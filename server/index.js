@@ -257,6 +257,64 @@ async function processInstagramEntry(body) {
     // 1. Messenger/Instagram Messaging API format (entry.messaging or entry.standby)
     const allEvents = [...(entry.messaging || []), ...(entry.standby || [])];
     for (const messaging of allEvents) {
+
+      // 1a. Handle message_edit events (Instagram sends these for new messages when app lacks instagram_manage_messages)
+      if (messaging.message_edit && messaging.message_edit.mid) {
+        const mid = messaging.message_edit.mid;
+        const numEdit = messaging.message_edit.num_edit || 0;
+        console.log(`📩 Received Instagram message_edit event (num_edit=${numEdit}, mid=${mid.slice(0, 40)}...)`);
+        
+        // Try to fetch the actual message content via Graph API
+        if (token && !token.includes('YOUR_')) {
+          try {
+            const msgRes = await fetch(`https://graph.instagram.com/v20.0/${mid}?fields=id,created_time,from,to,message&access_token=${token}`);
+            if (msgRes.ok) {
+              const msgData = await msgRes.json();
+              const senderId = msgData.from?.id;
+              const text = msgData.message || '[הודעת אינסטגרם]';
+              console.log(`📨 Fetched message content via API: from=${senderId}, text="${text}"`);
+              
+              if (senderId && senderId !== entry.id) {
+                let igName = `משתמש אינסטגרם (${senderId})`;
+                try {
+                  const profileRes = await fetch(`https://graph.instagram.com/v20.0/${senderId}?fields=username,name&access_token=${token}`);
+                  if (profileRes.ok) {
+                    const profileData = await profileRes.json();
+                    igName = profileData.name || profileData.username || igName;
+                    console.log(`👤 Retrieved Instagram Profile name: ${igName}`);
+                  }
+                } catch (err) {
+                  console.error('Error fetching IG profile:', err.message);
+                }
+
+                await instagramService.handleIncomingMessage(senderId, text, igName, false);
+                const { student, isNew } = db.createLeadFromInstagram(senderId, text, igName);
+                if (isNew) {
+                  automationsService.triggerEvent('new_lead', { ...student, phone: '', parentName: igName });
+                  console.log(`🎉 New lead created from Instagram message_edit: ${student.id} (${igName})`);
+                } else {
+                  console.log(`📝 Existing Instagram lead updated: ${student.id}`);
+                }
+              }
+            } else {
+              const errData = await msgRes.json().catch(() => ({}));
+              console.log(`⚠️ Could not fetch message content (${msgRes.status}):`, errData.error?.message || 'Unknown error');
+              // Even without content, create a basic lead from the entry ID
+              const fallbackId = `ig_msg_${Date.now()}`;
+              const { student, isNew } = db.createLeadFromInstagram(fallbackId, '[הודעה חדשה מאינסטגרם - נדרש instagram_manage_messages]', `ליד אינסטגרם (${new Date().toLocaleString('he-IL')})`);
+              if (isNew) {
+                automationsService.triggerEvent('new_lead', { ...student, phone: '', parentName: student.name });
+                console.log(`🎉 New fallback lead created from Instagram: ${student.id}`);
+              }
+            }
+          } catch (err) {
+            console.error('Error processing message_edit:', err.message);
+          }
+        }
+        continue;
+      }
+
+      // 1b. Handle regular message/postback events
       const msgObj = messaging.message || messaging.postback || {};
       if ((msgObj.text || msgObj.caption || msgObj.title || messaging.postback) && !msgObj.is_echo) {
         const senderId = messaging.sender?.id || entry.id;
