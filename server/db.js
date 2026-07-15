@@ -86,6 +86,12 @@ export const db = {
     const data = readDb();
     return data[table] || [];
   },
+
+  set: (table, value) => {
+    const data = readDb();
+    data[table] = value;
+    writeDb(data);
+  },
   
   getOne: (table, id) => {
     const list = db.get(table);
