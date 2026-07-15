@@ -31,6 +31,11 @@ if (supabaseUrl && supabaseUrl !== 'YOUR_SUPABASE_URL_HERE' && supabaseKey && su
 // 1. CRM GENERAL ENDPOINTS (Database Synced)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Health check endpoint for Uptime monitoring & Keep-Alive
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ status: 'UP', timestamp: new Date().toISOString(), uptime: process.uptime() });
+});
+
 // Get all parents
 app.get('/api/parents', (req, res) => {
   res.json(db.get('parents'));
@@ -680,5 +685,13 @@ app.post('/api/public/health-declarations', (req, res) => {
 // Start Server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
+  
+  // Self-Ping timer to prevent Render free instance sleep (runs every 8 minutes)
+  const renderUrl = process.env.RENDER_EXTERNAL_URL || 'https://climbing-crm-api.onrender.com';
+  setInterval(() => {
+    fetch(`${renderUrl}/api/health`)
+      .then(res => console.log(`⏱️ Keep-Alive Self-Ping (${res.status}) at ${new Date().toLocaleTimeString()}`))
+      .catch(err => console.error('Keep-Alive ping error:', err.message));
+  }, 8 * 60 * 1000);
 });
 
