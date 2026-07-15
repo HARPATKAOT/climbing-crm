@@ -254,14 +254,16 @@ async function processInstagramEntry(body) {
   const token = settings.metaIgAccessToken || process.env.INSTAGRAM_ACCESS_TOKEN;
 
   for (const entry of body.entry || []) {
-    // 1. Messenger/Instagram Messaging API format (entry.messaging)
-    for (const messaging of entry.messaging || []) {
-      if (messaging.message && !messaging.message.is_echo) {
-        const senderId = messaging.sender?.id;
-        const text = messaging.message.text || messaging.message.caption || messaging.postback?.title || '[הודעת אינסטגרם]';
+    // 1. Messenger/Instagram Messaging API format (entry.messaging or entry.standby)
+    const allEvents = [...(entry.messaging || []), ...(entry.standby || [])];
+    for (const messaging of allEvents) {
+      const msgObj = messaging.message || messaging.postback || {};
+      if ((msgObj.text || msgObj.caption || msgObj.title || messaging.postback) && !msgObj.is_echo) {
+        const senderId = messaging.sender?.id || entry.id;
+        const text = msgObj.text || msgObj.caption || msgObj.title || messaging.postback?.payload || '[הודעת אינסטגרם / בדיקה]';
         
         if (senderId && text) {
-          console.log(`💬 Processing Instagram message from IGID ${senderId}: "${text}"`);
+          console.log(`💬 Processing Instagram event from IGID ${senderId}: "${text}"`);
           let igName = `משתמש אינסטגרם (${senderId})`;
           try {
             if (token && !token.includes('YOUR_')) {
@@ -384,12 +386,23 @@ app.get('/api/instagram/webhook', (req, res) => {
   }
 });
 
+// Get recent raw webhook logs for debugging
+app.get('/api/webhook-logs', (req, res) => {
+  res.json(db.get('webhook_logs') || []);
+});
+
 // Instagram Webhook Messages Processor (POST)
 app.post('/api/instagram/webhook', async (req, res) => {
   const body = req.body;
   console.log('📥 Received Instagram webhook:', JSON.stringify(body, null, 2));
 
   try {
+    // Store in persistent log array for inspection (keep last 50)
+    const logs = db.get('webhook_logs') || [];
+    logs.unshift({ timestamp: new Date().toISOString(), body });
+    if (logs.length > 50) logs.pop();
+    db.set('webhook_logs', logs);
+
     // Process regardless of exact object name ('instagram', 'page', 'instagram_business_account')
     await processInstagramEntry(body);
   } catch (error) {
