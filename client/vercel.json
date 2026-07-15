@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "https://climbing-crm-api.onrender.com/api/$1"
+    }
+  ]
+}
