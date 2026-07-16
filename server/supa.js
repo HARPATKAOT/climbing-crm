@@ -41,6 +41,7 @@ export const CORE_TABLES = [
   'activities',
   'activity_registrations',
   'health_declarations',
+  'form_templates',
 ];
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -88,6 +89,7 @@ const mappers = {
       nextFollowup: r.next_followup || null,
       notes: r.notes || '',
       created: r.created || null,
+      created_at: r.created_at || null,
       healthSignedAt: r.health_signed_at || null,
       waiverSignedAt: r.waiver_signed_at || null,
     }),
@@ -104,6 +106,7 @@ const mappers = {
       next_followup: emptyToNull(o.nextFollowup),
       notes: o.notes || '',
       created: emptyToNull(o.created),
+      created_at: emptyToNull(o.created_at),
       health_signed_at: emptyToNull(o.healthSignedAt),
       waiver_signed_at: emptyToNull(o.waiverSignedAt),
     }),
@@ -194,6 +197,8 @@ mappers.health_declarations = {
     signature_url: r.signature_url || '',
     status: r.status || 'approved',
     notes: r.notes || '',
+    templateSlug: r.template_slug || '',
+    templateId: r.template_id || null,
     signed: r.status === 'approved' || !!r.signature_url,
     signedDate: r.date || null,
     signedBy: r.parent_name || '',
@@ -215,6 +220,35 @@ mappers.health_declarations = {
     signature_url: emptyToNull(o.signature_url || o.signature),
     status: o.status || (o.signed ? 'approved' : 'pending'),
     notes: o.notes || '',
+    template_slug: emptyToNull(o.templateSlug || o.template_slug),
+    template_id: emptyToNull(o.templateId || o.template_id),
+  }),
+};
+
+mappers.form_templates = {
+  fromRow: (r) => ({
+    id: r.id,
+    slug: r.slug || '',
+    title: r.title || '',
+    activityType: r.activity_type || 'wall',
+    waiverText: r.waiver_text || '',
+    healthQuestions: Array.isArray(r.health_questions) ? r.health_questions : [],
+    isDefault: !!r.is_default,
+    isActive: r.is_active !== false,
+    created_at: r.created_at || null,
+    updated_at: r.updated_at || null,
+  }),
+  toRow: (o) => ({
+    id: o.id,
+    slug: (o.slug || '').trim().toLowerCase(),
+    title: o.title || '',
+    activity_type: o.activityType || o.activity_type || 'wall',
+    waiver_text: o.waiverText || o.waiver_text || '',
+    health_questions: Array.isArray(o.healthQuestions)
+      ? o.healthQuestions
+      : (Array.isArray(o.health_questions) ? o.health_questions : []),
+    is_default: o.isDefault === true || o.isDefault === 'true' || o.is_default === true,
+    is_active: o.isActive !== false && o.is_active !== false,
   }),
 };
 
@@ -237,12 +271,16 @@ export const supa = {
     return (data || []).map(m.fromRow);
   },
 
-  // Insert or update a single record (fire-and-forget from sync callers).
+  // Insert or update a single record. Returns { ok, error }.
   async upsert(table, record) {
-    if (!client) return;
+    if (!client) return { ok: false, error: 'Supabase not configured' };
     const row = mapperFor(table).toRow(record);
     const { error } = await client.from(table).upsert(row, { onConflict: 'id' });
-    if (error) console.error(`Supabase upsert(${table}) failed:`, error.message, row);
+    if (error) {
+      console.error(`Supabase upsert(${table}) failed:`, error.message, row);
+      return { ok: false, error: error.message, row };
+    }
+    return { ok: true };
   },
 
   // Remove a single record by id.

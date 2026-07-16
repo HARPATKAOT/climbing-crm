@@ -194,3 +194,21 @@ CREATE TABLE broadcast_campaigns (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 16. FORM TEMPLATES (תבניות הצהרת בריאות / הסרת אחריות לפי פעילות)
+CREATE TABLE IF NOT EXISTS form_templates (
+    id TEXT PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL DEFAULT '',
+    activity_type TEXT NOT NULL DEFAULT 'wall', -- wall, birthday, trip, custom
+    waiver_text TEXT NOT NULL DEFAULT '',
+    health_questions JSONB NOT NULL DEFAULT '[]'::jsonb,
+    is_default BOOLEAN NOT NULL DEFAULT FALSE,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Optional columns on health_declarations (if table exists in Supabase)
+-- ALTER TABLE health_declarations ADD COLUMN IF NOT EXISTS template_slug TEXT;
+-- ALTER TABLE health_declarations ADD COLUMN IF NOT EXISTS template_id TEXT;
+

@@ -14,6 +14,12 @@ function syncUpsert(table, record) {
     );
   }
 }
+
+/** Await durable write for CRM-core tables (use on public form submit). */
+export async function persistCore(table, record) {
+  if (!record || !CORE_TABLES.includes(table)) return { ok: true };
+  return supa.upsert(table, record);
+}
 function syncRemove(table, id) {
   if (CORE_TABLES.includes(table)) {
     Promise.resolve(supa.remove(table, id)).catch((e) =>
@@ -169,9 +175,10 @@ export const db = {
   insert: (table, record) => {
     const data = readDb();
     if (!data[table]) data[table] = [];
+    // Spread first, then force id — otherwise `id: undefined` in record wipes the generated id.
     const newRecord = {
-      id: record.id || `${table.slice(0, 2)}${Date.now()}`,
       ...record,
+      id: record.id || `${table.slice(0, 2)}${Date.now()}`,
       created_at: record.created_at || new Date().toISOString(),
     };
     data[table].push(newRecord);

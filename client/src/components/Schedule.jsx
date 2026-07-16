@@ -1,6 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2 } from 'lucide-react';
+import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { DAYS_FULL } from '../mockData.js';
+import {
+  getGroupDays,
+  localDateStr,
+  dateToWeekday,
+  ATT_STATUS,
+  normalizeAttStatus,
+  isAttPresent,
+} from '../scheduleUtils.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const AGE_COLORS = {
@@ -32,28 +40,6 @@ const DUR_OPTIONS = [
   { val: 80, label: '80 דקות' },
   { val: 110, label: '110 דקות' },
 ];
-
-// Attendance status options (present / absent / late)
-const ATT_STATUS = [
-  { key: 'present', label: 'נוכח',  color: '#10B981' },
-  { key: 'absent',  label: 'נעדר',  color: '#EF4444' },
-  { key: 'late',    label: 'איחור', color: '#F59E0B' },
-];
-
-// Hebrew day-letter → weekday index (0=ראשון … 5=שישי)
-const HEB_DAY_IDX = { 'א': 0, 'ב': 1, 'ג': 2, 'ד': 3, 'ה': 4, 'ו': 5 };
-
-// A group may meet twice a week (biweekly). Such groups encode both days in
-// their name, e.g. "מתקדמים ה'-ו' — ב׳+ה׳ 15:30". Return every weekday the
-// group meets on so it can be rendered on both calendar columns.
-function getGroupDays(group) {
-  const m = (group?.name || '').match(/([א-ו])['׳’]?\s*\+\s*([א-ו])['׳’]?/);
-  if (m) {
-    const days = [HEB_DAY_IDX[m[1]], HEB_DAY_IDX[m[2]]].filter(d => d != null);
-    if (days.length) return [...new Set([group.day, ...days])].filter(d => d != null);
-  }
-  return [group?.day].filter(d => d != null);
-}
 
 function t2m(t) { const [h, m] = t.split(':').map(Number); return h * 60 + m; }
 function topPx(time)   { return (t2m(time) - START_MIN) * PX_PER_MIN; }
@@ -261,10 +247,10 @@ function GroupFormModal({ group, employees, onSave, onClose }) {
   );
 }
 
-// ─── Attendance Modal (real persistence) ──────────────────────────────────────
-function AttendanceModal({ group, students, parents, onClose }) {
+// ─── Attendance Modal (Supabase-persisted via API) ────────────────────────────
+function AttendanceModal({ group, students, parents, employees, initialDate, onClose }) {
   const members = students.filter(s => s.groupId === group.id && s.status !== 'archived');
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(initialDate || localDateStr());
   const [view, setView] = useState('sheet'); // 'sheet' | 'history'
   const [state, setState] = useState({});          // studentId -> status
   const [existingIds, setExistingIds] = useState({}); // studentId -> attendance row id
@@ -273,7 +259,10 @@ function AttendanceModal({ group, students, parents, onClose }) {
   const [savedMsg, setSavedMsg] = useState('');
   const [history, setHistory] = useState([]);
 
-  // Load saved marks for the selected date (defaults to "present").
+  const trainer = employees?.find(e => e.id === group.trainer);
+  const dayLabel = DAYS_FULL[dateToWeekday(date)] || '';
+
+  // Load saved marks for the selected date (default unmarked → attended).
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -283,8 +272,11 @@ function AttendanceModal({ group, students, parents, onClose }) {
       .then(rows => {
         if (cancelled) return;
         const st = {}; const ids = {};
-        members.forEach(m => { st[m.id] = 'present'; });
-        (rows || []).forEach(r => { st[r.student_id] = r.status; ids[r.student_id] = r.id; });
+        members.forEach(m => { st[m.id] = 'attended'; });
+        (rows || []).forEach(r => {
+          st[r.student_id] = normalizeAttStatus(r.status);
+          ids[r.student_id] = r.id;
+        });
         setState(st);
         setExistingIds(ids);
       })
@@ -300,11 +292,12 @@ function AttendanceModal({ group, students, parents, onClose }) {
       .then(rows => {
         const byDate = {};
         (rows || []).forEach(r => {
-          if (!byDate[r.date]) byDate[r.date] = { date: r.date, present: 0, absent: 0, late: 0, total: 0 };
+          if (!byDate[r.date]) byDate[r.date] = { date: r.date, present: 0, absent: 0, intro: 0, total: 0 };
           byDate[r.date].total++;
-          if (r.status === 'present') byDate[r.date].present++;
-          else if (r.status === 'absent') byDate[r.date].absent++;
-          else if (r.status === 'late') byDate[r.date].late++;
+          const s = normalizeAttStatus(r.status);
+          if (s === 'intro_attended' || s === 'intro_absent') byDate[r.date].intro++;
+          if (isAttPresent(r.status)) byDate[r.date].present++;
+          else byDate[r.date].absent++;
         });
         setHistory(Object.values(byDate).sort((a, b) => b.date.localeCompare(a.date)));
       })
@@ -317,13 +310,13 @@ function AttendanceModal({ group, students, parents, onClose }) {
   const handleSave = async () => {
     setSaving(true);
     setSavedMsg('');
-    // Stable ids keep re-saves idempotent (upsert instead of duplicate rows).
     const records = members.map(m => ({
       id: existingIds[m.id] || `att-${group.id}-${date}-${m.id}`,
       student_id: m.id,
       group_id: group.id,
       date,
-      status: state[m.id] || 'present',
+      status: state[m.id] || 'attended',
+      marked_by: group.trainer || null,
     }));
     try {
       const res = await fetch('/api/attendance/bulk', {
@@ -336,8 +329,8 @@ function AttendanceModal({ group, students, parents, onClose }) {
         const ids = { ...existingIds };
         (saved || []).forEach(r => { if (r && r.student_id) ids[r.student_id] = r.id; });
         setExistingIds(ids);
-        const present = records.filter(r => r.status === 'present').length;
-        setSavedMsg(`נשמר בהצלחה ✓ · ${present}/${records.length} נוכחים`);
+        const present = records.filter(r => isAttPresent(r.status)).length;
+        setSavedMsg(`נשמר בהצלחה ✓ · ${present}/${records.length} הגיעו`);
         loadHistory();
       } else {
         setSavedMsg('שגיאה בשמירת הנוכחות');
@@ -351,11 +344,16 @@ function AttendanceModal({ group, students, parents, onClose }) {
 
   return (
     <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal slide-up" style={{ maxWidth: 520 }}>
+      <div className="modal slide-up" style={{ maxWidth: 560 }}>
         <div className="modal-header">
           <div>
-            <div className="modal-title">📝 יומן נוכחות — {group.name}</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+            <div className="modal-title">יומן נוכחות — {group.name}</div>
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
+              {dayLabel} · {group.time}
+              {trainer ? ` · מדריך: ${trainer.name}` : group.trainerName ? ` · מדריך: ${group.trainerName}` : ''}
+              {' · '}{members.length} רשומים
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8 }}>
               <Calendar size={13} style={{ color: 'var(--text-3)' }} />
               <input
                 type="date"
@@ -369,7 +367,6 @@ function AttendanceModal({ group, students, parents, onClose }) {
           <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose}><X size={18} /></button>
         </div>
 
-        {/* View toggle */}
         <div style={{ display: 'flex', gap: 6, padding: '10px 16px 0' }}>
           <button className={`btn btn-sm ${view === 'sheet' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setView('sheet')}>
             <Users size={14} /> גיליון יומי
@@ -379,7 +376,7 @@ function AttendanceModal({ group, students, parents, onClose }) {
           </button>
         </div>
 
-        <div className="modal-body" style={{ maxHeight: 400, overflowY: 'auto' }}>
+        <div className="modal-body" style={{ maxHeight: 420, overflowY: 'auto' }}>
           {view === 'sheet' && (
             loading ? (
               <div className="empty-state" style={{ padding: 32 }}>
@@ -389,26 +386,33 @@ function AttendanceModal({ group, students, parents, onClose }) {
             ) : members.length === 0 ? (
               <div className="empty-state" style={{ padding: 32 }}>
                 <div className="empty-state-title">אין מתאמנים רשומים בחוג זה</div>
-                <div className="empty-state-sub">שבץ מתאמנים לקבוצה כדי לסמן נוכחות</div>
+                <div className="empty-state-sub">שבץ מתאמנים לקבוצה כדי לסמן נוכחות — אפשר עדיין לפתוח את הגיליון</div>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {members.map(s => {
                   const parent = parents.find(p => p.id === s.parentId);
-                  const currentStatus = state[s.id] || 'present';
+                  const currentStatus = state[s.id] || 'attended';
+                  const isIntro = s.status === 'intro_scheduled' || s.status === 'intro_paid';
                   return (
                     <div key={s.id} style={{
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                      padding: 10, background: '#111827', borderRadius: 8, border: '1px solid var(--border)'
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+                      padding: 10, background: '#111827', borderRadius: 8, border: '1px solid var(--border)',
+                      flexWrap: 'wrap',
                     }}>
-                      <div>
+                      <div style={{ minWidth: 120 }}>
                         <div style={{ fontWeight: 700, fontSize: 13 }}>{s.name}</div>
                         <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                          {parent?.name ? `הורה: ${parent.name}` : ''}{parent?.phone ? ` · ${parent.phone}` : ''}
+                          {isIntro ? 'אימון הכירות · ' : ''}
+                          {parent?.name ? `הורה: ${parent.name}` : ''}
+                          {parent?.phone ? ` · ${parent.phone}` : ''}
                         </div>
                       </div>
-                      <div style={{ display: 'flex', gap: 4 }}>
-                        {ATT_STATUS.map(opt => (
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {(isIntro
+                          ? ATT_STATUS
+                          : ATT_STATUS.filter(o => !o.key.startsWith('intro_'))
+                        ).map(opt => (
                           <button
                             key={opt.key}
                             type="button"
@@ -448,12 +452,12 @@ function AttendanceModal({ group, students, parents, onClose }) {
                       cursor: 'pointer', textAlign: 'right',
                     }}>
                     <div style={{ fontWeight: 700, fontSize: 13 }}>
-                      {new Date(h.date).toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'numeric' })}
+                      {new Date(`${h.date}T12:00:00`).toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'numeric' })}
                     </div>
                     <div style={{ display: 'flex', gap: 8, fontSize: 12 }}>
                       <span style={{ color: '#34D399' }}>✓ {h.present}</span>
                       <span style={{ color: '#FCA5A5' }}>✗ {h.absent}</span>
-                      <span style={{ color: '#FCD34D' }}>⏱ {h.late}</span>
+                      {h.intro > 0 && <span style={{ color: '#A5B4FC' }}>הכירות {h.intro}</span>}
                     </div>
                   </button>
                 ))}
@@ -468,7 +472,7 @@ function AttendanceModal({ group, students, parents, onClose }) {
             <button className="btn btn-ghost" onClick={onClose}>סגור</button>
             {view === 'sheet' && members.length > 0 && (
               <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-                {saving ? <Loader2 size={15} className="spin" /> : '💾'} {saving ? 'שומר...' : 'שמור נוכחות'}
+                {saving ? <Loader2 size={15} className="spin" /> : <Save size={15} />} {saving ? 'שומר...' : 'שמור נוכחות'}
               </button>
             )}
           </div>
@@ -712,7 +716,9 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
   const [editingGroup,    setEditingGroup]     = useState(null);
   const [showAddModal,    setShowAddModal]     = useState(false);
   const [attendanceGroup, setAttendanceGroup]  = useState(null);
-  const [viewMode,        setViewMode]         = useState('week');
+  const [attendanceDate,  setAttendanceDate]   = useState(localDateStr());
+  const [dayMarks,        setDayMarks]         = useState({}); // groupId -> { marked, present, total }
+  const [viewMode,        setViewMode]         = useState('attendance');
   const [employees,       setEmployees]        = useState([]);
 
   // Fetch employees list dynamically for trainers dropdown
@@ -722,6 +728,26 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
       .then(data => setEmployees(Array.isArray(data) ? data : []))
       .catch(err => console.error(err));
   }, []);
+
+  // Load attendance summary for the selected daily date (all groups that day).
+  useEffect(() => {
+    if (viewMode !== 'attendance') return;
+    let cancelled = false;
+    fetch(`/api/attendance?date=${encodeURIComponent(attendanceDate)}`)
+      .then(r => (r.ok ? r.json() : []))
+      .then(rows => {
+        if (cancelled) return;
+        const byGroup = {};
+        (rows || []).forEach(r => {
+          if (!byGroup[r.group_id]) byGroup[r.group_id] = { marked: 0, present: 0 };
+          byGroup[r.group_id].marked++;
+          if (isAttPresent(r.status)) byGroup[r.group_id].present++;
+        });
+        setDayMarks(byGroup);
+      })
+      .catch(() => setDayMarks({}));
+    return () => { cancelled = true; };
+  }, [attendanceDate, viewMode, attendanceGroup]);
 
   const refreshStudents = async () => {
     try {
@@ -797,10 +823,25 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
   const openEdit  = (g)  => { setEditingGroup(g); setShowAddModal(false); };
   const openAdd   = ()   => { setShowAddModal(true); setEditingGroup(null); setSelectedGroup(null); };
   const openPanel = (g)  => { setSelectedGroup(g); setEditingGroup(null); setShowAddModal(false); setAttendanceGroup(null); };
+  const openAttendance = (g, date) => {
+    if (date) setAttendanceDate(date);
+    setAttendanceGroup(g);
+    setSelectedGroup(null);
+    setEditingGroup(null);
+    setShowAddModal(false);
+  };
+
+  const shiftAttendanceDate = (deltaDays) => {
+    const d = new Date(`${attendanceDate}T12:00:00`);
+    d.setDate(d.getDate() + deltaDays);
+    setAttendanceDate(localDateStr(d));
+  };
 
   const getEnrolledCount = (groupId) => {
     return students.filter(s => s.groupId === groupId && s.status !== 'archived').length;
   };
+
+  const attendanceWeekday = dateToWeekday(attendanceDate);
 
   const formattedGroups = groups.map(g => {
     const trainerObj = employees.find(e => e.id === g.trainer);
@@ -809,6 +850,10 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
       trainerName: trainerObj ? trainerObj.name : ''
     };
   });
+
+  const dayGroupsForAttendance = [...formattedGroups]
+    .filter(g => getGroupDays(g).includes(attendanceWeekday))
+    .sort((a, b) => (a.time || '').localeCompare(b.time || ''));
 
   // Keep the selected/attendance group in sync with the latest data so the
   // members list and enrolled counts update after assign/remove.
@@ -820,9 +865,12 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
       {/* ── Modals ─────────────────────────────────────────────────────────── */}
       {liveAttendanceGroup && !editingGroup && !showAddModal && (
         <AttendanceModal
+          key={`${liveAttendanceGroup.id}-${attendanceDate}`}
           group={liveAttendanceGroup}
           students={students}
           parents={parents}
+          employees={employees}
+          initialDate={attendanceDate}
           onClose={() => setAttendanceGroup(null)}
         />
       )}
@@ -843,7 +891,7 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
           onClose={() => setSelectedGroup(null)}
           onEdit={openEdit}
           onDelete={handleDelete}
-          onAttendance={g => setAttendanceGroup(g)}
+          onAttendance={g => openAttendance(g, attendanceDate)}
           onAssignStudent={handleAssignStudent}
           onRemoveStudent={handleRemoveStudent}
         />
@@ -852,10 +900,18 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
       {/* ── Toolbar ────────────────────────────────────────────────────────── */}
       <div className="section-header" style={{ marginBottom: 20 }}>
         <div>
-          <div className="section-title">לוח חוגים שבועי</div>
-          <div className="section-sub">{groups.length} קבוצות חוגים פעילות · לחץ על משבצת לפרטים</div>
+          <div className="section-title">
+            {viewMode === 'attendance' ? 'נוכחות יומית' : 'לוח חוגים שבועי'}
+          </div>
+          <div className="section-sub">
+            {viewMode === 'attendance'
+              ? `${dayGroupsForAttendance.length} חוגים ב${DAYS_FULL[attendanceWeekday] || 'יום זה'} · בחר חוג לסימון נוכחות`
+              : `${groups.length} קבוצות חוגים פעילות · לחץ על משבצת לפרטים`}
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className={`btn btn-sm ${viewMode === 'attendance' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setViewMode('attendance')}>✓ נוכחות</button>
           <button className={`btn btn-sm ${viewMode === 'week' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setViewMode('week')}>🗓 שבוע</button>
           <button className={`btn btn-sm ${viewMode === 'list' ? 'btn-primary' : 'btn-ghost'}`}
@@ -865,6 +921,94 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
           </button>
         </div>
       </div>
+
+      {/* ── Daily Attendance View ──────────────────────────────────────────── */}
+      {viewMode === 'attendance' && (
+        <div>
+          <div className="card card-p" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <button className="btn btn-ghost btn-icon btn-sm" onClick={() => shiftAttendanceDate(-1)} title="יום קודם">
+              <ChevronRight size={18} />
+            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Calendar size={16} style={{ color: 'var(--text-3)' }} />
+              <input
+                type="date"
+                className="input"
+                style={{ width: 160 }}
+                value={attendanceDate}
+                onChange={e => setAttendanceDate(e.target.value)}
+              />
+              <span style={{ fontWeight: 700, fontSize: 14 }}>
+                {DAYS_FULL[attendanceWeekday]}
+              </span>
+            </div>
+            <button className="btn btn-ghost btn-icon btn-sm" onClick={() => shiftAttendanceDate(1)} title="יום הבא">
+              <ChevronLeft size={18} />
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setAttendanceDate(localDateStr())}>
+              היום
+            </button>
+            {attendanceDate !== localDateStr() && (
+              <span style={{ fontSize: 12, color: 'var(--text-3)' }}>צפייה ביום עבר / עתיד</span>
+            )}
+          </div>
+
+          {dayGroupsForAttendance.length === 0 ? (
+            <div className="card empty-state" style={{ padding: 48 }}>
+              <div className="empty-state-title">אין חוגים ביום זה</div>
+              <div className="empty-state-sub">בחר תאריך אחר או הוסף קבוצה ללוח החוגים</div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {dayGroupsForAttendance.map(g => {
+                const c = AGE_COLORS[g.ageCategory] || DEF_COLOR;
+                const enrolled = getEnrolledCount(g.id);
+                const marks = dayMarks[g.id];
+                const days = getGroupDays(g);
+                return (
+                  <div
+                    key={g.id}
+                    className="card card-p"
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
+                      borderRight: `3px solid ${c.text}`,
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 180 }}>
+                      <div style={{ fontWeight: 800, fontSize: 14, color: c.text }}>{g.name}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
+                        {g.time} · {g.duration}′
+                        {g.trainerName ? ` · מדריך: ${g.trainerName}` : ' · ללא מדריך'}
+                        {days.length > 1 ? ` · ${days.map(d => DAYS_FULL[d]).join(' + ')}` : ''}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12 }}>
+                      <span className="badge" style={{ background: c.bg, color: c.text }}>
+                        {enrolled}/{g.maxSlots} רשומים
+                      </span>
+                      {marks ? (
+                        <span style={{ color: '#34D399', fontWeight: 600 }}>
+                          סומן {marks.present}/{marks.marked}
+                        </span>
+                      ) : (
+                        <span style={{ color: 'var(--text-3)' }}>טרם סומן</span>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button className="btn btn-primary btn-sm" onClick={() => openAttendance(g, attendanceDate)}>
+                        <Users size={14} /> פתח נוכחות
+                      </button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => openPanel(g)}>
+                        פרטי קבוצה
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Week View ──────────────────────────────────────────────────────── */}
       {viewMode === 'week' && (
@@ -1006,7 +1150,7 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
                         </td>
                         <td onClick={e => e.stopPropagation()}>
                           <div style={{ display: 'flex', gap: 5 }}>
-                            <button className="btn btn-ghost btn-xs" onClick={() => setAttendanceGroup(g)}>
+                            <button className="btn btn-ghost btn-xs" onClick={() => openAttendance(g, attendanceDate)}>
                               <Users size={12} /> נוכחות
                             </button>
                             <button className="btn btn-ghost btn-icon btn-xs" onClick={() => openEdit(g)}>

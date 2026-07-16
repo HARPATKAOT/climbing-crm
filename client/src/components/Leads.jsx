@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Calendar, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, MessageCircle, Bell, FileCheck2, ExternalLink } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Calendar, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, MessageCircle, Bell, FileCheck2, ExternalLink, Download } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
+import { downloadHealthDeclarationPdf } from '../utils/healthDeclarationPdf.js';
 
 // Normalize phone for comparison (supports 05X ↔ 9725X)
 const normPhone = (p) => {
@@ -127,23 +128,50 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
   const [healthDecl, setHealthDecl] = useState(null);
   const [sendingHealth, setSendingHealth] = useState(false);
   const [healthSendMsg, setHealthSendMsg] = useState('');
+  const [formTemplates, setFormTemplates] = useState([]);
+  const [selectedFormSlug, setSelectedFormSlug] = useState('');
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
   useEffect(() => {
     fetch('/api/health-declarations')
       .then(res => res.ok ? res.json() : [])
       .then(decls => {
-        const match = (decls || []).find(d =>
-          d.studentId === student.id ||
-          (d.climberName && d.climberName === student.name) ||
-          (d.studentName && d.studentName === student.name)
-        );
+        const phoneKey = normPhone(parent?.phone);
+        const match = (decls || []).find(d => {
+          if (d.studentId && d.studentId === student.id) return true;
+          if (phoneKey && normPhone(d.phone) === phoneKey) {
+            const climber = d.climberName || d.studentName || '';
+            if (!climber || climber === student.name || student.name?.includes(climber.split(' ')[0])) return true;
+          }
+          if (d.climberName && d.climberName === student.name) return true;
+          if (d.studentName && d.studentName === student.name) return true;
+          return false;
+        });
         setHealthDecl(match || null);
       })
       .catch(() => setHealthDecl(null));
-  }, [student.id, student.name, student.status]);
+  }, [student.id, student.name, student.status, parent?.phone]);
 
-  const healthFormUrl = `${window.location.origin}/health?studentId=${encodeURIComponent(student.id)}${parent?.phone ? `&phone=${encodeURIComponent(parent.phone)}` : ''}`;
+  useEffect(() => {
+    fetch('/api/form-templates')
+      .then(res => res.ok ? res.json() : [])
+      .then(list => {
+        const active = (list || []).filter(t => t.isActive !== false);
+        setFormTemplates(active);
+        const def = active.find(t => t.isDefault) || active[0];
+        if (def) setSelectedFormSlug(def.slug);
+      })
+      .catch(() => setFormTemplates([]));
+  }, []);
+
+  const selectedTemplate = formTemplates.find(t => t.slug === selectedFormSlug)
+    || formTemplates.find(t => t.isDefault)
+    || formTemplates[0];
+  const healthPath = selectedTemplate && !selectedTemplate.isDefault
+    ? `/health/${selectedTemplate.slug}`
+    : '/health';
+  const healthFormUrl = `${window.location.origin}${healthPath}?studentId=${encodeURIComponent(student.id)}${parent?.phone ? `&phone=${encodeURIComponent(parent.phone)}` : ''}`;
+  // Only treat as signed when we have a real declaration, or explicit health_signed status
   const isHealthSigned = student.status === 'health_signed'
-    || ['intro_scheduled', 'intro_paid', 'registered'].includes(student.status)
     || !!(healthDecl && (healthDecl.signed || healthDecl.status === 'approved' || healthDecl.waiverAccepted));
 
   const handleSendHealthForm = async () => {
@@ -157,7 +185,10 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
       const res = await fetch(`/api/leads/${student.id}/send-health-form`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ origin: window.location.origin }),
+        body: JSON.stringify({
+          origin: window.location.origin,
+          templateSlug: selectedTemplate?.slug || selectedFormSlug || undefined,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (data.healthUrl) {
@@ -497,20 +528,43 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
             border: `1px solid ${isHealthSigned ? 'rgba(52, 211, 153, 0.35)' : 'rgba(252, 211, 77, 0.35)'}`,
           }}>
             <span style={{ fontSize: 18 }}>{isHealthSigned ? '✓' : '⏳'}</span>
-            <div>
+            <div style={{ flex: 1 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
                 {isHealthSigned ? 'נחתם — הצהרת בריאות + כתב ויתור' : 'טרם נחתם'}
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
                 {healthDecl?.signedDate || healthDecl?.date
                   ? `תאריך חתימה: ${healthDecl.signedDate || healthDecl.date}`
-                  : isHealthSigned
-                    ? `סטטוס: ${STATUSES[student.status]?.label || student.status}`
-                    : 'שלחו ללקוח קישור לחתימה דיגיטלית'}
+                  : 'שלחו ללקוח קישור לחתימה דיגיטלית'}
                 {healthDecl?.waiverAccepted ? ' · וויתור אושר' : ''}
+                {healthDecl?.templateSlug ? ` · ${healthDecl.templateSlug}` : ''}
               </div>
+              {healthDecl && (
+                <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 6 }}>
+                  חתם: {healthDecl.signedBy || healthDecl.parentName || '—'}
+                  {(healthDecl.climberName || healthDecl.studentName) ? ` · מתאמן: ${healthDecl.climberName || healthDecl.studentName}` : ''}
+                  {Object.values(healthDecl.answers || {}).some(Boolean) ? ' · יש הסתייגויות רפואיות' : ' · ללא הסתייגויות'}
+                </div>
+              )}
             </div>
           </div>
+          {formTemplates.length > 0 && (
+            <div className="form-group" style={{ marginBottom: 12 }}>
+              <label className="form-label" style={{ fontSize: 11 }}>סוג טופס / פעילות</label>
+              <select
+                className="select"
+                value={selectedFormSlug}
+                onChange={(e) => setSelectedFormSlug(e.target.value)}
+                style={{ fontSize: 13 }}
+              >
+                {formTemplates.map((t) => (
+                  <option key={t.id} value={t.slug}>
+                    {t.title}{t.isDefault ? ' (ברירת מחדל)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <a href={healthFormUrl} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm">
               <ExternalLink size={13} /> פתח טופס
@@ -524,7 +578,43 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
             >
               <Send size={13} /> {sendingHealth ? 'שולח...' : 'שלח קישור בוואטסאפ'}
             </button>
+            {healthDecl && (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={downloadingPdf}
+                onClick={async () => {
+                  setDownloadingPdf(true);
+                  setHealthSendMsg('');
+                  try {
+                    await downloadHealthDeclarationPdf(healthDecl);
+                    setHealthSendMsg('ה־PDF של האישור החתום הורד למחשב');
+                  } catch (err) {
+                    console.error(err);
+                    setHealthSendMsg('שגיאה בהורדת ה־PDF — נסו שוב');
+                  } finally {
+                    setDownloadingPdf(false);
+                  }
+                }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              >
+                <Download size={13} /> {downloadingPdf ? 'מכין PDF...' : 'הורד אישור PDF'}
+              </button>
+            )}
           </div>
+          {healthDecl?.signature_url && (
+            <div style={{
+              marginTop: 12, padding: 10, borderRadius: 10,
+              background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)',
+            }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>עותק חתימה שמור</div>
+              <img
+                src={healthDecl.signature_url}
+                alt="חתימה"
+                style={{ maxWidth: '100%', maxHeight: 90, background: '#0b1220', borderRadius: 8 }}
+              />
+            </div>
+          )}
           {healthSendMsg && (
             <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)', wordBreak: 'break-all' }}>
               {healthSendMsg}
@@ -1184,6 +1274,7 @@ export default function Leads({ students, setStudents, parents, setParents, grou
           notes: '',
           levelGrade: null,
           created: new Date().toISOString().split('T')[0],
+          created_at: new Date().toISOString(),
         });
       }
     });

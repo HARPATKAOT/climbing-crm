@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { PenTool, CheckCircle, ArrowLeft } from 'lucide-react';
-import { useSearchParams } from 'react-router-dom';
+import { PenTool, CheckCircle, ArrowLeft, Download } from 'lucide-react';
+import { useSearchParams, useParams } from 'react-router-dom';
+import { downloadHealthDeclarationPdf } from '../utils/healthDeclarationPdf.js';
 
-const WAIVER_TEXT = `כתב ויתור והסרת אחריות — קיר הטיפוס My Wall
+const FALLBACK_WAIVER = `כתב ויתור והסרת אחריות — קיר הטיפוס My Wall
 
 דף זה מיועד למי שלוקח חלק בפעילות טיפוס. ידוע לי כי טיפוס קירות היא פעילות אקסטרים הכרוכה בסיכונים, לרבות נפילות ופציעות.
 
@@ -16,10 +17,21 @@ const WAIVER_TEXT = `כתב ויתור והסרת אחריות — קיר הטי
 
 אני מצהיר/ה כי מסרתי מידע רפואי מלא, קראתי והבנתי את הוראות הבטיחות, ומתחייב/ת לוודא שילדי יפעל/תפעל לפיהן. אני משחרר/ת את My Wall, בעליו ועובדיו מאחריות לנזק שייגרם מהשתתפות בפעילות, למעט נזק במזיד או ברשלנות חמורה.`;
 
+const FALLBACK_QUESTIONS = [
+  { id: 'q1', label: 'האם המתאמן סובל מאסתמה, קוצר נשימה או מחלת ריאות?' },
+  { id: 'q2', label: 'האם המתאמן סובל מבעיות לב, לחץ דם, או סחרחורות/התעלפויות?' },
+  { id: 'q3', label: 'האם יש בעיה אורתופדית (גב, פרקים, שברים) המגבילה פעילות מאומצת?' },
+];
+
 export default function PublicHealthForm() {
+  const { slug: routeSlug } = useParams();
   const [searchParams] = useSearchParams();
+  const [template, setTemplate] = useState(null);
+  const [templateLoading, setTemplateLoading] = useState(true);
+  const [templateError, setTemplateError] = useState('');
   const [step, setStep] = useState(1);
   const [isAdult, setIsAdult] = useState(false);
+  const [answers, setAnswers] = useState({});
   const [formData, setFormData] = useState({
     parentName: '',
     parentIdNum: '',
@@ -28,21 +40,75 @@ export default function PublicHealthForm() {
     climberIdNum: '',
     birthDate: '',
     studentId: searchParams.get('studentId') || '',
-    q1: false,
-    q2: false,
-    q3: false,
     waiverAccepted: false,
     signature: ''
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [savedDecl, setSavedDecl] = useState(null);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [error, setError] = useState('');
   const canvasRef = useRef(null);
   const [isDrawing, setIsDrawing] = useState(false);
 
   useEffect(() => {
-    // Prefill from query when opening a staff-sent link
+    let cancelled = false;
+    async function loadTemplate() {
+      setTemplateLoading(true);
+      setTemplateError('');
+      const slug = routeSlug || searchParams.get('template') || 'default';
+      try {
+        const res = await fetch(`/api/public/form-templates/${encodeURIComponent(slug)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (!cancelled) {
+            setTemplate(data);
+            const qs = Array.isArray(data.healthQuestions) && data.healthQuestions.length
+              ? data.healthQuestions
+              : FALLBACK_QUESTIONS;
+            const initial = {};
+            qs.forEach((q) => { initial[q.id] = false; });
+            setAnswers(initial);
+          }
+        } else if (!cancelled) {
+          // Fallback so /health still works if templates not loaded yet
+          setTemplate({
+            id: null,
+            slug: routeSlug || 'wall',
+            title: 'הצהרת בריאות + הסרת אחריות',
+            waiverText: FALLBACK_WAIVER,
+            healthQuestions: FALLBACK_QUESTIONS,
+          });
+          const initial = {};
+          FALLBACK_QUESTIONS.forEach((q) => { initial[q.id] = false; });
+          setAnswers(initial);
+          if (res.status === 404 && routeSlug) {
+            setTemplateError('הטופס המבוקש לא נמצא — מוצג טופס ברירת מחדל');
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          setTemplate({
+            id: null,
+            slug: routeSlug || 'wall',
+            title: 'הצהרת בריאות + הסרת אחריות',
+            waiverText: FALLBACK_WAIVER,
+            healthQuestions: FALLBACK_QUESTIONS,
+          });
+          const initial = {};
+          FALLBACK_QUESTIONS.forEach((q) => { initial[q.id] = false; });
+          setAnswers(initial);
+        }
+      } finally {
+        if (!cancelled) setTemplateLoading(false);
+      }
+    }
+    loadTemplate();
+    return () => { cancelled = true; };
+  }, [routeSlug, searchParams]);
+
+  useEffect(() => {
     const phone = searchParams.get('phone');
     const studentId = searchParams.get('studentId');
     if (phone || studentId) {
@@ -54,12 +120,20 @@ export default function PublicHealthForm() {
     }
   }, [searchParams]);
 
+  const healthQuestions = (template?.healthQuestions?.length
+    ? template.healthQuestions
+    : FALLBACK_QUESTIONS);
+
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
     setFormData(prev => ({
       ...prev,
       [name]: type === 'checkbox' ? checked : value
     }));
+  };
+
+  const handleAnswerChange = (id, checked) => {
+    setAnswers((prev) => ({ ...prev, [id]: checked }));
   };
 
   const startDrawing = (e) => {
@@ -134,8 +208,10 @@ export default function PublicHealthForm() {
         const payload = {
           ...formData,
           signature,
-          answers: { q1: formData.q1, q2: formData.q2, q3: formData.q3 },
+          answers,
           waiverAccepted: true,
+          templateSlug: template?.slug || routeSlug || 'wall',
+          templateId: template?.id || null,
         };
         if (isAdult) {
           payload.climberName = formData.parentName;
@@ -148,6 +224,24 @@ export default function PublicHealthForm() {
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
+          setSavedDecl({
+            ...(data.record || {}),
+            parentName: payload.parentName,
+            parentIdNum: payload.parentIdNum,
+            phone: payload.phone,
+            climberName: payload.climberName,
+            climberIdNum: payload.climberIdNum,
+            birthDate: payload.birthDate,
+            answers: payload.answers,
+            waiverAccepted: true,
+            signature_url: signature,
+            signature,
+            signedBy: payload.parentName,
+            studentName: payload.climberName,
+            signedDate: data.record?.signedDate || data.record?.date || new Date().toISOString().split('T')[0],
+            templateSlug: payload.templateSlug,
+            title: template?.title || 'הצהרת בריאות + הסרת אחריות',
+          });
           setIsSuccess(true);
         } else {
           setError(data.error || 'שגיאה בשמירת ההצהרה');
@@ -160,6 +254,17 @@ export default function PublicHealthForm() {
       }
     }
   };
+
+  if (templateLoading) {
+    return (
+      <div className="public-health-wrapper">
+        <div className="glass-card" style={{ textAlign: 'center', padding: 40 }}>
+          <p style={{ color: 'rgba(255,255,255,0.7)' }}>טוען טופס...</p>
+        </div>
+        <FormStyles />
+      </div>
+    );
+  }
 
   if (isSuccess) {
     return (
@@ -174,11 +279,36 @@ export default function PublicHealthForm() {
             }
           </p>
           <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16, marginTop: 10 }}>נתראה על הקיר!</p>
+          {savedDecl && (
+            <button
+              type="button"
+              className="submit-btn primary-btn"
+              style={{ marginTop: 22 }}
+              disabled={downloadingPdf}
+              onClick={async () => {
+                setDownloadingPdf(true);
+                try {
+                  await downloadHealthDeclarationPdf(savedDecl);
+                } catch (err) {
+                  console.error(err);
+                  alert('שגיאה בהורדת ה־PDF');
+                } finally {
+                  setDownloadingPdf(false);
+                }
+              }}
+            >
+              <Download size={18} style={{ marginLeft: 8 }} />
+              {downloadingPdf ? 'מכין PDF...' : 'הורד עותק חתום (PDF)'}
+            </button>
+          )}
         </div>
         <FormStyles />
       </div>
     );
   }
+
+  const title = template?.title || 'הצהרת בריאות + הסרת אחריות';
+  const waiverText = template?.waiverText || FALLBACK_WAIVER;
 
   return (
     <div className="public-health-wrapper">
@@ -191,8 +321,11 @@ export default function PublicHealthForm() {
 
         <div className="form-header">
           <div className="logo-circle">🧗</div>
-          <h2>הצהרת בריאות + הסרת אחריות</h2>
+          <h2>{title}</h2>
           <p>My Wall — שלב {step} מתוך 3</p>
+          {templateError && (
+            <p style={{ color: '#FCD34D', fontSize: 12, marginTop: 8 }}>{templateError}</p>
+          )}
         </div>
 
         <form onSubmit={handleSubmit} className="public-form">
@@ -253,18 +386,16 @@ export default function PublicHealthForm() {
           {step === 2 && (
             <div className="fade-in">
               <div className="section-title">שאלון רפואי (סמן אם התשובה חיובית)</div>
-              <label className="checkbox-item">
-                <input type="checkbox" name="q1" checked={formData.q1} onChange={handleChange} />
-                <span>האם המתאמן סובל מאסתמה, קוצר נשימה או מחלת ריאות?</span>
-              </label>
-              <label className="checkbox-item">
-                <input type="checkbox" name="q2" checked={formData.q2} onChange={handleChange} />
-                <span>האם המתאמן סובל מבעיות לב, לחץ דם, או סחרחורות/התעלפויות?</span>
-              </label>
-              <label className="checkbox-item">
-                <input type="checkbox" name="q3" checked={formData.q3} onChange={handleChange} />
-                <span>האם יש בעיה אורתופדית (גב, פרקים, שברים) המגבילה פעילות מאומצת?</span>
-              </label>
+              {healthQuestions.map((q) => (
+                <label key={q.id} className="checkbox-item">
+                  <input
+                    type="checkbox"
+                    checked={!!answers[q.id]}
+                    onChange={(e) => handleAnswerChange(q.id, e.target.checked)}
+                  />
+                  <span>{q.label}</span>
+                </label>
+              ))}
               <button type="submit" className="submit-btn primary-btn" style={{ marginTop: 20 }}>
                 המשך לכתב ויתור וחתימה <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginLeft: 8 }} />
               </button>
@@ -280,7 +411,7 @@ export default function PublicHealthForm() {
                 color: 'rgba(255,255,255,0.85)', whiteSpace: 'pre-wrap', marginBottom: 16,
                 maxHeight: 180, overflowY: 'auto'
               }}>
-                {WAIVER_TEXT}
+                {waiverText}
               </div>
 
               <label className="checkbox-item">
@@ -290,7 +421,7 @@ export default function PublicHealthForm() {
 
               <div className="section-title" style={{ marginTop: 24 }}>חתימה דיגיטלית</div>
               <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)', marginBottom: 10 }}>
-                אני החתום מטה מצהיר בזאת כי מסרתי את כל המידע הרפואי. ידוע לי כי טיפוס קירות הינה פעילות אקסטרים ואני מאשר את השתתפות בני/בתי.
+                אני החתום מטה מצהיר בזאת כי מסרתי את כל המידע הרפואי. ידוע לי כי הפעילות כרוכה בסיכונים ואני מאשר/ת את ההשתתפות.
               </p>
 
               <div className="canvas-container">

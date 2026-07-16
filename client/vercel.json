@@ -5,6 +5,18 @@
       "destination": "https://climbing-crm-api.onrender.com/api/$1"
     },
     {
+      "source": "/health",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/health/(.*)",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/join",
+      "destination": "/index.html"
+    },
+    {
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }

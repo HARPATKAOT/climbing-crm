@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { createClient } from '@supabase/supabase-js';
-import { db, initDb } from './db.js';
+import { db, initDb, persistCore } from './db.js';
 import { supa } from './supa.js';
 import { whatsappService, instagramService } from './whatsapp.js';
 import { whatsappConnectService } from './whatsappConnect.js';
@@ -1188,6 +1188,121 @@ app.post('/api/health-declarations', (req, res) => {
   res.status(201).json(record);
 });
 
+// ─── Form templates (health + liability pages by activity) ───────────────────
+const DEFAULT_HEALTH_QUESTIONS = [
+  { id: 'q1', label: 'האם המתאמן סובל מאסתמה, קוצר נשימה או מחלת ריאות?' },
+  { id: 'q2', label: 'האם המתאמן סובל מבעיות לב, לחץ דם, או סחרחורות/התעלפויות?' },
+  { id: 'q3', label: 'האם יש בעיה אורתופדית (גב, פרקים, שברים) המגבילה פעילות מאומצת?' },
+];
+
+function slugifyFormTemplate(raw) {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9\u0590-\u05ff-_]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+function listFormTemplates() {
+  return db.get('form_templates') || [];
+}
+
+function findFormTemplateBySlug(slug) {
+  const key = slugifyFormTemplate(slug);
+  if (!key) return null;
+  return listFormTemplates().find((t) => t.slug === key && t.isActive !== false) || null;
+}
+
+function findDefaultFormTemplate() {
+  const all = listFormTemplates().filter((t) => t.isActive !== false);
+  return all.find((t) => t.isDefault) || all.find((t) => t.slug === 'wall') || all[0] || null;
+}
+
+function clearOtherDefaultTemplates(keepId) {
+  for (const t of listFormTemplates()) {
+    if (t.id !== keepId && t.isDefault) {
+      db.update('form_templates', t.id, { isDefault: false });
+    }
+  }
+}
+
+function normalizeTemplatePayload(body, existing = null) {
+  const slug = slugifyFormTemplate(body.slug || existing?.slug || body.title || `form-${Date.now()}`);
+  if (!slug) return { error: 'חסר מזהה קישור (slug)' };
+  const healthQuestions = Array.isArray(body.healthQuestions)
+    ? body.healthQuestions
+    : (Array.isArray(body.health_questions) ? body.health_questions : (existing?.healthQuestions || DEFAULT_HEALTH_QUESTIONS));
+  return {
+    slug,
+    title: (body.title ?? existing?.title ?? '').trim() || 'הצהרת בריאות',
+    activityType: body.activityType || body.activity_type || existing?.activityType || 'wall',
+    waiverText: body.waiverText ?? body.waiver_text ?? existing?.waiverText ?? '',
+    healthQuestions: healthQuestions.map((q, i) => ({
+      id: q.id || `q${i + 1}`,
+      label: q.label || q.text || '',
+    })).filter((q) => q.label),
+    isDefault: body.isDefault === true || body.isDefault === 'true' || body.is_default === true,
+    isActive: body.isActive !== false && body.is_active !== false,
+  };
+}
+
+app.get('/api/form-templates', (req, res) => {
+  res.json(listFormTemplates());
+});
+
+app.post('/api/form-templates', (req, res) => {
+  const normalized = normalizeTemplatePayload(req.body);
+  if (normalized.error) return res.status(400).json({ error: normalized.error });
+  const duplicate = listFormTemplates().find((t) => t.slug === normalized.slug);
+  if (duplicate) return res.status(400).json({ error: 'קיים כבר טופס עם אותו מזהה קישור' });
+
+  if (normalized.isDefault) clearOtherDefaultTemplates(null);
+  if (!listFormTemplates().some((t) => t.isDefault)) normalized.isDefault = true;
+
+  const record = db.insert('form_templates', {
+    id: req.body.id || `ft_${Date.now()}`,
+    ...normalized,
+  });
+  if (record.isDefault) clearOtherDefaultTemplates(record.id);
+  res.status(201).json(record);
+});
+
+app.put('/api/form-templates/:id', (req, res) => {
+  const existing = listFormTemplates().find((t) => t.id === req.params.id);
+  if (!existing) return res.status(404).json({ error: 'התבנית לא נמצאה' });
+
+  const normalized = normalizeTemplatePayload(req.body, existing);
+  if (normalized.error) return res.status(400).json({ error: normalized.error });
+  const duplicate = listFormTemplates().find((t) => t.slug === normalized.slug && t.id !== existing.id);
+  if (duplicate) return res.status(400).json({ error: 'קיים כבר טופס עם אותו מזהה קישור' });
+
+  if (normalized.isDefault) clearOtherDefaultTemplates(existing.id);
+  const updated = db.update('form_templates', existing.id, normalized);
+  res.json(updated);
+});
+
+app.delete('/api/form-templates/:id', (req, res) => {
+  const existing = listFormTemplates().find((t) => t.id === req.params.id);
+  if (!existing) return res.status(404).json({ error: 'התבנית לא נמצאה' });
+  if (existing.isDefault) {
+    return res.status(400).json({ error: 'לא ניתן למחוק את תבנית ברירת המחדל — סמנו תבנית אחרת קודם' });
+  }
+  db.delete('form_templates', existing.id);
+  res.json({ success: true });
+});
+
+// Public: load template by slug (or "default")
+app.get('/api/public/form-templates/:slug', (req, res) => {
+  const slugParam = req.params.slug;
+  const template = slugParam === 'default'
+    ? findDefaultFormTemplate()
+    : (findFormTemplateBySlug(slugParam) || (slugParam === 'wall' ? findDefaultFormTemplate() : null));
+  if (!template) return res.status(404).json({ error: 'הטופס לא נמצא' });
+  res.json(template);
+});
+
 // Check-in endpoints
 app.get('/api/check-ins', (req, res) => {
   res.json(db.get('check_ins'));
@@ -1198,11 +1313,57 @@ app.post('/api/check-ins', (req, res) => {
   res.status(201).json(record);
 });
 
+function normPhone(p) {
+  return String(p || '').replace(/[-\s]/g, '');
+}
+
+function resolveStudentForHealthForm({ studentId, parent, climberName, phone }) {
+  const students = db.get('students') || [];
+  const climberFirstName = (climberName || '').split(' ')[0];
+  const phoneKey = normPhone(phone);
+
+  // 1) Explicit student id from staff link
+  if (studentId) {
+    const byId = students.find((s) => s.id === studentId);
+    if (byId) return byId;
+  }
+
+  // 2) Same parent + matching climber name
+  const siblings = students.filter((s) => s.parentId === parent.id);
+  const byName = siblings.find((s) =>
+    s.name === climberName ||
+    (climberFirstName && s.name && s.name.includes(climberFirstName))
+  );
+  if (byName) return byName;
+
+  // 3) Match via parent phone → any student of that parent with same name
+  if (phoneKey) {
+    const parents = db.get('parents') || [];
+    const parentIds = parents
+      .filter((p) => normPhone(p.phone) === phoneKey)
+      .map((p) => p.id);
+    const byPhoneName = students.find((s) =>
+      parentIds.includes(s.parentId) &&
+      (s.name === climberName || (climberFirstName && s.name && s.name.includes(climberFirstName)))
+    );
+    if (byPhoneName) return byPhoneName;
+
+    // Single child under this phone → attach declaration there
+    const kidsOfPhone = students.filter((s) => parentIds.includes(s.parentId));
+    if (kidsOfPhone.length === 1) return kidsOfPhone[0];
+  }
+
+  // 4) Only one child under resolved parent
+  if (siblings.length === 1) return siblings[0];
+
+  return null;
+}
+
 // Public Health Declarations + Liability Waiver
-app.post('/api/public/health-declarations', (req, res) => {
+app.post('/api/public/health-declarations', async (req, res) => {
   const {
     parentName, parentIdNum, phone, climberName, climberIdNum, birthDate,
-    signature, answers, waiverAccepted, studentId, notes
+    signature, answers, waiverAccepted, studentId, notes, templateSlug, templateId
   } = req.body;
 
   if (!parentName || !phone || !climberName) {
@@ -1212,18 +1373,26 @@ app.post('/api/public/health-declarations', (req, res) => {
     return res.status(400).json({ error: 'יש לאשר את כתב הוויתור / הסרת האחריות' });
   }
 
-  // 1. Upsert parent (phone de-dupe) and resolve student
-  const parent = db.upsertParentByPhone(parentName, phone, '', { source: 'form', channel: 'form' });
-  const students = db.get('students');
-  const climberFirstName = (climberName || '').split(' ')[0];
-  let student = studentId
-    ? students.find(s => s.id === studentId)
-    : students.find(s => s.parentId === parent.id && s.name.includes(climberFirstName));
+  const template = templateId
+    ? listFormTemplates().find((t) => t.id === templateId)
+    : (templateSlug ? findFormTemplateBySlug(templateSlug) : findDefaultFormTemplate());
 
+  // 1. Upsert parent (phone de-dupe) and resolve / create student
+  const parent = db.upsertParentByPhone(parentName, phone, '', { source: 'form', channel: 'form' });
+  // Always refresh parent name from form when provided
+  if (parentName && parent.name !== parentName) {
+    db.update('parents', parent.id, { name: parentName });
+    parent.name = parentName;
+  }
+
+  let student = resolveStudentForHealthForm({ studentId, parent, climberName, phone });
   const signedAt = new Date().toISOString();
+
   if (student) {
+    const prevStatus = student.status;
     student = db.update('students', student.id, {
-      status: 'health_signed',
+      status: prevStatus === 'registered' ? prevStatus : 'health_signed',
+      parentId: student.parentId || parent.id,
       birthDate: birthDate || student.birthDate || '',
       name: climberName || student.name,
       healthSignedAt: signedAt,
@@ -1231,7 +1400,10 @@ app.post('/api/public/health-declarations', (req, res) => {
     }) || student;
     automationsService.triggerEvent('status_changed', { ...student, new_status: 'health_signed' });
   } else {
+    // Keep the CRM student's id when the staff link included studentId but the
+    // server cache was empty (common after Render restart before reload).
     student = db.insert('students', {
+      id: studentId || undefined,
       name: climberName,
       parentId: parent.id,
       groupId: null,
@@ -1247,7 +1419,11 @@ app.post('/api/public/health-declarations', (req, res) => {
     automationsService.triggerEvent('new_lead', { ...student, phone, parentName });
   }
 
-  // 2. Persist declaration (Supabase via CORE_TABLES write-through)
+  if (!student?.id || !parent?.id) {
+    return res.status(500).json({ error: 'לא ניתן לקשר את ההצהרה ללקוח' });
+  }
+
+  // 2. Persist declaration locally
   const record = db.insert('health_declarations', {
     date: new Date().toISOString().split('T')[0],
     studentId: student.id,
@@ -1263,11 +1439,31 @@ app.post('/api/public/health-declarations', (req, res) => {
     signature_url: signature || '',
     status: 'approved',
     notes: notes || '',
+    templateSlug: template?.slug || templateSlug || '',
+    templateId: template?.id || templateId || null,
     signed: true,
     signedDate: new Date().toISOString().split('T')[0],
     signedBy: parentName,
     studentName: climberName,
   });
+
+  // 3. Await durable Supabase writes so the client file survives Render restarts
+  const durable = await Promise.all([
+    persistCore('parents', parent),
+    persistCore('students', student),
+    persistCore('health_declarations', record),
+  ]);
+  const failed = durable.find((r) => r && r.ok === false);
+  if (failed) {
+    console.error('health-declaration durable write failed:', failed.error);
+    return res.status(201).json({
+      success: true,
+      warning: 'ההצהרה נשמרה מקומית אך ייתכן שלא סונכרנה למסד הנתונים',
+      record,
+      student,
+      parent,
+    });
+  }
 
   res.status(201).json({ success: true, record, student, parent });
 });
@@ -1280,7 +1476,12 @@ app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
   if (!parent?.phone) return res.status(400).json({ error: 'אין מספר טלפון לשליחה' });
 
   const origin = req.body?.origin || process.env.PUBLIC_APP_URL || 'https://mywall.co.il';
-  const healthUrl = `${origin.replace(/\/$/, '')}/health?studentId=${encodeURIComponent(student.id)}&phone=${encodeURIComponent(parent.phone)}`;
+  const requestedSlug = slugifyFormTemplate(req.body?.templateSlug || req.body?.slug || '');
+  const template = requestedSlug
+    ? findFormTemplateBySlug(requestedSlug)
+    : findDefaultFormTemplate();
+  const pathSlug = template?.slug && !template.isDefault ? `/${template.slug}` : '';
+  const healthUrl = `${origin.replace(/\/$/, '')}/health${pathSlug}?studentId=${encodeURIComponent(student.id)}&phone=${encodeURIComponent(parent.phone)}`;
 
   try {
     // Prefer approved Meta template t2; fall back to free-form text (mock / open session)
@@ -1291,10 +1492,10 @@ app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
         `שלום ${parent.name || ''}, בבקשה מלאו את הצהרת הבריאות והסרת האחריות לפני הגעתכם:\n${healthUrl}`
       );
     }
-    res.json({ success: true, healthUrl, result });
+    res.json({ success: true, healthUrl, templateSlug: template?.slug || null, result });
   } catch (err) {
     // Still return the link so staff can copy/share manually
-    res.status(200).json({ success: true, healthUrl, warning: err.message });
+    res.status(200).json({ success: true, healthUrl, templateSlug: template?.slug || null, warning: err.message });
   }
 });
 

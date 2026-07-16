@@ -20,6 +20,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <BrowserRouter>
       <Routes>
         <Route path="/health" element={<PublicHealthForm />} />
+        <Route path="/health/:slug" element={<PublicHealthForm />} />
         <Route path="/join" element={<LeadIntakeForm />} />
         <Route path="*" element={<App />} />
       </Routes>

@@ -31,7 +31,7 @@ const NAV = [
   { key: 'safety',     label: 'בדיקות בטיחות',     icon: ShieldCheck,      section: 'ops',  accent: '#4ADE80' },
   { key: 'employees',  label: 'עובדים ומשמרות',    icon: UserCog,          section: 'ops',  accent: '#60A5FA' },
   { key: 'levels',     label: 'מבחנים',             icon: Award,            section: 'ops',  accent: '#FCD34D' },
-  { key: 'health',     label: 'הצהרות בריאות',      icon: FileHeart,        section: 'ops',  accent: '#F472B6' },
+  { key: 'health',     label: 'הצהרות וטפסים',      icon: FileHeart,        section: 'ops',  accent: '#F472B6' },
   { key: 'automations',label: 'אוטומציות',         icon: Zap,              section: 'ops',  accent: '#FACC15' },
 ];
 
@@ -55,6 +55,15 @@ const PATH_TO_PAGE = Object.fromEntries(
   Object.entries(PAGE_PATHS).map(([key, path]) => [path, key])
 );
 
+// Public routes are handled outside App (main.jsx). Never redirect these into the CRM shell.
+const PUBLIC_PATH_PREFIXES = ['/health', '/join'];
+
+function isPublicPath(pathname) {
+  return PUBLIC_PATH_PREFIXES.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`)
+  );
+}
+
 function pathToPage(pathname) {
   if (pathname === '/' || pathname === '') return 'dashboard';
   return PATH_TO_PAGE[pathname] ?? null;
@@ -71,7 +80,7 @@ const PAGE_TITLES = {
   safety:     { title: 'בדיקות בטיחות יומיות',   sub: 'אישור ובטיחות האתר' },
   employees:  { title: 'עובדים ומשמרות',          sub: 'שעון נוכחות וניהול שכר' },
   levels:     { title: 'מבחנים',                  sub: 'רמה · אבטחה · הובלה' },
-  health:     { title: 'הצהרות בריאות',           sub: 'ניהול הצהרות בריאות דיגיטליות' },
+  health:     { title: 'הצהרות בריאות וטפסים',    sub: 'עריכת טקסט ההצהרה שנשלחת ללקוחות + מעקב חתימות' },
   automations:{ title: 'אוטומציות ומסעות לקוח',  sub: 'הגדרת פעולות שיווקיות ותפעוליות אוטומטיות' },
 };
 
@@ -87,6 +96,7 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (isPublicPath(location.pathname)) return;
     if (pathToPage(location.pathname) === null) {
       navigate('/', { replace: true });
     }
