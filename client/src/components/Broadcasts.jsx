@@ -32,14 +32,25 @@ export default function Broadcasts({ parents, students }) {
 
   // Settings State
   const [settings, setSettings] = useState({
-    metaWaPhoneId: '109283746562534',
-    metaWaAccessToken: 'EAAGb...',
+    metaWaPhoneId: '',
+    metaWaAccessToken: '',
     verifyToken: 'climbing_verify_token',
     aiResponderEnabled: true,
     aiSystemPrompt: 'אתה עוזר שירות לקוחות אינטליגנטי עבור קיר הטיפוס My Wall בירושלים. ענה בעברית מנומסת וקצרה. מחירון כניסות: כניסת יחיד מבוגר 50 ש"ח, ילד (עד 18) 40 ש"ח. כרטיסיית 10 כניסות 400 ש"ח. מנוי חודשי 220 ש"ח.',
   });
   const [savingSettings, setSavingSettings] = useState(false);
   const [saveSettingsSuccess, setSaveSettingsSuccess] = useState(false);
+
+  // WhatsApp Coexistence connect state
+  const [waStatus, setWaStatus] = useState({ connected: false });
+  const [waConnectConfig, setWaConnectConfig] = useState({ configured: false, appId: '', configId: '', checklist: [] });
+  const [waConnecting, setWaConnecting] = useState(false);
+  const [waConnectError, setWaConnectError] = useState('');
+  const [waConnectSuccess, setWaConnectSuccess] = useState('');
+  const [showAdvancedWa, setShowAdvancedWa] = useState(false);
+  const [testPhone, setTestPhone] = useState('');
+  const [testingSend, setTestingSend] = useState(false);
+  const sessionInfoRef = useRef({ phone_number_id: null, waba_id: null, business_id: null, event: null });
   
   // AI Workbench Simulator State
   const [workbenchInput, setWorkbenchInput] = useState('');
@@ -70,6 +81,190 @@ export default function Broadcasts({ parents, students }) {
       }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const fetchWaStatus = async (refresh = false) => {
+    try {
+      const response = await fetch(`/api/whatsapp/status${refresh ? '?refresh=1' : ''}`);
+      if (response.ok) {
+        const data = await response.json();
+        setWaStatus(data);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const fetchWaConnectConfig = async () => {
+    try {
+      const response = await fetch('/api/whatsapp/connect-config');
+      if (response.ok) {
+        const data = await response.json();
+        setWaConnectConfig(data);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const loadFacebookSdk = (appId, graphVersion = 'v21.0') => {
+    return new Promise((resolve, reject) => {
+      if (!appId) {
+        reject(new Error('חסר META_APP_ID'));
+        return;
+      }
+      if (window.FB) {
+        window.FB.init({ appId, autoLogAppEvents: true, xfbml: true, version: graphVersion });
+        resolve(window.FB);
+        return;
+      }
+      window.fbAsyncInit = function () {
+        window.FB.init({ appId, autoLogAppEvents: true, xfbml: true, version: graphVersion });
+        resolve(window.FB);
+      };
+      if (document.getElementById('facebook-jssdk')) {
+        // Script tag exists; wait briefly for init
+        setTimeout(() => (window.FB ? resolve(window.FB) : reject(new Error('Facebook SDK לא נטען'))), 800);
+        return;
+      }
+      const script = document.createElement('script');
+      script.id = 'facebook-jssdk';
+      script.async = true;
+      script.defer = true;
+      script.crossOrigin = 'anonymous';
+      script.src = 'https://connect.facebook.net/en_US/sdk.js';
+      script.onerror = () => reject(new Error('טעינת Facebook SDK נכשלה'));
+      document.body.appendChild(script);
+    });
+  };
+
+  const finishWhatsAppOAuth = async (code) => {
+    const session = sessionInfoRef.current || {};
+    const response = await fetch('/api/whatsapp/oauth/callback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        phone_number_id: session.phone_number_id,
+        waba_id: session.waba_id,
+        business_id: session.business_id,
+        event: session.event,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || 'השלמת החיבור נכשלה');
+    }
+    setWaStatus(data.status || { connected: true });
+    setWaConnectSuccess('WhatsApp חובר בהצלחה (Coexistence). אפשר לענות מהטלפון ומהמערכת.');
+    await fetchSettings();
+    await fetchWaStatus(true);
+  };
+
+  const handleConnectWhatsApp = async () => {
+    setWaConnectError('');
+    setWaConnectSuccess('');
+    setWaConnecting(true);
+    try {
+      if (!waConnectConfig.configured) {
+        throw new Error('חסרים META_APP_ID / META_EMBEDDED_SIGNUP_CONFIG_ID בשרת. השלימו את הצ׳קליסט למטה.');
+      }
+
+      await loadFacebookSdk(waConnectConfig.appId, waConnectConfig.graphVersion || 'v21.0');
+
+      const onMessage = (event) => {
+        if (!String(event.origin || '').endsWith('facebook.com')) return;
+        try {
+          const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+          if (data?.type !== 'WA_EMBEDDED_SIGNUP') return;
+          if (data.event === 'CANCEL') {
+            setWaConnectError(data.data?.current_step
+              ? `החיבור בוטל בשלב: ${data.data.current_step}`
+              : 'החיבור בוטל');
+            setWaConnecting(false);
+            return;
+          }
+          sessionInfoRef.current = {
+            phone_number_id: data.data?.phone_number_id || null,
+            waba_id: data.data?.waba_id || null,
+            business_id: data.data?.business_id || null,
+            event: data.event || null,
+          };
+        } catch {
+          // ignore non-JSON message events
+        }
+      };
+      window.addEventListener('message', onMessage);
+
+      window.FB.login((response) => {
+        window.removeEventListener('message', onMessage);
+        (async () => {
+          try {
+            if (!response?.authResponse?.code) {
+              throw new Error('לא התקבל קוד אימות מ-Meta');
+            }
+            await finishWhatsAppOAuth(response.authResponse.code);
+          } catch (err) {
+            setWaConnectError(err.message || 'שגיאה בחיבור');
+          } finally {
+            setWaConnecting(false);
+          }
+        })();
+      }, {
+        config_id: waConnectConfig.configId,
+        response_type: 'code',
+        override_default_response_type: true,
+        extras: {
+          setup: {},
+          featureType: 'whatsapp_business_app_onboarding',
+          sessionInfoVersion: '3',
+        },
+      });
+    } catch (err) {
+      setWaConnectError(err.message || 'שגיאה בחיבור');
+      setWaConnecting(false);
+    }
+  };
+
+  const handleDisconnectWhatsApp = async () => {
+    if (!confirm('לנתק את WhatsApp מהמערכת? (המספר יישאר פעיל באפליקציה בטלפון)')) return;
+    setWaConnectError('');
+    setWaConnectSuccess('');
+    try {
+      const response = await fetch('/api/whatsapp/disconnect', { method: 'POST' });
+      const data = await response.json();
+      setWaStatus(data.status || { connected: false });
+      setWaConnectSuccess('החיבור נותק מהמערכת');
+      await fetchSettings();
+    } catch (err) {
+      setWaConnectError('ניתוק נכשל');
+    }
+  };
+
+  const handleTestWhatsAppSend = async () => {
+    if (!testPhone.trim()) {
+      alert('הזינו מספר לבדיקה');
+      return;
+    }
+    setTestingSend(true);
+    setWaConnectError('');
+    try {
+      const response = await fetch('/api/whatsapp/send-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: testPhone.trim(), templateId: 'hello_world' }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok) {
+        setWaConnectSuccess('הודעת בדיקה נשלחה בהצלחה');
+      } else {
+        setWaConnectError(data.error || 'שליחת בדיקה נכשלה');
+      }
+    } catch {
+      setWaConnectError('שגיאת רשת בשליחת בדיקה');
+    } finally {
+      setTestingSend(false);
     }
   };
 
@@ -106,6 +301,8 @@ export default function Broadcasts({ parents, students }) {
   useEffect(() => {
     fetchSettings();
     fetchChatLogs();
+    fetchWaStatus();
+    fetchWaConnectConfig();
   }, []);
 
   useEffect(() => {
@@ -523,6 +720,129 @@ export default function Broadcasts({ parents, students }) {
 
       {/* SETTINGS & AI WORKBENCH */}
       {activeTab === 'settings' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* WhatsApp Coexistence Connect Card */}
+          <div className="card card-p" style={{ border: '1px solid rgba(37,211,102,0.35)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Smartphone size={18} style={{ color: '#25D366' }} />
+                <span className="section-title">חיבור WhatsApp Business (Coexistence)</span>
+              </div>
+              <span style={{
+                fontSize: 11,
+                fontWeight: 700,
+                padding: '4px 10px',
+                borderRadius: 999,
+                background: waStatus.connected ? 'rgba(37,211,102,0.15)' : 'rgba(239,68,68,0.12)',
+                color: waStatus.connected ? '#25D366' : '#F87171',
+              }}>
+                {waStatus.connected ? 'מחובר' : 'לא מחובר'}
+              </span>
+            </div>
+
+            <p style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.6, marginBottom: 14 }}>
+              חברו את מספר ה-WhatsApp Business שלכם כדי לענות גם מהטלפון וגם מהמערכת.
+              השיחות יופיעו בתיק הלקוח בזמן אמת.
+            </p>
+
+            {waStatus.connected ? (
+              <div style={{ display: 'grid', gap: 8, marginBottom: 14, fontSize: 12 }}>
+                <div><strong>מספר:</strong> {waStatus.displayPhone || waStatus.phoneNumberId || '—'}</div>
+                {waStatus.verifiedName && <div><strong>שם מאומת:</strong> {waStatus.verifiedName}</div>}
+                <div><strong>Coexistence:</strong> {waStatus.coexistenceEnabled || waStatus.isOnBizApp ? 'פעיל (טלפון + מערכת)' : 'לא מאושר עדיין'}</div>
+                {waStatus.connectedAt && (
+                  <div style={{ color: 'var(--text-3)' }}>
+                    חובר ב-{new Date(waStatus.connectedAt).toLocaleString('he-IL')}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 14 }}>
+                לחצו על הכפתור — ייפתח חלון Meta לאימות המספר באפליקציית WhatsApp Business.
+              </div>
+            )}
+
+            {waConnectSuccess && (
+              <div className="alert alert-success" style={{ marginBottom: 12 }}>
+                <span>{waConnectSuccess}</span>
+              </div>
+            )}
+            {waConnectError && (
+              <div className="alert alert-danger" style={{ marginBottom: 12 }}>
+                <span>{waConnectError}</span>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+              {!waStatus.connected ? (
+                <button type="button" className="btn btn-primary" onClick={handleConnectWhatsApp} disabled={waConnecting}>
+                  {waConnecting ? 'מתחבר...' : 'חבר WhatsApp'}
+                </button>
+              ) : (
+                <>
+                  <button type="button" className="btn btn-ghost" onClick={() => fetchWaStatus(true)}>
+                    <RefreshCw size={14} /> רענן סטטוס
+                  </button>
+                  <button type="button" className="btn btn-danger" onClick={handleDisconnectWhatsApp}>
+                    נתק
+                  </button>
+                </>
+              )}
+            </div>
+
+            {waStatus.connected && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
+                <input
+                  className="input input-sm"
+                  style={{ maxWidth: 180 }}
+                  placeholder="מספר לבדיקה (05...)"
+                  value={testPhone}
+                  onChange={e => setTestPhone(e.target.value)}
+                />
+                <button type="button" className="btn btn-sm btn-success" onClick={handleTestWhatsAppSend} disabled={testingSend}>
+                  {testingSend ? 'שולח...' : 'בדוק שליחה'}
+                </button>
+              </div>
+            )}
+
+            {!waConnectConfig.configured && (
+              <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 8, padding: 12, fontSize: 11, lineHeight: 1.6 }}>
+                <div style={{ fontWeight: 700, marginBottom: 6, color: '#FBBF24' }}>הגדרה חד-פעמית ב-Meta (צ׳קליסט)</div>
+                <ol style={{ margin: '0 18px', padding: 0 }}>
+                  {(waConnectConfig.checklist || []).map((item, idx) => (
+                    <li key={idx} style={{ marginBottom: 4 }}>{item}</li>
+                  ))}
+                </ol>
+              </div>
+            )}
+
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              style={{ marginTop: 10 }}
+              onClick={() => setShowAdvancedWa(v => !v)}
+            >
+              {showAdvancedWa ? 'הסתר הגדרות מתקדמות' : 'הצג הגדרות מתקדמות (גיבוי ידני)'}
+            </button>
+
+            {showAdvancedWa && (
+              <div className="form-grid" style={{ gap: 10, marginTop: 12 }}>
+                <div className="form-group">
+                  <label className="form-label" style={{ fontSize: 11 }}>Phone Number ID</label>
+                  <input className="input input-sm" value={settings.metaWaPhoneId || ''} onChange={e => setSettings({ ...settings, metaWaPhoneId: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label" style={{ fontSize: 11 }}>Access Token (השאירו ריק כדי לא לדרוס)</label>
+                  <input className="input input-sm" type="password" placeholder="EAA..." value={settings.metaWaAccessToken?.includes('•') ? '' : (settings.metaWaAccessToken || '')} onChange={e => setSettings({ ...settings, metaWaAccessToken: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label" style={{ fontSize: 11 }}>WABA ID</label>
+                  <input className="input input-sm" value={settings.metaWaWabaId || ''} onChange={e => setSettings({ ...settings, metaWaWabaId: e.target.value })} />
+                </div>
+              </div>
+            )}
+          </div>
+
         <div className="grid-2" style={{ gap: 20, alignItems: 'flex-start' }}>
           {/* Settings Form */}
           <div className="card card-p">
@@ -624,6 +944,7 @@ export default function Broadcasts({ parents, students }) {
               )}
             </div>
           </div>
+        </div>
         </div>
       )}
     </div>
