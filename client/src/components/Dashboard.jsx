@@ -129,7 +129,17 @@ export default function Dashboard({ students, groups, onNavigate }) {
   ];
 
   const todayDay = new Date().getDay();
-  const todayClasses = (groups || []).filter(g => g.day === todayDay);
+  // Include biweekly groups whose name encodes both days (e.g. ב׳+ה׳).
+  const todayClasses = (groups || []).filter(g => {
+    const name = g?.name || '';
+    const m = name.match(/([א-ו])['׳’]?\s*\+\s*([א-ו])['׳’]?/);
+    const heb = { א: 0, ב: 1, ג: 2, ד: 3, ה: 4, ו: 5 };
+    if (m) {
+      const days = [heb[m[1]], heb[m[2]], g.day].filter(d => d != null);
+      return [...new Set(days)].includes(todayDay);
+    }
+    return g.day === todayDay;
+  });
 
   const maxGroupCount = Math.max(...groupDistribution.map(g => g.count), 1);
   const maxGradeCount = Math.max(...gradeDistribution.map(g => g.count), 1);
@@ -144,7 +154,7 @@ export default function Dashboard({ students, groups, onNavigate }) {
           sub="חברים רשומים בקבוצות"
           subType="up"
           icon={Users}
-          color="#6366F1"
+          color="#38BDF8"
         />
         <StatCard
           label="לידים בטיפול"
@@ -152,7 +162,7 @@ export default function Dashboard({ students, groups, onNavigate }) {
           sub="ממתינים במשפך המכירות"
           subType="warn"
           icon={TrendingUp}
-          color="#F59E0B"
+          color="#FBBF24"
         />
         <StatCard
           label="קופה יומית (סליקה)"
@@ -160,7 +170,7 @@ export default function Dashboard({ students, groups, onNavigate }) {
           sub="עסקאות אשראי ומזומן"
           subType="up"
           icon={Coins}
-          color="#10B981"
+          color="#34D399"
         />
         <StatCard
           label="בדיקת בטיחות יומית"
@@ -168,7 +178,7 @@ export default function Dashboard({ students, groups, onNavigate }) {
           sub={safetyPerformed ? '✓ נחתם להיום' : '⚠️ יש לחתום על בדיקה'}
           subType={safetyPerformed ? 'up' : 'down'}
           icon={ShieldCheck}
-          color="#A855F7"
+          color="#A78BFA"
         />
       </div>
 
@@ -190,7 +200,7 @@ export default function Dashboard({ students, groups, onNavigate }) {
                 <div style={{ flex: 1, background: 'rgba(255,255,255,0.03)', height: 12, borderRadius: 6, overflow: 'hidden' }}>
                   <div style={{ 
                     width: `${(g.count / maxGroupCount) * 100}%`, 
-                    background: 'linear-gradient(90deg, #6366F1 0%, #A855F7 100%)', 
+                    background: 'linear-gradient(90deg, #38BDF8 0%, #A78BFA 100%)', 
                     height: '100%', 
                     borderRadius: 6,
                     transition: 'width 0.5s ease'

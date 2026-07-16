@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Calendar, ShieldCheck, UserCog, LogIn,
   MessageSquare, Bell, Search, Coins, Tag, Award, FileHeart, Zap
@@ -20,19 +21,44 @@ import Automations        from './components/Automations.jsx';
 
 // ─── Nav Config ─────────────────────────────────────────────────────────────
 const NAV = [
-  { key: 'dashboard',  label: 'דשבורד',            icon: LayoutDashboard,  section: 'main' },
-  { key: 'checkin',    label: 'מסוף כניסה',        icon: LogIn,            section: 'main' },
-  { key: 'leads',      label: 'לקוחות ולידים',     icon: Users,            section: 'main' },
-  { key: 'schedule',   label: 'לוח חוגים',          icon: Calendar,         section: 'main' },
-  { key: 'broadcasts', label: 'דיוור וואטסאפ',     icon: MessageSquare,    section: 'main' },
-  { key: 'cash',       label: 'קופה וחשבונות',    icon: Coins,            section: 'main' },
-  { key: 'pricelist',  label: 'מחירון',             icon: Tag,              section: 'main' },
-  { key: 'safety',     label: 'בדיקות בטיחות',     icon: ShieldCheck,      section: 'ops' },
-  { key: 'employees',  label: 'עובדים ומשמרות',    icon: UserCog,          section: 'ops' },
-  { key: 'levels',     label: 'מבחני רמה',          icon: Award,            section: 'ops' },
-  { key: 'health',     label: 'הצהרות בריאות',      icon: FileHeart,        section: 'ops' },
-  { key: 'automations',label: 'אוטומציות',         icon: Zap,              section: 'ops' },
+  { key: 'dashboard',  label: 'דשבורד',            icon: LayoutDashboard,  section: 'main', accent: '#38BDF8' },
+  { key: 'checkin',    label: 'מסוף כניסה',        icon: LogIn,            section: 'main', accent: '#2DD4BF' },
+  { key: 'leads',      label: 'לקוחות ולידים',     icon: Users,            section: 'main', accent: '#A78BFA' },
+  { key: 'schedule',   label: 'לוח חוגים',          icon: Calendar,         section: 'main', accent: '#FBBF24' },
+  { key: 'broadcasts', label: 'דיוור וואטסאפ',     icon: MessageSquare,    section: 'main', accent: '#34D399' },
+  { key: 'cash',       label: 'קופה וחשבונות',    icon: Coins,            section: 'main', accent: '#F59E0B' },
+  { key: 'pricelist',  label: 'מחירון',             icon: Tag,              section: 'main', accent: '#FB7185' },
+  { key: 'safety',     label: 'בדיקות בטיחות',     icon: ShieldCheck,      section: 'ops',  accent: '#4ADE80' },
+  { key: 'employees',  label: 'עובדים ומשמרות',    icon: UserCog,          section: 'ops',  accent: '#60A5FA' },
+  { key: 'levels',     label: 'מבחני רמה',          icon: Award,            section: 'ops',  accent: '#FCD34D' },
+  { key: 'health',     label: 'הצהרות בריאות',      icon: FileHeart,        section: 'ops',  accent: '#F472B6' },
+  { key: 'automations',label: 'אוטומציות',         icon: Zap,              section: 'ops',  accent: '#FACC15' },
 ];
+
+// URL paths for browser history (Back/Forward). /health is reserved for the public form.
+const PAGE_PATHS = {
+  dashboard:   '/',
+  checkin:     '/checkin',
+  leads:       '/leads',
+  schedule:    '/schedule',
+  broadcasts:  '/broadcasts',
+  cash:        '/cash',
+  pricelist:   '/pricelist',
+  safety:      '/safety',
+  employees:   '/employees',
+  levels:      '/levels',
+  health:      '/health-declarations',
+  automations: '/automations',
+};
+
+const PATH_TO_PAGE = Object.fromEntries(
+  Object.entries(PAGE_PATHS).map(([key, path]) => [path, key])
+);
+
+function pathToPage(pathname) {
+  if (pathname === '/' || pathname === '') return 'dashboard';
+  return PATH_TO_PAGE[pathname] ?? null;
+}
 
 const PAGE_TITLES = {
   dashboard:  { title: 'שלום 👋 Eyal',            sub: 'סקירה כללית של המערכת' },
@@ -51,7 +77,21 @@ const PAGE_TITLES = {
 
 // ─── Main App Component ──────────────────────────────────────────────────────
 export default function App() {
-  const [page, setPage]         = useState('dashboard');
+  const location = useLocation();
+  const navigate = useNavigate();
+  const page = pathToPage(location.pathname) ?? 'dashboard';
+
+  const goToPage = (key) => {
+    const path = PAGE_PATHS[key] || '/';
+    if (path !== location.pathname) navigate(path);
+  };
+
+  useEffect(() => {
+    if (pathToPage(location.pathname) === null) {
+      navigate('/', { replace: true });
+    }
+  }, [location.pathname, navigate]);
+
   const [searchQ, setSearchQ]   = useState('');
 
   // Shared state persisted in localStorage
@@ -147,13 +187,32 @@ export default function App() {
         <div className="nav-section-label">ניהול</div>
         {NAV.filter(n => n.section === 'main').map(n => {
           const Icon = n.icon;
+          const isActive = page === n.key;
           return (
             <button
               key={n.key}
-              className={`nav-item ${page === n.key ? 'active' : ''}`}
-              onClick={() => setPage(n.key)}
+              className={`nav-item ${isActive ? 'active' : ''}`}
+              onClick={() => goToPage(n.key)}
+              style={{
+                '--nav-accent': n.accent,
+                ...(isActive ? {
+                  background: `${n.accent}28`,
+                  borderColor: `${n.accent}66`,
+                  color: '#fff',
+                  boxShadow: `0 4px 18px ${n.accent}33`,
+                } : {}),
+              }}
             >
-              <Icon className="nav-icon" size={18} />
+              <span
+                className="nav-icon-wrap"
+                style={{
+                  background: `${n.accent}30`,
+                  color: n.accent,
+                  boxShadow: isActive ? `0 0 14px ${n.accent}66` : 'none',
+                }}
+              >
+                <Icon className="nav-icon" size={17} strokeWidth={2.25} />
+              </span>
               <span>{n.label}</span>
               {n.key === 'leads' && newLeadsCount > 0 && (
                 <span className="nav-badge">{newLeadsCount}</span>
@@ -166,13 +225,32 @@ export default function App() {
         <div className="nav-section-label" style={{ marginTop: 8 }}>תפעול</div>
         {NAV.filter(n => n.section === 'ops').map(n => {
           const Icon = n.icon;
+          const isActive = page === n.key;
           return (
             <button
               key={n.key}
-              className={`nav-item ${page === n.key ? 'active' : ''}`}
-              onClick={() => setPage(n.key)}
+              className={`nav-item ${isActive ? 'active' : ''}`}
+              onClick={() => goToPage(n.key)}
+              style={{
+                '--nav-accent': n.accent,
+                ...(isActive ? {
+                  background: `${n.accent}28`,
+                  borderColor: `${n.accent}66`,
+                  color: '#fff',
+                  boxShadow: `0 4px 18px ${n.accent}33`,
+                } : {}),
+              }}
             >
-              <Icon className="nav-icon" size={18} />
+              <span
+                className="nav-icon-wrap"
+                style={{
+                  background: `${n.accent}30`,
+                  color: n.accent,
+                  boxShadow: isActive ? `0 0 14px ${n.accent}66` : 'none',
+                }}
+              >
+                <Icon className="nav-icon" size={17} strokeWidth={2.25} />
+              </span>
               <span>{n.label}</span>
             </button>
           );
@@ -230,7 +308,7 @@ export default function App() {
                         return (
                         <div 
                           key={l.id} 
-                          onClick={() => { setPage('leads'); setShowNotifications(false); }}
+                          onClick={() => { goToPage('leads'); setShowNotifications(false); }}
                           style={{ fontSize: 12, padding: 8, background: '#21262D', borderRadius: 6, cursor: 'pointer', transition: 'background 0.2s', display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}
                           onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
                           onMouseLeave={e => e.currentTarget.style.background = '#21262D'}
@@ -257,7 +335,7 @@ export default function App() {
 
         {/* Page Content */}
         <main className="page-content">
-          {page === 'dashboard'  && <Dashboard students={students} groups={groups} onNavigate={setPage} />}
+          {page === 'dashboard'  && <Dashboard students={students} groups={groups} onNavigate={goToPage} />}
           {page === 'checkin'    && <CheckInConsole students={students} groups={groups} />}
           {page === 'leads'      && <Leads students={students} setStudents={setStudents} parents={parents} setParents={setParents} groups={groups} />}
           {page === 'schedule'   && <Schedule groups={groups} students={students} parents={parents} setGroups={setGroups} setStudents={setStudents} />}

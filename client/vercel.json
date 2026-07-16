@@ -3,6 +3,10 @@
     {
       "source": "/api/(.*)",
       "destination": "https://climbing-crm-api.onrender.com/api/$1"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
     }
   ]
 }

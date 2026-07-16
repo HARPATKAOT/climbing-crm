@@ -57,13 +57,21 @@ export function Modal({ title, onClose, children, footer }) {
   );
 }
 
-export function StatCard({ label, value, sub, subType = '', icon: Icon, color = '#6366F1', colorBg }) {
-  const bgColor = colorBg || `${color}18`;
+export function StatCard({ label, value, sub, subType = '', icon: Icon, color = '#38BDF8', colorBg }) {
+  const bgColor = colorBg || `${color}28`;
   return (
-    <div className="card stat-card slide-up" style={{ '--stat-color': color, '--stat-color-bg': bgColor }}>
-      <div className="stat-icon"><Icon size={18} /></div>
+    <div
+      className="card stat-card slide-up"
+      style={{
+        '--stat-color': color,
+        '--stat-color-bg': bgColor,
+        borderTop: `3px solid ${color}`,
+        background: `linear-gradient(165deg, ${color}22 0%, transparent 42%), var(--bg-card)`,
+      }}
+    >
+      <div className="stat-icon" style={{ background: bgColor, color }}><Icon size={18} /></div>
       <div className="stat-label">{label}</div>
-      <div className="stat-value">{value}</div>
+      <div className="stat-value" style={{ color }}>{value}</div>
       {sub && <div className={`stat-sub ${subType}`}>{sub}</div>}
     </div>
   );
