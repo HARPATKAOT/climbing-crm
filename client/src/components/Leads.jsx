@@ -32,12 +32,13 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
   if (!student) return null;
   const statusKeys = Object.keys(STATUSES);
 
-  const [broadcastLists, setBroadcastLists] = useState({
-    general: true,
-    classes: true,
-    trips: true,
-    events: true
-  });
+  const [broadcastListDefs, setBroadcastListDefs] = useState([
+    { key: 'general', label: 'כללי', description: 'עדכונים שוטפים' },
+    { key: 'classes', label: 'חוגים', description: 'שינויי שעות וכדומה' },
+    { key: 'trips', label: 'טיולים', description: 'טיולי סנפלינג/חוץ' },
+    { key: 'events', label: 'אירועים', description: 'אירועים ותחרויות מועדון' },
+  ]);
+  const [broadcastLists, setBroadcastLists] = useState({});
   const [loadingLists, setLoadingLists] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -254,20 +255,23 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
   }, []);
 
   useEffect(() => {
-    if (parent?.id) {
-      setLoadingLists(true);
-      fetch(`/api/parents/${parent.id}/broadcast-lists`)
-        .then(res => res.ok ? res.json() : null)
-        .then(data => {
-          if (data) setBroadcastLists(data);
-        })
-        .catch(err => console.error(err))
-        .finally(() => setLoadingLists(false));
-    }
+    if (!parent?.id) return;
+    setLoadingLists(true);
+    Promise.all([
+      fetch('/api/broadcast-list-defs').then((res) => (res.ok ? res.json() : null)),
+      fetch(`/api/parents/${parent.id}/broadcast-lists`).then((res) => (res.ok ? res.json() : null)),
+    ])
+      .then(([defs, subscriptions]) => {
+        if (Array.isArray(defs) && defs.length > 0) setBroadcastListDefs(defs);
+        if (subscriptions) setBroadcastLists(subscriptions);
+      })
+      .catch((err) => console.error(err))
+      .finally(() => setLoadingLists(false));
   }, [parent]);
 
   const handleListToggle = async (listKey) => {
-    const nextLists = { ...broadcastLists, [listKey]: !broadcastLists[listKey] };
+    const currentlyOn = broadcastLists[listKey] !== false;
+    const nextLists = { ...broadcastLists, [listKey]: !currentlyOn };
     setBroadcastLists(nextLists);
     try {
       await fetch(`/api/parents/${parent.id}/broadcast-lists`, {
@@ -906,24 +910,25 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
             <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען רשימות תפוצה...</div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {[
-                { key: 'general', label: 'כללי (עדכונים שוטפים)' },
-                { key: 'classes', label: 'חוגים (שינויי שעות וכדומה)' },
-                { key: 'trips',   label: 'טיולים (טיולי סנפלינג/חוץ)' },
-                { key: 'events',  label: 'אירועים ותחרויות מועדון' }
-              ].map(list => (
-                <label key={list.key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={broadcastLists[list.key]}
-                    onChange={() => handleListToggle(list.key)}
-                    style={{ cursor: 'pointer', width: 15, height: 15 }}
-                  />
-                  <span style={{ color: broadcastLists[list.key] ? 'var(--text-1)' : 'var(--text-3)', fontWeight: broadcastLists[list.key] ? '600' : 'normal' }}>
-                    {list.label}
-                  </span>
-                </label>
-              ))}
+              {broadcastListDefs.map((list) => {
+                const label = list.description
+                  ? `${list.label} (${list.description})`
+                  : list.label;
+                const checked = broadcastLists[list.key] !== false;
+                return (
+                  <label key={list.key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => handleListToggle(list.key)}
+                      style={{ cursor: 'pointer', width: 15, height: 15 }}
+                    />
+                    <span style={{ color: checked ? 'var(--text-1)' : 'var(--text-3)', fontWeight: checked ? '600' : 'normal' }}>
+                      {label}
+                    </span>
+                  </label>
+                );
+              })}
             </div>
           )}
         </div>

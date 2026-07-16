@@ -88,7 +88,15 @@ const SEED_DATA = {
   },
   whatsapp_logs: [],
   broadcast_campaigns: [],
+  broadcast_list_defs: [
+    { key: 'general', label: 'כללי', description: 'עדכונים שוטפים', color: 'var(--blue)', sortOrder: 0 },
+    { key: 'classes', label: 'חוגים', description: 'שינויי שעות וכדומה', color: 'var(--green)', sortOrder: 1 },
+    { key: 'trips', label: 'טיולים', description: 'טיולי סנפלינג/חוץ', color: 'var(--amber)', sortOrder: 2 },
+    { key: 'events', label: 'אירועים', description: 'אירועים ותחרויות מועדון', color: 'var(--purple)', sortOrder: 3 },
+  ],
 };
+
+const DEFAULT_BROADCAST_LIST_DEFS = SEED_DATA.broadcast_list_defs;
 
 // Ensure JSON file exists and read it
 function readDb() {
@@ -395,27 +403,101 @@ export const db = {
     return { parent, students: createdStudents, isNew: createdStudents.length > 0 };
   },
 
+  getBroadcastListDefs: () => {
+    const data = readDb();
+    if (!Array.isArray(data.broadcast_list_defs) || data.broadcast_list_defs.length === 0) {
+      data.broadcast_list_defs = DEFAULT_BROADCAST_LIST_DEFS.map((l) => ({ ...l }));
+      writeDb(data);
+    }
+    return [...data.broadcast_list_defs].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  },
+
+  createBroadcastListDef: ({ label, description = '', color = 'var(--blue)' }) => {
+    const name = String(label || '').trim();
+    if (!name) return { error: 'שם הרשימה חובה' };
+
+    const data = readDb();
+    if (!Array.isArray(data.broadcast_list_defs)) {
+      data.broadcast_list_defs = DEFAULT_BROADCAST_LIST_DEFS.map((l) => ({ ...l }));
+    }
+
+    const key = `list_${Date.now().toString(36)}`;
+    const sortOrder = data.broadcast_list_defs.reduce((max, l) => Math.max(max, l.sortOrder ?? 0), -1) + 1;
+    const created = {
+      key,
+      label: name,
+      description: String(description || '').trim(),
+      color: color || 'var(--blue)',
+      sortOrder,
+    };
+    data.broadcast_list_defs.push(created);
+    writeDb(data);
+    return { ok: true, list: created, lists: db.getBroadcastListDefs() };
+  },
+
+  updateBroadcastListDef: (key, updates = {}) => {
+    const data = readDb();
+    if (!Array.isArray(data.broadcast_list_defs)) {
+      data.broadcast_list_defs = DEFAULT_BROADCAST_LIST_DEFS.map((l) => ({ ...l }));
+    }
+    const index = data.broadcast_list_defs.findIndex((l) => l.key === key);
+    if (index === -1) return { error: 'הרשימה לא נמצאה' };
+
+    const current = data.broadcast_list_defs[index];
+    const nextLabel = updates.label !== undefined ? String(updates.label).trim() : current.label;
+    if (!nextLabel) return { error: 'שם הרשימה חובה' };
+
+    data.broadcast_list_defs[index] = {
+      ...current,
+      label: nextLabel,
+      description: updates.description !== undefined ? String(updates.description || '').trim() : (current.description || ''),
+      color: updates.color !== undefined ? (updates.color || current.color) : current.color,
+      sortOrder: updates.sortOrder !== undefined ? Number(updates.sortOrder) : current.sortOrder,
+    };
+    writeDb(data);
+    return { ok: true, list: data.broadcast_list_defs[index], lists: db.getBroadcastListDefs() };
+  },
+
+  deleteBroadcastListDef: (key) => {
+    const data = readDb();
+    if (!Array.isArray(data.broadcast_list_defs)) {
+      data.broadcast_list_defs = DEFAULT_BROADCAST_LIST_DEFS.map((l) => ({ ...l }));
+    }
+    if (data.broadcast_list_defs.length <= 1) {
+      return { error: 'חייבת להישאר לפחות רשימת תפוצה אחת' };
+    }
+    const index = data.broadcast_list_defs.findIndex((l) => l.key === key);
+    if (index === -1) return { error: 'הרשימה לא נמצאה' };
+
+    data.broadcast_list_defs.splice(index, 1);
+    if (Array.isArray(data.broadcast_lists)) {
+      data.broadcast_lists = data.broadcast_lists.filter((r) => r.listName !== key);
+    }
+    writeDb(data);
+    return { ok: true, lists: db.getBroadcastListDefs() };
+  },
+
   getParentBroadcastLists: (parentId) => {
     const data = readDb();
     if (!data.broadcast_lists) data.broadcast_lists = [];
-    
-    const lists = ['general', 'classes', 'trips', 'events'];
+
+    const lists = db.getBroadcastListDefs().map((l) => l.key);
     const result = {};
-    
-    lists.forEach(l => {
-      const record = data.broadcast_lists.find(r => r.parentId === parentId && r.listName === l);
+
+    lists.forEach((l) => {
+      const record = data.broadcast_lists.find((r) => r.parentId === parentId && r.listName === l);
       result[l] = record ? record.subscribed : true; // Default to true if no record exists
     });
-    
+
     return result;
   },
 
   updateParentBroadcastLists: (parentId, subscriptions) => {
     const data = readDb();
     if (!data.broadcast_lists) data.broadcast_lists = [];
-    
+
     Object.entries(subscriptions).forEach(([listName, subscribed]) => {
-      const index = data.broadcast_lists.findIndex(r => r.parentId === parentId && r.listName === listName);
+      const index = data.broadcast_lists.findIndex((r) => r.parentId === parentId && r.listName === listName);
       if (index !== -1) {
         data.broadcast_lists[index].subscribed = subscribed;
       } else {
@@ -423,11 +505,11 @@ export const db = {
           id: `bl${Date.now()}_${listName}`,
           parentId,
           listName,
-          subscribed
+          subscribed,
         });
       }
     });
-    
+
     writeDb(data);
     return db.getParentBroadcastLists(parentId);
   },

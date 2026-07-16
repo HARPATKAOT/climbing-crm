@@ -212,6 +212,29 @@ app.put('/api/parents/:id', (req, res) => {
   res.json(updated);
 });
 
+// Broadcast list definitions (editable mailing lists)
+app.get('/api/broadcast-list-defs', (req, res) => {
+  res.json(db.getBroadcastListDefs());
+});
+
+app.post('/api/broadcast-list-defs', (req, res) => {
+  const result = db.createBroadcastListDef(req.body || {});
+  if (result.error) return res.status(400).json({ error: result.error });
+  res.status(201).json(result);
+});
+
+app.put('/api/broadcast-list-defs/:key', (req, res) => {
+  const result = db.updateBroadcastListDef(req.params.key, req.body || {});
+  if (result.error) return res.status(404).json({ error: result.error });
+  res.json(result);
+});
+
+app.delete('/api/broadcast-list-defs/:key', (req, res) => {
+  const result = db.deleteBroadcastListDef(req.params.key);
+  if (result.error) return res.status(400).json({ error: result.error });
+  res.json(result);
+});
+
 // Get parent broadcast lists
 app.get('/api/parents/:id/broadcast-lists', (req, res) => {
   const { id } = req.params;

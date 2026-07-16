@@ -1,11 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Hash, MessageSquare, History, Settings, Smartphone, Loader, CheckCircle, RefreshCw, Sparkles, AlertCircle } from 'lucide-react';
+import { Send, Hash, History, Settings, Smartphone, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Modal } from './UI.jsx';
 
-const LISTS = [
-  { key: 'general', label: 'כללי', color: 'var(--blue)' },
-  { key: 'classes', label: 'חוגים', color: 'var(--green)' },
-  { key: 'trips',   label: 'טיולים', color: 'var(--amber)' },
-  { key: 'events',  label: 'אירועים', color: 'var(--purple)' },
+const DEFAULT_LISTS = [
+  { key: 'general', label: 'כללי', description: 'עדכונים שוטפים', color: 'var(--blue)' },
+  { key: 'classes', label: 'חוגים', description: 'שינויי שעות וכדומה', color: 'var(--green)' },
+  { key: 'trips',   label: 'טיולים', description: 'טיולי סנפלינג/חוץ', color: 'var(--amber)' },
+  { key: 'events',  label: 'אירועים', description: 'אירועים ותחרויות מועדון', color: 'var(--purple)' },
+];
+
+const LIST_COLORS = [
+  { value: 'var(--blue)', label: 'כחול' },
+  { value: 'var(--green)', label: 'ירוק' },
+  { value: 'var(--amber)', label: 'כתום' },
+  { value: 'var(--purple)', label: 'סגול' },
 ];
 
 const WA_TEMPLATES = [
@@ -19,12 +27,21 @@ export default function Broadcasts({ parents, students }) {
   const [activeTab, setActiveTab] = useState('compose'); // compose | history | simulator | settings
   
   // Compose / Send State
+  const [lists, setLists] = useState(DEFAULT_LISTS);
   const [selectedList, setSelectedList] = useState('general');
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [customMessage, setCustomMessage] = useState('');
   const [recipientFilter, setRecipientFilter] = useState('all'); 
   const [sendingBroadcast, setSendingBroadcast] = useState(false);
   const [sendResult, setSendResult] = useState(null);
+
+  // Edit mailing lists
+  const [showListsModal, setShowListsModal] = useState(false);
+  const [editingLists, setEditingLists] = useState([]);
+  const [newListLabel, setNewListLabel] = useState('');
+  const [newListDescription, setNewListDescription] = useState('');
+  const [savingLists, setSavingLists] = useState(false);
+  const [listsError, setListsError] = useState('');
 
   // Broadcast History State
   const [broadcasts, setBroadcasts] = useState([]);
@@ -71,6 +88,152 @@ export default function Broadcasts({ parents, students }) {
   const [selectedSimThread, setSelectedSimThread] = useState('0547654321');
 
   const phoneMessagesEndRef = useRef(null);
+
+  const fetchLists = async () => {
+    try {
+      const response = await fetch('/api/broadcast-list-defs');
+      if (response.ok) {
+        const data = await response.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setLists(data);
+          setSelectedList((prev) => (data.some((l) => l.key === prev) ? prev : data[0].key));
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const openListsModal = () => {
+    setEditingLists(lists.map((l) => ({ ...l })));
+    setNewListLabel('');
+    setNewListDescription('');
+    setListsError('');
+    setShowListsModal(true);
+  };
+
+  const handleSaveListEdits = async () => {
+    setSavingLists(true);
+    setListsError('');
+    try {
+      for (const list of editingLists) {
+        const original = lists.find((l) => l.key === list.key);
+        if (!original) continue;
+        const label = String(list.label || '').trim();
+        if (!label) {
+          setListsError('לכל רשימה חייב להיות שם');
+          setSavingLists(false);
+          return;
+        }
+        if (
+          label !== original.label ||
+          (list.description || '') !== (original.description || '') ||
+          list.color !== original.color
+        ) {
+          const res = await fetch(`/api/broadcast-list-defs/${list.key}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              label,
+              description: list.description || '',
+              color: list.color,
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || 'שמירת הרשימה נכשלה');
+        }
+      }
+      await fetchLists();
+      setShowListsModal(false);
+    } catch (err) {
+      setListsError(err.message || 'שמירה נכשלה');
+    } finally {
+      setSavingLists(false);
+    }
+  };
+
+  const handleAddList = async () => {
+    const label = newListLabel.trim();
+    if (!label) {
+      setListsError('נא להזין שם לרשימה החדשה');
+      return;
+    }
+    setSavingLists(true);
+    setListsError('');
+    try {
+      // שמירת שינויים פתוחים לפני הוספה
+      for (const list of editingLists) {
+        const original = lists.find((l) => l.key === list.key);
+        if (!original) continue;
+        if (
+          list.label !== original.label ||
+          (list.description || '') !== (original.description || '') ||
+          list.color !== original.color
+        ) {
+          await fetch(`/api/broadcast-list-defs/${list.key}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              label: String(list.label || '').trim(),
+              description: list.description || '',
+              color: list.color,
+            }),
+          });
+        }
+      }
+      const res = await fetch('/api/broadcast-list-defs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          label,
+          description: newListDescription.trim(),
+          color: 'var(--blue)',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'הוספת הרשימה נכשלה');
+      setNewListLabel('');
+      setNewListDescription('');
+      const nextLists = Array.isArray(data.lists) ? data.lists : null;
+      if (nextLists) {
+        setLists(nextLists);
+        setEditingLists(nextLists.map((l) => ({ ...l })));
+      } else {
+        const refreshed = await fetch('/api/broadcast-list-defs').then((r) => (r.ok ? r.json() : null));
+        if (Array.isArray(refreshed)) {
+          setLists(refreshed);
+          setEditingLists(refreshed.map((l) => ({ ...l })));
+        }
+      }
+    } catch (err) {
+      setListsError(err.message || 'הוספה נכשלה');
+    } finally {
+      setSavingLists(false);
+    }
+  };
+
+  const handleDeleteList = async (key) => {
+    if (editingLists.length <= 1) {
+      setListsError('חייבת להישאר לפחות רשימה אחת');
+      return;
+    }
+    if (!confirm('למחוק את רשימת התפוצה? המנויים שלה יימחקו.')) return;
+    setSavingLists(true);
+    setListsError('');
+    try {
+      const res = await fetch(`/api/broadcast-list-defs/${key}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'מחיקה נכשלה');
+      const next = Array.isArray(data.lists) ? data.lists : editingLists.filter((l) => l.key !== key);
+      setLists(next);
+      setEditingLists(next.map((l) => ({ ...l })));
+      setSelectedList((prev) => (next.some((l) => l.key === prev) ? prev : next[0]?.key));
+    } catch (err) {
+      setListsError(err.message || 'מחיקה נכשלה');
+    } finally {
+      setSavingLists(false);
+    }
+  };
 
   const fetchSettings = async () => {
     try {
@@ -299,6 +462,7 @@ export default function Broadcasts({ parents, students }) {
   };
 
   useEffect(() => {
+    fetchLists();
     fetchSettings();
     fetchChatLogs();
     fetchWaStatus();
@@ -360,7 +524,7 @@ export default function Broadcasts({ parents, students }) {
     setSendingBroadcast(true);
     setSendResult(null);
 
-    const campaignName = `קמפיין ${LISTS.find(l => l.key === selectedList)?.label} - ${new Date().toLocaleDateString('he-IL')}`;
+    const campaignName = `קמפיין ${lists.find(l => l.key === selectedList)?.label} - ${new Date().toLocaleDateString('he-IL')}`;
     
     try {
       const response = await fetch('/api/whatsapp/broadcast', {
@@ -528,9 +692,14 @@ export default function Broadcasts({ parents, students }) {
           <div className="grid-12" style={{ gap: 20, alignItems: 'flex-start' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16, gridColumn: 'span 7' }}>
               <div className="card card-p">
-                <div className="section-title" style={{ marginBottom: 14 }}>רשימת תפוצה</div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 14 }}>
+                  <div className="section-title" style={{ marginBottom: 0 }}>רשימת תפוצה</div>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={openListsModal} style={{ gap: 6 }}>
+                    <Pencil size={13} /> עריכת רשימות
+                  </button>
+                </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {LISTS.map(l => (
+                  {lists.map(l => (
                     <button key={l.key} className={`btn btn-sm ${selectedList === l.key ? 'btn-primary' : 'btn-ghost'}`}
                       onClick={() => setSelectedList(l.key)}>
                       <Hash size={13} /> {l.label}
@@ -716,6 +885,118 @@ export default function Broadcasts({ parents, students }) {
             </div>
           </div>
         </div>
+      )}
+
+      {showListsModal && (
+        <Modal
+          title="עריכת רשימות תפוצה"
+          onClose={() => !savingLists && setShowListsModal(false)}
+          footer={
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button type="button" className="btn btn-ghost" disabled={savingLists} onClick={() => setShowListsModal(false)}>
+                ביטול
+              </button>
+              <button type="button" className="btn btn-primary" disabled={savingLists} onClick={handleSaveListEdits}>
+                {savingLists ? 'שומר...' : 'שמור שינויים'}
+              </button>
+            </div>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.6 }}>
+              כאן אפשר לשנות שמות, להוסיף רשימות חדשות או למחוק רשימות קיימות.
+            </div>
+
+            {listsError && (
+              <div className="alert alert-danger">
+                <span>{listsError}</span>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {editingLists.map((list, idx) => (
+                <div
+                  key={list.key}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1.2fr auto auto',
+                    gap: 8,
+                    alignItems: 'center',
+                    padding: 10,
+                    border: '1px solid var(--border)',
+                    borderRadius: 10,
+                    background: 'rgba(255,255,255,0.02)',
+                  }}
+                >
+                  <input
+                    className="input input-sm"
+                    value={list.label}
+                    placeholder="שם הרשימה"
+                    onChange={(e) => {
+                      const next = [...editingLists];
+                      next[idx] = { ...next[idx], label: e.target.value };
+                      setEditingLists(next);
+                    }}
+                  />
+                  <input
+                    className="input input-sm"
+                    value={list.description || ''}
+                    placeholder="תיאור קצר (אופציונלי)"
+                    onChange={(e) => {
+                      const next = [...editingLists];
+                      next[idx] = { ...next[idx], description: e.target.value };
+                      setEditingLists(next);
+                    }}
+                  />
+                  <select
+                    className="input input-sm"
+                    style={{ minWidth: 90 }}
+                    value={list.color || 'var(--blue)'}
+                    onChange={(e) => {
+                      const next = [...editingLists];
+                      next[idx] = { ...next[idx], color: e.target.value };
+                      setEditingLists(next);
+                    }}
+                  >
+                    {LIST_COLORS.map((c) => (
+                      <option key={c.value} value={c.value}>{c.label}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm btn-icon"
+                    title="מחק רשימה"
+                    disabled={savingLists || editingLists.length <= 1}
+                    onClick={() => handleDeleteList(list.key)}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>הוספת רשימה חדשה</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr auto', gap: 8 }}>
+                <input
+                  className="input input-sm"
+                  placeholder="שם הרשימה"
+                  value={newListLabel}
+                  onChange={(e) => setNewListLabel(e.target.value)}
+                />
+                <input
+                  className="input input-sm"
+                  placeholder="תיאור קצר"
+                  value={newListDescription}
+                  onChange={(e) => setNewListDescription(e.target.value)}
+                />
+                <button type="button" className="btn btn-primary btn-sm" disabled={savingLists} onClick={handleAddList} style={{ gap: 6 }}>
+                  <Plus size={14} /> הוסף
+                </button>
+              </div>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* SETTINGS & AI WORKBENCH */}

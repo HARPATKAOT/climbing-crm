@@ -153,11 +153,21 @@ CREATE TABLE safety_inspections (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- 12. BROADCAST LISTS (רשימות תפוצה)
+-- 12. BROADCAST LIST DEFINITIONS (הגדרות רשימות תפוצה)
+CREATE TABLE IF NOT EXISTS broadcast_list_defs (
+    key VARCHAR(50) PRIMARY KEY,
+    label VARCHAR(100) NOT NULL,
+    description TEXT DEFAULT '',
+    color VARCHAR(50) DEFAULT 'var(--blue)',
+    sort_order INTEGER DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 12b. BROADCAST LIST SUBSCRIPTIONS (מנויים לרשימות תפוצה)
 CREATE TABLE broadcast_lists (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     parent_id UUID NOT NULL REFERENCES parents(id) ON DELETE CASCADE,
-    list_name VARCHAR(50) NOT NULL, -- hiking (טיולים), classes (חוגים), general (כללי)
+    list_name VARCHAR(50) NOT NULL, -- key from broadcast_list_defs
     subscribed BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT unique_parent_list UNIQUE (parent_id, list_name)
