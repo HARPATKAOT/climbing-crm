@@ -7,6 +7,13 @@ import { supa } from './supa.js';
 import { whatsappService, instagramService } from './whatsapp.js';
 import { whatsappConnectService } from './whatsappConnect.js';
 import { automationsService } from './automations.js';
+import { icount } from './icount.js';
+import {
+  ensureAttendanceRows,
+  israelDateStr,
+  israelHour,
+  normalizeAttStatus,
+} from './attendanceUtils.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -202,7 +209,7 @@ app.post('/api/public/leads', async (req, res) => {
 // Update parent details (name, phone, email, city, source, notes)
 app.put('/api/parents/:id', (req, res) => {
   const { id } = req.params;
-  const allowed = ['name', 'phone', 'email', 'city', 'source', 'notes'];
+  const allowed = ['name', 'phone', 'email', 'city', 'source', 'notes', 'icount_client_id'];
   const updates = {};
   for (const key of allowed) {
     if (req.body[key] !== undefined) updates[key] = req.body[key];
@@ -957,10 +964,99 @@ app.get('/api/attendance', async (req, res) => {
 
 app.post('/api/attendance', (req, res) => {
   const body = { ...req.body };
-  // Normalize legacy UI status → schema values
-  if (body.status === 'present') body.status = 'attended';
+  if (body.status) body.status = normalizeAttStatus(body.status);
+  else body.status = 'pending';
   const record = db.insert('attendance', body);
   res.status(201).json(record);
+});
+
+// Ensure pending attendance rows for every enrolled climber on training days.
+// Idempotent: never overwrites existing (student_id, group_id, date) rows.
+// Body: { date?: "YYYY-MM-DD", groupId?: string }
+async function refreshAttendanceCache() {
+  try {
+    if (supa.isEnabled()) {
+      const rows = await supa.getAll('attendance');
+      if (rows && typeof db.set === 'function') db.set('attendance', rows);
+    }
+  } catch (err) {
+    console.error('attendance cache refresh failed:', err.message);
+  }
+}
+
+async function refreshStudentsAndGroupsCache() {
+  try {
+    if (supa.isEnabled()) {
+      const [groups, students] = await Promise.all([
+        supa.getAll('groups'),
+        supa.getAll('students'),
+      ]);
+      if (groups && typeof db.set === 'function') db.set('groups', groups);
+      if (students && typeof db.set === 'function') db.set('students', students);
+    }
+  } catch (err) {
+    console.error('groups/students cache refresh failed:', err.message);
+  }
+}
+
+app.post('/api/attendance/ensure', async (req, res) => {
+  const date = req.body?.date || israelDateStr();
+  const groupId = req.body?.groupId || null;
+
+  await refreshStudentsAndGroupsCache();
+  await refreshAttendanceCache();
+
+  const result = ensureAttendanceRows({
+    groups: db.get('groups') || [],
+    students: db.get('students') || [],
+    attendance: db.get('attendance') || [],
+    date,
+    groupId,
+  });
+
+  for (const row of result.created) {
+    db.insert('attendance', row);
+  }
+
+  res.status(201).json({
+    created: result.created.length,
+    existing: result.existing,
+    groups: result.groups,
+    date: result.date,
+    rows: result.created,
+  });
+});
+
+// Cron / external scheduler entry (optional CRON_SECRET header or ?secret=)
+app.post('/api/attendance/ensure-today', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (secret) {
+    const provided = req.get('x-cron-secret') || req.query.secret || req.body?.secret;
+    if (provided !== secret) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+  }
+  req.body = { ...(req.body || {}), date: israelDateStr() };
+  // Reuse ensure handler logic
+  await refreshStudentsAndGroupsCache();
+  await refreshAttendanceCache();
+  const result = ensureAttendanceRows({
+    groups: db.get('groups') || [],
+    students: db.get('students') || [],
+    attendance: db.get('attendance') || [],
+    date: israelDateStr(),
+    groupId: null,
+  });
+  for (const row of result.created) {
+    db.insert('attendance', row);
+  }
+  console.log(`📋 Daily attendance ensure: created ${result.created.length} for ${result.date}`);
+  res.status(201).json({
+    created: result.created.length,
+    existing: result.existing,
+    groups: result.groups,
+    date: result.date,
+  });
 });
 
 // Bulk upsert attendance for a group on a given date.
@@ -970,20 +1066,12 @@ app.post('/api/attendance/bulk', async (req, res) => {
   const { records } = req.body;
   if (!Array.isArray(records)) return res.status(400).json({ error: 'records must be an array' });
 
-  // Refresh cache from Supabase so we don't duplicate rows after a cold start.
-  try {
-    if (supa.isEnabled()) {
-      const rows = await supa.getAll('attendance');
-      if (rows && typeof db.set === 'function') db.set('attendance', rows);
-    }
-  } catch (err) {
-    console.error('bulk attendance cache refresh failed:', err.message);
-  }
+  await refreshAttendanceCache();
 
   const existing = db.get('attendance') || [];
   const saved = records.map((raw) => {
     const r = { ...raw };
-    if (r.status === 'present') r.status = 'attended';
+    r.status = normalizeAttStatus(r.status || 'pending');
     if (!r.student_id || !r.group_id || !r.date) {
       return null;
     }
@@ -1000,7 +1088,7 @@ app.post('/api/attendance/bulk', async (req, res) => {
         student_id: r.student_id,
         group_id: r.group_id,
         date: r.date,
-        status: r.status || 'attended',
+        status: r.status,
         marked_by: r.marked_by ?? match.marked_by ?? null,
         notes: r.notes ?? match.notes ?? '',
       });
@@ -1010,7 +1098,7 @@ app.post('/api/attendance/bulk', async (req, res) => {
       student_id: r.student_id,
       group_id: r.group_id,
       date: r.date,
-      status: r.status || 'attended',
+      status: r.status,
       marked_by: r.marked_by || null,
       notes: r.notes || '',
     });
@@ -1022,7 +1110,7 @@ app.post('/api/attendance/bulk', async (req, res) => {
 app.put('/api/attendance/:id', (req, res) => {
   const { id } = req.params;
   const body = { ...req.body };
-  if (body.status === 'present') body.status = 'attended';
+  if (body.status) body.status = normalizeAttStatus(body.status);
   const updated = db.update('attendance', id, body);
   if (!updated) return res.status(404).json({ error: 'Attendance record not found' });
   res.json(updated);
@@ -1062,29 +1150,370 @@ app.delete('/api/pricelist/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// iCount generating checkout request
+// ─── iCount: status, clients, invoices, payments, webhook ───────────────────
+
+function normalizePhone(phone) {
+  return phone ? String(phone).replace(/[-\s]/g, '') : '';
+}
+
+async function syncParentToIcount(parent) {
+  const { clientId } = await icount.ensureClient(parent);
+  if (String(parent.icount_client_id || '') !== String(clientId)) {
+    db.update('parents', parent.id, { icount_client_id: clientId });
+    parent = { ...parent, icount_client_id: clientId };
+  }
+  return { parent, clientId };
+}
+
+function matchPendingPayment(payload) {
+  const payments = db.get('payments') || [];
+  const pending = payments.filter((p) => p.status === 'pending');
+  if (!pending.length) return null;
+
+  const customId =
+    payload?.client?.custom_client_id ||
+    payload?.custom_client_id ||
+    payload?.client_custom_id;
+  if (customId) {
+    const byParent = pending.find((p) => String(p.parent_id) === String(customId));
+    if (byParent) return byParent;
+  }
+
+  const clientId =
+    payload?.client?.client_id ||
+    payload?.client_id ||
+    payload?.clientid;
+  if (clientId) {
+    const byClient = pending.find((p) => String(p.icount_client_id) === String(clientId));
+    if (byClient) return byClient;
+  }
+
+  const phone = normalizePhone(
+    payload?.client?.phone ||
+    payload?.client?.mobile ||
+    payload?.phone ||
+    payload?.contact_phone
+  );
+  const total = Number(
+    payload?.totalwithvat ??
+    payload?.total ??
+    payload?.sum ??
+    payload?.paid ??
+    NaN
+  );
+
+  if (phone) {
+    const parents = db.get('parents') || [];
+    const parent = parents.find((p) => normalizePhone(p.phone) === phone);
+    if (parent) {
+      const byPhone = pending
+        .filter((p) => p.parent_id === parent.id)
+        .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+      if (!Number.isNaN(total)) {
+        const exact = byPhone.find((p) => Math.abs(Number(p.amount) - total) < 0.01);
+        if (exact) return exact;
+      }
+      if (byPhone[0]) return byPhone[0];
+    }
+  }
+
+  if (!Number.isNaN(total)) {
+    const byAmount = pending
+      .filter((p) => Math.abs(Number(p.amount) - total) < 0.01)
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    if (byAmount[0]) return byAmount[0];
+  }
+
+  return null;
+}
+
+app.get('/api/icount/status', async (req, res) => {
+  if (!icount.isConfigured()) {
+    return res.json({ ok: false, configured: false, message: 'חסר אסימון iCount בהגדרות השרת' });
+  }
+  try {
+    const result = await icount.ping();
+    res.json({ ok: true, configured: true, ...result });
+  } catch (err) {
+    res.status(502).json({
+      ok: false,
+      configured: true,
+      message: err.message,
+      code: err.code,
+    });
+  }
+});
+
+app.post('/api/icount/sync-client/:parentId', async (req, res) => {
+  try {
+    if (!icount.isConfigured()) {
+      return res.status(503).json({ error: 'iCount לא מוגדר בשרת' });
+    }
+    const parent = db.getOne('parents', req.params.parentId);
+    if (!parent) return res.status(404).json({ error: 'הורה לא נמצא' });
+    const synced = await syncParentToIcount(parent);
+    res.json({
+      success: true,
+      parentId: synced.parent.id,
+      icount_client_id: synced.clientId,
+      parent: synced.parent,
+    });
+  } catch (err) {
+    console.error('iCount sync-client error:', err.message);
+    res.status(502).json({ error: err.message, code: err.code });
+  }
+});
+
+app.post('/api/icount/invoice', async (req, res) => {
+  try {
+    if (!icount.isConfigured()) {
+      return res.status(503).json({ error: 'iCount לא מוגדר בשרת' });
+    }
+    const {
+      parentId,
+      studentId,
+      studentName,
+      amount,
+      description,
+      phone,
+    } = req.body || {};
+
+    if (!amount || !description) {
+      return res.status(400).json({ error: 'חסרים סכום או תיאור' });
+    }
+
+    let parent = parentId ? db.getOne('parents', parentId) : null;
+    if (!parent && studentId) {
+      const student = db.getOne('students', studentId);
+      if (student?.parentId) parent = db.getOne('parents', student.parentId);
+    }
+    if (!parent) {
+      parent = {
+        id: parentId || `temp-${Date.now()}`,
+        name: studentName || 'לקוח',
+        phone: phone || '',
+        email: '',
+      };
+    }
+
+    const { parent: syncedParent, clientId } = parentId || parent.id
+      ? await syncParentToIcount(parent)
+      : { parent, clientId: null };
+
+    const doc = await icount.createInvRec({
+      clientId,
+      clientName: syncedParent.name || studentName,
+      items: [{ description, unitprice: Number(amount), quantity: 1 }],
+      comment: studentName ? `עבור: ${studentName}` : undefined,
+    });
+
+    const payment = db.insert('payments', {
+      parent_id: syncedParent.id || null,
+      student_id: studentId || null,
+      amount: Number(amount),
+      description,
+      status: 'paid',
+      payment_url: null,
+      icount_client_id: clientId,
+      icount_doc_id: doc.docId,
+      icount_doc_number: doc.docnum,
+      paid_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    res.status(201).json({
+      success: true,
+      payment,
+      docId: doc.docId,
+      docNumber: doc.docnum,
+    });
+  } catch (err) {
+    console.error('iCount invoice error:', err.message);
+    res.status(502).json({ error: err.message, code: err.code });
+  }
+});
+
+app.get('/api/icount/docs', async (req, res) => {
+  try {
+    if (!icount.isConfigured()) {
+      return res.status(503).json({ error: 'iCount לא מוגדר בשרת' });
+    }
+    const docs = await icount.searchDocs({
+      startDate: req.query.start,
+      endDate: req.query.end,
+    });
+    const total = docs.reduce((sum, d) => {
+      const n = Number(d.totalwithvat ?? d.total ?? d.sum ?? 0);
+      return sum + (Number.isNaN(n) ? 0 : n);
+    }, 0);
+    res.json({ docs, total, count: docs.length });
+  } catch (err) {
+    console.error('iCount docs error:', err.message);
+    res.status(502).json({ error: err.message, code: err.code });
+  }
+});
+
+app.get('/api/payments', async (req, res) => {
+  try {
+    let rows = null;
+    if (supa.isEnabled()) {
+      rows = await supa.getAll('payments');
+      if (rows) db.set('payments', rows);
+    }
+    let payments = rows || db.get('payments') || [];
+    if (req.query.studentId) {
+      payments = payments.filter((p) => p.student_id === req.query.studentId);
+    }
+    if (req.query.parentId) {
+      payments = payments.filter((p) => p.parent_id === req.query.parentId);
+    }
+    payments = [...payments].sort((a, b) =>
+      String(b.created_at || '').localeCompare(String(a.created_at || ''))
+    );
+    res.json(payments);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/icount/webhook', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    console.log('📩 [iCount webhook] document event received');
+
+    const docId =
+      payload.doc_id != null
+        ? String(payload.doc_id)
+        : payload.docid != null
+          ? String(payload.docid)
+          : payload?.doc?.doc_id != null
+            ? String(payload.doc.doc_id)
+            : null;
+    const docnum =
+      payload.docnum != null
+        ? String(payload.docnum)
+        : payload?.doc?.docnum != null
+          ? String(payload.doc.docnum)
+          : null;
+
+    let payment = matchPendingPayment(payload);
+
+    // Also match by existing doc id (idempotent)
+    if (!payment && docId) {
+      payment = (db.get('payments') || []).find(
+        (p) => String(p.icount_doc_id) === String(docId)
+      );
+    }
+
+    if (payment) {
+      const updated = db.update('payments', payment.id, {
+        status: 'paid',
+        icount_doc_id: docId || payment.icount_doc_id,
+        icount_doc_number: docnum || payment.icount_doc_number,
+        paid_at: payment.paid_at || new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      return res.json({ ok: true, matched: true, paymentId: updated?.id });
+    }
+
+    // Create a paid record from webhook if we can resolve a parent
+    const customId =
+      payload?.client?.custom_client_id ||
+      payload?.custom_client_id;
+    const parent = customId ? db.getOne('parents', customId) : null;
+    const amount = Number(
+      payload?.totalwithvat ?? payload?.total ?? payload?.sum ?? 0
+    );
+    const description =
+      payload?.description ||
+      payload?.comment ||
+      (Array.isArray(payload?.items) && payload.items[0]?.desc) ||
+      'תשלום iCount';
+
+    if (parent || docId) {
+      const created = db.insert('payments', {
+        parent_id: parent?.id || null,
+        student_id: null,
+        amount: Number.isNaN(amount) ? 0 : amount,
+        description,
+        status: 'paid',
+        payment_url: null,
+        icount_client_id:
+          payload?.client?.client_id ||
+          parent?.icount_client_id ||
+          null,
+        icount_doc_id: docId,
+        icount_doc_number: docnum,
+        paid_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      return res.json({ ok: true, matched: false, created: true, paymentId: created.id });
+    }
+
+    res.json({ ok: true, matched: false, created: false });
+  } catch (err) {
+    console.error('iCount webhook error:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// iCount payment request: sync client + pending payment + WhatsApp link
 app.post('/api/checkout/payment-request', async (req, res) => {
-  const { studentId, studentName, amount, description, phone } = req.body;
-  console.log(`💳 [iCount Integration] Generating payment request for ${studentName} (${amount}₪) - "${description}"`);
-  
-  // Construct the clearing page redirect URL
-  const paymentPageName = 'mywall'; // Default clearing name
-  const encodedDescription = encodeURIComponent(description || 'חוג טיפוס קיר');
-  const encodedName = encodeURIComponent(studentName || 'מטפס');
-  
-  // Clean phone number
-  const cleanPhone = phone ? phone.replace(/[-\s]/g, '') : '';
-  
-  const payUrl = `https://pay.icount.co.il/${paymentPageName}?cs=${amount}&cd=${encodedDescription}&ccfname=${encodedName}&contact_phone=${cleanPhone}`;
-  
-  // In a real application, you could also call iCount API here to register a pending document
-  // but prefilled redirects are the standard clearing request flow.
-  
-  // Simulate sending a WhatsApp message with the payment request link
+  const { studentId, studentName, amount, description, phone, parentId } = req.body || {};
+  console.log(`💳 [iCount] Payment request for ${studentName} (${amount}₪) - "${description}"`);
+
+  if (!amount || !description) {
+    return res.status(400).json({ error: 'חסרים סכום או תיאור' });
+  }
+
+  let parent = parentId ? db.getOne('parents', parentId) : null;
+  if (!parent && studentId) {
+    const student = db.getOne('students', studentId);
+    if (student?.parentId) parent = db.getOne('parents', student.parentId);
+  }
+
+  let clientId = parent?.icount_client_id || null;
+  let syncWarning = null;
+  if (parent && icount.isConfigured()) {
+    try {
+      const synced = await syncParentToIcount(parent);
+      parent = synced.parent;
+      clientId = synced.clientId;
+    } catch (err) {
+      syncWarning = err.message;
+      console.warn('iCount client sync failed, continuing with payment link:', err.message);
+    }
+  }
+
+  const payName = parent?.name || studentName || 'מטפס';
+  const cleanPhone = normalizePhone(phone || parent?.phone);
+  const payUrl = icount.buildPaymentUrl({
+    amount,
+    description: description || 'חוג טיפוס קיר',
+    name: payName,
+    phone: cleanPhone,
+  });
+
+  const payment = db.insert('payments', {
+    parent_id: parent?.id || null,
+    student_id: studentId || null,
+    amount: Number(amount),
+    description,
+    status: 'pending',
+    payment_url: payUrl,
+    icount_client_id: clientId,
+    icount_doc_id: null,
+    icount_doc_number: null,
+    paid_at: null,
+    updated_at: new Date().toISOString(),
+  });
+
   const waMsg = `שלום! להלן קישור מאובטח לתשלום עבור ${description} בסך ${amount} ש״ח: ${payUrl}`;
+  let whatsappSent = false;
   try {
     if (cleanPhone) {
       await whatsappService.sendTextMessage(cleanPhone, waMsg);
+      whatsappSent = true;
     }
   } catch (waErr) {
     console.error('Failed to send payment link via WhatsApp:', waErr.message);
@@ -1093,8 +1522,10 @@ app.post('/api/checkout/payment-request', async (req, res) => {
   res.json({
     success: true,
     paymentUrl: payUrl,
-    whatsappSent: !!cleanPhone,
-    message: 'Payment request link generated and sent via WhatsApp'
+    payment,
+    whatsappSent,
+    syncWarning,
+    message: 'נוצר קישור תשלום ונשמר במערכת',
   });
 });
 
@@ -1522,6 +1953,33 @@ app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
   }
 });
 
+// Daily attendance ensure at 06:00 Asia/Jerusalem (in-process; also call POST /api/attendance/ensure-today)
+let lastAttendanceEnsureDate = null;
+async function runDailyAttendanceEnsureIfDue() {
+  try {
+    const today = israelDateStr();
+    if (lastAttendanceEnsureDate === today) return;
+    if (israelHour() < 6) return;
+    lastAttendanceEnsureDate = today;
+    await refreshStudentsAndGroupsCache();
+    await refreshAttendanceCache();
+    const result = ensureAttendanceRows({
+      groups: db.get('groups') || [],
+      students: db.get('students') || [],
+      attendance: db.get('attendance') || [],
+      date: today,
+      groupId: null,
+    });
+    for (const row of result.created) {
+      db.insert('attendance', row);
+    }
+    console.log(`📋 Daily attendance ensure (${today}): created ${result.created.length}`);
+  } catch (err) {
+    console.error('Daily attendance ensure failed:', err.message);
+    lastAttendanceEnsureDate = null;
+  }
+}
+
 // Start Server (after loading CRM-core data from Supabase)
 initDb().finally(() => {
 app.listen(PORT, () => {
@@ -1534,6 +1992,10 @@ app.listen(PORT, () => {
       .then(res => console.log(`⏱️ Keep-Alive Self-Ping (${res.status}) at ${new Date().toLocaleTimeString()}`))
       .catch(err => console.error('Keep-Alive ping error:', err.message));
   }, 8 * 60 * 1000);
+
+  // Check every 15 minutes whether the daily attendance ensure should run
+  setTimeout(() => { runDailyAttendanceEnsureIfDue(); }, 20_000);
+  setInterval(() => { runDailyAttendanceEnsureIfDue(); }, 15 * 60 * 1000);
 });
 });
 

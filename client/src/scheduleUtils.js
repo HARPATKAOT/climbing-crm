@@ -30,23 +30,34 @@ export function dateToWeekday(dateStr) {
 }
 
 // Canonical attendance statuses (schema + Notion מעקב נוכחות).
-// Legacy "present" from older UI is normalized to "attended" on load.
+// Auto-created rows start as "pending" (ממתין למילוי); trainer marks attended/absent.
 export const ATT_STATUS = [
+  { key: 'pending', label: 'ממתין למילוי', color: '#3B82F6' },
   { key: 'attended', label: 'הגיע', color: '#10B981' },
   { key: 'absent', label: 'נעדר', color: '#EF4444' },
   { key: 'intro_attended', label: 'הכירות ✓', color: '#6366F1' },
   { key: 'intro_absent', label: 'הכירות ✗', color: '#A78BFA' },
 ];
 
+export const ATT_MARK_KEYS = ['attended', 'absent'];
 export const ATT_PRESENT_KEYS = new Set(['attended', 'present', 'intro_attended', 'late']);
 export const ATT_ABSENT_KEYS = new Set(['absent', 'intro_absent']);
 
 export function normalizeAttStatus(status) {
   if (status === 'present' || status === 'late') return 'attended';
   if (ATT_STATUS.some((s) => s.key === status)) return status;
-  return 'attended';
+  return 'pending';
 }
 
 export function isAttPresent(status) {
   return ATT_PRESENT_KEYS.has(status);
+}
+
+export function isAttPending(status) {
+  return normalizeAttStatus(status) === 'pending';
+}
+
+export function attStatusMeta(status) {
+  const key = normalizeAttStatus(status);
+  return ATT_STATUS.find((s) => s.key === key) || ATT_STATUS[0];
 }

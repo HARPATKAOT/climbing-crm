@@ -1,0 +1,22 @@
+# Render Blueprint — API + daily attendance ensure cron
+services:
+  - type: web
+    name: climbing-crm-api
+    runtime: node
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+
+  - type: cron
+    name: climbing-crm-attendance-ensure
+    runtime: node
+    rootDir: server
+    schedule: "0 3 * * *" # 06:00 Asia/Jerusalem (UTC+3 standard)
+    buildCommand: npm install
+    startCommand: node -e "const s=process.env.CRON_SECRET; const h=s?{'x-cron-secret':s,'Content-Type':'application/json'}:{'Content-Type':'application/json'}; fetch((process.env.RENDER_EXTERNAL_URL||'https://climbing-crm-api.onrender.com')+'/api/attendance/ensure-today',{method:'POST',headers:h}).then(r=>r.json()).then(j=>{console.log(j); if(!j.date) process.exit(1)}).catch(e=>{console.error(e); process.exit(1)})"
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
