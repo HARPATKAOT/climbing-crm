@@ -1,13 +1,11 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import { db, initDb } from './db.js';
 import { supa } from './supa.js';
 import { whatsappService, instagramService } from './whatsapp.js';
 import { automationsService } from './automations.js';
-// Load environment variables
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -37,6 +35,28 @@ app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'UP', timestamp: new Date().toISOString(), uptime: process.uptime() });
 });
 
+// Re-pull CRM-core collections from Supabase into the local db.json cache.
+// Useful after durable-store seed/repair without waiting for a full redeploy cycle.
+app.post('/api/admin/reload-core', async (req, res) => {
+  try {
+    await initDb();
+    const groups = db.get('groups') || [];
+    const students = db.get('students') || [];
+    const parents = db.get('parents') || [];
+    res.json({
+      ok: true,
+      counts: {
+        groups: groups.length,
+        students: students.length,
+        parents: parents.length,
+      },
+    });
+  } catch (err) {
+    console.error('reload-core failed:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Get all parents
 app.get('/api/parents', (req, res) => {
   res.json(db.get('parents'));
@@ -47,15 +67,36 @@ app.get('/api/students', (req, res) => {
   res.json(db.get('students'));
 });
 
-// Get all groups (with live enrolled count computed from students)
-app.get('/api/groups', (req, res) => {
-  const groups = db.get('groups');
-  const students = db.get('students');
-  const withCounts = groups.map(g => ({
+function withGroupEnrollmentCounts(groups, students) {
+  // Dedupe by id (local cache can accumulate duplicates after naive re-seeds).
+  const byId = new Map();
+  for (const g of groups || []) {
+    if (g?.id) byId.set(g.id, g);
+  }
+  return [...byId.values()].map(g => ({
     ...g,
-    enrolled: students.filter(s => s.groupId === g.id && s.status !== 'archived').length
+    enrolled: (students || []).filter(s => s.groupId === g.id && s.status !== 'archived').length
   }));
-  res.json(withCounts);
+}
+
+// Get all groups (with live enrolled count computed from students).
+// Prefer Supabase so Render never serves a stale empty db.json after groups
+// were re-seeded in the durable store without a process restart.
+app.get('/api/groups', async (req, res) => {
+  try {
+    if (supa.isEnabled()) {
+      const rows = await supa.getAll('groups');
+      if (rows) {
+        const students = (await supa.getAll('students')) || db.get('students') || [];
+        // Keep the local cache warm for write paths that still use db.json.
+        if (typeof db.set === 'function') db.set('groups', rows);
+        return res.json(withGroupEnrollmentCounts(rows, students));
+      }
+    }
+  } catch (err) {
+    console.error('GET /api/groups Supabase error:', err.message);
+  }
+  res.json(withGroupEnrollmentCounts(db.get('groups'), db.get('students')));
 });
 
 // Update student status
@@ -559,8 +600,13 @@ app.put('/api/students/:id', (req, res) => {
   res.json(updated);
 });
 
-// Create/Update Group
+// Create/Update Group (upsert by id so re-seeds don't duplicate local cache)
 app.post('/api/groups', (req, res) => {
+  const id = req.body?.id;
+  if (id && db.getOne('groups', id)) {
+    const updated = db.update('groups', id, req.body);
+    return res.json(updated);
+  }
   const record = db.insert('groups', req.body);
   res.status(201).json(record);
 });

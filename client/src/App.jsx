@@ -76,9 +76,16 @@ export default function App() {
           fetch('/api/parents').then(r => r.ok ? r.json() : null),
           fetch('/api/groups').then(r => r.ok ? r.json() : null),
         ]);
-        if (resStudents) setStudents(resStudents);
-        if (resParents) setParents(resParents);
-        if (resGroups) setGroups(resGroups);
+        if (Array.isArray(resStudents)) setStudents(resStudents);
+        if (Array.isArray(resParents)) setParents(resParents);
+        if (Array.isArray(resGroups)) {
+          // Dedupe by id in case the API cache briefly contains re-seed duplicates.
+          const byId = new Map();
+          for (const g of resGroups) {
+            if (g?.id) byId.set(g.id, g);
+          }
+          setGroups([...byId.values()]);
+        }
       } catch (error) {
         console.warn('Backend server offline. Using localStorage mock data.', error);
       }
@@ -100,8 +107,27 @@ export default function App() {
   const [showNotifications, setShowNotifications] = useState(false);
   const info   = PAGE_TITLES[page] || {};
 
-  // Unread notification count
-  const newLeads = students.filter(s => s.status === 'lead_new');
+  // Unread notification count (newest first)
+  const leadTs = (s) => {
+    const raw = s.created_at || s.created;
+    const t = raw ? new Date(raw).getTime() : 0;
+    return Number.isNaN(t) ? 0 : t;
+  };
+  const formatLeadTime = (s) => {
+    const raw = s.created_at || s.created;
+    if (!raw) return '';
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return '';
+    // Full ISO / timestamp → clock time; date-only → short Hebrew date
+    if (typeof raw === 'string' && raw.includes('T')) {
+      return d.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+    }
+    return d.toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' });
+  };
+  const newLeads = students
+    .filter(s => s.status === 'lead_new')
+    .slice()
+    .sort((a, b) => leadTs(b) - leadTs(a));
   const newLeadsCount = newLeads.length;
 
   return (
@@ -199,18 +225,28 @@ export default function App() {
                     <div style={{ fontSize: 12, color: 'var(--text-3)', padding: '10px 0', textAlign: 'center' }}>אין לידים חדשים</div>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 200, overflowY: 'auto', textAlign: 'right' }}>
-                      {newLeads.slice(0, 5).map(l => (
+                      {newLeads.slice(0, 5).map(l => {
+                        const timeLabel = formatLeadTime(l);
+                        return (
                         <div 
                           key={l.id} 
                           onClick={() => { setPage('leads'); setShowNotifications(false); }}
-                          style={{ fontSize: 12, padding: 8, background: '#21262D', borderRadius: 6, cursor: 'pointer', transition: 'background 0.2s' }}
+                          style={{ fontSize: 12, padding: 8, background: '#21262D', borderRadius: 6, cursor: 'pointer', transition: 'background 0.2s', display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start' }}
                           onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
                           onMouseLeave={e => e.currentTarget.style.background = '#21262D'}
                         >
-                          👤 ליד חדש: <strong>{l.name}</strong>
-                          <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>{l.notes?.includes('אינסטגרם') ? 'פנייה מאינסטגרם 📱' : l.notes?.includes('וואטסאפ') ? 'פנייה מוואטסאפ 💬' : 'נוסף במערכת'}</div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            👤 ליד חדש: <strong>{l.name}</strong>
+                            <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>{l.notes?.includes('אינסטגרם') ? 'פנייה מאינסטגרם 📱' : l.notes?.includes('וואטסאפ') ? 'פנייה מוואטסאפ 💬' : 'נוסף במערכת'}</div>
+                          </div>
+                          {timeLabel && (
+                            <div style={{ fontSize: 10, color: 'var(--text-3)', whiteSpace: 'nowrap', flexShrink: 0, marginTop: 1 }}>
+                              {timeLabel}
+                            </div>
+                          )}
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>

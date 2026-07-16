@@ -32,12 +32,12 @@ const SEED_DATA = {
     { id: 'p5', name: 'רחל גולן', phone: '0527890123', email: 'rachel@gmail.com' },
   ],
   students: [
-    { id: 's1', name: 'עומרי לוי', parentId: 'p1', groupId: 'g-48775fd8', status: 'lead_new', birthDate: '2017-03-12', notes: '', levelGrade: null, created: '2026-07-08' },
-    { id: 's2', name: 'נועה לוי', parentId: 'p1', groupId: null, status: 'lead_new', birthDate: '2015-07-22', notes: 'אחות של עומרי', levelGrade: null, created: '2026-07-08' },
-    { id: 's3', name: 'רוני כהן', parentId: 'p2', groupId: 'g-993c2022', status: 'health_signed', birthDate: '2014-01-05', notes: '', levelGrade: '5C', created: '2026-07-07' },
-    { id: 's4', name: 'גיל מזרחי', parentId: 'p3', groupId: 'g-53d1483e', status: 'intro_scheduled', birthDate: '2013-11-15', notes: 'ניסיון קודם בטיפוס', levelGrade: null, created: '2026-07-06' },
-    { id: 's5', name: 'עברי שמר', parentId: 'p4', groupId: 'g-cf7a413e', status: 'registered', birthDate: '2012-04-20', notes: 'רשום לחוג בוגרים', levelGrade: '6B', created: '2026-07-05' },
-    { id: 's6', name: 'תמר גולן', parentId: 'p5', groupId: 'g-165dbd26', status: 'registered', birthDate: '2016-09-30', notes: '', levelGrade: '5A', created: '2026-07-01' },
+    { id: 's1', name: 'עומרי לוי', parentId: 'p1', groupId: 'g-48775fd8', status: 'lead_new', birthDate: '2017-03-12', notes: '', levelGrade: null, created: '2026-07-08', created_at: '2026-07-08T14:32:00.000Z' },
+    { id: 's2', name: 'נועה לוי', parentId: 'p1', groupId: null, status: 'lead_new', birthDate: '2015-07-22', notes: 'אחות של עומרי', levelGrade: null, created: '2026-07-08', created_at: '2026-07-08T11:05:00.000Z' },
+    { id: 's3', name: 'רוני כהן', parentId: 'p2', groupId: 'g-993c2022', status: 'health_signed', birthDate: '2014-01-05', notes: '', levelGrade: '5C', created: '2026-07-07', created_at: '2026-07-07T09:18:00.000Z' },
+    { id: 's4', name: 'גיל מזרחי', parentId: 'p3', groupId: 'g-53d1483e', status: 'intro_scheduled', birthDate: '2013-11-15', notes: 'ניסיון קודם בטיפוס', levelGrade: null, created: '2026-07-06', created_at: '2026-07-06T16:40:00.000Z' },
+    { id: 's5', name: 'עברי שמר', parentId: 'p4', groupId: 'g-cf7a413e', status: 'registered', birthDate: '2012-04-20', notes: 'רשום לחוג בוגרים', levelGrade: '6B', created: '2026-07-05', created_at: '2026-07-05T10:12:00.000Z' },
+    { id: 's6', name: 'תמר גולן', parentId: 'p5', groupId: 'g-165dbd26', status: 'registered', birthDate: '2016-09-30', notes: '', levelGrade: '5A', created: '2026-07-01', created_at: '2026-07-01T13:55:00.000Z' },
   ],
   groups: [
     { id: 'g-48775fd8', name: "כיתות ג'-ד' — יום א׳ 15:30", day: 0, time: '15:30', duration: 50, trainer: '', maxSlots: 11, enrolled: 0, ageCategory: "ג'-ד'", priceWeek: 280, priceTwice: 360, waParents: '', waClimbers: '' },
@@ -109,12 +109,21 @@ export async function initDb() {
   }
   try {
     const data = readDb();
+    const counts = {};
     for (const table of CORE_TABLES) {
       const rows = await supa.getAll(table);
-      if (rows !== null) data[table] = rows;
+      if (rows !== null) {
+        data[table] = rows;
+        counts[table] = rows.length;
+      } else {
+        counts[table] = 'error';
+      }
     }
     writeDb(data);
-    console.log(`✅ Loaded CRM-core collections from Supabase: ${CORE_TABLES.join(', ')}`);
+    console.log(
+      `✅ Loaded CRM-core from Supabase:`,
+      Object.entries(counts).map(([t, n]) => `${t}=${n}`).join(', ')
+    );
   } catch (error) {
     console.error('initDb() failed — falling back to local db.json:', error.message);
   }
@@ -234,7 +243,8 @@ export const db = {
         notes: `פנייה ראשונית מוואטסאפ: "${text}"`,
         levelGrade: null,
         source: 'whatsapp',
-        created: new Date().toISOString().split('T')[0]
+        created: new Date().toISOString().split('T')[0],
+        created_at: new Date().toISOString(),
       };
       data.students.unshift(newStudent);
       writeDb(data);
@@ -292,7 +302,8 @@ export const db = {
         notes: `פנייה ראשונית מאינסטגרם (IG ID: ${igId}): "${text}"`,
         levelGrade: null,
         source: 'instagram',
-        created: new Date().toISOString().split('T')[0]
+        created: new Date().toISOString().split('T')[0],
+        created_at: new Date().toISOString(),
       };
       data.students.unshift(newStudent);
       writeDb(data);
