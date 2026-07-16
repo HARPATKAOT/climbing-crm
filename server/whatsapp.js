@@ -1,4 +1,9 @@
 import { db } from './db.js';
+import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
+
+function formatWaPhone(phone) {
+  return normalizeWaPhone(phone);
+}
 
 // Call Meta WhatsApp Cloud API
 async function callMetaWhatsAppAPI(phone, payload) {
@@ -11,12 +16,7 @@ async function callMetaWhatsAppAPI(phone, payload) {
     return { mock: true, status: 'sent', messageId: `mock_wa_${Date.now()}` };
   }
 
-  const cleanPhone = phone.replace(/[-\s+]/g, '');
-  // Format international number (e.g. 0521234567 -> 972521234567)
-  let formattedPhone = cleanPhone;
-  if (formattedPhone.startsWith('0')) {
-    formattedPhone = '972' + formattedPhone.slice(1);
-  }
+  const formattedPhone = formatWaPhone(phone);
 
   const url = `https://graph.facebook.com/v20.0/${phoneId}/messages`;
   try {
@@ -54,20 +54,25 @@ export const whatsappService = {
       });
 
       db.insert('whatsapp_logs', {
-        phone,
+        phone: formatWaPhone(phone) || phone,
+        channel: 'whatsapp',
         direction: 'outbound',
         message: text,
         status: result.mock ? 'sent' : 'delivered',
-        is_ai: isAi
+        is_ai: isAi,
+        source: isAi ? 'ai' : 'crm',
+        meta_message_id: result.messageId || null,
       });
 
-      return { success: true, text };
+      return { success: true, text, messageId: result.messageId };
     } catch (error) {
       db.insert('whatsapp_logs', {
-        phone,
+        phone: formatWaPhone(phone) || phone,
+        channel: 'whatsapp',
         direction: 'outbound',
         message: text,
-        status: 'failed'
+        status: 'failed',
+        source: isAi ? 'ai' : 'crm',
       });
       return { success: false, error: error.message };
     }
@@ -104,21 +109,26 @@ export const whatsappService = {
       else if (templateName === 't4') logMessage = `שלום, לסיום תהליך הרשמה בבקשה שלמו את אימון ההכירות בקליק: https://checkout.icount.co.il/mywall`;
 
       db.insert('whatsapp_logs', {
-        phone,
+        phone: formatWaPhone(phone) || phone,
+        channel: 'whatsapp',
         direction: 'outbound',
         message: logMessage,
         status: result.mock ? 'sent' : 'delivered',
-        template_id: templateName
+        template_id: templateName,
+        source: 'crm',
+        meta_message_id: result.messageId || null,
       });
 
       return { success: true, message: logMessage };
     } catch (error) {
       db.insert('whatsapp_logs', {
-        phone,
+        phone: formatWaPhone(phone) || phone,
+        channel: 'whatsapp',
         direction: 'outbound',
         message: `[נכשל בשליחת תבנית: ${templateName}]`,
         status: 'failed',
-        template_id: templateName
+        template_id: templateName,
+        source: 'crm',
       });
       return { success: false, error: error.message };
     }
@@ -182,23 +192,28 @@ export const whatsappService = {
   },
 
   // Process incoming messages (webhook entrypoint / simulator)
-  handleIncomingMessage: async (phone, text, isSimulator = false) => {
+  handleIncomingMessage: async (phone, text, isSimulator = false, meta = {}) => {
+    const normalizedPhone = formatWaPhone(phone) || phone;
+
     // 1. Log inbound message
     db.insert('whatsapp_logs', {
-      phone,
+      phone: normalizedPhone,
       channel: 'whatsapp',
       direction: 'inbound',
       message: text,
-      status: 'received'
+      status: 'received',
+      source: 'customer',
+      meta_message_id: meta.messageId || null,
+      message_type: meta.type || 'text',
     });
 
     // 2. Upsert lead / client details in DB (source=whatsapp, status=lead_new)
-    const { parent, student, isNew } = db.createLeadFromWhatsApp(phone, text);
+    const { parent, student, isNew } = db.createLeadFromWhatsApp(normalizedPhone, text);
 
     // 3. Welcome template t1 for brand-new WhatsApp leads
     if (isNew) {
       try {
-        await whatsappService.sendTemplateMessage(phone, 't1', [parent.name || '']);
+        await whatsappService.sendTemplateMessage(normalizedPhone, 't1', [parent.name || '']);
       } catch (err) {
         console.error('Failed to send WhatsApp welcome t1:', err.message);
       }
@@ -206,25 +221,103 @@ export const whatsappService = {
 
     // 4. Process AI automated reply if active
     const settings = db.getSettings();
-    if (settings.aiResponderEnabled) {
+    if (settings.aiResponderEnabled && text) {
       const aiReply = await whatsappService.generateAIResponse(text);
       if (isSimulator) {
         db.insert('whatsapp_logs', {
-          phone,
+          phone: normalizedPhone,
           channel: 'whatsapp',
           direction: 'outbound',
           message: aiReply,
           status: 'sent',
-          is_ai: true
+          is_ai: true,
+          source: 'ai',
         });
       } else {
-        await whatsappService.sendTextMessage(phone, aiReply, true);
+        await whatsappService.sendTextMessage(normalizedPhone, aiReply, true);
       }
       return { parent, student, isNew, replied: true, reply: aiReply };
     }
 
     return { parent, student, isNew, replied: false };
-  }
+  },
+
+  // Messages sent from WhatsApp Business app (Coexistence echoes)
+  handlePhoneEcho: async ({ phone, text, messageId, type } = {}) => {
+    const normalizedPhone = formatWaPhone(phone) || phone;
+    if (!normalizedPhone) return { skipped: true };
+
+    const logs = db.get('whatsapp_logs') || [];
+    if (messageId && logs.some(l => l.meta_message_id === messageId)) {
+      return { skipped: true, reason: 'duplicate' };
+    }
+
+    db.insert('whatsapp_logs', {
+      phone: normalizedPhone,
+      channel: 'whatsapp',
+      direction: 'outbound',
+      message: text || '[הודעה מהטלפון]',
+      status: 'sent',
+      source: 'phone',
+      meta_message_id: messageId || null,
+      message_type: type || 'text',
+    });
+
+    // Ensure parent exists so the thread shows under a lead card
+    db.upsertParentByPhone('לקוח וואטסאפ', normalizedPhone, '', {
+      source: 'whatsapp',
+      channel: 'whatsapp',
+    });
+
+    return { success: true, phone: normalizedPhone };
+  },
+
+  // Initial history sync payloads from Coexistence onboarding
+  handleHistoryMessage: async ({ phone, text, direction, messageId, timestamp, type } = {}) => {
+    const normalizedPhone = formatWaPhone(phone) || phone;
+    if (!normalizedPhone || !text) return { skipped: true };
+
+    const logs = db.get('whatsapp_logs') || [];
+    if (messageId && logs.some(l => l.meta_message_id === messageId)) {
+      return { skipped: true, reason: 'duplicate' };
+    }
+
+    const resolvedDirection = direction === 'inbound' ? 'inbound' : 'outbound';
+
+    db.insert('whatsapp_logs', {
+      phone: normalizedPhone,
+      channel: 'whatsapp',
+      direction: resolvedDirection,
+      message: text,
+      status: 'synced',
+      source: resolvedDirection === 'outbound' ? 'phone' : 'customer',
+      meta_message_id: messageId || null,
+      message_type: type || 'text',
+      created_at: timestamp
+        ? new Date(Number(timestamp) > 1e12 ? Number(timestamp) : Number(timestamp) * 1000).toISOString()
+        : new Date().toISOString(),
+    });
+
+    db.upsertParentByPhone('לקוח וואטסאפ', normalizedPhone, '', {
+      source: 'whatsapp',
+      channel: 'whatsapp',
+    });
+
+    return { success: true };
+  },
+
+  replyFromCrm: async (phone, text) => {
+    if (!phone) return { success: false, error: 'חסר מספר טלפון' };
+    if (!text || !String(text).trim()) return { success: false, error: 'חסר תוכן הודעה' };
+    return whatsappService.sendTextMessage(phone, String(text).trim(), false);
+  },
+
+  getLogsForPhone: (phone) => {
+    const logs = db.get('whatsapp_logs') || [];
+    return logs
+      .filter(l => (l.channel || 'whatsapp') === 'whatsapp' && phonesMatch(l.phone || l.to || l.from, phone))
+      .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
+  },
 };
 
 function getInstagramToken() {

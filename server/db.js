@@ -66,6 +66,14 @@ const SEED_DATA = {
   whatsapp_settings: {
     metaWaPhoneId: '',
     metaWaAccessToken: '',
+    metaWaWabaId: '',
+    metaWaBusinessId: '',
+    connectedPhoneDisplay: '',
+    connectedVerifiedName: '',
+    coexistenceEnabled: false,
+    isOnBizApp: false,
+    connectedAt: null,
+    lastConnectEvent: null,
     metaIgAccountId: '',
     metaIgAccessToken: '',
     verifyToken: 'climbing_verify_token',
@@ -161,7 +169,11 @@ export const db = {
   insert: (table, record) => {
     const data = readDb();
     if (!data[table]) data[table] = [];
-    const newRecord = { id: record.id || `${table.slice(0, 2)}${Date.now()}`, ...record, created_at: new Date().toISOString() };
+    const newRecord = {
+      id: record.id || `${table.slice(0, 2)}${Date.now()}`,
+      ...record,
+      created_at: record.created_at || new Date().toISOString(),
+    };
     data[table].push(newRecord);
     writeDb(data);
     syncUpsert(table, newRecord);
@@ -192,8 +204,17 @@ export const db = {
 
   upsertParentByPhone: (name, phone, email, extras = {}) => {
     const data = readDb();
-    const cleanPhone = (phone || '').replace(/[-\s]/g, '');
-    let parent = data.parents.find(p => (p.phone || '').replace(/[-\s]/g, '') === cleanPhone);
+    const normalize = (p) => {
+      let d = String(p || '').replace(/[^\d]/g, '');
+      if (d.startsWith('0') && d.length >= 9) d = `972${d.slice(1)}`;
+      return d;
+    };
+    const cleanPhone = normalize(phone);
+    const phoneTail = cleanPhone.slice(-9);
+    let parent = data.parents.find(p => {
+      const np = normalize(p.phone);
+      return np === cleanPhone || (phoneTail && np.slice(-9) === phoneTail);
+    });
     
     if (parent) {
       if (email && !parent.email) parent.email = email;

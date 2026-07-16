@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 import { db, initDb } from './db.js';
 import { supa } from './supa.js';
 import { whatsappService, instagramService } from './whatsapp.js';
+import { whatsappConnectService } from './whatsappConnect.js';
 import { automationsService } from './automations.js';
 
 const app = express();
@@ -238,23 +239,94 @@ app.get('/api/health', (req, res) => {
 // 2. WHATSAPP CUSTOMER PORTAL & INTEGRATION ENDPOINTS
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Get WhatsApp Settings
+// Get WhatsApp Settings (never expose full access token to clients)
 app.get('/api/whatsapp/settings', (req, res) => {
-  res.json(db.getSettings());
+  const settings = db.getSettings();
+  const { metaWaAccessToken, ...safe } = settings;
+  res.json({
+    ...safe,
+    metaWaAccessToken: metaWaAccessToken ? '••••••••' : '',
+    hasAccessToken: !!(metaWaAccessToken && !metaWaAccessToken.includes('YOUR_')),
+  });
 });
 
 // Update WhatsApp Settings
 app.post('/api/whatsapp/settings', (req, res) => {
-  const settings = db.saveSettings(req.body);
-  res.json({ message: 'Settings saved successfully', settings });
+  const payload = { ...req.body };
+  // Ignore masked token placeholders from the UI
+  if (!payload.metaWaAccessToken || String(payload.metaWaAccessToken).includes('•') || payload.metaWaAccessToken === 'EAAGb...') {
+    delete payload.metaWaAccessToken;
+  }
+  const settings = db.saveSettings(payload);
+  const { metaWaAccessToken, ...safe } = settings;
+  res.json({
+    message: 'Settings saved successfully',
+    settings: { ...safe, metaWaAccessToken: metaWaAccessToken ? '••••••••' : '', hasAccessToken: !!metaWaAccessToken },
+  });
+});
+
+// Embedded Signup public config (no secrets)
+app.get('/api/whatsapp/connect-config', (req, res) => {
+  res.json(whatsappConnectService.getConnectConfig());
+});
+
+// Connection status for settings UI
+app.get('/api/whatsapp/status', async (req, res) => {
+  try {
+    if (req.query.refresh === '1') {
+      const status = await whatsappConnectService.refreshStatusFromMeta();
+      return res.json(status);
+    }
+    res.json(whatsappConnectService.getStatus());
+  } catch (err) {
+    res.status(500).json({ connected: false, error: err.message });
+  }
+});
+
+// Complete Embedded Signup / Coexistence OAuth
+app.post('/api/whatsapp/oauth/callback', async (req, res) => {
+  try {
+    const result = await whatsappConnectService.completeOAuth(req.body || {});
+    res.json(result);
+  } catch (err) {
+    console.error('WhatsApp OAuth callback failed:', err.message);
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// Disconnect WhatsApp locally
+app.post('/api/whatsapp/disconnect', (req, res) => {
+  res.json(whatsappConnectService.disconnect());
+});
+
+// Reply from CRM lead card
+app.post('/api/whatsapp/reply', async (req, res) => {
+  const { phone, message, text } = req.body || {};
+  const result = await whatsappService.replyFromCrm(phone, message || text);
+  if (result.success) {
+    res.json({ success: true, message: result.text });
+  } else {
+    res.status(400).json({ success: false, error: result.error || 'שליחה נכשלה' });
+  }
+});
+
+// Thread for a specific phone (lead card)
+app.get('/api/whatsapp/thread/:phone', (req, res) => {
+  const logs = whatsappService.getLogsForPhone(req.params.phone);
+  res.json(logs);
 });
 
 // Get WhatsApp Message Logs
 app.get('/api/whatsapp/logs', (req, res) => {
   const logs = db.get('whatsapp_logs');
-  // Sort logs by newest first
-  const sortedLogs = [...logs].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-  res.json(sortedLogs);
+  const phone = req.query.phone;
+  let filtered = [...logs];
+  if (phone) {
+    filtered = whatsappService.getLogsForPhone(phone);
+  } else {
+    filtered.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  }
+  res.json(filtered);
 });
 
 // Get Broadcast Campaigns History
@@ -567,6 +639,89 @@ async function processInstagramEntry(body) {
   }
 }
 
+async function processWhatsAppWebhookChange(change = {}) {
+  const field = change.field;
+  const value = change.value || {};
+
+  // Inbound customer messages (live)
+  if (field === 'messages') {
+    for (const message of value.messages || []) {
+      if (message.history_context) continue; // history sync handled separately
+      const phone = message.from;
+      const text = whatsappConnectService.extractMessageText(message);
+      if (!phone) continue;
+      if (!text && !message.type) continue;
+      console.log(`💬 Processing WhatsApp message from ${phone}: "${text}"`);
+      await whatsappService.handleIncomingMessage(phone, text || `[${message.type || 'media'}]`, false, {
+        messageId: message.id,
+        type: message.type,
+      });
+    }
+  }
+
+  // Outbound echoes from WhatsApp Business app (Coexistence)
+  if (field === 'smb_message_echoes') {
+    for (const echo of value.message_echoes || []) {
+      const phone = echo.to;
+      const text = whatsappConnectService.extractMessageText(echo);
+      console.log(`📱 Phone echo to ${phone}: "${text}"`);
+      await whatsappService.handlePhoneEcho({
+        phone,
+        text,
+        messageId: echo.id,
+        type: echo.type,
+      });
+    }
+  }
+
+  // History sync during Coexistence onboarding
+  if (field === 'history') {
+    for (const chunk of value.history || []) {
+      if (chunk.threads) {
+        for (const thread of chunk.threads) {
+          const peer = thread.id || thread.wa_id;
+          for (const message of thread.messages || []) {
+            const direction = message.from_me || message.direction === 'outbound'
+              ? 'outbound'
+              : 'inbound';
+            const phone = peer
+              || (direction === 'inbound' ? message.from : (message.to || message.from))
+              || message.from
+              || message.to;
+            const text = whatsappConnectService.extractMessageText(message);
+            await whatsappService.handleHistoryMessage({
+              phone,
+              text,
+              direction,
+              messageId: message.id,
+              timestamp: message.timestamp,
+              type: message.type,
+            });
+          }
+        }
+      } else {
+        for (const message of chunk.messages || []) {
+          const phone = message.from || message.to;
+          const text = whatsappConnectService.extractMessageText(message);
+          const direction = message.from_me || message.direction === 'outbound' ? 'outbound' : 'inbound';
+          await whatsappService.handleHistoryMessage({
+            phone,
+            text,
+            direction,
+            messageId: message.id,
+            timestamp: message.timestamp,
+            type: message.type,
+          });
+        }
+      }
+    }
+  }
+
+  if (field === 'account_update') {
+    console.log('ℹ️ WhatsApp account_update webhook:', JSON.stringify(value));
+  }
+}
+
 // Meta Webhook Messages Processor (POST) - Handles both WhatsApp & Instagram if routed here
 app.post('/api/whatsapp/webhook', async (req, res) => {
   const body = req.body;
@@ -579,18 +734,9 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
       return res.sendStatus(200);
     }
 
-    const entry = body.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
-    
-    if (value && value.messages?.[0]) {
-      const message = value.messages[0];
-      const phone = message.from; // Sender phone number
-      const text = message.text?.body || ''; // Message body
-
-      if (phone && text) {
-        console.log(`💬 Processing WhatsApp message from ${phone}: "${text}"`);
-        await whatsappService.handleIncomingMessage(phone, text);
+    for (const entry of body.entry || []) {
+      for (const change of entry.changes || []) {
+        await processWhatsAppWebhookChange(change);
       }
     }
   } catch (error) {
