@@ -721,130 +721,8 @@ export default function Broadcasts({ parents, students }) {
       {/* SETTINGS & AI WORKBENCH */}
       {activeTab === 'settings' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          {/* WhatsApp Coexistence Connect Card */}
-          <div className="card card-p" style={{ border: '1px solid rgba(37,211,102,0.35)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Smartphone size={18} style={{ color: '#25D366' }} />
-                <span className="section-title">חיבור WhatsApp Business (Coexistence)</span>
-              </div>
-              <span style={{
-                fontSize: 11,
-                fontWeight: 700,
-                padding: '4px 10px',
-                borderRadius: 999,
-                background: waStatus.connected ? 'rgba(37,211,102,0.15)' : 'rgba(239,68,68,0.12)',
-                color: waStatus.connected ? '#25D366' : '#F87171',
-              }}>
-                {waStatus.connected ? 'מחובר' : 'לא מחובר'}
-              </span>
-            </div>
-
-            <p style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.6, marginBottom: 14 }}>
-              חברו את מספר ה-WhatsApp Business שלכם כדי לענות גם מהטלפון וגם מהמערכת.
-              השיחות יופיעו בתיק הלקוח בזמן אמת.
-            </p>
-
-            {waStatus.connected ? (
-              <div style={{ display: 'grid', gap: 8, marginBottom: 14, fontSize: 12 }}>
-                <div><strong>מספר:</strong> {waStatus.displayPhone || waStatus.phoneNumberId || '—'}</div>
-                {waStatus.verifiedName && <div><strong>שם מאומת:</strong> {waStatus.verifiedName}</div>}
-                <div><strong>Coexistence:</strong> {waStatus.coexistenceEnabled || waStatus.isOnBizApp ? 'פעיל (טלפון + מערכת)' : 'לא מאושר עדיין'}</div>
-                {waStatus.connectedAt && (
-                  <div style={{ color: 'var(--text-3)' }}>
-                    חובר ב-{new Date(waStatus.connectedAt).toLocaleString('he-IL')}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 14 }}>
-                לחצו על הכפתור — ייפתח חלון Meta לאימות המספר באפליקציית WhatsApp Business.
-              </div>
-            )}
-
-            {waConnectSuccess && (
-              <div className="alert alert-success" style={{ marginBottom: 12 }}>
-                <span>{waConnectSuccess}</span>
-              </div>
-            )}
-            {waConnectError && (
-              <div className="alert alert-danger" style={{ marginBottom: 12 }}>
-                <span>{waConnectError}</span>
-              </div>
-            )}
-
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-              {!waStatus.connected ? (
-                <button type="button" className="btn btn-primary" onClick={handleConnectWhatsApp} disabled={waConnecting}>
-                  {waConnecting ? 'מתחבר...' : 'חבר WhatsApp'}
-                </button>
-              ) : (
-                <>
-                  <button type="button" className="btn btn-ghost" onClick={() => fetchWaStatus(true)}>
-                    <RefreshCw size={14} /> רענן סטטוס
-                  </button>
-                  <button type="button" className="btn btn-danger" onClick={handleDisconnectWhatsApp}>
-                    נתק
-                  </button>
-                </>
-              )}
-            </div>
-
-            {waStatus.connected && (
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
-                <input
-                  className="input input-sm"
-                  style={{ maxWidth: 180 }}
-                  placeholder="מספר לבדיקה (05...)"
-                  value={testPhone}
-                  onChange={e => setTestPhone(e.target.value)}
-                />
-                <button type="button" className="btn btn-sm btn-success" onClick={handleTestWhatsAppSend} disabled={testingSend}>
-                  {testingSend ? 'שולח...' : 'בדוק שליחה'}
-                </button>
-              </div>
-            )}
-
-            {!waConnectConfig.configured && (
-              <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 8, padding: 12, fontSize: 11, lineHeight: 1.6 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6, color: '#FBBF24' }}>הגדרה חד-פעמית ב-Meta (צ׳קליסט)</div>
-                <ol style={{ margin: '0 18px', padding: 0 }}>
-                  {(waConnectConfig.checklist || []).map((item, idx) => (
-                    <li key={idx} style={{ marginBottom: 4 }}>{item}</li>
-                  ))}
-                </ol>
-              </div>
-            )}
-
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              style={{ marginTop: 10 }}
-              onClick={() => setShowAdvancedWa(v => !v)}
-            >
-              {showAdvancedWa ? 'הסתר הגדרות מתקדמות' : 'הצג הגדרות מתקדמות (גיבוי ידני)'}
-            </button>
-
-            {showAdvancedWa && (
-              <div className="form-grid" style={{ gap: 10, marginTop: 12 }}>
-                <div className="form-group">
-                  <label className="form-label" style={{ fontSize: 11 }}>Phone Number ID</label>
-                  <input className="input input-sm" value={settings.metaWaPhoneId || ''} onChange={e => setSettings({ ...settings, metaWaPhoneId: e.target.value })} />
-                </div>
-                <div className="form-group">
-                  <label className="form-label" style={{ fontSize: 11 }}>Access Token (השאירו ריק כדי לא לדרוס)</label>
-                  <input className="input input-sm" type="password" placeholder="EAA..." value={settings.metaWaAccessToken?.includes('•') ? '' : (settings.metaWaAccessToken || '')} onChange={e => setSettings({ ...settings, metaWaAccessToken: e.target.value })} />
-                </div>
-                <div className="form-group">
-                  <label className="form-label" style={{ fontSize: 11 }}>WABA ID</label>
-                  <input className="input input-sm" value={settings.metaWaWabaId || ''} onChange={e => setSettings({ ...settings, metaWaWabaId: e.target.value })} />
-                </div>
-              </div>
-            )}
-          </div>
-
         <div className="grid-2" style={{ gap: 20, alignItems: 'flex-start' }}>
-          {/* Settings Form */}
+          {/* Settings Form — WhatsApp connect first */}
           <div className="card card-p">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
               <Settings size={18} style={{ color: 'var(--blue)' }} />
@@ -856,6 +734,144 @@ export default function Broadcasts({ parents, students }) {
                 <span>ההגדרות נשמרו בהצלחה! ✓</span>
               </div>
             )}
+
+            {/* WhatsApp connect — primary action in this screen */}
+            <div style={{
+              border: '1px solid rgba(37,211,102,0.45)',
+              background: 'rgba(37,211,102,0.06)',
+              borderRadius: 12,
+              padding: 14,
+              marginBottom: 18,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Smartphone size={18} style={{ color: '#25D366' }} />
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>חיבור WhatsApp של העסק</span>
+                </div>
+                <span style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  background: waStatus.connected ? 'rgba(37,211,102,0.2)' : 'rgba(239,68,68,0.15)',
+                  color: waStatus.connected ? '#25D366' : '#F87171',
+                }}>
+                  {waStatus.connected ? 'מחובר' : 'לא מחובר'}
+                </span>
+              </div>
+
+              <p style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.65, marginBottom: 12 }}>
+                כאן מחברים את מספר ה-WhatsApp Business שלכם.
+                אחרי החיבור אפשר לענות מהטלפון ומהמערכת, והשיחה תופיע בתיק הלקוח.
+              </p>
+
+              <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.7, marginBottom: 12 }}>
+                <div style={{ fontWeight: 700, color: 'var(--text-2)', marginBottom: 4 }}>איך מחברים (3 שלבים):</div>
+                <ol style={{ margin: '0 18px', padding: 0 }}>
+                  <li>לחצו על <strong style={{ color: '#25D366' }}>חבר WhatsApp</strong> למטה.</li>
+                  <li>בחלון Meta בחרו חיבור ל-WhatsApp Business App הקיים והזינו/אשרו את המספר.</li>
+                  <li>אשרו את הקוד באפליקציה בטלפון — וחזרו לכאן עד שמופיע סטטוס <strong>מחובר</strong>.</li>
+                </ol>
+              </div>
+
+              {waStatus.connected && (
+                <div style={{ display: 'grid', gap: 6, marginBottom: 12, fontSize: 12 }}>
+                  <div><strong>מספר:</strong> {waStatus.displayPhone || waStatus.phoneNumberId || '—'}</div>
+                  {waStatus.verifiedName && <div><strong>שם מאומת:</strong> {waStatus.verifiedName}</div>}
+                  <div><strong>טלפון + מערכת:</strong> {waStatus.coexistenceEnabled || waStatus.isOnBizApp ? 'פעיל' : 'ממתין לאישור Coexistence'}</div>
+                </div>
+              )}
+
+              {waConnectSuccess && (
+                <div className="alert alert-success" style={{ marginBottom: 10 }}>
+                  <span>{waConnectSuccess}</span>
+                </div>
+              )}
+              {waConnectError && (
+                <div className="alert alert-danger" style={{ marginBottom: 10 }}>
+                  <span>{waConnectError}</span>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+                {!waStatus.connected ? (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={handleConnectWhatsApp}
+                    disabled={waConnecting}
+                    style={{ background: '#25D366', borderColor: '#25D366', minWidth: 160 }}
+                  >
+                    {waConnecting ? 'מתחבר...' : 'חבר WhatsApp'}
+                  </button>
+                ) : (
+                  <>
+                    <button type="button" className="btn btn-ghost" onClick={() => fetchWaStatus(true)}>
+                      <RefreshCw size={14} /> רענן סטטוס
+                    </button>
+                    <button type="button" className="btn btn-danger" onClick={handleDisconnectWhatsApp}>
+                      נתק
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {waStatus.connected && (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+                  <input
+                    className="input input-sm"
+                    style={{ maxWidth: 180 }}
+                    placeholder="מספר לבדיקה (05...)"
+                    value={testPhone}
+                    onChange={e => setTestPhone(e.target.value)}
+                  />
+                  <button type="button" className="btn btn-sm btn-success" onClick={handleTestWhatsAppSend} disabled={testingSend}>
+                    {testingSend ? 'שולח...' : 'בדוק שליחה'}
+                  </button>
+                </div>
+              )}
+
+              <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.65, marginTop: 4 }}>
+                <div style={{ fontWeight: 700, marginBottom: 4, color: 'var(--text-2)' }}>Webhook לקבלת הודעות (חד-פעמי ב-Meta):</div>
+                <ol style={{ margin: '0 18px', padding: 0 }}>
+                  <li>הגדירו Callback URL ל-<code style={{ color: 'var(--blue)' }}>/api/whatsapp/webhook</code> בשרת שלכם.</li>
+                  <li>Verify Token: <code style={{ color: 'var(--green)' }}>{settings.verifyToken || 'climbing_verify_token'}</code></li>
+                  <li>סמנו: <code style={{ color: '#25D366' }}>messages</code>, <code style={{ color: '#25D366' }}>smb_message_echoes</code>, <code style={{ color: '#25D366' }}>history</code></li>
+                </ol>
+                {!waConnectConfig.configured && (
+                  <div style={{ marginTop: 8, padding: 8, borderRadius: 8, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)' }}>
+                    <strong style={{ color: '#FBBF24' }}>חסרים משתני סביבה בשרת:</strong>{' '}
+                    <code>META_APP_ID</code>, <code>META_APP_SECRET</code>, <code>META_EMBEDDED_SIGNUP_CONFIG_ID</code>
+                    <div style={{ marginTop: 4 }}>בלי אלה הכפתור לא יוכל לפתוח את חלון האימות של Meta.</div>
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ marginTop: 10 }}
+                onClick={() => setShowAdvancedWa(v => !v)}
+              >
+                {showAdvancedWa ? 'הסתר גיבוי ידני' : 'גיבוי ידני (Phone ID / Token)'}
+              </button>
+              {showAdvancedWa && (
+                <div className="form-grid" style={{ gap: 10, marginTop: 10 }}>
+                  <div className="form-group">
+                    <label className="form-label" style={{ fontSize: 11 }}>Phone Number ID</label>
+                    <input className="input input-sm" value={settings.metaWaPhoneId || ''} onChange={e => setSettings({ ...settings, metaWaPhoneId: e.target.value })} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" style={{ fontSize: 11 }}>Access Token</label>
+                    <input className="input input-sm" type="password" placeholder="EAA..." value={settings.metaWaAccessToken?.includes('•') ? '' : (settings.metaWaAccessToken || '')} onChange={e => setSettings({ ...settings, metaWaAccessToken: e.target.value })} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" style={{ fontSize: 11 }}>WABA ID</label>
+                    <input className="input input-sm" value={settings.metaWaWabaId || ''} onChange={e => setSettings({ ...settings, metaWaWabaId: e.target.value })} />
+                  </div>
+                </div>
+              )}
+            </div>
 
             <form onSubmit={handleSaveSettings} className="form-grid" style={{ gap: 14 }}>
               <div className="form-group">
