@@ -57,13 +57,35 @@ app.post('/api/admin/reload-core', async (req, res) => {
   }
 });
 
-// Get all parents
-app.get('/api/parents', (req, res) => {
+// Get all parents (prefer Supabase so Render never serves a stale empty cache)
+app.get('/api/parents', async (req, res) => {
+  try {
+    if (supa.isEnabled()) {
+      const rows = await supa.getAll('parents');
+      if (rows) {
+        if (typeof db.set === 'function') db.set('parents', rows);
+        return res.json(rows);
+      }
+    }
+  } catch (err) {
+    console.error('GET /api/parents Supabase error:', err.message);
+  }
   res.json(db.get('parents'));
 });
 
-// Get all students
-app.get('/api/students', (req, res) => {
+// Get all students (prefer Supabase)
+app.get('/api/students', async (req, res) => {
+  try {
+    if (supa.isEnabled()) {
+      const rows = await supa.getAll('students');
+      if (rows) {
+        if (typeof db.set === 'function') db.set('students', rows);
+        return res.json(rows);
+      }
+    }
+  } catch (err) {
+    console.error('GET /api/students Supabase error:', err.message);
+  }
   res.json(db.get('students'));
 });
 
@@ -323,67 +345,195 @@ app.get('/api/whatsapp/webhook', (req, res) => {
   }
 });
 
+async function resolveInstagramProfileName(token, senderId) {
+  let igName = `משתמש אינסטגרם (${senderId})`;
+  if (!token || token.includes('YOUR_')) return igName;
+  try {
+    const profileRes = await fetch(
+      `https://graph.instagram.com/v20.0/${senderId}?fields=username,name&access_token=${token}`
+    );
+    if (profileRes.ok) {
+      const profileData = await profileRes.json();
+      igName = profileData.name || profileData.username || igName;
+      console.log(`👤 Retrieved Instagram Profile name: ${igName}`);
+    }
+  } catch (err) {
+    console.error('Error fetching IG profile:', err.message);
+  }
+  return igName;
+}
+
+async function processResolvedInstagramMessage(senderId, text, token, entryId) {
+  if (!senderId || senderId === entryId) return false;
+  const igName = await resolveInstagramProfileName(token, senderId);
+  console.log(`💬 Processing Instagram message from IGID ${senderId}: "${text}"`);
+  await instagramService.handleIncomingMessage(senderId, text, igName, false);
+  const { student, isNew } = db.createLeadFromInstagram(senderId, text, igName);
+  // Ensure durable store gets the lead (GET /api/students reads Supabase, not local cache).
+  if (supa.isEnabled()) {
+    try {
+      const parents = db.get('parents') || [];
+      const parent = parents.find((p) => p.id === student.parentId);
+      if (parent) await supa.upsert('parents', parent);
+      await supa.upsert('students', student);
+    } catch (err) {
+      console.error('Supabase persist for Instagram lead failed:', err.message);
+    }
+  }
+  if (isNew) {
+    automationsService.triggerEvent('new_lead', { ...student, phone: '', parentName: igName });
+    console.log(`🎉 New lead created from Instagram: ${student.id} (${igName})`);
+  } else {
+    console.log(`📝 Existing Instagram lead updated: ${student.id}`);
+  }
+  return true;
+}
+
+async function fetchInstagramMessageByMid(token, mid) {
+  const msgRes = await fetch(
+    `https://graph.instagram.com/v20.0/${mid}?fields=id,created_time,from,to,message&access_token=${token}`
+  );
+  const msgData = await msgRes.json().catch(() => ({}));
+  if (!msgRes.ok) {
+    return { ok: false, error: msgData.error?.message || `HTTP ${msgRes.status}` };
+  }
+  // Meta sometimes returns HTTP 200 with an empty body when Advanced Access is missing.
+  if (!msgData?.from?.id) {
+    return { ok: false, error: 'empty_message_payload', raw: msgData };
+  }
+  return {
+    ok: true,
+    senderId: msgData.from.id,
+    text: msgData.message || messagingTextFallback(),
+  };
+}
+
+function messagingTextFallback() {
+  return '[הודעת אינסטגרם]';
+}
+
+async function findRecentInstagramSender(token, mid, ownIds = []) {
+  const folders = ['inbox', 'requests', 'pending', 'other'];
+  for (const folder of folders) {
+    try {
+      const url =
+        `https://graph.instagram.com/v20.0/me/conversations?folder=${folder}` +
+        `&fields=id,updated_time,participants,messages.limit(5){id,created_time,message,from,to}` +
+        `&access_token=${token}`;
+      const res = await fetch(url);
+      const data = await res.json().catch(() => ({}));
+      for (const conv of data.data || []) {
+        for (const msg of conv.messages?.data || []) {
+          if (mid && msg.id === mid && msg.from?.id && !ownIds.includes(msg.from.id)) {
+            return { senderId: msg.from.id, text: msg.message || messagingTextFallback() };
+          }
+        }
+        // Fallback: newest inbound message in this conversation
+        const inbound = (conv.messages?.data || []).find(
+          (m) => m.from?.id && !ownIds.includes(m.from.id)
+        );
+        if (inbound) {
+          return { senderId: inbound.from.id, text: inbound.message || messagingTextFallback() };
+        }
+      }
+    } catch (err) {
+      console.error(`IG conversations folder=${folder} failed:`, err.message);
+    }
+  }
+  return null;
+}
+
 // Helper to process any incoming Instagram message payload
 async function processInstagramEntry(body) {
   const settings = db.getSettings();
   const token = settings.metaIgAccessToken || process.env.INSTAGRAM_ACCESS_TOKEN;
+  const ownIds = ['36688670097443843', '17841409845483243'];
 
   for (const entry of body.entry || []) {
+    if (entry.id) ownIds.push(entry.id);
     // 1. Messenger/Instagram Messaging API format (entry.messaging or entry.standby)
     const allEvents = [...(entry.messaging || []), ...(entry.standby || [])];
     for (const messaging of allEvents) {
 
-      // 1a. Handle message_edit events (Instagram sends these for new messages when app lacks instagram_manage_messages)
+      // 1a. Handle message_edit events (Instagram often sends these instead of full messages
+      // when the app lacks Advanced Access for instagram_business_manage_messages).
       if (messaging.message_edit && messaging.message_edit.mid) {
         const mid = messaging.message_edit.mid;
         const numEdit = messaging.message_edit.num_edit || 0;
         console.log(`📩 Received Instagram message_edit event (num_edit=${numEdit}, mid=${mid.slice(0, 40)}...)`);
-        
-        // Try to fetch the actual message content via Graph API
+
+        let senderId = messaging.sender?.id || null;
+        let text = messaging.message_edit.text || null;
+
         if (token && !token.includes('YOUR_')) {
           try {
-            const msgRes = await fetch(`https://graph.instagram.com/v20.0/${mid}?fields=id,created_time,from,to,message&access_token=${token}`);
-            if (msgRes.ok) {
-              const msgData = await msgRes.json();
-              const senderId = msgData.from?.id;
-              const text = msgData.message || '[הודעת אינסטגרם]';
-              console.log(`📨 Fetched message content via API: from=${senderId}, text="${text}"`);
-              
-              if (senderId && senderId !== entry.id) {
-                let igName = `משתמש אינסטגרם (${senderId})`;
-                try {
-                  const profileRes = await fetch(`https://graph.instagram.com/v20.0/${senderId}?fields=username,name&access_token=${token}`);
-                  if (profileRes.ok) {
-                    const profileData = await profileRes.json();
-                    igName = profileData.name || profileData.username || igName;
-                    console.log(`👤 Retrieved Instagram Profile name: ${igName}`);
-                  }
-                } catch (err) {
-                  console.error('Error fetching IG profile:', err.message);
-                }
-
-                await instagramService.handleIncomingMessage(senderId, text, igName, false);
-                const { student, isNew } = db.createLeadFromInstagram(senderId, text, igName);
-                if (isNew) {
-                  automationsService.triggerEvent('new_lead', { ...student, phone: '', parentName: igName });
-                  console.log(`🎉 New lead created from Instagram message_edit: ${student.id} (${igName})`);
-                } else {
-                  console.log(`📝 Existing Instagram lead updated: ${student.id}`);
-                }
+            if (!senderId || !text) {
+              const fetched = await fetchInstagramMessageByMid(token, mid);
+              if (fetched.ok) {
+                senderId = senderId || fetched.senderId;
+                text = text || fetched.text;
+                console.log(`📨 Fetched message content via API: from=${senderId}, text="${text}"`);
+              } else {
+                console.log(`⚠️ Could not fetch message content: ${fetched.error}`);
               }
-            } else {
-              const errData = await msgRes.json().catch(() => ({}));
-              console.log(`⚠️ Could not fetch message content (${msgRes.status}):`, errData.error?.message || 'Unknown error');
-              // Even without content, create a basic lead from the entry ID
-              const fallbackId = `ig_msg_${Date.now()}`;
-              const { student, isNew } = db.createLeadFromInstagram(fallbackId, '[הודעה חדשה מאינסטגרם - נדרש instagram_manage_messages]', `ליד אינסטגרם (${new Date().toLocaleString('he-IL')})`);
-              if (isNew) {
-                automationsService.triggerEvent('new_lead', { ...student, phone: '', parentName: student.name });
-                console.log(`🎉 New fallback lead created from Instagram: ${student.id}`);
+            }
+
+            // Conversations can lag a bit after webhook — retry briefly.
+            if (!senderId) {
+              for (const delayMs of [0, 1500, 4000]) {
+                if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+                const found = await findRecentInstagramSender(token, mid, ownIds);
+                if (found?.senderId) {
+                  senderId = found.senderId;
+                  text = text || found.text;
+                  console.log(`📬 Resolved sender via conversations: ${senderId}`);
+                  break;
+                }
               }
             }
           } catch (err) {
             console.error('Error processing message_edit:', err.message);
+          }
+        }
+
+        if (senderId && !ownIds.includes(senderId)) {
+          await processResolvedInstagramMessage(
+            senderId,
+            text || messagingTextFallback(),
+            token,
+            entry.id
+          );
+        } else {
+          console.warn(
+            '⚠️ Instagram message_edit received but sender/text unavailable. ' +
+              'Meta usually requires App Live mode + Advanced Access ' +
+              '(instagram_business_manage_messages), or the sender must be an app role user/tester.'
+          );
+          // Persist a visible CRM lead so the inbox is not silently empty.
+          const fallbackId = 'ig_unresolved';
+          const note =
+            '[הודעת אינסטגרם התקבלה ב-webhook ללא תוכן/שולח — נדרש Advanced Access או חשבון Tester באפליקציית Meta]';
+          const { student, isNew } = db.createLeadFromInstagram(
+            fallbackId,
+            note,
+            `הודעת אינסטגרם ממתינה (${new Date().toLocaleString('he-IL')})`
+          );
+          if (supa.isEnabled()) {
+            try {
+              const parents = db.get('parents') || [];
+              const parent = parents.find((p) => p.id === student.parentId);
+              if (parent) await supa.upsert('parents', parent);
+              await supa.upsert('students', student);
+            } catch (err) {
+              console.error('Supabase persist for unresolved IG lead failed:', err.message);
+            }
+          }
+          if (isNew) {
+            automationsService.triggerEvent('new_lead', {
+              ...student,
+              phone: '',
+              parentName: student.name,
+            });
           }
         }
         continue;
@@ -393,32 +543,10 @@ async function processInstagramEntry(body) {
       const msgObj = messaging.message || messaging.postback || {};
       if ((msgObj.text || msgObj.caption || msgObj.title || messaging.postback) && !msgObj.is_echo) {
         const senderId = messaging.sender?.id || entry.id;
-        const text = msgObj.text || msgObj.caption || msgObj.title || messaging.postback?.payload || '[הודעת אינסטגרם / בדיקה]';
+        const text = msgObj.text || msgObj.caption || msgObj.title || messaging.postback?.payload || messagingTextFallback();
         
         if (senderId && text) {
-          console.log(`💬 Processing Instagram event from IGID ${senderId}: "${text}"`);
-          let igName = `משתמש אינסטגרם (${senderId})`;
-          try {
-            if (token && !token.includes('YOUR_')) {
-              const profileRes = await fetch(`https://graph.instagram.com/v20.0/${senderId}?fields=username,name&access_token=${token}`);
-              if (profileRes.ok) {
-                const profileData = await profileRes.json();
-                igName = profileData.name || profileData.username || igName;
-                console.log(`👤 Retrieved Instagram Profile name: ${igName}`);
-              }
-            }
-          } catch (err) {
-            console.error('Error fetching IG profile:', err.message);
-          }
-
-          await instagramService.handleIncomingMessage(senderId, text, igName, false);
-          const { student, isNew } = db.createLeadFromInstagram(senderId, text, igName);
-          if (isNew) {
-            automationsService.triggerEvent('new_lead', { ...student, phone: '', parentName: igName });
-            console.log(`🎉 New lead created from Instagram: ${student.id} (${igName})`);
-          } else {
-            console.log(`📝 Existing Instagram lead updated: ${student.id}`);
-          }
+          await processResolvedInstagramMessage(senderId, text, token, entry.id);
         }
       }
     }
@@ -432,24 +560,7 @@ async function processInstagramEntry(body) {
         const text = message.text?.body || message.caption || '[הודעה מאינסטגרם]';
         
         if (senderId && text) {
-          console.log(`💬 Processing Instagram change message from IGID ${senderId}: "${text}"`);
-          let igName = `משתמש אינסטגרם (${senderId})`;
-          try {
-            if (token && !token.includes('YOUR_')) {
-              const profileRes = await fetch(`https://graph.instagram.com/v20.0/${senderId}?fields=username,name&access_token=${token}`);
-              if (profileRes.ok) {
-                const profileData = await profileRes.json();
-                igName = profileData.name || profileData.username || igName;
-              }
-            }
-          } catch (err) {}
-
-          await instagramService.handleIncomingMessage(senderId, text, igName, false);
-          const { student, isNew } = db.createLeadFromInstagram(senderId, text, igName);
-          if (isNew) {
-            automationsService.triggerEvent('new_lead', { ...student, phone: '', parentName: igName });
-            console.log(`🎉 New lead created from Instagram: ${student.id} (${igName})`);
-          }
+          await processResolvedInstagramMessage(senderId, text, token, entry.id);
         }
       }
     }
@@ -650,37 +761,100 @@ app.delete('/api/activities/:id', (req, res) => {
 });
 
 // ─── Attendance — Supabase-backed ────────────────────────────────────────────
-// Optional query filters: ?groupId=..&date=YYYY-MM-DD
-app.get('/api/attendance', (req, res) => {
+// Optional query filters: ?groupId=..&date=YYYY-MM-DD&studentId=..
+function filterAttendanceRows(rows, { groupId, date, studentId }) {
+  let out = rows || [];
+  if (groupId) out = out.filter((r) => r.group_id === groupId);
+  if (date) out = out.filter((r) => r.date === date);
+  if (studentId) out = out.filter((r) => r.student_id === studentId);
+  return out;
+}
+
+app.get('/api/attendance', async (req, res) => {
   const { groupId, date, studentId } = req.query;
-  let rows = db.get('attendance');
-  if (groupId) rows = rows.filter(r => r.group_id === groupId);
-  if (date) rows = rows.filter(r => r.date === date);
-  if (studentId) rows = rows.filter(r => r.student_id === studentId);
-  res.json(rows);
+  try {
+    if (supa.isEnabled()) {
+      const rows = await supa.getAll('attendance');
+      if (rows) {
+        if (typeof db.set === 'function') db.set('attendance', rows);
+        return res.json(filterAttendanceRows(rows, { groupId, date, studentId }));
+      }
+    }
+  } catch (err) {
+    console.error('GET /api/attendance Supabase error:', err.message);
+  }
+  res.json(filterAttendanceRows(db.get('attendance'), { groupId, date, studentId }));
 });
 
 app.post('/api/attendance', (req, res) => {
-  const record = db.insert('attendance', req.body);
+  const body = { ...req.body };
+  // Normalize legacy UI status → schema values
+  if (body.status === 'present') body.status = 'attended';
+  const record = db.insert('attendance', body);
   res.status(201).json(record);
 });
 
-// Bulk upsert attendance for a group on a given date
-app.post('/api/attendance/bulk', (req, res) => {
+// Bulk upsert attendance for a group on a given date.
+// Also matches existing rows by (student_id, group_id, date) so re-saves
+// stay idempotent even if the client lost the previous id.
+app.post('/api/attendance/bulk', async (req, res) => {
   const { records } = req.body;
   if (!Array.isArray(records)) return res.status(400).json({ error: 'records must be an array' });
-  const saved = records.map(r => {
-    if (r.id && db.getOne('attendance', r.id)) {
-      return db.update('attendance', r.id, r);
+
+  // Refresh cache from Supabase so we don't duplicate rows after a cold start.
+  try {
+    if (supa.isEnabled()) {
+      const rows = await supa.getAll('attendance');
+      if (rows && typeof db.set === 'function') db.set('attendance', rows);
     }
-    return db.insert('attendance', r);
-  });
+  } catch (err) {
+    console.error('bulk attendance cache refresh failed:', err.message);
+  }
+
+  const existing = db.get('attendance') || [];
+  const saved = records.map((raw) => {
+    const r = { ...raw };
+    if (r.status === 'present') r.status = 'attended';
+    if (!r.student_id || !r.group_id || !r.date) {
+      return null;
+    }
+    const byId = r.id ? existing.find((e) => e.id === r.id) : null;
+    const byKey = existing.find(
+      (e) =>
+        e.student_id === r.student_id &&
+        e.group_id === r.group_id &&
+        e.date === r.date
+    );
+    const match = byId || byKey;
+    if (match) {
+      return db.update('attendance', match.id, {
+        student_id: r.student_id,
+        group_id: r.group_id,
+        date: r.date,
+        status: r.status || 'attended',
+        marked_by: r.marked_by ?? match.marked_by ?? null,
+        notes: r.notes ?? match.notes ?? '',
+      });
+    }
+    return db.insert('attendance', {
+      id: r.id || `att-${r.group_id}-${r.date}-${r.student_id}`,
+      student_id: r.student_id,
+      group_id: r.group_id,
+      date: r.date,
+      status: r.status || 'attended',
+      marked_by: r.marked_by || null,
+      notes: r.notes || '',
+    });
+  }).filter(Boolean);
+
   res.status(201).json(saved);
 });
 
 app.put('/api/attendance/:id', (req, res) => {
   const { id } = req.params;
-  const updated = db.update('attendance', id, req.body);
+  const body = { ...req.body };
+  if (body.status === 'present') body.status = 'attended';
+  const updated = db.update('attendance', id, body);
   if (!updated) return res.status(404).json({ error: 'Attendance record not found' });
   res.json(updated);
 });
