@@ -84,14 +84,18 @@ CREATE TABLE attendance (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- 7. LEVEL TESTS (מבחני רמה והובלה)
+-- 7. LEVEL TESTS (מבחני רמה / אבטחה / הובלה)
 CREATE TABLE level_tests (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
     test_date DATE NOT NULL DEFAULT CURRENT_DATE,
-    route_type VARCHAR(20) DEFAULT 'top_rope', -- top_rope (טופ רופ), lead (הובלה), pending (ממתין לשיבוץ)
-    level_grade VARCHAR(20) NOT NULL, -- 5A, 5B, 5C, 6A, 6B, 6C, 7A, 7B, 7C, 8A
+    -- test_type: level (מבחן רמה), security (מבחן אבטחה), lead (מבחן הובלה)
+    test_type VARCHAR(20) DEFAULT 'level',
+    -- route_style: only for level tests — top-rope (טופ רופ) or lead (הובלה על המסלול)
+    route_style VARCHAR(20),
+    level_grade VARCHAR(20), -- 5A…8A; required for level tests, null for security/lead certs
     status VARCHAR(20) DEFAULT 'pending', -- passed, failed, pending
+    examiner_id UUID REFERENCES employees(id), -- required for security / lead certs; null for level
     attended_ceremony BOOLEAN DEFAULT FALSE,
     notes TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP

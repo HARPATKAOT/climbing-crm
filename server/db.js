@@ -532,14 +532,20 @@ export const db = {
   insertLevelTest: (test) => {
     const data = readDb();
     if (!data.level_tests) data.level_tests = [];
-    
+
+    const testType = test.test_type || 'level';
+    const isLevelTest = testType === 'level' || testType === 'top-rope';
+    const needsExaminer = testType === 'security' || testType === 'lead';
+
     const newTest = {
       id: `lt${Date.now()}`,
       studentId: test.studentId || null,
       studentName: test.studentName || 'מתאמן',
-      level: test.level || '5A',
-      test_type: test.test_type || 'top-rope',
-      examiner: test.examiner || 'עידו בן דוד',
+      level: isLevelTest ? (test.level || '5A') : null,
+      test_type: testType,
+      route_style: isLevelTest ? (test.route_style || 'top-rope') : null,
+      examiner: needsExaminer ? (test.examiner ?? null) : null,
+      examinerId: needsExaminer ? (test.examinerId ?? null) : null,
       date: new Date().toISOString().split('T')[0],
       notes: test.notes || '',
       passed: test.passed ?? true,
@@ -548,8 +554,8 @@ export const db = {
     
     data.level_tests.unshift(newTest);
     
-    // If test passed, update student level grade
-    if (newTest.studentId && newTest.passed) {
+    // If a level test passed, update student level grade
+    if (isLevelTest && newTest.studentId && newTest.passed && newTest.level) {
       const studentIndex = data.students.findIndex(s => s.id === newTest.studentId);
       if (studentIndex !== -1) {
         data.students[studentIndex].levelGrade = newTest.level;
