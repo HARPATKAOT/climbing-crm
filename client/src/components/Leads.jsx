@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Calendar, Send, Clipboard, Edit2, Check } from 'lucide-react';
-import { STATUSES } from '../mockData.js';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Calendar, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, MessageCircle, Bell, FileCheck2, ExternalLink } from 'lucide-react';
+import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
 
 // Normalize phone for comparison
 const normPhone = p => p ? p.replace(/[-\s]/g, '') : '';
 
 // ─── Lead/Customer Card (detail sidebar) ────────────────────────────────────
-function CustomerCard({ student, parent, group, onClose, onStatusChange, onDelete, onUpdateStudent, pricelist, refreshData }) {
+function CustomerCard({ student, parent, group, groups = [], onClose, onStatusChange, onDelete, onUpdateStudent, pricelist, refreshData }) {
   if (!student) return null;
   const statusKeys = Object.keys(STATUSES);
 
@@ -19,10 +19,94 @@ function CustomerCard({ student, parent, group, onClose, onStatusChange, onDelet
   });
   const [loadingLists, setLoadingLists] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
   
-  // Edit Form Fields
+  // Edit Form Fields (student)
   const [editBirthDate, setEditBirthDate] = useState(student.birthDate || '');
   const [editNotes, setEditNotes] = useState(student.notes || '');
+  const [editSegment, setEditSegment] = useState(student.segment || '');
+  const [editNextFollowup, setEditNextFollowup] = useState(student.nextFollowup || '');
+  const [editGroupId, setEditGroupId] = useState(student.groupId || '');
+  // Edit Form Fields (parent)
+  const [editParentName, setEditParentName] = useState(parent?.name || '');
+  const [editPhone, setEditPhone] = useState(parent?.phone || '');
+  const [editEmail, setEditEmail] = useState(parent?.email || '');
+  const [editCity, setEditCity] = useState(parent?.city || '');
+  const [editSource, setEditSource] = useState(parent?.source || student.source || 'unknown');
+
+  // Message history (WhatsApp logs matching this parent's phone)
+  const [messages, setMessages] = useState([]);
+  useEffect(() => {
+    if (!parent?.phone) { setMessages([]); return; }
+    const norm = normPhone(parent.phone);
+    fetch('/api/whatsapp/logs')
+      .then(res => res.ok ? res.json() : [])
+      .then(logs => {
+        const mine = (logs || []).filter(l => {
+          const t = normPhone(l.to || l.phone || l.recipient || '');
+          const f = normPhone(l.from || '');
+          return t.endsWith(norm.slice(-9)) || f.endsWith(norm.slice(-9));
+        });
+        setMessages(mine);
+      })
+      .catch(err => console.error(err));
+  }, [parent?.id, parent?.phone]);
+
+  // Health declaration + waiver status for this student
+  const [healthDecl, setHealthDecl] = useState(null);
+  const [sendingHealth, setSendingHealth] = useState(false);
+  const [healthSendMsg, setHealthSendMsg] = useState('');
+  useEffect(() => {
+    fetch('/api/health-declarations')
+      .then(res => res.ok ? res.json() : [])
+      .then(decls => {
+        const match = (decls || []).find(d =>
+          d.studentId === student.id ||
+          (d.climberName && d.climberName === student.name) ||
+          (d.studentName && d.studentName === student.name)
+        );
+        setHealthDecl(match || null);
+      })
+      .catch(() => setHealthDecl(null));
+  }, [student.id, student.name, student.status]);
+
+  const healthFormUrl = `${window.location.origin}/health?studentId=${encodeURIComponent(student.id)}${parent?.phone ? `&phone=${encodeURIComponent(parent.phone)}` : ''}`;
+  const isHealthSigned = student.status === 'health_signed'
+    || ['intro_scheduled', 'intro_paid', 'registered'].includes(student.status)
+    || !!(healthDecl && (healthDecl.signed || healthDecl.status === 'approved' || healthDecl.waiverAccepted));
+
+  const handleSendHealthForm = async () => {
+    if (!parent?.phone) {
+      setHealthSendMsg('אין מספר טלפון לשליחה');
+      return;
+    }
+    setSendingHealth(true);
+    setHealthSendMsg('');
+    try {
+      const res = await fetch(`/api/leads/${student.id}/send-health-form`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ origin: window.location.origin }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.healthUrl) {
+        setHealthSendMsg(data.warning
+          ? `קישור מוכן (שליחה חלקית): ${data.healthUrl}`
+          : 'נשלח קישור להצהרת בריאות בוואטסאפ');
+      } else {
+        // Fallback: open wa.me with prefilled text
+        const text = encodeURIComponent(`שלום ${parent.name || ''}, בבקשה מלאו את הצהרת הבריאות והסרת האחריות:\n${healthFormUrl}`);
+        window.open(`https://wa.me/972${parent.phone.replace(/^0/, '').replace(/[-\s]/g, '')}?text=${text}`, '_blank');
+        setHealthSendMsg('נפתח וואטסאפ עם הקישור');
+      }
+    } catch (err) {
+      const text = encodeURIComponent(`שלום ${parent.name || ''}, בבקשה מלאו את הצהרת הבריאות והסרת האחריות:\n${healthFormUrl}`);
+      window.open(`https://wa.me/972${parent.phone.replace(/^0/, '').replace(/[-\s]/g, '')}?text=${text}`, '_blank');
+      setHealthSendMsg('נפתח וואטסאפ עם הקישור');
+    } finally {
+      setSendingHealth(false);
+    }
+  };
 
   // iCount Billing Fields
   const [billAmount, setBillAmount] = useState('');
@@ -81,22 +165,46 @@ function CustomerCard({ student, parent, group, onClose, onStatusChange, onDelet
   };
 
   const handleUpdateDetails = async () => {
+    setSavingEdit(true);
     try {
-      const response = await fetch(`/api/students/${student.id}`, {
+      // 1. Update the student record
+      const sRes = await fetch(`/api/students/${student.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           birthDate: editBirthDate,
-          notes: editNotes
+          notes: editNotes,
+          segment: editSegment || null,
+          nextFollowup: editNextFollowup || null,
+          groupId: editGroupId || null,
+          source: editSource
         })
       });
-      if (response.ok) {
-        const updated = await response.json();
+      if (sRes.ok) {
+        const updated = await sRes.json();
         onUpdateStudent(student.id, updated);
-        setIsEditing(false);
       }
+
+      // 2. Update the parent record (contact + city + source)
+      if (parent?.id) {
+        await fetch(`/api/parents/${parent.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: editParentName,
+            phone: editPhone,
+            email: editEmail,
+            city: editCity,
+            source: editSource
+          })
+        });
+      }
+      setIsEditing(false);
+      if (refreshData) refreshData();
     } catch (err) {
-      console.error('Failed to update student details:', err);
+      console.error('Failed to update details:', err);
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -190,29 +298,12 @@ function CustomerCard({ student, parent, group, onClose, onStatusChange, onDelet
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-1)' }}>{student.name}</div>
             <div style={{ fontSize: 13, color: 'var(--text-3)', marginTop: 4 }}>
-              {isEditing ? (
-                <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                  <input
-                    type="date"
-                    className="input input-sm"
-                    value={editBirthDate}
-                    onChange={e => setEditBirthDate(e.target.value)}
-                  />
-                  <button className="btn btn-success btn-xs btn-icon" onClick={handleUpdateDetails}>
-                    <Check size={12} />
-                  </button>
-                  <button className="btn btn-ghost btn-xs btn-icon" onClick={() => setIsEditing(false)}>
-                    <X size={12} />
-                  </button>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span>תאריך לידה: {student.birthDate || 'לא הוזן'}</span>
-                  <button className="btn btn-ghost btn-xs btn-icon" onClick={() => setIsEditing(true)}>
-                    <Edit2 size={11} />
-                  </button>
-                </div>
-              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>תאריך לידה: {student.birthDate || 'לא הוזן'}</span>
+                <button className="btn btn-ghost btn-xs" onClick={() => setIsEditing(true)}>
+                  <Edit2 size={11} /> ערוך פרטים
+                </button>
+              </div>
             </div>
           </div>
           <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose}>
@@ -267,6 +358,82 @@ function CustomerCard({ student, parent, group, onClose, onStatusChange, onDelet
                 className="btn btn-success btn-sm">
                 💬 וואטסאפ
               </a>
+            </div>
+          )}
+        </div>
+
+        {/* Lead attributes: source / segment / city / next followup */}
+        <div className="card card-p" style={{ marginBottom: 16, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 4 }}><Tag size={11} /> מקור ליד</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>
+              {(LEAD_SOURCES[parent?.source || student.source] || LEAD_SOURCES.unknown).icon}{' '}
+              {(LEAD_SOURCES[parent?.source || student.source] || LEAD_SOURCES.unknown).label}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 4 }}><UserCheck size={11} /> פלח</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>
+              {student.segment ? (LEAD_SEGMENTS[student.segment]?.label || student.segment) : '—'}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 4 }}><MapPin size={11} /> עיר</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>{parent?.city || '—'}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 4 }}><Bell size={11} /> מעקב הבא</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: student.nextFollowup ? 'var(--amber, #FCD34D)' : 'var(--text-1)' }}>
+              {student.nextFollowup || '—'}
+            </div>
+          </div>
+        </div>
+
+        {/* Health declaration + waiver conversion state */}
+        <div className="section-header">
+          <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <FileCheck2 size={15} /> הצהרת בריאות + הסרת אחריות
+          </div>
+        </div>
+        <div className="card card-p" style={{ marginBottom: 16 }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12,
+            padding: '10px 12px', borderRadius: 10,
+            background: isHealthSigned ? 'rgba(52, 211, 153, 0.12)' : 'rgba(252, 211, 77, 0.1)',
+            border: `1px solid ${isHealthSigned ? 'rgba(52, 211, 153, 0.35)' : 'rgba(252, 211, 77, 0.35)'}`,
+          }}>
+            <span style={{ fontSize: 18 }}>{isHealthSigned ? '✓' : '⏳'}</span>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
+                {isHealthSigned ? 'נחתם — הצהרת בריאות + כתב ויתור' : 'טרם נחתם'}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+                {healthDecl?.signedDate || healthDecl?.date
+                  ? `תאריך חתימה: ${healthDecl.signedDate || healthDecl.date}`
+                  : isHealthSigned
+                    ? `סטטוס: ${STATUSES[student.status]?.label || student.status}`
+                    : 'שלחו ללקוח קישור לחתימה דיגיטלית'}
+                {healthDecl?.waiverAccepted ? ' · וויתור אושר' : ''}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <a href={healthFormUrl} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm">
+              <ExternalLink size={13} /> פתח טופס
+            </a>
+            <button
+              type="button"
+              className="btn btn-success btn-sm"
+              disabled={sendingHealth || !parent?.phone}
+              onClick={handleSendHealthForm}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              <Send size={13} /> {sendingHealth ? 'שולח...' : 'שלח קישור בוואטסאפ'}
+            </button>
+          </div>
+          {healthSendMsg && (
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)', wordBreak: 'break-all' }}>
+              {healthSendMsg}
             </div>
           )}
         </div>
@@ -440,16 +607,30 @@ function CustomerCard({ student, parent, group, onClose, onStatusChange, onDelet
         {/* Notes */}
         <div className="section-header"><div className="section-title">הערות מעקב</div></div>
         <div className="card card-p" style={{ marginBottom: 20 }}>
-          {isEditing ? (
-            <textarea
-              className="input w-full"
-              style={{ minHeight: 60, fontSize: 12, padding: 8 }}
-              value={editNotes}
-              onChange={e => setEditNotes(e.target.value)}
-            />
+          <div style={{ fontSize: 13, color: 'var(--text-2)', whiteSpace: 'pre-wrap' }}>
+            {student.notes || 'אין הערות רשומות ללקוח זה'}
+          </div>
+        </div>
+
+        {/* Message history (WhatsApp) */}
+        <div className="section-header">
+          <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <MessageCircle size={15} /> היסטוריית הודעות
+          </div>
+        </div>
+        <div className="card card-p" style={{ marginBottom: 20 }}>
+          {messages.length === 0 ? (
+            <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>לא נמצאו הודעות מתועדות ללקוח זה</div>
           ) : (
-            <div style={{ fontSize: 13, color: 'var(--text-2)', whiteSpace: 'pre-wrap' }}>
-              {student.notes || 'אין הערות רשומות ללקוח זה'}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 200, overflowY: 'auto' }}>
+              {messages.map((m, i) => (
+                <div key={m.id || i} style={{ fontSize: 12, padding: 8, borderRadius: 8, background: (m.direction === 'inbound' || m.from) ? '#1F2937' : 'rgba(37,211,102,0.12)', border: '1px solid var(--border)' }}>
+                  <div style={{ color: 'var(--text-2)', whiteSpace: 'pre-wrap' }}>{m.body || m.message || m.text || '(ללא תוכן)'}</div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4, textAlign: 'left' }}>
+                    {(m.direction === 'inbound' || m.from) ? '⬅️ נכנס' : '➡️ יוצא'} · {m.created_at ? new Date(m.created_at).toLocaleString('he-IL') : ''} {m.status ? `· ${m.status}` : ''}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -558,6 +739,79 @@ function CustomerCard({ student, parent, group, onClose, onStatusChange, onDelet
           </div>
         </Modal>
       )}
+
+      {isEditing && (
+        <Modal title={`עריכת פרטי ליד: ${student.name}`} onClose={() => setIsEditing(false)}
+          footer={
+            <><button className="btn btn-ghost" onClick={() => setIsEditing(false)}>ביטול</button>
+              <button className="btn btn-primary" disabled={savingEdit} onClick={handleUpdateDetails}>
+                <Check size={15} /> {savingEdit ? 'שומר...' : 'שמור שינויים'}
+              </button></>
+          }
+        >
+          <div className="form-grid">
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', marginBottom: 4 }}>פרטי המתאמן</div>
+            <div className="form-grid-2">
+              <div className="form-group">
+                <label className="form-label">תאריך לידה</label>
+                <input type="date" className="input" value={editBirthDate} onChange={e => setEditBirthDate(e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">שיוך לחוג</label>
+                <select className="input" value={editGroupId} onChange={e => setEditGroupId(e.target.value)}>
+                  <option value="">— לא משויך —</option>
+                  {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="form-grid-2">
+              <div className="form-group">
+                <label className="form-label">פלח</label>
+                <select className="input" value={editSegment} onChange={e => setEditSegment(e.target.value)}>
+                  <option value="">— לא הוגדר —</option>
+                  {Object.entries(LEAD_SEGMENTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">תאריך מעקב הבא</label>
+                <input type="date" className="input" value={editNextFollowup} onChange={e => setEditNextFollowup(e.target.value)} />
+              </div>
+            </div>
+
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', margin: '10px 0 4px' }}>פרטי הורה / משלם</div>
+            <div className="form-grid-2">
+              <div className="form-group">
+                <label className="form-label">שם ההורה</label>
+                <input className="input" value={editParentName} onChange={e => setEditParentName(e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">טלפון</label>
+                <input className="input" type="tel" value={editPhone} onChange={e => setEditPhone(e.target.value)} />
+              </div>
+            </div>
+            <div className="form-grid-2">
+              <div className="form-group">
+                <label className="form-label">אימייל</label>
+                <input className="input" type="email" value={editEmail} onChange={e => setEditEmail(e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">עיר</label>
+                <input className="input" value={editCity} onChange={e => setEditCity(e.target.value)} />
+              </div>
+            </div>
+            <div className="form-group">
+              <label className="form-label">מקור ליד</label>
+              <select className="input" value={editSource} onChange={e => setEditSource(e.target.value)}>
+                {Object.entries(LEAD_SOURCES).map(([k, v]) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">הערות מעקב</label>
+              <textarea className="input" style={{ minHeight: 80 }} value={editNotes} onChange={e => setEditNotes(e.target.value)} />
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -567,6 +821,8 @@ function AddLeadModal({ students, parents, onAdd, onClose }) {
   const [parentName, setParentName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
+  const [city, setCity] = useState('');
+  const [source, setSource] = useState('phone');
   const [isAdult, setIsAdult] = useState(false);
   const [children, setChildren] = useState(['']);
   const [warnings, setWarnings] = useState([]);
@@ -604,7 +860,7 @@ function AddLeadModal({ students, parents, onAdd, onClose }) {
       return;
     }
 
-    onAdd({ parentName: parentName.trim(), phone: phone.trim(), email: email.trim(), children: finalChildren });
+    onAdd({ parentName: parentName.trim(), phone: phone.trim(), email: email.trim(), city: city.trim(), source, children: finalChildren });
     onClose();
   };
 
@@ -635,9 +891,21 @@ function AddLeadModal({ students, parents, onAdd, onClose }) {
             <input className="input" type="tel" placeholder="052-1234567" required value={phone} onChange={e => updatePhone(e.target.value)} />
           </div>
         </div>
+        <div className="form-grid-2">
+          <div className="form-group">
+            <label className="form-label">אימייל (לא חובה)</label>
+            <input className="input" type="email" placeholder="email@gmail.com" value={email} onChange={e => setEmail(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">עיר (לא חובה)</label>
+            <input className="input" placeholder="ירושלים" value={city} onChange={e => setCity(e.target.value)} />
+          </div>
+        </div>
         <div className="form-group">
-          <label className="form-label">אימייל (לא חובה)</label>
-          <input className="input" type="email" placeholder="email@gmail.com" value={email} onChange={e => setEmail(e.target.value)} />
+          <label className="form-label">מקור הליד</label>
+          <select className="input" value={source} onChange={e => setSource(e.target.value)}>
+            {Object.entries(LEAD_SOURCES).map(([k, v]) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
+          </select>
         </div>
         
         {!isAdult && (
@@ -679,6 +947,8 @@ export default function Leads({ students, setStudents, parents, setParents, grou
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedStudentId, setSelectedStudentId] = useState(null);
   const [pricelist, setPricelist] = useState([]);
+  const [viewMode, setViewMode] = useState('table');
+  const [dragOverStatus, setDragOverStatus] = useState(null);
 
   // Fetch pricelist for billing options
   useEffect(() => {
@@ -712,14 +982,14 @@ export default function Leads({ students, setStudents, parents, setParents, grou
   const selectedParent = selectedStudent ? parents.find(p => p.id === selectedStudent.parentId) : null;
   const selectedGroup = selectedStudent?.groupId ? groups.find(g => g.id === selectedStudent.groupId) : null;
 
-  const handleAdd = async ({ parentName, phone, email, children }) => {
+  const handleAdd = async ({ parentName, phone, email, city, source, children }) => {
     let updatedParents = [...parents];
     let updatedStudents = [...students];
 
     // Find or create parent
     let parent = updatedParents.find(p => normPhone(p.phone) === normPhone(phone));
     if (!parent) {
-      parent = { id: `p${Date.now()}`, name: parentName, phone, email };
+      parent = { id: `p${Date.now()}`, name: parentName, phone, email, city, source };
       updatedParents.push(parent);
     }
 
@@ -752,7 +1022,7 @@ export default function Leads({ students, setStudents, parents, setParents, grou
       const response = await fetch('/api/leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ parentName, phone, email, children }),
+        body: JSON.stringify({ parentName, phone, email, city, source, children }),
       });
       if (response.ok) {
         refreshData();
@@ -801,6 +1071,7 @@ export default function Leads({ students, setStudents, parents, setParents, grou
           student={selectedStudent}
           parent={selectedParent}
           group={selectedGroup}
+          groups={groups}
           pricelist={pricelist}
           onClose={() => setSelectedStudentId(null)}
           onStatusChange={handleStatusChange}
@@ -831,13 +1102,22 @@ export default function Leads({ students, setStudents, parents, setParents, grou
               onChange={e => setSearch(e.target.value)}
             />
           </div>
+          <div style={{ display: 'flex', gap: 2, background: 'var(--bg-2)', borderRadius: 8, padding: 2 }}>
+            <button className={`btn btn-sm ${viewMode === 'table' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setViewMode('table')} title="תצוגת טבלה">
+              <List size={16} />
+            </button>
+            <button className={`btn btn-sm ${viewMode === 'kanban' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setViewMode('kanban')} title="תצוגת קנבן">
+              <LayoutGrid size={16} />
+            </button>
+          </div>
           <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>
             <Plus size={16} /> ליד חדש
           </button>
         </div>
       </div>
 
-      {/* Status filter tabs */}
+      {/* Status filter tabs (table view) */}
+      {viewMode === 'table' && (
       <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
         <button className={`btn btn-sm ${filterStatus === 'all' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilterStatus('all')}>
           הכל ({students.length})
@@ -848,8 +1128,73 @@ export default function Leads({ students, setStudents, parents, setParents, grou
           </button>
         ))}
       </div>
+      )}
+
+      {/* Kanban board (funnel by status) */}
+      {viewMode === 'kanban' && (
+        <div style={{ display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 12, alignItems: 'flex-start' }}>
+          {Object.entries(STATUSES).filter(([k]) => k !== 'archived').map(([statusKey, statusVal]) => {
+            const colStudents = filtered.filter(s => s.status === statusKey);
+            return (
+              <div
+                key={statusKey}
+                onDragOver={e => { e.preventDefault(); setDragOverStatus(statusKey); }}
+                onDragLeave={() => setDragOverStatus(prev => prev === statusKey ? null : prev)}
+                onDrop={e => {
+                  e.preventDefault();
+                  const sid = e.dataTransfer.getData('text/plain');
+                  if (sid) handleStatusChange(sid, statusKey);
+                  setDragOverStatus(null);
+                }}
+                style={{
+                  minWidth: 240, width: 240, flexShrink: 0,
+                  background: dragOverStatus === statusKey ? 'rgba(129,140,248,0.08)' : 'var(--bg-2)',
+                  border: `1px solid ${dragOverStatus === statusKey ? statusVal.color : 'var(--border)'}`,
+                  borderRadius: 12, padding: 10, transition: 'background 0.15s, border-color 0.15s'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, paddingBottom: 8, borderBottom: '1px solid var(--border)' }}>
+                  <span style={{ width: 10, height: 10, borderRadius: '50%', background: statusVal.color }} />
+                  <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-1)' }}>{statusVal.label}</span>
+                  <span style={{ marginRight: 'auto', fontSize: 12, color: 'var(--text-3)', background: 'var(--bg-1)', borderRadius: 10, padding: '1px 8px' }}>{colStudents.length}</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minHeight: 40 }}>
+                  {colStudents.map(s => {
+                    const parent = parents.find(p => p.id === s.parentId);
+                    const group = s.groupId ? groups.find(g => g.id === s.groupId) : null;
+                    const src = LEAD_SOURCES[parent?.source || s.source] || LEAD_SOURCES.unknown;
+                    return (
+                      <div
+                        key={s.id}
+                        draggable
+                        onDragStart={e => e.dataTransfer.setData('text/plain', s.id)}
+                        onClick={() => setSelectedStudentId(s.id)}
+                        className="card card-p"
+                        style={{ cursor: 'grab', padding: 10 }}
+                      >
+                        <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-1)', marginBottom: 4 }}>{s.name}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{parent?.name}</div>
+                        {parent?.phone && <div style={{ fontSize: 11, color: 'var(--text-3)', direction: 'ltr', unicodeBidi: 'plaintext' }}>{parent.phone}</div>}
+                        <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                          <span className="badge badge-gray" style={{ fontSize: 10 }}>{src.icon} {src.label}</span>
+                          {group && <span className="badge badge-blue" style={{ fontSize: 10 }}>{group.name.split(' ')[0]}</span>}
+                          {s.nextFollowup && <span className="badge badge-amber" style={{ fontSize: 10 }}>🔔 {s.nextFollowup}</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {colStudents.length === 0 && (
+                    <div style={{ fontSize: 11, color: 'var(--text-3)', textAlign: 'center', padding: 12 }}>גרור לכאן</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Table */}
+      {viewMode === 'table' && (
       <div className="card">
         <div className="table-wrap">
           <table className="crm-table">
@@ -908,6 +1253,7 @@ export default function Leads({ students, setStudents, parents, setParents, grou
           </table>
         </div>
       </div>
+      )}
     </div>
   );
 }

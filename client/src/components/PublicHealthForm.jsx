@@ -1,26 +1,58 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { PenTool, CheckCircle, ArrowLeft } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+
+const WAIVER_TEXT = `כתב ויתור והסרת אחריות — קיר הטיפוס My Wall
+
+דף זה מיועד למי שלוקח חלק בפעילות טיפוס. ידוע לי כי טיפוס קירות היא פעילות אקסטרים הכרוכה בסיכונים, לרבות נפילות ופציעות.
+
+נהלי בטיחות עיקריים:
+• יש להישמע להוראות הצוות ולהימנע מקיצורי דרך
+• לימוד אבטחה והובלה — רק ע״י איש צוות
+• בדיקה הדדית מאבטח–מטפס לפני כל טיפוס
+• אסור לשבת/לאכול/לצלם/לדבר בטלפון בזמן אבטוח
+• טיפוס בנעליים סגורות בלבד; להסיר תכשיטים ולרוקן כיסים
+• לדווח מיידית על מפגע בטיחותי
+
+אני מצהיר/ה כי מסרתי מידע רפואי מלא, קראתי והבנתי את הוראות הבטיחות, ומתחייב/ת לוודא שילדי יפעל/תפעל לפיהן. אני משחרר/ת את My Wall, בעליו ועובדיו מאחריות לנזק שייגרם מהשתתפות בפעילות, למעט נזק במזיד או ברשלנות חמורה.`;
 
 export default function PublicHealthForm() {
+  const [searchParams] = useSearchParams();
   const [step, setStep] = useState(1);
   const [isAdult, setIsAdult] = useState(false);
   const [formData, setFormData] = useState({
     parentName: '',
     parentIdNum: '',
-    phone: '',
+    phone: searchParams.get('phone') || '',
     climberName: '',
     climberIdNum: '',
     birthDate: '',
+    studentId: searchParams.get('studentId') || '',
     q1: false,
     q2: false,
     q3: false,
+    waiverAccepted: false,
     signature: ''
   });
-  
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [error, setError] = useState('');
   const canvasRef = useRef(null);
   const [isDrawing, setIsDrawing] = useState(false);
+
+  useEffect(() => {
+    // Prefill from query when opening a staff-sent link
+    const phone = searchParams.get('phone');
+    const studentId = searchParams.get('studentId');
+    if (phone || studentId) {
+      setFormData(prev => ({
+        ...prev,
+        phone: phone || prev.phone,
+        studentId: studentId || prev.studentId,
+      }));
+    }
+  }, [searchParams]);
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -30,7 +62,6 @@ export default function PublicHealthForm() {
     }));
   };
 
-  // Canvas drawing logic for signature
   const startDrawing = (e) => {
     setIsDrawing(true);
     draw(e);
@@ -38,27 +69,20 @@ export default function PublicHealthForm() {
   const stopDrawing = () => {
     setIsDrawing(false);
     const canvas = canvasRef.current;
-    if (canvas) {
-       canvas.getContext('2d').beginPath();
-    }
+    if (canvas) canvas.getContext('2d').beginPath();
   };
   const draw = (e) => {
     if (!isDrawing) return;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
-    
-    // Get correct coordinates for mouse or touch
     const rect = canvas.getBoundingClientRect();
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    
     const x = clientX - rect.left;
     const y = clientY - rect.top;
-
     ctx.lineWidth = 2;
     ctx.lineCap = 'round';
     ctx.strokeStyle = '#fff';
-
     ctx.lineTo(x, y);
     ctx.stroke();
     ctx.beginPath();
@@ -73,49 +97,66 @@ export default function PublicHealthForm() {
     }
   };
 
+  const initCanvas = () => {
+    setTimeout(() => {
+      const canvas = canvasRef.current;
+      if (canvas) {
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
+      }
+    }, 100);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setError('');
+
     if (step === 1) {
       setStep(2);
-      // init canvas after render
-      setTimeout(() => {
-        const canvas = canvasRef.current;
-        if (canvas) {
-          canvas.width = canvas.offsetWidth;
-          canvas.height = canvas.offsetHeight;
-        }
-      }, 100);
+      return;
+    }
+    if (step === 2) {
+      setStep(3);
+      initCanvas();
       return;
     }
 
-    if (step === 2) {
+    if (step === 3) {
+      if (!formData.waiverAccepted) {
+        setError('יש לאשר את כתב הוויתור / הסרת האחריות');
+        return;
+      }
       const canvas = canvasRef.current;
-      if (canvas) {
-        setFormData(prev => ({ ...prev, signature: canvas.toDataURL() }));
-        setIsSubmitting(true);
-        try {
-          const payload = {
-            ...formData,
-            signature: canvas.toDataURL(),
-            answers: { q1: formData.q1, q2: formData.q2, q3: formData.q3 }
-          };
-          if (isAdult) {
-            payload.climberName = formData.parentName;
-            payload.climberIdNum = formData.parentIdNum;
-          }
-          const res = await fetch('/api/public/health-declarations', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
-          if (res.ok) {
-            setIsSuccess(true);
-          }
-        } catch (err) {
-          console.error(err);
-        } finally {
-          setIsSubmitting(false);
+      if (!canvas) return;
+      setIsSubmitting(true);
+      try {
+        const signature = canvas.toDataURL();
+        const payload = {
+          ...formData,
+          signature,
+          answers: { q1: formData.q1, q2: formData.q2, q3: formData.q3 },
+          waiverAccepted: true,
+        };
+        if (isAdult) {
+          payload.climberName = formData.parentName;
+          payload.climberIdNum = formData.parentIdNum;
         }
+        const res = await fetch('/api/public/health-declarations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          setIsSuccess(true);
+        } else {
+          setError(data.error || 'שגיאה בשמירת ההצהרה');
+        }
+      } catch (err) {
+        console.error(err);
+        setError('שגיאת רשת — נסו שוב');
+      } finally {
+        setIsSubmitting(false);
       }
     }
   };
@@ -127,13 +168,14 @@ export default function PublicHealthForm() {
           <CheckCircle size={60} color="#F97316" style={{ margin: '0 auto', marginBottom: 20 }} />
           <h1 style={{ color: '#fff', fontSize: 24, marginBottom: 10 }}>ההצהרה התקבלה!</h1>
           <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16 }}>
-            {isAdult 
-              ? `תודה רבה ${formData.parentName}. הצהרת הבריאות שלך נרשמה במערכת שלנו בהצלחה.`
-              : `תודה רבה ${formData.parentName}. הצהרת הבריאות של ${formData.climberName} נרשמה במערכת שלנו בהצלחה.`
+            {isAdult
+              ? `תודה רבה ${formData.parentName}. הצהרת הבריאות וכתב הוויתור נרשמו במערכת.`
+              : `תודה רבה ${formData.parentName}. הצהרת הבריאות וכתב הוויתור של ${formData.climberName} נרשמו במערכת.`
             }
           </p>
-          <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16, marginTop: 10 }}>נתראה על הקיר! 🧗‍♂️</p>
+          <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16, marginTop: 10 }}>נתראה על הקיר!</p>
         </div>
+        <FormStyles />
       </div>
     );
   }
@@ -141,17 +183,16 @@ export default function PublicHealthForm() {
   return (
     <div className="public-health-wrapper">
       <div className="glass-card">
-        
-        {step === 2 && (
-          <button type="button" className="back-btn" onClick={() => setStep(1)}>
+        {step > 1 && (
+          <button type="button" className="back-btn" onClick={() => setStep(s => s - 1)}>
             <ArrowLeft size={18} /> חזור
           </button>
         )}
 
         <div className="form-header">
           <div className="logo-circle">🧗</div>
-          <h2>הצהרת בריאות - קיר טיפוס My Wall</h2>
-          <p>אנא מלאו את הפרטים מטה בזהירות</p>
+          <h2>הצהרת בריאות + הסרת אחריות</h2>
+          <p>My Wall — שלב {step} מתוך 3</p>
         </div>
 
         <form onSubmit={handleSubmit} className="public-form">
@@ -202,7 +243,7 @@ export default function PublicHealthForm() {
                   </div>
                 </>
               )}
-              
+
               <button type="submit" className="submit-btn primary-btn">
                 המשך לשאלון רפואי <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginLeft: 8 }} />
               </button>
@@ -211,8 +252,7 @@ export default function PublicHealthForm() {
 
           {step === 2 && (
             <div className="fade-in">
-              <div className="section-title">שאלון רפואי (סמן אם התשובה היא חיובית)</div>
-              
+              <div className="section-title">שאלון רפואי (סמן אם התשובה חיובית)</div>
               <label className="checkbox-item">
                 <input type="checkbox" name="q1" checked={formData.q1} onChange={handleChange} />
                 <span>האם המתאמן סובל מאסתמה, קוצר נשימה או מחלת ריאות?</span>
@@ -225,18 +265,40 @@ export default function PublicHealthForm() {
                 <input type="checkbox" name="q3" checked={formData.q3} onChange={handleChange} />
                 <span>האם יש בעיה אורתופדית (גב, פרקים, שברים) המגבילה פעילות מאומצת?</span>
               </label>
+              <button type="submit" className="submit-btn primary-btn" style={{ marginTop: 20 }}>
+                המשך לכתב ויתור וחתימה <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginLeft: 8 }} />
+              </button>
+            </div>
+          )}
 
-              <div className="section-title" style={{ marginTop: 30 }}>חתימה דיגיטלית</div>
+          {step === 3 && (
+            <div className="fade-in">
+              <div className="section-title">כתב ויתור / הסרת אחריות</div>
+              <div style={{
+                background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 12, padding: 14, fontSize: 13, lineHeight: 1.7,
+                color: 'rgba(255,255,255,0.85)', whiteSpace: 'pre-wrap', marginBottom: 16,
+                maxHeight: 180, overflowY: 'auto'
+              }}>
+                {WAIVER_TEXT}
+              </div>
+
+              <label className="checkbox-item">
+                <input type="checkbox" name="waiverAccepted" checked={formData.waiverAccepted} onChange={handleChange} />
+                <span>קראתי ואני מאשר/ת את כתב הוויתור והסרת האחריות</span>
+              </label>
+
+              <div className="section-title" style={{ marginTop: 24 }}>חתימה דיגיטלית</div>
               <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)', marginBottom: 10 }}>
                 אני החתום מטה מצהיר בזאת כי מסרתי את כל המידע הרפואי. ידוע לי כי טיפוס קירות הינה פעילות אקסטרים ואני מאשר את השתתפות בני/בתי.
               </p>
-              
+
               <div className="canvas-container">
                 <div className="canvas-toolbar">
                   <span style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}><PenTool size={12}/> חתום כאן</span>
                   <button type="button" onClick={clearSignature} className="clear-btn">נקה</button>
                 </div>
-                <canvas 
+                <canvas
                   ref={canvasRef}
                   onMouseDown={startDrawing}
                   onMouseUp={stopDrawing}
@@ -249,6 +311,12 @@ export default function PublicHealthForm() {
                 />
               </div>
 
+              {error && (
+                <div style={{ background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)', color: '#FCA5A5', padding: 12, borderRadius: 12, marginTop: 12, fontSize: 14 }}>
+                  {error}
+                </div>
+              )}
+
               <button type="submit" disabled={isSubmitting} className="submit-btn primary-btn" style={{ marginTop: 20 }}>
                 {isSubmitting ? 'שולח נתונים...' : 'שלח והשלם הרשמה'}
               </button>
@@ -256,218 +324,87 @@ export default function PublicHealthForm() {
           )}
         </form>
       </div>
-
-      <style>{`
-        .public-health-wrapper {
-          min-height: 100vh;
-          width: 100vw;
-          background: linear-gradient(135deg, #0F172A 0%, #1E1B4B 100%);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 20px;
-          font-family: 'Inter', system-ui, sans-serif;
-          direction: rtl;
-          color: white;
-        }
-
-        .glass-card {
-          background: rgba(255, 255, 255, 0.05);
-          backdrop-filter: blur(16px);
-          -webkit-backdrop-filter: blur(16px);
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          border-radius: 24px;
-          padding: 30px;
-          width: 100%;
-          max-width: 480px;
-          box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-          position: relative;
-        }
-
-        .success-card {
-          text-align: center;
-          padding: 50px 30px;
-          border: 1px solid rgba(249, 115, 22, 0.3);
-          box-shadow: 0 0 40px rgba(249, 115, 22, 0.1);
-        }
-
-        .back-btn {
-          position: absolute;
-          top: 24px;
-          right: 24px;
-          background: none;
-          border: none;
-          color: rgba(255,255,255,0.6);
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          cursor: pointer;
-          font-family: inherit;
-        }
-
-        .form-header {
-          text-align: center;
-          margin-bottom: 30px;
-        }
-
-        .logo-circle {
-          width: 60px;
-          height: 60px;
-          border-radius: 50%;
-          background: linear-gradient(135deg, #F97316 0%, #EA580C 100%);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 30px;
-          margin: 0 auto 16px auto;
-          box-shadow: 0 10px 20px rgba(249, 115, 22, 0.3);
-        }
-
-        .form-header h2 {
-          margin: 0 0 8px 0;
-          font-size: 20px;
-          font-weight: 700;
-        }
-
-        .form-header p {
-          margin: 0;
-          font-size: 14px;
-          color: rgba(255, 255, 255, 0.6);
-        }
-
-        .section-title {
-          font-size: 13px;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          color: #F97316;
-          font-weight: 700;
-          margin-bottom: 16px;
-        }
-
-        .form-group {
-          margin-bottom: 16px;
-        }
-
-        .form-group label {
-          display: block;
-          margin-bottom: 6px;
-          font-size: 13px;
-          color: rgba(255,255,255,0.8);
-        }
-
-        .form-group input {
-          width: 100%;
-          background: rgba(0, 0, 0, 0.2);
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          color: white;
-          padding: 12px 16px;
-          border-radius: 12px;
-          font-size: 15px;
-          font-family: inherit;
-          transition: all 0.2s;
-        }
-
-        .form-group input:focus {
-          outline: none;
-          border-color: #F97316;
-          background: rgba(0, 0, 0, 0.4);
-        }
-
-        .submit-btn {
-          width: 100%;
-          background: linear-gradient(135deg, #F97316 0%, #EA580C 100%);
-          color: white;
-          border: none;
-          padding: 14px;
-          border-radius: 12px;
-          font-size: 16px;
-          font-weight: 600;
-          cursor: pointer;
-          font-family: inherit;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          transition: transform 0.1s, box-shadow 0.2s;
-          margin-top: 10px;
-        }
-
-        .submit-btn:active {
-          transform: scale(0.98);
-        }
-
-        .submit-btn:disabled {
-          opacity: 0.7;
-          cursor: not-allowed;
-        }
-
-        .checkbox-item {
-          display: flex;
-          align-items: flex-start;
-          gap: 12px;
-          margin-bottom: 14px;
-          cursor: pointer;
-          background: rgba(255,255,255,0.03);
-          padding: 14px;
-          border-radius: 12px;
-          border: 1px solid rgba(255,255,255,0.05);
-        }
-
-        .checkbox-item input {
-          margin-top: 2px;
-          width: 18px;
-          height: 18px;
-          accent-color: #F97316;
-        }
-
-        .checkbox-item span {
-          font-size: 14px;
-          line-height: 1.4;
-          color: rgba(255,255,255,0.9);
-        }
-
-        .canvas-container {
-          background: rgba(0, 0, 0, 0.3);
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          border-radius: 12px;
-          overflow: hidden;
-          margin-bottom: 10px;
-        }
-
-        .canvas-toolbar {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 8px 12px;
-          background: rgba(255, 255, 255, 0.05);
-          border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-        }
-
-        .clear-btn {
-          background: none;
-          border: 1px solid rgba(255,255,255,0.2);
-          color: rgba(255,255,255,0.8);
-          border-radius: 4px;
-          padding: 2px 8px;
-          font-size: 11px;
-          cursor: pointer;
-        }
-
-        .signature-pad {
-          width: 100%;
-          height: 150px;
-          cursor: crosshair;
-          touch-action: none;
-        }
-
-        .fade-in {
-          animation: fadeIn 0.4s ease;
-        }
-
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(10px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
+      <FormStyles />
     </div>
+  );
+}
+
+function FormStyles() {
+  return (
+    <style>{`
+      .public-health-wrapper {
+        min-height: 100vh; width: 100vw;
+        background: linear-gradient(135deg, #0F172A 0%, #1E1B4B 100%);
+        display: flex; align-items: center; justify-content: center;
+        padding: 20px; font-family: 'Heebo', 'Rubik', system-ui, sans-serif;
+        direction: rtl; color: white;
+      }
+      .glass-card {
+        background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(16px);
+        border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 24px;
+        padding: 30px; width: 100%; max-width: 480px;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); position: relative;
+      }
+      .success-card { text-align: center; padding: 50px 30px; border: 1px solid rgba(249, 115, 22, 0.3); }
+      .back-btn {
+        position: absolute; top: 24px; right: 24px; background: none; border: none;
+        color: rgba(255,255,255,0.6); display: flex; align-items: center; gap: 6px;
+        cursor: pointer; font-family: inherit;
+      }
+      .form-header { text-align: center; margin-bottom: 30px; }
+      .logo-circle {
+        width: 60px; height: 60px; border-radius: 50%;
+        background: linear-gradient(135deg, #F97316 0%, #EA580C 100%);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 30px; margin: 0 auto 16px auto;
+      }
+      .form-header h2 { margin: 0 0 8px 0; font-size: 20px; font-weight: 700; }
+      .form-header p { margin: 0; font-size: 14px; color: rgba(255, 255, 255, 0.6); }
+      .section-title {
+        font-size: 13px; letter-spacing: 0.5px; color: #F97316;
+        font-weight: 700; margin-bottom: 16px;
+      }
+      .form-group { margin-bottom: 16px; }
+      .form-group label { display: block; margin-bottom: 6px; font-size: 13px; color: rgba(255,255,255,0.8); }
+      .form-group input {
+        width: 100%; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.1);
+        color: white; padding: 12px 16px; border-radius: 12px; font-size: 15px; font-family: inherit;
+      }
+      .form-group input:focus { outline: none; border-color: #F97316; }
+      .submit-btn {
+        width: 100%; background: linear-gradient(135deg, #F97316 0%, #EA580C 100%);
+        color: white; border: none; padding: 14px; border-radius: 12px;
+        font-size: 16px; font-weight: 600; cursor: pointer; font-family: inherit;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .submit-btn:disabled { opacity: 0.7; cursor: not-allowed; }
+      .checkbox-item {
+        display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; cursor: pointer;
+        background: rgba(255,255,255,0.03); padding: 14px; border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.05);
+      }
+      .checkbox-item input { margin-top: 2px; width: 18px; height: 18px; accent-color: #F97316; }
+      .checkbox-item span { font-size: 14px; line-height: 1.4; color: rgba(255,255,255,0.9); }
+      .canvas-container {
+        background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px; overflow: hidden; margin-bottom: 10px;
+      }
+      .canvas-toolbar {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 8px 12px; background: rgba(255, 255, 255, 0.05);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      }
+      .clear-btn {
+        background: none; border: 1px solid rgba(255,255,255,0.2);
+        color: rgba(255,255,255,0.8); border-radius: 4px; padding: 2px 8px;
+        font-size: 11px; cursor: pointer;
+      }
+      .signature-pad { width: 100%; height: 150px; cursor: crosshair; touch-action: none; }
+      .fade-in { animation: fadeIn 0.4s ease; }
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+    `}</style>
   );
 }

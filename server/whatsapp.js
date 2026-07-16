@@ -192,13 +192,21 @@ export const whatsappService = {
       status: 'received'
     });
 
-    // 2. Upsert lead / client details in DB
+    // 2. Upsert lead / client details in DB (source=whatsapp, status=lead_new)
     const { parent, student, isNew } = db.createLeadFromWhatsApp(phone, text);
 
-    // 3. Process AI automated reply if active
+    // 3. Welcome template t1 for brand-new WhatsApp leads
+    if (isNew) {
+      try {
+        await whatsappService.sendTemplateMessage(phone, 't1', [parent.name || '']);
+      } catch (err) {
+        console.error('Failed to send WhatsApp welcome t1:', err.message);
+      }
+    }
+
+    // 4. Process AI automated reply if active
     const settings = db.getSettings();
     if (settings.aiResponderEnabled) {
-      // Small simulated delay for realistic feel
       const aiReply = await whatsappService.generateAIResponse(text);
       if (isSimulator) {
         db.insert('whatsapp_logs', {

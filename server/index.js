@@ -2,7 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
-import { db } from './db.js';
+import { db, initDb } from './db.js';
+import { supa } from './supa.js';
 import { whatsappService, instagramService } from './whatsapp.js';
 import { automationsService } from './automations.js';
 // Load environment variables
@@ -46,9 +47,15 @@ app.get('/api/students', (req, res) => {
   res.json(db.get('students'));
 });
 
-// Get all groups
+// Get all groups (with live enrolled count computed from students)
 app.get('/api/groups', (req, res) => {
-  res.json(db.get('groups'));
+  const groups = db.get('groups');
+  const students = db.get('students');
+  const withCounts = groups.map(g => ({
+    ...g,
+    enrolled: students.filter(s => s.groupId === g.id && s.status !== 'archived').length
+  }));
+  res.json(withCounts);
 });
 
 // Update student status
@@ -64,54 +71,81 @@ app.put('/api/students/:id/status', (req, res) => {
   res.json(updated);
 });
 
-// Create Lead (Parent & children)
-app.post('/api/leads', async (req, res) => {
-  const { parentName, phone, email, children } = req.body;
-  console.log(`📥 Received lead registration: Parent: ${parentName}, Phone: ${phone}, Children: ${children.join(', ')}`);
-
-  const parent = db.upsertParentByPhone(parentName, phone, email);
-  const createdStudents = [];
-
-  for (const childName of children) {
-    const existing = db.get('students').find(
-      s => s.name.trim().toLowerCase() === childName.trim().toLowerCase() && s.parentId === parent.id
-    );
-
-    if (existing) {
-      db.update('students', existing.id, { status: 'lead_new' });
-      createdStudents.push(existing);
-    } else {
-      const student = db.insert('students', {
-        name: childName,
-        parentId: parent.id,
-        groupId: null,
-        status: 'lead_new',
-        birthDate: '',
-        notes: '',
-        levelGrade: null,
-        created: new Date().toISOString().split('T')[0]
-      });
-      createdStudents.push(student);
-    }
+// Shared lead intake helper (CRM + public form)
+async function ingestLeadPayload(body, defaultSource = 'unknown') {
+  const { parentName, phone, email, children, city, source, interest } = body;
+  const childList = Array.isArray(children)
+    ? children
+    : (typeof children === 'string' && children.trim()
+        ? children.split(/[,،\n]/).map(s => s.trim()).filter(Boolean)
+        : []);
+  if (!parentName || !phone) {
+    return { error: 'נדרשים שם הורה ומספר טלפון', status: 400 };
+  }
+  if (childList.length === 0) {
+    return { error: 'יש להזין לפחות שם מתאמן אחד', status: 400 };
   }
 
-  // Trigger automated WhatsApp Welcome template message (t1) if available
+  const leadSource = source || defaultSource;
+  console.log(`📥 Lead intake (${leadSource}): Parent: ${parentName}, Phone: ${phone}, Children: ${childList.join(', ')}`);
+
+  const { parent, students: createdStudents } = db.createLeadFromForm({
+    parentName,
+    phone,
+    email: email || '',
+    city: city || '',
+    children: childList,
+    interest: interest || '',
+    source: leadSource,
+  });
+
   try {
     await whatsappService.sendTemplateMessage(phone, 't1', [parentName]);
   } catch (err) {
     console.error('Failed to send welcome WhatsApp message:', err.message);
   }
 
-  // Trigger automation events for each new lead
   for (const student of createdStudents) {
     automationsService.triggerEvent('new_lead', { ...student, phone, parentName });
   }
 
+  return { parent, students: createdStudents, status: 201 };
+}
+
+// Create Lead (Parent & children) — CRM / internal
+app.post('/api/leads', async (req, res) => {
+  const result = await ingestLeadPayload(req.body, 'unknown');
+  if (result.error) return res.status(result.status).json({ error: result.error });
   res.status(201).json({
     message: 'Lead received successfully',
-    parent,
-    students: createdStudents
+    parent: result.parent,
+    students: result.students,
   });
+});
+
+// Public lead intake form (source=form, phone de-dupe)
+app.post('/api/public/leads', async (req, res) => {
+  const result = await ingestLeadPayload(req.body, 'form');
+  if (result.error) return res.status(result.status).json({ error: result.error });
+  res.status(201).json({
+    success: true,
+    message: 'הליד נרשם בהצלחה',
+    parent: result.parent,
+    students: result.students,
+  });
+});
+
+// Update parent details (name, phone, email, city, source, notes)
+app.put('/api/parents/:id', (req, res) => {
+  const { id } = req.params;
+  const allowed = ['name', 'phone', 'email', 'city', 'source', 'notes'];
+  const updates = {};
+  for (const key of allowed) {
+    if (req.body[key] !== undefined) updates[key] = req.body[key];
+  }
+  const updated = db.update('parents', id, updates);
+  if (!updated) return res.status(404).json({ error: 'Parent not found' });
+  res.json(updated);
 });
 
 // Get parent broadcast lists
@@ -538,6 +572,80 @@ app.put('/api/groups/:id', (req, res) => {
   res.json(updated);
 });
 
+app.delete('/api/groups/:id', (req, res) => {
+  const { id } = req.params;
+  const deleted = db.delete('groups', id);
+  if (!deleted) return res.status(404).json({ error: 'Group not found' });
+  res.json({ success: true });
+});
+
+// ─── Activities (trips, birthdays, special events) — Supabase-backed ─────────
+app.get('/api/activities', (req, res) => {
+  res.json(db.get('activities'));
+});
+
+app.post('/api/activities', (req, res) => {
+  const record = db.insert('activities', req.body);
+  res.status(201).json(record);
+});
+
+app.put('/api/activities/:id', (req, res) => {
+  const { id } = req.params;
+  const updated = db.update('activities', id, req.body);
+  if (!updated) return res.status(404).json({ error: 'Activity not found' });
+  res.json(updated);
+});
+
+app.delete('/api/activities/:id', (req, res) => {
+  const { id } = req.params;
+  const deleted = db.delete('activities', id);
+  if (!deleted) return res.status(404).json({ error: 'Activity not found' });
+  res.json({ success: true });
+});
+
+// ─── Attendance — Supabase-backed ────────────────────────────────────────────
+// Optional query filters: ?groupId=..&date=YYYY-MM-DD
+app.get('/api/attendance', (req, res) => {
+  const { groupId, date, studentId } = req.query;
+  let rows = db.get('attendance');
+  if (groupId) rows = rows.filter(r => r.group_id === groupId);
+  if (date) rows = rows.filter(r => r.date === date);
+  if (studentId) rows = rows.filter(r => r.student_id === studentId);
+  res.json(rows);
+});
+
+app.post('/api/attendance', (req, res) => {
+  const record = db.insert('attendance', req.body);
+  res.status(201).json(record);
+});
+
+// Bulk upsert attendance for a group on a given date
+app.post('/api/attendance/bulk', (req, res) => {
+  const { records } = req.body;
+  if (!Array.isArray(records)) return res.status(400).json({ error: 'records must be an array' });
+  const saved = records.map(r => {
+    if (r.id && db.getOne('attendance', r.id)) {
+      return db.update('attendance', r.id, r);
+    }
+    return db.insert('attendance', r);
+  });
+  res.status(201).json(saved);
+});
+
+app.put('/api/attendance/:id', (req, res) => {
+  const { id } = req.params;
+  const updated = db.update('attendance', id, req.body);
+  if (!updated) return res.status(404).json({ error: 'Attendance record not found' });
+  res.json(updated);
+});
+
+app.delete('/api/attendance/:id', (req, res) => {
+  const { id } = req.params;
+  const deleted = db.delete('attendance', id);
+  if (!deleted) return res.status(404).json({ error: 'Attendance record not found' });
+  res.json({ success: true });
+});
+
 // Get all pricelist items
 app.get('/api/pricelist', (req, res) => {
   res.json(db.get('pricelist'));
@@ -626,7 +734,18 @@ app.post('/api/shifts/approve', (req, res) => {
 });
 
 // Employees list management
-app.get('/api/employees', (req, res) => {
+// Prefer the durable Supabase roster (38 real trainers, ids like "e-7") so the
+// trainer dropdown and group.trainer_id references resolve correctly. Falls
+// back to the local db.json seed if Supabase is unavailable.
+app.get('/api/employees', async (req, res) => {
+  try {
+    if (supa.isEnabled()) {
+      const rows = await supa.getAll('employees');
+      if (rows) return res.json(rows);
+    }
+  } catch (err) {
+    console.error('GET /api/employees Supabase error:', err.message);
+  }
   res.json(db.get('employees'));
 });
 
@@ -713,47 +832,108 @@ app.post('/api/check-ins', (req, res) => {
   res.status(201).json(record);
 });
 
-// Public Health Declarations
+// Public Health Declarations + Liability Waiver
 app.post('/api/public/health-declarations', (req, res) => {
-  const { parentName, parentIdNum, phone, climberName, climberIdNum, birthDate, signature } = req.body;
-  
-  // 1. Save the declaration
-  const record = db.insert('health_declarations', {
-    date: new Date().toISOString().split('T')[0],
+  const {
     parentName, parentIdNum, phone, climberName, climberIdNum, birthDate,
-    signature_url: signature, // Will be a base64 string
-    status: 'approved'
-  });
+    signature, answers, waiverAccepted, studentId, notes
+  } = req.body;
 
-  // 2. Upsert parent and student
-  const parent = db.upsertParentByPhone(parentName, phone, '');
+  if (!parentName || !phone || !climberName) {
+    return res.status(400).json({ error: 'חסרים פרטי הורה / מתאמן / טלפון' });
+  }
+  if (!waiverAccepted) {
+    return res.status(400).json({ error: 'יש לאשר את כתב הוויתור / הסרת האחריות' });
+  }
+
+  // 1. Upsert parent (phone de-dupe) and resolve student
+  const parent = db.upsertParentByPhone(parentName, phone, '', { source: 'form', channel: 'form' });
   const students = db.get('students');
-  // Match student by first name roughly
-  const climberFirstName = climberName.split(' ')[0];
-  const existingStudent = students.find(s => s.parentId === parent.id && s.name.includes(climberFirstName));
-  
-  if (existingStudent) {
-    db.update('students', existingStudent.id, { status: 'health_signed' });
-    // This event trigger is also in PUT /status, but here we do it explicitly since we bypassed PUT /status
-    automationsService.triggerEvent('status_changed', { ...existingStudent, new_status: 'health_signed' });
+  const climberFirstName = (climberName || '').split(' ')[0];
+  let student = studentId
+    ? students.find(s => s.id === studentId)
+    : students.find(s => s.parentId === parent.id && s.name.includes(climberFirstName));
+
+  const signedAt = new Date().toISOString();
+  if (student) {
+    student = db.update('students', student.id, {
+      status: 'health_signed',
+      birthDate: birthDate || student.birthDate || '',
+      name: climberName || student.name,
+      healthSignedAt: signedAt,
+      waiverSignedAt: signedAt,
+    }) || student;
+    automationsService.triggerEvent('status_changed', { ...student, new_status: 'health_signed' });
   } else {
-    const newStudent = db.insert('students', {
+    student = db.insert('students', {
       name: climberName,
       parentId: parent.id,
       groupId: null,
       status: 'health_signed',
-      birthDate,
-      notes: 'הגיע אוטומטית מטופס הצהרת בריאות',
+      birthDate: birthDate || '',
+      notes: 'הגיע אוטומטית מטופס הצהרת בריאות + הסרת אחריות',
       levelGrade: null,
+      source: 'form',
+      healthSignedAt: signedAt,
+      waiverSignedAt: signedAt,
       created: new Date().toISOString().split('T')[0]
     });
-    automationsService.triggerEvent('new_lead', { ...newStudent, phone, parentName });
+    automationsService.triggerEvent('new_lead', { ...student, phone, parentName });
   }
 
-  res.status(201).json({ success: true, record });
+  // 2. Persist declaration (Supabase via CORE_TABLES write-through)
+  const record = db.insert('health_declarations', {
+    date: new Date().toISOString().split('T')[0],
+    studentId: student.id,
+    parentId: parent.id,
+    parentName,
+    parentIdNum: parentIdNum || '',
+    phone,
+    climberName,
+    climberIdNum: climberIdNum || '',
+    birthDate: birthDate || '',
+    answers: answers || {},
+    waiverAccepted: true,
+    signature_url: signature || '',
+    status: 'approved',
+    notes: notes || '',
+    signed: true,
+    signedDate: new Date().toISOString().split('T')[0],
+    signedBy: parentName,
+    studentName: climberName,
+  });
+
+  res.status(201).json({ success: true, record, student, parent });
 });
 
-// Start Server
+// Send health-form link via WhatsApp (from lead card)
+app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
+  const student = db.get('students').find(s => s.id === req.params.studentId);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const parent = db.get('parents').find(p => p.id === student.parentId);
+  if (!parent?.phone) return res.status(400).json({ error: 'אין מספר טלפון לשליחה' });
+
+  const origin = req.body?.origin || process.env.PUBLIC_APP_URL || 'https://mywall.co.il';
+  const healthUrl = `${origin.replace(/\/$/, '')}/health?studentId=${encodeURIComponent(student.id)}&phone=${encodeURIComponent(parent.phone)}`;
+
+  try {
+    // Prefer approved Meta template t2; fall back to free-form text (mock / open session)
+    let result = await whatsappService.sendTemplateMessage(parent.phone, 't2', [parent.name || student.name]);
+    if (!result?.success) {
+      result = await whatsappService.sendTextMessage(
+        parent.phone,
+        `שלום ${parent.name || ''}, בבקשה מלאו את הצהרת הבריאות והסרת האחריות לפני הגעתכם:\n${healthUrl}`
+      );
+    }
+    res.json({ success: true, healthUrl, result });
+  } catch (err) {
+    // Still return the link so staff can copy/share manually
+    res.status(200).json({ success: true, healthUrl, warning: err.message });
+  }
+});
+
+// Start Server (after loading CRM-core data from Supabase)
+initDb().finally(() => {
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   
@@ -764,5 +944,6 @@ app.listen(PORT, () => {
       .then(res => console.log(`⏱️ Keep-Alive Self-Ping (${res.status}) at ${new Date().toLocaleTimeString()}`))
       .catch(err => console.error('Keep-Alive ping error:', err.message));
   }, 8 * 60 * 1000);
+});
 });
 

@@ -224,7 +224,7 @@ export default function App() {
           {page === 'dashboard'  && <Dashboard students={students} groups={groups} onNavigate={setPage} />}
           {page === 'checkin'    && <CheckInConsole students={students} groups={groups} />}
           {page === 'leads'      && <Leads students={students} setStudents={setStudents} parents={parents} setParents={setParents} groups={groups} />}
-          {page === 'schedule'   && <Schedule groups={groups} students={students} parents={parents} setGroups={setGroups} />}
+          {page === 'schedule'   && <Schedule groups={groups} students={students} parents={parents} setGroups={setGroups} setStudents={setStudents} />}
           {page === 'broadcasts' && <Broadcasts parents={parents} students={students} />}
           {page === 'cash'       && <CashRegister />}
           {page === 'pricelist'  && <Pricelist />}

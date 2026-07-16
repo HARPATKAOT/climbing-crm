@@ -1,7 +1,26 @@
 import fs from 'fs';
 import path from 'path';
+import { supa, CORE_TABLES } from './supa.js';
 
 const DB_FILE = path.join(process.cwd(), 'db.json');
+
+// Fire-and-forget write-through to Supabase for CRM-core collections.
+// Reads stay synchronous (served from the local db.json cache); Supabase is the
+// durable store that re-seeds db.json on every server start.
+function syncUpsert(table, record) {
+  if (record && CORE_TABLES.includes(table)) {
+    Promise.resolve(supa.upsert(table, record)).catch((e) =>
+      console.error(`syncUpsert(${table}) error:`, e?.message || e)
+    );
+  }
+}
+function syncRemove(table, id) {
+  if (CORE_TABLES.includes(table)) {
+    Promise.resolve(supa.remove(table, id)).catch((e) =>
+      console.error(`syncRemove(${table}) error:`, e?.message || e)
+    );
+  }
+}
 
 // Mock data to seed the database if it doesn't exist
 const SEED_DATA = {
@@ -35,7 +54,6 @@ const SEED_DATA = {
     { id: 'g-b2da9ca1', name: "ילדים ג'-ד' — יום ד׳ 17:30", day: 3, time: '17:30', duration: 50, trainer: '', maxSlots: 11, enrolled: 0, ageCategory: "ג'-ד'", priceWeek: 280, priceTwice: 360, waParents: 'https://chat.whatsapp.com/E41RU70lyzJ4xDrvrMlXwW', waClimbers: '' },
     { id: 'g-b5e58aa6', name: "חטיבה — יום ד׳ 18:40", day: 3, time: '18:40', duration: 80, trainer: '', maxSlots: 12, enrolled: 0, ageCategory: 'חטיבה', priceWeek: 305, priceTwice: 420, waParents: 'https://chat.whatsapp.com/DPqRRjNdEwqKEbkEVHlvcG', waClimbers: 'https://chat.whatsapp.com/JwfMVZUnpUIDK1FX0KLz8q' },
     { id: 'g-4012bf2e', name: "בוגרים — יום ד׳ 20:10", day: 3, time: '20:10', duration: 80, trainer: '', maxSlots: 12, enrolled: 0, ageCategory: 'בוגרים', priceWeek: 305, priceTwice: 420, waParents: 'https://chat.whatsapp.com/KQDVxQC7YPBLvZJOXu5WTr', waClimbers: '' },
-    { id: 'g-02d0c7cf-b', name: "מתקדמים ה'-ו' — ב׳+ה׳ 15:30", day: 1, time: '15:30', duration: 80, trainer: '', maxSlots: 13, enrolled: 0, ageCategory: "ה'-ו'", priceWeek: 0, priceTwice: 420, waParents: 'https://chat.whatsapp.com/KQDVxQC7YPBLvZJOXu5WTr', waClimbers: 'https://chat.whatsapp.com/CbHECN5brUcGiiiLMVulxZ' },
     { id: 'g-02d0c7cf', name: "מתקדמים ה'-ו' — ב׳+ה׳ 15:30", day: 4, time: '15:30', duration: 80, trainer: '', maxSlots: 13, enrolled: 0, ageCategory: "ה'-ו'", priceWeek: 0, priceTwice: 420, waParents: 'https://chat.whatsapp.com/KQDVxQC7YPBLvZJOXu5WTr', waClimbers: 'https://chat.whatsapp.com/CbHECN5brUcGiiiLMVulxZ' },
     { id: 'g-c5aece01', name: 'נבחרת צעירה — ה׳ 17:00', day: 4, time: '17:00', duration: 110, trainer: '', maxSlots: 13, enrolled: 0, ageCategory: 'חטיבה', priceWeek: 550, priceTwice: 550, waParents: 'https://chat.whatsapp.com/KX1HoM5PYqb2Fz7TH8j1aJ', waClimbers: '' },
     { id: 'g-529e08f6', name: 'נבחרת בוגרת — ה׳ 19:10', day: 4, time: '19:10', duration: 110, trainer: '', maxSlots: 13, enrolled: 0, ageCategory: 'תיכון', priceWeek: 0, priceTwice: 550, waParents: 'https://chat.whatsapp.com/HasZy575i5XAtUVLPfOyX4', waClimbers: 'https://chat.whatsapp.com/LGg0ekCjQr10S1PkmA9OcK' },
@@ -81,6 +99,27 @@ function writeDb(data) {
   }
 }
 
+// Called once on server startup: pulls the authoritative CRM-core collections
+// from Supabase into the local db.json so the ephemeral Render disk always
+// reflects the durable store. Non-core collections are left untouched.
+export async function initDb() {
+  if (!supa.isEnabled()) {
+    console.warn('⚠️ Supabase disabled — CRM data will not persist across restarts.');
+    return;
+  }
+  try {
+    const data = readDb();
+    for (const table of CORE_TABLES) {
+      const rows = await supa.getAll(table);
+      if (rows !== null) data[table] = rows;
+    }
+    writeDb(data);
+    console.log(`✅ Loaded CRM-core collections from Supabase: ${CORE_TABLES.join(', ')}`);
+  } catch (error) {
+    console.error('initDb() failed — falling back to local db.json:', error.message);
+  }
+}
+
 export const db = {
   get: (table) => {
     const data = readDb();
@@ -116,6 +155,7 @@ export const db = {
     const newRecord = { id: record.id || `${table.slice(0, 2)}${Date.now()}`, ...record, created_at: new Date().toISOString() };
     data[table].push(newRecord);
     writeDb(data);
+    syncUpsert(table, newRecord);
     return newRecord;
   },
 
@@ -126,6 +166,7 @@ export const db = {
     if (index === -1) return null;
     data[table][index] = { ...data[table][index], ...updates, updated_at: new Date().toISOString() };
     writeDb(data);
+    syncUpsert(table, data[table][index]);
     return data[table][index];
   },
 
@@ -136,42 +177,51 @@ export const db = {
     if (index === -1) return false;
     data[table].splice(index, 1);
     writeDb(data);
+    syncRemove(table, id);
     return true;
   },
 
-  upsertParentByPhone: (name, phone, email) => {
+  upsertParentByPhone: (name, phone, email, extras = {}) => {
     const data = readDb();
-    const cleanPhone = phone.replace(/[-\s]/g, '');
-    let parent = data.parents.find(p => p.phone.replace(/[-\s]/g, '') === cleanPhone);
+    const cleanPhone = (phone || '').replace(/[-\s]/g, '');
+    let parent = data.parents.find(p => (p.phone || '').replace(/[-\s]/g, '') === cleanPhone);
     
     if (parent) {
-      if (email && !parent.email) {
-        parent.email = email;
-      }
-      if (name && parent.name === 'לקוח וואטסאפ') {
+      if (email && !parent.email) parent.email = email;
+      if (name && (parent.name === 'לקוח וואטסאפ' || parent.name === 'ליד מאינסטגרם' || !parent.name)) {
         parent.name = name;
       }
+      if (extras.city && !parent.city) parent.city = extras.city;
+      if (extras.source && (!parent.source || parent.source === 'unknown')) parent.source = extras.source;
+      if (extras.channel && !parent.channel) parent.channel = extras.channel;
+      if (extras.notes) parent.notes = (parent.notes ? parent.notes + '\n' : '') + extras.notes;
       writeDb(data);
     } else {
       parent = {
         id: `p${Date.now()}`,
         name: name || 'לקוח וואטסאפ',
-        phone: phone,
-        email: email || ''
+        phone: phone || '',
+        email: email || '',
+        city: extras.city || '',
+        source: extras.source || 'unknown',
+        channel: extras.channel || extras.source || undefined,
+        notes: extras.notes || '',
       };
       data.parents.push(parent);
       writeDb(data);
     }
+    syncUpsert('parents', parent);
     return parent;
   },
 
   createLeadFromWhatsApp: (phone, text) => {
-    const parent = db.upsertParentByPhone('לקוח וואטסאפ', phone);
+    const parent = db.upsertParentByPhone('לקוח וואטסאפ', phone, '', {
+      source: 'whatsapp',
+      channel: 'whatsapp',
+    });
     const data = readDb();
-    // Extract potential student name from message, or use a default
-    let studentName = 'מתאמן חדש';
+    const studentName = 'מתאמן חדש';
     
-    // Check if child name is already there
     const existingStudent = data.students.find(s => s.parentId === parent.id);
     if (!existingStudent) {
       const newStudent = {
@@ -183,10 +233,12 @@ export const db = {
         birthDate: '',
         notes: `פנייה ראשונית מוואטסאפ: "${text}"`,
         levelGrade: null,
+        source: 'whatsapp',
         created: new Date().toISOString().split('T')[0]
       };
       data.students.unshift(newStudent);
       writeDb(data);
+      syncUpsert('students', newStudent);
       return { parent, student: newStudent, isNew: true };
     }
     
@@ -202,7 +254,10 @@ export const db = {
       if (name && name !== 'ליד מאינסטגרם' && (parent.name === 'ליד מאינסטגרם' || parent.name === 'לקוח וואטסאפ')) {
         parent.name = name;
       }
+      if (!parent.source || parent.source === 'unknown') parent.source = 'instagram';
+      parent.channel = 'instagram';
       writeDb(data);
+      syncUpsert('parents', parent);
       return parent;
     } else {
       parent = {
@@ -210,11 +265,13 @@ export const db = {
         name: name,
         phone: '',
         email: '',
+        source: 'instagram',
         instagram_id: igId,
         channel: 'instagram'
       };
       data.parents.push(parent);
       writeDb(data);
+      syncUpsert('parents', parent);
       return parent;
     }
   },
@@ -234,10 +291,12 @@ export const db = {
         birthDate: '',
         notes: `פנייה ראשונית מאינסטגרם (IG ID: ${igId}): "${text}"`,
         levelGrade: null,
+        source: 'instagram',
         created: new Date().toISOString().split('T')[0]
       };
       data.students.unshift(newStudent);
       writeDb(data);
+      syncUpsert('students', newStudent);
       return { parent, student: newStudent, isNew: true };
     }
     
@@ -245,9 +304,56 @@ export const db = {
     if (existingStudent.status === 'archived') {
       existingStudent.status = 'lead_new';
     }
+    if (!existingStudent.source || existingStudent.source === 'unknown') {
+      existingStudent.source = 'instagram';
+    }
     existingStudent.notes = (existingStudent.notes ? existingStudent.notes + '\n' : '') + `הודעה נוספת מאינסטגרם: "${text}"`;
     writeDb(data);
+    syncUpsert('students', existingStudent);
     return { parent, student: existingStudent, isNew: false };
+  },
+
+  createLeadFromForm: ({ parentName, phone, email, city, children, interest, source = 'form' }) => {
+    const parent = db.upsertParentByPhone(parentName, phone, email, {
+      city: city || '',
+      source,
+      channel: source,
+      notes: interest ? `עניין: ${interest}` : '',
+    });
+    const createdStudents = [];
+    const names = Array.isArray(children) ? children : (children ? [children] : ['מתאמן חדש']);
+
+    for (const childName of names) {
+      const trimmed = (childName || '').trim();
+      if (!trimmed) continue;
+      const existing = db.get('students').find(
+        s => s.name.trim().toLowerCase() === trimmed.toLowerCase() && s.parentId === parent.id
+      );
+      if (existing) {
+        const updated = db.update('students', existing.id, {
+          status: existing.status === 'archived' ? 'lead_new' : existing.status,
+          source: existing.source && existing.source !== 'unknown' ? existing.source : source,
+          notes: interest
+            ? ((existing.notes ? existing.notes + '\n' : '') + `עניין (טופס): ${interest}`)
+            : existing.notes,
+        });
+        createdStudents.push(updated || existing);
+      } else {
+        const student = db.insert('students', {
+          name: trimmed,
+          parentId: parent.id,
+          groupId: null,
+          status: 'lead_new',
+          birthDate: '',
+          notes: interest ? `עניין: ${interest}` : '',
+          levelGrade: null,
+          source,
+          created: new Date().toISOString().split('T')[0],
+        });
+        createdStudents.push(student);
+      }
+    }
+    return { parent, students: createdStudents, isNew: createdStudents.length > 0 };
   },
 
   getParentBroadcastLists: (parentId) => {
@@ -295,6 +401,7 @@ export const db = {
     
     const student = data.students[index];
     data.students.splice(index, 1);
+    syncRemove('students', id);
     
     // Check if parent has other children
     const otherChildren = data.students.filter(s => s.parentId === student.parentId);
@@ -303,6 +410,7 @@ export const db = {
       const parentIdx = data.parents.findIndex(p => p.id === student.parentId);
       if (parentIdx !== -1) {
         data.parents.splice(parentIdx, 1);
+        syncRemove('parents', student.parentId);
       }
     }
     

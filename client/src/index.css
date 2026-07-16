@@ -740,6 +740,8 @@ input, select, textarea { font-family: var(--font); }
 @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
 @keyframes slideUp { from { opacity: 0; transform: translateY(20px) scale(0.98) } to { opacity: 1; transform: translateY(0) scale(1) } }
 @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.5 } }
+@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
+.spin { animation: spin 0.9s linear infinite; }
 
 .fade-in { animation: fadeIn var(--t-normal) ease forwards; }
 .slide-up { animation: slideUp 0.3s cubic-bezier(0.4,0,0.2,1) forwards; }

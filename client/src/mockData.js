@@ -14,6 +14,29 @@ export const STATUSES = {
 export const DAYS_HEB = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳'];
 export const DAYS_FULL = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי'];
 
+// Lead source channels (how the lead reached us)
+export const LEAD_SOURCES = {
+  whatsapp:  { label: 'וואטסאפ', icon: '💬' },
+  instagram: { label: 'אינסטגרם', icon: '📸' },
+  facebook:  { label: 'פייסבוק', icon: '👍' },
+  form:      { label: 'טופס נחיתה', icon: '📝' },
+  referral:  { label: 'חבר מביא חבר', icon: '🤝' },
+  walk_in:   { label: 'הגעה פיזית', icon: '🚶' },
+  phone:     { label: 'טלפון', icon: '📞' },
+  unknown:   { label: 'לא ידוע', icon: '❓' },
+};
+
+// Lead segment (audience type)
+export const LEAD_SEGMENTS = {
+  kids:         { label: 'ילדים' },
+  youth:        { label: 'נוער' },
+  adults:       { label: 'בוגרים' },
+  competitive:  { label: 'נבחרת / תחרותי' },
+  parent_child: { label: 'הורים וילדים' },
+  birthday:     { label: 'ימי הולדת' },
+  other:        { label: 'אחר' },
+};
+
 export const mockParents = [
   { id: 'p1', name: 'מיכל לוי', phone: '0521234567', email: 'michal@gmail.com' },
   { id: 'p2', name: 'דוד כהן', phone: '0549876543', email: 'david@gmail.com' },
@@ -157,16 +180,7 @@ export const mockGroups = [
     waClimbers: '',
   },
 
-  // ── חמישי (+ שני) ────────────────────────────────────────────────────────────
-  {
-    id: 'g-02d0c7cf-b', notionId: '02d0c7cf-c275-446e-8051-e0ca23567e47',
-    name: "מתקדמים ה'-ו' — ב׳+ה׳ 15:30",
-    day: 1, time: '15:30', duration: 80, trainer: '',
-    maxSlots: 13, enrolled: 0, ageCategory: "ה'-ו'",
-    priceWeek: 0, priceTwice: 420,
-    waParents: 'https://chat.whatsapp.com/KQDVxQC7YPBLvZJOXu5WTr',
-    waClimbers: 'https://chat.whatsapp.com/CbHECN5brUcGiiiLMVulxZ',
-  },
+  // ── חמישי (+ שני) — biweekly, rendered on both days via getGroupDays() ──────
   {
     id: 'g-02d0c7cf', notionId: '02d0c7cf-c275-446e-8051-e0ca23567e47',
     name: "מתקדמים ה'-ו' — ב׳+ה׳ 15:30",

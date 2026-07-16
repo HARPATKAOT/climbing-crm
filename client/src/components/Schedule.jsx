@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, Save, X, Users, Check, Calendar, PlusCircle, AlertCircle, Send } from 'lucide-react';
+import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2 } from 'lucide-react';
 import { DAYS_FULL } from '../mockData.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -32,6 +32,28 @@ const DUR_OPTIONS = [
   { val: 80, label: '80 דקות' },
   { val: 110, label: '110 דקות' },
 ];
+
+// Attendance status options (present / absent / late)
+const ATT_STATUS = [
+  { key: 'present', label: 'נוכח',  color: '#10B981' },
+  { key: 'absent',  label: 'נעדר',  color: '#EF4444' },
+  { key: 'late',    label: 'איחור', color: '#F59E0B' },
+];
+
+// Hebrew day-letter → weekday index (0=ראשון … 5=שישי)
+const HEB_DAY_IDX = { 'א': 0, 'ב': 1, 'ג': 2, 'ד': 3, 'ה': 4, 'ו': 5 };
+
+// A group may meet twice a week (biweekly). Such groups encode both days in
+// their name, e.g. "מתקדמים ה'-ו' — ב׳+ה׳ 15:30". Return every weekday the
+// group meets on so it can be rendered on both calendar columns.
+function getGroupDays(group) {
+  const m = (group?.name || '').match(/([א-ו])['׳’]?\s*\+\s*([א-ו])['׳’]?/);
+  if (m) {
+    const days = [HEB_DAY_IDX[m[1]], HEB_DAY_IDX[m[2]]].filter(d => d != null);
+    if (days.length) return [...new Set([group.day, ...days])].filter(d => d != null);
+  }
+  return [group?.day].filter(d => d != null);
+}
 
 function t2m(t) { const [h, m] = t.split(':').map(Number); return h * 60 + m; }
 function topPx(time)   { return (t2m(time) - START_MIN) * PX_PER_MIN; }
@@ -115,6 +137,10 @@ function GroupFormModal({ group, employees, onSave, onClose }) {
   const [waParents,  setWaParents]  = useState(group?.waParents || '');
   const [waClimbers, setWaClimbers] = useState(group?.waClimbers || '');
 
+  // Active employees for the dropdown, but always keep the group's current
+  // trainer visible even if they've since been marked inactive.
+  const trainerOptions = employees.filter(e => e.active !== false || e.id === trainer);
+
   const handleSubmit = (e) => {
     e.preventDefault();
     const autoName = `${ageCat} — יום ${DAYS_FULL[day]} ${time}`;
@@ -186,7 +212,7 @@ function GroupFormModal({ group, employees, onSave, onClose }) {
                 <label className="form-label">מדריך</label>
                 <select className="input select" value={trainer} onChange={e => setTrainer(e.target.value)}>
                   <option value="">בחר מדריך...</option>
-                  {employees.map(emp => (
+                  {trainerOptions.map(emp => (
                     <option key={emp.id} value={emp.id}>{emp.name}</option>
                   ))}
                 </select>
@@ -235,35 +261,97 @@ function GroupFormModal({ group, employees, onSave, onClose }) {
   );
 }
 
-// ─── Attendance Modal ─────────────────────────────────────────────────────────
+// ─── Attendance Modal (real persistence) ──────────────────────────────────────
 function AttendanceModal({ group, students, parents, onClose }) {
-  const members = students.filter(s => s.groupId === group.id && s.status === 'registered');
+  const members = students.filter(s => s.groupId === group.id && s.status !== 'archived');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [attendanceState, setAttendanceState] = useState({});
+  const [view, setView] = useState('sheet'); // 'sheet' | 'history'
+  const [state, setState] = useState({});          // studentId -> status
+  const [existingIds, setExistingIds] = useState({}); // studentId -> attendance row id
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedMsg, setSavedMsg] = useState('');
+  const [history, setHistory] = useState([]);
 
+  // Load saved marks for the selected date (defaults to "present").
   useEffect(() => {
-    // Set default present for all
-    const defaults = {};
-    members.forEach(m => {
-      defaults[m.id] = 'present';
-    });
-    setAttendanceState(defaults);
-  }, [group.id]);
+    let cancelled = false;
+    setLoading(true);
+    setSavedMsg('');
+    fetch(`/api/attendance?groupId=${encodeURIComponent(group.id)}&date=${date}`)
+      .then(r => (r.ok ? r.json() : []))
+      .then(rows => {
+        if (cancelled) return;
+        const st = {}; const ids = {};
+        members.forEach(m => { st[m.id] = 'present'; });
+        (rows || []).forEach(r => { st[r.student_id] = r.status; ids[r.student_id] = r.id; });
+        setState(st);
+        setExistingIds(ids);
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date, group.id]);
 
-  const updateStatus = (studentId, status) => {
-    setAttendanceState(prev => ({ ...prev, [studentId]: status }));
+  const loadHistory = () => {
+    fetch(`/api/attendance?groupId=${encodeURIComponent(group.id)}`)
+      .then(r => (r.ok ? r.json() : []))
+      .then(rows => {
+        const byDate = {};
+        (rows || []).forEach(r => {
+          if (!byDate[r.date]) byDate[r.date] = { date: r.date, present: 0, absent: 0, late: 0, total: 0 };
+          byDate[r.date].total++;
+          if (r.status === 'present') byDate[r.date].present++;
+          else if (r.status === 'absent') byDate[r.date].absent++;
+          else if (r.status === 'late') byDate[r.date].late++;
+        });
+        setHistory(Object.values(byDate).sort((a, b) => b.date.localeCompare(a.date)));
+      })
+      .catch(() => {});
   };
+  useEffect(() => { loadHistory(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [group.id]);
 
-  const handleSave = () => {
-    // Collect attendance details and alert/mock save
-    const countPresent = Object.values(attendanceState).filter(s => s === 'present').length;
-    alert(`דו״ח נוכחות לתאריך ${date} נשמר בהצלחה! ${countPresent} נוכחים.`);
-    onClose();
+  const updateStatus = (sid, status) => setState(prev => ({ ...prev, [sid]: status }));
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSavedMsg('');
+    // Stable ids keep re-saves idempotent (upsert instead of duplicate rows).
+    const records = members.map(m => ({
+      id: existingIds[m.id] || `att-${group.id}-${date}-${m.id}`,
+      student_id: m.id,
+      group_id: group.id,
+      date,
+      status: state[m.id] || 'present',
+    }));
+    try {
+      const res = await fetch('/api/attendance/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ records }),
+      });
+      if (res.ok) {
+        const saved = await res.json();
+        const ids = { ...existingIds };
+        (saved || []).forEach(r => { if (r && r.student_id) ids[r.student_id] = r.id; });
+        setExistingIds(ids);
+        const present = records.filter(r => r.status === 'present').length;
+        setSavedMsg(`נשמר בהצלחה ✓ · ${present}/${records.length} נוכחים`);
+        loadHistory();
+      } else {
+        setSavedMsg('שגיאה בשמירת הנוכחות');
+      }
+    } catch (err) {
+      setSavedMsg('שגיאה בשמירת הנוכחות');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal slide-up" style={{ maxWidth: 500 }}>
+      <div className="modal slide-up" style={{ maxWidth: 520 }}>
         <div className="modal-header">
           <div>
             <div className="modal-title">📝 יומן נוכחות — {group.name}</div>
@@ -272,7 +360,7 @@ function AttendanceModal({ group, students, parents, onClose }) {
               <input
                 type="date"
                 className="input input-xs"
-                style={{ background: '#1F2937', color: 'white', border: 'none', padding: '2px 6px', width: 120 }}
+                style={{ background: '#1F2937', color: 'white', border: 'none', padding: '2px 6px', width: 140 }}
                 value={date}
                 onChange={e => setDate(e.target.value)}
               />
@@ -280,61 +368,110 @@ function AttendanceModal({ group, students, parents, onClose }) {
           </div>
           <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose}><X size={18} /></button>
         </div>
-        
-        <div className="modal-body" style={{ maxHeight: 380, overflowY: 'auto' }}>
-          {members.length === 0 ? (
-            <div className="empty-state" style={{ padding: 32 }}>
-              <div className="empty-state-title">אין מתאמנים רשומים בחוג זה</div>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {members.map(s => {
-                const parent = parents.find(p => p.id === s.parentId);
-                const currentStatus = attendanceState[s.id] || 'present';
-                
-                return (
-                  <div key={s.id} style={{
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                    padding: 10, background: '#111827', borderRadius: 8, border: '1px solid var(--border)'
-                  }}>
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: 13 }}>{s.name}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>הורה: {parent?.name} · {parent?.phone}</div>
+
+        {/* View toggle */}
+        <div style={{ display: 'flex', gap: 6, padding: '10px 16px 0' }}>
+          <button className={`btn btn-sm ${view === 'sheet' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setView('sheet')}>
+            <Users size={14} /> גיליון יומי
+          </button>
+          <button className={`btn btn-sm ${view === 'history' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setView('history')}>
+            <History size={14} /> היסטוריה
+          </button>
+        </div>
+
+        <div className="modal-body" style={{ maxHeight: 400, overflowY: 'auto' }}>
+          {view === 'sheet' && (
+            loading ? (
+              <div className="empty-state" style={{ padding: 32 }}>
+                <Loader2 size={20} className="spin" />
+                <div className="empty-state-sub" style={{ marginTop: 8 }}>טוען נוכחות...</div>
+              </div>
+            ) : members.length === 0 ? (
+              <div className="empty-state" style={{ padding: 32 }}>
+                <div className="empty-state-title">אין מתאמנים רשומים בחוג זה</div>
+                <div className="empty-state-sub">שבץ מתאמנים לקבוצה כדי לסמן נוכחות</div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {members.map(s => {
+                  const parent = parents.find(p => p.id === s.parentId);
+                  const currentStatus = state[s.id] || 'present';
+                  return (
+                    <div key={s.id} style={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      padding: 10, background: '#111827', borderRadius: 8, border: '1px solid var(--border)'
+                    }}>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 13 }}>{s.name}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                          {parent?.name ? `הורה: ${parent.name}` : ''}{parent?.phone ? ` · ${parent.phone}` : ''}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        {ATT_STATUS.map(opt => (
+                          <button
+                            key={opt.key}
+                            type="button"
+                            className="btn btn-xs"
+                            style={{
+                              background: currentStatus === opt.key ? opt.color : 'rgba(255,255,255,0.03)',
+                              color: currentStatus === opt.key ? 'white' : 'var(--text-3)',
+                              fontWeight: currentStatus === opt.key ? 'bold' : 'normal',
+                              border: '1px solid rgba(255,255,255,0.05)'
+                            }}
+                            onClick={() => updateStatus(s.id, opt.key)}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      {[
-                        { key: 'present', label: 'נוכח', color: '#10B981' },
-                        { key: 'absent', label: 'נעדר', color: '#EF4444' },
-                        { key: 'makeup', label: 'השלמה', color: '#3B82F6' }
-                      ].map(opt => (
-                        <button
-                          key={opt.key}
-                          type="button"
-                          className="btn btn-xs"
-                          style={{
-                            background: currentStatus === opt.key ? opt.color : 'rgba(255,255,255,0.03)',
-                            color: currentStatus === opt.key ? 'white' : 'var(--text-3)',
-                            fontWeight: currentStatus === opt.key ? 'bold' : 'normal',
-                            border: '1px solid rgba(255,255,255,0.05)'
-                          }}
-                          onClick={() => updateStatus(s.id, opt.key)}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
+                  );
+                })}
+              </div>
+            )
+          )}
+
+          {view === 'history' && (
+            history.length === 0 ? (
+              <div className="empty-state" style={{ padding: 32 }}>
+                <div className="empty-state-title">אין נתוני נוכחות שמורים</div>
+                <div className="empty-state-sub">שמור נוכחות ליום כלשהו כדי לראות היסטוריה</div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {history.map(h => (
+                  <button key={h.date} onClick={() => { setDate(h.date); setView('sheet'); }}
+                    style={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      padding: 10, background: '#111827', borderRadius: 8, border: '1px solid var(--border)',
+                      cursor: 'pointer', textAlign: 'right',
+                    }}>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>
+                      {new Date(h.date).toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'numeric' })}
                     </div>
-                  </div>
-                );
-              })}
-            </div>
+                    <div style={{ display: 'flex', gap: 8, fontSize: 12 }}>
+                      <span style={{ color: '#34D399' }}>✓ {h.present}</span>
+                      <span style={{ color: '#FCA5A5' }}>✗ {h.absent}</span>
+                      <span style={{ color: '#FCD34D' }}>⏱ {h.late}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )
           )}
         </div>
 
-        <div className="modal-footer">
-          <button className="btn btn-ghost" onClick={onClose}>ביטול</button>
-          <button className="btn btn-primary" onClick={handleSave}>
-            💾 שמור נוכחות
-          </button>
+        <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 12, color: savedMsg.includes('שגיאה') ? 'var(--red)' : 'var(--green)' }}>{savedMsg}</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-ghost" onClick={onClose}>סגור</button>
+            {view === 'sheet' && members.length > 0 && (
+              <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+                {saving ? <Loader2 size={15} className="spin" /> : '💾'} {saving ? 'שומר...' : 'שמור נוכחות'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -342,44 +479,27 @@ function AttendanceModal({ group, students, parents, onClose }) {
 }
 
 // ─── Group Detail Side Panel ──────────────────────────────────────────────────
-function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDelete, onAttendance }) {
+function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDelete, onAttendance, onAssignStudent, onRemoveStudent }) {
   const [tab, setTab] = useState('members');
-  const c       = AGE_COLORS[group.ageCategory] || DEF_COLOR;
-  
-  // Real registered members
-  const members = students.filter(s => s.groupId === group.id && s.status === 'registered');
-  
-  // Mock waitlist data for testing (in real CRM saved in group.waitlist list)
-  const [waitlist, setWaitlist] = useState([
-    { id: 'w1', name: 'אמיר שגיא', phone: '0547788990', parent: 'מיה שגיא' }
-  ]);
-  const [newWaitName, setNewWaitName] = useState('');
-  const [newWaitPhone, setNewWaitPhone] = useState('');
-  
-  const pct     = group.maxSlots > 0 ? Math.round(members.length / group.maxSlots * 100) : 0;
-  const isFull  = members.length >= group.maxSlots;
+  const [assignId, setAssignId] = useState('');
+  const c = AGE_COLORS[group.ageCategory] || DEF_COLOR;
+
+  // Enrolled climbers (any non-archived student assigned to this group).
+  const members = students.filter(s => s.groupId === group.id && s.status !== 'archived');
+  // Students that could be assigned here (anyone not already in this group).
+  const assignable = students.filter(s => s.groupId !== group.id && s.status !== 'archived');
+
+  const pct    = group.maxSlots > 0 ? Math.round(members.length / group.maxSlots * 100) : 0;
+  const isFull = members.length >= group.maxSlots;
+  const freeSlots = Math.max(0, group.maxSlots - members.length);
 
   const trainer = employees.find(e => e.id === group.trainer);
+  const days = getGroupDays(group);
 
-  const handleAddWaitlist = (e) => {
-    e.preventDefault();
-    if (!newWaitName || !newWaitPhone) return;
-    setWaitlist(prev => [...prev, {
-      id: `w-${Date.now()}`,
-      name: newWaitName,
-      phone: newWaitPhone,
-      parent: 'הורה וואטסאפ'
-    }]);
-    setNewWaitName('');
-    setNewWaitPhone('');
-  };
-
-  const handleRemoveWaitlist = (id) => {
-    setWaitlist(prev => prev.filter(w => w.id !== id));
-  };
-
-  const handleSendWaNotify = (waiter) => {
-    alert(`הודעת וואטסאפ נשלחה ל-${waiter.name} (${waiter.phone}):\n"היי! התפנה מקום בחוג ${group.name}. נשמח לתאם כניסה!"`);
+  const handleAssign = () => {
+    if (!assignId) return;
+    onAssignStudent(assignId, group.id);
+    setAssignId('');
   };
 
   return (
@@ -399,7 +519,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
               {group.name}
             </div>
             <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
-              {DAYS_FULL[group.day]} · {group.time} · {group.duration}′
+              {days.map(d => DAYS_FULL[d]).join(' + ')} · {group.time} · {group.duration}′
               {trainer && ` · מדריך: ${trainer.name}`}
             </div>
           </div>
@@ -415,8 +535,8 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
               transition: 'width 0.4s ease',
             }} />
           </div>
-          <span style={{ fontSize: 12, fontWeight: 700, color: isFull ? 'var(--red)' : 'var(--text-2)', minWidth: 60 }}>
-            {members.length}/{group.maxSlots} ({pct}%)
+          <span style={{ fontSize: 12, fontWeight: 700, color: isFull ? 'var(--red)' : 'var(--text-2)', minWidth: 90 }}>
+            {members.length}/{group.maxSlots} · {freeSlots} פנויים
           </span>
         </div>
 
@@ -440,7 +560,6 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
       <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
         {[
           { key: 'members', label: `משתתפים (${members.length})` },
-          { key: 'waitlist', label: `רשימת המתנה (${waitlist.length})` },
           { key: 'info',    label: 'פרטים' },
         ].map(t => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
@@ -460,95 +579,70 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
 
         {/* MEMBERS TAB */}
         {tab === 'members' && (
-          members.length === 0 ? (
-            <div className="empty-state" style={{ padding: 48 }}>
-              <div className="empty-state-icon">🧗</div>
-              <div className="empty-state-title">אין מתאמנים רשומים</div>
-              <div className="empty-state-sub">השבץ מתאמנים לקבוצה דרך מסך לקוחות</div>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {members.map(s => {
-                const parent = parents.find(p => p.id === s.parentId);
-                return (
-                  <div key={s.id} style={{
-                    display: 'flex', gap: 10, alignItems: 'center',
-                    padding: '10px 12px', borderRadius: 8,
-                    background: 'rgba(255,255,255,0.02)',
-                    border: '1px solid var(--border)',
-                  }}>
-                    <div className="avatar" style={{ width: 34, height: 34, fontSize: 12, flexShrink: 0 }}>
-                      {s.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: 13 }}>{s.name}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 1 }}>
-                        {parent?.name}{parent?.phone ? ` · ${parent.phone}` : ''}
-                      </div>
-                    </div>
-                    {s.levelGrade && (
-                      <span style={{ fontWeight: 900, color: c.text, fontSize: 13 }}>{s.levelGrade}</span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )
-        )}
-
-        {/* WAITLIST TAB */}
-        {tab === 'waitlist' && (
           <div>
-            {/* Quick Add to Waitlist */}
-            <form onSubmit={handleAddWaitlist} className="card card-p" style={{ marginBottom: 14, background: '#111827' }}>
-              <div style={{ fontSize: 12, fontWeight: 'bold', marginBottom: 8 }}>הוסף לרשימת המתנה</div>
-              <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-                <input
-                  className="input input-sm"
-                  placeholder="שם הילד..."
-                  required
-                  value={newWaitName}
-                  onChange={e => setNewWaitName(e.target.value)}
-                />
-                <input
-                  className="input input-sm"
-                  placeholder="טלפון הורה..."
-                  required
-                  value={newWaitPhone}
-                  onChange={e => setNewWaitPhone(e.target.value)}
-                />
+            {/* Assign a climber */}
+            <div className="card card-p" style={{ marginBottom: 14, background: '#111827' }}>
+              <div style={{ fontSize: 12, fontWeight: 'bold', marginBottom: 8 }}>שיבוץ מתאמן לקבוצה</div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <select className="input input-sm" style={{ flex: 1 }} value={assignId}
+                  onChange={e => setAssignId(e.target.value)}>
+                  <option value="">בחר מתאמן...</option>
+                  {assignable.map(s => {
+                    const p = parents.find(pp => pp.id === s.parentId);
+                    return <option key={s.id} value={s.id}>{s.name}{p?.name ? ` — ${p.name}` : ''}</option>;
+                  })}
+                </select>
+                <button className="btn btn-primary btn-sm" onClick={handleAssign} disabled={!assignId || isFull}>
+                  <UserPlus size={13} /> שבץ
+                </button>
               </div>
-              <button type="submit" className="btn btn-ghost btn-xs w-full" style={{ justifyContent: 'center' }}>
-                <PlusCircle size={12} /> רשום לרשימת המתנה
-              </button>
-            </form>
-
-            {/* List Waitlist */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {waitlist.length === 0 ? (
-                <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center', padding: 20 }}>אין ממתינים לקבוצה זו</div>
-              ) : (
-                waitlist.map(w => (
-                  <div key={w.id} style={{
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                    padding: 10, background: '#1F2937', borderRadius: 8
-                  }}>
-                    <div>
-                      <div style={{ fontWeight: 'bold', fontSize: 13 }}>{w.name}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>טלפון: {w.phone}</div>
-                    </div>
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      <button className="btn btn-success btn-icon btn-xs" onClick={() => handleSendWaNotify(w)} title="שלח התראת וואטסאפ שהתפנה מקום">
-                        <Send size={11} />
-                      </button>
-                      <button className="btn btn-danger btn-icon btn-xs" onClick={() => handleRemoveWaitlist(w.id)}>
-                        <X size={11} />
-                      </button>
-                    </div>
-                  </div>
-                ))
+              {isFull && (
+                <div style={{ fontSize: 11, color: '#FCD34D', marginTop: 6 }}>
+                  הקבוצה מלאה — הסר מתאמן כדי לפנות מקום
+                </div>
               )}
             </div>
+
+            {/* Members list */}
+            {members.length === 0 ? (
+              <div className="empty-state" style={{ padding: 40 }}>
+                <div className="empty-state-icon">🧗</div>
+                <div className="empty-state-title">אין מתאמנים רשומים</div>
+                <div className="empty-state-sub">שבץ מתאמנים דרך התיבה למעלה</div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {members.map(s => {
+                  const parent = parents.find(p => p.id === s.parentId);
+                  return (
+                    <div key={s.id} style={{
+                      display: 'flex', gap: 10, alignItems: 'center',
+                      padding: '10px 12px', borderRadius: 8,
+                      background: 'rgba(255,255,255,0.02)',
+                      border: '1px solid var(--border)',
+                    }}>
+                      <div className="avatar" style={{ width: 34, height: 34, fontSize: 12, flexShrink: 0 }}>
+                        {s.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: 13 }}>{s.name}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 1 }}>
+                          {parent?.name}{parent?.phone ? ` · ${parent.phone}` : ''}
+                        </div>
+                      </div>
+                      {s.levelGrade && (
+                        <span style={{ fontWeight: 900, color: c.text, fontSize: 13 }}>{s.levelGrade}</span>
+                      )}
+                      <button className="btn btn-ghost btn-icon btn-xs" title="הסר מהקבוצה"
+                        style={{ color: 'var(--red)' }}
+                        onClick={() => onRemoveStudent(s.id)}>
+                        <UserMinus size={14} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
@@ -557,12 +651,13 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div className="card card-p">
               {[
-                ['יום חוג', DAYS_FULL[group.day]],
+                ['ימי חוג', days.map(d => DAYS_FULL[d]).join(' + ')],
                 ['שעת התחלה', group.time],
                 ['משך אימון', `${group.duration} דק׳`],
                 ['מדריך אחראי', trainer ? trainer.name : '—'],
                 ['חתך גילאים', group.ageCategory],
                 ['מקסימום תפוסה', `${group.maxSlots} תלמידים`],
+                ['מקומות פנויים', `${freeSlots}`],
               ].map(([k, v]) => (
                 <div key={k} style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -592,6 +687,12 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
               </div>
             )}
 
+            {group.waClimbers && (
+              <a href={group.waClimbers} target="_blank" rel="noreferrer" className="btn btn-success btn-sm">
+                💬 וואטסאפ מטפסים
+              </a>
+            )}
+
             <button className="btn btn-danger btn-sm" style={{ marginTop: 4 }}
               onClick={() => {
                 if (window.confirm(`האם אתה בטוח שברצונך למחוק את קבוצת החוג "${group.name}"?`)) onDelete(group.id);
@@ -606,7 +707,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
 }
 
 // ─── Main Schedule Component ──────────────────────────────────────────────────
-export default function Schedule({ groups, students, parents, setGroups }) {
+export default function Schedule({ groups, students, parents, setGroups, setStudents }) {
   const [selectedGroup,   setSelectedGroup]   = useState(null);
   const [editingGroup,    setEditingGroup]     = useState(null);
   const [showAddModal,    setShowAddModal]     = useState(false);
@@ -618,19 +719,28 @@ export default function Schedule({ groups, students, parents, setGroups }) {
   useEffect(() => {
     fetch('/api/employees')
       .then(res => res.ok ? res.json() : [])
-      .then(data => setEmployees(data))
+      .then(data => setEmployees(Array.isArray(data) ? data : []))
       .catch(err => console.error(err));
   }, []);
 
+  const refreshStudents = async () => {
+    try {
+      const fresh = await fetch('/api/students').then(r => (r.ok ? r.json() : null));
+      if (Array.isArray(fresh)) setStudents(fresh);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const handleSave = async (data) => {
     const isEdit = groups.some(g => g.id === data.id);
-    
+
     // Optimistic state update
     setGroups(prev => {
       const idx = prev.findIndex(g => g.id === data.id);
       return idx >= 0 ? prev.map(g => g.id === data.id ? data : g) : [...prev, data];
     });
-    
+
     setEditingGroup(null);
     setShowAddModal(false);
     setSelectedGroup(data);
@@ -649,16 +759,47 @@ export default function Schedule({ groups, students, parents, setGroups }) {
   const handleDelete = async (id) => {
     setGroups(prev => prev.filter(g => g.id !== id));
     setSelectedGroup(null);
-    // In real CRM backend handles deleteGroup route
+    try {
+      await fetch(`/api/groups/${id}`, { method: 'DELETE' });
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleAssignStudent = async (studentId, groupId) => {
+    setStudents(prev => prev.map(s => s.id === studentId ? { ...s, groupId } : s));
+    try {
+      await fetch(`/api/students/${studentId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId })
+      });
+      refreshStudents();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleRemoveStudent = async (studentId) => {
+    setStudents(prev => prev.map(s => s.id === studentId ? { ...s, groupId: null } : s));
+    try {
+      await fetch(`/api/students/${studentId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId: null })
+      });
+      refreshStudents();
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const openEdit  = (g)  => { setEditingGroup(g); setShowAddModal(false); };
   const openAdd   = ()   => { setShowAddModal(true); setEditingGroup(null); setSelectedGroup(null); };
   const openPanel = (g)  => { setSelectedGroup(g); setEditingGroup(null); setShowAddModal(false); setAttendanceGroup(null); };
 
-  // Map group items to display labels
   const getEnrolledCount = (groupId) => {
-    return students.filter(s => s.groupId === groupId && s.status === 'registered').length;
+    return students.filter(s => s.groupId === groupId && s.status !== 'archived').length;
   };
 
   const formattedGroups = groups.map(g => {
@@ -669,12 +810,17 @@ export default function Schedule({ groups, students, parents, setGroups }) {
     };
   });
 
+  // Keep the selected/attendance group in sync with the latest data so the
+  // members list and enrolled counts update after assign/remove.
+  const liveSelectedGroup = selectedGroup ? (formattedGroups.find(g => g.id === selectedGroup.id) || selectedGroup) : null;
+  const liveAttendanceGroup = attendanceGroup ? (formattedGroups.find(g => g.id === attendanceGroup.id) || attendanceGroup) : null;
+
   return (
     <div className="fade-in">
       {/* ── Modals ─────────────────────────────────────────────────────────── */}
-      {attendanceGroup && !editingGroup && !showAddModal && (
+      {liveAttendanceGroup && !editingGroup && !showAddModal && (
         <AttendanceModal
-          group={attendanceGroup}
+          group={liveAttendanceGroup}
           students={students}
           parents={parents}
           onClose={() => setAttendanceGroup(null)}
@@ -688,9 +834,9 @@ export default function Schedule({ groups, students, parents, setGroups }) {
           onClose={() => { setEditingGroup(null); setShowAddModal(false); }}
         />
       )}
-      {selectedGroup && !editingGroup && !showAddModal && !attendanceGroup && (
+      {liveSelectedGroup && !editingGroup && !showAddModal && !attendanceGroup && (
         <GroupPanel
-          group={selectedGroup}
+          group={liveSelectedGroup}
           students={students}
           parents={parents}
           employees={employees}
@@ -698,6 +844,8 @@ export default function Schedule({ groups, students, parents, setGroups }) {
           onEdit={openEdit}
           onDelete={handleDelete}
           onAttendance={g => setAttendanceGroup(g)}
+          onAssignStudent={handleAssignStudent}
+          onRemoveStudent={handleRemoveStudent}
         />
       )}
 
@@ -726,7 +874,7 @@ export default function Schedule({ groups, students, parents, setGroups }) {
             <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
               <div style={{ width: 52, flexShrink: 0, padding: '10px 6px', fontSize: 10, color: 'var(--text-3)' }}>שעה</div>
               {DAYS_FULL.map((d, i) => {
-                const count = groups.filter(g => g.day === i).length;
+                const count = groups.filter(g => getGroupDays(g).includes(i)).length;
                 return (
                   <div key={i} style={{
                     flex: 1, padding: '10px 8px',
@@ -760,7 +908,7 @@ export default function Schedule({ groups, students, parents, setGroups }) {
 
               {/* 6 Day columns */}
               {Array.from({ length: 6 }, (_, day) => {
-                const dayGroups = formattedGroups.filter(g => g.day === day);
+                const dayGroups = formattedGroups.filter(g => getGroupDays(g).includes(day));
                 return (
                   <div key={day} style={{
                     flex: 1, position: 'relative', height: `${GRID_H}px`,
@@ -788,7 +936,7 @@ export default function Schedule({ groups, students, parents, setGroups }) {
                       const enrolledCount = getEnrolledCount(g.id);
                       return (
                         <GroupBlock
-                          key={g.id}
+                          key={`${g.id}-${day}`}
                           group={g}
                           enrolledCount={enrolledCount}
                           selected={selectedGroup?.id === g.id}
@@ -830,10 +978,11 @@ export default function Schedule({ groups, students, parents, setGroups }) {
                     const enrolledCount = getEnrolledCount(g.id);
                     const full = enrolledCount >= g.maxSlots;
                     const pct  = g.maxSlots > 0 ? (enrolledCount / g.maxSlots * 100) : 0;
+                    const days = getGroupDays(g);
                     return (
                       <tr key={g.id} style={{ cursor: 'pointer' }} onClick={() => openPanel(g)}>
                         <td style={{ fontWeight: 700 }}>{g.name}</td>
-                        <td style={{ color: 'var(--text-2)' }}>{DAYS_FULL[g.day]}</td>
+                        <td style={{ color: 'var(--text-2)' }}>{days.map(d => DAYS_FULL[d]).join(' + ')}</td>
                         <td>{g.time}</td>
                         <td style={{ color: 'var(--text-3)' }}>{g.duration}′</td>
                         <td style={{ color: 'var(--text-2)' }}>{g.trainerName || '—'}</td>
