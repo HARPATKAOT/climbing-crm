@@ -189,13 +189,15 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
 
   // Level Test Fields
   const [testLevel, setTestLevel] = useState('5A');
-  const [testType, setTestType] = useState('top-rope');
-  const [testExaminer, setTestExaminer] = useState('');
+  const [testType, setTestType] = useState('level'); // level | security | lead
+  const [testRouteStyle, setTestRouteStyle] = useState('top-rope'); // top-rope | lead (level tests only)
+  const [testExaminerId, setTestExaminerId] = useState('');
   const [testNotes, setTestNotes] = useState('');
   const [testPassed, setTestPassed] = useState(true);
   const [testLoading, setTestLoading] = useState(false);
   const [showTestForm, setShowTestForm] = useState(false);
   const [levelTestsHistory, setLevelTestsHistory] = useState([]);
+  const [employees, setEmployees] = useState([]);
 
   // Fetch student level tests history
   useEffect(() => {
@@ -207,6 +209,18 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
       })
       .catch(err => console.error(err));
   }, [student.id]);
+
+  // Fetch employees for examiner picker (security / lead tests)
+  useEffect(() => {
+    fetch('/api/employees')
+      .then(res => res.ok ? res.json() : [])
+      .then(data => {
+        const list = Array.isArray(data) ? data : [];
+        setEmployees(list);
+        if (list.length > 0) setTestExaminerId(prev => prev || list[0].id);
+      })
+      .catch(err => console.error(err));
+  }, []);
 
   useEffect(() => {
     if (parent?.id) {
@@ -324,6 +338,14 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
 
   const handleAddTest = async (e) => {
     e.preventDefault();
+    const needsExaminer = testType === 'security' || testType === 'lead';
+    if (needsExaminer && !testExaminerId) {
+      alert('נא לבחור את המדריך הבוחן');
+      return;
+    }
+    const examinerName = needsExaminer
+      ? (employees.find(emp => emp.id === testExaminerId)?.name || null)
+      : null;
     setTestLoading(true);
     try {
       const response = await fetch('/api/level-tests', {
@@ -332,9 +354,11 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
         body: JSON.stringify({
           studentId: student.id,
           studentName: student.name,
-          level: testLevel,
+          level: testType === 'level' ? testLevel : null,
           test_type: testType,
-          examiner: testType === 'lead' ? testExaminer : null,
+          route_style: testType === 'level' ? testRouteStyle : null,
+          examiner: examinerName,
+          examinerId: needsExaminer ? testExaminerId : null,
           passed: testPassed,
           notes: testNotes,
           attended_ceremony: false
@@ -344,7 +368,6 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
         const newTest = await response.json();
         setLevelTestsHistory(prev => [newTest, ...prev]);
         setTestNotes('');
-        setTestExaminer('');
         setShowTestForm(false);
         refreshData();
       }
@@ -581,45 +604,58 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
           )}
         </div>
 
-        {/* Level Tests Logs & Add Log */}
+        {/* Tests Logs & Add Log */}
         <div className="section-header">
           <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Award size={15} /> היסטוריית מבחני רמה
+            <Award size={15} /> היסטוריית מבחנים
           </div>
         </div>
         <div className="card card-p" style={{ marginBottom: 16 }}>
           {showTestForm ? (
             <form onSubmit={handleAddTest} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-                <select className="input input-sm" style={{ flex: 1 }} value={testLevel} onChange={e => setTestLevel(e.target.value)}>
-                  {['5A','5B','5C','6A','6B','6C','7A','7B','7C','8A'].map(lvl => (
-                    <option key={lvl} value={lvl}>רמה {lvl}</option>
-                  ))}
+              <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+                <select className="input input-sm" style={{ flex: 1, minWidth: 120 }} value={testType} onChange={e => setTestType(e.target.value)}>
+                  <option value="level">מבחן רמה</option>
+                  <option value="security">מבחן אבטחה</option>
+                  <option value="lead">מבחן הובלה</option>
                 </select>
-                <select className="input input-sm" style={{ flex: 1 }} value={testType} onChange={e => setTestType(e.target.value)}>
-                  <option value="top-rope">טופ רופ</option>
-                  <option value="lead">הובלה</option>
-                </select>
+                {testType === 'level' && (
+                  <>
+                    <select className="input input-sm" style={{ flex: 1, minWidth: 90 }} value={testLevel} onChange={e => setTestLevel(e.target.value)}>
+                      {['5A','5B','5C','6A','6B','6C','7A','7B','7C','8A'].map(lvl => (
+                        <option key={lvl} value={lvl}>רמה {lvl}</option>
+                      ))}
+                    </select>
+                    <select className="input input-sm" style={{ flex: 1, minWidth: 100 }} value={testRouteStyle} onChange={e => setTestRouteStyle(e.target.value)}>
+                      <option value="top-rope">טופ רופ</option>
+                      <option value="lead">הובלה</option>
+                    </select>
+                  </>
+                )}
+                {(testType === 'security' || testType === 'lead') && (
+                  <select
+                    className="input input-sm"
+                    style={{ flex: 1.5, minWidth: 140 }}
+                    required
+                    value={testExaminerId}
+                    onChange={e => setTestExaminerId(e.target.value)}
+                  >
+                    {employees.length === 0 && <option value="">אין עובדים</option>}
+                    {employees.map(emp => (
+                      <option key={emp.id} value={emp.id}>{emp.name}</option>
+                    ))}
+                  </select>
+                )}
                 <select className="input input-sm" style={{ width: 80 }} value={testPassed ? 'yes' : 'no'} onChange={e => setTestPassed(e.target.value === 'yes')}>
                   <option value="yes">עבר</option>
                   <option value="no">נכשל</option>
                 </select>
               </div>
               <div style={{ display: 'flex', gap: 6 }}>
-                {testType === 'lead' && (
-                  <input
-                    className="input input-sm"
-                    placeholder="שם הבוחן..."
-                    style={{ flex: 1 }}
-                    required
-                    value={testExaminer}
-                    onChange={e => setTestExaminer(e.target.value)}
-                  />
-                )}
                 <input
                   className="input input-sm"
                   placeholder="הערות..."
-                  style={{ flex: testType === 'lead' ? 1 : 2 }}
+                  style={{ flex: 2 }}
                   value={testNotes}
                   onChange={e => setTestNotes(e.target.value)}
                 />
@@ -632,8 +668,8 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
               </div>
             </form>
           ) : (
-            <button className="btn btn-ghost btn-sm w-full" style={{ marginBottom: 12, justifyContent: 'center', gap: 8 }} onClick={() => setShowTestForm(true)}>
-              <Plus size={13} /> צור מבחן רמה חדש
+            <button className="btn btn-ghost btn-sm w-full" style={{ marginBottom: 12, borderContent: 'center', gap: 8 }} onClick={() => setShowTestForm(true)}>
+              <Plus size={13} /> שמירת מבחן חדש
             </button>
           )}
 
@@ -642,19 +678,30 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
             {levelTestsHistory.length === 0 ? (
               <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>לא נמצאו מבחנים מדווחים</div>
             ) : (
-              levelTestsHistory.map(test => (
-                <div key={test.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, padding: '4px 0', borderBottom: '1px dotted var(--border)' }}>
-                  <div>
-                    <strong>{test.test_type === 'lead' ? 'מבחן הובלה' : `רמה ${test.level}`}</strong>
-                    {test.test_type === 'lead' && test.level && <span style={{ fontSize: 11, marginLeft: 4 }}>({test.level})</span>}
-                    {test.examiner && <div style={{ color: 'var(--text-3)', fontSize: 10 }}>בוחן: {test.examiner}</div>}
+              levelTestsHistory.map(test => {
+                const asLevel = test.test_type === 'level' || test.test_type === 'top-rope';
+                const asSecurity = test.test_type === 'security';
+                const asLeadCert = test.test_type === 'lead';
+                const routeStyle = test.route_style || (test.test_type === 'top-rope' ? 'top-rope' : null);
+                const routeLabel = routeStyle === 'lead' ? 'הובלה' : routeStyle === 'top-rope' ? 'טופ רופ' : null;
+                let title = 'מבחן';
+                if (asLevel) title = `רמה ${test.level || ''}${routeLabel ? ` · ${routeLabel}` : ''}`.trim();
+                else if (asSecurity) title = 'מבחן אבטחה';
+                else if (asLeadCert) title = 'מבחן הובלה';
+                const showExaminer = (asSecurity || asLeadCert) && !!test.examiner;
+                return (
+                  <div key={test.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, padding: '4px 0', borderBottom: '1px dotted var(--border)' }}>
+                    <div>
+                      <strong>{title}</strong>
+                      {showExaminer && <div style={{ color: 'var(--text-3)', fontSize: 10 }}>בוחן: {test.examiner}</div>}
+                    </div>
+                    <div style={{ textAlign: 'left' }}>
+                      <span className={`badge ${test.passed ? 'badge-success' : 'badge-danger'}`}>{test.passed ? 'עבר' : 'נכשל'}</span>
+                      <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>{test.date}</div>
+                    </div>
                   </div>
-                  <div style={{ textAlign: 'left' }}>
-                    <span className={`badge ${test.passed ? 'badge-success' : 'badge-danger'}`}>{test.passed ? 'עבר' : 'נכשל'}</span>
-                    <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>{test.date}</div>
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>

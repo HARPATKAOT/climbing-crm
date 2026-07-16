@@ -553,24 +553,55 @@ export const db = {
   insertLevelTest: (test) => {
     const data = readDb();
     if (!data.level_tests) data.level_tests = [];
-    
+
+    // Accept both Leads shape and LevelTests page shape
+    let testType = test.test_type || 'level';
+    if (testType === 'top_rope') testType = 'top-rope';
+    // Legacy LevelTests page sent route_type without test_type
+    if (!test.test_type && test.route_type) testType = 'level';
+
+    const isLevelTest = testType === 'level' || testType === 'top-rope';
+    const needsExaminer = testType === 'security' || testType === 'lead';
+
+    const routeStyleRaw = test.route_style || test.route_type || 'top-rope';
+    const routeStyle = isLevelTest
+      ? (routeStyleRaw === 'top_rope' ? 'top-rope' : routeStyleRaw)
+      : null;
+
+    const level = isLevelTest ? (test.level || test.grade || '5A') : null;
+    const passed = test.passed ?? (test.status ? test.status === 'passed' : true);
+    const studentId = test.studentId || test.climber_id || null;
+
+    let studentName = test.studentName || null;
+    if (!studentName && studentId) {
+      studentName = data.students?.find(s => s.id === studentId)?.name || null;
+    }
+
     const newTest = {
       id: `lt${Date.now()}`,
-      studentId: test.studentId || null,
-      studentName: test.studentName || 'מתאמן',
-      level: test.level || '5A',
-      test_type: test.test_type || 'top-rope',
-      examiner: test.examiner || 'עידו בן דוד',
-      date: new Date().toISOString().split('T')[0],
+      studentId,
+      studentName: studentName || 'מתאמן',
+      // Aliases kept for LevelTests page UI that still reads climber_id/grade/status
+      climber_id: studentId,
+      grade: level,
+      level,
+      test_type: testType === 'top-rope' ? 'level' : testType,
+      route_style: routeStyle,
+      route_type: routeStyle,
+      examiner: needsExaminer ? (test.examiner ?? null) : null,
+      examinerId: needsExaminer ? (test.examinerId ?? null) : null,
+      date: test.date || new Date().toISOString().split('T')[0],
       notes: test.notes || '',
-      passed: test.passed ?? true,
-      attended_ceremony: test.attended_ceremony ?? false
+      passed,
+      status: test.status || (passed ? 'passed' : 'failed'),
+      attended_ceremony: test.attended_ceremony ?? test.ceremony ?? false,
+      ceremony: test.attended_ceremony ?? test.ceremony ?? false
     };
     
     data.level_tests.unshift(newTest);
     
-    // If test passed, update student level grade
-    if (newTest.studentId && newTest.passed) {
+    // If a level test passed, update student level grade
+    if (isLevelTest && newTest.studentId && newTest.passed && newTest.level) {
       const studentIndex = data.students.findIndex(s => s.id === newTest.studentId);
       if (studentIndex !== -1) {
         data.students[studentIndex].levelGrade = newTest.level;

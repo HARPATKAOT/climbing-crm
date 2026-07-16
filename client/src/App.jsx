@@ -30,7 +30,7 @@ const NAV = [
   { key: 'pricelist',  label: 'מחירון',             icon: Tag,              section: 'main', accent: '#FB7185' },
   { key: 'safety',     label: 'בדיקות בטיחות',     icon: ShieldCheck,      section: 'ops',  accent: '#4ADE80' },
   { key: 'employees',  label: 'עובדים ומשמרות',    icon: UserCog,          section: 'ops',  accent: '#60A5FA' },
-  { key: 'levels',     label: 'מבחני רמה',          icon: Award,            section: 'ops',  accent: '#FCD34D' },
+  { key: 'levels',     label: 'מבחנים',             icon: Award,            section: 'ops',  accent: '#FCD34D' },
   { key: 'health',     label: 'הצהרות בריאות',      icon: FileHeart,        section: 'ops',  accent: '#F472B6' },
   { key: 'automations',label: 'אוטומציות',         icon: Zap,              section: 'ops',  accent: '#FACC15' },
 ];
@@ -70,7 +70,7 @@ const PAGE_TITLES = {
   pricelist:  { title: 'מחירון',                  sub: 'ניהול מחירי הכניסה, חוגים וציוד' },
   safety:     { title: 'בדיקות בטיחות יומיות',   sub: 'אישור ובטיחות האתר' },
   employees:  { title: 'עובדים ומשמרות',          sub: 'שעון נוכחות וניהול שכר' },
-  levels:     { title: 'מבחני רמה',               sub: 'מעקב אחר התקדמות המתאמנים' },
+  levels:     { title: 'מבחנים',                  sub: 'רמה · אבטחה · הובלה' },
   health:     { title: 'הצהרות בריאות',           sub: 'ניהול הצהרות בריאות דיגיטליות' },
   automations:{ title: 'אוטומציות ומסעות לקוח',  sub: 'הגדרת פעולות שיווקיות ותפעוליות אוטומטיות' },
 };
