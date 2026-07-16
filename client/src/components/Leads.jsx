@@ -27,6 +27,13 @@ const sourceLabel = (m) => {
   return 'יוצא';
 };
 
+// Distinct colors per test kind (level / security / lead)
+const TEST_TYPE_COLORS = {
+  level:    { accent: '#38BDF8', bg: 'rgba(56,189,248,0.10)', border: 'rgba(56,189,248,0.28)' },
+  security: { accent: '#FBBF24', bg: 'rgba(251,191,36,0.10)', border: 'rgba(251,191,36,0.28)' },
+  lead:     { accent: '#34D399', bg: 'rgba(52,211,153,0.10)', border: 'rgba(52,211,153,0.28)' },
+};
+
 // ─── Lead/Customer Card (detail sidebar) ────────────────────────────────────
 function CustomerCard({ student, parent, group, groups = [], onClose, onStatusChange, onDelete, onUpdateStudent, pricelist, refreshData }) {
   if (!student) return null;
@@ -707,8 +714,18 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
         <div className="card card-p" style={{ marginBottom: 16 }}>
           {showTestForm ? (
             <form onSubmit={handleAddTest} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
-                <select className="input input-sm" style={{ flex: 1, minWidth: 120 }} value={testType} onChange={e => setTestType(e.target.value)}>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <select
+                  className="input input-sm"
+                  style={{
+                    flex: 1, minWidth: 120, fontWeight: 700,
+                    color: TEST_TYPE_COLORS[testType]?.accent,
+                    borderColor: TEST_TYPE_COLORS[testType]?.border,
+                    background: TEST_TYPE_COLORS[testType]?.bg,
+                  }}
+                  value={testType}
+                  onChange={e => setTestType(e.target.value)}
+                >
                   <option value="level">מבחן רמה</option>
                   <option value="security">מבחן אבטחה</option>
                   <option value="lead">מבחן הובלה</option>
@@ -727,18 +744,24 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
                   </>
                 )}
                 {(testType === 'security' || testType === 'lead') && (
-                  <select
-                    className="input input-sm"
-                    style={{ flex: 1.5, minWidth: 140 }}
-                    required
-                    value={testExaminerId}
-                    onChange={e => setTestExaminerId(e.target.value)}
-                  >
-                    {employees.length === 0 && <option value="">אין עובדים</option>}
-                    {employees.map(emp => (
-                      <option key={emp.id} value={emp.id}>{emp.name}</option>
-                    ))}
-                  </select>
+                  <div style={{ flex: 1.5, minWidth: 140 }}>
+                    <label style={{ display: 'block', fontSize: 10, color: 'var(--text-3)', marginBottom: 3, fontWeight: 600 }}>
+                      בוחן
+                    </label>
+                    <select
+                      className="input input-sm"
+                      style={{ width: '100%' }}
+                      required
+                      value={testExaminerId}
+                      onChange={e => setTestExaminerId(e.target.value)}
+                    >
+                      <option value="">בחר בוחן...</option>
+                      {employees.length === 0 && <option value="" disabled>אין עובדים</option>}
+                      {employees.map(emp => (
+                        <option key={emp.id} value={emp.id}>{emp.name}</option>
+                      ))}
+                    </select>
+                  </div>
                 )}
                 <select className="input input-sm" style={{ width: 80 }} value={testPassed ? 'yes' : 'no'} onChange={e => setTestPassed(e.target.value === 'yes')}>
                   <option value="yes">עבר</option>
@@ -776,6 +799,8 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
                 const asLevel = test.test_type === 'level' || test.test_type === 'top-rope';
                 const asSecurity = test.test_type === 'security';
                 const asLeadCert = test.test_type === 'lead';
+                const typeKey = asSecurity ? 'security' : asLeadCert ? 'lead' : 'level';
+                const typeColor = TEST_TYPE_COLORS[typeKey];
                 const routeStyle = test.route_style || (test.test_type === 'top-rope' ? 'top-rope' : null);
                 const routeLabel = routeStyle === 'lead' ? 'הובלה' : routeStyle === 'top-rope' ? 'טופ רופ' : null;
                 let title = 'מבחן';
@@ -784,9 +809,14 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
                 else if (asLeadCert) title = 'מבחן הובלה';
                 const showExaminer = (asSecurity || asLeadCert) && !!test.examiner;
                 return (
-                  <div key={test.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, padding: '4px 0', borderBottom: '1px dotted var(--border)' }}>
+                  <div key={test.id} style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12,
+                    padding: '8px 10px', borderRadius: 8, marginBottom: 4,
+                    background: typeColor.bg, border: `1px solid ${typeColor.border}`,
+                    borderRight: `3px solid ${typeColor.accent}`,
+                  }}>
                     <div>
-                      <strong>{title}</strong>
+                      <strong style={{ color: typeColor.accent }}>{title}</strong>
                       {showExaminer && <div style={{ color: 'var(--text-3)', fontSize: 10 }}>בוחן: {test.examiner}</div>}
                     </div>
                     <div style={{ textAlign: 'left' }}>

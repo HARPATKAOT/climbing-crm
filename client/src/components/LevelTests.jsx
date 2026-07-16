@@ -29,6 +29,12 @@ const TEST_KINDS = [
   { key: 'lead',     label: 'מבחן הובלה' },
 ];
 
+const TEST_TYPE_COLORS = {
+  level:    { accent: '#38BDF8', bg: 'rgba(56,189,248,0.10)', border: 'rgba(56,189,248,0.28)' },
+  security: { accent: '#FBBF24', bg: 'rgba(251,191,36,0.10)', border: 'rgba(251,191,36,0.28)' },
+  lead:     { accent: '#34D399', bg: 'rgba(52,211,153,0.10)', border: 'rgba(52,211,153,0.28)' },
+};
+
 function normalizeTest(t) {
   const studentId = t.studentId || t.climber_id || null;
   const level = t.level || t.grade || null;
@@ -130,7 +136,17 @@ function AddTestModal({ students, groups, employees, onAdd, onClose }) {
 
         <div className="form-group">
           <label className="form-label">סוג מבחן *</label>
-          <select className="input select" value={testType} onChange={e => setTestType(e.target.value)}>
+          <select
+            className="input select"
+            value={testType}
+            onChange={e => setTestType(e.target.value)}
+            style={{
+              fontWeight: 700,
+              color: TEST_TYPE_COLORS[testType]?.accent,
+              borderColor: TEST_TYPE_COLORS[testType]?.border,
+              background: TEST_TYPE_COLORS[testType]?.bg,
+            }}
+          >
             {TEST_KINDS.map(k => (
               <option key={k.key} value={k.key}>{k.label}</option>
             ))}
@@ -168,9 +184,10 @@ function AddTestModal({ students, groups, employees, onAdd, onClose }) {
 
         {(testType === 'security' || testType === 'lead') && (
           <div className="form-group">
-            <label className="form-label">מדריך בוחן *</label>
+            <label className="form-label">בוחן *</label>
             <select className="input select" required value={examinerId} onChange={e => setExaminerId(e.target.value)}>
-              {employees.length === 0 && <option value="">אין עובדים במערכת</option>}
+              <option value="">בחר בוחן...</option>
+              {employees.length === 0 && <option value="" disabled>אין עובדים במערכת</option>}
               {employees.map(emp => (
                 <option key={emp.id} value={emp.id}>{emp.name}</option>
               ))}
@@ -261,6 +278,8 @@ function StudentLevelCard({ student, tests, groups }) {
               const asLevel = t.test_type === 'level' || t.test_type === 'top-rope' || t.test_type === 'top_rope';
               const asSecurity = t.test_type === 'security';
               const asLeadCert = t.test_type === 'lead';
+              const typeKey = asSecurity ? 'security' : asLeadCert ? 'lead' : 'level';
+              const typeColor = TEST_TYPE_COLORS[typeKey];
               const rt = ROUTE_TYPES.find(r => r.key === t.route_style || r.key === t.route_type);
               const statusColor = t.status === 'passed' ? 'var(--green)' : t.status === 'failed' ? 'var(--red)' : 'var(--amber)';
               const statusLabel = t.status === 'passed' ? '✓ עבר' : t.status === 'failed' ? '✗ לא עבר' : '⏳ ממתין';
@@ -273,15 +292,17 @@ function StudentLevelCard({ student, tests, groups }) {
                 <div key={t.id} style={{
                   display: 'flex', gap: 12, alignItems: 'center',
                   padding: '8px 12px', borderRadius: 8,
-                  background: 'rgba(255,255,255,0.02)',
-                  border: '1px solid var(--border)',
+                  background: typeColor.bg,
+                  border: `1px solid ${typeColor.border}`,
+                  borderRight: `3px solid ${typeColor.accent}`,
                 }}>
                   <div style={{
-                    fontSize: 16, fontWeight: 800, color: asLevel && t.grade ? LEVEL_COLOR[t.grade] : 'var(--text-2)',
+                    fontSize: 16, fontWeight: 800,
+                    color: asLevel && t.grade ? LEVEL_COLOR[t.grade] : typeColor.accent,
                     minWidth: 36, textAlign: 'center',
                   }}>{asLevel ? (t.grade || '?') : asSecurity ? 'אב' : 'הו'}</div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: typeColor.accent }}>
                       {title} {t.ceremony && '🏆'}
                     </div>
                     {showExaminer && <div style={{ fontSize: 11, color: 'var(--text-3)' }}>בוחן: {t.examiner}</div>}
@@ -509,6 +530,8 @@ export default function LevelTests({ students, groups }) {
                       const group   = groups.find(g => g.id === student?.groupId);
                       const rt      = ROUTE_TYPES.find(r => r.key === t.route_style || r.key === t.route_type);
                       const asLevel = t.test_type === 'level' || t.test_type === 'top-rope' || t.test_type === 'top_rope';
+                      const typeKey = t.test_type === 'security' ? 'security' : t.test_type === 'lead' ? 'lead' : 'level';
+                      const typeColor = TEST_TYPE_COLORS[typeKey];
                       const kindLabel = asLevel ? 'מבחן רמה' : t.test_type === 'security' ? 'מבחן אבטחה' : t.test_type === 'lead' ? 'מבחן הובלה' : 'מבחן';
                       const details = asLevel
                         ? `${t.grade || '—'}${rt ? ` · ${rt.label}` : ''}`
@@ -517,10 +540,10 @@ export default function LevelTests({ students, groups }) {
                       const statusLabel = t.status === 'passed' ? '✓ עבר' : t.status === 'failed' ? '✗ נכשל' : '⏳ ממתין';
                       const examiner = (t.test_type === 'security' || t.test_type === 'lead') ? (t.examiner || '—') : '—';
                       return (
-                        <tr key={t.id}>
+                        <tr key={t.id} style={{ background: typeColor.bg }}>
                           <td style={{ fontWeight: 700 }}>{student?.name || t.studentName || t.climber_id || '—'}</td>
                           <td style={{ fontSize: 12, color: 'var(--text-3)' }}>{group?.name?.split(' ')[0] || '—'}</td>
-                          <td style={{ fontSize: 13, fontWeight: 600 }}>{kindLabel}</td>
+                          <td style={{ fontSize: 13, fontWeight: 700, color: typeColor.accent }}>{kindLabel}</td>
                           <td>
                             {asLevel ? (
                               <span style={{
