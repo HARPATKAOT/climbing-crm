@@ -227,28 +227,39 @@ export const whatsappService = {
   }
 };
 
+function getInstagramToken() {
+  const settings = db.getSettings();
+  const token = settings.metaIgAccessToken || process.env.INSTAGRAM_ACCESS_TOKEN || '';
+  if (!token || token.includes('YOUR_')) return '';
+  return token;
+}
+
 // Call Meta Instagram Graph API
+// Instagram Login tokens (IGAAT…) must use graph.instagram.com/me/messages.
+// Page tokens use graph.facebook.com/{ig-user-id}/messages.
 async function callMetaInstagramAPI(recipientId, text) {
   const settings = db.getSettings();
-  const accountId = settings.metaIgAccountId || process.env.META_IG_ACCOUNT_ID || 'me';
-  const token = settings.metaIgAccessToken || process.env.INSTAGRAM_ACCESS_TOKEN;
+  const token = getInstagramToken();
 
-  if (!token || token.includes('YOUR_')) {
+  if (!token) {
     console.log(`[Instagram Mock Mode] Sending to ${recipientId}: "${text}"`);
     return { mock: true, status: 'sent', messageId: `mock_ig_${Date.now()}` };
   }
 
-  const url = `https://graph.facebook.com/v20.0/${accountId}/messages`;
+  const isIgLoginToken = token.startsWith('IGAAT') || token.startsWith('IGAA');
+  const accountId = settings.metaIgAccountId || process.env.META_IG_ACCOUNT_ID || 'me';
+  const url = isIgLoginToken
+    ? 'https://graph.instagram.com/v20.0/me/messages'
+    : `https://graph.facebook.com/v20.0/${accountId}/messages`;
+
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         recipient: { id: recipientId },
-        message: { text }
+        message: { text },
+        access_token: token
       })
     });
 
@@ -306,7 +317,9 @@ export const instagramService = {
     const settings = db.getSettings();
     if (settings.aiResponderEnabled) {
       const aiReply = await whatsappService.generateAIResponse(text);
-      if (isSimulator || !settings.metaIgAccessToken || settings.metaIgAccessToken.includes('YOUR_')) {
+      const hasRealToken = !!getInstagramToken();
+      if (isSimulator || !hasRealToken) {
+        // Simulator / missing token: log locally only (no Meta call)
         db.insert('whatsapp_logs', {
           phone: igId,
           channel: 'instagram',
@@ -316,7 +329,10 @@ export const instagramService = {
           is_ai: true
         });
       } else {
-        await instagramService.sendTextMessage(igId, aiReply, true);
+        const sendResult = await instagramService.sendTextMessage(igId, aiReply, true);
+        if (!sendResult.success) {
+          console.error('❌ Instagram AI reply failed to deliver:', sendResult.error);
+        }
       }
       return { parent, student, isNew, replied: true, reply: aiReply };
     }
