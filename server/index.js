@@ -1378,6 +1378,18 @@ app.get('/api/payments', async (req, res) => {
 
 app.post('/api/icount/webhook', async (req, res) => {
   try {
+    const expectedSecret = (process.env.ICOUNT_WEBHOOK_SECRET || '').trim();
+    if (expectedSecret) {
+      const incoming =
+        req.get('X-iCount-Secret') ||
+        req.get('x-icount-secret') ||
+        '';
+      if (String(incoming) !== expectedSecret) {
+        console.warn('⛔ [iCount webhook] rejected — bad or missing secret header');
+        return res.status(401).json({ ok: false, error: 'unauthorized' });
+      }
+    }
+
     const payload = req.body || {};
     console.log('📩 [iCount webhook] document event received');
 
