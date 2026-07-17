@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Calendar, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, MessageCircle, Bell, FileCheck2, ExternalLink, Download } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Calendar, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, MessageCircle, Bell, FileCheck2, ExternalLink, Download, ReceiptText } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
 import { downloadHealthDeclarationPdf } from '../utils/healthDeclarationPdf.js';
@@ -223,8 +223,10 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
   const [billDescription, setBillDescription] = useState('');
   const [selectedPricelistItem, setSelectedPricelistItem] = useState('');
   const [billingLoading, setBillingLoading] = useState(false);
+  const [invoiceLoading, setInvoiceLoading] = useState(false);
   const [billingLink, setBillingLink] = useState('');
-  const [showReceiptPreview, setShowReceiptPreview] = useState(false);
+  const [lastInvoice, setLastInvoice] = useState(null);
+  const [studentPayments, setStudentPayments] = useState([]);
 
   // Level Test Fields
   const [testLevel, setTestLevel] = useState('5A');
@@ -348,33 +350,115 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
     }
   };
 
+  const loadStudentPayments = async () => {
+    try {
+      const qs = parent?.id
+        ? `parentId=${encodeURIComponent(parent.id)}`
+        : `studentId=${encodeURIComponent(student.id)}`;
+      const res = await fetch(`/api/payments?${qs}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : [];
+      setStudentPayments(
+        list.filter(
+          (p) =>
+            p.student_id === student.id ||
+            (parent?.id && p.parent_id === parent.id)
+        )
+      );
+    } catch (err) {
+      console.error('Failed to load payments:', err);
+    }
+  };
+
+  useEffect(() => {
+    loadStudentPayments();
+  }, [student.id, parent?.id]);
+
   const handleSendPayment = async (e) => {
     e.preventDefault();
     if (!billAmount || !billDescription) return;
     setBillingLoading(true);
     setBillingLink('');
+    setLastInvoice(null);
     try {
       const response = await fetch('/api/checkout/payment-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           studentId: student.id,
+          parentId: parent?.id,
           studentName: student.name,
           amount: parseFloat(billAmount),
           description: billDescription,
           phone: parent?.phone
         })
       });
+      const resData = await response.json().catch(() => ({}));
       if (response.ok) {
-        const resData = await response.json();
-        setBillingLink(resData.paymentUrl);
-        alert('דרישת תשלום הופקה ונשלחה ללקוח בוואטסאפ בהצלחה!');
+        setBillingLink(resData.paymentUrl || '');
+        await loadStudentPayments();
+        const waNote = resData.whatsappSent ? ' ונשלחה בוואטסאפ' : ' (וואטסאפ לא נשלח — בדוק מספר/חיבור)';
+        alert(`דרישת תשלום נוצרה${waNote}`);
+        if (resData.syncWarning) {
+          console.warn('iCount sync warning:', resData.syncWarning);
+        }
+      } else {
+        alert(resData.error || 'שגיאה ביצירת דרישת התשלום');
       }
     } catch (err) {
       console.error('Payment request error:', err);
       alert('שגיאה ביצירת דרישת התשלום');
     } finally {
       setBillingLoading(false);
+    }
+  };
+
+  const handleCreateInvoice = async () => {
+    if (!billAmount || !billDescription) {
+      alert('מלא תיאור וסכום לפני הפקת חשבונית');
+      return;
+    }
+    if (!confirm(`להפיק חשבונית מס קבלה על ₪${billAmount} ל-${parent?.name || student.name}?`)) {
+      return;
+    }
+    setInvoiceLoading(true);
+    setLastInvoice(null);
+    try {
+      const response = await fetch('/api/icount/invoice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parentId: parent?.id,
+          studentId: student.id,
+          studentName: student.name,
+          amount: parseFloat(billAmount),
+          description: billDescription,
+          phone: parent?.phone,
+        }),
+      });
+      const resData = await response.json().catch(() => ({}));
+      if (response.ok) {
+        setLastInvoice({
+          docNumber: resData.docNumber,
+          docId: resData.docId,
+          amount: billAmount,
+          description: billDescription,
+        });
+        await loadStudentPayments();
+        alert(
+          resData.docNumber
+            ? `חשבונית מס קבלה הופקה בהצלחה (מס׳ ${resData.docNumber})`
+            : 'חשבונית הופקה בהצלחה'
+        );
+      } else {
+        alert(resData.error || 'שגיאה בהפקת חשבונית');
+      }
+    } catch (err) {
+      console.error('Invoice error:', err);
+      alert('שגיאה בהפקת חשבונית');
+    } finally {
+      setInvoiceLoading(false);
     }
   };
 
@@ -646,7 +730,7 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
         {/* iCount payment checkout generator */}
         <div className="section-header">
           <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <CreditCard size={15} /> דרישת תשלום iCount
+            <CreditCard size={15} /> דרישת תשלום / חשבונית
           </div>
         </div>
         <div className="card card-p" style={{ marginBottom: 16 }}>
@@ -683,24 +767,63 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
                 />
               </div>
             </div>
-            <button type="submit" disabled={billingLoading} className="btn btn-primary btn-sm w-full" style={{ justifyContent: 'center', gap: 8 }}>
-              <Send size={13} /> {billingLoading ? 'מייצר דף סליקה...' : 'שלח קישור סליקה בוואטסאפ'}
-            </button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <button type="submit" disabled={billingLoading || invoiceLoading} className="btn btn-primary btn-sm w-full" style={{ justifyContent: 'center', gap: 8 }}>
+                <Send size={13} /> {billingLoading ? 'מייצר קישור...' : 'שלח קישור סליקה בוואטסאפ'}
+              </button>
+              <button
+                type="button"
+                disabled={billingLoading || invoiceLoading}
+                className="btn btn-ghost btn-sm w-full"
+                style={{ justifyContent: 'center', gap: 8 }}
+                onClick={handleCreateInvoice}
+              >
+                <ReceiptText size={13} /> {invoiceLoading ? 'מפיק חשבונית...' : 'הפק חשבונית מס קבלה עכשיו'}
+              </button>
+            </div>
           </form>
           {billingLink && (
-            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div style={{ padding: 8, background: '#1F2937', borderRadius: 6, fontSize: 12, wordBreak: 'break-all' }}>
-                <strong>קישור לתשלום:</strong><br />
-                <a href={billingLink} target="_blank" rel="noreferrer" style={{ color: 'var(--blue)' }}>{billingLink}</a>
+            <div style={{ marginTop: 10, padding: 8, background: '#1F2937', borderRadius: 6, fontSize: 12, wordBreak: 'break-all' }}>
+              <strong>קישור לתשלום:</strong><br />
+              <a href={billingLink} target="_blank" rel="noreferrer" style={{ color: 'var(--blue)' }}>{billingLink}</a>
+            </div>
+          )}
+          {lastInvoice && (
+            <div className="alert alert-success" style={{ marginTop: 10, fontSize: 12 }}>
+              חשבונית הופקה
+              {lastInvoice.docNumber ? ` · מס׳ ${lastInvoice.docNumber}` : ''}
+              {' '}· ₪{lastInvoice.amount} · {lastInvoice.description}
+            </div>
+          )}
+          {studentPayments.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>היסטוריית תשלומים</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {studentPayments.slice(0, 8).map((p) => (
+                  <div
+                    key={p.id}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      fontSize: 12,
+                      padding: '6px 0',
+                      borderBottom: '1px solid var(--border)',
+                    }}
+                  >
+                    <span style={{ color: 'var(--text-2)' }}>
+                      {p.description}
+                      {p.icount_doc_number ? ` · מס׳ ${p.icount_doc_number}` : ''}
+                    </span>
+                    <span>
+                      ₪{Number(p.amount).toLocaleString()}{' '}
+                      <span className={p.status === 'paid' ? 'badge badge-green' : 'badge badge-amber'}>
+                        {p.status === 'paid' ? 'שולם' : p.status === 'pending' ? 'ממתין' : p.status}
+                      </span>
+                    </span>
+                  </div>
+                ))}
               </div>
-              <button 
-                type="button" 
-                className="btn btn-ghost btn-sm btn-full"
-                onClick={() => setShowReceiptPreview(true)}
-                style={{ fontSize: 11, paddingBlock: 4 }}
-              >
-                🧾 הצג תצוגה מקדימה של חשבונית מס
-              </button>
             </div>
           )}
         </div>
@@ -974,70 +1097,6 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
           </button>
         </div>
       </div>
-
-      {showReceiptPreview && (
-        <Modal title="תצוגה מקדימה: חשבונית מס קבלה ממוחשבת" onClose={() => setShowReceiptPreview(false)}>
-          <div style={{ padding: 16, background: '#FFFFFF', color: '#111827', direction: 'rtl', borderRadius: 8, fontFamily: 'sans-serif' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '2px solid #111827', paddingBottom: 10 }}>
-              <div>
-                <h2 style={{ margin: 0, fontWeight: 'bold', fontSize: 16, color: '#111827' }}>My Wall קיר טיפוס ירושלים בע"מ</h2>
-                <div style={{ fontSize: 10, color: '#4B5563', marginTop: 2 }}>ח.פ. 516382947 · דרך חברון 101, ירושלים</div>
-                <div style={{ fontSize: 10, color: '#4B5563' }}>טלפון: 02-5558839 · billing@mywall.co.il</div>
-              </div>
-              <div style={{ textAlign: 'left' }}>
-                <h3 style={{ margin: 0, color: '#111827', fontSize: 14, fontWeight: 'bold' }}>חשבונית מס קבלה מס׳ {10243 + student.name.charCodeAt(0)}</h3>
-                <div style={{ fontSize: 10, marginTop: 4, color: '#4B5563' }}>תאריך הפקה: {new Date().toLocaleDateString('he-IL')}</div>
-                <div style={{ fontSize: 10, color: '#10B981', fontWeight: 'bold' }}>שולם בביטחה ב-iCount ✓</div>
-              </div>
-            </div>
-            
-            <div style={{ marginBlock: 12, fontSize: 11, color: '#111827' }}>
-              <div><strong>לכבוד:</strong> {parent?.name || 'לקוח קיר'}</div>
-              <div><strong>מתאמן משויך:</strong> {student.name}</div>
-              {parent?.email && <div><strong>דוא"ל לקוח:</strong> {parent.email}</div>}
-              <div><strong>טלפון:</strong> {parent?.phone}</div>
-            </div>
-
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, marginBottom: 15, color: '#111827' }}>
-              <thead>
-                <tr style={{ background: '#F3F4F6', borderBottom: '1px solid #D1D5DB' }}>
-                  <th style={{ textAlign: 'right', padding: 6 }}>תיאור פריט / שירות</th>
-                  <th style={{ textAlign: 'center', padding: 6 }}>כמות</th>
-                  <th style={{ textAlign: 'left', padding: 6 }}>מחיר יחידה</th>
-                  <th style={{ textAlign: 'left', padding: 6 }}>סה"כ לתשלום</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
-                  <td style={{ padding: 6 }}>{billDescription}</td>
-                  <td style={{ textAlign: 'center', padding: 6 }}>1</td>
-                  <td style={{ textAlign: 'left', padding: 6 }}>₪{(parseFloat(billAmount) / 1.17).toFixed(2)}</td>
-                  <td style={{ textAlign: 'left', padding: 6 }}>₪{(parseFloat(billAmount) / 1.17).toFixed(2)}</td>
-                </tr>
-              </tbody>
-            </table>
-
-            <div style={{ width: '180px', marginRight: 'auto', fontSize: 10, borderTop: '1px solid #111827', paddingTop: 6, color: '#111827' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
-                <span>סה"כ ללא מע"מ:</span>
-                <span>₪{(parseFloat(billAmount) / 1.17).toFixed(2)}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
-                <span>מע"מ (17%):</span>
-                <span>₪{(parseFloat(billAmount) - (parseFloat(billAmount) / 1.17)).toFixed(2)}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: 12, borderTop: '1px dotted #D1D5DB', paddingTop: 2 }}>
-                <span>סה"כ לתשלום:</span>
-                <span>₪{parseFloat(billAmount).toFixed(2)}</span>
-              </div>
-            </div>
-
-            <div style={{ borderTop: '1px solid #D1D5DB', marginTop: 16, paddingTop: 8, textAlign: 'center', fontSize: 9, color: '#6B7280' }}>
-              מסמך ממוחשב זה חתום דיגיטלית ונשלח בביטחה בחיבור API מאושר למס הכנסה. תודה על תמיכתכם בקיר הטיפוס!🧗
-            </div>
-          </div>
-        </Modal>
-      )}
 
       {isEditing && (
         <Modal title={`עריכת פרטי ליד: ${student.name}`} onClose={() => setIsEditing(false)}

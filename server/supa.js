@@ -61,6 +61,7 @@ const mappers = {
       instagram_id: r.instagram_id || undefined,
       channel: r.channel || undefined,
       notes: r.notes || '',
+      icount_client_id: r.icount_client_id || undefined,
     }),
     toRow: (o) => ({
       id: o.id,
@@ -72,6 +73,7 @@ const mappers = {
       instagram_id: emptyToNull(o.instagram_id),
       channel: emptyToNull(o.channel),
       notes: o.notes || '',
+      icount_client_id: emptyToNull(o.icount_client_id),
     }),
   },
 
