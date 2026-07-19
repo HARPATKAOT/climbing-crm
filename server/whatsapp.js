@@ -8,8 +8,9 @@ function formatWaPhone(phone) {
 // Call Meta WhatsApp Cloud API
 async function callMetaWhatsAppAPI(phone, payload) {
   const settings = db.getSettings();
-  const phoneId = settings.metaWaPhoneId || process.env.META_WA_PHONE_NUMBER_ID;
-  const token = settings.metaWaAccessToken || process.env.META_WA_ACCESS_TOKEN;
+  // Prefer server env vars — committed/local settings may contain stale credentials.
+  const phoneId = String(process.env.META_WA_PHONE_NUMBER_ID || settings.metaWaPhoneId || '').trim();
+  const token = String(process.env.META_WA_ACCESS_TOKEN || settings.metaWaAccessToken || '').trim();
 
   if (!phoneId || phoneId.includes('YOUR_PHONE_NUMBER_ID') || !token || token.includes('YOUR_META_WA_ACCESS_TOKEN')) {
     console.log(`[WhatsApp Mock Mode] Sending to ${phone}:`, JSON.stringify(payload, null, 2));
@@ -18,7 +19,7 @@ async function callMetaWhatsAppAPI(phone, payload) {
 
   const formattedPhone = formatWaPhone(phone);
 
-  const url = `https://graph.facebook.com/v20.0/${phoneId}/messages`;
+  const url = `https://graph.facebook.com/v25.0/${phoneId}/messages`;
   try {
     const response = await fetch(url, {
       method: 'POST',
