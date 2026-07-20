@@ -1,5 +1,6 @@
 import { db } from './db.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
+import { buildTemplateParameters } from './channels/templates.js';
 
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v25.0';
 
@@ -379,22 +380,43 @@ export const whatsappService = {
   },
 
   // Send a template message
-  sendTemplateMessage: async (phone, templateName, variables = []) => {
+  // Send a template message
+  sendTemplateMessage: async (phone, templateName, variables = [], options = {}) => {
     try {
-      const isEnglishTemplate = ['hello_world', 'jaspers_market_order_confirmation'].includes(templateName);
+      const localTpl = (db.get('message_templates') || []).find(
+        (t) => (t.meta_name || t.name) === templateName
+      );
+      const isEnglishTemplate = ['hello_world', 'jaspers_market_order_confirmation'].includes(templateName)
+        || String(localTpl?.language || '').toLowerCase().startsWith('en');
+      const language = options.language
+        || localTpl?.language
+        || (isEnglishTemplate ? 'en_US' : 'he');
       const payload = {
         type: 'template',
         template: {
           name: templateName,
-          language: { code: isEnglishTemplate ? 'en_US' : 'he' }
+          language: { code: language }
         }
       };
 
-      if (variables.length > 0) {
+      const parameters = buildTemplateParameters(
+        localTpl || { body: '' },
+        Array.isArray(variables) ? variables : [],
+        options.fallbackName || ''
+      );
+      // If no local template metadata, only send params when explicitly provided
+      // and non-empty — avoids #132000 on zero-param templates.
+      const finalParams = localTpl
+        ? parameters
+        : (Array.isArray(variables) && variables.length
+          ? variables.map((v) => ({ type: 'text', text: String(v) }))
+          : []);
+
+      if (finalParams.length > 0) {
         payload.template.components = [
           {
             type: 'body',
-            parameters: variables.map(v => ({ type: 'text', text: String(v) }))
+            parameters: finalParams,
           }
         ];
       }
@@ -403,7 +425,14 @@ export const whatsappService = {
 
       // Render simple text preview for logs
       let logMessage = `[תבנית: ${templateName}]`;
-      if (templateName === 't1') logMessage = `שלום! ברוכים הבאים לקיר הטיפוס My Wall 🧗‍♂️`;
+      if (localTpl?.body) {
+        let preview = localTpl.body;
+        finalParams.forEach((p, i) => {
+          const key = p.parameter_name || String(i + 1);
+          preview = preview.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), p.text);
+        });
+        logMessage = preview;
+      } else if (templateName === 't1') logMessage = `שלום! ברוכים הבאים לקיר הטיפוס My Wall 🧗‍♂️`;
       else if (templateName === 't2') logMessage = `שלום, בבקשה מלאו את הצהרת הבריאות לפני הגעתכם: https://mywall.co.il/health`;
       else if (templateName === 't3') logMessage = `שלום, תזכורת: שיעור שלכם מחר. נתראה!`;
       else if (templateName === 't4') logMessage = `שלום, לסיום תהליך הרשמה בבקשה שלמו את אימון ההכירות בקליק: https://checkout.icount.co.il/mywall`;
@@ -417,9 +446,10 @@ export const whatsappService = {
         template_id: templateName,
         source: 'crm',
         meta_message_id: result.messageId || null,
+        parent_id: options.parentId || null,
       });
 
-      return { success: true, message: logMessage };
+      return { success: true, message: logMessage, messageId: result.messageId || null };
     } catch (error) {
       db.insert('whatsapp_logs', {
         phone: formatWaPhone(phone) || phone,
@@ -429,7 +459,36 @@ export const whatsappService = {
         status: 'failed',
         template_id: templateName,
         source: 'crm',
+        parent_id: options.parentId || null,
       });
+      return { success: false, error: error.message };
+    }
+  },
+
+  sendImageMessage: async (phone, mediaId, caption = '', options = {}) => {
+    try {
+      const result = await callMetaWhatsAppAPI(phone, {
+        type: 'image',
+        image: {
+          id: mediaId,
+          ...(caption ? { caption } : {}),
+        },
+      });
+      const logMessage = caption ? `📷 ${caption}` : '📷 תמונה';
+      db.insert('whatsapp_logs', {
+        phone: formatWaPhone(phone) || phone,
+        channel: 'whatsapp',
+        direction: 'outbound',
+        message: logMessage,
+        status: result.mock ? 'sent' : 'delivered',
+        source: 'crm',
+        meta_message_id: result.messageId || null,
+        message_type: 'image',
+        media_url: mediaId,
+        parent_id: options.parentId || null,
+      });
+      return { success: true, message: logMessage, messageId: result.messageId || null };
+    } catch (error) {
       return { success: false, error: error.message };
     }
   },
@@ -471,6 +530,14 @@ export const whatsappService = {
 
     // 2. Upsert lead / client details in DB (source=whatsapp, status=lead_new)
     const { parent, student, isNew } = db.createLeadFromWhatsApp(normalizedPhone, text);
+
+    // Open / refresh 24h customer care window
+    if (parent?.id) {
+      db.update('parents', parent.id, {
+        last_inbound_whatsapp: new Date().toISOString(),
+        channel: parent.channel || 'whatsapp',
+      });
+    }
 
     // 3. Welcome template t1 for brand-new WhatsApp leads
     if (isNew) {
@@ -677,6 +744,13 @@ export const instagramService = {
 
     // 2. Upsert lead / client details in DB
     const { parent, student, isNew } = db.createLeadFromInstagram(igId, text, name);
+
+    if (parent?.id) {
+      db.update('parents', parent.id, {
+        last_inbound_instagram: new Date().toISOString(),
+        channel: parent.channel || 'instagram',
+      });
+    }
 
     // 3. Process AI automated reply if active (schedule applies to live traffic)
     const settings = db.getSettings();

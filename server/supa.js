@@ -39,6 +39,12 @@ const DIRECT_TABLES = [
   'activity_registrations',
   'health_declarations',
   'form_templates',
+  'messages',
+  'message_templates',
+  'saved_replies',
+  'saved_segments',
+  'broadcast_jobs',
+  'broadcast_recipients',
 ];
 
 export const OPERATIONAL_TABLES = [
@@ -78,7 +84,13 @@ const mappers = {
       city: r.city || '',
       source: r.source || 'unknown',
       instagram_id: r.instagram_id || undefined,
+      messenger_psid: r.messenger_psid || undefined,
       channel: r.channel || undefined,
+      gender: r.gender || '',
+      marketing_opt_in: r.marketing_opt_in !== false,
+      last_inbound_whatsapp: r.last_inbound_whatsapp || null,
+      last_inbound_instagram: r.last_inbound_instagram || null,
+      last_inbound_messenger: r.last_inbound_messenger || null,
       notes: r.notes || '',
       icount_client_id: r.icount_client_id || undefined,
     }),
@@ -90,7 +102,13 @@ const mappers = {
       city: o.city || '',
       source: o.source || 'unknown',
       instagram_id: emptyToNull(o.instagram_id),
+      messenger_psid: emptyToNull(o.messenger_psid),
       channel: emptyToNull(o.channel),
+      gender: emptyToNull(o.gender),
+      marketing_opt_in: o.marketing_opt_in !== false,
+      last_inbound_whatsapp: emptyToNull(o.last_inbound_whatsapp),
+      last_inbound_instagram: emptyToNull(o.last_inbound_instagram),
+      last_inbound_messenger: emptyToNull(o.last_inbound_messenger),
       notes: o.notes || '',
       icount_client_id: emptyToNull(o.icount_client_id),
     }),
@@ -104,6 +122,8 @@ const mappers = {
       groupId: r.group_id || null,
       status: r.status || 'lead_new',
       birthDate: r.birth_date || '',
+      gender: r.gender || '',
+      interests: Array.isArray(r.interests) ? r.interests : [],
       levelGrade: r.level_grade || null,
       source: r.source || 'unknown',
       segment: r.segment || null,
@@ -121,6 +141,8 @@ const mappers = {
       group_id: emptyToNull(o.groupId),
       status: o.status || 'lead_new',
       birth_date: emptyToNull(o.birthDate),
+      gender: emptyToNull(o.gender),
+      interests: Array.isArray(o.interests) ? o.interests : [],
       level_grade: emptyToNull(o.levelGrade),
       source: o.source || 'unknown',
       segment: emptyToNull(o.segment),
@@ -272,6 +294,32 @@ mappers.form_templates = {
     is_active: o.isActive !== false && o.is_active !== false,
   }),
 };
+
+mappers.messages = columnMapper([
+  'id', 'parent_id', 'channel', 'direction', 'message', 'media_url', 'media_type',
+  'template_name', 'status', 'source', 'is_ai', 'meta_message_id', 'phone', 'recipient_id',
+  'created_at', 'updated_at',
+]);
+mappers.message_templates = columnMapper([
+  'id', 'name', 'meta_name', 'language', 'category', 'status', 'body', 'header', 'footer',
+  'variables', 'buttons', 'meta_id', 'rejection_reason', 'active_for_send',
+  'created_at', 'updated_at',
+]);
+mappers.saved_replies = columnMapper([
+  'id', 'name', 'body', 'sort_order', 'created_at', 'updated_at',
+]);
+mappers.saved_segments = columnMapper([
+  'id', 'name', 'filters', 'created_at', 'updated_at',
+]);
+mappers.broadcast_jobs = columnMapper([
+  'id', 'campaign_name', 'list_name', 'template_name', 'message_text', 'filters',
+  'recipient_count', 'sent_count', 'failed_count', 'status', 'notes',
+  'created_at', 'updated_at',
+]);
+mappers.broadcast_recipients = columnMapper([
+  'id', 'job_id', 'parent_id', 'phone', 'name', 'status', 'error',
+  'meta_message_id', 'sent_at', 'created_at',
+]);
 
 const identityMapper = { fromRow: (r) => r, toRow: (o) => o };
 const mapperFor = (table) => mappers[table] || identityMapper;

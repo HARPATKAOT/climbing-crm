@@ -339,7 +339,7 @@ export default function App() {
           {page === 'checkin'    && <CheckInConsole students={students} groups={groups} />}
           {page === 'leads'      && <Leads students={students} setStudents={setStudents} parents={parents} setParents={setParents} groups={groups} canManageBilling={isOwner} />}
           {page === 'schedule'   && <Schedule groups={groups} students={students} parents={parents} setGroups={setGroups} setStudents={setStudents} />}
-          {page === 'broadcasts' && <Broadcasts parents={parents} students={students} />}
+          {page === 'broadcasts' && <Broadcasts parents={parents} students={students} groups={groups} />}
           {page === 'cash'       && <CashRegister />}
           {page === 'pricelist'  && <Pricelist />}
           {page === 'safety'     && <Safety />}

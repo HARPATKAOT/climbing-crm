@@ -342,15 +342,18 @@ export default function Employees() {
 
   const refreshData = async () => {
     try {
-      const emps = await fetch('/api/employees').then(r => r.json());
-      const wgs = await fetch('/api/wages').then(r => r.json());
-      const sfts = await fetch('/api/shifts').then(r => r.json());
-      
-      setEmployees(emps);
-      setWages(wgs);
-      setShifts(sfts);
+      const emps = await fetch('/api/employees').then(r => r.json()).catch(() => null);
+      const wgs = await fetch('/api/wages').then(r => r.json()).catch(() => null);
+      const sfts = await fetch('/api/shifts').then(r => r.json()).catch(() => null);
+
+      setEmployees(Array.isArray(emps) ? emps : []);
+      setWages(Array.isArray(wgs) ? wgs : []);
+      setShifts(Array.isArray(sfts) ? sfts : []);
     } catch (err) {
       console.error('Failed to fetch staff data:', err);
+      setEmployees([]);
+      setWages([]);
+      setShifts([]);
     }
   };
 

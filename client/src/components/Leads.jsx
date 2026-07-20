@@ -3,6 +3,7 @@ import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, Credi
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
 import { downloadHealthDeclarationPdf } from '../utils/healthDeclarationPdf.js';
+import ConversationPanel from './ConversationPanel.jsx';
 
 // Normalize phone for comparison (supports 05X ↔ 9725X)
 const normPhone = (p) => {
@@ -65,75 +66,6 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
   const [editEmail, setEditEmail] = useState(parent?.email || '');
   const [editCity, setEditCity] = useState(parent?.city || '');
   const [editSource, setEditSource] = useState(parent?.source || student.source || 'unknown');
-
-  // WhatsApp thread (bidirectional chat)
-  const [messages, setMessages] = useState([]);
-  const [replyText, setReplyText] = useState('');
-  const [sendingReply, setSendingReply] = useState(false);
-  const [replyError, setReplyError] = useState('');
-  const chatEndRef = useRef(null);
-
-  const loadThread = async () => {
-    if (!parent?.phone) { setMessages([]); return; }
-    try {
-      const res = await fetch(`/api/whatsapp/thread/${encodeURIComponent(parent.phone)}`);
-      if (res.ok) {
-        const logs = await res.json();
-        setMessages(logs || []);
-        return;
-      }
-      // Fallback: filter full logs client-side
-      const allRes = await fetch('/api/whatsapp/logs');
-      const logs = allRes.ok ? await allRes.json() : [];
-      const mine = (logs || [])
-        .filter(l => phoneTailMatch(l.to || l.phone || l.recipient || l.from, parent.phone))
-        .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
-      setMessages(mine);
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  useEffect(() => {
-    loadThread();
-    if (!parent?.phone) return undefined;
-    const timer = setInterval(loadThread, 5000);
-    return () => clearInterval(timer);
-  }, [parent?.id, parent?.phone]);
-
-  useEffect(() => {
-    if (chatEndRef.current) {
-      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages.length]);
-
-  const handleSendReply = async (e) => {
-    e?.preventDefault?.();
-    if (!parent?.phone || !replyText.trim() || sendingReply) return;
-    setSendingReply(true);
-    setReplyError('');
-    const text = replyText.trim();
-    setReplyText('');
-    try {
-      const res = await fetch('/api/whatsapp/reply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: parent.phone, message: text }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.success) {
-        setReplyError(data.error || 'שליחה נכשלה');
-        setReplyText(text);
-      } else {
-        await loadThread();
-      }
-    } catch {
-      setReplyError('שגיאת רשת בשליחה');
-      setReplyText(text);
-    } finally {
-      setSendingReply(false);
-    }
-  };
 
   // Health declaration + waiver status for this student
   const [healthDecl, setHealthDecl] = useState(null);
@@ -1060,84 +992,8 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
           </div>
         </div>
 
-        {/* WhatsApp conversation (bidirectional) */}
-        <div className="section-header">
-          <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <MessageCircle size={15} /> שיחת WhatsApp
-          </div>
-        </div>
-        <div className="card card-p" style={{ marginBottom: 20, padding: 0, overflow: 'hidden' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', maxHeight: 320 }}>
-            <div style={{ flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8, minHeight: 140 }}>
-              {!parent?.phone ? (
-                <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center', marginTop: 20 }}>אין מספר טלפון ללקוח זה</div>
-              ) : messages.length === 0 ? (
-                <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center', marginTop: 20 }}>עדיין אין הודעות מתועדות. שלחו הודעה או המתינו לפנייה מהלקוח.</div>
-              ) : (
-                messages.map((m, i) => {
-                  const inbound = m.direction === 'inbound';
-                  return (
-                    <div
-                      key={m.id || i}
-                      style={{
-                        alignSelf: inbound ? 'flex-start' : 'flex-end',
-                        maxWidth: '88%',
-                        fontSize: 12,
-                        padding: '8px 10px',
-                        borderRadius: 12,
-                        background: inbound ? 'rgba(255,255,255,0.04)' : 'rgba(37,211,102,0.14)',
-                        border: '1px solid var(--border)',
-                      }}
-                    >
-                      <div style={{ color: 'var(--text-1)', whiteSpace: 'pre-wrap' }}>
-                        {m.body || m.message || m.text || '(ללא תוכן)'}
-                      </div>
-                      <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        <span>{sourceLabel(m)}</span>
-                        <span>·</span>
-                        <span>{m.created_at ? new Date(m.created_at).toLocaleString('he-IL') : ''}</span>
-                        {m.status ? <span>· {m.status}</span> : null}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-              <div ref={chatEndRef} />
-            </div>
-
-            <form
-              onSubmit={handleSendReply}
-              style={{
-                display: 'flex',
-                gap: 8,
-                padding: 10,
-                borderTop: '1px solid var(--border)',
-                background: 'rgba(0,0,0,0.15)',
-              }}
-            >
-              <input
-                className="input input-sm"
-                style={{ flex: 1 }}
-                placeholder={parent?.phone ? 'כתבו תשובה ללקוח...' : 'חסר מספר טלפון'}
-                value={replyText}
-                onChange={e => setReplyText(e.target.value)}
-                disabled={!parent?.phone || sendingReply}
-              />
-              <button
-                type="submit"
-                className="btn btn-primary btn-sm"
-                disabled={!parent?.phone || sendingReply || !replyText.trim()}
-                style={{ gap: 4 }}
-              >
-                <Send size={13} />
-                {sendingReply ? 'שולח...' : 'שלח'}
-              </button>
-            </form>
-            {replyError && (
-              <div style={{ fontSize: 11, color: '#F87171', padding: '0 10px 8px' }}>{replyError}</div>
-            )}
-          </div>
-        </div>
+        {/* Unified multi-channel conversation */}
+        <ConversationPanel parent={parent} student={student} />
 
         </>}
 
@@ -1318,10 +1174,8 @@ function AddLeadModal({ students, parents, onAdd, onClose }) {
     if (!parentName || !phone) return;
     
     let finalChildren = children.map(c => c.trim()).filter(Boolean);
-    if (isAdult) {
+    if (isAdult || finalChildren.length === 0) {
       finalChildren = [parentName.trim()];
-    } else if (finalChildren.length === 0) {
-      return;
     }
 
     onAdd({ parentName: parentName.trim(), phone: phone.trim(), email: email.trim(), city: city.trim(), source, children: finalChildren });
@@ -1375,14 +1229,14 @@ function AddLeadModal({ students, parents, onAdd, onClose }) {
         {!isAdult && (
           <div className="form-group">
             <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>שמות הילדים *</span>
+              <span>שמות הילדים (לא חובה)</span>
               <button type="button" className="btn btn-ghost btn-xs" onClick={() => setChildren([...children, ''])}>
                 <PlusCircle size={13} /> הוסף ילד
               </button>
             </label>
             {children.map((c, i) => (
               <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                <input className="input" placeholder={`שם הילד ${i + 1}`} required value={c} onChange={e => updateChild(i, e.target.value)} />
+                <input className="input" placeholder={`שם הילד ${i + 1}`} value={c} onChange={e => updateChild(i, e.target.value)} />
                 {children.length > 1 && (
                   <button type="button" className="btn btn-danger btn-icon btn-sm" onClick={() => {
                     const next = children.filter((_, j) => j !== i); setChildren(next); checkDuplicates(next, phone);

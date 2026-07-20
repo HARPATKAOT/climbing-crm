@@ -25,7 +25,17 @@ function AutomationModal({ automation, onSave, onClose }) {
   const [triggerCondition, setTriggerCondition] = useState(automation?.trigger_condition || '');
   const [actionType, setActionType] = useState(automation?.action_type || 'send_whatsapp');
   const [message, setMessage] = useState(automation?.action_payload?.message || '');
+  const [templateName, setTemplateName] = useState(automation?.action_payload?.templateName || '');
+  const [preferTemplate, setPreferTemplate] = useState(!!automation?.action_payload?.preferTemplate);
+  const [templates, setTemplates] = useState([]);
   const [isActive, setIsActive] = useState(automation?.is_active ?? true);
+
+  useEffect(() => {
+    fetch('/api/message-templates?approved=1')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setTemplates(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  }, []);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -37,7 +47,11 @@ function AutomationModal({ automation, onSave, onClose }) {
       trigger_event: triggerEvent,
       trigger_condition: triggerEvent === 'status_changed' ? triggerCondition : null,
       action_type: actionType,
-      action_payload: { message },
+      action_payload: {
+        message,
+        templateName: templateName || null,
+        preferTemplate: !!preferTemplate,
+      },
       is_active: isActive
     });
     onClose();
@@ -84,20 +98,42 @@ function AutomationModal({ automation, onSave, onClose }) {
             </div>
             
             {actionType === 'send_whatsapp' && (
+              <>
               <div className="form-group">
-                <label className="form-label">תוכן ההודעה</label>
+                <label className="form-label">תבנית Meta (מומלץ מחוץ לחלון 24ש)</label>
+                <select
+                  className="input select"
+                  value={templateName}
+                  onChange={(e) => setTemplateName(e.target.value)}
+                >
+                  <option value="">ללא תבנית — טקסט חופשי בלבד</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.meta_name || t.name}>
+                      {t.name || t.meta_name}
+                    </option>
+                  ))}
+                </select>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 8, fontSize: 12 }}>
+                  <input type="checkbox" checked={preferTemplate} onChange={(e) => setPreferTemplate(e.target.checked)} />
+                  העדף תבנית גם כשהחלון פתוח
+                </label>
+              </div>
+              <div className="form-group">
+                <label className="form-label">תוכן ההודעה (כשהחלון פתוח)</label>
                 <textarea 
                   className="input textarea" 
                   rows={4} 
-                  required 
                   value={message} 
                   onChange={e => setMessage(e.target.value)} 
                   placeholder="שלום {{name}}, שמחים שבאת לקיר הטיפוס..."
+                  required={!templateName}
                 />
                 <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
                   טיפ: ניתן להשתמש ב- <code>{'{{name}}'}</code> כדי להציג את שם המתאמן.
+                  אם החלון סגור ואין תבנית — האוטומציה תדולג.
                 </div>
               </div>
+              </>
             )}
             
             <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
@@ -131,10 +167,11 @@ export default function Automations() {
   const fetchAutomations = async () => {
     try {
       const res = await fetch('/api/automations');
-      const data = await res.json();
-      setAutomations(data);
+      const data = await res.json().catch(() => null);
+      setAutomations(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error(err);
+      setAutomations([]);
     }
   };
 

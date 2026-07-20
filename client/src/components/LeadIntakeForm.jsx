@@ -113,16 +113,18 @@ export default function LeadIntakeForm() {
             <input name="city" value={formData.city} onChange={handleChange} placeholder="אשדוד" />
           </div>
 
-          <div className="section-title" style={{ marginTop: 20 }}>שמות המתאמנים/ות</div>
+          <div className="section-title" style={{ marginTop: 20 }}>שמות המתאמנים/ות (לא חובה)</div>
+          <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.55)', margin: '0 0 12px' }}>
+            בחוג בוגרים אפשר להשאיר ריק — נרשום אתכם לפי השם שהזנתם למעלה.
+          </p>
           {formData.children.map((child, i) => (
             <div key={i} className="form-group" style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
               <div style={{ flex: 1 }}>
                 <label>שם מתאמן/ת {formData.children.length > 1 ? i + 1 : ''}</label>
                 <input
-                  required
                   value={child}
                   onChange={e => updateChild(i, e.target.value)}
-                  placeholder="שם מלא"
+                  placeholder="שם מלא (לא חובה)"
                 />
               </div>
               {formData.children.length > 1 && (

@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Hash, History, Settings, Smartphone, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2 } from 'lucide-react';
+import { Send, Hash, History, Settings, Smartphone, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2, FileText, Bookmark } from 'lucide-react';
 import { Modal } from './UI.jsx';
+import SegmentBuilder, { EMPTY_FILTERS } from './SegmentBuilder.jsx';
+import TemplatesManager from './TemplatesManager.jsx';
+import SavedRepliesManager from './SavedRepliesManager.jsx';
 
 const DEFAULT_LISTS = [
   { key: 'general', label: 'כללי', description: 'עדכונים שוטפים', color: 'var(--blue)' },
@@ -16,12 +19,7 @@ const LIST_COLORS = [
   { value: 'var(--purple)', label: 'סגול' },
 ];
 
-const WA_TEMPLATES = [
-  { id: 'hello_world', name: 'תבנית טסט של Meta (hello_world)', text: 'הודעת שלום עולמי רשמית של Meta ללא פרמטרים.' },
-  { id: 't1', name: 'ברוכים הבאים (דורש אישור ב-Meta)', text: 'שלום {{שם}}, ברוכים הבאים לקיר הטיפוס! נשמח לראות אתכם 🧗‍♂️' },
-  { id: 't2', name: 'הצהרת בריאות (דורש אישור ב-Meta)', text: 'שלום {{שם}}, בבקשה מלאו את הצהרת הבריאות לפני הגעתכם: https://mywall.co.il/health' },
-  { id: 't3', name: 'תזכורת שיעור (דורש אישור ב-Meta)', text: 'שלום {{שם}}, תזכורת: שיעור שלכם מחר. נתראה! 🤸‍♀️' },
-];
+const WA_TEMPLATES = [];
 
 const DAY_OPTIONS = [
   { value: 0, label: 'א׳' },
@@ -33,15 +31,17 @@ const DAY_OPTIONS = [
   { value: 6, label: 'ש׳' },
 ];
 
-export default function Broadcasts({ parents, students }) {
-  const [activeTab, setActiveTab] = useState('compose'); // compose | history | simulator | settings
+export default function Broadcasts({ parents, students, groups = [] }) {
+  const [activeTab, setActiveTab] = useState('compose'); // compose | templates | saved | history | simulator | settings
   
   // Compose / Send State
   const [lists, setLists] = useState(DEFAULT_LISTS);
   const [selectedList, setSelectedList] = useState('general');
   const [selectedTemplate, setSelectedTemplate] = useState(null);
+  const [approvedTemplates, setApprovedTemplates] = useState([]);
   const [customMessage, setCustomMessage] = useState('');
-  const [recipientFilter, setRecipientFilter] = useState('all'); 
+  const [segmentFilters, setSegmentFilters] = useState({ ...EMPTY_FILTERS, listKey: 'general' });
+  const [previewCount, setPreviewCount] = useState(0);
   const [sendingBroadcast, setSendingBroadcast] = useState(false);
   const [sendResult, setSendResult] = useState(null);
 
@@ -375,13 +375,32 @@ export default function Broadcasts({ parents, students }) {
     fetchChatLogs();
     fetchWaStatus();
     fetchWaConnectConfig();
+    fetchApprovedTemplates();
   }, []);
+
+  const fetchApprovedTemplates = async () => {
+    try {
+      const res = await fetch('/api/message-templates?approved=1');
+      const data = res.ok ? await res.json() : [];
+      const remote = Array.isArray(data) ? data.map((t) => ({
+        id: t.meta_name || t.name,
+        name: t.name || t.meta_name,
+        text: t.body || '',
+        language: t.language,
+      })) : [];
+      setApprovedTemplates(remote.length ? remote : WA_TEMPLATES);
+    } catch {
+      setApprovedTemplates(WA_TEMPLATES);
+    }
+  };
 
   useEffect(() => {
     if (activeTab === 'history') {
       fetchBroadcasts();
     } else if (activeTab === 'simulator') {
       fetchChatLogs();
+    } else if (activeTab === 'templates') {
+      fetchApprovedTemplates();
     }
   }, [activeTab]);
 
@@ -391,20 +410,26 @@ export default function Broadcasts({ parents, students }) {
     }
   }, [chatLogs, selectedSimThread]);
 
-  const getRecipients = () => {
-    let filtered = parents || [];
-    if (recipientFilter === 'registered') {
-      const regParentIds = new Set((students || []).filter(s => s.status === 'registered').map(s => s.parentId));
-      filtered = filtered.filter(p => regParentIds.has(p.id));
-    } else if (recipientFilter === 'leads') {
-      const leadParentIds = new Set((students || []).filter(s => ['lead_new','health_signed','intro_scheduled','intro_paid'].includes(s.status)).map(s => s.parentId));
-      filtered = filtered.filter(p => leadParentIds.has(p.id));
-    }
-    return filtered;
-  };
+  useEffect(() => {
+    setSegmentFilters((prev) => ({ ...prev, listKey: selectedList || '' }));
+  }, [selectedList]);
 
-  const recipients = getRecipients();
-  const messageText = selectedTemplate ? selectedTemplate.text : customMessage;
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/broadcast/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filters: segmentFilters }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled) setPreviewCount(d.count || 0);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [JSON.stringify(segmentFilters)]);
+
+  const messageText = selectedTemplate ? (selectedTemplate.text || selectedTemplate.body || `[תבנית: ${selectedTemplate.id}]`) : customMessage;
 
   const handleSaveSettings = async (e) => {
     e.preventDefault();
@@ -428,14 +453,17 @@ export default function Broadcasts({ parents, students }) {
   };
 
   const handleSendBroadcast = async () => {
-    if (!messageText.trim()) { alert('נא לכתוב הודעה'); return; }
+    if (!selectedTemplate && !customMessage.trim()) {
+      alert('בחרו תבנית מאושרת, או כתבו הודעה לנמענים עם חלון פתוח');
+      return;
+    }
     setSendingBroadcast(true);
     setSendResult(null);
 
-    const campaignName = `קמפיין ${lists.find(l => l.key === selectedList)?.label} - ${new Date().toLocaleDateString('he-IL')}`;
-    
+    const campaignName = `קמפיין ${lists.find(l => l.key === selectedList)?.label || 'פילוח'} - ${new Date().toLocaleDateString('he-IL')}`;
+
     try {
-      const response = await fetch('/api/whatsapp/broadcast', {
+      const response = await fetch('/api/broadcast/jobs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -443,18 +471,29 @@ export default function Broadcasts({ parents, students }) {
           listName: selectedList,
           templateId: selectedTemplate?.id || null,
           customMessage: selectedTemplate ? null : customMessage,
-          recipients: recipients
-        })
+          filters: { ...segmentFilters, listKey: selectedList || segmentFilters.listKey },
+        }),
       });
 
       const data = await response.json();
-      if (response.ok) {
-        setSendResult({ success: true, sent: data.sent, total: data.total });
+      if (response.ok && data.sent > 0) {
+        setSendResult({
+          success: true,
+          sent: data.sent,
+          failed: data.failed || 0,
+          total: data.recipientCount || data.total,
+          jobId: data.jobId,
+        });
         setSelectedTemplate(null);
         setCustomMessage('');
         fetchChatLogs();
       } else {
-        setSendResult({ success: false, error: data.error });
+        setSendResult({
+          success: false,
+          error: data.error || 'השליחה נכשלה. לרוב האסימון של Meta פג תוקף.',
+          sent: data.sent || 0,
+          failed: data.failed || 0,
+        });
       }
     } catch (err) {
       setSendResult({ success: false, error: 'שגיאה בחיבור' });
@@ -567,9 +606,15 @@ export default function Broadcasts({ parents, students }) {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 10 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 10, flexWrap: 'wrap' }}>
         <button className={`btn btn-sm ${activeTab === 'compose' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setActiveTab('compose'); setSendResult(null); }}>
           <Send size={14} /> שליחת דיוור
+        </button>
+        <button className={`btn btn-sm ${activeTab === 'templates' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('templates')}>
+          <FileText size={14} /> תבניות Meta
+        </button>
+        <button className={`btn btn-sm ${activeTab === 'saved' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('saved')}>
+          <Bookmark size={14} /> הודעות שמורות
         </button>
         <button className={`btn btn-sm ${activeTab === 'history' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('history')}>
           <History size={14} /> היסטוריית קמפיינים
@@ -582,6 +627,9 @@ export default function Broadcasts({ parents, students }) {
         </button>
       </div>
 
+      {activeTab === 'templates' && <TemplatesManager />}
+      {activeTab === 'saved' && <SavedRepliesManager />}
+
       {/* COMPOSE */}
       {activeTab === 'compose' && (
         sendResult && sendResult.success ? (
@@ -592,9 +640,25 @@ export default function Broadcasts({ parents, students }) {
               <CheckCircle size={18} style={{ flexShrink: 0 }} />
               <div>
                 <div style={{ fontWeight: 600 }}>ההודעה הופצה ל-{sendResult.sent} נמענים</div>
+                {sendResult.failed > 0 && (
+                  <div style={{ fontSize: 12, marginTop: 4 }}>נכשלו: {sendResult.failed}</div>
+                )}
               </div>
             </div>
             <button className="btn btn-ghost" onClick={() => setSendResult(null)}>דיוור חדש</button>
+          </div>
+        ) : sendResult && !sendResult.success ? (
+          <div className="fade-in" style={{ maxWidth: 520, margin: '0 auto', textAlign: 'center', paddingTop: 40 }}>
+            <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 12 }}>הדיוור לא נשלח</h2>
+            <div className="alert alert-danger" style={{ textAlign: 'right', marginBottom: 20 }}>
+              <div style={{ fontWeight: 600 }}>{sendResult.error || 'שגיאה בשליחה'}</div>
+              {(sendResult.sent != null || sendResult.failed != null) && (
+                <div style={{ fontSize: 12, marginTop: 6 }}>
+                  נשלחו: {sendResult.sent || 0} · נכשלו: {sendResult.failed || 0}
+                </div>
+              )}
+            </div>
+            <button className="btn btn-ghost" onClick={() => setSendResult(null)}>חזרה</button>
           </div>
         ) : (
           <div className="grid-12" style={{ gap: 20, alignItems: 'flex-start' }}>
@@ -617,24 +681,21 @@ export default function Broadcasts({ parents, students }) {
               </div>
 
               <div className="card card-p">
-                <div className="section-title" style={{ marginBottom: 14 }}>סינון נמענים</div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  {[
-                    { val: 'all', label: `כולם (${parents?.length || 0})` },
-                    { val: 'registered', label: 'רשומים בלבד' },
-                    { val: 'leads', label: 'לידים פעילים' },
-                  ].map(f => (
-                    <button key={f.val} className={`btn btn-sm ${recipientFilter === f.val ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setRecipientFilter(f.val)}>
-                      {f.label}
-                    </button>
-                  ))}
-                </div>
+                <div className="section-title" style={{ marginBottom: 14 }}>פילוח קהל</div>
+                <SegmentBuilder
+                  parents={parents}
+                  students={students}
+                  groups={groups}
+                  lists={lists}
+                  filters={segmentFilters}
+                  onChange={setSegmentFilters}
+                />
               </div>
 
               <div className="card card-p">
                 <div className="section-title" style={{ marginBottom: 14 }}>תבניות מאושרות</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {WA_TEMPLATES.map(tmpl => (
+                  {(approvedTemplates.length ? approvedTemplates : WA_TEMPLATES).map(tmpl => (
                     <div key={tmpl.id} className={`check-item ${selectedTemplate?.id === tmpl.id ? 'checked' : ''}`}
                       onClick={() => { setSelectedTemplate(selectedTemplate?.id === tmpl.id ? null : tmpl); setCustomMessage(''); }}
                       style={{ padding: 12, cursor: 'pointer', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border)', borderRadius: 8 }}>
@@ -643,10 +704,13 @@ export default function Broadcasts({ parents, students }) {
                     </div>
                   ))}
                 </div>
+                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 10 }}>
+                  לניהול והגשת תבניות חדשות — עברו לטאב «תבניות Meta».
+                </div>
               </div>
 
               <div className="card card-p">
-                <div className="section-title" style={{ marginBottom: 10 }}>הודעה חופשית</div>
+                <div className="section-title" style={{ marginBottom: 10 }}>הודעה חופשית (רק לנמענים עם חלון 24ש פתוח)</div>
                 <textarea className="input textarea" rows={4} placeholder="כתוב הודעה..."
                   value={customMessage} onChange={e => { setCustomMessage(e.target.value); setSelectedTemplate(null); }} />
               </div>
@@ -664,8 +728,8 @@ export default function Broadcasts({ parents, students }) {
               </div>
 
               <button className="btn btn-primary btn-full" style={{ paddingBlock: 14 }} onClick={handleSendBroadcast}
-                disabled={!messageText.trim() || sendingBroadcast}>
-                {sendingBroadcast ? '⏳ שולח...' : `שלח ל-${recipients.length} נמענים`}
+                disabled={(!messageText || !String(messageText).trim()) || sendingBroadcast || previewCount === 0}>
+                {sendingBroadcast ? '⏳ שולח...' : `שלח ל-${previewCount} נמענים`}
               </button>
             </div>
           </div>
@@ -1033,6 +1097,29 @@ export default function Broadcasts({ parents, students }) {
                     <code>{waConnectConfig.missingRecommended.join(', ')}</code>
                   </div>
                 )}
+              </div>
+            </div>
+
+            <div style={{
+              border: '1px solid rgba(0,132,255,0.35)',
+              background: 'rgba(0,132,255,0.06)',
+              borderRadius: 12,
+              padding: 14,
+              marginBottom: 18,
+            }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>חיבור מסנג׳ר (דף פייסבוק)</div>
+              <p style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 10, lineHeight: 1.6 }}>
+                כדי לקבל ולשלוח הודעות מסנג׳ר מתוך תיק הלקוח, שמרו כאן את מזהה הדף.
+                את אסימון הדף עדיף לשמור בהגדרות השרת.
+              </p>
+              <input
+                className="input input-sm"
+                placeholder="מזהה דף פייסבוק"
+                value={settings.metaPageId || ''}
+                onChange={(e) => setSettings({ ...settings, metaPageId: e.target.value })}
+              />
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 8 }}>
+                משתני שרת: <code>META_PAGE_ID</code> ו-<code>META_PAGE_ACCESS_TOKEN</code>
               </div>
             </div>
 

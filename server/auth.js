@@ -19,6 +19,14 @@ const TEAM_RULES = [
   { methods: ['GET', 'POST'], pattern: /^\/parents\/[^/]+\/broadcast-lists$/ },
   { methods: ['GET'], pattern: /^\/whatsapp\/(thread|logs)(\/|$)/ },
   { methods: ['POST'], pattern: /^\/whatsapp\/reply$/ },
+  { methods: ['GET'], pattern: /^\/conversations\/[^/]+$/ },
+  { methods: ['POST'], pattern: /^\/conversations\/[^/]+\/reply$/ },
+  { methods: ['GET'], pattern: /^\/message-templates(\/|$)/ },
+  { methods: ['GET'], pattern: /^\/saved-replies(\/|$)/ },
+  { methods: ['POST'], pattern: /^\/broadcast\/preview$/ },
+  { methods: ['GET'], pattern: /^\/broadcast\/(interest-options|jobs)(\/|$)/ },
+  { methods: ['GET'], pattern: /^\/saved-segments(\/|$)/ },
+  { methods: ['GET'], pattern: /^\/channels\/status$/ },
   { methods: ['GET'], pattern: /^\/auth\/me$/ },
 ];
 

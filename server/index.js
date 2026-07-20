@@ -15,6 +15,30 @@ import {
   israelHour,
   normalizeAttStatus,
 } from './attendanceUtils.js';
+import {
+  getConversation,
+  replyToParent,
+  updateMessageStatusByMetaId,
+  handleMessengerIncoming,
+} from './channels/conversations.js';
+import {
+  listLocalTemplates,
+  listApprovedTemplates,
+  createDraftTemplate,
+  updateLocalTemplate,
+  deleteLocalTemplate,
+  submitTemplateToMeta,
+  syncTemplatesFromMeta,
+} from './channels/templates.js';
+import {
+  previewAudience,
+  listSavedSegments,
+  saveSegment,
+  deleteSegment,
+  INTEREST_OPTIONS,
+} from './channels/segments.js';
+import { startBroadcastJob, getBroadcastJob, listBroadcastJobs } from './channels/broadcast.js';
+import { mediaCredentialsStatus } from './channels/media.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -193,10 +217,7 @@ async function ingestLeadPayload(body, defaultSource = 'unknown') {
         ? children.split(/[,،\n]/).map(s => s.trim()).filter(Boolean)
         : []);
   if (!parentName || !phone) {
-    return { error: 'נדרשים שם הורה ומספר טלפון', status: 400 };
-  }
-  if (childList.length === 0) {
-    return { error: 'יש להזין לפחות שם מתאמן אחד', status: 400 };
+    return { error: 'נדרשים שם ומספר טלפון', status: 400 };
   }
 
   const leadSource = source || defaultSource;
@@ -307,6 +328,7 @@ app.get('/api/whatsapp/settings', (req, res) => {
   const {
     metaWaAccessToken,
     metaIgAccessToken,
+    metaPageAccessToken,
     verifyToken,
     ...safe
   } = settings;
@@ -314,6 +336,7 @@ app.get('/api/whatsapp/settings', (req, res) => {
     ...safe,
     hasAccessToken: !!(metaWaAccessToken && !metaWaAccessToken.includes('YOUR_')),
     hasInstagramAccessToken: !!(metaIgAccessToken && !metaIgAccessToken.includes('YOUR_')),
+    hasMessengerAccessToken: !!(metaPageAccessToken && String(metaPageAccessToken).length > 10),
     verifyTokenConfigured: !!verifyToken,
     credentialsManagedByServer: !!(
       process.env.META_WA_PHONE_NUMBER_ID &&
@@ -333,6 +356,8 @@ app.post('/api/whatsapp/settings', requireOwner, (req, res) => {
     'aiSystemPrompt',
     'metaIgAccountId',
     'metaIgAccessToken',
+    'metaPageId',
+    'metaPageAccessToken',
   ];
   const payload = {};
   for (const key of allowed) {
@@ -434,6 +459,152 @@ app.post('/api/whatsapp/reply', async (req, res) => {
   } else {
     res.status(400).json({ success: false, error: result.error || 'שליחה נכשלה' });
   }
+});
+
+// ─── Unified conversations (multi-channel) ───────────────────────────────────
+app.get('/api/conversations/:parentId', async (req, res) => {
+  const result = await getConversation(req.params.parentId);
+  if (result.error) return res.status(result.status || 404).json(result);
+  res.json(result);
+});
+
+app.post('/api/conversations/:parentId/reply', async (req, res) => {
+  const result = await replyToParent(req.params.parentId, req.body || {});
+  if (!result.success) return res.status(result.status || 400).json(result);
+  res.json(result);
+});
+
+// ─── Message templates ───────────────────────────────────────────────────────
+app.get('/api/message-templates', (req, res) => {
+  const approvedOnly = req.query.approved === '1' || req.query.approved === 'true';
+  res.json(approvedOnly ? listApprovedTemplates() : listLocalTemplates());
+});
+
+app.post('/api/message-templates', requireOwner, (req, res) => {
+  try {
+    const created = createDraftTemplate(req.body || {});
+    res.json(created);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put('/api/message-templates/:id', requireOwner, (req, res) => {
+  try {
+    const updated = updateLocalTemplate(req.params.id, req.body || {});
+    res.json(updated);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/message-templates/:id', requireOwner, (req, res) => {
+  try {
+    res.json(deleteLocalTemplate(req.params.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/message-templates/sync', requireOwner, async (req, res) => {
+  try {
+    const result = await syncTemplatesFromMeta();
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/message-templates/:id/submit', requireOwner, async (req, res) => {
+  try {
+    const updated = await submitTemplateToMeta(req.params.id);
+    res.json(updated);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ─── Saved replies ───────────────────────────────────────────────────────────
+app.get('/api/saved-replies', (req, res) => {
+  const list = [...(db.get('saved_replies') || [])].sort(
+    (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)
+  );
+  res.json(list);
+});
+
+app.post('/api/saved-replies', requireOwner, (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  const body = String(req.body?.body || '').trim();
+  if (!name || !body) return res.status(400).json({ error: 'חסרים שם או תוכן' });
+  const created = db.insert('saved_replies', {
+    id: `sr_${Date.now()}`,
+    name,
+    body,
+    sort_order: Number(req.body?.sort_order) || 0,
+  });
+  res.json(created);
+});
+
+app.put('/api/saved-replies/:id', requireOwner, (req, res) => {
+  const updated = db.update('saved_replies', req.params.id, {
+    name: req.body?.name,
+    body: req.body?.body,
+    sort_order: req.body?.sort_order,
+  });
+  if (!updated) return res.status(404).json({ error: 'לא נמצא' });
+  res.json(updated);
+});
+
+app.delete('/api/saved-replies/:id', requireOwner, (req, res) => {
+  db.delete('saved_replies', req.params.id);
+  res.json({ success: true });
+});
+
+// ─── Audience segments + broadcast jobs ──────────────────────────────────────
+app.post('/api/broadcast/preview', (req, res) => {
+  const preview = previewAudience(req.body?.filters || {});
+  res.json(preview);
+});
+
+app.get('/api/broadcast/interest-options', (_req, res) => {
+  res.json(INTEREST_OPTIONS);
+});
+
+app.get('/api/saved-segments', (_req, res) => {
+  res.json(listSavedSegments());
+});
+
+app.post('/api/saved-segments', requireOwner, (req, res) => {
+  const created = saveSegment(req.body?.name, req.body?.filters || {});
+  res.json(created);
+});
+
+app.delete('/api/saved-segments/:id', requireOwner, (req, res) => {
+  res.json(deleteSegment(req.params.id));
+});
+
+app.post('/api/broadcast/jobs', requireOwner, async (req, res) => {
+  try {
+    const result = await startBroadcastJob(req.body || {});
+    if (!result.success) return res.status(400).json(result);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/broadcast/jobs', (_req, res) => {
+  res.json(listBroadcastJobs());
+});
+
+app.get('/api/broadcast/jobs/:id', (req, res) => {
+  const job = getBroadcastJob(req.params.id);
+  if (!job) return res.status(404).json({ error: 'הקמפיין לא נמצא' });
+  res.json(job);
+});
+
+app.get('/api/channels/status', (_req, res) => {
+  res.json(mediaCredentialsStatus());
 });
 
 // Thread for a specific phone (lead card)
@@ -771,6 +942,14 @@ async function processWhatsAppWebhookChange(change = {}) {
   const field = change.field;
   const value = change.value || {};
 
+  // Delivery / read receipts
+  if (field === 'messages' && Array.isArray(value.statuses) && value.statuses.length) {
+    for (const st of value.statuses) {
+      const statusMap = { sent: 'sent', delivered: 'delivered', read: 'read', failed: 'failed' };
+      updateMessageStatusByMetaId(st.id, statusMap[st.status] || st.status);
+    }
+  }
+
   // Inbound customer messages (live)
   if (field === 'messages') {
     for (const message of value.messages || []) {
@@ -883,7 +1062,29 @@ app.post('/api/whatsapp/webhook', verifyMetaWebhookSignature, async (req, res) =
 
   try {
     // If Meta routed an Instagram or Page object to /api/whatsapp/webhook
-    if (body.object === 'instagram' || body.object === 'page' || body.object === 'instagram_business_account') {
+    if (body.object === 'instagram' || body.object === 'instagram_business_account') {
+      await processInstagramEntry(body);
+      return res.sendStatus(200);
+    }
+
+    // Facebook Page / Messenger
+    if (body.object === 'page') {
+      for (const entry of body.entry || []) {
+        for (const messaging of entry.messaging || []) {
+          if (messaging.message?.is_echo) continue;
+          const psid = messaging.sender?.id;
+          const text = messaging.message?.text || messaging.postback?.title || '';
+          if (psid && (text || messaging.message || messaging.postback)) {
+            handleMessengerIncoming({
+              psid,
+              text: text || '[הודעת מסנג׳ר]',
+              messageId: messaging.message?.mid,
+              name: 'לקוח מסנג׳ר',
+            });
+          }
+        }
+      }
+      // Also may contain Instagram changes on page object
       await processInstagramEntry(body);
       return res.sendStatus(200);
     }

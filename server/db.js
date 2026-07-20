@@ -96,6 +96,8 @@ const SEED_DATA = {
     lastConnectEvent: null,
     metaIgAccountId: '',
     metaIgAccessToken: '',
+    metaPageId: '',
+    metaPageAccessToken: '',
     verifyToken: '',
     aiResponderEnabled: true,
     aiActiveHoursEnabled: false,
@@ -120,6 +122,8 @@ const DEFAULT_BROADCAST_LIST_DEFS = SEED_DATA.broadcast_list_defs;
 function withoutServerSecrets(settings = {}) {
   const {
     metaWaAccessToken: _metaWaAccessToken,
+    metaIgAccessToken: _metaIgAccessToken,
+    metaPageAccessToken: _metaPageAccessToken,
     verifyToken: _verifyToken,
     ...safe
   } = settings;
@@ -228,6 +232,8 @@ export const db = {
       metaWaWabaId: process.env.META_WA_WABA_ID || settings.metaWaWabaId || '',
       metaWaAccessToken: process.env.META_WA_ACCESS_TOKEN || '',
       metaIgAccessToken: process.env.INSTAGRAM_ACCESS_TOKEN || settings.metaIgAccessToken || '',
+      metaPageId: process.env.META_PAGE_ID || settings.metaPageId || '',
+      metaPageAccessToken: process.env.META_PAGE_ACCESS_TOKEN || settings.metaPageAccessToken || '',
       verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN || '',
     };
   },
@@ -435,7 +441,10 @@ export const db = {
       notes: interest ? `עניין: ${interest}` : '',
     });
     const createdStudents = [];
-    const names = Array.isArray(children) ? children : (children ? [children] : ['מתאמן חדש']);
+    const rawNames = Array.isArray(children)
+      ? children.map((c) => (c || '').trim()).filter(Boolean)
+      : (children ? [String(children).trim()] : []).filter(Boolean);
+    const names = rawNames.length > 0 ? rawNames : [(parentName || '').trim() || 'מתאמן חדש'];
 
     for (const childName of names) {
       const trimmed = (childName || '').trim();
