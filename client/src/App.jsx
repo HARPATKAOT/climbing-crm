@@ -2,10 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Calendar, ShieldCheck, UserCog, LogIn,
-  MessageSquare, Bell, Search, Coins, Tag, Award, FileHeart, Zap
+  MessageSquare, Bell, Search, Coins, Tag, Award, FileHeart, Zap, LogOut
 } from 'lucide-react';
+import { useAuth } from './components/AuthGate.jsx';
 
-import { mockStudents, mockParents, mockGroups } from './mockData.js';
 import Dashboard          from './components/Dashboard.jsx';
 import Leads              from './components/Leads.jsx';
 import Schedule           from './components/Schedule.jsx';
@@ -57,6 +57,7 @@ const PATH_TO_PAGE = Object.fromEntries(
 
 // Public routes are handled outside App (main.jsx). Never redirect these into the CRM shell.
 const PUBLIC_PATH_PREFIXES = ['/health', '/join'];
+const STAFF_PAGES = new Set(['checkin', 'leads', 'schedule', 'health']);
 
 function isPublicPath(pathname) {
   return PUBLIC_PATH_PREFIXES.some(
@@ -88,7 +89,10 @@ const PAGE_TITLES = {
 export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
-  const page = pathToPage(location.pathname) ?? 'dashboard';
+  const { user, isOwner, signOut } = useAuth();
+  const requestedPage = pathToPage(location.pathname) ?? 'dashboard';
+  const page = !isOwner && !STAFF_PAGES.has(requestedPage) ? 'leads' : requestedPage;
+  const visibleNav = isOwner ? NAV : NAV.filter((item) => STAFF_PAGES.has(item.key));
 
   const goToPage = (key) => {
     const path = PAGE_PATHS[key] || '/';
@@ -98,25 +102,20 @@ export default function App() {
   useEffect(() => {
     if (isPublicPath(location.pathname)) return;
     if (pathToPage(location.pathname) === null) {
-      navigate('/', { replace: true });
+      navigate(isOwner ? '/' : '/leads', { replace: true });
+      return;
     }
-  }, [location.pathname, navigate]);
+    if (!isOwner && !STAFF_PAGES.has(pathToPage(location.pathname))) {
+      navigate('/leads', { replace: true });
+    }
+  }, [isOwner, location.pathname, navigate]);
 
   const [searchQ, setSearchQ]   = useState('');
 
-  // Shared state persisted in localStorage
-  const [students, setStudents] = useState(() => {
-    const saved = localStorage.getItem('crm_students');
-    return saved ? JSON.parse(saved) : mockStudents;
-  });
-  const [parents, setParents] = useState(() => {
-    const saved = localStorage.getItem('crm_parents');
-    return saved ? JSON.parse(saved) : mockParents;
-  });
-  const [groups, setGroups] = useState(() => {
-    const saved = localStorage.getItem('crm_groups');
-    return saved ? JSON.parse(saved) : mockGroups;
-  });
+  // Start empty so deleted/demo records never flash before the API responds.
+  const [students, setStudents] = useState([]);
+  const [parents, setParents] = useState([]);
+  const [groups, setGroups] = useState([]);
 
   useEffect(() => {
     async function fetchData() {
@@ -137,23 +136,11 @@ export default function App() {
           setGroups([...byId.values()]);
         }
       } catch (error) {
-        console.warn('Backend server offline. Using localStorage mock data.', error);
+        console.warn('Backend server offline.', error);
       }
     }
     fetchData();
   }, [page]);
-
-  useEffect(() => {
-    localStorage.setItem('crm_students', JSON.stringify(students));
-  }, [students]);
-
-  useEffect(() => {
-    localStorage.setItem('crm_parents', JSON.stringify(parents));
-  }, [parents]);
-
-  useEffect(() => {
-    localStorage.setItem('crm_groups', JSON.stringify(groups));
-  }, [groups]);
   const [showNotifications, setShowNotifications] = useState(false);
   const info   = PAGE_TITLES[page] || {};
 
@@ -195,7 +182,7 @@ export default function App() {
 
         {/* Nav: main */}
         <div className="nav-section-label">ניהול</div>
-        {NAV.filter(n => n.section === 'main').map(n => {
+        {visibleNav.filter(n => n.section === 'main').map(n => {
           const Icon = n.icon;
           const isActive = page === n.key;
           return (
@@ -233,7 +220,7 @@ export default function App() {
 
         {/* Nav: ops */}
         <div className="nav-section-label" style={{ marginTop: 8 }}>תפעול</div>
-        {NAV.filter(n => n.section === 'ops').map(n => {
+        {visibleNav.filter(n => n.section === 'ops').map(n => {
           const Icon = n.icon;
           const isActive = page === n.key;
           return (
@@ -271,9 +258,12 @@ export default function App() {
           <div className="user-pill">
             <div className="avatar">DE</div>
             <div>
-              <div className="user-name">Eyal Dalak</div>
-              <div className="user-role">מנהל ראשי 🔑</div>
+              <div className="user-name">{user?.name || user?.email}</div>
+              <div className="user-role">{isOwner ? 'מנהל ראשי' : 'צוות תפעול'}</div>
             </div>
+            <button className="icon-btn" type="button" onClick={signOut} title="יציאה">
+              <LogOut size={15} />
+            </button>
           </div>
         </div>
       </aside>
@@ -347,7 +337,7 @@ export default function App() {
         <main className="page-content">
           {page === 'dashboard'  && <Dashboard students={students} groups={groups} onNavigate={goToPage} />}
           {page === 'checkin'    && <CheckInConsole students={students} groups={groups} />}
-          {page === 'leads'      && <Leads students={students} setStudents={setStudents} parents={parents} setParents={setParents} groups={groups} />}
+          {page === 'leads'      && <Leads students={students} setStudents={setStudents} parents={parents} setParents={setParents} groups={groups} canManageBilling={isOwner} />}
           {page === 'schedule'   && <Schedule groups={groups} students={students} parents={parents} setGroups={setGroups} setStudents={setStudents} />}
           {page === 'broadcasts' && <Broadcasts parents={parents} students={students} />}
           {page === 'cash'       && <CashRegister />}
@@ -355,7 +345,7 @@ export default function App() {
           {page === 'safety'     && <Safety />}
           {page === 'employees'  && <Employees />}
           {page === 'levels'     && <LevelTests students={students} groups={groups} />}
-          {page === 'health'     && <HealthDeclarations parents={parents} students={students} />}
+          {page === 'health'     && <HealthDeclarations parents={parents} students={students} canManageTemplates={isOwner} />}
           {page === 'automations'&& <Automations />}
         </main>
       </div>

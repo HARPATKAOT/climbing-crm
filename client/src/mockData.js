@@ -219,11 +219,7 @@ export const mockStudents = [
   { id: 's6', name: 'תמר גולן', parentId: 'p5', groupId: 'g-165dbd26', status: 'registered', birthDate: '2016-09-30', notes: '', levelGrade: '5A', created: '2026-07-01', created_at: '2026-07-01T13:55:00.000Z' },
 ];
 
-export const mockEmployees = [
-  { id: 'e1', name: 'עידו בן דוד', role: 'trainer', phone: '0521111111', clockedIn: true, clockInTime: '08:45' },
-  { id: 'e2', name: 'ליאת שניר', role: 'trainer', phone: '0522222222', clockedIn: false, clockInTime: null },
-  { id: 'e3', name: 'יובל כץ', role: 'safety_officer', phone: '0523333333', clockedIn: true, clockInTime: '09:10' },
-];
+export const mockEmployees = [];
 
 export const mockSafetyChecklist = [
   { id: 'sc1', label: 'בדיקת עמדות חיבור ובולטים', category: 'ציוד', critical: true },

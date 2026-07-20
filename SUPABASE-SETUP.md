@@ -1,41 +1,69 @@
-# Supabase wiring — environment variables
+# הגדרת Supabase, כניסה ושמירת מידע
 
-The CRM-core data (parents, students, groups, enrollments, attendance,
-activities, activity_registrations) now lives in **Supabase** and is loaded into
-the server on startup. Everything else still lives in `server/db.json`.
+הדפדפן אינו קורא טבלאות ישירות. כל מידע עסקי עובר דרך השרת, לאחר בדיקת זהות והרשאה.
 
-## Required environment variables (server)
+## 1. הגדרות השרת
 
-Set these on **Render** (Dashboard → your service → Environment) and locally in
-`server/.env`:
+העתק את `server/.env.example` אל `server/.env` במחשב. בסביבת Render הוסף את אותם משתנים במסך ההגדרות.
 
-| Variable | Value | Notes |
-|---|---|---|
-| `SUPABASE_URL` | `https://xaxykjvqqhrodmseqleu.supabase.co` | Project API URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | *(secret)* | **Recommended.** Supabase Dashboard → Project Settings → API → `service_role`. Bypasses RLS. |
-| `SUPABASE_KEY` | anon key (already in `.env`) | Fallback if the service role key is not set. Works today only because RLS is disabled. |
+חובה להגדיר:
 
-The server reads the service role key first, then falls back to `SUPABASE_KEY`.
+| משתנה | תפקיד |
+|---|---|
+| `SUPABASE_URL` | כתובת המיזם ב-Supabase |
+| `SUPABASE_SERVICE_ROLE_KEY` | מפתח שרת סודי. אסור להעביר אותו לדפדפן |
+| `CRM_OWNER_EMAILS` | כתובת החשבון של המנהל. אפשר להפריד כמה כתובות בפסיק |
+| `CRM_STAFF_EMAILS` | כתובת חשבון הצוות |
+| `ALLOWED_ORIGINS` | כתובות האתרים שמותר להם לפנות לשרת |
+| `CRON_SECRET` | סוד למשימת יצירת הנוכחות היומית |
+| `META_APP_SECRET` | משמש לאימות חתימות של הודעות נכנסות |
+| `META_WEBHOOK_VERIFY_TOKEN` | סוד אימות החיבור מול Meta |
+| `ICOUNT_WEBHOOK_SECRET` | סוד אימות הודעות נכנסות מ-iCount |
 
-## Security TODO (not blocking)
+השרת לא משתמש יותר במפתח הציבורי כתחליף למפתח השרת.
 
-RLS (Row Level Security) is currently **disabled** on all core tables, so the
-anon key can read/write. Before going to real production you should:
+## 2. הגדרות האתר
 
-1. Add `SUPABASE_SERVICE_ROLE_KEY` on Render (server-only, never expose to the browser).
-2. Enable RLS on the core tables and add policies (e.g. allow all for the
-   service role, deny anon). Example:
-   ```sql
-   alter table parents enable row level security;
-   alter table students enable row level security;
-   alter table groups enable row level security;
-   -- ...repeat for the other core tables, then add policies.
-   ```
+העתק את `client/.env.example` אל `client/.env.local` והגדר:
 
-## How persistence works now
+| משתנה | תפקיד |
+|---|---|
+| `VITE_SUPABASE_URL` | כתובת המיזם ב-Supabase |
+| `VITE_SUPABASE_ANON_KEY` | המפתח הציבורי של Supabase |
 
-- On boot, `server/db.js → initDb()` pulls the core tables from Supabase into
-  `db.json` so the ephemeral Render disk always reflects the durable store.
-- On every write to a core collection, the change is mirrored to Supabase
-  (write-through). Reads stay synchronous from the local cache.
-- If Supabase is unreachable, the server falls back to `db.json` only (offline mode).
+המפתח הציבורי אינו סוד. ההגנה על המידע מגיעה ממדיניות הגישה ומהשרת.
+
+## 3. יצירת שני החשבונות
+
+1. פתח ב-Supabase את מסך המשתמשים.
+2. צור משתמש אחד למנהל ומשתמש אחד לצוות.
+3. הכנס את כתובות הדואר שלהם למשתנים `CRM_OWNER_EMAILS` ו-`CRM_STAFF_EMAILS`.
+4. חשבון המנהל יקבל את כל המסכים. חשבון הצוות יקבל לידים, חוגים, נוכחות, מסוף כניסה והצהרות בלבד.
+
+## 4. הפעלת הגנת הטבלאות
+
+רק לאחר שהוגדר `SUPABASE_SERVICE_ROLE_KEY` בשרת, הרץ בעורך הנתונים של Supabase את:
+
+`database/20260720_security_and_persistence.sql`
+
+הקובץ מפעיל הגנת שורות ומבטל גישה ישירה מהמפתח הציבורי. מפתח השרת ממשיך לעבוד כרגיל.
+
+## 5. שמירת מידע תפעולי
+
+- הורים, מתאמנים, קבוצות, נוכחות, פעילויות והצהרות נשמרים בטבלאות הייעודיות.
+- כל המידע התפעולי שאין לו טבלה ייעודית נשמר ב-`kv_collections`. בין היתר: תשלומים, עובדים, מחירון, בדיקות בטיחות, משמרות, מבחנים, רשימות תפוצה, אוטומציות ויומן הודעות.
+- הגדרות חיבור WhatsApp נשמרות ב-`app_settings`.
+- בהפעלה הראשונה, אם האחסון המרוחק ריק, הרשומות המקומיות מועברות אליו לפני שהקובץ המקומי מוחלף.
+- `db.json` אינו נשמר עוד במאגר הקוד.
+
+## 6. החלפת מפתחות שנחשפו בעבר
+
+לפני פריסה יש לבטל ולהנפיק מחדש:
+
+1. מפתח הגישה של Render.
+2. מפתחות הגישה של WhatsApp ושל Instagram.
+3. הסוד של אפליקציית Meta.
+4. מפתח הגישה של iCount.
+5. סודות הקליטה של Meta, iCount והמשימה היומית.
+
+מחיקת הערכים מהקוד אינה מבטלת עותקים שכבר קיימים בהיסטוריית המאגר. החלפת המפתחות היא ההגנה החשובה.

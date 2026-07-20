@@ -1,8 +1,26 @@
 import fs from 'fs';
 import path from 'path';
-import { supa, CORE_TABLES } from './supa.js';
+import { supa, CORE_TABLES, OPERATIONAL_TABLES } from './supa.js';
 
 const DB_FILE = path.join(process.cwd(), 'db.json');
+
+export function planDurableHydration(table, remoteRows, localRows = []) {
+  if (remoteRows === null) return { mode: 'error', rows: localRows };
+  if (OPERATIONAL_TABLES.includes(table)) {
+    const remoteIds = new Set(remoteRows.map((record) => String(record.id ?? record.key)));
+    const missingLocal = localRows.filter(
+      (record) => !remoteIds.has(String(record.id ?? record.key))
+    );
+    if (missingLocal.length > 0) {
+      return {
+        mode: 'migrate',
+        rows: [...remoteRows, ...missingLocal],
+        toMigrate: missingLocal,
+      };
+    }
+  }
+  return { mode: 'remote', rows: remoteRows };
+}
 
 // Fire-and-forget write-through to Supabase for CRM-core collections.
 // Reads stay synchronous (served from the local db.json cache); Supabase is the
@@ -64,11 +82,7 @@ const SEED_DATA = {
     { id: 'g-c5aece01', name: 'נבחרת צעירה — ה׳ 17:00', day: 4, time: '17:00', duration: 110, trainer: '', maxSlots: 13, enrolled: 0, ageCategory: 'חטיבה', priceWeek: 550, priceTwice: 550, waParents: 'https://chat.whatsapp.com/KX1HoM5PYqb2Fz7TH8j1aJ', waClimbers: '' },
     { id: 'g-529e08f6', name: 'נבחרת בוגרת — ה׳ 19:10', day: 4, time: '19:10', duration: 110, trainer: '', maxSlots: 13, enrolled: 0, ageCategory: 'תיכון', priceWeek: 0, priceTwice: 550, waParents: 'https://chat.whatsapp.com/HasZy575i5XAtUVLPfOyX4', waClimbers: 'https://chat.whatsapp.com/LGg0ekCjQr10S1PkmA9OcK' },
   ],
-  employees: [
-    { id: 'e1', name: 'עידו בן דוד', role: 'trainer', phone: '0521111111', clockedIn: true, clockInTime: '08:45' },
-    { id: 'e2', name: 'ליאת שניר', role: 'trainer', phone: '0522222222', clockedIn: false, clockInTime: null },
-    { id: 'e3', name: 'יובל כץ', role: 'safety_officer', phone: '0523333333', clockedIn: true, clockInTime: '09:10' },
-  ],
+  employees: [],
   whatsapp_settings: {
     metaWaPhoneId: '',
     metaWaAccessToken: '',
@@ -82,8 +96,13 @@ const SEED_DATA = {
     lastConnectEvent: null,
     metaIgAccountId: '',
     metaIgAccessToken: '',
-    verifyToken: 'climbing_verify_token',
+    verifyToken: '',
     aiResponderEnabled: true,
+    aiActiveHoursEnabled: false,
+    aiActiveHoursStart: '09:00',
+    aiActiveHoursEnd: '21:00',
+    // 0=ראשון … 6=שבת (אזור זמן ישראל)
+    aiActiveDays: [0, 1, 2, 3, 4, 5, 6],
     aiSystemPrompt: 'אתה בוט שירות לקוחות ידידותי של קיר הטיפוס My Wall. ענה בנימוס וקצרות בעברית. שלח קישור להצהרת בריאות (https://mywall.co.il/health) או הסבר על חוגים לפי הצורך. שמור על טון חיובי ומקצועי.',
   },
   whatsapp_logs: [],
@@ -97,6 +116,15 @@ const SEED_DATA = {
 };
 
 const DEFAULT_BROADCAST_LIST_DEFS = SEED_DATA.broadcast_list_defs;
+
+function withoutServerSecrets(settings = {}) {
+  const {
+    metaWaAccessToken: _metaWaAccessToken,
+    verifyToken: _verifyToken,
+    ...safe
+  } = settings;
+  return safe;
+}
 
 // Ensure JSON file exists and read it
 function readDb() {
@@ -135,11 +163,34 @@ export async function initDb() {
     for (const table of CORE_TABLES) {
       const rows = await supa.getAll(table);
       if (rows !== null) {
-        data[table] = rows;
-        counts[table] = rows.length;
+        const localRows = Array.isArray(data[table]) ? data[table] : [];
+        const hydration = planDurableHydration(table, rows, localRows);
+        if (hydration.mode === 'migrate') {
+          for (const record of hydration.toMigrate) await supa.upsert(table, record);
+          data[table] = hydration.rows;
+          counts[table] = `migrated:${hydration.toMigrate.length}`;
+        } else {
+          data[table] = hydration.rows;
+          counts[table] = hydration.rows.length;
+        }
       } else {
         counts[table] = 'error';
       }
+    }
+    const remoteSettings = await supa.getAppSetting('whatsapp_settings');
+    if (remoteSettings && typeof remoteSettings === 'object') {
+      data.whatsapp_settings = {
+        ...SEED_DATA.whatsapp_settings,
+        ...data.whatsapp_settings,
+        ...withoutServerSecrets(remoteSettings),
+        metaWaAccessToken: '',
+        verifyToken: '',
+      };
+      await supa.setAppSetting('whatsapp_settings', withoutServerSecrets(data.whatsapp_settings));
+      counts.app_settings = 1;
+    } else if (data.whatsapp_settings) {
+      await supa.setAppSetting('whatsapp_settings', withoutServerSecrets(data.whatsapp_settings));
+      counts.app_settings = 'migrated';
     }
     writeDb(data);
     console.log(
@@ -170,13 +221,29 @@ export const db = {
 
   getSettings: () => {
     const data = readDb();
-    return data.whatsapp_settings || SEED_DATA.whatsapp_settings;
+    const settings = data.whatsapp_settings || SEED_DATA.whatsapp_settings;
+    return {
+      ...settings,
+      metaWaPhoneId: process.env.META_WA_PHONE_NUMBER_ID || settings.metaWaPhoneId || '',
+      metaWaWabaId: process.env.META_WA_WABA_ID || settings.metaWaWabaId || '',
+      metaWaAccessToken: process.env.META_WA_ACCESS_TOKEN || '',
+      metaIgAccessToken: process.env.INSTAGRAM_ACCESS_TOKEN || settings.metaIgAccessToken || '',
+      verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN || '',
+    };
   },
 
   saveSettings: (newSettings) => {
     const data = readDb();
-    data.whatsapp_settings = { ...data.whatsapp_settings, ...newSettings };
+    data.whatsapp_settings = {
+      ...withoutServerSecrets(data.whatsapp_settings),
+      ...withoutServerSecrets(newSettings),
+      metaWaAccessToken: '',
+      verifyToken: '',
+    };
     writeDb(data);
+    Promise.resolve(supa.setAppSetting('whatsapp_settings', withoutServerSecrets(data.whatsapp_settings))).catch((error) =>
+      console.error('sync whatsapp_settings error:', error?.message || error)
+    );
     return data.whatsapp_settings;
   },
 
@@ -408,6 +475,7 @@ export const db = {
     if (!Array.isArray(data.broadcast_list_defs) || data.broadcast_list_defs.length === 0) {
       data.broadcast_list_defs = DEFAULT_BROADCAST_LIST_DEFS.map((l) => ({ ...l }));
       writeDb(data);
+      for (const record of data.broadcast_list_defs) syncUpsert('broadcast_list_defs', record);
     }
     return [...data.broadcast_list_defs].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
   },
@@ -432,6 +500,7 @@ export const db = {
     };
     data.broadcast_list_defs.push(created);
     writeDb(data);
+    syncUpsert('broadcast_list_defs', created);
     return { ok: true, list: created, lists: db.getBroadcastListDefs() };
   },
 
@@ -455,6 +524,7 @@ export const db = {
       sortOrder: updates.sortOrder !== undefined ? Number(updates.sortOrder) : current.sortOrder,
     };
     writeDb(data);
+    syncUpsert('broadcast_list_defs', data.broadcast_list_defs[index]);
     return { ok: true, list: data.broadcast_list_defs[index], lists: db.getBroadcastListDefs() };
   },
 
@@ -474,6 +544,7 @@ export const db = {
       data.broadcast_lists = data.broadcast_lists.filter((r) => r.listName !== key);
     }
     writeDb(data);
+    syncRemove('broadcast_list_defs', key);
     return { ok: true, lists: db.getBroadcastListDefs() };
   },
 
@@ -511,6 +582,9 @@ export const db = {
     });
 
     writeDb(data);
+    for (const record of data.broadcast_lists.filter((r) => r.parentId === parentId)) {
+      syncUpsert('broadcast_lists', record);
+    }
     return db.getParentBroadcastLists(parentId);
   },
 
@@ -564,6 +638,9 @@ export const db = {
     
     data.shift_hours.push(newShift);
     writeDb(data);
+    for (const shift of data.shift_hours.filter((s) => s.employee_id === employeeId)) {
+      syncUpsert('shift_hours', shift);
+    }
     return newShift;
   },
 
@@ -581,6 +658,7 @@ export const db = {
     }
     
     writeDb(data);
+    syncUpsert('shift_hours', openShift);
     return openShift;
   },
 
@@ -596,6 +674,9 @@ export const db = {
     });
     
     writeDb(data);
+    for (const shift of data.shift_hours.filter((s) => shiftIds.includes(s.id))) {
+      syncUpsert('shift_hours', shift);
+    }
     return true;
   },
 
@@ -616,6 +697,7 @@ export const db = {
     
     data.safety_inspections.unshift(newInspection);
     writeDb(data);
+    syncUpsert('safety_inspections', newInspection);
     return newInspection;
   },
 
@@ -636,6 +718,7 @@ export const db = {
     
     data.safety_incidents.unshift(newIncident);
     writeDb(data);
+    syncUpsert('safety_incidents', newIncident);
     return newIncident;
   },
 
@@ -694,10 +777,12 @@ export const db = {
       const studentIndex = data.students.findIndex(s => s.id === newTest.studentId);
       if (studentIndex !== -1) {
         data.students[studentIndex].levelGrade = newTest.level;
+        syncUpsert('students', data.students[studentIndex]);
       }
     }
     
     writeDb(data);
+    syncUpsert('level_tests', newTest);
     return newTest;
   }
 };

@@ -2,18 +2,16 @@
 // Reads/writes go through the Supabase service role client so the data
 // survives Render restarts (the local db.json is ephemeral there).
 //
-// Only the CRM-core tables live here (parents, students, groups, enrollments,
-// attendance, activities, activity_registrations). Every other operational
-// collection still lives in db.json until its module is migrated.
+// CRM core tables map directly to Supabase. Selected operational collections
+// are stored as JSON records in kv_collections to avoid losing them
+// when Render replaces its ephemeral disk.
 
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
-// Prefer the service role key (bypasses RLS). Fall back to anon key.
 const SUPABASE_SERVICE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.SUPABASE_SERVICE_KEY ||
-  process.env.SUPABASE_KEY;
+  process.env.SUPABASE_SERVICE_KEY;
 
 const isConfigured =
   SUPABASE_URL &&
@@ -28,11 +26,10 @@ if (isConfigured) {
   });
   console.log('✅ Supabase data layer connected.');
 } else {
-  console.warn('⚠️ Supabase not configured (SUPABASE_URL / service key missing). CRM core will use db.json only.');
+  console.warn('⚠️ Supabase not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing). Durable data will use db.json only.');
 }
 
-// The collections that are backed by Supabase.
-export const CORE_TABLES = [
+const DIRECT_TABLES = [
   'parents',
   'students',
   'groups',
@@ -43,6 +40,28 @@ export const CORE_TABLES = [
   'health_declarations',
   'form_templates',
 ];
+
+export const OPERATIONAL_TABLES = [
+  'payments',
+  'employees',
+  'whatsapp_logs',
+  'wage_agreements',
+  'shift_hours',
+  'safety_inspections',
+  'safety_incidents',
+  'level_tests',
+  'pricelist',
+  'broadcast_campaigns',
+  'broadcast_lists',
+  'broadcast_list_defs',
+  'check_ins',
+  'automations',
+  'cash_register_shifts',
+  'webhook_logs',
+];
+
+// Kept as the public name used by db.js: every listed collection is durable.
+export const CORE_TABLES = [...DIRECT_TABLES, ...OPERATIONAL_TABLES];
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 const emptyToNull = (v) => (v === '' || v === undefined ? null : v);
@@ -264,6 +283,17 @@ export const supa = {
   // Load every row of a table, mapped to the app's JS shape.
   async getAll(table) {
     if (!client) return null;
+    if (OPERATIONAL_TABLES.includes(table)) {
+      const { data, error } = await client
+        .from('kv_collections')
+        .select('data')
+        .eq('collection', table);
+      if (error) {
+        console.error(`Supabase getAll(${table}) failed:`, error.message);
+        return null;
+      }
+      return (data || []).map((row) => row.data).filter(Boolean);
+    }
     const { data, error } = await client.from(table).select('*');
     if (error) {
       console.error(`Supabase getAll(${table}) failed:`, error.message);
@@ -276,6 +306,26 @@ export const supa = {
   // Insert or update a single record. Returns { ok, error }.
   async upsert(table, record) {
     if (!client) return { ok: false, error: 'Supabase not configured' };
+    if (OPERATIONAL_TABLES.includes(table)) {
+      const recordId = record.id ?? record.key;
+      if (recordId === undefined || recordId === null) {
+        return { ok: false, error: `Missing durable id for ${table}` };
+      }
+      const row = {
+        collection: table,
+        id: String(recordId),
+        data: record,
+        updated_at: new Date().toISOString(),
+      };
+      const { error } = await client
+        .from('kv_collections')
+        .upsert(row, { onConflict: 'collection,id' });
+      if (error) {
+        console.error(`Supabase upsert(${table}) failed:`, error.message);
+        return { ok: false, error: error.message, row };
+      }
+      return { ok: true };
+    }
     const row = mapperFor(table).toRow(record);
     const { error } = await client.from(table).upsert(row, { onConflict: 'id' });
     if (error) {
@@ -288,8 +338,52 @@ export const supa = {
   // Remove a single record by id.
   async remove(table, id) {
     if (!client) return;
+    if (OPERATIONAL_TABLES.includes(table)) {
+      const { error } = await client
+        .from('kv_collections')
+        .delete()
+        .eq('collection', table)
+        .eq('id', String(id));
+      if (error) console.error(`Supabase remove(${table}) failed:`, error.message);
+      return;
+    }
     const { error } = await client.from(table).delete().eq('id', id);
     if (error) console.error(`Supabase remove(${table}) failed:`, error.message);
+  },
+
+  async verifyAccessToken(token) {
+    if (!client || !token) return null;
+    const { data, error } = await client.auth.getUser(token);
+    if (error || !data?.user) return null;
+    return data.user;
+  },
+
+  async getAppSetting(key) {
+    if (!client) return null;
+    const { data, error } = await client
+      .from('app_settings')
+      .select('value')
+      .eq('key', key)
+      .maybeSingle();
+    if (error) {
+      console.error(`Supabase getAppSetting(${key}) failed:`, error.message);
+      return null;
+    }
+    return data?.value ?? null;
+  },
+
+  async setAppSetting(key, value) {
+    if (!client) return { ok: false, error: 'Supabase not configured' };
+    const { error } = await client.from('app_settings').upsert({
+      key,
+      value,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'key' });
+    if (error) {
+      console.error(`Supabase setAppSetting(${key}) failed:`, error.message);
+      return { ok: false, error: error.message };
+    }
+    return { ok: true };
   },
 
   client,

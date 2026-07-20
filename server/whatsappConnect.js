@@ -1,6 +1,6 @@
 import { db } from './db.js';
 
-const GRAPH_VERSION = 'v21.0';
+const GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v25.0';
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
 function getAppCredentials() {
@@ -132,20 +132,51 @@ async function fetchPhoneDisplay(phoneNumberId, token) {
   }
 }
 
+function listMissingMetaEnv() {
+  const requiredForMessaging = [
+    ['META_WA_PHONE_NUMBER_ID', process.env.META_WA_PHONE_NUMBER_ID],
+    ['META_WA_ACCESS_TOKEN', process.env.META_WA_ACCESS_TOKEN],
+  ];
+  const recommended = [
+    ['META_WA_WABA_ID', process.env.META_WA_WABA_ID],
+    ['META_WEBHOOK_VERIFY_TOKEN', process.env.META_WEBHOOK_VERIFY_TOKEN],
+    ['META_APP_ID', process.env.META_APP_ID],
+    ['META_APP_SECRET', process.env.META_APP_SECRET],
+  ];
+  return {
+    missingRequired: requiredForMessaging.filter(([, v]) => !v).map(([k]) => k),
+    missingRecommended: recommended.filter(([, v]) => !v).map(([k]) => k),
+  };
+}
+
 export const whatsappConnectService = {
   getConnectConfig() {
     const { appId, configId } = getAppCredentials();
     const settings = db.getSettings();
+    const { missingRequired, missingRecommended } = listMissingMetaEnv();
+    // Messaging works with phone ID + access token alone.
+    const messagingReady = missingRequired.length === 0;
+    const canActivate = !!(
+      process.env.META_WA_PHONE_NUMBER_ID &&
+      process.env.META_WA_ACCESS_TOKEN &&
+      process.env.META_WA_WABA_ID
+    );
     return {
       appId,
       configId,
       graphVersion: GRAPH_VERSION,
-      configured: !!(appId && configId),
-      verifyToken: settings.verifyToken || 'climbing_verify_token',
+      configured: messagingReady,
+      messagingReady,
+      canActivate,
+      missingRequired,
+      missingRecommended,
+      connectionMode: 'direct',
+      webhookPath: '/api/whatsapp/webhook',
+      verifyTokenConfigured: !!(settings.verifyToken || process.env.META_WEBHOOK_VERIFY_TOKEN),
       checklist: [
-        'הגדירו META_APP_ID, META_APP_SECRET, META_EMBEDDED_SIGNUP_CONFIG_ID בשרת',
-        'ב-Meta Developer: Facebook Login for Business → Configuration ל-WhatsApp Embedded Signup',
-        'הוסיפו את דומיין ה-CRM ל-Allowed Domains / Valid OAuth Redirect URIs',
+        'הגדירו בשרת META_WA_PHONE_NUMBER_ID ו-META_WA_ACCESS_TOKEN',
+        'מומלץ גם: META_WA_WABA_ID, META_WEBHOOK_VERIFY_TOKEN, META_APP_ID, META_APP_SECRET',
+        'ב-Meta הגדירו את כתובת קבלת ההודעות של השרת',
         'הירשמו ל-webhooks: messages, smb_message_echoes, history, account_update',
         'השתמשו ב-WhatsApp Business App (ירוק) גרסה 2.24.17 ומעלה',
       ],
@@ -154,29 +185,47 @@ export const whatsappConnectService = {
 
   getStatus() {
     const settings = db.getSettings();
-    const phoneId = settings.metaWaPhoneId || process.env.META_WA_PHONE_NUMBER_ID || '';
-    const token = settings.metaWaAccessToken || process.env.META_WA_ACCESS_TOKEN || '';
+    const phoneId = process.env.META_WA_PHONE_NUMBER_ID || settings.metaWaPhoneId || '';
+    const token = process.env.META_WA_ACCESS_TOKEN || settings.metaWaAccessToken || '';
+    const envConfigured = !!(
+      process.env.META_WA_PHONE_NUMBER_ID &&
+      process.env.META_WA_ACCESS_TOKEN
+    );
     const connected = !!(
       phoneId &&
       token &&
       !phoneId.includes('YOUR_') &&
       !token.includes('YOUR_')
     );
+    const coexistenceEnabled = !!(settings.coexistenceEnabled || settings.isOnBizApp);
+    const { missingRequired, missingRecommended } = listMissingMetaEnv();
     return {
       connected,
       phoneNumberId: phoneId || null,
       wabaId: settings.metaWaWabaId || process.env.META_WA_WABA_ID || null,
       displayPhone: settings.connectedPhoneDisplay || null,
       verifiedName: settings.connectedVerifiedName || null,
-      coexistenceEnabled: !!settings.coexistenceEnabled,
+      coexistenceEnabled,
       isOnBizApp: !!settings.isOnBizApp,
+      coexistenceStatus: coexistenceEnabled
+        ? 'active'
+        : connected
+          ? 'unknown'
+          : 'inactive',
       connectedAt: settings.connectedAt || null,
       tokenPreview: connected ? maskToken(token) : null,
-      envFallback: !settings.metaWaPhoneId && !!process.env.META_WA_PHONE_NUMBER_ID,
+      connectionMode: envConfigured ? 'direct' : 'legacy',
+      envConfigured,
+      messagingReady: connected,
+      missingRequired,
+      missingRecommended,
     };
   },
 
   async completeOAuth({ code, phone_number_id, waba_id, business_id, event } = {}) {
+    if (process.env.META_ENABLE_EMBEDDED_SIGNUP !== 'true') {
+      throw new Error('החיבור העצמי מוגדר באמצעות משתני השרת. חיבור Embedded Signup אינו פעיל');
+    }
     if (!code) throw new Error('חסר קוד OAuth מ-Meta');
     if (!phone_number_id) throw new Error('חסר phone_number_id מ-Meta');
 
@@ -213,6 +262,13 @@ export const whatsappConnectService = {
   },
 
   disconnect() {
+    if (process.env.META_WA_PHONE_NUMBER_ID || process.env.META_WA_ACCESS_TOKEN) {
+      return {
+        success: false,
+        error: 'החיבור מוגדר בשרת. יש להסיר את משתני Meta מהשרת כדי לנתק',
+        status: this.getStatus(),
+      };
+    }
     const settings = db.saveSettings({
       metaWaPhoneId: '',
       metaWaAccessToken: '',
@@ -251,6 +307,38 @@ export const whatsappConnectService = {
       });
     }
     return this.getStatus();
+  },
+
+  async activateDirectConnection() {
+    const phoneId = process.env.META_WA_PHONE_NUMBER_ID || '';
+    const wabaId = process.env.META_WA_WABA_ID || '';
+    const token = process.env.META_WA_ACCESS_TOKEN || '';
+    if (!phoneId || !wabaId || !token) {
+      throw new Error('חסרים מזהה מספר, מזהה חשבון WhatsApp או אסימון גישה בהגדרות השרת');
+    }
+
+    const subscribeResult = await subscribeWabaWebhooks(wabaId, token);
+    if (!subscribeResult.success) {
+      throw new Error(subscribeResult.error || 'רישום קבלת ההודעות ב-Meta נכשל');
+    }
+
+    const phoneInfo = await fetchPhoneDisplay(phoneId, token);
+    db.saveSettings({
+      metaWaPhoneId: phoneId,
+      metaWaWabaId: wabaId,
+      connectedPhoneDisplay: phoneInfo.display || '',
+      connectedVerifiedName: phoneInfo.verifiedName || '',
+      coexistenceEnabled: phoneInfo.isOnBizApp === true,
+      isOnBizApp: phoneInfo.isOnBizApp === true,
+      connectedAt: new Date().toISOString(),
+      lastConnectEvent: 'DIRECT_META_ACTIVATION',
+    });
+
+    return {
+      success: true,
+      status: this.getStatus(),
+      subscribeResult,
+    };
   },
 
   extractMessageText,

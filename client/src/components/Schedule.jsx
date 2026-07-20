@@ -875,7 +875,7 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
 
   // Fetch employees list dynamically for trainers dropdown
   useEffect(() => {
-    fetch('/api/employees')
+    fetch('/api/trainers')
       .then(res => res.ok ? res.json() : [])
       .then(data => setEmployees(Array.isArray(data) ? data : []))
       .catch(err => console.error(err));

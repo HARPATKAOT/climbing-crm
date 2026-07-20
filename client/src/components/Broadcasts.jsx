@@ -23,6 +23,16 @@ const WA_TEMPLATES = [
   { id: 't3', name: 'תזכורת שיעור (דורש אישור ב-Meta)', text: 'שלום {{שם}}, תזכורת: שיעור שלכם מחר. נתראה! 🤸‍♀️' },
 ];
 
+const DAY_OPTIONS = [
+  { value: 0, label: 'א׳' },
+  { value: 1, label: 'ב׳' },
+  { value: 2, label: 'ג׳' },
+  { value: 3, label: 'ד׳' },
+  { value: 4, label: 'ה׳' },
+  { value: 5, label: 'ו׳' },
+  { value: 6, label: 'ש׳' },
+];
+
 export default function Broadcasts({ parents, students }) {
   const [activeTab, setActiveTab] = useState('compose'); // compose | history | simulator | settings
   
@@ -49,10 +59,11 @@ export default function Broadcasts({ parents, students }) {
 
   // Settings State
   const [settings, setSettings] = useState({
-    metaWaPhoneId: '',
-    metaWaAccessToken: '',
-    verifyToken: 'climbing_verify_token',
     aiResponderEnabled: true,
+    aiActiveHoursEnabled: false,
+    aiActiveHoursStart: '09:00',
+    aiActiveHoursEnd: '21:00',
+    aiActiveDays: [0, 1, 2, 3, 4, 5, 6],
     aiSystemPrompt: 'אתה עוזר שירות לקוחות אינטליגנטי עבור קיר הטיפוס My Wall בירושלים. ענה בעברית מנומסת וקצרה. מחירון כניסות: כניסת יחיד מבוגר 50 ש"ח, ילד (עד 18) 40 ש"ח. כרטיסיית 10 כניסות 400 ש"ח. מנוי חודשי 220 ש"ח.',
   });
   const [savingSettings, setSavingSettings] = useState(false);
@@ -61,13 +72,11 @@ export default function Broadcasts({ parents, students }) {
   // WhatsApp Coexistence connect state
   const [waStatus, setWaStatus] = useState({ connected: false });
   const [waConnectConfig, setWaConnectConfig] = useState({ configured: false, appId: '', configId: '', checklist: [] });
-  const [waConnecting, setWaConnecting] = useState(false);
   const [waConnectError, setWaConnectError] = useState('');
   const [waConnectSuccess, setWaConnectSuccess] = useState('');
-  const [showAdvancedWa, setShowAdvancedWa] = useState(false);
+  const [activatingWa, setActivatingWa] = useState(false);
   const [testPhone, setTestPhone] = useState('');
   const [testingSend, setTestingSend] = useState(false);
-  const sessionInfoRef = useRef({ phone_number_id: null, waba_id: null, business_id: null, event: null });
   
   // AI Workbench Simulator State
   const [workbenchInput, setWorkbenchInput] = useState('');
@@ -88,6 +97,20 @@ export default function Broadcasts({ parents, students }) {
   const [selectedSimThread, setSelectedSimThread] = useState('0547654321');
 
   const phoneMessagesEndRef = useRef(null);
+
+  const coexistenceLabel = () => {
+    if (waStatus.coexistenceEnabled || waStatus.isOnBizApp) return 'פעיל (טלפון + מערכת)';
+    if (waStatus.connected) return 'לא עודכן — לחצו «רענן סטטוס»';
+    return 'לא פעיל';
+  };
+
+  const toggleActiveDay = (day) => {
+    const current = Array.isArray(settings.aiActiveDays) ? settings.aiActiveDays : [];
+    const next = current.includes(day)
+      ? current.filter((d) => d !== day)
+      : [...current, day].sort((a, b) => a - b);
+    setSettings({ ...settings, aiActiveDays: next.length ? next : [day] });
+  };
 
   const fetchLists = async () => {
     try {
@@ -271,137 +294,22 @@ export default function Broadcasts({ parents, students }) {
     }
   };
 
-  const loadFacebookSdk = (appId, graphVersion = 'v21.0') => {
-    return new Promise((resolve, reject) => {
-      if (!appId) {
-        reject(new Error('חסר META_APP_ID'));
-        return;
-      }
-      if (window.FB) {
-        window.FB.init({ appId, autoLogAppEvents: true, xfbml: true, version: graphVersion });
-        resolve(window.FB);
-        return;
-      }
-      window.fbAsyncInit = function () {
-        window.FB.init({ appId, autoLogAppEvents: true, xfbml: true, version: graphVersion });
-        resolve(window.FB);
-      };
-      if (document.getElementById('facebook-jssdk')) {
-        // Script tag exists; wait briefly for init
-        setTimeout(() => (window.FB ? resolve(window.FB) : reject(new Error('Facebook SDK לא נטען'))), 800);
-        return;
-      }
-      const script = document.createElement('script');
-      script.id = 'facebook-jssdk';
-      script.async = true;
-      script.defer = true;
-      script.crossOrigin = 'anonymous';
-      script.src = 'https://connect.facebook.net/en_US/sdk.js';
-      script.onerror = () => reject(new Error('טעינת Facebook SDK נכשלה'));
-      document.body.appendChild(script);
-    });
-  };
-
-  const finishWhatsAppOAuth = async (code) => {
-    const session = sessionInfoRef.current || {};
-    const response = await fetch('/api/whatsapp/oauth/callback', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        code,
-        phone_number_id: session.phone_number_id,
-        waba_id: session.waba_id,
-        business_id: session.business_id,
-        event: session.event,
-      }),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.success) {
-      throw new Error(data.error || 'השלמת החיבור נכשלה');
-    }
-    setWaStatus(data.status || { connected: true });
-    setWaConnectSuccess('WhatsApp חובר בהצלחה (Coexistence). אפשר לענות מהטלפון ומהמערכת.');
-    await fetchSettings();
-    await fetchWaStatus(true);
-  };
-
-  const handleConnectWhatsApp = async () => {
-    setWaConnectError('');
-    setWaConnectSuccess('');
-    setWaConnecting(true);
-    try {
-      if (!waConnectConfig.configured) {
-        throw new Error('חסרים META_APP_ID / META_EMBEDDED_SIGNUP_CONFIG_ID בשרת. השלימו את הצ׳קליסט למטה.');
-      }
-
-      await loadFacebookSdk(waConnectConfig.appId, waConnectConfig.graphVersion || 'v21.0');
-
-      const onMessage = (event) => {
-        if (!String(event.origin || '').endsWith('facebook.com')) return;
-        try {
-          const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-          if (data?.type !== 'WA_EMBEDDED_SIGNUP') return;
-          if (data.event === 'CANCEL') {
-            setWaConnectError(data.data?.current_step
-              ? `החיבור בוטל בשלב: ${data.data.current_step}`
-              : 'החיבור בוטל');
-            setWaConnecting(false);
-            return;
-          }
-          sessionInfoRef.current = {
-            phone_number_id: data.data?.phone_number_id || null,
-            waba_id: data.data?.waba_id || null,
-            business_id: data.data?.business_id || null,
-            event: data.event || null,
-          };
-        } catch {
-          // ignore non-JSON message events
-        }
-      };
-      window.addEventListener('message', onMessage);
-
-      window.FB.login((response) => {
-        window.removeEventListener('message', onMessage);
-        (async () => {
-          try {
-            if (!response?.authResponse?.code) {
-              throw new Error('לא התקבל קוד אימות מ-Meta');
-            }
-            await finishWhatsAppOAuth(response.authResponse.code);
-          } catch (err) {
-            setWaConnectError(err.message || 'שגיאה בחיבור');
-          } finally {
-            setWaConnecting(false);
-          }
-        })();
-      }, {
-        config_id: waConnectConfig.configId,
-        response_type: 'code',
-        override_default_response_type: true,
-        extras: {
-          setup: {},
-          featureType: 'whatsapp_business_app_onboarding',
-          sessionInfoVersion: '3',
-        },
-      });
-    } catch (err) {
-      setWaConnectError(err.message || 'שגיאה בחיבור');
-      setWaConnecting(false);
-    }
-  };
-
-  const handleDisconnectWhatsApp = async () => {
-    if (!confirm('לנתק את WhatsApp מהמערכת? (המספר יישאר פעיל באפליקציה בטלפון)')) return;
+  const handleActivateWhatsApp = async () => {
+    setActivatingWa(true);
     setWaConnectError('');
     setWaConnectSuccess('');
     try {
-      const response = await fetch('/api/whatsapp/disconnect', { method: 'POST' });
-      const data = await response.json();
-      setWaStatus(data.status || { connected: false });
-      setWaConnectSuccess('החיבור נותק מהמערכת');
-      await fetchSettings();
+      const response = await fetch('/api/whatsapp/activate', { method: 'POST' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'אימות החיבור נכשל');
+      }
+      setWaStatus(data.status || { connected: true });
+      setWaConnectSuccess('החיבור הישיר מול Meta אומת וקבלת ההודעות הופעלה');
     } catch (err) {
-      setWaConnectError('ניתוק נכשל');
+      setWaConnectError(err.message || 'אימות החיבור נכשל');
+    } finally {
+      setActivatingWa(false);
     }
   };
 
@@ -1042,16 +950,16 @@ export default function Broadcasts({ parents, students }) {
               </div>
 
               <p style={{ fontSize: 12, color: 'var(--text-2)', lineHeight: 1.65, marginBottom: 12 }}>
-                כאן מחברים את מספר ה-WhatsApp Business שלכם.
-                אחרי החיבור אפשר לענות מהטלפון ומהמערכת, והשיחה תופיע בתיק הלקוח.
+                החיבור נעשה ישירות מול Meta באמצעות הגדרות השרת.
+                לאחר ההעברה אפשר לענות מהטלפון ומהמערכת, והשיחה תופיע בתיק הלקוח.
               </p>
 
               <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.7, marginBottom: 12 }}>
-                <div style={{ fontWeight: 700, color: 'var(--text-2)', marginBottom: 4 }}>איך מחברים (3 שלבים):</div>
+                <div style={{ fontWeight: 700, color: 'var(--text-2)', marginBottom: 4 }}>איך מחברים:</div>
                 <ol style={{ margin: '0 18px', padding: 0 }}>
-                  <li>לחצו על <strong style={{ color: '#25D366' }}>חבר WhatsApp</strong> למטה.</li>
-                  <li>בחלון Meta בחרו חיבור ל-WhatsApp Business App הקיים והזינו/אשרו את המספר.</li>
-                  <li>אשרו את הקוד באפליקציה בטלפון — וחזרו לכאן עד שמופיע סטטוס <strong>מחובר</strong>.</li>
+                  <li>השלימו את העברת המספר בחשבון העסקי של Meta.</li>
+                  <li>שמרו את מזהי החשבון ואת האסימון הקבוע בהגדרות השרת.</li>
+                  <li>הגדירו ב-Meta את כתובת קבלת ההודעות ולחצו כאן על רענון.</li>
                 </ol>
               </div>
 
@@ -1059,7 +967,7 @@ export default function Broadcasts({ parents, students }) {
                 <div style={{ display: 'grid', gap: 6, marginBottom: 12, fontSize: 12 }}>
                   <div><strong>מספר:</strong> {waStatus.displayPhone || waStatus.phoneNumberId || '—'}</div>
                   {waStatus.verifiedName && <div><strong>שם מאומת:</strong> {waStatus.verifiedName}</div>}
-                  <div><strong>טלפון + מערכת:</strong> {waStatus.coexistenceEnabled || waStatus.isOnBizApp ? 'פעיל' : 'ממתין לאישור Coexistence'}</div>
+                  <div><strong>טלפון + מערכת:</strong> {coexistenceLabel()}</div>
                 </div>
               )}
 
@@ -1075,26 +983,20 @@ export default function Broadcasts({ parents, students }) {
               )}
 
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
-                {!waStatus.connected ? (
+                {(waConnectConfig.canActivate || waConnectConfig.configured) && (
                   <button
                     type="button"
                     className="btn btn-primary"
-                    onClick={handleConnectWhatsApp}
-                    disabled={waConnecting}
-                    style={{ background: '#25D366', borderColor: '#25D366', minWidth: 160 }}
+                    onClick={handleActivateWhatsApp}
+                    disabled={activatingWa}
+                    style={{ background: '#25D366', borderColor: '#25D366' }}
                   >
-                    {waConnecting ? 'מתחבר...' : 'חבר WhatsApp'}
+                    {activatingWa ? 'מאמת...' : 'אמת והפעל חיבור'}
                   </button>
-                ) : (
-                  <>
-                    <button type="button" className="btn btn-ghost" onClick={() => fetchWaStatus(true)}>
-                      <RefreshCw size={14} /> רענן סטטוס
-                    </button>
-                    <button type="button" className="btn btn-danger" onClick={handleDisconnectWhatsApp}>
-                      נתק
-                    </button>
-                  </>
                 )}
+                <button type="button" className="btn btn-ghost" onClick={() => fetchWaStatus(true)}>
+                  <RefreshCw size={14} /> רענן סטטוס
+                </button>
               </div>
 
               {waStatus.connected && (
@@ -1116,45 +1018,116 @@ export default function Broadcasts({ parents, students }) {
                 <div style={{ fontWeight: 700, marginBottom: 4, color: 'var(--text-2)' }}>Webhook לקבלת הודעות (חד-פעמי ב-Meta):</div>
                 <ol style={{ margin: '0 18px', padding: 0 }}>
                   <li>הגדירו Callback URL ל-<code style={{ color: 'var(--blue)' }}>/api/whatsapp/webhook</code> בשרת שלכם.</li>
-                  <li>Verify Token: <code style={{ color: 'var(--green)' }}>{settings.verifyToken || 'climbing_verify_token'}</code></li>
+                  <li>הזינו ב-Meta את אסימון האימות ששמור בהגדרות השרת.</li>
                   <li>סמנו: <code style={{ color: '#25D366' }}>messages</code>, <code style={{ color: '#25D366' }}>smb_message_echoes</code>, <code style={{ color: '#25D366' }}>history</code></li>
                 </ol>
-                {!waConnectConfig.configured && (
-                  <div style={{ marginTop: 8, padding: 8, borderRadius: 8, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)' }}>
-                    <strong style={{ color: '#FBBF24' }}>חסרים משתני סביבה בשרת:</strong>{' '}
-                    <code>META_APP_ID</code>, <code>META_APP_SECRET</code>, <code>META_EMBEDDED_SIGNUP_CONFIG_ID</code>
-                    <div style={{ marginTop: 4 }}>בלי אלה הכפתור לא יוכל לפתוח את חלון האימות של Meta.</div>
+                {Array.isArray(waConnectConfig.missingRequired) && waConnectConfig.missingRequired.length > 0 && (
+                  <div style={{ marginTop: 8, padding: 8, borderRadius: 8, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)' }}>
+                    <strong style={{ color: '#F87171' }}>חסרים ערכים הכרחיים בשרת לשליחת הודעות:</strong>{' '}
+                    <code>{waConnectConfig.missingRequired.join(', ')}</code>
+                  </div>
+                )}
+                {waConnectConfig.messagingReady && Array.isArray(waConnectConfig.missingRecommended) && waConnectConfig.missingRecommended.length > 0 && (
+                  <div style={{ marginTop: 8, padding: 8, borderRadius: 8, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)' }}>
+                    <strong style={{ color: '#FBBF24' }}>מומלץ להשלים בשרת (לא חוסם שליחה):</strong>{' '}
+                    <code>{waConnectConfig.missingRecommended.join(', ')}</code>
                   </div>
                 )}
               </div>
-
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                style={{ marginTop: 10 }}
-                onClick={() => setShowAdvancedWa(v => !v)}
-              >
-                {showAdvancedWa ? 'הסתר גיבוי ידני' : 'גיבוי ידני (Phone ID / Token)'}
-              </button>
-              {showAdvancedWa && (
-                <div className="form-grid" style={{ gap: 10, marginTop: 10 }}>
-                  <div className="form-group">
-                    <label className="form-label" style={{ fontSize: 11 }}>Phone Number ID</label>
-                    <input className="input input-sm" value={settings.metaWaPhoneId || ''} onChange={e => setSettings({ ...settings, metaWaPhoneId: e.target.value })} />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label" style={{ fontSize: 11 }}>Access Token</label>
-                    <input className="input input-sm" type="password" placeholder="EAA..." value={settings.metaWaAccessToken?.includes('•') ? '' : (settings.metaWaAccessToken || '')} onChange={e => setSettings({ ...settings, metaWaAccessToken: e.target.value })} />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label" style={{ fontSize: 11 }}>WABA ID</label>
-                    <input className="input input-sm" value={settings.metaWaWabaId || ''} onChange={e => setSettings({ ...settings, metaWaWabaId: e.target.value })} />
-                  </div>
-                </div>
-              )}
             </div>
 
             <form onSubmit={handleSaveSettings} className="form-grid" style={{ gap: 14 }}>
+              <div style={{
+                border: `1px solid ${settings.aiResponderEnabled ? 'rgba(37,211,102,0.45)' : 'rgba(239,68,68,0.35)'}`,
+                background: settings.aiResponderEnabled ? 'rgba(37,211,102,0.06)' : 'rgba(239,68,68,0.06)',
+                borderRadius: 12,
+                padding: 14,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>מענה אוטומטי של הבוט</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
+                      {settings.aiResponderEnabled
+                        ? 'הבוט פעיל — עונה אוטומטית להודעות נכנסות'
+                        : 'הבוט כבוי — לא יישלח מענה אוטומטי'}
+                    </div>
+                  </div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
+                    <input
+                      type="checkbox"
+                      checked={!!settings.aiResponderEnabled}
+                      onChange={e => setSettings({ ...settings, aiResponderEnabled: e.target.checked })}
+                      style={{ width: 20, height: 20 }}
+                    />
+                    {settings.aiResponderEnabled ? 'פעיל' : 'כבוי'}
+                  </label>
+                </div>
+
+                <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
+                    <input
+                      type="checkbox"
+                      checked={!!settings.aiActiveHoursEnabled}
+                      onChange={e => setSettings({ ...settings, aiActiveHoursEnabled: e.target.checked })}
+                      disabled={!settings.aiResponderEnabled}
+                      style={{ width: 18, height: 18 }}
+                    />
+                    הגבלת שעות פעילות
+                  </label>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 10, lineHeight: 1.5 }}>
+                    מחוץ לשעות האלה הבוט לא יענה (לפי שעון ישראל). בדיקת המענה במסך הזה תמשיך לעבוד גם מחוץ לשעות.
+                  </div>
+                  <div className="form-grid-2" style={{ opacity: settings.aiResponderEnabled && settings.aiActiveHoursEnabled ? 1 : 0.45, pointerEvents: settings.aiResponderEnabled && settings.aiActiveHoursEnabled ? 'auto' : 'none' }}>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="form-label" style={{ fontSize: 11 }}>משעה</label>
+                      <input
+                        className="input input-sm"
+                        type="time"
+                        value={settings.aiActiveHoursStart || '09:00'}
+                        onChange={e => setSettings({ ...settings, aiActiveHoursStart: e.target.value })}
+                      />
+                    </div>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="form-label" style={{ fontSize: 11 }}>עד שעה</label>
+                      <input
+                        className="input input-sm"
+                        type="time"
+                        value={settings.aiActiveHoursEnd || '21:00'}
+                        onChange={e => setSettings({ ...settings, aiActiveHoursEnd: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 10, opacity: settings.aiResponderEnabled && settings.aiActiveHoursEnabled ? 1 : 0.45, pointerEvents: settings.aiResponderEnabled && settings.aiActiveHoursEnabled ? 'auto' : 'none' }}>
+                    <div className="form-label" style={{ fontSize: 11, marginBottom: 6 }}>ימים פעילים</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {DAY_OPTIONS.map((day) => {
+                        const active = (settings.aiActiveDays || []).includes(day.value);
+                        return (
+                          <button
+                            key={day.value}
+                            type="button"
+                            onClick={() => toggleActiveDay(day.value)}
+                            style={{
+                              minWidth: 36,
+                              padding: '6px 8px',
+                              borderRadius: 8,
+                              border: active ? '1px solid rgba(37,211,102,0.55)' : '1px solid var(--border)',
+                              background: active ? 'rgba(37,211,102,0.18)' : 'transparent',
+                              color: 'var(--text)',
+                              fontWeight: 700,
+                              fontSize: 12,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {day.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <div className="form-group">
                 <label className="form-label">הנחיות אימון למענה ה-AI (System Prompt)</label>
                 <textarea className="input textarea" rows={6} style={{ fontSize: 12, lineHeight: 1.5 }}
@@ -1162,17 +1135,6 @@ export default function Broadcasts({ parents, students }) {
                 <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4 }}>
                   הסבר ל-AI כיצד להציג את הקיר, אלו מחירים לתת, וכיצד להתנסח (למשל: לתת קישורי רישום).
                 </div>
-              </div>
-
-              <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <input type="checkbox" id="ai-enabled" checked={settings.aiResponderEnabled}
-                  onChange={e => setSettings({ ...settings, aiResponderEnabled: e.target.checked })} style={{ width: 18, height: 18 }} />
-                <label htmlFor="ai-enabled" className="form-label" style={{ marginBottom: 0, cursor: 'pointer' }}>בוט AI פעיל למענה אוטומטי בוואטסאפ</label>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Verify Token (לחיבור Meta Webhook בוואטסאפ ואינסטגרם)</label>
-                <input className="input" value={settings.verifyToken} onChange={e => setSettings({ ...settings, verifyToken: e.target.value })} />
               </div>
 
               <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14, marginTop: 4 }}>
@@ -1184,7 +1146,7 @@ export default function Broadcasts({ parents, students }) {
                   <ol style={{ margin: '6px 20px', padding: 0 }}>
                     <li>היכנסו לפורטל המפתחים של Meta או להגדרות Instagram Graph API.</li>
                     <li>הגדירו את כתובת ה-Webhook ל-<code style={{ color: 'var(--blue)' }}>https://YOUR_SERVER_URL/api/instagram/webhook</code> (או לכתובת המנהרת Pinggy שלכם).</li>
-                    <li>הזינו את ה-Verify Token הרשום לעיל (<code style={{ color: 'var(--green)' }}>{settings.verifyToken || 'climbing_verify_token'}</code>).</li>
+                    <li>הזינו את אסימון האימות ששמור בהגדרות השרת.</li>
                     <li>סמנו תחת אירועי Webhook את <code style={{ color: '#ff80bf' }}>messages</code> ואת <code style={{ color: '#ff80bf' }}>messaging_postbacks</code>.</li>
                   </ol>
                 </div>
@@ -1201,7 +1163,7 @@ export default function Broadcasts({ parents, students }) {
               </div>
 
               <button type="submit" className="btn btn-primary btn-full" disabled={savingSettings}>
-                {savingSettings ? 'שומר...' : 'שמור הגדרות בוט, וואטסאפ ואינסטגרם'}
+                {savingSettings ? 'שומר...' : 'שמור הגדרות בוט ואינסטגרם'}
               </button>
             </form>
           </div>

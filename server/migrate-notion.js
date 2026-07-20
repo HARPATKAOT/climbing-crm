@@ -155,9 +155,9 @@ async function run() {
     level_tests: [],
     pricelist: [],
     whatsapp_settings: {
-      metaWaPhoneId: "107232849032183",
-      metaWaAccessToken: "EAATGWDBWZBQ4BRZBx81sBfughpiENWDv2nA3G4rXZColMy05YAZAgjmlslqVdwdps7zacG1CK7C8vtyZC5jSNQ8kixXH8wePmMzMSJpYlHQ3ktrUGZAqDEww9xXXCNXJFOw8SZAABk7YXMWqFZBxZCaSOl4ia7CrZCVJQ4a3w3kudG4NdDsvIZBiTDIjz0QeAyybQZCca17aEeT33S1ZABigwd6HvNlZAVoU8HnaC3ZCo6fqjejiqheZCvYiymOBD0H08uG7fXTf90klm2nN8ZBz8eEN7bwZDZD",
-      verifyToken: "climbing_verify_token",
+      metaWaPhoneId: process.env.META_WA_PHONE_NUMBER_ID || "",
+      metaWaAccessToken: "",
+      verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN || "",
       aiResponderEnabled: true,
       aiSystemPrompt: "אתה בבוט שירות לקוחות ידידותי של קיר הטיפוס My Wall. ענה בנימוס וקצרות בעברית. שלח קישור להצהרת בריאות (https://mywall.co.il/health) או הסבר על חוגים לפי הצורך. שמור על טון חיובי ומקצועי."
     },

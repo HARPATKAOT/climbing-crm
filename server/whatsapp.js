@@ -1,14 +1,227 @@
 import { db } from './db.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 
+const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v25.0';
+
 function formatWaPhone(phone) {
   return normalizeWaPhone(phone);
+}
+
+/** Current weekday (0=Sunday) and HH:mm in Asia/Jerusalem. */
+export function israelClockParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jerusalem',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const weekdayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const weekday = weekdayMap[parts.find((p) => p.type === 'weekday')?.value] ?? date.getDay();
+  let hour = parts.find((p) => p.type === 'hour')?.value ?? '00';
+  const minute = parts.find((p) => p.type === 'minute')?.value ?? '00';
+  // en-US hour12:false can still yield "24" for midnight in some engines
+  if (hour === '24') hour = '00';
+  return { weekday, time: `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}` };
+}
+
+function parseHm(value, fallback) {
+  const m = String(value || '').match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return fallback;
+  const h = Math.min(23, Math.max(0, Number(m[1])));
+  const min = Math.min(59, Math.max(0, Number(m[2])));
+  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+}
+
+/** Whether the AI bot should auto-reply right now (Israel time). */
+export function shouldAiAutoReply(settings = {}, { ignoreSchedule = false } = {}) {
+  if (!settings.aiResponderEnabled) return false;
+  if (ignoreSchedule || !settings.aiActiveHoursEnabled) return true;
+
+  const { weekday, time } = israelClockParts();
+  const days = Array.isArray(settings.aiActiveDays) && settings.aiActiveDays.length
+    ? settings.aiActiveDays.map(Number)
+    : [0, 1, 2, 3, 4, 5, 6];
+  if (!days.includes(weekday)) return false;
+
+  const start = parseHm(settings.aiActiveHoursStart, '09:00');
+  const end = parseHm(settings.aiActiveHoursEnd, '21:00');
+  if (start <= end) return time >= start && time < end;
+  // Overnight window, e.g. 22:00–06:00
+  return time >= start || time < end;
+}
+
+const DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'שבת'];
+
+function formatGroupLine(group) {
+  const dayLabel = DAY_NAMES[Number(group.day)] || `יום ${group.day}`;
+  const priceBits = [];
+  if (Number(group.priceWeek) > 0) priceBits.push(`שבועי ₪${group.priceWeek}`);
+  if (Number(group.priceTwice) > 0) priceBits.push(`פעמיים ₪${group.priceTwice}`);
+  const prices = priceBits.length ? priceBits.join(' / ') : 'מחיר לפי פנייה';
+  const free = Math.max(0, Number(group.maxSlots || 0) - Number(group.enrolled || 0));
+  return `• ${group.name} | ${dayLabel} ${group.time || ''} | קטגוריה: ${group.ageCategory || 'לא צוין'} | ${prices} | מקומות פנויים בערך: ${free}`;
+}
+
+/** Live CRM snapshot injected into the AI prompt / heuristic replies */
+function buildCrmBotContext() {
+  const groups = (db.get('groups') || [])
+    .slice()
+    .sort((a, b) => String(a.ageCategory || '').localeCompare(String(b.ageCategory || ''), 'he')
+      || Number(a.day) - Number(b.day)
+      || String(a.time || '').localeCompare(String(b.time || '')));
+
+  const groupLines = groups.length
+    ? groups.map(formatGroupLine).join('\n')
+    : 'אין כרגע קבוצות במערכת.';
+
+  return {
+    groups,
+    text: `## נתונים חיים ממערכת ה-CRM (השתמש רק בהם לתשובות על חוגים/זמנים/מחירים)
+כתובת: רחוב האורגים 12, אשדוד
+שעות פתיחה כלליות: א׳–ה׳ 14:00–22:00 | שישי 09:00–15:00 | שבת סגור
+הצהרת בריאות: https://mywall.co.il/health
+
+### קבוצות חוגים פעילות (${groups.length}):
+${groupLines}
+
+### כללים לתשובה לפי נתונים
+- אם שאלו על כיתה/גיל — הצג רק קבוצות רלוונטיות מהרשימה (למשל כיתה ג׳ → קטגוריה עם ג׳ כמו ג'-ד').
+- ציין יום, שעה ומחיר מהשורה המתאימה. אל תמציא קבוצות שלא מופיעות.
+- אם אין התאמה מדויקת — אמור זאת והצע את הקבוצות הקרובות ביותר + בקש שם וטלפון לחזרה.
+- אל תשלח את הלקוח ל"השב 2" אם כבר יש לך את המידע ברשימה.`,
+  };
+}
+
+function groupMatchesGradeLetter(group, letter) {
+  // Prefer ageCategory; ignore "יום ג׳" in names so weekday letters don't match grades.
+  const category = String(group.ageCategory || '');
+  const name = String(group.name || '').replace(/יום\s*[א-ו]['׳']?/g, ' ');
+  const re = new RegExp(`(^|[^א-ת])${letter}['׳']?(?:\\s*[-–]\\s*[א-ו]['׳']?)?(?=[^א-ת]|$)`);
+  return re.test(category) || re.test(name);
+}
+
+function findGroupsForText(text) {
+  const groups = db.get('groups') || [];
+  const t = String(text || '');
+  const gradeMatch = t.match(/כית(?:ה|ות)?\s*([א-ו])['׳']?/i)
+    || t.match(/([א-ו])['׳']?\s*[-–]\s*([א-ו])['׳']?/i);
+  if (!gradeMatch) {
+    if (/חוג|קבוצ|שיעור|רישום|אימון|אימונ/.test(t)) return groups.slice(0, 8);
+    return [];
+  }
+  const letter = gradeMatch[1];
+  const matched = groups.filter((g) => groupMatchesGradeLetter(g, letter));
+  return matched.length ? matched : groups.filter((g) => {
+    const hay = `${g.name || ''} ${g.ageCategory || ''}`;
+    return hay.includes(`${letter}'`) || hay.includes(`${letter}׳`) || hay.includes(`${letter}-`);
+  });
+}
+
+function buildHeuristicReply(incomingText) {
+  const raw = String(incomingText || '').trim();
+  const text = raw.toLowerCase();
+  // Menu picks from the default greeting: "1" / "2" / "3"
+  const menuPick = text.match(/^[1-3]$/)?.[0]
+    || (text.match(/^(?:אופציה|אפשרות|מספר)?\s*[1-3]\b/)?.[0]?.replace(/\D/g, '') || null);
+
+  const healthReply = 'היי! הנה הקישור לחתימה מהירה על הצהרת הבריאות הדיגיטלית של קיר הטיפוס: https://mywall.co.il/health 🧗‍♂️. לאחר החתימה המערכת תתעדכן אוטומטית.';
+  const matchedGroups = findGroupsForText(raw);
+  const groupsFromData = (matchedGroups.length ? matchedGroups : (db.get('groups') || []).slice(0, 6))
+    .map(formatGroupLine)
+    .join('\n');
+  const classesReply = matchedGroups.length
+    ? `היי! לפי הנתונים במערכת, אלה הקבוצות הרלוונטיות:\n${groupsFromData}\n\nרוצים שנשמור מקום / נחזור אליכם? כתבו שם הילד ומספר טלפון.`
+    : `שלום! אלה חלק מקבוצות החוגים במערכת כרגע:\n${groupsFromData || 'אין קבוצות פעילות כרגע במערכת.'}\n\nכדי לדייק — מהי כיתת הילד/ה?`;
+  const pricesReply = 'שלום! מחירי הכניסה והחוגים אצלנו:\n• כניסה חד פעמית: ₪50\n• כרטיסיית 10 כניסות: ₪450\n• מנוי חופשי חודשי: ₪280\n• חוג שבועי (כולל כניסה חופשית): ₪280 - ₪305 בחודש (תלוי בגיל).\nנשמח לתאם אימון הכירות! 💸';
+  const hoursReply = 'שעות הפעילות של קיר הטיפוס My Wall הן:\n• ימים א׳ - ה׳: 14:00 - 22:00\n• ימי שישי: 09:00 - 15:00\n• ימי שבת: סגור.\nנשמח לראותכם!';
+  const locationReply = 'קיר הטיפוס My Wall ממוקם ברחוב האורגים 12, אשדוד (חניה בשפע בחזית). נתראה על הקיר! 🗺️';
+  const defaultMenu = 'שלום! אני הבוט האוטומטי של My Wall CRM 🧗.\nאני יכול לעזור לך עם:\n1. קישור מהיר להצהרת בריאות ✍️\n2. הרשמה ומחירי חוגי טיפוס 🤸\n3. שעות פעילות ומיקום המועדון 🗺️\n\nכתבו מספר (1, 2 או 3) או שאלה קצרה — ואיך תרצו להתקדם?';
+
+  if (menuPick === '1' || text.includes('צהר') || text.includes('טופס') || text.includes('בריאות') || text.includes('חתמ')) {
+    return { text: healthReply, confidence: 'high' };
+  }
+
+  if (
+    menuPick === '2'
+    || text.includes('חוג')
+    || text.includes('קבוצ')
+    || text.includes('שיעור')
+    || text.includes('רישום')
+    || text.includes('להירשם')
+    || text.includes('אימון')
+    || text.includes('אימונ')
+    || /כית/.test(raw)
+  ) {
+    return { text: classesReply, confidence: 'high' };
+  }
+
+  if (text.includes('מחיר') || text.includes('כמה עולה') || text.includes('עלות') || text.includes('מנוי')) {
+    return { text: matchedGroups.length ? classesReply : pricesReply, confidence: 'high' };
+  }
+
+  if (menuPick === '3' || text.includes('שע') || text.includes('מתי פתוח') || text.includes('פתיח') || text.includes('מתי אתם פתוחים')) {
+    return { text: `${hoursReply}\n\n${locationReply}`, confidence: 'high' };
+  }
+
+  if (text.includes('מיקום') || text.includes('איפה') || text.includes('כתובת') || text.includes('הוראות הגעה')) {
+    return { text: locationReply, confidence: 'high' };
+  }
+
+  return { text: defaultMenu, confidence: 'low' };
+}
+
+async function callGeminiReply(systemPrompt, crmText, incomingText, apiKey) {
+  const models = [
+    process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'gemini-flash-latest',
+  ];
+  let lastError = '';
+  for (const model of models) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: `${systemPrompt}
+
+${crmText}
+
+הערה חשובה: אם הלקוח כותב רק 1 / 2 / 3 זה בחירה מתפריט:
+1 = קישור להצהרת בריאות (https://mywall.co.il/health)
+2 = הרשמה ומחירי חוגים (ענה מתוך רשימת הקבוצות למעלה)
+3 = שעות פעילות ומיקום
+
+הודעת לקוח: "${incomingText}"
+תשובה קצרה ומנומסת של הבוט, עם נתונים מהרשימה בלבד:`
+            }]
+          }]
+        })
+      });
+      if (!response.ok) {
+        const errBody = await response.text().catch(() => '');
+        lastError = `${model}: HTTP ${response.status} ${errBody.slice(0, 160)}`;
+        continue;
+      }
+      const data = await response.json();
+      const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (responseText?.trim()) return responseText.trim();
+      lastError = `${model}: empty candidates`;
+    } catch (err) {
+      lastError = `${model}: ${err.message}`;
+    }
+  }
+  if (lastError) console.error('Gemini API call failed, falling back to heuristics:', lastError);
+  return null;
 }
 
 // Call Meta WhatsApp Cloud API
 async function callMetaWhatsAppAPI(phone, payload) {
   const settings = db.getSettings();
-  // Prefer server env vars — committed/local settings may contain stale credentials.
   const phoneId = String(process.env.META_WA_PHONE_NUMBER_ID || settings.metaWaPhoneId || '').trim();
   const token = String(process.env.META_WA_ACCESS_TOKEN || settings.metaWaAccessToken || '').trim();
 
@@ -19,7 +232,7 @@ async function callMetaWhatsAppAPI(phone, payload) {
 
   const formattedPhone = formatWaPhone(phone);
 
-  const url = `https://graph.facebook.com/v25.0/${phoneId}/messages`;
+  const url = `https://graph.facebook.com/${META_GRAPH_VERSION}/${phoneId}/messages`;
   try {
     const response = await fetch(url, {
       method: 'POST',
@@ -36,11 +249,22 @@ async function callMetaWhatsAppAPI(phone, payload) {
 
     const data = await response.json();
     if (!response.ok) {
-      throw new Error(data.error?.message || 'Meta API error');
+      const metaMessage = data.error?.message || 'Meta API error';
+      const metaCode = data.error?.code;
+      const metaType = data.error?.type;
+      console.error(
+        `❌ Meta WhatsApp API failed for ${phone}:`,
+        metaMessage,
+        `| code=${metaCode || '?'} type=${metaType || '?'}`,
+        `| tokenLen=${token.length} phoneId=${phoneId} token=${token.slice(0, 6)}…${token.slice(-4)}`
+      );
+      throw new Error(metaMessage);
     }
     return { success: true, messageId: data.messages?.[0]?.id };
   } catch (error) {
-    console.error(`❌ Meta WhatsApp API failed for ${phone}:`, error.message);
+    if (!String(error.message || '').includes('Authentication Error') && !String(error.message || '').includes('Meta')) {
+      console.error(`❌ Meta WhatsApp API failed for ${phone}:`, error.message);
+    }
     throw error;
   }
 }
@@ -137,59 +361,21 @@ export const whatsappService = {
 
   // Generate automated AI response
   generateAIResponse: async (incomingText) => {
+    // Clear intents (1/2/3, כיתה, אימונים...) answered immediately — don't depend on Gemini.
+    const quick = buildHeuristicReply(incomingText);
+    if (quick.confidence === 'high') return quick.text;
+
     const settings = db.getSettings();
     const systemPrompt = settings.aiSystemPrompt;
     const apiKey = process.env.GEMINI_API_KEY;
+    const crm = buildCrmBotContext();
 
     if (apiKey && apiKey !== 'YOUR_GEMINI_API_KEY_HERE') {
-      try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{
-              parts: [{
-                text: `${systemPrompt}\n\nהודעת לקוח: "${incomingText}"\nתשובה קצרה ומנומסת של הבוט:`
-              }]
-            }]
-          })
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (responseText) return responseText.trim();
-        }
-      } catch (err) {
-        console.error('Gemini API call failed, falling back to heuristics:', err);
-      }
+      const geminiText = await callGeminiReply(systemPrompt, crm.text, incomingText, apiKey);
+      if (geminiText) return geminiText;
     }
 
-    // Heuristics Fallback Engine
-    const text = incomingText.toLowerCase();
-    
-    if (text.includes('צהר') || text.includes('טופס') || text.includes('בריאות') || text.includes('חתמ')) {
-      return 'היי! הנה הקישור לחתימה מהירה על הצהרת הבריאות הדיגיטלית של קיר הטיפוס: https://mywall.co.il/health 🧗‍♂️. לאחר החתימה המערכת תתעדכן אוטומטית.';
-    }
-    
-    if (text.includes('חוג') || text.includes('שיעור') || text.includes('רישום') || text.includes('להירשם')) {
-      return 'שלום! אנו מציעים חוגי טיפוס לילדים ולנוער (מכיתה א׳ ועד תיכון) וכן קבוצות בוגרים. כדי שנוכל להתאים את הקבוצה המושלמת עבורכם, מהי כיתת הילד/ה או גיל המטפס/ת? 🤸‍♀️';
-    }
-    
-    if (text.includes('מחיר') || text.includes('כמה עולה') || text.includes('עלות') || text.includes('מנוי')) {
-      return 'שלום! מחירי הכניסה והחוגים אצלנו:\n• כניסה חד פעמית: ₪50\n• כרטיסיית 10 כניסות: ₪450\n• מנוי חופשי חודשי: ₪280\n• חוג שבועי (כולל כניסה חופשית): ₪280 - ₪305 בחודש (תלוי בגיל).\nנשמח לתאם אימון הכירות! 💸';
-    }
-    
-    if (text.includes('שע') || text.includes('מתי פתוח') || text.includes('פתיח') || text.includes('מתי אתם פתוחים')) {
-      return 'שעות הפעילות של קיר הטיפוס My Wall הן:\n• ימים א׳ - ה׳: 14:00 - 22:00\n• ימי שישי: 09:00 - 15:00\n• ימי שבת: סגור.\nנשמח לראותכם!';
-    }
-    
-    if (text.includes('מיקום') || text.includes('איפה') || text.includes('כתובת') || text.includes('הוראות הגעה')) {
-      return 'קיר הטיפוס My Wall ממוקם ברחוב האורגים 12, אשדוד (חניה בשפע בחזית). נתראה על הקיר! 🗺️';
-    }
-
-    return 'שלום! אני הבוט האוטומטי של My Wall CRM 🧗.\nאני יכול לעזור לך עם:\n1. קישור מהיר להצהרת בריאות ✍️\n2. הרשמה ומחירי חוגי טיפוס 🤸\n3. שעות פעילות ומיקום המועדון 🗺️\n\nאיך תרצה להתקדם?';
+    return quick.text;
   },
 
   // Process incoming messages (webhook entrypoint / simulator)
@@ -220,9 +406,9 @@ export const whatsappService = {
       }
     }
 
-    // 4. Process AI automated reply if active
+    // 4. Process AI automated reply if active (and within schedule for live traffic)
     const settings = db.getSettings();
-    if (settings.aiResponderEnabled && text) {
+    if (shouldAiAutoReply(settings, { ignoreSchedule: isSimulator }) && text) {
       const aiReply = await whatsappService.generateAIResponse(text);
       if (isSimulator) {
         db.insert('whatsapp_logs', {
@@ -240,7 +426,17 @@ export const whatsappService = {
       return { parent, student, isNew, replied: true, reply: aiReply };
     }
 
-    return { parent, student, isNew, replied: false };
+    return {
+      parent,
+      student,
+      isNew,
+      replied: false,
+      skippedReason: !settings.aiResponderEnabled
+        ? 'disabled'
+        : settings.aiActiveHoursEnabled && !isSimulator
+          ? 'outside_hours'
+          : null,
+    };
   },
 
   // Messages sent from WhatsApp Business app (Coexistence echoes)
@@ -343,8 +539,8 @@ async function callMetaInstagramAPI(recipientId, text) {
   const isIgLoginToken = token.startsWith('IGAAT') || token.startsWith('IGAA');
   const accountId = settings.metaIgAccountId || process.env.META_IG_ACCOUNT_ID || 'me';
   const url = isIgLoginToken
-    ? 'https://graph.instagram.com/v20.0/me/messages'
-    : `https://graph.facebook.com/v20.0/${accountId}/messages`;
+    ? `https://graph.instagram.com/${META_GRAPH_VERSION}/me/messages`
+    : `https://graph.facebook.com/${META_GRAPH_VERSION}/${accountId}/messages`;
 
   try {
     const response = await fetch(url, {
@@ -407,9 +603,9 @@ export const instagramService = {
     // 2. Upsert lead / client details in DB
     const { parent, student, isNew } = db.createLeadFromInstagram(igId, text, name);
 
-    // 3. Process AI automated reply if active
+    // 3. Process AI automated reply if active (schedule applies to live traffic)
     const settings = db.getSettings();
-    if (settings.aiResponderEnabled) {
+    if (shouldAiAutoReply(settings, { ignoreSchedule: isSimulator })) {
       const aiReply = await whatsappService.generateAIResponse(text);
       const hasRealToken = !!getInstagramToken();
       if (isSimulator || !hasRealToken) {
@@ -431,7 +627,17 @@ export const instagramService = {
       return { parent, student, isNew, replied: true, reply: aiReply };
     }
 
-    return { parent, student, isNew, replied: false };
+    return {
+      parent,
+      student,
+      isNew,
+      replied: false,
+      skippedReason: !settings.aiResponderEnabled
+        ? 'disabled'
+        : settings.aiActiveHoursEnabled && !isSimulator
+          ? 'outside_hours'
+          : null,
+    };
   }
 };
 

@@ -1,3 +1,6 @@
+-- Historical reference only. The live Supabase schema uses text identifiers
+-- and additional JSON-backed operational tables. Do not run this file against
+-- the live project. Use the dated migrations in this directory instead.
 -- PostgreSQL Database Schema for Climbing Gym CRM
 
 -- Enable UUID extension

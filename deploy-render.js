@@ -1,7 +1,10 @@
-const API_KEY = 'rnd_tCEcyO0yO3djUGDcg1Uuj3hvhYXp';
+const API_KEY = process.env.RENDER_API_KEY;
 const BASE_URL = 'https://api.render.com/v1';
 
 async function main() {
+  if (!API_KEY) {
+    throw new Error('Missing RENDER_API_KEY environment variable');
+  }
   try {
     console.log('1. Fetching Render Account Owners...');
     const ownersRes = await fetch(`${BASE_URL}/owners`, {

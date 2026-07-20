@@ -6,7 +6,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon --ignore db.json index.js"
+    "dev": "nodemon --ignore db.json index.js",
+    "test": "node --test auth.test.js db.test.js whatsappConnect.test.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.8",

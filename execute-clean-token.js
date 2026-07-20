@@ -1,7 +1,8 @@
 const fs = require('fs');
-const token = 'EAATGWDBWZBQ4BRzYeH7cePcw64O7xGMpY29pCOjcitckRrQRxNvbYbGSp7xFiGoe50RT8HdW59eY4dZArZChpZBCOb0Ic4aZBZCDXbf3fwYXwnkya0clO5w2ln1uMSZCq0mEQYI0vcH6AaZAgXqj5Ce5wqVTgyZCFcbWsipy7h9uXugesBOzM0PHx30ICF6YRzBepH7ugFeClkwKvXeVxqQfhfKQxGgNYPszbi6cfkU3KOjkZCsNFdtoSKDwp7ZAJiiN5CHGzCuWfMz18L8ZAMOubwZDZD';
+const token = process.env.INSTAGRAM_ACCESS_TOKEN;
 
 async function main() {
+  if (!token) throw new Error('Missing INSTAGRAM_ACCESS_TOKEN environment variable');
   console.log('1. Checking token permissions...');
   try {
     const permRes = await fetch(`https://graph.facebook.com/v20.0/me/permissions?access_token=${token}`);

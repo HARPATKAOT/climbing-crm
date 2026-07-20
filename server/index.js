@@ -1,13 +1,14 @@
 import 'dotenv/config';
+import crypto from 'crypto';
 import express from 'express';
 import cors from 'cors';
-import { createClient } from '@supabase/supabase-js';
 import { db, initDb, persistCore } from './db.js';
 import { supa } from './supa.js';
 import { whatsappService, instagramService } from './whatsapp.js';
 import { whatsappConnectService } from './whatsappConnect.js';
 import { automationsService } from './automations.js';
 import { icount } from './icount.js';
+import { apiAuth, requireOwner } from './auth.js';
 import {
   ensureAttendanceRows,
   israelDateStr,
@@ -17,22 +18,34 @@ import {
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v25.0';
+app.set('trust proxy', 1);
 
-// Enable CORS and JSON parsing
-app.use(cors());
-app.use(express.json());
+const configuredOrigins = String(process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const allowedOrigins = new Set([
+  'https://client-omega-topaz-35.vercel.app',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  ...configuredOrigins,
+]);
 
-// Initialize Supabase Client
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
-
-let supabase;
-if (supabaseUrl && supabaseUrl !== 'YOUR_SUPABASE_URL_HERE' && supabaseKey && supabaseKey !== 'YOUR_SUPABASE_ANON_KEY_HERE') {
-  supabase = createClient(supabaseUrl, supabaseKey);
-  console.log('✅ Supabase client initialized.');
-} else {
-  console.warn('⚠️ Supabase credentials not set in .env. Running in mock/offline mode with db.json.');
-}
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+    return callback(new Error('Origin is not allowed'));
+  },
+}));
+app.use(express.json({
+  limit: '2mb',
+  verify(req, _res, buffer) {
+    req.rawBody = buffer;
+  },
+}));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. CRM GENERAL ENDPOINTS (Database Synced)
@@ -43,9 +56,38 @@ app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'UP', timestamp: new Date().toISOString(), uptime: process.uptime() });
 });
 
+app.use('/api', apiAuth);
+
+app.get('/api/auth/me', (req, res) => {
+  res.json(req.crmUser);
+});
+
+const publicRequestWindows = new Map();
+function publicFormRateLimit(req, res, next) {
+  const now = Date.now();
+  const windowMs = 15 * 60 * 1000;
+  const key = req.ip || req.socket.remoteAddress || 'unknown';
+  const current = publicRequestWindows.get(key);
+  if (!current || current.resetAt <= now) {
+    if (publicRequestWindows.size > 5000) {
+      for (const [storedKey, value] of publicRequestWindows) {
+        if (value.resetAt <= now) publicRequestWindows.delete(storedKey);
+      }
+    }
+    publicRequestWindows.set(key, { count: 1, resetAt: now + windowMs });
+    return next();
+  }
+  current.count += 1;
+  if (current.count > 20) {
+    res.set('Retry-After', String(Math.ceil((current.resetAt - now) / 1000)));
+    return res.status(429).json({ error: 'יותר מדי בקשות. אפשר לנסות שוב בעוד כמה דקות' });
+  }
+  return next();
+}
+
 // Re-pull CRM-core collections from Supabase into the local db.json cache.
 // Useful after durable-store seed/repair without waiting for a full redeploy cycle.
-app.post('/api/admin/reload-core', async (req, res) => {
+app.post('/api/admin/reload-core', requireOwner, async (req, res) => {
   try {
     await initDb();
     const groups = db.get('groups') || [];
@@ -195,7 +237,7 @@ app.post('/api/leads', async (req, res) => {
 });
 
 // Public lead intake form (source=form, phone de-dupe)
-app.post('/api/public/leads', async (req, res) => {
+app.post('/api/public/leads', publicFormRateLimit, async (req, res) => {
   const result = await ingestLeadPayload(req.body, 'form');
   if (result.error) return res.status(result.status).json({ error: result.error });
   res.status(201).json({
@@ -255,16 +297,6 @@ app.post('/api/parents/:id/broadcast-lists', (req, res) => {
   res.json(updated);
 });
 
-
-// Basic Health Check Route
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date(),
-    supabaseConnected: !!supabase
-  });
-});
-
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. WHATSAPP CUSTOMER PORTAL & INTEGRATION ENDPOINTS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -272,26 +304,78 @@ app.get('/api/health', (req, res) => {
 // Get WhatsApp Settings (never expose full access token to clients)
 app.get('/api/whatsapp/settings', (req, res) => {
   const settings = db.getSettings();
-  const { metaWaAccessToken, ...safe } = settings;
+  const {
+    metaWaAccessToken,
+    metaIgAccessToken,
+    verifyToken,
+    ...safe
+  } = settings;
   res.json({
     ...safe,
-    metaWaAccessToken: metaWaAccessToken ? '••••••••' : '',
     hasAccessToken: !!(metaWaAccessToken && !metaWaAccessToken.includes('YOUR_')),
+    hasInstagramAccessToken: !!(metaIgAccessToken && !metaIgAccessToken.includes('YOUR_')),
+    verifyTokenConfigured: !!verifyToken,
+    credentialsManagedByServer: !!(
+      process.env.META_WA_PHONE_NUMBER_ID &&
+      process.env.META_WA_ACCESS_TOKEN
+    ),
   });
 });
 
 // Update WhatsApp Settings
-app.post('/api/whatsapp/settings', (req, res) => {
-  const payload = { ...req.body };
-  // Ignore masked token placeholders from the UI
-  if (!payload.metaWaAccessToken || String(payload.metaWaAccessToken).includes('•') || payload.metaWaAccessToken === 'EAAGb...') {
-    delete payload.metaWaAccessToken;
+app.post('/api/whatsapp/settings', requireOwner, (req, res) => {
+  const allowed = [
+    'aiResponderEnabled',
+    'aiActiveHoursEnabled',
+    'aiActiveHoursStart',
+    'aiActiveHoursEnd',
+    'aiActiveDays',
+    'aiSystemPrompt',
+    'metaIgAccountId',
+    'metaIgAccessToken',
+  ];
+  const payload = {};
+  for (const key of allowed) {
+    if (req.body?.[key] !== undefined) payload[key] = req.body[key];
+  }
+  if (payload.aiActiveDays !== undefined) {
+    const days = (Array.isArray(payload.aiActiveDays) ? payload.aiActiveDays : [])
+      .map(Number)
+      .filter((d) => Number.isInteger(d) && d >= 0 && d <= 6);
+    payload.aiActiveDays = [...new Set(days)].sort((a, b) => a - b);
+    if (!payload.aiActiveDays.length) payload.aiActiveDays = [0, 1, 2, 3, 4, 5, 6];
+  }
+  if (payload.aiActiveHoursStart !== undefined) {
+    payload.aiActiveHoursStart = String(payload.aiActiveHoursStart).slice(0, 5);
+  }
+  if (payload.aiActiveHoursEnd !== undefined) {
+    payload.aiActiveHoursEnd = String(payload.aiActiveHoursEnd).slice(0, 5);
+  }
+  if (payload.aiResponderEnabled !== undefined) {
+    payload.aiResponderEnabled = !!payload.aiResponderEnabled;
+  }
+  if (payload.aiActiveHoursEnabled !== undefined) {
+    payload.aiActiveHoursEnabled = !!payload.aiActiveHoursEnabled;
   }
   const settings = db.saveSettings(payload);
-  const { metaWaAccessToken, ...safe } = settings;
+  const {
+    metaWaAccessToken,
+    metaIgAccessToken,
+    verifyToken,
+    ...safe
+  } = db.getSettings();
   res.json({
     message: 'Settings saved successfully',
-    settings: { ...safe, metaWaAccessToken: metaWaAccessToken ? '••••••••' : '', hasAccessToken: !!metaWaAccessToken },
+    settings: {
+      ...safe,
+      hasAccessToken: !!metaWaAccessToken,
+      hasInstagramAccessToken: !!metaIgAccessToken,
+      verifyTokenConfigured: !!verifyToken,
+      credentialsManagedByServer: !!(
+        process.env.META_WA_PHONE_NUMBER_ID &&
+        process.env.META_WA_ACCESS_TOKEN
+      ),
+    },
   });
 });
 
@@ -313,8 +397,19 @@ app.get('/api/whatsapp/status', async (req, res) => {
   }
 });
 
+// Validate direct Meta credentials and subscribe this app to WABA webhooks.
+app.post('/api/whatsapp/activate', requireOwner, async (req, res) => {
+  try {
+    const result = await whatsappConnectService.activateDirectConnection();
+    res.json(result);
+  } catch (err) {
+    console.error('WhatsApp direct activation failed:', err.message);
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
 // Complete Embedded Signup / Coexistence OAuth
-app.post('/api/whatsapp/oauth/callback', async (req, res) => {
+app.post('/api/whatsapp/oauth/callback', requireOwner, async (req, res) => {
   try {
     const result = await whatsappConnectService.completeOAuth(req.body || {});
     res.json(result);
@@ -325,8 +420,9 @@ app.post('/api/whatsapp/oauth/callback', async (req, res) => {
 });
 
 // Disconnect WhatsApp locally
-app.post('/api/whatsapp/disconnect', (req, res) => {
-  res.json(whatsappConnectService.disconnect());
+app.post('/api/whatsapp/disconnect', requireOwner, (req, res) => {
+  const result = whatsappConnectService.disconnect();
+  res.status(result.success ? 200 : 409).json(result);
 });
 
 // Reply from CRM lead card
@@ -433,11 +529,13 @@ app.post('/api/whatsapp/broadcast', async (req, res) => {
 // Meta Webhook Verification (GET)
 app.get('/api/whatsapp/webhook', (req, res) => {
   const settings = db.getSettings();
-  const verifyToken = settings.verifyToken || 'climbing_verify_token';
+  const verifyToken = process.env.META_WEBHOOK_VERIFY_TOKEN ||
+    (process.env.NODE_ENV !== 'production' ? settings.verifyToken : '');
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
+  if (!verifyToken) return res.status(503).json({ error: 'Webhook verification is not configured' });
   if (mode === 'subscribe' && token === verifyToken) {
     console.log('✅ WhatsApp Webhook verified successfully.');
     res.status(200).send(challenge);
@@ -452,7 +550,7 @@ async function resolveInstagramProfileName(token, senderId) {
   if (!token || token.includes('YOUR_')) return igName;
   try {
     const profileRes = await fetch(
-      `https://graph.instagram.com/v20.0/${senderId}?fields=username,name&access_token=${token}`
+      `https://graph.instagram.com/${META_GRAPH_VERSION}/${senderId}?fields=username,name&access_token=${token}`
     );
     if (profileRes.ok) {
       const profileData = await profileRes.json();
@@ -493,7 +591,7 @@ async function processResolvedInstagramMessage(senderId, text, token, entryId) {
 
 async function fetchInstagramMessageByMid(token, mid) {
   const msgRes = await fetch(
-    `https://graph.instagram.com/v20.0/${mid}?fields=id,created_time,from,to,message&access_token=${token}`
+    `https://graph.instagram.com/${META_GRAPH_VERSION}/${mid}?fields=id,created_time,from,to,message&access_token=${token}`
   );
   const msgData = await msgRes.json().catch(() => ({}));
   if (!msgRes.ok) {
@@ -519,7 +617,7 @@ async function findRecentInstagramSender(token, mid, ownIds = []) {
   for (const folder of folders) {
     try {
       const url =
-        `https://graph.instagram.com/v20.0/me/conversations?folder=${folder}` +
+        `https://graph.instagram.com/${META_GRAPH_VERSION}/me/conversations?folder=${folder}` +
         `&fields=id,updated_time,participants,messages.limit(5){id,created_time,message,from,to}` +
         `&access_token=${token}`;
       const res = await fetch(url);
@@ -752,8 +850,34 @@ async function processWhatsAppWebhookChange(change = {}) {
   }
 }
 
+function verifyMetaWebhookSignature(req, res, next) {
+  const signature = req.get('x-hub-signature-256') || '';
+  const secrets = [
+    process.env.META_APP_SECRET,
+    process.env.INSTAGRAM_APP_SECRET,
+  ].filter(Boolean);
+
+  if (secrets.length === 0) {
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(503).json({ error: 'Webhook signature verification is not configured' });
+    }
+    return next();
+  }
+  if (!signature.startsWith('sha256=') || !req.rawBody) {
+    return res.status(401).json({ error: 'Invalid webhook signature' });
+  }
+
+  const supplied = Buffer.from(signature.slice(7), 'hex');
+  const valid = secrets.some((secret) => {
+    const expected = crypto.createHmac('sha256', secret).update(req.rawBody).digest();
+    return supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
+  });
+  if (!valid) return res.status(401).json({ error: 'Invalid webhook signature' });
+  return next();
+}
+
 // Meta Webhook Messages Processor (POST) - Handles both WhatsApp & Instagram if routed here
-app.post('/api/whatsapp/webhook', async (req, res) => {
+app.post('/api/whatsapp/webhook', verifyMetaWebhookSignature, async (req, res) => {
   const body = req.body;
   console.log('📥 Received WhatsApp/Meta webhook:', JSON.stringify(body, null, 2));
 
@@ -777,7 +901,14 @@ app.post('/api/whatsapp/webhook', async (req, res) => {
 });
 
 // Local Webhook Simulator Trigger (POST)
-app.post('/api/whatsapp/simulate-incoming', async (req, res) => {
+function developmentOnly(req, res, next) {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  return next();
+}
+
+app.post('/api/whatsapp/simulate-incoming', developmentOnly, async (req, res) => {
   const { phone, message } = req.body;
   console.log(`📱 [Simulator] Incoming text from ${phone}: "${message}"`);
   
@@ -792,11 +923,13 @@ app.post('/api/whatsapp/simulate-incoming', async (req, res) => {
 // Instagram Webhook Verification (GET)
 app.get('/api/instagram/webhook', (req, res) => {
   const settings = db.getSettings();
-  const verifyToken = settings.verifyToken || 'climbing_verify_token';
+  const verifyToken = process.env.META_WEBHOOK_VERIFY_TOKEN ||
+    (process.env.NODE_ENV !== 'production' ? settings.verifyToken : '');
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
+  if (!verifyToken) return res.status(503).json({ error: 'Webhook verification is not configured' });
   if (mode === 'subscribe' && token === verifyToken) {
     console.log('✅ Instagram Webhook verified successfully.');
     res.status(200).send(challenge);
@@ -812,16 +945,24 @@ app.get('/api/webhook-logs', (req, res) => {
 });
 
 // Instagram Webhook Messages Processor (POST)
-app.post('/api/instagram/webhook', async (req, res) => {
+app.post('/api/instagram/webhook', verifyMetaWebhookSignature, async (req, res) => {
   const body = req.body;
   console.log('📥 Received Instagram webhook:', JSON.stringify(body, null, 2));
 
   try {
     // Store in persistent log array for inspection (keep last 50)
     const logs = db.get('webhook_logs') || [];
-    logs.unshift({ timestamp: new Date().toISOString(), body });
+    const webhookLog = {
+      id: `webhook-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      body,
+    };
+    logs.unshift(webhookLog);
     if (logs.length > 50) logs.pop();
     db.set('webhook_logs', logs);
+    supa.upsert('webhook_logs', webhookLog).catch((error) =>
+      console.error('Webhook log persistence failed:', error.message)
+    );
 
     // Process regardless of exact object name ('instagram', 'page', 'instagram_business_account')
     await processInstagramEntry(body);
@@ -833,7 +974,7 @@ app.post('/api/instagram/webhook', async (req, res) => {
 });
 
 // Instagram Local Webhook Simulator Trigger (POST)
-app.post('/api/instagram/simulate-incoming', async (req, res) => {
+app.post('/api/instagram/simulate-incoming', developmentOnly, async (req, res) => {
   const { igId, message, name } = req.body;
   const cleanId = igId || `ig_${Date.now()}`;
   const cleanName = name || `משתמש אינסטגרם (${cleanId})`;
@@ -1027,14 +1168,15 @@ app.post('/api/attendance/ensure', async (req, res) => {
   });
 });
 
-// Cron / external scheduler entry (optional CRON_SECRET header or ?secret=)
+// Cron / external scheduler entry. The secret is mandatory and header-only.
 app.post('/api/attendance/ensure-today', async (req, res) => {
   const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const provided = req.get('x-cron-secret') || req.query.secret || req.body?.secret;
-    if (provided !== secret) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
+  if (!secret) {
+    return res.status(503).json({ error: 'CRON_SECRET is not configured' });
+  }
+  const provided = req.get('x-cron-secret') || '';
+  if (provided !== secret) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
   req.body = { ...(req.body || {}), date: israelDateStr() };
   // Reuse ensure handler logic
@@ -1379,15 +1521,16 @@ app.get('/api/payments', async (req, res) => {
 app.post('/api/icount/webhook', async (req, res) => {
   try {
     const expectedSecret = (process.env.ICOUNT_WEBHOOK_SECRET || '').trim();
-    if (expectedSecret) {
-      const incoming =
-        req.get('X-iCount-Secret') ||
-        req.get('x-icount-secret') ||
-        '';
-      if (String(incoming) !== expectedSecret) {
-        console.warn('⛔ [iCount webhook] rejected — bad or missing secret header');
-        return res.status(401).json({ ok: false, error: 'unauthorized' });
-      }
+    if (!expectedSecret && process.env.NODE_ENV === 'production') {
+      return res.status(503).json({ ok: false, error: 'webhook secret is not configured' });
+    }
+    const incoming =
+      req.get('X-iCount-Secret') ||
+      req.get('x-icount-secret') ||
+      '';
+    if (expectedSecret && String(incoming) !== expectedSecret) {
+      console.warn('⛔ [iCount webhook] rejected — bad or missing secret header');
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
 
     const payload = req.body || {};
@@ -1569,6 +1712,21 @@ app.post('/api/shifts/approve', (req, res) => {
 // Prefer the durable Supabase roster (38 real trainers, ids like "e-7") so the
 // trainer dropdown and group.trainer_id references resolve correctly. Falls
 // back to the local db.json seed if Supabase is unavailable.
+app.get('/api/trainers', async (req, res) => {
+  let employees = db.get('employees') || [];
+  if (supa.isEnabled()) {
+    const rows = await supa.getAll('employees');
+    if (rows) employees = rows;
+  }
+  res.json(employees
+    .filter((employee) => employee.is_active !== false && employee.active !== false)
+    .map((employee) => ({
+      id: employee.id,
+      name: employee.name || '',
+      role: employee.role || 'trainer',
+    })));
+});
+
 app.get('/api/employees', async (req, res) => {
   try {
     if (supa.isEnabled()) {
@@ -1826,7 +1984,7 @@ function resolveStudentForHealthForm({ studentId, parent, climberName, phone }) 
 }
 
 // Public Health Declarations + Liability Waiver
-app.post('/api/public/health-declarations', async (req, res) => {
+app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res) => {
   const {
     parentName, parentIdNum, phone, climberName, climberIdNum, birthDate,
     signature, answers, waiverAccepted, studentId, notes, templateSlug, templateId

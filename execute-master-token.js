@@ -1,6 +1,7 @@
-const token = 'EAATGWDBWZBQ4BR8PBofezCBexdC0GqjyZAV1OWZCWLcArnnB2ZCIuMpASnMpomYCsKa49FUMEImj347rnYej2JGls51rhptS3PULShrKTBBO25ZBLZAXu964FqknDhWe4M763BPxRd0E13mCjhHHmmma2peKF2ZCc3MvVMCjwQfZBZBoApYMM792uzrhFnVNpGUzdjd47eyEHmZCDml9zn4Wf6I5dzFFAAjsvmdbERD5FEkTrGyP7TlAeo0BmzCMUkFtUUbaOPCeibJAl8uy07gAZDZD';
+const token = process.env.INSTAGRAM_ACCESS_TOKEN;
 
 async function main() {
+  if (!token) throw new Error('Missing INSTAGRAM_ACCESS_TOKEN environment variable');
   console.log('1. Inspecting User & Connected Pages...');
   try {
     const meRes = await fetch(`https://graph.facebook.com/v20.0/me?fields=id,name,accounts{id,name,access_token,instagram_business_account{id,username,name}}&access_token=${token}`);

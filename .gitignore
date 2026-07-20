@@ -1,6 +1,8 @@
 node_modules
 .env
 .env.*
+!.env.example
+!**/.env.example
 *.log
 dist
 tunnel-url.txt
@@ -8,3 +10,7 @@ url.txt
 lt.txt
 pinggy.txt
 .DS_Store
+db.json
+**/db.json
+.env.local
+.env.production

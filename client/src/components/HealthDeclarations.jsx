@@ -621,9 +621,9 @@ function FillDeclarationForm({ onSubmit, onCancel }) {
   );
 }
 
-export default function HealthDeclarations({ parents, students }) {
+export default function HealthDeclarations({ parents, students, canManageTemplates = false }) {
   const [declarations, setDeclarations] = useState([]);
-  const [view, setView]                 = useState('templates'); // templates | list | new
+  const [view, setView]                 = useState(canManageTemplates ? 'templates' : 'list'); // templates | list | new
   const [selectedDecl, setSelectedDecl] = useState(null);
   const [submitted, setSubmitted]       = useState(false);
 
@@ -702,9 +702,11 @@ export default function HealthDeclarations({ parents, students }) {
           <div className="section-sub">עריכת הטקסט שנשלח ללקוחות · מעקב חתימות · הורדת PDF</div>
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <button className={`btn btn-sm ${view === 'templates' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setView('templates'); setSubmitted(false); }}>
-            <Link2 size={15} /> עריכת הצהרה שנשלחת
-          </button>
+          {canManageTemplates && (
+            <button className={`btn btn-sm ${view === 'templates' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setView('templates'); setSubmitted(false); }}>
+              <Link2 size={15} /> עריכת הצהרה שנשלחת
+            </button>
+          )}
           <button className={`btn btn-sm ${view === 'list' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setView('list'); setSubmitted(false); }}>
             <ClipboardCheck size={15} /> הצהרות חתומות
           </button>
@@ -721,7 +723,7 @@ export default function HealthDeclarations({ parents, students }) {
         </div>
       )}
 
-      {view === 'templates' && <FormTemplatesPanel />}
+      {canManageTemplates && view === 'templates' && <FormTemplatesPanel />}
 
       {/* List View */}
       {view === 'list' && (

@@ -35,7 +35,7 @@ const TEST_TYPE_COLORS = {
 };
 
 // ─── Lead/Customer Card (detail sidebar) ────────────────────────────────────
-function CustomerCard({ student, parent, group, groups = [], onClose, onStatusChange, onDelete, onUpdateStudent, pricelist, refreshData }) {
+function CustomerCard({ student, parent, group, groups = [], onClose, onStatusChange, onDelete, onUpdateStudent, pricelist, refreshData, canManageBilling = false }) {
   if (!student) return null;
   const statusKeys = Object.keys(STATUSES);
 
@@ -47,8 +47,11 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
   ]);
   const [broadcastLists, setBroadcastLists] = useState({});
   const [loadingLists, setLoadingLists] = useState(false);
+  const [editingBroadcastLists, setEditingBroadcastLists] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [editingGroup, setEditingGroup] = useState(false);
+  const [savingGroup, setSavingGroup] = useState(false);
   
   // Edit Form Fields (student)
   const [editBirthDate, setEditBirthDate] = useState(student.birthDate || '');
@@ -242,17 +245,19 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
 
   // Fetch student level tests history
   useEffect(() => {
+    if (!canManageBilling) return;
     fetch('/api/level-tests')
-      .then(res => res.json())
+      .then(res => res.ok ? res.json() : [])
       .then(data => {
-        const studentTests = data.filter(t => t.studentId === student.id);
+        const studentTests = (Array.isArray(data) ? data : []).filter(t => t.studentId === student.id);
         setLevelTestsHistory(studentTests);
       })
       .catch(err => console.error(err));
-  }, [student.id]);
+  }, [canManageBilling, student.id]);
 
   // Fetch employees for examiner picker (security / lead tests)
   useEffect(() => {
+    if (!canManageBilling) return;
     fetch('/api/employees')
       .then(res => res.ok ? res.json() : [])
       .then(data => {
@@ -261,10 +266,11 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
         if (list.length > 0) setTestExaminerId(prev => prev || list[0].id);
       })
       .catch(err => console.error(err));
-  }, []);
+  }, [canManageBilling]);
 
   useEffect(() => {
     if (!parent?.id) return;
+    setEditingBroadcastLists(false);
     setLoadingLists(true);
     Promise.all([
       fetch('/api/broadcast-list-defs').then((res) => (res.ok ? res.json() : null)),
@@ -337,6 +343,27 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
     }
   };
 
+  const handleSaveGroup = async () => {
+    setSavingGroup(true);
+    try {
+      const res = await fetch(`/api/students/${student.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId: editGroupId || null }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        onUpdateStudent(student.id, updated);
+        setEditingGroup(false);
+        if (refreshData) refreshData();
+      }
+    } catch (err) {
+      console.error('Failed to update group:', err);
+    } finally {
+      setSavingGroup(false);
+    }
+  };
+
   const handlePricelistSelect = (e) => {
     const itemId = e.target.value;
     setSelectedPricelistItem(itemId);
@@ -372,8 +399,8 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
   };
 
   useEffect(() => {
-    loadStudentPayments();
-  }, [student.id, parent?.id]);
+    if (canManageBilling) loadStudentPayments();
+  }, [canManageBilling, student.id, parent?.id]);
 
   const handleSendPayment = async (e) => {
     e.preventDefault();
@@ -718,16 +745,70 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
         </div>
 
         {/* Group / Class */}
-        <div className="section-header"><div className="section-title">קבוצה / חוג שיוך</div></div>
+        <div className="section-header">
+          <div className="section-title">קבוצה / חוג שיוך</div>
+          {!editingGroup && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              onClick={() => {
+                setEditGroupId(student.groupId || '');
+                setEditingGroup(true);
+              }}
+            >
+              <Edit2 size={11} /> ערוך
+            </button>
+          )}
+        </div>
         <div className="card card-p" style={{ marginBottom: 16 }}>
-          {group
-            ? <><div style={{ fontWeight: 700, color: 'var(--text-1)' }}>{group.name}</div>
-               <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>יום {group.day} בשעה {group.time}</div></>
-            : <div style={{ color: 'var(--text-3)', fontSize: 13 }}>לא משויך לחוג עדיין</div>
-          }
+          {editingGroup ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <select
+                className="input input-sm"
+                value={editGroupId}
+                disabled={savingGroup}
+                onChange={e => setEditGroupId(e.target.value)}
+              >
+                <option value="">— לא משויך —</option>
+                {groups.map(g => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={savingGroup}
+                  onClick={handleSaveGroup}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                >
+                  <Check size={13} /> {savingGroup ? 'שומר...' : 'שמור'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={savingGroup}
+                  onClick={() => {
+                    setEditGroupId(student.groupId || '');
+                    setEditingGroup(false);
+                  }}
+                >
+                  ביטול
+                </button>
+              </div>
+            </div>
+          ) : group ? (
+            <>
+              <div style={{ fontWeight: 700, color: 'var(--text-1)' }}>{group.name}</div>
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>יום {group.day} בשעה {group.time}</div>
+            </>
+          ) : (
+            <div style={{ color: 'var(--text-3)', fontSize: 13 }}>לא משויך לחוג עדיין</div>
+          )}
         </div>
 
-        {/* iCount payment checkout generator */}
+        {/* iCount payment checkout generator — owner only */}
+        {canManageBilling && <>
         <div className="section-header">
           <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <CreditCard size={15} /> דרישת תשלום / חשבונית
@@ -827,8 +908,10 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
             </div>
           )}
         </div>
+        </>}
 
-        {/* Tests Logs & Add Log */}
+        {/* Tests Logs & Add Log — owner only */}
+        {canManageBilling && <>
         <div className="section-header">
           <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <Award size={15} /> היסטוריית מבחנים
@@ -1056,25 +1139,48 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
           </div>
         </div>
 
+        </>}
+
         {/* Mailing Lists */}
-        <div className="section-header"><div className="section-title">מנוי לרשימות תפוצה</div></div>
-        <div className="card card-p" style={{ marginBottom: 20 }}>
+        <div className="section-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <div className="section-title">מנוי לרשימות תפוצה</div>
+          {!loadingLists && (
+            <button
+              type="button"
+              className={`btn btn-xs ${editingBroadcastLists ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => setEditingBroadcastLists((v) => !v)}
+            >
+              {editingBroadcastLists ? <><Check size={11} /> סיום</> : <><Edit2 size={11} /> עריכה</>}
+            </button>
+          )}
+        </div>
+        <div className="card card-p" style={{ marginBottom: 20, opacity: editingBroadcastLists ? 1 : 0.85 }}>
           {loadingLists ? (
             <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען רשימות תפוצה...</div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, pointerEvents: editingBroadcastLists ? 'auto' : 'none' }}>
               {broadcastListDefs.map((list) => {
                 const label = list.description
                   ? `${list.label} (${list.description})`
                   : list.label;
                 const checked = broadcastLists[list.key] !== false;
                 return (
-                  <label key={list.key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+                  <label
+                    key={list.key}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      fontSize: 13,
+                      cursor: editingBroadcastLists ? 'pointer' : 'default',
+                    }}
+                  >
                     <input
                       type="checkbox"
                       checked={checked}
+                      disabled={!editingBroadcastLists}
                       onChange={() => handleListToggle(list.key)}
-                      style={{ cursor: 'pointer', width: 15, height: 15 }}
+                      style={{ cursor: editingBroadcastLists ? 'pointer' : 'default', width: 15, height: 15 }}
                     />
                     <span style={{ color: checked ? 'var(--text-1)' : 'var(--text-3)', fontWeight: checked ? '600' : 'normal' }}>
                       {label}
@@ -1299,7 +1405,7 @@ function AddLeadModal({ students, parents, onAdd, onClose }) {
 }
 
 // ─── Main Leads / Customers Page ─────────────────────────────────────────────
-export default function Leads({ students, setStudents, parents, setParents, groups }) {
+export default function Leads({ students, setStudents, parents, setParents, groups, canManageBilling = false }) {
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [showAddModal, setShowAddModal] = useState(false);
@@ -1310,11 +1416,12 @@ export default function Leads({ students, setStudents, parents, setParents, grou
 
   // Fetch pricelist for billing options
   useEffect(() => {
+    if (!canManageBilling) return;
     fetch('/api/pricelist')
       .then(res => res.ok ? res.json() : [])
       .then(data => setPricelist(data))
       .catch(err => console.error(err));
-  }, []);
+  }, [canManageBilling]);
 
   const refreshData = async () => {
     try {
@@ -1437,6 +1544,7 @@ export default function Leads({ students, setStudents, parents, setParents, grou
           onDelete={handleDelete}
           onUpdateStudent={handleUpdateStudent}
           refreshData={refreshData}
+          canManageBilling={canManageBilling}
         />
       )}
 
