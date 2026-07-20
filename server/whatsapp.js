@@ -53,14 +53,63 @@ export function shouldAiAutoReply(settings = {}, { ignoreSchedule = false } = {}
 
 const DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'שבת'];
 
+/** Strip day/time suffixes already shown separately (e.g. "— יום א׳ 15:30"). */
+function cleanGroupTitle(group) {
+  let name = String(group.name || '').trim();
+  name = name.replace(/\s*[—–\-]\s*יום\s*[א-ו]['׳']?\s*\d{1,2}:\d{2}.*$/u, '');
+  name = name.replace(/\s+יום\s*[א-ו]['׳']?\s*\d{1,2}:\d{2}.*$/u, '');
+  name = name.replace(/\s+/g, ' ').trim();
+  return name || String(group.ageCategory || '').trim() || 'חוג טיפוס';
+}
+
+/** Compact line for AI/CRM context (not WhatsApp customers). */
 function formatGroupLine(group) {
   const dayLabel = DAY_NAMES[Number(group.day)] || `יום ${group.day}`;
   const priceBits = [];
   if (Number(group.priceWeek) > 0) priceBits.push(`שבועי ₪${group.priceWeek}`);
   if (Number(group.priceTwice) > 0) priceBits.push(`פעמיים ₪${group.priceTwice}`);
   const prices = priceBits.length ? priceBits.join(' / ') : 'מחיר לפי פנייה';
-  const free = Math.max(0, Number(group.maxSlots || 0) - Number(group.enrolled || 0));
-  return `• ${group.name} | ${dayLabel} ${group.time || ''} | קטגוריה: ${group.ageCategory || 'לא צוין'} | ${prices} | מקומות פנויים בערך: ${free}`;
+  return `• ${cleanGroupTitle(group)} | יום ${dayLabel} ${group.time || ''} | ${group.ageCategory || ''} | ${prices}`;
+}
+
+/** Customer-facing WhatsApp card — short, with icons, no duplicate fields. */
+function formatGroupCard(group) {
+  const dayLabel = DAY_NAMES[Number(group.day)] || String(group.day ?? '');
+  const time = String(group.time || '').trim();
+  const title = cleanGroupTitle(group);
+  const priceBits = [];
+  if (Number(group.priceWeek) > 0) priceBits.push(`שבועי ₪${group.priceWeek}`);
+  if (Number(group.priceTwice) > 0) priceBits.push(`פעמיים ₪${group.priceTwice}`);
+
+  const lines = [
+    `📅 יום ${dayLabel}${time ? ` · ${time}` : ''}`,
+    `🧗 ${title}`,
+  ];
+  if (priceBits.length) lines.push(`💰 ${priceBits.join(' · ')}`);
+  return lines.join('\n');
+}
+
+function extractGradeLetter(text) {
+  const m = String(text || '').match(/כית(?:ה|ות)?\s*([א-ו])['׳']?/i);
+  return m?.[1] || '';
+}
+
+function formatClassesWhatsAppReply(groups, incomingText = '') {
+  const sorted = [...(groups || [])].sort(
+    (a, b) => Number(a.day) - Number(b.day) || String(a.time || '').localeCompare(String(b.time || ''))
+  );
+  const limited = sorted.slice(0, 8);
+  if (!limited.length) {
+    return 'היי! 🧗 כרגע אין לי קבוצות מתאימות במערכת.\nכתבו את כיתת הילד/ה ונחזור אליכם 📱';
+  }
+
+  const grade = extractGradeLetter(incomingText);
+  const header = grade
+    ? `היי! 🧗 לכיתה ${grade}׳ יש אצלנו:`
+    : 'היי! 🧗 אלה החוגים הרלוונטיים:';
+  const body = limited.map(formatGroupCard).join('\n\n');
+  const footer = 'רוצים שנשמור מקום או שנחזור אליכם?\nכתבו שם הילד ומספר טלפון 📱';
+  return `${header}\n\n${body}\n\n${footer}`;
 }
 
 /** Live CRM snapshot injected into the AI prompt / heuristic replies */
@@ -87,8 +136,9 @@ ${groupLines}
 
 ### כללים לתשובה לפי נתונים
 - אם שאלו על כיתה/גיל — הצג רק קבוצות רלוונטיות מהרשימה (למשל כיתה ג׳ → קטגוריה עם ג׳ כמו ג'-ד').
-- ציין יום, שעה ומחיר מהשורה המתאימה. אל תמציא קבוצות שלא מופיעות.
-- אם אין התאמה מדויקת — אמור זאת והצע את הקבוצות הקרובות ביותר + בקש שם וטלפון לחזרה.
+- ענה בוואטסאפ בקצרה ובסדר: יום+שעה, שם חוג, מחיר. עם אייקונים. בלי כפילויות ובלי "קטגוריה"/"מקומות פנויים".
+- אל תמציא קבוצות שלא מופיעות. עד 8 קבוצות.
+- אם אין התאמה מדויקת — אמור זאת + בקש שם וטלפון לחזרה.
 - אל תשלח את הלקוח ל"השב 2" אם כבר יש לך את המידע ברשימה.`,
   };
 }
@@ -125,18 +175,15 @@ function buildHeuristicReply(incomingText) {
   const menuPick = text.match(/^[1-3]$/)?.[0]
     || (text.match(/^(?:אופציה|אפשרות|מספר)?\s*[1-3]\b/)?.[0]?.replace(/\D/g, '') || null);
 
-  const healthReply = 'היי! הנה הקישור לחתימה מהירה על הצהרת הבריאות הדיגיטלית של קיר הטיפוס: https://mywall.co.il/health 🧗‍♂️. לאחר החתימה המערכת תתעדכן אוטומטית.';
+  const healthReply = 'היי! ✍️\nהנה קישור להצהרת הבריאות:\nhttps://mywall.co.il/health\n\nאחרי החתימה המערכת מתעדכנת אוטומטית 🧗';
   const matchedGroups = findGroupsForText(raw);
-  const groupsFromData = (matchedGroups.length ? matchedGroups : (db.get('groups') || []).slice(0, 6))
-    .map(formatGroupLine)
-    .join('\n');
   const classesReply = matchedGroups.length
-    ? `היי! לפי הנתונים במערכת, אלה הקבוצות הרלוונטיות:\n${groupsFromData}\n\nרוצים שנשמור מקום / נחזור אליכם? כתבו שם הילד ומספר טלפון.`
-    : `שלום! אלה חלק מקבוצות החוגים במערכת כרגע:\n${groupsFromData || 'אין קבוצות פעילות כרגע במערכת.'}\n\nכדי לדייק — מהי כיתת הילד/ה?`;
-  const pricesReply = 'שלום! מחירי הכניסה והחוגים אצלנו:\n• כניסה חד פעמית: ₪50\n• כרטיסיית 10 כניסות: ₪450\n• מנוי חופשי חודשי: ₪280\n• חוג שבועי (כולל כניסה חופשית): ₪280 - ₪305 בחודש (תלוי בגיל).\nנשמח לתאם אימון הכירות! 💸';
-  const hoursReply = 'שעות הפעילות של קיר הטיפוס My Wall הן:\n• ימים א׳ - ה׳: 14:00 - 22:00\n• ימי שישי: 09:00 - 15:00\n• ימי שבת: סגור.\nנשמח לראותכם!';
-  const locationReply = 'קיר הטיפוס My Wall ממוקם ברחוב האורגים 12, אשדוד (חניה בשפע בחזית). נתראה על הקיר! 🗺️';
-  const defaultMenu = 'שלום! אני הבוט האוטומטי של My Wall CRM 🧗.\nאני יכול לעזור לך עם:\n1. קישור מהיר להצהרת בריאות ✍️\n2. הרשמה ומחירי חוגי טיפוס 🤸\n3. שעות פעילות ומיקום המועדון 🗺️\n\nכתבו מספר (1, 2 או 3) או שאלה קצרה — ואיך תרצו להתקדם?';
+    ? formatClassesWhatsAppReply(matchedGroups, raw)
+    : `${formatClassesWhatsAppReply((db.get('groups') || []).slice(0, 6), raw)}\n\nכדי לדייק יותר — מהי כיתת הילד/ה?`;
+  const pricesReply = 'היי! 💰 מחירון קצר:\n\n🎟️ כניסה חד־פעמית — ₪50\n🔟 כרטיסייה 10 כניסות — ₪450\n🗓️ מנוי חודשי — ₪280\n🧗 חוג שבועי — ₪280–₪305 (לפי גיל)\n\nנשמח לתאם אימון היכרות!';
+  const hoursReply = '🕐 שעות פעילות My Wall:\n\n📅 א׳–ה׳ · 14:00–22:00\n📅 שישי · 09:00–15:00\n📅 שבת · סגור';
+  const locationReply = '📍 אנחנו ברחוב האורגים 12, אשדוד\n🅿️ יש חניה בחזית\nנתראה על הקיר! 🧗';
+  const defaultMenu = 'היי! אני הבוט של My Wall 🧗\n\nבמה אפשר לעזור?\n1️⃣ הצהרת בריאות ✍️\n2️⃣ חוגים ומחירים 🤸\n3️⃣ שעות ומיקום 🗺️\n\nכתבו מספר או שאלה קצרה 😊';
 
   if (menuPick === '1' || text.includes('צהר') || text.includes('טופס') || text.includes('בריאות') || text.includes('חתמ')) {
     return { text: healthReply, confidence: 'high' };
