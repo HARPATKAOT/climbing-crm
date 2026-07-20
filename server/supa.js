@@ -92,6 +92,7 @@ const mappers = {
       last_inbound_instagram: r.last_inbound_instagram || null,
       last_inbound_messenger: r.last_inbound_messenger || null,
       notes: r.notes || '',
+      status: r.status || null,
       icount_client_id: r.icount_client_id || undefined,
     }),
     toRow: (o) => ({
@@ -110,6 +111,7 @@ const mappers = {
       last_inbound_instagram: emptyToNull(o.last_inbound_instagram),
       last_inbound_messenger: emptyToNull(o.last_inbound_messenger),
       notes: o.notes || '',
+      status: emptyToNull(o.status),
       icount_client_id: emptyToNull(o.icount_client_id),
     }),
   },

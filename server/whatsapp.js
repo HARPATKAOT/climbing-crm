@@ -1,6 +1,7 @@
-import { db } from './db.js';
+import { db, persistCore } from './db.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { buildTemplateParameters } from './channels/templates.js';
+import { automationsService } from './automations.js';
 
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v25.0';
 
@@ -34,9 +35,14 @@ function parseHm(value, fallback) {
   return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
 }
 
+/** Master switch — when off, no automated WhatsApp/Instagram replies are sent. */
+export function isBotEnabled(settings = {}) {
+  return !!settings.aiResponderEnabled;
+}
+
 /** Whether the AI bot should auto-reply right now (Israel time). */
 export function shouldAiAutoReply(settings = {}, { ignoreSchedule = false } = {}) {
-  if (!settings.aiResponderEnabled) return false;
+  if (!isBotEnabled(settings)) return false;
   if (ignoreSchedule || !settings.aiActiveHoursEnabled) return true;
 
   const { weekday, time } = israelClockParts();
@@ -529,27 +535,41 @@ export const whatsappService = {
     });
 
     // 2. Upsert lead / client details in DB (source=whatsapp, status=lead_new)
-    const { parent, student, isNew } = db.createLeadFromWhatsApp(normalizedPhone, text);
+    const { parent, student, isNew } = await db.createLeadFromWhatsApp(normalizedPhone, text);
 
     // Open / refresh 24h customer care window
     if (parent?.id) {
-      db.update('parents', parent.id, {
+      const updatedParent = db.update('parents', parent.id, {
         last_inbound_whatsapp: new Date().toISOString(),
         channel: parent.channel || 'whatsapp',
       });
+      if (updatedParent) await persistCore('parents', updatedParent);
     }
 
-    // 3. Welcome template t1 for brand-new WhatsApp leads
-    if (isNew) {
+    const settings = db.getSettings();
+
+    // 3. Welcome template + automations only while the bot is enabled
+    if (isBotEnabled(settings) && isNew) {
       try {
         await whatsappService.sendTemplateMessage(normalizedPhone, 't1', [parent.name || '']);
       } catch (err) {
         console.error('Failed to send WhatsApp welcome t1:', err.message);
       }
+      try {
+        automationsService.triggerEvent('new_lead', student || {
+          id: parent.id,
+          parentId: parent.id,
+          phone: normalizedPhone,
+          parentName: parent.name,
+          status: parent.status || 'lead_new',
+          source: 'whatsapp',
+        });
+      } catch (err) {
+        console.error('Failed to trigger new_lead automation:', err.message);
+      }
     }
 
     // 4. Process AI automated reply if active (and within schedule for live traffic)
-    const settings = db.getSettings();
     if (shouldAiAutoReply(settings, { ignoreSchedule: isSimulator }) && text) {
       const aiReply = await whatsappService.generateAIResponse(text);
       if (isSimulator) {
@@ -568,12 +588,16 @@ export const whatsappService = {
       return { parent, student, isNew, replied: true, reply: aiReply };
     }
 
+    if (!isBotEnabled(settings)) {
+      console.log(`🤖 Bot disabled — skipping auto-reply for ${normalizedPhone}`);
+    }
+
     return {
       parent,
       student,
       isNew,
       replied: false,
-      skippedReason: !settings.aiResponderEnabled
+      skippedReason: !isBotEnabled(settings)
         ? 'disabled'
         : settings.aiActiveHoursEnabled && !isSimulator
           ? 'outside_hours'
@@ -743,13 +767,14 @@ export const instagramService = {
     });
 
     // 2. Upsert lead / client details in DB
-    const { parent, student, isNew } = db.createLeadFromInstagram(igId, text, name);
+    const { parent, student, isNew } = await db.createLeadFromInstagram(igId, text, name);
 
     if (parent?.id) {
-      db.update('parents', parent.id, {
+      const updatedParent = db.update('parents', parent.id, {
         last_inbound_instagram: new Date().toISOString(),
         channel: parent.channel || 'instagram',
       });
+      if (updatedParent) await persistCore('parents', updatedParent);
     }
 
     // 3. Process AI automated reply if active (schedule applies to live traffic)

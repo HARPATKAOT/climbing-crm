@@ -68,6 +68,8 @@ export default function Broadcasts({ parents, students, groups = [] }) {
   });
   const [savingSettings, setSavingSettings] = useState(false);
   const [saveSettingsSuccess, setSaveSettingsSuccess] = useState(false);
+  const [savingBotToggle, setSavingBotToggle] = useState(false);
+  const [botToggleError, setBotToggleError] = useState('');
 
   // WhatsApp Coexistence connect state
   const [waStatus, setWaStatus] = useState({ connected: false });
@@ -444,11 +446,41 @@ export default function Broadcasts({ parents, students, groups = [] }) {
       if (response.ok) {
         setSaveSettingsSuccess(true);
         setTimeout(() => setSaveSettingsSuccess(false), 3000);
+      } else {
+        const data = await response.json().catch(() => ({}));
+        alert(data.error || 'שמירת ההגדרות נכשלה');
       }
     } catch (err) {
       console.error(err);
     } finally {
       setSavingSettings(false);
+    }
+  };
+
+  const handleBotToggle = async (enabled) => {
+    const previous = !!settings.aiResponderEnabled;
+    setBotToggleError('');
+    setSettings((prev) => ({ ...prev, aiResponderEnabled: enabled }));
+    setSavingBotToggle(true);
+    try {
+      const response = await fetch('/api/whatsapp/bot-enabled', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setSettings((prev) => ({ ...prev, aiResponderEnabled: previous }));
+        setBotToggleError(data.error || 'שמירת מצב הבוט נכשלה. נסו שוב.');
+        return;
+      }
+      setSettings((prev) => ({ ...prev, aiResponderEnabled: !!data.aiResponderEnabled }));
+    } catch (err) {
+      console.error(err);
+      setSettings((prev) => ({ ...prev, aiResponderEnabled: previous }));
+      setBotToggleError('שגיאת חיבור — מצב הבוט לא נשמר');
+    } finally {
+      setSavingBotToggle(false);
     }
   };
 
@@ -1139,16 +1171,25 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                         : 'הבוט כבוי — לא יישלח מענה אוטומטי'}
                     </div>
                   </div>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: savingBotToggle ? 'wait' : 'pointer', fontWeight: 600, fontSize: 13 }}>
                     <input
                       type="checkbox"
                       checked={!!settings.aiResponderEnabled}
-                      onChange={e => setSettings({ ...settings, aiResponderEnabled: e.target.checked })}
+                      disabled={savingBotToggle}
+                      onChange={(e) => handleBotToggle(e.target.checked)}
                       style={{ width: 20, height: 20 }}
                     />
-                    {settings.aiResponderEnabled ? 'פעיל' : 'כבוי'}
+                    {savingBotToggle ? 'שומר...' : settings.aiResponderEnabled ? 'פעיל' : 'כבוי'}
                   </label>
                 </div>
+                {botToggleError && (
+                  <div style={{ marginTop: 8, fontSize: 12, color: 'var(--red)' }}>{botToggleError}</div>
+                )}
+                {!settings.aiResponderEnabled && !botToggleError && (
+                  <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)' }}>
+                    הבוט כבוי — לא יישלחו תשובות אוטומטיות, גם לא ללידים חדשים.
+                  </div>
+                )}
 
                 <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 10 }}>

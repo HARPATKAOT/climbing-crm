@@ -223,7 +223,7 @@ async function ingestLeadPayload(body, defaultSource = 'unknown') {
   const leadSource = source || defaultSource;
   console.log(`📥 Lead intake (${leadSource}): Parent: ${parentName}, Phone: ${phone}, Children: ${childList.join(', ')}`);
 
-  const { parent, students: createdStudents } = db.createLeadFromForm({
+  const { parent, students: createdStudents } = await db.createLeadFromForm({
     parentName,
     phone,
     email: email || '',
@@ -241,6 +241,16 @@ async function ingestLeadPayload(body, defaultSource = 'unknown') {
 
   for (const student of createdStudents) {
     automationsService.triggerEvent('new_lead', { ...student, phone, parentName });
+  }
+  if (createdStudents.length === 0) {
+    automationsService.triggerEvent('new_lead', {
+      id: parent.id,
+      parentId: parent.id,
+      phone,
+      parentName,
+      status: parent.status || 'lead_new',
+      source: leadSource,
+    });
   }
 
   return { parent, students: createdStudents, status: 201 };
@@ -272,7 +282,7 @@ app.post('/api/public/leads', publicFormRateLimit, async (req, res) => {
 // Update parent details (name, phone, email, city, source, notes)
 app.put('/api/parents/:id', (req, res) => {
   const { id } = req.params;
-  const allowed = ['name', 'phone', 'email', 'city', 'source', 'notes', 'icount_client_id'];
+  const allowed = ['name', 'phone', 'email', 'city', 'source', 'notes', 'icount_client_id', 'status'];
   const updates = {};
   for (const key of allowed) {
     if (req.body[key] !== undefined) updates[key] = req.body[key];
@@ -280,6 +290,17 @@ app.put('/api/parents/:id', (req, res) => {
   const updated = db.update('parents', id, updates);
   if (!updated) return res.status(404).json({ error: 'Parent not found' });
   res.json(updated);
+});
+
+app.delete('/api/parents/:id', (req, res) => {
+  const { id } = req.params;
+  const linked = (db.get('students') || []).filter((s) => s.parentId === id);
+  if (linked.length) {
+    return res.status(400).json({ error: 'לא ניתן למחוק — יש מתאמנים מקושרים' });
+  }
+  const ok = db.delete('parents', id);
+  if (!ok) return res.status(404).json({ error: 'הלקוח לא נמצא' });
+  res.json({ success: true });
 });
 
 // Broadcast list definitions (editable mailing lists)
@@ -342,6 +363,17 @@ app.get('/api/whatsapp/settings', (req, res) => {
       process.env.META_WA_PHONE_NUMBER_ID &&
       process.env.META_WA_ACCESS_TOKEN
     ),
+  });
+});
+
+// Toggle bot on/off immediately (staff + owner)
+app.post('/api/whatsapp/bot-enabled', (req, res) => {
+  const enabled = !!req.body?.enabled;
+  const settings = db.saveSettings({ aiResponderEnabled: enabled });
+  console.log(`🤖 Bot auto-reply ${enabled ? 'enabled' : 'disabled'} by ${req.crmUser?.email || 'unknown'}`);
+  res.json({
+    aiResponderEnabled: !!settings.aiResponderEnabled,
+    message: enabled ? 'הבוט הופעל' : 'הבוט כובה',
   });
 });
 
@@ -738,24 +770,19 @@ async function processResolvedInstagramMessage(senderId, text, token, entryId) {
   if (!senderId || senderId === entryId) return false;
   const igName = await resolveInstagramProfileName(token, senderId);
   console.log(`💬 Processing Instagram message from IGID ${senderId}: "${text}"`);
-  await instagramService.handleIncomingMessage(senderId, text, igName, false);
-  const { student, isNew } = db.createLeadFromInstagram(senderId, text, igName);
-  // Ensure durable store gets the lead (GET /api/students reads Supabase, not local cache).
-  if (supa.isEnabled()) {
-    try {
-      const parents = db.get('parents') || [];
-      const parent = parents.find((p) => p.id === student.parentId);
-      if (parent) await supa.upsert('parents', parent);
-      await supa.upsert('students', student);
-    } catch (err) {
-      console.error('Supabase persist for Instagram lead failed:', err.message);
-    }
-  }
-  if (isNew) {
-    automationsService.triggerEvent('new_lead', { ...student, phone: '', parentName: igName });
-    console.log(`🎉 New lead created from Instagram: ${student.id} (${igName})`);
+  const { parent, student, isNew } = await instagramService.handleIncomingMessage(senderId, text, igName, false);
+  if (isNew && db.getSettings().aiResponderEnabled) {
+    automationsService.triggerEvent('new_lead', student || {
+      id: parent?.id,
+      parentId: parent?.id,
+      phone: '',
+      parentName: igName,
+      status: parent?.status || 'lead_new',
+      source: 'instagram',
+    });
+    console.log(`🎉 New lead created from Instagram: ${student?.id || parent?.id} (${igName})`);
   } else {
-    console.log(`📝 Existing Instagram lead updated: ${student.id}`);
+    console.log(`📝 Existing Instagram lead updated: ${student?.id || parent?.id}`);
   }
   return true;
 }
@@ -884,21 +911,11 @@ async function processInstagramEntry(body) {
           const fallbackId = 'ig_unresolved';
           const note =
             '[הודעת אינסטגרם התקבלה ב-webhook ללא תוכן/שולח — נדרש Advanced Access או חשבון Tester באפליקציית Meta]';
-          const { student, isNew } = db.createLeadFromInstagram(
+          const { student, isNew } = await db.createLeadFromInstagram(
             fallbackId,
             note,
             `הודעת אינסטגרם ממתינה (${new Date().toLocaleString('he-IL')})`
           );
-          if (supa.isEnabled()) {
-            try {
-              const parents = db.get('parents') || [];
-              const parent = parents.find((p) => p.id === student.parentId);
-              if (parent) await supa.upsert('parents', parent);
-              await supa.upsert('students', student);
-            } catch (err) {
-              console.error('Supabase persist for unresolved IG lead failed:', err.message);
-            }
-          }
           if (isNew) {
             automationsService.triggerEvent('new_lead', {
               ...student,
@@ -959,10 +976,15 @@ async function processWhatsAppWebhookChange(change = {}) {
       if (!phone) continue;
       if (!text && !message.type) continue;
       console.log(`💬 Processing WhatsApp message from ${phone}: "${text}"`);
-      await whatsappService.handleIncomingMessage(phone, text || `[${message.type || 'media'}]`, false, {
+      const leadResult = await whatsappService.handleIncomingMessage(phone, text || `[${message.type || 'media'}]`, false, {
         messageId: message.id,
         type: message.type,
       });
+    if (leadResult?.parent) {
+        console.log(
+          `🎉 WhatsApp lead ${leadResult.isNew ? 'created' : 'updated'}: parent=${leadResult.parent.id} phone=${phone}${leadResult.student ? ` student=${leadResult.student.id}` : ' (contact only)'}`
+        );
+      }
     }
   }
 
@@ -1075,7 +1097,7 @@ app.post('/api/whatsapp/webhook', verifyMetaWebhookSignature, async (req, res) =
           const psid = messaging.sender?.id;
           const text = messaging.message?.text || messaging.postback?.title || '';
           if (psid && (text || messaging.message || messaging.postback)) {
-            handleMessengerIncoming({
+            await handleMessengerIncoming({
               psid,
               text: text || '[הודעת מסנג׳ר]',
               messageId: messaging.message?.mid,

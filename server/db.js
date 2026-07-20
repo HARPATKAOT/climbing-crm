@@ -33,11 +33,30 @@ function syncUpsert(table, record) {
   }
 }
 
+/** Await durable write for parent+student in order (avoids FK race on Supabase). */
+async function persistLeadPair(parent, student) {
+  if (parent) {
+    const parentResult = await persistCore('parents', parent);
+    if (!parentResult.ok) {
+      console.error('persistLeadPair(parent) failed:', parentResult.error);
+    }
+  }
+  if (student) {
+    const studentResult = await persistCore('students', student);
+    if (!studentResult.ok) {
+      console.error('persistLeadPair(student) failed:', studentResult.error);
+      return studentResult;
+    }
+  }
+  return { ok: true };
+}
+
 /** Await durable write for CRM-core tables (use on public form submit). */
 export async function persistCore(table, record) {
   if (!record || !CORE_TABLES.includes(table)) return { ok: true };
   return supa.upsert(table, record);
 }
+
 function syncRemove(table, id) {
   if (CORE_TABLES.includes(table)) {
     Promise.resolve(supa.remove(table, id)).catch((e) =>
@@ -153,6 +172,17 @@ function writeDb(data) {
   }
 }
 
+function mergeWhatsappSettings(local = {}, remote = null) {
+  const merged = {
+    ...SEED_DATA.whatsapp_settings,
+    ...withoutServerSecrets(local),
+  };
+  if (remote && typeof remote === 'object') {
+    Object.assign(merged, withoutServerSecrets(remote));
+  }
+  return merged;
+}
+
 // Called once on server startup: pulls the authoritative CRM-core collections
 // from Supabase into the local db.json so the ephemeral Render disk always
 // reflects the durable store. Non-core collections are left untouched.
@@ -184,9 +214,7 @@ export async function initDb() {
     const remoteSettings = await supa.getAppSetting('whatsapp_settings');
     if (remoteSettings && typeof remoteSettings === 'object') {
       data.whatsapp_settings = {
-        ...SEED_DATA.whatsapp_settings,
-        ...data.whatsapp_settings,
-        ...withoutServerSecrets(remoteSettings),
+        ...mergeWhatsappSettings(data.whatsapp_settings, remoteSettings),
         metaWaAccessToken: '',
         verifyToken: '',
       };
@@ -312,6 +340,7 @@ export const db = {
       if (extras.city && !parent.city) parent.city = extras.city;
       if (extras.source && (!parent.source || parent.source === 'unknown')) parent.source = extras.source;
       if (extras.channel && !parent.channel) parent.channel = extras.channel;
+      if (extras.status) parent.status = extras.status;
       if (extras.notes) parent.notes = (parent.notes ? parent.notes + '\n' : '') + extras.notes;
       writeDb(data);
     } else {
@@ -324,6 +353,7 @@ export const db = {
         source: extras.source || 'unknown',
         channel: extras.channel || extras.source || undefined,
         notes: extras.notes || '',
+        status: extras.status || 'lead_new',
       };
       data.parents.push(parent);
       writeDb(data);
@@ -332,36 +362,42 @@ export const db = {
     return parent;
   },
 
-  createLeadFromWhatsApp: (phone, text) => {
+  createLeadFromWhatsApp: async (phone, text) => {
+    const dataBefore = readDb();
+    const normalize = (p) => {
+      let d = String(p || '').replace(/[^\d]/g, '');
+      if (d.startsWith('0') && d.length >= 9) d = `972${d.slice(1)}`;
+      return d;
+    };
+    const cleanPhone = normalize(phone);
+    const phoneTail = cleanPhone.slice(-9);
+    const hadParent = dataBefore.parents.some((p) => {
+      const np = normalize(p.phone);
+      return np === cleanPhone || (phoneTail && np.slice(-9) === phoneTail);
+    });
+
     const parent = db.upsertParentByPhone('לקוח וואטסאפ', phone, '', {
       source: 'whatsapp',
       channel: 'whatsapp',
+      notes: `הודעה מוואטסאפ: "${text}"`,
+      status: 'lead_new',
     });
+
     const data = readDb();
-    const studentName = 'מתאמן חדש';
-    
-    const existingStudent = data.students.find(s => s.parentId === parent.id);
-    if (!existingStudent) {
-      const newStudent = {
-        id: `s${Date.now()}`,
-        name: studentName,
-        parentId: parent.id,
-        groupId: null,
-        status: 'lead_new',
-        birthDate: '',
-        notes: `פנייה ראשונית מוואטסאפ: "${text}"`,
-        levelGrade: null,
-        source: 'whatsapp',
-        created: new Date().toISOString().split('T')[0],
-        created_at: new Date().toISOString(),
-      };
-      data.students.unshift(newStudent);
+    const existingStudent = data.students.find((s) => s.parentId === parent.id);
+    if (existingStudent) {
+      if (existingStudent.status === 'archived') existingStudent.status = 'lead_new';
+      existingStudent.notes = (existingStudent.notes ? `${existingStudent.notes}\n` : '')
+        + `הודעה נוספת מוואטסאפ: "${text}"`;
       writeDb(data);
-      syncUpsert('students', newStudent);
-      return { parent, student: newStudent, isNew: true };
+      await persistLeadPair(parent, existingStudent);
+      return { parent, student: existingStudent, isNew: false };
     }
-    
-    return { parent, student: existingStudent, isNew: false };
+
+    if (parent.status === 'archived') parent.status = 'lead_new';
+    writeDb(data);
+    await persistCore('parents', parent);
+    return { parent, student: null, isNew: !hadParent };
   },
 
   upsertParentByInstagram: (igId, name = 'ליד מאינסטגרם') => {
@@ -386,7 +422,8 @@ export const db = {
         email: '',
         source: 'instagram',
         instagram_id: igId,
-        channel: 'instagram'
+        channel: 'instagram',
+        status: 'lead_new',
       };
       data.parents.push(parent);
       writeDb(data);
@@ -395,58 +432,53 @@ export const db = {
     }
   },
 
-  createLeadFromInstagram: (igId, text, name = 'ליד מאינסטגרם') => {
+  createLeadFromInstagram: async (igId, text, name = 'ליד מאינסטגרם') => {
+    const dataBefore = readDb();
+    const hadParent = dataBefore.parents.some((p) => p.instagram_id === igId);
+
     const parent = db.upsertParentByInstagram(igId, name);
     const data = readDb();
-    
-    const existingStudent = data.students.find(s => s.parentId === parent.id);
-    if (!existingStudent) {
-      const newStudent = {
-        id: `s${Date.now()}`,
-        name: name,
-        parentId: parent.id,
-        groupId: null,
-        status: 'lead_new',
-        birthDate: '',
-        notes: `פנייה ראשונית מאינסטגרם (IG ID: ${igId}): "${text}"`,
-        levelGrade: null,
-        source: 'instagram',
-        created: new Date().toISOString().split('T')[0],
-        created_at: new Date().toISOString(),
-      };
-      data.students.unshift(newStudent);
+
+    const existingStudent = data.students.find((s) => s.parentId === parent.id);
+    if (existingStudent) {
+      if (existingStudent.status === 'archived') existingStudent.status = 'lead_new';
+      if (!existingStudent.source || existingStudent.source === 'unknown') {
+        existingStudent.source = 'instagram';
+      }
+      existingStudent.notes = (existingStudent.notes ? `${existingStudent.notes}\n` : '')
+        + `הודעה נוספת מאינסטגרם: "${text}"`;
       writeDb(data);
-      syncUpsert('students', newStudent);
-      return { parent, student: newStudent, isNew: true };
+      await persistLeadPair(parent, existingStudent);
+      return { parent, student: existingStudent, isNew: false };
     }
-    
-    // Append note if student exists and ensure status is visible if archived
-    if (existingStudent.status === 'archived') {
-      existingStudent.status = 'lead_new';
-    }
-    if (!existingStudent.source || existingStudent.source === 'unknown') {
-      existingStudent.source = 'instagram';
-    }
-    existingStudent.notes = (existingStudent.notes ? existingStudent.notes + '\n' : '') + `הודעה נוספת מאינסטגרם: "${text}"`;
+
+    parent.status = parent.status === 'archived' ? 'lead_new' : (parent.status || 'lead_new');
+    parent.notes = (parent.notes ? `${parent.notes}\n` : '')
+      + `הודעה מאינסטגרם: "${text}"`;
     writeDb(data);
-    syncUpsert('students', existingStudent);
-    return { parent, student: existingStudent, isNew: false };
+    await persistCore('parents', parent);
+    return { parent, student: null, isNew: !hadParent };
   },
 
-  createLeadFromForm: ({ parentName, phone, email, city, children, interest, source = 'form' }) => {
+  createLeadFromForm: async ({ parentName, phone, email, city, children, interest, source = 'form' }) => {
     const parent = db.upsertParentByPhone(parentName, phone, email, {
       city: city || '',
       source,
       channel: source,
       notes: interest ? `עניין: ${interest}` : '',
+      status: 'lead_new',
     });
     const createdStudents = [];
     const rawNames = Array.isArray(children)
       ? children.map((c) => (c || '').trim()).filter(Boolean)
       : (children ? [String(children).trim()] : []).filter(Boolean);
-    const names = rawNames.length > 0 ? rawNames : [(parentName || '').trim() || 'מתאמן חדש'];
 
-    for (const childName of names) {
+    if (rawNames.length === 0) {
+      await persistCore('parents', parent);
+      return { parent, students: createdStudents, isNew: true };
+    }
+
+    for (const childName of rawNames) {
       const trimmed = (childName || '').trim();
       if (!trimmed) continue;
       const existing = db.get('students').find(
@@ -461,6 +493,7 @@ export const db = {
             : existing.notes,
         });
         createdStudents.push(updated || existing);
+        await persistLeadPair(parent, updated || existing);
       } else {
         const student = db.insert('students', {
           name: trimmed,
@@ -474,6 +507,7 @@ export const db = {
           created: new Date().toISOString().split('T')[0],
         });
         createdStudents.push(student);
+        await persistLeadPair(parent, student);
       }
     }
     return { parent, students: createdStudents, isNew: createdStudents.length > 0 };

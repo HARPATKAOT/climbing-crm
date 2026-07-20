@@ -1,4 +1,4 @@
-import { db } from '../db.js';
+import { db, persistCore } from '../db.js';
 import { phonesMatch, normalizeWaPhone } from '../whatsappConnect.js';
 import { getParentChannelWindows, canSendFreeform, inboundFieldForChannel } from './sessionWindow.js';
 import { uploadWhatsAppMedia, getMessengerCredentials, META_GRAPH_VERSION } from './media.js';
@@ -305,7 +305,7 @@ export async function replyToParent(parentId, payload = {}) {
   return whatsappService.sendTextMessage(parent.phone, text.trim(), false);
 }
 
-export function handleMessengerIncoming({ psid, text, messageId, name } = {}) {
+export async function handleMessengerIncoming({ psid, text, messageId, name } = {}) {
   if (!psid) return { skipped: true };
   let parent = (db.get('parents') || []).find((p) => p.messenger_psid === psid);
   if (!parent) {
@@ -317,18 +317,16 @@ export function handleMessengerIncoming({ psid, text, messageId, name } = {}) {
       source: 'messenger',
       channel: 'messenger',
       marketing_opt_in: true,
+      status: 'lead_new',
+      notes: text ? `הודעה ממסנג׳ר: "${text}"` : '',
     });
-    const existingStudent = (db.get('students') || []).find((s) => s.parentId === parent.id);
-    if (!existingStudent) {
-      db.insert('students', {
-        id: `s${Date.now()}`,
-        name: name || 'ליד ממסנג׳ר',
-        parentId: parent.id,
-        status: 'lead_new',
-        source: 'messenger',
-        interests: [],
-      });
-    }
+    await persistCore('parents', parent);
+  } else if (text) {
+    parent = db.update('parents', parent.id, {
+      notes: (parent.notes ? `${parent.notes}\n` : '') + `הודעה ממסנג׳ר: "${text}"`,
+      status: parent.status === 'archived' ? 'lead_new' : (parent.status || 'lead_new'),
+    });
+    if (parent) await persistCore('parents', parent);
   }
   markInboundForParent(parent, 'messenger');
   logMessage({

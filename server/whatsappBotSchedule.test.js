@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldAiAutoReply } from './whatsapp.js';
+import { isBotEnabled, shouldAiAutoReply } from './whatsapp.js';
 
 test('bot stays off when responder disabled', () => {
+  assert.equal(isBotEnabled({ aiResponderEnabled: false }), false);
   assert.equal(shouldAiAutoReply({ aiResponderEnabled: false }), false);
 });
 

@@ -20,6 +20,44 @@ const phoneTailMatch = (a, b) => {
   return na === nb || na.slice(-9) === nb.slice(-9);
 };
 
+function isParentOnlyLead(student) {
+  return !!student?._parentOnly || String(student?.id || '').startsWith('parent:');
+}
+
+/** Students + parent-only contacts (no child record required). */
+function buildLeadEntries(students, parents) {
+  const entries = (students || []).map((student) => ({
+    key: student.id,
+    student,
+    parent: (parents || []).find((p) => p.id === student.parentId) || null,
+  }));
+  const parentIdsWithStudents = new Set((students || []).map((s) => s.parentId).filter(Boolean));
+  for (const parent of parents || []) {
+    if (parentIdsWithStudents.has(parent.id)) continue;
+    const status = parent.status || 'lead_new';
+    if (status === 'archived') continue;
+    entries.push({
+      key: `parent:${parent.id}`,
+      parent,
+      student: {
+        id: `parent:${parent.id}`,
+        name: '',
+        parentId: parent.id,
+        groupId: null,
+        status,
+        birthDate: '',
+        notes: parent.notes || '',
+        levelGrade: null,
+        source: parent.source || 'unknown',
+        created: parent.created_at ? String(parent.created_at).split('T')[0] : '',
+        created_at: parent.created_at || null,
+        _parentOnly: true,
+      },
+    });
+  }
+  return entries;
+}
+
 const sourceLabel = (m) => {
   if (m.is_ai || m.source === 'ai') return 'AI';
   if (m.source === 'phone') return 'מהטלפון';
@@ -38,6 +76,7 @@ const TEST_TYPE_COLORS = {
 // ─── Lead/Customer Card (detail sidebar) ────────────────────────────────────
 function CustomerCard({ student, parent, group, groups = [], onClose, onStatusChange, onDelete, onUpdateStudent, pricelist, refreshData, canManageBilling = false }) {
   if (!student) return null;
+  const parentOnly = isParentOnlyLead(student);
   const statusKeys = Object.keys(STATUSES);
 
   const [broadcastListDefs, setBroadcastListDefs] = useState([
@@ -234,25 +273,25 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
   const handleUpdateDetails = async () => {
     setSavingEdit(true);
     try {
-      // 1. Update the student record
-      const sRes = await fetch(`/api/students/${student.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          birthDate: editBirthDate,
-          notes: editNotes,
-          segment: editSegment || null,
-          nextFollowup: editNextFollowup || null,
-          groupId: editGroupId || null,
-          source: editSource
-        })
-      });
-      if (sRes.ok) {
-        const updated = await sRes.json();
-        onUpdateStudent(student.id, updated);
+      if (!parentOnly) {
+        const sRes = await fetch(`/api/students/${student.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            birthDate: editBirthDate,
+            notes: editNotes,
+            segment: editSegment || null,
+            nextFollowup: editNextFollowup || null,
+            groupId: editGroupId || null,
+            source: editSource
+          })
+        });
+        if (sRes.ok) {
+          const updated = await sRes.json();
+          onUpdateStudent(student.id, updated);
+        }
       }
 
-      // 2. Update the parent record (contact + city + source)
       if (parent?.id) {
         await fetch(`/api/parents/${parent.id}`, {
           method: 'PUT',
@@ -262,7 +301,9 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
             phone: editPhone,
             email: editEmail,
             city: editCity,
-            source: editSource
+            source: editSource,
+            notes: parentOnly ? editNotes : undefined,
+            status: parentOnly ? student.status : undefined,
           })
         });
       }
@@ -475,10 +516,16 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
       <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid var(--border)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-1)' }}>{student.name}</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-1)' }}>
+              {parentOnly ? (parent?.name || 'ליד ללא מתאמן') : student.name}
+            </div>
             <div style={{ fontSize: 13, color: 'var(--text-3)', marginTop: 4 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>תאריך לידה: {student.birthDate || 'לא הוזן'}</span>
+                <span>
+                  {parentOnly
+                    ? 'ללא מתאמן רשום — ניתן להוסיף ילד מאוחר'
+                    : `תאריך לידה: ${student.birthDate || 'לא הוזן'}`}
+                </span>
                 <button className="btn btn-ghost btn-xs" onClick={() => setIsEditing(true)}>
                   <Edit2 size={11} /> ערוך פרטים
                 </button>
@@ -1174,7 +1221,7 @@ function AddLeadModal({ students, parents, onAdd, onClose }) {
     if (!parentName || !phone) return;
     
     let finalChildren = children.map(c => c.trim()).filter(Boolean);
-    if (isAdult || finalChildren.length === 0) {
+    if (isAdult && finalChildren.length === 0) {
       finalChildren = [parentName.trim()];
     }
 
@@ -1288,16 +1335,21 @@ export default function Leads({ students, setStudents, parents, setParents, grou
     }
   };
 
-  const filtered = students.filter(s => {
-    const parent = parents.find(p => p.id === s.parentId);
-    const matchSearch = s.name.toLowerCase().includes(search.toLowerCase()) ||
-      parent?.name.toLowerCase().includes(search.toLowerCase()) ||
-      parent?.phone.includes(search);
+  const leadEntries = buildLeadEntries(students, parents);
+
+  const filtered = leadEntries.filter(({ student: s, parent: p }) => {
+    const parent = p || parents.find((x) => x.id === s.parentId);
+    const matchSearch = (s.name || '').toLowerCase().includes(search.toLowerCase()) ||
+      parent?.name?.toLowerCase().includes(search.toLowerCase()) ||
+      (parent?.phone || '').includes(search);
     const matchStatus = filterStatus === 'all' || s.status === filterStatus;
     return matchSearch && matchStatus;
-  });
+  }).map((entry) => entry.student);
 
-  const selectedStudent = students.find(s => s.id === selectedStudentId);
+  const selectedStudent = students.find(s => s.id === selectedStudentId)
+    || (selectedStudentId?.startsWith('parent:')
+      ? buildLeadEntries(students, parents).find((e) => e.key === selectedStudentId)?.student
+      : null);
   const selectedParent = selectedStudent ? parents.find(p => p.id === selectedStudent.parentId) : null;
   const selectedGroup = selectedStudent?.groupId ? groups.find(g => g.id === selectedStudent.groupId) : null;
 
@@ -1334,6 +1386,12 @@ export default function Leads({ students, setStudents, parents, setParents, grou
       }
     });
 
+    if (children.length === 0) {
+      parent = { ...parent, status: 'lead_new' };
+      const pIdx = updatedParents.findIndex((p) => p.id === parent.id);
+      if (pIdx >= 0) updatedParents[pIdx] = parent;
+    }
+
     setParents(updatedParents);
     setStudents(updatedStudents);
 
@@ -1353,6 +1411,20 @@ export default function Leads({ students, setStudents, parents, setParents, grou
   };
 
   const handleStatusChange = async (studentId, newStatus) => {
+    if (isParentOnlyLead({ id: studentId })) {
+      const parentId = studentId.replace(/^parent:/, '');
+      setParents((prev) => prev.map((p) => (p.id === parentId ? { ...p, status: newStatus } : p)));
+      try {
+        await fetch(`/api/parents/${parentId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: newStatus }),
+        });
+      } catch (e) {
+        console.warn('Backend offline, status updated only locally.', e);
+      }
+      return;
+    }
     setStudents(prev => prev.map(s => s.id === studentId ? { ...s, status: newStatus } : s));
 
     try {
@@ -1368,6 +1440,15 @@ export default function Leads({ students, setStudents, parents, setParents, grou
 
   const handleDelete = async (studentId) => {
     try {
+      if (isParentOnlyLead({ id: studentId })) {
+        const parentId = studentId.replace(/^parent:/, '');
+        const response = await fetch(`/api/parents/${parentId}`, { method: 'DELETE' });
+        if (response.ok) {
+          setSelectedStudentId(null);
+          refreshData();
+        }
+        return;
+      }
       const response = await fetch(`/api/students/${studentId}`, {
         method: 'DELETE'
       });
@@ -1410,7 +1491,7 @@ export default function Leads({ students, setStudents, parents, setParents, grou
       <div className="section-header">
         <div>
           <div className="section-title">מאגר לקוחות ולידים</div>
-          <div className="section-sub">{students.length} רשומות סה"כ</div>
+          <div className="section-sub">{leadEntries.length} רשומות סה"כ</div>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <div className="input-icon-wrap">
@@ -1441,11 +1522,11 @@ export default function Leads({ students, setStudents, parents, setParents, grou
       {viewMode === 'table' && (
       <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
         <button className={`btn btn-sm ${filterStatus === 'all' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilterStatus('all')}>
-          הכל ({students.length})
+          הכל ({leadEntries.length})
         </button>
         {Object.entries(STATUSES).filter(([k]) => k !== 'archived').map(([k, v]) => (
           <button key={k} className={`btn btn-sm ${filterStatus === k ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilterStatus(k)}>
-            {v.label} ({students.filter(s => s.status === k).length})
+            {v.label} ({leadEntries.filter((e) => e.student.status === k).length})
           </button>
         ))}
       </div>
@@ -1541,7 +1622,7 @@ export default function Leads({ students, setStudents, parents, setParents, grou
                 const isIg = parent?.instagram_id || parent?.channel === 'instagram' || s.notes?.includes('אינסטגרם');
                 return (
                   <tr key={s.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedStudentId(s.id)}>
-                    <td style={{ fontWeight: 700 }}>{s.name}</td>
+                    <td style={{ fontWeight: 700 }}>{s.name || <span style={{ color: 'var(--text-3)' }}>—</span>}</td>
                     <td>{parent?.name}</td>
                     <td style={{ direction: 'ltr', unicodeBidi: 'plaintext', color: isIg && !parent?.phone ? '#ff80bf' : 'var(--text-2)' }}>
                       {isIg && !parent?.phone ? `📸 IG (${parent?.instagram_id || 'DM'})` : parent?.phone}
