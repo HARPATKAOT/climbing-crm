@@ -72,44 +72,57 @@ function formatGroupLine(group) {
   return `• ${cleanGroupTitle(group)} | יום ${dayLabel} ${group.time || ''} | ${group.ageCategory || ''} | ${prices}`;
 }
 
-/** Customer-facing WhatsApp card — short, with icons, no duplicate fields. */
-function formatGroupCard(group) {
-  const dayLabel = DAY_NAMES[Number(group.day)] || String(group.day ?? '');
-  const time = String(group.time || '').trim();
-  const title = cleanGroupTitle(group);
-  const priceBits = [];
-  if (Number(group.priceWeek) > 0) priceBits.push(`שבועי ₪${group.priceWeek}`);
-  if (Number(group.priceTwice) > 0) priceBits.push(`פעמיים ₪${group.priceTwice}`);
-
-  const lines = [
-    `📅 יום ${dayLabel}${time ? ` · ${time}` : ''}`,
-    `🧗 ${title}`,
-  ];
-  if (priceBits.length) lines.push(`💰 ${priceBits.join(' · ')}`);
-  return lines.join('\n');
-}
-
 function extractGradeLetter(text) {
   const m = String(text || '').match(/כית(?:ה|ות)?\s*([א-ו])['׳']?/i);
   return m?.[1] || '';
 }
 
-function formatClassesWhatsAppReply(groups, incomingText = '') {
+function asksAboutPrices(text) {
+  const t = String(text || '').toLowerCase();
+  return /מחיר|כמה עולה|עלות|מנוי|כסף|₪|שקל/.test(t);
+}
+
+/** Customer-facing schedule: group times by day, no prices unless requested. */
+function formatClassesWhatsAppReply(groups, incomingText = '', { includePrices = false } = {}) {
   const sorted = [...(groups || [])].sort(
     (a, b) => Number(a.day) - Number(b.day) || String(a.time || '').localeCompare(String(b.time || ''))
   );
-  const limited = sorted.slice(0, 8);
-  if (!limited.length) {
+  if (!sorted.length) {
     return 'היי! 🧗 כרגע אין לי קבוצות מתאימות במערכת.\nכתבו את כיתת הילד/ה ונחזור אליכם 📱';
+  }
+
+  const byDay = new Map();
+  for (const g of sorted) {
+    const day = Number(g.day);
+    const time = String(g.time || '').trim();
+    if (Number.isNaN(day) || !time) continue;
+    if (!byDay.has(day)) byDay.set(day, new Set());
+    byDay.get(day).add(time);
+  }
+
+  const dayBlocks = [...byDay.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([day, times]) => {
+      const dayLabel = DAY_NAMES[day] || String(day);
+      const timesSorted = [...times].sort((a, b) => a.localeCompare(b));
+      return `📅 יום ${dayLabel}\n${timesSorted.join(' / ')}`;
+    });
+
+  if (!dayBlocks.length) {
+    return 'היי! 🧗 כרגע אין שעות מתאימות במערכת.\nכתבו את כיתת הילד/ה ונחזור אליכם 📱';
   }
 
   const grade = extractGradeLetter(incomingText);
   const header = grade
     ? `היי! 🧗 לכיתה ${grade}׳ יש אצלנו:`
-    : 'היי! 🧗 אלה החוגים הרלוונטיים:';
-  const body = limited.map(formatGroupCard).join('\n\n');
-  const footer = 'רוצים שנשמור מקום או שנחזור אליכם?\nכתבו שם הילד ומספר טלפון 📱';
-  return `${header}\n\n${body}\n\n${footer}`;
+    : 'היי! 🧗 אלה השעות הרלוונטיות:';
+
+  let reply = `${header}\n\n${dayBlocks.join('\n\n')}`;
+  if (includePrices) {
+    reply += '\n\n💰 מחיר חוג שבועי בדרך כלל ₪280–₪305 (לפי גיל)';
+  }
+  reply += '\n\nרוצים שנשמור מקום או שנחזור אליכם?\nכתבו שם הילד ומספר טלפון 📱';
+  return reply;
 }
 
 /** Live CRM snapshot injected into the AI prompt / heuristic replies */
@@ -135,11 +148,14 @@ function buildCrmBotContext() {
 ${groupLines}
 
 ### כללים לתשובה לפי נתונים
-- אם שאלו על כיתה/גיל — הצג רק קבוצות רלוונטיות מהרשימה (למשל כיתה ג׳ → קטגוריה עם ג׳ כמו ג'-ד').
-- ענה בוואטסאפ בקצרה ובסדר: יום+שעה, שם חוג, מחיר. עם אייקונים. בלי כפילויות ובלי "קטגוריה"/"מקומות פנויים".
-- אל תמציא קבוצות שלא מופיעות. עד 8 קבוצות.
-- אם אין התאמה מדויקת — אמור זאת + בקש שם וטלפון לחזרה.
-- אל תשלח את הלקוח ל"השב 2" אם כבר יש לך את המידע ברשימה.`,
+- אם שאלו על כיתה/גיל — הצג רק קבוצות רלוונטיות מהרשימה.
+- פורמט בוואטסאפ: קבץ שעות לפי יום בלבד, למשל:
+📅 יום א׳
+15:30 / 17:30
+- אל תציג מחירים אלא אם הלקוח שאל במפורש על מחיר/עלות.
+- בלי שם קבוצה, בלי קטגוריה, בלי מקומות פנויים.
+- אל תמציא קבוצות שלא מופיעות.
+- אם אין התאמה מדויקת — אמור זאת + בקש שם וטלפון לחזרה.`,
   };
 }
 
@@ -177,9 +193,12 @@ function buildHeuristicReply(incomingText) {
 
   const healthReply = 'היי! ✍️\nהנה קישור להצהרת הבריאות:\nhttps://mywall.co.il/health\n\nאחרי החתימה המערכת מתעדכנת אוטומטית 🧗';
   const matchedGroups = findGroupsForText(raw);
-  const classesReply = matchedGroups.length
-    ? formatClassesWhatsAppReply(matchedGroups, raw)
-    : `${formatClassesWhatsAppReply((db.get('groups') || []).slice(0, 6), raw)}\n\nכדי לדייק יותר — מהי כיתת הילד/ה?`;
+  const sourceGroups = matchedGroups.length ? matchedGroups : (db.get('groups') || []).slice(0, 12);
+  const wantsPrices = asksAboutPrices(raw) || menuPick === '2';
+  const classesReply = formatClassesWhatsAppReply(sourceGroups, raw, { includePrices: wantsPrices });
+  const classesReplyNeedsGrade = !matchedGroups.length
+    ? `${formatClassesWhatsAppReply(sourceGroups, raw, { includePrices: wantsPrices })}\n\nכדי לדייק יותר — מהי כיתת הילד/ה?`
+    : classesReply;
   const pricesReply = 'היי! 💰 מחירון קצר:\n\n🎟️ כניסה חד־פעמית — ₪50\n🔟 כרטיסייה 10 כניסות — ₪450\n🗓️ מנוי חודשי — ₪280\n🧗 חוג שבועי — ₪280–₪305 (לפי גיל)\n\nנשמח לתאם אימון היכרות!';
   const hoursReply = '🕐 שעות פעילות My Wall:\n\n📅 א׳–ה׳ · 14:00–22:00\n📅 שישי · 09:00–15:00\n📅 שבת · סגור';
   const locationReply = '📍 אנחנו ברחוב האורגים 12, אשדוד\n🅿️ יש חניה בחזית\nנתראה על הקיר! 🧗';
@@ -189,22 +208,31 @@ function buildHeuristicReply(incomingText) {
     return { text: healthReply, confidence: 'high' };
   }
 
-  if (
+  const scheduleIntent =
     menuPick === '2'
-    || text.includes('חוג')
+    || /כית/.test(raw)
+    || text.includes('מתי')
+    || text.includes('איזה יום')
+    || text.includes('באיזה יום')
     || text.includes('קבוצ')
     || text.includes('שיעור')
     || text.includes('רישום')
     || text.includes('להירשם')
     || text.includes('אימון')
     || text.includes('אימונ')
-    || /כית/.test(raw)
-  ) {
-    return { text: classesReply, confidence: 'high' };
+    || (text.includes('חוג') && !asksAboutPrices(raw));
+
+  // "כמה עולה חוג?" → מחירון בלבד. מחיר+כיתה/מתי → מערכת שעות + מחיר קצר.
+  if (asksAboutPrices(raw) && !scheduleIntent && menuPick !== '2') {
+    return { text: pricesReply, confidence: 'high' };
   }
 
-  if (text.includes('מחיר') || text.includes('כמה עולה') || text.includes('עלות') || text.includes('מנוי')) {
-    return { text: matchedGroups.length ? classesReply : pricesReply, confidence: 'high' };
+  if (scheduleIntent) {
+    return { text: classesReplyNeedsGrade, confidence: 'high' };
+  }
+
+  if (asksAboutPrices(raw)) {
+    return { text: pricesReply, confidence: 'high' };
   }
 
   if (menuPick === '3' || text.includes('שע') || text.includes('מתי פתוח') || text.includes('פתיח') || text.includes('מתי אתם פתוחים')) {
