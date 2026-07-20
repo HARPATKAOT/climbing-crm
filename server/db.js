@@ -183,6 +183,53 @@ function mergeWhatsappSettings(local = {}, remote = null) {
   return merged;
 }
 
+function normalizeBoolFlag(value) {
+  if (value === true || value === false) return value;
+  if (value === 'true' || value === 1 || value === '1') return true;
+  if (value === 'false' || value === 0 || value === '0') return false;
+  return null;
+}
+
+let botFlagCache = { value: null, fetchedAt: 0 };
+const BOT_FLAG_TTL_MS = 2000;
+
+function patchLocalBotFlag(enabled) {
+  const data = readDb();
+  if (!data.whatsapp_settings) {
+    data.whatsapp_settings = { ...SEED_DATA.whatsapp_settings };
+  }
+  data.whatsapp_settings.aiResponderEnabled = enabled;
+  writeDb(data);
+  botFlagCache = { value: enabled, fetchedAt: Date.now() };
+}
+
+/** Pull aiResponderEnabled from Supabase before handling live bot traffic. */
+export async function syncBotFlagFromRemote() {
+  if (!supa.isEnabled()) return;
+  if (botFlagCache.value !== null && Date.now() - botFlagCache.fetchedAt < BOT_FLAG_TTL_MS) {
+    return;
+  }
+  const remote = await supa.getAppSetting('whatsapp_settings');
+  botFlagCache.fetchedAt = Date.now();
+  if (!remote || typeof remote !== 'object') return;
+  const enabled = normalizeBoolFlag(remote.aiResponderEnabled);
+  if (enabled === null) return;
+  botFlagCache.value = enabled;
+  const localEnabled = normalizeBoolFlag(readDb().whatsapp_settings?.aiResponderEnabled);
+  if (localEnabled !== enabled) {
+    patchLocalBotFlag(enabled);
+    console.log(`🤖 Bot flag synced from Supabase: ${enabled ? 'ON' : 'OFF'}`);
+  }
+}
+
+export function botFlagLabel() {
+  const settings = readDb().whatsapp_settings || SEED_DATA.whatsapp_settings;
+  const enabled = botFlagCache.value !== null
+    ? botFlagCache.value
+    : normalizeBoolFlag(settings.aiResponderEnabled);
+  return enabled ? 'ON' : 'OFF';
+}
+
 // Called once on server startup: pulls the authoritative CRM-core collections
 // from Supabase into the local db.json so the ephemeral Render disk always
 // reflects the durable store. Non-core collections are left untouched.
@@ -218,13 +265,15 @@ export async function initDb() {
         metaWaAccessToken: '',
         verifyToken: '',
       };
-      await supa.setAppSetting('whatsapp_settings', withoutServerSecrets(data.whatsapp_settings));
-      counts.app_settings = 1;
+      const enabled = normalizeBoolFlag(data.whatsapp_settings.aiResponderEnabled);
+      if (enabled !== null) botFlagCache = { value: enabled, fetchedAt: Date.now() };
+      counts.app_settings = 'remote';
     } else if (data.whatsapp_settings) {
       await supa.setAppSetting('whatsapp_settings', withoutServerSecrets(data.whatsapp_settings));
       counts.app_settings = 'migrated';
     }
     writeDb(data);
+    console.log(`🤖 Bot auto-reply after initDb: ${botFlagLabel()}`);
     console.log(
       `✅ Loaded CRM-core from Supabase:`,
       Object.entries(counts).map(([t, n]) => `${t}=${n}`).join(', ')
@@ -254,8 +303,12 @@ export const db = {
   getSettings: () => {
     const data = readDb();
     const settings = data.whatsapp_settings || SEED_DATA.whatsapp_settings;
+    const aiResponderEnabled = botFlagCache.value !== null
+      ? botFlagCache.value
+      : (normalizeBoolFlag(settings.aiResponderEnabled) ?? false);
     return {
       ...settings,
+      aiResponderEnabled,
       metaWaPhoneId: process.env.META_WA_PHONE_NUMBER_ID || settings.metaWaPhoneId || '',
       metaWaWabaId: process.env.META_WA_WABA_ID || settings.metaWaWabaId || '',
       metaWaAccessToken: process.env.META_WA_ACCESS_TOKEN || '',
@@ -274,6 +327,13 @@ export const db = {
       metaWaAccessToken: '',
       verifyToken: '',
     };
+    if (newSettings?.aiResponderEnabled !== undefined) {
+      const enabled = normalizeBoolFlag(newSettings.aiResponderEnabled);
+      if (enabled !== null) {
+        data.whatsapp_settings.aiResponderEnabled = enabled;
+        botFlagCache = { value: enabled, fetchedAt: Date.now() };
+      }
+    }
     writeDb(data);
     Promise.resolve(supa.setAppSetting('whatsapp_settings', withoutServerSecrets(data.whatsapp_settings))).catch((error) =>
       console.error('sync whatsapp_settings error:', error?.message || error)

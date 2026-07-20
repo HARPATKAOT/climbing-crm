@@ -1,4 +1,4 @@
-import { db, persistCore } from './db.js';
+import { db, persistCore, syncBotFlagFromRemote } from './db.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { buildTemplateParameters } from './channels/templates.js';
 import { automationsService } from './automations.js';
@@ -37,7 +37,11 @@ function parseHm(value, fallback) {
 
 /** Master switch — when off, no automated WhatsApp/Instagram replies are sent. */
 export function isBotEnabled(settings = {}) {
-  return !!settings.aiResponderEnabled;
+  const value = settings.aiResponderEnabled;
+  if (value === true || value === false) return value;
+  if (value === 'true' || value === 1 || value === '1') return true;
+  if (value === 'false' || value === 0 || value === '0') return false;
+  return false;
 }
 
 /** Whether the AI bot should auto-reply right now (Israel time). */
@@ -520,6 +524,7 @@ export const whatsappService = {
 
   // Process incoming messages (webhook entrypoint / simulator)
   handleIncomingMessage: async (phone, text, isSimulator = false, meta = {}) => {
+    if (!isSimulator) await syncBotFlagFromRemote();
     const normalizedPhone = formatWaPhone(phone) || phone;
 
     // 1. Log inbound message
@@ -757,6 +762,7 @@ export const instagramService = {
   },
 
   handleIncomingMessage: async (igId, text, name = 'ליד מאינסטגרם', isSimulator = false) => {
+    if (!isSimulator) await syncBotFlagFromRemote();
     // 1. Log inbound message
     db.insert('whatsapp_logs', {
       phone: igId,
