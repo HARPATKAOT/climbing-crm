@@ -164,11 +164,11 @@ function buildCertificateHtml(decl, { waiverText, questionLabels }) {
 }
 
 /**
- * Build and download a PDF certificate for a signed health declaration.
+ * Build a PDF certificate for a signed health declaration.
  * @param {object} decl - health declaration record from the API
- * @returns {Promise<void>}
+ * @returns {Promise<{ blob: Blob, fileName: string, pdf: import('jspdf').jsPDF }>}
  */
-export async function downloadHealthDeclarationPdf(decl) {
+export async function buildHealthDeclarationPdf(decl) {
   if (!decl) throw new Error('אין הצהרה להורדה');
 
   const meta = await resolveWaiverAndQuestions(decl);
@@ -207,8 +207,30 @@ export async function downloadHealthDeclarationPdf(decl) {
 
     const climber = (decl.climberName || decl.studentName || 'declaration').replace(/[^\w\u0590-\u05ff-]+/g, '_');
     const date = decl.signedDate || decl.date || 'signed';
-    pdf.save(`health-declaration_${climber}_${date}.pdf`);
+    const fileName = `health-declaration_${climber}_${date}.pdf`;
+    const blob = pdf.output('blob');
+    return { blob, fileName, pdf };
   } finally {
     document.body.removeChild(host);
   }
+}
+
+/**
+ * Build and download a PDF certificate for a signed health declaration.
+ * @param {object} decl - health declaration record from the API
+ * @returns {Promise<void>}
+ */
+export async function downloadHealthDeclarationPdf(decl) {
+  const { pdf, fileName } = await buildHealthDeclarationPdf(decl);
+  pdf.save(fileName);
+}
+
+/** Convert a Blob to a base64 data-URL string. */
+export function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 }

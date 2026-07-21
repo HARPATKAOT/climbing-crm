@@ -2315,6 +2315,372 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
   res.status(201).json({ success: true, record, student, parent });
 });
 
+const REQUIRED_BROADCAST_LIST = 'classes';
+
+function findParentForOnboard({ parentId, phone, studentId }) {
+  const parents = db.get('parents') || [];
+  const students = db.get('students') || [];
+  if (parentId) {
+    const byId = parents.find((p) => p.id === parentId);
+    if (byId) return byId;
+  }
+  if (studentId) {
+    const student = students.find((s) => s.id === studentId);
+    if (student?.parentId) {
+      const byStudent = parents.find((p) => p.id === student.parentId);
+      if (byStudent) return byStudent;
+    }
+  }
+  const phoneKey = normalizePhone(phone);
+  if (phoneKey) {
+    return parents.find((p) => normalizePhone(p.phone) === phoneKey) || null;
+  }
+  return null;
+}
+
+// Public onboarding context — prefill parent/children + mailing lists
+app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
+  const parentId = String(req.query.parentId || '').trim();
+  const studentId = String(req.query.studentId || '').trim();
+  const phone = String(req.query.phone || '').trim();
+  if (!parentId && !studentId && !phone) {
+    return res.status(400).json({ error: 'חסר מזהה הורה, ילד או טלפון' });
+  }
+
+  const parent = findParentForOnboard({ parentId, phone, studentId });
+  const listDefs = db.getBroadcastListDefs();
+  const students = parent
+    ? (db.get('students') || []).filter((s) => s.parentId === parent.id)
+    : [];
+  const subscriptions = parent
+    ? db.getParentBroadcastLists(parent.id)
+    : Object.fromEntries(listDefs.map((l) => [l.key, l.key === REQUIRED_BROADCAST_LIST]));
+
+  // Always lock classes on
+  subscriptions[REQUIRED_BROADCAST_LIST] = true;
+
+  const template = findDefaultFormTemplate() || findFormTemplateBySlug('wall');
+
+  res.json({
+    parent: parent
+      ? {
+          id: parent.id,
+          name: parent.name || '',
+          phone: parent.phone || '',
+          email: parent.email || '',
+          city: parent.city || '',
+          idNumber: parent.idNumber || '',
+        }
+      : null,
+    students: students.map((s) => ({
+      id: s.id,
+      name: s.name || '',
+      birthDate: s.birthDate || '',
+      gender: s.gender || '',
+      idNumber: s.idNumber || '',
+      status: s.status || '',
+    })),
+    listDefs,
+    subscriptions,
+    requiredListKey: REQUIRED_BROADCAST_LIST,
+    template: template
+      ? {
+          id: template.id,
+          slug: template.slug,
+          title: template.title,
+          waiverText: template.waiverText,
+          healthQuestions: template.healthQuestions,
+        }
+      : null,
+  });
+});
+
+// Public full onboarding submit (details + lists + health per child)
+app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
+  const {
+    parent: parentBody = {},
+    children = [],
+    subscriptions = {},
+    templateSlug,
+    templateId,
+  } = req.body || {};
+
+  const parentName = String(parentBody.name || '').trim();
+  const phone = String(parentBody.phone || '').trim();
+  const parentIdNum = String(parentBody.idNumber || parentBody.parentIdNum || '').trim();
+  const email = String(parentBody.email || '').trim();
+  const city = String(parentBody.city || '').trim();
+
+  if (!parentName || !phone) {
+    return res.status(400).json({ error: 'נדרשים שם הורה ומספר טלפון' });
+  }
+
+  const childList = (Array.isArray(children) ? children : [])
+    .map((c) => ({
+      id: c.id || null,
+      name: String(c.name || '').trim(),
+      birthDate: String(c.birthDate || '').trim(),
+      gender: String(c.gender || '').trim(),
+      idNumber: String(c.idNumber || c.climberIdNum || '').trim(),
+      answers: c.answers || {},
+      signature: c.signature || '',
+      waiverAccepted: c.waiverAccepted === true || c.waiverAccepted === 'true',
+    }))
+    .filter((c) => c.name);
+
+  if (!childList.length) {
+    return res.status(400).json({ error: 'יש להוסיף לפחות מתאמן/ת אחד' });
+  }
+
+  for (const child of childList) {
+    if (!child.waiverAccepted || !child.signature) {
+      return res.status(400).json({
+        error: `חסרה חתימה או אישור וויתור עבור ${child.name}`,
+      });
+    }
+  }
+
+  const template = templateId
+    ? (db.get('form_templates') || []).find((t) => t.id === templateId)
+    : (templateSlug ? findFormTemplateBySlug(templateSlug) : findDefaultFormTemplate());
+
+  let parent = db.upsertParentByPhone(parentName, phone, email, {
+    city,
+    idNumber: parentIdNum,
+    source: parentBody.source || 'form',
+  });
+  if (parentIdNum || city || email) {
+    parent = db.update('parents', parent.id, {
+      name: parentName,
+      email: email || parent.email || '',
+      city: city || parent.city || '',
+      idNumber: parentIdNum || parent.idNumber || '',
+    }) || parent;
+  }
+
+  const signedAt = new Date().toISOString();
+  const today = signedAt.split('T')[0];
+  const declarations = [];
+  const savedStudents = [];
+
+  for (const child of childList) {
+    let student = null;
+    if (child.id) {
+      student = (db.get('students') || []).find(
+        (s) => s.id === child.id && s.parentId === parent.id
+      );
+    }
+    if (!student) {
+      student = (db.get('students') || []).find(
+        (s) => s.parentId === parent.id && s.name === child.name
+      );
+    }
+
+    const prevStatus = student?.status;
+    const studentPatch = {
+      name: child.name,
+      parentId: parent.id,
+      birthDate: child.birthDate || student?.birthDate || '',
+      gender: child.gender || student?.gender || '',
+      idNumber: child.idNumber || student?.idNumber || '',
+      status: prevStatus === 'registered' ? prevStatus : 'health_signed',
+      healthSignedAt: signedAt,
+      waiverSignedAt: signedAt,
+    };
+
+    if (student) {
+      student = db.update('students', student.id, studentPatch) || student;
+      if (prevStatus !== 'registered' && prevStatus !== 'health_signed') {
+        automationsService.triggerEvent('status_changed', {
+          ...student,
+          new_status: 'health_signed',
+        });
+      }
+    } else {
+      student = db.insert('students', {
+        ...studentPatch,
+        groupId: null,
+        source: 'form',
+        notes: 'הושלם מטופס השלמת פרטים',
+        created: today,
+      });
+      automationsService.triggerEvent('new_lead', {
+        ...student,
+        phone,
+        parentName,
+      });
+    }
+    savedStudents.push(student);
+
+    const record = db.insert('health_declarations', {
+      date: today,
+      studentId: student.id,
+      parentId: parent.id,
+      parentName,
+      parentIdNum,
+      phone,
+      climberName: child.name,
+      climberIdNum: child.idNumber,
+      birthDate: child.birthDate || '',
+      answers: child.answers || {},
+      waiverAccepted: true,
+      signature_url: child.signature || '',
+      status: 'approved',
+      notes: '',
+      templateSlug: template?.slug || templateSlug || 'wall',
+      templateId: template?.id || templateId || null,
+      signed: true,
+      signedDate: today,
+      signedBy: parentName,
+      studentName: child.name,
+    });
+    declarations.push(record);
+  }
+
+  // Mailing lists — force classes subscribed
+  const listKeys = (db.getBroadcastListDefs() || []).map((l) => l.key);
+  const nextSubs = {};
+  for (const key of listKeys) {
+    if (key === REQUIRED_BROADCAST_LIST) {
+      nextSubs[key] = true;
+    } else {
+      nextSubs[key] = subscriptions[key] === true || subscriptions[key] === 'true';
+    }
+  }
+  const savedLists = db.updateParentBroadcastLists(parent.id, nextSubs);
+
+  const durableOps = [
+    persistCore('parents', parent),
+    ...savedStudents.map((s) => persistCore('students', s)),
+    ...declarations.map((d) => persistCore('health_declarations', d)),
+  ];
+  const durable = await Promise.all(durableOps);
+  const failed = durable.find((r) => r && r.ok === false);
+  if (failed) {
+    console.error('onboard durable write failed:', failed.error);
+  }
+
+  res.status(201).json({
+    success: true,
+    warning: failed ? 'נשמר מקומית אך ייתכן שלא סונכרן למסד' : undefined,
+    parent,
+    students: savedStudents,
+    declarations,
+    subscriptions: savedLists,
+  });
+});
+
+// Upload signed PDF into personal file (Supabase Storage)
+app.post('/api/public/onboard/:declarationId/pdf', publicFormRateLimit, async (req, res) => {
+  const { declarationId } = req.params;
+  const { pdfBase64, fileName } = req.body || {};
+  if (!pdfBase64 || typeof pdfBase64 !== 'string') {
+    return res.status(400).json({ error: 'חסר קובץ PDF' });
+  }
+
+  const decl = (db.get('health_declarations') || []).find((d) => d.id === declarationId);
+  if (!decl) return res.status(404).json({ error: 'הצהרה לא נמצאה' });
+
+  const raw = pdfBase64.includes(',') ? pdfBase64.split(',')[1] : pdfBase64;
+  let buffer;
+  try {
+    buffer = Buffer.from(raw, 'base64');
+  } catch {
+    return res.status(400).json({ error: 'קובץ PDF לא תקין' });
+  }
+  if (!buffer.length || buffer.length > 10 * 1024 * 1024) {
+    return res.status(400).json({ error: 'גודל הקובץ לא תקין' });
+  }
+
+  const safeName = String(fileName || `health-declaration_${declarationId}.pdf`)
+    .replace(/[^\w\u0590-\u05ff.\-]+/g, '_')
+    .slice(0, 120);
+  const storagePath = `${decl.parentId || 'unknown'}/${decl.studentId || 'unknown'}/${declarationId}_${Date.now()}.pdf`;
+
+  const uploaded = await supa.uploadClientDocument(storagePath, buffer, 'application/pdf');
+  if (!uploaded.ok) {
+    return res.status(500).json({ error: uploaded.error || 'שמירת הקובץ נכשלה' });
+  }
+
+  const doc = db.insert('client_documents', {
+    parentId: decl.parentId || null,
+    studentId: decl.studentId || null,
+    declarationId: decl.id,
+    type: 'health_waiver_pdf',
+    fileName: safeName,
+    storagePath,
+    mimeType: 'application/pdf',
+  });
+  await persistCore('client_documents', doc);
+
+  res.status(201).json({ success: true, document: doc });
+});
+
+// Staff: list documents in personal file
+app.get('/api/students/:id/documents', (req, res) => {
+  const studentId = req.params.id;
+  const docs = (db.get('client_documents') || [])
+    .filter((d) => d.studentId === studentId)
+    .slice()
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  res.json(docs);
+});
+
+app.get('/api/documents/:id/download', async (req, res) => {
+  const doc = (db.get('client_documents') || []).find((d) => d.id === req.params.id);
+  if (!doc?.storagePath) return res.status(404).json({ error: 'מסמך לא נמצא' });
+
+  const downloaded = await supa.downloadClientDocument(doc.storagePath);
+  if (!downloaded.ok || !downloaded.blob) {
+    return res.status(500).json({ error: downloaded.error || 'הורדה נכשלה' });
+  }
+
+  const arrayBuffer = await downloaded.blob.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  res.setHeader('Content-Type', doc.mimeType || 'application/pdf');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename*=UTF-8''${encodeURIComponent(doc.fileName || 'document.pdf')}`
+  );
+  res.send(buffer);
+});
+
+// Send full onboarding link via WhatsApp
+app.post('/api/leads/:studentId/send-onboard-link', async (req, res) => {
+  const student = db.get('students').find((s) => s.id === req.params.studentId);
+  if (!student) return res.status(404).json({ error: 'Student not found' });
+  const parent = db.get('parents').find((p) => p.id === student.parentId);
+  if (!parent?.phone) return res.status(400).json({ error: 'אין מספר טלפון לשליחה' });
+
+  const origin = req.body?.origin || process.env.PUBLIC_APP_URL || 'https://mywall.co.il';
+  const params = new URLSearchParams();
+  if (parent.id) params.set('parentId', parent.id);
+  params.set('studentId', student.id);
+  if (parent.phone) params.set('phone', parent.phone);
+  const onboardUrl = `${origin.replace(/\/$/, '')}/onboard?${params.toString()}`;
+
+  try {
+    let result = await whatsappService.sendTemplateMessage(
+      parent.phone,
+      't2',
+      [parent.name || student.name]
+    );
+    if (!result?.success) {
+      result = await whatsappService.sendTextMessage(
+        parent.phone,
+        `שלום ${parent.name || ''}, בבקשה השלימו את הפרטים, רישום הילדים וחתימה על הצהרת הבריאות:\n${onboardUrl}`
+      );
+    }
+    res.json({ success: true, onboardUrl, result });
+  } catch (err) {
+    res.status(200).json({
+      success: true,
+      onboardUrl,
+      warning: err.message,
+    });
+  }
+});
+
 // Send health-form link via WhatsApp (from lead card)
 app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
   const student = db.get('students').find(s => s.id === req.params.studentId);

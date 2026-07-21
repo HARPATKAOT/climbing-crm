@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Calendar, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, MessageCircle, Bell, FileCheck2, ExternalLink, Download, ReceiptText } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Calendar, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, MessageCircle, Bell, FileCheck2, ExternalLink, Download, ReceiptText, History } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
 import { downloadHealthDeclarationPdf } from '../utils/healthDeclarationPdf.js';
 import ConversationPanel from './ConversationPanel.jsx';
+import { attStatusMeta } from '../scheduleUtils.js';
 
 // Normalize phone for comparison (supports 05X ↔ 9725X)
 const normPhone = (p) => {
@@ -109,10 +110,13 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
   // Health declaration + waiver status for this student
   const [healthDecl, setHealthDecl] = useState(null);
   const [sendingHealth, setSendingHealth] = useState(false);
+  const [sendingOnboard, setSendingOnboard] = useState(false);
   const [healthSendMsg, setHealthSendMsg] = useState('');
   const [formTemplates, setFormTemplates] = useState([]);
   const [selectedFormSlug, setSelectedFormSlug] = useState('');
   const [downloadingPdf, setDownloadingPdf] = useState(false);
+  const [clientDocuments, setClientDocuments] = useState([]);
+  const [docsLoading, setDocsLoading] = useState(false);
   useEffect(() => {
     fetch('/api/health-declarations')
       .then(res => res.ok ? res.json() : [])
@@ -152,9 +156,67 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
     ? `/health/${selectedTemplate.slug}`
     : '/health';
   const healthFormUrl = `${window.location.origin}${healthPath}?studentId=${encodeURIComponent(student.id)}${parent?.phone ? `&phone=${encodeURIComponent(parent.phone)}` : ''}`;
+  const onboardParams = new URLSearchParams();
+  if (parent?.id) onboardParams.set('parentId', parent.id);
+  onboardParams.set('studentId', student.id);
+  if (parent?.phone) onboardParams.set('phone', parent.phone);
+  const onboardUrl = `${window.location.origin}/onboard?${onboardParams.toString()}`;
   // Only treat as signed when we have a real declaration, or explicit health_signed status
   const isHealthSigned = student.status === 'health_signed'
     || !!(healthDecl && (healthDecl.signed || healthDecl.status === 'approved' || healthDecl.waiverAccepted));
+
+  useEffect(() => {
+    if (parentOnly || !student?.id) {
+      setClientDocuments([]);
+      return;
+    }
+    let cancelled = false;
+    setDocsLoading(true);
+    fetch(`/api/students/${encodeURIComponent(student.id)}/documents`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((docs) => {
+        if (!cancelled) setClientDocuments(Array.isArray(docs) ? docs : []);
+      })
+      .catch(() => {
+        if (!cancelled) setClientDocuments([]);
+      })
+      .finally(() => {
+        if (!cancelled) setDocsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [parentOnly, student.id, isHealthSigned]);
+
+  const handleSendOnboardLink = async () => {
+    if (!parent?.phone) {
+      setHealthSendMsg('אין מספר טלפון לשליחה');
+      return;
+    }
+    setSendingOnboard(true);
+    setHealthSendMsg('');
+    try {
+      const res = await fetch(`/api/leads/${student.id}/send-onboard-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ origin: window.location.origin }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.onboardUrl) {
+        setHealthSendMsg(data.warning
+          ? `קישור השלמה מוכן (שליחה חלקית): ${data.onboardUrl}`
+          : 'נשלח קישור להשלמת פרטים בוואטסאפ');
+      } else {
+        const text = encodeURIComponent(`שלום ${parent.name || ''}, בבקשה השלימו פרטים, רישום וחתימה:\n${onboardUrl}`);
+        window.open(`https://wa.me/972${parent.phone.replace(/^0/, '').replace(/[-\s]/g, '')}?text=${text}`, '_blank');
+        setHealthSendMsg('נפתח וואטסאפ עם קישור השלמת הפרטים');
+      }
+    } catch {
+      const text = encodeURIComponent(`שלום ${parent.name || ''}, בבקשה השלימו פרטים, רישום וחתימה:\n${onboardUrl}`);
+      window.open(`https://wa.me/972${parent.phone.replace(/^0/, '').replace(/[-\s]/g, '')}?text=${text}`, '_blank');
+      setHealthSendMsg('נפתח וואטסאפ עם קישור השלמת הפרטים');
+    } finally {
+      setSendingOnboard(false);
+    }
+  };
 
   const handleSendHealthForm = async () => {
     if (!parent?.phone) {
@@ -213,6 +275,34 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
   const [showTestForm, setShowTestForm] = useState(false);
   const [levelTestsHistory, setLevelTestsHistory] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [attendanceHistory, setAttendanceHistory] = useState([]);
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+
+  // Fetch student attendance history for the client dossier
+  useEffect(() => {
+    if (parentOnly || !student?.id) {
+      setAttendanceHistory([]);
+      return;
+    }
+    let cancelled = false;
+    setAttendanceLoading(true);
+    fetch(`/api/attendance?studentId=${encodeURIComponent(student.id)}`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => {
+        if (cancelled) return;
+        const rows = (Array.isArray(data) ? data : [])
+          .slice()
+          .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+        setAttendanceHistory(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setAttendanceHistory([]);
+      })
+      .finally(() => {
+        if (!cancelled) setAttendanceLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [parentOnly, student.id]);
 
   // Fetch student level tests history
   useEffect(() => {
@@ -667,17 +757,29 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
             </div>
           )}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <a href={healthFormUrl} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm">
-              <ExternalLink size={13} /> פתח טופס
+            <a href={onboardUrl} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm">
+              <ExternalLink size={13} /> פתח השלמת פרטים
             </a>
             <button
               type="button"
               className="btn btn-success btn-sm"
+              disabled={sendingOnboard || !parent?.phone}
+              onClick={handleSendOnboardLink}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              <Send size={13} /> {sendingOnboard ? 'שולח...' : 'שלח קישור השלמת פרטים'}
+            </button>
+            <a href={healthFormUrl} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm">
+              <ExternalLink size={13} /> טופס בריאות בלבד
+            </a>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
               disabled={sendingHealth || !parent?.phone}
               onClick={handleSendHealthForm}
               style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
             >
-              <Send size={13} /> {sendingHealth ? 'שולח...' : 'שלח קישור בוואטסאפ'}
+              <Send size={13} /> {sendingHealth ? 'שולח...' : 'שלח הצהרת בריאות'}
             </button>
             {healthDecl && (
               <button
@@ -719,6 +821,68 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
           {healthSendMsg && (
             <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)', wordBreak: 'break-all' }}>
               {healthSendMsg}
+            </div>
+          )}
+        </div>
+
+        {/* Personal file documents */}
+        <div className="section-header">
+          <div className="section-title">מסמכים בתיק</div>
+        </div>
+        <div className="card card-p" style={{ marginBottom: 16 }}>
+          {docsLoading ? (
+            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען מסמכים...</div>
+          ) : clientDocuments.length === 0 ? (
+            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+              עדיין אין קבצים בתיק. אחרי השלמת טופס החתימה יישמר כאן PDF.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {clientDocuments.map((doc) => (
+                <div
+                  key={doc.id}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+                    padding: '8px 10px', borderRadius: 10, border: '1px solid var(--border)',
+                    background: 'rgba(255,255,255,0.03)',
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>
+                      {doc.fileName || 'הצהרת בריאות חתומה'}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                      {doc.created_at ? new Date(doc.created_at).toLocaleString('he-IL') : ''}
+                      {doc.type ? ` · ${doc.type}` : ''}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(`/api/documents/${encodeURIComponent(doc.id)}/download`);
+                        if (!res.ok) throw new Error('download failed');
+                        const blob = await res.blob();
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = doc.fileName || 'document.pdf';
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        URL.revokeObjectURL(url);
+                      } catch (err) {
+                        console.error(err);
+                        setHealthSendMsg('שגיאה בהורדת המסמך מהתיק');
+                      }
+                    }}
+                  >
+                    <Download size={12} /> הורדה
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -785,6 +949,61 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
             <div style={{ color: 'var(--text-3)', fontSize: 13 }}>לא משויך לחוג עדיין</div>
           )}
         </div>
+
+        {/* Attendance history for this climber */}
+        {!parentOnly && (
+          <>
+            <div className="section-header">
+              <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <History size={15} /> היסטוריית נוכחות
+              </div>
+            </div>
+            <div className="card card-p" style={{ marginBottom: 16 }}>
+              {attendanceLoading ? (
+                <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>טוען נוכחות...</div>
+              ) : attendanceHistory.length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>אין רשומות נוכחות עדיין</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto' }}>
+                  {attendanceHistory.map((row) => {
+                    const meta = attStatusMeta(row.status);
+                    const groupName =
+                      groups.find((g) => g.id === row.group_id)?.name
+                      || (group?.id === row.group_id ? group.name : null)
+                      || 'חוג';
+                    return (
+                      <div
+                        key={row.id || `${row.date}-${row.group_id}-${row.status}`}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: 8,
+                          fontSize: 12,
+                          padding: '8px 0',
+                          borderBottom: '1px solid var(--border)',
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 600, color: 'var(--text-1)' }}>{row.date || '—'}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>{groupName}</div>
+                        </div>
+                        <span style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: meta.color,
+                          whiteSpace: 'nowrap',
+                        }}>
+                          {meta.label}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </>
+        )}
 
         {/* iCount payment checkout generator — owner only */}
         {canManageBilling && <>

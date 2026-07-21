@@ -9,9 +9,12 @@
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
+// Prefer service role. Fall back to SUPABASE_KEY so existing Render/local
+// setups keep working until the service role key is configured.
 const SUPABASE_SERVICE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.SUPABASE_SERVICE_KEY;
+  process.env.SUPABASE_SERVICE_KEY ||
+  process.env.SUPABASE_KEY;
 
 const isConfigured =
   SUPABASE_URL &&
@@ -39,6 +42,7 @@ const DIRECT_TABLES = [
   'activity_registrations',
   'health_declarations',
   'form_templates',
+  'client_documents',
   'messages',
   'message_templates',
   'saved_replies',
@@ -93,6 +97,7 @@ const mappers = {
       last_inbound_messenger: r.last_inbound_messenger || null,
       notes: r.notes || '',
       status: r.status || null,
+      idNumber: r.id_number || '',
       icount_client_id: r.icount_client_id || undefined,
     }),
     toRow: (o) => ({
@@ -112,6 +117,7 @@ const mappers = {
       last_inbound_messenger: emptyToNull(o.last_inbound_messenger),
       notes: o.notes || '',
       status: emptyToNull(o.status),
+      id_number: emptyToNull(o.idNumber || o.id_number),
       icount_client_id: emptyToNull(o.icount_client_id),
     }),
   },
@@ -125,6 +131,7 @@ const mappers = {
       status: r.status || 'lead_new',
       birthDate: r.birth_date || '',
       gender: r.gender || '',
+      idNumber: r.id_number || '',
       interests: Array.isArray(r.interests) ? r.interests : [],
       levelGrade: r.level_grade || null,
       source: r.source || 'unknown',
@@ -144,6 +151,7 @@ const mappers = {
       status: o.status || 'lead_new',
       birth_date: emptyToNull(o.birthDate),
       gender: emptyToNull(o.gender),
+      id_number: emptyToNull(o.idNumber || o.id_number),
       interests: Array.isArray(o.interests) ? o.interests : [],
       level_grade: emptyToNull(o.levelGrade),
       source: o.source || 'unknown',
@@ -267,6 +275,31 @@ mappers.health_declarations = {
     notes: o.notes || '',
     template_slug: emptyToNull(o.templateSlug || o.template_slug),
     template_id: emptyToNull(o.templateId || o.template_id),
+  }),
+};
+
+mappers.client_documents = {
+  fromRow: (r) => ({
+    id: r.id,
+    parentId: r.parent_id || null,
+    studentId: r.student_id || null,
+    declarationId: r.declaration_id || null,
+    type: r.type || 'health_waiver_pdf',
+    fileName: r.file_name || '',
+    storagePath: r.storage_path || '',
+    mimeType: r.mime_type || 'application/pdf',
+    created_at: r.created_at || null,
+    updated_at: r.updated_at || null,
+  }),
+  toRow: (o) => ({
+    id: o.id,
+    parent_id: emptyToNull(o.parentId),
+    student_id: emptyToNull(o.studentId),
+    declaration_id: emptyToNull(o.declarationId),
+    type: o.type || 'health_waiver_pdf',
+    file_name: o.fileName || o.file_name || '',
+    storage_path: o.storagePath || o.storage_path || '',
+    mime_type: o.mimeType || o.mime_type || 'application/pdf',
   }),
 };
 
@@ -434,6 +467,30 @@ export const supa = {
       return { ok: false, error: error.message };
     }
     return { ok: true };
+  },
+
+  async uploadClientDocument(storagePath, buffer, mimeType = 'application/pdf') {
+    if (!client) return { ok: false, error: 'Supabase not configured' };
+    const { error } = await client.storage
+      .from('client-documents')
+      .upload(storagePath, buffer, { contentType: mimeType, upsert: true });
+    if (error) {
+      console.error('Supabase storage upload failed:', error.message);
+      return { ok: false, error: error.message };
+    }
+    return { ok: true };
+  },
+
+  async downloadClientDocument(storagePath) {
+    if (!client) return { ok: false, error: 'Supabase not configured' };
+    const { data, error } = await client.storage
+      .from('client-documents')
+      .download(storagePath);
+    if (error) {
+      console.error('Supabase storage download failed:', error.message);
+      return { ok: false, error: error.message };
+    }
+    return { ok: true, blob: data };
   },
 
   client,

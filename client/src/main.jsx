@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import AuthGate from './components/AuthGate.jsx';
 import PublicHealthForm from './components/PublicHealthForm.jsx';
+import PublicOnboardingForm from './components/PublicOnboardingForm.jsx';
 import LeadIntakeForm from './components/LeadIntakeForm.jsx';
 import PrivacyPolicy from './components/PrivacyPolicy.jsx';
 import { getAccessToken } from './authClient.js';
@@ -33,6 +34,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <Routes>
         <Route path="/health" element={<PublicHealthForm />} />
         <Route path="/health/:slug" element={<PublicHealthForm />} />
+        <Route path="/onboard" element={<PublicOnboardingForm />} />
         <Route path="/join" element={<LeadIntakeForm />} />
         <Route path="/privacy" element={<PrivacyPolicy />} />
         <Route path="*" element={<AuthGate><App /></AuthGate>} />

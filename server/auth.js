@@ -17,6 +17,8 @@ const TEAM_RULES = [
   { methods: ['GET'], pattern: /^\/trainers$/ },
   { methods: ['GET'], pattern: /^\/broadcast-list-defs(\/|$)/ },
   { methods: ['GET', 'POST'], pattern: /^\/parents\/[^/]+\/broadcast-lists$/ },
+  { methods: ['GET'], pattern: /^\/students\/[^/]+\/documents$/ },
+  { methods: ['GET'], pattern: /^\/documents\/[^/]+\/download$/ },
   { methods: ['GET'], pattern: /^\/whatsapp\/(thread|logs)(\/|$)/ },
   { methods: ['GET'], pattern: /^\/whatsapp\/settings$/ },
   { methods: ['POST'], pattern: /^\/whatsapp\/(reply|bot-enabled)$/ },
