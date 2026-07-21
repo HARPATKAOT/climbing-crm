@@ -72,7 +72,7 @@ function answerRows(answers = {}, questionLabels = {}) {
     const label = questionLabels[id] || DEFAULT_QUESTIONS[id] || id;
     return `
       <div class="qa ${yes ? 'yes' : 'no'}">
-        <span class="mark">${yes ? 'כן' : 'לא'}</span>
+        <span class="mark">${yes ? '✓' : '—'}</span>
         <span>${escapeHtml(label)}</span>
       </div>`;
   }).join('');

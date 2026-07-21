@@ -2343,11 +2343,10 @@ app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
   const parentId = String(req.query.parentId || '').trim();
   const studentId = String(req.query.studentId || '').trim();
   const phone = String(req.query.phone || '').trim();
-  if (!parentId && !studentId && !phone) {
-    return res.status(400).json({ error: 'חסר מזהה הורה, ילד או טלפון' });
-  }
 
-  const parent = findParentForOnboard({ parentId, phone, studentId });
+  const parent = (parentId || studentId || phone)
+    ? findParentForOnboard({ parentId, phone, studentId })
+    : null;
   const listDefs = db.getBroadcastListDefs();
   const students = parent
     ? (db.get('students') || []).filter((s) => s.parentId === parent.id)
@@ -2379,10 +2378,13 @@ app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
       gender: s.gender || '',
       idNumber: s.idNumber || '',
       status: s.status || '',
+      interests: Array.isArray(s.interests) ? s.interests : [],
+      notes: s.notes || '',
     })),
     listDefs,
     subscriptions,
     requiredListKey: REQUIRED_BROADCAST_LIST,
+    interestOptions: INTEREST_OPTIONS,
     template: template
       ? {
           id: template.id,
@@ -2401,6 +2403,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     parent: parentBody = {},
     children = [],
     subscriptions = {},
+    interest = '',
     templateSlug,
     templateId,
   } = req.body || {};
@@ -2410,9 +2413,16 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   const parentIdNum = String(parentBody.idNumber || parentBody.parentIdNum || '').trim();
   const email = String(parentBody.email || '').trim();
   const city = String(parentBody.city || '').trim();
+  const interestText = String(interest || '').trim();
 
   if (!parentName || !phone) {
     return res.status(400).json({ error: 'נדרשים שם הורה ומספר טלפון' });
+  }
+  if (!email) {
+    return res.status(400).json({ error: 'נדרש אימייל' });
+  }
+  if (!city) {
+    return res.status(400).json({ error: 'נדרש מקום מגורים' });
   }
 
   const childList = (Array.isArray(children) ? children : [])
@@ -2422,6 +2432,8 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
       birthDate: String(c.birthDate || '').trim(),
       gender: String(c.gender || '').trim(),
       idNumber: String(c.idNumber || c.climberIdNum || '').trim(),
+      childPhone: String(c.childPhone || '').trim(),
+      registrationNotes: String(c.registrationNotes || c.notes || '').trim(),
       answers: c.answers || {},
       signature: c.signature || '',
       waiverAccepted: c.waiverAccepted === true || c.waiverAccepted === 'true',
@@ -2429,10 +2441,13 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     .filter((c) => c.name);
 
   if (!childList.length) {
-    return res.status(400).json({ error: 'יש להוסיף לפחות מתאמן/ת אחד' });
+    return res.status(400).json({ error: 'יש להוסיף לפחות משתתף/ת אחד' });
   }
 
   for (const child of childList) {
+    if (!child.birthDate) {
+      return res.status(400).json({ error: `חסר תאריך לידה עבור ${child.name}` });
+    }
     if (!child.waiverAccepted || !child.signature) {
       return res.status(400).json({
         error: `חסרה חתימה או אישור וויתור עבור ${child.name}`,
@@ -2444,24 +2459,41 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     ? (db.get('form_templates') || []).find((t) => t.id === templateId)
     : (templateSlug ? findFormTemplateBySlug(templateSlug) : findDefaultFormTemplate());
 
+  const requiredQs = (template?.healthQuestions || []).filter((q) => q.requireYes);
+  for (const child of childList) {
+    for (const q of requiredQs) {
+      if (!child.answers?.[q.id]) {
+        return res.status(400).json({
+          error: `יש לסמן את כל סעיפי ההצהרה עבור ${child.name}`,
+        });
+      }
+    }
+  }
+
   let parent = db.upsertParentByPhone(parentName, phone, email, {
     city,
     idNumber: parentIdNum,
     source: parentBody.source || 'form',
   });
-  if (parentIdNum || city || email) {
-    parent = db.update('parents', parent.id, {
-      name: parentName,
-      email: email || parent.email || '',
-      city: city || parent.city || '',
-      idNumber: parentIdNum || parent.idNumber || '',
-    }) || parent;
-  }
+  parent = db.update('parents', parent.id, {
+    name: parentName,
+    email: email || parent.email || '',
+    city: city || parent.city || '',
+    idNumber: parentIdNum || parent.idNumber || '',
+  }) || parent;
 
   const signedAt = new Date().toISOString();
   const today = signedAt.split('T')[0];
   const declarations = [];
   const savedStudents = [];
+
+  const segmentFromInterest = (text) => {
+    if (/בוגר|מבוגר|adult/i.test(text)) return 'adults';
+    if (/נוער|youth/i.test(text)) return 'youth';
+    if (/ילד|kids|ילדים/i.test(text)) return 'kids';
+    if (/הולדת|birthday/i.test(text)) return 'birthday';
+    return null;
+  };
 
   for (const child of childList) {
     let student = null;
@@ -2476,13 +2508,29 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
       );
     }
 
+    const noteParts = [];
+    if (interestText) noteParts.push(`עניין: ${interestText}`);
+    if (child.childPhone) noteParts.push(`טלפון ילד/ה: ${child.childPhone}`);
+    if (child.registrationNotes) noteParts.push(child.registrationNotes);
+    const mergedNotes = noteParts.join('\n');
+
     const prevStatus = student?.status;
+    const interests = interestText
+      ? Array.from(new Set([...(Array.isArray(student?.interests) ? student.interests : []), interestText]))
+      : (Array.isArray(student?.interests) ? student.interests : []);
     const studentPatch = {
       name: child.name,
       parentId: parent.id,
       birthDate: child.birthDate || student?.birthDate || '',
       gender: child.gender || student?.gender || '',
       idNumber: child.idNumber || student?.idNumber || '',
+      interests,
+      segment: student?.segment || segmentFromInterest(interestText),
+      notes: mergedNotes
+        ? (student?.notes && !String(student.notes).includes(mergedNotes)
+            ? `${student.notes}\n${mergedNotes}`
+            : (mergedNotes || student?.notes || ''))
+        : (student?.notes || ''),
       status: prevStatus === 'registered' ? prevStatus : 'health_signed',
       healthSignedAt: signedAt,
       waiverSignedAt: signedAt,
@@ -2501,7 +2549,6 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
         ...studentPatch,
         groupId: null,
         source: 'form',
-        notes: 'הושלם מטופס השלמת פרטים',
         created: today,
       });
       automationsService.triggerEvent('new_lead', {
