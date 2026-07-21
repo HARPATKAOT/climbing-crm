@@ -19,6 +19,49 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * Signatures are drawn in white on the dark public form canvas.
+ * For PDF (white paper) convert bright ink to dark so the signature is visible.
+ */
+function toPrintableSignature(dataUrl) {
+  return new Promise((resolve) => {
+    if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image')) {
+      resolve(dataUrl || '');
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const c = document.createElement('canvas');
+        c.width = img.width || 1;
+        c.height = img.height || 1;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        const imageData = ctx.getImageData(0, 0, c.width, c.height);
+        const d = imageData.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const a = d[i + 3];
+          if (a < 8) continue;
+          const lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+          // White / light ink → dark ink for print
+          if (lum >= 140) {
+            d[i] = 15;
+            d[i + 1] = 23;
+            d[i + 2] = 42;
+            d[i + 3] = Math.max(a, 220);
+          }
+        }
+        ctx.putImageData(imageData, 0, 0);
+        resolve(c.toDataURL('image/png'));
+      } catch {
+        resolve(dataUrl);
+      }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
 function answerRows(answers = {}, questionLabels = {}) {
   const keys = Object.keys(answers);
   if (!keys.length) {
@@ -57,7 +100,7 @@ async function resolveWaiverAndQuestions(decl) {
   return { waiverText, questionLabels };
 }
 
-function buildCertificateHtml(decl, { waiverText, questionLabels }) {
+function buildCertificateHtml(decl, { waiverText, questionLabels, signatureSrc }) {
   const parentName = decl.parentName || decl.signedBy || '—';
   const climberName = decl.climberName || decl.studentName || '—';
   const phone = decl.phone || decl.emergencyPhone || '—';
@@ -65,7 +108,7 @@ function buildCertificateHtml(decl, { waiverText, questionLabels }) {
   const parentId = decl.parentIdNum || '—';
   const climberId = decl.climberIdNum || '—';
   const birthDate = decl.birthDate || '—';
-  const signature = decl.signature_url || decl.signature || '';
+  const signature = signatureSrc || decl.signature_url || decl.signature || '';
   const hasSig = typeof signature === 'string' && signature.startsWith('data:image');
   const title = decl.title || 'הצהרת בריאות + הסרת אחריות — אישור חתום';
   const templateNote = decl.templateSlug ? `תבנית: ${decl.templateSlug}` : '';
@@ -113,7 +156,7 @@ function buildCertificateHtml(decl, { waiverText, questionLabels }) {
         }
         #hd-cert-root .sig-box {
           margin-top: 8px; border: 1px dashed #94a3b8; border-radius: 10px;
-          min-height: 110px; padding: 10px; background: #f8fafc;
+          min-height: 110px; padding: 10px; background: #ffffff;
           display: flex; align-items: center; justify-content: center;
         }
         #hd-cert-root .sig-box img { max-width: 100%; max-height: 140px; }
@@ -172,9 +215,11 @@ export async function buildHealthDeclarationPdf(decl) {
   if (!decl) throw new Error('אין הצהרה להורדה');
 
   const meta = await resolveWaiverAndQuestions(decl);
+  const rawSig = decl.signature_url || decl.signature || '';
+  const signatureSrc = await toPrintableSignature(rawSig);
   const host = document.createElement('div');
   host.style.cssText = 'position:fixed;left:-10000px;top:0;z-index:-1;';
-  host.innerHTML = buildCertificateHtml(decl, meta);
+  host.innerHTML = buildCertificateHtml(decl, { ...meta, signatureSrc });
   document.body.appendChild(host);
 
   try {
