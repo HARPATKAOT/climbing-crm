@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Calendar, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, MessageCircle, Bell, FileCheck2, ExternalLink, Download, ReceiptText, History } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, Bell, FileCheck2, ExternalLink, Download, ReceiptText, History, ChevronDown, Users } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
 import { downloadHealthDeclarationPdf } from '../utils/healthDeclarationPdf.js';
@@ -74,6 +74,64 @@ const TEST_TYPE_COLORS = {
   lead:     { accent: '#34D399', bg: 'rgba(52,211,153,0.10)', border: 'rgba(52,211,153,0.28)' },
 };
 
+/** Collapsible folder row for lead detail panel */
+function FolderRow({ id, title, icon: Icon, summary, open, onToggle, children, summaryColor }) {
+  return (
+    <div style={{
+      border: '1px solid var(--border)',
+      borderRadius: 10,
+      marginBottom: 8,
+      overflow: 'hidden',
+      background: 'rgba(255,255,255,0.02)',
+    }}>
+      <button
+        type="button"
+        onClick={() => onToggle(id)}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '10px 12px',
+          background: open ? 'rgba(255,255,255,0.04)' : 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+          color: 'inherit',
+          textAlign: 'right',
+        }}
+      >
+        {Icon && <Icon size={15} style={{ flexShrink: 0, opacity: 0.85 }} />}
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', flexShrink: 0 }}>{title}</span>
+        <span style={{
+          fontSize: 12,
+          color: summaryColor || 'var(--text-3)',
+          flex: 1,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          textAlign: 'left',
+        }}>
+          {summary}
+        </span>
+        <ChevronDown
+          size={15}
+          style={{
+            flexShrink: 0,
+            opacity: 0.6,
+            transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
+            transition: 'transform 0.15s ease',
+          }}
+        />
+      </button>
+      {open && (
+        <div style={{ padding: '12px 12px 14px', borderTop: '1px solid var(--border)' }}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Lead/Customer Card (detail sidebar) ────────────────────────────────────
 function CustomerCard({ student, parent, group, groups = [], onClose, onStatusChange, onDelete, onUpdateStudent, pricelist, refreshData, canManageBilling = false }) {
   if (!student) return null;
@@ -115,8 +173,17 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
   const [formTemplates, setFormTemplates] = useState([]);
   const [selectedFormSlug, setSelectedFormSlug] = useState('');
   const [downloadingPdf, setDownloadingPdf] = useState(false);
-  const [clientDocuments, setClientDocuments] = useState([]);
-  const [docsLoading, setDocsLoading] = useState(false);
+  const [openFolder, setOpenFolder] = useState(null);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
+  const toggleFolder = (id) => setOpenFolder((cur) => (cur === id ? null : id));
+
   useEffect(() => {
     fetch('/api/health-declarations')
       .then(res => res.ok ? res.json() : [])
@@ -164,27 +231,6 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
   // Only treat as signed when we have a real declaration, or explicit health_signed status
   const isHealthSigned = student.status === 'health_signed'
     || !!(healthDecl && (healthDecl.signed || healthDecl.status === 'approved' || healthDecl.waiverAccepted));
-
-  useEffect(() => {
-    if (parentOnly || !student?.id) {
-      setClientDocuments([]);
-      return;
-    }
-    let cancelled = false;
-    setDocsLoading(true);
-    fetch(`/api/students/${encodeURIComponent(student.id)}/documents`)
-      .then((res) => (res.ok ? res.json() : []))
-      .then((docs) => {
-        if (!cancelled) setClientDocuments(Array.isArray(docs) ? docs : []);
-      })
-      .catch(() => {
-        if (!cancelled) setClientDocuments([]);
-      })
-      .finally(() => {
-        if (!cancelled) setDocsLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [parentOnly, student.id, isHealthSigned]);
 
   const handleSendOnboardLink = async () => {
     if (!parent?.phone) {
@@ -594,735 +640,660 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
     }
   };
 
+  const healthSummary = isHealthSigned
+    ? `חתום${healthDecl?.signedDate || healthDecl?.date ? ` · ${healthDecl.signedDate || healthDecl.date}` : ''}`
+    : 'חסר';
+  const groupSummary = group
+    ? `${group.name}${group.day ? ` · יום ${group.day}` : ''}`
+    : 'לא משויך';
+  const attendanceSummary = attendanceLoading
+    ? 'טוען...'
+    : attendanceHistory.length === 0
+      ? 'אין רשומות'
+      : `${attendanceHistory.length} רשומות`;
+  const paymentsSummary = studentPayments.length === 0
+    ? 'אין תשלומים'
+    : `${studentPayments.length} רשומות`;
+  const testsSummary = levelTestsHistory.length === 0
+    ? 'אין מבחנים'
+    : `${levelTestsHistory.length} מבחנים`;
+  const statusSummary = STATUSES[student.status]?.label || student.status || '—';
+
   return (
-    <div style={{
-      position: 'fixed', top: 0, left: 0, height: '100vh', width: '420px',
-      background: '#0D1117', borderRight: '1px solid var(--border)',
-      zIndex: 300, display: 'flex', flexDirection: 'column',
-      boxShadow: '4px 0 25px rgba(0,0,0,0.5)',
-      animation: 'slideUp 0.2s ease'
-    }}>
-      {/* Header */}
-      <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid var(--border)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-1)' }}>
-              {parentOnly ? (parent?.name || 'ליד ללא מתאמן') : student.name}
-            </div>
-            <div style={{ fontSize: 13, color: 'var(--text-3)', marginTop: 4 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>
-                  {parentOnly
-                    ? 'ללא מתאמן רשום — ניתן להוסיף ילד מאוחר'
-                    : `תאריך לידה: ${student.birthDate || 'לא הוזן'}`}
-                </span>
-                <button className="btn btn-ghost btn-xs" onClick={() => setIsEditing(true)}>
-                  <Edit2 size={11} /> ערוך פרטים
-                </button>
-              </div>
-            </div>
-          </div>
-          <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose}>
-            <X size={18} />
-          </button>
-        </div>
-        <div style={{ marginTop: 12 }}>
-          <StatusBadge status={student.status} />
-        </div>
-      </div>
-
-      {/* Scrollable Body */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
-        
-        {/* Contact Info */}
-        <div className="section-header"><div className="section-title">פרטי קשר ומקור ליד</div></div>
-        <div className="card card-p" style={{ marginBottom: 16 }}>
-          {parent?.name !== student.name && (
-            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8, color: 'var(--text-1)' }}>{parent?.name} (הורה/משלם)</div>
-          )}
-          {(parent?.instagram_id || parent?.channel === 'instagram' || student.notes?.includes('אינסטגרם')) ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'linear-gradient(45deg, rgba(240,148,51,0.15), rgba(220,39,67,0.15), rgba(188,24,136,0.15))', padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(225,48,108,0.4)' }}>
-                <span style={{ fontSize: 18 }}>📸</span>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 'bold', color: '#ff80bf' }}>הגיע מאינסטגרם (Instagram DM)</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-2)' }}>IG ID / שם משתמש: {parent?.instagram_id || 'מזהה אינסטגרם מדווח'}</div>
+    <>
+      <div
+        onClick={onClose}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.55)',
+          zIndex: 299,
+        }}
+      />
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          height: '100vh',
+          width: 'min(960px, 92vw)',
+          background: '#0D1117',
+          borderRight: '1px solid var(--border)',
+          zIndex: 300,
+          display: 'flex',
+          flexDirection: 'row',
+          boxShadow: '4px 0 25px rgba(0,0,0,0.5)',
+          animation: 'slideUp 0.2s ease',
+          overflow: 'hidden',
+        }}
+      >
+        {/* Details column (RTL: appears on the right) */}
+        <div
+          style={{
+            width: 380,
+            flexShrink: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            borderLeft: '1px solid var(--border)',
+            minHeight: 0,
+            overscrollBehavior: 'contain',
+          }}
+        >
+          <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-1)', lineHeight: 1.3 }}>
+                  {parentOnly ? (parent?.name || 'ליד ללא מתאמן') : student.name}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <span>
+                    {parentOnly
+                      ? 'ללא מתאמן רשום'
+                      : `תאריך לידה: ${student.birthDate || 'לא הוזן'}`}
+                  </span>
+                  <button className="btn btn-ghost btn-xs" onClick={() => setIsEditing(true)}>
+                    <Edit2 size={11} /> ערוך
+                  </button>
                 </div>
               </div>
-              {parent?.phone && (
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <a href={`tel:${parent?.phone}`} className="btn btn-ghost btn-sm">
-                    <Phone size={14} /> {parent?.phone}
-                  </a>
-                  <a href={`https://wa.me/972${parent?.phone?.replace(/^0/, '')}`} target="_blank" rel="noreferrer" className="btn btn-success btn-sm">
-                    💬 וואטסאפ
-                  </a>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <a href={`tel:${parent?.phone}`} className="btn btn-ghost btn-sm">
-                <Phone size={14} /> {parent?.phone}
-              </a>
-              {parent?.email && (
-                <a href={`mailto:${parent?.email}`} className="btn btn-ghost btn-sm">
-                  <Mail size={14} /> אימייל
-                </a>
-              )}
-              <a href={`https://wa.me/972${parent?.phone?.replace(/^0/, '')}`} target="_blank" rel="noreferrer"
-                className="btn btn-success btn-sm">
-                💬 וואטסאפ
-              </a>
-            </div>
-          )}
-        </div>
-
-        {/* Lead attributes: source / segment / city / next followup */}
-        <div className="card card-p" style={{ marginBottom: 16, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 4 }}><Tag size={11} /> מקור ליד</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>
-              {(LEAD_SOURCES[parent?.source || student.source] || LEAD_SOURCES.unknown).icon}{' '}
-              {(LEAD_SOURCES[parent?.source || student.source] || LEAD_SOURCES.unknown).label}
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 4 }}><UserCheck size={11} /> פלח</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>
-              {student.segment ? (LEAD_SEGMENTS[student.segment]?.label || student.segment) : '—'}
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 4 }}><MapPin size={11} /> עיר</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>{parent?.city || '—'}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 4 }}><Bell size={11} /> מעקב הבא</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: student.nextFollowup ? 'var(--amber, #FCD34D)' : 'var(--text-1)' }}>
-              {student.nextFollowup || '—'}
-            </div>
-          </div>
-        </div>
-
-        {/* Health declaration + waiver conversion state */}
-        <div className="section-header">
-          <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <FileCheck2 size={15} /> הצהרת בריאות + הסרת אחריות
-          </div>
-        </div>
-        <div className="card card-p" style={{ marginBottom: 16 }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12,
-            padding: '10px 12px', borderRadius: 10,
-            background: isHealthSigned ? 'rgba(52, 211, 153, 0.12)' : 'rgba(252, 211, 77, 0.1)',
-            border: `1px solid ${isHealthSigned ? 'rgba(52, 211, 153, 0.35)' : 'rgba(252, 211, 77, 0.35)'}`,
-          }}>
-            <span style={{ fontSize: 18 }}>{isHealthSigned ? '✓' : '⏳'}</span>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
-                {isHealthSigned ? 'נחתם — הצהרת בריאות + כתב ויתור' : 'טרם נחתם'}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
-                {healthDecl?.signedDate || healthDecl?.date
-                  ? `תאריך חתימה: ${healthDecl.signedDate || healthDecl.date}`
-                  : 'שלחו ללקוח קישור לחתימה דיגיטלית'}
-                {healthDecl?.waiverAccepted ? ' · וויתור אושר' : ''}
-                {healthDecl?.templateSlug ? ` · ${healthDecl.templateSlug}` : ''}
-              </div>
-              {healthDecl && (
-                <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 6 }}>
-                  חתם: {healthDecl.signedBy || healthDecl.parentName || '—'}
-                  {(healthDecl.climberName || healthDecl.studentName) ? ` · מתאמן: ${healthDecl.climberName || healthDecl.studentName}` : ''}
-                  {Object.values(healthDecl.answers || {}).some(Boolean) ? ' · יש הסתייגויות רפואיות' : ' · ללא הסתייגויות'}
-                </div>
-              )}
-            </div>
-          </div>
-          {formTemplates.length > 0 && (
-            <div className="form-group" style={{ marginBottom: 12 }}>
-              <label className="form-label" style={{ fontSize: 11 }}>סוג טופס / פעילות</label>
-              <select
-                className="select"
-                value={selectedFormSlug}
-                onChange={(e) => setSelectedFormSlug(e.target.value)}
-                style={{ fontSize: 13 }}
-              >
-                {formTemplates.map((t) => (
-                  <option key={t.id} value={t.slug}>
-                    {t.title}{t.isDefault ? ' (ברירת מחדל)' : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <a href={onboardUrl} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm">
-              <ExternalLink size={13} /> פתח השלמת פרטים
-            </a>
-            <button
-              type="button"
-              className="btn btn-success btn-sm"
-              disabled={sendingOnboard || !parent?.phone}
-              onClick={handleSendOnboardLink}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-            >
-              <Send size={13} /> {sendingOnboard ? 'שולח...' : 'שלח קישור השלמת פרטים'}
-            </button>
-            <a href={healthFormUrl} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm">
-              <ExternalLink size={13} /> טופס בריאות בלבד
-            </a>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              disabled={sendingHealth || !parent?.phone}
-              onClick={handleSendHealthForm}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-            >
-              <Send size={13} /> {sendingHealth ? 'שולח...' : 'שלח הצהרת בריאות'}
-            </button>
-            {healthDecl && (
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={downloadingPdf}
-                onClick={async () => {
-                  setDownloadingPdf(true);
-                  setHealthSendMsg('');
-                  try {
-                    await downloadHealthDeclarationPdf(healthDecl);
-                    setHealthSendMsg('ה־PDF של האישור החתום הורד למחשב');
-                  } catch (err) {
-                    console.error(err);
-                    setHealthSendMsg('שגיאה בהורדת ה־PDF — נסו שוב');
-                  } finally {
-                    setDownloadingPdf(false);
-                  }
-                }}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-              >
-                <Download size={13} /> {downloadingPdf ? 'מכין PDF...' : 'הורד אישור PDF'}
+              <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} aria-label="סגור">
+                <X size={18} />
               </button>
-            )}
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <StatusBadge status={student.status} />
+            </div>
           </div>
-          {healthDecl?.signature_url && (
-            <div style={{
-              marginTop: 12, padding: 10, borderRadius: 10,
-              background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)',
-            }}>
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>עותק חתימה שמור</div>
-              <img
-                src={healthDecl.signature_url}
-                alt="חתימה"
-                style={{ maxWidth: '100%', maxHeight: 90, background: '#0b1220', borderRadius: 8 }}
-              />
-            </div>
-          )}
-          {healthSendMsg && (
-            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)', wordBreak: 'break-all' }}>
-              {healthSendMsg}
-            </div>
-          )}
-        </div>
 
-        {/* Personal file documents */}
-        <div className="section-header">
-          <div className="section-title">מסמכים בתיק</div>
-        </div>
-        <div className="card card-p" style={{ marginBottom: 16 }}>
-          {docsLoading ? (
-            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען מסמכים...</div>
-          ) : clientDocuments.length === 0 ? (
-            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-              עדיין אין קבצים בתיק. אחרי השלמת טופס החתימה יישמר כאן PDF.
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {clientDocuments.map((doc) => (
-                <div
-                  key={doc.id}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-                    padding: '8px 10px', borderRadius: 10, border: '1px solid var(--border)',
-                    background: 'rgba(255,255,255,0.03)',
-                  }}
-                >
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>
-                      {doc.fileName || 'הצהרת בריאות חתומה'}
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                      {doc.created_at ? new Date(doc.created_at).toLocaleString('he-IL') : ''}
-                      {doc.type ? ` · ${doc.type}` : ''}
-                    </div>
+          <div
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              overscrollBehavior: 'contain',
+              padding: '12px 14px 16px',
+              minHeight: 0,
+            }}
+          >
+            {/* Contact — always visible compact */}
+            <div style={{ marginBottom: 12 }}>
+              {parent?.name && parent?.name !== student.name && (
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: 'var(--text-1)' }}>
+                  {parent.name} <span style={{ fontWeight: 500, color: 'var(--text-3)' }}>(הורה/משלם)</span>
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                {parent?.phone && (
+                  <a href={`tel:${parent.phone}`} className="btn btn-ghost btn-xs">
+                    <Phone size={12} /> {parent.phone}
+                  </a>
+                )}
+                {parent?.email && (
+                  <a href={`mailto:${parent.email}`} className="btn btn-ghost btn-xs">
+                    <Mail size={12} /> אימייל
+                  </a>
+                )}
+                {parent?.phone && (
+                  <a
+                    href={`https://wa.me/972${parent.phone.replace(/^0/, '')}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn btn-success btn-xs"
+                  >
+                    וואטסאפ
+                  </a>
+                )}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 12 }}>
+                <div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 2 }}><Tag size={10} /> מקור</div>
+                  <div style={{ fontWeight: 600 }}>
+                    {(LEAD_SOURCES[parent?.source || student.source] || LEAD_SOURCES.unknown).icon}{' '}
+                    {(LEAD_SOURCES[parent?.source || student.source] || LEAD_SOURCES.unknown).label}
                   </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 2 }}><UserCheck size={10} /> פלח</div>
+                  <div style={{ fontWeight: 600 }}>
+                    {student.segment ? (LEAD_SEGMENTS[student.segment]?.label || student.segment) : '—'}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 2 }}><MapPin size={10} /> עיר</div>
+                  <div style={{ fontWeight: 600 }}>{parent?.city || '—'}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 2 }}><Bell size={10} /> מעקב</div>
+                  <div style={{ fontWeight: 600, color: student.nextFollowup ? 'var(--amber, #FCD34D)' : undefined }}>
+                    {student.nextFollowup || '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Health folder */}
+            <FolderRow
+              id="health"
+              title="הצהרת בריאות"
+              icon={FileCheck2}
+              summary={healthSummary}
+              summaryColor={isHealthSigned ? '#34D399' : '#FCD34D'}
+              open={openFolder === 'health'}
+              onToggle={toggleFolder}
+            >
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12,
+                padding: '8px 10px', borderRadius: 8,
+                background: isHealthSigned ? 'rgba(52, 211, 153, 0.12)' : 'rgba(252, 211, 77, 0.1)',
+                border: `1px solid ${isHealthSigned ? 'rgba(52, 211, 153, 0.35)' : 'rgba(252, 211, 77, 0.35)'}`,
+              }}>
+                <span style={{ fontSize: 16 }}>{isHealthSigned ? '✓' : '⏳'}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>
+                    {isHealthSigned ? 'נחתם — הצהרת בריאות + כתב ויתור' : 'טרם נחתם'}
+                  </div>
+                  {healthDecl && (
+                    <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 4 }}>
+                      חתם: {healthDecl.signedBy || healthDecl.parentName || '—'}
+                      {(healthDecl.climberName || healthDecl.studentName) ? ` · מתאמן: ${healthDecl.climberName || healthDecl.studentName}` : ''}
+                      {Object.values(healthDecl.answers || {}).some(Boolean) ? ' · יש הסתייגויות רפואיות' : ' · ללא הסתייגויות'}
+                    </div>
+                  )}
+                </div>
+              </div>
+              {formTemplates.length > 0 && (
+                <div className="form-group" style={{ marginBottom: 10 }}>
+                  <label className="form-label" style={{ fontSize: 11 }}>סוג טופס / פעילות</label>
+                  <select
+                    className="select"
+                    value={selectedFormSlug}
+                    onChange={(e) => setSelectedFormSlug(e.target.value)}
+                    style={{ fontSize: 13 }}
+                  >
+                    {formTemplates.map((t) => (
+                      <option key={t.id} value={t.slug}>
+                        {t.title}{t.isDefault ? ' (ברירת מחדל)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <a href={onboardUrl} target="_blank" rel="noreferrer" className="btn btn-primary btn-xs">
+                  <ExternalLink size={12} /> פתח השלמת פרטים
+                </a>
+                <button
+                  type="button"
+                  className="btn btn-success btn-xs"
+                  disabled={sendingOnboard || !parent?.phone}
+                  onClick={handleSendOnboardLink}
+                >
+                  <Send size={12} /> {sendingOnboard ? 'שולח...' : 'שלח קישור השלמה'}
+                </button>
+                <a href={healthFormUrl} target="_blank" rel="noreferrer" className="btn btn-ghost btn-xs">
+                  <ExternalLink size={12} /> טופס בריאות
+                </a>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  disabled={sendingHealth || !parent?.phone}
+                  onClick={handleSendHealthForm}
+                >
+                  <Send size={12} /> {sendingHealth ? 'שולח...' : 'שלח הצהרת בריאות'}
+                </button>
+                {healthDecl && (
                   <button
                     type="button"
-                    className="btn btn-ghost btn-xs"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}
+                    className="btn btn-primary btn-xs"
+                    disabled={downloadingPdf}
                     onClick={async () => {
+                      setDownloadingPdf(true);
+                      setHealthSendMsg('');
                       try {
-                        const res = await fetch(`/api/documents/${encodeURIComponent(doc.id)}/download`);
-                        if (!res.ok) throw new Error('download failed');
-                        const blob = await res.blob();
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = doc.fileName || 'document.pdf';
-                        document.body.appendChild(a);
-                        a.click();
-                        a.remove();
-                        URL.revokeObjectURL(url);
+                        await downloadHealthDeclarationPdf(healthDecl);
+                        setHealthSendMsg('קובץ האישור החתום הורד למחשב');
                       } catch (err) {
                         console.error(err);
-                        setHealthSendMsg('שגיאה בהורדת המסמך מהתיק');
+                        setHealthSendMsg('שגיאה בהורדת האישור');
+                      } finally {
+                        setDownloadingPdf(false);
                       }
                     }}
                   >
-                    <Download size={12} /> הורדה
+                    <Download size={12} /> {downloadingPdf ? 'מכין...' : 'הורד אישור חתום'}
+                  </button>
+                )}
+              </div>
+              {healthDecl?.signature_url && (
+                <div style={{
+                  marginTop: 10, padding: 8, borderRadius: 8,
+                  background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)',
+                }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>עותק חתימה</div>
+                  <img
+                    src={healthDecl.signature_url}
+                    alt="חתימה"
+                    style={{ maxWidth: '100%', maxHeight: 70, background: '#0b1220', borderRadius: 8 }}
+                  />
+                </div>
+              )}
+              {healthSendMsg && (
+                <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)', wordBreak: 'break-all' }}>
+                  {healthSendMsg}
+                </div>
+              )}
+            </FolderRow>
+
+            {/* Group folder */}
+            {!parentOnly && (
+              <FolderRow
+                id="group"
+                title="חוג ושיוך"
+                icon={Users}
+                summary={groupSummary}
+                open={openFolder === 'group'}
+                onToggle={toggleFolder}
+              >
+                {editingGroup ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <select
+                      className="input input-sm"
+                      value={editGroupId}
+                      disabled={savingGroup}
+                      onChange={e => setEditGroupId(e.target.value)}
+                    >
+                      <option value="">— לא משויך —</option>
+                      {groups.map(g => (
+                        <option key={g.id} value={g.id}>{g.name}</option>
+                      ))}
+                    </select>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button type="button" className="btn btn-primary btn-sm" disabled={savingGroup} onClick={handleSaveGroup}>
+                        <Check size={13} /> {savingGroup ? 'שומר...' : 'שמור'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        disabled={savingGroup}
+                        onClick={() => {
+                          setEditGroupId(student.groupId || '');
+                          setEditingGroup(false);
+                        }}
+                      >
+                        ביטול
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    {group ? (
+                      <>
+                        <div style={{ fontWeight: 700 }}>{group.name}</div>
+                        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
+                          יום {group.day} בשעה {group.time}
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ color: 'var(--text-3)', fontSize: 13 }}>לא משויך לחוג עדיין</div>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      style={{ marginTop: 8 }}
+                      onClick={() => {
+                        setEditGroupId(student.groupId || '');
+                        setEditingGroup(true);
+                      }}
+                    >
+                      <Edit2 size={11} /> ערוך שיוך
+                    </button>
+                  </div>
+                )}
+              </FolderRow>
+            )}
+
+            {/* Attendance folder */}
+            {!parentOnly && (
+              <FolderRow
+                id="attendance"
+                title="נוכחות"
+                icon={History}
+                summary={attendanceSummary}
+                open={openFolder === 'attendance'}
+                onToggle={toggleFolder}
+              >
+                {attendanceLoading ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען נוכחות...</div>
+                ) : attendanceHistory.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין רשומות נוכחות עדיין</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto', overscrollBehavior: 'contain' }}>
+                    {attendanceHistory.map((row) => {
+                      const meta = attStatusMeta(row.status);
+                      const groupName =
+                        groups.find((g) => g.id === row.group_id)?.name
+                        || (group?.id === row.group_id ? group.name : null)
+                        || 'חוג';
+                      return (
+                        <div
+                          key={row.id || `${row.date}-${row.group_id}-${row.status}`}
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: 8,
+                            fontSize: 12,
+                            padding: '6px 0',
+                            borderBottom: '1px solid var(--border)',
+                          }}
+                        >
+                          <div>
+                            <div style={{ fontWeight: 600 }}>{row.date || '—'}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{groupName}</div>
+                          </div>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: meta.color }}>{meta.label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </FolderRow>
+            )}
+
+            {/* Payments folder */}
+            {canManageBilling && (
+              <FolderRow
+                id="payments"
+                title="תשלומים"
+                icon={CreditCard}
+                summary={paymentsSummary}
+                open={openFolder === 'payments'}
+                onToggle={toggleFolder}
+              >
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={() => setShowPaymentModal(true)}
+                  >
+                    <Send size={13} /> שלח בקשת תשלום
                   </button>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Group / Class */}
-        <div className="section-header">
-          <div className="section-title">קבוצה / חוג שיוך</div>
-          {!editingGroup && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs"
-              onClick={() => {
-                setEditGroupId(student.groupId || '');
-                setEditingGroup(true);
-              }}
-            >
-              <Edit2 size={11} /> ערוך
-            </button>
-          )}
-        </div>
-        <div className="card card-p" style={{ marginBottom: 16 }}>
-          {editingGroup ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <select
-                className="input input-sm"
-                value={editGroupId}
-                disabled={savingGroup}
-                onChange={e => setEditGroupId(e.target.value)}
-              >
-                <option value="">— לא משויך —</option>
-                {groups.map(g => (
-                  <option key={g.id} value={g.id}>{g.name}</option>
-                ))}
-              </select>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  disabled={savingGroup}
-                  onClick={handleSaveGroup}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                >
-                  <Check size={13} /> {savingGroup ? 'שומר...' : 'שמור'}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  disabled={savingGroup}
-                  onClick={() => {
-                    setEditGroupId(student.groupId || '');
-                    setEditingGroup(false);
-                  }}
-                >
-                  ביטול
-                </button>
-              </div>
-            </div>
-          ) : group ? (
-            <>
-              <div style={{ fontWeight: 700, color: 'var(--text-1)' }}>{group.name}</div>
-              <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>יום {group.day} בשעה {group.time}</div>
-            </>
-          ) : (
-            <div style={{ color: 'var(--text-3)', fontSize: 13 }}>לא משויך לחוג עדיין</div>
-          )}
-        </div>
-
-        {/* Attendance history for this climber */}
-        {!parentOnly && (
-          <>
-            <div className="section-header">
-              <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <History size={15} /> היסטוריית נוכחות
-              </div>
-            </div>
-            <div className="card card-p" style={{ marginBottom: 16 }}>
-              {attendanceLoading ? (
-                <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>טוען נוכחות...</div>
-              ) : attendanceHistory.length === 0 ? (
-                <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>אין רשומות נוכחות עדיין</div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto' }}>
-                  {attendanceHistory.map((row) => {
-                    const meta = attStatusMeta(row.status);
-                    const groupName =
-                      groups.find((g) => g.id === row.group_id)?.name
-                      || (group?.id === row.group_id ? group.name : null)
-                      || 'חוג';
-                    return (
+                {studentPayments.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין היסטוריית תשלומים</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 180, overflowY: 'auto', overscrollBehavior: 'contain' }}>
+                    {studentPayments.slice(0, 8).map((p) => (
                       <div
-                        key={row.id || `${row.date}-${row.group_id}-${row.status}`}
+                        key={p.id}
                         style={{
                           display: 'flex',
                           justifyContent: 'space-between',
-                          alignItems: 'center',
                           gap: 8,
                           fontSize: 12,
-                          padding: '8px 0',
+                          padding: '6px 0',
                           borderBottom: '1px solid var(--border)',
                         }}
                       >
-                        <div>
-                          <div style={{ fontWeight: 600, color: 'var(--text-1)' }}>{row.date || '—'}</div>
-                          <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>{groupName}</div>
-                        </div>
-                        <span style={{
-                          fontSize: 11,
-                          fontWeight: 700,
-                          color: meta.color,
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {meta.label}
+                        <span style={{ color: 'var(--text-2)' }}>
+                          {p.description}
+                          {p.icount_doc_number ? ` · מס׳ ${p.icount_doc_number}` : ''}
+                        </span>
+                        <span>
+                          ₪{Number(p.amount).toLocaleString()}{' '}
+                          <span className={p.status === 'paid' ? 'badge badge-green' : 'badge badge-amber'}>
+                            {p.status === 'paid' ? 'שולם' : p.status === 'pending' ? 'ממתין' : p.status}
+                          </span>
                         </span>
                       </div>
+                    ))}
+                  </div>
+                )}
+              </FolderRow>
+            )}
+
+            {/* Tests folder */}
+            {canManageBilling && (
+              <FolderRow
+                id="tests"
+                title="מבחנים"
+                icon={Award}
+                summary={testsSummary}
+                open={openFolder === 'tests'}
+                onToggle={toggleFolder}
+              >
+                {showTestForm ? (
+                  <form onSubmit={handleAddTest} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                      <select
+                        className="input input-sm"
+                        style={{
+                          flex: 1, minWidth: 110, fontWeight: 700,
+                          color: TEST_TYPE_COLORS[testType]?.accent,
+                          borderColor: TEST_TYPE_COLORS[testType]?.border,
+                          background: TEST_TYPE_COLORS[testType]?.bg,
+                        }}
+                        value={testType}
+                        onChange={e => setTestType(e.target.value)}
+                      >
+                        <option value="level">מבחן רמה</option>
+                        <option value="security">מבחן אבטחה</option>
+                        <option value="lead">מבחן הובלה</option>
+                      </select>
+                      {testType === 'level' && (
+                        <>
+                          <select className="input input-sm" style={{ flex: 1, minWidth: 80 }} value={testLevel} onChange={e => setTestLevel(e.target.value)}>
+                            {['5A','5B','5C','6A','6B','6C','7A','7B','7C','8A'].map(lvl => (
+                              <option key={lvl} value={lvl}>רמה {lvl}</option>
+                            ))}
+                          </select>
+                          <select className="input input-sm" style={{ flex: 1, minWidth: 90 }} value={testRouteStyle} onChange={e => setTestRouteStyle(e.target.value)}>
+                            <option value="top-rope">טופ רופ</option>
+                            <option value="lead">הובלה</option>
+                          </select>
+                        </>
+                      )}
+                      {(testType === 'security' || testType === 'lead') && (
+                        <select
+                          className="input input-sm"
+                          style={{ flex: 1.5, minWidth: 120 }}
+                          required
+                          value={testExaminerId}
+                          onChange={e => setTestExaminerId(e.target.value)}
+                        >
+                          <option value="">בחר בוחן...</option>
+                          {employees.map(emp => (
+                            <option key={emp.id} value={emp.id}>{emp.name}</option>
+                          ))}
+                        </select>
+                      )}
+                      <select className="input input-sm" style={{ width: 72 }} value={testPassed ? 'yes' : 'no'} onChange={e => setTestPassed(e.target.value === 'yes')}>
+                        <option value="yes">עבר</option>
+                        <option value="no">נכשל</option>
+                      </select>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input
+                        className="input input-sm"
+                        placeholder="הערות..."
+                        style={{ flex: 2 }}
+                        value={testNotes}
+                        onChange={e => setTestNotes(e.target.value)}
+                      />
+                      <button type="submit" disabled={testLoading} className="btn btn-primary btn-sm">רשום</button>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowTestForm(false)}>ביטול</button>
+                    </div>
+                  </form>
+                ) : (
+                  <button className="btn btn-ghost btn-sm w-full" style={{ marginBottom: 10, justifyContent: 'center', gap: 8 }} onClick={() => setShowTestForm(true)}>
+                    <Plus size={13} /> שמירת מבחן חדש
+                  </button>
+                )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 150, overflowY: 'auto', overscrollBehavior: 'contain' }}>
+                  {levelTestsHistory.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>לא נמצאו מבחנים מדווחים</div>
+                  ) : (
+                    levelTestsHistory.map(test => {
+                      const asLevel = test.test_type === 'level' || test.test_type === 'top-rope';
+                      const asSecurity = test.test_type === 'security';
+                      const asLeadCert = test.test_type === 'lead';
+                      const typeKey = asSecurity ? 'security' : asLeadCert ? 'lead' : 'level';
+                      const typeColor = TEST_TYPE_COLORS[typeKey];
+                      const routeStyle = test.route_style || (test.test_type === 'top-rope' ? 'top-rope' : null);
+                      const routeLabel = routeStyle === 'lead' ? 'הובלה' : routeStyle === 'top-rope' ? 'טופ רופ' : null;
+                      let title = 'מבחן';
+                      if (asLevel) title = `רמה ${test.level || ''}${routeLabel ? ` · ${routeLabel}` : ''}`.trim();
+                      else if (asSecurity) title = 'מבחן אבטחה';
+                      else if (asLeadCert) title = 'מבחן הובלה';
+                      const showExaminer = (asSecurity || asLeadCert) && !!test.examiner;
+                      return (
+                        <div key={test.id} style={{
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12,
+                          padding: '8px 10px', borderRadius: 8,
+                          background: typeColor.bg, border: `1px solid ${typeColor.border}`,
+                          borderRight: `3px solid ${typeColor.accent}`,
+                        }}>
+                          <div>
+                            <strong style={{ color: typeColor.accent }}>{title}</strong>
+                            {showExaminer && <div style={{ color: 'var(--text-3)', fontSize: 10 }}>בוחן: {test.examiner}</div>}
+                          </div>
+                          <div style={{ textAlign: 'left' }}>
+                            <span className={`badge ${test.passed ? 'badge-success' : 'badge-danger'}`}>{test.passed ? 'עבר' : 'נכשל'}</span>
+                            <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>{test.date}</div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </FolderRow>
+            )}
+
+            {/* Status & notes folder */}
+            <FolderRow
+              id="status"
+              title="סטטוס והערות"
+              icon={Clipboard}
+              summary={statusSummary}
+              open={openFolder === 'status'}
+              onToggle={toggleFolder}
+            >
+              {canManageBilling && (
+                <>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>שינוי סטטוס</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 14 }}>
+                    {statusKeys.filter(k => k !== 'archived').map(k => (
+                      <button
+                        key={k}
+                        className={`btn ${student.status === k ? 'btn-primary' : 'btn-ghost'} btn-xs`}
+                        style={{ justifyContent: 'flex-start', gap: 8 }}
+                        onClick={() => onStatusChange(student.id, k)}
+                      >
+                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: STATUSES[k].color, flexShrink: 0 }} />
+                        {STATUSES[k].label}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>הערות מעקב</div>
+                  <div className="card card-p" style={{ marginBottom: 14, padding: 10 }}>
+                    <div style={{ fontSize: 13, color: 'var(--text-2)', whiteSpace: 'pre-wrap' }}>
+                      {student.notes || 'אין הערות רשומות ללקוח זה'}
+                    </div>
+                  </div>
+                </>
+              )}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                <div style={{ fontSize: 11, color: 'var(--text-3)' }}>רשימות תפוצה</div>
+                {!loadingLists && (
+                  <button
+                    type="button"
+                    className={`btn btn-xs ${editingBroadcastLists ? 'btn-primary' : 'btn-ghost'}`}
+                    onClick={() => setEditingBroadcastLists((v) => !v)}
+                  >
+                    {editingBroadcastLists ? <><Check size={11} /> סיום</> : <><Edit2 size={11} /> עריכה</>}
+                  </button>
+                )}
+              </div>
+              {loadingLists ? (
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען רשימות תפוצה...</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, pointerEvents: editingBroadcastLists ? 'auto' : 'none', opacity: editingBroadcastLists ? 1 : 0.85 }}>
+                  {broadcastListDefs.map((list) => {
+                    const label = list.description ? `${list.label} (${list.description})` : list.label;
+                    const checked = broadcastLists[list.key] !== false;
+                    return (
+                      <label key={list.key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: editingBroadcastLists ? 'pointer' : 'default' }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={!editingBroadcastLists}
+                          onChange={() => handleListToggle(list.key)}
+                          style={{ cursor: editingBroadcastLists ? 'pointer' : 'default', width: 15, height: 15 }}
+                        />
+                        <span style={{ color: checked ? 'var(--text-1)' : 'var(--text-3)', fontWeight: checked ? '600' : 'normal' }}>
+                          {label}
+                        </span>
+                      </label>
                     );
                   })}
                 </div>
               )}
-            </div>
-          </>
-        )}
+            </FolderRow>
 
-        {/* iCount payment checkout generator — owner only */}
-        {canManageBilling && <>
-        <div className="section-header">
-          <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <CreditCard size={15} /> דרישת תשלום / חשבונית
-          </div>
-        </div>
-        <div className="card card-p" style={{ marginBottom: 16 }}>
-          <form onSubmit={handleSendPayment}>
-            <div className="form-group" style={{ marginBottom: 10 }}>
-              <label className="form-label" style={{ fontSize: 11 }}>בחר מוצר מהמחירון</label>
-              <select className="input input-sm" value={selectedPricelistItem} onChange={handlePricelistSelect}>
-                <option value="">-- מוצר מותאם אישית --</option>
-                {pricelist.map(item => (
-                  <option key={item.id} value={item.id}>{item.name} ({item.price}₪)</option>
-                ))}
-              </select>
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-              <div className="form-group" style={{ flex: 1 }}>
-                <label className="form-label" style={{ fontSize: 11 }}>תיאור</label>
-                <input
-                  className="input input-sm"
-                  placeholder="למשל: כרטיסיה 10 כניסות"
-                  required
-                  value={billDescription}
-                  onChange={e => setBillDescription(e.target.value)}
-                />
-              </div>
-              <div className="form-group" style={{ width: 80 }}>
-                <label className="form-label" style={{ fontSize: 11 }}>מחיר (₪)</label>
-                <input
-                  className="input input-sm"
-                  type="number"
-                  placeholder="350"
-                  required
-                  value={billAmount}
-                  onChange={e => setBillAmount(e.target.value)}
-                />
-              </div>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <button type="submit" disabled={billingLoading || invoiceLoading} className="btn btn-primary btn-sm w-full" style={{ justifyContent: 'center', gap: 8 }}>
-                <Send size={13} /> {billingLoading ? 'מייצר קישור...' : 'שלח קישור סליקה בוואטסאפ'}
-              </button>
+            <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
               <button
-                type="button"
-                disabled={billingLoading || invoiceLoading}
-                className="btn btn-ghost btn-sm w-full"
-                style={{ justifyContent: 'center', gap: 8 }}
-                onClick={handleCreateInvoice}
+                className="btn btn-danger btn-xs w-full"
+                style={{ justifyContent: 'center', gap: 6 }}
+                onClick={() => {
+                  if (confirm('האם אתה בטוח שברצונך למחוק את הלקוח לצמיתות ממאגר הלקוחות? פעולה זו תסיר גם את ההורה במידה ואין לו ילדים נוספים.')) {
+                    onDelete(student.id);
+                  }
+                }}
               >
-                <ReceiptText size={13} /> {invoiceLoading ? 'מפיק חשבונית...' : 'הפק חשבונית מס קבלה עכשיו'}
+                <Trash2 size={12} /> מחק לקוח לצמיתות
               </button>
             </div>
-          </form>
-          {billingLink && (
-            <div style={{ marginTop: 10, padding: 8, background: '#1F2937', borderRadius: 6, fontSize: 12, wordBreak: 'break-all' }}>
-              <strong>קישור לתשלום:</strong><br />
-              <a href={billingLink} target="_blank" rel="noreferrer" style={{ color: 'var(--blue)' }}>{billingLink}</a>
-            </div>
-          )}
-          {lastInvoice && (
-            <div className="alert alert-success" style={{ marginTop: 10, fontSize: 12 }}>
-              חשבונית הופקה
-              {lastInvoice.docNumber ? ` · מס׳ ${lastInvoice.docNumber}` : ''}
-              {' '}· ₪{lastInvoice.amount} · {lastInvoice.description}
-            </div>
-          )}
-          {studentPayments.length > 0 && (
-            <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>היסטוריית תשלומים</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {studentPayments.slice(0, 8).map((p) => (
-                  <div
-                    key={p.id}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      gap: 8,
-                      fontSize: 12,
-                      padding: '6px 0',
-                      borderBottom: '1px solid var(--border)',
-                    }}
-                  >
-                    <span style={{ color: 'var(--text-2)' }}>
-                      {p.description}
-                      {p.icount_doc_number ? ` · מס׳ ${p.icount_doc_number}` : ''}
-                    </span>
-                    <span>
-                      ₪{Number(p.amount).toLocaleString()}{' '}
-                      <span className={p.status === 'paid' ? 'badge badge-green' : 'badge badge-amber'}>
-                        {p.status === 'paid' ? 'שולם' : p.status === 'pending' ? 'ממתין' : p.status}
-                      </span>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-        </>}
-
-        {/* Tests Logs & Add Log — owner only */}
-        {canManageBilling && <>
-        <div className="section-header">
-          <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Award size={15} /> היסטוריית מבחנים
           </div>
         </div>
-        <div className="card card-p" style={{ marginBottom: 16 }}>
-          {showTestForm ? (
-            <form onSubmit={handleAddTest} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                <select
-                  className="input input-sm"
-                  style={{
-                    flex: 1, minWidth: 120, fontWeight: 700,
-                    color: TEST_TYPE_COLORS[testType]?.accent,
-                    borderColor: TEST_TYPE_COLORS[testType]?.border,
-                    background: TEST_TYPE_COLORS[testType]?.bg,
-                  }}
-                  value={testType}
-                  onChange={e => setTestType(e.target.value)}
-                >
-                  <option value="level">מבחן רמה</option>
-                  <option value="security">מבחן אבטחה</option>
-                  <option value="lead">מבחן הובלה</option>
-                </select>
-                {testType === 'level' && (
-                  <>
-                    <select className="input input-sm" style={{ flex: 1, minWidth: 90 }} value={testLevel} onChange={e => setTestLevel(e.target.value)}>
-                      {['5A','5B','5C','6A','6B','6C','7A','7B','7C','8A'].map(lvl => (
-                        <option key={lvl} value={lvl}>רמה {lvl}</option>
-                      ))}
-                    </select>
-                    <select className="input input-sm" style={{ flex: 1, minWidth: 100 }} value={testRouteStyle} onChange={e => setTestRouteStyle(e.target.value)}>
-                      <option value="top-rope">טופ רופ</option>
-                      <option value="lead">הובלה</option>
-                    </select>
-                  </>
-                )}
-                {(testType === 'security' || testType === 'lead') && (
-                  <div style={{ flex: 1.5, minWidth: 140 }}>
-                    <label style={{ display: 'block', fontSize: 10, color: 'var(--text-3)', marginBottom: 3, fontWeight: 600 }}>
-                      בוחן
-                    </label>
-                    <select
-                      className="input input-sm"
-                      style={{ width: '100%' }}
-                      required
-                      value={testExaminerId}
-                      onChange={e => setTestExaminerId(e.target.value)}
-                    >
-                      <option value="">בחר בוחן...</option>
-                      {employees.length === 0 && <option value="" disabled>אין עובדים</option>}
-                      {employees.map(emp => (
-                        <option key={emp.id} value={emp.id}>{emp.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-                <select className="input input-sm" style={{ width: 80 }} value={testPassed ? 'yes' : 'no'} onChange={e => setTestPassed(e.target.value === 'yes')}>
-                  <option value="yes">עבר</option>
-                  <option value="no">נכשל</option>
-                </select>
-              </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <input
-                  className="input input-sm"
-                  placeholder="הערות..."
-                  style={{ flex: 2 }}
-                  value={testNotes}
-                  onChange={e => setTestNotes(e.target.value)}
-                />
-                <button type="submit" disabled={testLoading} className="btn btn-primary btn-sm">
-                  רשום
-                </button>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowTestForm(false)}>
-                  ביטול
-                </button>
-              </div>
-            </form>
+
+        {/* Communication column */}
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            background: 'rgba(0,0,0,0.15)',
+            overscrollBehavior: 'contain',
+          }}
+        >
+          {canManageBilling ? (
+            <ConversationPanel parent={parent} student={student} fillHeight />
           ) : (
-            <button className="btn btn-ghost btn-sm w-full" style={{ marginBottom: 12, borderContent: 'center', gap: 8 }} onClick={() => setShowTestForm(true)}>
-              <Plus size={13} /> שמירת מבחן חדש
-            </button>
-          )}
-
-          {/* List tests */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 150, overflowY: 'auto' }}>
-            {levelTestsHistory.length === 0 ? (
-              <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>לא נמצאו מבחנים מדווחים</div>
-            ) : (
-              levelTestsHistory.map(test => {
-                const asLevel = test.test_type === 'level' || test.test_type === 'top-rope';
-                const asSecurity = test.test_type === 'security';
-                const asLeadCert = test.test_type === 'lead';
-                const typeKey = asSecurity ? 'security' : asLeadCert ? 'lead' : 'level';
-                const typeColor = TEST_TYPE_COLORS[typeKey];
-                const routeStyle = test.route_style || (test.test_type === 'top-rope' ? 'top-rope' : null);
-                const routeLabel = routeStyle === 'lead' ? 'הובלה' : routeStyle === 'top-rope' ? 'טופ רופ' : null;
-                let title = 'מבחן';
-                if (asLevel) title = `רמה ${test.level || ''}${routeLabel ? ` · ${routeLabel}` : ''}`.trim();
-                else if (asSecurity) title = 'מבחן אבטחה';
-                else if (asLeadCert) title = 'מבחן הובלה';
-                const showExaminer = (asSecurity || asLeadCert) && !!test.examiner;
-                return (
-                  <div key={test.id} style={{
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12,
-                    padding: '8px 10px', borderRadius: 8, marginBottom: 4,
-                    background: typeColor.bg, border: `1px solid ${typeColor.border}`,
-                    borderRight: `3px solid ${typeColor.accent}`,
-                  }}>
-                    <div>
-                      <strong style={{ color: typeColor.accent }}>{title}</strong>
-                      {showExaminer && <div style={{ color: 'var(--text-3)', fontSize: 10 }}>בוחן: {test.examiner}</div>}
-                    </div>
-                    <div style={{ textAlign: 'left' }}>
-                      <span className={`badge ${test.passed ? 'badge-success' : 'badge-danger'}`}>{test.passed ? 'עבר' : 'נכשל'}</span>
-                      <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>{test.date}</div>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-
-        {/* Change Status */}
-        <div className="section-header"><div className="section-title">שינוי סטטוס לקוח</div></div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 20 }}>
-          {statusKeys.filter(k => k !== 'archived').map(k => (
-            <button
-              key={k}
-              className={`btn ${student.status === k ? 'btn-primary' : 'btn-ghost'} btn-sm`}
-              style={{ justifyContent: 'flex-start', gap: 10 }}
-              onClick={() => onStatusChange(student.id, k)}
-            >
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: STATUSES[k].color, flexShrink: 0 }} />
-              {STATUSES[k].label}
-            </button>
-          ))}
-        </div>
-
-        {/* Notes */}
-        <div className="section-header"><div className="section-title">הערות מעקב</div></div>
-        <div className="card card-p" style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 13, color: 'var(--text-2)', whiteSpace: 'pre-wrap' }}>
-            {student.notes || 'אין הערות רשומות ללקוח זה'}
-          </div>
-        </div>
-
-        {/* Unified multi-channel conversation */}
-        <ConversationPanel parent={parent} student={student} />
-
-        </>}
-
-        {/* Mailing Lists */}
-        <div className="section-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-          <div className="section-title">מנוי לרשימות תפוצה</div>
-          {!loadingLists && (
-            <button
-              type="button"
-              className={`btn btn-xs ${editingBroadcastLists ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setEditingBroadcastLists((v) => !v)}
-            >
-              {editingBroadcastLists ? <><Check size={11} /> סיום</> : <><Edit2 size={11} /> עריכה</>}
-            </button>
-          )}
-        </div>
-        <div className="card card-p" style={{ marginBottom: 20, opacity: editingBroadcastLists ? 1 : 0.85 }}>
-          {loadingLists ? (
-            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען רשימות תפוצה...</div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, pointerEvents: editingBroadcastLists ? 'auto' : 'none' }}>
-              {broadcastListDefs.map((list) => {
-                const label = list.description
-                  ? `${list.label} (${list.description})`
-                  : list.label;
-                const checked = broadcastLists[list.key] !== false;
-                return (
-                  <label
-                    key={list.key}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      fontSize: 13,
-                      cursor: editingBroadcastLists ? 'pointer' : 'default',
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={!editingBroadcastLists}
-                      onChange={() => handleListToggle(list.key)}
-                      style={{ cursor: editingBroadcastLists ? 'pointer' : 'default', width: 15, height: 15 }}
-                    />
-                    <span style={{ color: checked ? 'var(--text-1)' : 'var(--text-3)', fontWeight: checked ? '600' : 'normal' }}>
-                      {label}
-                    </span>
-                  </label>
-                );
-              })}
+            <div style={{ padding: 20, color: 'var(--text-3)', fontSize: 13 }}>
+              אין הרשאה לצפייה בתקשורת
             </div>
           )}
-        </div>
-
-        {/* Permanent Deletion */}
-        <div style={{ marginTop: 24, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
-          <button className="btn btn-danger btn-sm w-full" style={{ justifyContent: 'center', gap: 8 }} onClick={() => {
-            if (confirm('האם אתה בטוח שברצונך למחוק את הלקוח לצמיתות ממאגר ה-CRM? פעולה זו תסיר גם את ההורה במידה ואין לו ילדים נוספים.')) {
-              onDelete(student.id);
-            }
-          }}>
-            <Trash2 size={13} /> מחק לקוח לצמיתות
-          </button>
         </div>
       </div>
 
@@ -1398,9 +1369,82 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
           </div>
         </Modal>
       )}
-    </div>
+
+      {showPaymentModal && (
+        <Modal
+          title="דרישת תשלום / חשבונית"
+          onClose={() => setShowPaymentModal(false)}
+          footer={
+            <button className="btn btn-ghost" onClick={() => setShowPaymentModal(false)}>סגור</button>
+          }
+        >
+          <form onSubmit={handleSendPayment}>
+            <div className="form-group" style={{ marginBottom: 10 }}>
+              <label className="form-label" style={{ fontSize: 11 }}>בחר מוצר מהמחירון</label>
+              <select className="input input-sm" value={selectedPricelistItem} onChange={handlePricelistSelect}>
+                <option value="">-- מוצר מותאם אישית --</option>
+                {pricelist.map(item => (
+                  <option key={item.id} value={item.id}>{item.name} ({item.price}₪)</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label className="form-label" style={{ fontSize: 11 }}>תיאור</label>
+                <input
+                  className="input input-sm"
+                  placeholder="למשל: כרטיסיה 10 כניסות"
+                  required
+                  value={billDescription}
+                  onChange={e => setBillDescription(e.target.value)}
+                />
+              </div>
+              <div className="form-group" style={{ width: 100 }}>
+                <label className="form-label" style={{ fontSize: 11 }}>מחיר (₪)</label>
+                <input
+                  className="input input-sm"
+                  type="number"
+                  placeholder="350"
+                  required
+                  value={billAmount}
+                  onChange={e => setBillAmount(e.target.value)}
+                />
+              </div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <button type="submit" disabled={billingLoading || invoiceLoading} className="btn btn-primary btn-sm w-full" style={{ justifyContent: 'center', gap: 8 }}>
+                <Send size={13} /> {billingLoading ? 'מייצר קישור...' : 'שלח קישור סליקה בוואטסאפ'}
+              </button>
+              <button
+                type="button"
+                disabled={billingLoading || invoiceLoading}
+                className="btn btn-ghost btn-sm w-full"
+                style={{ justifyContent: 'center', gap: 8 }}
+                onClick={handleCreateInvoice}
+              >
+                <ReceiptText size={13} /> {invoiceLoading ? 'מפיק חשבונית...' : 'הפק חשבונית מס קבלה עכשיו'}
+              </button>
+            </div>
+          </form>
+          {billingLink && (
+            <div style={{ marginTop: 10, padding: 8, background: '#1F2937', borderRadius: 6, fontSize: 12, wordBreak: 'break-all' }}>
+              <strong>קישור לתשלום:</strong><br />
+              <a href={billingLink} target="_blank" rel="noreferrer" style={{ color: 'var(--blue)' }}>{billingLink}</a>
+            </div>
+          )}
+          {lastInvoice && (
+            <div className="alert alert-success" style={{ marginTop: 10, fontSize: 12 }}>
+              חשבונית הופקה
+              {lastInvoice.docNumber ? ` · מס׳ ${lastInvoice.docNumber}` : ''}
+              {' '}· ₪{lastInvoice.amount} · {lastInvoice.description}
+            </div>
+          )}
+        </Modal>
+      )}
+    </>
   );
 }
+
 
 // ─── Add Lead Modal ──────────────────────────────────────────────────────────
 function AddLeadModal({ students, parents, onAdd, onClose }) {
@@ -1688,6 +1732,7 @@ export default function Leads({ students, setStudents, parents, setParents, grou
     <div className="fade-in">
       {selectedStudentId && (
         <CustomerCard
+          key={selectedStudentId}
           student={selectedStudent}
           parent={selectedParent}
           group={selectedGroup}
