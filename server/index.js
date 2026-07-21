@@ -308,6 +308,11 @@ app.get('/api/broadcast-list-defs', (req, res) => {
   res.json(db.getBroadcastListDefs());
 });
 
+// Public read-only mailing list definitions (for onboarding form)
+app.get('/api/public/broadcast-list-defs', publicFormRateLimit, (req, res) => {
+  res.json(db.getBroadcastListDefs());
+});
+
 app.post('/api/broadcast-list-defs', (req, res) => {
   const result = db.createBroadcastListDef(req.body || {});
   if (result.error) return res.status(400).json({ error: result.error });
@@ -2351,11 +2356,20 @@ app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
   const students = parent
     ? (db.get('students') || []).filter((s) => s.parentId === parent.id)
     : [];
-  const subscriptions = parent
-    ? db.getParentBroadcastLists(parent.id)
-    : Object.fromEntries(listDefs.map((l) => [l.key, l.key === REQUIRED_BROADCAST_LIST]));
 
-  // Always lock classes on
+  // Onboarding: classes is always on; other lists default off unless explicitly subscribed.
+  const broadcastRows = db.get('broadcast_lists') || [];
+  const subscriptions = {};
+  for (const list of listDefs) {
+    if (list.key === REQUIRED_BROADCAST_LIST) {
+      subscriptions[list.key] = true;
+      continue;
+    }
+    const record = parent
+      ? broadcastRows.find((r) => r.parentId === parent.id && r.listName === list.key)
+      : null;
+    subscriptions[list.key] = record ? record.subscribed === true : false;
+  }
   subscriptions[REQUIRED_BROADCAST_LIST] = true;
 
   const template = findDefaultFormTemplate() || findFormTemplateBySlug('wall');

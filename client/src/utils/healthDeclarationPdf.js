@@ -115,8 +115,8 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, signatureSrc }
 
   return `
     <div id="hd-cert-root" dir="rtl" style="
-      width: 794px; min-height: 1123px; box-sizing: border-box;
-      padding: 40px 44px; background: #fff; color: #111;
+      width: 794px; min-height: 900px; box-sizing: border-box;
+      padding: 28px 36px; background: #fff; color: #111;
       font-family: 'Segoe UI', Tahoma, Arial, sans-serif; text-align: right;
     ">
       <style>
@@ -140,28 +140,34 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, signatureSrc }
         #hd-cert-root .value { font-size: 14px; font-weight: 700; color: #0f172a; }
         #hd-cert-root h2 { font-size: 15px; margin: 18px 0 10px; color: #ea580c; }
         #hd-cert-root .qa {
-          display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px;
-          border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 6px; font-size: 12px;
+          display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px;
+          border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 4px; font-size: 11px;
         }
-        #hd-cert-root .qa.yes { background: #fef2f2; border-color: #fecaca; }
+        #hd-cert-root .qa.yes { background: #f0fdf4; border-color: #bbf7d0; }
         #hd-cert-root .qa.no { background: #f8fafc; }
         #hd-cert-root .mark {
-          font-weight: 800; min-width: 28px; color: #0f172a;
+          font-weight: 800; min-width: 18px; color: #047857;
         }
-        #hd-cert-root .qa.yes .mark { color: #b91c1c; }
+        #hd-cert-root .qa.yes .mark { color: #047857; }
         #hd-cert-root .waiver {
-          white-space: pre-wrap; font-size: 11px; line-height: 1.55; color: #334155;
-          background: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px; padding: 12px;
-          max-height: 220px; overflow: hidden;
+          white-space: pre-wrap; font-size: 10px; line-height: 1.45; color: #334155;
+          background: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px; padding: 10px;
         }
         #hd-cert-root .sig-box {
           margin-top: 8px; border: 1px dashed #94a3b8; border-radius: 10px;
-          min-height: 110px; padding: 10px; background: #ffffff;
+          min-height: 100px; padding: 8px; background: #ffffff;
           display: flex; align-items: center; justify-content: center;
+          page-break-inside: avoid; break-inside: avoid;
         }
-        #hd-cert-root .sig-box img { max-width: 100%; max-height: 140px; }
+        #hd-cert-root .sig-box img {
+          max-width: 100%; max-height: 120px; object-fit: contain;
+          display: block;
+        }
+        #hd-cert-root .sig-section {
+          page-break-inside: avoid; break-inside: avoid;
+        }
         #hd-cert-root .footer {
-          margin-top: 22px; padding-top: 12px; border-top: 1px solid #e2e8f0;
+          margin-top: 14px; padding-top: 10px; border-top: 1px solid #e2e8f0;
           font-size: 11px; color: #64748b;
         }
         #hd-cert-root .muted { color: #94a3b8; font-size: 12px; }
@@ -186,16 +192,18 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, signatureSrc }
         <div class="field"><div class="label">אישור כתב ויתור</div><div class="value">${decl.waiverAccepted ? 'אושר' : '—'}</div></div>
       </div>
 
-      <h2>שאלון רפואי</h2>
+      <h2>הצהרת בריאות ובטיחות</h2>
       ${answerRows(decl.answers || {}, questionLabels)}
 
       ${waiverText ? `<h2>כתב ויתור / הסרת אחריות</h2><div class="waiver">${escapeHtml(waiverText)}</div>` : ''}
 
-      <h2>חתימה דיגיטלית</h2>
-      <div class="sig-box">
-        ${hasSig
-          ? `<img src="${signature}" alt="חתימה" />`
-          : '<div class="muted">לא נמצאה תמונת חתימה שמורה</div>'}
+      <div class="sig-section">
+        <h2>חתימה דיגיטלית</h2>
+        <div class="sig-box">
+          ${hasSig
+            ? `<img src="${signature}" alt="חתימה" />`
+            : '<div class="muted">לא נמצאה תמונת חתימה שמורה</div>'}
+        </div>
       </div>
 
       <div class="footer">
@@ -231,23 +239,23 @@ export async function buildHealthDeclarationPdf(decl) {
       logging: false,
     });
 
-    const imgData = canvas.toDataURL('image/jpeg', 0.95);
+    // PNG avoids JPEG seam artifacts that look like a black bar through the signature
+    const imgData = canvas.toDataURL('image/png');
     const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     const pageWidth = pdf.internal.pageSize.getWidth();
     const pageHeight = pdf.internal.pageSize.getHeight();
-    const imgWidth = pageWidth;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+    let imgWidth = pageWidth;
+    let imgHeight = (canvas.height * imgWidth) / canvas.width;
 
-    let heightLeft = imgHeight;
-    let position = 0;
-    pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
-    heightLeft -= pageHeight;
-
-    while (heightLeft > 5) {
-      position -= pageHeight;
-      pdf.addPage();
-      pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
+    // Never slice through the signature — scale the whole certificate onto one page
+    if (imgHeight > pageHeight) {
+      const scale = pageHeight / imgHeight;
+      imgWidth *= scale;
+      imgHeight = pageHeight;
+      const xOffset = (pageWidth - imgWidth) / 2;
+      pdf.addImage(imgData, 'PNG', xOffset, 0, imgWidth, imgHeight);
+    } else {
+      pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
     }
 
     const climber = (decl.climberName || decl.studentName || 'declaration').replace(/[^\w\u0590-\u05ff-]+/g, '_');

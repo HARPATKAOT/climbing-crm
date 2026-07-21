@@ -113,12 +113,45 @@ export default function PublicOnboardingForm() {
       try {
         const res = await fetch(`/api/public/onboard-context?${params.toString()}`);
         const data = await res.json().catch(() => ({}));
-        if (!res.ok || cancelled) return;
-        setListDefs(Array.isArray(data.listDefs) ? data.listDefs : []);
-        setRequiredListKey(data.requiredListKey || 'classes');
+        if (cancelled) return;
+
+        let defs = Array.isArray(data.listDefs) ? data.listDefs : [];
+        if (!defs.length) {
+          try {
+            const defsRes = await fetch('/api/public/broadcast-list-defs');
+            if (defsRes.ok) {
+              const raw = await defsRes.json();
+              if (Array.isArray(raw)) defs = raw;
+            }
+          } catch {
+            // keep empty
+          }
+        }
+        if (!defs.length) {
+          defs = [
+            { key: 'general', label: 'כללי', description: 'עדכונים שוטפים' },
+            { key: 'classes', label: 'חוגים', description: 'שינויי שעות וכדומה' },
+            { key: 'trips', label: 'טיולים', description: 'טיולי סנפלינג/חוץ' },
+            { key: 'events', label: 'אירועים', description: 'אירועים ותחרויות מועדון' },
+          ];
+        }
+        setListDefs(defs);
+
+        const reqKey = data.requiredListKey || 'classes';
+        setRequiredListKey(reqKey);
         const subs = { ...(data.subscriptions || {}) };
-        subs[data.requiredListKey || 'classes'] = true;
+        // Ensure every known list has a boolean; only classes forced on
+        defs.forEach((l) => {
+          if (l.key === reqKey) subs[l.key] = true;
+          else if (subs[l.key] === undefined) subs[l.key] = false;
+        });
+        subs[reqKey] = true;
         setSubscriptions(subs);
+
+        if (!res.ok) {
+          // Still allow filling the form with list defs loaded above
+          return;
+        }
         if (Array.isArray(data.interestOptions) && data.interestOptions.length) {
           setInterestOptions(data.interestOptions);
         }
@@ -156,7 +189,16 @@ export default function PublicOnboardingForm() {
           setChildren([emptyChild(qs)]);
         }
       } catch {
-        // keep fallbacks
+        // keep fallbacks — still try public list defs
+        try {
+          const defsRes = await fetch('/api/public/broadcast-list-defs');
+          if (defsRes.ok) {
+            const raw = await defsRes.json();
+            if (Array.isArray(raw) && raw.length && !cancelled) setListDefs(raw);
+          }
+        } catch {
+          // ignore
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -533,17 +575,21 @@ export default function PublicOnboardingForm() {
 
             <div className="section-title" style={{ marginTop: 22 }}>רשימות דיוור</div>
             <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', margin: '0 0 12px' }}>
-              רשימת החוגים חובה — כדי לעדכן על שינויי שעות וביטולים. אפשר להצטרף גם לרשימות נוספות.
+              רשימת החוגים חובה. אפשר לסמן גם טיולים, אירועים ועוד.
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
-              {(listDefs.length ? listDefs : [{ key: 'classes', label: 'חוגים', description: 'שינויי שעות וכדומה' }]).map((list) => {
+              {listDefs.map((list) => {
                 const isRequired = list.key === requiredListKey;
                 const checked = isRequired ? true : subscriptions[list.key] === true;
                 return (
                   <label
                     key={list.key}
                     className="checkbox-item"
-                    style={{ cursor: isRequired ? 'default' : 'pointer' }}
+                    style={{
+                      cursor: isRequired ? 'default' : 'pointer',
+                      borderColor: checked ? 'rgba(249,115,22,0.45)' : 'rgba(255,255,255,0.08)',
+                      background: checked ? 'rgba(249,115,22,0.08)' : 'rgba(255,255,255,0.03)',
+                    }}
                   >
                     <input
                       type="checkbox"
@@ -559,13 +605,18 @@ export default function PublicOnboardingForm() {
                       }}
                     />
                     <span>
-                      <strong>{list.label}</strong>
+                      <strong>{list.label || list.key}</strong>
                       {list.description ? ` — ${list.description}` : ''}
                       {isRequired ? ' (חובה)' : ''}
                     </span>
                   </label>
                 );
               })}
+              {!listDefs.length && (
+                <div style={{ fontSize: 13, color: '#FCA5A5' }}>
+                  לא נטענו רשימות דיוור — רעננו את הדף
+                </div>
+              )}
             </div>
 
             {error && <ErrorBox message={error} />}
