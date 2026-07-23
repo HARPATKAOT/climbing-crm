@@ -1,6 +1,13 @@
 import { db, persistCore } from '../db.js';
 import { phonesMatch, normalizeWaPhone } from '../whatsappConnect.js';
-import { getParentChannelWindows, canSendFreeform, inboundFieldForChannel } from './sessionWindow.js';
+import {
+  getParentChannelWindows,
+  canSendFreeform,
+  inboundFieldForChannel,
+  enrichParentInboundFromMessages,
+  enrichParentInboundFromSiblings,
+  CHANNEL_INBOUND_FIELDS,
+} from './sessionWindow.js';
 import { uploadWhatsAppMedia, getMessengerCredentials, META_GRAPH_VERSION } from './media.js';
 import { whatsappService, instagramService } from '../whatsapp.js';
 
@@ -19,6 +26,11 @@ function findParentById(parentId) {
   return (db.get('parents') || []).find((p) => p.id === parentId) || null;
 }
 
+function findParentsByPhone(phone) {
+  if (!phone) return [];
+  return (db.get('parents') || []).filter((p) => phonesMatch(p.phone, phone));
+}
+
 function findParentForLog(log) {
   const parents = db.get('parents') || [];
   const channel = log.channel || 'whatsapp';
@@ -28,14 +40,46 @@ function findParentForLog(log) {
   if (channel === 'messenger') {
     return parents.find((p) => p.messenger_psid && String(p.messenger_psid) === String(log.phone || log.recipient_id)) || null;
   }
-  return parents.find((p) => phonesMatch(p.phone, log.phone)) || null;
+  const matches = findParentsByPhone(log.phone);
+  if (!matches.length) return null;
+  // Prefer the CRM card with real details over a bare WhatsApp lead duplicate.
+  return [...matches].sort((a, b) => scoreParentRecord(b) - scoreParentRecord(a))[0];
+}
+
+function scoreParentRecord(parent) {
+  if (!parent) return 0;
+  let score = 0;
+  if (parent.email) score += 4;
+  if (parent.idNumber) score += 3;
+  if (parent.name && parent.name !== 'לקוח וואטסאפ' && parent.name !== 'ליד מאינסטגרם') score += 3;
+  if (parent.last_inbound_whatsapp || parent.last_inbound_instagram || parent.last_inbound_messenger) score += 1;
+  if (parent.status && parent.status !== 'lead_new') score += 1;
+  return score;
 }
 
 function touchInbound(parent, channel, at = new Date().toISOString()) {
-  if (!parent?.id) return;
+  if (!parent?.id) return null;
   const field = inboundFieldForChannel(channel);
-  if (!field) return;
-  db.update('parents', parent.id, { [field]: at, channel: parent.channel || channel });
+  if (!field) return null;
+  return db.update('parents', parent.id, { [field]: at, channel: parent.channel || channel });
+}
+
+/** Open/refresh the 24h window on every parent row that shares this phone. */
+export function touchInboundForPhone(phone, channel = 'whatsapp', at = new Date().toISOString()) {
+  const field = inboundFieldForChannel(channel);
+  if (!field || !phone) return [];
+  const updated = [];
+  for (const parent of findParentsByPhone(phone)) {
+    const next = db.update('parents', parent.id, {
+      [field]: at,
+      channel: parent.channel === 'phone' ? channel : (parent.channel || channel),
+    });
+    if (next) {
+      updated.push(next);
+      persistCore('parents', next).catch(() => {});
+    }
+  }
+  return updated;
 }
 
 function logMessage(record) {
@@ -136,13 +180,27 @@ function pickDefaultChannel(parent, windows) {
 }
 
 export async function getConversation(parentId) {
-  const parent = findParentById(parentId);
-  if (!parent) return { error: 'הלקוח לא נמצא', status: 404 };
+  const parentRaw = findParentById(parentId);
+  if (!parentRaw) return { error: 'הלקוח לא נמצא', status: 404 };
 
-  const students = (db.get('students') || []).filter((s) => s.parentId === parent.id);
+  const students = (db.get('students') || []).filter((s) => s.parentId === parentRaw.id);
+  const messages = mergeThread(parentRaw);
+  const siblings = findParentsByPhone(parentRaw.phone).filter((p) => p.id !== parentRaw.id);
+  let parent = enrichParentInboundFromMessages(parentRaw, messages);
+  parent = enrichParentInboundFromSiblings(parent, siblings);
+
+  // Heal stale last_inbound_* when the thread / sibling card has a newer inbound.
+  const heal = {};
+  for (const field of Object.values(CHANNEL_INBOUND_FIELDS)) {
+    if (parent[field] && parent[field] !== parentRaw[field]) heal[field] = parent[field];
+  }
+  if (Object.keys(heal).length) {
+    const healed = db.update('parents', parent.id, heal);
+    if (healed) persistCore('parents', healed).catch(() => {});
+  }
+
   const windows = getParentChannelWindows(parent);
   const channels = availableChannels(parent);
-  const messages = mergeThread(parent);
   const defaultChannel = pickDefaultChannel(parent, windows);
 
   const messengerCreds = getMessengerCredentials();
@@ -196,10 +254,14 @@ export async function sendMessengerText(psid, text) {
 }
 
 export async function replyToParent(parentId, payload = {}) {
-  const parent = findParentById(parentId);
-  if (!parent) return { success: false, error: 'הלקוח לא נמצא', status: 404 };
+  const parentRaw = findParentById(parentId);
+  if (!parentRaw) return { success: false, error: 'הלקוח לא נמצא', status: 404 };
 
-  const students = (db.get('students') || []).filter((s) => s.parentId === parent.id);
+  const students = (db.get('students') || []).filter((s) => s.parentId === parentRaw.id);
+  const messages = mergeThread(parentRaw);
+  const siblings = findParentsByPhone(parentRaw.phone).filter((p) => p.id !== parentRaw.id);
+  let parent = enrichParentInboundFromMessages(parentRaw, messages);
+  parent = enrichParentInboundFromSiblings(parent, siblings);
   const channel = payload.channel || pickDefaultChannel(parent, getParentChannelWindows(parent));
   const type = payload.type || 'text';
 

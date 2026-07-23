@@ -35,6 +35,57 @@ export function getParentChannelWindows(parent, now = Date.now()) {
   return channels;
 }
 
+function newerInboundIso(currentIso, candidateIso) {
+  if (!candidateIso) return currentIso || null;
+  const candidateTs = new Date(candidateIso).getTime();
+  if (Number.isNaN(candidateTs)) return currentIso || null;
+  const currentTs = currentIso ? new Date(currentIso).getTime() : 0;
+  if (!currentTs || Number.isNaN(currentTs) || candidateTs > currentTs) {
+    return new Date(candidateTs).toISOString();
+  }
+  return currentIso;
+}
+
+/** Prefer the newer of parent.last_inbound_* vs latest inbound message in the thread. */
+export function enrichParentInboundFromMessages(parent, messages = []) {
+  if (!parent) return parent;
+  const patch = {};
+  for (const [channel, field] of Object.entries(CHANNEL_INBOUND_FIELDS)) {
+    let latestMsgAt = null;
+    for (const m of messages) {
+      if (m.direction !== 'inbound') continue;
+      if ((m.channel || 'whatsapp') !== channel) continue;
+      const raw = m.created_at || m.timestamp;
+      if (!raw) continue;
+      const ts = new Date(raw).getTime();
+      if (Number.isNaN(ts)) continue;
+      if (!latestMsgAt || ts > latestMsgAt) latestMsgAt = ts;
+    }
+    if (!latestMsgAt) continue;
+    const next = newerInboundIso(parent[field], new Date(latestMsgAt).toISOString());
+    if (next && next !== parent[field]) patch[field] = next;
+  }
+  return Object.keys(patch).length ? { ...parent, ...patch } : parent;
+}
+
+/**
+ * Duplicate parent rows for the same phone (050… vs 972…) can leave last_inbound
+ * on one card while the UI opens another. Copy the newest timestamp across siblings.
+ */
+export function enrichParentInboundFromSiblings(parent, siblings = []) {
+  if (!parent || !siblings.length) return parent;
+  const patch = {};
+  for (const field of Object.values(CHANNEL_INBOUND_FIELDS)) {
+    let best = parent[field] || null;
+    for (const sibling of siblings) {
+      if (!sibling || sibling.id === parent.id) continue;
+      best = newerInboundIso(best, sibling[field]);
+    }
+    if (best && best !== parent[field]) patch[field] = best;
+  }
+  return Object.keys(patch).length ? { ...parent, ...patch } : parent;
+}
+
 export function canSendFreeform(parent, channel) {
   const field = CHANNEL_INBOUND_FIELDS[channel];
   if (!field) return false;
