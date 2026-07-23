@@ -43,12 +43,13 @@ export default function ConversationPanel({ parent, student, fillHeight = false 
   const [templates, setTemplates] = useState([]);
   const [savedReplies, setSavedReplies] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState('');
-  const [templateVars, setTemplateVars] = useState(['']);
+  const [templateVars, setTemplateVars] = useState([]);
   const [selectedSaved, setSelectedSaved] = useState('');
   const [imagePreview, setImagePreview] = useState(null);
   const [imageBase64, setImageBase64] = useState('');
   const messagesRef = useRef(null);
   const fileRef = useRef(null);
+  const wasBlockedRef = useRef(false);
 
   const load = async () => {
     if (!parent?.id) return;
@@ -68,6 +69,13 @@ export default function ConversationPanel({ parent, student, fillHeight = false 
       setTemplates(Array.isArray(tpls) ? tpls : []);
       const srs = srRes.ok ? await srRes.json() : [];
       setSavedReplies(Array.isArray(srs) ? srs : []);
+      const openNow = !!conv.windows?.[conv.defaultChannel || 'whatsapp']?.open;
+      if (openNow) {
+        setMode((prev) => (prev === 'template' ? 'text' : prev));
+        wasBlockedRef.current = false;
+      } else {
+        wasBlockedRef.current = true;
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -91,7 +99,14 @@ export default function ConversationPanel({ parent, student, fillHeight = false 
   useEffect(() => {
     if (freeformBlocked && channel === 'whatsapp' && (mode === 'text' || mode === 'image' || mode === 'saved')) {
       setMode('template');
+    } else if (!freeformBlocked && wasBlockedRef.current && mode === 'template') {
+      // Customer just wrote — switch back to free-form text.
+      setMode('text');
+      setSelectedTemplate('');
+      setTemplateVars([]);
+      setError('');
     }
+    wasBlockedRef.current = !!freeformBlocked;
   }, [freeformBlocked, mode, channel]);
 
   const onPickImage = (e) => {
@@ -293,6 +308,12 @@ export default function ConversationPanel({ parent, student, fillHeight = false 
             </div>
           )}
 
+          {!freeformBlocked && channel === 'whatsapp' && mode === 'template' && (
+            <div style={{ fontSize: 11, color: '#4ade80', padding: '6px 12px', background: 'rgba(34,197,94,0.08)', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
+              החלון פתוח — אפשר גם לשלוח טקסט חופשי בלשונית טקסט.
+            </div>
+          )}
+
           <div style={{ display: 'flex', gap: 6, padding: '8px 10px', borderTop: '1px solid var(--border)', flexWrap: 'wrap', flexShrink: 0 }}>
             {[
               { id: 'text', label: 'טקסט', icon: MessageCircle, disabled: freeformBlocked },
@@ -315,22 +336,29 @@ export default function ConversationPanel({ parent, student, fillHeight = false 
           <form onSubmit={handleSend} style={{ padding: 10, background: 'rgba(0,0,0,0.15)', flexShrink: 0 }}>
             {mode === 'template' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
-                <select
-                  className="input input-sm"
-                  value={selectedTemplate}
-                  onChange={(e) => {
-                    setSelectedTemplate(e.target.value);
-                    const tpl = templates.find((t) => t.id === e.target.value || t.meta_name === e.target.value);
-                    const vars = Array.isArray(tpl?.variables) ? tpl.variables : [];
-                    setTemplateVars(vars.length ? vars.map(() => student?.name || parent?.name || '') : [parent?.name || '']);
-                  }}
-                >
-                  <option value="">בחרו תבנית מאושרת...</option>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name || t.meta_name} ({t.language || 'he'})</option>
-                  ))}
-                </select>
-                {templateVars.map((v, idx) => (
+                {templates.length === 0 ? (
+                  <div style={{ fontSize: 11, color: '#FBBF24', lineHeight: 1.45 }}>
+                    אין תבניות מאושרות במערכת.
+                    עברו למסך הדיוור, לשונית תבניות, לחצו על סנכרון, ואז רעננו כאן.
+                  </div>
+                ) : (
+                  <select
+                    className="input input-sm"
+                    value={selectedTemplate}
+                    onChange={(e) => {
+                      setSelectedTemplate(e.target.value);
+                      const tpl = templates.find((t) => t.id === e.target.value || t.meta_name === e.target.value);
+                      const vars = Array.isArray(tpl?.variables) ? tpl.variables : [];
+                      setTemplateVars(vars.length ? vars.map(() => student?.name || parent?.name || '') : []);
+                    }}
+                  >
+                    <option value="">בחרו תבנית מאושרת...</option>
+                    {templates.map((t) => (
+                      <option key={t.id} value={t.id}>{t.name || t.meta_name} ({t.language || 'he'})</option>
+                    ))}
+                  </select>
+                )}
+                {selectedTemplate && templateVars.map((v, idx) => (
                   <input
                     key={idx}
                     className="input input-sm"

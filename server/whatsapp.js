@@ -542,11 +542,14 @@ export const whatsappService = {
     // 2. Upsert lead / client details in DB (source=whatsapp, status=lead_new)
     const { parent, student, isNew } = await db.createLeadFromWhatsApp(normalizedPhone, text);
 
-    // Open / refresh 24h customer care window
-    if (parent?.id) {
-      const updatedParent = db.update('parents', parent.id, {
-        last_inbound_whatsapp: new Date().toISOString(),
-        channel: parent.channel || 'whatsapp',
+    // Open / refresh 24h window on EVERY parent row that shares this phone
+    // (duplicates like 050… vs 972… used to leave the CRM card closed).
+    const inboundAt = new Date().toISOString();
+    const phoneMatches = (db.get('parents') || []).filter((p) => phonesMatch(p.phone, normalizedPhone));
+    for (const match of phoneMatches) {
+      const updatedParent = db.update('parents', match.id, {
+        last_inbound_whatsapp: inboundAt,
+        channel: match.channel === 'phone' ? 'whatsapp' : (match.channel || 'whatsapp'),
       });
       if (updatedParent) await persistCore('parents', updatedParent);
     }
@@ -652,6 +655,10 @@ export const whatsappService = {
 
     const resolvedDirection = direction === 'inbound' ? 'inbound' : 'outbound';
 
+    const createdAt = timestamp
+      ? new Date(Number(timestamp) > 1e12 ? Number(timestamp) : Number(timestamp) * 1000).toISOString()
+      : new Date().toISOString();
+
     db.insert('whatsapp_logs', {
       phone: normalizedPhone,
       channel: 'whatsapp',
@@ -661,15 +668,24 @@ export const whatsappService = {
       source: resolvedDirection === 'outbound' ? 'phone' : 'customer',
       meta_message_id: messageId || null,
       message_type: type || 'text',
-      created_at: timestamp
-        ? new Date(Number(timestamp) > 1e12 ? Number(timestamp) : Number(timestamp) * 1000).toISOString()
-        : new Date().toISOString(),
+      created_at: createdAt,
     });
 
     db.upsertParentByPhone('לקוח וואטסאפ', normalizedPhone, '', {
       source: 'whatsapp',
       channel: 'whatsapp',
     });
+
+    if (resolvedDirection === 'inbound') {
+      const phoneMatches = (db.get('parents') || []).filter((p) => phonesMatch(p.phone, normalizedPhone));
+      for (const match of phoneMatches) {
+        const updatedParent = db.update('parents', match.id, {
+          last_inbound_whatsapp: createdAt,
+          channel: match.channel === 'phone' ? 'whatsapp' : (match.channel || 'whatsapp'),
+        });
+        if (updatedParent) persistCore('parents', updatedParent).catch(() => {});
+      }
+    }
 
     return { success: true };
   },

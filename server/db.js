@@ -4,6 +4,9 @@ import { supa, CORE_TABLES, OPERATIONAL_TABLES } from './supa.js';
 
 const DB_FILE = path.join(process.cwd(), 'db.json');
 
+/** Tables that may exist locally (e.g. after Meta sync) before durable write completes. */
+const LOCAL_MIGRATE_IF_REMOTE_EMPTY = new Set(['message_templates', 'saved_replies']);
+
 export function planDurableHydration(table, remoteRows, localRows = []) {
   if (remoteRows === null) return { mode: 'error', rows: localRows };
   if (OPERATIONAL_TABLES.includes(table)) {
@@ -18,6 +21,14 @@ export function planDurableHydration(table, remoteRows, localRows = []) {
         toMigrate: missingLocal,
       };
     }
+  }
+  // Don't wipe Meta-synced templates / saved replies if durable store is briefly empty.
+  if (
+    LOCAL_MIGRATE_IF_REMOTE_EMPTY.has(table) &&
+    remoteRows.length === 0 &&
+    localRows.length > 0
+  ) {
+    return { mode: 'migrate', rows: localRows, toMigrate: localRows };
   }
   return { mode: 'remote', rows: remoteRows };
 }
@@ -383,15 +394,29 @@ export const db = {
     const normalize = (p) => {
       let d = String(p || '').replace(/[^\d]/g, '');
       if (d.startsWith('0') && d.length >= 9) d = `972${d.slice(1)}`;
+      if (d.startsWith('9720')) d = `972${d.slice(4)}`;
       return d;
+    };
+    const scoreParent = (p) => {
+      let score = 0;
+      if (p.email) score += 4;
+      if (p.idNumber) score += 3;
+      if (p.name && p.name !== 'לקוח וואטסאפ' && p.name !== 'ליד מאינסטגרם') score += 3;
+      if (p.last_inbound_whatsapp || p.last_inbound_instagram || p.last_inbound_messenger) score += 1;
+      if (p.status && p.status !== 'lead_new') score += 1;
+      return score;
     };
     const cleanPhone = normalize(phone);
     const phoneTail = cleanPhone.slice(-9);
-    let parent = data.parents.find(p => {
+    const matches = data.parents.filter((p) => {
       const np = normalize(p.phone);
       return np === cleanPhone || (phoneTail && np.slice(-9) === phoneTail);
     });
-    
+    // Prefer the richest CRM card when the same person exists as 050… and 972…
+    let parent = matches.length
+      ? [...matches].sort((a, b) => scoreParent(b) - scoreParent(a))[0]
+      : null;
+
     if (parent) {
       if (email && !parent.email) parent.email = email;
       if (name && (parent.name === 'לקוח וואטסאפ' || parent.name === 'ליד מאינסטגרם' || !parent.name)) {
@@ -402,12 +427,16 @@ export const db = {
       if (extras.channel && !parent.channel) parent.channel = extras.channel;
       if (extras.status) parent.status = extras.status;
       if (extras.notes) parent.notes = (parent.notes ? parent.notes + '\n' : '') + extras.notes;
+      // Normalize stored phone so future lookups hit one format.
+      if (cleanPhone && normalize(parent.phone) === cleanPhone && parent.phone !== cleanPhone) {
+        parent.phone = cleanPhone;
+      }
       writeDb(data);
     } else {
       parent = {
         id: `p${Date.now()}`,
         name: name || 'לקוח וואטסאפ',
-        phone: phone || '',
+        phone: cleanPhone || phone || '',
         email: email || '',
         city: extras.city || '',
         source: extras.source || 'unknown',
