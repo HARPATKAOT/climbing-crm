@@ -145,16 +145,34 @@ export async function ensureClient(parent) {
   };
 }
 
+function buildDocLineFields(items) {
+  const fields = {};
+  (items || []).forEach((item, i) => {
+    fields[`desc[${i}]`] = item.description || item.desc || 'פריט';
+    fields[`unitprice[${i}]`] = item.unitprice ?? item.price ?? 0;
+    fields[`quantity[${i}]`] = item.quantity ?? 1;
+  });
+  return fields;
+}
+
 /**
  * Create tax invoice + receipt (חשבונית מס קבלה)
  * items: [{ description, unitprice, quantity? }]
  */
-export async function createInvRec({ clientId, clientName, items, comment }) {
+export async function createInvRec({
+  clientId,
+  clientName,
+  items,
+  comment,
+  emailTo,
+  hwp,
+}) {
   const fields = {
     doctype: 'invrec',
     doc_date: todayYyyymmdd(),
     currency: 'NIS',
     vattype: 1,
+    ...buildDocLineFields(items),
   };
 
   if (clientId) fields.client_id = clientId;
@@ -162,17 +180,55 @@ export async function createInvRec({ clientId, clientName, items, comment }) {
   else throw new Error('clientId or clientName required');
 
   if (comment) fields.comment = comment;
-
-  (items || []).forEach((item, i) => {
-    fields[`desc[${i}]`] = item.description || item.desc || 'פריט';
-    fields[`unitprice[${i}]`] = item.unitprice ?? item.price ?? 0;
-    fields[`quantity[${i}]`] = item.quantity ?? 1;
-  });
+  if (emailTo) {
+    fields.email_to = emailTo;
+    fields.send_email = 1;
+  }
+  // Payment type hint when supported by account (1=cash-ish, varies by tenant)
+  if (hwp != null) fields.hwp = hwp;
 
   const result = await icountPost('doc/create', fields);
   return {
     docId: result.doc_id != null ? String(result.doc_id) : null,
     docnum: result.docnum != null ? String(result.docnum) : null,
+    docUrl: result.doc_url || result.docurl || null,
+    raw: result,
+  };
+}
+
+/**
+ * Create price quote (הצעת מחיר)
+ */
+export async function createOffer({
+  clientId,
+  clientName,
+  items,
+  comment,
+  emailTo,
+}) {
+  const fields = {
+    doctype: 'offer',
+    doc_date: todayYyyymmdd(),
+    currency: 'NIS',
+    vattype: 1,
+    ...buildDocLineFields(items),
+  };
+
+  if (clientId) fields.client_id = clientId;
+  else if (clientName) fields.client_name = clientName;
+  else throw new Error('clientId or clientName required');
+
+  if (comment) fields.comment = comment;
+  if (emailTo) {
+    fields.email_to = emailTo;
+    fields.send_email = 1;
+  }
+
+  const result = await icountPost('doc/create', fields);
+  return {
+    docId: result.doc_id != null ? String(result.doc_id) : null,
+    docnum: result.docnum != null ? String(result.docnum) : null,
+    docUrl: result.doc_url || result.docurl || null,
     raw: result,
   };
 }
@@ -199,17 +255,65 @@ export async function getDoc(docId) {
   return icountPost('doc/get', { doc_id: docId });
 }
 
-export function buildPaymentUrl({ amount, description, name, phone }) {
+/**
+ * Build iCount payment-page URL.
+ * After successful payment, iCount issues the document configured on the page
+ * (typically חשבונית מס קבלה) and can notify us via ipn_url.
+ *
+ * Custom fields with m__ prefix are echoed back on the IPN without the prefix.
+ */
+export function buildPaymentUrl({
+  amount,
+  description,
+  name,
+  phone,
+  email,
+  paymentId,
+  ipnUrl,
+  successUrl,
+  failureUrl,
+  cancelUrl,
+} = {}) {
   const page = getPayPage();
   const params = new URLSearchParams();
   if (amount != null && amount !== '') params.set('cs', String(amount));
   if (description) params.set('cd', description);
-  if (name) params.set('ccfname', name);
+  if (name) {
+    params.set('full_name', name);
+    params.set('ccfname', name);
+  }
   if (phone) {
     const clean = String(phone).replace(/[-\s]/g, '');
     if (clean) params.set('contact_phone', clean);
   }
+  if (email) params.set('contact_email', String(email).trim());
+  if (paymentId) params.set('m__payment_id', String(paymentId));
+  if (ipnUrl) params.set('ipn_url', ipnUrl);
+  if (successUrl) params.set('success_url', successUrl);
+  if (failureUrl) params.set('failure_url', failureUrl);
+  if (cancelUrl) params.set('cancel_url', cancelUrl);
   return `https://pay.icount.co.il/${page}?${params.toString()}`;
+}
+
+export function getPublicApiBase() {
+  return (
+    process.env.PUBLIC_API_URL ||
+    process.env.RENDER_EXTERNAL_URL ||
+    'https://climbing-crm-api.onrender.com'
+  )
+    .trim()
+    .replace(/\/$/, '');
+}
+
+/** Server-to-server notify URL after payment-page success (IPN). */
+export function buildIpnUrl({ paymentId } = {}) {
+  const base = getPublicApiBase();
+  const secret = (process.env.ICOUNT_WEBHOOK_SECRET || '').trim();
+  const params = new URLSearchParams();
+  if (secret) params.set('secret', secret);
+  if (paymentId) params.set('payment_id', String(paymentId));
+  const qs = params.toString();
+  return `${base}/api/icount/webhook${qs ? `?${qs}` : ''}`;
 }
 
 export const icount = {
@@ -217,8 +321,12 @@ export const icount = {
   ping,
   ensureClient,
   createInvRec,
+  createOffer,
   searchDocs,
   getDoc,
   buildPaymentUrl,
+  buildIpnUrl,
+  getPublicApiBase,
+  getPayPage,
   icountPost,
 };

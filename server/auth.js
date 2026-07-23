@@ -31,6 +31,11 @@ const TEAM_RULES = [
   { methods: ['GET'], pattern: /^\/saved-segments(\/|$)/ },
   { methods: ['GET'], pattern: /^\/channels\/status$/ },
   { methods: ['GET'], pattern: /^\/auth\/me$/ },
+  { methods: ['GET'], pattern: /^\/pricelist(\/|$)/ },
+  { methods: ['GET', 'POST'], pattern: /^\/pos\/(sale|quote|payment-link|sales)(\/|$)/ },
+  { methods: ['GET', 'POST'], pattern: /^\/pos\/passes(\/|$)/ },
+  { methods: ['GET', 'POST'], pattern: /^\/cash-register(\/|$)/ },
+  { methods: ['GET'], pattern: /^\/icount\/status$/ },
 ];
 
 function emailSet(value) {

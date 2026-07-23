@@ -10,6 +10,16 @@ import { automationsService } from './automations.js';
 import { icount } from './icount.js';
 import { apiAuth, requireOwner } from './auth.js';
 import {
+  enrichPricelistItem,
+  buildPassFromItem,
+  computeSaleTotal,
+  pickBestPunchCard,
+  isPassUsable,
+  normalizeProductType,
+  PRODUCT_TYPES,
+  requiresCustomer,
+} from './posUtils.js';
+import {
   ensureAttendanceRows,
   israelDateStr,
   israelHour,
@@ -70,6 +80,8 @@ app.use(express.json({
     req.rawBody = buffer;
   },
 }));
+// iCount payment-page IPN often posts as form-urlencoded
+app.use(express.urlencoded({ extended: true }));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. CRM GENERAL ENDPOINTS (Database Synced)
@@ -1495,7 +1507,8 @@ app.delete('/api/attendance/:id', (req, res) => {
 
 // Get all pricelist items
 app.get('/api/pricelist', (req, res) => {
-  res.json(db.get('pricelist'));
+  const items = (db.get('pricelist') || []).map(enrichPricelistItem);
+  res.json(items);
 });
 
 // Create pricelist item
@@ -1540,6 +1553,19 @@ function matchPendingPayment(payload) {
   const pending = payments.filter((p) => p.status === 'pending');
   if (!pending.length) return null;
 
+  // Exact match from payment-page custom field / IPN query
+  const paymentId =
+    payload?.payment_id ||
+    payload?.m__payment_id ||
+    payload?.custom?.payment_id;
+  if (paymentId) {
+    const byId = pending.find((p) => String(p.id) === String(paymentId));
+    if (byId) return byId;
+    // Also allow matching already-paid rows for idempotent retries
+    const any = payments.find((p) => String(p.id) === String(paymentId));
+    if (any) return any;
+  }
+
   const customId =
     payload?.client?.custom_client_id ||
     payload?.custom_client_id ||
@@ -1552,7 +1578,8 @@ function matchPendingPayment(payload) {
   const clientId =
     payload?.client?.client_id ||
     payload?.client_id ||
-    payload?.clientid;
+    payload?.clientid ||
+    payload?.customer_id;
   if (clientId) {
     const byClient = pending.find((p) => String(p.icount_client_id) === String(clientId));
     if (byClient) return byClient;
@@ -1562,7 +1589,8 @@ function matchPendingPayment(payload) {
     payload?.client?.phone ||
     payload?.client?.mobile ||
     payload?.phone ||
-    payload?.contact_phone
+    payload?.contact_phone ||
+    payload?.customer_phone
   );
   const total = Number(
     payload?.totalwithvat ??
@@ -1595,6 +1623,38 @@ function matchPendingPayment(payload) {
   }
 
   return null;
+}
+
+/** Normalize iCount document webhook OR payment-page IPN payloads. */
+function normalizeIcountNotifyPayload(raw = {}, query = {}) {
+  const payload = { ...raw };
+  if (query.payment_id && !payload.payment_id) payload.payment_id = query.payment_id;
+  // IPN echoes m__* custom fields without the prefix
+  if (payload.payment_id == null && raw.m__payment_id != null) {
+    payload.payment_id = raw.m__payment_id;
+  }
+
+  const docId =
+    payload.doc_id != null
+      ? String(payload.doc_id)
+      : payload.docid != null
+        ? String(payload.docid)
+        : payload?.doc?.doc_id != null
+          ? String(payload.doc.doc_id)
+          : null;
+  const docnum =
+    payload.docnum != null
+      ? String(payload.docnum)
+      : payload?.doc?.docnum != null
+        ? String(payload.doc.docnum)
+        : null;
+  const doctype =
+    payload.doctype ||
+    payload.doc_type ||
+    payload?.doc?.doctype ||
+    null;
+
+  return { payload, docId, docnum, doctype };
 }
 
 app.get('/api/icount/status', async (req, res) => {
@@ -1755,29 +1815,22 @@ app.post('/api/icount/webhook', async (req, res) => {
     const incoming =
       req.get('X-iCount-Secret') ||
       req.get('x-icount-secret') ||
+      req.query?.secret ||
       '';
     if (expectedSecret && String(incoming) !== expectedSecret) {
-      console.warn('⛔ [iCount webhook] rejected — bad or missing secret header');
+      console.warn('⛔ [iCount webhook] rejected — bad or missing secret');
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
 
-    const payload = req.body || {};
-    console.log('📩 [iCount webhook] document event received');
-
-    const docId =
-      payload.doc_id != null
-        ? String(payload.doc_id)
-        : payload.docid != null
-          ? String(payload.docid)
-          : payload?.doc?.doc_id != null
-            ? String(payload.doc.doc_id)
-            : null;
-    const docnum =
-      payload.docnum != null
-        ? String(payload.docnum)
-        : payload?.doc?.docnum != null
-          ? String(payload.doc.docnum)
-          : null;
+    const { payload, docId, docnum, doctype } = normalizeIcountNotifyPayload(
+      req.body || {},
+      req.query || {}
+    );
+    console.log(
+      '📩 [iCount webhook] payment/document notify',
+      doctype ? `doctype=${doctype}` : '',
+      docnum ? `docnum=${docnum}` : ''
+    );
 
     let payment = matchPendingPayment(payload);
 
@@ -1787,16 +1840,59 @@ app.post('/api/icount/webhook', async (req, res) => {
         (p) => String(p.icount_doc_id) === String(docId)
       );
     }
+    if (!payment && docnum) {
+      payment = (db.get('payments') || []).find(
+        (p) => String(p.icount_doc_number) === String(docnum)
+      );
+    }
 
     if (payment) {
       const updated = db.update('payments', payment.id, {
         status: 'paid',
         icount_doc_id: docId || payment.icount_doc_id,
         icount_doc_number: docnum || payment.icount_doc_number,
+        icount_doctype: doctype || payment.icount_doctype || null,
         paid_at: payment.paid_at || new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
-      return res.json({ ok: true, matched: true, paymentId: updated?.id });
+
+      // Fulfill POS sale passes / inventory when payment-link completes
+      if (payment.pos_sale_id) {
+        const sale = db.getOne('pos_sales', payment.pos_sale_id);
+        if (sale && sale.status !== 'paid') {
+          const lines = mapCartLines(
+            (sale.items || []).map((line) => ({
+              ...line,
+              pricelist_id: line.pricelist_id,
+              quantity: line.quantity,
+              unitprice: line.unitprice,
+            }))
+          );
+          fulfillSalePasses({
+            sale,
+            lines,
+            studentId: sale.student_id,
+            parentId: sale.parent_id,
+            docId: docId || payment.icount_doc_id,
+            docNumber: docnum || payment.icount_doc_number,
+          });
+          decrementInventory(lines);
+          db.update('pos_sales', sale.id, {
+            status: 'paid',
+            icount_doc_id: docId || sale.icount_doc_id,
+            icount_doc_number: docnum || sale.icount_doc_number,
+            updated_at: new Date().toISOString(),
+          });
+        }
+      }
+
+      return res.json({
+        ok: true,
+        matched: true,
+        paymentId: updated?.id,
+        doctype: doctype || null,
+        docnum: docnum || null,
+      });
     }
 
     // Create a paid record from webhook if we can resolve a parent
@@ -1810,10 +1906,11 @@ app.post('/api/icount/webhook', async (req, res) => {
     const description =
       payload?.description ||
       payload?.comment ||
+      payload?.cd ||
       (Array.isArray(payload?.items) && payload.items[0]?.desc) ||
       'תשלום iCount';
 
-    if (parent || docId) {
+    if (parent || docId || docnum) {
       const created = db.insert('payments', {
         parent_id: parent?.id || null,
         student_id: null,
@@ -1823,10 +1920,12 @@ app.post('/api/icount/webhook', async (req, res) => {
         payment_url: null,
         icount_client_id:
           payload?.client?.client_id ||
+          payload?.customer_id ||
           parent?.icount_client_id ||
           null,
         icount_doc_id: docId,
         icount_doc_number: docnum,
+        icount_doctype: doctype || null,
         paid_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
@@ -1841,6 +1940,8 @@ app.post('/api/icount/webhook', async (req, res) => {
 });
 
 // iCount payment request: sync client + pending payment + WhatsApp link
+// After the customer pays on the payment page, iCount issues the configured
+// document (חשבונית מס קבלה) and notifies us via IPN → webhook.
 app.post('/api/checkout/payment-request', async (req, res) => {
   const { studentId, studentName, amount, description, phone, parentId } = req.body || {};
   console.log(`💳 [iCount] Payment request for ${studentName} (${amount}₪) - "${description}"`);
@@ -1870,28 +1971,40 @@ app.post('/api/checkout/payment-request', async (req, res) => {
 
   const payName = parent?.name || studentName || 'מטפס';
   const cleanPhone = normalizePhone(phone || parent?.phone);
-  const payUrl = icount.buildPaymentUrl({
-    amount,
-    description: description || 'חוג טיפוס קיר',
-    name: payName,
-    phone: cleanPhone,
-  });
 
+  // Create pending payment first so we can embed its id in the IPN / URL
   const payment = db.insert('payments', {
     parent_id: parent?.id || null,
     student_id: studentId || null,
     amount: Number(amount),
     description,
     status: 'pending',
-    payment_url: payUrl,
+    payment_url: null,
     icount_client_id: clientId,
     icount_doc_id: null,
     icount_doc_number: null,
+    icount_doctype: null,
     paid_at: null,
     updated_at: new Date().toISOString(),
   });
 
-  const waMsg = `שלום! להלן קישור מאובטח לתשלום עבור ${description} בסך ${amount} ש״ח: ${payUrl}`;
+  const ipnUrl = icount.buildIpnUrl({ paymentId: payment.id });
+  const payUrl = icount.buildPaymentUrl({
+    amount,
+    description: description || 'חוג טיפוס קיר',
+    name: payName,
+    phone: cleanPhone,
+    email: parent?.email || '',
+    paymentId: payment.id,
+    ipnUrl,
+  });
+
+  const updatedPayment = db.update('payments', payment.id, {
+    payment_url: payUrl,
+    updated_at: new Date().toISOString(),
+  });
+
+  const waMsg = `שלום! להלן קישור מאובטח לתשלום עבור ${description} בסך ${amount} ש״ח:\n${payUrl}\n\nלאחר התשלום תופק חשבונית מס קבלה אוטומטית.`;
   let whatsappSent = false;
   try {
     if (cleanPhone) {
@@ -1905,10 +2018,11 @@ app.post('/api/checkout/payment-request', async (req, res) => {
   res.json({
     success: true,
     paymentUrl: payUrl,
-    payment,
+    payment: updatedPayment || payment,
     whatsappSent,
+    autoInvoice: true,
     syncWarning,
-    message: 'נוצר קישור תשלום ונשמר במערכת',
+    message: 'נוצר קישור תשלום. לאחר התשלום תופק חשבונית מס קבלה באייקאונט',
   });
 });
 
@@ -2028,6 +2142,507 @@ app.get('/api/cash-register', (req, res) => {
 app.post('/api/cash-register', (req, res) => {
   const record = db.insert('cash_register_shifts', req.body);
   res.status(201).json(record);
+});
+
+// ─── POS: sales, quotes, punch cards ────────────────────────────────────────
+
+function resolvePosCustomer({ studentId, parentId, walkInName, walkInPhone, walkInEmail }) {
+  let student = studentId ? db.getOne('students', studentId) : null;
+  let parent = parentId ? db.getOne('parents', parentId) : null;
+  if (!parent && student?.parentId) parent = db.getOne('parents', student.parentId);
+  if (!parent && (walkInName || walkInPhone)) {
+    parent = {
+      id: null,
+      name: walkInName || 'לקוח מזדמן',
+      phone: walkInPhone || '',
+      email: walkInEmail || '',
+    };
+  }
+  return { student, parent };
+}
+
+function mapCartLines(cart) {
+  return (cart || []).map((line) => {
+    const item = line.pricelist_id
+      ? enrichPricelistItem(db.getOne('pricelist', line.pricelist_id) || {})
+      : enrichPricelistItem(line);
+    const quantity = Number(line.quantity) || 1;
+    const unitprice = Number(line.unitprice ?? line.price ?? item.price) || 0;
+    return {
+      pricelist_id: item.id || line.pricelist_id || null,
+      name: line.name || item.name || 'פריט',
+      description: line.description || item.name || 'פריט',
+      unitprice,
+      quantity,
+      product_type: normalizeProductType({ ...item, product_type: line.product_type || item.product_type }),
+      visits_total: item.visits_total,
+      validity_days: item.validity_days,
+      duration_days: item.duration_days,
+      track_inventory: item.track_inventory === true,
+      stock_qty: item.stock_qty,
+      item,
+    };
+  });
+}
+
+function fulfillSalePasses({ sale, lines, studentId, parentId, docId, docNumber }) {
+  const issued = [];
+  for (const line of lines) {
+    if (!requiresCustomer(line.product_type)) continue;
+    if (!studentId) continue;
+    const qty = Number(line.quantity) || 1;
+    for (let i = 0; i < qty; i += 1) {
+      const passFields = buildPassFromItem({
+        item: {
+          id: line.pricelist_id,
+          name: line.name,
+          product_type: line.product_type,
+          visits_total: line.visits_total,
+          validity_days: line.validity_days,
+          duration_days: line.duration_days,
+        },
+        studentId,
+        parentId,
+        saleId: sale.id,
+        docId,
+        docNumber,
+      });
+      if (passFields) issued.push(db.insert('customer_passes', passFields));
+    }
+  }
+  return issued;
+}
+
+function decrementInventory(lines) {
+  for (const line of lines) {
+    if (!line.pricelist_id || !line.track_inventory) continue;
+    const current = db.getOne('pricelist', line.pricelist_id);
+    if (!current) continue;
+    const stock = Number(current.stock_qty);
+    if (Number.isNaN(stock)) continue;
+    const next = Math.max(0, stock - (Number(line.quantity) || 1));
+    db.update('pricelist', line.pricelist_id, { stock_qty: next });
+  }
+}
+
+function punchPass(pass, { punchedBy, source, note }) {
+  if (!pass) {
+    const err = new Error('כרטיסייה לא נמצאה');
+    err.status = 404;
+    throw err;
+  }
+  if (pass.pass_type !== PRODUCT_TYPES.PUNCH_CARD) {
+    const err = new Error('אפשר לנקב רק כרטיסיית כניסות');
+    err.status = 400;
+    throw err;
+  }
+  if (!isPassUsable(pass)) {
+    const err = new Error('הכרטיסייה לא פעילה או שנגמרו הניקובים');
+    err.status = 400;
+    throw err;
+  }
+  const before = Number(pass.visits_remaining);
+  const after = before - 1;
+  const updated = db.update('customer_passes', pass.id, {
+    visits_remaining: after,
+    status: after <= 0 ? 'depleted' : 'active',
+    updated_at: new Date().toISOString(),
+  });
+  const punch = db.insert('pass_punches', {
+    pass_id: pass.id,
+    student_id: pass.student_id,
+    punched_at: new Date().toISOString(),
+    punched_by: punchedBy || null,
+    source: source || 'manual',
+    note: note || '',
+    visits_before: before,
+    visits_after: after,
+  });
+  return { pass: updated, punch };
+}
+
+app.get('/api/pos/sales', (req, res) => {
+  let sales = db.get('pos_sales') || [];
+  if (req.crmUser?.role === 'staff') {
+    const today = new Date().toISOString().slice(0, 10);
+    sales = sales.filter(
+      (s) =>
+        String(s.sold_by || '') === String(req.crmUser.email || '') ||
+        String(s.created_at || '').slice(0, 10) === today
+    );
+  }
+  sales = [...sales].sort((a, b) =>
+    String(b.created_at || '').localeCompare(String(a.created_at || ''))
+  );
+  res.json(sales);
+});
+
+app.get('/api/pos/passes', (req, res) => {
+  let passes = db.get('customer_passes') || [];
+  if (req.query.studentId) {
+    passes = passes.filter((p) => String(p.student_id) === String(req.query.studentId));
+  }
+  if (req.query.parentId) {
+    passes = passes.filter((p) => String(p.parent_id) === String(req.query.parentId));
+  }
+  if (req.query.active === '1') {
+    passes = passes.filter((p) => isPassUsable(p));
+  }
+  passes = [...passes].sort((a, b) =>
+    String(b.created_at || '').localeCompare(String(a.created_at || ''))
+  );
+  res.json(passes);
+});
+
+app.get('/api/pos/passes/:id/punches', (req, res) => {
+  const punches = (db.get('pass_punches') || [])
+    .filter((p) => String(p.pass_id) === String(req.params.id))
+    .sort((a, b) => String(b.punched_at || '').localeCompare(String(a.punched_at || '')));
+  res.json(punches);
+});
+
+app.post('/api/pos/passes/:id/punch', (req, res) => {
+  try {
+    const pass = db.getOne('customer_passes', req.params.id);
+    const result = punchPass(pass, {
+      punchedBy: req.crmUser?.name || req.crmUser?.email || 'צוות',
+      source: req.body?.source || 'customer_card',
+      note: req.body?.note || '',
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/pos/sale', async (req, res) => {
+  try {
+    const {
+      cart = [],
+      studentId,
+      parentId,
+      walkInName,
+      walkInPhone,
+      walkInEmail,
+      paymentMethod = 'cash',
+      sendEmail = false,
+      sendWhatsapp = false,
+    } = req.body || {};
+
+    const lines = mapCartLines(cart);
+    if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
+
+    const needsCustomer = lines.some((l) => requiresCustomer(l.product_type));
+    const { student, parent } = resolvePosCustomer({
+      studentId,
+      parentId,
+      walkInName,
+      walkInPhone,
+      walkInEmail,
+    });
+    if (needsCustomer && !student?.id) {
+      return res.status(400).json({ error: 'מנוי או כרטיסייה דורשים בחירת מתאמן' });
+    }
+
+    const total = computeSaleTotal(lines);
+    let clientId = parent?.icount_client_id || null;
+    let syncedParent = parent;
+    if (parent?.id && icount.isConfigured()) {
+      const synced = await syncParentToIcount(parent);
+      syncedParent = synced.parent;
+      clientId = synced.clientId;
+    }
+
+    let doc = null;
+    if (icount.isConfigured()) {
+      doc = await icount.createInvRec({
+        clientId,
+        clientName: syncedParent?.name || student?.name || walkInName || 'לקוח מזדמן',
+        items: lines.map((l) => ({
+          description: l.description,
+          unitprice: l.unitprice,
+          quantity: l.quantity,
+        })),
+        comment: `מכירה בדלפק · ${paymentMethod}${student?.name ? ` · עבור: ${student.name}` : ''}`,
+        emailTo: sendEmail ? syncedParent?.email || walkInEmail : undefined,
+      });
+    }
+
+    const sale = db.insert('pos_sales', {
+      items: lines.map(({ item, ...rest }) => rest),
+      total,
+      payment_method: paymentMethod,
+      status: 'paid',
+      student_id: student?.id || null,
+      parent_id: syncedParent?.id || parentId || null,
+      customer_name: syncedParent?.name || student?.name || walkInName || 'לקוח מזדמן',
+      customer_phone: syncedParent?.phone || walkInPhone || '',
+      customer_email: syncedParent?.email || walkInEmail || '',
+      icount_client_id: clientId,
+      icount_doc_id: doc?.docId || null,
+      icount_doc_number: doc?.docnum || null,
+      icount_doc_url: doc?.docUrl || null,
+      sold_by: req.crmUser?.email || req.crmUser?.name || null,
+      sent_email: !!sendEmail,
+      sent_whatsapp: !!sendWhatsapp,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    const passes = fulfillSalePasses({
+      sale,
+      lines,
+      studentId: student?.id,
+      parentId: syncedParent?.id || null,
+      docId: doc?.docId,
+      docNumber: doc?.docnum,
+    });
+    decrementInventory(lines);
+
+    db.insert('payments', {
+      parent_id: syncedParent?.id || null,
+      student_id: student?.id || null,
+      amount: total,
+      description: lines.map((l) => l.name).join(', '),
+      status: 'paid',
+      payment_url: null,
+      icount_client_id: clientId,
+      icount_doc_id: doc?.docId || null,
+      icount_doc_number: doc?.docnum || null,
+      pos_sale_id: sale.id,
+      paid_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    let whatsappUrl = null;
+    if (sendWhatsapp) {
+      const phone = normalizePhone(syncedParent?.phone || walkInPhone);
+      if (phone) {
+        const digits = phone.replace(/^0/, '972');
+        const text = encodeURIComponent(
+          `שלום${syncedParent?.name ? ` ${syncedParent.name}` : ''},\n` +
+            `תודה על הרכישה ב־My Wall.\n` +
+            `סכום: ₪${total}` +
+            (doc?.docnum ? `\nמספר מסמך: ${doc.docnum}` : '') +
+            (doc?.docUrl ? `\nקישור למסמך: ${doc.docUrl}` : '')
+        );
+        whatsappUrl = `https://wa.me/${digits}?text=${text}`;
+      }
+    }
+
+    res.status(201).json({ sale, passes, doc, whatsappUrl });
+  } catch (err) {
+    console.error('POS sale error:', err.message);
+    res.status(502).json({ error: err.message, code: err.code });
+  }
+});
+
+app.post('/api/pos/quote', async (req, res) => {
+  try {
+    if (!icount.isConfigured()) {
+      return res.status(503).json({ error: 'iCount לא מוגדר בשרת' });
+    }
+    const {
+      cart = [],
+      studentId,
+      parentId,
+      walkInName,
+      walkInPhone,
+      walkInEmail,
+      sendEmail = true,
+      sendWhatsapp = false,
+    } = req.body || {};
+
+    const lines = mapCartLines(cart);
+    if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
+
+    const { student, parent } = resolvePosCustomer({
+      studentId,
+      parentId,
+      walkInName,
+      walkInPhone,
+      walkInEmail,
+    });
+
+    let clientId = parent?.icount_client_id || null;
+    let syncedParent = parent;
+    if (parent?.id) {
+      const synced = await syncParentToIcount(parent);
+      syncedParent = synced.parent;
+      clientId = synced.clientId;
+    }
+
+    const email = syncedParent?.email || walkInEmail || '';
+    const doc = await icount.createOffer({
+      clientId,
+      clientName: syncedParent?.name || student?.name || walkInName || 'לקוח',
+      items: lines.map((l) => ({
+        description: l.description,
+        unitprice: l.unitprice,
+        quantity: l.quantity,
+      })),
+      comment: student?.name ? `עבור: ${student.name}` : undefined,
+      emailTo: sendEmail && email ? email : undefined,
+    });
+
+    const total = computeSaleTotal(lines);
+    const sale = db.insert('pos_sales', {
+      items: lines.map(({ item, ...rest }) => rest),
+      total,
+      payment_method: null,
+      status: 'quoted',
+      student_id: student?.id || null,
+      parent_id: syncedParent?.id || parentId || null,
+      customer_name: syncedParent?.name || student?.name || walkInName || 'לקוח',
+      customer_phone: syncedParent?.phone || walkInPhone || '',
+      customer_email: email,
+      icount_client_id: clientId,
+      icount_doc_id: doc.docId,
+      icount_doc_number: doc.docnum,
+      icount_doc_url: doc.docUrl,
+      icount_doctype: 'offer',
+      sold_by: req.crmUser?.email || req.crmUser?.name || null,
+      sent_email: !!(sendEmail && email),
+      sent_whatsapp: !!sendWhatsapp,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    let whatsappUrl = null;
+    if (sendWhatsapp) {
+      const phone = normalizePhone(syncedParent?.phone || walkInPhone);
+      if (phone) {
+        const digits = phone.replace(/^0/, '972');
+        const text = encodeURIComponent(
+          `שלום${syncedParent?.name ? ` ${syncedParent.name}` : ''},\n` +
+            `מצורפת הצעת מחיר מ־My Wall.\n` +
+            `סכום: ₪${total}` +
+            (doc.docnum ? `\nמספר הצעה: ${doc.docnum}` : '') +
+            (doc.docUrl ? `\nקישור: ${doc.docUrl}` : '')
+        );
+        whatsappUrl = `https://wa.me/${digits}?text=${text}`;
+      }
+    }
+
+    res.status(201).json({ sale, doc, whatsappUrl, emailedTo: sendEmail ? email : null });
+  } catch (err) {
+    console.error('POS quote error:', err.message);
+    res.status(502).json({ error: err.message, code: err.code });
+  }
+});
+
+app.post('/api/pos/payment-link', async (req, res) => {
+  try {
+    const {
+      cart = [],
+      studentId,
+      parentId,
+      walkInName,
+      walkInPhone,
+      walkInEmail,
+      sendWhatsapp = false,
+    } = req.body || {};
+
+    const lines = mapCartLines(cart);
+    if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
+
+    const needsCustomer = lines.some((l) => requiresCustomer(l.product_type));
+    const { student, parent } = resolvePosCustomer({
+      studentId,
+      parentId,
+      walkInName,
+      walkInPhone,
+      walkInEmail,
+    });
+    if (needsCustomer && !student?.id) {
+      return res.status(400).json({ error: 'מנוי או כרטיסייה דורשים בחירת מתאמן' });
+    }
+
+    const total = computeSaleTotal(lines);
+    let clientId = parent?.icount_client_id || null;
+    let syncedParent = parent;
+    let syncWarning = null;
+    if (parent?.id && icount.isConfigured()) {
+      try {
+        const synced = await syncParentToIcount(parent);
+        syncedParent = synced.parent;
+        clientId = synced.clientId;
+      } catch (err) {
+        syncWarning = err.message;
+      }
+    }
+
+    const description = lines.map((l) => `${l.name}×${l.quantity}`).join(', ');
+    const payment = db.insert('payments', {
+      parent_id: syncedParent?.id || null,
+      student_id: student?.id || null,
+      amount: total,
+      description,
+      status: 'pending',
+      payment_url: null,
+      icount_client_id: clientId,
+      icount_doc_id: null,
+      icount_doc_number: null,
+      paid_at: null,
+      updated_at: new Date().toISOString(),
+    });
+
+    const sale = db.insert('pos_sales', {
+      items: lines.map(({ item, ...rest }) => rest),
+      total,
+      payment_method: 'online',
+      status: 'pending_payment',
+      student_id: student?.id || null,
+      parent_id: syncedParent?.id || null,
+      customer_name: syncedParent?.name || student?.name || walkInName || 'לקוח',
+      customer_phone: syncedParent?.phone || walkInPhone || '',
+      customer_email: syncedParent?.email || walkInEmail || '',
+      icount_client_id: clientId,
+      payment_id: payment.id,
+      sold_by: req.crmUser?.email || req.crmUser?.name || null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    db.update('payments', payment.id, { pos_sale_id: sale.id });
+
+    const ipnUrl = icount.buildIpnUrl({ paymentId: payment.id });
+    const payUrl = icount.buildPaymentUrl({
+      amount: total,
+      description,
+      name: syncedParent?.name || student?.name || walkInName,
+      phone: syncedParent?.phone || walkInPhone,
+      email: syncedParent?.email || walkInEmail,
+      paymentId: payment.id,
+      ipnUrl,
+    });
+    db.update('payments', payment.id, { payment_url: payUrl });
+    db.update('pos_sales', sale.id, { payment_url: payUrl });
+
+    let whatsappUrl = null;
+    if (sendWhatsapp) {
+      const phone = normalizePhone(syncedParent?.phone || walkInPhone);
+      if (phone) {
+        const digits = phone.replace(/^0/, '972');
+        const text = encodeURIComponent(
+          `שלום${syncedParent?.name ? ` ${syncedParent.name}` : ''},\n` +
+            `לסיום התשלום ב־My Wall:\n${payUrl}`
+        );
+        whatsappUrl = `https://wa.me/${digits}?text=${text}`;
+      }
+    }
+
+    res.status(201).json({
+      sale: { ...sale, payment_url: payUrl },
+      payment: { ...payment, payment_url: payUrl },
+      payUrl,
+      whatsappUrl,
+      syncWarning,
+    });
+  } catch (err) {
+    console.error('POS payment-link error:', err.message);
+    res.status(502).json({ error: err.message });
+  }
 });
 
 // Health Declarations endpoints

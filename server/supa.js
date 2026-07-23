@@ -68,6 +68,9 @@ export const OPERATIONAL_TABLES = [
   'automations',
   'cash_register_shifts',
   'webhook_logs',
+  'customer_passes',
+  'pass_punches',
+  'pos_sales',
 ];
 
 // Kept as the public name used by db.js: every listed collection is durable.

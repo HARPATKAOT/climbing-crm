@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ReceiptText, RefreshCw } from 'lucide-react';
+import PosSale from './PosSale.jsx';
 
 function docAmount(doc) {
   const n = Number(doc?.totalwithvat ?? doc?.total ?? doc?.sum ?? 0);
@@ -35,7 +36,7 @@ export default function CashRegister() {
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
   const [shifts, setShifts] = useState([]);
-  const [activeTab, setActiveTab] = useState('close');
+  const [activeTab, setActiveTab] = useState('sale');
   const [employees, setEmployees] = useState([]);
 
   const [icountStatus, setIcountStatus] = useState({ loading: true });
@@ -182,6 +183,7 @@ export default function CashRegister() {
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
         {[
+          { k: 'sale', label: 'מכירה' },
           { k: 'close', label: 'סגירת קופה' },
           { k: 'history', label: 'היסטוריה' },
           { k: 'icount', label: 'iCount / סליקה' },
@@ -195,6 +197,8 @@ export default function CashRegister() {
           </button>
         ))}
       </div>
+
+      {activeTab === 'sale' && <PosSale />}
 
       {activeTab === 'close' && (
         <div className="grid-2" style={{ alignItems: 'flex-start' }}>

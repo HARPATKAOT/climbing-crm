@@ -39,7 +39,6 @@ export default function CheckInConsole({ students, groups }) {
     if (!climber) return;
     
     const matchedGroup = groups.find(g => g.id === climber.groupId);
-    const todayStr = new Date().toISOString().split('T')[0];
     
     // Check medical status
     const hasDecl = declarations.some(d => d.studentName === climber.name && d.signed) || 
@@ -61,7 +60,34 @@ export default function CheckInConsole({ students, groups }) {
       });
       
       if (response.ok) {
-        setSuccessMsg(`✓ כניסה אושרה: ${climber.name}!`);
+        let punchNote = '';
+        try {
+          const passes = await fetch(`/api/pos/passes?studentId=${encodeURIComponent(climber.id)}&active=1`)
+            .then((r) => (r.ok ? r.json() : []));
+          const punchCard = (Array.isArray(passes) ? passes : []).find(
+            (p) => p.pass_type === 'punch_card' && Number(p.visits_remaining) > 0
+          );
+          const membership = (Array.isArray(passes) ? passes : []).find(
+            (p) => p.pass_type === 'time_membership'
+          );
+          if (punchCard) {
+            const punchRes = await fetch(`/api/pos/passes/${punchCard.id}/punch`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ source: 'check_in' }),
+            });
+            const punchData = await punchRes.json().catch(() => ({}));
+            if (punchRes.ok) {
+              punchNote = ` · נשארו ${punchData.pass?.visits_remaining} כניסות`;
+            }
+          } else if (membership) {
+            punchNote = ' · מנוי בתוקף';
+          }
+        } catch (e) {
+          console.warn('pass punch on check-in failed', e);
+        }
+
+        setSuccessMsg(`✓ כניסה אושרה: ${climber.name}!${punchNote}`);
         setSelectedClimber(null);
         refreshCheckins();
         

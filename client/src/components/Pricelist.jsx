@@ -48,6 +48,12 @@ function ItemForm({ item, onSave, onCancel }) {
   const [cats, setCats]         = useState(item?.categories || []);
   const [ages, setAges]         = useState(item?.ages || []);
   const [active, setActive]     = useState(item?.active ?? true);
+  const [productType, setProductType] = useState(item?.product_type || 'product');
+  const [visitsTotal, setVisitsTotal] = useState(item?.visits_total ?? 10);
+  const [validityDays, setValidityDays] = useState(item?.validity_days ?? '');
+  const [durationDays, setDurationDays] = useState(item?.duration_days ?? 30);
+  const [stockQty, setStockQty] = useState(item?.stock_qty ?? '');
+  const [trackInventory, setTrackInventory] = useState(item?.track_inventory ?? false);
 
   const toggleCat = (cat) => setCats(prev =>
     prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]
@@ -70,6 +76,12 @@ function ItemForm({ item, onSave, onCancel }) {
       categories: cats,
       ages,
       active,
+      product_type: productType,
+      visits_total: productType === 'punch_card' ? (parseInt(visitsTotal, 10) || 10) : null,
+      validity_days: productType === 'punch_card' && validityDays !== '' ? parseInt(validityDays, 10) : null,
+      duration_days: productType === 'time_membership' ? (parseInt(durationDays, 10) || 30) : null,
+      track_inventory: productType === 'product' ? !!trackInventory : false,
+      stock_qty: productType === 'product' && stockQty !== '' ? parseInt(stockQty, 10) : null,
     });
   };
 
@@ -82,10 +94,55 @@ function ItemForm({ item, onSave, onCancel }) {
             placeholder="כניסה בודדת..." />
         </div>
         <div className="form-group">
+          <label className="form-label">סוג פריט</label>
+          <select className="input select" value={productType} onChange={(e) => setProductType(e.target.value)}>
+            <option value="product">מוצר / ציוד / חד־פעמי</option>
+            <option value="punch_card">כרטיסייה (כניסות)</option>
+            <option value="time_membership">מנוי לפי זמן</option>
+          </select>
+        </div>
+        <div className="form-group">
           <label className="form-label">מחיר (₪)</label>
           <input className="input" type="number" min={0} step={0.5} value={price}
             onChange={e => setPrice(e.target.value)} placeholder="0" />
         </div>
+        {productType === 'punch_card' && (
+          <>
+            <div className="form-group">
+              <label className="form-label">מספר כניסות</label>
+              <input className="input" type="number" min={1} value={visitsTotal}
+                onChange={e => setVisitsTotal(e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">תוקף בימים (ריק = בלי)</label>
+              <input className="input" type="number" min={1} value={validityDays}
+                onChange={e => setValidityDays(e.target.value)} placeholder="365" />
+            </div>
+          </>
+        )}
+        {productType === 'time_membership' && (
+          <div className="form-group">
+            <label className="form-label">משך מנוי (ימים)</label>
+            <input className="input" type="number" min={1} value={durationDays}
+              onChange={e => setDurationDays(e.target.value)} />
+          </div>
+        )}
+        {productType === 'product' && (
+          <>
+            <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <label className="form-label" style={{ marginBottom: 0 }}>מעקב מלאי?</label>
+              <input type="checkbox" checked={trackInventory} onChange={e => setTrackInventory(e.target.checked)}
+                style={{ width: 18, height: 18, cursor: 'pointer' }} />
+            </div>
+            {trackInventory && (
+              <div className="form-group">
+                <label className="form-label">כמות במלאי</label>
+                <input className="input" type="number" min={0} value={stockQty}
+                  onChange={e => setStockQty(e.target.value)} />
+              </div>
+            )}
+          </>
+        )}
         <div className="form-group">
           <label className="form-label">מספר משתתפים</label>
           <input className="input" value={participants} onChange={e => setPart(e.target.value)}
