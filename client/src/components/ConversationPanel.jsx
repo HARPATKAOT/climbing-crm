@@ -32,7 +32,7 @@ function WindowBadge({ windows, channel }) {
   );
 }
 
-export default function ConversationPanel({ parent, student }) {
+export default function ConversationPanel({ parent, student, fillHeight = false }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -47,7 +47,7 @@ export default function ConversationPanel({ parent, student }) {
   const [selectedSaved, setSelectedSaved] = useState('');
   const [imagePreview, setImagePreview] = useState(null);
   const [imageBase64, setImageBase64] = useState('');
-  const chatEndRef = useRef(null);
+  const messagesRef = useRef(null);
   const fileRef = useRef(null);
   const wasBlockedRef = useRef(false);
 
@@ -89,7 +89,8 @@ export default function ConversationPanel({ parent, student }) {
   }, [parent?.id]);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = messagesRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [data?.messages?.length]);
 
   const windowOpen = data?.windows?.[channel]?.open;
@@ -167,7 +168,7 @@ export default function ConversationPanel({ parent, student }) {
 
   if (!parent) {
     return (
-      <div className="card card-p" style={{ marginBottom: 20 }}>
+      <div className="card card-p" style={{ marginBottom: fillHeight ? 0 : 20, height: fillHeight ? '100%' : undefined }}>
         <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין איש קשר מקושר ללקוח זה</div>
       </div>
     );
@@ -177,9 +178,27 @@ export default function ConversationPanel({ parent, student }) {
   const channels = data?.channels || {};
 
   return (
-    <>
-      <div className="section-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-        <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: fillHeight ? '100%' : undefined,
+        minHeight: 0,
+        flex: fillHeight ? 1 : undefined,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          padding: fillHeight ? '12px 14px' : undefined,
+          borderBottom: fillHeight ? '1px solid var(--border)' : undefined,
+          flexShrink: 0,
+        }}
+      >
+        <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
           <MessageCircle size={15} /> תקשורת עם הלקוח
         </div>
         <button type="button" className="btn btn-ghost btn-xs" onClick={load} disabled={loading}>
@@ -187,14 +206,28 @@ export default function ConversationPanel({ parent, student }) {
         </button>
       </div>
 
-      <div className="card card-p" style={{ marginBottom: 20, padding: 0, overflow: 'hidden' }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '10px 12px', borderBottom: '1px solid var(--border)' }}>
+      <div
+        className={fillHeight ? undefined : 'card card-p'}
+        style={{
+          marginBottom: fillHeight ? 0 : 20,
+          padding: 0,
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          flex: fillHeight ? 1 : undefined,
+          minHeight: 0,
+          background: fillHeight ? 'transparent' : undefined,
+          border: fillHeight ? 'none' : undefined,
+          borderRadius: fillHeight ? 0 : undefined,
+        }}
+      >
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '10px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
           {['whatsapp', 'instagram', 'messenger'].map((ch) => (
             <WindowBadge key={ch} windows={data?.windows} channel={ch} />
           ))}
         </div>
 
-        <div style={{ display: 'flex', gap: 6, padding: '8px 12px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 6, padding: '8px 12px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap', flexShrink: 0 }}>
           {Object.keys(CHANNEL_LABELS).map((ch) => (
             <button
               key={ch}
@@ -209,8 +242,20 @@ export default function ConversationPanel({ parent, student }) {
           ))}
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', maxHeight: 360 }}>
-          <div style={{ flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8, minHeight: 160 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: fillHeight ? 0 : 160, maxHeight: fillHeight ? undefined : 360 }}>
+          <div
+            ref={messagesRef}
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              overscrollBehavior: 'contain',
+              padding: 12,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+              minHeight: fillHeight ? 0 : 160,
+            }}
+          >
             {loading && !messages.length ? (
               <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center', marginTop: 20 }}>טוען שיחה...</div>
             ) : messages.length === 0 ? (
@@ -253,11 +298,10 @@ export default function ConversationPanel({ parent, student }) {
                 );
               })
             )}
-            <div ref={chatEndRef} />
           </div>
 
           {freeformBlocked && (
-            <div style={{ fontSize: 11, color: '#FBBF24', padding: '6px 12px', background: 'rgba(251,191,36,0.08)', borderTop: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 11, color: '#FBBF24', padding: '6px 12px', background: 'rgba(251,191,36,0.08)', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
               {channel === 'whatsapp'
                 ? 'חלון 24 השעות סגור בוואטסאפ — אפשר לשלוח רק תבנית מאושרת.'
                 : 'חלון 24 השעות סגור בערוץ הזה. עברו לוואטסאפ כדי לשלוח תבנית מאושרת, או המתינו לפנייה מהלקוח.'}
@@ -265,12 +309,12 @@ export default function ConversationPanel({ parent, student }) {
           )}
 
           {!freeformBlocked && channel === 'whatsapp' && mode === 'template' && (
-            <div style={{ fontSize: 11, color: '#4ade80', padding: '6px 12px', background: 'rgba(34,197,94,0.08)', borderTop: '1px solid var(--border)' }}>
+            <div style={{ fontSize: 11, color: '#4ade80', padding: '6px 12px', background: 'rgba(34,197,94,0.08)', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
               החלון פתוח — אפשר גם לשלוח טקסט חופשי בלשונית טקסט.
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 6, padding: '8px 10px', borderTop: '1px solid var(--border)', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 6, padding: '8px 10px', borderTop: '1px solid var(--border)', flexWrap: 'wrap', flexShrink: 0 }}>
             {[
               { id: 'text', label: 'טקסט', icon: MessageCircle, disabled: freeformBlocked },
               { id: 'template', label: 'תבנית', icon: FileText, disabled: channel !== 'whatsapp' },
@@ -289,7 +333,7 @@ export default function ConversationPanel({ parent, student }) {
             ))}
           </div>
 
-          <form onSubmit={handleSend} style={{ padding: 10, background: 'rgba(0,0,0,0.15)' }}>
+          <form onSubmit={handleSend} style={{ padding: 10, background: 'rgba(0,0,0,0.15)', flexShrink: 0 }}>
             {mode === 'template' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
                 {templates.length === 0 ? (
@@ -384,10 +428,10 @@ export default function ConversationPanel({ parent, student }) {
           </form>
 
           {error && (
-            <div style={{ fontSize: 11, color: '#F87171', padding: '0 10px 8px' }}>{error}</div>
+            <div style={{ fontSize: 11, color: '#F87171', padding: '0 10px 8px', flexShrink: 0 }}>{error}</div>
           )}
         </div>
       </div>
-    </>
+    </div>
   );
 }
