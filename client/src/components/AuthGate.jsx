@@ -67,6 +67,8 @@ export default function AuthGate({ children }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  // Identity only — token refresh must not remount the whole app.
+  const userId = session?.user?.id || null;
 
   useEffect(() => {
     if (!authClient) {
@@ -89,22 +91,26 @@ export default function AuthGate({ children }) {
   }, []);
 
   useEffect(() => {
-    if (!session) return;
+    if (!userId || !session?.user) return;
     let active = true;
-    setLoading(true);
+    const user = session.user;
+    // Keep the existing UI visible when the same user is already loaded
+    // (e.g. silent token refresh after switching browser tabs).
+    const alreadyLoaded = profile?.id === userId;
+    if (!alreadyLoaded) setLoading(true);
 
     const fallbackProfile = () => {
-      const email = session.user?.email || '';
+      const email = user?.email || '';
       const rawRole =
-        session.user?.app_metadata?.crm_role ||
-        session.user?.user_metadata?.crm_role ||
+        user?.app_metadata?.crm_role ||
+        user?.user_metadata?.crm_role ||
         '';
       const role = String(rawRole).toLowerCase();
       if (role === 'owner' || role === 'admin' || role === 'staff' || role === 'team') {
         return {
-          id: session.user.id,
+          id: user.id,
           email,
-          name: session.user.user_metadata?.full_name || session.user.user_metadata?.name || email,
+          name: user.user_metadata?.full_name || user.user_metadata?.name || email,
           role: role === 'admin' ? 'owner' : (role === 'team' ? 'staff' : role),
         };
       }
@@ -139,7 +145,8 @@ export default function AuthGate({ children }) {
     return () => {
       active = false;
     };
-  }, [session]);
+    // Re-run only when the signed-in user changes — not on every token refresh.
+  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps -- intentionally keyed by userId only
 
   const value = useMemo(() => ({
     user: profile,
@@ -159,7 +166,7 @@ export default function AuthGate({ children }) {
       </div>
     );
   }
-  if (loading) return <div className="auth-page"><div className="auth-card">טוען את המערכת...</div></div>;
+  if (loading && !profile) return <div className="auth-page"><div className="auth-card">טוען את המערכת...</div></div>;
   if (!session) return <LoginScreen />;
   if (error || !profile) {
     return (
