@@ -18,6 +18,15 @@ function getPayPage() {
   return (process.env.ICOUNT_PAY_PAGE || 'mywall').trim().replace(/^\//, '');
 }
 
+function getPayBaseUrl() {
+  return (
+    process.env.ICOUNT_PAY_BASE_URL ||
+    'https://checkout.icount.co.il'
+  )
+    .trim()
+    .replace(/\/$/, '');
+}
+
 export function isConfigured() {
   return !!getToken();
 }
@@ -292,7 +301,7 @@ export function buildPaymentUrl({
   if (successUrl) params.set('success_url', successUrl);
   if (failureUrl) params.set('failure_url', failureUrl);
   if (cancelUrl) params.set('cancel_url', cancelUrl);
-  return `https://pay.icount.co.il/${page}?${params.toString()}`;
+  return `${getPayBaseUrl()}/${page}?${params.toString()}`;
 }
 
 export function getPublicApiBase() {
@@ -328,5 +337,6 @@ export const icount = {
   buildIpnUrl,
   getPublicApiBase,
   getPayPage,
+  getPayBaseUrl,
   icountPost,
 };
