@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ShoppingCart, Plus, Minus, Trash2, Search, User, CreditCard,
-  Banknote, Link2, FileText, Send, CheckCircle2, X,
+  Banknote, Link2, FileText, CheckCircle2, X,
 } from 'lucide-react';
 
 const PAY_METHODS = [
@@ -34,29 +34,25 @@ export default function PosSale() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
-  const [recentSales, setRecentSales] = useState([]);
   const [lastPayUrl, setLastPayUrl] = useState('');
   const [copied, setCopied] = useState(false);
   const [loadError, setLoadError] = useState('');
 
   const refresh = useCallback(async () => {
     try {
-      const [pRes, sRes, parRes, salesRes] = await Promise.all([
+      const [pRes, sRes, parRes] = await Promise.all([
         fetch('/api/pricelist'),
         fetch('/api/students'),
         fetch('/api/parents'),
-        fetch('/api/pos/sales'),
       ]);
-      const [p, s, par, sales] = await Promise.all([
+      const [p, s, par] = await Promise.all([
         pRes.ok ? pRes.json() : [],
         sRes.ok ? sRes.json() : [],
         parRes.ok ? parRes.json() : [],
-        salesRes.ok ? salesRes.json() : [],
       ]);
       setPricelist(Array.isArray(p) ? p.filter((i) => i.active !== false) : []);
       setStudents(Array.isArray(s) ? s : []);
       setParents(Array.isArray(par) ? par : []);
-      setRecentSales(Array.isArray(sales) ? sales.slice(0, 12) : []);
       if (!sRes.ok || !parRes.ok) {
         setLoadError('לא הצלחנו לטעון לקוחות — נסו לרענן');
       } else {
@@ -673,69 +669,6 @@ export default function PosSale() {
           {paymentMethod === 'emv' && (
             <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 8 }}>
               סלקו במסוף ואז לחצו על גבייה — המערכת תפיק חשבונית מס קבלה.
-            </div>
-          )}
-        </div>
-
-        <div className="card card-p">
-          <div className="section-title" style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Send size={14} /> מכירות אחרונות
-          </div>
-          {recentSales.length === 0 ? (
-            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>עדיין אין מכירות</div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {recentSales.map((sale) => {
-                const payUrl = sale.payment_url || '';
-                const statusLabel =
-                  sale.status === 'quoted'
-                    ? 'הצעה'
-                    : sale.status === 'pending_payment'
-                      ? 'ממתין לתשלום'
-                      : 'שולם';
-                return (
-                  <div
-                    key={sale.id}
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 6,
-                      fontSize: 12,
-                      paddingBottom: 8,
-                      borderBottom: '1px solid var(--border)',
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                      <span style={{ color: 'var(--text-2)' }}>
-                        {sale.customer_name || 'לקוח'} · {statusLabel}
-                        {sale.icount_doc_number ? ` · מס׳ ${sale.icount_doc_number}` : ''}
-                      </span>
-                      <strong>₪{Number(sale.total || 0).toLocaleString()}</strong>
-                    </div>
-                    {payUrl && sale.status === 'pending_payment' && (
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        <a
-                          className="btn btn-primary btn-sm"
-                          href={payUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ fontSize: 11 }}
-                        >
-                          פתח קישור סליקה
-                        </a>
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          style={{ fontSize: 11 }}
-                          onClick={() => copyPayUrl(payUrl)}
-                        >
-                          העתק
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
             </div>
           )}
         </div>
