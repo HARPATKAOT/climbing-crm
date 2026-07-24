@@ -285,6 +285,25 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
   const [addChildError, setAddChildError] = useState('');
 
   useEffect(() => {
+    setEditBirthDate(student.birthDate || '');
+    setEditNotes(student.notes || '');
+    setEditSegment(student.segment || '');
+    setEditNextFollowup(student.nextFollowup || '');
+    setEditGroupId(student.groupId || '');
+    setEditParentName(parent?.name || '');
+    setEditPhone(parent?.phone || '');
+    setEditEmail(parent?.email || '');
+    setEditCity(parent?.city || '');
+    setEditSource(parent?.source || student.source || 'unknown');
+    setIsEditing(false);
+    setEditingGroup(false);
+    setOpenFolder(null);
+    setShowPaymentModal(false);
+    setShowAddChild(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [student.id, parent?.id]);
+
+  useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => { document.body.style.overflow = prev; };
@@ -1146,9 +1165,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                 open={openFolder === 'mailing'}
                 onToggle={toggleFolder}
               >
-                <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10, lineHeight: 1.45 }}>
-                  הרשמה של {parent.name || 'ההורה'} — חלה על כל המתאמנים במשפחה, לא על ילד בודד.
-                </div>
+
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
                   <div style={{ fontSize: 11, color: 'var(--text-3)' }}>רשימות פעילות</div>
                   {!loadingLists && (
@@ -1267,19 +1284,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                   </button>
                 )}
               </div>
-              {healthDecl?.signature_url && (
-                <div style={{
-                  marginTop: 10, padding: 8, borderRadius: 8,
-                  background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)',
-                }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>עותק חתימה</div>
-                  <img
-                    src={healthDecl.signature_url}
-                    alt="חתימה"
-                    style={{ maxWidth: '100%', maxHeight: 70, background: '#0b1220', borderRadius: 8 }}
-                  />
-                </div>
-              )}
+
               {healthSendMsg && (
                 <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)' }}>
                   <div style={{ marginBottom: healthSendLink ? 6 : 0 }}>{healthSendMsg}</div>
@@ -1310,66 +1315,92 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                   )}
                 </div>
               )}
-              {!parentOnly && (
-                <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)', marginBottom: 8 }}>מסמכים בתיק</div>
-                  {docsLoading ? (
-                    <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען מסמכים...</div>
-                  ) : clientDocuments.length === 0 ? (
-                    <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-                      עדיין אין קבצים בתיק. אחרי השלמת טופס החתימה יישמר כאן קובץ אישור.
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {clientDocuments.map((doc) => (
-                        <div
-                          key={doc.id}
-                          style={{
-                            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-                            padding: '6px 8px', borderRadius: 8, border: '1px solid var(--border)',
-                            background: 'rgba(255,255,255,0.03)',
-                          }}
-                        >
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)' }}>
-                              {doc.fileName || 'הצהרת בריאות חתומה'}
-                            </div>
-                            <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
-                              {doc.created_at ? new Date(doc.created_at).toLocaleString('he-IL') : ''}
-                              {doc.type ? ` · ${doc.type}` : ''}
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            className="btn btn-ghost btn-xs"
-                            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}
-                            onClick={async () => {
-                              try {
-                                const res = await fetch(`/api/documents/${encodeURIComponent(doc.id)}/download`);
-                                if (!res.ok) throw new Error('download failed');
-                                const blob = await res.blob();
-                                const url = URL.createObjectURL(blob);
-                                const a = document.createElement('a');
-                                a.href = url;
-                                a.download = doc.fileName || 'document.pdf';
-                                document.body.appendChild(a);
-                                a.click();
-                                a.remove();
-                                URL.revokeObjectURL(url);
-                              } catch (err) {
-                                console.error(err);
-                                setHealthSendMsg('שגיאה בהורדת המסמך מהתיק');
-                              }
+              {!parentOnly && (() => {
+                const combinedDocuments = [...clientDocuments];
+                if (healthDecl && (healthDecl.signature_url || healthDecl.signed) && !clientDocuments.some(d => d.declarationId === healthDecl.id || d.type === 'health_waiver_pdf')) {
+                  combinedDocuments.push({
+                    id: `virtual_${healthDecl.id}`,
+                    fileName: 'הצהרת בריאות חתומה',
+                    created_at: healthDecl.signedAt || healthDecl.createdAt || Date.now(),
+                    type: 'health_waiver_pdf',
+                    isVirtual: true,
+                    virtualData: healthDecl,
+                  });
+                }
+                return (
+                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)', marginBottom: 8 }}>מסמכים בתיק</div>
+                    {docsLoading ? (
+                      <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען מסמכים...</div>
+                    ) : combinedDocuments.length === 0 ? (
+                      <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                        עדיין אין קבצים בתיק. אחרי השלמת טופס החתימה יישמר כאן קובץ אישור.
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {combinedDocuments.map((doc) => (
+                          <div
+                            key={doc.id}
+                            style={{
+                              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                              padding: '6px 8px', borderRadius: 8, border: '1px solid var(--border)',
+                              background: 'rgba(255,255,255,0.03)',
                             }}
                           >
-                            <Download size={12} /> הורדה
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)' }}>
+                                {doc.fileName || 'הצהרת בריאות חתומה'}
+                              </div>
+                              <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
+                                {doc.created_at ? new Date(doc.created_at).toLocaleString('he-IL') : ''}
+                                {doc.type ? ` · ${doc.type}` : ''}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs"
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}
+                              disabled={doc.isVirtual && downloadingPdf}
+                              onClick={async () => {
+                                if (doc.isVirtual) {
+                                  setDownloadingPdf(true);
+                                  try {
+                                    await downloadHealthDeclarationPdf(doc.virtualData);
+                                  } catch (err) {
+                                    console.error(err);
+                                    setHealthSendMsg('שגיאה בהורדת האישור');
+                                  } finally {
+                                    setDownloadingPdf(false);
+                                  }
+                                } else {
+                                  try {
+                                    const res = await fetch(`/api/documents/${encodeURIComponent(doc.id)}/download`);
+                                    if (!res.ok) throw new Error('download failed');
+                                    const blob = await res.blob();
+                                    const url = URL.createObjectURL(blob);
+                                    const a = document.createElement('a');
+                                    a.href = url;
+                                    a.download = doc.fileName || 'document.pdf';
+                                    document.body.appendChild(a);
+                                    a.click();
+                                    a.remove();
+                                    URL.revokeObjectURL(url);
+                                  } catch (err) {
+                                    console.error(err);
+                                    setHealthSendMsg('שגיאה בהורדת המסמך מהתיק');
+                                  }
+                                }
+                              }}
+                            >
+                              <Download size={12} /> {doc.isVirtual && downloadingPdf ? 'מכין...' : 'הורדה'}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </FolderRow>
 
             {/* Group folder */}
@@ -2301,7 +2332,6 @@ export default function Leads({ students, setStudents, parents, setParents, grou
     <div className="fade-in">
       {selectedStudentId && (
         <CustomerCard
-          key={selectedStudentId}
           student={selectedStudent}
           parent={selectedParent}
           siblings={selectedSiblings}

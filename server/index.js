@@ -66,6 +66,8 @@ const allowedOrigins = new Set([
   'https://client-omega-topaz-35.vercel.app',
   'http://localhost:3000',
   'http://127.0.0.1:3000',
+  'http://localhost:3001',
+  'http://127.0.0.1:3001',
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   ...configuredOrigins,
@@ -73,7 +75,9 @@ const allowedOrigins = new Set([
 
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+    if (!origin || allowedOrigins.has(origin) || (origin && (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')))) {
+      return callback(null, true);
+    }
     return callback(new Error('Origin is not allowed'));
   },
 }));
@@ -600,9 +604,14 @@ app.get('/api/conversations/:parentId', async (req, res) => {
 });
 
 app.post('/api/conversations/:parentId/reply', async (req, res) => {
-  const result = await replyToParent(req.params.parentId, req.body || {});
-  if (!result.success) return res.status(result.status || 400).json(result);
-  res.json(result);
+  try {
+    const result = await replyToParent(req.params.parentId, req.body || {});
+    if (!result.success) return res.status(result.status || 400).json(result);
+    res.json(result);
+  } catch (err) {
+    console.error('Error in /reply:', err);
+    res.status(500).json({ success: false, error: err.message || 'שגיאת שרת פנימית' });
+  }
 });
 
 // ─── Message templates ───────────────────────────────────────────────────────
@@ -2138,12 +2147,8 @@ app.post('/api/shifts/approve', (req, res) => {
 // Prefer the durable Supabase roster (38 real trainers, ids like "e-7") so the
 // trainer dropdown and group.trainer_id references resolve correctly. Falls
 // back to the local db.json seed if Supabase is unavailable.
-app.get('/api/trainers', async (req, res) => {
+app.get('/api/trainers', (req, res) => {
   let employees = db.get('employees') || [];
-  if (supa.isEnabled()) {
-    const rows = await supa.getAll('employees');
-    if (rows) employees = rows;
-  }
   res.json(employees
     .filter((employee) => employee.is_active !== false && employee.active !== false)
     .map((employee) => ({
@@ -2153,15 +2158,7 @@ app.get('/api/trainers', async (req, res) => {
     })));
 });
 
-app.get('/api/employees', async (req, res) => {
-  try {
-    if (supa.isEnabled()) {
-      const rows = await supa.getAll('employees');
-      if (rows) return res.json(rows);
-    }
-  } catch (err) {
-    console.error('GET /api/employees Supabase error:', err.message);
-  }
+app.get('/api/employees', (req, res) => {
   res.json(db.get('employees'));
 });
 

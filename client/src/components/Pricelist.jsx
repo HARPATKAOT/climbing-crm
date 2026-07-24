@@ -277,6 +277,11 @@ export default function Pricelist() {
         setEditingId(null);
         setAddingNew(false);
         refreshPricelist();
+      } else {
+        const errorText = await response.text();
+        let errorData = {};
+        try { errorData = JSON.parse(errorText); } catch(e) {}
+        alert(`Status: ${response.status}\n` + (errorData.error || errorText.substring(0, 100) || 'שגיאה בשמירת הפריט'));
       }
     } catch (err) {
       console.error(err);
