@@ -153,7 +153,7 @@ function buildCrmBotContext() {
     text: `## נתונים חיים ממערכת ה-CRM (השתמש רק בהם לתשובות על חוגים/זמנים/מחירים)
 כתובת: רחוב האורגים 12, אשדוד
 שעות פתיחה כלליות: א׳–ה׳ 14:00–22:00 | שישי 09:00–15:00 | שבת סגור
-הצהרת בריאות: https://mywall.co.il/health
+הצהרת בריאות: https://client-omega-topaz-35.vercel.app/health
 
 ### קבוצות חוגים פעילות (${groups.length}):
 ${groupLines}
@@ -202,7 +202,7 @@ function buildHeuristicReply(incomingText) {
   const menuPick = text.match(/^[1-3]$/)?.[0]
     || (text.match(/^(?:אופציה|אפשרות|מספר)?\s*[1-3]\b/)?.[0]?.replace(/\D/g, '') || null);
 
-  const healthReply = 'היי! ✍️\nהנה קישור להצהרת הבריאות:\nhttps://mywall.co.il/health\n\nאחרי החתימה המערכת מתעדכנת אוטומטית 🧗';
+  const healthReply = 'היי! ✍️\nהנה קישור להצהרת הבריאות:\nhttps://client-omega-topaz-35.vercel.app/health\n\nאחרי החתימה המערכת מתעדכנת אוטומטית 🧗';
   const matchedGroups = findGroupsForText(raw);
   const sourceGroups = matchedGroups.length ? matchedGroups : (db.get('groups') || []).slice(0, 12);
   const wantsPrices = asksAboutPrices(raw) || menuPick === '2';
@@ -278,7 +278,7 @@ async function callGeminiReply(systemPrompt, crmText, incomingText, apiKey) {
 ${crmText}
 
 הערה חשובה: אם הלקוח כותב רק 1 / 2 / 3 זה בחירה מתפריט:
-1 = קישור להצהרת בריאות (https://mywall.co.il/health)
+1 = קישור להצהרת בריאות (https://client-omega-topaz-35.vercel.app/health)
 2 = הרשמה ומחירי חוגים (ענה מתוך רשימת הקבוצות למעלה)
 3 = שעות פעילות ומיקום
 
@@ -460,7 +460,7 @@ export const whatsappService = {
         });
         logMessage = preview;
       } else if (templateName === 't1') logMessage = `שלום! ברוכים הבאים לקיר הטיפוס My Wall 🧗‍♂️`;
-      else if (templateName === 't2') logMessage = `שלום, בבקשה מלאו את הצהרת הבריאות לפני הגעתכם: https://mywall.co.il/health`;
+      else if (templateName === 't2') logMessage = `שלום, בבקשה מלאו את הצהרת הבריאות לפני הגעתכם: https://client-omega-topaz-35.vercel.app/health`;
       else if (templateName === 't3') logMessage = `שלום, תזכורת: שיעור שלכם מחר. נתראה!`;
       else if (templateName === 't4') logMessage = `שלום, לסיום תהליך הרשמה בבקשה שלמו את אימון ההכירות בקליק: https://app.icount.co.il/m/9a79f`;
 

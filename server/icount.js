@@ -462,6 +462,22 @@ export function buildIpnUrl({ paymentId } = {}) {
   return `${base}/api/icount/webhook${qs ? `?${qs}` : ''}`;
 }
 
+/**
+ * Inventory module is not exposed on this iCount account (all inventory/* methods fail).
+ * Local pricelist.stock_qty is the source of truth until the module is enabled.
+ */
+export async function listInventoryItems() {
+  const err = new Error('מודול המלאי ב-iCount לא זמין בחשבון זה');
+  err.code = 'inventory_unavailable';
+  throw err;
+}
+
+export async function updateInventoryQty() {
+  const err = new Error('מודול המלאי ב-iCount לא זמין בחשבון זה');
+  err.code = 'inventory_unavailable';
+  throw err;
+}
+
 export const icount = {
   isConfigured,
   ping,
@@ -472,6 +488,8 @@ export const icount = {
   getDoc,
   getDocInfo,
   cancelDoc,
+  listInventoryItems,
+  updateInventoryQty,
   buildPaymentUrl,
   resolvePayPageUrl,
   buildIpnUrl,

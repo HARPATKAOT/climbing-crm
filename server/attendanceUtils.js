@@ -29,7 +29,19 @@ export function dateToWeekday(dateStr) {
 
 export function normalizeAttStatus(status) {
   if (status === 'present' || status === 'late') return 'attended';
-  const known = ['pending', 'attended', 'absent', 'intro_attended', 'intro_absent'];
+  if (status === 'alternate' || status === 'makeup_attended' || status === 'arrived_makeup') return 'makeup';
+  if (status === 'חג' || status === 'holiday_day') return 'holiday';
+  const known = [
+    'pending',
+    'attended',
+    'absent',
+    'makeup',
+    'holiday',
+    'cancelled',
+    'saturday_makeup',
+    'intro_attended',
+    'intro_absent',
+  ];
   if (known.includes(status)) return status;
   return 'pending';
 }

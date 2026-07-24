@@ -27,6 +27,12 @@ test('staff can operate leads and attendance but cannot access billing or settin
   assert.equal(isStaffRequestAllowed('GET', '/api/pos/passes'), true);
   assert.equal(isStaffRequestAllowed('POST', '/api/pos/passes/abc/punch'), true);
   assert.equal(isStaffRequestAllowed('GET', '/api/pricelist'), true);
+  assert.equal(isStaffRequestAllowed('GET', '/api/cash-register'), true);
+  assert.equal(isStaffRequestAllowed('POST', '/api/cash-register'), true);
+  assert.equal(isStaffRequestAllowed('GET', '/api/pos/sales'), true);
+  assert.equal(isStaffRequestAllowed('GET', '/api/pos/reports'), false);
+  assert.equal(isStaffRequestAllowed('POST', '/api/pos/sync-inventory'), false);
+  assert.equal(isStaffRequestAllowed('GET', '/api/icount/docs'), false);
 });
 
 test('roles resolve from metadata and configured email lists', () => {

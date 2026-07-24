@@ -1,9 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { Search, LogIn, CheckCircle2, ShieldAlert, ShieldCheck, Flame, RefreshCw, QrCode } from 'lucide-react';
 
+function pickBestPunchCard(passes) {
+  const usable = (passes || []).filter(
+    (p) => p.pass_type === 'punch_card' && Number(p.visits_remaining) > 0
+  );
+  if (!usable.length) return null;
+  return [...usable].sort((a, b) => {
+    const au = a.valid_until || '9999-12-31';
+    const bu = b.valid_until || '9999-12-31';
+    if (au !== bu) return au.localeCompare(bu);
+    return Number(a.visits_remaining) - Number(b.visits_remaining);
+  })[0];
+}
+
 export default function CheckInConsole({ students, groups }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClimber, setSelectedClimber] = useState(null);
+  const [selectedPasses, setSelectedPasses] = useState([]);
   const [checkIns, setCheckIns] = useState([]);
   const [declarations, setDeclarations] = useState([]);
   const [successMsg, setSuccessMsg] = useState(null);
@@ -24,6 +38,20 @@ export default function CheckInConsole({ students, groups }) {
     refreshCheckins();
   }, []);
 
+  const loadPasses = async (climberId) => {
+    if (!climberId) {
+      setSelectedPasses([]);
+      return;
+    }
+    try {
+      const passes = await fetch(`/api/pos/passes?studentId=${encodeURIComponent(climberId)}&active=1`)
+        .then((r) => (r.ok ? r.json() : []));
+      setSelectedPasses(Array.isArray(passes) ? passes : []);
+    } catch {
+      setSelectedPasses([]);
+    }
+  };
+
   const suggestions = searchQuery.trim()
     ? students
         .filter(s => s.name.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -33,7 +61,11 @@ export default function CheckInConsole({ students, groups }) {
   const handleSelect = (climber) => {
     setSelectedClimber(climber);
     setSearchQuery('');
+    loadPasses(climber.id);
   };
+
+  const bestPunch = pickBestPunchCard(selectedPasses);
+  const membership = (selectedPasses || []).find((p) => p.pass_type === 'time_membership');
 
   const handleCheckIn = async (climber) => {
     if (!climber) return;
@@ -64,10 +96,8 @@ export default function CheckInConsole({ students, groups }) {
         try {
           const passes = await fetch(`/api/pos/passes?studentId=${encodeURIComponent(climber.id)}&active=1`)
             .then((r) => (r.ok ? r.json() : []));
-          const punchCard = (Array.isArray(passes) ? passes : []).find(
-            (p) => p.pass_type === 'punch_card' && Number(p.visits_remaining) > 0
-          );
-          const membership = (Array.isArray(passes) ? passes : []).find(
+          const punchCard = pickBestPunchCard(passes);
+          const activeMembership = (Array.isArray(passes) ? passes : []).find(
             (p) => p.pass_type === 'time_membership'
           );
           if (punchCard) {
@@ -80,7 +110,7 @@ export default function CheckInConsole({ students, groups }) {
             if (punchRes.ok) {
               punchNote = ` · נשארו ${punchData.pass?.visits_remaining} כניסות`;
             }
-          } else if (membership) {
+          } else if (activeMembership) {
             punchNote = ' · מנוי בתוקף';
           }
         } catch (e) {
@@ -89,6 +119,7 @@ export default function CheckInConsole({ students, groups }) {
 
         setSuccessMsg(`✓ כניסה אושרה: ${climber.name}!${punchNote}`);
         setSelectedClimber(null);
+        setSelectedPasses([]);
         refreshCheckins();
         
         // Voice greeting simulation using HTML5 Web Speech API!
@@ -99,232 +130,205 @@ export default function CheckInConsole({ students, groups }) {
             utterance.rate = 1.0;
             window.speechSynthesis.speak(utterance);
           }
-        } catch (e) {
-          console.warn('Speech synthesis not supported or blocked:', e);
-        }
-
+        } catch (_) { /* ignore */ }
+        
         setTimeout(() => setSuccessMsg(null), 4000);
       }
     } catch (err) {
       console.error(err);
+      alert('שגיאה ברישום כניסה');
     }
   };
 
-  const handleSimulateQRScan = () => {
-    setScanning(true);
-    setTimeout(() => {
-      setScanning(false);
-      // Pick a random registered student
-      const registered = students.filter(s => s.status === 'registered');
-      if (registered.length > 0) {
-        const randStudent = registered[Math.floor(Math.random() * registered.length)];
-        handleCheckIn(randStudent);
-      }
-    }, 1500);
-  };
+  // Get today's check-ins
+  const today = new Date().toDateString();
+  const todayCheckIns = checkIns.filter(c => new Date(c.timestamp).toDateString() === today);
 
   return (
-    <div className="fade-in" style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 20, alignItems: 'flex-start' }}>
-      
-      {/* Right Column: Entrance Checkin Console */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        
-        {/* Quick check-in card */}
-        <div className="card card-p" style={{ 
-          background: '#0D1117', 
-          borderColor: 'var(--border)', 
-          minHeight: 340, 
-          display: 'flex', 
-          flexDirection: 'column',
-          position: 'relative'
-        }}>
-          <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 12, display: 'flex', justifyContent: 'space-between' }}>
+    <div className="fade-in" style={{ maxWidth: 900, margin: '0 auto' }}>
+      {successMsg && (
+        <div className="alert alert-success" style={{ marginBottom: 20, fontSize: 18, justify: 'flex', alignItems: 'center', gap: 10 }}>
+          <CheckCircle2 size={24} /> {successMsg}
+        </div>
+      )}
+
+      <div className="grid-2" style={{ alignItems: 'start', gap: 24 }}>
+        {/* Search / Scan Panel */}
+        <div className="card card-p">
+          <div className="section-title" style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between' }}>
             <span>🚪 מסוף צ׳ק-אין כניסה</span>
-            <button className="btn btn-ghost btn-xs" onClick={refreshCheckins}>
-              <RefreshCw size={12} /> רענן
-            </button>
+            <button className="btn btn-ghost btn-sm" onClick={refreshCheckins}><RefreshCw size={14} /></button>
           </div>
 
-          {successMsg && (
-            <div className="alert alert-success slide-up" style={{ 
-              position: 'absolute', top: 12, left: 12, right: 12, zIndex: 10,
-              boxShadow: '0 4px 15px rgba(16,185,129,0.3)'
-            }}>
-              <CheckCircle2 size={16} style={{ flexShrink: 0 }} />
-              <strong style={{ fontSize: 13 }}>{successMsg}</strong>
+          <div className="form-group" style={{ position: 'relative' }}>
+            <label className="form-label">חיפוש מתאמן לפי שם</label>
+            <div className="input-icon-wrap">
+              <Search size={16} className="input-icon" />
+              <input 
+                className="input" 
+                placeholder="הקלד שם..." 
+                style={{ paddingRight: 36, fontSize: 18, height: 50 }}
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                autoFocus
+              />
             </div>
-          )}
-
-          {/* Search Climber */}
-          <div style={{ position: 'relative', marginBottom: 16 }}>
-            <Search size={16} style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-3)' }} />
-            <input
-              className="input input-lg"
-              style={{ paddingRight: 38, background: '#111827' }}
-              placeholder="חפש שם מטפס לכניסה..."
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-            />
-
+            
             {suggestions.length > 0 && (
-              <div className="dropdown-menu" style={{ 
-                position: 'absolute', top: '100%', left: 0, right: 0, 
-                background: '#1F2937', borderRadius: 8, border: '1px solid var(--border)',
-                marginTop: 4, zIndex: 100, boxShadow: '0 10px 25px rgba(0,0,0,0.5)'
+              <div style={{
+                position: 'absolute', top: '100%', right: 0, left: 0, zIndex: 50,
+                background: 'var(--bg-card)', border: '1px solid var(--border)',
+                borderRadius: 8, marginTop: 4, boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+                overflow: 'hidden'
               }}>
                 {suggestions.map(s => (
                   <div 
                     key={s.id} 
-                    className="dropdown-item" 
-                    style={{ padding: '10px 14px', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.03)' }}
                     onClick={() => handleSelect(s)}
+                    style={{ padding: '12px 16px', cursor: 'pointer', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between' }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-2)'}
+                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                   >
-                    <div style={{ fontWeight: 'bold', fontSize: 13 }}>{s.name}</div>
-                    <div style={{ fontSize: 10, color: 'var(--text-3)' }}>סטטוס: {s.status === 'registered' ? 'רשום בחוג' : 'ליד'}</div>
+                    <span style={{ fontWeight: 600 }}>{s.name}</span>
+                    <span style={{ color: 'var(--text-3)', fontSize: 13 }}>{groups.find(g => g.id === s.groupId)?.name || ''}</span>
                   </div>
                 ))}
               </div>
             )}
           </div>
 
-          {/* Selected Climber Screen */}
-          {selectedClimber ? (
-            <div className="fade-in" style={{ 
-              background: '#111827', padding: 16, borderRadius: 8, border: '1px solid var(--border)',
-              display: 'flex', flexDirection: 'column', gap: 12, flex: 1 
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <div style={{ fontSize: 18, fontWeight: 900 }}>{selectedClimber.name}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
-                    קבוצה: {groups.find(g => g.id === selectedClimber.groupId)?.name || 'טיפוס חופשי'}
-                  </div>
-                </div>
-                {selectedClimber.levelGrade && (
-                  <span style={{ fontSize: 18, fontWeight: 900, color: '#A5B4FC' }}>
-                    {selectedClimber.levelGrade}
-                  </span>
-                )}
+          <div style={{ textAlign: 'center', margin: '20px 0', color: 'var(--text-3)' }}>— או —</div>
+          
+          <button 
+            className={`btn ${scanning ? 'btn-primary' : 'btn-ghost'} btn-full`} 
+            style={{ height: 60, fontSize: 16, gap: 10 }}
+            onClick={() => {
+              setScanning(!scanning);
+              // Simulate a scan after 2 seconds for demo
+              if (!scanning) {
+                setTimeout(() => {
+                  const randStudent = students[Math.floor(Math.random() * students.length)];
+                  if (randStudent) {
+                    handleCheckIn(randStudent);
+                    setScanning(false);
+                  }
+                }, 1500);
+              }
+            }}
+          >
+            <QrCode size={24} /> {scanning ? 'סורק... הצג ברקוד' : 'סריקת ברקוד / כרטיס'}
+          </button>
+        </div>
+
+        {/* Selected Climber Preview */}
+        <div className="card card-p" style={{ minHeight: 300, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
+          {!selectedClimber ? (
+            <div style={{ textAlign: 'center', color: 'var(--text-3)' }}>
+              <LogIn size={48} style={{ opacity: 0.3, marginBottom: 16 }} />
+              <div>בחר מתאמן כדי לאשר כניסה</div>
+            </div>
+          ) : (
+            <div style={{ width: '100%', textAlign: 'center' }}>
+              <div style={{
+                width: 80, height: 80, borderRadius: '50%', background: 'var(--accent)',
+                color: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 32, fontWeight: 800, margin: '0 auto 16px'
+              }}>
+                {selectedClimber.name.charAt(0)}
+              </div>
+              <h2 style={{ margin: '0 0 8px', fontSize: 28 }}>{selectedClimber.name}</h2>
+              <div style={{ color: 'var(--text-2)', marginBottom: 12 }}>
+                {groups.find(g => g.id === selectedClimber.groupId)?.name || 'טיפוס חופשי'}
               </div>
 
-              {/* Security/Medical Check */}
-              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-                {selectedClimber.status === 'registered' ? (
-                  <span className="badge badge-green" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <ShieldCheck size={11} /> הצהרה חתומה
-                  </span>
+              <div style={{
+                marginBottom: 20,
+                padding: '10px 12px',
+                borderRadius: 10,
+                background: 'var(--bg-2)',
+                border: '1px solid var(--border)',
+                textAlign: 'right',
+                fontSize: 13,
+              }}>
+                {bestPunch ? (
+                  <div>
+                    כרטיסייה: <strong>{bestPunch.name}</strong>
+                    <div style={{ color: 'var(--text-3)', marginTop: 4 }}>
+                      נשארו {bestPunch.visits_remaining} מתוך {bestPunch.visits_total}
+                      {bestPunch.valid_until ? ` · עד ${bestPunch.valid_until}` : ''}
+                    </div>
+                  </div>
+                ) : membership ? (
+                  <div>
+                    מנוי: <strong>{membership.name}</strong>
+                    {membership.valid_until ? (
+                      <div style={{ color: 'var(--text-3)', marginTop: 4 }}>עד {membership.valid_until}</div>
+                    ) : null}
+                  </div>
                 ) : (
-                  <span className="badge badge-red" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <ShieldAlert size={11} /> חסרה הצהרה
-                  </span>
+                  <div style={{ color: 'var(--text-3)' }}>אין כרטיסייה או מנוי פעיל במערכת</div>
+                )}
+              </div>
+              
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginBottom: 24 }}>
+                {(declarations.some(d => d.studentName === selectedClimber.name && d.signed) || selectedClimber.status === 'registered') ? (
+                  <span className="badge badge-green" style={{ fontSize: 14, padding: '6px 12px' }}><ShieldCheck size={14} /> הצהרת בריאות בתוקף</span>
+                ) : (
+                  <span className="badge badge-red" style={{ fontSize: 14, padding: '6px 12px' }}><ShieldAlert size={14} /> חסרה הצהרה!</span>
                 )}
               </div>
 
               <button 
-                className="btn btn-primary btn-full btn-lg" 
-                style={{ marginTop: 'auto', paddingBlock: 12, fontSize: 14 }}
+                className="btn btn-primary btn-full" 
+                style={{ height: 60, fontSize: 20, fontWeight: 700 }}
                 onClick={() => handleCheckIn(selectedClimber)}
               >
-                <LogIn size={16} /> אשר כניסה (Check-In)
+                אישור כניסה
+              </button>
+              <button className="btn btn-ghost btn-full" style={{ marginTop: 8 }} onClick={() => { setSelectedClimber(null); setSelectedPasses([]); }}>
+                ביטול
               </button>
             </div>
-          ) : (
-            <div style={{ 
-              flex: 1, display: 'flex', flexDirection: 'column', 
-              justifyContent: 'center', alignItems: 'center', 
-              color: 'var(--text-3)', gap: 12, padding: 20,
-              background: 'rgba(255,255,255,0.01)', borderRadius: 8, border: '1px dashed var(--border)'
-            }}>
-              <div style={{ fontSize: 40 }}>🧗</div>
-              <div style={{ fontSize: 13, fontWeight: 'bold' }}>ממתין לבחירת מטפס</div>
-              <div style={{ fontSize: 11, textAlign: 'center' }}>הקלד שם בחיפוש למעלה או הדמה סריקת כרטיס חבר לקיר</div>
-            </div>
           )}
-
         </div>
-
-        {/* QR Scanner Simulator */}
-        <div className="card card-p" style={{ 
-          background: 'linear-gradient(135deg, rgba(99,102,241,0.05) 0%, rgba(168,85,247,0.05) 100%)', 
-          borderColor: 'rgba(99,102,241,0.2)' 
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <QrCode size={24} style={{ color: '#A5B4FC' }} />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 14, fontWeight: 'bold' }}>סימולטור סורק כרטיסי חבר QR</div>
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>סרוק כרטיס דיגיטלי להרשמת כניסה מהירה של מטפס אקראי</div>
-            </div>
-            <button 
-              className={`btn btn-sm ${scanning ? 'btn-ghost' : 'btn-primary'}`} 
-              disabled={scanning}
-              onClick={handleSimulateQRScan}
-            >
-              {scanning ? '⚡ סורק...' : 'סרוק כרטיס QR'}
-            </button>
-          </div>
-        </div>
-
       </div>
 
-      {/* Left Column: Live capacity & checked in list */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        
-        {/* Capacity Widget */}
-        <div className="card card-p" style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-          <div style={{ 
-            width: 56, height: 56, borderRadius: '50%', 
-            background: 'rgba(16,185,129,0.1)', color: '#10B981',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 22, fontWeight: 'bold'
-          }}>
-            {checkIns.length}
-          </div>
-          <div>
-            <div style={{ fontSize: 13, color: 'var(--text-3)' }}>מטפסים בפועל בקיר כרגע</div>
-            <div style={{ fontSize: 18, fontWeight: 900, marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>תפוסת מתחם: {Math.round(checkIns.length / 50 * 100)}%</span>
-              <Flame size={14} style={{ color: '#FCD34D' }} />
-            </div>
-          </div>
+      {/* Today's Log */}
+      <div className="card" style={{ marginTop: 24 }}>
+        <div className="section-title" style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between' }}>
+          <span>יומן כניסות להיום ({todayCheckIns.length})</span>
         </div>
-
-        {/* Checked-in climbers feed */}
-        <div className="card card-p" style={{ flex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 'bold', marginBottom: 12 }}>רשימת נכנסים היום</div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 310, overflowY: 'auto' }}>
-            {checkIns.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: 30, fontSize: 11, color: 'var(--text-3)' }}>
-                טרם בוצעו כניסות היום
-              </div>
-            ) : (
-              checkIns
-                .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
-                .map((ch, i) => (
-                  <div key={i} style={{ 
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                    padding: 8, background: '#111827', borderRadius: 6, border: '1px solid var(--border)'
-                  }}>
-                    <div>
-                      <div style={{ fontWeight: 'bold', fontSize: 12 }}>{ch.climber_name}</div>
-                      <div style={{ fontSize: 9, color: 'var(--text-3)' }}>{ch.group_name}</div>
-                    </div>
-                    <div style={{ textAlign: 'left' }}>
-                      <div style={{ fontSize: 10, color: 'var(--text-2)' }}>
-                        {new Date(ch.timestamp).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}
-                      </div>
-                      <span className={`badge ${ch.medical_approved ? 'badge-green' : 'badge-red'}`} style={{ fontSize: 8, padding: '1px 4px', marginTop: 2 }}>
-                        {ch.medical_approved ? 'מאושר רפואית' : 'חסר הצהרה'}
-                      </span>
-                    </div>
-                  </div>
-                ))
-            )}
-          </div>
+        <div className="table-wrap">
+          <table className="crm-table">
+            <thead>
+              <tr>
+                <th>שעה</th>
+                <th>שם</th>
+                <th>קבוצה</th>
+                <th>סטטוס רפואי</th>
+              </tr>
+            </thead>
+            <tbody>
+              {todayCheckIns.length === 0 && (
+                <tr><td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 24 }}>אין כניסות עדיין היום</td></tr>
+              )}
+              {[...todayCheckIns].reverse().map((c, i) => (
+                <tr key={c.id || i}>
+                  <td style={{ fontFamily: 'monospace' }}>{new Date(c.timestamp).toLocaleTimeString('he-IL', {hour: '2-digit', minute:'2-digit'})}</td>
+                  <td style={{ fontWeight: 600 }}>{c.climber_name}</td>
+                  <td>{c.group_name}</td>
+                  <td>
+                    {c.medical_approved 
+                      ? <span className="badge badge-green"><ShieldCheck size={12} /> תקין</span>
+                      : <span className="badge badge-amber"><Flame size={12} /> ללא הצהרה</span>
+                    }
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-
       </div>
-
     </div>
   );
 }

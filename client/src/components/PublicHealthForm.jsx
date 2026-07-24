@@ -1,7 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { PenTool, CheckCircle, ArrowLeft, Download } from 'lucide-react';
 import { useSearchParams, useParams } from 'react-router-dom';
-import { downloadHealthDeclarationPdf } from '../utils/healthDeclarationPdf.js';
+import {
+  blobToBase64,
+  buildHealthDeclarationPdf,
+  downloadHealthDeclarationPdf,
+} from '../utils/healthDeclarationPdf.js';
 
 const FALLBACK_WAIVER = `כתב ויתור והסרת אחריות — קיר הטיפוס My Wall
 
@@ -120,6 +124,77 @@ export default function PublicHealthForm() {
     }
   }, [searchParams]);
 
+  useEffect(() => {
+    const phone = searchParams.get('phone') || '';
+    const studentId = searchParams.get('studentId') || '';
+    const parentId = searchParams.get('parentId') || '';
+    if (!phone && !studentId && !parentId) return;
+
+    let cancelled = false;
+    const params = new URLSearchParams();
+    if (studentId) params.set('studentId', studentId);
+    if (phone) params.set('phone', phone);
+    if (parentId) params.set('parentId', parentId);
+    const qs = params.toString();
+
+    const trimStr = (value) => String(value || '').trim();
+
+    const applyPrefill = (parent, student) => {
+      if (cancelled || (!parent && !student)) return;
+      const parentName = trimStr(parent?.name);
+      const climberName = trimStr(student?.name);
+      const samePerson = parentName
+        && climberName
+        && parentName.toLowerCase() === climberName.toLowerCase();
+      setFormData((prev) => ({
+        ...prev,
+        parentName: parentName || prev.parentName,
+        parentIdNum: trimStr(parent?.idNumber) || prev.parentIdNum,
+        phone: trimStr(parent?.phone) || prev.phone || phone,
+        climberName: climberName || prev.climberName,
+        climberIdNum: trimStr(student?.idNumber) || prev.climberIdNum,
+        birthDate: trimStr(student?.birthDate) || prev.birthDate,
+        studentId: student?.id || prev.studentId || studentId,
+      }));
+      if (samePerson) setIsAdult(true);
+    };
+
+    async function loadPrefill() {
+      // Prefer dedicated health-context; fall back to onboard-context (already live).
+      try {
+        const res = await fetch(`/api/public/health-context?${qs}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.parent || data?.student) {
+            applyPrefill(data.parent, data.student);
+            return;
+          }
+        }
+      } catch {
+        // continue to fallback
+      }
+
+      try {
+        const res = await fetch(`/api/public/onboard-context?${qs}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const students = Array.isArray(data?.students) ? data.students : [];
+        let student = null;
+        if (studentId) {
+          student = students.find((s) => s.id === studentId) || null;
+        } else if (students.length === 1) {
+          student = students[0];
+        }
+        applyPrefill(data?.parent || null, student);
+      } catch {
+        // silent — form stays blank for manual fill
+      }
+    }
+
+    loadPrefill();
+    return () => { cancelled = true; };
+  }, [searchParams]);
+
   const healthQuestions = (template?.healthQuestions?.length
     ? template.healthQuestions
     : FALLBACK_QUESTIONS);
@@ -224,7 +299,7 @@ export default function PublicHealthForm() {
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
-          setSavedDecl({
+          const saved = {
             ...(data.record || {}),
             parentName: payload.parentName,
             parentIdNum: payload.parentIdNum,
@@ -241,8 +316,24 @@ export default function PublicHealthForm() {
             signedDate: data.record?.signedDate || data.record?.date || new Date().toISOString().split('T')[0],
             templateSlug: payload.templateSlug,
             title: template?.title || 'הצהרת בריאות + הסרת אחריות',
-          });
+          };
+          setSavedDecl(saved);
           setIsSuccess(true);
+
+          // Store signed PDF in the climber's personal file (same as onboard flow)
+          if (data.record?.id) {
+            try {
+              const { blob, fileName } = await buildHealthDeclarationPdf(saved);
+              const pdfBase64 = await blobToBase64(blob);
+              await fetch(`/api/public/onboard/${encodeURIComponent(data.record.id)}/pdf`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pdfBase64, fileName }),
+              });
+            } catch (err) {
+              console.error('health PDF upload failed', err);
+            }
+          }
         } else {
           setError(data.error || 'שגיאה בשמירת ההצהרה');
         }

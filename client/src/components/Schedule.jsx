@@ -10,8 +10,10 @@ import {
   normalizeAttStatus,
   isAttPresent,
   isAttPending,
+  isAttAbsent,
   attStatusMeta,
 } from '../scheduleUtils.js';
+import { StatusPill } from './AttendanceCalendar.jsx';
 
 async function ensureAttendance({ date, groupId } = {}) {
   const res = await fetch('/api/attendance/ensure', {
@@ -331,7 +333,7 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
           if (s === 'intro_attended' || s === 'intro_absent') byDate[r.date].intro++;
           if (s === 'pending') byDate[r.date].pending++;
           else if (isAttPresent(r.status)) byDate[r.date].present++;
-          else byDate[r.date].absent++;
+          else if (isAttAbsent(r.status)) byDate[r.date].absent++;
         });
         setHistory(Object.values(byDate).sort((a, b) => b.date.localeCompare(a.date)));
       })
@@ -365,8 +367,12 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
 
   const markOptionsFor = (s) => {
     const isIntro = s.status === 'intro_scheduled' || s.status === 'intro_paid';
-    if (isIntro) return ATT_STATUS.filter(o => o.key !== 'pending');
-    return ATT_STATUS.filter(o => ATT_MARK_KEYS.includes(o.key) || o.key === 'pending');
+    if (isIntro) {
+      return ATT_STATUS.filter((o) =>
+        ['intro_attended', 'intro_absent', 'attended', 'absent'].includes(o.key)
+      );
+    }
+    return ATT_STATUS.filter((o) => ATT_MARK_KEYS.includes(o.key));
   };
 
   return (
@@ -440,17 +446,18 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
                           {parent?.phone ? ` · ${parent.phone}` : ''}
                         </div>
                         <div style={{ fontSize: 11, color: meta.color, marginTop: 3, fontWeight: 600 }}>
-                          {meta.label}
-                          {savingId === s.id && ' · שומר...'}
+                          <StatusPill meta={meta} />
+                          {savingId === s.id && <span style={{ marginRight: 6, color: 'var(--text-3)' }}>שומר...</span>}
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                        {markOptionsFor(s).filter(o => o.key !== 'pending').map(opt => (
+                        {markOptionsFor(s).map(opt => (
                           <button
                             key={opt.key}
                             type="button"
                             className="btn btn-xs"
                             disabled={savingId === s.id}
+                            title={opt.label}
                             style={{
                               background: currentStatus === opt.key ? opt.color : 'rgba(255,255,255,0.03)',
                               color: currentStatus === opt.key ? 'white' : 'var(--text-3)',
@@ -459,7 +466,7 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
                             }}
                             onClick={() => markStatus(s.id, opt.key)}
                           >
-                            {opt.label}
+                            {opt.shortLabel || opt.label}
                           </button>
                         ))}
                       </div>
@@ -706,24 +713,26 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                     }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                         <div style={{ fontWeight: 700, fontSize: 13 }}>{s.name}</div>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: meta.color }}>{meta.label}</span>
+                        <StatusPill meta={meta} />
                       </div>
-                      <div style={{ display: 'flex', gap: 6 }}>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         {ATT_STATUS.filter(o => ATT_MARK_KEYS.includes(o.key)).map(opt => (
                           <button
                             key={opt.key}
                             type="button"
                             className="btn btn-sm"
                             disabled={attSavingId === s.id}
+                            title={opt.label}
                             style={{
                               flex: 1,
+                              minWidth: 72,
                               background: status === opt.key ? opt.color : 'rgba(255,255,255,0.04)',
                               color: status === opt.key ? 'white' : 'var(--text-2)',
                               fontWeight: status === opt.key ? 700 : 500,
                             }}
                             onClick={() => markFromPanel(s.id, opt.key)}
                           >
-                            {opt.label}
+                            {opt.shortLabel || opt.label}
                           </button>
                         ))}
                       </div>
@@ -870,7 +879,7 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
   const [attendanceGroup, setAttendanceGroup]  = useState(null);
   const [attendanceDate,  setAttendanceDate]   = useState(localDateStr());
   const [dayMarks,        setDayMarks]         = useState({}); // groupId -> { marked, present, total }
-  const [viewMode,        setViewMode]         = useState('attendance');
+  const [viewMode,        setViewMode]         = useState('week');
   const [employees,       setEmployees]        = useState([]);
 
   // Fetch employees list dynamically for trainers dropdown
@@ -903,7 +912,7 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
           const s = normalizeAttStatus(row.status);
           if (s === 'pending') byGroup[row.group_id].pending++;
           else if (isAttPresent(row.status)) byGroup[row.group_id].present++;
-          else byGroup[row.group_id].absent++;
+          else if (isAttAbsent(row.status)) byGroup[row.group_id].absent++;
         });
         setDayMarks(byGroup);
       } catch {
@@ -1159,7 +1168,7 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
                           )}
                           <span style={{ color: '#34D399' }}>הגיע {marks.present}</span>
                           {marks.absent > 0 && (
-                            <span style={{ color: '#FCA5A5' }}>נעדר {marks.absent}</span>
+                            <span style={{ color: '#FCA5A5' }}>לא הגיע {marks.absent}</span>
                           )}
                         </span>
                       ) : (

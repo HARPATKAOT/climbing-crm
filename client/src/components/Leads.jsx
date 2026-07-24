@@ -1,8 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Calendar, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, MessageCircle, Bell, FileCheck2, ExternalLink, Download, ReceiptText, History, Ticket } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, Users, Ticket } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
-import { downloadHealthDeclarationPdf } from '../utils/healthDeclarationPdf.js';
+import {
+  blobToBase64,
+  buildHealthDeclarationPdf,
+  downloadHealthDeclarationPdf,
+} from '../utils/healthDeclarationPdf.js';
 import ConversationPanel from './ConversationPanel.jsx';
 import AttendanceCalendar from './AttendanceCalendar.jsx';
 
@@ -23,6 +27,47 @@ const phoneTailMatch = (a, b) => {
 
 function isParentOnlyLead(student) {
   return !!student?._parentOnly || String(student?.id || '').startsWith('parent:');
+}
+
+/** WhatsApp copy for health declaration — always addressed to the parent. */
+function buildHealthWhatsAppText(parentName, studentName, link) {
+  const p = String(parentName || '').trim();
+  const s = String(studentName || '').trim();
+  // Blank line before URL helps WhatsApp detect a clickable link.
+  if (s && p && s.toLowerCase() !== p.toLowerCase()) {
+    return `שלום ${p}, מצורף קישור להצהרת בריאות עבור ${s}:\n\n${link}`;
+  }
+  return `שלום ${p || ''}, בבקשה מלאו את הצהרת הבריאות והסרת האחריות:\n\n${link}`;
+}
+
+function isLocalOrigin(origin) {
+  try {
+    const host = new URL(String(origin || '')).hostname;
+    return host === 'localhost' || host === '127.0.0.1';
+  } catch {
+    return true;
+  }
+}
+
+/** Prefer public site for WhatsApp share links (localhost is not clickable on phones). */
+const PUBLIC_APP_FALLBACK = 'https://client-omega-topaz-35.vercel.app';
+
+function publicShareOrigin() {
+  const env = String(import.meta.env.VITE_PUBLIC_APP_URL || '').trim().replace(/\/$/, '');
+  if (env && !isLocalOrigin(env)) return env;
+  if (!isLocalOrigin(window.location.origin)) return window.location.origin;
+  return PUBLIC_APP_FALLBACK;
+}
+
+function buildShareHealthLink(studentId, phone, healthPath = '/health') {
+  const params = new URLSearchParams();
+  if (studentId && !String(studentId).startsWith('parent:')) {
+    params.set('studentId', studentId);
+  } else if (phone) {
+    params.set('phone', phone);
+  }
+  const qs = params.toString();
+  return `${publicShareOrigin()}${healthPath}${qs ? `?${qs}` : ''}`;
 }
 
 /** Students + parent-only contacts (no child record required). */
@@ -59,6 +104,62 @@ function buildLeadEntries(students, parents) {
   return entries;
 }
 
+/** Group lead rows by parent (and merge same-phone duplicate parent cards). */
+function buildFamilyRows(students, parents) {
+  const parentById = new Map((parents || []).map((p) => [p.id, p]));
+  const groups = new Map();
+
+  for (const student of students || []) {
+    const parent = parentById.get(student.parentId) || null;
+    const phoneKey = normPhone(parent?.phone) || '';
+    const groupKey = phoneKey
+      ? `phone:${phoneKey}`
+      : (parent?.id ? `parent:${parent.id}` : `student:${student.id}`);
+
+    let row = groups.get(groupKey);
+    if (!row) {
+      row = {
+        key: groupKey,
+        parent,
+        students: [],
+      };
+      groups.set(groupKey, row);
+    } else if (!row.parent && parent) {
+      row.parent = parent;
+    } else if (parent && row.parent && scoreParentForDisplay(parent) > scoreParentForDisplay(row.parent)) {
+      row.parent = parent;
+    }
+    row.students.push(student);
+  }
+
+  return [...groups.values()].map((row) => {
+    const sorted = [...row.students].sort((a, b) => {
+      const da = a.created_at || a.created || '';
+      const db = b.created_at || b.created || '';
+      return String(da).localeCompare(String(db));
+    });
+    const statuses = [...new Set(sorted.map((s) => s.status).filter(Boolean))];
+    const created = sorted.map((s) => s.created || (s.created_at ? String(s.created_at).split('T')[0] : '')).filter(Boolean).sort()[0] || '';
+    return {
+      ...row,
+      students: sorted,
+      primaryStudent: sorted.find((s) => !isParentOnlyLead(s)) || sorted[0],
+      statuses,
+      created,
+    };
+  });
+}
+
+function scoreParentForDisplay(parent) {
+  if (!parent) return 0;
+  let score = 0;
+  if (parent.name && parent.name !== 'לקוח וואטסאפ' && parent.name !== 'ליד מאינסטגרם') score += 4;
+  if (parent.email) score += 2;
+  if (parent.city) score += 1;
+  if (String(parent.phone || '').startsWith('972')) score += 1;
+  return score;
+}
+
 const sourceLabel = (m) => {
   if (m.is_ai || m.source === 'ai') return 'AI';
   if (m.source === 'phone') return 'מהטלפון';
@@ -74,8 +175,66 @@ const TEST_TYPE_COLORS = {
   lead:     { accent: '#34D399', bg: 'rgba(52,211,153,0.10)', border: 'rgba(52,211,153,0.28)' },
 };
 
+/** Collapsible folder row for lead detail panel */
+function FolderRow({ id, title, icon: Icon, summary, open, onToggle, children, summaryColor }) {
+  return (
+    <div style={{
+      border: '1px solid var(--border)',
+      borderRadius: 10,
+      marginBottom: 8,
+      overflow: 'hidden',
+      background: 'rgba(255,255,255,0.02)',
+    }}>
+      <button
+        type="button"
+        onClick={() => onToggle(id)}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '10px 12px',
+          background: open ? 'rgba(255,255,255,0.04)' : 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+          color: 'inherit',
+          textAlign: 'right',
+        }}
+      >
+        {Icon && <Icon size={15} style={{ flexShrink: 0, opacity: 0.85 }} />}
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', flexShrink: 0 }}>{title}</span>
+        <span style={{
+          fontSize: 12,
+          color: summaryColor || 'var(--text-3)',
+          flex: 1,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          textAlign: 'left',
+        }}>
+          {summary}
+        </span>
+        <ChevronDown
+          size={15}
+          style={{
+            flexShrink: 0,
+            opacity: 0.6,
+            transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
+            transition: 'transform 0.15s ease',
+          }}
+        />
+      </button>
+      {open && (
+        <div style={{ padding: '12px 12px 14px', borderTop: '1px solid var(--border)' }}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Lead/Customer Card (detail sidebar) ────────────────────────────────────
-function CustomerCard({ student, parent, group, groups = [], onClose, onStatusChange, onDelete, onUpdateStudent, pricelist, refreshData, canManageBilling = false }) {
+function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, groups = [], onClose, onStatusChange, onDelete, onUpdateStudent, pricelist, refreshData, canManageBilling = false }) {
   if (!student) return null;
   const parentOnly = isParentOnlyLead(student);
   const statusKeys = Object.keys(STATUSES);
@@ -110,32 +269,71 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
   // Health declaration + waiver status for this student
   const [healthDecl, setHealthDecl] = useState(null);
   const [sendingHealth, setSendingHealth] = useState(false);
-  const [sendingOnboard, setSendingOnboard] = useState(false);
   const [healthSendMsg, setHealthSendMsg] = useState('');
+  const [healthSendLink, setHealthSendLink] = useState('');
   const [formTemplates, setFormTemplates] = useState([]);
   const [selectedFormSlug, setSelectedFormSlug] = useState('');
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [clientDocuments, setClientDocuments] = useState([]);
   const [docsLoading, setDocsLoading] = useState(false);
+  const [openFolder, setOpenFolder] = useState(null);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showAddChild, setShowAddChild] = useState(false);
+  const [newChildName, setNewChildName] = useState('');
+  const [sendHealthOnAdd, setSendHealthOnAdd] = useState(true);
+  const [addingChild, setAddingChild] = useState(false);
+  const [addChildError, setAddChildError] = useState('');
+
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('pendingHealthSend');
+      if (!raw) return;
+      const pending = JSON.parse(raw);
+      if (pending?.studentId && pending.studentId === student.id) {
+        setHealthSendMsg(pending.msg || '');
+        setHealthSendLink(pending.link || '');
+        setOpenFolder('health');
+        sessionStorage.removeItem('pendingHealthSend');
+      }
+    } catch { /* ignore */ }
+  }, [student.id]);
+
+  const toggleFolder = (id) => setOpenFolder((cur) => (cur === id ? null : id));
+
   useEffect(() => {
     fetch('/api/health-declarations')
       .then(res => res.ok ? res.json() : [])
       .then(decls => {
         const phoneKey = normPhone(parent?.phone);
+        const studentName = String(student.name || '').trim();
+        const studentFirst = studentName.split(/\s+/)[0] || '';
         const match = (decls || []).find(d => {
           if (d.studentId && d.studentId === student.id) return true;
-          if (phoneKey && normPhone(d.phone) === phoneKey) {
-            const climber = d.climberName || d.studentName || '';
-            if (!climber || climber === student.name || student.name?.includes(climber.split(' ')[0])) return true;
+          const climber = String(d.climberName || d.studentName || '').trim();
+          const climberFirst = climber.split(/\s+/)[0] || '';
+          if (phoneKey && phoneTailMatch(d.phone, parent?.phone)) {
+            if (!climber || climber === studentName || (studentFirst && climberFirst === studentFirst)) return true;
           }
-          if (d.climberName && d.climberName === student.name) return true;
-          if (d.studentName && d.studentName === student.name) return true;
+          if (climber && climber === studentName) return true;
           return false;
         });
         setHealthDecl(match || null);
+        // Keep list/card in sync when declaration exists but student cache is stale
+        if (match && onUpdateStudent && !student.healthSignedAt) {
+          onUpdateStudent(student.id, {
+            healthSignedAt: match.signedDate || match.date || new Date().toISOString(),
+            waiverSignedAt: match.signedDate || match.date || new Date().toISOString(),
+          });
+        }
       })
       .catch(() => setHealthDecl(null));
-  }, [student.id, student.name, student.status, parent?.phone]);
+  }, [student.id, student.name, student.status, student.healthSignedAt, parent?.phone, onUpdateStudent]);
 
   useEffect(() => {
     fetch('/api/form-templates')
@@ -155,14 +353,12 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
   const healthPath = selectedTemplate && !selectedTemplate.isDefault
     ? `/health/${selectedTemplate.slug}`
     : '/health';
-  const healthFormUrl = `${window.location.origin}${healthPath}?studentId=${encodeURIComponent(student.id)}${parent?.phone ? `&phone=${encodeURIComponent(parent.phone)}` : ''}`;
-  const onboardParams = new URLSearchParams();
-  if (parent?.id) onboardParams.set('parentId', parent.id);
-  onboardParams.set('studentId', student.id);
-  if (parent?.phone) onboardParams.set('phone', parent.phone);
-  const onboardUrl = `${window.location.origin}/onboard?${onboardParams.toString()}`;
-  // Only treat as signed when we have a real declaration, or explicit health_signed status
+  // WhatsApp-shareable public links (never localhost)
+  const healthShareUrl = buildShareHealthLink(student.id, parent?.phone, healthPath);
+  // Signed if status says so, declaration exists, or durable timestamp was saved on the student
   const isHealthSigned = student.status === 'health_signed'
+    || !!student.healthSignedAt
+    || !!student.waiverSignedAt
     || !!(healthDecl && (healthDecl.signed || healthDecl.status === 'approved' || healthDecl.waiverAccepted));
 
   useEffect(() => {
@@ -186,47 +382,53 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
     return () => { cancelled = true; };
   }, [parentOnly, student.id, isHealthSigned]);
 
-  const handleSendOnboardLink = async () => {
-    if (!parent?.phone) {
-      setHealthSendMsg('אין מספר טלפון לשליחה');
-      return;
-    }
-    setSendingOnboard(true);
-    setHealthSendMsg('');
-    try {
-      const res = await fetch(`/api/leads/${student.id}/send-onboard-link`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ origin: window.location.origin }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (data.onboardUrl) {
-        setHealthSendMsg(data.warning
-          ? `קישור השלמה מוכן (שליחה חלקית): ${data.onboardUrl}`
-          : 'נשלח קישור להשלמת פרטים בוואטסאפ');
-      } else {
-        const text = encodeURIComponent(`שלום ${parent.name || ''}, בבקשה השלימו פרטים, רישום וחתימה:\n${onboardUrl}`);
-        window.open(`https://wa.me/972${parent.phone.replace(/^0/, '').replace(/[-\s]/g, '')}?text=${text}`, '_blank');
-        setHealthSendMsg('נפתח וואטסאפ עם קישור השלמת הפרטים');
+  // Backfill personal-file PDF when a signed declaration exists but no file was stored yet
+  const pdfBackfillRef = useRef(new Set());
+  useEffect(() => {
+    if (parentOnly || !student?.id || !healthDecl?.id || docsLoading) return;
+    if (clientDocuments.some((d) => d.declarationId === healthDecl.id || d.type === 'health_waiver_pdf')) return;
+    if (pdfBackfillRef.current.has(healthDecl.id)) return;
+    pdfBackfillRef.current.add(healthDecl.id);
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const { blob, fileName } = await buildHealthDeclarationPdf(healthDecl);
+        const pdfBase64 = await blobToBase64(blob);
+        const res = await fetch(`/api/public/onboard/${encodeURIComponent(healthDecl.id)}/pdf`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pdfBase64, fileName }),
+        });
+        if (!res.ok || cancelled) {
+          pdfBackfillRef.current.delete(healthDecl.id);
+          return;
+        }
+        const docsRes = await fetch(`/api/students/${encodeURIComponent(student.id)}/documents`);
+        const docs = docsRes.ok ? await docsRes.json() : [];
+        if (!cancelled) setClientDocuments(Array.isArray(docs) ? docs : []);
+      } catch {
+        pdfBackfillRef.current.delete(healthDecl.id);
       }
-    } catch {
-      const text = encodeURIComponent(`שלום ${parent.name || ''}, בבקשה השלימו פרטים, רישום וחתימה:\n${onboardUrl}`);
-      window.open(`https://wa.me/972${parent.phone.replace(/^0/, '').replace(/[-\s]/g, '')}?text=${text}`, '_blank');
-      setHealthSendMsg('נפתח וואטסאפ עם קישור השלמת הפרטים');
-    } finally {
-      setSendingOnboard(false);
-    }
+    })();
+
+    return () => { cancelled = true; };
+  }, [parentOnly, student.id, healthDecl, docsLoading, clientDocuments]);
+
+  const openPersonalWhatsApp = (message) => {
+    const digits = String(parent?.phone || '').replace(/[^\d]/g, '');
+    if (!digits) return;
+    const intl = digits.startsWith('972') ? digits : `972${digits.replace(/^0/, '')}`;
+    window.open(`https://wa.me/${intl}?text=${encodeURIComponent(message)}`, '_blank');
   };
 
-  const handleSendHealthForm = async () => {
-    if (!parent?.phone) {
-      setHealthSendMsg('אין מספר טלפון לשליחה');
-      return;
+  const sendHealthFormForStudent = async (targetStudentId, targetStudentName) => {
+    if (!parent?.phone || !targetStudentId) {
+      return { sent: false, link: '', warning: 'אין מספר טלפון לשליחה' };
     }
-    setSendingHealth(true);
-    setHealthSendMsg('');
+    const fallbackLink = buildShareHealthLink(targetStudentId, parent?.phone, healthPath);
     try {
-      const res = await fetch(`/api/leads/${student.id}/send-health-form`, {
+      const res = await fetch(`/api/leads/${encodeURIComponent(targetStudentId)}/send-health-form`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -235,20 +437,41 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
         }),
       });
       const data = await res.json().catch(() => ({}));
-      if (data.healthUrl) {
-        setHealthSendMsg(data.warning
-          ? `קישור מוכן (שליחה חלקית): ${data.healthUrl}`
-          : 'נשלח קישור להצהרת בריאות בוואטסאפ');
-      } else {
-        // Fallback: open wa.me with prefilled text
-        const text = encodeURIComponent(`שלום ${parent.name || ''}, בבקשה מלאו את הצהרת הבריאות והסרת האחריות:\n${healthFormUrl}`);
-        window.open(`https://wa.me/972${parent.phone.replace(/^0/, '').replace(/[-\s]/g, '')}?text=${text}`, '_blank');
-        setHealthSendMsg('נפתח וואטסאפ עם הקישור');
+      const link = data.healthUrl || fallbackLink;
+      if (!data.sent) {
+        openPersonalWhatsApp(buildHealthWhatsAppText(parent.name, targetStudentName, link));
       }
-    } catch (err) {
-      const text = encodeURIComponent(`שלום ${parent.name || ''}, בבקשה מלאו את הצהרת הבריאות והסרת האחריות:\n${healthFormUrl}`);
-      window.open(`https://wa.me/972${parent.phone.replace(/^0/, '').replace(/[-\s]/g, '')}?text=${text}`, '_blank');
-      setHealthSendMsg('נפתח וואטסאפ עם הקישור');
+      return {
+        sent: !!data.sent,
+        link,
+        warning: data.sent ? undefined : (data.warning || data.error || 'השליחה האוטומטית נכשלה'),
+      };
+    } catch {
+      openPersonalWhatsApp(buildHealthWhatsAppText(parent.name, targetStudentName, fallbackLink));
+      return { sent: false, link: fallbackLink, warning: 'השליחה האוטומטית נכשלה' };
+    }
+  };
+
+  const handleSendHealthForm = async () => {
+    if (!parent?.phone) {
+      setHealthSendMsg('אין מספר טלפון לשליחה');
+      setHealthSendLink('');
+      return;
+    }
+    setSendingHealth(true);
+    setHealthSendMsg('');
+    setHealthSendLink('');
+    try {
+      const result = await sendHealthFormForStudent(student.id, student.name);
+      setHealthSendLink(result.link || healthShareUrl);
+      if (result.sent) {
+        setHealthSendMsg('נשלח קישור להצהרת בריאות בוואטסאפ');
+      } else {
+        setHealthSendMsg(
+          result.warning
+            || 'השליחה האוטומטית נכשלה — העתיקו את הקישור או שלחו מוואטסאפ אישי'
+        );
+      }
     } finally {
       setSendingHealth(false);
     }
@@ -395,9 +618,10 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
       })
       .catch((err) => console.error(err))
       .finally(() => setLoadingLists(false));
-  }, [parent]);
+  }, [parent?.id]);
 
   const handleListToggle = async (listKey) => {
+    if (!parent?.id) return;
     const currentlyOn = broadcastLists[listKey] !== false;
     const nextLists = { ...broadcastLists, [listKey]: !currentlyOn };
     setBroadcastLists(nextLists);
@@ -409,6 +633,54 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
       });
     } catch (err) {
       console.error('Failed to update broadcast lists:', err);
+    }
+  };
+
+  const handleAddChild = async (e) => {
+    e.preventDefault();
+    const name = newChildName.trim();
+    if (!name || !parent?.id || addingChild) return;
+    setAddingChild(true);
+    setAddChildError('');
+    try {
+      const res = await fetch(`/api/parents/${parent.id}/students`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAddChildError(data.error || 'שגיאה בהוספת מתאמן');
+        return;
+      }
+      const newId = data.student?.id;
+      if (sendHealthOnAdd && newId) {
+        const sendResult = await sendHealthFormForStudent(newId, name);
+        const pendingHealthLink = sendResult.link || '';
+        const pendingHealthMsg = sendResult.sent
+          ? 'נשלח קישור להצהרת בריאות בוואטסאפ להורה'
+          : (sendResult.warning
+            || 'השליחה האוטומטית נכשלה — העתיקו את הקישור או שלחו מוואטסאפ אישי');
+        if (pendingHealthLink) {
+          try {
+            sessionStorage.setItem('pendingHealthSend', JSON.stringify({
+              studentId: newId,
+              msg: pendingHealthMsg,
+              link: pendingHealthLink,
+            }));
+          } catch { /* ignore */ }
+        }
+      }
+      setShowAddChild(false);
+      setNewChildName('');
+      setSendHealthOnAdd(true);
+      if (refreshData) await refreshData();
+      if (newId) onSelectSibling?.(newId);
+    } catch (err) {
+      console.error(err);
+      setAddChildError('לא ניתן להתחבר לשרת');
+    } finally {
+      setAddingChild(false);
     }
   };
 
@@ -646,780 +918,934 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
     }
   };
 
+  const healthSummary = isHealthSigned
+    ? `חתום${healthDecl?.signedDate || healthDecl?.date ? ` · ${healthDecl.signedDate || healthDecl.date}` : ''}`
+    : 'חסר';
+  const groupSummary = group
+    ? `${group.name}${group.day ? ` · יום ${group.day}` : ''}`
+    : 'לא משויך';
+  const activePasses = customerPasses.filter((p) => p.status === 'active').length;
+  const passesSummary = passesLoading
+    ? 'טוען...'
+    : activePasses > 0
+      ? `${activePasses} פעילים`
+      : customerPasses.length === 0
+        ? 'אין מנוי או כרטיסייה'
+        : 'אין פעילים';
+  const attendanceSummary = attendanceLoading
+    ? 'טוען...'
+    : attendanceHistory.length === 0
+      ? 'אין נוכחות'
+      : `${attendanceHistory.length} נוכחויות`;
+  const paymentsSummary = studentPayments.length === 0
+    ? 'אין תשלומים'
+    : `${studentPayments.length} רשומות`;
+  const testsSummary = levelTestsHistory.length === 0
+    ? 'אין מבחנים'
+    : `${levelTestsHistory.length} מבחנים`;
+  const statusSummary = STATUSES[student.status]?.label || student.status || '—';
+  const mailingListSummary = (() => {
+    if (!parent?.id) return 'אין הורה';
+    const active = broadcastListDefs.filter((list) => broadcastLists[list.key] !== false).length;
+    return `${active}/${broadcastListDefs.length} רשימות`;
+  })();
+
   return (
-    <div style={{
-      position: 'fixed', top: 0, left: 0, height: '100vh', width: '420px',
-      background: '#0D1117', borderRight: '1px solid var(--border)',
-      zIndex: 300, display: 'flex', flexDirection: 'column',
-      boxShadow: '4px 0 25px rgba(0,0,0,0.5)',
-      animation: 'slideUp 0.2s ease'
-    }}>
-      {/* Header */}
-      <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid var(--border)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-1)' }}>
-              {parentOnly ? (parent?.name || 'ליד ללא מתאמן') : student.name}
-            </div>
-            <div style={{ fontSize: 13, color: 'var(--text-3)', marginTop: 4 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>
-                  {parentOnly
-                    ? 'ללא מתאמן רשום — ניתן להוסיף ילד מאוחר'
-                    : `תאריך לידה: ${student.birthDate || 'לא הוזן'}`}
-                </span>
-                <button className="btn btn-ghost btn-xs" onClick={() => setIsEditing(true)}>
-                  <Edit2 size={11} /> ערוך פרטים
-                </button>
-              </div>
-            </div>
-          </div>
-          <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose}>
-            <X size={18} />
-          </button>
-        </div>
-        <div style={{ marginTop: 12 }}>
-          <StatusBadge status={student.status} />
-        </div>
-      </div>
-
-      {/* Scrollable Body */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
-        
-        {/* Contact Info */}
-        <div className="section-header"><div className="section-title">פרטי קשר ומקור ליד</div></div>
-        <div className="card card-p" style={{ marginBottom: 16 }}>
-          {parent?.name !== student.name && (
-            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8, color: 'var(--text-1)' }}>{parent?.name} (הורה/משלם)</div>
-          )}
-          {(parent?.instagram_id || parent?.channel === 'instagram' || student.notes?.includes('אינסטגרם')) ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'linear-gradient(45deg, rgba(240,148,51,0.15), rgba(220,39,67,0.15), rgba(188,24,136,0.15))', padding: '8px 12px', borderRadius: 8, border: '1px solid rgba(225,48,108,0.4)' }}>
-                <span style={{ fontSize: 18 }}>📸</span>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 'bold', color: '#ff80bf' }}>הגיע מאינסטגרם (Instagram DM)</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-2)' }}>IG ID / שם משתמש: {parent?.instagram_id || 'מזהה אינסטגרם מדווח'}</div>
+    <>
+      <div
+        onClick={onClose}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.55)',
+          zIndex: 299,
+        }}
+      />
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          height: '100vh',
+          width: 'min(960px, 92vw)',
+          background: '#0D1117',
+          borderRight: '1px solid var(--border)',
+          zIndex: 300,
+          display: 'flex',
+          flexDirection: 'row',
+          boxShadow: '4px 0 25px rgba(0,0,0,0.5)',
+          animation: 'slideUp 0.2s ease',
+          overflow: 'hidden',
+        }}
+      >
+        {/* Details column (RTL: appears on the right) */}
+        <div
+          style={{
+            width: 380,
+            flexShrink: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            borderLeft: '1px solid var(--border)',
+            minHeight: 0,
+            overscrollBehavior: 'contain',
+          }}
+        >
+          <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-1)', lineHeight: 1.3 }}>
+                  {parentOnly ? (parent?.name || 'ליד ללא מתאמן') : student.name}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <span>
+                    {parentOnly
+                      ? 'ללא מתאמן רשום'
+                      : `תאריך לידה: ${student.birthDate || 'לא הוזן'}`}
+                  </span>
+                  <button className="btn btn-ghost btn-xs" onClick={() => setIsEditing(true)}>
+                    <Edit2 size={11} /> ערוך
+                  </button>
                 </div>
               </div>
-              {parent?.phone && (
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <a href={`tel:${parent?.phone}`} className="btn btn-ghost btn-sm">
-                    <Phone size={14} /> {parent?.phone}
-                  </a>
-                  <a href={`https://wa.me/972${parent?.phone?.replace(/^0/, '')}`} target="_blank" rel="noreferrer" className="btn btn-success btn-sm">
-                    💬 וואטסאפ
-                  </a>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <a href={`tel:${parent?.phone}`} className="btn btn-ghost btn-sm">
-                <Phone size={14} /> {parent?.phone}
-              </a>
-              {parent?.email && (
-                <a href={`mailto:${parent?.email}`} className="btn btn-ghost btn-sm">
-                  <Mail size={14} /> אימייל
-                </a>
-              )}
-              <a href={`https://wa.me/972${parent?.phone?.replace(/^0/, '')}`} target="_blank" rel="noreferrer"
-                className="btn btn-success btn-sm">
-                💬 וואטסאפ
-              </a>
-            </div>
-          )}
-        </div>
-
-        {/* Lead attributes: source / segment / city / next followup */}
-        <div className="card card-p" style={{ marginBottom: 16, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 4 }}><Tag size={11} /> מקור ליד</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>
-              {(LEAD_SOURCES[parent?.source || student.source] || LEAD_SOURCES.unknown).icon}{' '}
-              {(LEAD_SOURCES[parent?.source || student.source] || LEAD_SOURCES.unknown).label}
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 4 }}><UserCheck size={11} /> פלח</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>
-              {student.segment ? (LEAD_SEGMENTS[student.segment]?.label || student.segment) : '—'}
-            </div>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 4 }}><MapPin size={11} /> עיר</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>{parent?.city || '—'}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 4 }}><Bell size={11} /> מעקב הבא</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: student.nextFollowup ? 'var(--amber, #FCD34D)' : 'var(--text-1)' }}>
-              {student.nextFollowup || '—'}
-            </div>
-          </div>
-        </div>
-
-        {/* Health declaration + waiver conversion state */}
-        <div className="section-header">
-          <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <FileCheck2 size={15} /> הצהרת בריאות + הסרת אחריות
-          </div>
-        </div>
-        <div className="card card-p" style={{ marginBottom: 16 }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12,
-            padding: '10px 12px', borderRadius: 10,
-            background: isHealthSigned ? 'rgba(52, 211, 153, 0.12)' : 'rgba(252, 211, 77, 0.1)',
-            border: `1px solid ${isHealthSigned ? 'rgba(52, 211, 153, 0.35)' : 'rgba(252, 211, 77, 0.35)'}`,
-          }}>
-            <span style={{ fontSize: 18 }}>{isHealthSigned ? '✓' : '⏳'}</span>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
-                {isHealthSigned ? 'נחתם — הצהרת בריאות + כתב ויתור' : 'טרם נחתם'}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
-                {healthDecl?.signedDate || healthDecl?.date
-                  ? `תאריך חתימה: ${healthDecl.signedDate || healthDecl.date}`
-                  : 'שלחו ללקוח קישור לחתימה דיגיטלית'}
-                {healthDecl?.waiverAccepted ? ' · וויתור אושר' : ''}
-                {healthDecl?.templateSlug ? ` · ${healthDecl.templateSlug}` : ''}
-              </div>
-              {healthDecl && (
-                <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 6 }}>
-                  חתם: {healthDecl.signedBy || healthDecl.parentName || '—'}
-                  {(healthDecl.climberName || healthDecl.studentName) ? ` · מתאמן: ${healthDecl.climberName || healthDecl.studentName}` : ''}
-                  {Object.values(healthDecl.answers || {}).some(Boolean) ? ' · יש הסתייגויות רפואיות' : ' · ללא הסתייגויות'}
-                </div>
-              )}
-            </div>
-          </div>
-          {formTemplates.length > 0 && (
-            <div className="form-group" style={{ marginBottom: 12 }}>
-              <label className="form-label" style={{ fontSize: 11 }}>סוג טופס / פעילות</label>
-              <select
-                className="select"
-                value={selectedFormSlug}
-                onChange={(e) => setSelectedFormSlug(e.target.value)}
-                style={{ fontSize: 13 }}
-              >
-                {formTemplates.map((t) => (
-                  <option key={t.id} value={t.slug}>
-                    {t.title}{t.isDefault ? ' (ברירת מחדל)' : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <a href={onboardUrl} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm">
-              <ExternalLink size={13} /> פתח השלמת פרטים
-            </a>
-            <button
-              type="button"
-              className="btn btn-success btn-sm"
-              disabled={sendingOnboard || !parent?.phone}
-              onClick={handleSendOnboardLink}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-            >
-              <Send size={13} /> {sendingOnboard ? 'שולח...' : 'שלח קישור השלמת פרטים'}
-            </button>
-            <a href={healthFormUrl} target="_blank" rel="noreferrer" className="btn btn-ghost btn-sm">
-              <ExternalLink size={13} /> טופס בריאות בלבד
-            </a>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              disabled={sendingHealth || !parent?.phone}
-              onClick={handleSendHealthForm}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-            >
-              <Send size={13} /> {sendingHealth ? 'שולח...' : 'שלח הצהרת בריאות'}
-            </button>
-            {healthDecl && (
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={downloadingPdf}
-                onClick={async () => {
-                  setDownloadingPdf(true);
-                  setHealthSendMsg('');
-                  try {
-                    await downloadHealthDeclarationPdf(healthDecl);
-                    setHealthSendMsg('ה־PDF של האישור החתום הורד למחשב');
-                  } catch (err) {
-                    console.error(err);
-                    setHealthSendMsg('שגיאה בהורדת ה־PDF — נסו שוב');
-                  } finally {
-                    setDownloadingPdf(false);
-                  }
-                }}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-              >
-                <Download size={13} /> {downloadingPdf ? 'מכין PDF...' : 'הורד אישור PDF'}
+              <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} aria-label="סגור">
+                <X size={18} />
               </button>
-            )}
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <StatusBadge status={student.status} />
+            </div>
           </div>
-          {healthDecl?.signature_url && (
-            <div style={{
-              marginTop: 12, padding: 10, borderRadius: 10,
-              background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)',
-            }}>
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>עותק חתימה שמור</div>
-              <img
-                src={healthDecl.signature_url}
-                alt="חתימה"
-                style={{ maxWidth: '100%', maxHeight: 90, background: '#0b1220', borderRadius: 8 }}
-              />
-            </div>
-          )}
-          {healthSendMsg && (
-            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)', wordBreak: 'break-all' }}>
-              {healthSendMsg}
-            </div>
-          )}
-        </div>
 
-        {/* Personal file documents */}
-        <div className="section-header">
-          <div className="section-title">מסמכים בתיק</div>
-        </div>
-        <div className="card card-p" style={{ marginBottom: 16 }}>
-          {docsLoading ? (
-            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען מסמכים...</div>
-          ) : clientDocuments.length === 0 ? (
-            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-              עדיין אין קבצים בתיק. אחרי השלמת טופס החתימה יישמר כאן PDF.
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {clientDocuments.map((doc) => (
-                <div
-                  key={doc.id}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-                    padding: '8px 10px', borderRadius: 10, border: '1px solid var(--border)',
-                    background: 'rgba(255,255,255,0.03)',
-                  }}
-                >
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>
-                      {doc.fileName || 'הצהרת בריאות חתומה'}
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                      {doc.created_at ? new Date(doc.created_at).toLocaleString('he-IL') : ''}
-                      {doc.type ? ` · ${doc.type}` : ''}
-                    </div>
+          <div
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              overscrollBehavior: 'contain',
+              padding: '12px 14px 16px',
+              minHeight: 0,
+            }}
+          >
+            {/* Contact — always visible compact */}
+            <div style={{ marginBottom: 12 }}>
+              {parent?.name && parent?.name !== student.name && (
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: 'var(--text-1)' }}>
+                  {parent.name} <span style={{ fontWeight: 500, color: 'var(--text-3)' }}>(הורה/משלם)</span>
+                </div>
+              )}
+              {(siblings.length > 0 || parent?.id) && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8, alignItems: 'center' }}>
+                  {siblings.map((sib) => {
+                    const active = !parentOnly && sib.id === student.id;
+                    return (
+                      <button
+                        key={sib.id}
+                        type="button"
+                        onClick={() => onSelectSibling?.(sib.id)}
+                        title={sib.name}
+                        style={{
+                          border: active
+                            ? '1px solid rgba(249, 115, 22, 0.65)'
+                            : '1px solid var(--border)',
+                          background: active
+                            ? 'rgba(249, 115, 22, 0.18)'
+                            : 'rgba(255,255,255,0.04)',
+                          color: active ? 'var(--text-1)' : 'var(--text-2)',
+                          borderRadius: 999,
+                          padding: '4px 10px',
+                          fontSize: 12,
+                          fontWeight: active ? 700 : 600,
+                          cursor: 'pointer',
+                          lineHeight: 1.3,
+                          maxWidth: '100%',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {sib.name}
+                      </button>
+                    );
+                  })}
+                  {parent?.id && (
+                    <button
+                      type="button"
+                      className={`btn btn-xs ${parentOnly ? 'btn-primary' : 'btn-ghost'}`}
+                      onClick={() => {
+                        setAddChildError('');
+                        setNewChildName('');
+                        setSendHealthOnAdd(true);
+                        setShowAddChild(true);
+                      }}
+                      style={{
+                        borderRadius: 999,
+                        border: parentOnly ? undefined : '1px dashed var(--border)',
+                        gap: 4,
+                      }}
+                    >
+                      <Plus size={12} /> הוסף ילד / מתאמן
+                    </button>
+                  )}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                {parent?.phone && (
+                  <a href={`tel:${parent.phone}`} className="btn btn-ghost btn-xs">
+                    <Phone size={12} /> {parent.phone}
+                  </a>
+                )}
+                {parent?.email && (
+                  <a href={`mailto:${parent.email}`} className="btn btn-ghost btn-xs">
+                    <Mail size={12} /> אימייל
+                  </a>
+                )}
+                {parent?.phone && (
+                  <a
+                    href={`https://wa.me/972${parent.phone.replace(/^0/, '')}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn btn-success btn-xs"
+                  >
+                    וואטסאפ
+                  </a>
+                )}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 12 }}>
+                <div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 2 }}><Tag size={10} /> מקור</div>
+                  <div style={{ fontWeight: 600 }}>
+                    {(LEAD_SOURCES[parent?.source || student.source] || LEAD_SOURCES.unknown).icon}{' '}
+                    {(LEAD_SOURCES[parent?.source || student.source] || LEAD_SOURCES.unknown).label}
                   </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 2 }}><UserCheck size={10} /> פלח</div>
+                  <div style={{ fontWeight: 600 }}>
+                    {student.segment ? (LEAD_SEGMENTS[student.segment]?.label || student.segment) : '—'}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 2 }}><MapPin size={10} /> עיר</div>
+                  <div style={{ fontWeight: 600 }}>{parent?.city || '—'}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 2 }}><Bell size={10} /> מעקב</div>
+                  <div style={{ fontWeight: 600, color: student.nextFollowup ? 'var(--amber, #FCD34D)' : undefined }}>
+                    {student.nextFollowup || '—'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Parent-level mailing lists — one subscription for the whole family */}
+            {parent?.id && (
+              <FolderRow
+                id="mailing"
+                title="רשימות תפוצה (הורה)"
+                icon={Bell}
+                summary={mailingListSummary}
+                open={openFolder === 'mailing'}
+                onToggle={toggleFolder}
+              >
+                <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10, lineHeight: 1.45 }}>
+                  הרשמה של {parent.name || 'ההורה'} — חלה על כל המתאמנים במשפחה, לא על ילד בודד.
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)' }}>רשימות פעילות</div>
+                  {!loadingLists && (
+                    <button
+                      type="button"
+                      className={`btn btn-xs ${editingBroadcastLists ? 'btn-primary' : 'btn-ghost'}`}
+                      onClick={() => setEditingBroadcastLists((v) => !v)}
+                    >
+                      {editingBroadcastLists ? <><Check size={11} /> סיום</> : <><Edit2 size={11} /> עריכה</>}
+                    </button>
+                  )}
+                </div>
+                {loadingLists ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען רשימות תפוצה...</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, pointerEvents: editingBroadcastLists ? 'auto' : 'none', opacity: editingBroadcastLists ? 1 : 0.85 }}>
+                    {broadcastListDefs.map((list) => {
+                      const label = list.description ? `${list.label} (${list.description})` : list.label;
+                      const checked = broadcastLists[list.key] !== false;
+                      return (
+                        <label key={list.key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: editingBroadcastLists ? 'pointer' : 'default' }}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={!editingBroadcastLists}
+                            onChange={() => handleListToggle(list.key)}
+                            style={{ cursor: editingBroadcastLists ? 'pointer' : 'default', width: 15, height: 15 }}
+                          />
+                          <span style={{ color: checked ? 'var(--text-1)' : 'var(--text-3)', fontWeight: checked ? '600' : 'normal' }}>
+                            {label}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </FolderRow>
+            )}
+
+            {/* Health folder */}
+            <FolderRow
+              id="health"
+              title="הצהרת בריאות"
+              icon={FileCheck2}
+              summary={healthSummary}
+              summaryColor={isHealthSigned ? '#34D399' : '#FCD34D'}
+              open={openFolder === 'health'}
+              onToggle={toggleFolder}
+            >
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12,
+                padding: '8px 10px', borderRadius: 8,
+                background: isHealthSigned ? 'rgba(52, 211, 153, 0.12)' : 'rgba(252, 211, 77, 0.1)',
+                border: `1px solid ${isHealthSigned ? 'rgba(52, 211, 153, 0.35)' : 'rgba(252, 211, 77, 0.35)'}`,
+              }}>
+                <span style={{ fontSize: 16 }}>{isHealthSigned ? '✓' : '⏳'}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>
+                    {isHealthSigned ? 'נחתם — הצהרת בריאות + כתב ויתור' : 'טרם נחתם'}
+                  </div>
+                  {healthDecl && (
+                    <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 4 }}>
+                      חתם: {healthDecl.signedBy || healthDecl.parentName || '—'}
+                      {(healthDecl.climberName || healthDecl.studentName) ? ` · מתאמן: ${healthDecl.climberName || healthDecl.studentName}` : ''}
+                      {Object.values(healthDecl.answers || {}).some(Boolean) ? ' · יש הסתייגויות רפואיות' : ' · ללא הסתייגויות'}
+                    </div>
+                  )}
+                </div>
+              </div>
+              {formTemplates.length > 0 && (
+                <div className="form-group" style={{ marginBottom: 10 }}>
+                  <label className="form-label" style={{ fontSize: 11 }}>סוג טופס / פעילות</label>
+                  <select
+                    className="select"
+                    value={selectedFormSlug}
+                    onChange={(e) => setSelectedFormSlug(e.target.value)}
+                    style={{ fontSize: 13 }}
+                  >
+                    {formTemplates.map((t) => (
+                      <option key={t.id} value={t.slug}>
+                        {t.title}{t.isDefault ? ' (ברירת מחדל)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-success btn-xs"
+                  disabled={sendingHealth || !parent?.phone}
+                  onClick={handleSendHealthForm}
+                >
+                  <Send size={12} /> {sendingHealth ? 'שולח...' : 'שלח בוואטסאפ'}
+                </button>
+                {healthDecl && (
                   <button
                     type="button"
-                    className="btn btn-ghost btn-xs"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}
+                    className="btn btn-primary btn-xs"
+                    disabled={downloadingPdf}
                     onClick={async () => {
+                      setDownloadingPdf(true);
+                      setHealthSendMsg('');
                       try {
-                        const res = await fetch(`/api/documents/${encodeURIComponent(doc.id)}/download`);
-                        if (!res.ok) throw new Error('download failed');
-                        const blob = await res.blob();
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = doc.fileName || 'document.pdf';
-                        document.body.appendChild(a);
-                        a.click();
-                        a.remove();
-                        URL.revokeObjectURL(url);
+                        await downloadHealthDeclarationPdf(healthDecl);
+                        setHealthSendMsg('קובץ האישור החתום הורד למחשב');
                       } catch (err) {
                         console.error(err);
-                        setHealthSendMsg('שגיאה בהורדת המסמך מהתיק');
+                        setHealthSendMsg('שגיאה בהורדת האישור');
+                      } finally {
+                        setDownloadingPdf(false);
                       }
                     }}
                   >
-                    <Download size={12} /> הורדה
+                    <Download size={12} /> {downloadingPdf ? 'מכין...' : 'הורד אישור חתום'}
                   </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Group / Class */}
-        <div className="section-header">
-          <div className="section-title">קבוצה / חוג שיוך</div>
-          {!editingGroup && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs"
-              onClick={() => {
-                setEditGroupId(student.groupId || '');
-                setEditingGroup(true);
-              }}
-            >
-              <Edit2 size={11} /> ערוך
-            </button>
-          )}
-        </div>
-        <div className="card card-p" style={{ marginBottom: 16 }}>
-          {editingGroup ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <select
-                className="input input-sm"
-                value={editGroupId}
-                disabled={savingGroup}
-                onChange={e => setEditGroupId(e.target.value)}
-              >
-                <option value="">— לא משויך —</option>
-                {groups.map(g => (
-                  <option key={g.id} value={g.id}>{g.name}</option>
-                ))}
-              </select>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  disabled={savingGroup}
-                  onClick={handleSaveGroup}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                >
-                  <Check size={13} /> {savingGroup ? 'שומר...' : 'שמור'}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  disabled={savingGroup}
-                  onClick={() => {
-                    setEditGroupId(student.groupId || '');
-                    setEditingGroup(false);
-                  }}
-                >
-                  ביטול
-                </button>
-              </div>
-            </div>
-          ) : group ? (
-            <>
-              <div style={{ fontWeight: 700, color: 'var(--text-1)' }}>{group.name}</div>
-              <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>יום {group.day} בשעה {group.time}</div>
-            </>
-          ) : (
-            <div style={{ color: 'var(--text-3)', fontSize: 13 }}>לא משויך לחוג עדיין</div>
-          )}
-        </div>
-
-        {/* Attendance history for this climber */}
-        {!parentOnly && (
-          <>
-            <div className="section-header">
-              <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Ticket size={15} /> מנויים וכרטיסיות
-              </div>
-            </div>
-            <div className="card card-p" style={{ marginBottom: 16 }}>
-              {passesLoading ? (
-                <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>טוען...</div>
-              ) : customerPasses.length === 0 ? (
-                <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>אין מנוי או כרטיסייה פעילים</div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {customerPasses.map((pass) => {
-                    const isPunch = pass.pass_type === 'punch_card';
-                    const remaining = Number(pass.visits_remaining);
-                    const totalVisits = Number(pass.visits_total);
-                    const statusLabel =
-                      pass.status === 'active' ? 'פעיל' :
-                      pass.status === 'depleted' ? 'נגמר' :
-                      pass.status === 'expired' ? 'פג תוקף' : pass.status;
-                    return (
-                      <div key={pass.id} style={{ borderBottom: '1px solid var(--border)', paddingBottom: 10 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
-                          <div>
-                            <div style={{ fontWeight: 700 }}>{pass.name}</div>
-                            <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
-                              {isPunch ? 'כרטיסייה' : 'מנוי'} · {statusLabel}
-                              {pass.valid_until ? ` · עד ${pass.valid_until}` : ''}
-                            </div>
-                            {isPunch && (
-                              <div style={{ marginTop: 6, fontSize: 15, fontWeight: 800, color: remaining > 0 ? 'var(--green)' : 'var(--red)' }}>
-                                נשארו {remaining} מתוך {totalVisits}
-                              </div>
-                            )}
-                          </div>
-                          {isPunch && pass.status === 'active' && remaining > 0 && (
-                            <button
-                              type="button"
-                              className="btn btn-primary btn-sm"
-                              disabled={punchingId === pass.id}
-                              onClick={() => handlePunchPass(pass.id)}
-                            >
-                              {punchingId === pass.id ? 'מנקב...' : 'ניקוב'}
-                            </button>
-                          )}
-                        </div>
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          style={{ marginTop: 6, fontSize: 11 }}
-                          onClick={() => loadPassPunches(pass.id)}
-                        >
-                          היסטוריית ניקובים
-                        </button>
-                        {Array.isArray(passPunches[pass.id]) && passPunches[pass.id].length > 0 && (
-                          <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-3)' }}>
-                            {passPunches[pass.id].slice(0, 5).map((p) => (
-                              <div key={p.id}>
-                                {new Date(p.punched_at).toLocaleString('he-IL')} · נשאר {p.visits_after}
-                                {p.punched_by ? ` · ${p.punched_by}` : ''}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            <div className="section-header">
-              <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <History size={15} /> היסטוריית נוכחות
-              </div>
-            </div>
-            <div className="card card-p" style={{ marginBottom: 16 }}>
-              {attendanceLoading ? (
-                <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>טוען נוכחות...</div>
-              ) : attendanceHistory.length === 0 ? (
-                <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>אין רשומות נוכחות עדיין</div>
-              ) : (
-                <AttendanceCalendar
-                  rows={attendanceHistory}
-                  groups={groups}
-                  group={group}
-                />
-              )}
-            </div>
-          </>
-        )}
-
-        {/* iCount payment checkout generator — owner only */}
-        {canManageBilling && <>
-        <div className="section-header">
-          <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <CreditCard size={15} /> דרישת תשלום / חשבונית
-          </div>
-        </div>
-        <div className="card card-p" style={{ marginBottom: 16 }}>
-          <form onSubmit={handleSendPayment}>
-            <div className="form-group" style={{ marginBottom: 10 }}>
-              <label className="form-label" style={{ fontSize: 11 }}>בחר מוצר מהמחירון</label>
-              <select className="input input-sm" value={selectedPricelistItem} onChange={handlePricelistSelect}>
-                <option value="">-- מוצר מותאם אישית --</option>
-                {pricelist.map(item => (
-                  <option key={item.id} value={item.id}>{item.name} ({item.price}₪)</option>
-                ))}
-              </select>
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-              <div className="form-group" style={{ flex: 1 }}>
-                <label className="form-label" style={{ fontSize: 11 }}>תיאור</label>
-                <input
-                  className="input input-sm"
-                  placeholder="למשל: כרטיסיה 10 כניסות"
-                  required
-                  value={billDescription}
-                  onChange={e => setBillDescription(e.target.value)}
-                />
-              </div>
-              <div className="form-group" style={{ width: 80 }}>
-                <label className="form-label" style={{ fontSize: 11 }}>מחיר (₪)</label>
-                <input
-                  className="input input-sm"
-                  type="number"
-                  placeholder="350"
-                  required
-                  value={billAmount}
-                  onChange={e => setBillAmount(e.target.value)}
-                />
-              </div>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <button type="submit" disabled={billingLoading || invoiceLoading} className="btn btn-primary btn-sm w-full" style={{ justifyContent: 'center', gap: 8 }}>
-                <Send size={13} /> {billingLoading ? 'מייצר קישור...' : 'שלח קישור סליקה + חשבונית אחרי תשלום'}
-              </button>
-              <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.4 }}>
-                הלקוח משלם בעמוד סליקה. אחרי התשלום אייקאונט מפיק חשבונית מס קבלה אוטומטית, ואנחנו מעדכנים את הסטטוס בתיק.
-              </div>
-              <button
-                type="button"
-                disabled={billingLoading || invoiceLoading}
-                className="btn btn-ghost btn-sm w-full"
-                style={{ justifyContent: 'center', gap: 8 }}
-                onClick={handleCreateInvoice}
-              >
-                <ReceiptText size={13} /> {invoiceLoading ? 'מפיק חשבונית...' : 'הפק חשבונית מס קבלה עכשיו (בלי תשלום)'}
-              </button>
-            </div>
-          </form>
-          {billingLink && (
-            <div style={{ marginTop: 10, padding: 8, background: '#1F2937', borderRadius: 6, fontSize: 12, wordBreak: 'break-all' }}>
-              <strong>קישור לתשלום:</strong><br />
-              <a href={billingLink} target="_blank" rel="noreferrer" style={{ color: 'var(--blue)' }}>{billingLink}</a>
-            </div>
-          )}
-          {lastInvoice && (
-            <div className="alert alert-success" style={{ marginTop: 10, fontSize: 12 }}>
-              חשבונית הופקה
-              {lastInvoice.docNumber ? ` · מס׳ ${lastInvoice.docNumber}` : ''}
-              {' '}· ₪{lastInvoice.amount} · {lastInvoice.description}
-            </div>
-          )}
-          {studentPayments.length > 0 && (
-            <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>היסטוריית תשלומים</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {studentPayments.slice(0, 8).map((p) => (
-                  <div
-                    key={p.id}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      gap: 8,
-                      fontSize: 12,
-                      padding: '6px 0',
-                      borderBottom: '1px solid var(--border)',
-                    }}
-                  >
-                    <span style={{ color: 'var(--text-2)' }}>
-                      {p.description}
-                      {p.icount_doc_number ? ` · מס׳ ${p.icount_doc_number}` : ''}
-                    </span>
-                    <span>
-                      ₪{Number(p.amount).toLocaleString()}{' '}
-                      <span className={p.status === 'paid' ? 'badge badge-green' : 'badge badge-amber'}>
-                        {p.status === 'paid' ? 'שולם' : p.status === 'pending' ? 'ממתין' : p.status}
-                      </span>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-        </>}
-
-        {/* Tests Logs & Add Log — owner only */}
-        {canManageBilling && <>
-        <div className="section-header">
-          <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Award size={15} /> היסטוריית מבחנים
-          </div>
-        </div>
-        <div className="card card-p" style={{ marginBottom: 16 }}>
-          {showTestForm ? (
-            <form onSubmit={handleAddTest} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                <select
-                  className="input input-sm"
-                  style={{
-                    flex: 1, minWidth: 120, fontWeight: 700,
-                    color: TEST_TYPE_COLORS[testType]?.accent,
-                    borderColor: TEST_TYPE_COLORS[testType]?.border,
-                    background: TEST_TYPE_COLORS[testType]?.bg,
-                  }}
-                  value={testType}
-                  onChange={e => setTestType(e.target.value)}
-                >
-                  <option value="level">מבחן רמה</option>
-                  <option value="security">מבחן אבטחה</option>
-                  <option value="lead">מבחן הובלה</option>
-                </select>
-                {testType === 'level' && (
-                  <>
-                    <select className="input input-sm" style={{ flex: 1, minWidth: 90 }} value={testLevel} onChange={e => setTestLevel(e.target.value)}>
-                      {['5A','5B','5C','6A','6B','6C','7A','7B','7C','8A'].map(lvl => (
-                        <option key={lvl} value={lvl}>רמה {lvl}</option>
-                      ))}
-                    </select>
-                    <select className="input input-sm" style={{ flex: 1, minWidth: 100 }} value={testRouteStyle} onChange={e => setTestRouteStyle(e.target.value)}>
-                      <option value="top-rope">טופ רופ</option>
-                      <option value="lead">הובלה</option>
-                    </select>
-                  </>
                 )}
-                {(testType === 'security' || testType === 'lead') && (
-                  <div style={{ flex: 1.5, minWidth: 140 }}>
-                    <label style={{ display: 'block', fontSize: 10, color: 'var(--text-3)', marginBottom: 3, fontWeight: 600 }}>
-                      בוחן
-                    </label>
+              </div>
+              {healthDecl?.signature_url && (
+                <div style={{
+                  marginTop: 10, padding: 8, borderRadius: 8,
+                  background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)',
+                }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>עותק חתימה</div>
+                  <img
+                    src={healthDecl.signature_url}
+                    alt="חתימה"
+                    style={{ maxWidth: '100%', maxHeight: 70, background: '#0b1220', borderRadius: 8 }}
+                  />
+                </div>
+              )}
+              {healthSendMsg && (
+                <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)' }}>
+                  <div style={{ marginBottom: healthSendLink ? 6 : 0 }}>{healthSendMsg}</div>
+                  {healthSendLink && (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <input
+                        className="input input-sm"
+                        readOnly
+                        value={healthSendLink}
+                        style={{ flex: 1, minWidth: 140, fontSize: 11 }}
+                        onFocus={(e) => e.target.select()}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(healthSendLink);
+                            setHealthSendMsg('הקישור הועתק — אפשר לשלוח אותו ללקוח בוואטסאפ');
+                          } catch {
+                            setHealthSendMsg('לא הצלחתי להעתיק — סמנו את הקישור ידנית');
+                          }
+                        }}
+                      >
+                        העתק קישור
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+              {!parentOnly && (
+                <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)', marginBottom: 8 }}>מסמכים בתיק</div>
+                  {docsLoading ? (
+                    <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען מסמכים...</div>
+                  ) : clientDocuments.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                      עדיין אין קבצים בתיק. אחרי השלמת טופס החתימה יישמר כאן קובץ אישור.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {clientDocuments.map((doc) => (
+                        <div
+                          key={doc.id}
+                          style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                            padding: '6px 8px', borderRadius: 8, border: '1px solid var(--border)',
+                            background: 'rgba(255,255,255,0.03)',
+                          }}
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)' }}>
+                              {doc.fileName || 'הצהרת בריאות חתומה'}
+                            </div>
+                            <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
+                              {doc.created_at ? new Date(doc.created_at).toLocaleString('he-IL') : ''}
+                              {doc.type ? ` · ${doc.type}` : ''}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs"
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}
+                            onClick={async () => {
+                              try {
+                                const res = await fetch(`/api/documents/${encodeURIComponent(doc.id)}/download`);
+                                if (!res.ok) throw new Error('download failed');
+                                const blob = await res.blob();
+                                const url = URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = doc.fileName || 'document.pdf';
+                                document.body.appendChild(a);
+                                a.click();
+                                a.remove();
+                                URL.revokeObjectURL(url);
+                              } catch (err) {
+                                console.error(err);
+                                setHealthSendMsg('שגיאה בהורדת המסמך מהתיק');
+                              }
+                            }}
+                          >
+                            <Download size={12} /> הורדה
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </FolderRow>
+
+            {/* Group folder */}
+            {!parentOnly && (
+              <FolderRow
+                id="group"
+                title="חוג ושיוך"
+                icon={Users}
+                summary={groupSummary}
+                open={openFolder === 'group'}
+                onToggle={toggleFolder}
+              >
+                {editingGroup ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     <select
                       className="input input-sm"
-                      style={{ width: '100%' }}
-                      required
-                      value={testExaminerId}
-                      onChange={e => setTestExaminerId(e.target.value)}
+                      value={editGroupId}
+                      disabled={savingGroup}
+                      onChange={e => setEditGroupId(e.target.value)}
                     >
-                      <option value="">בחר בוחן...</option>
-                      {employees.length === 0 && <option value="" disabled>אין עובדים</option>}
-                      {employees.map(emp => (
-                        <option key={emp.id} value={emp.id}>{emp.name}</option>
+                      <option value="">— לא משויך —</option>
+                      {groups.map(g => (
+                        <option key={g.id} value={g.id}>{g.name}</option>
                       ))}
                     </select>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button type="button" className="btn btn-primary btn-sm" disabled={savingGroup} onClick={handleSaveGroup}>
+                        <Check size={13} /> {savingGroup ? 'שומר...' : 'שמור'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        disabled={savingGroup}
+                        onClick={() => {
+                          setEditGroupId(student.groupId || '');
+                          setEditingGroup(false);
+                        }}
+                      >
+                        ביטול
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    {group ? (
+                      <>
+                        <div style={{ fontWeight: 700 }}>{group.name}</div>
+                        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
+                          יום {group.day} בשעה {group.time}
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ color: 'var(--text-3)', fontSize: 13 }}>לא משויך לחוג עדיין</div>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      style={{ marginTop: 8 }}
+                      onClick={() => {
+                        setEditGroupId(student.groupId || '');
+                        setEditingGroup(true);
+                      }}
+                    >
+                      <Edit2 size={11} /> ערוך שיוך
+                    </button>
                   </div>
                 )}
-                <select className="input input-sm" style={{ width: 80 }} value={testPassed ? 'yes' : 'no'} onChange={e => setTestPassed(e.target.value === 'yes')}>
-                  <option value="yes">עבר</option>
-                  <option value="no">נכשל</option>
-                </select>
-              </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <input
-                  className="input input-sm"
-                  placeholder="הערות..."
-                  style={{ flex: 2 }}
-                  value={testNotes}
-                  onChange={e => setTestNotes(e.target.value)}
-                />
-                <button type="submit" disabled={testLoading} className="btn btn-primary btn-sm">
-                  רשום
-                </button>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowTestForm(false)}>
-                  ביטול
-                </button>
-              </div>
-            </form>
-          ) : (
-            <button className="btn btn-ghost btn-sm w-full" style={{ marginBottom: 12, borderContent: 'center', gap: 8 }} onClick={() => setShowTestForm(true)}>
-              <Plus size={13} /> שמירת מבחן חדש
-            </button>
-          )}
+              </FolderRow>
+            )}
 
-          {/* List tests */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 150, overflowY: 'auto' }}>
-            {levelTestsHistory.length === 0 ? (
-              <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>לא נמצאו מבחנים מדווחים</div>
-            ) : (
-              levelTestsHistory.map(test => {
-                const asLevel = test.test_type === 'level' || test.test_type === 'top-rope';
-                const asSecurity = test.test_type === 'security';
-                const asLeadCert = test.test_type === 'lead';
-                const typeKey = asSecurity ? 'security' : asLeadCert ? 'lead' : 'level';
-                const typeColor = TEST_TYPE_COLORS[typeKey];
-                const routeStyle = test.route_style || (test.test_type === 'top-rope' ? 'top-rope' : null);
-                const routeLabel = routeStyle === 'lead' ? 'הובלה' : routeStyle === 'top-rope' ? 'טופ רופ' : null;
-                let title = 'מבחן';
-                if (asLevel) title = `רמה ${test.level || ''}${routeLabel ? ` · ${routeLabel}` : ''}`.trim();
-                else if (asSecurity) title = 'מבחן אבטחה';
-                else if (asLeadCert) title = 'מבחן הובלה';
-                const showExaminer = (asSecurity || asLeadCert) && !!test.examiner;
-                return (
-                  <div key={test.id} style={{
-                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12,
-                    padding: '8px 10px', borderRadius: 8, marginBottom: 4,
-                    background: typeColor.bg, border: `1px solid ${typeColor.border}`,
-                    borderRight: `3px solid ${typeColor.accent}`,
-                  }}>
-                    <div>
-                      <strong style={{ color: typeColor.accent }}>{title}</strong>
-                      {showExaminer && <div style={{ color: 'var(--text-3)', fontSize: 10 }}>בוחן: {test.examiner}</div>}
+            {/* Passes folder */}
+            {!parentOnly && (
+              <FolderRow
+                id="passes"
+                title="מנויים וכרטיסיות"
+                icon={Ticket}
+                summary={passesSummary}
+                open={openFolder === 'passes'}
+                onToggle={toggleFolder}
+              >
+                {passesLoading ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען...</div>
+                ) : customerPasses.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין מנוי או כרטיסייה פעילים</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {customerPasses.map((pass) => {
+                      const isPunch = pass.pass_type === 'punch_card';
+                      const remaining = Number(pass.visits_remaining);
+                      const totalVisits = Number(pass.visits_total);
+                      const statusLabel =
+                        pass.status === 'active' ? 'פעיל' :
+                        pass.status === 'depleted' ? 'נגמר' :
+                        pass.status === 'expired' ? 'פג תוקף' : pass.status;
+                      return (
+                        <div key={pass.id} style={{ borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                            <div>
+                              <div style={{ fontWeight: 700, fontSize: 13 }}>{pass.name}</div>
+                              <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+                                {isPunch ? 'כרטיסייה' : 'מנוי'} · {statusLabel}
+                                {pass.valid_until ? ` · עד ${pass.valid_until}` : ''}
+                              </div>
+                              {isPunch && (
+                                <div style={{ marginTop: 4, fontSize: 14, fontWeight: 800, color: remaining > 0 ? 'var(--green)' : 'var(--red)' }}>
+                                  נשארו {remaining} מתוך {totalVisits}
+                                </div>
+                              )}
+                            </div>
+                            {isPunch && pass.status === 'active' && remaining > 0 && (
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-xs"
+                                disabled={punchingId === pass.id}
+                                onClick={() => handlePunchPass(pass.id)}
+                              >
+                                {punchingId === pass.id ? 'מנקב...' : 'ניקוב'}
+                              </button>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs"
+                            style={{ marginTop: 4, fontSize: 11 }}
+                            onClick={() => loadPassPunches(pass.id)}
+                          >
+                            היסטוריית ניקובים
+                          </button>
+                          {Array.isArray(passPunches[pass.id]) && passPunches[pass.id].length > 0 && (
+                            <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                              {passPunches[pass.id].slice(0, 5).map((p) => (
+                                <div key={p.id}>
+                                  {new Date(p.punched_at).toLocaleString('he-IL')} · נשאר {p.visits_after}
+                                  {p.punched_by ? ` · ${p.punched_by}` : ''}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </FolderRow>
+            )}
+
+            {/* Attendance folder */}
+            {!parentOnly && (
+              <FolderRow
+                id="attendance"
+                title="נוכחות"
+                icon={History}
+                summary={attendanceSummary}
+                open={openFolder === 'attendance'}
+                onToggle={toggleFolder}
+              >
+                {attendanceLoading ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען נוכחות...</div>
+                ) : attendanceHistory.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין רשומות נוכחות עדיין</div>
+                ) : (
+                  <AttendanceCalendar
+                    rows={attendanceHistory}
+                    groups={groups}
+                    group={group}
+                  />
+                )}
+              </FolderRow>
+            )}
+
+            {/* Payments folder */}
+            {canManageBilling && (
+              <FolderRow
+                id="payments"
+                title="תשלומים"
+                icon={CreditCard}
+                summary={paymentsSummary}
+                open={openFolder === 'payments'}
+                onToggle={toggleFolder}
+              >
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={() => setShowPaymentModal(true)}
+                  >
+                    <Send size={13} /> שלח בקשת תשלום
+                  </button>
+                </div>
+                {studentPayments.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין היסטוריית תשלומים</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 180, overflowY: 'auto', overscrollBehavior: 'contain' }}>
+                    {studentPayments.slice(0, 8).map((p) => (
+                      <div
+                        key={p.id}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          gap: 8,
+                          fontSize: 12,
+                          padding: '6px 0',
+                          borderBottom: '1px solid var(--border)',
+                        }}
+                      >
+                        <span style={{ color: 'var(--text-2)' }}>
+                          {p.description}
+                          {p.icount_doc_number ? ` · מס׳ ${p.icount_doc_number}` : ''}
+                        </span>
+                        <span>
+                          ₪{Number(p.amount).toLocaleString()}{' '}
+                          <span className={p.status === 'paid' ? 'badge badge-green' : 'badge badge-amber'}>
+                            {p.status === 'paid' ? 'שולם' : p.status === 'pending' ? 'ממתין' : p.status}
+                          </span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </FolderRow>
+            )}
+
+            {/* Tests folder */}
+            {canManageBilling && (
+              <FolderRow
+                id="tests"
+                title="מבחנים"
+                icon={Award}
+                summary={testsSummary}
+                open={openFolder === 'tests'}
+                onToggle={toggleFolder}
+              >
+                {showTestForm ? (
+                  <form onSubmit={handleAddTest} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                      <select
+                        className="input input-sm"
+                        style={{
+                          flex: 1, minWidth: 110, fontWeight: 700,
+                          color: TEST_TYPE_COLORS[testType]?.accent,
+                          borderColor: TEST_TYPE_COLORS[testType]?.border,
+                          background: TEST_TYPE_COLORS[testType]?.bg,
+                        }}
+                        value={testType}
+                        onChange={e => setTestType(e.target.value)}
+                      >
+                        <option value="level">מבחן רמה</option>
+                        <option value="security">מבחן אבטחה</option>
+                        <option value="lead">מבחן הובלה</option>
+                      </select>
+                      {testType === 'level' && (
+                        <>
+                          <select className="input input-sm" style={{ flex: 1, minWidth: 80 }} value={testLevel} onChange={e => setTestLevel(e.target.value)}>
+                            {['5A','5B','5C','6A','6B','6C','7A','7B','7C','8A'].map(lvl => (
+                              <option key={lvl} value={lvl}>רמה {lvl}</option>
+                            ))}
+                          </select>
+                          <select className="input input-sm" style={{ flex: 1, minWidth: 90 }} value={testRouteStyle} onChange={e => setTestRouteStyle(e.target.value)}>
+                            <option value="top-rope">טופ רופ</option>
+                            <option value="lead">הובלה</option>
+                          </select>
+                        </>
+                      )}
+                      {(testType === 'security' || testType === 'lead') && (
+                        <select
+                          className="input input-sm"
+                          style={{ flex: 1.5, minWidth: 120 }}
+                          required
+                          value={testExaminerId}
+                          onChange={e => setTestExaminerId(e.target.value)}
+                        >
+                          <option value="">בחר בוחן...</option>
+                          {employees.map(emp => (
+                            <option key={emp.id} value={emp.id}>{emp.name}</option>
+                          ))}
+                        </select>
+                      )}
+                      <select className="input input-sm" style={{ width: 72 }} value={testPassed ? 'yes' : 'no'} onChange={e => setTestPassed(e.target.value === 'yes')}>
+                        <option value="yes">עבר</option>
+                        <option value="no">נכשל</option>
+                      </select>
                     </div>
-                    <div style={{ textAlign: 'left' }}>
-                      <span className={`badge ${test.passed ? 'badge-success' : 'badge-danger'}`}>{test.passed ? 'עבר' : 'נכשל'}</span>
-                      <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>{test.date}</div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input
+                        className="input input-sm"
+                        placeholder="הערות..."
+                        style={{ flex: 2 }}
+                        value={testNotes}
+                        onChange={e => setTestNotes(e.target.value)}
+                      />
+                      <button type="submit" disabled={testLoading} className="btn btn-primary btn-sm">רשום</button>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowTestForm(false)}>ביטול</button>
+                    </div>
+                  </form>
+                ) : (
+                  <button className="btn btn-ghost btn-sm w-full" style={{ marginBottom: 10, justifyContent: 'center', gap: 8 }} onClick={() => setShowTestForm(true)}>
+                    <Plus size={13} /> שמירת מבחן חדש
+                  </button>
+                )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 150, overflowY: 'auto', overscrollBehavior: 'contain' }}>
+                  {levelTestsHistory.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>לא נמצאו מבחנים מדווחים</div>
+                  ) : (
+                    levelTestsHistory.map(test => {
+                      const asLevel = test.test_type === 'level' || test.test_type === 'top-rope';
+                      const asSecurity = test.test_type === 'security';
+                      const asLeadCert = test.test_type === 'lead';
+                      const typeKey = asSecurity ? 'security' : asLeadCert ? 'lead' : 'level';
+                      const typeColor = TEST_TYPE_COLORS[typeKey];
+                      const routeStyle = test.route_style || (test.test_type === 'top-rope' ? 'top-rope' : null);
+                      const routeLabel = routeStyle === 'lead' ? 'הובלה' : routeStyle === 'top-rope' ? 'טופ רופ' : null;
+                      let title = 'מבחן';
+                      if (asLevel) title = `רמה ${test.level || ''}${routeLabel ? ` · ${routeLabel}` : ''}`.trim();
+                      else if (asSecurity) title = 'מבחן אבטחה';
+                      else if (asLeadCert) title = 'מבחן הובלה';
+                      const showExaminer = (asSecurity || asLeadCert) && !!test.examiner;
+                      return (
+                        <div key={test.id} style={{
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12,
+                          padding: '8px 10px', borderRadius: 8,
+                          background: typeColor.bg, border: `1px solid ${typeColor.border}`,
+                          borderRight: `3px solid ${typeColor.accent}`,
+                        }}>
+                          <div>
+                            <strong style={{ color: typeColor.accent }}>{title}</strong>
+                            {showExaminer && <div style={{ color: 'var(--text-3)', fontSize: 10 }}>בוחן: {test.examiner}</div>}
+                          </div>
+                          <div style={{ textAlign: 'left' }}>
+                            <span className={`badge ${test.passed ? 'badge-success' : 'badge-danger'}`}>{test.passed ? 'עבר' : 'נכשל'}</span>
+                            <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>{test.date}</div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </FolderRow>
+            )}
+
+            {/* Status & notes folder */}
+            <FolderRow
+              id="status"
+              title="סטטוס והערות"
+              icon={Clipboard}
+              summary={statusSummary}
+              open={openFolder === 'status'}
+              onToggle={toggleFolder}
+            >
+              {canManageBilling && (
+                <>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>שינוי סטטוס</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 14 }}>
+                    {statusKeys.filter(k => k !== 'archived').map(k => (
+                      <button
+                        key={k}
+                        className={`btn ${student.status === k ? 'btn-primary' : 'btn-ghost'} btn-xs`}
+                        style={{ justifyContent: 'flex-start', gap: 8 }}
+                        onClick={() => onStatusChange(student.id, k)}
+                      >
+                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: STATUSES[k].color, flexShrink: 0 }} />
+                        {STATUSES[k].label}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>הערות מעקב</div>
+                  <div className="card card-p" style={{ marginBottom: 0, padding: 10 }}>
+                    <div style={{ fontSize: 13, color: 'var(--text-2)', whiteSpace: 'pre-wrap' }}>
+                      {student.notes || 'אין הערות רשומות ללקוח זה'}
                     </div>
                   </div>
-                );
-              })
-            )}
+                </>
+              )}
+            </FolderRow>
+
+            <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+              <button
+                className="btn btn-danger btn-xs w-full"
+                style={{ justifyContent: 'center', gap: 6 }}
+                onClick={() => {
+                  if (confirm('האם אתה בטוח שברצונך למחוק את הלקוח לצמיתות ממאגר הלקוחות? פעולה זו תסיר גם את ההורה במידה ואין לו ילדים נוספים.')) {
+                    onDelete(student.id);
+                  }
+                }}
+              >
+                <Trash2 size={12} /> מחק לקוח לצמיתות
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Change Status */}
-        <div className="section-header"><div className="section-title">שינוי סטטוס לקוח</div></div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 20 }}>
-          {statusKeys.filter(k => k !== 'archived').map(k => (
-            <button
-              key={k}
-              className={`btn ${student.status === k ? 'btn-primary' : 'btn-ghost'} btn-sm`}
-              style={{ justifyContent: 'flex-start', gap: 10 }}
-              onClick={() => onStatusChange(student.id, k)}
-            >
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: STATUSES[k].color, flexShrink: 0 }} />
-              {STATUSES[k].label}
-            </button>
-          ))}
-        </div>
-
-        {/* Notes */}
-        <div className="section-header"><div className="section-title">הערות מעקב</div></div>
-        <div className="card card-p" style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 13, color: 'var(--text-2)', whiteSpace: 'pre-wrap' }}>
-            {student.notes || 'אין הערות רשומות ללקוח זה'}
-          </div>
-        </div>
-
-        {/* Unified multi-channel conversation */}
-        <ConversationPanel parent={parent} student={student} />
-
-        </>}
-
-        {/* Mailing Lists */}
-        <div className="section-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-          <div className="section-title">מנוי לרשימות תפוצה</div>
-          {!loadingLists && (
-            <button
-              type="button"
-              className={`btn btn-xs ${editingBroadcastLists ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setEditingBroadcastLists((v) => !v)}
-            >
-              {editingBroadcastLists ? <><Check size={11} /> סיום</> : <><Edit2 size={11} /> עריכה</>}
-            </button>
-          )}
-        </div>
-        <div className="card card-p" style={{ marginBottom: 20, opacity: editingBroadcastLists ? 1 : 0.85 }}>
-          {loadingLists ? (
-            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען רשימות תפוצה...</div>
+        {/* Communication column */}
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            background: 'rgba(0,0,0,0.15)',
+            overscrollBehavior: 'contain',
+          }}
+        >
+          {canManageBilling ? (
+            <ConversationPanel parent={parent} student={student} fillHeight />
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, pointerEvents: editingBroadcastLists ? 'auto' : 'none' }}>
-              {broadcastListDefs.map((list) => {
-                const label = list.description
-                  ? `${list.label} (${list.description})`
-                  : list.label;
-                const checked = broadcastLists[list.key] !== false;
-                return (
-                  <label
-                    key={list.key}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      fontSize: 13,
-                      cursor: editingBroadcastLists ? 'pointer' : 'default',
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={!editingBroadcastLists}
-                      onChange={() => handleListToggle(list.key)}
-                      style={{ cursor: editingBroadcastLists ? 'pointer' : 'default', width: 15, height: 15 }}
-                    />
-                    <span style={{ color: checked ? 'var(--text-1)' : 'var(--text-3)', fontWeight: checked ? '600' : 'normal' }}>
-                      {label}
-                    </span>
-                  </label>
-                );
-              })}
+            <div style={{ padding: 20, color: 'var(--text-3)', fontSize: 13 }}>
+              אין הרשאה לצפייה בתקשורת
             </div>
           )}
         </div>
-
-        {/* Permanent Deletion */}
-        <div style={{ marginTop: 24, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
-          <button className="btn btn-danger btn-sm w-full" style={{ justifyContent: 'center', gap: 8 }} onClick={() => {
-            if (confirm('האם אתה בטוח שברצונך למחוק את הלקוח לצמיתות ממאגר ה-CRM? פעולה זו תסיר גם את ההורה במידה ואין לו ילדים נוספים.')) {
-              onDelete(student.id);
-            }
-          }}>
-            <Trash2 size={13} /> מחק לקוח לצמיתות
-          </button>
-        </div>
       </div>
+
+      {showAddChild && (
+        <Modal
+          title="הוספת ילד / מתאמן"
+          onClose={() => !addingChild && setShowAddChild(false)}
+          footer={
+            <>
+              <button className="btn btn-ghost" disabled={addingChild} onClick={() => setShowAddChild(false)}>ביטול</button>
+              <button
+                form="add-child-form"
+                type="submit"
+                className="btn btn-primary"
+                disabled={addingChild || !newChildName.trim()}
+              >
+                <PlusCircle size={15} />
+                {addingChild
+                  ? 'מוסיף...'
+                  : (sendHealthOnAdd ? 'הוסף ושלח הצהרה' : 'הוסף')}
+              </button>
+            </>
+          }
+        >
+          <form id="add-child-form" onSubmit={handleAddChild} className="form-grid">
+            <div className="form-group">
+              <label className="form-label">שם המתאמן *</label>
+              <input
+                className="input"
+                required
+                autoFocus
+                placeholder="שם מלא"
+                value={newChildName}
+                onChange={(e) => setNewChildName(e.target.value)}
+              />
+            </div>
+            {parent?.name && (
+              <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                יתווסף תחת {parent.name}. פרטי ההורה כבר במערכת — ההודעה תישלח אליו.
+              </div>
+            )}
+            <label
+              className="checkbox-item"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                cursor: 'pointer',
+                background: 'var(--bg-2)',
+                padding: 10,
+                borderRadius: 8,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={sendHealthOnAdd}
+                onChange={(e) => setSendHealthOnAdd(e.target.checked)}
+                style={{ accentColor: 'var(--primary)' }}
+              />
+              <span style={{ fontSize: 13 }}>שלח הצהרת בריאות להורה בוואטסאפ</span>
+            </label>
+            {addChildError && (
+              <div className="alert alert-warn" style={{ marginTop: 4 }}>{addChildError}</div>
+            )}
+          </form>
+        </Modal>
+      )}
 
       {isEditing && (
         <Modal title={`עריכת פרטי ליד: ${student.name}`} onClose={() => setIsEditing(false)}
@@ -1493,9 +1919,82 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
           </div>
         </Modal>
       )}
-    </div>
+
+      {showPaymentModal && (
+        <Modal
+          title="דרישת תשלום / חשבונית"
+          onClose={() => setShowPaymentModal(false)}
+          footer={
+            <button className="btn btn-ghost" onClick={() => setShowPaymentModal(false)}>סגור</button>
+          }
+        >
+          <form onSubmit={handleSendPayment}>
+            <div className="form-group" style={{ marginBottom: 10 }}>
+              <label className="form-label" style={{ fontSize: 11 }}>בחר מוצר מהמחירון</label>
+              <select className="input input-sm" value={selectedPricelistItem} onChange={handlePricelistSelect}>
+                <option value="">-- מוצר מותאם אישית --</option>
+                {pricelist.map(item => (
+                  <option key={item.id} value={item.id}>{item.name} ({item.price}₪)</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label className="form-label" style={{ fontSize: 11 }}>תיאור</label>
+                <input
+                  className="input input-sm"
+                  placeholder="למשל: כרטיסיה 10 כניסות"
+                  required
+                  value={billDescription}
+                  onChange={e => setBillDescription(e.target.value)}
+                />
+              </div>
+              <div className="form-group" style={{ width: 100 }}>
+                <label className="form-label" style={{ fontSize: 11 }}>מחיר (₪)</label>
+                <input
+                  className="input input-sm"
+                  type="number"
+                  placeholder="350"
+                  required
+                  value={billAmount}
+                  onChange={e => setBillAmount(e.target.value)}
+                />
+              </div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <button type="submit" disabled={billingLoading || invoiceLoading} className="btn btn-primary btn-sm w-full" style={{ justifyContent: 'center', gap: 8 }}>
+                <Send size={13} /> {billingLoading ? 'מייצר קישור...' : 'שלח קישור סליקה בוואטסאפ'}
+              </button>
+              <button
+                type="button"
+                disabled={billingLoading || invoiceLoading}
+                className="btn btn-ghost btn-sm w-full"
+                style={{ justifyContent: 'center', gap: 8 }}
+                onClick={handleCreateInvoice}
+              >
+                <ReceiptText size={13} /> {invoiceLoading ? 'מפיק חשבונית...' : 'הפק חשבונית מס קבלה עכשיו'}
+              </button>
+            </div>
+          </form>
+          {billingLink && (
+            <div style={{ marginTop: 10, padding: 8, background: '#1F2937', borderRadius: 6, fontSize: 12, wordBreak: 'break-all' }}>
+              <strong>קישור לתשלום:</strong><br />
+              <a href={billingLink} target="_blank" rel="noreferrer" style={{ color: 'var(--blue)' }}>{billingLink}</a>
+            </div>
+          )}
+          {lastInvoice && (
+            <div className="alert alert-success" style={{ marginTop: 10, fontSize: 12 }}>
+              חשבונית הופקה
+              {lastInvoice.docNumber ? ` · מס׳ ${lastInvoice.docNumber}` : ''}
+              {' '}· ₪{lastInvoice.amount} · {lastInvoice.description}
+            </div>
+          )}
+        </Modal>
+      )}
+    </>
   );
 }
+
 
 // ─── Add Lead Modal ──────────────────────────────────────────────────────────
 function AddLeadModal({ students, parents, onAdd, onClose }) {
@@ -1660,12 +2159,31 @@ export default function Leads({ students, setStudents, parents, setParents, grou
     return matchSearch && matchStatus;
   }).map((entry) => entry.student);
 
+  // Table: one row per family. Kanban stays per-student for the funnel.
+  const familyRows = buildFamilyRows(filtered, parents);
+  const familyCountByStatus = (() => {
+    const map = { all: buildFamilyRows(leadEntries.map((e) => e.student), parents).length };
+    for (const key of Object.keys(STATUSES)) {
+      if (key === 'archived') continue;
+      const matching = leadEntries.filter((e) => e.student.status === key).map((e) => e.student);
+      map[key] = buildFamilyRows(matching, parents).length;
+    }
+    return map;
+  })();
+
   const selectedStudent = students.find(s => s.id === selectedStudentId)
     || (selectedStudentId?.startsWith('parent:')
       ? buildLeadEntries(students, parents).find((e) => e.key === selectedStudentId)?.student
       : null);
   const selectedParent = selectedStudent ? parents.find(p => p.id === selectedStudent.parentId) : null;
   const selectedGroup = selectedStudent?.groupId ? groups.find(g => g.id === selectedStudent.groupId) : null;
+  const selectedSiblings = selectedParent
+    ? students.filter((s) => {
+        if (String(s.parentId) === String(selectedParent.id)) return true;
+        const otherParent = parents.find((p) => p.id === s.parentId);
+        return phoneTailMatch(otherParent?.phone, selectedParent.phone);
+      })
+    : [];
 
   const handleAdd = async ({ parentName, phone, email, city, source, children }) => {
     let updatedParents = [...parents];
@@ -1783,8 +2301,11 @@ export default function Leads({ students, setStudents, parents, setParents, grou
     <div className="fade-in">
       {selectedStudentId && (
         <CustomerCard
+          key={selectedStudentId}
           student={selectedStudent}
           parent={selectedParent}
+          siblings={selectedSiblings}
+          onSelectSibling={setSelectedStudentId}
           group={selectedGroup}
           groups={groups}
           pricelist={pricelist}
@@ -1836,11 +2357,11 @@ export default function Leads({ students, setStudents, parents, setParents, grou
       {viewMode === 'table' && (
       <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
         <button className={`btn btn-sm ${filterStatus === 'all' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilterStatus('all')}>
-          הכל ({leadEntries.length})
+          הכל ({familyCountByStatus.all})
         </button>
         {Object.entries(STATUSES).filter(([k]) => k !== 'archived').map(([k, v]) => (
           <button key={k} className={`btn btn-sm ${filterStatus === k ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilterStatus(k)}>
-            {v.label} ({leadEntries.filter((e) => e.student.status === k).length})
+            {v.label} ({familyCountByStatus[k] || 0})
           </button>
         ))}
       </div>
@@ -1909,50 +2430,101 @@ export default function Leads({ students, setStudents, parents, setParents, grou
         </div>
       )}
 
-      {/* Table */}
+      {/* Table — one row per family */}
       {viewMode === 'table' && (
       <div className="card">
         <div className="table-wrap">
           <table className="crm-table">
             <thead>
               <tr>
-                <th>שם הילד</th>
                 <th>שם ההורה</th>
+                <th>ילדים / מתאמנים</th>
                 <th>טלפון</th>
                 <th>קבוצה</th>
-                <th>רמה</th>
                 <th>סטטוס</th>
                 <th>תאריך קליטה</th>
                 <th>פעולות</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 && (
-                <tr><td colSpan={8} style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>אין תוצאות</td></tr>
+              {familyRows.length === 0 && (
+                <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>אין תוצאות</td></tr>
               )}
-              {filtered.map(s => {
-                const parent = parents.find(p => p.id === s.parentId);
-                const group = s.groupId ? groups.find(g => g.id === s.groupId) : null;
-                const isIg = parent?.instagram_id || parent?.channel === 'instagram' || s.notes?.includes('אינסטגרם');
+              {familyRows.map((family) => {
+                const parent = family.parent;
+                const primary = family.primaryStudent;
+                const isIg = parent?.instagram_id || parent?.channel === 'instagram'
+                  || family.students.some((s) => s.notes?.includes('אינסטגרם'));
+                const namedChildren = family.students.filter((s) => s.name && !isParentOnlyLead(s));
+                const groupsInFamily = [...new Set(
+                  family.students.map((s) => s.groupId).filter(Boolean)
+                )].map((gid) => groups.find((g) => g.id === gid)).filter(Boolean);
+
                 return (
-                  <tr key={s.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedStudentId(s.id)}>
-                    <td style={{ fontWeight: 700 }}>{s.name || <span style={{ color: 'var(--text-3)' }}>—</span>}</td>
-                    <td>{parent?.name}</td>
+                  <tr
+                    key={family.key}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => primary && setSelectedStudentId(primary.id)}
+                  >
+                    <td style={{ fontWeight: 700 }}>{parent?.name || '—'}</td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      {namedChildren.length === 0 ? (
+                        <span style={{ color: 'var(--text-3)' }}>ללא מתאמן רשום</span>
+                      ) : (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {namedChildren.map((child) => (
+                            <button
+                              key={child.id}
+                              type="button"
+                              className="btn btn-ghost btn-xs"
+                              style={{
+                                padding: '2px 8px',
+                                border: '1px solid var(--border)',
+                                borderRadius: 999,
+                                fontWeight: 600,
+                              }}
+                              onClick={() => setSelectedStudentId(child.id)}
+                              title={STATUSES[child.status]?.label || child.status}
+                            >
+                              {child.name}
+                              {namedChildren.length > 1 && (
+                                <span style={{ marginInlineStart: 4, color: 'var(--text-3)', fontWeight: 500, fontSize: 10 }}>
+                                  {STATUSES[child.status]?.label || ''}
+                                </span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </td>
                     <td style={{ direction: 'ltr', unicodeBidi: 'plaintext', color: isIg && !parent?.phone ? '#ff80bf' : 'var(--text-2)' }}>
                       {isIg && !parent?.phone ? `📸 IG (${parent?.instagram_id || 'DM'})` : parent?.phone}
                     </td>
-                    <td>{group ? <span className="badge badge-blue">{group.name.split(' ')[0]}</span> : <span className="badge badge-gray">—</span>}</td>
-                    <td>{s.levelGrade ? <span className="badge badge-purple">{s.levelGrade}</span> : <span style={{ color: 'var(--text-3)' }}>—</span>}</td>
-                    <td><StatusBadge status={s.status} /></td>
-                    <td style={{ color: 'var(--text-3)', fontSize: 12 }}>{s.created}</td>
-                    <td onClick={e => e.stopPropagation()}>
+                    <td>
+                      {groupsInFamily.length === 0
+                        ? <span className="badge badge-gray">—</span>
+                        : groupsInFamily.map((g) => (
+                          <span key={g.id} className="badge badge-blue" style={{ marginInlineEnd: 4 }}>
+                            {g.name.split(' ')[0]}
+                          </span>
+                        ))}
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                        {family.statuses.map((st) => (
+                          <StatusBadge key={st} status={st} />
+                        ))}
+                      </div>
+                    </td>
+                    <td style={{ color: 'var(--text-3)', fontSize: 12 }}>{family.created}</td>
+                    <td onClick={(e) => e.stopPropagation()}>
                       <div style={{ display: 'flex', gap: 6 }}>
-                        <button className="btn btn-ghost btn-xs" onClick={() => setSelectedStudentId(s.id)}>
+                        <button className="btn btn-ghost btn-xs" onClick={() => primary && setSelectedStudentId(primary.id)}>
                           <Eye size={13} /> פרטים
                         </button>
                         {parent?.phone && !isIg ? (
                           <a href={`https://wa.me/972${parent?.phone?.replace(/^0/, '').replace(/[-\s]/g, '')}`}
-                            target="_blank" rel="noreferrer" className="btn btn-success btn-xs" onClick={e => e.stopPropagation()}>
+                            target="_blank" rel="noreferrer" className="btn btn-success btn-xs" onClick={(e) => e.stopPropagation()}>
                             💬
                           </a>
                         ) : isIg ? (

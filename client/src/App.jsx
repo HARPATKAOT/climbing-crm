@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Calendar, ShieldCheck, UserCog, LogIn,
@@ -57,7 +57,7 @@ const PATH_TO_PAGE = Object.fromEntries(
 
 // Public routes are handled outside App (main.jsx). Never redirect these into the CRM shell.
 const PUBLIC_PATH_PREFIXES = ['/health', '/join'];
-const STAFF_PAGES = new Set(['checkin', 'leads', 'schedule', 'health']);
+const STAFF_PAGES = new Set(['checkin', 'leads', 'schedule', 'health', 'cash']);
 
 function isPublicPath(pathname) {
   return PUBLIC_PATH_PREFIXES.some(
@@ -76,7 +76,7 @@ const PAGE_TITLES = {
   leads:      { title: 'לקוחות ולידים',           sub: 'ניהול מאגר המתאמנים' },
   schedule:   { title: 'לוח חוגים',               sub: 'ניהול שיעורים ונוכחות' },
   broadcasts: { title: 'דיוור וואטסאפ',           sub: 'שליחת הודעות מסיביות' },
-  cash:       { title: 'קופה ומכירה',           sub: 'מכירה בדלפק, סגירת קופה וסליקה' },
+  cash:       { title: 'קופה ומכירה',           sub: 'מכירה בדלפק, סגירת קופה ודוחות' },
   pricelist:  { title: 'מחירון',                  sub: 'ניהול מחירי הכניסה, חוגים וציוד' },
   safety:     { title: 'בדיקות בטיחות יומיות',   sub: 'אישור ובטיחות האתר' },
   employees:  { title: 'עובדים ומשמרות',          sub: 'שעון נוכחות וניהול שכר' },
@@ -116,8 +116,17 @@ export default function App() {
   const [students, setStudents] = useState([]);
   const [parents, setParents] = useState([]);
   const [groups, setGroups] = useState([]);
+  const coreEmptyRef = useRef(true);
 
   useEffect(() => {
+    coreEmptyRef.current = students.length === 0 && parents.length === 0;
+  }, [students.length, parents.length]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let retryTimer = null;
+    let attempt = 0;
+
     async function fetchData() {
       try {
         const [resStudents, resParents, resGroups] = await Promise.all([
@@ -125,9 +134,13 @@ export default function App() {
           fetch('/api/parents').then(r => r.ok ? r.json() : null),
           fetch('/api/groups').then(r => r.ok ? r.json() : null),
         ]);
-        if (Array.isArray(resStudents)) setStudents(resStudents);
-        if (Array.isArray(resParents)) setParents(resParents);
-        if (Array.isArray(resGroups)) {
+        if (cancelled) return;
+        const gotStudents = Array.isArray(resStudents);
+        const gotParents = Array.isArray(resParents);
+        const gotGroups = Array.isArray(resGroups);
+        if (gotStudents) setStudents(resStudents);
+        if (gotParents) setParents(resParents);
+        if (gotGroups) {
           // Dedupe by id in case the API cache briefly contains re-seed duplicates.
           const byId = new Map();
           for (const g of resGroups) {
@@ -135,11 +148,35 @@ export default function App() {
           }
           setGroups([...byId.values()]);
         }
+        if (gotStudents || gotParents || gotGroups) return;
+        throw new Error('empty core response');
       } catch (error) {
+        if (cancelled) return;
         console.warn('Backend server offline.', error);
+        // Nodemon restarts briefly refuse connections — retry instead of staying at 0.
+        if (attempt < 8) {
+          const delay = Math.min(1000 * (2 ** attempt), 8000);
+          attempt += 1;
+          retryTimer = setTimeout(fetchData, delay);
+        }
       }
     }
+
     fetchData();
+
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!coreEmptyRef.current) return;
+      attempt = 0;
+      fetchData();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [page]);
   const [showNotifications, setShowNotifications] = useState(false);
   const info   = PAGE_TITLES[page] || {};
@@ -340,7 +377,7 @@ export default function App() {
           {page === 'leads'      && <Leads students={students} setStudents={setStudents} parents={parents} setParents={setParents} groups={groups} canManageBilling={isOwner} />}
           {page === 'schedule'   && <Schedule groups={groups} students={students} parents={parents} setGroups={setGroups} setStudents={setStudents} />}
           {page === 'broadcasts' && <Broadcasts parents={parents} students={students} groups={groups} />}
-          {page === 'cash'       && <CashRegister />}
+          {page === 'cash'       && <CashRegister isOwner={isOwner} />}
           {page === 'pricelist'  && <Pricelist />}
           {page === 'safety'     && <Safety />}
           {page === 'employees'  && <Employees />}

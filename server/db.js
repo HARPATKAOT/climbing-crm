@@ -7,6 +7,60 @@ const DB_FILE = path.join(process.cwd(), 'db.json');
 /** Tables that may exist locally (e.g. after Meta sync) before durable write completes. */
 const LOCAL_MIGRATE_IF_REMOTE_EMPTY = new Set(['message_templates', 'saved_replies']);
 
+/** Normalize Israeli mobile numbers to 972… so 050… and 97250… match. */
+export function normalizeParentPhone(phone) {
+  let digits = String(phone || '').replace(/[^\d]/g, '');
+  if (digits.startsWith('0') && digits.length >= 9) digits = `972${digits.slice(1)}`;
+  if (digits.startsWith('9720')) digits = `972${digits.slice(4)}`;
+  return digits;
+}
+
+export function parentPhonesMatch(a, b) {
+  const na = normalizeParentPhone(a);
+  const nb = normalizeParentPhone(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const tailA = na.slice(-9);
+  const tailB = nb.slice(-9);
+  return tailA.length === 9 && tailA === tailB;
+}
+
+function scoreParentRecord(p) {
+  let score = 0;
+  if (p?.email) score += 4;
+  if (p?.idNumber) score += 3;
+  if (p?.name && p.name !== 'לקוח וואטסאפ' && p.name !== 'ליד מאינסטגרם' && p.name !== 'לקוח מסנג׳ר') {
+    score += 3;
+  }
+  if (p?.last_inbound_whatsapp || p?.last_inbound_instagram || p?.last_inbound_messenger) score += 1;
+  if (p?.status && p.status !== 'lead_new') score += 1;
+  // Prefer already-normalized 972… cards so we keep one phone format.
+  if (String(p?.phone || '').startsWith('972')) score += 1;
+  return score;
+}
+
+const STUDENT_STATUS_RANK = {
+  registered: 50,
+  health_signed: 40,
+  intro_paid: 30,
+  lead_contacted: 20,
+  lead_new: 10,
+  archived: 0,
+};
+
+function scoreStudentRecord(s) {
+  let score = STUDENT_STATUS_RANK[s?.status] ?? 5;
+  if (s?.groupId) score += 5;
+  if (s?.levelGrade) score += 2;
+  if (s?.healthSignedAt || s?.waiverSignedAt) score += 3;
+  if (s?.notes) score += 1;
+  return score;
+}
+
+function sameChildName(a, b) {
+  return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+}
+
 export function planDurableHydration(table, remoteRows, localRows = []) {
   if (remoteRows === null) return { mode: 'error', rows: localRows };
   if (OPERATIONAL_TABLES.includes(table)) {
@@ -284,6 +338,17 @@ export async function initDb() {
       counts.app_settings = 'migrated';
     }
     writeDb(data);
+    // Heal historical 050… / 972… duplicate parent cards after hydration.
+    try {
+      const mergeResult = db.mergeAllDuplicateParentsByPhone();
+      if (mergeResult.absorbedCount > 0) {
+        console.log(
+          `🔗 Parent phone de-dupe: merged ${mergeResult.absorbedCount} card(s) in ${mergeResult.mergedGroups} group(s)`
+        );
+      }
+    } catch (mergeErr) {
+      console.error('Parent phone de-dupe failed:', mergeErr.message);
+    }
     console.log(`🤖 Bot auto-reply after initDb: ${botFlagLabel()}`);
     console.log(
       `✅ Loaded CRM-core from Supabase:`,
@@ -292,6 +357,173 @@ export async function initDb() {
   } catch (error) {
     console.error('initDb() failed — falling back to local db.json:', error.message);
   }
+}
+
+/**
+ * Move children + related rows from duplicate parent cards onto `canonical`,
+ * then remove the duplicate parent records (local + durable).
+ * Mutates `data` in place. Returns absorbed parent ids.
+ */
+function absorbDuplicateParentsInto(data, canonical, duplicates) {
+  if (!canonical || !duplicates?.length) return [];
+  const absorbedIds = [];
+  const touchedStudents = [];
+  const touchedDecls = [];
+
+  for (const dup of duplicates) {
+    if (!dup?.id || dup.id === canonical.id) continue;
+
+    if (dup.email && !canonical.email) canonical.email = dup.email;
+    if (dup.city && !canonical.city) canonical.city = dup.city;
+    if (dup.idNumber && !canonical.idNumber) canonical.idNumber = dup.idNumber;
+    if (dup.icount_client_id && !canonical.icount_client_id) {
+      canonical.icount_client_id = dup.icount_client_id;
+    }
+    if (
+      dup.name
+      && dup.name !== 'לקוח וואטסאפ'
+      && dup.name !== 'ליד מאינסטגרם'
+      && (canonical.name === 'לקוח וואטסאפ' || canonical.name === 'ליד מאינסטגרם' || !canonical.name)
+    ) {
+      canonical.name = dup.name;
+    }
+    if (dup.notes) {
+      canonical.notes = canonical.notes
+        ? `${canonical.notes}\n---\n${dup.notes}`
+        : dup.notes;
+    }
+    if (dup.last_inbound_whatsapp) {
+      const cur = canonical.last_inbound_whatsapp || '';
+      if (!cur || String(dup.last_inbound_whatsapp) > String(cur)) {
+        canonical.last_inbound_whatsapp = dup.last_inbound_whatsapp;
+      }
+    }
+
+    const dupStudents = (data.students || []).filter((s) => s.parentId === dup.id);
+    for (const st of dupStudents) {
+      const sameOnCanonical = (data.students || []).find(
+        (s) => s.parentId === canonical.id && s.id !== st.id && sameChildName(s.name, st.name)
+      );
+
+      if (sameOnCanonical) {
+        const keep =
+          scoreStudentRecord(sameOnCanonical) >= scoreStudentRecord(st) ? sameOnCanonical : st;
+        const drop = keep.id === sameOnCanonical.id ? st : sameOnCanonical;
+        keep.parentId = canonical.id;
+        if (!keep.groupId && drop.groupId) keep.groupId = drop.groupId;
+        if (!keep.levelGrade && drop.levelGrade) keep.levelGrade = drop.levelGrade;
+        if (!keep.birthDate && drop.birthDate) keep.birthDate = drop.birthDate;
+        if (!keep.healthSignedAt && drop.healthSignedAt) keep.healthSignedAt = drop.healthSignedAt;
+        if (!keep.waiverSignedAt && drop.waiverSignedAt) keep.waiverSignedAt = drop.waiverSignedAt;
+        if ((STUDENT_STATUS_RANK[drop.status] ?? 0) > (STUDENT_STATUS_RANK[keep.status] ?? 0)) {
+          keep.status = drop.status;
+        }
+        if (drop.notes) {
+          keep.notes = keep.notes ? `${keep.notes}\n${drop.notes}` : drop.notes;
+        }
+
+        for (const decl of data.health_declarations || []) {
+          if (decl.studentId === drop.id) {
+            decl.studentId = keep.id;
+            touchedDecls.push(decl);
+            syncUpsert('health_declarations', decl);
+          }
+          if (decl.parentId === dup.id) {
+            decl.parentId = canonical.id;
+            touchedDecls.push(decl);
+            syncUpsert('health_declarations', decl);
+          }
+        }
+        for (const doc of data.client_documents || []) {
+          if (doc.student_id === drop.id || doc.studentId === drop.id) {
+            if (doc.student_id !== undefined) doc.student_id = keep.id;
+            if (doc.studentId !== undefined) doc.studentId = keep.id;
+            syncUpsert('client_documents', doc);
+          }
+          if (doc.parent_id === dup.id || doc.parentId === dup.id) {
+            if (doc.parent_id !== undefined) doc.parent_id = canonical.id;
+            if (doc.parentId !== undefined) doc.parentId = canonical.id;
+            syncUpsert('client_documents', doc);
+          }
+        }
+        for (const pay of data.payments || []) {
+          if (pay.student_id === drop.id) {
+            pay.student_id = keep.id;
+            syncUpsert('payments', pay);
+          }
+        }
+
+        data.students = data.students.filter((s) => s.id !== drop.id);
+        syncRemove('students', drop.id);
+        touchedStudents.push(keep);
+        syncUpsert('students', keep);
+      } else {
+        st.parentId = canonical.id;
+        touchedStudents.push(st);
+        syncUpsert('students', st);
+      }
+    }
+
+    for (const decl of data.health_declarations || []) {
+      if (decl.parentId === dup.id) {
+        decl.parentId = canonical.id;
+        touchedDecls.push(decl);
+        syncUpsert('health_declarations', decl);
+      }
+    }
+    for (const pay of data.payments || []) {
+      if (pay.parent_id === dup.id) {
+        pay.parent_id = canonical.id;
+        syncUpsert('payments', pay);
+      }
+    }
+    for (const msg of data.messages || []) {
+      if (msg.parent_id === dup.id) {
+        msg.parent_id = canonical.id;
+        syncUpsert('messages', msg);
+      }
+    }
+    for (const doc of data.client_documents || []) {
+      if (doc.parent_id === dup.id || doc.parentId === dup.id) {
+        if (doc.parent_id !== undefined) doc.parent_id = canonical.id;
+        if (doc.parentId !== undefined) doc.parentId = canonical.id;
+        syncUpsert('client_documents', doc);
+      }
+    }
+    if (Array.isArray(data.broadcast_lists)) {
+      for (const row of data.broadcast_lists) {
+        if (row.parent_id === dup.id || row.parentId === dup.id) {
+          if (row.parent_id !== undefined) row.parent_id = canonical.id;
+          if (row.parentId !== undefined) row.parentId = canonical.id;
+          syncUpsert('broadcast_lists', row);
+        }
+      }
+    }
+
+    data.parents = (data.parents || []).filter((p) => p.id !== dup.id);
+    absorbedIds.push(dup.id);
+  }
+
+  // Durable write order matters: reassign children before deleting duplicate parents
+  // (Supabase FK is ON DELETE CASCADE on students.parent_id).
+  if (absorbedIds.length) {
+    Promise.resolve()
+      .then(async () => {
+        for (const s of touchedStudents) await persistCore('students', s);
+        for (const decl of touchedDecls) await persistCore('health_declarations', decl);
+        await persistCore('parents', canonical);
+        for (const id of absorbedIds) {
+          try {
+            await supa.remove('parents', id);
+          } catch (e) {
+            console.error(`merge remove parent ${id} failed:`, e?.message || e);
+          }
+        }
+      })
+      .catch((e) => console.error('parent merge durable write failed:', e?.message || e));
+  }
+
+  return absorbedIds;
 }
 
 export const db = {
@@ -391,31 +623,40 @@ export const db = {
 
   upsertParentByPhone: (name, phone, email, extras = {}) => {
     const data = readDb();
-    const normalize = (p) => {
-      let d = String(p || '').replace(/[^\d]/g, '');
-      if (d.startsWith('0') && d.length >= 9) d = `972${d.slice(1)}`;
-      if (d.startsWith('9720')) d = `972${d.slice(4)}`;
-      return d;
-    };
-    const scoreParent = (p) => {
-      let score = 0;
-      if (p.email) score += 4;
-      if (p.idNumber) score += 3;
-      if (p.name && p.name !== 'לקוח וואטסאפ' && p.name !== 'ליד מאינסטגרם') score += 3;
-      if (p.last_inbound_whatsapp || p.last_inbound_instagram || p.last_inbound_messenger) score += 1;
-      if (p.status && p.status !== 'lead_new') score += 1;
-      return score;
-    };
-    const cleanPhone = normalize(phone);
-    const phoneTail = cleanPhone.slice(-9);
-    const matches = data.parents.filter((p) => {
-      const np = normalize(p.phone);
-      return np === cleanPhone || (phoneTail && np.slice(-9) === phoneTail);
-    });
-    // Prefer the richest CRM card when the same person exists as 050… and 972…
+    const cleanPhone = normalizeParentPhone(phone);
+    if (!cleanPhone && !phone) {
+      // No phone — cannot de-dupe; create a thin card.
+      const parent = {
+        id: `p${Date.now()}`,
+        name: name || 'לקוח וואטסאפ',
+        phone: '',
+        email: email || '',
+        city: extras.city || '',
+        source: extras.source || 'unknown',
+        channel: extras.channel || extras.source || undefined,
+        notes: extras.notes || '',
+        status: extras.status || 'lead_new',
+      };
+      data.parents.push(parent);
+      writeDb(data);
+      syncUpsert('parents', parent);
+      return parent;
+    }
+
+    const matches = (data.parents || []).filter((p) => parentPhonesMatch(p.phone, cleanPhone || phone));
     let parent = matches.length
-      ? [...matches].sort((a, b) => scoreParent(b) - scoreParent(a))[0]
+      ? [...matches].sort((a, b) => scoreParentRecord(b) - scoreParentRecord(a))[0]
       : null;
+
+    // Auto-merge leftover duplicates (050… vs 972…) into the canonical card.
+    if (parent && matches.length > 1) {
+      const absorbed = absorbDuplicateParentsInto(data, parent, matches.filter((p) => p.id !== parent.id));
+      if (absorbed.length) {
+        console.log(
+          `🔗 Merged ${absorbed.length} duplicate parent card(s) into ${parent.id} (phone ${cleanPhone})`
+        );
+      }
+    }
 
     if (parent) {
       if (email && !parent.email) parent.email = email;
@@ -426,11 +667,9 @@ export const db = {
       if (extras.source && (!parent.source || parent.source === 'unknown')) parent.source = extras.source;
       if (extras.channel && !parent.channel) parent.channel = extras.channel;
       if (extras.status) parent.status = extras.status;
-      if (extras.notes) parent.notes = (parent.notes ? parent.notes + '\n' : '') + extras.notes;
-      // Normalize stored phone so future lookups hit one format.
-      if (cleanPhone && normalize(parent.phone) === cleanPhone && parent.phone !== cleanPhone) {
-        parent.phone = cleanPhone;
-      }
+      if (extras.notes) parent.notes = (parent.notes ? `${parent.notes}\n` : '') + extras.notes;
+      // Always store one canonical phone format.
+      if (cleanPhone) parent.phone = cleanPhone;
       writeDb(data);
     } else {
       parent = {
@@ -449,6 +688,39 @@ export const db = {
     }
     syncUpsert('parents', parent);
     return parent;
+  },
+
+  /** Scan all parents and merge cards that share the same phone (any format). */
+  mergeAllDuplicateParentsByPhone: () => {
+    const data = readDb();
+    const groups = new Map();
+    for (const parent of data.parents || []) {
+      const key = normalizeParentPhone(parent.phone);
+      if (!key) continue;
+      const list = groups.get(key) || [];
+      list.push(parent);
+      groups.set(key, list);
+    }
+    let mergedGroups = 0;
+    let absorbedCount = 0;
+    for (const [, list] of groups) {
+      if (list.length < 2) continue;
+      const canonical = [...list].sort((a, b) => scoreParentRecord(b) - scoreParentRecord(a))[0];
+      const absorbed = absorbDuplicateParentsInto(
+        data,
+        canonical,
+        list.filter((p) => p.id !== canonical.id)
+      );
+      const normalized = normalizeParentPhone(canonical.phone);
+      if (normalized) canonical.phone = normalized;
+      if (absorbed.length) {
+        mergedGroups += 1;
+        absorbedCount += absorbed.length;
+        syncUpsert('parents', canonical);
+      }
+    }
+    writeDb(data);
+    return { mergedGroups, absorbedCount };
   },
 
   createLeadFromWhatsApp: async (phone, text) => {
@@ -570,19 +842,27 @@ export const db = {
     for (const childName of rawNames) {
       const trimmed = (childName || '').trim();
       if (!trimmed) continue;
+      // Look under this parent AND any leftover duplicate parent with the same phone.
+      const siblingParentIds = new Set(
+        (db.get('parents') || [])
+          .filter((p) => p.id === parent.id || parentPhonesMatch(p.phone, parent.phone))
+          .map((p) => p.id)
+      );
       const existing = db.get('students').find(
-        s => s.name.trim().toLowerCase() === trimmed.toLowerCase() && s.parentId === parent.id
+        (s) => sameChildName(s.name, trimmed) && siblingParentIds.has(s.parentId)
       );
       if (existing) {
-        const updated = db.update('students', existing.id, {
+        const patch = {
+          parentId: parent.id,
           status: existing.status === 'archived' ? 'lead_new' : existing.status,
           source: existing.source && existing.source !== 'unknown' ? existing.source : source,
           notes: interest
-            ? ((existing.notes ? existing.notes + '\n' : '') + `עניין (טופס): ${interest}`)
+            ? ((existing.notes ? `${existing.notes}\n` : '') + `עניין (טופס): ${interest}`)
             : existing.notes,
-        });
-        createdStudents.push(updated || existing);
-        await persistLeadPair(parent, updated || existing);
+        };
+        const updated = db.update('students', existing.id, patch);
+        createdStudents.push(updated || { ...existing, ...patch });
+        await persistLeadPair(parent, updated || { ...existing, ...patch });
       } else {
         const student = db.insert('students', {
           name: trimmed,
@@ -600,6 +880,36 @@ export const db = {
       }
     }
     return { parent, students: createdStudents, isNew: createdStudents.length > 0 };
+  },
+
+  /** Add a trainee/child under an existing parent card. */
+  addStudentToParent: async (parentId, { name, birthDate = '', status = 'lead_new', source = 'crm' } = {}) => {
+    const trimmed = String(name || '').trim();
+    if (!trimmed) return { error: 'שם המתאמן חובה', status: 400 };
+
+    const parent = db.getOne('parents', parentId);
+    if (!parent) return { error: 'הלקוח לא נמצא', status: 404 };
+
+    const existing = (db.get('students') || []).find(
+      (s) => s.parentId === parentId && sameChildName(s.name, trimmed)
+    );
+    if (existing) {
+      return { error: 'מתאמן עם שם זה כבר קיים תחת הלקוח', status: 409, student: existing };
+    }
+
+    const student = db.insert('students', {
+      name: trimmed,
+      parentId: parent.id,
+      groupId: null,
+      status,
+      birthDate: birthDate || '',
+      notes: '',
+      levelGrade: null,
+      source,
+      created: new Date().toISOString().split('T')[0],
+    });
+    await persistLeadPair(parent, student);
+    return { parent, student };
   },
 
   getBroadcastListDefs: () => {

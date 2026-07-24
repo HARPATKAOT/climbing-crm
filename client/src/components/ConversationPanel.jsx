@@ -61,14 +61,17 @@ export default function ConversationPanel({ parent, student, fillHeight = false 
         fetch('/api/message-templates?approved=1'),
         fetch('/api/saved-replies'),
       ]);
-      const conv = await convRes.json();
-      if (!convRes.ok) throw new Error(conv.error || 'טעינת שיחה נכשלה');
-      setData(conv);
-      setChannel(conv.defaultChannel || 'whatsapp');
+
+      // Templates / saved replies first — don't lose them if conversation load fails
       const tpls = tplRes.ok ? await tplRes.json() : [];
       setTemplates(Array.isArray(tpls) ? tpls : []);
       const srs = srRes.ok ? await srRes.json() : [];
       setSavedReplies(Array.isArray(srs) ? srs : []);
+
+      const conv = await convRes.json().catch(() => ({}));
+      if (!convRes.ok) throw new Error(conv.error || 'טעינת שיחה נכשלה');
+      setData(conv);
+      setChannel(conv.defaultChannel || 'whatsapp');
       const openNow = !!conv.windows?.[conv.defaultChannel || 'whatsapp']?.open;
       if (openNow) {
         setMode((prev) => (prev === 'template' ? 'text' : prev));
@@ -336,7 +339,11 @@ export default function ConversationPanel({ parent, student, fillHeight = false 
           <form onSubmit={handleSend} style={{ padding: 10, background: 'rgba(0,0,0,0.15)', flexShrink: 0 }}>
             {mode === 'template' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
-                {templates.length === 0 ? (
+                {loading && templates.length === 0 ? (
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.45 }}>
+                    טוען תבניות מאושרות...
+                  </div>
+                ) : templates.length === 0 ? (
                   <div style={{ fontSize: 11, color: '#FBBF24', lineHeight: 1.45 }}>
                     אין תבניות מאושרות במערכת.
                     עברו למסך הדיוור, לשונית תבניות, לחצו על סנכרון, ואז רעננו כאן.

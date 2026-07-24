@@ -52,7 +52,7 @@ function saleStatusBadge(status) {
   return 'badge badge-gray';
 }
 
-export default function CashRegister() {
+export default function CashRegister({ isOwner = true }) {
   const [expectedAmount, setExpectedAmount] = useState('');
   const [actualAmount, setActualAmount] = useState('');
   const [shiftType, setShiftType] = useState('בוקר');
@@ -73,22 +73,25 @@ export default function CashRegister() {
   const [refundBusyId, setRefundBusyId] = useState('');
   const [historyError, setHistoryError] = useState('');
   const [historyOk, setHistoryOk] = useState('');
+  const [reports, setReports] = useState(null);
+  const [reportsLoading, setReportsLoading] = useState(false);
+  const [syncInventoryMsg, setSyncInventoryMsg] = useState('');
 
   const refreshRegister = useCallback(async () => {
     try {
-      const [data, emps] = await Promise.all([
-        fetch('/api/cash-register').then((r) => (r.ok ? r.json() : [])),
-        fetch('/api/employees').then((r) => (r.ok ? r.json() : [])),
-      ]);
-      const list = Array.isArray(emps) ? emps : [];
-      setEmployees(list);
-      if (list.length && !employee) setEmployee(list[0].name);
+      const data = await fetch('/api/cash-register').then((r) => (r.ok ? r.json() : []));
       setShifts(Array.isArray(data) ? data : []);
+      if (isOwner) {
+        const emps = await fetch('/api/employees').then((r) => (r.ok ? r.json() : []));
+        const list = Array.isArray(emps) ? emps : [];
+        setEmployees(list);
+        if (list.length && !employee) setEmployee(list[0].name);
+      }
     } catch (err) {
       console.error(err);
       setShifts([]);
     }
-  }, [employee]);
+  }, [employee, isOwner]);
 
   const refreshSales = useCallback(async () => {
     setSalesLoading(true);
@@ -106,6 +109,45 @@ export default function CashRegister() {
       setSalesLoading(false);
     }
   }, []);
+
+  const refreshReports = useCallback(async () => {
+    if (!isOwner) return;
+    setReportsLoading(true);
+    try {
+      const res = await fetch('/api/pos/reports?days=30');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'טעינת דוחות נכשלה');
+      setReports(data);
+    } catch (err) {
+      console.error(err);
+      setReports(null);
+    } finally {
+      setReportsLoading(false);
+    }
+  }, [isOwner]);
+
+  const syncInventory = async () => {
+    if (!isOwner) return;
+    setSyncInventoryMsg('');
+    try {
+      const res = await fetch('/api/pos/sync-inventory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ threshold: 5 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'סנכרון מלאי נכשל');
+      setSyncInventoryMsg(
+        data.mode === 'local'
+          ? `מלאי מקומי · ${data.trackedCount} פריטים · ${data.lowStockCount} במלאי נמוך` +
+            (data.remoteError ? ` (${data.remoteError})` : '')
+          : `סונכרן · ${data.trackedCount} פריטים`
+      );
+      refreshReports();
+    } catch (err) {
+      setSyncInventoryMsg(err.message || 'סנכרון נכשל');
+    }
+  };
 
   const refundSale = async (sale) => {
     if (!sale?.id) return;
@@ -133,7 +175,7 @@ export default function CashRegister() {
           : 'העסקה זוכתה'
       );
       await refreshSales();
-      await refreshIcount();
+      if (isOwner) await refreshIcount();
     } catch (err) {
       setHistoryError(err.message || 'הזיכוי נכשל');
     } finally {
@@ -181,14 +223,40 @@ export default function CashRegister() {
 
   useEffect(() => {
     refreshRegister();
-    refreshIcount();
     refreshSales();
-  }, [refreshRegister, refreshIcount, refreshSales]);
+    if (isOwner) {
+      refreshIcount();
+    } else {
+      setIcountStatus({ loading: false, ok: false, configured: false });
+    }
+  }, [refreshRegister, refreshIcount, refreshSales, isOwner]);
+
+  useEffect(() => {
+    if (activeTab === 'reports' && isOwner) refreshReports();
+  }, [activeTab, isOwner, refreshReports]);
+
+  useEffect(() => {
+    if (!isOwner && (activeTab === 'icount' || activeTab === 'reports')) {
+      setActiveTab('sale');
+    }
+  }, [isOwner, activeTab]);
 
   const discrepancy =
     actualAmount && expectedAmount
       ? parseFloat(actualAmount) - parseFloat(expectedAmount)
       : null;
+
+  const tabs = [
+    { k: 'sale', label: 'מכירה' },
+    { k: 'close', label: 'סגירת קופה' },
+    { k: 'history', label: 'היסטוריה' },
+    ...(isOwner
+      ? [
+          { k: 'reports', label: 'דוחות' },
+          { k: 'icount', label: 'סליקה ומסמכים' },
+        ]
+      : []),
+  ];
 
   const handleClose = async () => {
     if (!expectedAmount || !actualAmount) {
@@ -241,34 +309,31 @@ export default function CashRegister() {
 
   return (
     <div className="fade-in">
-      <div className="stats-grid" style={{ marginBottom: 24 }}>
-        <div className="card stat-card" style={{ '--stat-color': '#10B981' }}>
-          <div className="stat-label">הכנסות מזומן (סגירות קופה)</div>
-          <div className="stat-value">₪{totalCash.toLocaleString()}</div>
-        </div>
-        <div className="card stat-card" style={{ '--stat-color': '#6366F1' }}>
-          <div className="stat-label">מסמכי iCount (30 יום)</div>
-          <div className="stat-value">₪{Math.round(icountTotal).toLocaleString()}</div>
-          <div className={`stat-sub ${icountStatus.ok ? 'up' : 'down'}`}>{statusLine}</div>
-        </div>
-        <div className="card stat-card" style={{ '--stat-color': problemShifts > 0 ? '#EF4444' : '#10B981' }}>
-          <div className="stat-label">חריגות קופה</div>
-          <div className="stat-value" style={{ color: problemShifts > 0 ? 'var(--red)' : 'var(--green)' }}>
-            {problemShifts > 0 ? `${problemShifts} חריגות` : 'תקין'}
+      {isOwner && (
+        <div className="stats-grid" style={{ marginBottom: 24 }}>
+          <div className="card stat-card" style={{ '--stat-color': '#10B981' }}>
+            <div className="stat-label">הכנסות מזומן (סגירות קופה)</div>
+            <div className="stat-value">₪{totalCash.toLocaleString()}</div>
           </div>
-          <div className={`stat-sub ${problemShifts > 0 ? 'down' : 'up'}`}>
-            {problemShifts > 0 ? 'דרוש בירור' : 'כל המשמרות תואמות'}
+          <div className="card stat-card" style={{ '--stat-color': '#6366F1' }}>
+            <div className="stat-label">מסמכי חיוב (30 יום)</div>
+            <div className="stat-value">₪{Math.round(icountTotal).toLocaleString()}</div>
+            <div className={`stat-sub ${icountStatus.ok ? 'up' : 'down'}`}>{statusLine}</div>
+          </div>
+          <div className="card stat-card" style={{ '--stat-color': problemShifts > 0 ? '#EF4444' : '#10B981' }}>
+            <div className="stat-label">חריגות קופה</div>
+            <div className="stat-value" style={{ color: problemShifts > 0 ? 'var(--red)' : 'var(--green)' }}>
+              {problemShifts > 0 ? `${problemShifts} חריגות` : 'תקין'}
+            </div>
+            <div className={`stat-sub ${problemShifts > 0 ? 'down' : 'up'}`}>
+              {problemShifts > 0 ? 'דרוש בירור' : 'כל המשמרות תואמות'}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-        {[
-          { k: 'sale', label: 'מכירה' },
-          { k: 'close', label: 'סגירת קופה' },
-          { k: 'history', label: 'היסטוריה' },
-          { k: 'icount', label: 'iCount / סליקה' },
-        ].map((t) => (
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+        {tabs.map((t) => (
           <button
             key={t.k}
             className={`btn btn-sm ${activeTab === t.k ? 'btn-primary' : 'btn-ghost'}`}
@@ -306,12 +371,20 @@ export default function CashRegister() {
                 </div>
                 <div className="form-group">
                   <label className="form-label">שם העובד</label>
-                  <select className="input select" value={employee} onChange={(e) => setEmployee(e.target.value)}>
-                    {employees.map((emp) => (
-                      <option key={emp.id} value={emp.name}>{emp.name}</option>
-                    ))}
-                    {employees.length === 0 && <option value="">אין עובדים במערכת</option>}
-                  </select>
+                  {isOwner && employees.length > 0 ? (
+                    <select className="input select" value={employee} onChange={(e) => setEmployee(e.target.value)}>
+                      {employees.map((emp) => (
+                        <option key={emp.id} value={emp.name}>{emp.name}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      className="input"
+                      value={employee}
+                      onChange={(e) => setEmployee(e.target.value)}
+                      placeholder="שם העובד"
+                    />
+                  )}
                 </div>
               </div>
 
@@ -420,7 +493,9 @@ export default function CashRegister() {
               <div>
                 <div className="section-title" style={{ marginBottom: 4 }}>היסטוריית עסקאות</div>
                 <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-                  מכירות מהקופה · אפשר לזכות עסקה ששולמה (יוצר מסמך ביטול במערכת החיוב)
+                  {isOwner
+                    ? 'מכירות מהקופה · אפשר לזכות עסקה ששולמה (יוצר מסמך ביטול במערכת החיוב)'
+                    : 'מכירות של היום ושלך · זיכוי זמין לעסקאות האלה'}
                 </div>
               </div>
               <button className="btn btn-ghost btn-sm" onClick={refreshSales} disabled={salesLoading}>
@@ -566,14 +641,192 @@ export default function CashRegister() {
         </div>
       )}
 
-      {activeTab === 'icount' && (
+      {activeTab === 'reports' && isOwner && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div className="card card-p">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div>
+                <div className="section-title" style={{ marginBottom: 4 }}>דוחות מכירה ומלאי</div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                  30 יום אחרונים · מנהל בלבד
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button className="btn btn-ghost btn-sm" onClick={refreshReports} disabled={reportsLoading}>
+                  <RefreshCw size={14} /> {reportsLoading ? 'מרענן...' : 'רענון'}
+                </button>
+                <button className="btn btn-primary btn-sm" type="button" onClick={syncInventory}>
+                  סנכרון מלאי
+                </button>
+              </div>
+            </div>
+            {syncInventoryMsg && (
+              <div className="alert alert-info" style={{ marginTop: 12 }}>{syncInventoryMsg}</div>
+            )}
+          </div>
+
+          {reportsLoading && !reports && (
+            <div className="card card-p" style={{ color: 'var(--text-3)' }}>טוען דוחות...</div>
+          )}
+
+          {reports && (
+            <>
+              <div className="stats-grid">
+                <div className="card stat-card" style={{ '--stat-color': '#10B981' }}>
+                  <div className="stat-label">סה״כ מכירות</div>
+                  <div className="stat-value">₪{Number(reports.total || 0).toLocaleString()}</div>
+                  <div className="stat-sub up">{reports.count || 0} עסקאות</div>
+                </div>
+                <div className="card stat-card" style={{ '--stat-color': '#EF4444' }}>
+                  <div className="stat-label">מלאי נמוך</div>
+                  <div className="stat-value">{(reports.lowStock || []).length}</div>
+                </div>
+                <div className="card stat-card" style={{ '--stat-color': '#F59E0B' }}>
+                  <div className="stat-label">מנויים לפוג (14 יום)</div>
+                  <div className="stat-value">{(reports.expiringPasses || []).length}</div>
+                </div>
+              </div>
+
+              <div className="grid-2" style={{ alignItems: 'flex-start' }}>
+                <div className="card">
+                  <div className="section-title" style={{ padding: '14px 16px 0' }}>לפי יום</div>
+                  <div className="table-wrap">
+                    <table className="crm-table">
+                      <thead>
+                        <tr><th>יום</th><th>סכום</th></tr>
+                      </thead>
+                      <tbody>
+                        {(reports.byDay || []).slice(0, 14).map((row) => (
+                          <tr key={row.key}>
+                            <td>{row.key}</td>
+                            <td style={{ fontWeight: 700 }}>₪{Number(row.total).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                        {(reports.byDay || []).length === 0 && (
+                          <tr><td colSpan={2} style={{ textAlign: 'center', color: 'var(--text-3)' }}>אין נתונים</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                <div className="card">
+                  <div className="section-title" style={{ padding: '14px 16px 0' }}>לפי עובד</div>
+                  <div className="table-wrap">
+                    <table className="crm-table">
+                      <thead>
+                        <tr><th>עובד</th><th>סכום</th></tr>
+                      </thead>
+                      <tbody>
+                        {(reports.byEmployee || []).map((row) => (
+                          <tr key={row.key}>
+                            <td>{row.key}</td>
+                            <td style={{ fontWeight: 700 }}>₪{Number(row.total).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                        {(reports.byEmployee || []).length === 0 && (
+                          <tr><td colSpan={2} style={{ textAlign: 'center', color: 'var(--text-3)' }}>אין נתונים</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid-2" style={{ alignItems: 'flex-start' }}>
+                <div className="card">
+                  <div className="section-title" style={{ padding: '14px 16px 0' }}>לפי אמצעי תשלום</div>
+                  <div className="table-wrap">
+                    <table className="crm-table">
+                      <thead>
+                        <tr><th>אמצעי</th><th>סכום</th></tr>
+                      </thead>
+                      <tbody>
+                        {(reports.byPayment || []).map((row) => (
+                          <tr key={row.key}>
+                            <td>{payMethodLabel(row.key)}</td>
+                            <td style={{ fontWeight: 700 }}>₪{Number(row.total).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                        {(reports.byPayment || []).length === 0 && (
+                          <tr><td colSpan={2} style={{ textAlign: 'center', color: 'var(--text-3)' }}>אין נתונים</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                <div className="card">
+                  <div className="section-title" style={{ padding: '14px 16px 0' }}>מלאי נמוך</div>
+                  <div className="table-wrap">
+                    <table className="crm-table">
+                      <thead>
+                        <tr><th>פריט</th><th>מק״ט</th><th>כמות</th></tr>
+                      </thead>
+                      <tbody>
+                        {(reports.lowStock || []).map((item) => (
+                          <tr key={item.id}>
+                            <td>{item.name}</td>
+                            <td>{item.sku || '—'}</td>
+                            <td style={{ fontWeight: 700, color: 'var(--red)' }}>{item.stock_qty}</td>
+                          </tr>
+                        ))}
+                        {(reports.lowStock || []).length === 0 && (
+                          <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--text-3)' }}>אין פריטים במלאי נמוך</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="section-title" style={{ padding: '14px 16px 0' }}>מנויים / כרטיסיות לפוג</div>
+                <div className="table-wrap">
+                  <table className="crm-table">
+                    <thead>
+                      <tr>
+                        <th>שם</th>
+                        <th>סוג</th>
+                        <th>תוקף עד</th>
+                        <th>יתרה</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(reports.expiringPasses || []).map((pass) => (
+                        <tr key={pass.id}>
+                          <td>{pass.name}</td>
+                          <td>{pass.pass_type === 'punch_card' ? 'כרטיסייה' : 'מנוי'}</td>
+                          <td>{pass.valid_until || '—'}</td>
+                          <td>
+                            {pass.pass_type === 'punch_card'
+                              ? `${pass.visits_remaining}/${pass.visits_total}`
+                              : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                      {(reports.expiringPasses || []).length === 0 && (
+                        <tr>
+                          <td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-3)' }}>
+                            אין מנויים שעומדים לפוג בקרוב
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'icount' && isOwner && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="card card-p">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <ReceiptText size={22} style={{ color: 'var(--blue)' }} />
                 <div>
-                  <div className="section-title">iCount · מסמכים וסליקה</div>
+                  <div className="section-title">מסמכים וסליקה</div>
                   <div style={{ fontSize: 12, color: 'var(--text-3)' }}>{statusLine}</div>
                 </div>
               </div>
@@ -583,7 +836,7 @@ export default function CashRegister() {
             </div>
 
             <div className="alert alert-info" style={{ marginBottom: 0 }}>
-              שליחת קישור תשלום והפקת חשבונית מתבצעות מתיק הלקוח. כאן מוצגים מסמכים אמיתיים מ-iCount.
+              שליחת קישור תשלום והפקת חשבונית מתבצעות ממסך המכירה ומתיק הלקוח. כאן מוצגים מסמכים מהמערכת החיצונית.
             </div>
           </div>
 

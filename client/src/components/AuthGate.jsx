@@ -12,18 +12,42 @@ function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
 
   const submit = async (event) => {
     event.preventDefault();
     setLoading(true);
     setError('');
+    setInfo('');
     const { error: signInError } = await authClient.auth.signInWithPassword({
       email: email.trim(),
       password,
     });
     if (signInError) setError('פרטי הכניסה אינם נכונים');
     setLoading(false);
+  };
+
+  const handleResetPassword = async () => {
+    const trimmed = email.trim();
+    if (!trimmed) {
+      setError('יש להזין דואר אלקטרוני לאיפוס הסיסמה');
+      setInfo('');
+      return;
+    }
+    setResetting(true);
+    setError('');
+    setInfo('');
+    const { error: resetError } = await authClient.auth.resetPasswordForEmail(trimmed, {
+      redirectTo: window.location.origin,
+    });
+    if (resetError) {
+      setError('לא הצלחנו לשלוח קישור לאיפוס. נסו שוב בעוד רגע.');
+    } else {
+      setInfo('נשלח קישור לאיפוס הסיסמה לדואר האלקטרוני שלכם.');
+    }
+    setResetting(false);
   };
 
   return (
@@ -53,9 +77,84 @@ function LoginScreen() {
           required
         />
         {error && <div className="alert alert-danger">{error}</div>}
-        <button className="btn btn-primary" type="submit" disabled={loading}>
+        {info && <div className="alert alert-success">{info}</div>}
+        <button className="btn btn-primary" type="submit" disabled={loading || resetting}>
           <LogIn size={17} />
           {loading ? 'מתחבר...' : 'כניסה'}
+        </button>
+        <button
+          className="btn btn-ghost"
+          type="button"
+          disabled={loading || resetting}
+          onClick={handleResetPassword}
+        >
+          {resetting ? 'שולח קישור...' : 'שכחתי סיסמה'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function NewPasswordScreen({ onDone }) {
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (event) => {
+    event.preventDefault();
+    if (password.length < 6) {
+      setError('הסיסמה חייבת לכלול לפחות 6 תווים');
+      return;
+    }
+    if (password !== confirm) {
+      setError('הסיסמאות אינן תואמות');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    const { error: updateError } = await authClient.auth.updateUser({ password });
+    if (updateError) {
+      setError('לא הצלחנו לעדכן את הסיסמה. נסו שוב.');
+      setLoading(false);
+      return;
+    }
+    setLoading(false);
+    onDone?.();
+  };
+
+  return (
+    <div className="auth-page">
+      <form className="auth-card" onSubmit={submit}>
+        <div className="auth-logo">🧗</div>
+        <h1>סיסמה חדשה</h1>
+        <p>בחרו סיסמה חדשה לחשבון שלכם</p>
+        <label className="form-label" htmlFor="crm-new-password">סיסמה חדשה</label>
+        <input
+          id="crm-new-password"
+          className="input"
+          type="password"
+          autoComplete="new-password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          required
+          minLength={6}
+        />
+        <label className="form-label" htmlFor="crm-confirm-password">אימות סיסמה</label>
+        <input
+          id="crm-confirm-password"
+          className="input"
+          type="password"
+          autoComplete="new-password"
+          value={confirm}
+          onChange={(event) => setConfirm(event.target.value)}
+          required
+          minLength={6}
+        />
+        {error && <div className="alert alert-danger">{error}</div>}
+        <button className="btn btn-primary" type="submit" disabled={loading}>
+          <ShieldCheck size={17} />
+          {loading ? 'שומר...' : 'שמירת סיסמה חדשה'}
         </button>
       </form>
     </div>
@@ -67,6 +166,7 @@ export default function AuthGate({ children }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [recoveryMode, setRecoveryMode] = useState(false);
   // Identity only — token refresh must not remount the whole app.
   const userId = session?.user?.id || null;
 
@@ -80,10 +180,12 @@ export default function AuthGate({ children }) {
       setSession(data.session || null);
       if (!data.session) setLoading(false);
     });
-    const { data: subscription } = authClient.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: subscription } = authClient.auth.onAuthStateChange((event, nextSession) => {
+      if (event === 'PASSWORD_RECOVERY') setRecoveryMode(true);
       setSession(nextSession);
       if (!nextSession) {
         setProfile(null);
+        setRecoveryMode(false);
         setLoading(false);
       }
     });
@@ -164,6 +266,16 @@ export default function AuthGate({ children }) {
           <p>יש להגדיר את כתובת Supabase ואת המפתח הציבורי בהגדרות האתר.</p>
         </div>
       </div>
+    );
+  }
+  if (recoveryMode && session) {
+    return (
+      <NewPasswordScreen
+        onDone={() => {
+          setRecoveryMode(false);
+          setLoading(true);
+        }}
+      />
     );
   }
   if (loading && !profile) return <div className="auth-page"><div className="auth-card">טוען את המערכת...</div></div>;

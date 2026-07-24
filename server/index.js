@@ -18,6 +18,9 @@ import {
   normalizeProductType,
   PRODUCT_TYPES,
   requiresCustomer,
+  listTrackedInventory,
+  listExpiringPasses,
+  aggregatePosSales,
 } from './posUtils.js';
 import {
   ensureAttendanceRows,
@@ -2556,6 +2559,61 @@ app.post('/api/pos/passes/:id/punch', (req, res) => {
   }
 });
 
+/** Local inventory sync / low-stock snapshot (iCount inventory module unavailable). */
+app.post('/api/pos/sync-inventory', requireOwner, async (req, res) => {
+  try {
+    const threshold = Number(req.body?.threshold) || 5;
+    const items = (db.get('pricelist') || []).map(enrichPricelistItem);
+    const tracked = listTrackedInventory(items, { threshold });
+    const lowStock = tracked.filter((i) => i.low);
+
+    let remote = null;
+    let remoteError = null;
+    try {
+      remote = await icount.listInventoryItems();
+    } catch (err) {
+      remoteError = err.message;
+    }
+
+    res.json({
+      ok: true,
+      mode: remote ? 'remote' : 'local',
+      remoteError,
+      trackedCount: tracked.length,
+      lowStockCount: lowStock.length,
+      lowStock,
+      items: tracked,
+      syncedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/pos/reports', requireOwner, (req, res) => {
+  const days = Math.min(90, Math.max(1, Number(req.query.days) || 30));
+  const threshold = Number(req.query.threshold) || 5;
+  const withinDays = Number(req.query.withinDays) || 14;
+  const since = new Date();
+  since.setDate(since.getDate() - days);
+  const sinceIso = since.toISOString();
+
+  const sales = (db.get('pos_sales') || []).filter(
+    (s) => String(s.created_at || '') >= sinceIso
+  );
+  const aggregates = aggregatePosSales(sales);
+  const pricelist = (db.get('pricelist') || []).map(enrichPricelistItem);
+  const lowStock = listTrackedInventory(pricelist, { lowOnly: true, threshold });
+  const expiringPasses = listExpiringPasses(db.get('customer_passes') || [], { withinDays });
+
+  res.json({
+    days,
+    ...aggregates,
+    lowStock,
+    expiringPasses: expiringPasses.slice(0, 50),
+  });
+});
+
 app.post('/api/pos/sale', async (req, res) => {
   try {
     const {
@@ -3102,12 +3160,15 @@ app.post('/api/check-ins', (req, res) => {
 });
 
 function normPhone(p) {
-  return String(p || '').replace(/[-\s]/g, '');
+  let d = String(p || '').replace(/[^\d]/g, '');
+  if (d.startsWith('0') && d.length >= 9) d = `972${d.slice(1)}`;
+  return d;
 }
 
 function resolveStudentForHealthForm({ studentId, parent, climberName, phone }) {
   const students = db.get('students') || [];
-  const climberFirstName = (climberName || '').split(' ')[0];
+  const cleanName = String(climberName || '').trim();
+  const climberFirstName = cleanName.split(/\s+/)[0] || '';
   const phoneKey = normPhone(phone);
 
   // 1) Explicit student id from staff link
@@ -3116,12 +3177,15 @@ function resolveStudentForHealthForm({ studentId, parent, climberName, phone }) 
     if (byId) return byId;
   }
 
+  const nameMatches = (s) => {
+    const sn = String(s?.name || '').trim();
+    if (!sn || !cleanName) return false;
+    return sn === cleanName || (climberFirstName && sn.includes(climberFirstName));
+  };
+
   // 2) Same parent + matching climber name
   const siblings = students.filter((s) => s.parentId === parent.id);
-  const byName = siblings.find((s) =>
-    s.name === climberName ||
-    (climberFirstName && s.name && s.name.includes(climberFirstName))
-  );
+  const byName = siblings.find(nameMatches);
   if (byName) return byName;
 
   // 3) Match via parent phone → any student of that parent with same name
@@ -3131,8 +3195,7 @@ function resolveStudentForHealthForm({ studentId, parent, climberName, phone }) 
       .filter((p) => normPhone(p.phone) === phoneKey)
       .map((p) => p.id);
     const byPhoneName = students.find((s) =>
-      parentIds.includes(s.parentId) &&
-      (s.name === climberName || (climberFirstName && s.name && s.name.includes(climberFirstName)))
+      parentIds.includes(s.parentId) && nameMatches(s)
     );
     if (byPhoneName) return byPhoneName;
 
@@ -3175,6 +3238,7 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
 
   let student = resolveStudentForHealthForm({ studentId, parent, climberName, phone });
   const signedAt = new Date().toISOString();
+  const cleanClimberName = String(climberName || '').trim();
 
   if (student) {
     const prevStatus = student.status;
@@ -3182,7 +3246,7 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
       status: prevStatus === 'registered' ? prevStatus : 'health_signed',
       parentId: student.parentId || parent.id,
       birthDate: birthDate || student.birthDate || '',
-      name: climberName || student.name,
+      name: cleanClimberName || student.name,
       healthSignedAt: signedAt,
       waiverSignedAt: signedAt,
     }) || student;
@@ -3192,7 +3256,7 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
     // server cache was empty (common after Render restart before reload).
     student = db.insert('students', {
       id: studentId || undefined,
-      name: climberName,
+      name: cleanClimberName,
       parentId: parent.id,
       groupId: null,
       status: 'health_signed',
@@ -3219,7 +3283,7 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
     parentName,
     parentIdNum: parentIdNum || '',
     phone,
-    climberName,
+    climberName: cleanClimberName,
     climberIdNum: climberIdNum || '',
     birthDate: birthDate || '',
     answers: answers || {},
@@ -3232,7 +3296,7 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
     signed: true,
     signedDate: new Date().toISOString().split('T')[0],
     signedBy: parentName,
-    studentName: climberName,
+    studentName: cleanClimberName,
   });
 
   // 3. Await durable Supabase writes so the client file survives Render restarts
@@ -3306,7 +3370,7 @@ app.get('/api/public/health-context', publicFormRateLimit, (req, res) => {
     parent: parent
       ? {
           id: parent.id,
-          name: parent.name || '',
+          name: String(parent.name || '').trim(),
           phone: parent.phone || '',
           idNumber: parent.idNumber || parent.parentIdNum || '',
         }
@@ -3314,7 +3378,7 @@ app.get('/api/public/health-context', publicFormRateLimit, (req, res) => {
     student: student
       ? {
           id: student.id,
-          name: student.name || '',
+          name: String(student.name || '').trim(),
           birthDate: student.birthDate || '',
           idNumber: student.idNumber || student.climberIdNum || '',
         }
@@ -3746,12 +3810,13 @@ function isLocalAppOrigin(origin) {
 }
 
 /** Prefer a public HTTPS origin for WhatsApp — localhost links are not clickable on phones. */
+const PUBLIC_APP_FALLBACK = 'https://client-omega-topaz-35.vercel.app';
+
 function resolvePublicAppOrigin(requestedOrigin) {
   const candidates = [
     process.env.PUBLIC_APP_URL,
     requestedOrigin,
-    'https://mywall.co.il',
-    'https://client-omega-topaz-35.vercel.app',
+    PUBLIC_APP_FALLBACK,
   ]
     .map((value) => String(value || '').trim().replace(/\/$/, ''))
     .filter(Boolean);
@@ -3759,7 +3824,7 @@ function resolvePublicAppOrigin(requestedOrigin) {
   for (const candidate of candidates) {
     if (!isLocalAppOrigin(candidate)) return candidate;
   }
-  return 'https://mywall.co.il';
+  return PUBLIC_APP_FALLBACK;
 }
 
 function buildShareableHealthUrl(origin, { pathSlug = '', studentId = '', phone = '' } = {}) {

@@ -573,7 +573,10 @@ export default function PublicOnboardingForm() {
               />
             </div>
 
-            <div className="section-title" style={{ marginTop: 22 }}>רשימות דיוור</div>
+            <div className="section-title" style={{ marginTop: 22 }}>רשימות דיוור של ההורה</div>
+            <p style={{ fontSize: 13, color: 'var(--text-3)', marginTop: -6, marginBottom: 12, lineHeight: 1.45 }}>
+              ההרשמה חלה על כל הילדים במשפחה, לא על ילד בודד.
+            </p>
             <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', margin: '0 0 12px' }}>
               רשימת החוגים חובה. אפשר לסמן גם טיולים, אירועים ועוד.
             </p>

@@ -122,6 +122,65 @@ export function computeSaleTotal(items) {
   }, 0);
 }
 
+/** Local inventory snapshot for tracked products (iCount inventory API not available on this account). */
+export function listTrackedInventory(pricelist = [], { lowOnly = false, threshold = 5 } = {}) {
+  const items = (pricelist || [])
+    .filter((i) => i && i.track_inventory === true && i.active !== false)
+    .map((i) => ({
+      id: i.id,
+      name: i.name || 'פריט',
+      sku: i.sku || '',
+      icount_item_id: i.icount_item_id || null,
+      stock_qty: Number(i.stock_qty) || 0,
+      low: (Number(i.stock_qty) || 0) <= Number(threshold),
+    }))
+    .sort((a, b) => a.stock_qty - b.stock_qty || String(a.name).localeCompare(String(b.name), 'he'));
+  return lowOnly ? items.filter((i) => i.low) : items;
+}
+
+export function listExpiringPasses(passes = [], { withinDays = 14, onDate = todayIsoDate() } = {}) {
+  const limit = addDays(onDate, withinDays);
+  return (passes || [])
+    .filter((p) => {
+      if (!p || p.status !== 'active') return false;
+      if (!p.valid_until) return false;
+      return String(p.valid_until) >= String(onDate) && String(p.valid_until) <= String(limit);
+    })
+    .sort((a, b) => String(a.valid_until).localeCompare(String(b.valid_until)));
+}
+
+export function aggregatePosSales(sales = []) {
+  const byDay = {};
+  const byEmployee = {};
+  const byPayment = {};
+  let total = 0;
+  let count = 0;
+  for (const sale of sales || []) {
+    if (!sale || sale.status === 'pending_payment' || sale.status === 'quoted') continue;
+    if (sale.status === 'refunded' || sale.status === 'cancelled') continue;
+    const amount = Number(sale.total) || 0;
+    const day = String(sale.created_at || '').slice(0, 10) || 'לא ידוע';
+    const emp = sale.sold_by || 'לא צוין';
+    const pay = sale.payment_method || 'לא צוין';
+    byDay[day] = (byDay[day] || 0) + amount;
+    byEmployee[emp] = (byEmployee[emp] || 0) + amount;
+    byPayment[pay] = (byPayment[pay] || 0) + amount;
+    total += amount;
+    count += 1;
+  }
+  const toRows = (obj) =>
+    Object.entries(obj)
+      .map(([key, value]) => ({ key, total: value }))
+      .sort((a, b) => b.total - a.total || String(a.key).localeCompare(String(b.key), 'he'));
+  return {
+    count,
+    total,
+    byDay: toRows(byDay).sort((a, b) => String(b.key).localeCompare(String(a.key))),
+    byEmployee: toRows(byEmployee),
+    byPayment: toRows(byPayment),
+  };
+}
+
 export function enrichPricelistItem(item) {
   const productType = normalizeProductType(item);
   return {
