@@ -294,10 +294,22 @@ app.post('/api/public/leads', publicFormRateLimit, async (req, res) => {
 // Update parent details (name, phone, email, city, source, notes)
 app.put('/api/parents/:id', (req, res) => {
   const { id } = req.params;
-  const allowed = ['name', 'phone', 'email', 'city', 'source', 'notes', 'icount_client_id', 'status'];
+  const allowed = [
+    'name', 'phone', 'email', 'city', 'source', 'notes', 'icount_client_id', 'status',
+    'in_communication', 'in_communication_since',
+  ];
   const updates = {};
   for (const key of allowed) {
     if (req.body[key] !== undefined) updates[key] = req.body[key];
+  }
+  if (updates.in_communication === false || updates.in_communication === 'false') {
+    updates.in_communication = false;
+    updates.in_communication_since = null;
+  } else if (updates.in_communication === true || updates.in_communication === 'true') {
+    updates.in_communication = true;
+    if (!updates.in_communication_since) {
+      updates.in_communication_since = new Date().toISOString();
+    }
   }
   const updated = db.update('parents', id, updates);
   if (!updated) return res.status(404).json({ error: 'Parent not found' });

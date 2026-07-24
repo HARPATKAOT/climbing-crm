@@ -550,6 +550,8 @@ export const whatsappService = {
       const updatedParent = db.update('parents', match.id, {
         last_inbound_whatsapp: inboundAt,
         channel: match.channel === 'phone' ? 'whatsapp' : (match.channel || 'whatsapp'),
+        in_communication: true,
+        in_communication_since: match.in_communication ? (match.in_communication_since || inboundAt) : inboundAt,
       });
       if (updatedParent) await persistCore('parents', updatedParent);
     }
@@ -792,9 +794,12 @@ export const instagramService = {
     const { parent, student, isNew } = await db.createLeadFromInstagram(igId, text, name);
 
     if (parent?.id) {
+      const inboundAt = new Date().toISOString();
       const updatedParent = db.update('parents', parent.id, {
-        last_inbound_instagram: new Date().toISOString(),
+        last_inbound_instagram: inboundAt,
         channel: parent.channel || 'instagram',
+        in_communication: true,
+        in_communication_since: parent.in_communication ? (parent.in_communication_since || inboundAt) : inboundAt,
       });
       if (updatedParent) await persistCore('parents', updatedParent);
     }
