@@ -22,8 +22,9 @@ export default function PosSale() {
   const [parents, setParents] = useState([]);
   const [cart, setCart] = useState([]);
   const [productFilter, setProductFilter] = useState('');
-  const [studentQuery, setStudentQuery] = useState('');
+  const [customerQuery, setCustomerQuery] = useState('');
   const [selectedStudentId, setSelectedStudentId] = useState('');
+  const [selectedParentId, setSelectedParentId] = useState('');
   const [walkInName, setWalkInName] = useState('');
   const [walkInPhone, setWalkInPhone] = useState('');
   const [walkInEmail, setWalkInEmail] = useState('');
@@ -36,21 +37,34 @@ export default function PosSale() {
   const [recentSales, setRecentSales] = useState([]);
   const [lastPayUrl, setLastPayUrl] = useState('');
   const [copied, setCopied] = useState(false);
+  const [loadError, setLoadError] = useState('');
 
   const refresh = useCallback(async () => {
     try {
+      const [pRes, sRes, parRes, salesRes] = await Promise.all([
+        fetch('/api/pricelist'),
+        fetch('/api/students'),
+        fetch('/api/parents'),
+        fetch('/api/pos/sales'),
+      ]);
       const [p, s, par, sales] = await Promise.all([
-        fetch('/api/pricelist').then((r) => (r.ok ? r.json() : [])),
-        fetch('/api/students').then((r) => (r.ok ? r.json() : [])),
-        fetch('/api/parents').then((r) => (r.ok ? r.json() : [])),
-        fetch('/api/pos/sales').then((r) => (r.ok ? r.json() : [])),
+        pRes.ok ? pRes.json() : [],
+        sRes.ok ? sRes.json() : [],
+        parRes.ok ? parRes.json() : [],
+        salesRes.ok ? salesRes.json() : [],
       ]);
       setPricelist(Array.isArray(p) ? p.filter((i) => i.active !== false) : []);
       setStudents(Array.isArray(s) ? s : []);
       setParents(Array.isArray(par) ? par : []);
       setRecentSales(Array.isArray(sales) ? sales.slice(0, 12) : []);
+      if (!sRes.ok || !parRes.ok) {
+        setLoadError('לא הצלחנו לטעון לקוחות — נסו לרענן');
+      } else {
+        setLoadError('');
+      }
     } catch (err) {
       console.error(err);
+      setLoadError('לא הצלחנו לטעון לקוחות — נסו לרענן');
     }
   }, []);
 
@@ -59,9 +73,17 @@ export default function PosSale() {
   }, [refresh]);
 
   const selectedStudent = students.find((s) => s.id === selectedStudentId) || null;
-  const selectedParent = selectedStudent
-    ? parents.find((p) => p.id === selectedStudent.parentId)
-    : null;
+  const selectedParent =
+    parents.find((p) => p.id === selectedParentId) ||
+    (selectedStudent
+      ? parents.find((p) => p.id === selectedStudent.parentId)
+      : null) ||
+    null;
+
+  const childrenOfSelectedParent = useMemo(() => {
+    if (!selectedParent?.id) return [];
+    return students.filter((s) => String(s.parentId) === String(selectedParent.id));
+  }, [students, selectedParent]);
 
   const effectivePhone = walkInPhone || selectedParent?.phone || '';
   const effectiveEmail = walkInEmail || selectedParent?.email || '';
@@ -77,13 +99,76 @@ export default function PosSale() {
     );
   }, [pricelist, productFilter]);
 
-  const studentSuggestions = useMemo(() => {
-    const q = studentQuery.trim().toLowerCase();
-    if (!q) return [];
-    return students
-      .filter((s) => String(s.name || '').toLowerCase().includes(q))
-      .slice(0, 8);
-  }, [students, studentQuery]);
+  const normalizePhoneDigits = (phone) => String(phone || '').replace(/\D/g, '');
+
+  const customerSuggestions = useMemo(() => {
+    const q = customerQuery.trim().toLowerCase();
+    if (q.length < 1) return [];
+    const phoneQ = normalizePhoneDigits(customerQuery);
+    const results = [];
+
+    for (const parent of parents) {
+      const name = String(parent.name || '').toLowerCase();
+      const phone = normalizePhoneDigits(parent.phone);
+      const email = String(parent.email || '').toLowerCase();
+      if (
+        name.includes(q) ||
+        email.includes(q) ||
+        (phoneQ.length >= 3 && phone.includes(phoneQ))
+      ) {
+        results.push({
+          key: `parent:${parent.id}`,
+          type: 'parent',
+          id: parent.id,
+          name: parent.name || 'לקוח',
+          phone: parent.phone || '',
+          email: parent.email || '',
+        });
+      }
+    }
+
+    for (const student of students) {
+      const name = String(student.name || '').toLowerCase();
+      if (!name.includes(q)) continue;
+      const parent = parents.find((p) => p.id === student.parentId);
+      results.push({
+        key: `student:${student.id}`,
+        type: 'student',
+        id: student.id,
+        name: student.name || 'מתאמן',
+        parentId: student.parentId || null,
+        parentName: parent?.name || '',
+        phone: parent?.phone || '',
+        email: parent?.email || '',
+      });
+    }
+
+    return results.slice(0, 12);
+  }, [customerQuery, parents, students]);
+
+  const selectCustomer = (hit) => {
+    if (hit.type === 'student') {
+      setSelectedStudentId(hit.id);
+      setSelectedParentId(hit.parentId || '');
+      setWalkInName('');
+      setWalkInPhone(hit.phone || '');
+      setWalkInEmail(hit.email || '');
+    } else {
+      setSelectedParentId(hit.id);
+      setSelectedStudentId('');
+      setWalkInName('');
+      setWalkInPhone(hit.phone || '');
+      setWalkInEmail(hit.email || '');
+    }
+    setCustomerQuery('');
+    setError('');
+  };
+
+  const clearCustomer = () => {
+    setSelectedStudentId('');
+    setSelectedParentId('');
+    setCustomerQuery('');
+  };
 
   const total = cart.reduce(
     (sum, line) => sum + (Number(line.unitprice) || 0) * (Number(line.quantity) || 1),
@@ -145,8 +230,8 @@ export default function PosSale() {
   const payloadBase = () => ({
     cart,
     studentId: selectedStudentId || undefined,
-    parentId: selectedParent?.id || undefined,
-    walkInName: walkInName || undefined,
+    parentId: selectedParent?.id || selectedParentId || undefined,
+    walkInName: walkInName || selectedParent?.name || undefined,
     walkInPhone: effectivePhone || undefined,
     walkInEmail: effectiveEmail || undefined,
     sendEmail,
@@ -159,7 +244,7 @@ export default function PosSale() {
       return false;
     }
     if (needsCustomer && !selectedStudentId) {
-      setError('למנוי או כרטיסייה חובה לבחור מתאמן');
+      setError('למנוי או כרטיסייה חובה לבחור מתאמן (אפשר לחפש הורה ואז לבחור ילד)');
       return false;
     }
     if (sendWhatsapp && !String(effectivePhone || '').trim()) {
@@ -285,64 +370,123 @@ export default function PosSale() {
       </div>
 
       <div>
-        <div className="card card-p" style={{ marginBottom: 16 }}>
+        <div className="card card-p" style={{ marginBottom: 16, overflow: 'visible' }}>
           <div className="section-title" style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
             <User size={16} /> לקוח
           </div>
-          <div className="form-group" style={{ marginBottom: 10, position: 'relative' }}>
-            <label className="form-label">חיפוש מתאמן {needsCustomer ? '*' : '(רשות)'}</label>
+          {loadError && (
+            <div className="alert alert-error" style={{ marginBottom: 10 }}>{loadError}</div>
+          )}
+          <div className="form-group" style={{ marginBottom: 10, position: 'relative', zIndex: 30 }}>
+            <label className="form-label">
+              חיפוש לקוח {needsCustomer ? '*' : '(רשות)'}
+            </label>
             <input
               className="input"
-              placeholder="שם מתאמן..."
-              value={selectedStudent ? selectedStudent.name : studentQuery}
+              placeholder="שם לקוח, מתאמן או טלפון..."
+              value={
+                selectedStudent
+                  ? selectedStudent.name
+                  : selectedParent && !customerQuery
+                    ? selectedParent.name
+                    : customerQuery
+              }
               onChange={(e) => {
                 setSelectedStudentId('');
-                setStudentQuery(e.target.value);
+                setSelectedParentId('');
+                setCustomerQuery(e.target.value);
               }}
+              onFocus={() => {
+                if (selectedStudent || selectedParent) {
+                  setCustomerQuery('');
+                }
+              }}
+              autoComplete="off"
             />
-            {studentSuggestions.length > 0 && !selectedStudentId && (
+            {customerQuery.trim() && !selectedStudentId && customerSuggestions.length > 0 && (
               <div
-                className="card"
                 style={{
                   position: 'absolute',
-                  zIndex: 20,
+                  zIndex: 50,
                   right: 0,
                   left: 0,
                   top: '100%',
                   marginTop: 4,
-                  maxHeight: 200,
+                  maxHeight: 260,
                   overflow: 'auto',
                   border: '1px solid var(--border)',
+                  borderRadius: 10,
+                  background: 'var(--bg-1, #111827)',
+                  boxShadow: '0 12px 28px rgba(0,0,0,0.45)',
                 }}
               >
-                {studentSuggestions.map((s) => (
+                {customerSuggestions.map((hit) => (
                   <button
-                    key={s.id}
+                    key={hit.key}
                     type="button"
                     className="btn btn-ghost btn-sm"
-                    style={{ width: '100%', justifyContent: 'flex-start', borderRadius: 0 }}
-                    onClick={() => {
-                      setSelectedStudentId(s.id);
-                      setStudentQuery('');
+                    style={{
+                      width: '100%',
+                      justifyContent: 'flex-start',
+                      borderRadius: 0,
+                      gap: 8,
+                      padding: '10px 12px',
                     }}
+                    onClick={() => selectCustomer(hit)}
                   >
-                    {s.name}
+                    <span style={{ fontWeight: 700 }}>{hit.name}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                      {hit.type === 'parent' ? 'לקוח / הורה' : 'מתאמן'}
+                      {hit.parentName ? ` · ${hit.parentName}` : ''}
+                      {hit.phone ? ` · ${hit.phone}` : ''}
+                    </span>
                   </button>
                 ))}
               </div>
             )}
+            {customerQuery.trim().length >= 1 && customerSuggestions.length === 0 && !selectedStudentId && !selectedParentId && (
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
+                לא נמצאו לקוחות תואמים · אפשר למלא למטה כלקוח מזדמן
+              </div>
+            )}
           </div>
-          {selectedStudent && (
+
+          {(selectedStudent || selectedParent) && (
             <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 10, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
               <span>
-                נבחר: <strong>{selectedStudent.name}</strong>
-                {selectedParent?.name ? ` · הורה: ${selectedParent.name}` : ''}
+                נבחר:{' '}
+                <strong>
+                  {selectedStudent
+                    ? selectedStudent.name
+                    : selectedParent?.name}
+                </strong>
+                {selectedStudent && selectedParent?.name ? ` · הורה: ${selectedParent.name}` : ''}
+                {!selectedStudent && selectedParent ? ' · לקוח' : ''}
               </span>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSelectedStudentId('')}>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={clearCustomer}>
                 <X size={12} /> נקה
               </button>
             </div>
           )}
+
+          {selectedParent && !selectedStudent && childrenOfSelectedParent.length > 0 && (
+            <div className="form-group" style={{ marginBottom: 12 }}>
+              <label className="form-label">בחירת מתאמן מהמשפחה</label>
+              <select
+                className="input select"
+                value=""
+                onChange={(e) => {
+                  if (e.target.value) setSelectedStudentId(e.target.value);
+                }}
+              >
+                <option value="">— בחרו מתאמן —</option>
+                {childrenOfSelectedParent.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div className="form-grid-2" style={{ gap: 8 }}>
             <div className="form-group">
               <label className="form-label">שם לקוח מזדמן</label>
@@ -367,7 +511,7 @@ export default function PosSale() {
               />
               {!walkInEmail && selectedParent?.email && (
                 <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
-                  יישלח אל המייל של ההורה אם לא תמלאו אחר
+                  יישלח אל המייל של הלקוח אם לא תמלאו אחר
                 </div>
               )}
             </div>
