@@ -422,13 +422,30 @@ export const whatsappService = {
           ? variables.map((v) => ({ type: 'text', text: String(v) }))
           : []);
 
+      const components = [];
       if (finalParams.length > 0) {
-        payload.template.components = [
-          {
-            type: 'body',
-            parameters: finalParams,
-          }
-        ];
+        components.push({
+          type: 'body',
+          parameters: finalParams,
+        });
+      }
+
+      // Dynamic URL button suffix (e.g. payment id for /r/{{1}})
+      const buttonParams = Array.isArray(options.buttonUrlParams)
+        ? options.buttonUrlParams
+        : (options.buttonUrlParam != null ? [options.buttonUrlParam] : []);
+      buttonParams.forEach((suffix, index) => {
+        if (suffix == null || String(suffix).trim() === '') return;
+        components.push({
+          type: 'button',
+          sub_type: 'url',
+          index: String(index),
+          parameters: [{ type: 'text', text: String(suffix) }],
+        });
+      });
+
+      if (components.length > 0) {
+        payload.template.components = components;
       }
 
       const result = await callMetaWhatsAppAPI(phone, payload);

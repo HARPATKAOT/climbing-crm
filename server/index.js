@@ -92,6 +92,28 @@ app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'UP', timestamp: new Date().toISOString(), uptime: process.uptime() });
 });
 
+/** Short public redirect: WhatsApp template button → iCount payment URL */
+function redirectPaymentLink(req, res) {
+  const paymentId = String(req.params.paymentId || '').trim();
+  if (!paymentId) return res.status(400).send('חסר מזהה תשלום');
+  const payment = db.getOne('payments', paymentId);
+  const payUrl = payment?.payment_url || '';
+  if (!payUrl) {
+    return res
+      .status(404)
+      .type('html')
+      .send(
+        '<!doctype html><html lang="he" dir="rtl"><meta charset="utf-8" />' +
+          '<title>קישור לא נמצא</title><body style="font-family:sans-serif;padding:24px">' +
+          '<h1>קישור התשלום לא נמצא או שפג תוקפו</h1>' +
+          '<p>פנו לצוות My Wall לקבלת קישור חדש.</p></body></html>'
+      );
+  }
+  return res.redirect(302, payUrl);
+}
+app.get('/r/:paymentId', redirectPaymentLink);
+app.get('/api/r/:paymentId', redirectPaymentLink);
+
 app.use('/api', apiAuth);
 
 app.get('/api/auth/me', (req, res) => {
@@ -2866,26 +2888,61 @@ app.post('/api/pos/payment-link', async (req, res) => {
     if (sendWhatsapp) {
       const phone = normalizePhone(syncedParent?.phone || walkInPhone);
       if (phone) {
-        const customerName = syncedParent?.name || walkInName || '';
-        const waMsg =
-          `שלום${customerName ? ` ${customerName}` : ''},\n` +
-          `לסיום התשלום ב-My Wall:\n${payUrl}\n\n` +
-          `לאחר התשלום תופק חשבונית מס קבלה אוטומטית.`;
-        try {
-          const waResult = await whatsappService.sendTextMessage(phone, waMsg);
-          whatsappSent = !!waResult?.success;
-          if (!whatsappSent) {
-            whatsappError = waResult?.error || 'שליחת וואטסאפ נכשלה';
-            console.error('POS payment-link WhatsApp failed:', whatsappError);
+        const customerName = syncedParent?.name || walkInName || 'לקוח';
+        const amountLabel = String(total);
+        const tplName = icount.getPaymentTemplateName();
+        const localTpl = (db.get('message_templates') || []).find(
+          (t) => (t.meta_name || t.name) === tplName
+        );
+        const tplApproved =
+          localTpl &&
+          (String(localTpl.status).toUpperCase() === 'APPROVED' || localTpl.active_for_send);
+
+        // Prefer approved Meta template (works outside 24h window)
+        if (tplApproved) {
+          try {
+            const waResult = await whatsappService.sendTemplateMessage(
+              phone,
+              tplName,
+              [customerName, description || 'רכישה', amountLabel],
+              {
+                fallbackName: customerName,
+                parentId: syncedParent?.id || null,
+                buttonUrlParam: payment.id,
+              }
+            );
+            whatsappSent = !!waResult?.success;
+            if (!whatsappSent) {
+              whatsappError = waResult?.error || 'שליחת תבנית וואטסאפ נכשלה';
+            }
+          } catch (waErr) {
+            whatsappError = waErr.message || 'שליחת תבנית וואטסאפ נכשלה';
           }
-        } catch (waErr) {
-          whatsappError = waErr.message || 'שליחת וואטסאפ נכשלה';
-          console.error('POS payment-link WhatsApp error:', whatsappError);
         }
-        // Fallback: open WhatsApp Web/app with prefilled message if API send failed
+
+        // Fallback: free-form text (only works inside 24h window)
         if (!whatsappSent) {
-          const digits = phone.startsWith('972') ? phone : phone.replace(/^0/, '972');
-          whatsappUrl = `https://wa.me/${digits}?text=${encodeURIComponent(waMsg)}`;
+          const waMsg =
+            `שלום${customerName ? ` ${customerName}` : ''},\n` +
+            `לסיום התשלום ב-My Wall:\n${payUrl}\n\n` +
+            `לאחר התשלום תופק חשבונית מס קבלה אוטומטית.`;
+          try {
+            const waResult = await whatsappService.sendTextMessage(phone, waMsg);
+            whatsappSent = !!waResult?.success;
+            if (!whatsappSent) {
+              whatsappError = waResult?.error || whatsappError || 'שליחת וואטסאפ נכשלה';
+              console.error('POS payment-link WhatsApp failed:', whatsappError);
+            } else {
+              whatsappError = null;
+            }
+          } catch (waErr) {
+            whatsappError = waErr.message || whatsappError || 'שליחת וואטסאפ נכשלה';
+            console.error('POS payment-link WhatsApp error:', whatsappError);
+          }
+          if (!whatsappSent) {
+            const digits = phone.startsWith('972') ? phone : phone.replace(/^0/, '972');
+            whatsappUrl = `https://wa.me/${digits}?text=${encodeURIComponent(waMsg)}`;
+          }
         }
       } else {
         whatsappError = 'אין מספר טלפון לשליחה בוואטסאפ';

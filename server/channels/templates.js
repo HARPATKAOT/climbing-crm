@@ -1,4 +1,4 @@
-import { db } from '../db.js';
+import { db, persistCore } from '../db.js';
 import { getWaCredentials, META_GRAPH_VERSION } from './media.js';
 
 function getWabaId() {
@@ -47,7 +47,13 @@ export function normalizeButtons(buttons = []) {
       if (type === 'URL') {
         const url = String(b.url || '').trim();
         if (!url) return null;
-        return { type: 'URL', text, url };
+        const out = { type: 'URL', text, url };
+        // Dynamic URL buttons need an example suffix for Meta review
+        const example = b.example ?? b.example_url_suffix;
+        if (example != null && String(example).trim()) {
+          out.example = Array.isArray(example) ? example : [String(example).trim()];
+        }
+        return out;
       }
       if (type === 'PHONE_NUMBER') {
         const phone_number = String(b.phone_number || b.phone || '').trim();
@@ -155,10 +161,15 @@ export async function syncTemplatesFromMeta() {
       active_for_send: mapMetaStatus(t.status) === 'APPROVED',
     };
     const current = byMetaName.get(key);
-    if (current) {
-      db.update('message_templates', current.id, payload);
-    } else {
-      db.insert('message_templates', { id: `tpl_${t.id || Date.now()}_${language}`, ...payload });
+    const saved = current
+      ? db.update('message_templates', current.id, payload)
+      : db.insert('message_templates', { id: `tpl_${t.id || Date.now()}_${language}`, ...payload });
+    // Await durable write so a restart right after sync cannot wipe templates.
+    if (saved) {
+      const persist = await persistCore('message_templates', saved);
+      if (!persist.ok) {
+        console.error('persist message_templates failed:', persist.error);
+      }
     }
   }
 
@@ -199,6 +210,7 @@ export function createDraftTemplate(input = {}) {
     body,
     header: input.header || '',
     footer: input.footer || '',
+    body_examples: Array.isArray(input.body_examples) ? input.body_examples : [],
     variables: countVariables(body),
     buttons,
     active_for_send: false,
@@ -249,7 +261,17 @@ export async function submitTemplateToMeta(id) {
   if (template.header) {
     components.push({ type: 'HEADER', format: 'TEXT', text: template.header });
   }
-  components.push({ type: 'BODY', text: template.body });
+
+  const bodyComponent = { type: 'BODY', text: template.body };
+  const bodyVars = parseTemplateVariables(template.body);
+  const bodyExamples = Array.isArray(template.body_examples) && template.body_examples.length
+    ? template.body_examples.map(String)
+    : bodyVars.map((v, i) => (i === 0 ? 'דלק' : i === 1 ? 'מוצר' : i === 2 ? '70' : 'דוגמה'));
+  if (bodyVars.length) {
+    bodyComponent.example = { body_text: [bodyExamples.slice(0, bodyVars.length)] };
+  }
+  components.push(bodyComponent);
+
   if (template.footer) {
     components.push({ type: 'FOOTER', text: template.footer });
   }
@@ -257,7 +279,22 @@ export async function submitTemplateToMeta(id) {
   const buttonError = validateButtons(buttons);
   if (buttonError) throw new Error(buttonError);
   if (buttons.length) {
-    components.push({ type: 'BUTTONS', buttons });
+    // Meta create API expects example on dynamic URL buttons
+    const metaButtons = buttons.map((b) => {
+      if (b.type !== 'URL') return b;
+      const hasDynamic = /\{\{\d+\}\}/.test(b.url);
+      if (!hasDynamic) {
+        const { example, ...rest } = b;
+        return rest;
+      }
+      return {
+        type: 'URL',
+        text: b.text,
+        url: b.url,
+        example: b.example?.length ? b.example : ['pa_example'],
+      };
+    });
+    components.push({ type: 'BUTTONS', buttons: metaButtons });
   }
 
   const url = `https://graph.facebook.com/${META_GRAPH_VERSION}/${wabaId}/message_templates`;

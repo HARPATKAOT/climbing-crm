@@ -3,6 +3,7 @@ import { supa } from './supa.js';
 const PUBLIC_API_ROUTES = [
   /^\/health$/,
   /^\/public\//,
+  /^\/r\/[^/]+$/,
   /^\/whatsapp\/webhook$/,
   /^\/instagram\/webhook$/,
   /^\/icount\/webhook$/,

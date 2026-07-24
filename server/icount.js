@@ -423,6 +423,10 @@ export async function buildPaymentUrl({
   return `${base}?${params.toString()}`;
 }
 
+/**
+ * Public base used for short WhatsApp payment redirects / template URL buttons.
+ * Example button URL: https://climbing-crm-api.onrender.com/r/{{1}}
+ */
 export function getPublicApiBase() {
   return (
     process.env.PUBLIC_API_URL ||
@@ -431,6 +435,20 @@ export function getPublicApiBase() {
   )
     .trim()
     .replace(/\/$/, '');
+}
+
+export function getPaymentRedirectBase() {
+  return getPublicApiBase();
+}
+
+export function buildPaymentRedirectUrl(paymentId) {
+  if (!paymentId) return '';
+  return `${getPaymentRedirectBase()}/r/${encodeURIComponent(String(paymentId))}`;
+}
+
+/** Default Meta template name for POS payment links. */
+export function getPaymentTemplateName() {
+  return (process.env.WA_PAYMENT_TEMPLATE || 'payment_link').trim();
 }
 
 /** Server-to-server notify URL after payment-page success (IPN). */
@@ -458,6 +476,9 @@ export const icount = {
   resolvePayPageUrl,
   buildIpnUrl,
   getPublicApiBase,
+  getPaymentRedirectBase,
+  buildPaymentRedirectUrl,
+  getPaymentTemplateName,
   getPayPage,
   getPayBaseUrl,
   icountPost,
