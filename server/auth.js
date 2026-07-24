@@ -33,6 +33,7 @@ const TEAM_RULES = [
   { methods: ['GET'], pattern: /^\/auth\/me$/ },
   { methods: ['GET'], pattern: /^\/pricelist(\/|$)/ },
   { methods: ['GET', 'POST'], pattern: /^\/pos\/(sale|quote|payment-link|sales)(\/|$)/ },
+  { methods: ['POST'], pattern: /^\/pos\/sales\/[^/]+\/refund$/ },
   { methods: ['GET', 'POST'], pattern: /^\/pos\/passes(\/|$)/ },
   { methods: ['GET', 'POST'], pattern: /^\/cash-register(\/|$)/ },
   { methods: ['GET'], pattern: /^\/icount\/status$/ },

@@ -2,7 +2,7 @@ import 'dotenv/config';
 import crypto from 'crypto';
 import express from 'express';
 import cors from 'cors';
-import { db, initDb, persistCore } from './db.js';
+import { db, initDb, persistCore, parentPhonesMatch } from './db.js';
 import { supa } from './supa.js';
 import { whatsappService, instagramService } from './whatsapp.js';
 import { whatsappConnectService } from './whatsappConnect.js';
@@ -139,6 +139,17 @@ app.post('/api/admin/reload-core', requireOwner, async (req, res) => {
     });
   } catch (err) {
     console.error('reload-core failed:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// One-shot / on-demand merge of parent cards that share the same phone (050… vs 972…).
+app.post('/api/admin/merge-duplicate-parents', requireOwner, (req, res) => {
+  try {
+    const result = db.mergeAllDuplicateParentsByPhone();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('merge-duplicate-parents failed:', err.message);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
@@ -299,6 +310,25 @@ app.put('/api/parents/:id', (req, res) => {
   for (const key of allowed) {
     if (req.body[key] !== undefined) updates[key] = req.body[key];
   }
+
+  // If phone is changing to one that already exists — absorb into that card instead of creating ambiguity.
+  if (updates.phone) {
+    const existing = (db.get('parents') || []).find(
+      (p) => p.id !== id && parentPhonesMatch(p.phone, updates.phone)
+    );
+    if (existing) {
+      // Point this card's phone at the existing one via upsert merge path.
+      db.update('parents', id, { ...updates, phone: updates.phone });
+      const merged = db.upsertParentByPhone(
+        updates.name || existing.name,
+        updates.phone,
+        updates.email || existing.email,
+        { city: updates.city, source: updates.source, status: updates.status }
+      );
+      return res.json(merged);
+    }
+  }
+
   const updated = db.update('parents', id, updates);
   if (!updated) return res.status(404).json({ error: 'Parent not found' });
   res.json(updated);
@@ -313,6 +343,33 @@ app.delete('/api/parents/:id', (req, res) => {
   const ok = db.delete('parents', id);
   if (!ok) return res.status(404).json({ error: 'הלקוח לא נמצא' });
   res.json({ success: true });
+});
+
+// Add trainee/child under an existing parent
+app.post('/api/parents/:id/students', async (req, res) => {
+  const { id } = req.params;
+  const { name, birthDate, status, source } = req.body || {};
+  const result = await db.addStudentToParent(id, {
+    name,
+    birthDate: birthDate || '',
+    status: status || 'lead_new',
+    source: source || 'crm',
+  });
+  if (result.error) {
+    return res.status(result.status || 400).json({
+      error: result.error,
+      student: result.student || undefined,
+    });
+  }
+
+  const parent = result.parent;
+  automationsService.triggerEvent('new_lead', {
+    ...result.student,
+    phone: parent?.phone,
+    parentName: parent?.name,
+  });
+
+  res.status(201).json({ parent, student: result.student });
 });
 
 // Broadcast list definitions (editable mailing lists)
@@ -1882,6 +1939,7 @@ app.post('/api/icount/webhook', async (req, res) => {
             status: 'paid',
             icount_doc_id: docId || sale.icount_doc_id,
             icount_doc_number: docnum || sale.icount_doc_number,
+            icount_doctype: doctype || sale.icount_doctype || 'invrec',
             updated_at: new Date().toISOString(),
           });
         }
@@ -2151,35 +2209,81 @@ function resolvePosCustomer({ studentId, parentId, walkInName, walkInPhone, walk
   let student = studentId ? db.getOne('students', studentId) : null;
   let parent = parentId ? db.getOne('parents', parentId) : null;
   if (!parent && student?.parentId) parent = db.getOne('parents', student.parentId);
+
+  let isNewLead = false;
   if (!parent && (walkInName || walkInPhone)) {
-    parent = {
-      id: null,
-      name: walkInName || 'לקוח מזדמן',
-      phone: walkInPhone || '',
-      email: walkInEmail || '',
-    };
+    const name = String(walkInName || '').trim() || 'לקוח מדלפק';
+    const phone = String(walkInPhone || '').trim();
+    const email = String(walkInEmail || '').trim();
+
+    // If phone matches an existing card — reuse it (do not reset status to lead).
+    const existingByPhone = phone
+      ? (db.get('parents') || []).find((p) => parentPhonesMatch(p.phone, phone))
+      : null;
+
+    if (existingByPhone) {
+      const patch = {};
+      if (email && !existingByPhone.email) patch.email = email;
+      if (
+        name &&
+        name !== 'לקוח מדלפק' &&
+        (!existingByPhone.name ||
+          existingByPhone.name === 'לקוח וואטסאפ' ||
+          existingByPhone.name === 'ליד מאינסטגרם')
+      ) {
+        patch.name = name;
+      }
+      parent = Object.keys(patch).length
+        ? db.update('parents', existingByPhone.id, patch) || existingByPhone
+        : existingByPhone;
+    } else {
+      parent = db.upsertParentByPhone(name, phone, email, {
+        source: 'pos',
+        channel: 'pos',
+        status: 'lead_new',
+      });
+      isNewLead = true;
+      try {
+        automationsService.triggerEvent('new_lead', {
+          id: parent.id,
+          parentId: parent.id,
+          phone: parent.phone || phone,
+          parentName: parent.name || name,
+          status: 'lead_new',
+          source: 'pos',
+        });
+      } catch (err) {
+        console.warn('POS new_lead automation skipped:', err.message);
+      }
+    }
   }
-  return { student, parent };
+
+  return { student, parent, isNewLead };
 }
 
 function mapCartLines(cart) {
   return (cart || []).map((line) => {
-    const item = line.pricelist_id
+    const fromCatalog = Boolean(line.pricelist_id);
+    const item = fromCatalog
       ? enrichPricelistItem(db.getOne('pricelist', line.pricelist_id) || {})
-      : enrichPricelistItem(line);
+      : enrichPricelistItem({
+          ...line,
+          product_type: line.product_type || 'product',
+          track_inventory: false,
+        });
     const quantity = Number(line.quantity) || 1;
     const unitprice = Number(line.unitprice ?? line.price ?? item.price) || 0;
     return {
-      pricelist_id: item.id || line.pricelist_id || null,
+      pricelist_id: fromCatalog ? (item.id || line.pricelist_id || null) : null,
       name: line.name || item.name || 'פריט',
-      description: line.description || item.name || 'פריט',
+      description: line.description || item.name || line.name || 'פריט',
       unitprice,
       quantity,
       product_type: normalizeProductType({ ...item, product_type: line.product_type || item.product_type }),
       visits_total: item.visits_total,
       validity_days: item.validity_days,
       duration_days: item.duration_days,
-      track_inventory: item.track_inventory === true,
+      track_inventory: fromCatalog && item.track_inventory === true,
       stock_qty: item.stock_qty,
       item,
     };
@@ -2278,6 +2382,120 @@ app.get('/api/pos/sales', (req, res) => {
   res.json(sales);
 });
 
+app.post('/api/pos/sales/:id/refund', async (req, res) => {
+  try {
+    if (!icount.isConfigured()) {
+      return res.status(503).json({ error: 'iCount לא מוגדר בשרת' });
+    }
+    const sale = db.getOne('pos_sales', req.params.id);
+    if (!sale) return res.status(404).json({ error: 'עסקה לא נמצאה' });
+
+    if (req.crmUser?.role === 'staff') {
+      const today = new Date().toISOString().slice(0, 10);
+      const allowed =
+        String(sale.sold_by || '') === String(req.crmUser.email || '') ||
+        String(sale.created_at || '').slice(0, 10) === today;
+      if (!allowed) {
+        return res.status(403).json({ error: 'אין הרשאה לזכות עסקה זו' });
+      }
+    }
+
+    if (sale.status === 'refunded' || sale.status === 'cancelled') {
+      return res.status(400).json({ error: 'העסקה כבר זוכתה או בוטלה' });
+    }
+    if (sale.status === 'pending_payment') {
+      return res.status(400).json({ error: 'לא ניתן לזכות עסקה שממתינה לתשלום — בטלו את הקישור במקום' });
+    }
+    if (!sale.icount_doc_number) {
+      return res.status(400).json({ error: 'לעסקה אין מספר מסמך ב-iCount — אי אפשר לזכות אוטומטית' });
+    }
+
+    const doctype = sale.icount_doctype || 'invrec';
+    const reason =
+      String(req.body?.reason || '').trim() ||
+      `ביטול עסקת קופה ${sale.id}`;
+
+    // Verify still cancellable when possible
+    try {
+      const info = await icount.getDocInfo({ doctype, docnum: sale.icount_doc_number });
+      const docInfo = info.doc_info || info;
+      if (docInfo?.is_cancelled) {
+        const updated = db.update('pos_sales', sale.id, {
+          status: 'refunded',
+          refunded_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          refund_note: 'המסמך כבר בוטל ב-iCount',
+        });
+        return res.json({ sale: updated, alreadyCancelled: true });
+      }
+      if (docInfo && docInfo.is_cancellable === false) {
+        return res.status(400).json({ error: 'המסמך ב-iCount לא ניתן לביטול' });
+      }
+    } catch (err) {
+      console.warn('⚠️ [POS refund] doc info check failed:', err.message);
+    }
+
+    const cancellation = await icount.cancelDoc({
+      doctype,
+      docnum: sale.icount_doc_number,
+      reason,
+    });
+
+    // Void passes issued by this sale
+    const voidedPasses = [];
+    for (const pass of db.get('customer_passes') || []) {
+      if (String(pass.sale_id) !== String(sale.id)) continue;
+      if (pass.status === 'void') continue;
+      const updatedPass = db.update('customer_passes', pass.id, {
+        status: 'void',
+        void_reason: reason,
+        updated_at: new Date().toISOString(),
+      });
+      if (updatedPass) voidedPasses.push(updatedPass);
+    }
+
+    // Mark related payments
+    for (const payment of db.get('payments') || []) {
+      if (String(payment.pos_sale_id) !== String(sale.id) && String(payment.icount_doc_number) !== String(sale.icount_doc_number)) {
+        continue;
+      }
+      db.update('payments', payment.id, {
+        status: 'refunded',
+        updated_at: new Date().toISOString(),
+      });
+    }
+
+    const updatedSale = db.update('pos_sales', sale.id, {
+      status: 'refunded',
+      refunded_at: new Date().toISOString(),
+      refund_reason: reason,
+      refund_doc_number: cancellation.docnum,
+      refund_doctype: cancellation.doctype,
+      refunded_by: req.crmUser?.email || req.crmUser?.name || null,
+      updated_at: new Date().toISOString(),
+    });
+
+    console.log(
+      `↩️ [POS] refund sale=${sale.id} doc=${sale.icount_doc_number} → cancel=${cancellation.docnum}`
+    );
+
+    res.json({
+      sale: updatedSale,
+      cancellation,
+      voidedPasses,
+    });
+  } catch (err) {
+    console.error('POS refund error:', err.message, err.details?.error_details || '');
+    const details = Array.isArray(err.details?.error_details)
+      ? err.details.error_details.filter(Boolean).join(' · ')
+      : '';
+    res.status(502).json({
+      error: details || err.message,
+      code: err.code,
+    });
+  }
+});
+
 app.get('/api/pos/passes', (req, res) => {
   let passes = db.get('customer_passes') || [];
   if (req.query.studentId) {
@@ -2334,7 +2552,7 @@ app.post('/api/pos/sale', async (req, res) => {
     if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
 
     const needsCustomer = lines.some((l) => requiresCustomer(l.product_type));
-    const { student, parent } = resolvePosCustomer({
+    const { student, parent, isNewLead } = resolvePosCustomer({
       studentId,
       parentId,
       walkInName,
@@ -2358,7 +2576,7 @@ app.post('/api/pos/sale', async (req, res) => {
     if (icount.isConfigured()) {
       doc = await icount.createInvRec({
         clientId,
-        clientName: syncedParent?.name || student?.name || walkInName || 'לקוח מזדמן',
+        clientName: syncedParent?.name || student?.name || walkInName || 'לקוח מדלפק',
         items: lines.map((l) => ({
           description: l.description,
           unitprice: l.unitprice,
@@ -2377,12 +2595,13 @@ app.post('/api/pos/sale', async (req, res) => {
       status: 'paid',
       student_id: student?.id || null,
       parent_id: syncedParent?.id || parentId || null,
-      customer_name: syncedParent?.name || student?.name || walkInName || 'לקוח מזדמן',
+      customer_name: syncedParent?.name || student?.name || walkInName || 'לקוח מדלפק',
       customer_phone: syncedParent?.phone || walkInPhone || '',
       customer_email: syncedParent?.email || walkInEmail || '',
       icount_client_id: clientId,
       icount_doc_id: doc?.docId || null,
       icount_doc_number: doc?.docnum || null,
+      icount_doctype: doc ? 'invrec' : null,
       icount_doc_url: doc?.docUrl || null,
       sold_by: req.crmUser?.email || req.crmUser?.name || null,
       sent_email: !!sendEmail,
@@ -2432,7 +2651,7 @@ app.post('/api/pos/sale', async (req, res) => {
       }
     }
 
-    res.status(201).json({ sale, passes, doc, whatsappUrl });
+    res.status(201).json({ sale, passes, doc, whatsappUrl, isNewLead: !!isNewLead, parent: syncedParent });
   } catch (err) {
     console.error('POS sale error:', err.message, err.details?.error_details || '');
     const details = Array.isArray(err.details?.error_details)
@@ -2464,7 +2683,7 @@ app.post('/api/pos/quote', async (req, res) => {
     const lines = mapCartLines(cart);
     if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
 
-    const { student, parent } = resolvePosCustomer({
+    const { student, parent, isNewLead } = resolvePosCustomer({
       studentId,
       parentId,
       walkInName,
@@ -2532,7 +2751,7 @@ app.post('/api/pos/quote', async (req, res) => {
       }
     }
 
-    res.status(201).json({ sale, doc, whatsappUrl, emailedTo: sendEmail ? email : null });
+    res.status(201).json({ sale, doc, whatsappUrl, emailedTo: sendEmail ? email : null, isNewLead: !!isNewLead, parent: syncedParent });
   } catch (err) {
     console.error('POS quote error:', err.message);
     res.status(502).json({ error: err.message, code: err.code });
@@ -2555,7 +2774,7 @@ app.post('/api/pos/payment-link', async (req, res) => {
     if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
 
     const needsCustomer = lines.some((l) => requiresCustomer(l.product_type));
-    const { student, parent } = resolvePosCustomer({
+    const { student, parent, isNewLead } = resolvePosCustomer({
       studentId,
       parentId,
       walkInName,
@@ -2636,15 +2855,34 @@ app.post('/api/pos/payment-link', async (req, res) => {
     console.log(`💳 [POS] payment-link created sale=${sale.id} total=${total} url=${payUrl}`);
 
     let whatsappUrl = null;
+    let whatsappSent = false;
+    let whatsappError = null;
     if (sendWhatsapp) {
       const phone = normalizePhone(syncedParent?.phone || walkInPhone);
       if (phone) {
-        const digits = phone.startsWith('972') ? phone : phone.replace(/^0/, '972');
-        const text = encodeURIComponent(
-          `שלום${syncedParent?.name ? ` ${syncedParent.name}` : ''},\n` +
-            `לסיום התשלום ב-My Wall:\n${payUrl}`
-        );
-        whatsappUrl = `https://wa.me/${digits}?text=${text}`;
+        const customerName = syncedParent?.name || walkInName || '';
+        const waMsg =
+          `שלום${customerName ? ` ${customerName}` : ''},\n` +
+          `לסיום התשלום ב-My Wall:\n${payUrl}\n\n` +
+          `לאחר התשלום תופק חשבונית מס קבלה אוטומטית.`;
+        try {
+          const waResult = await whatsappService.sendTextMessage(phone, waMsg);
+          whatsappSent = !!waResult?.success;
+          if (!whatsappSent) {
+            whatsappError = waResult?.error || 'שליחת וואטסאפ נכשלה';
+            console.error('POS payment-link WhatsApp failed:', whatsappError);
+          }
+        } catch (waErr) {
+          whatsappError = waErr.message || 'שליחת וואטסאפ נכשלה';
+          console.error('POS payment-link WhatsApp error:', whatsappError);
+        }
+        // Fallback: open WhatsApp Web/app with prefilled message if API send failed
+        if (!whatsappSent) {
+          const digits = phone.startsWith('972') ? phone : phone.replace(/^0/, '972');
+          whatsappUrl = `https://wa.me/${digits}?text=${encodeURIComponent(waMsg)}`;
+        }
+      } else {
+        whatsappError = 'אין מספר טלפון לשליחה בוואטסאפ';
       }
     }
 
@@ -2653,7 +2891,11 @@ app.post('/api/pos/payment-link', async (req, res) => {
       payment: updatedPayment || { ...payment, payment_url: payUrl },
       payUrl,
       whatsappUrl,
+      whatsappSent,
+      whatsappError,
       syncWarning,
+      isNewLead: !!isNewLead,
+      parent: syncedParent,
     });
   } catch (err) {
     console.error('POS payment-link error:', err.message);
@@ -2973,6 +3215,49 @@ function findParentForOnboard({ parentId, phone, studentId }) {
   }
   return null;
 }
+
+// Public health-form context — prefill parent + climber from CRM
+app.get('/api/public/health-context', publicFormRateLimit, (req, res) => {
+  const studentId = String(req.query.studentId || '').trim();
+  const phone = String(req.query.phone || '').trim();
+  const parentId = String(req.query.parentId || '').trim();
+
+  const students = db.get('students') || [];
+  let student = studentId ? students.find((s) => s.id === studentId) : null;
+  const parent = findParentForOnboard({
+    parentId: parentId || student?.parentId || '',
+    phone,
+    studentId,
+  });
+
+  if (!student && parent) {
+    const kids = students.filter((s) => s.parentId === parent.id);
+    if (kids.length === 1) student = kids[0];
+  }
+
+  if (!parent && !student) {
+    return res.json({ parent: null, student: null });
+  }
+
+  res.json({
+    parent: parent
+      ? {
+          id: parent.id,
+          name: parent.name || '',
+          phone: parent.phone || '',
+          idNumber: parent.idNumber || parent.parentIdNum || '',
+        }
+      : null,
+    student: student
+      ? {
+          id: student.id,
+          name: student.name || '',
+          birthDate: student.birthDate || '',
+          idNumber: student.idNumber || student.climberIdNum || '',
+        }
+      : null,
+  });
+});
 
 // Public onboarding context — prefill parent/children + mailing lists
 app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
@@ -3337,36 +3622,147 @@ app.get('/api/documents/:id/download', async (req, res) => {
   res.send(buffer);
 });
 
+/** Resolve student + parent for lead send endpoints (supports parent-only cards). */
+function resolveLeadSendTarget(studentIdParam) {
+  const rawId = String(studentIdParam || '');
+  if (rawId.startsWith('parent:')) {
+    const parent = (db.get('parents') || []).find((p) => p.id === rawId.slice('parent:'.length));
+    if (!parent) return { error: 'הלקוח לא נמצא', status: 404 };
+    if (!parent.phone) return { error: 'אין מספר טלפון לשליחה', status: 400 };
+    return {
+      student: { id: rawId, name: '', parentId: parent.id },
+      parent,
+    };
+  }
+  const student = (db.get('students') || []).find((s) => s.id === rawId);
+  if (!student) return { error: 'המתאמן לא נמצא', status: 404 };
+  const parent = (db.get('parents') || []).find((p) => p.id === student.parentId);
+  if (!parent?.phone) return { error: 'אין מספר טלפון לשליחה', status: 400 };
+  return { student, parent };
+}
+
+/** Prefer a configured Meta template; fall back to free-form text when the 24h window is open. */
+async function sendWhatsAppWithOptionalTemplate(phone, {
+  templateCandidates = [],
+  variables = [],
+  freeformText,
+  parentId,
+} = {}) {
+  const tried = new Set();
+  let lastError = '';
+
+  for (const name of templateCandidates) {
+    if (!name || tried.has(name)) continue;
+    tried.add(name);
+    const result = await whatsappService.sendTemplateMessage(phone, name, variables, { parentId });
+    if (result?.success) return { sent: true, via: 'template', templateName: name, result };
+    lastError = result?.error || lastError;
+  }
+
+  if (freeformText) {
+    const result = await whatsappService.sendTextMessage(phone, freeformText);
+    if (result?.success) return { sent: true, via: 'text', result };
+    lastError = result?.error || lastError || 'שליחת טקסט חופשי נכשלה (ייתכן שחלון 24 השעות סגור)';
+  }
+
+  return {
+    sent: false,
+    via: null,
+    result: null,
+    error: lastError || 'לא נמצאה תבנית מאושרת לשליחה מחוץ לחלון 24 השעות',
+  };
+}
+
+function isLocalAppOrigin(origin) {
+  try {
+    const host = new URL(String(origin || '')).hostname;
+    return host === 'localhost' || host === '127.0.0.1';
+  } catch {
+    return true;
+  }
+}
+
+/** Prefer a public HTTPS origin for WhatsApp — localhost links are not clickable on phones. */
+function resolvePublicAppOrigin(requestedOrigin) {
+  const candidates = [
+    process.env.PUBLIC_APP_URL,
+    requestedOrigin,
+    'https://mywall.co.il',
+    'https://client-omega-topaz-35.vercel.app',
+  ]
+    .map((value) => String(value || '').trim().replace(/\/$/, ''))
+    .filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (!isLocalAppOrigin(candidate)) return candidate;
+  }
+  return 'https://mywall.co.il';
+}
+
+function buildShareableHealthUrl(origin, { pathSlug = '', studentId = '', phone = '' } = {}) {
+  const base = `${String(origin).replace(/\/$/, '')}/health${pathSlug || ''}`;
+  const params = new URLSearchParams();
+  // Prefer studentId alone — long phone digits at the end break WhatsApp link detection.
+  if (studentId && !String(studentId).startsWith('parent:')) {
+    params.set('studentId', studentId);
+  } else if (phone) {
+    params.set('phone', phone);
+  }
+  const qs = params.toString();
+  return qs ? `${base}?${qs}` : base;
+}
+
+function buildShareableOnboardUrl(origin, { parentId = '', studentId = '', phone = '' } = {}) {
+  const base = `${String(origin).replace(/\/$/, '')}/onboard`;
+  const params = new URLSearchParams();
+  if (parentId) params.set('parentId', parentId);
+  if (studentId && !String(studentId).startsWith('parent:')) params.set('studentId', studentId);
+  // Keep phone only when we have no parent/student id to resolve context.
+  if (!parentId && !(studentId && !String(studentId).startsWith('parent:')) && phone) {
+    params.set('phone', phone);
+  }
+  const qs = params.toString();
+  return qs ? `${base}?${qs}` : base;
+}
+
 // Send full onboarding link via WhatsApp
 app.post('/api/leads/:studentId/send-onboard-link', async (req, res) => {
-  const student = db.get('students').find((s) => s.id === req.params.studentId);
-  if (!student) return res.status(404).json({ error: 'Student not found' });
-  const parent = db.get('parents').find((p) => p.id === student.parentId);
-  if (!parent?.phone) return res.status(400).json({ error: 'אין מספר טלפון לשליחה' });
+  const target = resolveLeadSendTarget(req.params.studentId);
+  if (target.error) return res.status(target.status).json({ error: target.error });
+  const { student, parent } = target;
 
-  const origin = req.body?.origin || process.env.PUBLIC_APP_URL || 'https://mywall.co.il';
-  const params = new URLSearchParams();
-  if (parent.id) params.set('parentId', parent.id);
-  params.set('studentId', student.id);
-  if (parent.phone) params.set('phone', parent.phone);
-  const onboardUrl = `${origin.replace(/\/$/, '')}/onboard?${params.toString()}`;
+  const origin = resolvePublicAppOrigin(req.body?.origin);
+  const onboardUrl = buildShareableOnboardUrl(origin, {
+    parentId: parent.id,
+    studentId: student.id,
+    phone: parent.phone,
+  });
 
   try {
-    let result = await whatsappService.sendTemplateMessage(
-      parent.phone,
-      't2',
-      [parent.name || student.name]
-    );
-    if (!result?.success) {
-      result = await whatsappService.sendTextMessage(
-        parent.phone,
-        `שלום ${parent.name || ''}, בבקשה השלימו את הפרטים, רישום הילדים וחתימה על הצהרת הבריאות:\n${onboardUrl}`
-      );
-    }
-    res.json({ success: true, onboardUrl, result });
+    const settings = db.getSettings() || {};
+    // Do NOT use Meta templates whose button still points at an external form
+    // (e.g. noteforms). Prefer free-form with our /onboard URL, or a template
+    // explicitly configured for the CRM onboarding page.
+    const send = await sendWhatsAppWithOptionalTemplate(parent.phone, {
+      templateCandidates: [
+        settings.waOnboardTemplate,
+        process.env.WA_ONBOARD_TEMPLATE,
+      ].filter(Boolean),
+      variables: [parent.name || student.name || 'לקוח'],
+      freeformText: `שלום ${parent.name || ''}, בבקשה השלימו את הפרטים, רישום הילדים וחתימה על הצהרת הבריאות:\n\n${onboardUrl}`,
+      parentId: parent.id,
+    });
+    res.json({
+      success: !!send.sent,
+      sent: !!send.sent,
+      onboardUrl,
+      result: send.result || null,
+      warning: send.sent ? undefined : send.error,
+    });
   } catch (err) {
     res.status(200).json({
-      success: true,
+      success: false,
+      sent: false,
       onboardUrl,
       warning: err.message,
     });
@@ -3375,32 +3771,59 @@ app.post('/api/leads/:studentId/send-onboard-link', async (req, res) => {
 
 // Send health-form link via WhatsApp (from lead card)
 app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
-  const student = db.get('students').find(s => s.id === req.params.studentId);
-  if (!student) return res.status(404).json({ error: 'Student not found' });
-  const parent = db.get('parents').find(p => p.id === student.parentId);
-  if (!parent?.phone) return res.status(400).json({ error: 'אין מספר טלפון לשליחה' });
+  const target = resolveLeadSendTarget(req.params.studentId);
+  if (target.error) return res.status(target.status).json({ error: target.error });
+  const { student, parent } = target;
 
-  const origin = req.body?.origin || process.env.PUBLIC_APP_URL || 'https://mywall.co.il';
+  const origin = resolvePublicAppOrigin(req.body?.origin);
   const requestedSlug = slugifyFormTemplate(req.body?.templateSlug || req.body?.slug || '');
   const template = requestedSlug
     ? findFormTemplateBySlug(requestedSlug)
     : findDefaultFormTemplate();
   const pathSlug = template?.slug && !template.isDefault ? `/${template.slug}` : '';
-  const healthUrl = `${origin.replace(/\/$/, '')}/health${pathSlug}?studentId=${encodeURIComponent(student.id)}&phone=${encodeURIComponent(parent.phone)}`;
+  const healthUrl = buildShareableHealthUrl(origin, {
+    pathSlug,
+    studentId: student.id,
+    phone: parent.phone,
+  });
 
   try {
-    // Prefer approved Meta template t2; fall back to free-form text (mock / open session)
-    let result = await whatsappService.sendTemplateMessage(parent.phone, 't2', [parent.name || student.name]);
-    if (!result?.success) {
-      result = await whatsappService.sendTextMessage(
-        parent.phone,
-        `שלום ${parent.name || ''}, בבקשה מלאו את הצהרת הבריאות והסרת האחריות לפני הגעתכם:\n${healthUrl}`
-      );
-    }
-    res.json({ success: true, healthUrl, templateSlug: template?.slug || null, result });
+    const settings = db.getSettings() || {};
+    const parentLabel = parent.name || 'לקוח';
+    const studentLabel = student.name || '';
+    const forChild = studentLabel
+      && parentLabel
+      && studentLabel.trim().toLowerCase() !== parentLabel.trim().toLowerCase();
+    const freeformText = forChild
+      ? `שלום ${parentLabel}, מצורף קישור להצהרת בריאות עבור ${studentLabel}:\n\n${healthUrl}`
+      : `שלום ${parentLabel}, בבקשה מלאו את הצהרת הבריאות והסרת האחריות לפני הגעתכם:\n\n${healthUrl}`;
+    const send = await sendWhatsAppWithOptionalTemplate(parent.phone, {
+      templateCandidates: [
+        settings.waHealthTemplate,
+        process.env.WA_HEALTH_TEMPLATE,
+        't2',
+      ].filter(Boolean),
+      variables: [parentLabel],
+      freeformText,
+      parentId: parent.id,
+    });
+    res.json({
+      success: !!send.sent,
+      sent: !!send.sent,
+      healthUrl,
+      templateSlug: template?.slug || null,
+      result: send.result || null,
+      warning: send.sent ? undefined : send.error,
+    });
   } catch (err) {
     // Still return the link so staff can copy/share manually
-    res.status(200).json({ success: true, healthUrl, templateSlug: template?.slug || null, warning: err.message });
+    res.status(200).json({
+      success: false,
+      sent: false,
+      healthUrl,
+      templateSlug: template?.slug || null,
+      warning: err.message,
+    });
   }
 });
 

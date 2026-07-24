@@ -358,6 +358,31 @@ export async function getDoc(docId) {
   return icountPost('doc/get', { doc_id: docId });
 }
 
+export async function getDocInfo({ doctype, docnum } = {}) {
+  return icountPost('doc/info', { doctype, docnum });
+}
+
+/**
+ * Cancel / credit an existing document in iCount.
+ * Creates a cancellation document linked to the original.
+ * For card charges, iCount handles the accounting cancel; card money return
+ * depends on their terminal settings (may still need manual bank refund).
+ */
+export async function cancelDoc({ doctype = 'invrec', docnum, reason } = {}) {
+  if (!docnum) throw new Error('docnum required');
+  const fields = {
+    doctype,
+    docnum,
+  };
+  if (reason) fields.cancellation_reason = reason;
+  const data = await icountPost('doc/cancel', fields);
+  return {
+    doctype: data.cancellation_doctype || doctype,
+    docnum: data.cancellation_docnum || data.docnum || null,
+    raw: data,
+  };
+}
+
 /**
  * Build iCount payment-page URL.
  * After successful payment, iCount issues the document configured on the page
@@ -427,6 +452,8 @@ export const icount = {
   createOffer,
   searchDocs,
   getDoc,
+  getDocInfo,
+  cancelDoc,
   buildPaymentUrl,
   resolvePayPageUrl,
   buildIpnUrl,

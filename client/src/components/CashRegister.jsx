@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { ReceiptText, RefreshCw } from 'lucide-react';
+import { ReceiptText, RefreshCw, RotateCcw } from 'lucide-react';
 import PosSale from './PosSale.jsx';
 
 function docAmount(doc) {
@@ -28,6 +28,30 @@ function docDate(doc) {
   return s || '—';
 }
 
+function payMethodLabel(method) {
+  if (method === 'cash') return 'מזומן';
+  if (method === 'emv' || method === 'credit' || method === 'cc') return 'אשראי במסוף';
+  if (method === 'online') return 'סליקה בקישור';
+  if (method === 'quote') return 'הצעת מחיר';
+  return method || '—';
+}
+
+function saleStatusLabel(status) {
+  if (status === 'paid') return 'שולם';
+  if (status === 'pending_payment') return 'ממתין לתשלום';
+  if (status === 'refunded') return 'זוכה';
+  if (status === 'cancelled') return 'בוטל';
+  if (status === 'quoted') return 'הצעה';
+  return status || '—';
+}
+
+function saleStatusBadge(status) {
+  if (status === 'paid') return 'badge badge-green';
+  if (status === 'pending_payment') return 'badge badge-amber';
+  if (status === 'refunded' || status === 'cancelled') return 'badge badge-red';
+  return 'badge badge-gray';
+}
+
 export default function CashRegister() {
   const [expectedAmount, setExpectedAmount] = useState('');
   const [actualAmount, setActualAmount] = useState('');
@@ -44,6 +68,11 @@ export default function CashRegister() {
   const [icountTotal, setIcountTotal] = useState(0);
   const [icountLoading, setIcountLoading] = useState(false);
   const [payments, setPayments] = useState([]);
+  const [posSales, setPosSales] = useState([]);
+  const [salesLoading, setSalesLoading] = useState(false);
+  const [refundBusyId, setRefundBusyId] = useState('');
+  const [historyError, setHistoryError] = useState('');
+  const [historyOk, setHistoryOk] = useState('');
 
   const refreshRegister = useCallback(async () => {
     try {
@@ -60,6 +89,57 @@ export default function CashRegister() {
       setShifts([]);
     }
   }, [employee]);
+
+  const refreshSales = useCallback(async () => {
+    setSalesLoading(true);
+    setHistoryError('');
+    try {
+      const res = await fetch('/api/pos/sales');
+      const data = await res.json().catch(() => []);
+      if (!res.ok) throw new Error(data.error || 'לא הצלחנו לטעון עסקאות');
+      setPosSales(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error(err);
+      setPosSales([]);
+      setHistoryError(err.message || 'שגיאה בטעינת עסקאות');
+    } finally {
+      setSalesLoading(false);
+    }
+  }, []);
+
+  const refundSale = async (sale) => {
+    if (!sale?.id) return;
+    const ok = window.confirm(
+      `לזכות את העסקה של ${sale.customer_name || 'לקוח'} בסך ₪${Number(sale.total || 0).toLocaleString()}?\n` +
+        (sale.icount_doc_number ? `מספר מסמך: ${sale.icount_doc_number}\n` : '') +
+        'יווצר מסמך ביטול במערכת החיוב, וכרטיסיות או מנויים מהעסקה יבוטלו.'
+    );
+    if (!ok) return;
+
+    setRefundBusyId(sale.id);
+    setHistoryError('');
+    setHistoryOk('');
+    try {
+      const res = await fetch(`/api/pos/sales/${sale.id}/refund`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: `זיכוי מקופה · ${sale.id}` }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'הזיכוי נכשל');
+      setHistoryOk(
+        data.cancellation?.docnum
+          ? `העסקה זוכתה · מסמך ביטול ${data.cancellation.docnum}`
+          : 'העסקה זוכתה'
+      );
+      await refreshSales();
+      await refreshIcount();
+    } catch (err) {
+      setHistoryError(err.message || 'הזיכוי נכשל');
+    } finally {
+      setRefundBusyId('');
+    }
+  };
 
   const refreshIcount = useCallback(async () => {
     setIcountLoading(true);
@@ -102,7 +182,8 @@ export default function CashRegister() {
   useEffect(() => {
     refreshRegister();
     refreshIcount();
-  }, [refreshRegister, refreshIcount]);
+    refreshSales();
+  }, [refreshRegister, refreshIcount, refreshSales]);
 
   const discrepancy =
     actualAmount && expectedAmount
@@ -333,47 +414,154 @@ export default function CashRegister() {
       )}
 
       {activeTab === 'history' && (
-        <div className="card">
-          <div className="table-wrap">
-            <table className="crm-table">
-              <thead>
-                <tr>
-                  <th>תאריך</th>
-                  <th>משמרת</th>
-                  <th>עובד</th>
-                  <th>צפוי</th>
-                  <th>בפועל</th>
-                  <th>חריגה בקופה</th>
-                  <th>סטטוס</th>
-                </tr>
-              </thead>
-              <tbody>
-                {shifts.length === 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div className="card card-p">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <div>
+                <div className="section-title" style={{ marginBottom: 4 }}>היסטוריית עסקאות</div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                  מכירות מהקופה · אפשר לזכות עסקה ששולמה (יוצר מסמך ביטול במערכת החיוב)
+                </div>
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={refreshSales} disabled={salesLoading}>
+                <RefreshCw size={14} /> {salesLoading ? 'מרענן...' : 'רענון'}
+              </button>
+            </div>
+            {historyError && (
+              <div className="alert alert-error" style={{ marginTop: 12 }}>{historyError}</div>
+            )}
+            {historyOk && (
+              <div className="alert alert-success" style={{ marginTop: 12 }}>{historyOk}</div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="table-wrap">
+              <table className="crm-table">
+                <thead>
                   <tr>
-                    <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-3)' }}>
-                      עדיין אין סגירות קופה שמורות
-                    </td>
+                    <th>תאריך</th>
+                    <th>לקוח</th>
+                    <th>פריטים</th>
+                    <th>אמצעי</th>
+                    <th>סכום</th>
+                    <th>מסמך</th>
+                    <th>סטטוס</th>
+                    <th></th>
                   </tr>
-                )}
-                {shifts.map((s) => (
-                  <tr key={s.id}>
-                    <td>{s.date}</td>
-                    <td><span className="badge badge-blue">{s.shift}</span></td>
-                    <td>{s.employee}</td>
-                    <td>₪{Number(s.expected).toLocaleString()}</td>
-                    <td style={{ fontWeight: 700 }}>₪{Number(s.actual).toLocaleString()}</td>
-                    <td>
-                      <span className={Number(s.discrepancy) === 0 ? 'badge badge-green' : 'badge badge-red'}>
-                        {Number(s.discrepancy) === 0
-                          ? 'תקין'
-                          : `${Number(s.discrepancy) > 0 ? '+' : ''}${s.discrepancy} ₪`}
-                      </span>
-                    </td>
-                    <td><span className="badge badge-gray">סגורה</span></td>
+                </thead>
+                <tbody>
+                  {posSales.length === 0 && (
+                    <tr>
+                      <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-3)' }}>
+                        {salesLoading ? 'טוען עסקאות...' : 'עדיין אין עסקאות קופה'}
+                      </td>
+                    </tr>
+                  )}
+                  {posSales.map((sale) => {
+                    const items = Array.isArray(sale.items) ? sale.items : [];
+                    const canRefund =
+                      sale.status === 'paid' &&
+                      !!sale.icount_doc_number &&
+                      sale.payment_method !== 'quote';
+                    return (
+                      <tr key={sale.id}>
+                        <td>
+                          {sale.created_at
+                            ? new Date(sale.created_at).toLocaleString('he-IL')
+                            : '—'}
+                        </td>
+                        <td>
+                          <div style={{ fontWeight: 600 }}>{sale.customer_name || 'לקוח'}</div>
+                          {sale.customer_phone && (
+                            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{sale.customer_phone}</div>
+                          )}
+                        </td>
+                        <td style={{ fontSize: 12, maxWidth: 220 }}>
+                          {items.length
+                            ? items.map((i) => i.name || i.description).filter(Boolean).join(', ')
+                            : '—'}
+                        </td>
+                        <td>{payMethodLabel(sale.payment_method)}</td>
+                        <td style={{ fontWeight: 700 }}>₪{Number(sale.total || 0).toLocaleString()}</td>
+                        <td>{sale.icount_doc_number || sale.refund_doc_number || '—'}</td>
+                        <td>
+                          <span className={saleStatusBadge(sale.status)}>
+                            {saleStatusLabel(sale.status)}
+                          </span>
+                          {sale.refund_doc_number && (
+                            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                              ביטול: {sale.refund_doc_number}
+                            </div>
+                          )}
+                        </td>
+                        <td>
+                          {canRefund ? (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              disabled={refundBusyId === sale.id}
+                              onClick={() => refundSale(sale)}
+                              title="זיכוי / ביטול עסקה"
+                            >
+                              <RotateCcw size={13} />
+                              {refundBusyId === sale.id ? 'מזכה...' : 'זיכוי'}
+                            </button>
+                          ) : (
+                            <span style={{ color: 'var(--text-3)', fontSize: 12 }}>—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="section-title" style={{ padding: '14px 16px 0' }}>סגירות קופה</div>
+            <div className="table-wrap">
+              <table className="crm-table">
+                <thead>
+                  <tr>
+                    <th>תאריך</th>
+                    <th>משמרת</th>
+                    <th>עובד</th>
+                    <th>צפוי</th>
+                    <th>בפועל</th>
+                    <th>חריגה בקופה</th>
+                    <th>סטטוס</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {shifts.length === 0 && (
+                    <tr>
+                      <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-3)' }}>
+                        עדיין אין סגירות קופה שמורות
+                      </td>
+                    </tr>
+                  )}
+                  {shifts.map((s) => (
+                    <tr key={s.id}>
+                      <td>{s.date}</td>
+                      <td><span className="badge badge-blue">{s.shift}</span></td>
+                      <td>{s.employee}</td>
+                      <td>₪{Number(s.expected).toLocaleString()}</td>
+                      <td style={{ fontWeight: 700 }}>₪{Number(s.actual).toLocaleString()}</td>
+                      <td>
+                        <span className={Number(s.discrepancy) === 0 ? 'badge badge-green' : 'badge badge-red'}>
+                          {Number(s.discrepancy) === 0
+                            ? 'תקין'
+                            : `${Number(s.discrepancy) > 0 ? '+' : ''}${s.discrepancy} ₪`}
+                        </span>
+                      </td>
+                      <td><span className="badge badge-gray">סגורה</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
