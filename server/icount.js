@@ -164,9 +164,28 @@ function buildDocLineFields(items) {
   return fields;
 }
 
+/** Israel standard VAT rate used by this account. */
+const DEFAULT_VAT_RATE = 0.18;
+
+function lineItemsNetTotal(items) {
+  return (items || []).reduce((sum, item) => {
+    const qty = Number(item.quantity) || 1;
+    const price = Number(item.unitprice ?? item.price) || 0;
+    return sum + qty * price;
+  }, 0);
+}
+
+function roundMoney(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
 /**
  * Create tax invoice + receipt (חשבונית מס קבלה)
  * items: [{ description, unitprice, quantity? }]
+ * paymentMethod: cash | emv | credit | online (default cash)
+ *
+ * iCount requires an explicit payment line for invrec:
+ *   cash[sum]=AMOUNT  OR  cc[0][sum]=amount
  */
 export async function createInvRec({
   clientId,
@@ -174,13 +193,15 @@ export async function createInvRec({
   items,
   comment,
   emailTo,
-  hwp,
+  paymentMethod = 'cash',
+  vattype = 1,
+  vatRate = DEFAULT_VAT_RATE,
 }) {
   const fields = {
     doctype: 'invrec',
     doc_date: todayYyyymmdd(),
-    currency: 'NIS',
-    vattype: 1,
+    currency: 'ILS',
+    vattype,
     ...buildDocLineFields(items),
   };
 
@@ -193,14 +214,25 @@ export async function createInvRec({
     fields.email_to = emailTo;
     fields.send_email = 1;
   }
-  // Payment type hint when supported by account (1=cash-ish, varies by tenant)
-  if (hwp != null) fields.hwp = hwp;
+
+  const net = lineItemsNetTotal(items);
+  const paid =
+    Number(vattype) === 1 ? roundMoney(net * (1 + Number(vatRate) || DEFAULT_VAT_RATE)) : roundMoney(net);
+
+  const method = String(paymentMethod || 'cash').toLowerCase();
+  if (method === 'emv' || method === 'credit' || method === 'cc' || method === 'card') {
+    fields['cc[0][sum]'] = paid;
+  } else {
+    // cash, online confirmation, or unknown → record as cash payment on the document
+    fields['cash[sum]'] = paid;
+  }
 
   const result = await icountPost('doc/create', fields);
   return {
     docId: result.doc_id != null ? String(result.doc_id) : null,
     docnum: result.docnum != null ? String(result.docnum) : null,
     docUrl: result.doc_url || result.docurl || null,
+    paidAmount: paid,
     raw: result,
   };
 }

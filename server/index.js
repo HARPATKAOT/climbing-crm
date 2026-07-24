@@ -1735,6 +1735,7 @@ app.post('/api/icount/invoice', async (req, res) => {
       clientName: syncedParent.name || studentName,
       items: [{ description, unitprice: Number(amount), quantity: 1 }],
       comment: studentName ? `עבור: ${studentName}` : undefined,
+      paymentMethod: 'cash',
     });
 
     const payment = db.insert('payments', {
@@ -2365,6 +2366,7 @@ app.post('/api/pos/sale', async (req, res) => {
         })),
         comment: `מכירה בדלפק · ${paymentMethod}${student?.name ? ` · עבור: ${student.name}` : ''}`,
         emailTo: sendEmail ? syncedParent?.email || walkInEmail : undefined,
+        paymentMethod,
       });
     }
 
@@ -2432,8 +2434,14 @@ app.post('/api/pos/sale', async (req, res) => {
 
     res.status(201).json({ sale, passes, doc, whatsappUrl });
   } catch (err) {
-    console.error('POS sale error:', err.message);
-    res.status(502).json({ error: err.message, code: err.code });
+    console.error('POS sale error:', err.message, err.details?.error_details || '');
+    const details = Array.isArray(err.details?.error_details)
+      ? err.details.error_details.filter(Boolean).join(' · ')
+      : '';
+    res.status(502).json({
+      error: details || err.message,
+      code: err.code,
+    });
   }
 });
 
