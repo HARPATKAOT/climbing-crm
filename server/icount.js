@@ -14,17 +14,79 @@ function getToken() {
   ).trim();
 }
 
+/** Legacy slug that never existed as DNS; map to intro-training pay page. */
+const LEGACY_PAY_PAGE_ALIASES = {
+  mywall: '45',
+};
+
 function getPayPage() {
-  return (process.env.ICOUNT_PAY_PAGE || 'mywall').trim().replace(/^\//, '');
+  return (process.env.ICOUNT_PAY_PAGE || process.env.ICOUNT_PAY_PAGE_ID || '45')
+    .trim()
+    .replace(/^\//, '');
 }
 
 function getPayBaseUrl() {
   return (
     process.env.ICOUNT_PAY_BASE_URL ||
-    'https://checkout.icount.co.il'
+    'https://app.icount.co.il/m'
   )
     .trim()
     .replace(/\/$/, '');
+}
+
+let _payPageUrlCache = { key: null, url: null, at: 0 };
+
+/**
+ * Resolve the real iCount payment-page base URL (no query string).
+ * Prefers ICOUNT_PAY_PAGE_URL; otherwise looks up paypage/get_list by id/slug.
+ */
+export async function resolvePayPageUrl() {
+  const fullOverride = (process.env.ICOUNT_PAY_PAGE_URL || '').trim().replace(/\/$/, '');
+  if (fullOverride) return fullOverride;
+
+  let key = getPayPage();
+  if (LEGACY_PAY_PAGE_ALIASES[key.toLowerCase()]) {
+    key = LEGACY_PAY_PAGE_ALIASES[key.toLowerCase()];
+  }
+
+  const now = Date.now();
+  if (_payPageUrlCache.key === key && _payPageUrlCache.url && now - _payPageUrlCache.at < 5 * 60 * 1000) {
+    return _payPageUrlCache.url;
+  }
+
+  // Already a full URL
+  if (/^https?:\/\//i.test(key)) {
+    _payPageUrlCache = { key, url: key.replace(/\/$/, ''), at: now };
+    return _payPageUrlCache.url;
+  }
+
+  // Numeric page id or slug — resolve via iCount so we never invent dead hosts
+  try {
+    const data = await icountPost('paypage/get_list', {});
+    const pages = data.paypages || {};
+    const list = Object.values(pages);
+    let match =
+      pages[key] ||
+      list.find((p) => String(p.page_id) === String(key)) ||
+      list.find((p) => {
+        const url = String(p.page_url || '');
+        const slug = url.split('/').pop();
+        return slug === key || url.endsWith(`/m/${key}`);
+      });
+
+    if (match?.page_url) {
+      const url = String(match.page_url).replace(/\/$/, '');
+      _payPageUrlCache = { key, url, at: now };
+      return url;
+    }
+  } catch (err) {
+    console.warn('⚠️ [iCount] paypage/get_list failed, falling back to constructed URL:', err.message);
+  }
+
+  // Fallback: app.icount.co.il/m/{slug-or-id}
+  const url = `${getPayBaseUrl()}/${key}`;
+  _payPageUrlCache = { key, url, at: now };
+  return url;
 }
 
 export function isConfigured() {
@@ -303,7 +365,7 @@ export async function getDoc(docId) {
  *
  * Custom fields with m__ prefix are echoed back on the IPN without the prefix.
  */
-export function buildPaymentUrl({
+export async function buildPaymentUrl({
   amount,
   description,
   name,
@@ -315,7 +377,7 @@ export function buildPaymentUrl({
   failureUrl,
   cancelUrl,
 } = {}) {
-  const page = getPayPage();
+  const base = await resolvePayPageUrl();
   const params = new URLSearchParams();
   if (amount != null && amount !== '') params.set('cs', String(amount));
   if (description) params.set('cd', description);
@@ -333,7 +395,7 @@ export function buildPaymentUrl({
   if (successUrl) params.set('success_url', successUrl);
   if (failureUrl) params.set('failure_url', failureUrl);
   if (cancelUrl) params.set('cancel_url', cancelUrl);
-  return `${getPayBaseUrl()}/${page}?${params.toString()}`;
+  return `${base}?${params.toString()}`;
 }
 
 export function getPublicApiBase() {
@@ -366,6 +428,7 @@ export const icount = {
   searchDocs,
   getDoc,
   buildPaymentUrl,
+  resolvePayPageUrl,
   buildIpnUrl,
   getPublicApiBase,
   getPayPage,

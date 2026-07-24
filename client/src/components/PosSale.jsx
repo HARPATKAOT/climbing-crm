@@ -146,13 +146,13 @@ export default function PosSale() {
     if (hit.type === 'student') {
       setSelectedStudentId(hit.id);
       setSelectedParentId(hit.parentId || '');
-      setWalkInName('');
+      setWalkInName(hit.parentName || hit.name || '');
       setWalkInPhone(hit.phone || '');
       setWalkInEmail(hit.email || '');
     } else {
       setSelectedParentId(hit.id);
       setSelectedStudentId('');
-      setWalkInName('');
+      setWalkInName(hit.name || '');
       setWalkInPhone(hit.phone || '');
       setWalkInEmail(hit.email || '');
     }
@@ -164,6 +164,9 @@ export default function PosSale() {
     setSelectedStudentId('');
     setSelectedParentId('');
     setCustomerQuery('');
+    setWalkInName('');
+    setWalkInPhone('');
+    setWalkInEmail('');
   };
 
   const total = cart.reduce(
@@ -366,54 +369,92 @@ export default function PosSale() {
       </div>
 
       <div>
-        <div className="card card-p" style={{ marginBottom: 16, overflow: 'visible' }}>
+        <div
+          className="card card-p"
+          style={{ marginBottom: 16, overflow: 'visible', position: 'relative', zIndex: 60 }}
+        >
           <div className="section-title" style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <User size={16} /> לקוח
+            <User size={16} /> לקוח לחיוב
           </div>
           {loadError && (
             <div className="alert alert-error" style={{ marginBottom: 10 }}>{loadError}</div>
           )}
-          <div className="form-group" style={{ marginBottom: 10, position: 'relative', zIndex: 30 }}>
+          {!loadError && (
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>
+              {parents.length} לקוחות · {students.length} מתאמנים במערכת
+            </div>
+          )}
+
+          {(selectedStudent || selectedParent) && (
+            <div
+              style={{
+                marginBottom: 12,
+                padding: '10px 12px',
+                borderRadius: 10,
+                border: '1px solid rgba(56,189,248,0.35)',
+                background: 'rgba(56,189,248,0.08)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <div style={{ fontSize: 13, color: 'var(--text-1)' }}>
+                <div style={{ fontWeight: 800 }}>
+                  {selectedStudent ? selectedStudent.name : selectedParent?.name}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
+                  {selectedStudent && selectedParent?.name ? `הורה: ${selectedParent.name} · ` : ''}
+                  {effectivePhone || 'בלי טלפון'}
+                  {effectiveEmail ? ` · ${effectiveEmail}` : ''}
+                </div>
+              </div>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={clearCustomer}>
+                <X size={12} /> החלף
+              </button>
+            </div>
+          )}
+
+          <div className="form-group" style={{ marginBottom: 10, position: 'relative', zIndex: 70 }}>
             <label className="form-label">
-              חיפוש לקוח {needsCustomer ? '*' : '(רשות)'}
+              חיפוש לקוח קיים {needsCustomer ? '*' : '(מומלץ לקישור תשלום)'}
             </label>
-            <input
-              className="input"
-              placeholder="שם לקוח, מתאמן או טלפון..."
-              value={
-                selectedStudent
-                  ? selectedStudent.name
-                  : selectedParent && !customerQuery
-                    ? selectedParent.name
-                    : customerQuery
-              }
-              onChange={(e) => {
-                setSelectedStudentId('');
-                setSelectedParentId('');
-                setCustomerQuery(e.target.value);
-              }}
-              onFocus={() => {
-                if (selectedStudent || selectedParent) {
-                  setCustomerQuery('');
-                }
-              }}
-              autoComplete="off"
-            />
-            {customerQuery.trim() && !selectedStudentId && customerSuggestions.length > 0 && (
+            <div style={{ position: 'relative' }}>
+              <Search
+                size={14}
+                style={{
+                  position: 'absolute',
+                  right: 10,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  color: 'var(--text-3)',
+                  pointerEvents: 'none',
+                }}
+              />
+              <input
+                className="input"
+                style={{ paddingRight: 34 }}
+                placeholder="הקלידו שם או טלפון לבחירה מהרשימה..."
+                value={customerQuery}
+                onChange={(e) => setCustomerQuery(e.target.value)}
+                autoComplete="off"
+              />
+            </div>
+            {customerQuery.trim() && customerSuggestions.length > 0 && (
               <div
                 style={{
                   position: 'absolute',
-                  zIndex: 50,
+                  zIndex: 80,
                   right: 0,
                   left: 0,
                   top: '100%',
                   marginTop: 4,
-                  maxHeight: 260,
+                  maxHeight: 280,
                   overflow: 'auto',
                   border: '1px solid var(--border)',
                   borderRadius: 10,
-                  background: 'var(--bg-1, #111827)',
-                  boxShadow: '0 12px 28px rgba(0,0,0,0.45)',
+                  background: 'var(--bg-card, #0f172a)',
+                  boxShadow: '0 16px 40px rgba(0,0,0,0.55)',
                 }}
               >
                 {customerSuggestions.map((hit) => (
@@ -427,7 +468,9 @@ export default function PosSale() {
                       borderRadius: 0,
                       gap: 8,
                       padding: '10px 12px',
+                      textAlign: 'right',
                     }}
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => selectCustomer(hit)}
                   >
                     <span style={{ fontWeight: 700 }}>{hit.name}</span>
@@ -440,30 +483,12 @@ export default function PosSale() {
                 ))}
               </div>
             )}
-            {customerQuery.trim().length >= 1 && customerSuggestions.length === 0 && !selectedStudentId && !selectedParentId && (
+            {customerQuery.trim().length >= 1 && customerSuggestions.length === 0 && (
               <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
                 לא נמצאו לקוחות תואמים · אפשר למלא למטה כלקוח מזדמן
               </div>
             )}
           </div>
-
-          {(selectedStudent || selectedParent) && (
-            <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 10, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-              <span>
-                נבחר:{' '}
-                <strong>
-                  {selectedStudent
-                    ? selectedStudent.name
-                    : selectedParent?.name}
-                </strong>
-                {selectedStudent && selectedParent?.name ? ` · הורה: ${selectedParent.name}` : ''}
-                {!selectedStudent && selectedParent ? ' · לקוח' : ''}
-              </span>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={clearCustomer}>
-                <X size={12} /> נקה
-              </button>
-            </div>
-          )}
 
           {selectedParent && !selectedStudent && childrenOfSelectedParent.length > 0 && (
             <div className="form-group" style={{ marginBottom: 12 }}>
@@ -472,7 +497,18 @@ export default function PosSale() {
                 className="input select"
                 value=""
                 onChange={(e) => {
-                  if (e.target.value) setSelectedStudentId(e.target.value);
+                  if (!e.target.value) return;
+                  const student = students.find((s) => s.id === e.target.value);
+                  if (!student) return;
+                  selectCustomer({
+                    type: 'student',
+                    id: student.id,
+                    name: student.name,
+                    parentId: selectedParent.id,
+                    parentName: selectedParent.name,
+                    phone: selectedParent.phone || '',
+                    email: selectedParent.email || '',
+                  });
                 }}
               >
                 <option value="">— בחרו מתאמן —</option>
@@ -485,8 +521,15 @@ export default function PosSale() {
 
           <div className="form-grid-2" style={{ gap: 8 }}>
             <div className="form-group">
-              <label className="form-label">שם לקוח מזדמן</label>
-              <input className="input input-sm" value={walkInName} onChange={(e) => setWalkInName(e.target.value)} placeholder="אופציונלי" />
+              <label className="form-label">
+                {selectedParent || selectedStudent ? 'שם לחיוב' : 'שם לקוח מזדמן'}
+              </label>
+              <input
+                className="input input-sm"
+                value={walkInName}
+                onChange={(e) => setWalkInName(e.target.value)}
+                placeholder={selectedParent ? selectedParent.name : 'אם אין לקוח במערכת'}
+              />
             </div>
             <div className="form-group">
               <label className="form-label">טלפון</label>
@@ -505,16 +548,11 @@ export default function PosSale() {
                 onChange={(e) => setWalkInEmail(e.target.value)}
                 placeholder={selectedParent?.email || 'name@email.com'}
               />
-              {!walkInEmail && selectedParent?.email && (
-                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
-                  יישלח אל המייל של הלקוח אם לא תמלאו אחר
-                </div>
-              )}
             </div>
           </div>
         </div>
 
-        <div className="card card-p" style={{ marginBottom: 16 }}>
+        <div className="card card-p" style={{ marginBottom: 16, position: 'relative', zIndex: 1 }}>
           <div className="section-title" style={{ marginBottom: 12 }}>עגלה</div>
           {cart.length === 0 ? (
             <div style={{ color: 'var(--text-3)', fontSize: 13, textAlign: 'center', padding: 16 }}>העגלה ריקה</div>

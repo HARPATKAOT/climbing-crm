@@ -1990,7 +1990,7 @@ app.post('/api/checkout/payment-request', async (req, res) => {
   });
 
   const ipnUrl = icount.buildIpnUrl({ paymentId: payment.id });
-  const payUrl = icount.buildPaymentUrl({
+  const payUrl = await icount.buildPaymentUrl({
     amount,
     description: description || 'חוג טיפוס קיר',
     name: payName,
@@ -2618,7 +2618,7 @@ app.post('/api/pos/payment-link', async (req, res) => {
     db.update('payments', payment.id, { pos_sale_id: sale.id });
 
     const ipnUrl = icount.buildIpnUrl({ paymentId: payment.id });
-    const payUrl = icount.buildPaymentUrl({
+    const payUrl = await icount.buildPaymentUrl({
       amount: total,
       description: description || 'רכישה ב-My Wall',
       name: syncedParent?.name || student?.name || walkInName || 'לקוח',

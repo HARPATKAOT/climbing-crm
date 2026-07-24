@@ -9,6 +9,12 @@ const managedKeys = [
   'INSTAGRAM_APP_SECRET',
   'INSTAGRAM_ACCESS_TOKEN',
   'ICOUNT_API_TOKEN',
+  'ICOUNT_WEBHOOK_SECRET',
+  'ICOUNT_PAY_PAGE',
+  'ICOUNT_PAY_PAGE_ID',
+  'ICOUNT_PAY_PAGE_URL',
+  'ICOUNT_PAY_BASE_URL',
+  'PUBLIC_API_URL',
 ];
 const envVars = managedKeys
   .filter((key) => process.env[key])
