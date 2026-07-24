@@ -2572,7 +2572,10 @@ app.post('/api/pos/payment-link', async (req, res) => {
       }
     }
 
-    const description = lines.map((l) => `${l.name}×${l.quantity}`).join(', ');
+    const description = lines
+      .map((l) => `${l.name}${Number(l.quantity) > 1 ? ` (${l.quantity})` : ''}`)
+      .join(', ')
+      .slice(0, 180);
     const payment = db.insert('payments', {
       parent_id: syncedParent?.id || null,
       student_id: student?.id || null,
@@ -2609,32 +2612,37 @@ app.post('/api/pos/payment-link', async (req, res) => {
     const ipnUrl = icount.buildIpnUrl({ paymentId: payment.id });
     const payUrl = icount.buildPaymentUrl({
       amount: total,
-      description,
-      name: syncedParent?.name || student?.name || walkInName,
+      description: description || 'רכישה ב-My Wall',
+      name: syncedParent?.name || student?.name || walkInName || 'לקוח',
       phone: syncedParent?.phone || walkInPhone,
       email: syncedParent?.email || walkInEmail,
       paymentId: payment.id,
       ipnUrl,
     });
-    db.update('payments', payment.id, { payment_url: payUrl });
-    db.update('pos_sales', sale.id, { payment_url: payUrl });
+    const updatedPayment = db.update('payments', payment.id, { payment_url: payUrl });
+    const updatedSale = db.update('pos_sales', sale.id, {
+      payment_url: payUrl,
+      updated_at: new Date().toISOString(),
+    });
+
+    console.log(`💳 [POS] payment-link created sale=${sale.id} total=${total} url=${payUrl}`);
 
     let whatsappUrl = null;
     if (sendWhatsapp) {
       const phone = normalizePhone(syncedParent?.phone || walkInPhone);
       if (phone) {
-        const digits = phone.replace(/^0/, '972');
+        const digits = phone.startsWith('972') ? phone : phone.replace(/^0/, '972');
         const text = encodeURIComponent(
           `שלום${syncedParent?.name ? ` ${syncedParent.name}` : ''},\n` +
-            `לסיום התשלום ב־My Wall:\n${payUrl}`
+            `לסיום התשלום ב-My Wall:\n${payUrl}`
         );
         whatsappUrl = `https://wa.me/${digits}?text=${text}`;
       }
     }
 
     res.status(201).json({
-      sale: { ...sale, payment_url: payUrl },
-      payment: { ...payment, payment_url: payUrl },
+      sale: updatedSale || { ...sale, payment_url: payUrl },
+      payment: updatedPayment || { ...payment, payment_url: payUrl },
       payUrl,
       whatsappUrl,
       syncWarning,

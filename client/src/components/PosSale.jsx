@@ -34,6 +34,8 @@ export default function PosSale() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [recentSales, setRecentSales] = useState([]);
+  const [lastPayUrl, setLastPayUrl] = useState('');
+  const [copied, setCopied] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -60,6 +62,9 @@ export default function PosSale() {
   const selectedParent = selectedStudent
     ? parents.find((p) => p.id === selectedStudent.parentId)
     : null;
+
+  const effectivePhone = walkInPhone || selectedParent?.phone || '';
+  const effectiveEmail = walkInEmail || selectedParent?.email || '';
 
   const filteredProducts = useMemo(() => {
     const q = productFilter.trim().toLowerCase();
@@ -126,13 +131,24 @@ export default function PosSale() {
     setCart((prev) => prev.filter((l) => l.pricelist_id !== id));
   };
 
+  const copyPayUrl = async (url) => {
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      window.prompt('העתיקו את הקישור:', url);
+    }
+  };
+
   const payloadBase = () => ({
     cart,
     studentId: selectedStudentId || undefined,
     parentId: selectedParent?.id || undefined,
     walkInName: walkInName || undefined,
-    walkInPhone: walkInPhone || undefined,
-    walkInEmail: walkInEmail || selectedParent?.email || undefined,
+    walkInPhone: effectivePhone || undefined,
+    walkInEmail: effectiveEmail || undefined,
     sendEmail,
     sendWhatsapp,
   });
@@ -144,6 +160,14 @@ export default function PosSale() {
     }
     if (needsCustomer && !selectedStudentId) {
       setError('למנוי או כרטיסייה חובה לבחור מתאמן');
+      return false;
+    }
+    if (sendWhatsapp && !String(effectivePhone || '').trim()) {
+      setError('לשליחה בוואטסאפ חובה למלא טלפון, או לבטל את הסימון');
+      return false;
+    }
+    if (sendEmail && !String(effectiveEmail || '').trim()) {
+      setError('לשליחה למייל חובה למלא כתובת מייל, או לבטל את הסימון');
       return false;
     }
     return true;
@@ -163,12 +187,22 @@ export default function PosSale() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'הפעולה נכשלה');
       setResult(data);
+
+      const payUrl = data.payUrl || data.sale?.payment_url || '';
+      if (payUrl) {
+        setLastPayUrl(payUrl);
+        // Open the payment page so staff can verify / hand the device to the customer
+        window.open(payUrl, '_blank', 'noopener,noreferrer');
+      }
+
       if (data.whatsappUrl && sendWhatsapp) {
-        window.open(data.whatsappUrl, '_blank');
+        window.open(data.whatsappUrl, '_blank', 'noopener,noreferrer');
+      } else if (sendWhatsapp && payUrl && !data.whatsappUrl) {
+        setError('הקישור נוצר, אבל לא נפתח וואטסאפ — בדקו מספר טלפון');
       }
-      if (endpoint !== '/api/pos/payment-link' || data.sale?.status === 'paid') {
-        setCart([]);
-      }
+
+      // Clear cart after any successful checkout action
+      setCart([]);
       refresh();
     } catch (err) {
       setError(err.message || 'שגיאה');
@@ -316,16 +350,26 @@ export default function PosSale() {
             </div>
             <div className="form-group">
               <label className="form-label">טלפון</label>
-              <input className="input input-sm" value={walkInPhone} onChange={(e) => setWalkInPhone(e.target.value)} placeholder="050..." />
+              <input
+                className="input input-sm"
+                value={walkInPhone}
+                onChange={(e) => setWalkInPhone(e.target.value)}
+                placeholder={selectedParent?.phone || '050...'}
+              />
             </div>
             <div className="form-group" style={{ gridColumn: 'span 2' }}>
               <label className="form-label">מייל לשליחת מסמך</label>
               <input
                 className="input input-sm"
-                value={walkInEmail || selectedParent?.email || ''}
+                value={walkInEmail}
                 onChange={(e) => setWalkInEmail(e.target.value)}
-                placeholder="name@email.com"
+                placeholder={selectedParent?.email || 'name@email.com'}
               />
+              {!walkInEmail && selectedParent?.email && (
+                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                  יישלח אל המייל של ההורה אם לא תמלאו אחר
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -402,22 +446,57 @@ export default function PosSale() {
           {error && (
             <div className="alert alert-error" style={{ marginTop: 12 }}>{error}</div>
           )}
-          {result && (
+          {(lastPayUrl || result?.payUrl) && (
+            <div
+              className="alert alert-success"
+              style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700 }}>
+                <CheckCircle2 size={14} />
+                קישור תשלום מוכן
+                {result?.passes?.length ? ` · הופעלו ${result.passes.length} כרטיסים/מנויים` : ''}
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  wordBreak: 'break-all',
+                  direction: 'ltr',
+                  textAlign: 'left',
+                  background: 'rgba(0,0,0,0.2)',
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                }}
+              >
+                {lastPayUrl || result.payUrl}
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <a
+                  className="btn btn-primary btn-sm"
+                  href={lastPayUrl || result.payUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <Link2 size={13} /> פתח עמוד סליקה
+                </a>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => copyPayUrl(lastPayUrl || result.payUrl)}
+                >
+                  {copied ? 'הועתק!' : 'העתק קישור'}
+                </button>
+              </div>
+            </div>
+          )}
+          {result && !result.payUrl && !lastPayUrl && (
             <div className="alert alert-success" style={{ marginTop: 12 }}>
               <CheckCircle2 size={14} />
               <span>
                 {result.doc?.docnum
                   ? `מסמך ${result.doc.docnum} הופק`
-                  : result.payUrl
-                    ? 'קישור תשלום מוכן'
-                    : 'הפעולה הושלמה'}
+                  : 'הפעולה הושלמה'}
                 {result.passes?.length ? ` · הופעלו ${result.passes.length} כרטיסים/מנויים` : ''}
               </span>
-              {result.payUrl && (
-                <a href={result.payUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--blue)', marginRight: 8 }}>
-                  פתח קישור
-                </a>
-              )}
             </div>
           )}
 
@@ -441,6 +520,12 @@ export default function PosSale() {
               <FileText size={14} /> הצעת מחיר
             </button>
           </div>
+          {paymentMethod === 'online' && (
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 8 }}>
+              אחרי יצירת הקישור ייפתח עמוד הסליקה. אפשר גם להעתיק ולשלוח ללקוח.
+              {sendWhatsapp ? ' לשליחה בוואטסאפ חובה טלפון.' : ''}
+            </div>
+          )}
           {paymentMethod === 'emv' && (
             <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 8 }}>
               סלקו במסוף ואז לחצו על גבייה — המערכת תפיק חשבונית מס קבלה.
@@ -455,16 +540,58 @@ export default function PosSale() {
           {recentSales.length === 0 ? (
             <div style={{ fontSize: 12, color: 'var(--text-3)' }}>עדיין אין מכירות</div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {recentSales.map((sale) => (
-                <div key={sale.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, gap: 8 }}>
-                  <span style={{ color: 'var(--text-2)' }}>
-                    {sale.customer_name || 'לקוח'} · {sale.status === 'quoted' ? 'הצעה' : sale.status === 'pending_payment' ? 'ממתין' : 'שולם'}
-                    {sale.icount_doc_number ? ` · מס׳ ${sale.icount_doc_number}` : ''}
-                  </span>
-                  <strong>₪{Number(sale.total || 0).toLocaleString()}</strong>
-                </div>
-              ))}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {recentSales.map((sale) => {
+                const payUrl = sale.payment_url || '';
+                const statusLabel =
+                  sale.status === 'quoted'
+                    ? 'הצעה'
+                    : sale.status === 'pending_payment'
+                      ? 'ממתין לתשלום'
+                      : 'שולם';
+                return (
+                  <div
+                    key={sale.id}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 6,
+                      fontSize: 12,
+                      paddingBottom: 8,
+                      borderBottom: '1px solid var(--border)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                      <span style={{ color: 'var(--text-2)' }}>
+                        {sale.customer_name || 'לקוח'} · {statusLabel}
+                        {sale.icount_doc_number ? ` · מס׳ ${sale.icount_doc_number}` : ''}
+                      </span>
+                      <strong>₪{Number(sale.total || 0).toLocaleString()}</strong>
+                    </div>
+                    {payUrl && sale.status === 'pending_payment' && (
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <a
+                          className="btn btn-primary btn-sm"
+                          href={payUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ fontSize: 11 }}
+                        >
+                          פתח קישור סליקה
+                        </a>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          style={{ fontSize: 11 }}
+                          onClick={() => copyPayUrl(payUrl)}
+                        >
+                          העתק
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
