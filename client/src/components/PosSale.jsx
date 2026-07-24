@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ShoppingCart, Plus, Minus, Trash2, Search, User, CreditCard,
-  Banknote, Link2, FileText, CheckCircle2, X,
+  Banknote, Link2, FileText, CheckCircle2, X, Percent, Tag,
 } from 'lucide-react';
 
 const PAY_METHODS = [
@@ -13,7 +13,26 @@ const PAY_METHODS = [
 function productTypeLabel(type) {
   if (type === 'punch_card') return 'כרטיסייה';
   if (type === 'time_membership') return 'מנוי';
+  if (type === 'custom') return 'מותאם';
   return 'מוצר';
+}
+
+function makeCartLineId() {
+  return `cl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function roundMoney(n) {
+  return Math.round(Number(n) * 100) / 100;
+}
+
+function applyLineDiscount(listPrice, discountType, discountValue) {
+  const base = Number(listPrice) || 0;
+  const val = Number(discountValue) || 0;
+  if (val <= 0) return roundMoney(base);
+  if (discountType === 'percent') {
+    return roundMoney(Math.max(0, base * (1 - Math.min(val, 100) / 100)));
+  }
+  return roundMoney(Math.max(0, base - val));
 }
 
 export default function PosSale() {
@@ -23,6 +42,7 @@ export default function PosSale() {
   const [cart, setCart] = useState([]);
   const [productFilter, setProductFilter] = useState('');
   const [customerQuery, setCustomerQuery] = useState('');
+  const [hideSuggestions, setHideSuggestions] = useState(false);
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [selectedParentId, setSelectedParentId] = useState('');
   const [walkInName, setWalkInName] = useState('');
@@ -37,6 +57,10 @@ export default function PosSale() {
   const [lastPayUrl, setLastPayUrl] = useState('');
   const [copied, setCopied] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [editingDiscountId, setEditingDiscountId] = useState(null);
+  const [discountDraft, setDiscountDraft] = useState({ type: 'percent', value: '' });
+  const [showCustomForm, setShowCustomForm] = useState(false);
+  const [customDraft, setCustomDraft] = useState({ name: '', price: '', quantity: '1' });
 
   const refresh = useCallback(async () => {
     try {
@@ -143,6 +167,15 @@ export default function PosSale() {
   }, [customerQuery, parents, students]);
 
   const selectCustomer = (hit) => {
+    if (hit.type === 'new_lead') {
+      setSelectedStudentId('');
+      setSelectedParentId('');
+      setWalkInName(hit.name || customerQuery.trim());
+      setCustomerQuery(hit.name || customerQuery.trim());
+      setHideSuggestions(true);
+      setError('');
+      return;
+    }
     if (hit.type === 'student') {
       setSelectedStudentId(hit.id);
       setSelectedParentId(hit.parentId || '');
@@ -157,6 +190,7 @@ export default function PosSale() {
       setWalkInEmail(hit.email || '');
     }
     setCustomerQuery('');
+    setHideSuggestions(false);
     setError('');
   };
 
@@ -164,10 +198,17 @@ export default function PosSale() {
     setSelectedStudentId('');
     setSelectedParentId('');
     setCustomerQuery('');
+    setHideSuggestions(false);
     setWalkInName('');
     setWalkInPhone('');
     setWalkInEmail('');
   };
+
+  const pendingNewLeadName =
+    !selectedParent && !selectedStudent ? String(customerQuery || walkInName || '').trim() : '';
+  const isPendingNewLead = Boolean(pendingNewLeadName);
+  const showNewLeadBanner =
+    isPendingNewLead && (customerSuggestions.length === 0 || hideSuggestions);
 
   const total = cart.reduce(
     (sum, line) => sum + (Number(line.unitprice) || 0) * (Number(line.quantity) || 1),
@@ -182,37 +223,134 @@ export default function PosSale() {
     setResult(null);
     setError('');
     setCart((prev) => {
-      const existing = prev.find((l) => l.pricelist_id === item.id);
+      const existing = prev.find(
+        (l) => l.pricelist_id === item.id && !l.isCustom && l.unitprice === (Number(item.price) || 0)
+      );
       if (existing) {
         return prev.map((l) =>
-          l.pricelist_id === item.id
+          l.cartLineId === existing.cartLineId
             ? { ...l, quantity: (Number(l.quantity) || 1) + 1 }
             : l
         );
       }
+      const price = Number(item.price) || 0;
       return [
         ...prev,
         {
+          cartLineId: makeCartLineId(),
           pricelist_id: item.id,
           name: item.name,
           description: item.name,
-          unitprice: Number(item.price) || 0,
+          listPrice: price,
+          unitprice: price,
           quantity: 1,
           product_type: item.product_type || 'product',
+          discountType: null,
+          discountValue: 0,
+          isCustom: false,
         },
       ];
     });
   };
 
-  const setQty = (id, qty) => {
+  const addCustomProduct = () => {
+    const name = String(customDraft.name || '').trim();
+    const price = Number(customDraft.price);
+    const quantity = Math.max(1, Number(customDraft.quantity) || 1);
+    if (!name) {
+      setError('מלאו שם למוצר בהתאמה אישית');
+      return;
+    }
+    if (Number.isNaN(price) || price < 0) {
+      setError('מלאו מחיר תקין למוצר בהתאמה אישית');
+      return;
+    }
+    setResult(null);
+    setError('');
+    setCart((prev) => [
+      ...prev,
+      {
+        cartLineId: makeCartLineId(),
+        pricelist_id: null,
+        name,
+        description: name,
+        listPrice: roundMoney(price),
+        unitprice: roundMoney(price),
+        quantity,
+        product_type: 'product',
+        discountType: null,
+        discountValue: 0,
+        isCustom: true,
+      },
+    ]);
+    setCustomDraft({ name: '', price: '', quantity: '1' });
+    setShowCustomForm(false);
+  };
+
+  const setQty = (cartLineId, qty) => {
     const n = Math.max(1, Number(qty) || 1);
     setCart((prev) =>
-      prev.map((l) => (l.pricelist_id === id ? { ...l, quantity: n } : l))
+      prev.map((l) => (l.cartLineId === cartLineId ? { ...l, quantity: n } : l))
     );
   };
 
-  const removeLine = (id) => {
-    setCart((prev) => prev.filter((l) => l.pricelist_id !== id));
+  const removeLine = (cartLineId) => {
+    setCart((prev) => prev.filter((l) => l.cartLineId !== cartLineId));
+    if (editingDiscountId === cartLineId) setEditingDiscountId(null);
+  };
+
+  const setLinePrice = (cartLineId, price) => {
+    const n = roundMoney(Math.max(0, Number(price) || 0));
+    setCart((prev) =>
+      prev.map((l) =>
+        l.cartLineId === cartLineId
+          ? { ...l, unitprice: n, discountType: null, discountValue: 0 }
+          : l
+      )
+    );
+  };
+
+  const openDiscountEditor = (line) => {
+    setEditingDiscountId(line.cartLineId);
+    setDiscountDraft({
+      type: line.discountType || 'percent',
+      value: line.discountValue ? String(line.discountValue) : '',
+    });
+  };
+
+  const applyDiscountToLine = (cartLineId) => {
+    const type = discountDraft.type === 'amount' ? 'amount' : 'percent';
+    const value = Number(discountDraft.value) || 0;
+    setCart((prev) =>
+      prev.map((l) => {
+        if (l.cartLineId !== cartLineId) return l;
+        const listPrice = Number(l.listPrice ?? l.unitprice) || 0;
+        return {
+          ...l,
+          listPrice,
+          unitprice: applyLineDiscount(listPrice, type, value),
+          discountType: value > 0 ? type : null,
+          discountValue: value > 0 ? value : 0,
+        };
+      })
+    );
+    setEditingDiscountId(null);
+  };
+
+  const clearLineDiscount = (cartLineId) => {
+    setCart((prev) =>
+      prev.map((l) => {
+        if (l.cartLineId !== cartLineId) return l;
+        const listPrice = Number(l.listPrice ?? l.unitprice) || 0;
+        return {
+          ...l,
+          unitprice: listPrice,
+          discountType: null,
+          discountValue: 0,
+        };
+      })
+    );
+    setEditingDiscountId(null);
   };
 
   const copyPayUrl = async (url) => {
@@ -226,11 +364,16 @@ export default function PosSale() {
     }
   };
 
+  const resolvedWalkInName =
+    selectedParent || selectedStudent
+      ? walkInName || selectedParent?.name || selectedStudent?.name || ''
+      : pendingNewLeadName;
+
   const payloadBase = () => ({
     cart,
     studentId: selectedStudentId || undefined,
     parentId: selectedParent?.id || selectedParentId || undefined,
-    walkInName: walkInName || selectedParent?.name || undefined,
+    walkInName: resolvedWalkInName || undefined,
     walkInPhone: effectivePhone || undefined,
     walkInEmail: effectiveEmail || undefined,
     sendEmail,
@@ -246,12 +389,20 @@ export default function PosSale() {
       setError('למנוי או כרטיסייה חובה לבחור מתאמן (אפשר לחפש הורה ואז לבחור ילד)');
       return false;
     }
+    if (isPendingNewLead && !String(effectivePhone || '').trim()) {
+      setError('לליד חדש חובה למלא טלפון (או לבחור לקוח קיים מהרשימה)');
+      return false;
+    }
     if (sendWhatsapp && !String(effectivePhone || '').trim()) {
       setError('לשליחה בוואטסאפ חובה למלא טלפון, או לבטל את הסימון');
       return false;
     }
     if (sendEmail && !String(effectiveEmail || '').trim()) {
       setError('לשליחה למייל חובה למלא כתובת מייל, או לבטל את הסימון');
+      return false;
+    }
+    if (paymentMethod === 'online' && !(Number(total) > 0)) {
+      setError('לא ניתן ליצור קישור תשלום לסכום 0 — עמוד הסליקה יציג מחיר ברירת מחדל. שינוי מחיר או גבייה במזומן');
       return false;
     }
     return true;
@@ -275,18 +426,31 @@ export default function PosSale() {
       const payUrl = data.payUrl || data.sale?.payment_url || '';
       if (payUrl) {
         setLastPayUrl(payUrl);
-        // Open the payment page so staff can verify / hand the device to the customer
-        window.open(payUrl, '_blank', 'noopener,noreferrer');
+        // When WhatsApp send is requested, don't auto-open the payment page —
+        // a second popup is often blocked, and the customer gets the link instead.
+        if (!sendWhatsapp) {
+          window.open(payUrl, '_blank', 'noopener,noreferrer');
+        }
       }
 
-      if (data.whatsappUrl && sendWhatsapp) {
-        window.open(data.whatsappUrl, '_blank', 'noopener,noreferrer');
-      } else if (sendWhatsapp && payUrl && !data.whatsappUrl) {
-        setError('הקישור נוצר, אבל לא נפתח וואטסאפ — בדקו מספר טלפון');
+      if (sendWhatsapp) {
+        if (data.whatsappSent) {
+          // Sent via Meta API — nothing else to open
+        } else if (data.whatsappUrl) {
+          window.open(data.whatsappUrl, '_blank', 'noopener,noreferrer');
+          if (data.whatsappError) {
+            setError('הקישור נוצר. שליחה אוטומטית נכשלה — נפתח וואטסאפ לשליחה ידנית');
+          }
+        } else {
+          setError('הקישור נוצר, אבל לא נשלח בוואטסאפ — בדקו מספר טלפון');
+        }
       }
 
       // Clear cart after any successful checkout action
       setCart([]);
+      if (data.isNewLead || (!selectedParentId && !selectedStudentId && pendingNewLeadName)) {
+        clearCustomer();
+      }
       refresh();
     } catch (err) {
       setError(err.message || 'שגיאה');
@@ -320,6 +484,70 @@ export default function PosSale() {
               onChange={(e) => setProductFilter(e.target.value)}
             />
           </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            style={{ width: '100%', marginBottom: 12, display: 'flex', justifyContent: 'center', gap: 6}}
+            onClick={() => {
+              setShowCustomForm((v) => !v);
+              setError('');
+            }}
+          >
+            <Tag size={13} />
+            {showCustomForm ? 'סגור מוצר בהתאמה אישית' : 'הוסף מוצר בהתאמה אישית'}
+          </button>
+          {showCustomForm && (
+            <div
+              style={{
+                marginBottom: 12,
+                padding: 12,
+                borderRadius: 10,
+                border: '1px solid var(--border)',
+                background: 'var(--bg-2)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+              }}
+            >
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">שם המוצר</label>
+                <input
+                  className="input input-sm"
+                  value={customDraft.name}
+                  onChange={(e) => setCustomDraft((d) => ({ ...d, name: e.target.value }))}
+                  placeholder="למשל: השכרת נעליים"
+                />
+              </div>
+              <div className="form-grid-2" style={{ gap: 8 }}>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">מחיר</label>
+                  <input
+                    className="input input-sm"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={customDraft.price}
+                    onChange={(e) => setCustomDraft((d) => ({ ...d, price: e.target.value }))}
+                    placeholder="0"
+                  />
+                </div>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label">כמות</label>
+                  <input
+                    className="input input-sm"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={customDraft.quantity}
+                    onChange={(e) => setCustomDraft((d) => ({ ...d, quantity: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <button type="button" className="btn btn-primary btn-sm" onClick={addCustomProduct}>
+                <Plus size={13} /> הוסף לעגלה
+              </button>
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8, maxHeight: 420, overflow: 'auto' }}>
             {filteredProducts.map((item) => (
               <button
@@ -415,51 +643,79 @@ export default function PosSale() {
             </div>
           )}
 
-          <div className="form-group" style={{ marginBottom: 10, position: 'relative', zIndex: 70 }}>
-            <label className="form-label">
-              חיפוש לקוח קיים {needsCustomer ? '*' : '(מומלץ לקישור תשלום)'}
-            </label>
-            <div style={{ position: 'relative' }}>
-              <Search
-                size={14}
-                style={{
-                  position: 'absolute',
-                  right: 10,
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  color: 'var(--text-3)',
-                  pointerEvents: 'none',
-                }}
-              />
-              <input
-                className="input"
-                style={{ paddingRight: 34 }}
-                placeholder="הקלידו שם או טלפון לבחירה מהרשימה..."
-                value={customerQuery}
-                onChange={(e) => setCustomerQuery(e.target.value)}
-                autoComplete="off"
-              />
-            </div>
-            {customerQuery.trim() && customerSuggestions.length > 0 && (
-              <div
-                style={{
-                  position: 'absolute',
-                  zIndex: 80,
-                  right: 0,
-                  left: 0,
-                  top: '100%',
-                  marginTop: 4,
-                  maxHeight: 280,
-                  overflow: 'auto',
-                  border: '1px solid var(--border)',
-                  borderRadius: 10,
-                  background: 'var(--bg-card, #0f172a)',
-                  boxShadow: '0 16px 40px rgba(0,0,0,0.55)',
-                }}
-              >
-                {customerSuggestions.map((hit) => (
+          {!(selectedStudent || selectedParent) && (
+            <div className="form-group" style={{ marginBottom: 10, position: 'relative', zIndex: 70 }}>
+              <label className="form-label">
+                חיפוש או שם לקוח חדש {needsCustomer ? '*' : ''}
+              </label>
+              <div style={{ position: 'relative' }}>
+                <Search
+                  size={14}
+                  style={{
+                    position: 'absolute',
+                    right: 10,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    color: 'var(--text-3)',
+                    pointerEvents: 'none',
+                  }}
+                />
+                <input
+                  className="input"
+                  style={{ paddingRight: 34 }}
+                  placeholder="הקלידו שם או טלפון..."
+                  value={customerQuery}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setCustomerQuery(value);
+                    setWalkInName(value);
+                    setHideSuggestions(false);
+                  }}
+                  autoComplete="off"
+                />
+              </div>
+              {customerQuery.trim() && !hideSuggestions && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    zIndex: 80,
+                    right: 0,
+                    left: 0,
+                    top: '100%',
+                    marginTop: 4,
+                    maxHeight: 280,
+                    overflow: 'auto',
+                    border: '1px solid var(--border)',
+                    borderRadius: 10,
+                    background: 'var(--bg-card, #0f172a)',
+                    boxShadow: '0 16px 40px rgba(0,0,0,0.55)',
+                  }}
+                >
+                  {customerSuggestions.map((hit) => (
+                    <button
+                      key={hit.key}
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      style={{
+                        width: '100%',
+                        justifyContent: 'flex-start',
+                        borderRadius: 0,
+                        gap: 8,
+                        padding: '10px 12px',
+                        textAlign: 'right',
+                      }}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => selectCustomer(hit)}
+                    >
+                      <span style={{ fontWeight: 700 }}>{hit.name}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                        {hit.type === 'parent' ? 'לקוח / הורה' : 'מתאמן'}
+                        {hit.parentName ? ` · ${hit.parentName}` : ''}
+                        {hit.phone ? ` · ${hit.phone}` : ''}
+                      </span>
+                    </button>
+                  ))}
                   <button
-                    key={hit.key}
                     type="button"
                     className="btn btn-ghost btn-sm"
                     style={{
@@ -469,26 +725,28 @@ export default function PosSale() {
                       gap: 8,
                       padding: '10px 12px',
                       textAlign: 'right',
+                      borderTop: customerSuggestions.length ? '1px solid var(--border)' : undefined,
+                      color: 'var(--accent, #F59E0B)',
                     }}
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => selectCustomer(hit)}
+                    onClick={() =>
+                      selectCustomer({
+                        type: 'new_lead',
+                        name: customerQuery.trim(),
+                      })
+                    }
                   >
-                    <span style={{ fontWeight: 700 }}>{hit.name}</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                      {hit.type === 'parent' ? 'לקוח / הורה' : 'מתאמן'}
-                      {hit.parentName ? ` · ${hit.parentName}` : ''}
-                      {hit.phone ? ` · ${hit.phone}` : ''}
-                    </span>
+                    <span style={{ fontWeight: 700 }}>ליד חדש: {customerQuery.trim()}</span>
                   </button>
-                ))}
-              </div>
-            )}
-            {customerQuery.trim().length >= 1 && customerSuggestions.length === 0 && (
-              <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
-                לא נמצאו לקוחות תואמים · אפשר למלא למטה כלקוח מזדמן
-              </div>
-            )}
-          </div>
+                </div>
+              )}
+              {showNewLeadBanner && (
+                <div style={{ fontSize: 12, color: 'var(--accent, #F59E0B)', marginTop: 6, fontWeight: 600 }}>
+                  לא נמצא במערכת · יישמר אוטומטית כליד חדש במכירה
+                </div>
+              )}
+            </div>
+          )}
 
           {selectedParent && !selectedStudent && childrenOfSelectedParent.length > 0 && (
             <div className="form-group" style={{ marginBottom: 12 }}>
@@ -521,18 +779,7 @@ export default function PosSale() {
 
           <div className="form-grid-2" style={{ gap: 8 }}>
             <div className="form-group">
-              <label className="form-label">
-                {selectedParent || selectedStudent ? 'שם לחיוב' : 'שם לקוח מזדמן'}
-              </label>
-              <input
-                className="input input-sm"
-                value={walkInName}
-                onChange={(e) => setWalkInName(e.target.value)}
-                placeholder={selectedParent ? selectedParent.name : 'אם אין לקוח במערכת'}
-              />
-            </div>
-            <div className="form-group">
-              <label className="form-label">טלפון</label>
+              <label className="form-label">טלפון {isPendingNewLead ? '*' : ''}</label>
               <input
                 className="input input-sm"
                 value={walkInPhone}
@@ -540,7 +787,7 @@ export default function PosSale() {
                 placeholder={selectedParent?.phone || '050...'}
               />
             </div>
-            <div className="form-group" style={{ gridColumn: 'span 2' }}>
+            <div className="form-group">
               <label className="form-label">מייל לשליחת מסמך</label>
               <input
                 className="input input-sm"
@@ -558,35 +805,183 @@ export default function PosSale() {
             <div style={{ color: 'var(--text-3)', fontSize: 13, textAlign: 'center', padding: 16 }}>העגלה ריקה</div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {cart.map((line) => (
-                <div
-                  key={line.pricelist_id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    padding: '8px 0',
-                    borderBottom: '1px solid var(--border)',
-                  }}
-                >
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13 }}>{line.name}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                      {productTypeLabel(line.product_type)} · ₪{line.unitprice}
+              {cart.map((line) => {
+                const hasDiscount =
+                  line.discountType && Number(line.discountValue) > 0;
+                const lineTotal =
+                  (Number(line.unitprice) || 0) * (Number(line.quantity) || 1);
+                const isEditingDiscount = editingDiscountId === line.cartLineId;
+                return (
+                  <div
+                    key={line.cartLineId}
+                    style={{
+                      padding: '10px 0',
+                      borderBottom: '1px solid var(--border)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: 8,
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13 }}>
+                          {line.name}
+                          {line.isCustom ? (
+                            <span style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 500 }}> · מותאם</span>
+                          ) : null}
+                        </div>
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            marginTop: 6,
+                            flexWrap: 'wrap',
+                          }}
+                        >
+                          <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                            {productTypeLabel(line.isCustom ? 'custom' : line.product_type)} · ₪
+                          </span>
+                          <input
+                            className="input input-sm"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={line.unitprice}
+                            onChange={(e) => setLinePrice(line.cartLineId, e.target.value)}
+                            style={{ width: 84, padding: '4px 8px', fontSize: 12 }}
+                            title="שינוי מחיר"
+                          />
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            style={{ padding: '4px 8px', fontSize: 11 }}
+                            onClick={() =>
+                              isEditingDiscount
+                                ? setEditingDiscountId(null)
+                                : openDiscountEditor(line)
+                            }
+                            title="הנחה"
+                          >
+                            <Percent size={11} /> הנחה
+                          </button>
+                          {hasDiscount && (
+                            <span style={{ fontSize: 11, color: 'var(--accent, #F59E0B)' }}>
+                              {line.discountType === 'percent'
+                                ? `-${line.discountValue}%`
+                                : `-₪${line.discountValue}`}
+                              {Number(line.listPrice) !== Number(line.unitprice)
+                                ? ` (מ־₪${line.listPrice})`
+                                : ''}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                          שורה: ₪{lineTotal.toLocaleString()}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => setQty(line.cartLineId, line.quantity - 1)}
+                      >
+                        <Minus size={12} />
+                      </button>
+                      <span style={{ minWidth: 20, textAlign: 'center', fontWeight: 700, paddingTop: 4 }}>
+                        {line.quantity}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => setQty(line.cartLineId, line.quantity + 1)}
+                      >
+                        <Plus size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => removeLine(line.cartLineId)}
+                      >
+                        <Trash2 size={12} />
+                      </button>
                     </div>
+                    {isEditingDiscount && (
+                      <div
+                        style={{
+                          marginTop: 8,
+                          padding: 10,
+                          borderRadius: 8,
+                          background: 'var(--bg-2)',
+                          border: '1px solid var(--border)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 8,
+                        }}
+                      >
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            className={`btn btn-sm ${discountDraft.type === 'percent' ? 'btn-primary' : 'btn-ghost'}`}
+                            onClick={() => setDiscountDraft((d) => ({ ...d, type: 'percent' }))}
+                          >
+                            לפי אחוז
+                          </button>
+                          <button
+                            type="button"
+                            className={`btn btn-sm ${discountDraft.type === 'amount' ? 'btn-primary' : 'btn-ghost'}`}
+                            onClick={() => setDiscountDraft((d) => ({ ...d, type: 'amount' }))}
+                          >
+                            לפי סכום
+                          </button>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <input
+                            className="input input-sm"
+                            type="number"
+                            min="0"
+                            step={discountDraft.type === 'percent' ? '1' : '0.01'}
+                            placeholder={discountDraft.type === 'percent' ? 'למשל 10' : 'למשל 20'}
+                            value={discountDraft.value}
+                            onChange={(e) =>
+                              setDiscountDraft((d) => ({ ...d, value: e.target.value }))
+                            }
+                            style={{ flex: 1 }}
+                          />
+                          <span style={{ fontSize: 12, color: 'var(--text-3)', minWidth: 18 }}>
+                            {discountDraft.type === 'percent' ? '%' : '₪'}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            onClick={() => applyDiscountToLine(line.cartLineId)}
+                          >
+                            החל הנחה
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => clearLineDiscount(line.cartLineId)}
+                          >
+                            נקה הנחה
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => setEditingDiscountId(null)}
+                          >
+                            ביטול
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setQty(line.pricelist_id, line.quantity - 1)}>
-                    <Minus size={12} />
-                  </button>
-                  <span style={{ minWidth: 20, textAlign: 'center', fontWeight: 700 }}>{line.quantity}</span>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setQty(line.pricelist_id, line.quantity + 1)}>
-                    <Plus size={12} />
-                  </button>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => removeLine(line.pricelist_id)}>
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              ))}
+                );
+              })}
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontWeight: 800, fontSize: 18 }}>
                 <span>סה״כ</span>
                 <span>₪{total.toLocaleString()}</span>
@@ -632,6 +1027,7 @@ export default function PosSale() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700 }}>
                 <CheckCircle2 size={14} />
                 קישור תשלום מוכן
+                {result?.whatsappSent ? ' · נשלח בוואטסאפ' : ''}
                 {result?.passes?.length ? ` · הופעלו ${result.passes.length} כרטיסים/מנויים` : ''}
               </div>
               <div
@@ -674,6 +1070,7 @@ export default function PosSale() {
                   ? `מסמך ${result.doc.docnum} הופק`
                   : 'הפעולה הושלמה'}
                 {result.passes?.length ? ` · הופעלו ${result.passes.length} כרטיסים/מנויים` : ''}
+                {result.isNewLead ? ' · נשמר כליד חדש' : ''}
               </span>
             </div>
           )}
@@ -700,8 +1097,9 @@ export default function PosSale() {
           </div>
           {paymentMethod === 'online' && (
             <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 8 }}>
-              אחרי יצירת הקישור ייפתח עמוד הסליקה. אפשר גם להעתיק ולשלוח ללקוח.
-              {sendWhatsapp ? ' לשליחה בוואטסאפ חובה טלפון.' : ''}
+              {sendWhatsapp
+                ? 'אחרי יצירת הקישור הוא יישלח בוואטסאפ ללקוח (חובה טלפון). אפשר גם להעתיק או לפתוח את עמוד הסליקה.'
+                : 'אחרי יצירת הקישור ייפתח עמוד הסליקה. אפשר גם להעתיק ולשלוח ללקוח.'}
             </div>
           )}
           {paymentMethod === 'emv' && (

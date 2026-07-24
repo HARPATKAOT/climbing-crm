@@ -2786,6 +2786,12 @@ app.post('/api/pos/payment-link', async (req, res) => {
     }
 
     const total = computeSaleTotal(lines);
+    if (!(Number(total) > 0)) {
+      return res.status(400).json({
+        error:
+          'לא ניתן ליצור קישור תשלום לסכום 0. עמוד הסליקה חוזר אז למחיר ברירת מחדל. לסכום חינם השתמשו במזומן או גבייה ללא קישור.',
+      });
+    }
     let clientId = parent?.icount_client_id || null;
     let syncedParent = parent;
     let syncWarning = null;
