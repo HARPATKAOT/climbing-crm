@@ -106,6 +106,7 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
   const [editEmail, setEditEmail] = useState(parent?.email || '');
   const [editCity, setEditCity] = useState(parent?.city || '');
   const [editSource, setEditSource] = useState(parent?.source || student.source || 'unknown');
+  const [clearingCommunication, setClearingCommunication] = useState(false);
 
   // Health declaration + waiver status for this student
   const [healthDecl, setHealthDecl] = useState(null);
@@ -412,6 +413,23 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
     }
   };
 
+  const handleClearCommunication = async () => {
+    if (!parent?.id) return;
+    setClearingCommunication(true);
+    try {
+      const res = await fetch(`/api/parents/${parent.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ in_communication: false }),
+      });
+      if (res.ok && refreshData) await refreshData();
+    } catch (err) {
+      console.error('Failed to clear in-communication:', err);
+    } finally {
+      setClearingCommunication(false);
+    }
+  };
+
   const handleUpdateDetails = async () => {
     setSavingEdit(true);
     try {
@@ -678,9 +696,37 @@ function CustomerCard({ student, parent, group, groups = [], onClose, onStatusCh
             <X size={18} />
           </button>
         </div>
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <StatusBadge status={student.status} />
+          {parent?.in_communication && (
+            <span className="badge badge-cyan" style={{ fontSize: 11 }}>בתקשורת עכשיו</span>
+          )}
         </div>
+        {parent?.in_communication && (
+          <div style={{
+            marginTop: 12,
+            padding: '10px 12px',
+            borderRadius: 8,
+            background: 'rgba(45,212,191,0.10)',
+            border: '1px solid rgba(45,212,191,0.35)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+            flexWrap: 'wrap',
+          }}>
+            <div style={{ fontSize: 12, color: '#5EEAD4', fontWeight: 600 }}>
+              ממתין לחזרה — יישאר ברשימה עד שתסיים ידנית
+            </div>
+            <button
+              className="btn btn-sm btn-primary"
+              onClick={handleClearCommunication}
+              disabled={clearingCommunication}
+            >
+              {clearingCommunication ? 'מסיר…' : 'סיים תקשורת'}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Scrollable Body */}
@@ -1623,6 +1669,7 @@ function AddLeadModal({ students, parents, onAdd, onClose }) {
 export default function Leads({ students, setStudents, parents, setParents, groups, canManageBilling = false }) {
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
+  const [filterInCommunication, setFilterInCommunication] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedStudentId, setSelectedStudentId] = useState(null);
   const [pricelist, setPricelist] = useState([]);
@@ -1650,6 +1697,10 @@ export default function Leads({ students, setStudents, parents, setParents, grou
   };
 
   const leadEntries = buildLeadEntries(students, parents);
+  const inCommunicationCount = leadEntries.filter(({ parent: p, student: s }) => {
+    const parent = p || parents.find((x) => x.id === s.parentId);
+    return !!parent?.in_communication;
+  }).length;
 
   const filtered = leadEntries.filter(({ student: s, parent: p }) => {
     const parent = p || parents.find((x) => x.id === s.parentId);
@@ -1657,7 +1708,8 @@ export default function Leads({ students, setStudents, parents, setParents, grou
       parent?.name?.toLowerCase().includes(search.toLowerCase()) ||
       (parent?.phone || '').includes(search);
     const matchStatus = filterStatus === 'all' || s.status === filterStatus;
-    return matchSearch && matchStatus;
+    const matchComm = !filterInCommunication || !!parent?.in_communication;
+    return matchSearch && matchStatus && matchComm;
   }).map((entry) => entry.student);
 
   const selectedStudent = students.find(s => s.id === selectedStudentId)
@@ -1832,19 +1884,33 @@ export default function Leads({ students, setStudents, parents, setParents, grou
         </div>
       </div>
 
-      {/* Status filter tabs (table view) */}
-      {viewMode === 'table' && (
+      {/* In-communication filter (all views) + status tabs (table) */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
-        <button className={`btn btn-sm ${filterStatus === 'all' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilterStatus('all')}>
-          הכל ({leadEntries.length})
+        {viewMode === 'table' && (
+          <button className={`btn btn-sm ${filterStatus === 'all' && !filterInCommunication ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setFilterStatus('all'); setFilterInCommunication(false); }}>
+            הכל ({leadEntries.length})
+          </button>
+        )}
+        <button
+          className={`btn btn-sm ${filterInCommunication ? 'btn-primary' : 'btn-ghost'}`}
+          onClick={() => {
+            if (filterInCommunication) {
+              setFilterInCommunication(false);
+            } else {
+              setFilterInCommunication(true);
+              setFilterStatus('all');
+            }
+          }}
+          style={filterInCommunication ? undefined : { borderColor: 'rgba(45,212,191,0.4)', color: '#5EEAD4' }}
+        >
+          בתקשורת עכשיו ({inCommunicationCount})
         </button>
-        {Object.entries(STATUSES).filter(([k]) => k !== 'archived').map(([k, v]) => (
-          <button key={k} className={`btn btn-sm ${filterStatus === k ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilterStatus(k)}>
+        {viewMode === 'table' && Object.entries(STATUSES).filter(([k]) => k !== 'archived').map(([k, v]) => (
+          <button key={k} className={`btn btn-sm ${filterStatus === k && !filterInCommunication ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setFilterStatus(k); setFilterInCommunication(false); }}>
             {v.label} ({leadEntries.filter((e) => e.student.status === k).length})
           </button>
         ))}
       </div>
-      )}
 
       {/* Kanban board (funnel by status) */}
       {viewMode === 'kanban' && (
@@ -1894,6 +1960,7 @@ export default function Leads({ students, setStudents, parents, setParents, grou
                         <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
                           <span className="badge badge-gray" style={{ fontSize: 10 }}>{src.icon} {src.label}</span>
                           {group && <span className="badge badge-blue" style={{ fontSize: 10 }}>{group.name.split(' ')[0]}</span>}
+                          {parent?.in_communication && <span className="badge badge-cyan" style={{ fontSize: 10 }}>בתקשורת</span>}
                           {s.nextFollowup && <span className="badge badge-amber" style={{ fontSize: 10 }}>🔔 {s.nextFollowup}</span>}
                         </div>
                       </div>
@@ -1936,7 +2003,12 @@ export default function Leads({ students, setStudents, parents, setParents, grou
                 const isIg = parent?.instagram_id || parent?.channel === 'instagram' || s.notes?.includes('אינסטגרם');
                 return (
                   <tr key={s.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedStudentId(s.id)}>
-                    <td style={{ fontWeight: 700 }}>{s.name || <span style={{ color: 'var(--text-3)' }}>—</span>}</td>
+                    <td style={{ fontWeight: 700 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <span>{s.name || <span style={{ color: 'var(--text-3)' }}>—</span>}</span>
+                        {parent?.in_communication && <span className="badge badge-cyan" style={{ fontSize: 10 }}>בתקשורת</span>}
+                      </div>
+                    </td>
                     <td>{parent?.name}</td>
                     <td style={{ direction: 'ltr', unicodeBidi: 'plaintext', color: isIg && !parent?.phone ? '#ff80bf' : 'var(--text-2)' }}>
                       {isIg && !parent?.phone ? `📸 IG (${parent?.instagram_id || 'DM'})` : parent?.phone}

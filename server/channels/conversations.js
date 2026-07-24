@@ -61,7 +61,12 @@ function touchInbound(parent, channel, at = new Date().toISOString()) {
   if (!parent?.id) return null;
   const field = inboundFieldForChannel(channel);
   if (!field) return null;
-  return db.update('parents', parent.id, { [field]: at, channel: parent.channel || channel });
+  return db.update('parents', parent.id, {
+    [field]: at,
+    channel: parent.channel || channel,
+    in_communication: true,
+    in_communication_since: parent.in_communication ? (parent.in_communication_since || at) : at,
+  });
 }
 
 /** Open/refresh the 24h window on every parent row that shares this phone. */
