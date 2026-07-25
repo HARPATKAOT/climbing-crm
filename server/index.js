@@ -1587,6 +1587,27 @@ function buildHostPaymentUrl(req, token) {
   return `${frontendPublicBase(req)}/event-host/${encodeURIComponent(token)}`;
 }
 
+function matchHostPaymentActivity(rows, token) {
+  const wanted = String(token || '').trim();
+  if (!wanted) return null;
+  return (rows || []).find(
+    (item) =>
+      item.host_payment_token === wanted &&
+      (item.registration_mode === 'host_pays' || !item.registration_mode)
+  ) || null;
+}
+
+/** Resolve host-payment activity, refreshing from durable store when local cache is stale. */
+async function findActivityByHostPaymentToken(token) {
+  let activity = matchHostPaymentActivity(db.get('activities'), token);
+  if (activity) return activity;
+  if (!supa.isEnabled()) return null;
+  const remote = await supa.getAll('activities');
+  if (!remote) return null;
+  db.set('activities', remote);
+  return matchHostPaymentActivity(remote, token);
+}
+
 function ensureActivityRegistrationSlug(activity) {
   if (activity?.registration_slug) return activity;
   const slug = makeRegistrationSlug();
@@ -1900,6 +1921,12 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
         activity = db.update('activities', activity.id, {
           host_payment_token: makePrivatePaymentToken(),
         }) || activity;
+        const tokenPersisted = await persistCore('activities', activity);
+        if (tokenPersisted?.ok === false) {
+          return res.status(503).json({
+            error: tokenPersisted.error || 'שמירת קישור התשלום נכשלה',
+          });
+        }
       }
       url = buildHostPaymentUrl(req, activity.host_payment_token);
     }
@@ -2073,37 +2100,45 @@ app.post('/api/activity-templates/:id/create-activity', async (req, res) => {
 });
 
 // ─── Public activity registration ────────────────────────────────────────────
-app.get('/api/public/host-payments/:token', publicFormRateLimit, (req, res) => {
-  const activity = (db.get('activities') || []).find(
-    (item) => item.host_payment_token === req.params.token
-  );
-  if (!activity || activity.registration_mode !== 'host_pays') {
-    return res.status(404).json({ error: 'קישור התשלום לא נמצא' });
+app.get('/api/public/host-payments/:token', publicFormRateLimit, async (req, res) => {
+  try {
+    const activity = await findActivityByHostPaymentToken(req.params.token);
+    if (!activity) {
+      return res.status(404).json({ error: 'קישור התשלום לא נמצא' });
+    }
+    res.json({
+      id: activity.id,
+      name: activity.name,
+      date: activity.date,
+      start_time: activity.start_time,
+      location: activity.location || '',
+      host_name: activity.host_name || activity.contact_name || '',
+      price: Number(activity.price) || 0,
+      payment_status: activity.payment_status || 'unpaid',
+    });
+  } catch (err) {
+    console.error('host payment lookup error:', err.message);
+    res.status(503).json({ error: err.message || 'טעינת קישור התשלום נכשלה' });
   }
-  res.json({
-    id: activity.id,
-    name: activity.name,
-    date: activity.date,
-    start_time: activity.start_time,
-    location: activity.location || '',
-    host_name: activity.host_name || activity.contact_name || '',
-    price: Number(activity.price) || 0,
-    payment_status: activity.payment_status || 'unpaid',
-  });
 });
 
 app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req, res) => {
   try {
-    const activity = (db.get('activities') || []).find(
-      (item) => item.host_payment_token === req.params.token
-    );
-    if (!activity || activity.registration_mode !== 'host_pays') {
+    const activity = await findActivityByHostPaymentToken(req.params.token);
+    if (!activity) {
       return res.status(404).json({ error: 'קישור התשלום לא נמצא' });
     }
     if (activity.payment_status === 'paid') {
       return res.json({ success: true, alreadyPaid: true });
     }
-    const parent = db.getOne('parents', activity.host_parent_id);
+    let parent = db.getOne('parents', activity.host_parent_id);
+    if (!parent && activity.host_parent_id && supa.isEnabled()) {
+      const remoteParents = await supa.getAll('parents');
+      if (remoteParents) {
+        db.set('parents', remoteParents);
+        parent = db.getOne('parents', activity.host_parent_id);
+      }
+    }
     if (!parent) return res.status(400).json({ error: 'המזמין אינו מקושר ללקוח במערכת' });
 
     let payment = activity.host_payment_id

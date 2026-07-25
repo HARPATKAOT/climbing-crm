@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Plus, ChevronLeft, ChevronRight, X, Save, Trash2, Link2, Unlink,
   RefreshCw, Loader2, CalendarDays, CalendarRange, Layers,
+  CheckCircle, AlertCircle, Clock3,
 } from 'lucide-react';
 import ActivityRegistrationPanel from './ActivityRegistrationPanel.jsx';
 import ActivityTemplatesMenu from './ActivityTemplatesMenu.jsx';
@@ -913,6 +914,26 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
   );
 }
 
+function PaymentStatusIcon({ status, size = 12 }) {
+  const normalized = status === 'paid' || status === 'partial' ? status : 'unpaid';
+  const config = normalized === 'paid'
+    ? { Icon: CheckCircle, label: 'שולם', color: '#34D399' }
+    : normalized === 'partial'
+      ? { Icon: Clock3, label: 'שולם חלקית', color: '#FBBF24' }
+      : { Icon: AlertCircle, label: 'טרם שולם', color: '#FB7185' };
+  const { Icon, label, color } = config;
+
+  return (
+    <span
+      title={`מצב תשלום: ${label}`}
+      aria-label={`מצב תשלום: ${label}`}
+      style={{ display: 'inline-flex', color, flexShrink: 0 }}
+    >
+      <Icon size={size} strokeWidth={2.4} aria-hidden="true" />
+    </span>
+  );
+}
+
 function EventChip({ activity, onClick, draggable = true }) {
   const meta = TYPE_MAP[activity.type] || TYPE_MAP.other;
   const timeLabel = activity.all_day
@@ -944,7 +965,9 @@ function EventChip({ activity, onClick, draggable = true }) {
       }}
       title={activity.name}
       style={{
-        display: 'block',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 4,
         width: '100%',
         maxWidth: '100%',
         boxSizing: 'border-box',
@@ -964,7 +987,10 @@ function EventChip({ activity, onClick, draggable = true }) {
         lineHeight: 1.3,
       }}
     >
-      {timeLabel ? `${timeLabel} · ` : ''}{activity.name}
+      <PaymentStatusIcon status={activity.payment_status} />
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {timeLabel ? `${timeLabel} · ` : ''}{activity.name}
+      </span>
     </button>
   );
 }
@@ -1138,24 +1164,30 @@ function WeekTimedEvent({
               {startLabel}{endLabel ? `–${endLabel}` : ''}
             </span>
           )}
-          <span
-            style={{
-              overflow: 'hidden',
-              whiteSpace: 'normal',
-              wordBreak: 'break-word',
-              overflowWrap: 'anywhere',
-              display: '-webkit-box',
-              WebkitBoxOrient: 'vertical',
-              WebkitLineClamp: nameLines,
-              lineHeight: `${nameLineHeight}px`,
-            }}
-          >
-            {name}
+          <span style={{ display: 'flex', alignItems: 'flex-start', gap: 3, minWidth: 0 }}>
+            {!isOverlay && <PaymentStatusIcon status={event.payment_status} size={11} />}
+            <span
+              style={{
+                overflow: 'hidden',
+                whiteSpace: 'normal',
+                wordBreak: 'break-word',
+                overflowWrap: 'anywhere',
+                display: '-webkit-box',
+                WebkitBoxOrient: 'vertical',
+                WebkitLineClamp: nameLines,
+                lineHeight: `${nameLineHeight}px`,
+              }}
+            >
+              {name}
+            </span>
           </span>
         </>
       ) : (
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {startLabel ? `${startLabel} ` : ''}{name}
+        <span style={{ display: 'flex', alignItems: 'center', gap: 3, minWidth: 0 }}>
+          {!isOverlay && <PaymentStatusIcon status={event.payment_status} size={11} />}
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {startLabel ? `${startLabel} ` : ''}{name}
+          </span>
         </span>
       )}
       {canDrag && (
