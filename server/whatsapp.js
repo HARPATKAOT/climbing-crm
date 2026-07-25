@@ -5,6 +5,14 @@ import { recordMessage, recordMessageDurable, findMessageByMetaId } from './chan
 import { automationsService } from './automations.js';
 import { israelClockParts, isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 import {
+  enrichGroupsWithCapacity,
+  spotsLeft,
+  wantsWaitlist,
+  pickGroupForWaitlist,
+  extractPreferredDayIndex,
+  extractTimeHint,
+} from './groupCapacity.js';
+import {
   mergeBotSettings,
   loadBrandedBotSettings,
   normalizeMenuChoice,
@@ -51,11 +59,11 @@ function cleanGroupTitle(group) {
 /** Compact line for AI/CRM context (not WhatsApp customers). */
 function formatGroupLine(group) {
   const dayLabel = DAY_NAMES[Number(group.day)] || `יום ${group.day}`;
-  const priceBits = [];
-  if (Number(group.priceWeek) > 0) priceBits.push(`שבועי ₪${group.priceWeek}`);
-  if (Number(group.priceTwice) > 0) priceBits.push(`פעמיים ₪${group.priceTwice}`);
-  const prices = priceBits.length ? priceBits.join(' / ') : 'מחיר לפי פנייה';
-  return `• ${cleanGroupTitle(group)} | יום ${dayLabel} ${group.time || ''} | ${group.ageCategory || ''} | ${prices}`;
+  const free = Number.isFinite(group.freeSlots)
+    ? group.freeSlots
+    : spotsLeft(group, db.get('students') || []);
+  const seat = free > 0 ? `${free} פנויים` : 'מלאה';
+  return `• ${cleanGroupTitle(group)} | יום ${dayLabel} ${group.time || ''} | ${group.ageCategory || ''} | ${seat}`;
 }
 
 function extractGradeLetter(text) {
@@ -65,49 +73,102 @@ function extractGradeLetter(text) {
 
 function asksAboutPrices(text) {
   const t = String(text || '').toLowerCase();
-  return /מחיר|כמה עולה|עלות|מנוי|כסף|₪|שקל/.test(t);
+  return /מחיר|כמה עולה|עלות|מנוי|כסף|₪|שקל|מחירון/.test(t);
 }
 
-/** Customer-facing schedule: group times by day, no prices unless requested. */
-function formatClassesWhatsAppReply(groups, incomingText = '', { includePrices = false } = {}) {
-  const sorted = [...(groups || [])].sort(
+export const NO_PRICE_REPLY =
+  'לגבי מחירים אני לא מוסר מספרים כאן 🙏\n' +
+  'הצוות יחזור אליכם עם מחיר מדויק.\n' +
+  'אפשר לכתוב 4 לדבר עם נציג, או לשאול על חוגים ושעות.';
+
+function asksAboutAvailability(text) {
+  const t = String(text || '');
+  return /מקום\s*פנוי|יש\s*מקום|מקומות\s*פנויים|תפוסה|מלאה|יש\s*מקומות/.test(t);
+}
+
+/** Explicit request for seat counts (not just “where is there room”). */
+function asksAboutSpotCount(text) {
+  const t = String(text || '');
+  return /כמה\s*מקומות|מקומות\s*פנויים|כמה\s*פנויים|מה\s*התפוסה|כמה\s*יש\s*מקום|מספר\s*מקומות|כמה\s*נשארו/.test(t);
+}
+
+function isScheduleQuestion(text) {
+  const t = String(text || '');
+  if (wantsWaitlist(t)) return true;
+  if (asksAboutAvailability(t) || asksAboutSpotCount(t)) return true;
+  if (/כית(?:ה|ות)?\s*[א-ו]/.test(t)) return true;
+  return /קבוצ|חוג|שיעור|אימון|שעות|מתי/.test(t);
+}
+
+/** Customer-facing schedule: where there is room; counts only if asked explicitly. Never includes prices. */
+function formatClassesWhatsAppReply(groups, incomingText = '', _ignoredOptions = {}) {
+  const question = typeof incomingText === 'string' ? incomingText : '';
+  const students = db.get('students') || [];
+  const enriched = enrichGroupsWithCapacity(groups || [], students);
+  const showCounts = asksAboutSpotCount(question);
+  const sorted = [...enriched].sort(
     (a, b) => Number(a.day) - Number(b.day) || String(a.time || '').localeCompare(String(b.time || ''))
   );
   if (!sorted.length) {
-    return 'היי! 🧗 כרגע אין לי קבוצות מתאימות במערכת.\nכתבו את כיתת הילד/ה ונחזור אליכם 📱';
+    return 'כן, בטח! 🧗 כרגע אין לי קבוצות מתאימות במערכת.\nכתבו את כיתת הילד/ה ונחזור אליכם 📱';
+  }
+
+  const anyFull = sorted.some((g) => g.isFull);
+  const anyOpen = sorted.some((g) => !g.isFull);
+  const visible = showCounts ? sorted : sorted.filter((g) => !g.isFull);
+
+  if (!visible.length) {
+    return (
+      'כן, בטח! 🧗 כרגע כל הקבוצות הרלוונטיות מלאות.\n' +
+      'אפשר לכתוב «רשימת המתנה» עם כיתה ויום/שעה ונשבץ אתכם.'
+    );
   }
 
   const byDay = new Map();
-  for (const g of sorted) {
+  for (const g of visible) {
     const day = Number(g.day);
     const time = String(g.time || '').trim();
     if (Number.isNaN(day) || !time) continue;
-    if (!byDay.has(day)) byDay.set(day, new Set());
-    byDay.get(day).add(time);
+    if (!byDay.has(day)) byDay.set(day, []);
+    byDay.get(day).push(g);
   }
 
   const dayBlocks = [...byDay.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([day, times]) => {
+    .map(([day, dayGroups]) => {
       const dayLabel = DAY_NAMES[day] || String(day);
-      const timesSorted = [...times].sort((a, b) => a.localeCompare(b));
-      return `📅 יום ${dayLabel}\n${timesSorted.join(' / ')}`;
+      const lines = dayGroups
+        .sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')))
+        .map((g) => {
+          if (showCounts) {
+            return g.freeSlots > 0 ? `${g.time} · ${g.freeSlots} פנויים` : `${g.time} · מלאה`;
+          }
+          return `${g.time} · יש מקום`;
+        });
+      return `📅 יום ${dayLabel}\n${lines.join('\n')}`;
     });
 
   if (!dayBlocks.length) {
-    return 'היי! 🧗 כרגע אין שעות מתאימות במערכת.\nכתבו את כיתת הילד/ה ונחזור אליכם 📱';
+    return 'כן, בטח! 🧗 כרגע אין שעות מתאימות במערכת.\nכתבו את כיתת הילד/ה ונחזור אליכם 📱';
   }
 
-  const grade = extractGradeLetter(incomingText);
+  const grade = extractGradeLetter(question);
   const header = grade
-    ? `היי! 🧗 לכיתה ${grade}׳ יש אצלנו:`
-    : 'היי! 🧗 אלה השעות הרלוונטיות:';
+    ? (showCounts
+      ? `כן, בטח! 🧗 לכיתה ${grade}׳ — מצב מקומות:`
+      : `כן, בטח! 🧗 לכיתה ${grade}׳ יש מקום ב:`)
+    : (showCounts ? 'כן, בטח! 🧗 מצב מקומות:' : 'כן, בטח! 🧗 יש מקום ב:');
 
   let reply = `${header}\n\n${dayBlocks.join('\n\n')}`;
-  if (includePrices) {
-    reply += '\n\n💰 מחיר חוג שבועי בדרך כלל ₪280–₪305 (לפי גיל)';
+  if (anyFull && anyOpen && !showCounts) {
+    reply += '\n\nיש גם קבוצות מלאות — אפשר לבקש שיבוץ לרשימת המתנה.';
+  } else if (anyFull && anyOpen && showCounts) {
+    reply += '\n\nלקבוצה מלאה אפשר לבקש שיבוץ לרשימת המתנה.';
+  } else if (!anyOpen) {
+    reply += '\n\nאפשר לכתוב «רשימת המתנה» ונשבץ אתכם.';
+  } else {
+    reply += '\n\nרוצים שנשמור מקום או שנחזור אליכם?\nכתבו שם הילד ומספר טלפון 📱';
   }
-  reply += '\n\nרוצים שנשמור מקום או שנחזור אליכם?\nכתבו שם הילד ומספר טלפון 📱';
   return reply;
 }
 
@@ -115,11 +176,15 @@ function formatClassesWhatsAppReply(groups, incomingText = '', { includePrices =
 function buildCrmBotContext(settings = {}, { phone, parent, students } = {}) {
   const s = mergeBotSettings(settings);
   const brand = s.brandName || 'הרפתקאות';
-  const groups = (db.get('groups') || [])
-    .slice()
-    .sort((a, b) => String(a.ageCategory || '').localeCompare(String(b.ageCategory || ''), 'he')
-      || Number(a.day) - Number(b.day)
-      || String(a.time || '').localeCompare(String(b.time || '')));
+  const allStudents = db.get('students') || [];
+  const groups = enrichGroupsWithCapacity(
+    (db.get('groups') || [])
+      .slice()
+      .sort((a, b) => String(a.ageCategory || '').localeCompare(String(b.ageCategory || ''), 'he')
+        || Number(a.day) - Number(b.day)
+        || String(a.time || '').localeCompare(String(b.time || ''))),
+    allStudents
+  );
 
   const groupLines = groups.length
     ? groups.map(formatGroupLine).join('\n')
@@ -144,7 +209,7 @@ function buildCrmBotContext(settings = {}, { phone, parent, students } = {}) {
 
   return {
     groups,
-    text: `## נתונים חיים ממערכת ה-CRM (השתמש רק בהם לתשובות על חוגים/זמנים/מחירים)
+    text: `## נתונים חיים ממערכת ה-CRM (השתמש רק בהם לתשובות על חוגים/זמנים)
 שם העסק הרשמי: ${brand}
 
 ${s.aiBusinessFacts || ''}
@@ -154,11 +219,12 @@ ${groupLines}
 
 ### כללים לתשובה לפי נתונים
 - אם שאלו על כיתה/גיל — הצג רק קבוצות רלוונטיות מהרשימה.
-- פורמט בוואטסאפ: קבץ שעות לפי יום בלבד, למשל:
-📅 יום א׳
-15:30 / 17:30
-- אל תציג מחירים אלא אם הלקוח שאל במפורש על מחיר/עלות.
-- בלי שם קבוצה, בלי קטגוריה, בלי מקומות פנויים.
+- כברירת מחדל ציין רק איפה יש מקום (בלי מספרים). דוגמה: «15:30 · יש מקום».
+- פתח תשובות על חוגים ב־«כן, בטח!» והצג כל יום/שעה בשורה נפרדת.
+- מספר מקומות פנויים — רק אם הלקוח שאל במפורש כמה מקומות / תפוסה.
+- כשקבוצה מלאה — הצע שיבוץ לרשימת המתנה.
+- אסור לציין מחירים, סכומים או מחירון — גם אם מופיעים בהנחיות ישנות. על מחיר: הפנה לצוות.
+- בלי שם קבוצה פנימי ארוך; אפשר כיתה/גיל קצר.
 - אל תמציא קבוצות שלא מופיעות.
 - אם אין התאמה מדויקת — אמור זאת + בקש שם וטלפון לחזרה.
 
@@ -202,12 +268,10 @@ function buildHeuristicReply(incomingText, settings = {}) {
   const healthReply = `היי! ✍️\nהנה קישור להצהרת הבריאות:\n${healthUrl}\n\nאחרי החתימה המערכת מתעדכנת אוטומטית 🧗`;
   const matchedGroups = findGroupsForText(raw);
   const sourceGroups = matchedGroups.length ? matchedGroups : (db.get('groups') || []).slice(0, 12);
-  const wantsPrices = asksAboutPrices(raw) || menuPick === '2';
-  const classesReply = formatClassesWhatsAppReply(sourceGroups, raw, { includePrices: wantsPrices });
+  const classesReply = formatClassesWhatsAppReply(sourceGroups, raw);
   const classesReplyNeedsGrade = !matchedGroups.length
-    ? `${formatClassesWhatsAppReply(sourceGroups, raw, { includePrices: wantsPrices })}\n\nכדי לדייק יותר — מהי כיתת הילד/ה?`
+    ? `${formatClassesWhatsAppReply(sourceGroups, raw)}\n\nכדי לדייק יותר — מהי כיתת הילד/ה?`
     : classesReply;
-  const pricesReply = 'היי! 💰 מחירון קצר:\n\n🎟️ כניסה חד־פעמית — ₪50\n🔟 כרטיסייה 10 כניסות — ₪450\n🗓️ מנוי חודשי — ₪280\n🧗 חוג שבועי — ₪280–₪305 (לפי גיל)\n\nנשמח לתאם אימון היכרות!';
   const brand = s.brandName || 'הרפתקאות';
   const hoursReply = `🕐 שעות פעילות ${brand}:\n\n📅 א׳–ה׳ · 14:00–22:00\n📅 שישי · 09:00–15:00\n📅 שבת · סגור`;
   const locationReply = '📍 אנחנו ברחוב האורגים 12, אשדוד\n🅿️ יש חניה בחזית\nנתראה על הקיר! 🧗';
@@ -219,6 +283,11 @@ function buildHeuristicReply(incomingText, settings = {}) {
 
   if (menuPick === '1' || text.includes('צהר') || text.includes('טופס') || text.includes('בריאות') || text.includes('חתמ')) {
     return { text: healthReply, confidence: 'high' };
+  }
+
+  // Price questions never quote amounts — hand off to staff.
+  if (asksAboutPrices(raw)) {
+    return { text: NO_PRICE_REPLY, confidence: 'high', handoff: true };
   }
 
   const scheduleIntent =
@@ -233,19 +302,13 @@ function buildHeuristicReply(incomingText, settings = {}) {
     || text.includes('להירשם')
     || text.includes('אימון')
     || text.includes('אימונ')
-    || (text.includes('חוג') && !asksAboutPrices(raw));
-
-  // "כמה עולה חוג?" → מחירון בלבד. מחיר+כיתה/מתי → מערכת שעות + מחיר קצר.
-  if (asksAboutPrices(raw) && !scheduleIntent && menuPick !== '2') {
-    return { text: pricesReply, confidence: 'high' };
-  }
+    || asksAboutAvailability(raw)
+    || asksAboutSpotCount(raw)
+    || wantsWaitlist(raw)
+    || text.includes('חוג');
 
   if (scheduleIntent) {
     return { text: classesReplyNeedsGrade, confidence: 'high', startIntake: menuPick === '2' };
-  }
-
-  if (asksAboutPrices(raw)) {
-    return { text: pricesReply, confidence: 'high' };
   }
 
   if (menuPick === '3' || text.includes('שע') || text.includes('מתי פתוח') || text.includes('פתיח') || text.includes('מתי אתם פתוחים')) {
@@ -262,7 +325,105 @@ function buildHeuristicReply(incomingText, settings = {}) {
 function formatClassesForGrade(gradeText) {
   const groups = findGroupsForText(`כיתה ${gradeText}`);
   if (!groups.length) return '';
-  return formatClassesWhatsAppReply(groups, `כיתה ${gradeText}`, { includePrices: false });
+  return formatClassesWhatsAppReply(groups, `כיתה ${gradeText}`);
+}
+
+async function ensureStudentForParent(parent, nameHint = '') {
+  if (!parent?.id) return null;
+  const existing = studentsForParent(parent);
+  if (existing[0]) return existing[0];
+  const created = db.insert('students', {
+    name: nameHint || (parent.name ? `ילד/ה של ${parent.name}` : 'לקוח וואטסאפ'),
+    parentId: parent.id,
+    status: 'lead_new',
+    source: 'whatsapp',
+  });
+  await persistCore('students', created);
+  return created;
+}
+
+async function assignStudentToWaitlist(parent, group, { childName = '' } = {}) {
+  const student = await ensureStudentForParent(parent, childName);
+  if (!student || !group?.id) {
+    return { ok: false, reply: 'לא הצלחתי לשבץ להמתנה. כתבו 4 ונעביר לצוות.' };
+  }
+  const row = db.update('students', student.id, {
+    status: 'waitlist',
+    groupId: group.id,
+    ...(childName ? { name: childName } : {}),
+  });
+  if (row) await persistCore('students', row);
+  const dayLabel = DAY_NAMES[Number(group.day)] || `יום ${group.day}`;
+  const age = group.ageCategory || cleanGroupTitle(group);
+  return {
+    ok: true,
+    student: row || student,
+    group,
+    reply:
+      `נרשמתם לרשימת ההמתנה 🙌\n` +
+      `${age}\n` +
+      `יום ${dayLabel} · ${group.time || ''}\n\n` +
+      `נעדכן כשיתפנה מקום.`,
+  };
+}
+
+async function handleWaitlistRequest(phone, parent, students, text) {
+  const matched = findGroupsForText(text);
+  const grade = extractGradeLetter(text);
+  const pool = matched.length
+    ? matched
+    : (grade ? findGroupsForText(`כיתה ${grade}`) : (db.get('groups') || []));
+  const dayIndex = extractPreferredDayIndex(text);
+  const timeHint = extractTimeHint(text);
+
+  if (!pool.length) {
+    return {
+      ok: false,
+      reply: 'לא מצאתי קבוצה מתאימה.\nכתבו כיתה ויום/שעה, למשל:\nרשימת המתנה לכיתה ג׳ יום א׳ 15:30',
+    };
+  }
+
+  if (dayIndex == null && !timeHint && pool.length > 1 && !grade) {
+    return {
+      ok: false,
+      reply: 'לאיזו כיתה ויום לשבץ להמתנה?\nלדוגמה: רשימת המתנה לכיתה ג׳ יום א׳ 15:30',
+    };
+  }
+
+  const group = pickGroupForWaitlist(pool, db.get('students') || [], {
+    dayIndex,
+    timeHint,
+    preferFull: true,
+  });
+  if (!group) {
+    return {
+      ok: false,
+      reply: 'לא מצאתי קבוצה מתאימה.\nכתבו כיתה ויום/שעה ונשבץ להמתנה.',
+    };
+  }
+
+  return assignStudentToWaitlist(parent, group);
+}
+
+async function assignWaitlistIfFull(phone, parent, intake = {}) {
+  const grade = intake.grade || '';
+  const groups = findGroupsForText(grade ? `כיתה ${grade}` : '') || [];
+  if (!groups.length) return '';
+  const students = db.get('students') || [];
+  const enriched = enrichGroupsWithCapacity(groups, students);
+  const dayIndex = extractPreferredDayIndex(intake.preferredDay || '');
+  const relevant = dayIndex == null
+    ? enriched
+    : enriched.filter((g) => Number(g.day) === dayIndex);
+  const open = (relevant.length ? relevant : enriched).filter((g) => !g.isFull);
+  if (open.length) return '';
+
+  const group = pickGroupForWaitlist(groups, students, { dayIndex, preferFull: true });
+  if (!group) return '';
+  const result = await assignStudentToWaitlist(parent, group, {
+    childName: intake.childName || '',
+  });
+  return result.ok ? result.reply : '';
 }
 
 async function callGeminiReply(systemPrompt, crmText, incomingText, apiKey, settings = {}) {
@@ -294,9 +455,11 @@ ${crmText}
 
 הערה חשובה: אם הלקוח כותב רק 1 / 2 / 3 / 4 זה בחירה מתפריט:
 1 = קישור להצהרת בריאות (${healthUrl})
-2 = הרשמה ומחירי חוגים (ענה מתוך רשימת הקבוצות למעלה)
+2 = הרשמה וחוגים (שעות ומקום — בלי מחירים)
 3 = שעות פעילות ומיקום
 4 = העברה לצוות אנושי
+
+אסור לציין מחירים או סכומים בכל תשובה. על מחיר — הפנה לצוות.
 
 מגבלת אורך תשובה: עד ${s.aiMaxReplyChars || 700} תווים.
 אם אינך בטוח — התחל את התשובה במילה UNSURE.
@@ -771,9 +934,26 @@ export const whatsappService = {
       return { parent, student, isNew, replied: true, reply: gate.reply, reason: 'handoff' };
     }
 
-    // Active intake
-    if (gate.action === 'intake' || (getIntake(parent)?.step && getIntake(parent).step !== 'done')) {
-      const intakeResult = await advanceLeadCapture(normalizedPhone, parent, text, { formatClassesForGrade });
+    // Active intake — schedule / waitlist questions may interrupt to answer first
+    const intakeActive = !!(getIntake(parent)?.step && getIntake(parent).step !== 'done');
+    if (wantsWaitlist(text)) {
+      const waitlist = await handleWaitlistRequest(normalizedPhone, parent, students, text);
+      await whatsappService.sendBotReply(normalizedPhone, waitlist.reply, { isSimulator });
+      return {
+        parent: findPrimaryParent(normalizedPhone) || parent,
+        student: waitlist.student || student,
+        isNew,
+        replied: true,
+        reply: waitlist.reply,
+        reason: 'waitlist',
+      };
+    }
+
+    if ((gate.action === 'intake' || intakeActive) && !isScheduleQuestion(text)) {
+      const intakeResult = await advanceLeadCapture(normalizedPhone, parent, text, {
+        formatClassesForGrade,
+        assignWaitlistIfFull,
+      });
       if (intakeResult.reply) {
         await whatsappService.sendBotReply(normalizedPhone, intakeResult.reply, { isSimulator });
         return { parent: findPrimaryParent(normalizedPhone) || parent, student, isNew, replied: true, reply: intakeResult.reply, reason: 'intake' };
@@ -781,7 +961,7 @@ export const whatsappService = {
     }
 
     // Start intake for new/incomplete leads (after menu 2 or missing details)
-    if (shouldStartLeadCapture(settings, parent, students, text, { isNew })) {
+    if (shouldStartLeadCapture(settings, parent, students, text, { isNew }) && !isScheduleQuestion(text)) {
       const choice = normalizeMenuChoice(text);
       // If they just picked "2", acknowledge classes briefly then start intake
       if (choice === '2') {
@@ -792,7 +972,10 @@ export const whatsappService = {
       }
       await setIntake(normalizedPhone, { step: 'parent_name', asked: false });
       parent = findPrimaryParent(normalizedPhone) || parent;
-      const intakeResult = await advanceLeadCapture(normalizedPhone, parent, '', { formatClassesForGrade });
+      const intakeResult = await advanceLeadCapture(normalizedPhone, parent, '', {
+        formatClassesForGrade,
+        assignWaitlistIfFull,
+      });
       if (intakeResult.reply) {
         await whatsappService.sendBotReply(normalizedPhone, intakeResult.reply, { isSimulator });
         return {

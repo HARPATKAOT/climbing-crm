@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Hash, History, Settings, Smartphone, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2, FileText, Bookmark } from 'lucide-react';
+import { Send, Hash, History, Settings, Smartphone, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2, FileText, Bookmark, RotateCcw } from 'lucide-react';
 import { Modal } from './UI.jsx';
 import SegmentBuilder from './SegmentBuilder.jsx';
 import { EMPTY_FILTERS } from './segmentFilters.js';
@@ -7,6 +7,8 @@ import TemplatesManager from './TemplatesManager.jsx';
 import SavedRepliesManager from './SavedRepliesManager.jsx';
 import BotSettingsPanel from './BotSettingsPanel.jsx';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
+
+const PLAYGROUND_PHONE = '0599111000';
 
 const DEFAULT_LISTS = [
   { key: 'general', label: 'כללי', description: 'עדכונים שוטפים', color: 'var(--blue)' },
@@ -27,7 +29,7 @@ const WA_TEMPLATES = [];
 export default function Broadcasts({ parents, students, groups = [] }) {
   const { profile } = useBusinessProfile();
   const brandName = profile.display_name || 'הרפתקאות';
-  const [activeTab, setActiveTab] = useState('compose'); // compose | templates | saved | history | simulator | settings
+  const [activeTab, setActiveTab] = useState('compose'); // compose | templates | saved | history | simulator | channels | settings
   
   // Compose / Send State
   const [lists, setLists] = useState(DEFAULT_LISTS);
@@ -77,8 +79,10 @@ export default function Broadcasts({ parents, students, groups = [] }) {
   
   // AI Workbench Simulator State
   const [workbenchInput, setWorkbenchInput] = useState('');
-  const [workbenchOutput, setWorkbenchOutput] = useState('');
+  const [workbenchMessages, setWorkbenchMessages] = useState([]);
   const [testingAi, setTestingAi] = useState(false);
+  const [resettingPlayground, setResettingPlayground] = useState(false);
+  const workbenchEndRef = useRef(null);
 
   // Chat Log & Simulator State
   const [chatLogs, setChatLogs] = useState([]);
@@ -569,32 +573,121 @@ export default function Broadcasts({ parents, students, groups = [] }) {
     }
   };
 
-  // Test AI bot reply directly in the workbench console
+  // Test AI bot reply as a continuing playground conversation
   const handleTestAiResponse = async () => {
-    if (!workbenchInput.trim()) return;
+    const text = workbenchInput.trim();
+    if (!text || testingAi) return;
+    const userMsg = {
+      id: `u-${Date.now()}`,
+      role: 'user',
+      text,
+      at: new Date().toISOString(),
+    };
+    setWorkbenchMessages((prev) => [...prev, userMsg]);
+    setWorkbenchInput('');
     setTestingAi(true);
-    setWorkbenchOutput('');
     try {
       const response = await fetch('/api/whatsapp/simulate-incoming', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          phone: '0599999999',
-          message: workbenchInput
-        })
+          phone: PLAYGROUND_PHONE,
+          message: text,
+        }),
       });
       if (response.ok) {
         const data = await response.json();
-        setWorkbenchOutput(data.reply || 'הבוט סירב לענות או החזיר תשובה ריקה.');
+        const reply = data.reply
+          || (data.skippedReason ? `הבוט לא ענה (${data.skippedReason})` : '')
+          || 'הבוט סירב לענות או החזיר תשובה ריקה.';
+        setWorkbenchMessages((prev) => [
+          ...prev,
+          {
+            id: `b-${Date.now()}`,
+            role: 'bot',
+            text: reply,
+            at: new Date().toISOString(),
+          },
+        ]);
       } else {
-        setWorkbenchOutput('שגיאה בתקשורת עם מנוע ה-AI');
+        setWorkbenchMessages((prev) => [
+          ...prev,
+          {
+            id: `e-${Date.now()}`,
+            role: 'bot',
+            text: 'שגיאה בתקשורת עם מנוע המענה',
+            at: new Date().toISOString(),
+          },
+        ]);
       }
     } catch (err) {
-      setWorkbenchOutput('שגיאה בחיבור לשרת ה-API');
+      setWorkbenchMessages((prev) => [
+        ...prev,
+        {
+          id: `e-${Date.now()}`,
+          role: 'bot',
+          text: 'שגיאה בחיבור לשרת',
+          at: new Date().toISOString(),
+        },
+      ]);
     } finally {
       setTestingAi(false);
     }
   };
+
+  const handleResetPlayground = async () => {
+    setResettingPlayground(true);
+    try {
+      await fetch('/api/whatsapp/playground-reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: PLAYGROUND_PHONE }),
+      });
+      setWorkbenchMessages([]);
+      setWorkbenchInput('');
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setResettingPlayground(false);
+    }
+  };
+
+  useEffect(() => {
+    if (workbenchEndRef.current) {
+      workbenchEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [workbenchMessages, testingAi]);
+
+  useEffect(() => {
+    if (activeTab !== 'settings') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/whatsapp/logs');
+        if (!res.ok || cancelled) return;
+        const logs = await res.json();
+        const thread = (Array.isArray(logs) ? logs : [])
+          .filter((l) => {
+            const p = String(l.phone || l.to || l.from || '');
+            return p.includes('599111000') || p.includes('0599111000');
+          })
+          .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+          .map((l, i) => ({
+            id: l.id || `log-${i}`,
+            role: l.direction === 'inbound' ? 'user' : 'bot',
+            text: l.message || '',
+            at: l.created_at,
+          }))
+          .filter((m) => m.text);
+        if (!cancelled && thread.length) {
+          setWorkbenchMessages(thread);
+        }
+      } catch {
+        // ignore
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeTab]);
 
   const threadMessages = chatLogs
     .filter(log => log.phone === selectedSimThread)
@@ -652,6 +745,9 @@ export default function Broadcasts({ parents, students, groups = [] }) {
         </button>
         <button className={`btn btn-sm ${activeTab === 'simulator' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('simulator')}>
           <Smartphone size={14} /> סימולטור שיחות
+        </button>
+        <button className={`btn btn-sm ${activeTab === 'channels' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('channels')}>
+          <Smartphone size={14} /> חיבורי ערוצים
         </button>
         <button className={`btn btn-sm ${activeTab === 'settings' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('settings')}>
           <Settings size={14} /> הגדרות ואימון AI
@@ -1020,15 +1116,13 @@ export default function Broadcasts({ parents, students, groups = [] }) {
         </Modal>
       )}
 
-      {/* SETTINGS & AI WORKBENCH */}
-      {activeTab === 'settings' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-        <div className="grid-2" style={{ gap: 20, alignItems: 'flex-start' }}>
-          {/* Settings Form — WhatsApp connect first */}
+      {/* CHANNEL CONNECTIONS — WhatsApp / Messenger / Instagram, separate from bot training */}
+      {activeTab === 'channels' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 680 }}>
           <div className="card card-p">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-              <Settings size={18} style={{ color: 'var(--blue)' }} />
-              <span className="section-title">אימון בוט ה-AI והגדרות API</span>
+              <Smartphone size={18} style={{ color: 'var(--blue)' }} />
+              <span className="section-title">חיבורי ערוצים (וואטסאפ, מסנג׳ר, אינסטגרם)</span>
             </div>
 
             {saveSettingsSuccess && (
@@ -1037,7 +1131,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
               </div>
             )}
 
-            {/* WhatsApp connect — primary action in this screen */}
+            {/* WhatsApp connect */}
             <div style={{
               border: '1px solid rgba(37,211,102,0.45)',
               background: 'rgba(37,211,102,0.06)',
@@ -1172,6 +1266,66 @@ export default function Broadcasts({ parents, students, groups = [] }) {
               </div>
             </div>
 
+            <div style={{
+              border: '1px solid rgba(247,119,55,0.45)',
+              background: 'rgba(247,119,55,0.06)',
+              borderRadius: 12,
+              padding: 14,
+              marginBottom: 18,
+            }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, color: '#F77737', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>📸 חיבור אינסטגרם (Instagram DM Webhook)</span>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.6 }}>
+                כדי שפניות והודעות פרטיות מאינסטגרם יפתחו אוטומטית ליד במערכת ויקבלו מענה AI:
+                <ol style={{ margin: '6px 20px', padding: 0 }}>
+                  <li>היכנסו לפורטל המפתחים של Meta או להגדרות Instagram Graph API.</li>
+                  <li>הגדירו את כתובת ה-Webhook ל-<code style={{ color: '#F77737' }}>https://YOUR_SERVER_URL/api/instagram/webhook</code> (או לכתובת המנהרת Pinggy שלכם).</li>
+                  <li>הזינו את אסימון האימות ששמור בהגדרות השרת.</li>
+                  <li>סמנו תחת אירועי Webhook את <code style={{ color: '#F77737' }}>messages</code> ואת <code style={{ color: '#F77737' }}>messaging_postbacks</code>.</li>
+                </ol>
+              </div>
+              <div className="form-grid-2">
+                <div className="form-group">
+                  <label className="form-label" style={{ fontSize: 11 }}>Instagram Account ID (IG Business ID)</label>
+                  <input className="input input-sm" placeholder="17841400000000000" value={settings.metaIgAccountId || ''} onChange={e => setSettings({ ...settings, metaIgAccountId: e.target.value })} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label" style={{ fontSize: 11 }}>Instagram Access Token</label>
+                  <input className="input input-sm" type="password" placeholder="EAAGb..." value={settings.metaIgAccessToken || ''} onChange={e => setSettings({ ...settings, metaIgAccessToken: e.target.value })} />
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 8 }}>
+                משתני שרת: <code>META_IG_ACCOUNT_ID</code> ו-<code>META_IG_ACCESS_TOKEN</code>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveSettings}>
+              <button type="submit" className="btn btn-primary btn-full" disabled={savingSettings}>
+                {savingSettings ? 'שומר...' : 'שמור הגדרות חיבורי ערוצים'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* SETTINGS & AI WORKBENCH */}
+      {activeTab === 'settings' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div className="grid-2" style={{ gap: 20, alignItems: 'flex-start' }}>
+          {/* Bot training settings */}
+          <div className="card card-p">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+              <Settings size={18} style={{ color: 'var(--blue)' }} />
+              <span className="section-title">אימון בוט ה-AI</span>
+            </div>
+
+            {saveSettingsSuccess && (
+              <div className="alert alert-success" style={{ marginBottom: 16 }}>
+                <span>ההגדרות נשמרו בהצלחה! ✓</span>
+              </div>
+            )}
+
             <form onSubmit={handleSaveSettings} className="form-grid" style={{ gap: 14 }}>
               <BotSettingsPanel
                 settings={settings}
@@ -1181,76 +1335,115 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                 handleBotToggle={handleBotToggle}
               />
 
-              <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14, marginTop: 4 }}>
-                <div style={{ fontWeight: 'bold', fontSize: 13, marginBottom: 10, color: '#E1306C', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span>📸 חיבור וקליטת הודעות אינסטגרם (Instagram DM Webhook)</span>
-                </div>
-                <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.6 }}>
-                  כדי שפניות והודעות פרטיות מאינסטגרם יפתחו אוטומטית ליד במערכת ויקבלו מענה AI:
-                  <ol style={{ margin: '6px 20px', padding: 0 }}>
-                    <li>היכנסו לפורטל המפתחים של Meta או להגדרות Instagram Graph API.</li>
-                    <li>הגדירו את כתובת ה-Webhook ל-<code style={{ color: 'var(--blue)' }}>https://YOUR_SERVER_URL/api/instagram/webhook</code> (או לכתובת המנהרת Pinggy שלכם).</li>
-                    <li>הזינו את אסימון האימות ששמור בהגדרות השרת.</li>
-                    <li>סמנו תחת אירועי Webhook את <code style={{ color: '#ff80bf' }}>messages</code> ואת <code style={{ color: '#ff80bf' }}>messaging_postbacks</code>.</li>
-                  </ol>
-                </div>
-                <div className="form-grid-2">
-                  <div className="form-group">
-                    <label className="form-label" style={{ fontSize: 11 }}>Instagram Account ID (IG Business ID)</label>
-                    <input className="input input-sm" placeholder="17841400000000000" value={settings.metaIgAccountId || ''} onChange={e => setSettings({ ...settings, metaIgAccountId: e.target.value })} />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label" style={{ fontSize: 11 }}>Instagram Access Token</label>
-                    <input className="input input-sm" type="password" placeholder="EAAGb..." value={settings.metaIgAccessToken || ''} onChange={e => setSettings({ ...settings, metaIgAccessToken: e.target.value })} />
-                  </div>
-                </div>
-              </div>
-
               <button type="submit" className="btn btn-primary btn-full" disabled={savingSettings}>
-                {savingSettings ? 'שומר...' : 'שמור הגדרות בוט ואינסטגרם'}
+                {savingSettings ? 'שומר...' : 'שמור הגדרות בוט'}
               </button>
             </form>
           </div>
 
           {/* AI Testing Workbench Playground */}
           <div className="card card-p" style={{ border: '1px solid rgba(99,102,241,0.25)', background: 'linear-gradient(135deg, rgba(99,102,241,0.02) 0%, rgba(168,85,247,0.02) 100%)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-              <Sparkles size={18} style={{ color: '#A5B4FC' }} />
-              <span className="section-title">ארגז חול לבדיקת מענה ה-AI (Playground)</span>
-            </div>
-            
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 16 }}>
-              בחן כיצד בוט ה-AI מגיב לשאלות לקוחות על בסיס הנחיות ה-System Prompt שכתבת משמאל.
-            </div>
-
-            <div className="form-grid" style={{ gap: 12 }}>
-              <div className="form-group">
-                <label className="form-label" style={{ fontSize: 11 }}>שאלת לקוח מדומה (לדוגמה)</label>
-                <input className="input" placeholder="לדוגמה: כמה עולה אצלכם כניסה חד פעמית לילד?"
-                  value={workbenchInput} onChange={e => setWorkbenchInput(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && !testingAi && workbenchInput.trim()) {
-                      e.preventDefault();
-                      handleTestAiResponse();
-                    }
-                  }} />
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Sparkles size={18} style={{ color: '#A5B4FC' }} />
+                <span className="section-title">ארגז חול לבדיקת מענה ה-AI</span>
               </div>
-
-              <button type="button" className="btn btn-primary btn-sm" style={{ alignSelf: 'flex-start' }}
-                disabled={testingAi || !workbenchInput.trim()} onClick={handleTestAiResponse}>
-                {testingAi ? '⏳ מנתח תשובה...' : '🚀 בדוק מענה בוט'}
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={resettingPlayground || testingAi}
+                onClick={handleResetPlayground}
+                title="איפוס שיחת הבדיקה"
+              >
+                <RotateCcw size={14} />
+                {resettingPlayground ? 'מאפס...' : 'איפוס שיחה'}
               </button>
+            </div>
 
-              {workbenchOutput && (
-                <div className="fade-in" style={{ marginTop: 14 }}>
-                  <label className="form-label" style={{ fontSize: 11, color: 'var(--green)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <span>🤖 תגובת הבוט (סימולציה):</span>
-                  </label>
-                  <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border)', borderRadius: 8, padding: 12, fontSize: 12, lineHeight: 1.6, color: 'var(--text-1)' }}>
-                    {workbenchOutput}
-                  </div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 12 }}>
+              שיחת ניסוי עם היסטוריה — אפשר להמשיך לענות לבוט. לא נשלח ללקוחות אמיתיים.
+            </div>
+
+            <div style={{
+              height: 320,
+              overflowY: 'auto',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+              padding: 12,
+              marginBottom: 12,
+              borderRadius: 10,
+              border: '1px solid var(--border)',
+              background: 'rgba(0,0,0,0.18)',
+            }}>
+              {workbenchMessages.length === 0 && !testingAi && (
+                <div style={{ margin: 'auto', fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>
+                  התחילו שיחה — כתבו הודעה למטה
                 </div>
               )}
+              {workbenchMessages.map((msg) => (
+                <div
+                  key={msg.id}
+                  style={{
+                    alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                    maxWidth: '85%',
+                  }}
+                >
+                  <div style={{
+                    background: msg.role === 'user'
+                      ? 'rgba(99,102,241,0.22)'
+                      : 'rgba(255,255,255,0.05)',
+                    border: msg.role === 'bot' ? '1px solid var(--border)' : '1px solid rgba(99,102,241,0.35)',
+                    padding: '8px 12px',
+                    borderRadius: 10,
+                    fontSize: 12,
+                    lineHeight: 1.55,
+                    whiteSpace: 'pre-wrap',
+                  }}>
+                    {msg.text}
+                  </div>
+                  <div style={{
+                    fontSize: 9,
+                    color: 'var(--text-3)',
+                    marginTop: 3,
+                    textAlign: msg.role === 'user' ? 'left' : 'right',
+                  }}>
+                    {msg.role === 'user' ? 'לקוח (בדיקה)' : 'בוט'}
+                  </div>
+                </div>
+              ))}
+              {testingAi && (
+                <div style={{ alignSelf: 'flex-start', fontSize: 11, color: 'var(--text-3)' }}>
+                  הבוט מקליד...
+                </div>
+              )}
+              <div ref={workbenchEndRef} />
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>
+              <input
+                className="input"
+                style={{ flex: 1 }}
+                placeholder="כתבו הודעה כאילו אתם הלקוח..."
+                value={workbenchInput}
+                onChange={(e) => setWorkbenchInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !testingAi && workbenchInput.trim()) {
+                    e.preventDefault();
+                    handleTestAiResponse();
+                  }
+                }}
+                disabled={testingAi}
+              />
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={testingAi || !workbenchInput.trim()}
+                onClick={handleTestAiResponse}
+              >
+                <Send size={14} />
+                {testingAi ? '...' : 'שלח'}
+              </button>
             </div>
           </div>
         </div>

@@ -558,7 +558,15 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
   const [eqError, setEqError] = useState('');
   const c = AGE_COLORS[group.ageCategory] || DEF_COLOR;
 
-  const members = students.filter(s => s.groupId === group.id && s.status !== 'archived');
+  const seatedMembers = students.filter(s =>
+    s.groupId === group.id
+    && s.status !== 'archived'
+    && s.status !== 'waitlist'
+  );
+  const waitlistMembers = students.filter(s =>
+    s.groupId === group.id && s.status === 'waitlist'
+  );
+  const members = seatedMembers;
   const kidMembers = members.filter(s => !s.isAdult);
   const assignable = students.filter(s => s.groupId !== group.id && s.status !== 'archived');
 
@@ -838,7 +846,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
               </div>
               {isFull && (
                 <div style={{ fontSize: 11, color: '#FCD34D', marginTop: 6 }}>
-                  הקבוצה מלאה — הסר מתאמן כדי לפנות מקום
+                  הקבוצה מלאה — אפשר לשבץ לרשימת המתנה מהבוט או להסיר מתאמן
                 </div>
               )}
             </div>
@@ -880,6 +888,40 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {waitlistMembers.length > 0 && (
+              <div style={{ marginTop: 18 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', marginBottom: 8 }}>
+                  רשימת המתנה ({waitlistMembers.length})
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {waitlistMembers.map(s => {
+                    const parent = parents.find(p => p.id === s.parentId);
+                    return (
+                      <div key={s.id} style={{
+                        display: 'flex', gap: 10, alignItems: 'center',
+                        padding: '10px 12px', borderRadius: 8,
+                        background: 'rgba(148,163,184,0.08)',
+                        border: '1px dashed var(--border)',
+                      }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 700, fontSize: 13 }}>{s.name}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 1 }}>
+                            {parent?.name}{parent?.phone ? ` · ${parent.phone}` : ''}
+                          </div>
+                        </div>
+                        <span className="badge badge-gray">המתנה</span>
+                        <button className="btn btn-ghost btn-icon btn-xs" title="הסר מהמתנה"
+                          style={{ color: 'var(--red)' }}
+                          onClick={() => onRemoveStudent(s.id)}>
+                          <UserMinus size={14} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>
@@ -1183,7 +1225,11 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
   };
 
   const getEnrolledCount = (groupId) => {
-    return students.filter(s => s.groupId === groupId && s.status !== 'archived').length;
+    return students.filter(s =>
+      s.groupId === groupId
+      && s.status !== 'archived'
+      && s.status !== 'waitlist'
+    ).length;
   };
 
   const attendanceWeekday = dateToWeekday(attendanceDate);

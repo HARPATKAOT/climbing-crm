@@ -33,7 +33,7 @@ export const DEFAULT_BOT_SETTINGS = {
   aiKnowledgeBase:
     'שאלות נפוצות:\n- חניה: יש חניה בחזית הקיר.\n- גיל מינימום לחוג ילדים: לפי כיתה בקבוצות במערכת.\n- ציוד: נעלי טיפוס להשכרה במקום.\n- ביטול אימון: לעדכן את הצוות מראש בוואטסאפ.',
   aiForbiddenTopics:
-    'אל תבטיח הנחות שלא אושרו.\nאל תמציא מחירים שלא מופיעים במחירון/בקבוצות.\nאל תיתן ייעוץ רפואי.\nאל תשתף פרטי לקוחות אחרים.',
+    'אל תציין מחירים או סכומים.\nאל תבטיח הנחות.\nאל תיתן ייעוץ רפואי.\nאל תשתף פרטי לקוחות אחרים.',
   aiBusinessFacts:
     'כתובת: רחוב האורגים 12, אשדוד\nשעות: א׳–ה׳ 14:00–22:00 | שישי 09:00–15:00 | שבת סגור\nהצהרת בריאות: https://client-omega-topaz-35.vercel.app/health',
   aiEscalateWhenUnsure: true,
@@ -41,7 +41,7 @@ export const DEFAULT_BOT_SETTINGS = {
   aiLeadCaptureEnabled: true,
   aiInteractiveMenuEnabled: true,
   aiGreetingMenu:
-    `היי! אני הבוט של ${LEGACY_BRAND_NAME} 🧗\n\nבמה אפשר לעזור?\n1️⃣ הצהרת בריאות ✍️\n2️⃣ חוגים ומחירים 🤸\n3️⃣ שעות ומיקום 🗺️\n4️⃣ לדבר עם צוות 👤\n\nכתבו מספר או שאלה קצרה 😊`,
+    `היי! אני הבוט של ${LEGACY_BRAND_NAME} 🧗\n\nבמה אפשר לעזור?\n1️⃣ הצהרת בריאות ✍️\n2️⃣ חוגים ורישום 🤸\n3️⃣ שעות ומיקום 🗺️\n4️⃣ לדבר עם צוות 👤\n\nכתבו מספר או שאלה קצרה 😊`,
   aiReactivateKeywords: 'הפעל בוט,הפעל,activate',
 };
 
@@ -82,7 +82,13 @@ export async function loadBrandedBotSettings() {
   } catch {
     // keep fallback
   }
-  return applyBusinessBrand(db.getSettings(), brand);
+  const branded = applyBusinessBrand(db.getSettings(), brand);
+  const prompt = String(branded.aiSystemPrompt || '').trim();
+  const priceBan = 'כלל קשיח: אל תציין מחירים או סכומים. על מחיר — הפנה לצוות בלבד.';
+  if (!prompt.includes('אל תציין מחירים')) {
+    branded.aiSystemPrompt = prompt ? `${prompt}\n\n${priceBan}` : priceBan;
+  }
+  return branded;
 }
 
 export function parseKeywordList(value) {
@@ -123,13 +129,13 @@ export function normalizeMenuChoice(text) {
   if (numbered) return numbered[1];
 
   if (/הצהר|בריאות|טופס|חתמ/.test(raw)) return '1';
-  if (/חוג|מחיר|רישום|אימון|כית/.test(raw) && !/שע|מיקום|כתובת/.test(raw)) return '2';
+  if (/חוג|רישום|אימון|כית/.test(raw) && !/שע|מיקום|כתובת|מחיר|עלות|כסף|שקל/.test(raw)) return '2';
   if (/שע|מיקום|כתובת|פתוח|הגע/.test(raw)) return '3';
   if (/צוות|אדם|נציג|לדבר עם/.test(raw)) return '4';
 
   // Interactive list / button titles
   if (/הצהרת בריאות/.test(raw)) return '1';
-  if (/חוגים ומחירים|חוגים/.test(raw)) return '2';
+  if (/חוגים ורישום|חוגים ומחירים|חוגים/.test(raw)) return '2';
   if (/שעות ומיקום/.test(raw)) return '3';
   if (/לדבר עם צוות|עם צוות/.test(raw)) return '4';
   return null;
@@ -335,7 +341,8 @@ export function buildAiExtraContext(settings, phone, parent, students) {
     '',
     '## כללי ביטחון',
     'אם אינך בטוח בתשובה — השב בדיוק בשורה הראשונה: UNSURE',
-    'ואז משפט קצר ללקוח. אל תנחש מחירים או זמנים.'
+    'ואז משפט קצר ללקוח. אל תנחש זמנים.',
+    'אסור לציין מחירים או סכומים — על מחיר הפנה לצוות.'
   );
   return parts.join('\n');
 }
@@ -364,6 +371,30 @@ export function getIntake(parent) {
 
 export async function setIntake(phone, intake) {
   return updateParentsForPhone(phone, { bot_intake: intake });
+}
+
+/** Clear intake, pause, opt-out and local conversation mirror for playground testing. */
+export async function resetPlaygroundConversation(phone) {
+  const normalized = normalizeWaPhone(phone) || phone;
+  await updateParentsForPhone(normalized, {
+    bot_intake: null,
+    bot_paused_until: null,
+    bot_pause_reason: null,
+    bot_opted_out: false,
+    bot_outside_hours_date: null,
+  });
+
+  const logs = (db.get('whatsapp_logs') || []).filter(
+    (l) => !phonesMatch(l.phone || l.to || l.from, normalized)
+  );
+  db.set('whatsapp_logs', logs);
+
+  const messages = (db.get('messages') || []).filter(
+    (m) => !phonesMatch(m.phone || '', normalized)
+  );
+  db.set('messages', messages);
+
+  return { phone: normalized, cleared: true };
 }
 
 export function shouldStartLeadCapture(settings, parent, students, incomingText, { isNew } = {}) {
@@ -444,9 +475,16 @@ export async function advanceLeadCapture(phone, parent, incomingText, helpers = 
     if (typeof helpers.formatClassesForGrade === 'function') {
       classesHint = helpers.formatClassesForGrade(grade) || '';
     }
-    const reply = classesHint
+    let waitlistNote = '';
+    if (typeof helpers.assignWaitlistIfFull === 'function') {
+      waitlistNote = (await helpers.assignWaitlistIfFull(phone, parent, intake)) || '';
+    }
+    let reply = classesHint
       ? `${summary}\n\n${classesHint}\n\nרוצים שנקבע אימון היכרות? אפשר גם לכתוב 4 לדבר עם צוות.`
       : `${summary}\n\nצוות יחזור אליכם לתיאום אימון היכרות 🧗`;
+    if (waitlistNote) {
+      reply = `${summary}\n\n${waitlistNote}`;
+    }
     return { reply, done: true, intake };
   }
 
@@ -537,7 +575,7 @@ export function interactiveMenuPayload(settings) {
             title: 'תפריט',
             rows: [
               { id: 'menu_1', title: 'הצהרת בריאות', description: 'קישור לחתימה' },
-              { id: 'menu_2', title: 'חוגים ומחירים', description: 'רישום וזמנים' },
+              { id: 'menu_2', title: 'חוגים ורישום', description: 'זמנים ומקומות' },
               { id: 'menu_3', title: 'שעות ומיקום', description: 'כתובת ושעות' },
               { id: 'menu_4', title: 'לדבר עם צוות', description: 'העברה לנציג' },
             ],

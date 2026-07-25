@@ -2728,7 +2728,7 @@ function AddLeadModal({ students, parents, onAdd, onClose }) {
 export default function Leads({ students, setStudents, parents, setParents, groups, canManageBilling = false, canViewComms = true }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState('');
-  const [filterStatus, setFilterStatus] = useState('all');
+  const [filterStatus, setFilterStatus] = useState('communication');
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedStudentId, setSelectedStudentId] = useState(null);
   const [pricelist, setPricelist] = useState([]);

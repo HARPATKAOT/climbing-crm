@@ -98,7 +98,8 @@ import {
   saveBusinessProfile,
   safeBusinessProfile,
 } from './businessProfile.js';
-import { applyBusinessBrand } from './whatsappBot.js';
+import { applyBusinessBrand, resetPlaygroundConversation } from './whatsappBot.js';
+import { countEnrolled } from './groupCapacity.js';
 import {
   ensureAttendanceRows,
   israelDateStr,
@@ -355,7 +356,7 @@ function withGroupEnrollmentCounts(groups, students) {
   }
   return [...byId.values()].map(g => ({
     ...g,
-    enrolled: (students || []).filter(s => s.groupId === g.id && s.status !== 'archived').length
+    enrolled: countEnrolled(g.id, students || []),
   }));
 }
 
@@ -1480,6 +1481,17 @@ app.post('/api/whatsapp/simulate-incoming', developmentOnly, async (req, res) =>
   
   const result = await whatsappService.handleIncomingMessage(phone, message, true);
   res.json({ success: true, ...result });
+});
+
+app.post('/api/whatsapp/playground-reset', developmentOnly, async (req, res) => {
+  const phone = String(req.body?.phone || '0599111000').trim();
+  try {
+    const result = await resetPlaygroundConversation(phone);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('playground-reset failed:', err.message);
+    res.status(500).json({ error: err.message || 'איפוס השיחה נכשל' });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,53 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  countEnrolled,
+  spotsLeft,
+  isGroupFull,
+  enrichGroupsWithCapacity,
+  wantsWaitlist,
+  pickGroupForWaitlist,
+  extractPreferredDayIndex,
+  extractTimeHint,
+} from './groupCapacity.js';
+
+const group = { id: 'g1', maxSlots: 2, day: 0, time: '15:30', name: "ג'-ד'" };
+const students = [
+  { id: 's1', groupId: 'g1', status: 'registered' },
+  { id: 's2', groupId: 'g1', status: 'waitlist' },
+  { id: 's3', groupId: 'g1', status: 'archived' },
+  { id: 's4', groupId: 'g1', status: 'active' },
+];
+
+test('waitlist and archived do not take a seat', () => {
+  assert.equal(countEnrolled('g1', students), 2);
+  assert.equal(spotsLeft(group, students), 0);
+  assert.equal(isGroupFull(group, students), true);
+});
+
+test('enrichGroupsWithCapacity adds freeSlots', () => {
+  const [row] = enrichGroupsWithCapacity([group], students);
+  assert.equal(row.enrolled, 2);
+  assert.equal(row.freeSlots, 0);
+  assert.equal(row.isFull, true);
+});
+
+test('wantsWaitlist detects Hebrew phrases', () => {
+  assert.equal(wantsWaitlist('אפשר רשימת המתנה?'), true);
+  assert.equal(wantsWaitlist('תכניסו אותי להמתנה'), true);
+  assert.equal(wantsWaitlist('מה השעות?'), false);
+});
+
+test('extract day and time hints', () => {
+  assert.equal(extractPreferredDayIndex('יום א׳ בבקשה'), 0);
+  assert.equal(extractTimeHint('בשעה 15:30'), '15:30');
+});
+
+test('pickGroupForWaitlist prefers matching day', () => {
+  const groups = [
+    { id: 'a', maxSlots: 1, day: 0, time: '15:30' },
+    { id: 'b', maxSlots: 1, day: 2, time: '16:00' },
+  ];
+  const picked = pickGroupForWaitlist(groups, [], { dayIndex: 2, preferFull: false });
+  assert.equal(picked.id, 'b');
+});
