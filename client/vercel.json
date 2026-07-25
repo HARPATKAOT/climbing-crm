@@ -33,6 +33,10 @@
       "destination": "/index.html"
     },
     {
+      "source": "/event-host/(.*)",
+      "destination": "/index.html"
+    },
+    {
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }

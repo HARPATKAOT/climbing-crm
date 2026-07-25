@@ -4,6 +4,7 @@ export const PUBLIC_PATH_PREFIXES = [
   '/join',
   '/onboard',
   '/event',
+  '/event-host',
   '/privacy',
 ];
 

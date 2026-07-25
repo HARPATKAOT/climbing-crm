@@ -7,6 +7,7 @@ import PublicOnboardingForm from './components/PublicOnboardingForm.jsx';
 import LeadIntakeForm from './components/LeadIntakeForm.jsx';
 import PrivacyPolicy from './components/PrivacyPolicy.jsx';
 import PublicActivityRegistration from './components/PublicActivityRegistration.jsx';
+import PublicHostPayment from './components/PublicHostPayment.jsx';
 import { getAccessToken } from './authClient.js';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import './index.css';
@@ -39,6 +40,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Route path="/join" element={<LeadIntakeForm />} />
         <Route path="/privacy" element={<PrivacyPolicy />} />
         <Route path="/event/:slug" element={<PublicActivityRegistration />} />
+        <Route path="/event-host/:token" element={<PublicHostPayment />} />
         <Route path="*" element={<AuthGate><App /></AuthGate>} />
       </Routes>
     </BrowserRouter>

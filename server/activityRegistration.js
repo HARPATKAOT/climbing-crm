@@ -17,6 +17,10 @@ export function makeRegistrationSlug() {
   return crypto.randomBytes(6).toString('hex');
 }
 
+export function makePrivatePaymentToken() {
+  return crypto.randomBytes(24).toString('base64url');
+}
+
 export function normalizeHostPaymentStatus(value) {
   const v = String(value || 'unpaid').toLowerCase();
   return PAYMENT_STATUSES.has(v) ? v : 'unpaid';
@@ -28,10 +32,17 @@ export function normalizeTemplateCategory(value) {
 }
 
 export function activeRegistrations(db, activityId) {
+  const now = Date.now();
   return (db.get('activity_registrations') || []).filter(
     (r) =>
       String(r.activity_id) === String(activityId) &&
-      String(r.status || 'active') !== 'cancelled'
+      (
+        ['active', 'confirmed'].includes(String(r.status || 'active')) ||
+        (
+          String(r.status) === 'pending_payment' &&
+          (!r.hold_expires_at || new Date(r.hold_expires_at).getTime() > now)
+        )
+      )
   );
 }
 
@@ -56,14 +67,19 @@ export function findActivityBySlug(db, slug) {
   const needle = String(slug || '').trim();
   if (!needle) return null;
   return (db.get('activities') || []).find(
-    (a) => String(a.registration_slug || '') === needle
+    (a) =>
+      String(a.participant_registration_slug || '') === needle ||
+      String(a.registration_slug || '') === needle
   ) || null;
 }
 
 export function publicRegistrationPayload(activity, registrations) {
   const remaining = remainingCapacity(activity, registrations);
   const price = Number(activity.price) || 0;
-  const collectPay = !!activity.collect_registration_payment && price > 0;
+  const registrationMode = activity.registration_mode || (
+    activity.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
+  );
+  const collectPay = registrationMode === 'paid_per_participant' && price > 0;
   const theme = activity.registration_theme || activity.theme || {};
   return {
     id: activity.id,
@@ -81,7 +97,9 @@ export function publicRegistrationPayload(activity, registrations) {
     registered_count: registrations.length,
     remaining,
     registration_open: registrationIsOpen(activity) && (remaining == null || remaining > 0),
+    registration_mode: registrationMode,
     collect_payment: collectPay,
+    unit_price: collectPay ? price : 0,
     page_title: activity.registration_page_title || activity.name || '',
     page_body: activity.registration_page_body || activity.description || '',
     host_name: activity.host_name || activity.contact_name || '',
@@ -104,6 +122,9 @@ export function templateFieldsFromActivity(activity = {}) {
     all_day: !!activity.all_day,
     registration_enabled: !!activity.registration_enabled,
     collect_registration_payment: !!activity.collect_registration_payment,
+    registration_mode: activity.registration_mode || (
+      activity.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
+    ),
     registration_page_title: activity.registration_page_title || '',
     registration_page_body: activity.registration_page_body || '',
     theme:
@@ -137,6 +158,9 @@ export function normalizeTemplatePayload(body = {}) {
     all_day: !!body.all_day,
     registration_enabled: !!body.registration_enabled,
     collect_registration_payment: !!body.collect_registration_payment,
+    registration_mode: body.registration_mode === 'host_pays'
+      ? 'host_pays'
+      : 'paid_per_participant',
     registration_page_title: body.registration_page_title || '',
     registration_page_body: body.registration_page_body || '',
     theme,
@@ -170,6 +194,7 @@ export function activityDraftFromTemplate(template = {}, { date } = {}) {
     payment_status: 'unpaid',
     registration_enabled: !!fields.registration_enabled,
     collect_registration_payment: !!fields.collect_registration_payment,
+    registration_mode: fields.registration_mode,
     registration_page_title: fields.registration_page_title || fields.name,
     registration_page_body: fields.registration_page_body || fields.description,
     registration_theme: fields.theme || {},

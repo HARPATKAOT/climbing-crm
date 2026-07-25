@@ -17,6 +17,7 @@ import {
 } from './email.js';
 import {
   makeRegistrationSlug,
+  makePrivatePaymentToken,
   normalizeHostPaymentStatus,
   activeRegistrations,
   remainingCapacity,
@@ -32,6 +33,15 @@ import {
   activityDraftFromTemplate,
   TEMPLATE_CATEGORIES,
 } from './activityRegistration.js';
+import {
+  registerActivityGroup,
+  markRegistrationOrderPaid,
+  markHostedActivityPaid,
+} from './activityRegistrationOrderService.js';
+import {
+  resolveDeclarationTemplate,
+  saveCrmParticipants,
+} from './crmWaiverService.js';
 import {
   enrichPricelistItem,
   buildPassFromItem,
@@ -1500,13 +1510,16 @@ function normalizeActivityEndDate(date, endDate) {
 }
 
 function normalizeActivityPayload(body = {}) {
-  const type = ['birthday', 'trip', 'school', 'company', 'route_building', 'other'].includes(body.type)
+  const type = ['birthday', 'trip', 'school', 'company', 'route_building', 'opening_hours', 'other'].includes(body.type)
     ? body.type
     : (body.type || 'other');
   const hostName = body.host_name || body.contact_name || '';
   const hostPhone = body.host_phone || body.contact_phone || '';
   const hostParentId = body.host_parent_id || body.hostParentId || null;
   const date = body.date || null;
+  const registrationMode = body.registration_mode === 'host_pays'
+    ? 'host_pays'
+    : 'paid_per_participant';
   return {
     name: String(body.name || '').trim(),
     type,
@@ -1533,9 +1546,18 @@ function normalizeActivityPayload(body = {}) {
     host_parent_id: hostParentId || null,
     payment_status: normalizeHostPaymentStatus(body.payment_status),
     registration_slug: body.registration_slug || null,
+    participant_registration_slug:
+      body.participant_registration_slug || body.registration_slug || null,
     registration_enabled: !!body.registration_enabled,
     registration_closes_at: body.registration_closes_at || null,
-    collect_registration_payment: !!body.collect_registration_payment,
+    collect_registration_payment:
+      registrationMode === 'paid_per_participant' && Number(body.price || 0) > 0,
+    registration_mode: registrationMode,
+    host_payment_token: body.host_payment_token || null,
+    host_payment_id: body.host_payment_id || null,
+    host_paid_at: body.host_paid_at || null,
+    form_template_id: body.form_template_id || null,
+    form_template_slug: body.form_template_slug || 'wall',
     registration_page_title: body.registration_page_title || '',
     registration_page_body: body.registration_page_body || '',
     registration_theme:
@@ -1558,6 +1580,11 @@ function frontendPublicBase(req) {
 function buildActivityRegistrationUrl(req, slug) {
   if (!slug) return '';
   return `${frontendPublicBase(req)}/event/${encodeURIComponent(slug)}`;
+}
+
+function buildHostPaymentUrl(req, token) {
+  if (!token) return '';
+  return `${frontendPublicBase(req)}/event-host/${encodeURIComponent(token)}`;
 }
 
 function ensureActivityRegistrationSlug(activity) {
@@ -1654,6 +1681,13 @@ app.post('/api/activities', async (req, res) => {
   if (payload.end_date && payload.end_date < payload.date) {
     return res.status(400).json({ error: 'תאריך הסיום לפני תאריך ההתחלה' });
   }
+  if (payload.registration_enabled && !payload.participant_registration_slug) {
+    payload.participant_registration_slug = makeRegistrationSlug();
+    payload.registration_slug = payload.participant_registration_slug;
+  }
+  if (payload.registration_mode === 'host_pays' && !payload.host_payment_token) {
+    payload.host_payment_token = makePrivatePaymentToken();
+  }
   const record = db.insert('activities', payload);
   res.status(201).json(record);
   // Don't block the UI on Google — sync in the background
@@ -1676,6 +1710,17 @@ app.put('/api/activities/:id', async (req, res) => {
     payload.registration_slug = existing.registration_slug || makeRegistrationSlug();
   } else if (!payload.registration_slug && existing.registration_slug) {
     payload.registration_slug = existing.registration_slug;
+  }
+  payload.participant_registration_slug =
+    payload.participant_registration_slug ||
+    payload.registration_slug ||
+    existing.participant_registration_slug ||
+    null;
+  if (payload.participant_registration_slug && !payload.registration_slug) {
+    payload.registration_slug = payload.participant_registration_slug;
+  }
+  if (payload.registration_mode === 'host_pays' && !payload.host_payment_token) {
+    payload.host_payment_token = existing.host_payment_token || makePrivatePaymentToken();
   }
   const updated = db.update('activities', id, {
     ...payload,
@@ -1714,39 +1759,81 @@ app.get('/api/activities/unpaid-open', (req, res) => {
   res.json(rows);
 });
 
-app.get('/api/activities/:id/registrations', (req, res) => {
+app.get('/api/activities/:id/registrations', async (req, res) => {
   const activity = db.getOne('activities', req.params.id);
   if (!activity) return res.status(404).json({ error: 'Activity not found' });
+  if (supa.isEnabled()) {
+    const [remoteRegs, remoteOrders, remoteDeclarations] = await Promise.all([
+      supa.getAll('activity_registrations'),
+      supa.getAll('activity_registration_orders'),
+      supa.getAll('health_declarations'),
+    ]);
+    if (remoteRegs) db.set('activity_registrations', remoteRegs);
+    if (remoteOrders) db.set('activity_registration_orders', remoteOrders);
+    if (remoteDeclarations) db.set('health_declarations', remoteDeclarations);
+  }
   const regs = activeRegistrations(db, activity.id).sort((a, b) =>
     String(b.created_at || '').localeCompare(String(a.created_at || ''))
   );
+  const parents = db.get('parents') || [];
+  const declarations = db.get('health_declarations') || [];
+  const enriched = regs.map((registration) => ({
+    ...registration,
+    parent_name: parents.find((parent) => parent.id === registration.parent_id)?.name || '',
+    declaration_signed: declarations.some(
+      (declaration) =>
+        declaration.id === registration.health_declaration_id &&
+        declaration.signed &&
+        !!declaration.signature_url
+    ),
+  }));
   res.json({
     activity_id: activity.id,
     max_participants: activity.max_participants ?? null,
     remaining: remainingCapacity(activity, regs),
-    registrations: regs,
+    registrations: enriched,
   });
 });
 
-app.post('/api/activities/:id/registration-link', (req, res) => {
+app.post('/api/activities/:id/registration-link', async (req, res) => {
   const activity = db.getOne('activities', req.params.id);
   if (!activity) return res.status(404).json({ error: 'Activity not found' });
   const regenerate = !!(req.body || {}).regenerate;
   let updated = activity;
   if (regenerate || !activity.registration_slug) {
+    const participantSlug = makeRegistrationSlug();
     updated = db.update('activities', activity.id, {
-      registration_slug: makeRegistrationSlug(),
+      registration_slug: participantSlug,
+      participant_registration_slug: participantSlug,
       registration_enabled:
         req.body?.enable === false ? false : (activity.registration_enabled || true),
     }) || activity;
   } else if (req.body?.enable) {
-    updated = db.update('activities', activity.id, { registration_enabled: true }) || activity;
+    updated = db.update('activities', activity.id, {
+      registration_enabled: true,
+      participant_registration_slug:
+        activity.participant_registration_slug || activity.registration_slug,
+    }) || activity;
   }
-  const url = buildActivityRegistrationUrl(req, updated.registration_slug);
+  const participantSlug =
+    updated.participant_registration_slug || updated.registration_slug;
+  const url = buildActivityRegistrationUrl(req, participantSlug);
+  let hostPaymentToken = updated.host_payment_token;
+  if (updated.registration_mode === 'host_pays' && !hostPaymentToken) {
+    hostPaymentToken = makePrivatePaymentToken();
+    updated = db.update('activities', activity.id, {
+      host_payment_token: hostPaymentToken,
+    }) || updated;
+  }
+  const durableLink = await persistCore('activities', updated);
+  if (durableLink?.ok === false) {
+    return res.status(503).json({ error: durableLink.error || 'שמירת הקישור נכשלה' });
+  }
   res.json({
     success: true,
-    slug: updated.registration_slug,
+    slug: participantSlug,
     url,
+    hostPaymentUrl: buildHostPaymentUrl(req, hostPaymentToken),
     registration_enabled: !!updated.registration_enabled,
   });
 });
@@ -1802,7 +1889,20 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
       return res.status(400).json({ error: 'לא נוצר קישור הרשמה לאירוע' });
     }
 
-    const url = buildActivityRegistrationUrl(req, activity.registration_slug);
+    let url = buildActivityRegistrationUrl(
+      req,
+      activity.participant_registration_slug || activity.registration_slug
+    );
+    const sendHostPayment = activity.registration_mode === 'host_pays'
+      && req.body?.link_type !== 'participant';
+    if (sendHostPayment) {
+      if (!activity.host_payment_token) {
+        activity = db.update('activities', activity.id, {
+          host_payment_token: makePrivatePaymentToken(),
+        }) || activity;
+      }
+      url = buildHostPaymentUrl(req, activity.host_payment_token);
+    }
 
     let emailed = false;
     let emailStub = false;
@@ -1827,7 +1927,7 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
       } else {
         const msg =
           `שלום${hostName ? ` ${hostName}` : ''}!\n` +
-          `קישור להרשמה ותשלום עבור "${activity.name}":\n${url}`;
+          `${sendHostPayment ? 'קישור פרטי לתשלום' : 'קישור להרשמת משתתפים'} עבור "${activity.name}":\n${url}`;
         const waResult = await whatsappService.sendTextMessage(hostPhone, msg, false, {
           clip: false,
           parentId: parent.id,
@@ -1973,11 +2073,96 @@ app.post('/api/activity-templates/:id/create-activity', async (req, res) => {
 });
 
 // ─── Public activity registration ────────────────────────────────────────────
+app.get('/api/public/host-payments/:token', publicFormRateLimit, (req, res) => {
+  const activity = (db.get('activities') || []).find(
+    (item) => item.host_payment_token === req.params.token
+  );
+  if (!activity || activity.registration_mode !== 'host_pays') {
+    return res.status(404).json({ error: 'קישור התשלום לא נמצא' });
+  }
+  res.json({
+    id: activity.id,
+    name: activity.name,
+    date: activity.date,
+    start_time: activity.start_time,
+    location: activity.location || '',
+    host_name: activity.host_name || activity.contact_name || '',
+    price: Number(activity.price) || 0,
+    payment_status: activity.payment_status || 'unpaid',
+  });
+});
+
+app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req, res) => {
+  try {
+    const activity = (db.get('activities') || []).find(
+      (item) => item.host_payment_token === req.params.token
+    );
+    if (!activity || activity.registration_mode !== 'host_pays') {
+      return res.status(404).json({ error: 'קישור התשלום לא נמצא' });
+    }
+    if (activity.payment_status === 'paid') {
+      return res.json({ success: true, alreadyPaid: true });
+    }
+    const parent = db.getOne('parents', activity.host_parent_id);
+    if (!parent) return res.status(400).json({ error: 'המזמין אינו מקושר ללקוח במערכת' });
+
+    let payment = activity.host_payment_id
+      ? db.getOne('payments', activity.host_payment_id)
+      : null;
+    if (!payment || payment.status === 'failed') {
+      payment = db.insert('payments', {
+        parent_id: parent.id,
+        student_id: null,
+        activity_id: activity.id,
+        activity_host_payment: true,
+        amount: Number(activity.price) || 0,
+        description: `תשלום מזמין: ${activity.name}`,
+        status: 'pending',
+        payment_url: null,
+        paid_at: null,
+        updated_at: new Date().toISOString(),
+      });
+    }
+    const paymentUrl = payment.payment_url || await icount.buildPaymentUrl({
+      amount: payment.amount,
+      description: payment.description,
+      name: parent.name,
+      phone: normalizePhone(parent.phone),
+      email: parent.email,
+      paymentId: payment.id,
+      ipnUrl: icount.buildIpnUrl({ paymentId: payment.id }),
+      successUrl: `${frontendPublicBase(req)}/event-host/${encodeURIComponent(req.params.token)}?paid=1`,
+    });
+    payment = db.update('payments', payment.id, {
+      payment_url: paymentUrl,
+      updated_at: new Date().toISOString(),
+    }) || payment;
+    const paymentPersisted = await persistCore('payments', payment);
+    if (paymentPersisted?.ok === false) throw new Error(paymentPersisted.error);
+    const updatedActivity = db.update('activities', activity.id, {
+      host_payment_id: payment.id,
+    }) || activity;
+    const activityPersisted = await persistCore('activities', updatedActivity);
+    if (activityPersisted?.ok === false) throw new Error(activityPersisted.error);
+    res.json({ success: true, paymentUrl });
+  } catch (err) {
+    console.error('host activity payment error:', err.message);
+    res.status(503).json({ error: err.message || 'יצירת התשלום נכשלה' });
+  }
+});
+
 app.get('/api/public/activities/:slug', publicFormRateLimit, (req, res) => {
   const activity = findActivityBySlug(db, req.params.slug);
   if (!activity) return res.status(404).json({ error: 'הפעילות לא נמצאה' });
   const regs = activeRegistrations(db, activity.id);
-  res.json(publicRegistrationPayload(activity, regs));
+  const template = resolveDeclarationTemplate(db, {
+    templateId: activity.form_template_id,
+    templateSlug: activity.form_template_slug || 'wall',
+  });
+  res.json({
+    ...publicRegistrationPayload(activity, regs),
+    form_template: template,
+  });
 });
 
 app.post('/api/public/activities/:slug/register', publicFormRateLimit, async (req, res) => {
@@ -1987,109 +2172,69 @@ app.post('/api/public/activities/:slug/register', publicFormRateLimit, async (re
     if (!registrationIsOpen(activity)) {
       return res.status(400).json({ error: 'ההרשמה לפעילות זו סגורה' });
     }
-
-    const participant_name = String(req.body?.participant_name || req.body?.name || '').trim();
-    const phone = String(req.body?.phone || '').trim();
-    const email = String(req.body?.email || '').trim();
-    const notes = String(req.body?.notes || '').trim();
-    if (!participant_name) return res.status(400).json({ error: 'חסר שם משתתף' });
-    if (!phone && !email) return res.status(400).json({ error: 'חסר טלפון או אימייל' });
-
-    const regs = activeRegistrations(db, activity.id);
-    const remaining = remainingCapacity(activity, regs);
-    if (remaining != null && remaining <= 0) {
-      return res.status(400).json({ error: 'אין מקומות פנויים בפעילות' });
+    if (supa.isEnabled()) {
+      const [remoteOrders, remoteRegs] = await Promise.all([
+        supa.getAll('activity_registration_orders'),
+        supa.getAll('activity_registrations'),
+      ]);
+      if (remoteOrders) db.set('activity_registration_orders', remoteOrders);
+      if (remoteRegs) db.set('activity_registrations', remoteRegs);
     }
-
-    const price = Number(activity.price) || 0;
-    const collectPay = !!activity.collect_registration_payment && price > 0;
-    const registration = db.insert('activity_registrations', {
-      activity_id: activity.id,
-      student_id: null,
-      parent_id: null,
-      participant_name,
-      phone,
-      email,
-      notes,
-      status: 'active',
-      payment_status: collectPay ? 'pending' : 'n/a',
-      amount: collectPay ? price : 0,
-      paid_at: null,
-      payment_id: null,
-      updated_at: new Date().toISOString(),
-    });
-
-    let paymentUrl = null;
-    let payment = null;
-    if (collectPay) {
-      payment = db.insert('payments', {
-        parent_id: null,
-        student_id: null,
-        amount: price,
-        description: `הרשמה: ${activity.name} — ${participant_name}`,
-        status: 'pending',
-        payment_url: null,
-        activity_id: activity.id,
-        activity_registration_id: registration.id,
-        icount_client_id: null,
-        icount_doc_id: null,
-        icount_doc_number: null,
-        icount_doctype: null,
-        paid_at: null,
-        updated_at: new Date().toISOString(),
-      });
-      const ipnUrl = icount.buildIpnUrl({ paymentId: payment.id });
-      const successUrl = `${frontendPublicBase(req)}/event/${encodeURIComponent(activity.registration_slug)}?paid=1`;
-      paymentUrl = await icount.buildPaymentUrl({
-        amount: price,
+    const participantSlug =
+      activity.participant_registration_slug || activity.registration_slug;
+    const result = await registerActivityGroup({
+      db,
+      persist: persistCore,
+      activity,
+      payload: req.body || {},
+      createPaymentUrl: ({ payment, parent, amount }) => icount.buildPaymentUrl({
+        amount,
         description: `הרשמה — ${activity.name}`,
-        name: participant_name,
-        phone: normalizePhone(phone),
-        email,
+        name: parent.name,
+        phone: normalizePhone(parent.phone),
+        email: parent.email,
         paymentId: payment.id,
-        ipnUrl,
-        successUrl,
-      });
-      payment = db.update('payments', payment.id, {
-        payment_url: paymentUrl,
-        updated_at: new Date().toISOString(),
-      }) || payment;
-      db.update('activity_registrations', registration.id, {
-        payment_id: payment.id,
-        updated_at: new Date().toISOString(),
-      });
-    }
-
+        ipnUrl: icount.buildIpnUrl({ paymentId: payment.id }),
+        successUrl: `${frontendPublicBase(req)}/event/${encodeURIComponent(participantSlug)}?paid=1`,
+      }),
+      onStudentCreated: (student, parent) => automationsService.triggerEvent('new_lead', {
+        ...student,
+        phone: parent.phone,
+        parentName: parent.name,
+      }),
+      onStudentStatusChanged: (student) => automationsService.triggerEvent('status_changed', {
+        ...student,
+        new_status: 'health_signed',
+      }),
+    });
+    const parent = result.crm?.parent || db.getOne('parents', result.order.parent_id);
     let emailResult = { sent: false };
-    if (email) {
+    if (parent?.email && !result.duplicate) {
       emailResult = await sendActivityRegistrationConfirmation({
-        to: email,
-        participantName: participant_name,
+        to: parent.email,
+        participantName: parent.name,
         activityName: activity.name,
         date: activity.date,
         startTime: activity.start_time,
         location: activity.location,
-        paymentUrl,
+        paymentUrl: result.paymentUrl,
       });
     }
-
     const updatedRegs = activeRegistrations(db, activity.id);
     res.status(201).json({
       success: true,
-      registration: {
-        id: registration.id,
-        participant_name,
-        payment_status: collectPay ? 'pending' : 'n/a',
-      },
-      paymentUrl,
+      duplicate: result.duplicate,
+      order: result.order,
+      registrations: result.registrations,
+      declarations: result.crm?.declarations || [],
+      paymentUrl: result.paymentUrl,
       emailSent: !!emailResult.sent,
       emailStub: !!emailResult.stub,
-      remaining: remainingCapacity(activity, updatedRegs),
       activity: publicRegistrationPayload(activity, updatedRegs),
     });
   } catch (err) {
     console.error('public activity register error:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -2917,6 +3062,7 @@ app.post('/api/icount/webhook', async (req, res) => {
         paid_at: payment.paid_at || new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
+      if (updated) await persistCore('payments', updated);
 
       // Fulfill POS sale passes / inventory when payment-link completes
       if (payment.pos_sale_id) {
@@ -2959,6 +3105,23 @@ app.post('/api/icount/webhook', async (req, res) => {
             updated_at: new Date().toISOString(),
           });
         }
+      }
+      if (payment.activity_registration_order_id) {
+        await markRegistrationOrderPaid({
+          db,
+          persist: persistCore,
+          orderId: payment.activity_registration_order_id,
+          paidAt: updated?.paid_at,
+        });
+      }
+      if (payment.activity_host_payment && payment.activity_id) {
+        await markHostedActivityPaid({
+          db,
+          persist: persistCore,
+          activityId: payment.activity_id,
+          paymentId: payment.id,
+          paidAt: updated?.paid_at,
+        });
       }
 
       return res.json({
@@ -3154,6 +3317,139 @@ app.put('/api/employees/:id', (req, res) => {
   const updated = db.update('employees', id, req.body);
   if (!updated) return res.status(404).json({ error: 'Employee not found' });
   res.json(updated);
+});
+
+const EMPLOYEE_DOC_TYPES = {
+  contract: 'חוזה העסקה',
+  police: 'אישור משטרה',
+  certificates: 'תעודות רלוונטיות',
+  idPhoto: 'צילום תעודת זהות',
+  form101: 'טופס 101',
+};
+
+const EMPLOYEE_DOC_FLAG = {
+  contract: 'contractSigned',
+  police: 'policeClearance',
+  certificates: 'hasCertificates',
+  idPhoto: 'hasIdPhoto',
+  form101: 'hasForm101',
+};
+
+function extFromMime(mimeType = '', fileName = '') {
+  const fromName = String(fileName).split('.').pop();
+  if (fromName && fromName.length <= 5 && fromName !== fileName) return fromName.toLowerCase();
+  if (mimeType.includes('pdf')) return 'pdf';
+  if (mimeType.includes('png')) return 'png';
+  if (mimeType.includes('webp')) return 'webp';
+  if (mimeType.includes('gif')) return 'gif';
+  if (mimeType.includes('jpeg') || mimeType.includes('jpg')) return 'jpg';
+  if (mimeType.includes('wordprocessingml')) return 'docx';
+  if (mimeType.includes('msword')) return 'doc';
+  return 'bin';
+}
+
+app.post('/api/employees/:id/documents', async (req, res) => {
+  const emp = (db.get('employees') || []).find((e) => e.id === req.params.id);
+  if (!emp) return res.status(404).json({ error: 'העובד לא נמצא' });
+
+  const { docType, fileBase64, fileName, mimeType } = req.body || {};
+  if (!EMPLOYEE_DOC_TYPES[docType]) {
+    return res.status(400).json({ error: 'סוג מסמך לא תקין' });
+  }
+  if (!fileBase64 || typeof fileBase64 !== 'string') {
+    return res.status(400).json({ error: 'חסר קובץ' });
+  }
+
+  const raw = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
+  let buffer;
+  try {
+    buffer = Buffer.from(raw, 'base64');
+  } catch {
+    return res.status(400).json({ error: 'קובץ לא תקין' });
+  }
+  if (!buffer.length || buffer.length > 10 * 1024 * 1024) {
+    return res.status(400).json({ error: 'גודל הקובץ לא תקין' });
+  }
+
+  const safeMime = String(mimeType || 'application/pdf').slice(0, 120);
+  const safeName = String(fileName || `${docType}.${extFromMime(safeMime, fileName)}`)
+    .replace(/[^\w\u0590-\u05ff.\-]+/g, '_')
+    .slice(0, 120);
+  const ext = extFromMime(safeMime, safeName);
+  const storagePath = `${emp.id}/${docType}_${Date.now()}.${ext}`;
+
+  const prev = emp.documents?.[docType];
+  if (prev?.storagePath) {
+    await supa.removeEmployeeDocument(prev.storagePath);
+  }
+
+  const uploaded = await supa.uploadEmployeeDocument(storagePath, buffer, safeMime);
+  if (!uploaded.ok) {
+    return res.status(500).json({ error: uploaded.error || 'שמירת הקובץ נכשלה' });
+  }
+
+  const docMeta = {
+    fileName: safeName,
+    storagePath,
+    mimeType: safeMime,
+    uploadedAt: new Date().toISOString(),
+  };
+  const documents = { ...(emp.documents || {}), [docType]: docMeta };
+  const flag = EMPLOYEE_DOC_FLAG[docType];
+  const updated = db.update('employees', emp.id, {
+    documents,
+    ...(flag ? { [flag]: true } : {}),
+  });
+  await persistCore('employees', updated);
+  res.json({ success: true, document: docMeta, employee: updated });
+});
+
+app.delete('/api/employees/:id/documents/:docType', async (req, res) => {
+  const emp = (db.get('employees') || []).find((e) => e.id === req.params.id);
+  if (!emp) return res.status(404).json({ error: 'העובד לא נמצא' });
+
+  const { docType } = req.params;
+  if (!EMPLOYEE_DOC_TYPES[docType]) {
+    return res.status(400).json({ error: 'סוג מסמך לא תקין' });
+  }
+
+  const prev = emp.documents?.[docType];
+  if (prev?.storagePath) {
+    await supa.removeEmployeeDocument(prev.storagePath);
+  }
+
+  const documents = { ...(emp.documents || {}) };
+  delete documents[docType];
+  const flag = EMPLOYEE_DOC_FLAG[docType];
+  const updated = db.update('employees', emp.id, {
+    documents,
+    ...(flag ? { [flag]: false } : {}),
+  });
+  await persistCore('employees', updated);
+  res.json({ success: true, employee: updated });
+});
+
+app.get('/api/employees/:id/documents/:docType/download', async (req, res) => {
+  const emp = (db.get('employees') || []).find((e) => e.id === req.params.id);
+  if (!emp) return res.status(404).json({ error: 'העובד לא נמצא' });
+
+  const { docType } = req.params;
+  const doc = emp.documents?.[docType];
+  if (!doc?.storagePath) return res.status(404).json({ error: 'מסמך לא נמצא' });
+
+  const downloaded = await supa.downloadEmployeeDocument(doc.storagePath);
+  if (!downloaded.ok || !downloaded.blob) {
+    return res.status(500).json({ error: downloaded.error || 'הורדה נכשלה' });
+  }
+
+  const arrayBuffer = await downloaded.blob.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  res.setHeader('Content-Type', doc.mimeType || 'application/pdf');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename*=UTF-8''${encodeURIComponent(doc.fileName || `${docType}.bin`)}`
+  );
+  res.send(buffer);
 });
 
 // Wage agreements management
@@ -4775,118 +5071,71 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     }
   }
 
-  let parent = db.upsertParentByPhone(parentName, phone, email, {
-    city,
-    idNumber: parentIdNum,
-    source: parentBody.source || 'form',
-  });
-  parent = db.update('parents', parent.id, {
-    name: parentName,
-    email: email || parent.email || '',
-    city: city || parent.city || '',
-    idNumber: parentIdNum || parent.idNumber || '',
-  }) || parent;
+  let crmResult;
+  try {
+    crmResult = await saveCrmParticipants({
+      db,
+      persist: persistCore,
+      parent: {
+        ...parentBody,
+        name: parentName,
+        phone,
+        email,
+        city,
+        idNumber: parentIdNum,
+      },
+      participants: childList.map((child) => ({ ...child, type: 'child' })),
+      template: template || resolveDeclarationTemplate(db, { templateId, templateSlug }),
+      source: parentBody.source || 'form',
+      onStudentCreated: (student, savedParent) => automationsService.triggerEvent('new_lead', {
+        ...student,
+        phone: savedParent.phone,
+        parentName: savedParent.name,
+      }),
+      onStudentStatusChanged: (student) => automationsService.triggerEvent('status_changed', {
+        ...student,
+        new_status: 'health_signed',
+      }),
+    });
+  } catch (err) {
+    return res.status(err.status || 503).json({ error: err.message });
+  }
+  const parent = crmResult.parent;
+  const declarations = crmResult.declarations;
+  const savedStudents = crmResult.participants.map((participant) => participant.student);
 
-  const signedAt = new Date().toISOString();
-  const today = signedAt.split('T')[0];
-  const declarations = [];
-  const savedStudents = [];
-
-  const segmentFromInterest = (text) => {
-    if (/בוגר|מבוגר|adult/i.test(text)) return 'adults';
-    if (/נוער|youth/i.test(text)) return 'youth';
-    if (/ילד|kids|ילדים/i.test(text)) return 'kids';
-    if (/הולדת|birthday/i.test(text)) return 'birthday';
-    return null;
-  };
-
-  for (const child of childList) {
-    let student = null;
-    if (child.id) {
-      student = (db.get('students') || []).find(
-        (s) => s.id === child.id && s.parentId === parent.id
-      );
-    }
-    if (!student) {
-      student = (db.get('students') || []).find(
-        (s) => s.parentId === parent.id && s.name === child.name
-      );
-    }
-
+  for (let index = 0; index < savedStudents.length; index += 1) {
+    const student = savedStudents[index];
+    const child = childList[index];
     const noteParts = [];
     if (interestText) noteParts.push(`עניין: ${interestText}`);
     if (child.childPhone) noteParts.push(`טלפון ילד/ה: ${child.childPhone}`);
     if (child.registrationNotes) noteParts.push(child.registrationNotes);
     const mergedNotes = noteParts.join('\n');
-
-    const prevStatus = student?.status;
     const interests = interestText
-      ? Array.from(new Set([...(Array.isArray(student?.interests) ? student.interests : []), interestText]))
-      : (Array.isArray(student?.interests) ? student.interests : []);
-    const studentPatch = {
-      name: child.name,
-      parentId: parent.id,
-      birthDate: child.birthDate || student?.birthDate || '',
-      gender: child.gender || student?.gender || '',
-      idNumber: child.idNumber || student?.idNumber || '',
+      ? Array.from(new Set([...(Array.isArray(student.interests) ? student.interests : []), interestText]))
+      : (Array.isArray(student.interests) ? student.interests : []);
+    const segment = student.segment || (
+      /בוגר|מבוגר|adult/i.test(interestText) ? 'adults'
+        : /נוער|youth/i.test(interestText) ? 'youth'
+          : /ילד|kids|ילדים/i.test(interestText) ? 'kids'
+            : /הולדת|birthday/i.test(interestText) ? 'birthday'
+              : null
+    );
+    const updatedStudent = db.update('students', student.id, {
       interests,
-      segment: student?.segment || segmentFromInterest(interestText),
+      segment,
       notes: mergedNotes
-        ? (student?.notes && !String(student.notes).includes(mergedNotes)
+        ? (student.notes && !String(student.notes).includes(mergedNotes)
             ? `${student.notes}\n${mergedNotes}`
-            : (mergedNotes || student?.notes || ''))
-        : (student?.notes || ''),
-      status: prevStatus === 'registered' ? prevStatus : 'health_signed',
-      healthSignedAt: signedAt,
-      waiverSignedAt: signedAt,
-    };
-
-    if (student) {
-      student = db.update('students', student.id, studentPatch) || student;
-      if (prevStatus !== 'registered' && prevStatus !== 'health_signed') {
-        automationsService.triggerEvent('status_changed', {
-          ...student,
-          new_status: 'health_signed',
-        });
-      }
-    } else {
-      student = db.insert('students', {
-        ...studentPatch,
-        groupId: null,
-        source: 'form',
-        created: today,
-      });
-      automationsService.triggerEvent('new_lead', {
-        ...student,
-        phone,
-        parentName,
-      });
+            : mergedNotes)
+        : (student.notes || ''),
+    }) || student;
+    savedStudents[index] = updatedStudent;
+    const durableStudent = await persistCore('students', updatedStudent);
+    if (durableStudent?.ok === false) {
+      return res.status(503).json({ error: durableStudent.error || 'שמירת המתאמן נכשלה' });
     }
-    savedStudents.push(student);
-
-    const record = db.insert('health_declarations', {
-      date: today,
-      studentId: student.id,
-      parentId: parent.id,
-      parentName,
-      parentIdNum,
-      phone,
-      climberName: child.name,
-      climberIdNum: child.idNumber,
-      birthDate: child.birthDate || '',
-      answers: child.answers || {},
-      waiverAccepted: true,
-      signature_url: child.signature || '',
-      status: 'approved',
-      notes: '',
-      templateSlug: template?.slug || templateSlug || 'wall',
-      templateId: template?.id || templateId || null,
-      signed: true,
-      signedDate: today,
-      signedBy: parentName,
-      studentName: child.name,
-    });
-    declarations.push(record);
   }
 
   // Mailing lists — force classes subscribed
@@ -4901,20 +5150,8 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   }
   const savedLists = db.updateParentBroadcastLists(parent.id, nextSubs);
 
-  const durableOps = [
-    persistCore('parents', parent),
-    ...savedStudents.map((s) => persistCore('students', s)),
-    ...declarations.map((d) => persistCore('health_declarations', d)),
-  ];
-  const durable = await Promise.all(durableOps);
-  const failed = durable.find((r) => r && r.ok === false);
-  if (failed) {
-    console.error('onboard durable write failed:', failed.error);
-  }
-
   res.status(201).json({
     success: true,
-    warning: failed ? 'נשמר מקומית אך ייתכן שלא סונכרן למסד' : undefined,
     parent,
     students: savedStudents,
     declarations,

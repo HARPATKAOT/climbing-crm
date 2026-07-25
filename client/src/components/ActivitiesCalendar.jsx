@@ -12,6 +12,7 @@ export const ACTIVITY_TYPES = [
   { id: 'school', label: 'בית ספר', color: '#34D399', bg: 'rgba(52,211,153,0.18)' },
   { id: 'company', label: 'חברה', color: '#FBBF24', bg: 'rgba(251,191,36,0.18)' },
   { id: 'route_building', label: 'בניית מסלולים', color: '#A78BFA', bg: 'rgba(167,139,250,0.18)' },
+  { id: 'opening_hours', label: 'שעות פתיחה', color: '#22D3EE', bg: 'rgba(34,211,238,0.16)' },
   { id: 'other', label: 'אחר', color: '#94A3B8', bg: 'rgba(148,163,184,0.16)' },
 ];
 
@@ -178,6 +179,20 @@ function eachDateInclusive(startStr, endStr) {
   return out;
 }
 
+/** True when activity spans more than one calendar day (inclusive end_date). */
+function isMultiDayEvent(ev) {
+  if (!ev) return false;
+  const start = String(ev.date || '').slice(0, 10);
+  const end = String(ev.end_date || '').slice(0, 10);
+  return !!(start && end && end > start);
+}
+
+/** Column / filter date for an expanded occurrence (week grid). */
+function eventOccurrenceDate(ev) {
+  if (!ev) return '';
+  return String(ev.occurrenceDate || ev.date || '').slice(0, 10);
+}
+
 function shiftEndDatePreservingSpan(oldDate, oldEndDate, newDate) {
   const start = String(oldDate || '').slice(0, 10);
   const end = String(oldEndDate || '').slice(0, 10);
@@ -220,6 +235,7 @@ function emptyForm(dateStr = '', opts = {}) {
     payment_status: 'unpaid',
     registration_enabled: false,
     collect_registration_payment: false,
+    registration_mode: 'paid_per_participant',
     registration_slug: '',
     registration_page_title: '',
     registration_page_body: '',
@@ -231,30 +247,6 @@ function emptyForm(dateStr = '', opts = {}) {
     notes: '',
     status: 'open',
   };
-}
-
-function TypeBadge({ type }) {
-  const meta = TYPE_MAP[type] || TYPE_MAP.other;
-  return (
-    <span style={{
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 4,
-      padding: '2px 8px',
-      borderRadius: 999,
-      fontSize: 11,
-      fontWeight: 700,
-      background: meta.bg,
-      color: meta.color,
-      border: `1px solid ${meta.color}44`,
-      whiteSpace: 'nowrap',
-    }}>
-      <span style={{
-        width: 7, height: 7, borderRadius: '50%', background: meta.color, flexShrink: 0,
-      }} />
-      {meta.label}
-    </span>
-  );
 }
 
 function WorkAssignmentsBlock({ activityId }) {
@@ -555,6 +547,9 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
     payment_status: initial?.payment_status || 'unpaid',
     registration_enabled: !!initial?.registration_enabled,
     collect_registration_payment: !!initial?.collect_registration_payment,
+    registration_mode: initial?.registration_mode || (
+      initial?.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
+    ),
   }));
   const [localError, setLocalError] = useState('');
   const isEdit = !!initial?.id;
@@ -951,6 +946,8 @@ function EventChip({ activity, onClick, draggable = true }) {
       style={{
         display: 'block',
         width: '100%',
+        maxWidth: '100%',
+        boxSizing: 'border-box',
         textAlign: 'right',
         border: 'none',
         borderRadius: 6,
@@ -1006,20 +1003,21 @@ function OverlayChip({ event, onClick, draggable = true }) {
       style={{
         display: 'block',
         width: '100%',
+        maxWidth: '100%',
+        boxSizing: 'border-box',
         textAlign: 'right',
         borderRadius: 6,
         padding: '2px 6px',
         marginBottom: 3,
-        background: 'transparent',
+        background: `${color}22`,
         color,
-        border: `1px dashed ${color}99`,
+        border: `1px solid ${color}66`,
         fontSize: 10,
         fontWeight: 600,
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
         lineHeight: 1.3,
-        opacity: 0.9,
         cursor: editable ? 'grab' : 'pointer',
       }}
     >
@@ -1044,6 +1042,9 @@ function WeekTimedEvent({
   const color = isOverlay ? (event.color || '#94A3B8') : meta.color;
   const bg = isOverlay ? `${color}22` : meta.bg;
   const editable = canEditEvent(event);
+  // Multi-day: edit via form only — drag/resize of one day would be ambiguous.
+  const multiDayLocked = isMultiDayEvent(event);
+  const canDrag = editable && !multiDayLocked;
   const startLabel = draft
     ? minutesToTime(draft.startMin)
     : (event.all_day ? '' : String(event.start_time || '').slice(0, 5));
@@ -1062,11 +1063,15 @@ function WeekTimedEvent({
     1,
     Math.min(4, Math.floor((blockHeight - 8 - timeRowHeight) / nameLineHeight))
   );
+  const titleBase = `${name}${startLabel ? ` · ${startLabel}–${endLabel}` : ''}`;
+  const title = multiDayLocked
+    ? `${titleBase} — אירוע רב־יומי — יש לערוך דרך הטופס`
+    : titleBase;
 
   return (
     <div
       onPointerDown={(e) => {
-        if (!editable) return;
+        if (!canDrag) return;
         if (e.button !== 0) return;
         e.stopPropagation();
         onPointerDownMove(e, event);
@@ -1080,7 +1085,7 @@ function WeekTimedEvent({
         }
         onOpen(event);
       }}
-      title={`${name}${startLabel ? ` · ${startLabel}–${endLabel}` : ''}`}
+      title={title}
       style={{
         position: 'absolute',
         insetInlineStart: `calc(${(col * 100) / colCount}% + 2px)`,
@@ -1089,13 +1094,13 @@ function WeekTimedEvent({
         height: Math.max(18, height),
         borderRadius: 7,
         background: bg,
-        border: isOverlay ? `1px dashed ${color}` : `1px solid ${color}66`,
+        border: `1px solid ${color}66`,
         color,
         fontSize: nameFontSize,
         fontWeight: 700,
         padding: narrow ? '3px 4px' : '3px 6px',
         overflow: 'hidden',
-        cursor: editable ? 'grab' : 'pointer',
+        cursor: canDrag ? 'grab' : 'pointer',
         zIndex: draft ? 5 : 2,
         boxShadow: draft ? '0 6px 18px rgba(0,0,0,0.35)' : 'none',
         userSelect: 'none',
@@ -1105,7 +1110,7 @@ function WeekTimedEvent({
         gap: 1,
       }}
     >
-      {editable && (
+      {canDrag && (
         <div
           onPointerDown={(e) => {
             e.stopPropagation();
@@ -1153,7 +1158,7 @@ function WeekTimedEvent({
           {startLabel ? `${startLabel} ` : ''}{name}
         </span>
       )}
-      {editable && (
+      {canDrag && (
         <div
           onPointerDown={(e) => {
             e.stopPropagation();
@@ -1236,23 +1241,26 @@ function WeekTimeGrid({
 
   const beginDrag = (e, event, mode) => {
     if (!canEditEvent(event)) return;
+    // Safer MVP: do not move/resize multi-day occurrences from the week grid.
+    if (isMultiDayEvent(event)) return;
     e.preventDefault();
     const startMin = eventStartMinutes(event);
     const endMin = eventEndMinutes(event);
     const duration = Math.max(SNAP_MIN, endMin - startMin);
-    const pointerMin = yToMinutes(e.clientY, event.date);
+    const colDate = eventOccurrenceDate(event) || event.date;
+    const pointerMin = yToMinutes(e.clientY, colDate);
     const offset = pointerMin - startMin;
     const next = {
       id: event.id,
       kind: event.overlay ? 'overlay' : 'activity',
       mode,
-      date: event.date,
+      date: colDate,
       startMin,
       endMin,
       duration,
       offset,
       origin: {
-        date: event.date,
+        date: colDate,
         start_time: event.start_time ? String(event.start_time).slice(0, 5) : minutesToTime(startMin),
         end_time: event.end_time ? String(event.end_time).slice(0, 5) : minutesToTime(endMin),
         all_day: !!event.all_day,
@@ -1329,6 +1337,9 @@ function WeekTimeGrid({
       border: '1px solid var(--border)',
       borderRadius: 14,
       overflow: 'hidden',
+      width: '100%',
+      maxWidth: '100%',
+      minWidth: 0,
     }}>
       <div style={{
         display: 'grid',
@@ -1346,16 +1357,35 @@ function WeekTimeGrid({
               padding: '10px 4px', textAlign: 'center',
               border: 'none',
               borderInlineStart: '1px solid var(--border)',
-              background: day.isToday ? 'rgba(56,189,248,0.08)' : 'transparent',
+              background: day.isToday ? 'rgba(56,189,248,0.14)' : 'transparent',
+              boxShadow: day.isToday ? 'inset 0 -3px 0 #38BDF8' : 'none',
               cursor: 'pointer',
             }}
           >
-            <div style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700 }}>
+            <div style={{
+              fontSize: 11,
+              color: day.isToday ? '#7DD3FC' : 'var(--text-3)',
+              fontWeight: 700,
+            }}>
               {HEB_DAYS[day.date.getDay()]}
             </div>
             <div style={{
-              fontSize: 16, fontWeight: 800,
-              color: day.isToday ? '#7DD3FC' : 'var(--text-1)',
+              width: day.isToday ? 30 : 'auto',
+              height: day.isToday ? 30 : 'auto',
+              margin: '4px auto 0',
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 16,
+              fontWeight: 800,
+              background: day.isToday
+                ? 'linear-gradient(135deg, #38BDF8 0%, #0EA5E9 100%)'
+                : 'transparent',
+              color: day.isToday ? '#0B1220' : 'var(--text-1)',
+              boxShadow: day.isToday
+                ? '0 0 0 3px rgba(56,189,248,0.22)'
+                : 'none',
             }}>
               {day.date.getDate()}
             </div>
@@ -1448,7 +1478,10 @@ function WeekTimeGrid({
                 borderInlineStart: '1px solid var(--border)',
                 background: hot
                   ? 'rgba(56,189,248,0.08)'
-                  : (day.isToday ? 'rgba(56,189,248,0.03)' : 'transparent'),
+                  : (day.isToday ? 'rgba(56,189,248,0.08)' : 'transparent'),
+                boxShadow: day.isToday && !hot
+                  ? 'inset 0 0 0 1px rgba(56,189,248,0.35)'
+                  : 'none',
               }}
             >
               {hours.map((m) => (
@@ -1499,14 +1532,14 @@ function WeekTimeGrid({
                 const isDraft = drag && drag.id === ev.id;
                 const startMin = isDraft ? drag.startMin : eventStartMinutes(ev);
                 const endMin = isDraft ? drag.endMin : eventEndMinutes(ev);
-                const date = isDraft ? drag.date : ev.date;
+                const date = isDraft ? drag.date : eventOccurrenceDate(ev);
                 if (date !== day.dateStr) return null;
                 const top = (startMin - WEEK_START_MIN) * PX_PER_MIN;
                 const height = Math.max(18, (endMin - startMin) * PX_PER_MIN);
                 const slot = isDraft ? null : layout.get(ev.id);
                 return (
                   <WeekTimedEvent
-                    key={ev.id}
+                    key={`${ev.id}-${date}`}
                     event={ev}
                     top={top}
                     height={height}
@@ -1562,59 +1595,72 @@ function OverlaySidebar({
 
   return (
     <aside style={{
-      width: 260,
-      flexShrink: 0,
+      width: '100%',
+      maxWidth: '100%',
+      minWidth: 0,
       background: 'var(--bg-card)',
       border: '1px solid var(--border)',
       borderRadius: 14,
-      display: 'flex',
-      flexDirection: 'column',
-      maxHeight: 'min(72vh, 820px)',
       overflow: 'hidden',
     }}>
       <div style={{
-        padding: '12px 14px',
-        borderBottom: '1px solid var(--border)',
+        padding: '10px 14px 8px',
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'baseline',
+        gap: 8,
       }}>
         <div style={{
-          display: 'flex', alignItems: 'center', gap: 8,
+          display: 'inline-flex', alignItems: 'center', gap: 8,
           fontSize: 13, fontWeight: 800, color: 'var(--text-1)',
         }}>
           <Layers size={15} />
           יומנים להצגה
         </div>
-        <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4, lineHeight: 1.35 }}>
+        <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.35 }}>
           סמן כדי לראות בלוח. אפשר לערוך יומנים עם הרשאת כתיבה.
         </div>
       </div>
 
-      <div style={{ padding: 10, overflowY: 'auto', flex: 1 }}>
+      <div style={{ padding: '0 12px 12px' }}>
         {loading ? (
-          <div style={{ textAlign: 'center', color: 'var(--text-3)', padding: 20, fontSize: 12 }}>
+          <div style={{ textAlign: 'center', color: 'var(--text-3)', padding: 12, fontSize: 12 }}>
             <Loader2 size={16} className="spin" style={{ display: 'inline' }} /> טוען...
           </div>
         ) : (calendars || []).length === 0 ? (
-          <div style={{ color: 'var(--text-3)', fontSize: 12, textAlign: 'center', padding: 16 }}>
+          <div style={{ color: 'var(--text-3)', fontSize: 12, textAlign: 'center', padding: 8 }}>
             אין יומנים להצגה
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 8,
+            alignItems: 'stretch',
+          }}>
             {calendars.map((cal) => {
               const isWall = cal.id === wallCalendarId || cal.isWallCalendar;
               const checked = isWall || selected.has(cal.id);
+              const color = cal.backgroundColor || '#94A3B8';
+              let status = '';
+              if (isWall) status = 'מסונכרן';
+              else if (cal.primary) status = 'ראשי';
+
               return (
                 <label
                   key={cal.id}
                   style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
+                    display: 'inline-flex',
+                    alignItems: 'center',
                     gap: 8,
-                    padding: '8px 8px',
-                    borderRadius: 10,
-                    border: `1px solid ${checked ? 'rgba(255,255,255,0.12)' : 'var(--border)'}`,
-                    background: checked ? 'rgba(255,255,255,0.04)' : 'transparent',
+                    padding: '7px 10px',
+                    borderRadius: 999,
+                    border: `1px solid ${checked ? `${color}88` : 'var(--border)'}`,
+                    background: checked ? `${color}18` : 'transparent',
                     cursor: isWall || saving ? 'default' : 'pointer',
-                    opacity: isWall ? 0.8 : 1,
+                    opacity: isWall ? 0.9 : (checked ? 1 : 0.72),
+                    maxWidth: '100%',
+                    minWidth: 0,
                   }}
                 >
                   <input
@@ -1622,38 +1668,36 @@ function OverlaySidebar({
                     checked={checked}
                     disabled={isWall || saving}
                     onChange={() => !isWall && onToggle(cal.id)}
-                    style={{ marginTop: 2 }}
+                    style={{ margin: 0, flexShrink: 0 }}
                   />
                   <span
                     style={{
-                      width: 9, height: 9, borderRadius: '50%', flexShrink: 0, marginTop: 4,
-                      background: cal.backgroundColor || '#94A3B8',
+                      width: 9, height: 9, borderRadius: '50%', flexShrink: 0,
+                      background: color,
                     }}
                   />
-                  <span style={{ flex: 1, minWidth: 0 }}>
-                    <span style={{
-                      display: 'block',
-                      fontSize: 12,
-                      color: 'var(--text-1)',
-                      fontWeight: 600,
-                      lineHeight: 1.3,
-                      wordBreak: 'break-word',
-                    }}>
-                      {cal.name}
-                    </span>
-                    {isWall && (
-                      <span style={{ fontSize: 10, color: '#34D399' }}>מסונכרן</span>
-                    )}
-                    {cal.primary && !isWall && (
-                      <span style={{ fontSize: 10, color: 'var(--text-3)' }}>ראשי</span>
-                    )}
-                    {!isWall && ['owner', 'writer'].includes(String(cal.accessRole || '')) && (
-                      <span style={{ fontSize: 10, color: '#7DD3FC', display: 'block' }}>ניתן לעריכה</span>
-                    )}
-                    {!isWall && cal.accessRole && !['owner', 'writer'].includes(String(cal.accessRole || '')) && (
-                      <span style={{ fontSize: 10, color: 'var(--text-3)', display: 'block' }}>צפייה בלבד</span>
-                    )}
+                  <span style={{
+                    fontSize: 12,
+                    color: 'var(--text-1)',
+                    fontWeight: 600,
+                    lineHeight: 1.2,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    maxWidth: 180,
+                  }}>
+                    {cal.name}
                   </span>
+                  {status && (
+                    <span style={{
+                      fontSize: 10,
+                      color: isWall ? '#34D399' : 'var(--text-3)',
+                      whiteSpace: 'nowrap',
+                      flexShrink: 0,
+                    }}>
+                      {status}
+                    </span>
+                  )}
                 </label>
               );
             })}
@@ -1819,7 +1863,8 @@ export default function ActivitiesCalendar({ isOwner = false }) {
       const end = endRaw && endRaw >= start ? endRaw : start;
       for (const key of eachDateInclusive(start, end)) {
         if (!map.has(key)) map.set(key, []);
-        map.get(key).push(a);
+        // Keep parent date/end_date; occurrenceDate is the day being rendered.
+        map.get(key).push({ ...a, occurrenceDate: key });
       }
     }
     for (const list of map.values()) {
@@ -1947,7 +1992,12 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   const openEdit = (activity) => {
     if (Date.now() < skipClickUntilRef.current) return;
     setFormError('');
-    setModal({ ...activity });
+    // Open the parent activity (ignore occurrenceDate from week/month expansion).
+    const canonical = activities.find((a) => a.id === activity?.id) || activity;
+    if (!canonical) return;
+    const rest = { ...canonical };
+    delete rest.occurrenceDate;
+    setModal(rest);
   };
 
   const openOverlayEdit = (event) => {
@@ -2338,7 +2388,16 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   })();
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14,
+      width: '100%',
+      maxWidth: '100%',
+      minWidth: 0,
+      overflowX: 'hidden',
+      boxSizing: 'border-box',
+    }}>
       {banner && (
         <div style={{
           padding: '10px 14px',
@@ -2448,6 +2507,9 @@ export default function ActivitiesCalendar({ isOwner = false }) {
                   notes: tpl.notes || '',
                   registration_enabled: !!tpl.registration_enabled,
                   collect_registration_payment: !!tpl.collect_registration_payment,
+                  registration_mode: tpl.registration_mode || (
+                    tpl.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
+                  ),
                   registration_page_title: tpl.registration_page_title || tpl.name || '',
                   registration_page_body: tpl.registration_page_body || tpl.description || '',
                   registration_theme: theme,
@@ -2468,11 +2530,12 @@ export default function ActivitiesCalendar({ isOwner = false }) {
         display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center',
         justifyContent: 'space-between',
       }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
           <button
             type="button"
             onClick={() => setTypeFilter('all')}
             style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
               padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: 'pointer',
               border: `1px solid ${typeFilter === 'all' ? '#38BDF8' : 'var(--border)'}`,
               background: typeFilter === 'all' ? 'rgba(56,189,248,0.15)' : 'transparent',
@@ -2481,21 +2544,32 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           >
             הכל
           </button>
-          {ACTIVITY_TYPES.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setTypeFilter(t.id)}
-              style={{
-                padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: 'pointer',
-                border: `1px solid ${typeFilter === t.id ? t.color : 'var(--border)'}`,
-                background: typeFilter === t.id ? t.bg : 'transparent',
-                color: typeFilter === t.id ? t.color : 'var(--text-3)',
-              }}
-            >
-              {t.label}
-            </button>
-          ))}
+          {ACTIVITY_TYPES.map((t) => {
+            const active = typeFilter === t.id;
+            const dimmed = typeFilter !== 'all' && !active;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTypeFilter(active ? 'all' : t.id)}
+                title={active ? 'הצג הכל' : `סנן לפי ${t.label}`}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                  border: `1px solid ${active ? t.color : `${t.color}55`}`,
+                  background: active ? t.bg : `${t.color}14`,
+                  color: t.color,
+                  opacity: dimmed ? 0.45 : 1,
+                  transition: 'opacity 0.12s ease',
+                }}
+              >
+                <span style={{
+                  width: 8, height: 8, borderRadius: '50%', background: t.color, flexShrink: 0,
+                }} />
+                {t.label}
+              </button>
+            );
+          })}
         </div>
 
         <div style={{
@@ -2555,14 +2629,14 @@ export default function ActivitiesCalendar({ isOwner = false }) {
         </div>
       </div>
 
-      {/* Calendar + overlay list */}
+      {/* Calendar */}
       <div style={{
-        display: 'flex',
-        gap: 12,
-        alignItems: 'stretch',
-        flexWrap: 'wrap',
+        width: '100%',
+        minWidth: 0,
+        maxWidth: '100%',
+        position: 'relative',
+        overflow: 'hidden',
       }}>
-        <div style={{ flex: '1 1 520px', minWidth: 0, position: 'relative' }}>
       {loading ? (
         <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-3)' }}>
           <Loader2 className="spin" size={22} style={{ display: 'inline' }} /> טוען יומן...
@@ -2573,10 +2647,12 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           border: '1px solid var(--border)',
           borderRadius: 14,
           overflow: 'hidden',
+          width: '100%',
+          maxWidth: '100%',
         }}>
           <div style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(7, 1fr)',
+            gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
             borderBottom: '1px solid var(--border)',
             background: 'rgba(255,255,255,0.02)',
           }}>
@@ -2584,12 +2660,14 @@ export default function ActivitiesCalendar({ isOwner = false }) {
               <div key={d} style={{
                 padding: '10px 6px', textAlign: 'center', fontSize: 12,
                 fontWeight: 700, color: 'var(--text-3)',
+                minWidth: 0,
+                overflow: 'hidden',
               }}>
                 {d}
               </div>
             ))}
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', width: '100%' }}>
             {monthCells.map((cell) => {
               const list = byDate.get(cell.dateStr) || [];
               const overlays = overlayByDate.get(cell.dateStr) || [];
@@ -2604,17 +2682,27 @@ export default function ActivitiesCalendar({ isOwner = false }) {
                   onDrop={(e) => onDayDrop(e, cell.dateStr)}
                   style={{
                     minHeight: 96,
+                    minWidth: 0,
                     padding: 6,
                     borderTop: '1px solid var(--border)',
                     borderInlineStart: '1px solid var(--border)',
                     background: hot
-                      ? 'rgba(56,189,248,0.14)'
-                      : (cell.inMonth ? 'transparent' : 'rgba(0,0,0,0.15)'),
+                      ? 'rgba(56,189,248,0.18)'
+                      : cell.isToday
+                        ? 'rgba(56,189,248,0.12)'
+                        : (cell.inMonth ? 'transparent' : 'rgba(0,0,0,0.15)'),
                     cursor: 'pointer',
                     opacity: cell.inMonth ? 1 : 0.55,
-                    outline: hot ? '1px solid rgba(56,189,248,0.5)' : 'none',
+                    outline: hot
+                      ? '1px solid rgba(56,189,248,0.55)'
+                      : (cell.isToday ? '2px solid rgba(56,189,248,0.75)' : 'none'),
                     outlineOffset: -1,
+                    boxShadow: cell.isToday && !hot
+                      ? 'inset 0 0 0 1px rgba(56,189,248,0.25)'
+                      : 'none',
                     position: 'relative',
+                    overflow: 'hidden',
+                    zIndex: cell.isToday ? 1 : 0,
                   }}
                 >
                   <button
@@ -2630,13 +2718,26 @@ export default function ActivitiesCalendar({ isOwner = false }) {
                     <Plus size={11} strokeWidth={2.5} />
                   </button>
                   <div style={{
-                    width: 26, height: 26, borderRadius: '50%',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    marginBottom: 4, marginInlineStart: 'auto',
-                    fontSize: 12, fontWeight: 700,
-                    background: cell.isToday ? 'rgba(56,189,248,0.25)' : 'transparent',
-                    color: cell.isToday ? '#7DD3FC' : 'var(--text-2)',
-                    border: cell.isToday ? '1px solid rgba(56,189,248,0.5)' : '1px solid transparent',
+                    width: cell.isToday ? 28 : 26,
+                    height: cell.isToday ? 28 : 26,
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginBottom: 4,
+                    marginInlineStart: 'auto',
+                    fontSize: cell.isToday ? 13 : 12,
+                    fontWeight: cell.isToday ? 800 : 700,
+                    background: cell.isToday
+                      ? 'linear-gradient(135deg, #38BDF8 0%, #0EA5E9 100%)'
+                      : 'transparent',
+                    color: cell.isToday ? '#0B1220' : 'var(--text-2)',
+                    border: cell.isToday
+                      ? '1px solid rgba(125,211,252,0.9)'
+                      : '1px solid transparent',
+                    boxShadow: cell.isToday
+                      ? '0 0 0 3px rgba(56,189,248,0.22), 0 4px 12px rgba(14,165,233,0.35)'
+                      : 'none',
                   }}>
                     {cell.date.getDate()}
                   </div>
@@ -2699,42 +2800,18 @@ export default function ActivitiesCalendar({ isOwner = false }) {
               <Plus size={22} strokeWidth={2.5} />
             </button>
           )}
-        </div>
-
-        {googleStatus?.connected && (
-          <OverlaySidebar
-            calendars={overlayCalendars}
-            selectedIds={overlaySelectedIds}
-            wallCalendarId={googleStatus?.calendarId}
-            saving={overlaySaving}
-            loading={overlayListLoading}
-            onToggle={toggleOverlayCalendar}
-          />
-        )}
       </div>
 
-      {/* Legend */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
-        {ACTIVITY_TYPES.map((t) => (
-          <TypeBadge key={t.id} type={t.id} />
-        ))}
-        <span style={{
-          fontSize: 11, color: 'var(--text-3)',
-          border: '1px dashed #94A3B8', borderRadius: 999, padding: '2px 8px',
-        }}>
-          קו מקווקו = יומן חיצוני
-        </span>
-        <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
-        <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
-          {scheduleBusy
-            ? 'שומר שינוי...'
-            : 'גררו אירוע ליום אחר · בתצוגת שבוע משכו קצוות להארכת שעות · ביטול פעולה אחרונה:'}
-        </span>
-        {!scheduleBusy && (
-          <span style={{ fontSize: 11, color: 'var(--text-3)', direction: 'ltr' }}>Ctrl+Z</span>
-        )}
-        </span>
-      </div>
+      {googleStatus?.connected && (
+        <OverlaySidebar
+          calendars={overlayCalendars}
+          selectedIds={overlaySelectedIds}
+          wallCalendarId={googleStatus?.calendarId}
+          saving={overlaySaving}
+          loading={overlayListLoading}
+          onToggle={toggleOverlayCalendar}
+        />
+      )}
 
       {modal && (
         <ActivityFormModal

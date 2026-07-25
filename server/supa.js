@@ -39,6 +39,7 @@ const DIRECT_TABLES = [
   'enrollments',
   'attendance',
   'activities',
+  'activity_registration_orders',
   'activity_registrations',
   'activity_templates',
   'health_declarations',
@@ -234,7 +235,9 @@ mappers.activities = columnMapper([
   'host_name', 'host_email', 'host_phone', 'host_parent_id', 'payment_status',
   'registration_slug', 'registration_enabled', 'registration_closes_at',
   'collect_registration_payment', 'registration_page_title', 'registration_page_body',
-  'registration_theme',
+  'registration_theme', 'registration_mode', 'participant_registration_slug',
+  'host_payment_token', 'host_payment_id', 'host_paid_at',
+  'form_template_id', 'form_template_slug',
   'created_at', 'updated_at',
 ]);
 mappers.attendance = columnMapper([
@@ -246,12 +249,19 @@ mappers.enrollments = columnMapper([
 mappers.activity_registrations = columnMapper([
   'id', 'activity_id', 'student_id', 'parent_id', 'participant_name', 'phone', 'email',
   'payment_status', 'amount', 'paid_at', 'status', 'notes', 'payment_id',
+  'order_id', 'participant_type', 'health_declaration_id', 'hold_expires_at',
   'created_at', 'updated_at',
+]);
+mappers.activity_registration_orders = columnMapper([
+  'id', 'activity_id', 'parent_id', 'idempotency_key', 'participant_count',
+  'unit_price', 'total_amount', 'payment_status', 'status', 'payment_id',
+  'hold_expires_at', 'created_at', 'updated_at',
 ]);
 mappers.activity_templates = columnMapper([
   'id', 'name', 'type', 'category', 'location', 'price', 'max_participants', 'description', 'notes',
   'start_time', 'end_time', 'all_day',
   'registration_enabled', 'collect_registration_payment',
+  'registration_mode',
   'registration_page_title', 'registration_page_body',
   'theme', 'sort_order', 'is_active',
   'created_at', 'updated_at',
@@ -276,6 +286,9 @@ mappers.health_declarations = {
     notes: r.notes || '',
     templateSlug: r.template_slug || '',
     templateId: r.template_id || null,
+      formSnapshot: r.form_snapshot || {},
+      activityId: r.activity_id || null,
+      orderId: r.order_id || null,
     signed: r.status === 'approved' || !!r.signature_url,
     signedDate: r.date || null,
     signedBy: r.parent_name || '',
@@ -299,6 +312,9 @@ mappers.health_declarations = {
     notes: o.notes || '',
     template_slug: emptyToNull(o.templateSlug || o.template_slug),
     template_id: emptyToNull(o.templateId || o.template_id),
+    form_snapshot: o.formSnapshot || o.form_snapshot || {},
+    activity_id: emptyToNull(o.activityId || o.activity_id),
+    order_id: emptyToNull(o.orderId || o.order_id),
   }),
 };
 
@@ -515,6 +531,42 @@ export const supa = {
       return { ok: false, error: error.message };
     }
     return { ok: true, blob: data };
+  },
+
+  async uploadEmployeeDocument(storagePath, buffer, mimeType = 'application/pdf') {
+    if (!client) return { ok: false, error: 'Supabase not configured' };
+    const { error } = await client.storage
+      .from('employee-documents')
+      .upload(storagePath, buffer, { contentType: mimeType, upsert: true });
+    if (error) {
+      console.error('Supabase employee storage upload failed:', error.message);
+      return { ok: false, error: error.message };
+    }
+    return { ok: true };
+  },
+
+  async downloadEmployeeDocument(storagePath) {
+    if (!client) return { ok: false, error: 'Supabase not configured' };
+    const { data, error } = await client.storage
+      .from('employee-documents')
+      .download(storagePath);
+    if (error) {
+      console.error('Supabase employee storage download failed:', error.message);
+      return { ok: false, error: error.message };
+    }
+    return { ok: true, blob: data };
+  },
+
+  async removeEmployeeDocument(storagePath) {
+    if (!client || !storagePath) return { ok: true };
+    const { error } = await client.storage
+      .from('employee-documents')
+      .remove([storagePath]);
+    if (error) {
+      console.error('Supabase employee storage remove failed:', error.message);
+      return { ok: false, error: error.message };
+    }
+    return { ok: true };
   },
 
   client,

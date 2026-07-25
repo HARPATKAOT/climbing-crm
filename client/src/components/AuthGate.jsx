@@ -4,6 +4,7 @@ import { LogIn, LogOut, ShieldCheck } from 'lucide-react';
 import { authClient, authConfigured } from '../authClient.js';
 import { isPublicPath } from '../publicPaths.js';
 import PublicActivityRegistration from './PublicActivityRegistration.jsx';
+import PublicHostPayment from './PublicHostPayment.jsx';
 import PublicHealthForm from './PublicHealthForm.jsx';
 import PublicOnboardingForm from './PublicOnboardingForm.jsx';
 import LeadIntakeForm from './LeadIntakeForm.jsx';
@@ -281,6 +282,7 @@ export default function AuthGate({ children }) {
     if (path === '/join') return <LeadIntakeForm />;
     if (path === '/privacy') return <PrivacyPolicy />;
     if (path.startsWith('/event/')) return <PublicActivityRegistration />;
+    if (path.startsWith('/event-host/')) return <PublicHostPayment />;
     return null;
   }
 

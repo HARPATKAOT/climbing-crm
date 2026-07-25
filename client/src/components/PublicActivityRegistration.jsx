@@ -1,366 +1,439 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { CheckCircle, Loader2, Plus, Trash2 } from 'lucide-react';
 import { useLocation, useParams, useSearchParams } from 'react-router-dom';
-import { CheckCircle, Loader2 } from 'lucide-react';
 
-const TYPE_LABELS = {
-  birthday: 'יום הולדת',
-  trip: 'טיול',
-  school: 'בית ספר',
-  company: 'חברה',
-  route_building: 'בניית מסלולים',
-  other: 'אירוע',
-};
+const emptyParticipant = (questions = []) => ({
+  key: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
+  type: 'child',
+  name: '',
+  birthDate: '',
+  answers: Object.fromEntries(questions.map((question) => [question.id, false])),
+  waiverAccepted: false,
+  signature: '',
+});
 
 function slugFromPath(pathname) {
-  const match = String(pathname || '').match(/^\/event\/([^/]+)\/?$/);
-  return match ? decodeURIComponent(match[1]) : '';
+  return decodeURIComponent(String(pathname || '').match(/^\/event\/([^/]+)/)?.[1] || '');
 }
 
-function formatDateHe(iso) {
+function formatDate(iso) {
   if (!iso) return '';
-  try {
-    const [y, m, d] = String(iso).split('-').map(Number);
-    const dt = new Date(y, (m || 1) - 1, d || 1);
-    return dt.toLocaleDateString('he-IL', {
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    });
-  } catch {
-    return iso;
-  }
+  const [year, month, day] = iso.split('-').map(Number);
+  return new Date(year, month - 1, day).toLocaleDateString('he-IL', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+  });
+}
+
+function SignaturePad({ value, onChange }) {
+  const canvasRef = useRef(null);
+  const drawing = useRef(false);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ratio = window.devicePixelRatio || 1;
+    const width = canvas.clientWidth;
+    canvas.width = width * ratio;
+    canvas.height = 150 * ratio;
+    const context = canvas.getContext('2d');
+    context.scale(ratio, ratio);
+    context.lineWidth = 2;
+    context.lineCap = 'round';
+    context.strokeStyle = '#f8fafc';
+    if (value) {
+      const image = new Image();
+      image.onload = () => context.drawImage(image, 0, 0, width, 150);
+      image.src = value;
+    }
+  }, []); // The pad is remounted for each participant.
+
+  const point = (event) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const touch = event.touches?.[0] || event;
+    return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
+  };
+  const start = (event) => {
+    event.preventDefault();
+    drawing.current = true;
+    const position = point(event);
+    const context = canvasRef.current.getContext('2d');
+    context.beginPath();
+    context.moveTo(position.x, position.y);
+  };
+  const move = (event) => {
+    if (!drawing.current) return;
+    event.preventDefault();
+    const position = point(event);
+    const context = canvasRef.current.getContext('2d');
+    context.lineTo(position.x, position.y);
+    context.stroke();
+  };
+  const stop = () => {
+    if (!drawing.current) return;
+    drawing.current = false;
+    onChange(canvasRef.current.toDataURL('image/png'));
+  };
+  const clear = () => {
+    const canvas = canvasRef.current;
+    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+    onChange('');
+  };
+
+  return (
+    <div>
+      <canvas
+        ref={canvasRef}
+        className="event-signature"
+        onMouseDown={start}
+        onMouseMove={move}
+        onMouseUp={stop}
+        onMouseLeave={stop}
+        onTouchStart={start}
+        onTouchMove={move}
+        onTouchEnd={stop}
+        aria-label="אזור חתימה"
+      />
+      <button type="button" className="event-link-button" onClick={clear}>ניקוי חתימה</button>
+    </div>
+  );
 }
 
 export default function PublicActivityRegistration() {
   const { slug: slugParam } = useParams();
   const location = useLocation();
-  const slug = slugParam || slugFromPath(location.pathname);
   const [searchParams] = useSearchParams();
-  const justPaid = searchParams.get('paid') === '1';
-
-  const [loading, setLoading] = useState(true);
+  const slug = slugParam || slugFromPath(location.pathname);
   const [activity, setActivity] = useState(null);
-  const [error, setError] = useState('');
-  const [form, setForm] = useState({
-    participant_name: '',
-    phone: '',
-    email: '',
-    notes: '',
-  });
+  const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [done, setDone] = useState(null);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(false);
+  const [step, setStep] = useState(1);
+  const [healthIndex, setHealthIndex] = useState(0);
+  const [parentParticipates, setParentParticipates] = useState(false);
+  const [parent, setParent] = useState({ name: '', phone: '', email: '', city: '' });
+  const [participants, setParticipants] = useState([]);
+  const [idempotencyKey] = useState(
+    () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`
+  );
 
   useEffect(() => {
-    let cancelled = false;
-    if (!slug) {
-      setLoading(false);
-      setError('חסר מזהה אירוע בקישור');
-      return undefined;
-    }
-    (async () => {
-      setLoading(true);
-      setError('');
-      try {
-        const res = await fetch(`/api/public/activities/${encodeURIComponent(slug)}`);
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          if (!cancelled) setError(data.error || 'הפעילות לא נמצאה');
-          return;
-        }
-        if (!cancelled) setActivity(data);
-      } catch {
-        if (!cancelled) setError('שגיאת רשת — נסו שוב');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
+    let active = true;
+    fetch(`/api/public/activities/${encodeURIComponent(slug)}`)
+      .then(async (response) => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || 'הפעילות לא נמצאה');
+        if (!active) return;
+        setActivity(body);
+        setParticipants([emptyParticipant(body.form_template?.healthQuestions || [])]);
+      })
+      .catch((loadError) => active && setError(loadError.message))
+      .finally(() => active && setLoading(false));
+    return () => { active = false; };
   }, [slug]);
 
-  const onChange = (e) => {
-    const { name, value } = e.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
+  const paidMode = activity?.registration_mode === 'paid_per_participant';
+  const allParticipants = useMemo(() => {
+    const children = participants.filter((participant) => participant.name.trim());
+    if (!parentParticipates) return children;
+    const existing = participants.find((participant) => participant.type === 'adult');
+    const adult = existing || {
+      ...emptyParticipant(activity?.form_template?.healthQuestions || []),
+      type: 'adult',
+    };
+    return [{ ...adult, name: parent.name.trim() }, ...children.filter((item) => item.type !== 'adult')];
+  }, [participants, parentParticipates, parent.name, activity]);
+  const total = (Number(activity?.unit_price) || 0) * allParticipants.length;
+  const currentParticipant = allParticipants[healthIndex];
+
+  const updateParticipant = (key, patch) => {
+    setParticipants((current) => current.map((participant) =>
+      participant.key === key ? { ...participant, ...patch } : participant
+    ));
   };
 
-  const submit = async (e) => {
-    e.preventDefault();
+  const syncAdult = (patch) => {
+    setParticipants((current) => {
+      const adult = current.find((participant) => participant.type === 'adult');
+      if (adult) {
+        return current.map((participant) =>
+          participant.key === adult.key ? { ...participant, ...patch } : participant
+        );
+      }
+      return [{ ...emptyParticipant(activity.form_template.healthQuestions), type: 'adult', ...patch }, ...current];
+    });
+  };
+
+  const next = () => {
     setError('');
-    setSubmitting(true);
-    try {
-      const res = await fetch(`/api/public/activities/${encodeURIComponent(slug)}/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setError(data.error || 'ההרשמה נכשלה');
+    if (step === 1) {
+      if (!parent.name.trim() || !parent.phone.trim() || !parent.email.trim()) {
+        setError('יש למלא שם, טלפון ודואר אלקטרוני');
         return;
       }
-      setDone(data);
-      if (data.activity) setActivity(data.activity);
-      if (data.paymentUrl) {
-        window.location.href = data.paymentUrl;
+      setStep(2);
+      return;
+    }
+    if (step === 2) {
+      if (!allParticipants.length) {
+        setError('יש להוסיף לפחות משתתף אחד');
+        return;
       }
-    } catch {
-      setError('שגיאת רשת — נסו שוב');
+      if (activity.remaining != null && allParticipants.length > activity.remaining) {
+        setError(`נותרו רק ${activity.remaining} מקומות פנויים`);
+        return;
+      }
+      if (allParticipants.some((participant) =>
+        !participant.name.trim() || (participant.type === 'child' && !participant.birthDate)
+      )) {
+        setError('יש למלא שם ותאריך לידה לכל ילד');
+        return;
+      }
+      setHealthIndex(0);
+      setStep(3);
+      return;
+    }
+    if (step === 3) {
+      const required = (activity.form_template?.healthQuestions || [])
+        .filter((question) => question.requireYes);
+      if (required.some((question) => !currentParticipant.answers?.[question.id])) {
+        setError('יש לסמן את כל סעיפי ההצהרה');
+        return;
+      }
+      if (!currentParticipant.waiverAccepted || !currentParticipant.signature) {
+        setError('יש לאשר את כתב הוויתור ולחתום');
+        return;
+      }
+      if (healthIndex < allParticipants.length - 1) {
+        setHealthIndex((index) => index + 1);
+      } else {
+        setStep(4);
+      }
+    }
+  };
+
+  const submit = async () => {
+    setSubmitting(true);
+    setError('');
+    try {
+      const response = await fetch(`/api/public/activities/${encodeURIComponent(slug)}/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          idempotency_key: idempotencyKey,
+          parent,
+          participants: allParticipants.map(({ key: _key, ...participant }) => participant),
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'ההרשמה נכשלה');
+      if (body.paymentUrl) {
+        window.location.assign(body.paymentUrl);
+        return;
+      }
+      setDone(true);
+    } catch (submitError) {
+      setError(submitError.message);
     } finally {
       setSubmitting(false);
     }
   };
 
-  if (loading) {
+  if (loading) return <EventShell><Loader2 className="spin" /><p>טוען...</p></EventShell>;
+  if (error && !activity) return <EventShell><h1>לא ניתן להירשם</h1><p>{error}</p></EventShell>;
+  if (done || searchParams.get('paid') === '1') {
     return (
-      <div className="public-health-wrapper">
-        <div className="glass-card" style={{ textAlign: 'center', padding: 40 }}>
-          <Loader2 size={32} className="spin" style={{ color: '#F97316' }} />
-          <p style={{ color: 'rgba(255,255,255,0.7)', marginTop: 16 }}>טוען...</p>
-        </div>
-      </div>
+      <EventShell>
+        <CheckCircle size={62} color="#34d399" />
+        <h1>ההרשמה התקבלה</h1>
+        <p>{paidMode ? 'התשלום נקלט והמשתתפים רשומים.' : 'כל המשתתפים נשמרו בהצלחה.'}</p>
+      </EventShell>
     );
   }
-
-  if (error && !activity) {
-    return (
-      <div className="public-health-wrapper">
-        <div className="glass-card" style={{ textAlign: 'center', padding: 40 }}>
-          <h1 style={{ color: '#fff', fontSize: 22, marginBottom: 12 }}>לא ניתן להירשם</h1>
-          <p style={{ color: 'rgba(255,255,255,0.7)' }}>{error}</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (done && !done.paymentUrl) {
-    return (
-      <div className="public-health-wrapper">
-        <div className="glass-card success-card">
-          <CheckCircle size={60} color="#F97316" style={{ margin: '0 auto', marginBottom: 20 }} />
-          <h1 style={{ color: '#fff', fontSize: 24, marginBottom: 10 }}>נרשמתם בהצלחה!</h1>
-          <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16 }}>
-            {form.participant_name}, ההרשמה ל־{activity?.name} התקבלה.
-          </p>
-          {form.email && (
-            <p style={{ color: 'rgba(255,255,255,0.55)', fontSize: 14, marginTop: 12 }}>
-              אישור נשלח לאימייל (אם הוגדר שליחה בשרת).
-            </p>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  const timeLine = activity?.all_day
-    ? 'יום שלם'
-    : [activity?.start_time, activity?.end_time]
-      .filter(Boolean)
-      .map((t) => String(t).slice(0, 5))
-      .join(' – ');
-
-  const accent = activity?.theme?.accent || '#F97316';
 
   return (
-    <div className="public-health-wrapper">
-      <form className="glass-card" onSubmit={submit} style={{ maxWidth: 480, width: '100%' }}>
-        <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <div style={{
-            fontSize: 13,
-            fontWeight: 700,
-            letterSpacing: '0.08em',
-            color: accent,
-            marginBottom: 8,
-          }}>
-            MY WALL
-          </div>
-          <h1 style={{ color: '#fff', fontSize: 26, margin: '0 0 8px', fontWeight: 800 }}>
-            {activity.page_title || activity.name}
-          </h1>
-          <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: 13, marginBottom: 12 }}>
-            {TYPE_LABELS[activity.type] || TYPE_LABELS.other}
-          </div>
-          {justPaid && (
-            <div style={{
-              background: 'rgba(52,211,153,0.15)',
-              border: '1px solid rgba(52,211,153,0.35)',
-              color: '#6EE7B7',
-              padding: '10px 12px',
-              borderRadius: 10,
-              fontSize: 14,
-              marginBottom: 12,
-            }}>
-              התשלום התקבל — תודה!
-            </div>
-          )}
-        </div>
+    <div className="event-page">
+      <main className="event-card">
+        <header>
+          <div className="event-brand">MY WALL</div>
+          <h1>{activity.page_title || activity.name}</h1>
+          <p>{formatDate(activity.date)} {activity.start_time ? ` · ${activity.start_time.slice(0, 5)}` : ''}</p>
+          {activity.location && <p>{activity.location}</p>}
+          <div className="event-progress">שלב {step} מתוך 4</div>
+        </header>
 
-        <div style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 8,
-          marginBottom: 20,
-          padding: 14,
-          borderRadius: 12,
-          background: 'rgba(0,0,0,0.25)',
-          border: '1px solid rgba(255,255,255,0.08)',
-          color: 'rgba(255,255,255,0.8)',
-          fontSize: 14,
-        }}>
-          {activity.date && <div>{formatDateHe(activity.date)}</div>}
-          {timeLine && <div>{timeLine}</div>}
-          {activity.location && <div>{activity.location}</div>}
-          {activity.page_body && (
-            <div style={{ marginTop: 6, whiteSpace: 'pre-wrap', color: 'rgba(255,255,255,0.65)' }}>
-              {activity.page_body}
-            </div>
-          )}
-          {activity.collect_payment && (
-            <div style={{ marginTop: 8, fontWeight: 700, color: '#FDBA74' }}>
-              מחיר למשתתף: ₪{Math.round(activity.price)}
-            </div>
-          )}
-          {activity.remaining != null && (
-            <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.5)' }}>
-              מקומות פנויים: {activity.remaining}
-            </div>
-          )}
-        </div>
-
-        {!activity.registration_open ? (
-          <p style={{ color: 'rgba(255,255,255,0.7)', textAlign: 'center' }}>
-            ההרשמה לפעילות זו סגורה או שאין מקומות פנויים.
-          </p>
-        ) : (
-          <>
-            <label style={labelStyle}>
-              שם המשתתף
-              <input
-                className="input"
-                name="participant_name"
-                value={form.participant_name}
-                onChange={onChange}
-                required
-                style={inputStyle}
-              />
-            </label>
-            <label style={labelStyle}>
-              טלפון
-              <input
-                className="input"
-                name="phone"
-                value={form.phone}
-                onChange={onChange}
-                style={inputStyle}
-              />
-            </label>
-            <label style={labelStyle}>
-              אימייל
-              <input
-                className="input"
-                type="email"
-                name="email"
-                value={form.email}
-                onChange={onChange}
-                style={inputStyle}
-              />
-            </label>
-            <label style={labelStyle}>
-              הערות
-              <textarea
-                className="input"
-                name="notes"
-                value={form.notes}
-                onChange={onChange}
-                rows={2}
-                style={{ ...inputStyle, resize: 'vertical' }}
-              />
-            </label>
-
-            {error && (
-              <div style={{
-                marginBottom: 12,
-                padding: '10px 12px',
-                borderRadius: 10,
-                background: 'rgba(248,113,113,0.15)',
-                color: '#FCA5A5',
-                fontSize: 13,
-              }}>
-                {error}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              className="btn-primary"
-              disabled={submitting}
-              style={{
-                width: '100%',
-                marginTop: 8,
-                padding: '14px 16px',
-                fontSize: 16,
-                fontWeight: 800,
-                background: accent,
-                border: 'none',
-                borderRadius: 12,
-                color: '#fff',
-                cursor: submitting ? 'wait' : 'pointer',
-              }}
-            >
-              {submitting
-                ? 'שולח...'
-                : activity.collect_payment
-                  ? `הרשמה ומעבר לתשלום ₪${Math.round(activity.price)}`
-                  : 'אישור הרשמה'}
-            </button>
-          </>
+        {step === 1 && (
+          <section>
+            <h2>פרטי הורה או משלם</h2>
+            <Field label="שם מלא" value={parent.name} onChange={(name) => setParent({ ...parent, name })} />
+            <Field label="טלפון" type="tel" value={parent.phone} onChange={(phone) => setParent({ ...parent, phone })} />
+            <Field label="דואר אלקטרוני" type="email" value={parent.email} onChange={(email) => setParent({ ...parent, email })} />
+            <Field label="עיר" value={parent.city} onChange={(city) => setParent({ ...parent, city })} />
+          </section>
         )}
-      </form>
-      <style>{`
-        .public-health-wrapper {
-          min-height: 100vh;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 24px 16px;
-          background:
-            radial-gradient(ellipse at 20% 0%, rgba(249,115,22,0.18), transparent 50%),
-            radial-gradient(ellipse at 80% 100%, rgba(56,189,248,0.12), transparent 45%),
-            #0B1220;
-          direction: rtl;
-          font-family: 'Heebo', 'Assistant', system-ui, sans-serif;
-        }
-        .glass-card {
-          background: rgba(15, 23, 42, 0.85);
-          border: 1px solid rgba(255,255,255,0.1);
-          border-radius: 20px;
-          padding: 28px 24px;
-          backdrop-filter: blur(12px);
-          box-shadow: 0 24px 60px rgba(0,0,0,0.45);
-        }
-        .success-card { text-align: center; max-width: 420px; }
-        .spin { animation: spin 0.8s linear infinite; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-      `}</style>
+
+        {step === 2 && (
+          <section>
+            <h2>מי משתתף?</h2>
+            <label className="event-check">
+              <input
+                type="checkbox"
+                checked={parentParticipates}
+                onChange={(event) => {
+                  setParentParticipates(event.target.checked);
+                  if (event.target.checked) syncAdult({ name: parent.name });
+                }}
+              />
+              גם ההורה משתתף בפעילות
+            </label>
+            {participants.filter((participant) => participant.type !== 'adult').map((participant, index) => (
+              <div className="participant-card" key={participant.key}>
+                <div className="participant-title">
+                  <strong>ילד או ילדה {index + 1}</strong>
+                  {participants.filter((item) => item.type !== 'adult').length > 1 && (
+                    <button
+                      type="button"
+                      className="event-icon-button"
+                      aria-label="הסרת משתתף"
+                      onClick={() => setParticipants((items) => items.filter((item) => item.key !== participant.key))}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
+                </div>
+                <Field label="שם מלא" value={participant.name} onChange={(name) => updateParticipant(participant.key, { name })} />
+                <Field label="תאריך לידה" type="date" value={participant.birthDate} onChange={(birthDate) => updateParticipant(participant.key, { birthDate })} />
+              </div>
+            ))}
+            <button
+              type="button"
+              className="event-secondary"
+              onClick={() => setParticipants((items) => [
+                ...items,
+                emptyParticipant(activity.form_template?.healthQuestions || []),
+              ])}
+            >
+              <Plus size={17} /> הוספת משתתף
+            </button>
+          </section>
+        )}
+
+        {step === 3 && currentParticipant && (
+          <section key={currentParticipant.key}>
+            <h2>הצהרה עבור {currentParticipant.name}</h2>
+            {(activity.form_template?.healthQuestions || []).map((question) => (
+              <label className="event-question" key={question.id}>
+                <input
+                  type="checkbox"
+                  checked={!!currentParticipant.answers?.[question.id]}
+                  onChange={(event) => {
+                    const patch = {
+                      answers: {
+                        ...currentParticipant.answers,
+                        [question.id]: event.target.checked,
+                      },
+                    };
+                    if (currentParticipant.type === 'adult') syncAdult(patch);
+                    else updateParticipant(currentParticipant.key, patch);
+                  }}
+                />
+                <span>{question.label}</span>
+              </label>
+            ))}
+            <div className="event-waiver">{activity.form_template?.waiverText}</div>
+            <label className="event-check">
+              <input
+                type="checkbox"
+                checked={!!currentParticipant.waiverAccepted}
+                onChange={(event) => {
+                  const patch = { waiverAccepted: event.target.checked };
+                  if (currentParticipant.type === 'adult') syncAdult(patch);
+                  else updateParticipant(currentParticipant.key, patch);
+                }}
+              />
+              קראתי ואני מאשר או מאשרת את כתב הוויתור
+            </label>
+            <p className="event-label">חתימה</p>
+            <SignaturePad
+              value={currentParticipant.signature}
+              onChange={(signature) => {
+                const patch = { signature };
+                if (currentParticipant.type === 'adult') syncAdult(patch);
+                else updateParticipant(currentParticipant.key, patch);
+              }}
+            />
+          </section>
+        )}
+
+        {step === 4 && (
+          <section>
+            <h2>סיכום הרשמה</h2>
+            <div className="event-summary">
+              <div><span>מספר משתתפים</span><strong>{allParticipants.length}</strong></div>
+              {activity.remaining != null && <div><span>מקומות פנויים לפני ההרשמה</span><strong>{activity.remaining}</strong></div>}
+              {paidMode && (
+                <>
+                  <div><span>מחיר למשתתף</span><strong>₪{activity.unit_price}</strong></div>
+                  <div className="event-total"><span>סך הכול</span><strong>₪{total}</strong></div>
+                </>
+              )}
+            </div>
+            {!paidMode && <p className="event-free-note">אין תשלום בטופס המשתתפים.</p>}
+          </section>
+        )}
+
+        {error && <div className="event-error" role="alert">{error}</div>}
+        <footer className="event-actions">
+          {step > 1 && (
+            <button type="button" className="event-secondary" onClick={() => {
+              if (step === 3 && healthIndex > 0) setHealthIndex((index) => index - 1);
+              else setStep((current) => current - 1);
+              setError('');
+            }}>
+              חזרה
+            </button>
+          )}
+          {step < 4 ? (
+            <button type="button" className="event-primary" onClick={next}>המשך</button>
+          ) : (
+            <button type="button" className="event-primary" disabled={submitting} onClick={submit}>
+              {submitting ? 'שומר...' : paidMode ? `מעבר לתשלום ₪${total}` : 'אישור הרשמה'}
+            </button>
+          )}
+        </footer>
+      </main>
+      <EventStyles />
     </div>
   );
 }
 
-const labelStyle = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 6,
-  fontSize: 13,
-  color: 'rgba(255,255,255,0.65)',
-  marginBottom: 12,
-};
+function Field({ label, value, onChange, type = 'text' }) {
+  return (
+    <label className="event-field">
+      <span>{label}</span>
+      <input type={type} value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
 
-const inputStyle = {
-  width: '100%',
-  background: 'rgba(0,0,0,0.2)',
-  border: '1px solid rgba(255,255,255,0.1)',
-  color: 'white',
-  padding: '12px 16px',
-  borderRadius: 12,
-  fontSize: 15,
-  fontFamily: 'inherit',
-};
+function EventShell({ children }) {
+  return (
+    <div className="event-page">
+      <main className="event-card event-centered">{children}</main>
+      <EventStyles />
+    </div>
+  );
+}
+
+function EventStyles() {
+  return <style>{`
+    .event-page{min-height:100vh;direction:rtl;background:radial-gradient(circle at top,#1e293b,#070b14 65%);padding:20px 12px;color:#f8fafc;font-family:Heebo,Assistant,system-ui,sans-serif}
+    .event-card{width:min(620px,100%);margin:auto;background:rgba(15,23,42,.94);border:1px solid rgba(255,255,255,.12);border-radius:22px;padding:24px;box-shadow:0 22px 70px rgba(0,0,0,.45)}
+    .event-centered{text-align:center;margin-top:12vh}.event-brand{color:#fb923c;font-weight:900;letter-spacing:.12em}.event-card h1{margin:8px 0;font-size:28px}.event-card h2{font-size:20px;margin:20px 0 14px}.event-card header p{margin:4px;color:#94a3b8}
+    .event-progress{height:6px;border-radius:8px;background:linear-gradient(90deg,#f97316 0 55%,rgba(255,255,255,.1) 55%);margin-top:20px;font-size:0}.event-field{display:flex;flex-direction:column;gap:6px;margin:12px 0;color:#cbd5e1;font-size:14px}.event-field input{padding:12px 14px;border-radius:11px;border:1px solid rgba(255,255,255,.15);background:#0b1220;color:#fff;font:inherit}
+    .event-check,.event-question{display:flex;gap:10px;align-items:flex-start;padding:10px 0;color:#e2e8f0}.event-check input,.event-question input{margin-top:4px;min-width:18px;min-height:18px}.participant-card{padding:14px;margin:12px 0;border:1px solid rgba(255,255,255,.1);border-radius:14px;background:rgba(0,0,0,.16)}.participant-title{display:flex;justify-content:space-between}.event-icon-button,.event-link-button{border:0;background:none;color:#fca5a5;cursor:pointer}
+    .event-waiver{white-space:pre-wrap;max-height:200px;overflow:auto;padding:14px;border-radius:12px;background:#0b1220;color:#cbd5e1;line-height:1.55;font-size:13px}.event-signature{width:100%;height:150px;background:#111827;border:1px solid rgba(255,255,255,.2);border-radius:12px;touch-action:none}.event-label{color:#cbd5e1;margin-bottom:7px}
+    .event-summary{display:grid;gap:10px}.event-summary>div{display:flex;justify-content:space-between;padding:12px;border-radius:10px;background:#0b1220}.event-total{color:#fdba74;font-size:18px}.event-free-note{color:#6ee7b7}.event-error{margin-top:14px;padding:11px;border-radius:10px;background:rgba(239,68,68,.14);color:#fca5a5}
+    .event-actions{display:flex;gap:10px;margin-top:22px}.event-primary,.event-secondary{display:flex;align-items:center;justify-content:center;gap:7px;border:0;border-radius:11px;padding:12px 18px;font:inherit;font-weight:800;cursor:pointer}.event-primary{background:#f97316;color:#fff;flex:1}.event-secondary{background:rgba(255,255,255,.09);color:#e2e8f0}.event-primary:disabled{opacity:.6}.spin{animation:event-spin .8s linear infinite}@keyframes event-spin{to{transform:rotate(360deg)}}@media(max-width:520px){.event-card{padding:18px 15px;border-radius:16px}.event-card h1{font-size:24px}}
+  `}</style>;
+}

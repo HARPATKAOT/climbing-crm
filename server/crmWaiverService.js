@@ -1,0 +1,217 @@
+export const STANDARD_WAIVER_TEXT = `אני מצהיר/ה כי אני מודע/ת לסיכונים הכרוכים בפעילות המתקיימת ב"קיר בועז", אני פוטר/ת את "קיר בועז" ו/או מי מטעמו מכל אחריות לפגיעה אם תקרה למשתתף אותו אני רושם לפעילות וזאת אלא אם יוכח כי הינה תוצאה של רשלנות המקום.
+
+אני הח"מ מתחייב/ת בזאת למלא את כל הוראות הבטיחות המפורטות להלן:
+• אין להשאיר ילד עד גיל 11 ללא ליווי מבוגר שלא במסגרת חוג מסודר
+• נא להימנע מריצה והשתוללות בכל מתחם הקיר
+• יש להישמע להוראות המדריכים
+• טיפוס על הקיר יתאפשר רק לאלו שקיבלו תדריך מסודר
+• אין להשתמש במתקנים השונים ללא קבלת אישור ממדריך`;
+
+export const STANDARD_HEALTH_QUESTIONS = [
+  {
+    id: 'h1',
+    requireYes: true,
+    label: 'אני החתום/ה מטה מצהיר/ה בזאת שאני או האדם אותו אני רושם לחוג הטיפוס בריא/ה וכשיר/ה פיזית, נפשית וקוגניטיבית להשתתף בפעילות המתקיימת ב"קיר בועז". אני מבין כי הפעילות עלולה להיות מסוכנת ולא ידוע לי על מגבלות שעלולות למנוע מהמשתתף פעילות בטוחה ובריאה.',
+  },
+  { id: 's1', requireYes: true, label: 'אין להשאיר ילד עד גיל 11 ללא ליווי מבוגר שלא במסגרת חוג מסודר' },
+  { id: 's2', requireYes: true, label: 'נא להימנע מריצה והשתוללות בכל מתחם הקיר' },
+  { id: 's3', requireYes: true, label: 'יש להישמע להוראות המדריכים' },
+  { id: 's4', requireYes: true, label: 'טיפוס על הקיר יתאפשר רק לאלו שקיבלו תדריך מסודר' },
+  { id: 's5', requireYes: true, label: 'אין להשתמש במתקנים השונים ללא קבלת אישור ממדריך' },
+];
+
+function clean(value) {
+  return String(value || '').trim();
+}
+
+function normalizedName(value) {
+  return clean(value).replace(/\s+/g, ' ').toLocaleLowerCase('he');
+}
+
+export function resolveDeclarationTemplate(db, { templateId, templateSlug } = {}) {
+  const templates = db.get('form_templates') || [];
+  const selected =
+    (templateId && templates.find((item) => String(item.id) === String(templateId))) ||
+    (templateSlug && templates.find((item) => item.slug === templateSlug && item.isActive !== false)) ||
+    templates.find((item) => item.isDefault && item.isActive !== false) ||
+    templates.find((item) => item.slug === 'wall' && item.isActive !== false);
+  return {
+    id: selected?.id || null,
+    slug: selected?.slug || templateSlug || 'wall',
+    title: selected?.title || 'הצהרת בריאות ובטיחות + הסרת אחריות',
+    waiverText: selected?.waiverText || STANDARD_WAIVER_TEXT,
+    healthQuestions:
+      Array.isArray(selected?.healthQuestions) && selected.healthQuestions.length
+        ? selected.healthQuestions
+        : STANDARD_HEALTH_QUESTIONS,
+  };
+}
+
+export function validateParticipantDeclarations(participants, template) {
+  if (!Array.isArray(participants) || participants.length === 0) {
+    throw Object.assign(new Error('יש להוסיף לפחות משתתף אחד'), { status: 400 });
+  }
+  const required = (template.healthQuestions || []).filter((question) => question.requireYes);
+  for (const participant of participants) {
+    const name = clean(participant.name);
+    if (!name) throw Object.assign(new Error('חסר שם משתתף'), { status: 400 });
+    if (participant.type !== 'adult' && !clean(participant.birthDate)) {
+      throw Object.assign(new Error(`חסר תאריך לידה עבור ${name}`), { status: 400 });
+    }
+    if (!(participant.waiverAccepted === true || participant.waiverAccepted === 'true')) {
+      throw Object.assign(new Error(`חסר אישור כתב הוויתור עבור ${name}`), { status: 400 });
+    }
+    if (!clean(participant.signature)) {
+      throw Object.assign(new Error(`חסרה חתימה עבור ${name}`), { status: 400 });
+    }
+    if (required.some((question) => !participant.answers?.[question.id])) {
+      throw Object.assign(new Error(`יש לסמן את כל סעיפי ההצהרה עבור ${name}`), { status: 400 });
+    }
+  }
+}
+
+async function requireDurable(persist, table, record) {
+  const result = await persist(table, record);
+  if (result?.ok === false) {
+    const error = new Error(result.error || `שמירת ${table} נכשלה`);
+    error.status = 503;
+    throw error;
+  }
+}
+
+/**
+ * Shared CRM + declaration path for onboarding and activity registration.
+ * The caller supplies the database facade and awaited durable writer.
+ */
+export async function saveCrmParticipants({
+  db,
+  persist,
+  parent: parentInput,
+  participants,
+  template: templateInput,
+  activityId = null,
+  orderId = null,
+  source = 'form',
+  onStudentCreated,
+  onStudentStatusChanged,
+} = {}) {
+  const parentName = clean(parentInput?.name);
+  const phone = clean(parentInput?.phone);
+  const email = clean(parentInput?.email);
+  if (!parentName || !phone) {
+    throw Object.assign(new Error('נדרשים שם הורה ומספר טלפון'), { status: 400 });
+  }
+
+  const template = templateInput || resolveDeclarationTemplate(db);
+  validateParticipantDeclarations(participants, template);
+
+  let parent = db.upsertParentByPhone(parentName, phone, email, {
+    city: clean(parentInput?.city),
+    idNumber: clean(parentInput?.idNumber || parentInput?.parentIdNum),
+    source,
+  });
+  parent = db.update('parents', parent.id, {
+    name: parentName,
+    email: email || parent.email || '',
+    city: clean(parentInput?.city) || parent.city || '',
+    idNumber: clean(parentInput?.idNumber || parentInput?.parentIdNum) || parent.idNumber || '',
+  }) || parent;
+  await requireDurable(persist, 'parents', parent);
+
+  const signedAt = new Date().toISOString();
+  const signedDate = signedAt.slice(0, 10);
+  const savedParticipants = [];
+  const declarations = [];
+  const snapshot = {
+    id: template.id,
+    slug: template.slug,
+    title: template.title,
+    waiverText: template.waiverText,
+    healthQuestions: template.healthQuestions,
+  };
+
+  for (const input of participants) {
+    const participantType = input.type === 'adult' ? 'adult' : 'child';
+    const name = clean(input.name);
+    let student = null;
+    if (participantType === 'child') {
+      if (input.id) {
+        student = (db.get('students') || []).find(
+          (item) => String(item.id) === String(input.id) && item.parentId === parent.id
+        );
+      }
+      if (!student) {
+        student = (db.get('students') || []).find(
+          (item) =>
+            item.parentId === parent.id &&
+            normalizedName(item.name) === normalizedName(name) &&
+            (!input.birthDate || !item.birthDate || item.birthDate === input.birthDate)
+        );
+      }
+      const previousStatus = student?.status;
+      const patch = {
+        name,
+        parentId: parent.id,
+        birthDate: clean(input.birthDate) || student?.birthDate || '',
+        gender: clean(input.gender) || student?.gender || '',
+        idNumber: clean(input.idNumber || input.climberIdNum) || student?.idNumber || '',
+        notes: clean(input.notes || input.registrationNotes) || student?.notes || '',
+        status: previousStatus === 'registered' ? 'registered' : 'health_signed',
+        healthSignedAt: signedAt,
+        waiverSignedAt: signedAt,
+      };
+      if (student) {
+        student = db.update('students', student.id, patch) || { ...student, ...patch };
+        if (previousStatus !== 'registered' && previousStatus !== 'health_signed') {
+          onStudentStatusChanged?.(student);
+        }
+      } else {
+        student = db.insert('students', {
+          ...patch,
+          groupId: null,
+          source,
+          created: signedDate,
+        });
+        onStudentCreated?.(student, parent);
+      }
+      await requireDurable(persist, 'students', student);
+    }
+
+    const declaration = db.insert('health_declarations', {
+      date: signedDate,
+      studentId: student?.id || null,
+      parentId: parent.id,
+      parentName,
+      parentIdNum: clean(parentInput?.idNumber || parentInput?.parentIdNum),
+      phone,
+      climberName: name,
+      climberIdNum: clean(input.idNumber || input.climberIdNum),
+      birthDate: clean(input.birthDate),
+      answers: input.answers || {},
+      waiverAccepted: true,
+      signature_url: input.signature,
+      status: 'approved',
+      notes: clean(input.notes),
+      templateSlug: template.slug,
+      templateId: template.id,
+      formSnapshot: snapshot,
+      activityId,
+      orderId,
+      signed: true,
+      signedDate,
+      signedBy: parentName,
+      studentName: name,
+    });
+    await requireDurable(persist, 'health_declarations', declaration);
+    declarations.push(declaration);
+    savedParticipants.push({
+      input,
+      type: participantType,
+      name,
+      student,
+      declaration,
+    });
+  }
+
+  return { parent, participants: savedParticipants, declarations, template };
+}
