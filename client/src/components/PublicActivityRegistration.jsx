@@ -134,14 +134,16 @@ export default function PublicActivityRegistration() {
 
   const paidMode = activity?.registration_mode === 'paid_per_participant';
   const allParticipants = useMemo(() => {
-    const children = participants.filter((participant) => participant.name.trim());
+    const children = participants.filter(
+      (participant) => participant.type !== 'adult' && participant.name.trim()
+    );
     if (!parentParticipates) return children;
     const existing = participants.find((participant) => participant.type === 'adult');
     const adult = existing || {
       ...emptyParticipant(activity?.form_template?.healthQuestions || []),
       type: 'adult',
     };
-    return [{ ...adult, name: parent.name.trim() }, ...children.filter((item) => item.type !== 'adult')];
+    return [{ ...adult, name: parent.name.trim() }, ...children];
   }, [participants, parentParticipates, parent.name, activity]);
   const total = (Number(activity?.unit_price) || 0) * allParticipants.length;
   const currentParticipant = allParticipants[healthIndex];
@@ -162,6 +164,16 @@ export default function PublicActivityRegistration() {
       }
       return [{ ...emptyParticipant(activity.form_template.healthQuestions), type: 'adult', ...patch }, ...current];
     });
+  };
+
+  const setParentParticipatesChecked = (checked) => {
+    setParentParticipates(checked);
+    if (checked) {
+      syncAdult({ name: parent.name });
+      return;
+    }
+    setParticipants((current) => current.filter((participant) => participant.type !== 'adult'));
+    setHealthIndex(0);
   };
 
   const next = () => {
@@ -279,10 +291,7 @@ export default function PublicActivityRegistration() {
               <input
                 type="checkbox"
                 checked={parentParticipates}
-                onChange={(event) => {
-                  setParentParticipates(event.target.checked);
-                  if (event.target.checked) syncAdult({ name: parent.name });
-                }}
+                onChange={(event) => setParentParticipatesChecked(event.target.checked)}
               />
               גם ההורה משתתף בפעילות
             </label>
