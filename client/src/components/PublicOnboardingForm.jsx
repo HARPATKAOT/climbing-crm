@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, CheckCircle, Download, PenTool, Plus, Trash2 } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -6,8 +6,10 @@ import {
   buildHealthDeclarationPdf,
   downloadHealthDeclarationPdf,
 } from '../utils/healthDeclarationPdf.js';
+import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 
-const FALLBACK_WAIVER = `אני מצהיר/ה כי אני מודע/ת לסיכונים הכרוכים בפעילות המתקיימת ב"קיר בועז", אני פוטר/ת את "קיר בועז" ו/או מי מטעמו מכל אחריות לפגיעה אם תקרה למשתתף אותו אני רושם לפעילות וזאת אלא אם יוכח כי הינה תוצאה של רשלנות המקום.
+function buildFallbackWaiver(legalName) {
+  return `אני מצהיר/ה כי אני מודע/ת לסיכונים הכרוכים בפעילות המתקיימת ב"${legalName}", אני פוטר/ת את "${legalName}" ו/או מי מטעמו מכל אחריות לפגיעה אם תקרה למשתתף אותו אני רושם לפעילות וזאת אלא אם יוכח כי הינה תוצאה של רשלנות המקום.
 
 אני הח"מ מתחייב/ת בזאת למלא את כל הוראות הבטיחות המפורטות להלן:
 • אין להשאיר ילד עד גיל 11 ללא ליווי מבוגר שלא במסגרת חוג מסודר
@@ -15,19 +17,22 @@ const FALLBACK_WAIVER = `אני מצהיר/ה כי אני מודע/ת לסיכו
 • יש להישמע להוראות המדריכים
 • טיפוס על הקיר יתאפשר רק לאלו שקיבלו תדריך מסודר
 • אין להשתמש במתקנים השונים ללא קבלת אישור ממדריך`;
+}
 
-const FALLBACK_QUESTIONS = [
-  {
-    id: 'h1',
-    requireYes: true,
-    label: 'אני החתום/ה מטה מצהיר/ה בזאת שאני או האדם אותו אני רושם לחוג הטיפוס בריא/ה וכשיר/ה פיזית, נפשית וקוגניטיבית להשתתף בפעילות המתקיימת ב"קיר בועז". אני מבין כי הפעילות עלולה להיות מסוכנת ולא ידוע לי על מגבלות שעלולות למנוע מהמשתתף פעילות בטוחה ובריאה.',
-  },
-  { id: 's1', requireYes: true, label: 'אין להשאיר ילד עד גיל 11 ללא ליווי מבוגר שלא במסגרת חוג מסודר' },
-  { id: 's2', requireYes: true, label: 'נא להימנע מריצה והשתוללות בכל מתחם הקיר' },
-  { id: 's3', requireYes: true, label: 'יש להישמע להוראות המדריכים' },
-  { id: 's4', requireYes: true, label: 'טיפוס על הקיר יתאפשר רק לאלו שקיבלו תדריך מסודר' },
-  { id: 's5', requireYes: true, label: 'אין להשתמש במתקנים השונים ללא קבלת אישור ממדריך' },
-];
+function buildFallbackQuestions(legalName) {
+  return [
+    {
+      id: 'h1',
+      requireYes: true,
+      label: `אני החתום/ה מטה מצהיר/ה בזאת שאני או האדם אותו אני רושם לחוג הטיפוס בריא/ה וכשיר/ה פיזית, נפשית וקוגניטיבית להשתתף בפעילות המתקיימת ב"${legalName}". אני מבין כי הפעילות עלולה להיות מסוכנת ולא ידוע לי על מגבלות שעלולות למנוע מהמשתתף פעילות בטוחה ובריאה.`,
+    },
+    { id: 's1', requireYes: true, label: 'אין להשאיר ילד עד גיל 11 ללא ליווי מבוגר שלא במסגרת חוג מסודר' },
+    { id: 's2', requireYes: true, label: 'נא להימנע מריצה והשתוללות בכל מתחם הקיר' },
+    { id: 's3', requireYes: true, label: 'יש להישמע להוראות המדריכים' },
+    { id: 's4', requireYes: true, label: 'טיפוס על הקיר יתאפשר רק לאלו שקיבלו תדריך מסודר' },
+    { id: 's5', requireYes: true, label: 'אין להשתמש במתקנים השונים ללא קבלת אישור ממדריך' },
+  ];
+}
 
 const FALLBACK_INTERESTS = [
   'אימון הכירות',
@@ -41,7 +46,7 @@ const FALLBACK_INTERESTS = [
   'טיפוס בשעות הפתיחה',
 ];
 
-const emptyChild = (questions = FALLBACK_QUESTIONS) => {
+const emptyChild = (questions = []) => {
   const answers = {};
   questions.forEach((q) => { answers[q.id] = false; });
   return {
@@ -69,6 +74,11 @@ const selectStyle = {
 };
 
 export default function PublicOnboardingForm() {
+  const { profile, legalName } = useBusinessProfile();
+  const brandName = profile.display_name || 'הרפתקאות';
+  const brandLogo = profile.logo_url || '/logo.png';
+  const fallbackWaiver = useMemo(() => buildFallbackWaiver(legalName), [legalName]);
+  const fallbackQuestions = useMemo(() => buildFallbackQuestions(legalName), [legalName]);
   const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [step, setStep] = useState(1);
@@ -97,8 +107,8 @@ export default function PublicOnboardingForm() {
 
   const questions = (template?.healthQuestions?.length
     ? template.healthQuestions
-    : FALLBACK_QUESTIONS);
-  const waiverText = template?.waiverText || FALLBACK_WAIVER;
+    : fallbackQuestions);
+  const waiverText = template?.waiverText || fallbackWaiver;
   const totalStepsLabel = 2 + Math.max(children.filter((c) => c.name.trim()).length, 1);
 
   useEffect(() => {
@@ -158,7 +168,7 @@ export default function PublicOnboardingForm() {
         if (data.template) setTemplate(data.template);
         const qs = data.template?.healthQuestions?.length
           ? data.template.healthQuestions
-          : FALLBACK_QUESTIONS;
+          : fallbackQuestions;
         if (data.parent) {
           setParent({
             name: data.parent.name || '',
@@ -205,7 +215,7 @@ export default function PublicOnboardingForm() {
     }
     load();
     return () => { cancelled = true; };
-  }, [searchParams]);
+  }, [searchParams, fallbackQuestions]);
 
   const initCanvas = () => {
     setTimeout(() => {
@@ -411,6 +421,7 @@ export default function PublicOnboardingForm() {
         signedDate: d.signedDate || d.date,
         templateSlug: template?.slug || 'wall',
         title: template?.title || 'הצהרת בריאות ובטיחות + הסרת אחריות',
+        brandName,
       }));
       setSavedDeclarations(decls);
       setIsSuccess(true);
@@ -514,7 +525,7 @@ export default function PublicOnboardingForm() {
 
         <div className="form-header">
           <div className="logo-circle">
-            <img src="/logo.png" alt="קיר בועז" />
+            <img src={brandLogo} alt={brandName} />
           </div>
           <h2>מילוי פרטים והרשמה</h2>
           <p>

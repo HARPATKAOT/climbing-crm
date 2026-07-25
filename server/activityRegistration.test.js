@@ -74,6 +74,37 @@ test('publicRegistrationPayload exposes collect_payment', () => {
   assert.equal(payload.registration_open, true);
 });
 
+test('publicRegistrationPayload exposes cover_image from theme', () => {
+  const payload = publicRegistrationPayload(
+    {
+      id: 'a2',
+      name: 'טיול',
+      registration_page_title: 'טיול לנחל',
+      registration_theme: { cover_image: 'https://example.com/cover.jpg' },
+      registration_enabled: true,
+      status: 'open',
+    },
+    []
+  );
+  assert.equal(payload.cover_image, 'https://example.com/cover.jpg');
+  assert.equal(payload.page_title, 'טיול לנחל');
+});
+
+test('publicRegistrationPayload parses theme JSON string', () => {
+  const payload = publicRegistrationPayload(
+    {
+      id: 'a3',
+      name: 'יום הולדת',
+      registration_theme: '{"cover_image":"https://cdn.example/cover.jpg","cover_position":"50% 20%"}',
+      registration_enabled: true,
+      status: 'open',
+    },
+    []
+  );
+  assert.equal(payload.cover_image, 'https://cdn.example/cover.jpg');
+  assert.equal(payload.cover_position, '50% 20%');
+});
+
 test('starter templates cover both categories', () => {
   const cats = new Set(STARTER_ACTIVITY_TEMPLATES.map((t) => t.category));
   assert.ok(cats.has('field'));

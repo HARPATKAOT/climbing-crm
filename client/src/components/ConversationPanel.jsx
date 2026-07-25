@@ -372,7 +372,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
             ))}
           </div>
 
-          <form onSubmit={handleSend} style={{ padding: 10, background: 'rgba(0,0,0,0.15)', flexShrink: 0 }}>
+          <form onSubmit={handleSend} style={{ padding: 10, background: 'var(--bg-input)', flexShrink: 0 }}>
             {mode === 'template' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
                 {loading && templates.length === 0 ? (

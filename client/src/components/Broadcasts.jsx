@@ -689,8 +689,8 @@ export default function Broadcasts({ parents, students, groups = [] }) {
             <button className="btn btn-ghost" onClick={() => setSendResult(null)}>חזרה</button>
           </div>
         ) : (
-          <div className="grid-12" style={{ gap: 20, alignItems: 'flex-start' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, gridColumn: 'span 7' }}>
+          <div className="grid-21" style={{ gap: 20, alignItems: 'flex-start' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
               <div className="card card-p">
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 14 }}>
                   <div className="section-title" style={{ marginBottom: 0 }}>רשימת תפוצה</div>
@@ -762,7 +762,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
               </div>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, gridColumn: 'span 5' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
               <div className="card card-p" style={{ background: 'rgba(16,185,129,0.03)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
                   <span style={{ color: 'var(--green)' }}>📝</span>
@@ -820,8 +820,8 @@ export default function Broadcasts({ parents, students, groups = [] }) {
 
       {/* SIMULATOR */}
       {activeTab === 'simulator' && (
-        <div className="grid-12" style={{ gap: 20, alignItems: 'flex-start' }}>
-          <div className="card" style={{ gridColumn: 'span 7', display: 'flex', flexDirection: 'column', height: '540px' }}>
+        <div className="grid-21" style={{ gap: 20, alignItems: 'flex-start' }}>
+          <div className="card" style={{ display: 'flex', flexDirection: 'column', height: '540px', minWidth: 0 }}>
             <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <span className="section-title" style={{ fontSize: 14 }}>יומן צ׳אט וסימולטור פעיל</span>
@@ -871,7 +871,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
             </div>
           </div>
 
-          <div style={{ gridColumn: 'span 5', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 0 }}>
             <div style={{ width: '100%', maxWidth: '300px', height: '540px', border: '8px solid #1f2937', borderRadius: 24, background: simChannel === 'instagram' ? '#000000' : '#e5ddd5', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
               <div style={{ background: simChannel === 'instagram' ? 'linear-gradient(90deg, #833ab4, #fd1d1d, #fcb045)' : '#075e54', color: 'white', padding: 10, fontSize: 12, fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

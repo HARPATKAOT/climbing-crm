@@ -365,16 +365,26 @@ export async function getDocInfo({ doctype, docnum } = {}) {
 /**
  * Cancel / credit an existing document in iCount.
  * Creates a cancellation document linked to the original.
- * For card charges, iCount handles the accounting cancel; card money return
- * depends on their terminal settings (may still need manual bank refund).
+ *
+ * refundCc (refund_cc=1): also reverse the card charge on the linked terminal
+ * (Max via iCount). Without it, only the accounting document is cancelled.
  */
-export async function cancelDoc({ doctype = 'invrec', docnum, reason } = {}) {
+export async function cancelDoc({
+  doctype = 'invrec',
+  docnum,
+  reason,
+  refundCc = false,
+} = {}) {
   if (!docnum) throw new Error('docnum required');
   const fields = {
     doctype,
     docnum,
+    refund_cc: refundCc ? 1 : 0,
   };
-  if (reason) fields.cancellation_reason = reason;
+  if (reason) {
+    fields.cancellation_reason = reason;
+    fields.reason = reason;
+  }
   const data = await icountPost('doc/cancel', fields);
   return {
     doctype: data.cancellation_doctype || doctype,

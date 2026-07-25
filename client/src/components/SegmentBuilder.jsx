@@ -104,6 +104,17 @@ export default function SegmentBuilder({
     set({ [key]: arr });
   };
 
+  const toggleDayGroups = (dayGroups) => {
+    const dayIds = dayGroups.map((g) => g.id);
+    const selected = Array.isArray(f.groupIds) ? f.groupIds : [];
+    const allSelected = dayIds.every((id) => selected.includes(id));
+    if (allSelected) {
+      set({ groupIds: selected.filter((id) => !dayIds.includes(id)) });
+    } else {
+      set({ groupIds: [...new Set([...selected, ...dayIds])] });
+    }
+  };
+
   const saveCurrent = async () => {
     const name = segmentName.trim() || `קהל ${new Date().toLocaleDateString('he-IL')}`;
     const res = await fetch('/api/saved-segments', {
@@ -225,11 +236,14 @@ export default function SegmentBuilder({
             display: 'grid',
             gridTemplateColumns: `repeat(${Math.max(groupsByDay.length, 1)}, minmax(140px, 1fr))`,
             gap: 10,
-            overflowX: 'auto',
             paddingBottom: 4,
           }}
         >
-          {groupsByDay.map((section) => (
+          {groupsByDay.map((section) => {
+            const dayIds = section.groups.map((g) => g.id);
+            const selected = Array.isArray(f.groupIds) ? f.groupIds : [];
+            const allDaySelected = dayIds.length > 0 && dayIds.every((id) => selected.includes(id));
+            return (
             <div
               key={section.day}
               style={{
@@ -243,48 +257,50 @@ export default function SegmentBuilder({
                 border: '1px solid var(--border)',
               }}
             >
-              <div
+              <button
+                type="button"
+                onClick={() => toggleDayGroups(section.groups)}
+                title={allDaySelected ? 'בטל סימון כל הקבוצות של היום' : 'סמן את כל הקבוצות של היום'}
+                className={`btn btn-xs segment-day-btn ${allDaySelected ? 'btn-primary' : 'btn-ghost'}`}
                 style={{
                   fontSize: 12,
                   fontWeight: 800,
-                  color: 'var(--text-1)',
-                  textAlign: 'center',
-                  paddingBottom: 4,
-                  borderBottom: '1px solid var(--border)',
+                  width: '100%',
+                  marginBottom: 4,
+                  minHeight: 28,
+                  boxSizing: 'border-box',
+                  border: '1px solid var(--border)',
+                  background: allDaySelected ? undefined : 'rgba(255,255,255,0.06)',
+                  boxShadow: 'none',
+                  transform: 'none',
                 }}
               >
                 יום {section.label}
-              </div>
+              </button>
               {section.groups.map((g) => (
                 <button
                   key={`${section.day}-${g.id}`}
                   type="button"
-                  className={`btn btn-xs ${(f.groupIds || []).includes(g.id) ? 'btn-primary' : 'btn-ghost'}`}
+                  className={`btn btn-xs segment-group-btn ${(f.groupIds || []).includes(g.id) ? 'btn-primary' : 'btn-ghost'}`}
                   onClick={() => toggleInArray('groupIds', g.id)}
-                  style={{ width: '100%', whiteSpace: 'normal', lineHeight: 1.35, height: 'auto', minHeight: 28 }}
+                  style={{
+                    width: '100%',
+                    whiteSpace: 'normal',
+                    lineHeight: 1.35,
+                    height: 'auto',
+                    minHeight: 28,
+                    boxSizing: 'border-box',
+                    boxShadow: 'none',
+                    transform: 'none',
+                  }}
                   title={g.name}
                 >
                   {g.name}
                 </button>
               ))}
             </div>
-          ))}
-        </div>
-      </div>
-
-      <div>
-        <div style={{ fontSize: 12, marginBottom: 6, color: 'var(--text-2)' }}>יום בשבוע</div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {DAY_OPTIONS.map((d) => (
-            <button
-              key={d.value}
-              type="button"
-              className={`btn btn-xs ${(f.groupDays || []).includes(d.value) ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => toggleInArray('groupDays', d.value)}
-            >
-              {d.label}
-            </button>
-          ))}
+            );
+          })}
         </div>
       </div>
 

@@ -2,8 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Plus, ChevronLeft, ChevronRight, X, Save, Trash2, Link2, Unlink,
   RefreshCw, Loader2, CalendarDays, CalendarRange, Layers,
-  CheckCircle, AlertCircle, Clock3,
+  CheckCircle, AlertCircle, Clock3, Bookmark, Check,
 } from 'lucide-react';
+import ActivityPageDesigner from './ActivityPageDesigner.jsx';
 import ActivityRegistrationPanel from './ActivityRegistrationPanel.jsx';
 import ActivityTemplatesMenu from './ActivityTemplatesMenu.jsx';
 
@@ -250,6 +251,25 @@ function emptyForm(dateStr = '', opts = {}) {
   };
 }
 
+function roundHoursQuarter(h) {
+  const n = Number(h);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.round(n * 4) / 4;
+}
+
+function hoursFromTimes(startHm, endHm) {
+  const parse = (hm) => {
+    if (!hm || !/^\d{1,2}:\d{2}/.test(hm)) return null;
+    const [h, m] = hm.split(':').map(Number);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+    return h * 60 + m;
+  };
+  const a = parse(startHm);
+  const b = parse(endHm);
+  if (a == null || b == null || b <= a) return null;
+  return roundHoursQuarter((b - a) / 60);
+}
+
 function WorkAssignmentsBlock({ activityId }) {
   const [employees, setEmployees] = useState([]);
   const [rows, setRows] = useState([]);
@@ -266,7 +286,9 @@ function WorkAssignmentsBlock({ activityId }) {
       const emps = empRes.ok ? await empRes.json() : [];
       const asgs = asgRes.ok ? await asgRes.json() : [];
       setEmployees(Array.isArray(emps) ? emps.filter((e) => e.is_active !== false) : []);
-      setRows(Array.isArray(asgs) ? asgs : []);
+      setRows(Array.isArray(asgs)
+        ? asgs.map((r) => ({ ...r, hours: roundHoursQuarter(r.hours) }))
+        : []);
     } catch {
       setEmployees([]);
       setRows([]);
@@ -315,7 +337,7 @@ function WorkAssignmentsBlock({ activityId }) {
           work_type: row.work_type,
           start_time: row.start_time,
           end_time: row.end_time,
-          hours: row.hours,
+          hours: roundHoursQuarter(row.hours),
           source: 'manual',
           notes: row.notes || '',
         }),
@@ -341,7 +363,15 @@ function WorkAssignmentsBlock({ activityId }) {
   };
 
   const patchLocal = (id, patch) => {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+    setRows((prev) => prev.map((r) => {
+      if (r.id !== id) return r;
+      const next = { ...r, ...patch };
+      if ('start_time' in patch || 'end_time' in patch) {
+        const computed = hoursFromTimes(next.start_time, next.end_time);
+        if (computed != null) next.hours = computed;
+      }
+      return next;
+    }));
   };
 
   const available = employees.filter((e) => !rows.some((r) => r.employee_id === e.id));
@@ -359,9 +389,6 @@ function WorkAssignmentsBlock({ activityId }) {
     }}>
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-1)' }}>
         עובדים במשמרת
-      </div>
-      <div style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.45 }}>
-        לכל עובד שעות משלו. אפשר למשוך מהשעון או מהתכנון ביומן, ואז לתקן.
       </div>
 
       {available.length > 0 && (
@@ -494,6 +521,7 @@ function WorkAssignmentsBlock({ activityId }) {
                   step="0.25"
                   value={row.hours ?? 0}
                   onChange={(e) => patchLocal(row.id, { hours: e.target.value })}
+                  onBlur={(e) => patchLocal(row.id, { hours: roundHoursQuarter(e.target.value) })}
                   style={{ fontSize: 12, padding: '4px 6px' }}
                 />
               </label>
@@ -530,6 +558,242 @@ function WorkAssignmentsBlock({ activityId }) {
   );
 }
 
+function RegularActivityModal({
+  form,
+  set,
+  setForm,
+  readOnly,
+  isEdit,
+  initial,
+  onDelete,
+  onClose,
+  saving,
+  showError,
+  submit,
+  title,
+}) {
+  const [tplBusy, setTplBusy] = useState(false);
+  const [tplMsg, setTplMsg] = useState('');
+  const activityId = isEdit ? initial?.id : null;
+
+  const saveAsTemplate = async () => {
+    if (!activityId) {
+      setTplMsg('שמרו את האירוע קודם');
+      return;
+    }
+    const name = window.prompt('שם התבנית', form.name || 'תבנית אירוע');
+    if (!name) return;
+    const catRaw = window.prompt(
+      'קטגוריה: wall = אירועים בקיר, field = פעילויות שטח',
+      'wall'
+    );
+    if (catRaw == null) return;
+    const category = String(catRaw).trim().toLowerCase() === 'field' ? 'field' : 'wall';
+    setTplBusy(true);
+    setTplMsg('');
+    try {
+      const res = await fetch('/api/activity-templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          activity_id: activityId,
+          name,
+          category,
+          theme: form.registration_theme || {},
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setTplMsg(data.error || 'שמירת תבנית נכשלה');
+        return;
+      }
+      setTplMsg(category === 'field' ? 'נשמר תחת פעילויות שטח' : 'נשמר תחת אירועים בקיר');
+    } catch {
+      setTplMsg('שגיאת רשת');
+    } finally {
+      setTplBusy(false);
+    }
+  };
+
+  return (
+    <div className="activity-modal-backdrop" onClick={onClose}>
+      <form
+        className="activity-modal activity-modal--wide"
+        onClick={(event) => event.stopPropagation()}
+        onSubmit={submit}
+      >
+        <header className="activity-modal-header">
+          <div>
+            <div className="activity-modal-title">{title}</div>
+            <div className="activity-modal-subtitle">
+              עריכת העמוד הציבורי והגדרות האירוע במקום אחד
+            </div>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="סגור">
+            <X size={16} />
+          </button>
+        </header>
+
+        <div className="activity-modal-grid">
+          <div className="activity-modal-preview-pane">
+            <ActivityPageDesigner
+              form={form}
+              setForm={setForm}
+              readOnly={readOnly}
+            />
+          </div>
+
+          <div className="activity-modal-operations">
+            <section className="activity-settings-card">
+              <div className="activity-settings-card-title">הגדרות האירוע</div>
+              <div>
+                <div className="activity-settings-label">סוג האירוע</div>
+                <div className="activity-type-options">
+                  {ACTIVITY_TYPES.map((type) => {
+                    const active = form.type === type.id;
+                    return (
+                      <button
+                        key={type.id}
+                        type="button"
+                        disabled={readOnly}
+                        onClick={() => set('type', type.id)}
+                        className={active ? 'is-active' : ''}
+                        style={{
+                          '--activity-type-color': type.color,
+                          '--activity-type-background': type.bg,
+                        }}
+                      >
+                        {type.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="activity-settings-grid">
+                <label>
+                  <span className="activity-settings-label">מצב האירוע</span>
+                  <select
+                    className="input"
+                    value={form.status || 'open'}
+                    onChange={(event) => set('status', event.target.value)}
+                    disabled={readOnly}
+                  >
+                    <option value="open">פעיל</option>
+                    <option value="completed">הסתיים</option>
+                    <option value="cancelled">בוטל</option>
+                  </select>
+                </label>
+                <label>
+                  <span className="activity-settings-label">מצב תצוגה</span>
+                  <div className="activity-settings-toggle">
+                    <input
+                      type="checkbox"
+                      checked={!!form.registration_enabled}
+                      onChange={(event) => set('registration_enabled', event.target.checked)}
+                      disabled={readOnly}
+                    />
+                    דף הרשמה ציבורי
+                  </div>
+                </label>
+              </div>
+            </section>
+
+            <ActivityRegistrationPanel
+              activityId={activityId}
+              form={form}
+              setForm={setForm}
+              readOnly={readOnly}
+              hideRegistrationToggle
+            />
+
+            <section className="activity-settings-card">
+              <div className="activity-settings-card-title">הערות פנימיות</div>
+              <textarea
+                className="input"
+                rows={3}
+                value={form.notes || ''}
+                onChange={(event) => set('notes', event.target.value)}
+                placeholder="הערות לצוות בלבד..."
+                disabled={readOnly}
+              />
+            </section>
+
+            {isEdit ? (
+              <WorkAssignmentsBlock activityId={initial.id} />
+            ) : (
+              <div className="activity-settings-empty">
+                אחרי שמירת האירוע אפשר לשייך עובדים ולקבוע שעות לכל אחד
+              </div>
+            )}
+          </div>
+        </div>
+
+        {(showError || tplMsg) && (
+          <div className="activity-modal-error" role="alert">{showError || tplMsg}</div>
+        )}
+
+        <footer className="activity-modal-footer">
+          <div className="activity-modal-footer-start">
+            {isEdit && !readOnly && onDelete && (
+              <button
+                type="button"
+                className="btn activity-modal-btn activity-modal-btn--danger"
+                onClick={() => onDelete(initial)}
+                disabled={saving || tplBusy}
+              >
+                <Trash2 size={14} /> מחיקה
+              </button>
+            )}
+          </div>
+          <div className="activity-modal-footer-actions">
+            {!readOnly && (
+              <button
+                type="button"
+                className="btn activity-modal-btn activity-modal-btn--template"
+                onClick={saveAsTemplate}
+                disabled={saving || tplBusy || !activityId}
+                title={!activityId ? 'שמרו את האירוע תחילה' : 'שמירה כתבנית'}
+              >
+                {tplBusy ? <Loader2 size={14} className="spin" /> : <Bookmark size={14} />}
+                שמירה כתבנית
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn activity-modal-btn activity-modal-btn--ghost"
+              onClick={onClose}
+              disabled={saving || tplBusy}
+            >
+              {readOnly ? 'סגור' : 'ביטול'}
+            </button>
+            {!readOnly && (
+              <>
+                <button
+                  type="button"
+                  className="btn activity-modal-btn activity-modal-btn--ghost"
+                  disabled={saving || tplBusy}
+                  onClick={(event) => submit(event, { closeAfter: false })}
+                >
+                  {saving ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
+                  החל
+                </button>
+                <button
+                  type="submit"
+                  className="btn activity-modal-btn activity-modal-btn--primary"
+                  disabled={saving || tplBusy}
+                >
+                  {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
+                  שמור וצא
+                </button>
+              </>
+            )}
+          </div>
+        </footer>
+      </form>
+    </div>
+  );
+}
+
 function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }) {
   const isOverlay = !!initial?.overlay;
   const readOnly = !!initial?.read_only;
@@ -551,6 +815,13 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
     registration_mode: initial?.registration_mode || (
       initial?.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
     ),
+    registration_page_title: initial?.registration_page_title || '',
+    registration_page_body: initial?.registration_page_body || '',
+    registration_theme: (
+      initial?.registration_theme && typeof initial.registration_theme === 'object'
+        ? initial.registration_theme
+        : {}
+    ),
   }));
   const [localError, setLocalError] = useState('');
   const isEdit = !!initial?.id;
@@ -563,7 +834,7 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
-  const submit = (e) => {
+  const submit = (e, options = {}) => {
     e.preventDefault();
     if (readOnly) return;
     if (!String(form.name || '').trim()) {
@@ -579,6 +850,7 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
       return;
     }
     const endDateNorm = form.end_date && form.end_date > form.date ? form.end_date : '';
+    const closeAfter = options.closeAfter !== false;
     if (isOverlay) {
       onSave({
         ...form,
@@ -587,6 +859,7 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
         name: String(form.name).trim(),
         calendar_id: initial.calendar_id,
         google_event_id: initial.google_event_id,
+        closeAfter,
       });
       return;
     }
@@ -596,6 +869,7 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
       name: String(form.name).trim(),
       price: form.price === '' ? 0 : Number(form.price),
       max_participants: form.max_participants === '' ? null : Number(form.max_participants),
+      closeAfter,
     });
   };
 
@@ -604,6 +878,25 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
     : isOverlay
       ? 'עריכת אירוע מיומן חיצוני'
       : (isEdit ? 'עריכת אירוע' : 'אירוע חדש');
+
+  if (!isOverlay) {
+    return (
+      <RegularActivityModal
+        form={form}
+        set={set}
+        setForm={setForm}
+        readOnly={readOnly}
+        isEdit={isEdit}
+        initial={initial}
+        onDelete={onDelete}
+        onClose={onClose}
+        saving={saving}
+        showError={showError}
+        submit={submit}
+        title={title}
+      />
+    );
+  }
 
   return (
     <div
@@ -902,10 +1195,21 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
               {readOnly ? 'סגור' : 'ביטול'}
             </button>
             {!readOnly && (
-              <button type="submit" className="btn-primary" disabled={saving}>
-                {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
-                שמירה
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  disabled={saving}
+                  onClick={(event) => submit(event, { closeAfter: false })}
+                >
+                  {saving ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
+                  החל
+                </button>
+                <button type="submit" className="btn-primary" disabled={saving}>
+                  {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
+                  שמור וצא
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -1982,14 +2286,17 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     const month = cursor.getMonth();
     const first = new Date(year, month, 1);
     const start = startOfWeek(first);
+    const todayStr = toDateStr(new Date());
     const cells = [];
     for (let i = 0; i < 42; i += 1) {
       const d = addDays(start, i);
+      const dateStr = toDateStr(d);
       cells.push({
         date: d,
-        dateStr: toDateStr(d),
+        dateStr,
         inMonth: d.getMonth() === month,
-        isToday: toDateStr(d) === toDateStr(new Date()),
+        isToday: dateStr === todayStr,
+        isPast: dateStr < todayStr,
       });
     }
     return cells;
@@ -2248,6 +2555,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   const handleSave = async (payload) => {
     setSaving(true);
     setFormError('');
+    const closeAfter = payload.closeAfter !== false;
     try {
       if (payload.overlay) {
         const before = overlayEvents.find((e) => e.id === payload.id) || payload;
@@ -2265,18 +2573,23 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           label: 'עריכת אירוע חיצוני',
           before: { ...before },
         });
-        setModal(null);
+        if (closeAfter) {
+          setModal(null);
+        } else {
+          setModal({ ...payload });
+        }
         await loadOverlayEvents(visibleRangeRef.current.from, visibleRangeRef.current.to);
-        setBanner('האירוע עודכן ביומן החיצוני');
+        setBanner(closeAfter ? 'האירוע נשמר' : 'השינויים הוחלו');
         return;
       }
 
       const isEdit = !!payload.id;
       const before = isEdit ? activities.find((a) => a.id === payload.id) : null;
+      const { closeAfter: _closeAfter, ...body } = payload;
       const res = await fetch(isEdit ? `/api/activities/${payload.id}` : '/api/activities', {
         method: isEdit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -2287,8 +2600,14 @@ export default function ActivitiesCalendar({ isOwner = false }) {
       } else if (!isEdit && data?.id) {
         pushUndo({ type: 'activity_create', label: 'יצירת אירוע', createdId: data.id });
       }
-      setModal(null);
       await loadActivities();
+      if (closeAfter) {
+        setModal(null);
+        setBanner('האירוע נשמר');
+      } else {
+        setModal(data?.id ? data : { ...body, ...(data || {}) });
+        setBanner('השינויים הוחלו');
+      }
     } catch (err) {
       const msg = err.message || 'שמירה נכשלה';
       setFormError(msg);
@@ -2722,9 +3041,9 @@ export default function ActivitiesCalendar({ isOwner = false }) {
                       ? 'rgba(56,189,248,0.18)'
                       : cell.isToday
                         ? 'rgba(56,189,248,0.12)'
-                        : (cell.inMonth ? 'transparent' : 'rgba(0,0,0,0.15)'),
+                        : (cell.isPast ? 'rgba(0,0,0,0.15)' : 'transparent'),
                     cursor: 'pointer',
-                    opacity: cell.inMonth ? 1 : 0.55,
+                    opacity: cell.isPast ? 0.55 : 1,
                     outline: hot
                       ? '1px solid rgba(56,189,248,0.55)'
                       : (cell.isToday ? '2px solid rgba(56,189,248,0.75)' : 'none'),
@@ -2847,6 +3166,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
 
       {modal && (
         <ActivityFormModal
+          key={modal.overlay ? `overlay-${modal.id}` : (modal.id || 'new-activity')}
           initial={modal}
           onSave={handleSave}
           onDelete={handleDelete}

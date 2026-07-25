@@ -1,7 +1,11 @@
 import React, { useState } from 'react';
 import { CheckCircle, Plus, Trash2 } from 'lucide-react';
+import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 
 export default function LeadIntakeForm() {
+  const { profile } = useBusinessProfile();
+  const brandName = profile.display_name || 'הרפתקאות';
+  const brandLogo = profile.logo_url || '/logo.png';
   const [formData, setFormData] = useState({
     parentName: '',
     phone: '',
@@ -90,9 +94,9 @@ export default function LeadIntakeForm() {
       <div className="glass-card">
         <div className="form-header">
           <div className="logo-circle">
-            <img src="/logo.png" alt="קיר בועז" />
+            <img src={brandLogo} alt={brandName} />
           </div>
-          <h2>הרשמה לקיר הטיפוס My Wall</h2>
+          <h2>הרשמה לקיר הטיפוס {brandName}</h2>
           <p>השאירו פרטים ונחזור אליכם לתיאום אימון היכרות</p>
         </div>
 

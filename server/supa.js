@@ -426,6 +426,22 @@ export const supa = {
     return (data || []).map(m.fromRow);
   },
 
+  // Attendance filtered at the database level (avoids pulling the whole table).
+  async getAttendanceFiltered({ groupId, date, studentId } = {}) {
+    if (!client) return null;
+    let query = client.from('attendance').select('*');
+    if (groupId) query = query.eq('group_id', groupId);
+    if (date) query = query.eq('date', date);
+    if (studentId) query = query.eq('student_id', studentId);
+    const { data, error } = await query;
+    if (error) {
+      console.error('Supabase getAttendanceFiltered failed:', error.message);
+      return null;
+    }
+    const m = mapperFor('attendance');
+    return (data || []).map(m.fromRow);
+  },
+
   // Insert or update a single record. Returns { ok, error }.
   async upsert(table, record) {
     if (!client) return { ok: false, error: 'Supabase not configured' };

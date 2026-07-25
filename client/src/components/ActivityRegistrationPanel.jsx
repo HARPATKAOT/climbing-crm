@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Copy, ExternalLink, Link2, Loader2, Mail, Pencil, RefreshCw,
-  Search, Send, Trash2, Users, X,
+  Copy, ExternalLink, Loader2, Pencil, RefreshCw,
+  Search, Send, Trash2, Undo2, Users, X,
 } from 'lucide-react';
 
 function leadOpenTarget(registration) {
@@ -15,21 +15,40 @@ function normalizePhoneDigits(phone) {
   return String(phone || '').replace(/\D/g, '');
 }
 
+function formatPaidAt(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString('he-IL', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 /**
  * Registration / host / payment controls for a saved calendar activity.
  * Kept separate from ActivitiesCalendar to avoid edit conflicts.
  */
-export default function ActivityRegistrationPanel({ activityId, form, setForm, readOnly }) {
+export default function ActivityRegistrationPanel({
+  activityId,
+  form,
+  setForm,
+  readOnly,
+  hideRegistrationToggle = false,
+}) {
   const navigate = useNavigate();
   const [regs, setRegs] = useState([]);
   const [remaining, setRemaining] = useState(null);
+  const [hostPayment, setHostPayment] = useState(null);
   const [linkUrl, setLinkUrl] = useState('');
   const [hostLinkUrl, setHostLinkUrl] = useState('');
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState('');
   const [copied, setCopied] = useState(false);
-  const [templates, setTemplates] = useState([]);
-  const [tplBusy, setTplBusy] = useState(false);
+  const [hostCopied, setHostCopied] = useState(false);
   const [parents, setParents] = useState([]);
   const [students, setStudents] = useState([]);
   const [customerQuery, setCustomerQuery] = useState('');
@@ -62,20 +81,18 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
       const data = await res.json();
       setRegs(Array.isArray(data.registrations) ? data.registrations : []);
       setRemaining(data.remaining ?? null);
+      setHostPayment(data.host_payment || null);
+      if (data.host_payment?.payment_status && setForm) {
+        setForm((prev) => {
+          if (!prev) return prev;
+          if (prev.payment_status === data.host_payment.payment_status) return prev;
+          return { ...prev, payment_status: data.host_payment.payment_status };
+        });
+      }
     } catch {
       /* ignore */
     }
-  }, [activityId]);
-
-  const loadTemplates = useCallback(async () => {
-    try {
-      const res = await fetch('/api/activity-templates');
-      if (!res.ok) return;
-      setTemplates(await res.json());
-    } catch {
-      /* ignore */
-    }
-  }, []);
+  }, [activityId, setForm]);
 
   const loadCustomers = useCallback(async () => {
     try {
@@ -94,9 +111,8 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
 
   useEffect(() => {
     loadRegs();
-    loadTemplates();
     loadCustomers();
-  }, [loadRegs, loadTemplates, loadCustomers]);
+  }, [loadRegs, loadCustomers]);
 
   useEffect(() => {
     const refreshWhenVisible = () => {
@@ -147,6 +163,12 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
     const timeout = window.setTimeout(() => setCopied(false), 1500);
     return () => window.clearTimeout(timeout);
   }, [copied]);
+
+  useEffect(() => {
+    if (!hostCopied) return undefined;
+    const timeout = window.setTimeout(() => setHostCopied(false), 1500);
+    return () => window.clearTimeout(timeout);
+  }, [hostCopied]);
 
   const selectedParent = useMemo(() => {
     if (!form?.host_parent_id) return null;
@@ -250,7 +272,10 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
       setHostLinkUrl(data.hostPaymentUrl || '');
       set('registration_slug', data.slug);
       set('registration_enabled', true);
-      return data.url;
+      return {
+        url: data.url || '',
+        hostPaymentUrl: data.hostPaymentUrl || '',
+      };
     } catch {
       setMsg('שגיאת רשת');
       return null;
@@ -261,7 +286,10 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
 
   const copyLink = async () => {
     let url = linkUrl;
-    if (!url) url = await ensureLink();
+    if (!url) {
+      const created = await ensureLink();
+      url = created?.url || '';
+    }
     if (!url) return;
     try {
       await navigator.clipboard.writeText(url);
@@ -276,15 +304,8 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
   const copyHostLink = async () => {
     let url = hostLinkUrl;
     if (!url) {
-      await ensureLink();
-      const response = await fetch(`/api/activities/${encodeURIComponent(activityId)}/registration-link`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enable: true }),
-      });
-      const data = await response.json().catch(() => ({}));
-      url = data.hostPaymentUrl || '';
-      setHostLinkUrl(url);
+      const created = await ensureLink();
+      url = created?.hostPaymentUrl || '';
     }
     if (!url) {
       setMsg('קישור תשלום זמין רק באירוע שבו המזמין משלם');
@@ -292,8 +313,10 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
     }
     try {
       await navigator.clipboard.writeText(url);
+      setHostCopied(true);
       setMsg('קישור התשלום למזמין הועתק');
     } catch {
+      setHostCopied(false);
       setMsg(url);
     }
   };
@@ -443,43 +466,100 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
     }
   };
 
-  const saveAsTemplate = async () => {
-    if (!activityId) {
-      setMsg('שמרו את האירוע קודם');
+  const refundParticipant = async (registration) => {
+    if (!activityId || !registration?.id || readOnly) return;
+    if (registration.payment_status !== 'paid') {
+      setMsg('אין תשלום שולם למשתתף הזה');
       return;
     }
-    const name = window.prompt('שם התבנית', form.name || 'תבנית אירוע');
-    if (!name) return;
-    const catRaw = window.prompt(
-      'קטגוריה: wall = אירועים בקיר, field = פעילויות שטח',
-      'wall'
+    const name = registration.participant_name || 'המשתתף';
+    const ok = window.confirm(
+      `לזכות את התשלום של ${name}?\n\n` +
+      'אם ההרשמה הייתה קבוצתית עם תשלום אחד — יזוכו כל המשתתפים באותו תשלום, והכסף יוחזר לכרטיס דרך מסוף מקס.\n\n' +
+      'פעולה זו לא ניתנת לביטול מהמערכת.'
     );
-    if (catRaw == null) return;
-    const category = String(catRaw).trim().toLowerCase() === 'field' ? 'field' : 'wall';
-    setTplBusy(true);
+    if (!ok) return;
+    setEditBusy(`refund:${registration.id}`);
     setMsg('');
     try {
-      const res = await fetch('/api/activity-templates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          activity_id: activityId,
-          name,
-          category,
-          theme: form.registration_theme || {},
-        }),
-      });
+      const res = await fetch(
+        `/api/activities/${encodeURIComponent(activityId)}/registrations/${encodeURIComponent(registration.id)}/refund`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reason: `זיכוי משתתף · ${name}`,
+          }),
+        }
+      );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setMsg(data.error || 'שמירת תבנית נכשלה');
+        setMsg(data.error || 'הזיכוי נכשל');
         return;
       }
-      setMsg(category === 'field' ? 'נשמר תחת פעילויות שטח' : 'נשמר תחת אירועים בקיר');
-      loadTemplates();
+      if (editingId === registration.id) cancelEdit();
+      if (data.remaining != null) setRemaining(data.remaining);
+      const names = Array.isArray(data.participantNames) ? data.participantNames.join(', ') : name;
+      const amountPart = data.amount != null ? ` · ₪${data.amount}` : '';
+      setMsg(
+        data.sharedPayment
+          ? `זוכו ${names}${amountPart} (תשלום משותף)`
+          : `זוכה ${names}${amountPart}`
+      );
+      await loadRegs();
     } catch {
       setMsg('שגיאת רשת');
     } finally {
-      setTplBusy(false);
+      setEditBusy('');
+    }
+  };
+
+  const refundHostPayment = async () => {
+    if (!activityId || readOnly) return;
+    if ((form.payment_status || 'unpaid') !== 'paid') {
+      setMsg('דמי ההזמנה לא מסומנים כשולמו');
+      return;
+    }
+    const ok = window.confirm(
+      'לזכות את דמי ההזמנה של המזמין?\n\n' +
+      'הכסף יוחזר לכרטיס דרך מסוף מקס, והסטטוס יחזור ל„לא שולם”.\n\n' +
+      'פעולה זו לא ניתנת לביטול מהמערכת.'
+    );
+    if (!ok) return;
+    setBusy('host-refund');
+    setMsg('');
+    try {
+      const res = await fetch(
+        `/api/activities/${encodeURIComponent(activityId)}/host-payment/refund`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reason: `זיכוי דמי הזמנה · ${form.name || activityId}`,
+          }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMsg(data.error || 'זיכוי דמי ההזמנה נכשל');
+        return;
+      }
+      if (data.activity) {
+        setForm((prev) => ({
+          ...prev,
+          payment_status: data.activity.payment_status || 'unpaid',
+          host_paid_at: data.activity.host_paid_at || null,
+        }));
+      } else {
+        set('payment_status', 'unpaid');
+      }
+      const amountPart = data.amount != null ? ` · ₪${data.amount}` : '';
+      setMsg(`דמי ההזמנה זוכו${amountPart}`);
+      await loadRegs();
+    } catch {
+      setMsg('שגיאת רשת');
+    } finally {
+      setBusy('');
     }
   };
 
@@ -494,19 +574,13 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
   const displayEmail = form.host_email || selectedParent?.email || '';
   const hasLinkedCustomer = !!form.host_parent_id;
   const hasLegacyHost = !hasLinkedCustomer && !!(displayName || displayPhone || displayEmail);
+  const isHostPays =
+    (form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')) === 'host_pays';
 
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 12,
-      padding: 12,
-      borderRadius: 12,
-      border: '1px solid var(--border)',
-      background: 'rgba(255,255,255,0.02)',
-    }}>
-      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-1)' }}>
-        מזמין · הרשמה · תשלום
+    <div className="activity-registration-operations">
+      <div className="activity-registration-operations-title">
+        מזמין
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -649,6 +723,10 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
         )}
       </div>
 
+      <div className="activity-registration-divider">
+        תשלום והרשמה
+      </div>
+
       <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-3)' }}>
         סטטוס תשלום המזמין (דמי הזמנה לקיר)
         <select
@@ -663,17 +741,32 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
         </select>
       </label>
 
-      <label style={{
-        display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-2)',
-      }}>
-        <input
-          type="checkbox"
-          checked={!!form.registration_enabled}
-          onChange={(e) => set('registration_enabled', e.target.checked)}
-          disabled={readOnly}
-        />
-        הפעלת דף הרשמה ציבורי
-      </label>
+      {activityId && !readOnly && (form.payment_status || 'unpaid') === 'paid' && !isHostPays && (
+        <button
+          type="button"
+          className="btn-ghost"
+          onClick={refundHostPayment}
+          disabled={busy === 'host-refund'}
+          style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        >
+          {busy === 'host-refund' ? <Loader2 size={14} className="spin" /> : <Undo2 size={14} />}
+          זיכוי דמי הזמנה
+        </button>
+      )}
+
+      {!hideRegistrationToggle && (
+        <label style={{
+          display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-2)',
+        }}>
+          <input
+            type="checkbox"
+            checked={!!form.registration_enabled}
+            onChange={(e) => set('registration_enabled', e.target.checked)}
+            disabled={readOnly}
+          />
+          הפעלת דף הרשמה ציבורי
+        </label>
+      )}
 
       <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-3)' }}>
         אופן ההרשמה והתשלום
@@ -696,125 +789,149 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
         </span>
       </label>
 
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-3)' }}>
-        כותרת בדף הציבורי
-        <input
-          className="input"
-          value={form.registration_page_title || ''}
-          onChange={(e) => set('registration_page_title', e.target.value)}
-          disabled={readOnly}
-          placeholder="ברירת מחדל: שם האירוע"
-        />
-      </label>
-
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-3)' }}>
-        טקסט בדף הציבורי
-        <textarea
-          className="input"
-          rows={2}
-          value={form.registration_page_body || ''}
-          onChange={(e) => set('registration_page_body', e.target.value)}
-          disabled={readOnly}
-          style={{ resize: 'vertical' }}
-        />
-      </label>
-
       {activityId && (
-        <div className="registration-actions">
-          <button
-            type="button"
-            className="btn btn-sm reg-action-btn reg-action-btn--participants"
-            onClick={() => ensureLink()}
-            disabled={!!busy || tplBusy || readOnly}
-          >
-            {busy === 'link' ? <Loader2 size={14} className="spin" /> : <Link2 size={14} />}
-            קישור משתתפים
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm reg-action-btn reg-action-btn--refresh"
-            onClick={() => ensureLink({ regenerate: true })}
-            disabled={!!busy || tplBusy || readOnly}
-          >
-            <RefreshCw size={14} /> קישור חדש
-          </button>
-          {(form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')) === 'host_pays' && (
-            <button
-              type="button"
-              className="btn btn-sm reg-action-btn reg-action-btn--copy-host"
-              onClick={copyHostLink}
-              disabled={!!busy || tplBusy || readOnly}
-            >
-              <Copy size={14} />
-              העתקת קישור תשלום למזמין
-            </button>
+        <div className="registration-sections">
+          {isHostPays && (
+            <div className="registration-section registration-section--host">
+              <div className="registration-section-header">
+                <span className="registration-section-badge registration-section-badge--host">תשלום</span>
+                <div className="registration-section-title registration-section-title--host">
+                  קישור תשלום למזמין
+                </div>
+              </div>
+              <div className="registration-link-row">
+                <button
+                  type="button"
+                  className="btn btn-sm reg-action-btn reg-action-btn--send"
+                  onClick={() => sendToHost('host')}
+                  disabled={!!busy || readOnly}
+                >
+                  {busy === 'send' ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
+                  שליחה
+                </button>
+                <div className="registration-link-value" title={hostLinkUrl || undefined}>
+                  <span>{hostLinkUrl || 'אין קישור עדיין'}</span>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm registration-copy-btn"
+                  onClick={copyHostLink}
+                  disabled={!!busy}
+                >
+                  <Copy size={14} />
+                  {hostCopied ? 'הועתק' : 'העתקה'}
+                </button>
+              </div>
+
+              <div className="registration-host-payment-card">
+                <div className="registration-host-payment-title">פרטי תשלום המזמין</div>
+                <div className="registration-host-payment-grid">
+                  <div>
+                    <span className="registration-host-payment-label">סטטוס</span>
+                    <strong>
+                      {hostPayment?.status === 'refunded'
+                        ? 'זוכה'
+                        : (form.payment_status || hostPayment?.payment_status || 'unpaid') === 'paid'
+                          ? 'שולם'
+                          : (form.payment_status || 'unpaid') === 'partial'
+                            ? 'שולם חלקית'
+                            : 'לא שולם'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="registration-host-payment-label">סכום</span>
+                    <strong>
+                      ₪{Number(hostPayment?.amount ?? form.price ?? 0) || 0}
+                    </strong>
+                  </div>
+                  {(hostPayment?.paid_at || form.host_paid_at) && (
+                    <div>
+                      <span className="registration-host-payment-label">תאריך תשלום</span>
+                      <strong>{formatPaidAt(hostPayment?.paid_at || form.host_paid_at)}</strong>
+                    </div>
+                  )}
+                  {hostPayment?.icount_doc_number && (
+                    <div>
+                      <span className="registration-host-payment-label">מספר מסמך</span>
+                      <strong>{hostPayment.icount_doc_number}</strong>
+                    </div>
+                  )}
+                </div>
+
+                <div className="registration-host-payment-actions">
+                  {hostPayment?.icount_doc_url ? (
+                    <a
+                      className="btn btn-ghost btn-sm"
+                      href={hostPayment.icount_doc_url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <ExternalLink size={14} />
+                      פתיחת חשבונית
+                    </a>
+                  ) : hostPayment?.icount_doc_number ? (
+                    <span className="registration-host-payment-hint">
+                      יש מספר מסמך, אבל אין קישור ישיר לחשבונית
+                    </span>
+                  ) : (form.payment_status || 'unpaid') === 'paid' ? (
+                    <span className="registration-host-payment-hint">
+                      אין עדיין מסמך חיוב מקושר — ייתכן שהתשלום סומן ידנית
+                    </span>
+                  ) : null}
+
+                  {!readOnly && (
+                    (hostPayment?.refundable ||
+                      ((form.payment_status || 'unpaid') === 'paid' && hostPayment?.status !== 'refunded')) && (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={refundHostPayment}
+                        disabled={busy === 'host-refund'}
+                      >
+                        {busy === 'host-refund'
+                          ? <Loader2 size={14} className="spin" />
+                          : <Undo2 size={14} />}
+                        זיכוי דמי הזמנה
+                      </button>
+                    )
+                  )}
+                </div>
+              </div>
+            </div>
           )}
-          {(form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')) === 'host_pays' && (
-            <button
-              type="button"
-              className="btn btn-sm reg-action-btn reg-action-btn--send"
-              onClick={() => sendToHost('host')}
-              disabled={!!busy || tplBusy || readOnly}
-            >
-              {busy === 'send' ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
-              שליחת תשלום למזמין
-            </button>
-          )}
-          <button
-            type="button"
-            className="btn btn-sm reg-action-btn reg-action-btn--send-participants"
-            onClick={() => sendToHost('participant')}
-            disabled={!!busy || tplBusy || readOnly}
-          >
-            {busy === 'send-participants' ? <Loader2 size={14} className="spin" /> : <Users size={14} />}
-            שליחת קישור משתתפים למזמין
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm reg-action-btn reg-action-btn--template"
-            onClick={saveAsTemplate}
-            disabled={!!busy || tplBusy || readOnly}
-          >
-            {tplBusy ? <Loader2 size={14} className="spin" /> : <Mail size={14} />}
-            שמירה כתבנית
-          </button>
+
+          <div className="registration-section registration-section--participants">
+            <div className="registration-section-header">
+              <span className="registration-section-badge registration-section-badge--participants">משתתפים</span>
+              <div className="registration-section-title">
+                קישור למשתתפים
+              </div>
+            </div>
+            <div className="registration-link-row">
+              <button
+                type="button"
+                className="btn btn-sm reg-action-btn reg-action-btn--send-participants"
+                onClick={() => sendToHost('participant')}
+                disabled={!!busy || readOnly}
+              >
+                {busy === 'send-participants' ? <Loader2 size={14} className="spin" /> : <Users size={14} />}
+                שליחה
+              </button>
+              <div className="registration-link-value" title={linkUrl || undefined}>
+                <span>{linkUrl || 'אין קישור עדיין'}</span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm registration-copy-btn"
+                onClick={copyLink}
+                disabled={!!busy}
+              >
+                <Copy size={14} />
+                {copied ? 'הועתק' : 'העתקה'}
+              </button>
+            </div>
+          </div>
         </div>
-      )}
-
-      {linkUrl && (
-        <>
-          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>קישור הרשמת משתתפים</div>
-          <div className="registration-link-field">
-            <div className="registration-link-value" title={linkUrl}>
-              <Link2 size={14} />
-              <span>{linkUrl}</span>
-            </div>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm registration-copy-btn"
-              onClick={copyLink}
-              disabled={!!busy || tplBusy}
-            >
-              <Copy size={14} />
-              {copied ? 'הועתק' : 'העתקה'}
-            </button>
-          </div>
-        </>
-      )}
-
-      {hostLinkUrl && (
-        <>
-          <div style={{ fontSize: 11, color: '#FCD34D' }}>קישור פרטי לתשלום המזמין</div>
-          <div className="registration-link-field">
-            <div className="registration-link-value" title={hostLinkUrl}>
-              <Link2 size={14} />
-              <span>{hostLinkUrl}</span>
-            </div>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={copyHostLink}>
-              <Copy size={14} /> העתקה
-            </button>
-          </div>
-        </>
       )}
 
       {!activityId && (
@@ -944,6 +1061,20 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
                       </span>
                       {!readOnly && (
                         <span className="registration-participant-actions">
+                          {r.payment_status === 'paid' && (
+                            <button
+                              type="button"
+                              className="icon-btn"
+                              onClick={() => refundParticipant(r)}
+                              disabled={!!editBusy}
+                              aria-label="זיכוי משתתף"
+                              title="זיכוי תשלום"
+                            >
+                              {editBusy === `refund:${r.id}`
+                                ? <Loader2 size={14} className="spin" />
+                                : <Undo2 size={14} />}
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="icon-btn"
@@ -962,7 +1093,7 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
                             aria-label="הסרת משתתף"
                             title="הסרה"
                           >
-                            {rowBusy ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+                            {editBusy === r.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
                           </button>
                         </span>
                       )}
@@ -973,12 +1104,6 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
               })}
             </div>
           )}
-        </div>
-      )}
-
-      {templates.length > 0 && (
-        <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
-          תבניות שמורות: {templates.map((t) => t.name).join(' · ')}
         </div>
       )}
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Search, LogIn, CheckCircle2, ShieldAlert, ShieldCheck, Flame, RefreshCw, QrCode } from 'lucide-react';
 import { CheckIcon } from './safetyCheckIcons.jsx';
+import { isHealthDeclarationValid } from '../utils/healthValidity.js';
 
 function pickBestPunchCard(passes) {
   const usable = (passes || []).filter(
@@ -13,6 +14,23 @@ function pickBestPunchCard(passes) {
     if (au !== bu) return au.localeCompare(bu);
     return Number(a.visits_remaining) - Number(b.visits_remaining);
   })[0];
+}
+
+// 'valid' | 'expired' | 'missing' — expired declarations stay on file but require renewal
+function healthStatusFor(climber, declarations) {
+  const signedDecls = (declarations || []).filter(
+    (d) => d.studentName === climber.name && d.signed
+  );
+  const anySigned = signedDecls.length > 0
+    || climber.status === 'registered'
+    || !!climber.healthSignedAt;
+  if (!anySigned) return 'missing';
+  const dates = [
+    ...signedDecls.map((d) => d.signedDate || d.date),
+    climber.healthSignedAt,
+  ].filter(Boolean);
+  if (dates.length === 0) return 'valid';
+  return dates.some((dt) => isHealthDeclarationValid(dt)) ? 'valid' : 'expired';
 }
 
 export default function CheckInConsole({ students, groups }) {
@@ -121,8 +139,7 @@ export default function CheckInConsole({ students, groups }) {
 
     const matchedGroup = groups.find(g => g.id === climber.groupId);
 
-    const hasDecl = declarations.some(d => d.studentName === climber.name && d.signed) ||
-                    (climber.status === 'registered');
+    const hasDecl = healthStatusFor(climber, declarations) === 'valid';
 
     const newCheckIn = {
       climber_id: climber.id,
@@ -394,11 +411,16 @@ export default function CheckInConsole({ students, groups }) {
               </div>
 
               <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginBottom: 24 }}>
-                {(declarations.some(d => d.studentName === selectedClimber.name && d.signed) || selectedClimber.status === 'registered') ? (
-                  <span className="badge badge-green" style={{ fontSize: 14, padding: '6px 12px' }}><ShieldCheck size={14} /> הצהרת בריאות בתוקף</span>
-                ) : (
-                  <span className="badge badge-red" style={{ fontSize: 14, padding: '6px 12px' }}><ShieldAlert size={14} /> חסרה הצהרה!</span>
-                )}
+                {(() => {
+                  const status = healthStatusFor(selectedClimber, declarations);
+                  if (status === 'valid') {
+                    return <span className="badge badge-green" style={{ fontSize: 14, padding: '6px 12px' }}><ShieldCheck size={14} /> הצהרת בריאות בתוקף</span>;
+                  }
+                  if (status === 'expired') {
+                    return <span className="badge badge-amber" style={{ fontSize: 14, padding: '6px 12px' }}><ShieldAlert size={14} /> הצהרה פגת תוקף — נדרש חידוש</span>;
+                  }
+                  return <span className="badge badge-red" style={{ fontSize: 14, padding: '6px 12px' }}><ShieldAlert size={14} /> חסרה הצהרה!</span>;
+                })()}
               </div>
 
               <button

@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Clock, LogIn, LogOut, Coins, Plus, Trash2, Edit2,
-  Save, X, UserCheck, RefreshCw, Briefcase, Award, ArrowUpRight, Search, ChevronDown, ChevronUp
+  Save, X, UserCheck, RefreshCw, Briefcase, Award, ArrowUpRight, Search, ChevronDown, ChevronUp,
+  Upload, Download, FileText
 } from 'lucide-react';
 import { Modal } from './UI.jsx';
 
@@ -35,6 +36,25 @@ function rateForWorkType(agreement, workType) {
   return Number(agreement.counter_rate) || 0;
 }
 
+function roundHoursQuarter(h) {
+  const n = Number(h);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.round(n * 4) / 4;
+}
+
+function hoursFromTimes(startHm, endHm) {
+  const parse = (hm) => {
+    if (!hm || !/^\d{1,2}:\d{2}/.test(hm)) return null;
+    const [h, m] = hm.split(':').map(Number);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+    return h * 60 + m;
+  };
+  const a = parse(startHm);
+  const b = parse(endHm);
+  if (a == null || b == null || b <= a) return null;
+  return roundHoursQuarter((b - a) / 60);
+}
+
 function workTypeLabel(workType) {
   return WORK_TYPE_OPTIONS.find((o) => o.id === workType)?.label || workType || 'דלפק';
 }
@@ -47,6 +67,14 @@ const CERTIFICATION_OPTIONS = [
   'מורה דרך',
   'בונה מסלולים רמה 1',
   'בונה מסלולים רמה 2'
+];
+
+const EMPLOYEE_DOC_FIELDS = [
+  { key: 'contract', label: 'חוזה העסקה חתום' },
+  { key: 'police', label: 'אישור משטרה (סקס)' },
+  { key: 'certificates', label: 'תעודות רלוונטיות' },
+  { key: 'idPhoto', label: 'צילום תעודת זהות' },
+  { key: 'form101', label: 'טופס 101 חתום' },
 ];
 
 function calculateAge(birthDateStr) {
@@ -62,6 +90,86 @@ function calculateAge(birthDateStr) {
   return age;
 }
 
+function hasEmployeeDoc(emp, key) {
+  if (emp?.documents?.[key]?.storagePath || emp?.documents?.[key]?.fileName) return true;
+  const legacy = {
+    contract: 'contractSigned',
+    police: 'policeClearance',
+    certificates: 'hasCertificates',
+    idPhoto: 'hasIdPhoto',
+    form101: 'hasForm101',
+  };
+  return !!(legacy[key] && emp?.[legacy[key]]);
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('קריאת הקובץ נכשלה'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function EmployeeDocField({ label, savedDoc, pendingFile, onPick, onClearPending, onRemoveSaved, onDownload, busy }) {
+  const inputRef = useRef(null);
+  const displayName = pendingFile?.name || savedDoc?.fileName || '';
+
+  return (
+    <div className="form-group" style={{ marginBottom: 0 }}>
+      <label className="form-label">{label}</label>
+      <div style={{
+        display: 'flex', flexDirection: 'column', gap: 8,
+        padding: 10, borderRadius: 10, border: '1px solid var(--border)',
+        background: 'rgba(255,255,255,0.02)',
+      }}>
+        {displayName ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+            <FileText size={14} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {displayName}
+              {pendingFile ? ' (ממתין לשמירה)' : ''}
+            </span>
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: 'var(--text-3)' }}>לא הועלה קובץ</div>
+        )}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".pdf,.jpg,.jpeg,.png,.webp,.gif,.doc,.docx,application/pdf,image/*"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (file) onPick(file);
+            }}
+          />
+          <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => inputRef.current?.click()}>
+            <Upload size={13} /> {displayName ? 'החלף' : 'העלה'}
+          </button>
+          {pendingFile && (
+            <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={onClearPending}>
+              <X size={13} /> בטל בחירה
+            </button>
+          )}
+          {!pendingFile && savedDoc?.storagePath && (
+            <>
+              <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={onDownload}>
+                <Download size={13} /> הורד
+              </button>
+              <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={onRemoveSaved}>
+                <Trash2 size={13} /> מחק
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Modal: Employee Form (Add/Edit) ──────────────────────────────────────────
 function EmployeeFormModal({ employee, onSave, onClose }) {
   const isEdit = !!employee;
@@ -74,65 +182,69 @@ function EmployeeFormModal({ employee, onSave, onClose }) {
   const [idNumber, setIdNumber]       = useState(employee?.idNumber || '');
   const [status, setStatus]           = useState(employee?.is_active ? 'עובד פעיל' : 'ארכיון');
   const [paymentMethod, setPayMethod] = useState(employee?.payment_method === 'invoice' ? 'חשבונית' : 'תלוש');
-  const [salaryTransferred, setSal]   = useState(employee?.salaryTransferred ?? false);
   const [notes, setNotes]             = useState(employee?.notes || '');
   const [bankAccount, setBankAccount] = useState(employee?.bank_account_details || '');
-  const [pensionNumber, setPensionN]  = useState(employee?.pensionNumber || '');
   const [pensionCompany, setPensionC] = useState(employee?.pensionCompany || '');
-  const [mobility, setMobility]       = useState(employee?.mobility ?? false);
-  
-  // Doc toggles
-  const [contractSigned, setContract] = useState(employee?.contractSigned ?? false);
-  const [policeClearance, setPolice]  = useState(employee?.policeClearance ?? false);
-  const [hasCertificates, setCerts]   = useState(employee?.hasCertificates ?? false);
-  const [hasIdPhoto, setPhoto]         = useState(employee?.hasIdPhoto ?? false);
-  const [hasForm101, setForm101]       = useState(employee?.hasForm101 ?? false);
-
+  const [documents, setDocuments]     = useState(employee?.documents || {});
+  const [pendingFiles, setPendingFiles] = useState({});
   const [certifications, setCertifications] = useState(employee?.certifications || []);
+  const [customCert, setCustomCert]   = useState('');
+  const [saving, setSaving]           = useState(false);
+  const [saveError, setSaveError]     = useState('');
 
-  const toggleCert = (cert) => {
-    setCertifications(prev =>
-      prev.includes(cert) ? prev.filter(c => c !== cert) : [...prev, cert]
-    );
+  const addCert = (cert) => {
+    const value = String(cert || '').trim();
+    if (!value) return;
+    setCertifications((prev) => (prev.includes(value) ? prev : [...prev, value]));
   };
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (!name.trim() || !phone.trim()) return;
+  const removeCert = (cert) => {
+    setCertifications((prev) => prev.filter((c) => c !== cert));
+  };
 
-    onSave({
-      ...(employee || {}),
-      name: name.trim(),
-      phone: phone.trim(),
-      email: email.trim(),
-      address: residence.trim(),
-      gender,
-      birthDate,
-      idNumber: idNumber.trim(),
-      is_active: status !== 'ארכיון',
-      payment_method: paymentMethod === 'חשבונית' ? 'invoice' : 'slip',
-      salaryTransferred,
-      notes: notes.trim(),
-      bank_account_details: bankAccount.trim(),
-      pensionNumber: pensionNumber.trim(),
-      pensionCompany: pensionCompany.trim(),
-      mobility,
-      contractSigned,
-      policeClearance,
-      hasCertificates,
-      hasIdPhoto,
-      hasForm101,
-      certifications
-    });
-    onClose();
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!name.trim() || !phone.trim() || saving) return;
+    setSaving(true);
+    setSaveError('');
+    try {
+      await onSave({
+        ...(employee || {}),
+        name: name.trim(),
+        phone: phone.trim(),
+        email: email.trim(),
+        address: residence.trim(),
+        gender,
+        birthDate,
+        idNumber: idNumber.trim(),
+        is_active: status !== 'ארכיון',
+        payment_method: paymentMethod === 'חשבונית' ? 'invoice' : 'slip',
+        notes: notes.trim(),
+        bank_account_details: bankAccount.trim(),
+        pensionCompany: pensionCompany.trim(),
+        documents,
+        contractSigned: hasEmployeeDoc({ documents }, 'contract') || !!pendingFiles.contract,
+        policeClearance: hasEmployeeDoc({ documents }, 'police') || !!pendingFiles.police,
+        hasCertificates: hasEmployeeDoc({ documents }, 'certificates') || !!pendingFiles.certificates,
+        hasIdPhoto: hasEmployeeDoc({ documents }, 'idPhoto') || !!pendingFiles.idPhoto,
+        hasForm101: hasEmployeeDoc({ documents }, 'form101') || !!pendingFiles.form101,
+        certifications,
+        _pendingFiles: pendingFiles,
+      });
+      onClose();
+    } catch (err) {
+      setSaveError(err?.message || 'שמירה נכשלה');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
-    <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && !saving && onClose()}>
       <div className="modal slide-up" style={{ maxWidth: 680 }}>
         <div className="modal-header">
           <div className="modal-title">{isEdit ? '✏️ עריכת פרטי עובד' : '➕ הוספת עובד חדש'}</div>
-          <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose}><X size={18} /></button>
+          <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} disabled={saving}><X size={18} /></button>
         </div>
         <div className="modal-body">
           <form id="employee-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -192,17 +304,6 @@ function EmployeeFormModal({ employee, onSave, onClose }) {
                   {PAYMENT_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </div>
-              <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: 8, height: '100%', paddingTop: 20 }}>
-                <input type="checkbox" id="sal-check" checked={salaryTransferred} onChange={e => setSal(e.target.checked)} style={{ width: 16, height: 16 }} />
-                <label htmlFor="sal-check" className="form-label" style={{ marginBottom: 0, cursor: 'pointer' }}>משכורת הועברה</label>
-              </div>
-              <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: 8, height: '100%', paddingTop: 20 }}>
-                <input type="checkbox" id="mob-check" checked={mobility} onChange={e => setMobility(e.target.checked)} style={{ width: 16, height: 16 }} />
-                <label htmlFor="mob-check" className="form-label" style={{ marginBottom: 0, cursor: 'pointer' }}>ניידות (רכב / רישיון)</label>
-              </div>
-            </div>
-
-            <div className="form-grid-3">
               <div className="form-group">
                 <label className="form-label">מספר חשבון בנק</label>
                 <input className="input" value={bankAccount} onChange={e => setBankAccount(e.target.value)} placeholder="בנק, סניף, חשבון" />
@@ -211,47 +312,120 @@ function EmployeeFormModal({ employee, onSave, onClose }) {
                 <label className="form-label">חברת פנסיה</label>
                 <input className="input" value={pensionCompany} onChange={e => setPensionC(e.target.value)} />
               </div>
-              <div className="form-group">
-                <label className="form-label">מספר פוליסת פנסיה</label>
-                <input className="input" value={pensionNumber} onChange={e => setPensionN(e.target.value)} />
-              </div>
             </div>
 
-            <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>טפסים ואישורים (צ׳קליסט)</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-              {[
-                { label: 'חוזה העסקה חתום', state: contractSigned, setter: setContract },
-                { label: 'אישור משטרה (סקס)', state: policeClearance, setter: setPolice },
-                { label: 'תעודות רלוונטיות', state: hasCertificates, setter: setCerts },
-                { label: 'צילום תעודת זהות', state: hasIdPhoto, setter: setPhoto },
-                { label: 'טופס 101 חתום', state: hasForm101, setter: setForm101 },
-              ].map(item => (
-                <label key={item.label} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
-                  <input type="checkbox" checked={item.state} onChange={e => item.setter(e.target.checked)} style={{ width: 15, height: 15 }} />
-                  {item.label}
-                </label>
+            <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>טפסים ואישורים</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
+              {EMPLOYEE_DOC_FIELDS.map((field) => (
+                <EmployeeDocField
+                  key={field.key}
+                  label={field.label}
+                  savedDoc={documents[field.key]}
+                  pendingFile={pendingFiles[field.key]}
+                  busy={saving}
+                  onPick={(file) => setPendingFiles((prev) => ({ ...prev, [field.key]: file }))}
+                  onClearPending={() => setPendingFiles((prev) => {
+                    const next = { ...prev };
+                    delete next[field.key];
+                    return next;
+                  })}
+                  onRemoveSaved={() => {
+                    setDocuments((prev) => {
+                      const next = { ...prev };
+                      delete next[field.key];
+                      return next;
+                    });
+                    setPendingFiles((prev) => {
+                      const next = { ...prev };
+                      delete next[field.key];
+                      return next;
+                    });
+                  }}
+                  onDownload={async () => {
+                    if (!employee?.id) return;
+                    const res = await fetch(`/api/employees/${encodeURIComponent(employee.id)}/documents/${field.key}/download`);
+                    if (!res.ok) return;
+                    const blob = await res.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = documents[field.key]?.fileName || field.label;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                />
               ))}
             </div>
 
             <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>הסמכות מקצועיות</div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {CERTIFICATION_OPTIONS.map(c => {
-                const isSelected = certifications.includes(c);
-                return (
-                  <button
-                    key={c} type="button" onClick={() => toggleCert(c)}
+            {certifications.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {certifications.map((c) => (
+                  <span
+                    key={c}
                     style={{
-                      padding: '4px 10px', borderRadius: 20, fontSize: 12, cursor: 'pointer', border: 'none',
-                      background: isSelected ? 'rgba(99,102,241,0.2)' : 'rgba(255,255,255,0.04)',
-                      color: isSelected ? '#A5B4FC' : 'var(--text-3)',
-                      outline: isSelected ? '1px solid #A5B4FC55' : '1px solid var(--border)',
-                      fontWeight: isSelected ? 700 : 400,
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                      padding: '4px 8px 4px 10px', borderRadius: 20, fontSize: 12,
+                      background: 'rgba(99,102,241,0.2)', color: '#A5B4FC',
+                      outline: '1px solid #A5B4FC55', fontWeight: 700,
                     }}
                   >
                     {c}
-                  </button>
-                );
-              })}
+                    <button
+                      type="button"
+                      onClick={() => removeCert(c)}
+                      title="מחק הסמכה"
+                      style={{
+                        border: 'none', background: 'transparent', color: '#A5B4FC',
+                        cursor: 'pointer', padding: 0, display: 'flex', lineHeight: 1,
+                      }}
+                    >
+                      <X size={13} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {CERTIFICATION_OPTIONS.filter((c) => !certifications.includes(c)).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => addCert(c)}
+                  style={{
+                    padding: '4px 10px', borderRadius: 20, fontSize: 12, cursor: 'pointer', border: 'none',
+                    background: 'rgba(255,255,255,0.04)', color: 'var(--text-3)',
+                    outline: '1px solid var(--border)',
+                  }}
+                >
+                  + {c}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                className="input"
+                value={customCert}
+                onChange={(e) => setCustomCert(e.target.value)}
+                placeholder="הסמכה מותאמת אישית"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addCert(customCert);
+                    setCustomCert('');
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => {
+                  addCert(customCert);
+                  setCustomCert('');
+                }}
+              >
+                <Plus size={15} /> הוסף
+              </button>
             </div>
 
             <div className="form-group">
@@ -259,12 +433,16 @@ function EmployeeFormModal({ employee, onSave, onClose }) {
               <textarea className="input textarea" rows={2} value={notes} onChange={e => setNotes(e.target.value)} />
             </div>
 
+            {saveError && (
+              <div style={{ fontSize: 13, color: 'var(--red)' }}>{saveError}</div>
+            )}
+
           </form>
         </div>
         <div className="modal-footer">
-          <button className="btn btn-ghost" onClick={onClose}>ביטול</button>
-          <button form="employee-form" type="submit" className="btn btn-primary">
-            <Save size={15} /> {isEdit ? 'שמור שינויים' : 'הוסף עובד'}
+          <button className="btn btn-ghost" onClick={onClose} disabled={saving}>ביטול</button>
+          <button form="employee-form" type="submit" className="btn btn-primary" disabled={saving}>
+            <Save size={15} /> {saving ? 'שומר...' : (isEdit ? 'שמור שינויים' : 'הוסף עובד')}
           </button>
         </div>
       </div>
@@ -406,7 +584,9 @@ export default function Employees() {
       setEmployees(Array.isArray(emps) ? emps : []);
       setWages(Array.isArray(wgs) ? wgs : []);
       setShifts(Array.isArray(sfts) ? sfts : []);
-      setWorkAssignments(Array.isArray(asgs) ? asgs : []);
+      setWorkAssignments(Array.isArray(asgs)
+        ? asgs.map((r) => ({ ...r, hours: roundHoursQuarter(r.hours) }))
+        : []);
       setActivities(Array.isArray(acts) ? acts : []);
     } catch (err) {
       console.error('Failed to fetch staff data:', err);
@@ -522,20 +702,67 @@ export default function Employees() {
   }, [employees, empSearch, empFilterActive, empSortConfig, employeeShiftStats]);
 
   const handleSaveEmployee = async (data) => {
-    const isEdit = employees.some(e => e.id === data.id);
-    try {
-      const response = await fetch(isEdit ? `/api/employees/${data.id}` : '/api/employees', {
-        method: isEdit ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-      });
-      if (response.ok) {
-        refreshData();
-        setEditingEmployee(null);
+    const { _pendingFiles = {}, ...payload } = data;
+    const isEdit = employees.some(e => e.id === payload.id);
+    const previousDocs = isEdit
+      ? (employees.find((e) => e.id === payload.id)?.documents || {})
+      : {};
+    let employeeId = payload.id;
+
+    // Remove cleared documents first (while storagePath still exists on the server record)
+    if (isEdit && employeeId) {
+      for (const field of EMPLOYEE_DOC_FIELDS) {
+        const key = field.key;
+        const wasPresent = !!previousDocs[key]?.storagePath;
+        const stillPresent = !!payload.documents?.[key]?.storagePath;
+        const replacedByUpload = !!_pendingFiles[key];
+        if (wasPresent && !stillPresent && !replacedByUpload) {
+          await fetch(
+            `/api/employees/${encodeURIComponent(employeeId)}/documents/${key}`,
+            { method: 'DELETE' }
+          );
+        }
       }
-    } catch (err) {
-      console.error(err);
     }
+
+    const response = await fetch(isEdit ? `/api/employees/${payload.id}` : '/api/employees', {
+      method: isEdit ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      throw new Error('שמירת פרטי העובד נכשלה');
+    }
+    let saved = await response.json();
+    employeeId = saved.id;
+
+    // Upload newly picked files
+    for (const [docType, file] of Object.entries(_pendingFiles)) {
+      if (!file || !file.name) continue;
+      const fileBase64 = await readFileAsBase64(file);
+      const upRes = await fetch(`/api/employees/${encodeURIComponent(employeeId)}/documents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          docType,
+          fileBase64,
+          fileName: file.name,
+          mimeType: file.type || 'application/octet-stream',
+        }),
+      });
+      if (!upRes.ok) {
+        const errBody = await upRes.json().catch(() => ({}));
+        throw new Error(errBody.error || 'העלאת הקובץ נכשלה');
+      }
+      saved = (await upRes.json()).employee || saved;
+    }
+
+    await refreshData();
+    setEditingEmployee(null);
+    if (selectedEmployee?.id === saved.id) {
+      setSelectedEmployee(saved);
+    }
+    return saved;
   };
 
   const handleToggleActive = async (emp) => {
@@ -626,7 +853,7 @@ export default function Employees() {
           work_type: row.work_type,
           start_time: row.start_time,
           end_time: row.end_time,
-          hours: row.hours,
+          hours: roundHoursQuarter(row.hours),
           source: 'manual',
           notes: row.notes || '',
           approved: row.approved,
@@ -676,7 +903,12 @@ export default function Employees() {
       const res = await fetch('/api/work-assignments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...newManualRow, source: 'manual', approved: false }),
+        body: JSON.stringify({
+          ...newManualRow,
+          hours: roundHoursQuarter(newManualRow.hours),
+          source: 'manual',
+          approved: false,
+        }),
       });
       if (!res.ok) alert('יצירת השורה נכשלה');
       else {
@@ -689,7 +921,15 @@ export default function Employees() {
   };
 
   const patchAssignmentLocal = (id, patch) => {
-    setWorkAssignments((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+    setWorkAssignments((prev) => prev.map((r) => {
+      if (r.id !== id) return r;
+      const next = { ...r, ...patch };
+      if ('start_time' in patch || 'end_time' in patch) {
+        const computed = hoursFromTimes(next.start_time, next.end_time);
+        if (computed != null) next.hours = computed;
+      }
+      return next;
+    }));
   };
 
   return (
@@ -760,7 +1000,6 @@ export default function Employees() {
                 <div>👤 <strong>מין:</strong> {selectedEmployee.gender || 'זכר'}</div>
                 <div>📅 <strong>תאריך לידה:</strong> {selectedEmployee.birthDate || '—'}</div>
                 <div>👶 <strong>גיל:</strong> {calculateAge(selectedEmployee.birthDate) || '—'}</div>
-                <div>🚗 <strong>ניידות:</strong> {selectedEmployee.mobility ? 'כן' : 'לא'}</div>
               </div>
             </div>
 
@@ -768,19 +1007,58 @@ export default function Employees() {
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>פרטי בנק</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
                 <div>🏦 <strong>חשבון בנק:</strong> {selectedEmployee.bank_account_details || 'טרם עודכן'}</div>
+                {selectedEmployee.pensionCompany && (
+                  <div>🏛 <strong>חברת פנסיה:</strong> {selectedEmployee.pensionCompany}</div>
+                )}
               </div>
             </div>
 
-            {selectedEmployee.certifications?.length > 0 && (
-              <div className="card card-p">
-                <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>הסמכות מקצועיות</div>
+            <div className="card card-p">
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>טפסים ואישורים</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
+                {EMPLOYEE_DOC_FIELDS.map((field) => {
+                  const doc = selectedEmployee.documents?.[field.key];
+                  const present = hasEmployeeDoc(selectedEmployee, field.key);
+                  return (
+                    <div key={field.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                      <span>{present ? '✓' : '—'} {field.label}</span>
+                      {doc?.storagePath && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={async () => {
+                            const res = await fetch(`/api/employees/${encodeURIComponent(selectedEmployee.id)}/documents/${field.key}/download`);
+                            if (!res.ok) return;
+                            const blob = await res.blob();
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = doc.fileName || field.label;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                        >
+                          <Download size={12} /> הורד
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="card card-p">
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>הסמכות מקצועיות</div>
+              {selectedEmployee.certifications?.length > 0 ? (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                   {selectedEmployee.certifications.map(c => (
                     <span key={c} className="badge badge-blue" style={{ fontSize: 10 }}>{c}</span>
                   ))}
                 </div>
-              </div>
-            )}
+              ) : (
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>לא הוגדרו הסמכות</div>
+              )}
+            </div>
 
             <div>
               <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>💰 הסכם שכר פעיל</div>
@@ -1005,7 +1283,7 @@ export default function Employees() {
                 <tr>
                   <th>שם מלא</th>
                   <th>טלפון</th>
-                  <th>תעודות רלוונטיות (צ׳קליסט)</th>
+                  <th>טפסים ואישורים</th>
                   <th>הסמכות מקצועיות</th>
                 </tr>
               </thead>
@@ -1016,11 +1294,14 @@ export default function Employees() {
                     <td style={{ fontSize: 13, color: 'var(--text-3)' }}>{emp.phone || '—'}</td>
                     <td>
                       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                        {emp.contractSigned && <span className="badge badge-green" style={{ fontSize: 9 }}>חוזה ✓</span>}
-                        {emp.policeClearance && <span className="badge badge-green" style={{ fontSize: 9 }}>משטרה ✓</span>}
-                        {emp.hasForm101 && <span className="badge badge-green" style={{ fontSize: 9 }}>101 ✓</span>}
-                        {emp.hasIdPhoto && <span className="badge badge-blue" style={{ fontSize: 9 }}>צילום ת.ז</span>}
-                        {!emp.contractSigned && !emp.policeClearance && !emp.hasForm101 && <span style={{ color: 'var(--text-3)', fontSize: 11 }}>אין תעודות</span>}
+                        {hasEmployeeDoc(emp, 'contract') && <span className="badge badge-green" style={{ fontSize: 9 }}>חוזה ✓</span>}
+                        {hasEmployeeDoc(emp, 'police') && <span className="badge badge-green" style={{ fontSize: 9 }}>משטרה ✓</span>}
+                        {hasEmployeeDoc(emp, 'form101') && <span className="badge badge-green" style={{ fontSize: 9 }}>101 ✓</span>}
+                        {hasEmployeeDoc(emp, 'idPhoto') && <span className="badge badge-blue" style={{ fontSize: 9 }}>צילום ת.ז</span>}
+                        {hasEmployeeDoc(emp, 'certificates') && <span className="badge badge-blue" style={{ fontSize: 9 }}>תעודות</span>}
+                        {!EMPLOYEE_DOC_FIELDS.some((f) => hasEmployeeDoc(emp, f.key)) && (
+                          <span style={{ color: 'var(--text-3)', fontSize: 11 }}>אין קבצים</span>
+                        )}
                       </div>
                     </td>
                     <td>
@@ -1307,7 +1588,11 @@ export default function Employees() {
                   className="input input-sm"
                   type="time"
                   value={newManualRow.start_time}
-                  onChange={(e) => setNewManualRow((p) => ({ ...p, start_time: e.target.value }))}
+                  onChange={(e) => setNewManualRow((p) => {
+                    const start_time = e.target.value;
+                    const hours = hoursFromTimes(start_time, p.end_time);
+                    return { ...p, start_time, ...(hours != null ? { hours } : {}) };
+                  })}
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
@@ -1316,7 +1601,11 @@ export default function Employees() {
                   className="input input-sm"
                   type="time"
                   value={newManualRow.end_time}
-                  onChange={(e) => setNewManualRow((p) => ({ ...p, end_time: e.target.value }))}
+                  onChange={(e) => setNewManualRow((p) => {
+                    const end_time = e.target.value;
+                    const hours = hoursFromTimes(p.start_time, end_time);
+                    return { ...p, end_time, ...(hours != null ? { hours } : {}) };
+                  })}
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
@@ -1328,6 +1617,7 @@ export default function Employees() {
                   step="0.25"
                   value={newManualRow.hours}
                   onChange={(e) => setNewManualRow((p) => ({ ...p, hours: e.target.value }))}
+                  onBlur={(e) => setNewManualRow((p) => ({ ...p, hours: roundHoursQuarter(e.target.value) }))}
                 />
               </label>
               <button className="btn btn-primary btn-sm" disabled={payrollBusy} onClick={createManualAssignment}>
@@ -1404,6 +1694,7 @@ export default function Employees() {
                             step="0.25"
                             value={row.hours ?? 0}
                             onChange={(e) => patchAssignmentLocal(row.id, { hours: e.target.value })}
+                            onBlur={(e) => patchAssignmentLocal(row.id, { hours: roundHoursQuarter(e.target.value) })}
                             style={{ width: 70 }}
                           />
                         </td>

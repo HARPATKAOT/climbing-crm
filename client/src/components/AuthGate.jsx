@@ -1,14 +1,18 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState, lazy, Suspense } from 'react';
 import { useLocation } from 'react-router-dom';
 import { LogIn, LogOut, ShieldCheck } from 'lucide-react';
 import { authClient, authConfigured } from '../authClient.js';
+import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { isPublicPath } from '../publicPaths.js';
-import PublicActivityRegistration from './PublicActivityRegistration.jsx';
-import PublicHostPayment from './PublicHostPayment.jsx';
-import PublicHealthForm from './PublicHealthForm.jsx';
-import PublicOnboardingForm from './PublicOnboardingForm.jsx';
-import LeadIntakeForm from './LeadIntakeForm.jsx';
-import PrivacyPolicy from './PrivacyPolicy.jsx';
+
+// Lazy — these heavy public forms must not be bundled into the CRM shell.
+// They render here only as defense in depth when a public URL hits the catch-all.
+const PublicActivityRegistration = lazy(() => import('./PublicActivityRegistration.jsx'));
+const PublicHostPayment          = lazy(() => import('./PublicHostPayment.jsx'));
+const PublicHealthForm           = lazy(() => import('./PublicHealthForm.jsx'));
+const PublicOnboardingForm       = lazy(() => import('./PublicOnboardingForm.jsx'));
+const LeadIntakeForm             = lazy(() => import('./LeadIntakeForm.jsx'));
+const PrivacyPolicy              = lazy(() => import('./PrivacyPolicy.jsx'));
 
 const AuthContext = createContext(null);
 
@@ -17,6 +21,9 @@ export function useAuth() {
 }
 
 function LoginScreen() {
+  const { profile } = useBusinessProfile();
+  const brandName = profile.display_name || 'הרפתקאות';
+  const brandLogo = profile.logo_url || '/logo.png';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -62,9 +69,9 @@ function LoginScreen() {
     <div className="auth-page">
       <form className="auth-card" onSubmit={submit}>
         <div className="auth-logo">
-          <img src="/logo.png" alt="קיר בועז" />
+          <img src={brandLogo} alt={brandName} />
         </div>
-        <h1>כניסה לקיר בועז</h1>
+        <h1>כניסה ל{brandName}</h1>
         <p>מערכת הניהול של קיר הטיפוס</p>
         <label className="form-label" htmlFor="crm-email">דואר אלקטרוני</label>
         <input
@@ -137,7 +144,7 @@ function NewPasswordScreen({ onDone }) {
     <div className="auth-page">
       <form className="auth-card" onSubmit={submit}>
         <div className="auth-logo">
-          <img src="/logo.png" alt="קיר בועז" />
+          <img src="/logo.png" alt="" />
         </div>
         <h1>סיסמה חדשה</h1>
         <p>בחרו סיסמה חדשה לחשבון שלכם</p>
@@ -277,13 +284,16 @@ export default function AuthGate({ children }) {
   // Prefer dedicated routes in main.jsx; this is defense in depth if a public URL hits the catch-all.
   if (onPublicPath) {
     const path = location.pathname;
-    if (path === '/health' || path.startsWith('/health/')) return <PublicHealthForm />;
-    if (path === '/onboard') return <PublicOnboardingForm />;
-    if (path === '/join') return <LeadIntakeForm />;
-    if (path === '/privacy') return <PrivacyPolicy />;
-    if (path.startsWith('/event/')) return <PublicActivityRegistration />;
-    if (path.startsWith('/event-host/')) return <PublicHostPayment />;
-    return null;
+    const publicFallback = <div style={{ padding: 40, textAlign: 'center', fontFamily: 'sans-serif' }}>טוען...</div>;
+    let publicPage = null;
+    if (path === '/health' || path.startsWith('/health/')) publicPage = <PublicHealthForm />;
+    else if (path === '/onboard') publicPage = <PublicOnboardingForm />;
+    else if (path === '/join') publicPage = <LeadIntakeForm />;
+    else if (path === '/privacy') publicPage = <PrivacyPolicy />;
+    else if (path.startsWith('/event/')) publicPage = <PublicActivityRegistration />;
+    else if (path.startsWith('/event-host/')) publicPage = <PublicHostPayment />;
+    if (!publicPage) return null;
+    return <Suspense fallback={publicFallback}>{publicPage}</Suspense>;
   }
 
   if (!authConfigured) {

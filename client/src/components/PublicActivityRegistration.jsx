@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle, Loader2, Plus, Trash2 } from 'lucide-react';
 import { useLocation, useParams, useSearchParams } from 'react-router-dom';
+import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 
 const emptyParticipant = (questions = []) => ({
   key: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
@@ -99,6 +100,9 @@ function SignaturePad({ value, onChange }) {
 }
 
 export default function PublicActivityRegistration() {
+  const { profile } = useBusinessProfile();
+  const brandName = profile.display_name || 'הרפתקאות';
+  const brandLogo = profile.logo_url || '';
   const { slug: slugParam } = useParams();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -263,15 +267,60 @@ export default function PublicActivityRegistration() {
     );
   }
 
+  const coverImage = activity?.cover_image || activity?.theme?.cover_image || '';
+  const coverPosition = activity?.cover_position
+    || activity?.theme?.cover_position
+    || '50% 50%';
+
   return (
     <div className="event-page">
       <main className="event-card">
-        <header>
-          <div className="event-brand">MY WALL</div>
+        {coverImage ? (
+          <div className="event-cover">
+            <img
+              src={coverImage}
+              alt=""
+              style={{ objectPosition: coverPosition }}
+            />
+          </div>
+        ) : null}
+        <header className="event-hero">
+          {brandLogo ? (
+            <div className="event-brand-logo">
+              <img src={brandLogo} alt={brandName} />
+            </div>
+          ) : (
+            <div className="event-brand">{brandName}</div>
+          )}
           <h1>{activity.page_title || activity.name}</h1>
-          <p>{formatDate(activity.date)} {activity.start_time ? ` · ${activity.start_time.slice(0, 5)}` : ''}</p>
-          {activity.location && <p>{activity.location}</p>}
-          <div className="event-progress">שלב {step} מתוך 4</div>
+          <div className="event-meta">
+            <span>
+              {formatDate(activity.date)}
+              {activity.end_date && activity.end_date !== activity.date
+                ? ` – ${formatDate(activity.end_date)}`
+                : ''}
+              {!activity.all_day && activity.start_time
+                ? ` · ${activity.start_time.slice(0, 5)}`
+                : ''}
+              {!activity.all_day && activity.end_time
+                ? `–${activity.end_time.slice(0, 5)}`
+                : ''}
+            </span>
+            {activity.location && <span>{activity.location}</span>}
+          </div>
+          {(activity.page_body || activity.description) && (
+            <p className="event-body">{activity.page_body || activity.description}</p>
+          )}
+          {paidMode && activity.unit_price > 0 && (
+            <div className="event-price-chip">₪{activity.unit_price} למשתתף</div>
+          )}
+          {!paidMode && activity.price > 0 && (
+            <div className="event-price-chip">מחיר האירוע: ₪{activity.price}</div>
+          )}
+          <div className="event-progress-label">שלב {step} מתוך 4</div>
+          <div className="event-progress" style={{
+            background: `linear-gradient(90deg,#f97316 0 ${(step / 4) * 100}%,rgba(255,255,255,.1) ${(step / 4) * 100}%)`,
+          }} />
         </header>
 
         {step === 1 && (
@@ -322,7 +371,7 @@ export default function PublicActivityRegistration() {
                 emptyParticipant(activity.form_template?.healthQuestions || []),
               ])}
             >
-              <Plus size={17} /> הוספת משתתף
+              <Plus size={17} /> הוספת משתתף נוסף
             </button>
           </section>
         )}
@@ -437,12 +486,15 @@ function EventShell({ children }) {
 function EventStyles() {
   return <style>{`
     .event-page{min-height:100vh;direction:rtl;background:radial-gradient(circle at top,#1e293b,#070b14 65%);padding:20px 12px;color:#f8fafc;font-family:Heebo,Assistant,system-ui,sans-serif}
-    .event-card{width:min(620px,100%);margin:auto;background:rgba(15,23,42,.94);border:1px solid rgba(255,255,255,.12);border-radius:22px;padding:24px;box-shadow:0 22px 70px rgba(0,0,0,.45)}
-    .event-centered{text-align:center;margin-top:12vh}.event-brand{color:#fb923c;font-weight:900;letter-spacing:.12em}.event-card h1{margin:8px 0;font-size:28px}.event-card h2{font-size:20px;margin:20px 0 14px}.event-card header p{margin:4px;color:#94a3b8}
-    .event-progress{height:6px;border-radius:8px;background:linear-gradient(90deg,#f97316 0 55%,rgba(255,255,255,.1) 55%);margin-top:20px;font-size:0}.event-field{display:flex;flex-direction:column;gap:6px;margin:12px 0;color:#cbd5e1;font-size:14px}.event-field input{padding:12px 14px;border-radius:11px;border:1px solid rgba(255,255,255,.15);background:#0b1220;color:#fff;font:inherit}
+    .event-card{width:min(620px,100%);margin:auto;background:rgba(15,23,42,.94);border:1px solid rgba(255,255,255,.12);border-radius:22px;padding:0 0 24px;overflow:hidden;box-shadow:0 22px 70px rgba(0,0,0,.45)}
+    .event-centered{text-align:center;margin-top:12vh;padding:24px}.event-cover{width:100%;height:210px;background:#0b1220}.event-cover img{width:100%;height:100%;object-fit:cover;object-position:center center;display:block}
+    .event-hero{padding:22px 24px 0}.event-brand{color:#fb923c;font-weight:900;letter-spacing:.12em;font-size:12px}.event-brand-logo{display:flex;justify-content:flex-start;margin:0 0 6px}.event-brand-logo img{height:36px;width:auto;max-width:160px;object-fit:contain}.event-card h1{margin:8px 0;font-size:28px}.event-card h2{font-size:20px;margin:20px 0 14px;padding:0 24px}.event-card section{padding:0 24px}.event-meta{display:flex;flex-direction:column;gap:4px;margin:6px 0 0;color:#94a3b8;font-size:14px}
+    .event-body{margin:12px 0 0;color:#cbd5e1;line-height:1.55;font-size:15px;white-space:pre-wrap}.event-price-chip{display:inline-flex;margin-top:14px;padding:7px 12px;border-radius:999px;background:rgba(249,115,22,.16);color:#fdba74;font-weight:800;font-size:13px}
+    .event-progress-label{margin-top:18px;font-size:12px;color:#94a3b8;font-weight:700}.event-progress{height:6px;border-radius:8px;margin-top:8px;font-size:0}
+    .event-field{display:flex;flex-direction:column;gap:6px;margin:12px 0;color:#cbd5e1;font-size:14px}.event-field input{padding:12px 14px;border-radius:11px;border:1px solid rgba(255,255,255,.15);background:#0b1220;color:#fff;font:inherit}
     .event-check,.event-question{display:flex;gap:10px;align-items:flex-start;padding:10px 0;color:#e2e8f0}.event-check input,.event-question input{margin-top:4px;min-width:18px;min-height:18px}.participant-card{padding:14px;margin:12px 0;border:1px solid rgba(255,255,255,.1);border-radius:14px;background:rgba(0,0,0,.16)}.participant-title{display:flex;justify-content:space-between}.event-icon-button,.event-link-button{border:0;background:none;color:#fca5a5;cursor:pointer}
     .event-waiver{white-space:pre-wrap;max-height:200px;overflow:auto;padding:14px;border-radius:12px;background:#0b1220;color:#cbd5e1;line-height:1.55;font-size:13px}.event-signature{width:100%;height:150px;background:#111827;border:1px solid rgba(255,255,255,.2);border-radius:12px;touch-action:none}.event-label{color:#cbd5e1;margin-bottom:7px}
-    .event-summary{display:grid;gap:10px}.event-summary>div{display:flex;justify-content:space-between;padding:12px;border-radius:10px;background:#0b1220}.event-total{color:#fdba74;font-size:18px}.event-free-note{color:#6ee7b7}.event-error{margin-top:14px;padding:11px;border-radius:10px;background:rgba(239,68,68,.14);color:#fca5a5}
-    .event-actions{display:flex;gap:10px;margin-top:22px}.event-primary,.event-secondary{display:flex;align-items:center;justify-content:center;gap:7px;border:0;border-radius:11px;padding:12px 18px;font:inherit;font-weight:800;cursor:pointer}.event-primary{background:#f97316;color:#fff;flex:1}.event-secondary{background:rgba(255,255,255,.09);color:#e2e8f0}.event-primary:disabled{opacity:.6}.spin{animation:event-spin .8s linear infinite}@keyframes event-spin{to{transform:rotate(360deg)}}@media(max-width:520px){.event-card{padding:18px 15px;border-radius:16px}.event-card h1{font-size:24px}}
+    .event-summary{display:grid;gap:10px}.event-summary>div{display:flex;justify-content:space-between;padding:12px;border-radius:10px;background:#0b1220}.event-total{color:#fdba74;font-size:18px}.event-free-note{color:#6ee7b7}.event-error{margin:14px 24px 0;padding:11px;border-radius:10px;background:rgba(239,68,68,.14);color:#fca5a5}
+    .event-actions{display:flex;gap:10px;margin:22px 24px 0}.event-primary,.event-secondary{display:flex;align-items:center;justify-content:center;gap:7px;border:0;border-radius:11px;padding:12px 18px;font:inherit;font-weight:800;cursor:pointer}.event-primary{background:#f97316;color:#fff;flex:1}.event-secondary{background:rgba(255,255,255,.09);color:#e2e8f0}.event-primary:disabled{opacity:.6}.spin{animation:event-spin .8s linear infinite}@keyframes event-spin{to{transform:rotate(360deg)}}@media(max-width:520px){.event-hero,.event-card section,.event-actions{padding-left:15px;padding-right:15px}.event-card h2{padding-left:15px;padding-right:15px}.event-error{margin-left:15px;margin-right:15px}.event-cover{height:170px}.event-card h1{font-size:24px}}
   `}</style>;
 }

@@ -112,6 +112,7 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, signatureSrc }
   const hasSig = typeof signature === 'string' && signature.startsWith('data:image');
   const title = decl.title || 'הצהרת בריאות + הסרת אחריות — אישור חתום';
   const templateNote = decl.templateSlug ? `תבנית: ${decl.templateSlug}` : '';
+  const brandName = decl.brandName || 'הרפתקאות';
 
   return `
     <div id="hd-cert-root" dir="rtl" style="
@@ -175,7 +176,7 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, signatureSrc }
 
       <div class="brand">
         <div>
-          <h1>My Wall — ${escapeHtml(title)}</h1>
+          <h1>${escapeHtml(brandName)} — ${escapeHtml(title)}</h1>
           <p class="sub">עותק דיגיטלי של הצהרה חתומה · ${escapeHtml(templateNote || 'קיר הטיפוס')}</p>
         </div>
         <div class="badge">✓ נחתם</div>
@@ -207,7 +208,7 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, signatureSrc }
       </div>
 
       <div class="footer">
-        מסמך זה הופק ממערכת My Wall CRM · מזהה הצהרה: ${escapeHtml(decl.id || '—')}
+        מסמך זה הופק ממערכת ${escapeHtml(brandName)} · מזהה הצהרה: ${escapeHtml(decl.id || '—')}
         ${decl.notes ? `<br/>הערות: ${escapeHtml(decl.notes)}` : ''}
       </div>
     </div>

@@ -273,24 +273,37 @@ function withoutServerSecrets(settings = {}) {
   return safe;
 }
 
-// Ensure JSON file exists and read it
-function readDb() {
+// In-memory cache of db.json. The file is parsed once per process; every read
+// is served from memory, and writes update memory immediately while the disk
+// flush is debounced. Supabase remains the durable store — db.json is only a
+// local cache, so losing a few hundred ms of it on a crash is acceptable.
+let dbCache = null;
+let flushTimer = null;
+const FLUSH_DELAY_MS = 300;
+
+function loadDbFromDisk() {
   try {
     if (!fs.existsSync(DB_FILE)) {
       fs.writeFileSync(DB_FILE, JSON.stringify(SEED_DATA, null, 2), 'utf-8');
-      return SEED_DATA;
+      return JSON.parse(JSON.stringify(SEED_DATA));
     }
     const content = fs.readFileSync(DB_FILE, 'utf-8');
     return JSON.parse(content);
   } catch (error) {
     console.error('Error reading local JSON database:', error);
-    return SEED_DATA;
+    return JSON.parse(JSON.stringify(SEED_DATA));
   }
 }
 
-function writeDb(data) {
+function readDb() {
+  if (dbCache === null) dbCache = loadDbFromDisk();
+  return dbCache;
+}
+
+function flushDbToDisk() {
+  if (dbCache === null) return;
   try {
-    const payload = JSON.stringify(data, null, 2);
+    const payload = JSON.stringify(dbCache, null, 2);
     const tmpFile = `${DB_FILE}.tmp`;
     fs.writeFileSync(tmpFile, payload, 'utf-8');
     try {
@@ -303,6 +316,27 @@ function writeDb(data) {
   } catch (error) {
     console.error('Error writing local JSON database:', error);
   }
+}
+
+function writeDb(data) {
+  dbCache = data;
+  if (flushTimer) return;
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    flushDbToDisk();
+  }, FLUSH_DELAY_MS);
+}
+
+// Persist any pending in-memory changes before the process exits.
+process.on('exit', () => {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+    flushDbToDisk();
+  }
+});
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => process.exit(0));
 }
 
 function mergeWhatsappSettings(local = {}, remote = null) {

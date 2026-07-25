@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { PenTool, CheckCircle, ArrowLeft, Download } from 'lucide-react';
 import { useSearchParams, useParams } from 'react-router-dom';
 import {
@@ -6,8 +6,10 @@ import {
   buildHealthDeclarationPdf,
   downloadHealthDeclarationPdf,
 } from '../utils/healthDeclarationPdf.js';
+import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 
-const FALLBACK_WAIVER = `כתב ויתור והסרת אחריות — קיר הטיפוס My Wall
+function buildFallbackWaiver(legalName) {
+  return `כתב ויתור והסרת אחריות — קיר הטיפוס ${legalName}
 
 דף זה מיועד למי שלוקח חלק בפעילות טיפוס. ידוע לי כי טיפוס קירות היא פעילות אקסטרים הכרוכה בסיכונים, לרבות נפילות ופציעות.
 
@@ -19,7 +21,8 @@ const FALLBACK_WAIVER = `כתב ויתור והסרת אחריות — קיר ה
 • טיפוס בנעליים סגורות בלבד; להסיר תכשיטים ולרוקן כיסים
 • לדווח מיידית על מפגע בטיחותי
 
-אני מצהיר/ה כי מסרתי מידע רפואי מלא, קראתי והבנתי את הוראות הבטיחות, ומתחייב/ת לוודא שילדי יפעל/תפעל לפיהן. אני משחרר/ת את My Wall, בעליו ועובדיו מאחריות לנזק שייגרם מהשתתפות בפעילות, למעט נזק במזיד או ברשלנות חמורה.`;
+אני מצהיר/ה כי מסרתי מידע רפואי מלא, קראתי והבנתי את הוראות הבטיחות, ומתחייב/ת לוודא שילדי יפעל/תפעל לפיהן. אני משחרר/ת את ${legalName}, בעליו ועובדיו מאחריות לנזק שייגרם מהשתתפות בפעילות, למעט נזק במזיד או ברשלנות חמורה.`;
+}
 
 const FALLBACK_QUESTIONS = [
   { id: 'q1', label: 'האם המתאמן סובל מאסתמה, קוצר נשימה או מחלת ריאות?' },
@@ -28,6 +31,10 @@ const FALLBACK_QUESTIONS = [
 ];
 
 export default function PublicHealthForm() {
+  const { profile, legalName } = useBusinessProfile();
+  const brandName = profile.display_name || 'הרפתקאות';
+  const brandLogo = profile.logo_url || '/logo.png';
+  const fallbackWaiver = useMemo(() => buildFallbackWaiver(legalName), [legalName]);
   const { slug: routeSlug } = useParams();
   const [searchParams] = useSearchParams();
   const [template, setTemplate] = useState(null);
@@ -81,7 +88,7 @@ export default function PublicHealthForm() {
             id: null,
             slug: routeSlug || 'wall',
             title: 'הצהרת בריאות + הסרת אחריות',
-            waiverText: FALLBACK_WAIVER,
+            waiverText: fallbackWaiver,
             healthQuestions: FALLBACK_QUESTIONS,
           });
           const initial = {};
@@ -97,7 +104,7 @@ export default function PublicHealthForm() {
             id: null,
             slug: routeSlug || 'wall',
             title: 'הצהרת בריאות + הסרת אחריות',
-            waiverText: FALLBACK_WAIVER,
+            waiverText: fallbackWaiver,
             healthQuestions: FALLBACK_QUESTIONS,
           });
           const initial = {};
@@ -110,7 +117,7 @@ export default function PublicHealthForm() {
     }
     loadTemplate();
     return () => { cancelled = true; };
-  }, [routeSlug, searchParams]);
+  }, [routeSlug, searchParams, fallbackWaiver]);
 
   useEffect(() => {
     const phone = searchParams.get('phone');
@@ -316,6 +323,7 @@ export default function PublicHealthForm() {
             signedDate: data.record?.signedDate || data.record?.date || new Date().toISOString().split('T')[0],
             templateSlug: payload.templateSlug,
             title: template?.title || 'הצהרת בריאות + הסרת אחריות',
+            brandName,
           };
           setSavedDecl(saved);
           setIsSuccess(true);
@@ -399,7 +407,7 @@ export default function PublicHealthForm() {
   }
 
   const title = template?.title || 'הצהרת בריאות + הסרת אחריות';
-  const waiverText = template?.waiverText || FALLBACK_WAIVER;
+  const waiverText = template?.waiverText || fallbackWaiver;
 
   return (
     <div className="public-health-wrapper">
@@ -412,10 +420,10 @@ export default function PublicHealthForm() {
 
         <div className="form-header">
           <div className="logo-circle">
-            <img src="/logo.png" alt="קיר בועז" />
+            <img src={brandLogo} alt={brandName} />
           </div>
           <h2>{title}</h2>
-          <p>My Wall — שלב {step} מתוך 3</p>
+          <p>{brandName} — שלב {step} מתוך 3</p>
           {templateError && (
             <p style={{ color: '#FCD34D', fontSize: 12, marginTop: 8 }}>{templateError}</p>
           )}

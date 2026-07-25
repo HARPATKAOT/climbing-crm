@@ -4,12 +4,22 @@
  * Falls back to a logged stub so registration flows never crash.
  */
 
-function fromAddress() {
-  return (
-    process.env.EMAIL_FROM ||
-    process.env.RESEND_FROM ||
-    'My Wall <onboarding@resend.dev>'
-  ).trim();
+import { getBusinessProfile } from './businessProfile.js';
+
+async function brandLabel() {
+  try {
+    const profile = await getBusinessProfile();
+    return profile.display_name || 'הרפתקאות';
+  } catch {
+    return 'הרפתקאות';
+  }
+}
+
+function fromAddress(brandName) {
+  if (process.env.EMAIL_FROM || process.env.RESEND_FROM) {
+    return (process.env.EMAIL_FROM || process.env.RESEND_FROM).trim();
+  }
+  return `${brandName} <onboarding@resend.dev>`;
 }
 
 export function isEmailConfigured() {
@@ -26,6 +36,7 @@ export async function sendEmail({ to, subject, text, html } = {}) {
     return { sent: false, error: 'missing recipient' };
   }
 
+  const brandName = await brandLabel();
   const apiKey = (process.env.RESEND_API_KEY || '').trim();
   if (!apiKey) {
     console.log(
@@ -42,9 +53,9 @@ export async function sendEmail({ to, subject, text, html } = {}) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: fromAddress(),
+        from: fromAddress(brandName),
         to: [recipient],
-        subject: subject || 'הודעה מ-My Wall',
+        subject: subject || `הודעה מ-${brandName}`,
         text: text || '',
         html: html || undefined,
       }),
@@ -71,6 +82,7 @@ export async function sendActivityRegistrationConfirmation({
   location,
   paymentUrl,
 } = {}) {
+  const brandName = await brandLabel();
   const when = [date, startTime].filter(Boolean).join(' · ');
   const lines = [
     `שלום ${participantName || ''},`.trim(),
@@ -82,7 +94,7 @@ export async function sendActivityRegistrationConfirmation({
     paymentUrl ? `לתשלום: ${paymentUrl}` : null,
     '',
     'נתראה בקיר!',
-    'My Wall',
+    brandName,
   ].filter((line) => line !== null);
 
   const text = lines.join('\n');
@@ -97,6 +109,7 @@ export async function sendHostRegistrationLink({
   date,
   registrationUrl,
 } = {}) {
+  const brandName = await brandLabel();
   const lines = [
     `שלום ${hostName || ''},`.trim(),
     '',
@@ -104,7 +117,7 @@ export async function sendHostRegistrationLink({
     registrationUrl || '',
     date ? `תאריך: ${date}` : null,
     '',
-    'My Wall',
+    brandName,
   ].filter((line) => line !== null);
 
   return sendEmail({

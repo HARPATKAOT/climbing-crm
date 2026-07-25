@@ -103,6 +103,63 @@ export function parseTemplateVariables(text) {
   return vars;
 }
 
+/** Local checks before calling Meta — clearer errors than "Invalid parameter". */
+export function validateTemplateForMeta(template = {}) {
+  const metaName = String(template.meta_name || template.name || '').trim();
+  if (!metaName) return 'חסר שם תבנית למטא (אנגלית/קו תחתון בלבד)';
+  if (!/^[a-z0-9_]+$/.test(metaName)) {
+    return 'שם התבנית במטא חייב להיות באנגלית קטנה, מספרים וקו תחתון בלבד';
+  }
+
+  const body = String(template.body || '').trim();
+  if (!body) return 'חסר גוף הודעה';
+
+  const vars = parseTemplateVariables(body);
+  const numeric = vars.filter((v) => !v.named).map((v) => Number(v.key));
+  if (numeric.length) {
+    for (let i = 0; i < numeric.length; i += 1) {
+      if (numeric[i] !== i + 1) {
+        return 'מספרי המשתנים חייבים להיות רצופים ולהתחיל מ-{{1}} (למשל {{1}}, {{2}} — לא רק {{2}})';
+      }
+    }
+  }
+
+  if (/^\{\{\s*[^{}]+\s*\}\}/.test(body)) {
+    return 'גוף ההודעה לא יכול להתחיל במשתנה — הוסיפו טקסט לפני {{1}}';
+  }
+  if (/\{\{\s*[^{}]+\s*\}\}$/.test(body)) {
+    return 'גוף ההודעה לא יכול להסתיים במשתנה — הוסיפו טקסט אחרי המשתנה האחרון';
+  }
+
+  const examples = Array.isArray(template.body_examples) ? template.body_examples : [];
+  if (vars.length && examples.length < vars.length) {
+    const fromVars = examplesFromVariables(
+      enrichVariablesFromFields(
+        vars.map((v) => v.key),
+        template.variables
+      )
+    );
+    if (fromVars.length < vars.length || fromVars.some((e) => !String(e || '').trim())) {
+      return 'חסרה דוגמה לכל משתנה — מלאו את עמודת הדוגמה במיפוי';
+    }
+  }
+
+  return validateButtons(normalizeButtons(template.buttons));
+}
+
+function formatMetaError(data = {}) {
+  const err = data?.error || {};
+  const parts = [
+    err.error_user_msg,
+    err.error_user_title,
+    typeof err.error_data === 'string' ? err.error_data : err.error_data?.details,
+    err.message,
+  ].filter((p) => p && String(p).trim());
+  const unique = [...new Set(parts.map((p) => String(p).trim()))];
+  if (!unique.length) return 'הגשת התבנית למטא נכשלה';
+  return unique.join(' — ');
+}
+
 function countVariables(text) {
   return parseTemplateVariables(text).map((v) => v.key);
 }
@@ -271,6 +328,17 @@ export async function submitTemplateToMeta(id) {
   const template = (db.get('message_templates') || []).find((t) => t.id === id);
   if (!template) throw new Error('התבנית לא נמצאה');
 
+  const status = String(template.status || '').toUpperCase();
+  if (status === 'PENDING') {
+    throw new Error('התבנית כבר ממתינה לאישור במטא');
+  }
+  if (status === 'APPROVED') {
+    throw new Error('התבנית כבר מאושרת');
+  }
+
+  const localError = validateTemplateForMeta(template);
+  if (localError) throw new Error(localError);
+
   const { accessToken } = getWaCredentials();
   const wabaId = getWabaId();
   if (!accessToken || !wabaId) {
@@ -281,13 +349,17 @@ export async function submitTemplateToMeta(id) {
     });
   }
 
+  const header = String(template.header || '').trim();
+  const footer = String(template.footer || '').trim();
+  const body = String(template.body || '').trim();
+
   const components = [];
-  if (template.header) {
-    components.push({ type: 'HEADER', format: 'TEXT', text: template.header });
+  if (header) {
+    components.push({ type: 'HEADER', format: 'TEXT', text: header });
   }
 
-  const bodyComponent = { type: 'BODY', text: template.body };
-  const bodyVars = parseTemplateVariables(template.body);
+  const bodyComponent = { type: 'BODY', text: body };
+  const bodyVars = parseTemplateVariables(body);
   const bodyExamples = Array.isArray(template.body_examples) && template.body_examples.length
     ? template.body_examples.map(String)
     : examplesFromVariables(
@@ -301,8 +373,8 @@ export async function submitTemplateToMeta(id) {
   }
   components.push(bodyComponent);
 
-  if (template.footer) {
-    components.push({ type: 'FOOTER', text: template.footer });
+  if (footer) {
+    components.push({ type: 'FOOTER', text: footer });
   }
   const buttons = normalizeButtons(template.buttons);
   const buttonError = validateButtons(buttons);
@@ -326,6 +398,13 @@ export async function submitTemplateToMeta(id) {
     components.push({ type: 'BUTTONS', buttons: metaButtons });
   }
 
+  const payload = {
+    name: String(template.meta_name || template.name || '').trim().toLowerCase(),
+    language: template.language || 'he',
+    category: template.category || 'UTILITY',
+    components,
+  };
+
   const url = `https://graph.facebook.com/${META_GRAPH_VERSION}/${wabaId}/message_templates`;
   const res = await fetch(url, {
     method: 'POST',
@@ -333,16 +412,12 @@ export async function submitTemplateToMeta(id) {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      name: template.meta_name || template.name,
-      language: template.language || 'he',
-      category: template.category || 'UTILITY',
-      components,
-    }),
+    body: JSON.stringify(payload),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data?.error?.message || 'הגשת התבנית למטא נכשלה');
+    console.error('Meta template submit failed:', JSON.stringify({ payload, data }, null, 2));
+    throw new Error(formatMetaError(data));
   }
 
   return db.update('message_templates', id, {

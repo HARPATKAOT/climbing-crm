@@ -46,15 +46,22 @@ export default function Dashboard({ students, groups, onNavigate }) {
   useEffect(() => {
     async function loadDashboardStats() {
       try {
-        const [dueToday, inspections] = await Promise.all([
+        // One parallel round-trip instead of a sequential waterfall.
+        const [dueToday, inspections, emps, tests, incidents, waLogs, unpaid] = await Promise.all([
           fetch('/api/safety/due-today').then(r => r.ok ? r.json() : []),
           fetch('/api/safety/inspections').then(r => r.ok ? r.json() : []),
+          fetch('/api/employees').then(r => r.ok ? r.json() : []),
+          fetch('/api/level-tests').then(r => r.ok ? r.json() : []),
+          fetch('/api/safety/incidents').then(r => r.ok ? r.json() : []),
+          fetch('/api/whatsapp/logs?limit=10').then(r => r.ok ? r.json() : []),
+          fetch('/api/activities/unpaid-open').then(r => r.ok ? r.json() : []),
         ]);
         const pending = (dueToday || []).filter((c) => c.is_due && !c.signed_today);
         setSafetyPerformed(pending.length === 0);
 
         const weekStatus = {};
-        for (let i = 0; i < 7; i++) {
+        // Oldest → newest so RTL flex shows Sunday on the right, then leftward
+        for (let i = 6; i >= 0; i--) {
           const d = new Date();
           d.setDate(d.getDate() - i);
           const iso = new Intl.DateTimeFormat('en-CA', {
@@ -68,15 +75,7 @@ export default function Dashboard({ students, groups, onNavigate }) {
         }
         setSafetyWeekLogs(weekStatus);
 
-        // 2. Fetch employees for mapping
-        const emps = await fetch('/api/employees').then(r => r.ok ? r.json() : []);
         setEmployees(emps);
-
-        // 3. Fetch latest activity events
-        const tests = await fetch('/api/level-tests').then(r => r.ok ? r.json() : []);
-        const incidents = await fetch('/api/safety/incidents').then(r => r.ok ? r.json() : []);
-        const waLogs = await fetch('/api/whatsapp/logs').then(r => r.ok ? r.json() : []);
-        const unpaid = await fetch('/api/activities/unpaid-open').then(r => r.ok ? r.json() : []);
         setUnpaidEvents(Array.isArray(unpaid) ? unpaid.slice(0, 8) : []);
 
         const list = [];
@@ -121,7 +120,8 @@ export default function Dashboard({ students, groups, onNavigate }) {
       }
     }
     loadDashboardStats();
-  }, [students, groups]);
+    // The dashboard stats don't derive from students/groups props — load once.
+  }, []);
 
   const counts = getPipelineCounts(students);
   const totalStudents = students.filter(s => s.status === 'registered').length;

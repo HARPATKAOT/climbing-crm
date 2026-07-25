@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { RefreshCw, Plus, Send, Trash2, MousePointerClick } from 'lucide-react';
+import { RefreshCw, Plus, Send, Trash2, MousePointerClick, ExternalLink, Phone } from 'lucide-react';
 import { TEMPLATE_VAR_FIELDS, TEMPLATE_VAR_FIELD_MAP, normalizeTemplateVariables } from './templateVariables.js';
+import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 
 const CATEGORIES = [
   { value: 'UTILITY', label: 'תפעולי' },
@@ -33,6 +34,186 @@ const EMPTY_DRAFT = {
   footer: '',
   buttons: [],
 };
+
+function fillTemplateBody(body, varMeta = []) {
+  return String(body || '').replace(/\{\{\s*([^{}]+)\s*\}\}/g, (_, key) => {
+    const idx = Number(String(key).trim());
+    if (Number.isFinite(idx) && idx >= 1) {
+      const meta = varMeta[idx - 1];
+      return meta?.example || meta?.label || `משתנה ${idx}`;
+    }
+    return `{{${key}}}`;
+  });
+}
+
+function TemplatePreview({ draft, varMeta }) {
+  const { profile } = useBusinessProfile();
+  const brandName = profile.display_name || 'הרפתקאות';
+  const bodyFilled = fillTemplateBody(draft.body, varMeta);
+  const buttons = (draft.buttons || []).filter((b) => String(b.text || '').trim());
+  const hasContent = String(draft.header || '').trim()
+    || String(draft.body || '').trim()
+    || String(draft.footer || '').trim()
+    || buttons.length > 0;
+  const now = new Date().toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+
+  return (
+    <div style={{
+      position: 'sticky',
+      top: 12,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10,
+      minWidth: 0,
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 600 }}>תצוגה מקדימה</div>
+      <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.45 }}>
+        כך ההודעה תופיע אצל הלקוח (עם ערכי הדוגמה מהמיפוי).
+      </div>
+      <div style={{
+        borderRadius: 18,
+        border: '1px solid var(--border)',
+        overflow: 'hidden',
+        background: '#0b141a',
+        boxShadow: '0 8px 28px rgba(0,0,0,0.28)',
+      }}>
+        <div style={{
+          padding: '10px 14px',
+          background: '#1f2c34',
+          borderBottom: '1px solid rgba(255,255,255,0.06)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+        }}>
+          <div style={{
+            width: 34,
+            height: 34,
+            borderRadius: '50%',
+            background: 'linear-gradient(135deg, #25D366, #128C7E)',
+            display: 'grid',
+            placeItems: 'center',
+            color: '#fff',
+            fontSize: 13,
+            fontWeight: 700,
+            flexShrink: 0,
+          }}>
+            MW
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#e9edef' }}>{brandName}</div>
+            <div style={{ fontSize: 11, color: '#8696a0' }}>עסק · וואטסאפ</div>
+          </div>
+        </div>
+
+        <div style={{
+          padding: 14,
+          minHeight: 280,
+          background: `
+            radial-gradient(circle at 20% 20%, rgba(37,211,102,0.05), transparent 40%),
+            radial-gradient(circle at 80% 70%, rgba(18,140,126,0.06), transparent 45%),
+            #0b141a
+          `,
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'flex-end',
+        }}>
+          {!hasContent ? (
+            <div style={{
+              alignSelf: 'center',
+              color: '#8696a0',
+              fontSize: 12,
+              textAlign: 'center',
+              padding: 16,
+            }}>
+              התחילו לכתוב את גוף ההודעה — התצוגה תתעדכן כאן.
+            </div>
+          ) : (
+            <div style={{
+              alignSelf: 'flex-start',
+              maxWidth: '92%',
+              width: '100%',
+              background: '#202c33',
+              borderRadius: '0 10px 10px 10px',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.35)',
+              overflow: 'hidden',
+            }}>
+              <div style={{ padding: '10px 12px 6px' }}>
+                {String(draft.header || '').trim() && (
+                  <div style={{
+                    fontWeight: 700,
+                    fontSize: 14,
+                    color: '#e9edef',
+                    marginBottom: 6,
+                    lineHeight: 1.35,
+                    whiteSpace: 'pre-wrap',
+                  }}>
+                    {draft.header}
+                  </div>
+                )}
+                <div style={{
+                  fontSize: 13.5,
+                  color: '#e9edef',
+                  lineHeight: 1.45,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                }}>
+                  {bodyFilled || ' '}
+                </div>
+                {String(draft.footer || '').trim() && (
+                  <div style={{
+                    marginTop: 8,
+                    fontSize: 12,
+                    color: '#8696a0',
+                    whiteSpace: 'pre-wrap',
+                  }}>
+                    {draft.footer}
+                  </div>
+                )}
+                <div style={{
+                  marginTop: 6,
+                  fontSize: 10,
+                  color: '#8696a0',
+                  textAlign: 'left',
+                  direction: 'ltr',
+                }}>
+                  {now}
+                </div>
+              </div>
+
+              {buttons.length > 0 && (
+                <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+                  {buttons.map((btn, i) => {
+                    const type = String(btn.type || 'QUICK_REPLY').toUpperCase();
+                    const Icon = type === 'URL' ? ExternalLink : type === 'PHONE_NUMBER' ? Phone : null;
+                    return (
+                      <div
+                        key={i}
+                        style={{
+                          borderTop: i === 0 ? 'none' : '1px solid rgba(255,255,255,0.08)',
+                          padding: '10px 12px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 6,
+                          color: '#53bdeb',
+                          fontSize: 13,
+                          fontWeight: 500,
+                        }}
+                      >
+                        {Icon && <Icon size={13} />}
+                        <span>{String(btn.text || '').trim().slice(0, 25)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function emptyButton(type = 'QUICK_REPLY') {
   return { type, text: '', url: '', phone_number: '' };
@@ -105,13 +286,15 @@ export default function TemplatesManager() {
   const [varMeta, setVarMeta] = useState(() => syncVarMetaFromBody(EMPTY_DRAFT.body, [
     { field: 'parent_first', label: 'שם פרטי (הורה)', example: 'דלק' },
   ]));
+  const [submittingId, setSubmittingId] = useState(null);
+  const [rowError, setRowError] = useState({});
   const bodyRef = useRef(null);
 
   const mode = buttonMode(draft.buttons);
   const canAddButton = draft.buttons.length < maxButtonsForMode(mode === 'none' ? 'quick' : mode);
 
-  const load = async () => {
-    setLoading(true);
+  const load = async ({ quiet = false } = {}) => {
+    if (!quiet) setLoading(true);
     setError('');
     try {
       const res = await fetch('/api/message-templates');
@@ -119,13 +302,19 @@ export default function TemplatesManager() {
       if (!res.ok) throw new Error(data.error || 'טעינה נכשלה');
       setTemplates(Array.isArray(data) ? data : []);
     } catch (err) {
-      setError(err.message);
+      if (!quiet) setError(err.message);
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   };
 
   useEffect(() => { load(); }, []);
+
+  // Refresh local list while this screen is open (server syncs from Meta every ~15 min)
+  useEffect(() => {
+    const id = setInterval(() => { load({ quiet: true }); }, 2 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const sync = async () => {
     setLoading(true);
@@ -241,14 +430,21 @@ export default function TemplatesManager() {
 
   const submit = async (id) => {
     setError('');
+    setSuccess('');
+    setRowError((prev) => ({ ...prev, [id]: '' }));
+    setSubmittingId(id);
     try {
       const res = await fetch(`/api/message-templates/${id}/submit`, { method: 'POST' });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'הגשה נכשלה');
-      setSuccess('התבנית נשלחה לאישור Meta');
+      setSuccess('התבנית נשלחה לאישור — הסטטוס יתעדכן לממתין לאישור');
       await load();
     } catch (err) {
-      setError(err.message);
+      const msg = err.message || 'הגשה נכשלה';
+      setError(msg);
+      setRowError((prev) => ({ ...prev, [id]: msg }));
+    } finally {
+      setSubmittingId(null);
     }
   };
 
@@ -278,167 +474,171 @@ export default function TemplatesManager() {
 
       <div className="card card-p">
         <div className="section-title" style={{ marginBottom: 12 }}>יצירת תבנית חדשה</div>
-        <form onSubmit={createDraft} style={{ display: 'grid', gap: 8 }}>
-          <input className="input input-sm" placeholder="שם לתצוגה" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} required />
-          <input className="input input-sm" placeholder="שם ב-Meta (אנגלית/קו תחתון)" value={draft.meta_name} onChange={(e) => setDraft({ ...draft, meta_name: e.target.value })} />
-          <div style={{ display: 'flex', gap: 8 }}>
-            <select className="input input-sm" value={draft.language} onChange={(e) => setDraft({ ...draft, language: e.target.value })}>
-              <option value="he">עברית (he)</option>
-              <option value="he_IL">עברית (he_IL)</option>
-              <option value="en_US">אנגלית</option>
-            </select>
-            <select className="input input-sm" value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
-              {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-            </select>
-          </div>
-          <input className="input input-sm" placeholder="כותרת (אופציונלי)" value={draft.header} onChange={(e) => setDraft({ ...draft, header: e.target.value })} />
-
-          <div style={{ display: 'grid', gap: 8 }}>
-            <textarea
-              ref={bodyRef}
-              className="input"
-              rows={3}
-              placeholder="גוף ההודעה — לחצו על משתנה למטה או כתבו {{1}}, {{2}}"
-              value={draft.body}
-              onChange={(e) => updateBody(e.target.value)}
-              required
-            />
-            <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
-              לחצו על כפתור כדי להוסיף משתנה לגוף ההודעה.
-              <br />
-              אחר כך בחרו במיפוי למה כל מספר מתאים — שם פרטי, שם משפחה, שם הילד וכו׳.
+        <div className="template-builder-layout">
+          <form onSubmit={createDraft} style={{ display: 'grid', gap: 8, minWidth: 0 }}>
+            <input className="input input-sm" placeholder="שם לתצוגה" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} required />
+            <input className="input input-sm" placeholder="שם ב-Meta (אנגלית/קו תחתון)" value={draft.meta_name} onChange={(e) => setDraft({ ...draft, meta_name: e.target.value })} />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <select className="input input-sm" value={draft.language} onChange={(e) => setDraft({ ...draft, language: e.target.value })}>
+                <option value="he">עברית (he)</option>
+                <option value="he_IL">עברית (he_IL)</option>
+                <option value="en_US">אנגלית</option>
+              </select>
+              <select className="input input-sm" value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
+                {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+              </select>
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {TEMPLATE_VAR_FIELDS.filter((f) => f.id !== 'custom').map((f) => (
-                <button
-                  key={f.id}
-                  type="button"
-                  className="btn btn-xs btn-ghost"
-                  onClick={() => insertVariable(f.id)}
-                  title={`הכנס ${f.label}`}
-                >
-                  + {f.label}
+            <input className="input input-sm" placeholder="כותרת (אופציונלי)" value={draft.header} onChange={(e) => setDraft({ ...draft, header: e.target.value })} />
+
+            <div style={{ display: 'grid', gap: 8 }}>
+              <textarea
+                ref={bodyRef}
+                className="input"
+                rows={3}
+                placeholder="גוף ההודעה — לחצו על משתנה למטה או כתבו {{1}}, {{2}}"
+                value={draft.body}
+                onChange={(e) => updateBody(e.target.value)}
+                required
+              />
+              <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                לחצו על כפתור כדי להוסיף משתנה לגוף ההודעה.
+                <br />
+                אחר כך בחרו במיפוי למה כל מספר מתאים — שם פרטי, שם משפחה, שם הילד וכו׳.
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {TEMPLATE_VAR_FIELDS.filter((f) => f.id !== 'custom').map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    className="btn btn-xs btn-ghost"
+                    onClick={() => insertVariable(f.id)}
+                    title={`הכנס ${f.label}`}
+                  >
+                    + {f.label}
+                  </button>
+                ))}
+                <button type="button" className="btn btn-xs btn-ghost" onClick={() => insertVariable('custom')}>
+                  + טקסט חופשי
                 </button>
-              ))}
-              <button type="button" className="btn btn-xs btn-ghost" onClick={() => insertVariable('custom')}>
-                + טקסט חופשי
-              </button>
+              </div>
+
+              {varMeta.length > 0 && (
+                <div style={{ display: 'grid', gap: 8, padding: 10, background: 'var(--bg-2)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>מיפוי משתנים</div>
+                  {varMeta.map((v, idx) => (
+                    <div key={idx} style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: 8, alignItems: 'center' }}>
+                      <code style={{ fontSize: 12, color: 'var(--blue)' }}>{`{{${idx + 1}}}`}</code>
+                      <select
+                        className="input input-sm"
+                        value={v.field || 'custom'}
+                        onChange={(e) => updateVarField(idx, e.target.value)}
+                      >
+                        {TEMPLATE_VAR_FIELDS.map((f) => (
+                          <option key={f.id} value={f.id}>{f.label}</option>
+                        ))}
+                      </select>
+                      <input
+                        className="input input-sm"
+                        placeholder="דוגמה לאישור מטא"
+                        value={v.example || ''}
+                        onChange={(e) => updateVarExample(idx, e.target.value)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
-            {varMeta.length > 0 && (
-              <div style={{ display: 'grid', gap: 8, padding: 10, background: 'var(--bg-2)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>מיפוי משתנים</div>
-                {varMeta.map((v, idx) => (
-                  <div key={idx} style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: 8, alignItems: 'center' }}>
-                    <code style={{ fontSize: 12, color: 'var(--blue)' }}>{`{{${idx + 1}}}`}</code>
+            <input className="input input-sm" placeholder="כותרת תחתונה (אופציונלי)" value={draft.footer} onChange={(e) => setDraft({ ...draft, footer: e.target.value })} />
+
+            <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, display: 'grid', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: 13 }}>
+                  <MousePointerClick size={14} /> כפתורים (אופציונלי)
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {(!draft.buttons.length || mode === 'quick') && (
+                    <button type="button" className="btn btn-xs btn-ghost" disabled={!canAddButton && mode === 'quick'} onClick={() => addButton('QUICK_REPLY')}>
+                      + תשובה מהירה
+                    </button>
+                  )}
+                  {(!draft.buttons.length || mode === 'cta') && (
+                    <>
+                      <button type="button" className="btn btn-xs btn-ghost" disabled={!canAddButton && mode === 'cta'} onClick={() => addButton('URL')}>
+                        + קישור
+                      </button>
+                      <button type="button" className="btn btn-xs btn-ghost" disabled={!canAddButton && mode === 'cta'} onClick={() => addButton('PHONE_NUMBER')}>
+                        + חיוג
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                עד 3 תשובות מהירה, או עד 2 כפתורי פעולה (קישור/טלפון). לא ניתן לשלב בין הסוגים. טקסט כפתור — עד 25 תווים.
+              </div>
+
+              {draft.buttons.map((btn, index) => (
+                <div key={index} className="card card-p" style={{ padding: 10, display: 'grid', gap: 8, background: 'var(--bg-2)' }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <select
                       className="input input-sm"
-                      value={v.field || 'custom'}
-                      onChange={(e) => updateVarField(idx, e.target.value)}
+                      style={{ width: 140 }}
+                      value={btn.type}
+                      onChange={(e) => updateButton(index, {
+                        type: e.target.value,
+                        url: '',
+                        phone_number: '',
+                      })}
+                      disabled={draft.buttons.length > 1}
                     >
-                      {TEMPLATE_VAR_FIELDS.map((f) => (
-                        <option key={f.id} value={f.id}>{f.label}</option>
+                      {(mode === 'cta'
+                        ? BUTTON_TYPES.filter((t) => t.value !== 'QUICK_REPLY')
+                        : BUTTON_TYPES.filter((t) => t.value === 'QUICK_REPLY')
+                      ).map((t) => (
+                        <option key={t.value} value={t.value}>{t.label}</option>
                       ))}
                     </select>
                     <input
                       className="input input-sm"
-                      placeholder="דוגמה לאישור מטא"
-                      value={v.example || ''}
-                      onChange={(e) => updateVarExample(idx, e.target.value)}
+                      style={{ flex: 1 }}
+                      placeholder="טקסט על הכפתור (עד 25 תווים)"
+                      maxLength={25}
+                      value={btn.text}
+                      onChange={(e) => updateButton(index, { text: e.target.value })}
+                      required={draft.buttons.length > 0}
                     />
+                    <button type="button" className="btn btn-xs btn-ghost" onClick={() => removeButton(index)} aria-label="הסר כפתור">
+                      <Trash2 size={12} />
+                    </button>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <input className="input input-sm" placeholder="כותרת תחתונה (אופציונלי)" value={draft.footer} onChange={(e) => setDraft({ ...draft, footer: e.target.value })} />
-
-          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, display: 'grid', gap: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: 13 }}>
-                <MousePointerClick size={14} /> כפתורים (אופציונלי)
-              </div>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {(!draft.buttons.length || mode === 'quick') && (
-                  <button type="button" className="btn btn-xs btn-ghost" disabled={!canAddButton && mode === 'quick'} onClick={() => addButton('QUICK_REPLY')}>
-                    + תשובה מהירה
-                  </button>
-                )}
-                {(!draft.buttons.length || mode === 'cta') && (
-                  <>
-                    <button type="button" className="btn btn-xs btn-ghost" disabled={!canAddButton && mode === 'cta'} onClick={() => addButton('URL')}>
-                      + קישור
-                    </button>
-                    <button type="button" className="btn btn-xs btn-ghost" disabled={!canAddButton && mode === 'cta'} onClick={() => addButton('PHONE_NUMBER')}>
-                      + חיוג
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
-              עד 3 תשובות מהירה, או עד 2 כפתורי פעולה (קישור/טלפון). לא ניתן לשלב בין הסוגים. טקסט כפתור — עד 25 תווים.
-            </div>
-
-            {draft.buttons.map((btn, index) => (
-              <div key={index} className="card card-p" style={{ padding: 10, display: 'grid', gap: 8, background: 'var(--bg-2)' }}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <select
-                    className="input input-sm"
-                    style={{ width: 140 }}
-                    value={btn.type}
-                    onChange={(e) => updateButton(index, {
-                      type: e.target.value,
-                      url: '',
-                      phone_number: '',
-                    })}
-                    disabled={draft.buttons.length > 1}
-                  >
-                    {(mode === 'cta'
-                      ? BUTTON_TYPES.filter((t) => t.value !== 'QUICK_REPLY')
-                      : BUTTON_TYPES.filter((t) => t.value === 'QUICK_REPLY')
-                    ).map((t) => (
-                      <option key={t.value} value={t.value}>{t.label}</option>
-                    ))}
-                  </select>
-                  <input
-                    className="input input-sm"
-                    style={{ flex: 1 }}
-                    placeholder="טקסט על הכפתור (עד 25 תווים)"
-                    maxLength={25}
-                    value={btn.text}
-                    onChange={(e) => updateButton(index, { text: e.target.value })}
-                    required={draft.buttons.length > 0}
-                  />
-                  <button type="button" className="btn btn-xs btn-ghost" onClick={() => removeButton(index)} aria-label="הסר כפתור">
-                    <Trash2 size={12} />
-                  </button>
+                  {btn.type === 'URL' && (
+                    <input
+                      className="input input-sm"
+                      placeholder="https://..."
+                      value={btn.url}
+                      onChange={(e) => updateButton(index, { url: e.target.value })}
+                      required
+                    />
+                  )}
+                  {btn.type === 'PHONE_NUMBER' && (
+                    <input
+                      className="input input-sm"
+                      placeholder="972501234567"
+                      value={btn.phone_number}
+                      onChange={(e) => updateButton(index, { phone_number: e.target.value })}
+                      required
+                    />
+                  )}
                 </div>
-                {btn.type === 'URL' && (
-                  <input
-                    className="input input-sm"
-                    placeholder="https://..."
-                    value={btn.url}
-                    onChange={(e) => updateButton(index, { url: e.target.value })}
-                    required
-                  />
-                )}
-                {btn.type === 'PHONE_NUMBER' && (
-                  <input
-                    className="input input-sm"
-                    placeholder="972501234567"
-                    value={btn.phone_number}
-                    onChange={(e) => updateButton(index, { phone_number: e.target.value })}
-                    required
-                  />
-                )}
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
 
-          <button type="submit" className="btn btn-primary btn-sm"><Plus size={13} /> שמור טיוטה</button>
-        </form>
+            <button type="submit" className="btn btn-primary btn-sm"><Plus size={13} /> שמור טיוטה</button>
+          </form>
+
+          <TemplatePreview draft={draft} varMeta={varMeta} />
+        </div>
       </div>
 
       <div className="card card-p" style={{ padding: 0, overflow: 'hidden' }}>
@@ -482,14 +682,25 @@ export default function TemplatesManager() {
                   <td>{STATUS_LABELS[String(t.status).toUpperCase()] || t.status}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     {String(t.status).toUpperCase() === 'DRAFT' && (
-                      <button type="button" className="btn btn-xs btn-primary" onClick={() => submit(t.id)} style={{ marginLeft: 4 }}>
-                        <Send size={11} /> שלח לאישור
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-primary"
+                        onClick={() => submit(t.id)}
+                        disabled={submittingId === t.id}
+                        style={{ marginLeft: 4 }}
+                      >
+                        <Send size={11} /> {submittingId === t.id ? 'שולח...' : 'שלח לאישור'}
                       </button>
                     )}
                     {String(t.status).toUpperCase() !== 'APPROVED' && (
                       <button type="button" className="btn btn-xs btn-ghost" onClick={() => remove(t.id)}>
                         <Trash2 size={11} />
                       </button>
+                    )}
+                    {rowError[t.id] && (
+                      <div style={{ color: '#F87171', fontSize: 11, marginTop: 6, maxWidth: 220, whiteSpace: 'normal' }}>
+                        {rowError[t.id]}
+                      </div>
                     )}
                   </td>
                 </tr>

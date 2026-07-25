@@ -2,6 +2,7 @@
  * Helpers for activity public registration pages, capacity, and templates.
  */
 import crypto from 'crypto';
+import { clampImage } from './productCategories.js';
 
 const PAYMENT_STATUSES = new Set(['unpaid', 'paid', 'partial']);
 
@@ -12,6 +13,20 @@ export const TEMPLATE_CATEGORIES = [
 ];
 
 export const TEMPLATE_CATEGORY_IDS = new Set(TEMPLATE_CATEGORIES.map((c) => c.id));
+
+/** Sanitize registration_theme / template theme (cover image size + format). */
+export function sanitizeRegistrationTheme(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const theme = { ...raw };
+  if (theme.cover_image !== undefined) {
+    theme.cover_image = theme.cover_image ? clampImage(theme.cover_image) : '';
+  }
+  if (theme.cover_position !== undefined) {
+    const pos = String(theme.cover_position || '').trim();
+    theme.cover_position = pos || '50% 50%';
+  }
+  return theme;
+}
 
 export function makeRegistrationSlug() {
   return crypto.randomBytes(6).toString('hex');
@@ -73,6 +88,20 @@ export function findActivityBySlug(db, slug) {
   ) || null;
 }
 
+/** Normalize theme JSON that may arrive as a string from storage. */
+export function normalizeActivityTheme(raw) {
+  let theme = raw;
+  if (typeof theme === 'string') {
+    try {
+      theme = JSON.parse(theme);
+    } catch {
+      return {};
+    }
+  }
+  if (!theme || typeof theme !== 'object' || Array.isArray(theme)) return {};
+  return theme;
+}
+
 export function publicRegistrationPayload(activity, registrations) {
   const remaining = remainingCapacity(activity, registrations);
   const price = Number(activity.price) || 0;
@@ -80,7 +109,9 @@ export function publicRegistrationPayload(activity, registrations) {
     activity.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
   );
   const collectPay = registrationMode === 'paid_per_participant' && price > 0;
-  const theme = activity.registration_theme || activity.theme || {};
+  const safeTheme = normalizeActivityTheme(
+    activity.registration_theme || activity.theme || {}
+  );
   return {
     id: activity.id,
     name: activity.name,
@@ -102,8 +133,10 @@ export function publicRegistrationPayload(activity, registrations) {
     unit_price: collectPay ? price : 0,
     page_title: activity.registration_page_title || activity.name || '',
     page_body: activity.registration_page_body || activity.description || '',
+    cover_image: safeTheme.cover_image || '',
+    cover_position: safeTheme.cover_position || '50% 50%',
     host_name: activity.host_name || activity.contact_name || '',
-    theme: typeof theme === 'object' && theme ? theme : {},
+    theme: safeTheme,
   };
 }
 
@@ -137,10 +170,11 @@ export function templateFieldsFromActivity(activity = {}) {
 }
 
 export function normalizeTemplatePayload(body = {}) {
-  const theme =
+  const theme = sanitizeRegistrationTheme(
     body.theme && typeof body.theme === 'object' && !Array.isArray(body.theme)
       ? body.theme
-      : {};
+      : {}
+  );
   return {
     name: String(body.name || '').trim(),
     type: body.type || 'birthday',

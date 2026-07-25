@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { CheckCircle, CreditCard, Loader2 } from 'lucide-react';
 import { useParams, useSearchParams } from 'react-router-dom';
+import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 
 export default function PublicHostPayment() {
+  const { profile } = useBusinessProfile();
+  const brandName = profile.display_name || 'הרפתקאות';
   const { token } = useParams();
   const [searchParams] = useSearchParams();
   const [activity, setActivity] = useState(null);
@@ -91,7 +94,7 @@ export default function PublicHostPayment() {
       />
       <main className={`host-payment-shell ${paymentUrl && !paid ? 'host-payment-shell--wide' : ''}`}>
         <header className="host-payment-header">
-          <div className="host-payment-brand">MY WALL</div>
+          <div className="host-payment-brand">{brandName}</div>
           {loading ? (
             <div className="host-payment-loading">
               <Loader2 className="spin" size={28} />
@@ -106,7 +109,6 @@ export default function PublicHostPayment() {
             <div className="host-payment-success">
               <CheckCircle size={64} color="#34d399" />
               <h1>התשלום התקבל</h1>
-              <p className="host-payment-sub">תודה, האירוע מסומן כשולם.</p>
             </div>
           ) : (
             <>

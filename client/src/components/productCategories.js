@@ -79,24 +79,83 @@ export function compressImageFile(file, { maxSide = 720, quality = 0.72 } = {}) 
       reject(new Error('לא נבחר קובץ'));
       return;
     }
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('קריאת הקובץ נכשלה'));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error('קובץ התמונה לא תקין'));
-      img.onload = () => {
-        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-        const w = Math.max(1, Math.round(img.width * scale));
-        const h = Math.max(1, Math.round(img.height * scale));
+    const type = String(file.type || '').toLowerCase();
+    if (type.includes('heic') || type.includes('heif') || /\.heic$|\.heif$/i.test(file.name || '')) {
+      reject(new Error('פורמט התמונה לא נתמך — שמרו כ־JPG או PNG ונסו שוב'));
+      return;
+    }
+
+    const finishFromBitmap = (bitmap) => {
+      try {
+        const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+        const w = Math.max(1, Math.round(bitmap.width * scale));
+        const h = Math.max(1, Math.round(bitmap.height * scale));
         const canvas = document.createElement('canvas');
         canvas.width = w;
         canvas.height = h;
         const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, w, h);
+        ctx.drawImage(bitmap, 0, 0, w, h);
+        if (typeof bitmap.close === 'function') bitmap.close();
         resolve(canvas.toDataURL('image/jpeg', quality));
-      };
-      img.src = reader.result;
+      } catch (err) {
+        reject(new Error(err?.message || 'עיבוד התמונה נכשל'));
+      }
     };
+
+    if (typeof createImageBitmap === 'function') {
+      createImageBitmap(file)
+        .then(finishFromBitmap)
+        .catch(() => {
+          // Fall through to FileReader + Image
+          readWithImage();
+        });
+      return;
+    }
+
+    readWithImage();
+
+    function readWithImage() {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('קריאת הקובץ נכשלה'));
+      reader.onload = () => {
+        const img = new Image();
+        img.onerror = () => reject(new Error('קובץ התמונה לא תקין או לא נתמך'));
+        img.onload = () => {
+          try {
+            const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+            const w = Math.max(1, Math.round(img.width * scale));
+            const h = Math.max(1, Math.round(img.height * scale));
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, w, h);
+            resolve(canvas.toDataURL('image/jpeg', quality));
+          } catch (err) {
+            reject(new Error(err?.message || 'עיבוד התמונה נכשל'));
+          }
+        };
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    }
+  });
+}
+
+/** Read image as data-URL without compression (fallback for stubborn files). */
+export function readImageFileAsDataUrl(file, { maxBytes = 1_200_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    if (!file) {
+      reject(new Error('לא נבחר קובץ'));
+      return;
+    }
+    if (file.size > maxBytes) {
+      reject(new Error('התמונה גדולה מדי — נסו תמונה קטנה יותר'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('קריאת הקובץ נכשלה'));
+    reader.onload = () => resolve(String(reader.result || ''));
     reader.readAsDataURL(file);
   });
 }

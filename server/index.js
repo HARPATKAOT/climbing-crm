@@ -30,9 +30,17 @@ import {
   listActivityTemplates,
   groupTemplatesByCategory,
   ensureSeedActivityTemplates,
+  sanitizeRegistrationTheme,
   activityDraftFromTemplate,
   TEMPLATE_CATEGORIES,
 } from './activityRegistration.js';
+import {
+  buildRegistrationRefundPlan,
+  applyRegistrationRefundMarks,
+  buildHostRefundPlan,
+  applyHostRefundMarks,
+  summarizeHostPayment,
+} from './activityRegistrationRefund.js';
 import {
   registerActivityGroup,
   markRegistrationOrderPaid,
@@ -60,6 +68,11 @@ import {
   renameCategoryOnProducts,
   clampImage,
 } from './productCategories.js';
+import {
+  getBusinessProfile,
+  saveBusinessProfile,
+  safeBusinessProfile,
+} from './businessProfile.js';
 import {
   ensureAttendanceRows,
   israelDateStr,
@@ -122,7 +135,7 @@ app.use(cors({
   },
 }));
 app.use(express.json({
-  limit: '2mb',
+  limit: '15mb',
   verify(req, _res, buffer) {
     req.rawBody = buffer;
   },
@@ -165,6 +178,32 @@ app.use('/api', apiAuth);
 
 app.get('/api/auth/me', (req, res) => {
   res.json(req.crmUser);
+});
+
+app.get('/api/public/business-profile', async (_req, res) => {
+  try {
+    const profile = await getBusinessProfile();
+    res.json(safeBusinessProfile(profile));
+  } catch (error) {
+    console.error('business profile public load error:', error.message);
+    res.json(safeBusinessProfile());
+  }
+});
+
+app.get('/api/settings/business-profile', requireOwner, async (_req, res) => {
+  try {
+    res.json(await getBusinessProfile({ fresh: true }));
+  } catch (error) {
+    res.status(503).json({ error: error.message || 'טעינת פרטי העסק נכשלה' });
+  }
+});
+
+app.put('/api/settings/business-profile', requireOwner, async (req, res) => {
+  try {
+    res.json(await saveBusinessProfile(req.body || {}));
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'שמירת פרטי העסק נכשלה' });
+  }
 });
 
 const publicRequestWindows = new Map();
@@ -856,6 +895,11 @@ app.get('/api/whatsapp/logs', (req, res) => {
     filtered = whatsappService.getLogsForPhone(phone);
   } else {
     filtered.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  }
+  // Optional cap so light consumers (e.g. dashboard) don't download the full log.
+  const limit = Number(req.query.limit);
+  if (Number.isFinite(limit) && limit > 0) {
+    filtered = filtered.slice(0, limit);
   }
   res.json(filtered);
 });
@@ -1560,10 +1604,11 @@ function normalizeActivityPayload(body = {}) {
     form_template_slug: body.form_template_slug || 'wall',
     registration_page_title: body.registration_page_title || '',
     registration_page_body: body.registration_page_body || '',
-    registration_theme:
+    registration_theme: sanitizeRegistrationTheme(
       body.registration_theme && typeof body.registration_theme === 'object'
         ? body.registration_theme
-        : (body.theme && typeof body.theme === 'object' ? body.theme : {}),
+        : (body.theme && typeof body.theme === 'object' ? body.theme : {})
+    ),
   };
 }
 
@@ -1784,14 +1829,16 @@ app.get('/api/activities/:id/registrations', async (req, res) => {
   const activity = db.getOne('activities', req.params.id);
   if (!activity) return res.status(404).json({ error: 'Activity not found' });
   if (supa.isEnabled()) {
-    const [remoteRegs, remoteOrders, remoteDeclarations] = await Promise.all([
+    const [remoteRegs, remoteOrders, remoteDeclarations, remotePayments] = await Promise.all([
       supa.getAll('activity_registrations'),
       supa.getAll('activity_registration_orders'),
       supa.getAll('health_declarations'),
+      supa.getAll('payments'),
     ]);
     if (remoteRegs) db.set('activity_registrations', remoteRegs);
     if (remoteOrders) db.set('activity_registration_orders', remoteOrders);
     if (remoteDeclarations) db.set('health_declarations', remoteDeclarations);
+    if (remotePayments) db.set('payments', remotePayments);
   }
   const regs = activeRegistrations(db, activity.id).sort((a, b) =>
     String(b.created_at || '').localeCompare(String(a.created_at || ''))
@@ -1808,11 +1855,45 @@ app.get('/api/activities/:id/registrations', async (req, res) => {
         !!declaration.signature_url
     ),
   }));
+
+  let hostPayment = summarizeHostPayment(db, activity);
+  // Best-effort: fill missing invoice URL from iCount when we already have a doc id
+  if (
+    hostPayment?.icount_doc_id &&
+    !hostPayment.icount_doc_url &&
+    icount.isConfigured()
+  ) {
+    try {
+      const info = await icount.getDoc(hostPayment.icount_doc_id);
+      const url =
+        info?.doc_url ||
+        info?.docurl ||
+        info?.doc?.doc_url ||
+        info?.doc?.docurl ||
+        null;
+      if (url && hostPayment.payment_id) {
+        const updated = db.update('payments', hostPayment.payment_id, {
+          icount_doc_url: url,
+          updated_at: new Date().toISOString(),
+        });
+        if (updated) {
+          await persistCore('payments', updated);
+          hostPayment = { ...hostPayment, icount_doc_url: url };
+        }
+      } else if (url) {
+        hostPayment = { ...hostPayment, icount_doc_url: url };
+      }
+    } catch (err) {
+      console.warn('⚠️ [host payment] doc url lookup failed:', err.message);
+    }
+  }
+
   res.json({
     activity_id: activity.id,
     max_participants: activity.max_participants ?? null,
     remaining: remainingCapacity(activity, regs),
     registrations: enriched,
+    host_payment: hostPayment,
   });
 });
 
@@ -1901,6 +1982,202 @@ app.delete('/api/activities/:id/registrations/:registrationId', async (req, res)
   } catch (err) {
     console.error('delete registration error:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/activities/:id/registrations/:registrationId/refund', async (req, res) => {
+  try {
+    if (!icount.isConfigured()) {
+      return res.status(503).json({ error: 'מערכת החיוב לא מוגדרת בשרת' });
+    }
+    const activity = db.getOne('activities', req.params.id);
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+    if (supa.isEnabled()) {
+      const [remoteRegs, remoteOrders, remotePayments] = await Promise.all([
+        supa.getAll('activity_registrations'),
+        supa.getAll('activity_registration_orders'),
+        supa.getAll('payments'),
+      ]);
+      if (remoteRegs) db.set('activity_registrations', remoteRegs);
+      if (remoteOrders) db.set('activity_registration_orders', remoteOrders);
+      if (remotePayments) db.set('payments', remotePayments);
+    }
+    const registration = db.getOne('activity_registrations', req.params.registrationId);
+    if (!registration || String(registration.activity_id) !== String(activity.id)) {
+      return res.status(404).json({ error: 'המשתתף לא נמצא באירוע' });
+    }
+
+    const plan = buildRegistrationRefundPlan(db, { activity, registration });
+    if (!plan.ok) {
+      return res.status(400).json({ error: plan.error, code: plan.code || null });
+    }
+
+    const reason =
+      String(req.body?.reason || '').trim() ||
+      `זיכוי הרשמה · ${activity.name} · ${plan.participantNames.join(', ')}`;
+
+    try {
+      const info = await icount.getDocInfo({ doctype: plan.doctype, docnum: plan.docnum });
+      const docInfo = info.doc_info || info;
+      if (docInfo?.is_cancelled) {
+        const marked = await applyRegistrationRefundMarks({
+          db,
+          persist: persistCore,
+          plan,
+          reason: 'המסמך כבר בוטל במערכת החיוב',
+          cancellation: { doctype: plan.doctype, docnum: plan.docnum },
+          refundedBy: req.crmUser?.email || req.crmUser?.name || null,
+        });
+        const regs = activeRegistrations(db, activity.id);
+        return res.json({
+          success: true,
+          alreadyCancelled: true,
+          sharedPayment: plan.sharedPayment,
+          participantNames: plan.participantNames,
+          amount: plan.amount,
+          registrations: marked.registrations,
+          remaining: remainingCapacity(activity, regs),
+        });
+      }
+      if (docInfo && docInfo.is_cancellable === false) {
+        return res.status(400).json({ error: 'המסמך במערכת החיוב לא ניתן לביטול' });
+      }
+    } catch (err) {
+      console.warn('⚠️ [activity refund] doc info check failed:', err.message);
+    }
+
+    const cancellation = await icount.cancelDoc({
+      doctype: plan.doctype,
+      docnum: plan.docnum,
+      reason,
+      refundCc: true,
+    });
+
+    const marked = await applyRegistrationRefundMarks({
+      db,
+      persist: persistCore,
+      plan,
+      reason,
+      cancellation,
+      refundedBy: req.crmUser?.email || req.crmUser?.name || null,
+    });
+
+    const regs = activeRegistrations(db, activity.id);
+    console.log(
+      `↩️ [activity] refund regs=${marked.registrations.map((r) => r.id).join(',')} doc=${plan.docnum} → ${cancellation.docnum}`
+    );
+
+    res.json({
+      success: true,
+      sharedPayment: plan.sharedPayment,
+      participantNames: plan.participantNames,
+      amount: plan.amount,
+      cancellation,
+      registrations: marked.registrations,
+      remaining: remainingCapacity(activity, regs),
+    });
+  } catch (err) {
+    console.error('activity registration refund error:', err.message, err.details?.error_details || '');
+    const details = Array.isArray(err.details?.error_details)
+      ? err.details.error_details.filter(Boolean).join(' · ')
+      : '';
+    res.status(502).json({
+      error: details || err.message,
+      code: err.code,
+    });
+  }
+});
+
+app.post('/api/activities/:id/host-payment/refund', async (req, res) => {
+  try {
+    if (!icount.isConfigured()) {
+      return res.status(503).json({ error: 'מערכת החיוב לא מוגדרת בשרת' });
+    }
+    const activity = db.getOne('activities', req.params.id);
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+    if (supa.isEnabled()) {
+      const [remoteActivities, remotePayments] = await Promise.all([
+        supa.getAll('activities'),
+        supa.getAll('payments'),
+      ]);
+      if (remoteActivities) db.set('activities', remoteActivities);
+      if (remotePayments) db.set('payments', remotePayments);
+    }
+    const fresh = db.getOne('activities', req.params.id) || activity;
+    const plan = buildHostRefundPlan(db, fresh);
+    if (!plan.ok) {
+      return res.status(400).json({ error: plan.error, code: plan.code || null });
+    }
+
+    const reason =
+      String(req.body?.reason || '').trim() ||
+      `זיכוי דמי הזמנה · ${fresh.name}`;
+
+    try {
+      const info = await icount.getDocInfo({ doctype: plan.doctype, docnum: plan.docnum });
+      const docInfo = info.doc_info || info;
+      if (docInfo?.is_cancelled) {
+        const marked = await applyHostRefundMarks({
+          db,
+          persist: persistCore,
+          activity: fresh,
+          payment: plan.payment,
+          reason: 'המסמך כבר בוטל במערכת החיוב',
+          cancellation: { doctype: plan.doctype, docnum: plan.docnum },
+          refundedBy: req.crmUser?.email || req.crmUser?.name || null,
+        });
+        return res.json({
+          success: true,
+          alreadyCancelled: true,
+          amount: plan.amount,
+          activity: marked.activity,
+          payment: marked.payment,
+        });
+      }
+      if (docInfo && docInfo.is_cancellable === false) {
+        return res.status(400).json({ error: 'המסמך במערכת החיוב לא ניתן לביטול' });
+      }
+    } catch (err) {
+      console.warn('⚠️ [host refund] doc info check failed:', err.message);
+    }
+
+    const cancellation = await icount.cancelDoc({
+      doctype: plan.doctype,
+      docnum: plan.docnum,
+      reason,
+      refundCc: true,
+    });
+
+    const marked = await applyHostRefundMarks({
+      db,
+      persist: persistCore,
+      activity: fresh,
+      payment: plan.payment,
+      reason,
+      cancellation,
+      refundedBy: req.crmUser?.email || req.crmUser?.name || null,
+    });
+
+    console.log(
+      `↩️ [activity] host refund activity=${fresh.id} doc=${plan.docnum} → ${cancellation.docnum}`
+    );
+
+    res.json({
+      success: true,
+      amount: plan.amount,
+      cancellation,
+      activity: marked.activity,
+      payment: marked.payment,
+    });
+  } catch (err) {
+    console.error('host payment refund error:', err.message, err.details?.error_details || '');
+    const details = Array.isArray(err.details?.error_details)
+      ? err.details.error_details.filter(Boolean).join(' · ')
+      : '';
+    res.status(502).json({
+      error: details || err.message,
+      code: err.code,
+    });
   }
 });
 
@@ -2290,23 +2567,47 @@ app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req
   }
 });
 
-app.get('/api/public/activities/:slug', publicFormRateLimit, (req, res) => {
-  const activity = findActivityBySlug(db, req.params.slug);
-  if (!activity) return res.status(404).json({ error: 'הפעילות לא נמצאה' });
-  const regs = activeRegistrations(db, activity.id);
-  const template = resolveDeclarationTemplate(db, {
-    templateId: activity.form_template_id,
-    templateSlug: activity.form_template_slug || 'wall',
-  });
-  res.json({
-    ...publicRegistrationPayload(activity, regs),
-    form_template: template,
-  });
+/** Resolve public registration activity, refreshing from durable store when needed. */
+async function findActivityBySlugFresh(slug) {
+  let activity = findActivityBySlug(db, slug);
+  // Always refresh from durable store so cover/theme edits are visible on public links
+  // even when the in-memory cache on the server is stale.
+  if (supa.isEnabled()) {
+    const remote = await supa.getAll('activities');
+    if (remote) {
+      db.set('activities', remote);
+      activity = findActivityBySlug(db, slug) || activity;
+    }
+  }
+  return activity;
+}
+
+app.get('/api/public/activities/:slug', publicFormRateLimit, async (req, res) => {
+  try {
+    const activity = await findActivityBySlugFresh(req.params.slug);
+    if (!activity) return res.status(404).json({ error: 'הפעילות לא נמצאה' });
+    if (supa.isEnabled()) {
+      const remoteRegs = await supa.getAll('activity_registrations');
+      if (remoteRegs) db.set('activity_registrations', remoteRegs);
+    }
+    const regs = activeRegistrations(db, activity.id);
+    const template = resolveDeclarationTemplate(db, {
+      templateId: activity.form_template_id,
+      templateSlug: activity.form_template_slug || 'wall',
+    });
+    res.json({
+      ...publicRegistrationPayload(activity, regs),
+      form_template: template,
+    });
+  } catch (err) {
+    console.error('public activity get error:', err.message);
+    res.status(500).json({ error: err.message || 'טעינת הפעילות נכשלה' });
+  }
 });
 
 app.post('/api/public/activities/:slug/register', publicFormRateLimit, async (req, res) => {
   try {
-    const activity = findActivityBySlug(db, req.params.slug);
+    const activity = await findActivityBySlugFresh(req.params.slug);
     if (!activity) return res.status(404).json({ error: 'הפעילות לא נמצאה' });
     if (!registrationIsOpen(activity)) {
       return res.status(400).json({ error: 'ההרשמה לפעילות זו סגורה' });
@@ -2588,12 +2889,17 @@ function filterAttendanceRows(rows, { groupId, date, studentId }) {
 
 app.get('/api/attendance', async (req, res) => {
   const { groupId, date, studentId } = req.query;
+  const hasFilter = Boolean(groupId || date || studentId);
   try {
     if (supa.isEnabled()) {
-      const rows = await supa.getAll('attendance');
+      // With a filter: query only the matching rows in the database.
+      // Without a filter: pull everything and refresh the local cache.
+      const rows = hasFilter
+        ? await supa.getAttendanceFiltered({ groupId, date, studentId })
+        : await supa.getAll('attendance');
       if (rows) {
-        if (typeof db.set === 'function') db.set('attendance', rows);
-        return res.json(filterAttendanceRows(rows, { groupId, date, studentId }));
+        if (!hasFilter && typeof db.set === 'function') db.set('attendance', rows);
+        return res.json(hasFilter ? rows : filterAttendanceRows(rows, { groupId, date, studentId }));
       }
     }
   } catch (err) {
@@ -3198,6 +3504,13 @@ app.post('/api/icount/webhook', async (req, res) => {
         icount_doc_id: docId || payment.icount_doc_id,
         icount_doc_number: docnum || payment.icount_doc_number,
         icount_doctype: doctype || payment.icount_doctype || null,
+        icount_doc_url:
+          payload.doc_url ||
+          payload.docurl ||
+          payload?.doc?.doc_url ||
+          payload?.doc?.docurl ||
+          payment.icount_doc_url ||
+          null,
         paid_at: payment.paid_at || new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
@@ -3642,11 +3955,18 @@ function minutesToHm(total) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
+/** Round work hours to nearest quarter-hour (matches UI step=0.25). */
+function roundHoursQuarter(h) {
+  const n = Number(h);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.round(n * 4) / 4;
+}
+
 function hoursBetweenHm(startHm, endHm) {
   const a = parseHmToMinutes(startHm);
   const b = parseHmToMinutes(endHm);
   if (a == null || b == null || b <= a) return 0;
-  return Math.round(((b - a) / 60) * 100) / 100;
+  return roundHoursQuarter((b - a) / 60);
 }
 
 function israelLocalParts(iso) {
@@ -3698,7 +4018,7 @@ function suggestHoursFromClock(employeeId, dateStr, eventStartHm, eventEndHm) {
       }
     }
 
-    const hours = Math.round(((endMin - startMin) / 60) * 100) / 100;
+    const hours = roundHoursQuarter((endMin - startMin) / 60);
     if (!best || hours > best.hours) {
       best = {
         start_time: minutesToHm(startMin),
@@ -3722,7 +4042,7 @@ function normalizeWorkAssignment(body = {}, { existing = null } = {}) {
   if (hours === undefined || hours === null || hours === '') {
     hours = hoursBetweenHm(startTime, endTime);
   } else {
-    hours = Math.round((Number(hours) || 0) * 100) / 100;
+    hours = roundHoursQuarter(hours);
   }
   return {
     employee_id: body.employee_id || existing?.employee_id || null,
@@ -4147,6 +4467,7 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
       doctype,
       docnum: sale.icount_doc_number,
       reason,
+      refundCc: true,
     });
 
     // Void passes issued by this sale
@@ -5649,6 +5970,22 @@ app.listen(PORT, () => {
   };
   setTimeout(() => { runGooglePullIfConnected(); }, 60_000);
   setInterval(() => { runGooglePullIfConnected(); }, 10 * 60 * 1000);
+
+  // Meta WhatsApp template statuses (PENDING → APPROVED/REJECTED)
+  const runTemplateSyncIfConfigured = async () => {
+    try {
+      const result = await syncTemplatesFromMeta();
+      if (result?.success) {
+        console.log(`📄 Message templates sync: ${result.synced ?? 0} from Meta`);
+      } else if (result?.error) {
+        console.warn('Periodic template sync skipped:', result.error);
+      }
+    } catch (err) {
+      console.error('Periodic template sync failed:', err.message);
+    }
+  };
+  setTimeout(() => { runTemplateSyncIfConfigured(); }, 90_000);
+  setInterval(() => { runTemplateSyncIfConfigured(); }, 15 * 60 * 1000);
 });
 });
 

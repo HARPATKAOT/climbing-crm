@@ -1,24 +1,36 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Calendar, CalendarRange, ShieldCheck, UserCog, LogIn,
-  MessageSquare, Bell, Search, Coins, Award, FileHeart, Zap, LogOut
+  MessageSquare, Bell, Search, Coins, Award, FileHeart, Zap, LogOut, Building2,
 } from 'lucide-react';
 import { useAuth } from './components/AuthGate.jsx';
+import { useBusinessProfile } from './BusinessProfileContext.jsx';
 import { isPublicPath } from './publicPaths.js';
 
-import Dashboard          from './components/Dashboard.jsx';
-import Leads              from './components/Leads.jsx';
-import Schedule           from './components/Schedule.jsx';
-import ActivitiesCalendar from './components/ActivitiesCalendar.jsx';
-import Safety             from './components/Safety.jsx';
-import Employees          from './components/Employees.jsx';
-import Broadcasts         from './components/Broadcasts.jsx';
-import CashRegister       from './components/CashRegister.jsx';
-import LevelTests         from './components/LevelTests.jsx';
-import HealthDeclarations from './components/HealthDeclarations.jsx';
-import CheckInConsole     from './components/CheckInConsole.jsx';
-import Automations        from './components/Automations.jsx';
+// Code-splitting: each screen is downloaded only when first visited,
+// which keeps the initial bundle (and first paint) small.
+const Dashboard          = lazy(() => import('./components/Dashboard.jsx'));
+const Leads              = lazy(() => import('./components/Leads.jsx'));
+const Schedule           = lazy(() => import('./components/Schedule.jsx'));
+const ActivitiesCalendar = lazy(() => import('./components/ActivitiesCalendar.jsx'));
+const Safety             = lazy(() => import('./components/Safety.jsx'));
+const Employees          = lazy(() => import('./components/Employees.jsx'));
+const Broadcasts         = lazy(() => import('./components/Broadcasts.jsx'));
+const CashRegister       = lazy(() => import('./components/CashRegister.jsx'));
+const LevelTests         = lazy(() => import('./components/LevelTests.jsx'));
+const HealthDeclarations = lazy(() => import('./components/HealthDeclarations.jsx'));
+const CheckInConsole     = lazy(() => import('./components/CheckInConsole.jsx'));
+const Automations        = lazy(() => import('./components/Automations.jsx'));
+const BusinessSettings   = lazy(() => import('./components/BusinessSettings.jsx'));
+
+function PageLoader() {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '60vh', color: 'var(--text-3)', fontSize: 14 }}>
+      טוען מסך...
+    </div>
+  );
+}
 
 // ─── Nav Config ─────────────────────────────────────────────────────────────
 const NAV = [
@@ -34,6 +46,7 @@ const NAV = [
   { key: 'levels',     label: 'מבחנים',             icon: Award,            section: 'ops',  accent: '#FCD34D' },
   { key: 'health',     label: 'הצהרות וטפסים',      icon: FileHeart,        section: 'ops',  accent: '#F472B6' },
   { key: 'automations',label: 'אוטומציות',         icon: Zap,              section: 'ops',  accent: '#FACC15' },
+  { key: 'business',   label: 'הגדרות עסק',        icon: Building2,        section: 'ops',  accent: '#C084FC', ownerOnly: true },
 ];
 
 // URL paths for browser history (Back/Forward). /health is reserved for the public form.
@@ -50,6 +63,7 @@ const PAGE_PATHS = {
   levels:      '/levels',
   health:      '/health-declarations',
   automations: '/automations',
+  business:    '/business-settings',
 };
 
 const PATH_TO_PAGE = Object.fromEntries(
@@ -77,6 +91,7 @@ const PAGE_TITLES = {
   levels:     { title: 'מבחנים',                  sub: 'רמה · אבטחה · הובלה' },
   health:     { title: 'הצהרות בריאות וטפסים',    sub: 'עריכת טקסט ההצהרה שנשלחת ללקוחות + מעקב חתימות' },
   automations:{ title: 'אוטומציות ומסעות לקוח',  sub: 'הגדרת פעולות שיווקיות ותפעוליות אוטומטיות' },
+  business:   { title: 'הגדרות עסק',             sub: 'שם, לוגו ופרטי קשר שמופיעים ללקוחות' },
 };
 
 // ─── Main App Component ──────────────────────────────────────────────────────
@@ -84,9 +99,14 @@ export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, isOwner, signOut } = useAuth();
+  const { profile } = useBusinessProfile();
+  const brandName = profile.display_name || 'הרפתקאות';
+  const brandLogo = profile.logo_url || '/logo.png';
   const requestedPage = pathToPage(location.pathname) ?? 'dashboard';
   const page = !isOwner && !STAFF_PAGES.has(requestedPage) ? 'leads' : requestedPage;
-  const visibleNav = isOwner ? NAV : NAV.filter((item) => STAFF_PAGES.has(item.key));
+  const visibleNav = isOwner
+    ? NAV
+    : NAV.filter((item) => STAFF_PAGES.has(item.key) && !item.ownerOnly);
 
   const goToPage = (key) => {
     const path = PAGE_PATHS[key] || '/';
@@ -176,7 +196,9 @@ export default function App() {
       if (retryTimer) clearTimeout(retryTimer);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [page]);
+    // Fetch core data once on mount (plus retry/visibility logic above) —
+    // NOT on every tab change, which used to re-download all parents/students/groups.
+  }, []);
   const [showNotifications, setShowNotifications] = useState(false);
   const info   = PAGE_TITLES[page] || {};
 
@@ -210,11 +232,11 @@ export default function App() {
         {/* Logo */}
         <div className="sidebar-logo">
           <div className="sidebar-logo-mark">
-            <img src="/logo.png" alt="קיר בועז" />
+            <img src={brandLogo} alt={brandName} />
           </div>
           <div>
-            <div className="sidebar-logo-text">קיר בועז</div>
-            <div className="sidebar-logo-sub">CRM · מנהל קיר טיפוס</div>
+            <div className="sidebar-logo-text">{brandName}</div>
+            <div className="sidebar-logo-sub">ניהול קיר טיפוס</div>
           </div>
         </div>
 
@@ -229,23 +251,13 @@ export default function App() {
                 key={n.key}
                 className={`nav-item ${isActive ? 'active' : ''}`}
                 onClick={() => goToPage(n.key)}
-                style={{
-                  '--nav-accent': n.accent,
-                  ...(isActive ? {
-                    background: `${n.accent}18`,
-                    borderColor: `${n.accent}40`,
-                    color: '#fff',
-                  } : {}),
-                }}
+                style={{ '--nav-accent': n.accent }}
               >
                 <span
                   className="nav-icon-wrap"
-                  style={{
-                    background: `${n.accent}18`,
-                    color: n.accent,
-                  }}
+                  style={{ color: n.accent }}
                 >
-                  <Icon className="nav-icon" size={17} strokeWidth={2.25} />
+                  <Icon className="nav-icon" size={17} strokeWidth={2} />
                 </span>
                 <span>{n.label}</span>
                 {n.key === 'leads' && newLeadsCount > 0 && (
@@ -265,23 +277,13 @@ export default function App() {
                 key={n.key}
                 className={`nav-item ${isActive ? 'active' : ''}`}
                 onClick={() => goToPage(n.key)}
-                style={{
-                  '--nav-accent': n.accent,
-                  ...(isActive ? {
-                    background: `${n.accent}18`,
-                    borderColor: `${n.accent}40`,
-                    color: '#fff',
-                  } : {}),
-                }}
+                style={{ '--nav-accent': n.accent }}
               >
                 <span
                   className="nav-icon-wrap"
-                  style={{
-                    background: `${n.accent}18`,
-                    color: n.accent,
-                  }}
+                  style={{ color: n.accent }}
                 >
-                  <Icon className="nav-icon" size={17} strokeWidth={2.25} />
+                  <Icon className="nav-icon" size={17} strokeWidth={2} />
                 </span>
                 <span>{n.label}</span>
               </button>
@@ -371,18 +373,21 @@ export default function App() {
 
         {/* Page Content */}
         <main className="page-content">
-          {page === 'dashboard'  && <Dashboard students={students} groups={groups} onNavigate={goToPage} />}
-          {page === 'checkin'    && <CheckInConsole students={students} groups={groups} />}
-          {page === 'leads'      && <Leads students={students} setStudents={setStudents} parents={parents} setParents={setParents} groups={groups} canManageBilling={isOwner} canViewComms />}
-          {page === 'schedule'   && <Schedule groups={groups} students={students} parents={parents} setGroups={setGroups} setStudents={setStudents} />}
-          {page === 'activities' && <ActivitiesCalendar isOwner={isOwner} />}
-          {page === 'broadcasts' && <Broadcasts parents={parents} students={students} groups={groups} />}
-          {page === 'cash'       && <CashRegister isOwner={isOwner} initialTab={location.state?.cashTab} />}
-          {page === 'safety'     && <Safety />}
-          {page === 'employees'  && <Employees />}
-          {page === 'levels'     && <LevelTests students={students} groups={groups} />}
-          {page === 'health'     && <HealthDeclarations parents={parents} students={students} canManageTemplates={isOwner} />}
-          {page === 'automations'&& <Automations />}
+          <Suspense fallback={<PageLoader />}>
+            {page === 'dashboard'  && <Dashboard students={students} groups={groups} onNavigate={goToPage} />}
+            {page === 'checkin'    && <CheckInConsole students={students} groups={groups} />}
+            {page === 'leads'      && <Leads students={students} setStudents={setStudents} parents={parents} setParents={setParents} groups={groups} canManageBilling={isOwner} canViewComms />}
+            {page === 'schedule'   && <Schedule groups={groups} students={students} parents={parents} setGroups={setGroups} setStudents={setStudents} />}
+            {page === 'activities' && <ActivitiesCalendar isOwner={isOwner} />}
+            {page === 'broadcasts' && <Broadcasts parents={parents} students={students} groups={groups} />}
+            {page === 'cash'       && <CashRegister isOwner={isOwner} initialTab={location.state?.cashTab} />}
+            {page === 'safety'     && <Safety />}
+            {page === 'employees'  && <Employees />}
+            {page === 'levels'     && <LevelTests students={students} groups={groups} />}
+            {page === 'health'     && <HealthDeclarations parents={parents} students={students} canManageTemplates={isOwner} />}
+            {page === 'automations'&& <Automations />}
+            {page === 'business'   && isOwner && <BusinessSettings />}
+          </Suspense>
         </main>
       </div>
     </div>

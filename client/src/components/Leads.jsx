@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, Users, Ticket } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
@@ -7,6 +8,7 @@ import {
   buildHealthDeclarationPdf,
   downloadHealthDeclarationPdf,
 } from '../utils/healthDeclarationPdf.js';
+import { healthExpiryDate } from '../utils/healthValidity.js';
 import ConversationPanel from './ConversationPanel.jsx';
 import AttendanceCalendar from './AttendanceCalendar.jsx';
 import { isAwaitingHandling, latestInboundTime } from './communicationQueue.js';
@@ -380,13 +382,20 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
     || !!student.healthSignedAt
     || !!student.waiverSignedAt
     || !!(healthDecl && (healthDecl.signed || healthDecl.status === 'approved' || healthDecl.waiverAccepted));
+  // Declarations expire together every two years, at the end of July (even years)
+  const healthSignedOn = healthDecl?.signedDate || healthDecl?.date
+    || student.healthSignedAt || student.waiverSignedAt || null;
+  const healthExpiry = healthExpiryDate(healthSignedOn);
+  const healthExpired = isHealthSigned && !!healthExpiry && healthExpiry.getTime() < Date.now();
 
   useEffect(() => {
     if (parentOnly || !student?.id) {
       setClientDocuments([]);
+      setDocsLoading(false);
       return;
     }
     let cancelled = false;
+    setClientDocuments([]);
     setDocsLoading(true);
     fetch(`/api/students/${encodeURIComponent(student.id)}/documents`)
       .then((res) => (res.ok ? res.json() : []))
@@ -400,7 +409,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
         if (!cancelled) setDocsLoading(false);
       });
     return () => { cancelled = true; };
-  }, [parentOnly, student.id, isHealthSigned]);
+  }, [parentOnly, student.id]);
 
   // Backfill personal-file PDF when a signed declaration exists but no file was stored yet
   const pdfBackfillRef = useRef(new Set());
@@ -938,9 +947,11 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
     }
   };
 
-  const healthSummary = isHealthSigned
-    ? `חתום${healthDecl?.signedDate || healthDecl?.date ? ` · ${healthDecl.signedDate || healthDecl.date}` : ''}`
-    : 'חסר';
+  const healthSummary = !isHealthSigned
+    ? 'חסר'
+    : healthExpired
+      ? `פג תוקף · ${healthExpiry.toLocaleDateString('he-IL')}`
+      : `חתום${healthExpiry ? ` · בתוקף עד ${healthExpiry.toLocaleDateString('he-IL')}` : ''}`;
   const groupSummary = group
     ? `${group.name}${group.day ? ` · יום ${group.day}` : ''}`
     : 'לא משויך';
@@ -977,7 +988,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
         style={{
           position: 'fixed',
           inset: 0,
-          background: 'rgba(0,0,0,0.55)',
+          background: 'var(--bg-overlay)',
           zIndex: 299,
         }}
       />
@@ -988,7 +999,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
           left: 0,
           height: '100vh',
           width: 'min(960px, 92vw)',
-          background: '#0D1117',
+          background: 'var(--bg-card)',
           borderRight: '1px solid var(--border)',
           zIndex: 300,
           display: 'flex',
@@ -1212,194 +1223,273 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
               title="הצהרת בריאות"
               icon={FileCheck2}
               summary={healthSummary}
-              summaryColor={isHealthSigned ? '#34D399' : '#FCD34D'}
+              summaryColor={isHealthSigned && !healthExpired ? '#34D399' : '#FCD34D'}
               open={openFolder === 'health'}
               onToggle={toggleFolder}
             >
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12,
-                padding: '8px 10px', borderRadius: 8,
-                background: isHealthSigned ? 'rgba(52, 211, 153, 0.12)' : 'rgba(252, 211, 77, 0.1)',
-                border: `1px solid ${isHealthSigned ? 'rgba(52, 211, 153, 0.35)' : 'rgba(252, 211, 77, 0.35)'}`,
-              }}>
-                <span style={{ fontSize: 16 }}>{isHealthSigned ? '✓' : '⏳'}</span>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700 }}>
-                    {isHealthSigned ? 'נחתם — הצהרת בריאות + כתב ויתור' : 'טרם נחתם'}
-                  </div>
-                  {healthDecl && (
-                    <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 4 }}>
-                      חתם: {healthDecl.signedBy || healthDecl.parentName || '—'}
-                      {(healthDecl.climberName || healthDecl.studentName) ? ` · מתאמן: ${healthDecl.climberName || healthDecl.studentName}` : ''}
-                      {Object.values(healthDecl.answers || {}).some(Boolean) ? ' · יש הסתייגויות רפואיות' : ' · ללא הסתייגויות'}
-                    </div>
-                  )}
-                </div>
-              </div>
-              {formTemplates.length > 0 && (
-                <div className="form-group" style={{ marginBottom: 10 }}>
-                  <label className="form-label" style={{ fontSize: 11 }}>סוג טופס / פעילות</label>
-                  <select
-                    className="select"
-                    value={selectedFormSlug}
-                    onChange={(e) => setSelectedFormSlug(e.target.value)}
-                    style={{ fontSize: 13 }}
-                  >
-                    {formTemplates.map((t) => (
-                      <option key={t.id} value={t.slug}>
-                        {t.title}{t.isDefault ? ' (ברירת מחדל)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  className="btn btn-success btn-xs"
-                  disabled={sendingHealth || !parent?.phone}
-                  onClick={handleSendHealthForm}
-                >
-                  <Send size={12} /> {sendingHealth ? 'שולח...' : 'שלח בוואטסאפ'}
-                </button>
-                {healthDecl && (
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-xs"
-                    disabled={downloadingPdf}
-                    onClick={async () => {
-                      setDownloadingPdf(true);
-                      setHealthSendMsg('');
-                      try {
-                        await downloadHealthDeclarationPdf(healthDecl);
-                        setHealthSendMsg('קובץ האישור החתום הורד למחשב');
-                      } catch (err) {
-                        console.error(err);
-                        setHealthSendMsg('שגיאה בהורדת האישור');
-                      } finally {
-                        setDownloadingPdf(false);
-                      }
-                    }}
-                  >
-                    <Download size={12} /> {downloadingPdf ? 'מכין...' : 'הורד אישור חתום'}
-                  </button>
-                )}
-              </div>
-
-              {healthSendMsg && (
-                <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)' }}>
-                  <div style={{ marginBottom: healthSendLink ? 6 : 0 }}>{healthSendMsg}</div>
-                  {healthSendLink && (
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <input
-                        className="input input-sm"
-                        readOnly
-                        value={healthSendLink}
-                        style={{ flex: 1, minWidth: 140, fontSize: 11 }}
-                        onFocus={(e) => e.target.select()}
-                      />
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-xs"
-                        onClick={async () => {
-                          try {
-                            await navigator.clipboard.writeText(healthSendLink);
-                            setHealthSendMsg('הקישור הועתק — אפשר לשלוח אותו ללקוח בוואטסאפ');
-                          } catch {
-                            setHealthSendMsg('לא הצלחתי להעתיק — סמנו את הקישור ידנית');
-                          }
-                        }}
-                      >
-                        העתק קישור
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-              {!parentOnly && (() => {
+              {(() => {
+                const isHealthDoc = (doc) => doc.isVirtual || doc.type === 'health_waiver_pdf' || !!doc.declarationId;
                 const combinedDocuments = [...clientDocuments];
-                if (healthDecl && (healthDecl.signature_url || healthDecl.signed) && !clientDocuments.some(d => d.declarationId === healthDecl.id || d.type === 'health_waiver_pdf')) {
+                const hasStoredHealthDoc = combinedDocuments.some(isHealthDoc);
+                if (
+                  !hasStoredHealthDoc
+                  && healthDecl
+                  && (healthDecl.signature_url || healthDecl.signed || healthDecl.waiverAccepted || healthDecl.status === 'approved')
+                ) {
                   combinedDocuments.push({
                     id: `virtual_${healthDecl.id}`,
                     fileName: 'הצהרת בריאות חתומה',
-                    created_at: healthDecl.signedAt || healthDecl.createdAt || Date.now(),
+                    created_at: healthDecl.signedAt || healthDecl.signedDate || healthDecl.date || healthDecl.createdAt || Date.now(),
+                    type: 'health_waiver_pdf',
+                    isVirtual: true,
+                    virtualData: healthDecl,
+                  });
+                } else if (!hasStoredHealthDoc && isHealthSigned) {
+                  combinedDocuments.push({
+                    id: `virtual_signed_${student.id}`,
+                    fileName: 'הצהרת בריאות חתומה',
+                    created_at: student.healthSignedAt || student.waiverSignedAt || Date.now(),
                     type: 'health_waiver_pdf',
                     isVirtual: true,
                     virtualData: healthDecl,
                   });
                 }
+                const hasHealthDoc = combinedDocuments.some(isHealthDoc);
+                // Renewal controls appear when nothing is signed, or the signature expired
+                const showUnsignedControls = healthExpired || (!isHealthSigned && !hasHealthDoc);
+
+                const handleDownloadDoc = async (doc) => {
+                  const source = doc.virtualData || healthDecl;
+                  if (doc.isVirtual || (!doc.id || String(doc.id).startsWith('virtual_'))) {
+                    if (!source) {
+                      setHealthSendMsg('האישור עדיין נטען — נסו שוב בעוד רגע');
+                      return;
+                    }
+                    setDownloadingPdf(true);
+                    setHealthSendMsg('');
+                    try {
+                      await downloadHealthDeclarationPdf(source);
+                      setHealthSendMsg('קובץ האישור החתום הורד למחשב');
+                    } catch (err) {
+                      console.error(err);
+                      setHealthSendMsg('שגיאה בהורדת האישור');
+                    } finally {
+                      setDownloadingPdf(false);
+                    }
+                    return;
+                  }
+                  try {
+                    const res = await fetch(`/api/documents/${encodeURIComponent(doc.id)}/download`);
+                    if (!res.ok) throw new Error('download failed');
+                    const blob = await res.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = doc.fileName || 'document.pdf';
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    URL.revokeObjectURL(url);
+                    setHealthSendMsg('קובץ האישור החתום הורד למחשב');
+                  } catch (err) {
+                    console.error(err);
+                    setHealthSendMsg('שגיאה בהורדת המסמך מהתיק');
+                  }
+                };
+
                 return (
-                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)', marginBottom: 8 }}>מסמכים בתיק</div>
-                    {docsLoading ? (
-                      <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען מסמכים...</div>
-                    ) : combinedDocuments.length === 0 ? (
-                      <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-                        עדיין אין קבצים בתיק. אחרי השלמת טופס החתימה יישמר כאן קובץ אישור.
-                      </div>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                        {combinedDocuments.map((doc) => (
-                          <div
-                            key={doc.id}
-                            style={{
-                              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-                              padding: '6px 8px', borderRadius: 8, border: '1px solid var(--border)',
-                              background: 'rgba(255,255,255,0.03)',
-                            }}
-                          >
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)' }}>
-                                {doc.fileName || 'הצהרת בריאות חתומה'}
-                              </div>
-                              <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
-                                {doc.created_at ? new Date(doc.created_at).toLocaleString('he-IL') : ''}
-                                {doc.type ? ` · ${doc.type}` : ''}
-                              </div>
+                  <>
+                    {showUnsignedControls && (
+                      <>
+                        <div style={{
+                          display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12,
+                          padding: '8px 10px', borderRadius: 8,
+                          background: 'rgba(252, 211, 77, 0.1)',
+                          border: '1px solid rgba(252, 211, 77, 0.35)',
+                        }}>
+                          <span style={{ fontSize: 16 }}>⏳</span>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 13, fontWeight: 700 }}>
+                              {healthExpired ? 'פג תוקף — נדרשת חתימה מחדש' : 'טרם נחתם'}
                             </div>
+                            {healthExpired && (
+                              <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 4 }}>
+                                ההצהרה הקודמת פגה בתאריך {healthExpiry.toLocaleDateString('he-IL')} · הקובץ הישן נשמר בתיק
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {formTemplates.length > 0 && (
+                          <div className="form-group" style={{ marginBottom: 10 }}>
+                            <label className="form-label" style={{ fontSize: 11 }}>סוג טופס / פעילות</label>
+                            <select
+                              className="select"
+                              value={selectedFormSlug}
+                              onChange={(e) => setSelectedFormSlug(e.target.value)}
+                              style={{ fontSize: 13 }}
+                            >
+                              {formTemplates.map((t) => (
+                                <option key={t.id} value={t.slug}>
+                                  {t.title}{t.isDefault ? ' (ברירת מחדל)' : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            className="btn btn-success btn-xs"
+                            disabled={sendingHealth || !parent?.phone}
+                            onClick={handleSendHealthForm}
+                          >
+                            <Send size={12} /> {sendingHealth ? 'שולח...' : 'שלח בוואטסאפ'}
+                          </button>
+                          {parentOnly && healthExpired && healthDecl && (
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-xs"
+                              disabled={downloadingPdf}
+                              onClick={() => handleDownloadDoc({ isVirtual: true, virtualData: healthDecl })}
+                            >
+                              <Download size={12} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    )}
+
+                    {parentOnly && isHealthSigned && !healthExpired && (
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="btn btn-success btn-xs"
+                          disabled={sendingHealth || !parent?.phone}
+                          onClick={handleSendHealthForm}
+                        >
+                          <Send size={12} /> {sendingHealth ? 'שולח...' : 'שלח בוואטסאפ'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-xs"
+                          disabled={downloadingPdf || !healthDecl}
+                          onClick={async () => {
+                            if (!healthDecl) return;
+                            setDownloadingPdf(true);
+                            setHealthSendMsg('');
+                            try {
+                              await downloadHealthDeclarationPdf(healthDecl);
+                              setHealthSendMsg('קובץ האישור החתום הורד למחשב');
+                            } catch (err) {
+                              console.error(err);
+                              setHealthSendMsg('שגיאה בהורדת האישור');
+                            } finally {
+                              setDownloadingPdf(false);
+                            }
+                          }}
+                        >
+                          <Download size={12} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
+                        </button>
+                      </div>
+                    )}
+
+                    {healthSendMsg && (
+                      <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)' }}>
+                        <div style={{ marginBottom: healthSendLink ? 6 : 0 }}>{healthSendMsg}</div>
+                        {healthSendLink && (
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                            <input
+                              className="input input-sm"
+                              readOnly
+                              value={healthSendLink}
+                              style={{ flex: 1, minWidth: 140, fontSize: 11 }}
+                              onFocus={(e) => e.target.select()}
+                            />
                             <button
                               type="button"
                               className="btn btn-ghost btn-xs"
-                              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}
-                              disabled={doc.isVirtual && downloadingPdf}
                               onClick={async () => {
-                                if (doc.isVirtual) {
-                                  setDownloadingPdf(true);
-                                  try {
-                                    await downloadHealthDeclarationPdf(doc.virtualData);
-                                  } catch (err) {
-                                    console.error(err);
-                                    setHealthSendMsg('שגיאה בהורדת האישור');
-                                  } finally {
-                                    setDownloadingPdf(false);
-                                  }
-                                } else {
-                                  try {
-                                    const res = await fetch(`/api/documents/${encodeURIComponent(doc.id)}/download`);
-                                    if (!res.ok) throw new Error('download failed');
-                                    const blob = await res.blob();
-                                    const url = URL.createObjectURL(blob);
-                                    const a = document.createElement('a');
-                                    a.href = url;
-                                    a.download = doc.fileName || 'document.pdf';
-                                    document.body.appendChild(a);
-                                    a.click();
-                                    a.remove();
-                                    URL.revokeObjectURL(url);
-                                  } catch (err) {
-                                    console.error(err);
-                                    setHealthSendMsg('שגיאה בהורדת המסמך מהתיק');
-                                  }
+                                try {
+                                  await navigator.clipboard.writeText(healthSendLink);
+                                  setHealthSendMsg('הקישור הועתק — אפשר לשלוח אותו ללקוח בוואטסאפ');
+                                } catch {
+                                  setHealthSendMsg('לא הצלחתי להעתיק — סמנו את הקישור ידנית');
                                 }
                               }}
                             >
-                              <Download size={12} /> {doc.isVirtual && downloadingPdf ? 'מכין...' : 'הורדה'}
+                              העתק קישור
                             </button>
                           </div>
-                        ))}
+                        )}
                       </div>
                     )}
-                  </div>
+
+                    {!parentOnly && (
+                      <div style={{ marginTop: showUnsignedControls || healthSendMsg ? 12 : 0 }}>
+                        {(showUnsignedControls || healthSendMsg) && (
+                          <div style={{ borderTop: '1px solid var(--border)', marginBottom: 12 }} />
+                        )}
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)', marginBottom: 8 }}>מסמכים בתיק</div>
+                        {docsLoading && !hasHealthDoc ? (
+                          <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען...</div>
+                        ) : combinedDocuments.length === 0 ? (
+                          <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                            עדיין אין קבצים בתיק. אחרי השלמת טופס החתימה יישמר כאן קובץ אישור.
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            {combinedDocuments.map((doc) => {
+                              const healthRow = isHealthDoc(doc);
+                              return (
+                                <div
+                                  key={doc.id}
+                                  style={{
+                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                                    padding: '6px 8px', borderRadius: 8, border: '1px solid var(--border)',
+                                    background: 'rgba(255,255,255,0.03)',
+                                  }}
+                                >
+                                  <div style={{ minWidth: 0 }}>
+                                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)' }}>
+                                      {doc.fileName || 'הצהרת בריאות חתומה'}
+                                    </div>
+                                    <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
+                                      {doc.created_at ? new Date(doc.created_at).toLocaleString('he-IL') : ''}
+                                    </div>
+                                  </div>
+                                  <div style={{ display: 'flex', gap: 4, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                    {healthRow && healthExpired && (
+                                      <span className="badge badge-amber" style={{ fontSize: 10, alignSelf: 'center' }}>פג תוקף</span>
+                                    )}
+                                    {healthRow && !healthExpired && (
+                                      <button
+                                        type="button"
+                                        className="btn btn-success btn-xs"
+                                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                                        disabled={sendingHealth || !parent?.phone}
+                                        onClick={handleSendHealthForm}
+                                      >
+                                        <Send size={12} /> {sendingHealth ? 'שולח...' : 'שלח בוואטסאפ'}
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className="btn btn-primary btn-xs"
+                                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                                      disabled={downloadingPdf || (doc.isVirtual && !(doc.virtualData || healthDecl))}
+                                      onClick={() => handleDownloadDoc(doc)}
+                                    >
+                                      <Download size={12} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
                 );
               })()}
             </FolderRow>
@@ -1800,7 +1890,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
             minHeight: 0,
             display: 'flex',
             flexDirection: 'column',
-            background: 'rgba(0,0,0,0.15)',
+            background: 'var(--bg-root)',
             overscrollBehavior: 'contain',
           }}
         >
@@ -2014,7 +2104,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
             </div>
           </form>
           {billingLink && (
-            <div style={{ marginTop: 10, padding: 8, background: '#1F2937', borderRadius: 6, fontSize: 12, wordBreak: 'break-all' }}>
+            <div style={{ marginTop: 10, padding: 8, background: 'var(--bg-input)', borderRadius: 6, fontSize: 12, wordBreak: 'break-all' }}>
               <strong>קישור לתשלום:</strong><br />
               <a href={billingLink} target="_blank" rel="noreferrer" style={{ color: 'var(--blue)' }}>{billingLink}</a>
             </div>
@@ -2157,6 +2247,7 @@ function AddLeadModal({ students, parents, onAdd, onClose }) {
 
 // ─── Main Leads / Customers Page ─────────────────────────────────────────────
 export default function Leads({ students, setStudents, parents, setParents, groups, canManageBilling = false, canViewComms = true }) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [showAddModal, setShowAddModal] = useState(false);
@@ -2166,6 +2257,29 @@ export default function Leads({ students, setStudents, parents, setParents, grou
   const [dragOverStatus, setDragOverStatus] = useState(null);
   const [markingHandledId, setMarkingHandledId] = useState(null);
   const [handlingError, setHandlingError] = useState('');
+
+  // Open a customer file from deep links (e.g. activity registration list).
+  useEffect(() => {
+    const openId = searchParams.get('open');
+    if (!openId) return;
+    const exists =
+      students.some((s) => String(s.id) === String(openId)) ||
+      (String(openId).startsWith('parent:') &&
+        parents.some((p) => String(p.id) === String(openId).replace(/^parent:/, ''))) ||
+      buildLeadEntries(students, parents).some((e) => String(e.key) === String(openId));
+    if (!exists && (students.length > 0 || parents.length > 0)) {
+      // Data loaded but target missing — still clear the param.
+      const next = new URLSearchParams(searchParams);
+      next.delete('open');
+      setSearchParams(next, { replace: true });
+      return;
+    }
+    if (!exists) return;
+    setSelectedStudentId(openId);
+    const next = new URLSearchParams(searchParams);
+    next.delete('open');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams, students, parents]);
 
   // Fetch pricelist for billing options
   useEffect(() => {
@@ -2178,8 +2292,10 @@ export default function Leads({ students, setStudents, parents, setParents, grou
 
   const refreshData = async () => {
     try {
-      const freshStudents = await fetch('/api/students').then(r => r.json());
-      const freshParents = await fetch('/api/parents').then(r => r.json());
+      const [freshStudents, freshParents] = await Promise.all([
+        fetch('/api/students').then(r => r.json()),
+        fetch('/api/parents').then(r => r.json()),
+      ]);
       setStudents(freshStudents);
       setParents(freshParents);
     } catch (e) {
@@ -2187,9 +2303,20 @@ export default function Leads({ students, setStudents, parents, setParents, grou
     }
   };
 
+  // Background refresh: once a minute, and only while the tab is visible.
+  // (Was every 15s regardless of visibility — a constant load on the server.)
   useEffect(() => {
-    const timer = setInterval(refreshData, 15000);
-    return () => clearInterval(timer);
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') refreshData();
+    }, 60000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshData();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
