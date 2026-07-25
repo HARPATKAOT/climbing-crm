@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { CheckCircle, CreditCard, Loader2 } from 'lucide-react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
+import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
 
 export default function PublicHostPayment() {
   const { profile } = useBusinessProfile();
@@ -77,6 +78,10 @@ export default function PublicHostPayment() {
   }, []);
 
   const paid = activity?.payment_status === 'paid' || searchParams.get('paid') === '1';
+  const priceVat = vatBreakdown(
+    activity?.price,
+    normalizePriceIncludesVat(activity?.price_includes_vat)
+  );
   const dateLabel = activity?.date
     ? new Date(`${activity.date}T12:00:00`).toLocaleDateString('he-IL', {
       weekday: 'long',
@@ -121,8 +126,22 @@ export default function PublicHostPayment() {
                 {dateLabel && <span>{dateLabel}</span>}
                 {activity?.start_time && <span>{String(activity.start_time).slice(0, 5)}</span>}
                 {activity?.location && <span>{activity.location}</span>}
-                <strong>₪{Number(activity?.price || 0).toLocaleString('he-IL')}</strong>
+                <strong>
+                  {formatIls(priceVat.gross)}
+                  {' '}
+                  כולל מע״מ
+                </strong>
               </div>
+              {!priceVat.includesVat && priceVat.entered > 0 && (
+                <p className="host-payment-vat-note">
+                  מחיר לפני מע״מ: {formatIls(priceVat.net)}
+                </p>
+              )}
+              {priceVat.includesVat && priceVat.entered > 0 && (
+                <p className="host-payment-vat-note">
+                  מתוכו לפני מע״מ: {formatIls(priceVat.net)}
+                </p>
+              )}
             </>
           )}
         </header>

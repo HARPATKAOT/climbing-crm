@@ -4,6 +4,7 @@ import {
   Copy, ExternalLink, Loader2, Pencil, RefreshCw,
   Search, Send, Trash2, Undo2, Users, X,
 } from 'lucide-react';
+import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
 
 function leadOpenTarget(registration) {
   if (registration?.student_id) return String(registration.student_id);
@@ -789,6 +790,19 @@ export default function ActivityRegistrationPanel({
         </span>
       </label>
 
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-3)' }}>
+        האם המחיר כולל מע״מ
+        <select
+          className="input"
+          value={normalizePriceIncludesVat(form.price_includes_vat) ? 'incl' : 'excl'}
+          onChange={(e) => set('price_includes_vat', e.target.value === 'incl')}
+          disabled={readOnly}
+        >
+          <option value="excl">לפני מע״מ — הלקוח משלם מחיר + מע״מ</option>
+          <option value="incl">כולל מע״מ — הלקוח משלם בדיוק את הסכום שהוזן</option>
+        </select>
+      </label>
+
       {activityId && (
         <div className="registration-sections">
           {isHostPays && (
@@ -839,9 +853,32 @@ export default function ActivityRegistrationPanel({
                     </strong>
                   </div>
                   <div>
-                    <span className="registration-host-payment-label">סכום</span>
+                    <span className="registration-host-payment-label">
+                      {normalizePriceIncludesVat(
+                        hostPayment?.price_includes_vat ?? form.price_includes_vat
+                      )
+                        ? 'סכום כולל מע״מ'
+                        : 'סכום לפני מע״מ'}
+                    </span>
                     <strong>
-                      ₪{Number(hostPayment?.amount ?? form.price ?? 0) || 0}
+                      {formatIls(
+                        hostPayment?.entered_amount
+                          ?? form.price
+                          ?? hostPayment?.amount
+                          ?? 0
+                      )}
+                    </strong>
+                  </div>
+                  <div>
+                    <span className="registration-host-payment-label">סכום לתשלום</span>
+                    <strong>
+                      {formatIls(
+                        hostPayment?.amount
+                          ?? vatBreakdown(
+                            form.price,
+                            normalizePriceIncludesVat(form.price_includes_vat)
+                          ).gross
+                      )}
                     </strong>
                   </div>
                   {(hostPayment?.paid_at || form.host_paid_at) && (

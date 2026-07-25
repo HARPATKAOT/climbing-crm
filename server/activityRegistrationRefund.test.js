@@ -122,4 +122,20 @@ test('summarizeHostPayment exposes invoice fields for paid host', () => {
   assert.equal(summary.icount_doc_number, '555');
   assert.equal(summary.icount_doc_url, 'https://example.com/doc/555');
   assert.equal(summary.amount, 450);
+  assert.equal(summary.entered_amount, 450);
+  assert.equal(summary.price_includes_vat, false);
+});
+
+test('summarizeHostPayment charges VAT when price is before tax', () => {
+  const db = makeDb({ payments: [] });
+  const summary = summarizeHostPayment(db, {
+    id: 'a2',
+    name: 'טיול',
+    price: 100,
+    price_includes_vat: false,
+    payment_status: 'unpaid',
+  });
+  assert.equal(summary.amount, 118);
+  assert.equal(summary.entered_amount, 100);
+  assert.equal(summary.price_includes_vat, false);
 });

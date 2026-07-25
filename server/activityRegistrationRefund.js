@@ -1,4 +1,5 @@
 import { normalizeHostPaymentStatus } from './activityRegistration.js';
+import { chargeAmount, normalizePriceIncludesVat } from './vat.js';
 
 export function summarizeHostPayment(db, activity) {
   if (!activity) return null;
@@ -14,7 +15,13 @@ export function summarizeHostPayment(db, activity) {
     ) || null;
   }
 
-  const amount = Number(payment?.amount ?? activity.price) || 0;
+  const includesVat = normalizePriceIncludesVat(
+    payment?.price_includes_vat ?? activity.price_includes_vat
+  );
+  const entered = Number(activity.price) || 0;
+  const amount = Number(payment?.amount) > 0
+    ? Number(payment.amount)
+    : chargeAmount(entered, includesVat);
   const docnum = payment?.icount_doc_number || null;
   const doctype = payment?.icount_doctype || null;
   const docId = payment?.icount_doc_id || null;
@@ -26,6 +33,8 @@ export function summarizeHostPayment(db, activity) {
     payment_status: paymentStatus,
     payment_id: payment?.id || null,
     amount,
+    entered_amount: entered,
+    price_includes_vat: includesVat,
     description: payment?.description || (activity.name ? `תשלום אירוע: ${activity.name}` : ''),
     paid_at: paidAt,
     status: paymentRecordStatus || (paymentStatus === 'paid' ? 'paid' : 'pending'),

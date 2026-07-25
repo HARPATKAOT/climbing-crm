@@ -238,6 +238,7 @@ mappers.activities = columnMapper([
   'registration_theme', 'registration_mode', 'participant_registration_slug',
   'host_payment_token', 'host_payment_id', 'host_paid_at',
   'form_template_id', 'form_template_slug',
+  'price_includes_vat',
   'created_at', 'updated_at',
 ]);
 mappers.attendance = columnMapper([
@@ -262,6 +263,7 @@ mappers.activity_templates = columnMapper([
   'start_time', 'end_time', 'all_day',
   'registration_enabled', 'collect_registration_payment',
   'registration_mode',
+  'price_includes_vat',
   'registration_page_title', 'registration_page_body',
   'theme', 'sort_order', 'is_active',
   'created_at', 'updated_at',

@@ -2195,6 +2195,32 @@ input, select, textarea { font-family: var(--font); }
   font-size: 10px;
 }
 
+.activity-designer-vat-hint {
+  grid-column: 1 / -1;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.activity-designer-vat-mode {
+  min-width: 0;
+}
+
+.activity-designer-vat-mode select {
+  font-size: 12px;
+  padding: 6px 8px;
+  background: #0f172a;
+  border-color: #334155;
+  color: #e2e8f0;
+}
+
+.host-payment-vat-note {
+  margin: 8px 0 0;
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .activity-designer-all-day {
   display: flex;
   align-items: center;

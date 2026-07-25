@@ -238,6 +238,7 @@ function emptyForm(dateStr = '', opts = {}) {
     registration_enabled: false,
     collect_registration_payment: false,
     registration_mode: 'paid_per_participant',
+    price_includes_vat: false,
     registration_slug: '',
     registration_page_title: '',
     registration_page_body: '',
@@ -815,6 +816,7 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
     registration_mode: initial?.registration_mode || (
       initial?.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
     ),
+    price_includes_vat: !!initial?.price_includes_vat,
     registration_page_title: initial?.registration_page_title || '',
     registration_page_body: initial?.registration_page_body || '',
     registration_theme: (
@@ -868,6 +870,7 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
       end_date: endDateNorm || null,
       name: String(form.name).trim(),
       price: form.price === '' ? 0 : Number(form.price),
+      price_includes_vat: !!form.price_includes_vat,
       max_participants: form.max_participants === '' ? null : Number(form.max_participants),
       closeAfter,
     });
@@ -2861,6 +2864,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
                   registration_mode: tpl.registration_mode || (
                     tpl.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
                   ),
+                  price_includes_vat: !!tpl.price_includes_vat,
                   registration_page_title: tpl.registration_page_title || tpl.name || '',
                   registration_page_body: tpl.registration_page_body || tpl.description || '',
                   registration_theme: theme,

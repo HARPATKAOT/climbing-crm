@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { CalendarDays, Clock3, ImagePlus, MapPin, Users, X } from 'lucide-react';
 import { compressImageFile, readImageFileAsDataUrl } from './productCategories.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
+import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
 
 function parsePosition(position) {
   const raw = String(position || '50% 50%').trim().toLowerCase();
@@ -70,6 +71,8 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
   const publicBody = form.registration_page_body || form.description || '';
   const paidPerParticipant = form.registration_mode === 'paid_per_participant'
     || (!form.registration_mode && form.collect_registration_payment);
+  const includesVat = normalizePriceIncludesVat(form.price_includes_vat);
+  const priceVat = vatBreakdown(form.price, includesVat);
 
   const patch = (values) => {
     if (readOnly) return;
@@ -335,7 +338,7 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
           <label>
             <span className="activity-designer-currency">₪</span>
             <InlineField
-              label="מחיר"
+              label={includesVat ? 'מחיר כולל מע״מ' : 'מחיר לפני מע״מ'}
               type="number"
               min="0"
               step="1"
@@ -347,6 +350,24 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
               {paidPerParticipant ? 'למשתתף' : 'לאירוע'}
             </span>
           </label>
+          <label className="activity-designer-vat-mode">
+            <select
+              className="input"
+              value={includesVat ? 'incl' : 'excl'}
+              disabled={readOnly}
+              onChange={(e) => patch({ price_includes_vat: e.target.value === 'incl' })}
+            >
+              <option value="excl">לפני מע״מ</option>
+              <option value="incl">כולל מע״מ</option>
+            </select>
+          </label>
+          {priceVat.entered > 0 && (
+            <div className="activity-designer-vat-hint">
+              {includesVat
+                ? `לפני מע״מ: ${formatIls(priceVat.net)} · לתשלום: ${formatIls(priceVat.gross)}`
+                : `כולל מע״מ: ${formatIls(priceVat.gross)} · לתשלום: ${formatIls(priceVat.gross)}`}
+            </div>
+          )}
           <label>
             <Users size={15} />
             <InlineField
