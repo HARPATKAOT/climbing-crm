@@ -3,6 +3,7 @@
  */
 import crypto from 'crypto';
 import { clampImage } from './productCategories.js';
+import { normalizePriceIncludesVat } from './vat.js';
 
 const PAYMENT_STATUSES = new Set(['unpaid', 'paid', 'partial']);
 
@@ -102,6 +103,22 @@ export function normalizeActivityTheme(raw) {
   return theme;
 }
 
+/** Lead source key for a new parent registering via a public activity page. */
+export function leadSourceFromActivityType(type) {
+  switch (String(type || '').toLowerCase()) {
+    case 'birthday':
+      return 'activity_birthday';
+    case 'trip':
+      return 'activity_trip';
+    case 'school':
+      return 'activity_school';
+    case 'company':
+      return 'activity_company';
+    default:
+      return 'activity_registration';
+  }
+}
+
 export function publicRegistrationPayload(activity, registrations) {
   const remaining = remainingCapacity(activity, registrations);
   const price = Number(activity.price) || 0;
@@ -124,6 +141,7 @@ export function publicRegistrationPayload(activity, registrations) {
     location: activity.location || '',
     description: activity.description || '',
     price,
+    price_includes_vat: normalizePriceIncludesVat(activity.price_includes_vat),
     max_participants: activity.max_participants ?? null,
     registered_count: registrations.length,
     remaining,
@@ -147,6 +165,7 @@ export function templateFieldsFromActivity(activity = {}) {
     category: normalizeTemplateCategory(activity.category),
     location: activity.location || '',
     price: Number(activity.price) || 0,
+    price_includes_vat: normalizePriceIncludesVat(activity.price_includes_vat),
     max_participants: activity.max_participants ?? null,
     description: activity.description || '',
     notes: activity.notes || '',
@@ -181,6 +200,7 @@ export function normalizeTemplatePayload(body = {}) {
     category: normalizeTemplateCategory(body.category),
     location: body.location || '',
     price: body.price === '' || body.price == null ? 0 : Number(body.price) || 0,
+    price_includes_vat: normalizePriceIncludesVat(body.price_includes_vat),
     max_participants:
       body.max_participants === '' || body.max_participants == null
         ? null
@@ -216,6 +236,7 @@ export function activityDraftFromTemplate(template = {}, { date } = {}) {
     all_day: !!fields.all_day,
     location: fields.location,
     price: fields.price,
+    price_includes_vat: normalizePriceIncludesVat(fields.price_includes_vat),
     max_participants: fields.max_participants,
     description: fields.description,
     notes: fields.notes,

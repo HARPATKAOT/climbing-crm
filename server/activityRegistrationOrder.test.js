@@ -47,16 +47,24 @@ function createDb(seed = {}) {
       store[table][index] = { ...store[table][index], ...patch };
       return store[table][index];
     },
-    upsertParentByPhone: (name, phone, email) => {
+    upsertParentByPhone: (name, phone, email, extras = {}) => {
       const normalized = String(phone).replace(/\D/g, '').replace(/^972/, '0');
-      let parent = store.parents.find(
+      let parentRow = store.parents.find(
         (item) => String(item.phone).replace(/\D/g, '').replace(/^972/, '0') === normalized
       );
-      if (!parent) {
-        parent = { id: `parent-${++sequence}`, name, phone: normalized, email };
-        store.parents.push(parent);
+      if (!parentRow) {
+        parentRow = {
+          id: `parent-${++sequence}`,
+          name,
+          phone: normalized,
+          email,
+          source: extras.source || 'unknown',
+        };
+        store.parents.push(parentRow);
+      } else if (extras.source && (!parentRow.source || parentRow.source === 'unknown')) {
+        parentRow.source = extras.source;
       }
-      return parent;
+      return parentRow;
     },
   };
 }
@@ -79,6 +87,7 @@ test('paid parent and two children reserve three slots and price units', async (
     id: 'activity-paid',
     name: 'טיול',
     price: 100,
+    price_includes_vat: true,
     max_participants: 10,
     registration_mode: 'paid_per_participant',
   };
@@ -96,6 +105,7 @@ test('paid parent and two children reserve three slots and price units', async (
   });
   assert.equal(result.order.participant_count, 3);
   assert.equal(result.order.total_amount, 300);
+  assert.equal(result.order.price_includes_vat, true);
   assert.equal(result.registrations.length, 3);
   assert.equal(db.store.health_declarations.length, 3);
   assert.ok(result.registrations.every((row) => row.health_declaration_id));
@@ -215,4 +225,123 @@ test('payment confirmation and hosted payment are idempotent', async () => {
   assert.equal(db.store.activities[0].payment_status, 'paid');
   assert.equal(db.store.activity_registrations[0].payment_status, 'paid');
   assert.equal(db.store.activity_registrations[1].payment_status, 'not_required');
+});
+
+test('new birthday registration sets activity_birthday lead source', async () => {
+  const db = createDb();
+  const activity = {
+    id: 'birthday-1',
+    name: 'יום הולדת',
+    type: 'birthday',
+    price: 0,
+    registration_mode: 'host_pays',
+  };
+  db.store.activities.push(activity);
+  await registerActivityGroup({
+    db,
+    persist,
+    activity,
+    payload: {
+      idempotency_key: 'src-birthday',
+      parent,
+      participants: [signed('ילד')],
+      subscriptions: { classes: true, trips: true },
+    },
+    createPaymentUrl: async () => null,
+  });
+  assert.equal(db.store.parents[0].source, 'activity_birthday');
+  assert.equal(db.store.students[0].source, 'activity_birthday');
+});
+
+test('existing parent source is not overwritten', async () => {
+  const db = createDb({
+    parents: [{
+      id: 'p-old',
+      name: 'אמא',
+      phone: '0501234567',
+      email: '',
+      source: 'whatsapp',
+    }],
+  });
+  db.upsertParentByPhone = (name, phone, email, extras = {}) => {
+    const parentRow = db.store.parents[0];
+    if (extras.source && (!parentRow.source || parentRow.source === 'unknown')) {
+      parentRow.source = extras.source;
+    }
+    return parentRow;
+  };
+  const activity = {
+    id: 'school-1',
+    name: 'בית ספר',
+    type: 'school',
+    price: 0,
+    registration_mode: 'host_pays',
+  };
+  db.store.activities.push(activity);
+  await registerActivityGroup({
+    db,
+    persist,
+    activity,
+    payload: {
+      idempotency_key: 'keep-source',
+      parent: { ...parent, phone: '0501234567' },
+      participants: [signed('ילד')],
+    },
+    createPaymentUrl: async () => null,
+  });
+  assert.equal(db.store.parents[0].source, 'whatsapp');
+});
+
+test('reuse_health skips creating a new declaration for valid student', async () => {
+  const db = createDb({
+    parents: [{ id: 'p1', name: 'אמא', phone: '0501234567', email: 'a@b.com' }],
+    students: [{
+      id: 's1',
+      name: 'ראם',
+      parentId: 'p1',
+      birthDate: '2015-01-01',
+      healthSignedAt: '2026-01-15T10:00:00.000Z',
+      status: 'health_signed',
+    }],
+    health_declarations: [{
+      id: 'hd1',
+      studentId: 's1',
+      parentId: 'p1',
+      climberName: 'ראם',
+      signedDate: '2026-01-15',
+      date: '2026-01-15',
+      waiverAccepted: true,
+      signature_url: 'data:image/png;base64,old',
+    }],
+  });
+  db.upsertParentByPhone = () => db.store.parents[0];
+  const activity = {
+    id: 'reuse-1',
+    name: 'טיול',
+    type: 'trip',
+    price: 0,
+    registration_mode: 'host_pays',
+  };
+  db.store.activities.push(activity);
+  const before = db.store.health_declarations.length;
+  const result = await registerActivityGroup({
+    db,
+    persist,
+    activity,
+    payload: {
+      idempotency_key: 'reuse-health',
+      parent: { name: 'אמא', phone: '0501234567', email: 'a@b.com' },
+      participants: [{
+        id: 's1',
+        name: 'ראם',
+        type: 'child',
+        birthDate: '2015-01-01',
+        reuse_health: true,
+      }],
+    },
+    createPaymentUrl: async () => null,
+  });
+  assert.equal(db.store.health_declarations.length, before);
+  assert.equal(result.registrations[0].health_declaration_id, 'hd1');
+  assert.equal(result.registrations[0].student_id, 's1');
 });

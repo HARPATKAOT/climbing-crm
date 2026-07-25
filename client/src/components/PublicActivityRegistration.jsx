@@ -2,15 +2,22 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle, Loader2, Plus, Trash2 } from 'lucide-react';
 import { useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
+import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
 
-const emptyParticipant = (questions = []) => ({
+const REQUIRED_LIST = 'classes';
+
+const emptyParticipant = (questions = [], extras = {}) => ({
   key: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
   type: 'child',
+  id: null,
   name: '',
   birthDate: '',
   answers: Object.fromEntries(questions.map((question) => [question.id, false])),
   waiverAccepted: false,
   signature: '',
+  reuse_health: false,
+  health_valid: false,
+  ...extras,
 });
 
 function slugFromPath(pathname) {
@@ -46,7 +53,7 @@ function SignaturePad({ value, onChange }) {
       image.onload = () => context.drawImage(image, 0, 0, width, 150);
       image.src = value;
     }
-  }, []); // The pad is remounted for each participant.
+  }, []);
 
   const point = (event) => {
     const rect = canvasRef.current.getBoundingClientRect();
@@ -114,22 +121,35 @@ export default function PublicActivityRegistration() {
   const [done, setDone] = useState(false);
   const [step, setStep] = useState(1);
   const [healthIndex, setHealthIndex] = useState(0);
-  const [parentParticipates, setParentParticipates] = useState(false);
+  const [isAdultSelf, setIsAdultSelf] = useState(false);
   const [parent, setParent] = useState({ name: '', phone: '', email: '', city: '' });
   const [participants, setParticipants] = useState([]);
+  const [household, setHousehold] = useState(null);
+  const [listDefs, setListDefs] = useState([]);
+  const [subscriptions, setSubscriptions] = useState({ [REQUIRED_LIST]: true });
+  const [selectedChildIds, setSelectedChildIds] = useState([]);
   const [idempotencyKey] = useState(
     () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`
   );
 
   useEffect(() => {
     let active = true;
-    fetch(`/api/public/activities/${encodeURIComponent(slug)}`)
-      .then(async (response) => {
+    Promise.all([
+      fetch(`/api/public/activities/${encodeURIComponent(slug)}`).then(async (response) => {
         const body = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(body.error || 'הפעילות לא נמצאה');
+        return body;
+      }),
+      fetch('/api/public/broadcast-list-defs').then(async (response) => {
+        const body = await response.json().catch(() => ([]));
+        return Array.isArray(body) ? body : (body.lists || body.listDefs || []);
+      }).catch(() => []),
+    ])
+      .then(([body, defs]) => {
         if (!active) return;
         setActivity(body);
         setParticipants([emptyParticipant(body.form_template?.healthQuestions || [])]);
+        setListDefs(defs);
       })
       .catch((loadError) => active && setError(loadError.message))
       .finally(() => active && setLoading(false));
@@ -137,20 +157,60 @@ export default function PublicActivityRegistration() {
   }, [slug]);
 
   const paidMode = activity?.registration_mode === 'paid_per_participant';
+  const questions = activity?.form_template?.healthQuestions || [];
+
   const allParticipants = useMemo(() => {
-    const children = participants.filter(
-      (participant) => participant.type !== 'adult' && participant.name.trim()
-    );
-    if (!parentParticipates) return children;
-    const existing = participants.find((participant) => participant.type === 'adult');
-    const adult = existing || {
-      ...emptyParticipant(activity?.form_template?.healthQuestions || []),
-      type: 'adult',
+    const mergeMirror = (base) => {
+      const mirror = participants.find((item) => item.key === base.key);
+      return mirror ? { ...base, ...mirror, ...base, answers: mirror.answers || base.answers, waiverAccepted: mirror.waiverAccepted ?? base.waiverAccepted, signature: mirror.signature || base.signature } : base;
     };
-    return [{ ...adult, name: parent.name.trim() }, ...children];
-  }, [participants, parentParticipates, parent.name, activity]);
-  const total = (Number(activity?.unit_price) || 0) * allParticipants.length;
-  const currentParticipant = allParticipants[healthIndex];
+    if (isAdultSelf) {
+      return [mergeMirror({
+        ...emptyParticipant(questions, {
+          key: 'adult-self',
+          type: 'adult',
+          name: parent.name.trim(),
+          reuse_health: !!household?.adult_health_valid,
+          health_valid: !!household?.adult_health_valid,
+        }),
+      })];
+    }
+    const fromExisting = (household?.children || [])
+      .filter((child) => selectedChildIds.includes(child.id))
+      .map((child) => mergeMirror(emptyParticipant(questions, {
+        key: `existing-${child.id}`,
+        id: child.id,
+        type: 'child',
+        name: child.name,
+        birthDate: child.birthDate || '',
+        reuse_health: !!child.health_valid,
+        health_valid: !!child.health_valid,
+      })));
+    const newChildren = participants.filter(
+      (participant) => participant.type !== 'adult'
+        && !String(participant.key || '').startsWith('existing-')
+        && participant.key !== 'adult-self'
+        && participant.name.trim()
+    );
+    return [...fromExisting, ...newChildren];
+  }, [isAdultSelf, parent.name, household, selectedChildIds, participants, questions]);
+
+  const participantsNeedingHealth = useMemo(
+    () => allParticipants.filter((participant) => !participant.reuse_health),
+    [allParticipants]
+  );
+
+  const includesVat = normalizePriceIncludesVat(activity?.price_includes_vat);
+  const unitVat = vatBreakdown(activity?.unit_price, includesVat);
+  const totalEntered = (Number(activity?.unit_price) || 0) * allParticipants.length;
+  const totalVat = vatBreakdown(totalEntered, includesVat);
+  const total = totalVat.gross;
+  const currentParticipant = participantsNeedingHealth[healthIndex];
+  const totalSteps = participantsNeedingHealth.length ? 4 : 3;
+
+  const step1Title = isAdultSelf
+    ? 'פרטים אישיים'
+    : (paidMode ? 'פרטי הורה או משלם' : 'פרטי הורה של משתתף בפעילות');
 
   const updateParticipant = (key, patch) => {
     setParticipants((current) => current.map((participant) =>
@@ -158,33 +218,67 @@ export default function PublicActivityRegistration() {
     ));
   };
 
-  const syncAdult = (patch) => {
-    setParticipants((current) => {
-      const adult = current.find((participant) => participant.type === 'adult');
-      if (adult) {
-        return current.map((participant) =>
-          participant.key === adult.key ? { ...participant, ...patch } : participant
-        );
-      }
-      return [{ ...emptyParticipant(activity.form_template.healthQuestions), type: 'adult', ...patch }, ...current];
-    });
-  };
-
-  const setParentParticipatesChecked = (checked) => {
-    setParentParticipates(checked);
-    if (checked) {
-      syncAdult({ name: parent.name });
+  const patchHealthParticipant = (participant, patch) => {
+    if (participant.type === 'adult' || String(participant.key || '').startsWith('existing-')) {
+      // Adult / existing kids are derived — keep signature fields on participants array via mirror key.
+      setParticipants((current) => {
+        const mirrorKey = participant.key;
+        const existing = current.find((item) => item.key === mirrorKey);
+        if (existing) {
+          return current.map((item) => (item.key === mirrorKey ? { ...item, ...patch } : item));
+        }
+        return [...current, { ...participant, ...patch }];
+      });
       return;
     }
-    setParticipants((current) => current.filter((participant) => participant.type !== 'adult'));
-    setHealthIndex(0);
+    updateParticipant(participant.key, patch);
   };
 
-  const next = () => {
+  const resolvedHealthParticipant = (participant) => {
+    const mirror = participants.find((item) => item.key === participant.key);
+    return mirror ? { ...participant, ...mirror } : participant;
+  };
+
+  const lookupHousehold = async () => {
+    const response = await fetch(
+      `/api/public/activities/${encodeURIComponent(slug)}/household?phone=${encodeURIComponent(parent.phone)}`
+    );
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || 'בדיקת לקוח קיים נכשלה');
+    setHousehold(body.found ? body : { found: false, children: [], adult_health_valid: false });
+    if (body.found) {
+      if (body.parent?.email && !parent.email) {
+        setParent((current) => ({ ...current, email: body.parent.email || current.email, city: body.parent.city || current.city }));
+      }
+      if (Array.isArray(body.listDefs) && body.listDefs.length) setListDefs(body.listDefs);
+      if (body.subscriptions && typeof body.subscriptions === 'object') {
+        setSubscriptions({ ...body.subscriptions, [REQUIRED_LIST]: true });
+      }
+      if (!isAdultSelf && Array.isArray(body.children) && body.children.length === 1) {
+        setSelectedChildIds([body.children[0].id]);
+      }
+    } else {
+      setSelectedChildIds([]);
+    }
+    return body;
+  };
+
+  const next = async () => {
     setError('');
     if (step === 1) {
       if (!parent.name.trim() || !parent.phone.trim() || !parent.email.trim()) {
         setError('יש למלא שם, טלפון ודואר אלקטרוני');
+        return;
+      }
+      try {
+        await lookupHousehold();
+      } catch (lookupError) {
+        setError(lookupError.message);
+        return;
+      }
+      if (isAdultSelf) {
+        setHealthIndex(0);
+        setStep(household?.adult_health_valid ? 4 : 3);
         return;
       }
       setStep(2);
@@ -192,7 +286,7 @@ export default function PublicActivityRegistration() {
     }
     if (step === 2) {
       if (!allParticipants.length) {
-        setError('יש להוסיף לפחות משתתף אחד');
+        setError('יש לבחור או להוסיף לפחות משתתף אחד');
         return;
       }
       if (activity.remaining != null && allParticipants.length > activity.remaining) {
@@ -200,27 +294,28 @@ export default function PublicActivityRegistration() {
         return;
       }
       if (allParticipants.some((participant) =>
-        !participant.name.trim() || (participant.type === 'child' && !participant.birthDate)
+        !participant.name.trim()
+        || (participant.type === 'child' && !participant.id && !participant.birthDate)
       )) {
-        setError('יש למלא שם ותאריך לידה לכל ילד');
+        setError('יש למלא שם ותאריך לידה לכל ילד חדש');
         return;
       }
       setHealthIndex(0);
-      setStep(3);
+      setStep(participantsNeedingHealth.length ? 3 : 4);
       return;
     }
     if (step === 3) {
-      const required = (activity.form_template?.healthQuestions || [])
-        .filter((question) => question.requireYes);
-      if (required.some((question) => !currentParticipant.answers?.[question.id])) {
+      const current = resolvedHealthParticipant(currentParticipant);
+      const required = questions.filter((question) => question.requireYes);
+      if (required.some((question) => !current.answers?.[question.id])) {
         setError('יש לסמן את כל סעיפי ההצהרה');
         return;
       }
-      if (!currentParticipant.waiverAccepted || !currentParticipant.signature) {
+      if (!current.waiverAccepted || !current.signature) {
         setError('יש לאשר את כתב הוויתור ולחתום');
         return;
       }
-      if (healthIndex < allParticipants.length - 1) {
+      if (healthIndex < participantsNeedingHealth.length - 1) {
         setHealthIndex((index) => index + 1);
       } else {
         setStep(4);
@@ -232,13 +327,22 @@ export default function PublicActivityRegistration() {
     setSubmitting(true);
     setError('');
     try {
+      const payloadParticipants = allParticipants.map((participant) => {
+        const merged = resolvedHealthParticipant(participant);
+        const { key: _key, health_valid: _valid, ...rest } = merged;
+        return {
+          ...rest,
+          reuse_health: !!rest.reuse_health,
+        };
+      });
       const response = await fetch(`/api/public/activities/${encodeURIComponent(slug)}/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           idempotency_key: idempotencyKey,
           parent,
-          participants: allParticipants.map(({ key: _key, ...participant }) => participant),
+          subscriptions: { ...subscriptions, [REQUIRED_LIST]: true },
+          participants: payloadParticipants,
         }),
       });
       const body = await response.json().catch(() => ({}));
@@ -271,6 +375,10 @@ export default function PublicActivityRegistration() {
   const coverPosition = activity?.cover_position
     || activity?.theme?.cover_position
     || '50% 50%';
+  const displayStep = step === 4 && !participantsNeedingHealth.length
+    ? 3
+    : (step === 4 ? totalSteps : Math.min(step, totalSteps));
+  const healthCurrent = currentParticipant ? resolvedHealthParticipant(currentParticipant) : null;
 
   return (
     <div className="event-page">
@@ -311,43 +419,111 @@ export default function PublicActivityRegistration() {
           {(activity.page_body || activity.description) && (
             <p className="event-body">{activity.page_body || activity.description}</p>
           )}
-          {paidMode && activity.unit_price > 0 && (
-            <div className="event-price-chip">₪{activity.unit_price} למשתתף</div>
+          {paidMode && unitVat.entered > 0 && (
+            <div className="event-price-chip">
+              {formatIls(unitVat.gross)} למשתתף
+              {' · '}
+              {includesVat ? 'כולל מע״מ' : 'לפני מע״מ + מע״מ'}
+            </div>
           )}
-          {!paidMode && activity.price > 0 && (
-            <div className="event-price-chip">מחיר האירוע: ₪{activity.price}</div>
-          )}
-          <div className="event-progress-label">שלב {step} מתוך 4</div>
+          <div className="event-progress-label">שלב {displayStep} מתוך {totalSteps}</div>
           <div className="event-progress" style={{
-            background: `linear-gradient(90deg,#f97316 0 ${(step / 4) * 100}%,rgba(255,255,255,.1) ${(step / 4) * 100}%)`,
+            background: `linear-gradient(90deg,#f97316 0 ${(displayStep / totalSteps) * 100}%,rgba(255,255,255,.1) ${(displayStep / totalSteps) * 100}%)`,
           }} />
         </header>
 
         {step === 1 && (
           <section>
-            <h2>פרטי הורה או משלם</h2>
-            <Field label="שם מלא" value={parent.name} onChange={(name) => setParent({ ...parent, name })} />
+            <label className="event-check event-adult-toggle">
+              <input
+                type="checkbox"
+                checked={isAdultSelf}
+                onChange={(event) => {
+                  setIsAdultSelf(event.target.checked);
+                  setSelectedChildIds([]);
+                }}
+              />
+              אני ממלא עבור עצמי (בוגר מעל גיל 18)
+            </label>
+            <h2>{step1Title}</h2>
+            <Field label={isAdultSelf ? 'שם מלא' : 'שם מלא (הורה)'} value={parent.name} onChange={(name) => setParent({ ...parent, name })} />
             <Field label="טלפון" type="tel" value={parent.phone} onChange={(phone) => setParent({ ...parent, phone })} />
             <Field label="דואר אלקטרוני" type="email" value={parent.email} onChange={(email) => setParent({ ...parent, email })} />
             <Field label="עיר" value={parent.city} onChange={(city) => setParent({ ...parent, city })} />
+
+            <h2 style={{ marginTop: 28 }}>רשימות דיוור</h2>
+            <p className="event-hint">רשימת החוגים חובה. אפשר לסמן גם טיולים, אירועים ועוד.</p>
+            <div className="event-lists">
+              {listDefs.map((list) => {
+                const isRequired = list.key === REQUIRED_LIST;
+                const checked = isRequired ? true : subscriptions[list.key] === true;
+                return (
+                  <label className="event-check" key={list.key}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={isRequired}
+                      onChange={() => {
+                        if (isRequired) return;
+                        setSubscriptions((prev) => ({
+                          ...prev,
+                          [list.key]: !prev[list.key],
+                          [REQUIRED_LIST]: true,
+                        }));
+                      }}
+                    />
+                    <span>
+                      <strong>{list.label || list.key}</strong>
+                      {list.description ? ` — ${list.description}` : ''}
+                      {isRequired ? ' (חובה)' : ''}
+                    </span>
+                  </label>
+                );
+              })}
+              {!listDefs.length && (
+                <p className="event-hint">רשימות הדיוור יישמרו עם ההרשמה.</p>
+              )}
+            </div>
           </section>
         )}
 
         {step === 2 && (
           <section>
             <h2>מי משתתף?</h2>
-            <label className="event-check">
-              <input
-                type="checkbox"
-                checked={parentParticipates}
-                onChange={(event) => setParentParticipatesChecked(event.target.checked)}
-              />
-              גם ההורה משתתף בפעילות
-            </label>
+            {household?.found && (
+              <p className="event-hint">
+                נמצאת במערכת. בחרו ילד קיים או הוסיפו ילד אחר.
+              </p>
+            )}
+            {(household?.children || []).map((child) => {
+              const checked = selectedChildIds.includes(child.id);
+              return (
+                <label className="event-check event-existing-child" key={child.id}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => {
+                      setSelectedChildIds((current) => (
+                        checked
+                          ? current.filter((id) => id !== child.id)
+                          : [...current, child.id]
+                      ));
+                    }}
+                  />
+                  <span>
+                    <strong>{child.name}</strong>
+                    {child.health_valid
+                      ? ' — יש הצהרת בריאות בתוקף'
+                      : ' — נדרשת הצהרת בריאות'}
+                  </span>
+                </label>
+              );
+            })}
+
             {participants.filter((participant) => participant.type !== 'adult').map((participant, index) => (
               <div className="participant-card" key={participant.key}>
                 <div className="participant-title">
-                  <strong>ילד או ילדה {index + 1}</strong>
+                  <strong>ילד או ילדה חדש {index + 1}</strong>
                   {participants.filter((item) => item.type !== 'adult').length > 1 && (
                     <button
                       type="button"
@@ -367,32 +543,30 @@ export default function PublicActivityRegistration() {
               type="button"
               className="event-secondary"
               onClick={() => setParticipants((items) => [
-                ...items,
-                emptyParticipant(activity.form_template?.healthQuestions || []),
+                ...items.filter((item) => item.type !== 'adult' || item.name),
+                emptyParticipant(questions),
               ])}
             >
-              <Plus size={17} /> הוספת משתתף נוסף
+              <Plus size={17} /> הוספת ילד אחר
             </button>
           </section>
         )}
 
-        {step === 3 && currentParticipant && (
-          <section key={currentParticipant.key}>
-            <h2>הצהרה עבור {currentParticipant.name}</h2>
+        {step === 3 && healthCurrent && (
+          <section key={healthCurrent.key}>
+            <h2>הצהרה עבור {healthCurrent.name}</h2>
             {(activity.form_template?.healthQuestions || []).map((question) => (
               <label className="event-question" key={question.id}>
                 <input
                   type="checkbox"
-                  checked={!!currentParticipant.answers?.[question.id]}
+                  checked={!!healthCurrent.answers?.[question.id]}
                   onChange={(event) => {
-                    const patch = {
+                    patchHealthParticipant(healthCurrent, {
                       answers: {
-                        ...currentParticipant.answers,
+                        ...healthCurrent.answers,
                         [question.id]: event.target.checked,
                       },
-                    };
-                    if (currentParticipant.type === 'adult') syncAdult(patch);
-                    else updateParticipant(currentParticipant.key, patch);
+                    });
                   }}
                 />
                 <span>{question.label}</span>
@@ -402,23 +576,17 @@ export default function PublicActivityRegistration() {
             <label className="event-check">
               <input
                 type="checkbox"
-                checked={!!currentParticipant.waiverAccepted}
+                checked={!!healthCurrent.waiverAccepted}
                 onChange={(event) => {
-                  const patch = { waiverAccepted: event.target.checked };
-                  if (currentParticipant.type === 'adult') syncAdult(patch);
-                  else updateParticipant(currentParticipant.key, patch);
+                  patchHealthParticipant(healthCurrent, { waiverAccepted: event.target.checked });
                 }}
               />
               קראתי ואני מאשר או מאשרת את כתב הוויתור
             </label>
             <p className="event-label">חתימה</p>
             <SignaturePad
-              value={currentParticipant.signature}
-              onChange={(signature) => {
-                const patch = { signature };
-                if (currentParticipant.type === 'adult') syncAdult(patch);
-                else updateParticipant(currentParticipant.key, patch);
-              }}
+              value={healthCurrent.signature}
+              onChange={(signature) => patchHealthParticipant(healthCurrent, { signature })}
             />
           </section>
         )}
@@ -429,10 +597,28 @@ export default function PublicActivityRegistration() {
             <div className="event-summary">
               <div><span>מספר משתתפים</span><strong>{allParticipants.length}</strong></div>
               {activity.remaining != null && <div><span>מקומות פנויים לפני ההרשמה</span><strong>{activity.remaining}</strong></div>}
+              {allParticipants.map((participant) => (
+                <div key={participant.key}>
+                  <span>{participant.name}</span>
+                  <strong>{participant.reuse_health ? 'הצהרה בתוקף' : 'הצהרה חדשה'}</strong>
+                </div>
+              ))}
               {paidMode && (
                 <>
-                  <div><span>מחיר למשתתף</span><strong>₪{activity.unit_price}</strong></div>
-                  <div className="event-total"><span>סך הכול</span><strong>₪{total}</strong></div>
+                  <div>
+                    <span>{includesVat ? 'מחיר למשתתף כולל מע״מ' : 'מחיר למשתתף לפני מע״מ'}</span>
+                    <strong>{formatIls(unitVat.entered)}</strong>
+                  </div>
+                  {!includesVat && (
+                    <div>
+                      <span>מחיר למשתתף כולל מע״מ</span>
+                      <strong>{formatIls(unitVat.gross)}</strong>
+                    </div>
+                  )}
+                  <div className="event-total">
+                    <span>סך הכול לתשלום</span>
+                    <strong>{formatIls(totalVat.gross)}</strong>
+                  </div>
                 </>
               )}
             </div>
@@ -445,6 +631,8 @@ export default function PublicActivityRegistration() {
           {step > 1 && (
             <button type="button" className="event-secondary" onClick={() => {
               if (step === 3 && healthIndex > 0) setHealthIndex((index) => index - 1);
+              else if (step === 4 && participantsNeedingHealth.length) setStep(3);
+              else if (step === 4 && isAdultSelf) setStep(1);
               else setStep((current) => current - 1);
               setError('');
             }}>
@@ -492,7 +680,8 @@ function EventStyles() {
     .event-body{margin:12px 0 0;color:#cbd5e1;line-height:1.55;font-size:15px;white-space:pre-wrap}.event-price-chip{display:inline-flex;margin-top:14px;padding:7px 12px;border-radius:999px;background:rgba(249,115,22,.16);color:#fdba74;font-weight:800;font-size:13px}
     .event-progress-label{margin-top:18px;font-size:12px;color:#94a3b8;font-weight:700}.event-progress{height:6px;border-radius:8px;margin-top:8px;font-size:0}
     .event-field{display:flex;flex-direction:column;gap:6px;margin:12px 0;color:#cbd5e1;font-size:14px}.event-field input{padding:12px 14px;border-radius:11px;border:1px solid rgba(255,255,255,.15);background:#0b1220;color:#fff;font:inherit}
-    .event-check,.event-question{display:flex;gap:10px;align-items:flex-start;padding:10px 0;color:#e2e8f0}.event-check input,.event-question input{margin-top:4px;min-width:18px;min-height:18px}.participant-card{padding:14px;margin:12px 0;border:1px solid rgba(255,255,255,.1);border-radius:14px;background:rgba(0,0,0,.16)}.participant-title{display:flex;justify-content:space-between}.event-icon-button,.event-link-button{border:0;background:none;color:#fca5a5;cursor:pointer}
+    .event-check,.event-question{display:flex;gap:10px;align-items:flex-start;padding:10px 0;color:#e2e8f0}.event-check input,.event-question input{margin-top:4px;min-width:18px;min-height:18px}.event-adult-toggle{margin:0 0 8px;padding:12px;border-radius:12px;background:rgba(255,255,255,.06)}.event-existing-child{padding:12px;border-radius:12px;background:rgba(0,0,0,.16);margin:8px 0}.participant-card{padding:14px;margin:12px 0;border:1px solid rgba(255,255,255,.1);border-radius:14px;background:rgba(0,0,0,.16)}.participant-title{display:flex;justify-content:space-between}.event-icon-button,.event-link-button{border:0;background:none;color:#fca5a5;cursor:pointer}
+    .event-hint{color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 12px}.event-lists{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
     .event-waiver{white-space:pre-wrap;max-height:200px;overflow:auto;padding:14px;border-radius:12px;background:#0b1220;color:#cbd5e1;line-height:1.55;font-size:13px}.event-signature{width:100%;height:150px;background:#111827;border:1px solid rgba(255,255,255,.2);border-radius:12px;touch-action:none}.event-label{color:#cbd5e1;margin-bottom:7px}
     .event-summary{display:grid;gap:10px}.event-summary>div{display:flex;justify-content:space-between;padding:12px;border-radius:10px;background:#0b1220}.event-total{color:#fdba74;font-size:18px}.event-free-note{color:#6ee7b7}.event-error{margin:14px 24px 0;padding:11px;border-radius:10px;background:rgba(239,68,68,.14);color:#fca5a5}
     .event-actions{display:flex;gap:10px;margin:22px 24px 0}.event-primary,.event-secondary{display:flex;align-items:center;justify-content:center;gap:7px;border:0;border-radius:11px;padding:12px 18px;font:inherit;font-weight:800;cursor:pointer}.event-primary{background:#f97316;color:#fff;flex:1}.event-secondary{background:rgba(255,255,255,.09);color:#e2e8f0}.event-primary:disabled{opacity:.6}.spin{animation:event-spin .8s linear infinite}@keyframes event-spin{to{transform:rotate(360deg)}}@media(max-width:520px){.event-hero,.event-card section,.event-actions{padding-left:15px;padding-right:15px}.event-card h2{padding-left:15px;padding-right:15px}.event-error{margin-left:15px;margin-right:15px}.event-cover{height:170px}.event-card h1{font-size:24px}}

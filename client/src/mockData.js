@@ -23,6 +23,11 @@ export const LEAD_SOURCES = {
   referral:  { label: 'חבר מביא חבר', icon: '🤝' },
   walk_in:   { label: 'הגעה פיזית', icon: '🚶' },
   phone:     { label: 'טלפון', icon: '📞' },
+  activity_birthday: { label: 'הרשמה ליום הולדת', icon: '🎂' },
+  activity_trip:     { label: 'הרשמה לטיול', icon: '🥾' },
+  activity_school:   { label: 'הרשמה לבית ספר', icon: '🏫' },
+  activity_company:  { label: 'הרשמה לחברה', icon: '🏢' },
+  activity_registration: { label: 'הרשמה לאירוע', icon: '📅' },
   unknown:   { label: 'לא ידוע', icon: '❓' },
 };
 

@@ -41,6 +41,7 @@ import {
   applyHostRefundMarks,
   summarizeHostPayment,
 } from './activityRegistrationRefund.js';
+import { chargeAmount, normalizePriceIncludesVat } from './vat.js';
 import {
   registerActivityGroup,
   markRegistrationOrderPaid,
@@ -48,8 +49,14 @@ import {
 } from './activityRegistrationOrderService.js';
 import {
   resolveDeclarationTemplate,
+  resolveDefaultDeclarationTemplate,
+  findLatestValidDeclaration,
   saveCrmParticipants,
 } from './crmWaiverService.js';
+import {
+  declarationSignedAt,
+  isHealthDeclarationValid,
+} from './healthValidity.js';
 import {
   enrichPricelistItem,
   buildPassFromItem,
@@ -1574,6 +1581,7 @@ function normalizeActivityPayload(body = {}) {
     end_time: body.all_day ? null : (body.end_time || null),
     location: body.location || '',
     price: body.price === '' || body.price === undefined ? 0 : Number(body.price) || 0,
+    price_includes_vat: normalizePriceIncludesVat(body.price_includes_vat),
     max_participants: body.max_participants === '' || body.max_participants == null
       ? null
       : Number(body.max_participants) || null,
@@ -2486,6 +2494,7 @@ app.get('/api/public/host-payments/:token', publicFormRateLimit, async (req, res
       location: activity.location || '',
       host_name: activity.host_name || activity.contact_name || '',
       price: Number(activity.price) || 0,
+      price_includes_vat: normalizePriceIncludesVat(activity.price_includes_vat),
       payment_status: activity.payment_status || 'unpaid',
     });
   } catch (err) {
@@ -2516,7 +2525,8 @@ app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req
     let payment = activity.host_payment_id
       ? db.getOne('payments', activity.host_payment_id)
       : null;
-    const amount = Number(activity.price) || 0;
+    const includesVat = normalizePriceIncludesVat(activity.price_includes_vat);
+    const amount = chargeAmount(activity.price, includesVat);
     const description = `תשלום אירוע: ${activity.name}`;
     if (!payment || payment.status === 'failed') {
       payment = db.insert('payments', {
@@ -2525,6 +2535,7 @@ app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req
         activity_id: activity.id,
         activity_host_payment: true,
         amount,
+        price_includes_vat: includesVat,
         description,
         status: 'pending',
         payment_url: null,
@@ -2534,6 +2545,7 @@ app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req
     } else {
       payment = db.update('payments', payment.id, {
         amount,
+        price_includes_vat: includesVat,
         description,
         updated_at: new Date().toISOString(),
       }) || payment;
@@ -2591,10 +2603,7 @@ app.get('/api/public/activities/:slug', publicFormRateLimit, async (req, res) =>
       if (remoteRegs) db.set('activity_registrations', remoteRegs);
     }
     const regs = activeRegistrations(db, activity.id);
-    const template = resolveDeclarationTemplate(db, {
-      templateId: activity.form_template_id,
-      templateSlug: activity.form_template_slug || 'wall',
-    });
+    const template = resolveDefaultDeclarationTemplate(db);
     res.json({
       ...publicRegistrationPayload(activity, regs),
       form_template: template,
@@ -2602,6 +2611,72 @@ app.get('/api/public/activities/:slug', publicFormRateLimit, async (req, res) =>
   } catch (err) {
     console.error('public activity get error:', err.message);
     res.status(500).json({ error: err.message || 'טעינת הפעילות נכשלה' });
+  }
+});
+
+app.get('/api/public/activities/:slug/household', publicFormRateLimit, async (req, res) => {
+  try {
+    const activity = await findActivityBySlugFresh(req.params.slug);
+    if (!activity) return res.status(404).json({ error: 'הפעילות לא נמצאה' });
+    const phone = normalizePhone(req.query.phone || '');
+    if (!phone || phone.replace(/\D/g, '').length < 9) {
+      return res.json({ found: false, parent: null, children: [], adult_health_valid: false });
+    }
+    if (supa.isEnabled()) {
+      const [remoteParents, remoteStudents, remoteDecls] = await Promise.all([
+        supa.getAll('parents'),
+        supa.getAll('students'),
+        supa.getAll('health_declarations'),
+      ]);
+      if (remoteParents) db.set('parents', remoteParents);
+      if (remoteStudents) db.set('students', remoteStudents);
+      if (remoteDecls) db.set('health_declarations', remoteDecls);
+    }
+    const parent = findParentForOnboard({ phone });
+    if (!parent) {
+      return res.json({ found: false, parent: null, children: [], adult_health_valid: false });
+    }
+    const children = (db.get('students') || [])
+      .filter((student) => String(student.parentId) === String(parent.id))
+      .map((student) => {
+        const declaration = findLatestValidDeclaration(db, { studentId: student.id });
+        const signedAt = declarationSignedAt(declaration) || student.healthSignedAt || null;
+        const healthValid = !!declaration || isHealthDeclarationValid(student.healthSignedAt);
+        return {
+          id: student.id,
+          name: String(student.name || '').trim(),
+          birthDate: student.birthDate || '',
+          health_valid: healthValid,
+          health_signed_at: signedAt,
+        };
+      })
+      .filter((child) => child.name)
+      .sort((a, b) => a.name.localeCompare(b.name, 'he'));
+
+    const adultDeclaration = findLatestValidDeclaration(db, {
+      parentId: parent.id,
+      climberName: parent.name,
+    });
+
+    res.json({
+      found: true,
+      parent: {
+        id: parent.id,
+        name: parent.name || '',
+        phone: parent.phone || '',
+        email: parent.email || '',
+        city: parent.city || '',
+      },
+      children,
+      adult_health_valid: !!adultDeclaration,
+      listDefs: typeof db.getBroadcastListDefs === 'function' ? db.getBroadcastListDefs() : [],
+      subscriptions: typeof db.getParentBroadcastLists === 'function'
+        ? db.getParentBroadcastLists(parent.id)
+        : { classes: true },
+    });
+  } catch (err) {
+    console.error('public activity household error:', err.message);
+    res.status(500).json({ error: err.message || 'טעינת פרטי הלקוח נכשלה' });
   }
 });
 
@@ -5673,6 +5748,58 @@ app.get('/api/students/:id/documents', (req, res) => {
     .slice()
     .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
   res.json(docs);
+});
+
+app.get('/api/students/:id/activity-registrations', async (req, res) => {
+  try {
+    const studentId = String(req.params.id || '').trim();
+    if (!studentId) return res.status(400).json({ error: 'חסר מזהה מתאמן' });
+    if (supa.isEnabled()) {
+      const [remoteRegs, remoteActivities] = await Promise.all([
+        supa.getAll('activity_registrations'),
+        supa.getAll('activities'),
+      ]);
+      if (remoteRegs) db.set('activity_registrations', remoteRegs);
+      if (remoteActivities) db.set('activities', remoteActivities);
+    }
+    const typeLabels = {
+      birthday: 'יום הולדת',
+      trip: 'טיול',
+      school: 'בית ספר',
+      company: 'חברה',
+    };
+    const statusLabels = {
+      confirmed: 'רשום',
+      pending_payment: 'ממתין לתשלום',
+      cancelled: 'בוטל',
+      refunded: 'זוכה',
+    };
+    const rows = (db.get('activity_registrations') || [])
+      .filter((registration) => String(registration.student_id || '') === studentId)
+      .map((registration) => {
+        const activity = db.getOne('activities', registration.activity_id) || {};
+        return {
+          id: registration.id,
+          activity_id: registration.activity_id,
+          activity_name: activity.name || registration.participant_name || 'אירוע',
+          activity_type: activity.type || '',
+          activity_type_label: typeLabels[activity.type] || 'אירוע',
+          date: activity.date || '',
+          end_date: activity.end_date || null,
+          start_time: activity.start_time || '',
+          location: activity.location || '',
+          status: registration.status || '',
+          status_label: statusLabels[registration.status] || registration.status || '',
+          payment_status: registration.payment_status || '',
+          created_at: registration.created_at || registration.updated_at || '',
+        };
+      })
+      .sort((a, b) => String(b.date || b.created_at).localeCompare(String(a.date || a.created_at)));
+    res.json(rows);
+  } catch (err) {
+    console.error('student activity registrations error:', err.message);
+    res.status(500).json({ error: err.message || 'טעינת פעילויות נכשלה' });
+  }
 });
 
 app.get('/api/documents/:id/download', async (req, res) => {

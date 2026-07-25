@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, Users, Ticket } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, Users, Ticket, CalendarDays } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
 import {
@@ -529,6 +529,8 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
   const [employees, setEmployees] = useState([]);
   const [attendanceHistory, setAttendanceHistory] = useState([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [activityHistory, setActivityHistory] = useState([]);
+  const [activityHistoryLoading, setActivityHistoryLoading] = useState(false);
   const [customerPasses, setCustomerPasses] = useState([]);
   const [passesLoading, setPassesLoading] = useState(false);
   const [punchingId, setPunchingId] = useState(null);
@@ -573,6 +575,27 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
       })
       .finally(() => {
         if (!cancelled) setAttendanceLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [parentOnly, student.id]);
+
+  useEffect(() => {
+    if (parentOnly || !student?.id) {
+      setActivityHistory([]);
+      return;
+    }
+    let cancelled = false;
+    setActivityHistoryLoading(true);
+    fetch(`/api/students/${encodeURIComponent(student.id)}/activity-registrations`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => {
+        if (!cancelled) setActivityHistory(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setActivityHistory([]);
+      })
+      .finally(() => {
+        if (!cancelled) setActivityHistoryLoading(false);
       });
     return () => { cancelled = true; };
   }, [parentOnly, student.id]);
@@ -968,6 +991,11 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
     : attendanceHistory.length === 0
       ? 'אין נוכחות'
       : `${attendanceHistory.length} נוכחויות`;
+  const activityHistorySummary = activityHistoryLoading
+    ? 'טוען...'
+    : activityHistory.length === 0
+      ? 'אין פעילויות'
+      : `${activityHistory.length} פעילויות`;
   const paymentsSummary = studentPayments.length === 0
     ? 'אין תשלומים'
     : `${studentPayments.length} רשומות`;
@@ -1658,6 +1686,49 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                     groups={groups}
                     group={group}
                   />
+                )}
+              </FolderRow>
+            )}
+
+            {!parentOnly && (
+              <FolderRow
+                id="activities"
+                title="פעילויות"
+                icon={CalendarDays}
+                summary={activityHistorySummary}
+                open={openFolder === 'activities'}
+                onToggle={toggleFolder}
+              >
+                {activityHistoryLoading ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען פעילויות...</div>
+                ) : activityHistory.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין הרשמות לאירועים עדיין</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {activityHistory.map((row) => (
+                      <div
+                        key={row.id}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          gap: 10,
+                          fontSize: 12,
+                          padding: '8px 0',
+                          borderBottom: '1px solid var(--border)',
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 700, color: 'var(--text)' }}>{row.activity_name}</div>
+                          <div style={{ color: 'var(--text-3)', marginTop: 2 }}>
+                            {row.date ? new Date(row.date).toLocaleDateString('he-IL') : '—'}
+                            {row.activity_type_label ? ` · ${row.activity_type_label}` : ''}
+                            {row.location ? ` · ${row.location}` : ''}
+                          </div>
+                        </div>
+                        <span className="badge badge-gray">{row.status_label || row.status || '—'}</span>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </FolderRow>
             )}

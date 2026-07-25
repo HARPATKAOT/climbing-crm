@@ -1,9 +1,18 @@
 import crypto from 'crypto';
-import { activeRegistrations, remainingCapacity } from './activityRegistration.js';
-import { resolveDeclarationTemplate, saveCrmParticipants } from './crmWaiverService.js';
+import {
+  activeRegistrations,
+  leadSourceFromActivityType,
+  remainingCapacity,
+} from './activityRegistration.js';
+import {
+  resolveDefaultDeclarationTemplate,
+  saveCrmParticipants,
+} from './crmWaiverService.js';
+import { chargeAmount, normalizePriceIncludesVat } from './vat.js';
 
 const activityLocks = new Map();
 const HOLD_MINUTES = 20;
+const REQUIRED_BROADCAST_LIST = 'classes';
 
 // Serializes capacity checks inside one Node process. The database unique key
 // prevents duplicate idempotency keys across instances; a database transaction
@@ -26,15 +35,32 @@ function clean(value) {
   return String(value || '').trim();
 }
 
+function normalizeSubscriptions(raw = {}) {
+  const subscriptions = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    subscriptions[REQUIRED_BROADCAST_LIST] = true;
+    return subscriptions;
+  }
+  for (const [key, value] of Object.entries(raw)) {
+    subscriptions[String(key)] = value === true || value === 'true' || value === 1 || value === '1';
+  }
+  subscriptions[REQUIRED_BROADCAST_LIST] = true;
+  return subscriptions;
+}
+
 export function normalizeGroupedRegistrationPayload(body = {}) {
   if (Array.isArray(body.participants)) {
     return {
       idempotencyKey: clean(body.idempotency_key || body.idempotencyKey),
       parent: body.parent || {},
+      subscriptions: normalizeSubscriptions(body.subscriptions),
       participants: body.participants.map((participant) => ({
         ...participant,
         type: participant.type === 'adult' ? 'adult' : 'child',
         name: clean(participant.name),
+        reuse_health: participant.reuse_health === true
+          || participant.reuseHealth === true
+          || participant.reuse_declaration === true,
       })),
     };
   }
@@ -47,6 +73,7 @@ export function normalizeGroupedRegistrationPayload(body = {}) {
       phone: clean(body.phone),
       email: clean(body.email),
     },
+    subscriptions: normalizeSubscriptions(body.subscriptions),
     participants: [{
       type: body.participant_type === 'adult' ? 'adult' : 'child',
       name: clean(body.participant_name || body.name),
@@ -55,6 +82,7 @@ export function normalizeGroupedRegistrationPayload(body = {}) {
       waiverAccepted: body.waiverAccepted,
       signature: body.signature || '',
       notes: body.notes || '',
+      reuse_health: body.reuse_health === true || body.reuseHealth === true,
     }],
   };
 }
@@ -106,17 +134,17 @@ export async function registerActivityGroup({
       activity.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
     );
     const paid = mode === 'paid_per_participant';
+    const includesVat = normalizePriceIncludesVat(activity.price_includes_vat);
     const unitPrice = paid ? Math.max(0, Number(activity.price) || 0) : 0;
-    const total = unitPrice * count;
+    const unitCharge = paid ? chargeAmount(unitPrice, includesVat) : 0;
+    const total = unitCharge * count;
     const pendingPayment = paid && total > 0;
     const holdExpiresAt = pendingPayment
       ? new Date(Date.now() + HOLD_MINUTES * 60 * 1000).toISOString()
       : null;
     const orderId = makeId('aro');
-    const template = resolveDeclarationTemplate(db, {
-      templateId: activity.form_template_id,
-      templateSlug: activity.form_template_slug || 'wall',
-    });
+    const template = resolveDefaultDeclarationTemplate(db);
+    const leadSource = leadSourceFromActivityType(activity.type);
     const crm = await saveCrmParticipants({
       db,
       persist,
@@ -125,10 +153,14 @@ export async function registerActivityGroup({
       template,
       activityId: activity.id,
       orderId,
-      source: 'activity_registration',
+      source: leadSource,
       onStudentCreated,
       onStudentStatusChanged,
     });
+
+    if (typeof db.updateParentBroadcastLists === 'function') {
+      db.updateParentBroadcastLists(crm.parent.id, normalized.subscriptions);
+    }
 
     let order = db.insert('activity_registration_orders', {
       id: orderId,
@@ -137,6 +169,8 @@ export async function registerActivityGroup({
       idempotency_key: normalized.idempotencyKey,
       participant_count: count,
       unit_price: unitPrice,
+      unit_charge: unitCharge,
+      price_includes_vat: includesVat,
       total_amount: total,
       payment_status: pendingPayment ? 'pending' : 'not_required',
       status: pendingPayment ? 'pending_payment' : 'confirmed',
@@ -157,11 +191,11 @@ export async function registerActivityGroup({
         participant_name: participant.name,
         phone: crm.parent.phone || '',
         email: crm.parent.email || '',
-        health_declaration_id: participant.declaration.id,
+        health_declaration_id: participant.declaration?.id || null,
         status: pendingPayment ? 'pending_payment' : 'confirmed',
         hold_expires_at: holdExpiresAt,
         payment_status: pendingPayment ? 'pending' : 'not_required',
-        amount: unitPrice,
+        amount: unitCharge,
         paid_at: null,
         payment_id: null,
         updated_at: new Date().toISOString(),

@@ -1,3 +1,8 @@
+import {
+  declarationSignedAt,
+  isHealthDeclarationValid,
+} from './healthValidity.js';
+
 export const STANDARD_WAIVER_TEXT = `אני מצהיר/ה כי אני מודע/ת לסיכונים הכרוכים בפעילות המתקיימת ב"קיר בועז", אני פוטר/ת את "קיר בועז" ו/או מי מטעמו מכל אחריות לפגיעה אם תקרה למשתתף אותו אני רושם לפעילות וזאת אלא אם יוכח כי הינה תוצאה של רשלנות המקום.
 
 אני הח"מ מתחייב/ת בזאת למלא את כל הוראות הבטיחות המפורטות להלן:
@@ -28,6 +33,17 @@ function normalizedName(value) {
   return clean(value).replace(/\s+/g, ' ').toLocaleLowerCase('he');
 }
 
+function wantsReuse(participant) {
+  return participant?.reuse_health === true
+    || participant?.reuseHealth === true
+    || participant?.reuse_declaration === true;
+}
+
+/** Always the active default health template — used by public activity registration. */
+export function resolveDefaultDeclarationTemplate(db) {
+  return resolveDeclarationTemplate(db, {});
+}
+
 export function resolveDeclarationTemplate(db, { templateId, templateSlug } = {}) {
   const templates = db.get('form_templates') || [];
   const selected =
@@ -47,6 +63,38 @@ export function resolveDeclarationTemplate(db, { templateId, templateSlug } = {}
   };
 }
 
+export function findLatestValidDeclaration(db, {
+  studentId = null,
+  parentId = null,
+  climberName = '',
+} = {}) {
+  const declarations = (db.get('health_declarations') || [])
+    .filter((declaration) => {
+      if (studentId) {
+        return String(declaration.studentId || '') === String(studentId);
+      }
+      if (!parentId) return false;
+      if (String(declaration.parentId || '') !== String(parentId)) return false;
+      if (declaration.studentId) return false;
+      if (climberName && normalizedName(declaration.climberName || declaration.studentName) !== normalizedName(climberName)) {
+        return false;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      const left = String(declarationSignedAt(b) || '');
+      const right = String(declarationSignedAt(a) || '');
+      return left.localeCompare(right);
+    });
+
+  for (const declaration of declarations) {
+    if (isHealthDeclarationValid(declarationSignedAt(declaration))) {
+      return declaration;
+    }
+  }
+  return null;
+}
+
 export function validateParticipantDeclarations(participants, template) {
   if (!Array.isArray(participants) || participants.length === 0) {
     throw Object.assign(new Error('יש להוסיף לפחות משתתף אחד'), { status: 400 });
@@ -55,9 +103,10 @@ export function validateParticipantDeclarations(participants, template) {
   for (const participant of participants) {
     const name = clean(participant.name);
     if (!name) throw Object.assign(new Error('חסר שם משתתף'), { status: 400 });
-    if (participant.type !== 'adult' && !clean(participant.birthDate)) {
+    if (participant.type !== 'adult' && !clean(participant.birthDate) && !participant.id) {
       throw Object.assign(new Error(`חסר תאריך לידה עבור ${name}`), { status: 400 });
     }
+    if (wantsReuse(participant)) continue;
     if (!(participant.waiverAccepted === true || participant.waiverAccepted === 'true')) {
       throw Object.assign(new Error(`חסר אישור כתב הוויתור עבור ${name}`), { status: 400 });
     }
@@ -157,9 +206,13 @@ export async function saveCrmParticipants({
         idNumber: clean(input.idNumber || input.climberIdNum) || student?.idNumber || '',
         notes: clean(input.notes || input.registrationNotes) || student?.notes || '',
         status: previousStatus === 'registered' ? 'registered' : 'health_signed',
-        healthSignedAt: signedAt,
-        waiverSignedAt: signedAt,
+        healthSignedAt: student?.healthSignedAt || signedAt,
+        waiverSignedAt: student?.waiverSignedAt || signedAt,
       };
+      if (!wantsReuse(input)) {
+        patch.healthSignedAt = signedAt;
+        patch.waiverSignedAt = signedAt;
+      }
       if (student) {
         student = db.update('students', student.id, patch) || { ...student, ...patch };
         if (previousStatus !== 'registered' && previousStatus !== 'health_signed') {
@@ -177,32 +230,57 @@ export async function saveCrmParticipants({
       await requireDurable(persist, 'students', student);
     }
 
-    const declaration = db.insert('health_declarations', {
-      date: signedDate,
-      studentId: student?.id || null,
-      parentId: parent.id,
-      parentName,
-      parentIdNum: clean(parentInput?.idNumber || parentInput?.parentIdNum),
-      phone,
-      climberName: name,
-      climberIdNum: clean(input.idNumber || input.climberIdNum),
-      birthDate: clean(input.birthDate),
-      answers: input.answers || {},
-      waiverAccepted: true,
-      signature_url: input.signature,
-      status: 'approved',
-      notes: clean(input.notes),
-      templateSlug: template.slug,
-      templateId: template.id,
-      formSnapshot: snapshot,
-      activityId,
-      orderId,
-      signed: true,
-      signedDate,
-      signedBy: parentName,
-      studentName: name,
-    });
-    await requireDurable(persist, 'health_declarations', declaration);
+    let declaration = null;
+    if (wantsReuse(input)) {
+      declaration = findLatestValidDeclaration(db, {
+        studentId: student?.id || null,
+        parentId: parent.id,
+        climberName: name,
+      });
+      if (!declaration && student?.healthSignedAt && isHealthDeclarationValid(student.healthSignedAt)) {
+        // Older records may only have the student flag — still allow register without new signature.
+        declaration = {
+          id: null,
+          reused_from_student: true,
+          studentId: student.id,
+          parentId: parent.id,
+          signedDate: String(student.healthSignedAt).slice(0, 10),
+        };
+      }
+      if (!declaration) {
+        throw Object.assign(
+          new Error(`אין הצהרת בריאות בתוקף עבור ${name} — יש למלא הצהרה מחדש`),
+          { status: 400 }
+        );
+      }
+    } else {
+      declaration = db.insert('health_declarations', {
+        date: signedDate,
+        studentId: student?.id || null,
+        parentId: parent.id,
+        parentName,
+        parentIdNum: clean(parentInput?.idNumber || parentInput?.parentIdNum),
+        phone,
+        climberName: name,
+        climberIdNum: clean(input.idNumber || input.climberIdNum),
+        birthDate: clean(input.birthDate),
+        answers: input.answers || {},
+        waiverAccepted: true,
+        signature_url: input.signature,
+        status: 'approved',
+        notes: clean(input.notes),
+        templateSlug: template.slug,
+        templateId: template.id,
+        formSnapshot: snapshot,
+        activityId,
+        orderId,
+        signed: true,
+        signedDate,
+        signedBy: parentName,
+        studentName: name,
+      });
+      await requireDurable(persist, 'health_declarations', declaration);
+    }
     declarations.push(declaration);
     savedParticipants.push({
       input,
