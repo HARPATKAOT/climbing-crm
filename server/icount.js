@@ -389,6 +389,10 @@ export async function cancelDoc({ doctype = 'invrec', docnum, reason } = {}) {
  * (typically חשבונית מס קבלה) and can notify us via ipn_url.
  *
  * Custom fields with m__ prefix are echoed back on the IPN without the prefix.
+ *
+ * pageKind:
+ *   - default: intro / general pay page (ICOUNT_PAY_PAGE_URL)
+ *   - event: dedicated events page when ICOUNT_EVENT_PAY_PAGE_URL is set
  */
 export async function buildPaymentUrl({
   amount,
@@ -401,8 +405,13 @@ export async function buildPaymentUrl({
   successUrl,
   failureUrl,
   cancelUrl,
+  pageKind = 'default',
 } = {}) {
-  const base = await resolvePayPageUrl();
+  const eventOverride = (process.env.ICOUNT_EVENT_PAY_PAGE_URL || '').trim().replace(/\/$/, '');
+  const base =
+    pageKind === 'event' && eventOverride
+      ? eventOverride
+      : await resolvePayPageUrl();
   const params = new URLSearchParams();
   if (amount != null && amount !== '') params.set('cs', String(amount));
   if (description) params.set('cd', description);

@@ -617,7 +617,7 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
         <div className="registration-actions">
           <button
             type="button"
-            className={`btn btn-sm ${linkUrl ? 'btn-ghost' : 'btn-primary'}`}
+            className="btn btn-sm reg-action-btn reg-action-btn--participants"
             onClick={() => ensureLink()}
             disabled={!!busy || tplBusy || readOnly}
           >
@@ -626,7 +626,7 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
           </button>
           <button
             type="button"
-            className="btn btn-ghost btn-sm"
+            className="btn btn-sm reg-action-btn reg-action-btn--refresh"
             onClick={() => ensureLink({ regenerate: true })}
             disabled={!!busy || tplBusy || readOnly}
           >
@@ -635,7 +635,7 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
           {(form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')) === 'host_pays' && (
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
+              className="btn btn-sm reg-action-btn reg-action-btn--copy-host"
               onClick={copyHostLink}
               disabled={!!busy || tplBusy || readOnly}
             >
@@ -645,7 +645,7 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
           )}
           <button
             type="button"
-            className={`btn btn-sm ${linkUrl ? 'btn-primary' : 'btn-ghost'}`}
+            className="btn btn-sm reg-action-btn reg-action-btn--send"
             onClick={sendToHost}
             disabled={!!busy || tplBusy || readOnly}
           >
@@ -656,7 +656,7 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
           </button>
           <button
             type="button"
-            className="btn btn-ghost btn-sm"
+            className="btn btn-sm reg-action-btn reg-action-btn--template"
             onClick={saveAsTemplate}
             disabled={!!busy || tplBusy || readOnly}
           >

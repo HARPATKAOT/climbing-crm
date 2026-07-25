@@ -2144,29 +2144,38 @@ app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req
     let payment = activity.host_payment_id
       ? db.getOne('payments', activity.host_payment_id)
       : null;
+    const amount = Number(activity.price) || 0;
+    const description = `תשלום אירוע: ${activity.name}`;
     if (!payment || payment.status === 'failed') {
       payment = db.insert('payments', {
         parent_id: parent.id,
         student_id: null,
         activity_id: activity.id,
         activity_host_payment: true,
-        amount: Number(activity.price) || 0,
-        description: `תשלום מזמין: ${activity.name}`,
+        amount,
+        description,
         status: 'pending',
         payment_url: null,
         paid_at: null,
         updated_at: new Date().toISOString(),
       });
+    } else {
+      payment = db.update('payments', payment.id, {
+        amount,
+        description,
+        updated_at: new Date().toISOString(),
+      }) || payment;
     }
-    const paymentUrl = payment.payment_url || await icount.buildPaymentUrl({
-      amount: payment.amount,
-      description: payment.description,
+    const paymentUrl = await icount.buildPaymentUrl({
+      amount,
+      description,
       name: parent.name,
       phone: normalizePhone(parent.phone),
       email: parent.email,
       paymentId: payment.id,
       ipnUrl: icount.buildIpnUrl({ paymentId: payment.id }),
       successUrl: `${frontendPublicBase(req)}/event-host/${encodeURIComponent(req.params.token)}?paid=1`,
+      pageKind: 'event',
     });
     payment = db.update('payments', payment.id, {
       payment_url: paymentUrl,
