@@ -229,16 +229,16 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
           <MessageCircle size={15} /> תקשורת עם הלקוח
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {awaitingHandling && (
-            <button
-              type="button"
-              className="btn btn-success btn-xs"
-              onClick={handleMarkHandled}
-              disabled={markingHandled}
-            >
-              <CheckCircle2 size={12} /> {markingHandled ? 'מסמן...' : 'לקוח טופל'}
-            </button>
-          )}
+          <button
+            type="button"
+            className={`btn btn-xs ${awaitingHandling ? 'btn-success' : 'btn-ghost'}`}
+            onClick={handleMarkHandled}
+            disabled={!awaitingHandling || markingHandled}
+            title={awaitingHandling ? 'סיום הטיפול והסרת הלקוח מרשימת ההמתנה' : 'אין טיפול פתוח ללקוח זה'}
+          >
+            <CheckCircle2 size={12} />
+            {markingHandled ? 'מסיים...' : awaitingHandling ? 'סיום טיפול' : 'הטיפול הסתיים'}
+          </button>
           <button type="button" className="btn btn-ghost btn-xs" onClick={load} disabled={loading}>
             <RefreshCw size={12} /> רענון
           </button>
