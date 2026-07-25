@@ -996,6 +996,10 @@ input, select, textarea { font-family: var(--font); }
   background: #7C3AED;
 }
 
+.reg-action-btn--send-participants {
+  background: #2563EB;
+}
+
 .registration-actions svg,
 .registration-link-field svg,
 .registration-participants-summary svg {
@@ -1087,7 +1091,89 @@ input, select, textarea { font-family: var(--font); }
 
 .registration-refresh-btn:hover {
   border-color: var(--border-hover);
-  background: var(--bg-card-hover);
+  background: var(--bg-hover);
+}
+
+.registration-participant-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.registration-participant-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.registration-participant-edit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px;
+  gap: 8px;
+  width: 100%;
+}
+
+.registration-participant-edit-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+}
+
+.registration-participant-main {
+  color: var(--text-1);
+  font-weight: 600;
+  min-width: 0;
+}
+
+.registration-participant-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.registration-participant-meta {
+  display: block;
+  color: var(--text-3);
+  font-weight: 400;
+}
+
+.registration-participant-status {
+  color: var(--text-3);
+  text-align: left;
+  flex-shrink: 0;
+}
+
+.registration-participant-status small {
+  display: block;
+}
+
+.registration-participant-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent, #38BDF8);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: right;
+}
+
+.registration-participant-link:hover {
+  text-decoration: underline;
+}
+
+.registration-participant-link--inline {
+  font-weight: 500;
 }
 
 .registration-actions .btn:focus-visible,

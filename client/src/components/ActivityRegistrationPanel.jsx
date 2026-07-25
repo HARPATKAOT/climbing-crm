@@ -1,5 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Copy, Link2, Loader2, Mail, RefreshCw, Search, Send, Users, X } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import {
+  Copy, ExternalLink, Link2, Loader2, Mail, Pencil, RefreshCw,
+  Search, Send, Trash2, Users, X,
+} from 'lucide-react';
+
+function leadOpenTarget(registration) {
+  if (registration?.student_id) return String(registration.student_id);
+  if (registration?.parent_id) return `parent:${registration.parent_id}`;
+  return null;
+}
 
 function normalizePhoneDigits(phone) {
   return String(phone || '').replace(/\D/g, '');
@@ -10,6 +20,7 @@ function normalizePhoneDigits(phone) {
  * Kept separate from ActivitiesCalendar to avoid edit conflicts.
  */
 export default function ActivityRegistrationPanel({ activityId, form, setForm, readOnly }) {
+  const navigate = useNavigate();
   const [regs, setRegs] = useState([]);
   const [remaining, setRemaining] = useState(null);
   const [linkUrl, setLinkUrl] = useState('');
@@ -24,6 +35,14 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
   const [customerQuery, setCustomerQuery] = useState('');
   const [hideSuggestions, setHideSuggestions] = useState(false);
   const [customersLoaded, setCustomersLoaded] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editDraft, setEditDraft] = useState({ participant_name: '', participant_type: 'child' });
+  const [editBusy, setEditBusy] = useState('');
+
+  const openLeadFile = useCallback((openId) => {
+    if (!openId) return;
+    navigate(`/leads?open=${encodeURIComponent(openId)}`);
+  }, [navigate]);
 
   const set = (key, value) => {
     if (readOnly) return;
@@ -279,7 +298,7 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
     }
   };
 
-  const sendToHost = async () => {
+  const sendToHost = async (linkType = 'auto') => {
     if (!activityId) {
       setMsg('שמרו את האירוע קודם');
       return;
@@ -292,7 +311,12 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
       setMsg('ללקוח שנבחר אין מספר טלפון');
       return;
     }
-    setBusy('send');
+    const isHostPays =
+      (form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')) === 'host_pays';
+    const resolvedType = linkType === 'auto'
+      ? (isHostPays ? 'host' : 'participant')
+      : linkType;
+    setBusy(resolvedType === 'participant' ? 'send-participants' : 'send');
     setMsg('');
     try {
       if (!form.registration_enabled) {
@@ -307,7 +331,7 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
           email: form.host_email,
           phone: form.host_phone || selectedParent?.phone,
           via: 'whatsapp',
-          link_type: form.registration_mode === 'host_pays' ? 'host' : 'participant',
+          link_type: resolvedType,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -315,7 +339,8 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
         setMsg(data.error || 'שליחה נכשלה');
         return;
       }
-      if (data.url) setLinkUrl(data.url);
+      if (resolvedType === 'participant' && data.url) setLinkUrl(data.url);
+      if (resolvedType === 'host' && data.url) setHostLinkUrl(data.url);
       if (data.host_name) {
         setMany({
           host_name: data.host_name,
@@ -324,7 +349,9 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
         });
       }
       if (data.whatsappSent) {
-        setMsg('הקישור נשלח למזמין בוואטסאפ');
+        setMsg(resolvedType === 'participant'
+          ? 'קישור המשתתפים נשלח למזמין בוואטסאפ'
+          : 'קישור התשלום נשלח למזמין בוואטסאפ');
       } else if (data.whatsappError) {
         setMsg(data.whatsappError);
       } else {
@@ -334,6 +361,85 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
       setMsg('שגיאת רשת');
     } finally {
       setBusy('');
+    }
+  };
+
+  const beginEdit = (registration) => {
+    if (readOnly) return;
+    setEditingId(registration.id);
+    setEditDraft({
+      participant_name: registration.participant_name || '',
+      participant_type: registration.participant_type === 'adult' ? 'adult' : 'child',
+    });
+    setMsg('');
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditDraft({ participant_name: '', participant_type: 'child' });
+    setEditBusy('');
+  };
+
+  const saveEdit = async (registrationId) => {
+    if (!activityId || !registrationId) return;
+    const name = String(editDraft.participant_name || '').trim();
+    if (!name) {
+      setMsg('יש למלא שם משתתף');
+      return;
+    }
+    setEditBusy(registrationId);
+    setMsg('');
+    try {
+      const res = await fetch(
+        `/api/activities/${encodeURIComponent(activityId)}/registrations/${encodeURIComponent(registrationId)}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            participant_name: name,
+            participant_type: editDraft.participant_type,
+          }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMsg(data.error || 'שמירת המשתתף נכשלה');
+        return;
+      }
+      cancelEdit();
+      setMsg('פרטי המשתתף עודכנו');
+      await loadRegs();
+    } catch {
+      setMsg('שגיאת רשת');
+    } finally {
+      setEditBusy('');
+    }
+  };
+
+  const removeParticipant = async (registration) => {
+    if (!activityId || !registration?.id || readOnly) return;
+    const ok = window.confirm(`להסיר את ${registration.participant_name || 'המשתתף'} מהאירוע?`);
+    if (!ok) return;
+    setEditBusy(registration.id);
+    setMsg('');
+    try {
+      const res = await fetch(
+        `/api/activities/${encodeURIComponent(activityId)}/registrations/${encodeURIComponent(registration.id)}`,
+        { method: 'DELETE' }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMsg(data.error || 'הסרת המשתתף נכשלה');
+        return;
+      }
+      if (editingId === registration.id) cancelEdit();
+      if (data.remaining != null) setRemaining(data.remaining);
+      setMsg('המשתתף הוסר מהאירוע');
+      await loadRegs();
+    } catch {
+      setMsg('שגיאת רשת');
+    } finally {
+      setEditBusy('');
     }
   };
 
@@ -643,16 +749,25 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
               העתקת קישור תשלום למזמין
             </button>
           )}
+          {(form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')) === 'host_pays' && (
+            <button
+              type="button"
+              className="btn btn-sm reg-action-btn reg-action-btn--send"
+              onClick={() => sendToHost('host')}
+              disabled={!!busy || tplBusy || readOnly}
+            >
+              {busy === 'send' ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
+              שליחת תשלום למזמין
+            </button>
+          )}
           <button
             type="button"
-            className="btn btn-sm reg-action-btn reg-action-btn--send"
-            onClick={sendToHost}
+            className="btn btn-sm reg-action-btn reg-action-btn--send-participants"
+            onClick={() => sendToHost('participant')}
             disabled={!!busy || tplBusy || readOnly}
           >
-            {busy === 'send' ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
-            {(form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')) === 'host_pays'
-              ? 'שליחת תשלום למזמין'
-              : 'שליחת הרשמה למזמין'}
+            {busy === 'send-participants' ? <Loader2 size={14} className="spin" /> : <Users size={14} />}
+            שליחת קישור משתתפים למזמין
           </button>
           <button
             type="button"
@@ -733,36 +848,129 @@ export default function ActivityRegistrationPanel({ activityId, form, setForm, r
           {regs.length === 0 ? (
             <div style={{ fontSize: 12, color: 'var(--text-3)' }}>עדיין אין נרשמים</div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 160, overflowY: 'auto' }}>
-              {regs.map((r) => (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 280, overflowY: 'auto' }}>
+              {regs.map((r) => {
+                const openId = leadOpenTarget(r);
+                const parentOpenId = r.parent_id ? `parent:${r.parent_id}` : null;
+                const isEditing = editingId === r.id;
+                const rowBusy = editBusy === r.id;
+                return (
                 <div
                   key={r.id}
-                  style={{
-                    display: 'flex', justifyContent: 'space-between', gap: 8,
-                    fontSize: 12, padding: '6px 8px', borderRadius: 8,
-                    background: 'rgba(0,0,0,0.2)',
-                  }}
+                  className="registration-participant-row"
                 >
-                  <span style={{ color: 'var(--text-1)', fontWeight: 600 }}>
-                    {r.participant_name}
-                    <small style={{ display: 'block', color: 'var(--text-3)', fontWeight: 400 }}>
-                      {r.participant_type === 'adult' ? 'מבוגר' : 'ילד'}
-                      {r.parent_name ? ` · לקוח: ${r.parent_name}` : ''}
-                    </small>
-                  </span>
-                  <span style={{ color: 'var(--text-3)', textAlign: 'left' }}>
-                    {r.declaration_signed ? 'הצהרה חתומה' : 'חסרה הצהרה'}
-                    <small style={{ display: 'block' }}>
-                      {r.status === 'confirmed' || r.status === 'active' ? 'הרשמה מאושרת' : 'ממתין לתשלום'}
-                      {r.payment_status === 'paid'
-                        ? ' · שולם'
-                        : r.payment_status === 'pending'
-                          ? ' · תשלום ממתין'
-                          : ' · ללא תשלום'}
-                    </small>
-                  </span>
+                  {isEditing ? (
+                    <div className="registration-participant-edit">
+                      <input
+                        className="input"
+                        value={editDraft.participant_name}
+                        onChange={(e) => setEditDraft((prev) => ({ ...prev, participant_name: e.target.value }))}
+                        placeholder="שם משתתף"
+                        disabled={!!rowBusy}
+                      />
+                      <select
+                        className="input"
+                        value={editDraft.participant_type}
+                        onChange={(e) => setEditDraft((prev) => ({ ...prev, participant_type: e.target.value }))}
+                        disabled={!!rowBusy}
+                      >
+                        <option value="child">ילד</option>
+                        <option value="adult">מבוגר</option>
+                      </select>
+                      <div className="registration-participant-edit-actions">
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-primary"
+                          onClick={() => saveEdit(r.id)}
+                          disabled={!!rowBusy}
+                        >
+                          {rowBusy ? <Loader2 size={14} className="spin" /> : 'שמירה'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          onClick={cancelEdit}
+                          disabled={!!rowBusy}
+                        >
+                          ביטול
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <span className="registration-participant-main">
+                        {openId ? (
+                          <button
+                            type="button"
+                            className="registration-participant-link"
+                            onClick={() => openLeadFile(openId)}
+                            title="פתיחת תיק לקוח"
+                          >
+                            <span>{r.participant_name}</span>
+                            <ExternalLink size={12} />
+                          </button>
+                        ) : (
+                          <span className="registration-participant-name">{r.participant_name}</span>
+                        )}
+                        <small className="registration-participant-meta">
+                          {r.participant_type === 'adult' ? 'מבוגר' : 'ילד'}
+                          {r.parent_name && parentOpenId ? (
+                            <>
+                              {' · '}
+                              <button
+                                type="button"
+                                className="registration-participant-link registration-participant-link--inline"
+                                onClick={() => openLeadFile(parentOpenId)}
+                                title="פתיחת תיק לקוח"
+                              >
+                                לקוח: {r.parent_name}
+                              </button>
+                            </>
+                          ) : r.parent_name ? (
+                            ` · לקוח: ${r.parent_name}`
+                          ) : null}
+                        </small>
+                      </span>
+                      <span className="registration-participant-status">
+                        {r.declaration_signed ? 'הצהרה חתומה' : 'חסרה הצהרה'}
+                        <small>
+                          {r.status === 'confirmed' || r.status === 'active' ? 'הרשמה מאושרת' : 'ממתין לתשלום'}
+                          {r.payment_status === 'paid'
+                            ? ' · שולם'
+                            : r.payment_status === 'pending'
+                              ? ' · תשלום ממתין'
+                              : ' · ללא תשלום'}
+                        </small>
+                      </span>
+                      {!readOnly && (
+                        <span className="registration-participant-actions">
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            onClick={() => beginEdit(r)}
+                            disabled={!!editBusy}
+                            aria-label="עריכת משתתף"
+                            title="עריכה"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            onClick={() => removeParticipant(r)}
+                            disabled={!!editBusy}
+                            aria-label="הסרת משתתף"
+                            title="הסרה"
+                          >
+                            {rowBusy ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+                          </button>
+                        </span>
+                      )}
+                    </>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

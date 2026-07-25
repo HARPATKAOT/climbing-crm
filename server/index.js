@@ -1816,6 +1816,94 @@ app.get('/api/activities/:id/registrations', async (req, res) => {
   });
 });
 
+app.put('/api/activities/:id/registrations/:registrationId', async (req, res) => {
+  try {
+    const activity = db.getOne('activities', req.params.id);
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+    if (supa.isEnabled()) {
+      const remoteRegs = await supa.getAll('activity_registrations');
+      if (remoteRegs) db.set('activity_registrations', remoteRegs);
+    }
+    const registration = db.getOne('activity_registrations', req.params.registrationId);
+    if (!registration || String(registration.activity_id) !== String(activity.id)) {
+      return res.status(404).json({ error: 'המשתתף לא נמצא באירוע' });
+    }
+    if (['cancelled', 'canceled'].includes(String(registration.status || ''))) {
+      return res.status(400).json({ error: 'לא ניתן לערוך משתתף שבוטל' });
+    }
+
+    const body = req.body || {};
+    const patch = {};
+    if (body.participant_name != null) {
+      const name = String(body.participant_name || '').trim();
+      if (!name) return res.status(400).json({ error: 'שם המשתתף חובה' });
+      patch.participant_name = name;
+    }
+    if (body.participant_type != null) {
+      patch.participant_type = body.participant_type === 'adult' ? 'adult' : 'child';
+    }
+    if (body.notes != null) {
+      patch.notes = String(body.notes || '');
+    }
+    if (Object.keys(patch).length === 0) {
+      return res.status(400).json({ error: 'אין שדות לעדכון' });
+    }
+
+    const updated = db.update('activity_registrations', registration.id, patch);
+    const durable = await persistCore('activity_registrations', updated);
+    if (durable?.ok === false) {
+      return res.status(503).json({ error: durable.error || 'שמירת המשתתף נכשלה' });
+    }
+
+    if (patch.participant_name && registration.student_id) {
+      const student = db.getOne('students', registration.student_id);
+      if (student) {
+        const studentUpdated = db.update('students', student.id, { name: patch.participant_name });
+        await persistCore('students', studentUpdated);
+      }
+    }
+
+    res.json({ success: true, registration: updated });
+  } catch (err) {
+    console.error('put registration error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/activities/:id/registrations/:registrationId', async (req, res) => {
+  try {
+    const activity = db.getOne('activities', req.params.id);
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+    if (supa.isEnabled()) {
+      const remoteRegs = await supa.getAll('activity_registrations');
+      if (remoteRegs) db.set('activity_registrations', remoteRegs);
+    }
+    const registration = db.getOne('activity_registrations', req.params.registrationId);
+    if (!registration || String(registration.activity_id) !== String(activity.id)) {
+      return res.status(404).json({ error: 'המשתתף לא נמצא באירוע' });
+    }
+
+    const updated = db.update('activity_registrations', registration.id, {
+      status: 'cancelled',
+      notes: [registration.notes, 'בוטל על ידי צוות'].filter(Boolean).join(' · '),
+    });
+    const durable = await persistCore('activity_registrations', updated);
+    if (durable?.ok === false) {
+      return res.status(503).json({ error: durable.error || 'ביטול המשתתף נכשל' });
+    }
+
+    const regs = activeRegistrations(db, activity.id);
+    res.json({
+      success: true,
+      registration: updated,
+      remaining: remainingCapacity(activity, regs),
+    });
+  } catch (err) {
+    console.error('delete registration error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/activities/:id/registration-link', async (req, res) => {
   const activity = db.getOne('activities', req.params.id);
   if (!activity) return res.status(404).json({ error: 'Activity not found' });
@@ -1952,9 +2040,16 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
         whatsappError =
           'חלון התקשורת של 24 שעות סגור. אפשר לשלוח טקסט חופשי רק אחרי שהלקוח כתב אלינו, או דרך תבנית מאושרת.';
       } else {
-        const msg =
-          `שלום${hostName ? ` ${hostName}` : ''}!\n` +
-          `${sendHostPayment ? 'קישור פרטי לתשלום' : 'קישור להרשמת משתתפים'} עבור "${activity.name}":\n${url}`;
+        const msg = sendHostPayment
+          ? (
+            `שלום${hostName ? ` ${hostName}` : ''}!\n` +
+            `קישור פרטי לתשלום עבור "${activity.name}":\n${url}`
+          )
+          : (
+            `שלום${hostName ? ` ${hostName}` : ''}!\n` +
+            `קישור להרשמת משתתפים עבור "${activity.name}":\n${url}\n` +
+            `אפשר להעביר את הקישור לכל מי שמגיע לאירוע.`
+          );
         const waResult = await whatsappService.sendTextMessage(hostPhone, msg, false, {
           clip: false,
           parentId: parent.id,
