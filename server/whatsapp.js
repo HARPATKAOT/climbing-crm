@@ -6,6 +6,7 @@ import { automationsService } from './automations.js';
 import { israelClockParts, isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 import {
   mergeBotSettings,
+  loadBrandedBotSettings,
   normalizeMenuChoice,
   decideBotGate,
   pauseBotForPhone,
@@ -113,6 +114,7 @@ function formatClassesWhatsAppReply(groups, incomingText = '', { includePrices =
 /** Live CRM snapshot injected into the AI prompt / heuristic replies */
 function buildCrmBotContext(settings = {}, { phone, parent, students } = {}) {
   const s = mergeBotSettings(settings);
+  const brand = s.brandName || 'הרפתקאות';
   const groups = (db.get('groups') || [])
     .slice()
     .sort((a, b) => String(a.ageCategory || '').localeCompare(String(b.ageCategory || ''), 'he')
@@ -126,6 +128,10 @@ function buildCrmBotContext(settings = {}, { phone, parent, students } = {}) {
   const extra = phone
     ? buildAiExtraContext(s, phone, parent, students || [])
     : [
+      '## שם העסק',
+      brand,
+      'השתמש רק בשם הזה כשאתה מזכיר את העסק.',
+      '',
       '## פרטי עסק',
       s.aiBusinessFacts || '',
       '',
@@ -139,6 +145,8 @@ function buildCrmBotContext(settings = {}, { phone, parent, students } = {}) {
   return {
     groups,
     text: `## נתונים חיים ממערכת ה-CRM (השתמש רק בהם לתשובות על חוגים/זמנים/מחירים)
+שם העסק הרשמי: ${brand}
+
 ${s.aiBusinessFacts || ''}
 
 ### קבוצות חוגים פעילות (${groups.length}):
@@ -200,7 +208,8 @@ function buildHeuristicReply(incomingText, settings = {}) {
     ? `${formatClassesWhatsAppReply(sourceGroups, raw, { includePrices: wantsPrices })}\n\nכדי לדייק יותר — מהי כיתת הילד/ה?`
     : classesReply;
   const pricesReply = 'היי! 💰 מחירון קצר:\n\n🎟️ כניסה חד־פעמית — ₪50\n🔟 כרטיסייה 10 כניסות — ₪450\n🗓️ מנוי חודשי — ₪280\n🧗 חוג שבועי — ₪280–₪305 (לפי גיל)\n\nנשמח לתאם אימון היכרות!';
-  const hoursReply = '🕐 שעות פעילות My Wall:\n\n📅 א׳–ה׳ · 14:00–22:00\n📅 שישי · 09:00–15:00\n📅 שבת · סגור';
+  const brand = s.brandName || 'הרפתקאות';
+  const hoursReply = `🕐 שעות פעילות ${brand}:\n\n📅 א׳–ה׳ · 14:00–22:00\n📅 שישי · 09:00–15:00\n📅 שבת · סגור`;
   const locationReply = '📍 אנחנו ברחוב האורגים 12, אשדוד\n🅿️ יש חניה בחזית\nנתראה על הקיר! 🧗';
   const defaultMenu = s.aiGreetingMenu || DEFAULT_BOT_SETTINGS.aiGreetingMenu;
 
@@ -258,6 +267,7 @@ function formatClassesForGrade(gradeText) {
 
 async function callGeminiReply(systemPrompt, crmText, incomingText, apiKey, settings = {}) {
   const s = mergeBotSettings(settings);
+  const brand = s.brandName || 'הרפתקאות';
   const healthUrl = (s.aiBusinessFacts || '').match(/https?:\/\/\S+health\S*/i)?.[0]
     || 'https://client-omega-topaz-35.vercel.app/health';
   const models = [
@@ -275,7 +285,10 @@ async function callGeminiReply(systemPrompt, crmText, incomingText, apiKey, sett
         body: JSON.stringify({
           contents: [{
             parts: [{
-              text: `${systemPrompt}
+              text: `שם העסק הרשמי: ${brand}
+הזכר את העסק רק בשם הרשמי הזה. אל תשתמש בשם ישן אם הוא שונה מהשם הרשמי.
+
+${systemPrompt}
 
 ${crmText}
 
@@ -561,7 +574,7 @@ export const whatsappService = {
 
   // Generate automated AI response
   generateAIResponse: async (incomingText, context = {}) => {
-    const settings = mergeBotSettings(db.getSettings());
+    const settings = await loadBrandedBotSettings();
     const phone = context.phone || '';
     const parent = context.parent || (phone ? findPrimaryParent(phone) : null);
     const students = context.students || (parent ? studentsForParent(parent) : []);
@@ -694,7 +707,7 @@ export const whatsappService = {
     }
 
     let students = studentsForParent(parent);
-    const settings = mergeBotSettings(db.getSettings());
+    const settings = await loadBrandedBotSettings();
 
     // 4. Welcome template + automations only while the bot is enabled
     if (isBotEnabled(settings) && isNew) {

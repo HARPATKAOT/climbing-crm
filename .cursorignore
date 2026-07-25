@@ -1,0 +1,36 @@
+﻿# חסימה מלאה לסוכן — קבצים שלא ייסרקו ולא ייקראו אלא אם מפנים אליהם במפורש
+
+# ארכיון ושאריות
+_archive/
+
+# מטמון מקומי ענק
+**/db.json
+**/db.json.bak
+**/db.json.tmp
+**/*.before-restore
+
+# תלויות ובנייה
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+package-lock.json
+**/package-lock.json
+
+# סביבה וסודות
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# לוגים ומנהרות
+*.log
+lt.txt
+pinggy.txt
+tunnel-url.txt
+url.txt
+
+# ניסויים חד־פעמיים
+scratch/
+server/test-cust.js
+server/test-attendance-extraction.js

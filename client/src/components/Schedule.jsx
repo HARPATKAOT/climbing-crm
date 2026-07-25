@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight, Package, Check } from 'lucide-react';
 import { DAYS_FULL } from '../mockData.js';
 import {
   getGroupDays,
@@ -14,6 +14,13 @@ import {
   attStatusMeta,
 } from '../scheduleUtils.js';
 import { StatusPill } from './AttendanceCalendar.jsx';
+import {
+  EQUIPMENT_LABELS,
+  EQUIPMENT_ORDER,
+  equipmentItemTone,
+  equipmentToneColor,
+  equipmentToneLabel,
+} from './equipmentUtils.js';
 
 async function ensureAttendance({ date, groupId } = {}) {
   const res = await fetch('/api/attendance/ensure', {
@@ -545,9 +552,14 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
   const [attIds, setAttIds] = useState({});
   const [attLoading, setAttLoading] = useState(false);
   const [attSavingId, setAttSavingId] = useState(null);
+  const [eqByStudent, setEqByStudent] = useState({});
+  const [eqLoading, setEqLoading] = useState(false);
+  const [eqBusyId, setEqBusyId] = useState('');
+  const [eqError, setEqError] = useState('');
   const c = AGE_COLORS[group.ageCategory] || DEF_COLOR;
 
   const members = students.filter(s => s.groupId === group.id && s.status !== 'archived');
+  const kidMembers = members.filter(s => !s.isAdult);
   const assignable = students.filter(s => s.groupId !== group.id && s.status !== 'archived');
 
   const pct    = group.maxSlots > 0 ? Math.round(members.length / group.maxSlots * 100) : 0;
@@ -556,6 +568,49 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
 
   const trainer = employees.find(e => e.id === group.trainer);
   const pendingCount = members.filter(m => isAttPending(attState[m.id])).length;
+  const eqAwaitingCount = kidMembers.filter((m) => {
+    const items = eqByStudent[m.id] || [];
+    return items.some((i) => i.payment_status === 'paid' && i.fulfillment_status !== 'given');
+  }).length;
+
+  const loadGroupEquipment = async () => {
+    setEqLoading(true);
+    setEqError('');
+    try {
+      const res = await fetch(`/api/equipment?groupId=${encodeURIComponent(group.id)}&filter=all`);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'טעינת ציוד נכשלה');
+      const map = {};
+      for (const row of body.rows || []) {
+        map[row.student_id] = row.items || [];
+      }
+      setEqByStudent(map);
+    } catch (err) {
+      setEqError(err.message);
+      setEqByStudent({});
+    } finally {
+      setEqLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (tab === 'equipment') loadGroupEquipment();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, group.id]);
+
+  const markEqGiven = async (itemId) => {
+    setEqBusyId(itemId);
+    try {
+      const res = await fetch(`/api/equipment/${encodeURIComponent(itemId)}/mark-given`, { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'סימון המסירה נכשל');
+      await loadGroupEquipment();
+    } catch (err) {
+      setEqError(err.message);
+    } finally {
+      setEqBusyId('');
+    }
+  };
 
   const loadPanelAttendance = async (date) => {
     setAttLoading(true);
@@ -673,6 +728,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
         {[
           { key: 'attendance', label: pendingCount > 0 ? `נוכחות (${pendingCount})` : 'נוכחות' },
           { key: 'members', label: `משתתפים (${members.length})` },
+          { key: 'equipment', label: eqAwaitingCount > 0 ? `ציוד (${eqAwaitingCount})` : 'ציוד' },
           { key: 'info',    label: 'פרטים' },
         ].map(t => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
@@ -764,6 +820,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
         {/* MEMBERS TAB */}
         {tab === 'members' && (
           <div>
+
             <div className="card card-p" style={{ marginBottom: 14, background: '#111827' }}>
               <div style={{ fontSize: 12, fontWeight: 'bold', marginBottom: 8 }}>שיבוץ מתאמן לקבוצה</div>
               <div style={{ display: 'flex', gap: 6 }}>
@@ -820,6 +877,102 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                         onClick={() => onRemoveStudent(s.id)}>
                         <UserMinus size={14} />
                       </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* EQUIPMENT TAB */}
+        {tab === 'equipment' && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <Package size={14} style={{ color: 'var(--text-3)' }} />
+              <div style={{ fontSize: 13, fontWeight: 700 }}>ציוד לאימונים — ילדים בקבוצה</div>
+            </div>
+            {eqError && (
+              <div style={{ marginBottom: 10, padding: 8, borderRadius: 8, background: 'rgba(248,113,113,.12)', color: '#f87171', fontSize: 12 }}>
+                {eqError}
+              </div>
+            )}
+            {eqLoading ? (
+              <div className="empty-state" style={{ padding: 32 }}>
+                <Loader2 size={18} className="spin" />
+                <div className="empty-state-sub" style={{ marginTop: 8 }}>טוען ציוד...</div>
+              </div>
+            ) : kidMembers.length === 0 ? (
+              <div className="empty-state" style={{ padding: 32 }}>
+                <div className="empty-state-title">אין ילדים בקבוצה</div>
+                <div className="empty-state-sub">ציוד לאימונים מיועד לילדים בלבד</div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {kidMembers.map((s) => {
+                  const p = parents.find((pp) => pp.id === s.parentId);
+                  const items = eqByStudent[s.id] || [];
+                  const byType = Object.fromEntries(items.map((i) => [i.item_type, i]));
+                  const awaiting = items.filter(
+                    (i) => i.payment_status === 'paid' && i.fulfillment_status !== 'given'
+                  );
+                  return (
+                    <div
+                      key={s.id}
+                      style={{
+                        border: awaiting.length ? '1px solid rgba(251,191,36,.45)' : '1px solid var(--border)',
+                        borderRadius: 12,
+                        padding: 10,
+                        background: awaiting.length ? 'rgba(251,191,36,.06)' : 'transparent',
+                      }}
+                    >
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>{s.name}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>
+                        {p?.name || '—'}
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {EQUIPMENT_ORDER.map((type) => {
+                          const item = byType[type];
+                          if (!item) {
+                            return (
+                              <span key={type} style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                                {EQUIPMENT_LABELS[type]} · —
+                              </span>
+                            );
+                          }
+                          const tone = equipmentItemTone(item);
+                          const color = equipmentToneColor(tone);
+                          return (
+                            <button
+                              key={type}
+                              type="button"
+                              disabled={tone !== 'awaiting' || eqBusyId === item.id}
+                              onClick={() => tone === 'awaiting' && markEqGiven(item.id)}
+                              title={tone === 'awaiting' ? 'לחצו לסימון מסירה' : equipmentToneLabel(tone)}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4,
+                                padding: '4px 8px',
+                                borderRadius: 999,
+                                border: `1px solid ${color}66`,
+                                background: `${color}18`,
+                                color,
+                                fontSize: 11,
+                                fontWeight: 700,
+                                cursor: tone === 'awaiting' ? 'pointer' : 'default',
+                                opacity: eqBusyId === item.id ? 0.6 : 1,
+                              }}
+                            >
+                              {tone === 'awaiting' && <Check size={11} />}
+                              {EQUIPMENT_LABELS[type]}
+                              {' · '}
+                              {equipmentToneLabel(tone)}
+                              {type === 'shirt' && item.shirt_size ? ` · ${item.shirt_size}` : ''}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
                   );
                 })}

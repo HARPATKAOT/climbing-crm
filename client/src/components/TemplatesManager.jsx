@@ -1,20 +1,54 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { RefreshCw, Plus, Send, Trash2, MousePointerClick, ExternalLink, Phone } from 'lucide-react';
+import {
+  RefreshCw, Plus, Send, Trash2, MousePointerClick, ExternalLink, Phone,
+  ArrowUp, ArrowDown, Archive, ArchiveRestore, Pencil, X, Save,
+  Wrench, Megaphone, KeyRound,
+} from 'lucide-react';
 import { TEMPLATE_VAR_FIELDS, TEMPLATE_VAR_FIELD_MAP, normalizeTemplateVariables } from './templateVariables.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 
-const CATEGORIES = [
-  { value: 'UTILITY', label: 'תפעולי' },
-  { value: 'MARKETING', label: 'שיווקי' },
-  { value: 'AUTHENTICATION', label: 'אימות' },
-];
-
-const STATUS_LABELS = {
-  DRAFT: 'טיוטה',
-  PENDING: 'ממתין לאישור',
-  APPROVED: 'מאושר',
-  REJECTED: 'נדחה',
+const CATEGORY_META = {
+  UTILITY: { label: 'תפעולי', icon: Wrench, color: '#38BDF8' },
+  MARKETING: { label: 'שיווקי', icon: Megaphone, color: '#34D399' },
+  AUTHENTICATION: { label: 'אימות', icon: KeyRound, color: '#FBBF24' },
 };
+
+const CATEGORIES = Object.entries(CATEGORY_META).map(([value, meta]) => ({ value, label: meta.label }));
+
+const STATUS_META = {
+  DRAFT: { label: 'טיוטה', color: '#94A3B8' },
+  PENDING: { label: 'ממתין לאישור', color: '#FBBF24' },
+  APPROVED: { label: 'מאושר', color: '#34D399' },
+  REJECTED: { label: 'נדחה', color: '#F87171' },
+};
+
+function CategoryIcon({ category }) {
+  const meta = CATEGORY_META[String(category || '').toUpperCase()] || CATEGORY_META.UTILITY;
+  const Icon = meta.icon;
+  return (
+    <span title={meta.label} style={{ display: 'inline-flex', color: meta.color }}>
+      <Icon size={16} />
+    </span>
+  );
+}
+
+function StatusBadge({ status }) {
+  const key = String(status || '').toUpperCase();
+  const meta = STATUS_META[key] || { label: status, color: '#94A3B8' };
+  return (
+    <span style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 12,
+      fontWeight: 600,
+      color: meta.color,
+    }}>
+      <span style={{ width: 8, height: 8, borderRadius: '50%', background: meta.color, flexShrink: 0 }} />
+      {meta.label}
+    </span>
+  );
+}
 
 const BUTTON_TYPES = [
   { value: 'QUICK_REPLY', label: 'תשובה מהירה' },
@@ -288,10 +322,17 @@ export default function TemplatesManager() {
   ]));
   const [submittingId, setSubmittingId] = useState(null);
   const [rowError, setRowError] = useState({});
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+  const [editVarMeta, setEditVarMeta] = useState([]);
+  const [busyId, setBusyId] = useState(null);
   const bodyRef = useRef(null);
 
   const mode = buttonMode(draft.buttons);
   const canAddButton = draft.buttons.length < maxButtonsForMode(mode === 'none' ? 'quick' : mode);
+
+  const activeTemplates = templates.filter((t) => !t.archived);
+  const archivedTemplates = templates.filter((t) => !!t.archived);
 
   const load = async ({ quiet = false } = {}) => {
     if (!quiet) setLoading(true);
@@ -448,16 +489,312 @@ export default function TemplatesManager() {
     }
   };
 
-  const remove = async (id) => {
-    if (!window.confirm('למחוק את הטיוטה?')) return;
+  const startEdit = (t) => {
+    const locked = ['APPROVED', 'PENDING'].includes(String(t.status).toUpperCase());
+    setEditingId(t.id);
+    setEditForm({
+      name: t.name || '',
+      meta_name: t.meta_name || '',
+      language: t.language || 'he',
+      category: t.category || 'UTILITY',
+      body: t.body || '',
+      header: t.header || '',
+      footer: t.footer || '',
+      buttons: Array.isArray(t.buttons) ? t.buttons.map((b) => ({ ...b })) : [],
+      locked,
+    });
+    setEditVarMeta(syncVarMetaFromBody(t.body, t.variables));
+    setError('');
+    setSuccess('');
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditForm(null);
+    setEditVarMeta([]);
+  };
+
+  const saveEdit = async () => {
+    if (!editingId || !editForm) return;
+    setBusyId(editingId);
+    setError('');
     try {
-      const res = await fetch(`/api/message-templates/${id}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'מחיקה נכשלה');
+      const payload = editForm.locked
+        ? {
+          name: editForm.name,
+          variable_fields: editVarMeta,
+          body_examples: editVarMeta.map((v) => v.example || 'דוגמה'),
+        }
+        : {
+          name: editForm.name,
+          meta_name: editForm.meta_name,
+          language: editForm.language,
+          category: editForm.category,
+          body: editForm.body,
+          header: editForm.header,
+          footer: editForm.footer,
+          buttons: normalizeButtons(editForm.buttons),
+          variable_fields: editVarMeta,
+          body_examples: editVarMeta.map((v) => v.example || 'דוגמה'),
+        };
+      if (!editForm.locked) {
+        const buttonError = validateButtons(payload.buttons);
+        if (buttonError) throw new Error(buttonError);
+      }
+      const res = await fetch(`/api/message-templates/${editingId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'שמירה נכשלה');
+      setSuccess('התבנית עודכנה');
+      cancelEdit();
       await load();
     } catch (err) {
       setError(err.message);
+    } finally {
+      setBusyId(null);
     }
+  };
+
+  const setArchived = async (id, archived) => {
+    setBusyId(id);
+    setError('');
+    try {
+      const res = await fetch(`/api/message-templates/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ archived }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'עדכון נכשל');
+      setSuccess(archived ? 'התבנית הועברה לארכיון' : 'התבנית שוחזרה מהארכיון');
+      if (editingId === id) cancelEdit();
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const move = async (id, direction) => {
+    setBusyId(id);
+    setError('');
+    try {
+      const res = await fetch(`/api/message-templates/${id}/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ direction }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'מיון נכשל');
+      setTemplates(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const remove = async (t) => {
+    const locked = ['APPROVED', 'PENDING'].includes(String(t.status).toUpperCase());
+    const ok = locked
+      ? window.confirm(
+        `למחוק את התבנית «${t.name || t.meta_name}» גם אצל Meta?\nפעולה זו בלתי הפיכה — לא ניתן לשלוח אותה יותר.`
+      )
+      : window.confirm('למחוק את הטיוטה?');
+    if (!ok) return;
+    setBusyId(t.id);
+    setError('');
+    try {
+      const res = await fetch(`/api/message-templates/${t.id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'מחיקה נכשלה');
+      setSuccess(locked ? 'התבנית נמחקה גם אצל Meta' : 'הטיוטה נמחקה');
+      if (editingId === t.id) cancelEdit();
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const renderTemplateRows = (list, { showMove = true } = {}) => {
+    if (!list.length) {
+      return (
+        <tr>
+          <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 16 }}>
+            אין תבניות בקבוצה זו
+          </td>
+        </tr>
+      );
+    }
+    return list.map((t, index) => {
+      const status = String(t.status).toUpperCase();
+      const isEditing = editingId === t.id;
+      const busy = busyId === t.id || submittingId === t.id;
+      return (
+        <React.Fragment key={t.id}>
+          <tr style={isEditing ? { background: 'rgba(56,189,248,0.06)' } : undefined}>
+            <td>
+              <div style={{ fontWeight: 600 }}>{t.name}</div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', maxWidth: 320, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.body}</div>
+            </td>
+            <td style={{ color: 'var(--text-3)', fontSize: 12 }}>{t.meta_name}</td>
+            <td style={{ textAlign: 'center' }}><CategoryIcon category={t.category} /></td>
+            <td><StatusBadge status={status} /></td>
+            <td style={{ whiteSpace: 'nowrap' }}>
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                {showMove && (
+                  <>
+                    <button type="button" className="btn btn-xs btn-ghost" disabled={busy || index === 0} onClick={() => move(t.id, 'up')} title="העלה">
+                      <ArrowUp size={11} />
+                    </button>
+                    <button type="button" className="btn btn-xs btn-ghost" disabled={busy || index === list.length - 1} onClick={() => move(t.id, 'down')} title="הורד">
+                      <ArrowDown size={11} />
+                    </button>
+                  </>
+                )}
+                <button type="button" className="btn btn-xs btn-ghost" disabled={busy} onClick={() => (isEditing ? cancelEdit() : startEdit(t))} title="עריכה">
+                  {isEditing ? <X size={11} /> : <Pencil size={11} />}
+                </button>
+                {status === 'DRAFT' && (
+                  <button
+                    type="button"
+                    className="btn btn-xs btn-primary"
+                    onClick={() => submit(t.id)}
+                    disabled={busy}
+                  >
+                    <Send size={11} /> {submittingId === t.id ? 'שולח...' : 'שלח לאישור'}
+                  </button>
+                )}
+                {t.archived ? (
+                  <button type="button" className="btn btn-xs btn-ghost" disabled={busy} onClick={() => setArchived(t.id, false)} title="שחזר">
+                    <ArchiveRestore size={11} />
+                  </button>
+                ) : (
+                  <button type="button" className="btn btn-xs btn-ghost" disabled={busy} onClick={() => setArchived(t.id, true)} title="ארכיון">
+                    <Archive size={11} />
+                  </button>
+                )}
+                <button type="button" className="btn btn-xs btn-ghost" disabled={busy} onClick={() => remove(t)} title="מחיקה">
+                  <Trash2 size={11} />
+                </button>
+              </div>
+              {rowError[t.id] && (
+                <div style={{ color: '#F87171', fontSize: 11, marginTop: 6, maxWidth: 220, whiteSpace: 'normal' }}>
+                  {rowError[t.id]}
+                </div>
+              )}
+            </td>
+          </tr>
+          {isEditing && editForm && (
+            <tr>
+              <td colSpan={5} style={{ background: 'var(--bg-2)', padding: 14 }}>
+                <div style={{ display: 'grid', gap: 10, maxWidth: 720 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>
+                    {editForm.locked
+                      ? 'עריכה מוגבלת — שם לתצוגה ומיפוי משתנים בלבד (גוף ההודעה נעול אצל Meta)'
+                      : 'עריכת טיוטה'}
+                  </div>
+                  <input
+                    className="input input-sm"
+                    placeholder="שם לתצוגה"
+                    value={editForm.name}
+                    onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                  />
+                  {!editForm.locked && (
+                    <>
+                      <input
+                        className="input input-sm"
+                        placeholder="שם ב-Meta"
+                        value={editForm.meta_name}
+                        onChange={(e) => setEditForm({ ...editForm, meta_name: e.target.value })}
+                      />
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <select className="input input-sm" value={editForm.language} onChange={(e) => setEditForm({ ...editForm, language: e.target.value })}>
+                          <option value="he">עברית (he)</option>
+                          <option value="he_IL">עברית (he_IL)</option>
+                          <option value="en_US">אנגלית</option>
+                        </select>
+                        <select className="input input-sm" value={editForm.category} onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}>
+                          {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                        </select>
+                      </div>
+                      <input
+                        className="input input-sm"
+                        placeholder="כותרת"
+                        value={editForm.header}
+                        onChange={(e) => setEditForm({ ...editForm, header: e.target.value })}
+                      />
+                      <textarea
+                        className="input"
+                        rows={3}
+                        value={editForm.body}
+                        onChange={(e) => {
+                          const nextBody = e.target.value;
+                          setEditForm({ ...editForm, body: nextBody });
+                          setEditVarMeta(syncVarMetaFromBody(nextBody, editVarMeta));
+                        }}
+                      />
+                      <input
+                        className="input input-sm"
+                        placeholder="כותרת תחתונה"
+                        value={editForm.footer}
+                        onChange={(e) => setEditForm({ ...editForm, footer: e.target.value })}
+                      />
+                    </>
+                  )}
+                  {editVarMeta.length > 0 && (
+                    <div style={{ display: 'grid', gap: 8, padding: 10, background: 'var(--bg)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>מיפוי משתנים</div>
+                      {editVarMeta.map((v, idx) => (
+                        <div key={idx} style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: 8, alignItems: 'center' }}>
+                          <code style={{ fontSize: 12, color: 'var(--blue)' }}>{`{{${idx + 1}}}`}</code>
+                          <select
+                            className="input input-sm"
+                            value={v.field || 'custom'}
+                            onChange={(e) => {
+                              const field = TEMPLATE_VAR_FIELD_MAP[e.target.value] || TEMPLATE_VAR_FIELD_MAP.custom;
+                              setEditVarMeta((prev) => prev.map((row, i) => (
+                                i === idx
+                                  ? { field: field.id, label: field.label, example: field.example }
+                                  : row
+                              )));
+                            }}
+                          >
+                            {TEMPLATE_VAR_FIELDS.map((f) => (
+                              <option key={f.id} value={f.id}>{f.label}</option>
+                            ))}
+                          </select>
+                          <input
+                            className="input input-sm"
+                            placeholder="דוגמה"
+                            value={v.example || ''}
+                            onChange={(e) => setEditVarMeta((prev) => prev.map((row, i) => (
+                              i === idx ? { ...row, example: e.target.value } : row
+                            )))}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={saveEdit}>
+                      <Save size={12} /> שמור
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={cancelEdit}>ביטול</button>
+                  </div>
+                </div>
+              </td>
+            </tr>
+          )}
+        </React.Fragment>
+      );
+    });
   };
 
   return (
@@ -641,74 +978,64 @@ export default function TemplatesManager() {
         </div>
       </div>
 
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', fontSize: 12, color: 'var(--text-3)' }}>
+        <span style={{ fontWeight: 600, color: 'var(--text-2)' }}>מקרא קטגוריה:</span>
+        {CATEGORIES.map((c) => (
+          <span key={c.value} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <CategoryIcon category={c.value} /> {c.label}
+          </span>
+        ))}
+      </div>
+
       <div className="card card-p" style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>
+          תבניות פעילות
+          <span style={{ fontWeight: 400, color: 'var(--text-3)', marginRight: 8 }}>
+            ({activeTemplates.length}) — סדר הרשימה כאן הוא הסדר בשליחה
+          </span>
+        </div>
         <table className="table" style={{ width: '100%', fontSize: 13 }}>
           <thead>
             <tr>
               <th>שם</th>
               <th>Meta</th>
-              <th>שפה</th>
-              <th>קטגוריה</th>
-              <th>משתנים</th>
-              <th>כפתורים</th>
+              <th style={{ textAlign: 'center' }}>קטגוריה</th>
               <th>סטטוס</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {templates.length === 0 ? (
-              <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 16 }}>אין תבניות עדיין — סנכרנו מ-Meta או צרו טיוטה</td></tr>
-            ) : templates.map((t) => {
-              const vars = normalizeTemplateVariables(t.variables, t.body);
-              return (
-                <tr key={t.id}>
-                  <td>
-                    <div>{t.name}</div>
-                    <div style={{ fontSize: 11, color: 'var(--text-3)', maxWidth: 240, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.body}</div>
-                  </td>
-                  <td>{t.meta_name}</td>
-                  <td>{t.language}</td>
-                  <td>{t.category}</td>
-                  <td style={{ fontSize: 11, color: 'var(--text-2)', maxWidth: 160 }}>
-                    {vars.length
-                      ? vars.map((v, i) => <div key={i}>{`{{${v.key}}}`} · {v.label}</div>)
-                      : '—'}
-                  </td>
-                  <td style={{ fontSize: 11, color: 'var(--text-2)', maxWidth: 180 }}>
-                    {Array.isArray(t.buttons) && t.buttons.length
-                      ? t.buttons.map((b, i) => <div key={i}>{formatButtonSummary(b)}</div>)
-                      : '—'}
-                  </td>
-                  <td>{STATUS_LABELS[String(t.status).toUpperCase()] || t.status}</td>
-                  <td style={{ whiteSpace: 'nowrap' }}>
-                    {String(t.status).toUpperCase() === 'DRAFT' && (
-                      <button
-                        type="button"
-                        className="btn btn-xs btn-primary"
-                        onClick={() => submit(t.id)}
-                        disabled={submittingId === t.id}
-                        style={{ marginLeft: 4 }}
-                      >
-                        <Send size={11} /> {submittingId === t.id ? 'שולח...' : 'שלח לאישור'}
-                      </button>
-                    )}
-                    {String(t.status).toUpperCase() !== 'APPROVED' && (
-                      <button type="button" className="btn btn-xs btn-ghost" onClick={() => remove(t.id)}>
-                        <Trash2 size={11} />
-                      </button>
-                    )}
-                    {rowError[t.id] && (
-                      <div style={{ color: '#F87171', fontSize: 11, marginTop: 6, maxWidth: 220, whiteSpace: 'normal' }}>
-                        {rowError[t.id]}
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
+            {activeTemplates.length === 0 && !loading ? (
+              <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 16 }}>אין תבניות עדיין — סנכרנו מ-Meta או צרו טיוטה</td></tr>
+            ) : renderTemplateRows(activeTemplates)}
           </tbody>
         </table>
       </div>
+
+      {archivedTemplates.length > 0 && (
+        <div className="card card-p" style={{ padding: 0, overflow: 'hidden', opacity: 0.92 }}>
+          <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>
+            ארכיון
+            <span style={{ fontWeight: 400, color: 'var(--text-3)', marginRight: 8 }}>
+              ({archivedTemplates.length}) — לא מופיעות ברשימת השליחה
+            </span>
+          </div>
+          <table className="table" style={{ width: '100%', fontSize: 13 }}>
+            <thead>
+              <tr>
+                <th>שם</th>
+                <th>Meta</th>
+                <th style={{ textAlign: 'center' }}>קטגוריה</th>
+                <th>סטטוס</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {renderTemplateRows(archivedTemplates, { showMove: true })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

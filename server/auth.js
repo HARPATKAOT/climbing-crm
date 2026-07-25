@@ -30,6 +30,7 @@ const TEAM_RULES = [
   { methods: ['GET'], pattern: /^\/broadcast-list-defs(\/|$)/ },
   { methods: ['GET', 'POST'], pattern: /^\/parents\/[^/]+\/broadcast-lists$/ },
   { methods: ['GET'], pattern: /^\/students\/[^/]+\/documents$/ },
+  { methods: ['GET', 'POST'], pattern: /^\/students\/[^/]+\/equipment(\/|$)/ },
   { methods: ['GET'], pattern: /^\/documents\/[^/]+\/download$/ },
   { methods: ['GET'], pattern: /^\/whatsapp\/(thread|logs)(\/|$)/ },
   { methods: ['GET'], pattern: /^\/whatsapp\/settings$/ },
@@ -52,6 +53,9 @@ const TEAM_RULES = [
   { methods: ['GET'], pattern: /^\/icount\/status$/ },
   { methods: ['GET', 'POST', 'PUT', 'DELETE'], pattern: /^\/safety(\/|$)/ },
   { methods: ['GET', 'POST'], pattern: /^\/level-tests(\/|$)/ },
+  { methods: ['GET', 'PUT'], pattern: /^\/equipment(\/|$)/ },
+  { methods: ['POST'], pattern: /^\/equipment\/[^/]+\/(reset-rental|mark-given|mark-pending)$/ },
+  { methods: ['GET'], pattern: /^\/equipment-settings$/ },
 ];
 
 function emailSet(value) {

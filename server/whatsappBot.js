@@ -2,6 +2,7 @@ import { db, persistCore } from './db.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { israelClockParts, isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 import { recordMessage } from './channels/messageStore.js';
+import { DEFAULT_BUSINESS_PROFILE, getBusinessProfile } from './businessProfile.js';
 
 export const LEAD_STATUSES = new Set(['lead_new', 'health_signed', 'waitlist']);
 export const CUSTOMER_STATUSES = new Set([
@@ -11,11 +12,15 @@ export const CUSTOMER_STATUSES = new Set([
   'active',
 ]);
 
+/** Legacy gym name still present in older prompts / defaults. */
+export const LEGACY_BRAND_NAME = 'My Wall';
+const LEGACY_BRAND_RE = /My Wall/gi;
+
 export const DEFAULT_BOT_SETTINGS = {
   aiOutsideHoursMessage:
     'קיבלנו את ההודעה 🙏\nאנחנו מחוץ לשעות המענה כרגע.\nנחזור אליכם בבוקר בין 9:00 ל־21:00.',
   aiHandoffKeywords: 'אדם,נציג,צוות,תלונה,מנהל,דחוף,לדבר עם',
-  aiHandoffAckMessage: 'מעבירים אתכם לצוות My Wall 🧗\nמישהו יחזור אליכם בהקדם.',
+  aiHandoffAckMessage: `מעבירים אתכם לצוות ${LEGACY_BRAND_NAME} 🧗\nמישהו יחזור אליכם בהקדם.`,
   aiStopKeywords: 'עצור,הסר,stop,unsubscribe,הסר אותי',
   aiOptOutMessage: 'הוסרתם מרשימת המענה האוטומטי.\nאם תרצו לחזור — כתבו «הפעל בוט».',
   aiPauseOnHumanReply: true,
@@ -36,12 +41,48 @@ export const DEFAULT_BOT_SETTINGS = {
   aiLeadCaptureEnabled: true,
   aiInteractiveMenuEnabled: true,
   aiGreetingMenu:
-    'היי! אני הבוט של My Wall 🧗\n\nבמה אפשר לעזור?\n1️⃣ הצהרת בריאות ✍️\n2️⃣ חוגים ומחירים 🤸\n3️⃣ שעות ומיקום 🗺️\n4️⃣ לדבר עם צוות 👤\n\nכתבו מספר או שאלה קצרה 😊',
+    `היי! אני הבוט של ${LEGACY_BRAND_NAME} 🧗\n\nבמה אפשר לעזור?\n1️⃣ הצהרת בריאות ✍️\n2️⃣ חוגים ומחירים 🤸\n3️⃣ שעות ומיקום 🗺️\n4️⃣ לדבר עם צוות 👤\n\nכתבו מספר או שאלה קצרה 😊`,
   aiReactivateKeywords: 'הפעל בוט,הפעל,activate',
 };
 
+const BRANDED_TEXT_KEYS = [
+  'aiSystemPrompt',
+  'aiHandoffAckMessage',
+  'aiGreetingMenu',
+  'aiOutsideHoursMessage',
+  'aiBusinessFacts',
+  'aiKnowledgeBase',
+  'aiUnsureReply',
+  'aiOptOutMessage',
+  'aiForbiddenTopics',
+];
+
 export function mergeBotSettings(settings = {}) {
   return { ...DEFAULT_BOT_SETTINGS, ...settings };
+}
+
+/** Replace legacy gym name with the current business display name. */
+export function applyBusinessBrand(settings = {}, brandName) {
+  const brand = String(brandName || '').trim() || DEFAULT_BUSINESS_PROFILE.display_name;
+  const merged = mergeBotSettings(settings);
+  const stamped = { ...merged, brandName: brand };
+  for (const key of BRANDED_TEXT_KEYS) {
+    if (stamped[key] != null) {
+      stamped[key] = String(stamped[key]).replace(LEGACY_BRAND_RE, brand);
+    }
+  }
+  return stamped;
+}
+
+export async function loadBrandedBotSettings() {
+  let brand = DEFAULT_BUSINESS_PROFILE.display_name;
+  try {
+    const profile = await getBusinessProfile();
+    brand = profile.display_name || brand;
+  } catch {
+    // keep fallback
+  }
+  return applyBusinessBrand(db.getSettings(), brand);
 }
 
 export function parseKeywordList(value) {
@@ -268,8 +309,13 @@ export function buildParentCardContext(parent, students = []) {
 
 export function buildAiExtraContext(settings, phone, parent, students) {
   const s = mergeBotSettings(settings);
+  const brand = s.brandName || DEFAULT_BUSINESS_PROFILE.display_name;
   const history = getConversationHistory(phone, s.aiHistoryCount);
   const parts = [
+    '## שם העסק',
+    brand,
+    'השתמש רק בשם הזה כשאתה מזכיר את העסק.',
+    '',
     '## פרטי עסק',
     s.aiBusinessFacts || '',
     '',
@@ -430,18 +476,26 @@ export function decideBotGate(settings, parent, students, text, { isSimulator = 
     return { action: 'silence', reason: 'paused' };
   }
 
-  if (!isBotEnabled(s)) {
+  // The playground must remain usable while live automatic replies are disabled.
+  // Simulator replies are recorded locally and never sent through Meta.
+  if (!isSimulator && !isBotEnabled(s)) {
     return { action: 'silence', reason: 'disabled' };
   }
 
-  const inHours = shouldAiAutoReply(s, { ignoreSchedule: isSimulator });
-  if (!inHours) {
-    return {
-      action: 'outside_hours',
-      reason: 'outside_hours',
-      reply: s.aiOutsideHoursMessage,
-      sendOnce: true,
-    };
+  // Live traffic only: shouldAiAutoReply is false both when the bot is off and
+  // when outside hours. Disabled was already handled above; remaining false =
+  // outside hours. The playground skips this so a disabled master switch does
+  // not look like an hours restriction.
+  if (!isSimulator) {
+    const inHours = shouldAiAutoReply(s);
+    if (!inHours) {
+      return {
+        action: 'outside_hours',
+        reason: 'outside_hours',
+        reply: s.aiOutsideHoursMessage,
+        sendOnce: true,
+      };
+    }
   }
 
   if (!audienceAllows(s, parent, students)) {

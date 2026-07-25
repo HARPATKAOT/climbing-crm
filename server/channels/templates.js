@@ -225,9 +225,15 @@ export async function syncTemplatesFromMeta() {
       active_for_send: mapMetaStatus(t.status) === 'APPROVED',
     };
     const current = previous;
+    // Manual order and archive flag are ours — Meta never sends them back.
     const saved = current
       ? db.update('message_templates', current.id, payload)
-      : db.insert('message_templates', { id: `tpl_${t.id || Date.now()}_${language}`, ...payload });
+      : db.insert('message_templates', {
+        id: `tpl_${t.id || Date.now()}_${language}`,
+        ...payload,
+        sort_order: nextSortOrder(),
+        archived: false,
+      });
     // Await durable write so a restart right after sync cannot wipe templates.
     if (saved) {
       const persist = await persistCore('message_templates', saved);
@@ -241,15 +247,24 @@ export async function syncTemplatesFromMeta() {
 }
 
 export function listLocalTemplates() {
-  return [...(db.get('message_templates') || [])].sort((a, b) =>
-    String(a.name || '').localeCompare(String(b.name || ''), 'he')
+  return [...(db.get('message_templates') || [])].sort(
+    (a, b) =>
+      (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0) ||
+      String(a.name || '').localeCompare(String(b.name || ''), 'he')
   );
 }
 
 export function listApprovedTemplates() {
   return listLocalTemplates().filter(
-    (t) => String(t.status).toUpperCase() === 'APPROVED' || t.active_for_send
+    (t) =>
+      !t.archived &&
+      (String(t.status).toUpperCase() === 'APPROVED' || t.active_for_send)
   );
+}
+
+function nextSortOrder() {
+  const existing = db.get('message_templates') || [];
+  return existing.reduce((max, t) => Math.max(max, Number(t.sort_order) || 0), 0) + 1;
 }
 
 export function createDraftTemplate(input = {}) {
@@ -287,38 +302,116 @@ export function createDraftTemplate(input = {}) {
     variables,
     buttons,
     active_for_send: false,
+    sort_order: nextSortOrder(),
+    archived: false,
   });
+}
+
+/** Meta freezes template content once it is submitted; only labels stay editable. */
+const CONTENT_FIELDS = ['body', 'header', 'footer', 'buttons', 'category', 'language', 'meta_name'];
+
+function isLockedAtMeta(template) {
+  const status = String(template?.status || '').toUpperCase();
+  return status === 'APPROVED' || status === 'PENDING';
 }
 
 export function updateLocalTemplate(id, updates = {}) {
   const current = (db.get('message_templates') || []).find((t) => t.id === id);
   if (!current) throw new Error('התבנית לא נמצאה');
-  if (String(current.status).toUpperCase() === 'APPROVED' && updates.body) {
-    // Keep approved Meta copy; allow local label tweaks only unless draft
+
+  const locked = isLockedAtMeta(current);
+  if (locked) {
+    const changed = CONTENT_FIELDS.filter(
+      (field) => updates[field] !== undefined
+        && JSON.stringify(updates[field]) !== JSON.stringify(current[field])
+    );
+    if (changed.length) {
+      throw new Error('תבנית שהוגשה למטא נעולה לעריכת תוכן — אפשר לשנות שם לתצוגה ומיפוי משתנים, או ליצור תבנית חדשה');
+    }
   }
-  const body = updates.body !== undefined ? updates.body : current.body;
+
+  const body = !locked && updates.body !== undefined ? updates.body : current.body;
   const bodyKeys = countVariables(body);
   const fieldSource = updates.variable_fields !== undefined
     ? updates.variable_fields
     : (updates.variables !== undefined ? updates.variables : current.variables);
   const variables = enrichVariablesFromFields(bodyKeys, fieldSource);
+
   const patch = { ...updates, variables };
+  delete patch.variable_fields;
+  if (locked) {
+    for (const field of CONTENT_FIELDS) delete patch[field];
+  }
+  if (updates.name !== undefined) {
+    const name = String(updates.name).trim();
+    if (!name) throw new Error('שם לתצוגה חובה');
+    patch.name = name;
+  }
+  if (updates.archived !== undefined) {
+    patch.archived = updates.archived === true || updates.archived === 'true';
+  }
+  if (updates.sort_order !== undefined) {
+    patch.sort_order = Number(updates.sort_order) || 0;
+  }
   if (updates.body_examples === undefined && Array.isArray(variables)) {
     patch.body_examples = examplesFromVariables(variables);
   }
-  if (updates.buttons !== undefined) {
-    patch.buttons = normalizeButtons(updates.buttons);
+  if (patch.buttons !== undefined) {
+    patch.buttons = normalizeButtons(patch.buttons);
     const buttonError = validateButtons(patch.buttons);
     if (buttonError) throw new Error(buttonError);
   }
   return db.update('message_templates', id, patch);
 }
 
-export function deleteLocalTemplate(id) {
+/**
+ * Swap a template with its neighbour in the manual order.
+ * Archived rows are skipped so ordering stays stable in the send list.
+ */
+export function moveTemplate(id, direction = 'up') {
+  const all = listLocalTemplates();
+  const current = all.find((t) => t.id === id);
+  if (!current) throw new Error('התבנית לא נמצאה');
+
+  const siblings = all.filter((t) => !!t.archived === !!current.archived);
+  const index = siblings.findIndex((t) => t.id === id);
+  const targetIndex = direction === 'down' ? index + 1 : index - 1;
+  if (targetIndex < 0 || targetIndex >= siblings.length) return listLocalTemplates();
+
+  // Renumber the whole group so rows imported without an order still sort predictably.
+  const reordered = [...siblings];
+  reordered.splice(targetIndex, 0, reordered.splice(index, 1)[0]);
+  reordered.forEach((t, i) => {
+    db.update('message_templates', t.id, { sort_order: i + 1 });
+  });
+  return listLocalTemplates();
+}
+
+async function deleteTemplateAtMeta(template) {
+  const { accessToken } = getWaCredentials();
+  const wabaId = getWabaId();
+  const metaName = String(template.meta_name || template.name || '').trim();
+  if (!accessToken || !wabaId) {
+    throw new Error('אין חיבור למטא — לא ניתן למחוק תבנית מאושרת כרגע');
+  }
+  if (!metaName) throw new Error('חסר שם התבנית במטא');
+
+  const params = new URLSearchParams({ name: metaName });
+  if (template.meta_id) params.set('hsm_id', String(template.meta_id));
+  const url = `https://graph.facebook.com/${META_GRAPH_VERSION}/${wabaId}/message_templates?${params}`;
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(formatMetaError(data));
+}
+
+export async function deleteLocalTemplate(id) {
   const current = (db.get('message_templates') || []).find((t) => t.id === id);
   if (!current) throw new Error('התבנית לא נמצאה');
-  if (String(current.status).toUpperCase() === 'APPROVED') {
-    throw new Error('לא ניתן למחוק תבנית מאושרת ממטא מכאן — בטלו אותה במנהל העסקי של Meta');
+  if (isLockedAtMeta(current)) {
+    await deleteTemplateAtMeta(current);
   }
   db.delete('message_templates', id);
   return { success: true };

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, Users, Ticket, CalendarDays } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, Users, Ticket, CalendarDays, Package, Footprints, Shirt, Sparkles } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
 import {
@@ -12,6 +12,23 @@ import { healthExpiryDate } from '../utils/healthValidity.js';
 import ConversationPanel from './ConversationPanel.jsx';
 import AttendanceCalendar from './AttendanceCalendar.jsx';
 import { isAwaitingHandling, latestInboundTime } from './communicationQueue.js';
+import {
+  EQUIPMENT_LABELS,
+  EQUIPMENT_ORDER,
+  EQUIPMENT_STATUS_TONES,
+  applyEquipmentTone,
+  equipmentItemTone,
+  equipmentToneBg,
+  equipmentToneColor,
+  equipmentToneLabel,
+  formatRentalRange,
+} from './equipmentUtils.js';
+
+const EQUIPMENT_ICONS = {
+  shoes: Footprints,
+  shirt: Shirt,
+  chalk_bag: Sparkles,
+};
 
 // Normalize phone for comparison (supports 05X ↔ 9725X)
 const normPhone = (p) => {
@@ -554,6 +571,13 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
   const [passesLoading, setPassesLoading] = useState(false);
   const [punchingId, setPunchingId] = useState(null);
   const [passPunches, setPassPunches] = useState({});
+  const [equipmentItems, setEquipmentItems] = useState([]);
+  const [equipmentLoading, setEquipmentLoading] = useState(false);
+  const [equipmentBusyId, setEquipmentBusyId] = useState('');
+  const [equipmentMsg, setEquipmentMsg] = useState('');
+  const [equipmentLink, setEquipmentLink] = useState('');
+  const [equipmentEditId, setEquipmentEditId] = useState('');
+  const showEquipment = !parentOnly && !student.isAdult;
 
   const refreshPasses = async () => {
     if (parentOnly || !student?.id) {
@@ -569,6 +593,78 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
       setCustomerPasses([]);
     } finally {
       setPassesLoading(false);
+    }
+  };
+
+  const refreshEquipment = async () => {
+    if (!showEquipment || !student?.id) {
+      setEquipmentItems([]);
+      return;
+    }
+    setEquipmentLoading(true);
+    try {
+      const res = await fetch(`/api/students/${encodeURIComponent(student.id)}/equipment`);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'טעינת ציוד נכשלה');
+      setEquipmentItems(Array.isArray(body.items) ? body.items : []);
+    } catch {
+      setEquipmentItems([]);
+    } finally {
+      setEquipmentLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshEquipment();
+    setEquipmentMsg('');
+    setEquipmentLink('');
+    setEquipmentEditId('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [student.id, student.isAdult, parentOnly]);
+
+  const handleEquipmentSetStatus = async (item, targetTone) => {
+    if (!item?.id) return;
+    setEquipmentBusyId(item.id);
+    setEquipmentMsg('');
+    try {
+      await applyEquipmentTone(item.id, targetTone, { currentItem: item });
+      await refreshEquipment();
+      setEquipmentEditId('');
+      setEquipmentMsg(`עודכן ל„${equipmentToneLabel(targetTone)}”`);
+    } catch (err) {
+      setEquipmentMsg(err.message);
+    } finally {
+      setEquipmentBusyId('');
+    }
+  };
+
+  const handleSendEquipmentLink = async () => {
+    setEquipmentBusyId('link');
+    setEquipmentMsg('');
+    setEquipmentLink('');
+    try {
+      const res = await fetch(`/api/students/${encodeURIComponent(student.id)}/equipment/payment-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sendWhatsapp: true }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(body.error || `יצירת הקישור נכשלה (${res.status})`);
+      }
+      setEquipmentLink(body.pageUrl || '');
+      if (body.pageUrl) {
+        try { await navigator.clipboard.writeText(body.pageUrl); } catch { /* ignore */ }
+      }
+      setEquipmentMsg(
+        body.whatsappSent
+          ? 'הקישור נשלח בוואטסאפ'
+          : (body.whatsappError || 'הקישור נוצר — העתיקו ושילחו ידנית')
+      );
+    } catch (err) {
+      setEquipmentMsg(err.message || 'יצירת הקישור נכשלה');
+    } finally {
+      setEquipmentBusyId('');
     }
   };
 
@@ -1028,6 +1124,20 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
       : customerPasses.length === 0
         ? 'אין מנוי או כרטיסייה'
         : 'אין פעילים';
+  const equipmentUnpaid = equipmentItems.filter((i) => i.payment_status !== 'paid').length;
+  const equipmentAwaiting = equipmentItems.filter(
+    (i) => i.payment_status === 'paid' && i.fulfillment_status !== 'given'
+  ).length;
+  const equipmentSummary = !showEquipment
+    ? ''
+    : equipmentLoading
+      ? 'טוען...'
+      : equipmentUnpaid + equipmentAwaiting === 0
+        ? 'הכל תקין'
+        : [
+            equipmentUnpaid ? `${equipmentUnpaid} ממתין לתשלום` : null,
+            equipmentAwaiting ? `${equipmentAwaiting} שולם` : null,
+          ].filter(Boolean).join(' · ');
   const attendanceSummary = attendanceLoading
     ? 'טוען...'
     : attendanceHistory.length === 0
@@ -1782,6 +1892,181 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                         </div>
                       );
                     })}
+                  </div>
+                )}
+              </FolderRow>
+            )}
+
+            {/* Equipment folder — kids only */}
+            {showEquipment && (
+              <FolderRow
+                id="equipment"
+                title="ציוד לאימונים"
+                icon={Package}
+                summary={equipmentSummary}
+                open={openFolder === 'equipment'}
+                onToggle={toggleFolder}
+              >
+                {equipmentLoading ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען...</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      disabled={equipmentBusyId === 'link'}
+                      onClick={handleSendEquipmentLink}
+                    >
+                      <Send size={13} />
+                      {equipmentBusyId === 'link' ? 'שולח...' : 'שלח קישור תשלום ציוד'}
+                    </button>
+                    {equipmentMsg && (
+                      <div
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: equipmentLink ? 'var(--text-2)' : '#fb7185',
+                        }}
+                      >
+                        {equipmentMsg}
+                      </div>
+                    )}
+                    {equipmentLink && (
+                      <a
+                        href={equipmentLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ fontSize: 11, wordBreak: 'break-all', color: 'var(--accent)' }}
+                      >
+                        {equipmentLink}
+                      </a>
+                    )}
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                        gap: 8,
+                      }}
+                    >
+                      {EQUIPMENT_ORDER.map((type) => {
+                        const item = equipmentItems.find((i) => i.item_type === type);
+                        if (!item) return null;
+                        const tone = equipmentItemTone(item);
+                        const color = equipmentToneColor(tone);
+                        const Icon = EQUIPMENT_ICONS[type] || Package;
+                        const editing = equipmentEditId === item.id;
+                        const busy = equipmentBusyId === item.id;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            disabled={busy}
+                            onClick={() => setEquipmentEditId(editing ? '' : item.id)}
+                            style={{
+                              width: '100%',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              gap: 6,
+                              padding: '12px 6px 10px',
+                              borderRadius: 10,
+                              border: editing ? `2px solid ${color}` : '1px solid var(--border)',
+                              background: editing ? equipmentToneBg(tone) : 'rgba(255,255,255,0.03)',
+                              cursor: busy ? 'wait' : 'pointer',
+                              opacity: busy ? 0.6 : 1,
+                              color: 'var(--text-1)',
+                            }}
+                          >
+                            <Icon size={24} color="var(--text-2)" strokeWidth={2.2} />
+                            <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--text-1)' }}>
+                              {EQUIPMENT_LABELS[type] || type}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: 11,
+                                fontWeight: 800,
+                                color,
+                                background: equipmentToneBg(tone),
+                                border: `1px solid ${color}66`,
+                                borderRadius: 999,
+                                padding: '3px 8px',
+                                textAlign: 'center',
+                                lineHeight: 1.25,
+                                maxWidth: '100%',
+                              }}
+                            >
+                              {busy ? '...' : equipmentToneLabel(tone)}
+                            </div>
+                            {type === 'shirt' && item.shirt_size && (
+                              <div style={{ fontSize: 10, color: 'var(--text-3)' }}>מידה {item.shirt_size}</div>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {equipmentEditId && (() => {
+                      const item = equipmentItems.find((i) => i.id === equipmentEditId);
+                      if (!item) return null;
+                      const tone = equipmentItemTone(item);
+                      const busy = equipmentBusyId === item.id;
+                      const label = EQUIPMENT_LABELS[item.item_type] || item.item_type;
+                      return (
+                        <div
+                          style={{
+                            marginTop: 2,
+                            padding: 10,
+                            borderRadius: 10,
+                            border: '1px solid var(--border)',
+                            background: 'rgba(255,255,255,0.06)',
+                          }}
+                        >
+                          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, color: 'var(--text-1)' }}>
+                            סטטוס ל{label}
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            {EQUIPMENT_STATUS_TONES.map((opt) => {
+                              const optColor = equipmentToneColor(opt);
+                              const selected = opt === tone;
+                              return (
+                                <button
+                                  key={opt}
+                                  type="button"
+                                  disabled={busy || selected}
+                                  onClick={() => handleEquipmentSetStatus(item, opt)}
+                                  style={{
+                                    width: '100%',
+                                    fontSize: 13,
+                                    fontWeight: 800,
+                                    padding: '10px 12px',
+                                    borderRadius: 8,
+                                    border: selected ? `2px solid ${optColor}` : `1px solid ${optColor}55`,
+                                    background: equipmentToneBg(opt),
+                                    color: optColor,
+                                    cursor: selected ? 'default' : 'pointer',
+                                    textAlign: 'center',
+                                    opacity: selected ? 1 : 0.95,
+                                  }}
+                                >
+                                  {equipmentToneLabel(opt)}
+                                  {selected ? ' · נוכחי' : ''}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                    {(() => {
+                      const shoes = equipmentItems.find((i) => i.item_type === 'shoes');
+                      if (!shoes || shoes.payment_status !== 'paid') return null;
+                      const range = formatRentalRange(shoes);
+                      if (!range) return null;
+                      return (
+                        <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                          תוקף השכרת נעליים: {range}
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
               </FolderRow>

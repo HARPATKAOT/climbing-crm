@@ -6,6 +6,7 @@ import { EMPTY_FILTERS } from './segmentFilters.js';
 import TemplatesManager from './TemplatesManager.jsx';
 import SavedRepliesManager from './SavedRepliesManager.jsx';
 import BotSettingsPanel from './BotSettingsPanel.jsx';
+import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 
 const DEFAULT_LISTS = [
   { key: 'general', label: 'כללי', description: 'עדכונים שוטפים', color: 'var(--blue)' },
@@ -24,6 +25,8 @@ const LIST_COLORS = [
 const WA_TEMPLATES = [];
 
 export default function Broadcasts({ parents, students, groups = [] }) {
+  const { profile } = useBusinessProfile();
+  const brandName = profile.display_name || 'הרפתקאות';
   const [activeTab, setActiveTab] = useState('compose'); // compose | templates | saved | history | simulator | settings
   
   // Compose / Send State
@@ -56,7 +59,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
     aiActiveHoursStart: '09:00',
     aiActiveHoursEnd: '21:00',
     aiActiveDays: [0, 1, 2, 3, 4, 5, 6],
-    aiSystemPrompt: 'אתה עוזר שירות לקוחות אינטליגנטי עבור קיר הטיפוס My Wall בירושלים. ענה בעברית מנומסת וקצרה. מחירון כניסות: כניסת יחיד מבוגר 50 ש"ח, ילד (עד 18) 40 ש"ח. כרטיסיית 10 כניסות 400 ש"ח. מנוי חודשי 220 ש"ח.',
+    aiSystemPrompt: `אתה עוזר שירות לקוחות אינטליגנטי עבור קיר הטיפוס ${brandName}. ענה בעברית מנומסת וקצרה.`,
   });
   const [savingSettings, setSavingSettings] = useState(false);
   const [saveSettingsSuccess, setSaveSettingsSuccess] = useState(false);
@@ -751,7 +754,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                   ))}
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 10 }}>
-                  לניהול והגשת תבניות חדשות — עברו לטאב «תבניות Meta».
+                  לניהול — מיון, ארכיון, עריכה ומחיקה — עברו לטאב «תבניות Meta».
                 </div>
               </div>
 
@@ -876,7 +879,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
               <div style={{ background: simChannel === 'instagram' ? 'linear-gradient(90deg, #833ab4, #fd1d1d, #fcb045)' : '#075e54', color: 'white', padding: 10, fontSize: 12, fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <div style={{ width: 24, height: 24, borderRadius: '50%', background: simChannel === 'instagram' ? 'rgba(255,255,255,0.2)' : '#128c7e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13 }}>{simChannel === 'instagram' ? '📸' : 'MW'}</div>
-                  <span>{simChannel === 'instagram' ? 'My Wall Instagram DM' : 'תמיכה My Wall 🧗'}</span>
+                  <span>{simChannel === 'instagram' ? `${brandName} Instagram DM` : `תמיכה ${brandName} 🧗`}</span>
                 </div>
                 <span style={{ fontSize: 10, opacity: 0.85 }}>{simChannel === 'instagram' ? 'Active now' : 'מחובר'}</span>
               </div>
@@ -1224,7 +1227,13 @@ export default function Broadcasts({ parents, students, groups = [] }) {
               <div className="form-group">
                 <label className="form-label" style={{ fontSize: 11 }}>שאלת לקוח מדומה (לדוגמה)</label>
                 <input className="input" placeholder="לדוגמה: כמה עולה אצלכם כניסה חד פעמית לילד?"
-                  value={workbenchInput} onChange={e => setWorkbenchInput(e.target.value)} />
+                  value={workbenchInput} onChange={e => setWorkbenchInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !testingAi && workbenchInput.trim()) {
+                      e.preventDefault();
+                      handleTestAiResponse();
+                    }
+                  }} />
               </div>
 
               <button type="button" className="btn btn-primary btn-sm" style={{ alignSelf: 'flex-start' }}

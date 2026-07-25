@@ -11,6 +11,7 @@ import {
   parseAiReply,
   classifyAudience,
   mergeBotSettings,
+  applyBusinessBrand,
 } from './whatsappBot.js';
 import { isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 
@@ -18,6 +19,22 @@ test('clipReply truncates long text', () => {
   const long = 'א'.repeat(50);
   assert.equal(clipReply(long, 20).endsWith('…'), true);
   assert.ok(clipReply(long, 20).length <= 20);
+});
+
+test('applyBusinessBrand replaces legacy gym name', () => {
+  const branded = applyBusinessBrand(
+    {
+      aiSystemPrompt: 'אתה הבוט של My Wall',
+      aiGreetingMenu: 'היי מ-My Wall',
+      aiHandoffAckMessage: 'צוות My Wall',
+    },
+    'הרפתקאות'
+  );
+  assert.equal(branded.brandName, 'הרפתקאות');
+  assert.equal(branded.aiSystemPrompt, 'אתה הבוט של הרפתקאות');
+  assert.equal(branded.aiGreetingMenu, 'היי מ-הרפתקאות');
+  assert.equal(branded.aiHandoffAckMessage, 'צוות הרפתקאות');
+  assert.doesNotMatch(branded.aiGreetingMenu, /My Wall/i);
 });
 
 test('handoff and stop keywords match', () => {
@@ -57,6 +74,10 @@ test('decideBotGate: disabled / opted out / handoff / outside hours', () => {
     aiActiveHoursEnabled: false,
   });
   assert.equal(decideBotGate({ ...base, aiResponderEnabled: false }, {}, [], 'שלום').action, 'silence');
+  assert.equal(
+    decideBotGate({ ...base, aiResponderEnabled: false }, {}, [], 'שלום', { isSimulator: true }).action,
+    'reply'
+  );
   assert.equal(decideBotGate(base, { bot_opted_out: true }, [], 'שלום').action, 'silence');
   assert.equal(decideBotGate(base, {}, [], 'רוצה נציג').action, 'handoff');
   assert.equal(decideBotGate(base, {}, [], '4').action, 'handoff');

@@ -1,0 +1,17 @@
+{
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/dist/**": true,
+    "**/_archive/**": true,
+    "**/db.json": true,
+    "**/db.json.tmp": true,
+    "**/db.json.bak": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/_archive": true,
+    "**/package-lock.json": true,
+    "**/db.json": true
+  }
+}

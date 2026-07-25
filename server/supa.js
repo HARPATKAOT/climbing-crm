@@ -57,6 +57,7 @@ const DIRECT_TABLES = [
   'saved_segments',
   'broadcast_jobs',
   'broadcast_recipients',
+  'student_equipment',
 ];
 
 export const OPERATIONAL_TABLES = [
@@ -82,6 +83,7 @@ export const OPERATIONAL_TABLES = [
   'customer_passes',
   'pass_punches',
   'pos_sales',
+  'equipment_checkouts',
 ];
 
 // Kept as the public name used by db.js: every listed collection is durable.
@@ -266,6 +268,13 @@ mappers.activity_registration_orders = columnMapper([
   'unit_price', 'total_amount', 'payment_status', 'status', 'payment_id',
   'hold_expires_at', 'created_at', 'updated_at',
 ]);
+mappers.student_equipment = columnMapper([
+  'id', 'student_id', 'parent_id', 'item_type',
+  'payment_status', 'fulfillment_status', 'shirt_size',
+  'paid_at', 'given_at', 'given_by', 'payment_id',
+  'rental_starts_at', 'rental_ends_at',
+  'created_at', 'updated_at',
+]);
 mappers.activity_templates = columnMapper([
   'id', 'name', 'type', 'category', 'location', 'price', 'max_participants', 'description', 'notes',
   'start_time', 'end_time', 'all_day',
@@ -388,6 +397,7 @@ mappers.messages = columnMapper([
 mappers.message_templates = columnMapper([
   'id', 'name', 'meta_name', 'language', 'category', 'status', 'body', 'header', 'footer',
   'variables', 'buttons', 'meta_id', 'rejection_reason', 'active_for_send',
+  'sort_order', 'archived',
   'created_at', 'updated_at',
 ]);
 mappers.saved_replies = columnMapper([

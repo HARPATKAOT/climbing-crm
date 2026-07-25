@@ -369,6 +369,7 @@ export default function BotSettingsPanel({
           />
           <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4 }}>
             הסבר לבינה איך להציג את הקיר, אילו מחירים לתת, ואיך להתנסח.
+            שם העסק נלקח אוטומטית ממסך הגדרות העסק — אין צורך לכתוב אותו כאן.
           </div>
         </div>
       </Section>

@@ -1,0 +1,27 @@
+# קבצים שלא ייכנסו לאינדקס החיפוש של קרסר
+# (הסוכן עדיין יכול לקרוא אותם אם מפנים אליהם ישירות)
+
+# תיקיית ארכיון — קבצים ישנים
+_archive/
+
+# קבצי נעילת תלויות — גדולים ולא רלוונטיים לחיפוש
+package-lock.json
+**/package-lock.json
+
+# סקריפטים חד־פעמיים וקבצי ניסוי
+scratch/
+server/test-cust.js
+server/test-attendance-extraction.js
+
+# מטמון מקומי — קובץ ענק; מאט חיפוש וקריאה של הסוכן
+**/db.json
+**/db.json.bak
+**/db.json.tmp
+**/*.before-restore
+
+# לוגים וקבצי מנהרה זמניים
+*.log
+lt.txt
+pinggy.txt
+tunnel-url.txt
+url.txt

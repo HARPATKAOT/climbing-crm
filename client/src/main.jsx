@@ -15,6 +15,7 @@ const LeadIntakeForm             = lazy(() => import('./components/LeadIntakeFor
 const PrivacyPolicy              = lazy(() => import('./components/PrivacyPolicy.jsx'));
 const PublicActivityRegistration = lazy(() => import('./components/PublicActivityRegistration.jsx'));
 const PublicHostPayment          = lazy(() => import('./components/PublicHostPayment.jsx'));
+const PublicEquipmentPayment     = lazy(() => import('./components/PublicEquipmentPayment.jsx'));
 
 // Automatically route all /api calls directly to live cloud Render backend when running on Vercel
 const originalFetch = window.fetch.bind(window);
@@ -47,6 +48,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/privacy" element={<PrivacyPolicy />} />
             <Route path="/event/:slug" element={<PublicActivityRegistration />} />
             <Route path="/event-host/:token" element={<PublicHostPayment />} />
+            <Route path="/equipment/:token" element={<PublicEquipmentPayment />} />
             <Route path="*" element={<AuthGate><App /></AuthGate>} />
           </Routes>
         </Suspense>

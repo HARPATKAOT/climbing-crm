@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Calendar, CalendarRange, ShieldCheck, UserCog, LogIn,
-  MessageSquare, Bell, Search, Coins, Award, FileHeart, Zap, LogOut, Building2,
+  MessageSquare, Bell, Search, Coins, Award, FileHeart, Zap, LogOut, Building2, Package,
 } from 'lucide-react';
 import { useAuth } from './components/AuthGate.jsx';
 import { useBusinessProfile } from './BusinessProfileContext.jsx';
@@ -23,6 +23,7 @@ const HealthDeclarations = lazy(() => import('./components/HealthDeclarations.js
 const CheckInConsole     = lazy(() => import('./components/CheckInConsole.jsx'));
 const Automations        = lazy(() => import('./components/Automations.jsx'));
 const BusinessSettings   = lazy(() => import('./components/BusinessSettings.jsx'));
+const EquipmentTracker   = lazy(() => import('./components/EquipmentTracker.jsx'));
 
 function PageLoader() {
   return (
@@ -38,6 +39,7 @@ const NAV = [
   { key: 'checkin',    label: 'מסוף כניסה',        icon: LogIn,            section: 'main', accent: '#2DD4BF' },
   { key: 'leads',      label: 'לקוחות ולידים',     icon: Users,            section: 'main', accent: '#A78BFA' },
   { key: 'schedule',   label: 'לוח חוגים',          icon: Calendar,         section: 'main', accent: '#FBBF24' },
+  { key: 'equipment',  label: 'ציוד לאימונים',      icon: Package,          section: 'main', accent: '#38BDF8' },
   { key: 'activities', label: 'יומן',               icon: CalendarRange,    section: 'main', accent: '#FB923C' },
   { key: 'broadcasts', label: 'דיוור וואטסאפ',     icon: MessageSquare,    section: 'main', accent: '#34D399' },
   { key: 'cash',       label: 'קופה ומכירה',      icon: Coins,            section: 'main', accent: '#F59E0B' },
@@ -55,6 +57,7 @@ const PAGE_PATHS = {
   checkin:     '/checkin',
   leads:       '/leads',
   schedule:    '/schedule',
+  equipment:   '/equipment-tracker',
   activities:  '/activities',
   broadcasts:  '/broadcasts',
   cash:        '/cash',
@@ -71,7 +74,7 @@ const PATH_TO_PAGE = Object.fromEntries(
 );
 
 // Public routes are handled outside App (main.jsx). Never redirect these into the CRM shell.
-const STAFF_PAGES = new Set(['checkin', 'leads', 'schedule', 'activities', 'health', 'cash']);
+const STAFF_PAGES = new Set(['checkin', 'leads', 'schedule', 'equipment', 'activities', 'health', 'cash']);
 
 function pathToPage(pathname) {
   if (pathname === '/' || pathname === '') return 'dashboard';
@@ -83,6 +86,7 @@ const PAGE_TITLES = {
   checkin:    { title: 'מסוף כניסה מהירה',       sub: 'רישום כניסות וצ׳ק-אין של לקוחות ומנויים' },
   leads:      { title: 'לקוחות ולידים',           sub: 'ניהול מאגר המתאמנים' },
   schedule:   { title: 'לוח חוגים',               sub: 'ניהול שיעורים ונוכחות' },
+  equipment:  { title: 'ציוד לאימונים',           sub: 'מעקב תשלום ומסירה של נעליים, חולצה ומגנזיום' },
   activities: { title: 'יומן',                    sub: 'ימי הולדת, טיולים ואירועים — מסונכרן עם גוגל' },
   broadcasts: { title: 'דיוור וואטסאפ',           sub: 'שליחת הודעות מסיביות' },
   cash:       { title: 'קופה ומכירה',           sub: 'מכירה בדלפק, מוצרים, סגירת קופה ודוחות' },
@@ -378,6 +382,15 @@ export default function App() {
             {page === 'checkin'    && <CheckInConsole students={students} groups={groups} />}
             {page === 'leads'      && <Leads students={students} setStudents={setStudents} parents={parents} setParents={setParents} groups={groups} canManageBilling={isOwner} canViewComms />}
             {page === 'schedule'   && <Schedule groups={groups} students={students} parents={parents} setGroups={setGroups} setStudents={setStudents} />}
+            {page === 'equipment'  && (
+              <EquipmentTracker
+                groups={groups}
+                canEditSettings={isOwner}
+                onOpenStudent={(studentId) => {
+                  navigate(`/leads?open=${encodeURIComponent(studentId)}`);
+                }}
+              />
+            )}
             {page === 'activities' && <ActivitiesCalendar isOwner={isOwner} />}
             {page === 'broadcasts' && <Broadcasts parents={parents} students={students} groups={groups} />}
             {page === 'cash'       && <CashRegister isOwner={isOwner} initialTab={location.state?.cashTab} />}

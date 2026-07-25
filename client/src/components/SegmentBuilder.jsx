@@ -130,7 +130,7 @@ export default function SegmentBuilder({
   };
 
   return (
-    <div style={{ display: 'grid', gap: 14 }}>
+    <div style={{ display: 'grid', gap: 14, minWidth: 0, maxWidth: '100%' }}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <Users size={16} />
         <strong style={{ fontSize: 14 }}>
@@ -234,9 +234,11 @@ export default function SegmentBuilder({
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: `repeat(${Math.max(groupsByDay.length, 1)}, minmax(140px, 1fr))`,
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(150px, 100%), 1fr))',
             gap: 10,
             paddingBottom: 4,
+            minWidth: 0,
+            maxWidth: '100%',
           }}
         >
           {groupsByDay.map((section) => {
@@ -250,7 +252,8 @@ export default function SegmentBuilder({
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 6,
-                minWidth: 140,
+                minWidth: 0,
+                maxWidth: '100%',
                 padding: 8,
                 borderRadius: 10,
                 background: 'rgba(255,255,255,0.03)',

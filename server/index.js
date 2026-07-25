@@ -71,6 +71,24 @@ import {
   aggregatePosSales,
 } from './posUtils.js';
 import {
+  EQUIPMENT_ITEM_TYPES,
+  EQUIPMENT_ITEM_LABELS,
+  EQUIPMENT_TEMPLATE_NAME,
+  DEFAULT_EQUIPMENT_SETTINGS,
+  normalizeEquipmentSettings,
+  isKidStudent,
+  ensureStudentEquipment,
+  markEquipmentItemsPaid,
+  resetShoeRental,
+  markEquipmentGiven,
+  markEquipmentPendingFulfillment,
+  computeEquipmentTotal,
+  describeEquipmentItems,
+  equipmentGapFlags,
+  newCheckoutToken,
+  ensureEquipmentWhatsappTemplate,
+} from './equipmentService.js';
+import {
   ensureProductCategories,
   renameCategoryOnProducts,
   clampImage,
@@ -80,6 +98,7 @@ import {
   saveBusinessProfile,
   safeBusinessProfile,
 } from './businessProfile.js';
+import { applyBusinessBrand } from './whatsappBot.js';
 import {
   ensureAttendanceRows,
   israelDateStr,
@@ -106,6 +125,7 @@ import {
   createDraftTemplate,
   updateLocalTemplate,
   deleteLocalTemplate,
+  moveTemplate,
   submitTemplateToMeta,
   syncTemplatesFromMeta,
 } from './channels/templates.js';
@@ -559,15 +579,23 @@ app.post('/api/parents/:id/broadcast-lists', (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Get WhatsApp Settings (never expose full access token to clients)
-app.get('/api/whatsapp/settings', (req, res) => {
+app.get('/api/whatsapp/settings', async (req, res) => {
   const settings = db.getSettings();
+  let brandName = 'הרפתקאות';
+  try {
+    const profile = await getBusinessProfile();
+    brandName = profile.display_name || brandName;
+  } catch {
+    // keep fallback
+  }
+  const branded = applyBusinessBrand(settings, brandName);
   const {
     metaWaAccessToken,
     metaIgAccessToken,
     metaPageAccessToken,
     verifyToken,
     ...safe
-  } = settings;
+  } = branded;
   res.json({
     ...safe,
     hasAccessToken: !!(metaWaAccessToken && !metaWaAccessToken.includes('YOUR_')),
@@ -593,7 +621,7 @@ app.post('/api/whatsapp/bot-enabled', (req, res) => {
 });
 
 // Update WhatsApp Settings
-app.post('/api/whatsapp/settings', requireOwner, (req, res) => {
+app.post('/api/whatsapp/settings', requireOwner, async (req, res) => {
   const allowed = [
     'aiResponderEnabled',
     'aiActiveHoursEnabled',
@@ -672,6 +700,17 @@ app.post('/api/whatsapp/settings', requireOwner, (req, res) => {
       payload[numKey] = Number.isFinite(n) ? n : undefined;
       if (payload[numKey] === undefined) delete payload[numKey];
     }
+  }
+  let brandName = 'הרפתקאות';
+  try {
+    const profile = await getBusinessProfile();
+    brandName = profile.display_name || brandName;
+  } catch {
+    // keep fallback
+  }
+  const brandedPayload = applyBusinessBrand(payload, brandName);
+  for (const key of Object.keys(payload)) {
+    if (brandedPayload[key] !== undefined) payload[key] = brandedPayload[key];
   }
   const settings = db.saveSettings(payload);
   const {
@@ -804,9 +843,18 @@ app.put('/api/message-templates/:id', requireOwner, (req, res) => {
   }
 });
 
-app.delete('/api/message-templates/:id', requireOwner, (req, res) => {
+app.delete('/api/message-templates/:id', requireOwner, async (req, res) => {
   try {
-    res.json(deleteLocalTemplate(req.params.id));
+    res.json(await deleteLocalTemplate(req.params.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/message-templates/:id/move', requireOwner, (req, res) => {
+  try {
+    const direction = req.body?.direction === 'down' ? 'down' : 'up';
+    res.json(moveTemplate(req.params.id, direction));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -1566,6 +1614,549 @@ app.put('/api/students/:id', (req, res) => {
   const updated = db.update('students', id, req.body);
   if (!updated) return res.status(404).json({ error: 'Student not found' });
   res.json(updated);
+});
+
+// ─── Training equipment (kids kit) ───────────────────────────────────────────
+async function refreshStudentEquipmentCache() {
+  if (!supa.isEnabled()) return db.get('student_equipment') || [];
+  try {
+    const rows = await supa.getAll('student_equipment');
+    if (rows && typeof db.set === 'function') db.set('student_equipment', rows);
+    return rows || db.get('student_equipment') || [];
+  } catch (err) {
+    console.error('refresh student_equipment failed:', err.message);
+    return db.get('student_equipment') || [];
+  }
+}
+
+async function loadEquipmentSettings() {
+  let remote = null;
+  try {
+    remote = await supa.getAppSetting('equipment_settings');
+  } catch {
+    remote = null;
+  }
+  const local = db.getSettings?.()?.equipment_settings;
+  return normalizeEquipmentSettings(remote || local || DEFAULT_EQUIPMENT_SETTINGS);
+}
+
+async function saveEquipmentSettings(next) {
+  const normalized = normalizeEquipmentSettings(next);
+  const result = await supa.setAppSetting('equipment_settings', normalized);
+  if (result?.ok === false) {
+    throw new Error(result.error || 'שמירת הגדרות הציוד נכשלה');
+  }
+  return normalized;
+}
+
+function buildEquipmentPageUrl(req, token) {
+  if (!token) return '';
+  return `${frontendPublicBase(req)}/equipment/${encodeURIComponent(token)}`;
+}
+
+async function resolveEquipmentCheckout(token) {
+  const wanted = String(token || '').trim();
+  if (!wanted) return null;
+  let checkout = db.getOne('equipment_checkouts', wanted);
+  if (checkout) return checkout;
+  if (!supa.isEnabled()) return null;
+  try {
+    const rows = await supa.getAll('equipment_checkouts');
+    if (rows && typeof db.set === 'function') db.set('equipment_checkouts', rows);
+    return db.getOne('equipment_checkouts', wanted);
+  } catch {
+    return null;
+  }
+}
+
+app.get('/api/equipment-settings', async (_req, res) => {
+  try {
+    const settings = await loadEquipmentSettings();
+    res.json(settings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/equipment-settings', requireOwner, async (req, res) => {
+  try {
+    const settings = await saveEquipmentSettings(req.body || {});
+    res.json(settings);
+  } catch (err) {
+    console.error('PUT /api/equipment-settings failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/students/:id/equipment', async (req, res) => {
+  try {
+    await refreshStudentEquipmentCache();
+    let student = db.getOne('students', req.params.id);
+    if (!student && supa.isEnabled()) {
+      const remote = await supa.getAll('students');
+      if (remote && typeof db.set === 'function') db.set('students', remote);
+      student = db.getOne('students', req.params.id);
+    }
+    if (!student) return res.status(404).json({ error: 'המתאמן לא נמצא' });
+    if (!isKidStudent(student)) {
+      return res.json({ items: [], applicable: false });
+    }
+    const items = ensureStudentEquipment({ db, student, persist: persistCore });
+    const settings = await loadEquipmentSettings();
+    res.json({
+      applicable: true,
+      items,
+      settings,
+      labels: EQUIPMENT_ITEM_LABELS,
+      gaps: equipmentGapFlags(items),
+    });
+  } catch (err) {
+    console.error('GET student equipment error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/equipment', async (req, res) => {
+  try {
+    await refreshStudentEquipmentCache();
+    const settings = await loadEquipmentSettings();
+    let students = db.get('students') || [];
+    let parents = db.get('parents') || [];
+    let groups = db.get('groups') || [];
+    if (supa.isEnabled()) {
+      const [remoteStudents, remoteParents, remoteGroups] = await Promise.all([
+        supa.getAll('students'),
+        supa.getAll('parents'),
+        supa.getAll('groups'),
+      ]);
+      if (remoteStudents) {
+        students = remoteStudents;
+        if (typeof db.set === 'function') db.set('students', remoteStudents);
+      }
+      if (remoteParents) {
+        parents = remoteParents;
+        if (typeof db.set === 'function') db.set('parents', remoteParents);
+      }
+      if (remoteGroups) {
+        groups = remoteGroups;
+        if (typeof db.set === 'function') db.set('groups', remoteGroups);
+      }
+    }
+
+    const groupId = req.query.groupId ? String(req.query.groupId) : '';
+    const filter = String(req.query.filter || 'gaps'); // gaps | unpaid | awaiting | all
+    const kids = students.filter(
+      (s) => isKidStudent(s) && s.status !== 'archived' && (!groupId || s.groupId === groupId)
+    );
+
+    const parentById = new Map(parents.map((p) => [p.id, p]));
+    const groupById = new Map(groups.map((g) => [g.id, g]));
+    const rows = [];
+
+    for (const student of kids) {
+      const items = ensureStudentEquipment({ db, student, persist: persistCore });
+      const gaps = equipmentGapFlags(items);
+      if (filter === 'unpaid' && !gaps.hasUnpaid) continue;
+      if (filter === 'awaiting' && !gaps.hasAwaitingHandoff) continue;
+      if (filter === 'gaps' && !gaps.hasGap) continue;
+      const parent = parentById.get(student.parentId) || null;
+      const group = groupById.get(student.groupId) || null;
+      rows.push({
+        student_id: student.id,
+        student_name: student.name,
+        parent_id: parent?.id || student.parentId || null,
+        parent_name: parent?.name || '',
+        parent_phone: parent?.phone || '',
+        group_id: group?.id || student.groupId || null,
+        group_name: group?.name || '',
+        items,
+        gaps,
+      });
+    }
+
+    rows.sort((a, b) => String(a.student_name || '').localeCompare(String(b.student_name || ''), 'he'));
+    res.json({ rows, settings, labels: EQUIPMENT_ITEM_LABELS });
+  } catch (err) {
+    console.error('GET /api/equipment error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/equipment/:id', async (req, res) => {
+  try {
+    await refreshStudentEquipmentCache();
+    const row = db.getOne('student_equipment', req.params.id);
+    if (!row) return res.status(404).json({ error: 'פריט הציוד לא נמצא' });
+    const patch = {};
+    if (req.body?.shirt_size !== undefined) {
+      patch.shirt_size = String(req.body.shirt_size || '').trim() || null;
+    }
+    if (req.body?.payment_status === 'paid' || req.body?.payment_status === 'unpaid') {
+      patch.payment_status = req.body.payment_status;
+      if (req.body.payment_status === 'paid' && !row.paid_at) {
+        patch.paid_at = new Date().toISOString();
+      }
+      if (req.body.payment_status === 'unpaid') {
+        patch.paid_at = null;
+        patch.payment_id = null;
+        if (row.item_type === 'shoes') {
+          patch.rental_starts_at = null;
+          patch.rental_ends_at = null;
+        }
+      }
+      if (req.body.payment_status === 'paid' && row.item_type === 'shoes' && !row.rental_starts_at) {
+        const settings = await loadEquipmentSettings();
+        const when = patch.paid_at || new Date().toISOString();
+        patch.rental_starts_at = when;
+        const end = new Date(when);
+        end.setDate(end.getDate() + settings.rental_days);
+        patch.rental_ends_at = end.toISOString();
+      }
+    }
+    if (req.body?.fulfillment_status === 'given' || req.body?.fulfillment_status === 'pending') {
+      if (req.body.fulfillment_status === 'given') {
+        const result = markEquipmentGiven({
+          db,
+          persist: persistCore,
+          rowId: row.id,
+          givenBy: req.crmUser?.email || req.crmUser?.name || null,
+        });
+        if (!result.ok) return res.status(400).json({ error: result.error });
+        return res.json(result.row);
+      }
+      const result = markEquipmentPendingFulfillment({ db, persist: persistCore, rowId: row.id });
+      if (!result.ok) return res.status(400).json({ error: result.error });
+      return res.json(result.row);
+    }
+    if (!Object.keys(patch).length) return res.json(row);
+    const updated = db.update('student_equipment', row.id, patch);
+    if (updated) await persistCore('student_equipment', updated);
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/equipment/:id/mark-given', async (req, res) => {
+  try {
+    await refreshStudentEquipmentCache();
+    const result = markEquipmentGiven({
+      db,
+      persist: persistCore,
+      rowId: req.params.id,
+      givenBy: req.crmUser?.email || req.crmUser?.name || null,
+    });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json(result.row);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/equipment/:id/mark-pending', async (req, res) => {
+  try {
+    await refreshStudentEquipmentCache();
+    const result = markEquipmentPendingFulfillment({
+      db,
+      persist: persistCore,
+      rowId: req.params.id,
+    });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json(result.row);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/equipment/:id/reset-rental', async (req, res) => {
+  try {
+    await refreshStudentEquipmentCache();
+    const result = resetShoeRental({
+      db,
+      persist: persistCore,
+      rowId: req.params.id,
+      givenBy: req.crmUser?.email || req.crmUser?.name || null,
+    });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json(result.row);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/students/:id/equipment/payment-link', async (req, res) => {
+  try {
+    await refreshStudentEquipmentCache();
+    let student = db.getOne('students', req.params.id);
+    if (!student && supa.isEnabled()) {
+      const remote = await supa.getAll('students');
+      if (remote) {
+        if (typeof db.set === 'function') db.set('students', remote);
+        student = db.getOne('students', req.params.id);
+      }
+    }
+    if (!student) return res.status(404).json({ error: 'המתאמן לא נמצא' });
+    if (!isKidStudent(student)) {
+      return res.status(400).json({ error: 'ציוד לאימונים מיועד לילדים בלבד' });
+    }
+    const parent = db.getOne('parents', student.parentId);
+    if (!parent?.phone) {
+      return res.status(400).json({ error: 'חסר טלפון להורה — אי אפשר לשלוח קישור' });
+    }
+
+    ensureStudentEquipment({ db, student, persist: persistCore });
+    try {
+      ensureEquipmentWhatsappTemplate({
+        db,
+        persist: persistCore,
+        publicAppBase: frontendPublicBase(req),
+      });
+    } catch (tplErr) {
+      console.warn('equipment template ensure skipped:', tplErr.message);
+    }
+
+    const token = newCheckoutToken();
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 30);
+    const checkout = db.insert('equipment_checkouts', {
+      id: token,
+      student_id: student.id,
+      parent_id: parent.id,
+      expires_at: expiresAt.toISOString(),
+      created_by: req.crmUser?.email || null,
+      created_at: new Date().toISOString(),
+    });
+    if (!checkout?.id) {
+      return res.status(500).json({ error: 'שמירת קישור התשלום נכשלה' });
+    }
+    const persistResult = await persistCore('equipment_checkouts', checkout);
+    if (persistResult && persistResult.ok === false) {
+      console.warn('equipment_checkouts persist failed:', persistResult.error);
+    }
+
+    const publicPageUrl = buildEquipmentPageUrl(req, token);
+    // When staff tests from localhost, show a local link they can open in the same browser.
+    let pageUrl = publicPageUrl;
+    try {
+      const originHeader = String(req?.headers?.origin || '').trim().replace(/\/$/, '');
+      if (originHeader && isLocalAppOrigin(originHeader)) {
+        pageUrl = `${originHeader}/equipment/${encodeURIComponent(token)}`;
+      }
+    } catch {
+      pageUrl = publicPageUrl;
+    }
+    const sendWhatsapp = req.body?.sendWhatsapp !== false;
+    let whatsappSent = false;
+    let whatsappError = null;
+
+    if (sendWhatsapp) {
+      const phone = normalizePhone(parent.phone);
+      const templates = db.get('message_templates') || [];
+      const localTpl = templates.find(
+        (t) => (t.meta_name || t.name) === EQUIPMENT_TEMPLATE_NAME
+      );
+      const tplApproved =
+        localTpl &&
+        (String(localTpl.status).toUpperCase() === 'APPROVED' || localTpl.active_for_send);
+
+      // Prefer free-form with the full public URL — Meta template buttons can point at a wrong base.
+      const inWindow = canSendFreeform(parent, 'whatsapp');
+      if (inWindow) {
+        const msg =
+          `שלום ${parent.name || ''},\n` +
+          `לתשלום ציוד האימונים של ${student.name || 'הילד'}:\n\n` +
+          `${publicPageUrl}\n\n` +
+          `אפשר לבחור נעליים, חולצת חוג ושק מגנזיום.`;
+        try {
+          const waResult = await whatsappService.sendTextMessage(phone, msg, false, {
+            parentId: parent.id,
+            fallbackName: parent.name,
+          });
+          whatsappSent = !!waResult?.success;
+          if (!whatsappSent) whatsappError = waResult?.error || 'שליחת הודעה נכשלה';
+        } catch (waErr) {
+          whatsappError = waErr.message || 'שליחת הודעה נכשלה';
+        }
+      }
+
+      if (!whatsappSent && tplApproved) {
+        try {
+          const waResult = await whatsappService.sendTemplateMessage(
+            phone,
+            EQUIPMENT_TEMPLATE_NAME,
+            [parent.name || 'הורה', student.name || 'הילד'],
+            {
+              fallbackName: parent.name,
+              parentId: parent.id,
+              buttonUrlParam: token,
+            }
+          );
+          whatsappSent = !!waResult?.success;
+          if (!whatsappSent) whatsappError = waResult?.error || 'שליחת תבנית נכשלה';
+        } catch (waErr) {
+          whatsappError = waErr.message || 'שליחת תבנית נכשלה';
+        }
+      }
+
+      if (!whatsappSent && !whatsappError) {
+        whatsappError =
+          'התבנית עדיין לא מאושרת וחלון 24 השעות סגור — העתיקו את הקישור ידנית';
+      }
+    }
+
+    res.json({
+      success: true,
+      token,
+      pageUrl,
+      publicPageUrl,
+      whatsappSent,
+      whatsappError,
+    });
+  } catch (err) {
+    console.error('equipment payment-link error:', err.message);
+    res.status(500).json({ error: err.message || 'יצירת קישור הציוד נכשלה' });
+  }
+});
+
+app.get('/api/public/equipment/:token', publicFormRateLimit, async (req, res) => {
+  try {
+    const checkout = await resolveEquipmentCheckout(req.params.token);
+    if (!checkout) return res.status(404).json({ error: 'קישור התשלום לא נמצא' });
+    if (checkout.expires_at && new Date(checkout.expires_at).getTime() < Date.now()) {
+      return res.status(410).json({ error: 'פג תוקף הקישור — בקשו קישור חדש מהצוות' });
+    }
+
+    await refreshStudentEquipmentCache();
+    let student = db.getOne('students', checkout.student_id);
+    let parent = db.getOne('parents', checkout.parent_id);
+    if ((!student || !parent) && supa.isEnabled()) {
+      const [remoteStudents, remoteParents] = await Promise.all([
+        !student ? supa.getAll('students') : null,
+        !parent ? supa.getAll('parents') : null,
+      ]);
+      if (remoteStudents && typeof db.set === 'function') db.set('students', remoteStudents);
+      if (remoteParents && typeof db.set === 'function') db.set('parents', remoteParents);
+      student = student || db.getOne('students', checkout.student_id);
+      parent = parent || db.getOne('parents', checkout.parent_id);
+    }
+    if (!student || !isKidStudent(student)) {
+      return res.status(404).json({ error: 'המתאמן לא נמצא' });
+    }
+
+    const items = ensureStudentEquipment({ db, student, persist: persistCore });
+    const settings = await loadEquipmentSettings();
+    const unpaid = items.filter((i) => i.payment_status !== 'paid');
+    res.json({
+      student_name: student.name,
+      parent_name: parent?.name || '',
+      items,
+      unpaid_items: unpaid,
+      settings,
+      labels: EQUIPMENT_ITEM_LABELS,
+      all_paid: unpaid.length === 0,
+    });
+  } catch (err) {
+    console.error('public equipment lookup error:', err.message);
+    res.status(503).json({ error: err.message || 'טעינת דף הציוד נכשלה' });
+  }
+});
+
+app.post('/api/public/equipment/:token/pay', publicFormRateLimit, async (req, res) => {
+  try {
+    const checkout = await resolveEquipmentCheckout(req.params.token);
+    if (!checkout) return res.status(404).json({ error: 'קישור התשלום לא נמצא' });
+    if (checkout.expires_at && new Date(checkout.expires_at).getTime() < Date.now()) {
+      return res.status(410).json({ error: 'פג תוקף הקישור — בקשו קישור חדש מהצוות' });
+    }
+
+    await refreshStudentEquipmentCache();
+    let student = db.getOne('students', checkout.student_id);
+    let parent = db.getOne('parents', checkout.parent_id);
+    if ((!student || !parent) && supa.isEnabled()) {
+      const [remoteStudents, remoteParents] = await Promise.all([
+        !student ? supa.getAll('students') : null,
+        !parent ? supa.getAll('parents') : null,
+      ]);
+      if (remoteStudents && typeof db.set === 'function') db.set('students', remoteStudents);
+      if (remoteParents && typeof db.set === 'function') db.set('parents', remoteParents);
+      student = student || db.getOne('students', checkout.student_id);
+      parent = parent || db.getOne('parents', checkout.parent_id);
+    }
+    if (!student || !parent) return res.status(404).json({ error: 'הלקוח לא נמצא' });
+
+    const items = ensureStudentEquipment({ db, student, persist: persistCore });
+    const settings = await loadEquipmentSettings();
+    const unpaidTypes = new Set(
+      items.filter((i) => i.payment_status !== 'paid').map((i) => i.item_type)
+    );
+
+    let selected = Array.isArray(req.body?.itemTypes)
+      ? req.body.itemTypes.map((t) => String(t || '').trim()).filter((t) => EQUIPMENT_ITEM_TYPES.includes(t))
+      : [];
+    selected = selected.filter((t) => unpaidTypes.has(t));
+    if (!selected.length) {
+      return res.status(400).json({ error: 'בחרו לפחות פריט אחד לתשלום' });
+    }
+
+    const shirtSize = String(req.body?.shirtSize || '').trim();
+    if (selected.includes('shirt')) {
+      if (!shirtSize) return res.status(400).json({ error: 'יש לבחור מידת חולצה' });
+      if (!settings.shirt_sizes.includes(shirtSize)) {
+        return res.status(400).json({ error: 'מידת החולצה אינה תקפה' });
+      }
+    }
+
+    const entered = computeEquipmentTotal(settings, selected);
+    if (entered <= 0) return res.status(400).json({ error: 'סכום התשלום אינו תקף — פנו לצוות' });
+    const includesVat = normalizePriceIncludesVat(settings.price_includes_vat, true);
+    const amount = chargeAmount(entered, includesVat);
+    const description = describeEquipmentItems(selected, shirtSize || null);
+
+    const payment = db.insert('payments', {
+      parent_id: parent.id,
+      student_id: student.id,
+      amount,
+      price_includes_vat: includesVat,
+      description,
+      status: 'pending',
+      payment_url: null,
+      paid_at: null,
+      equipment_payment: true,
+      equipment_checkout_token: checkout.id,
+      equipment_item_types: selected,
+      equipment_shirt_size: selected.includes('shirt') ? shirtSize : null,
+      equipment_rental_days: settings.rental_days,
+      updated_at: new Date().toISOString(),
+    });
+
+    const paymentUrl = await icount.buildPaymentUrl({
+      amount,
+      description,
+      name: parent.name,
+      phone: normalizePhone(parent.phone),
+      email: parent.email,
+      paymentId: payment.id,
+      ipnUrl: icount.buildIpnUrl({ paymentId: payment.id }),
+      successUrl: `${frontendPublicBase(req)}/equipment/${encodeURIComponent(checkout.id)}?paid=1`,
+    });
+
+    const updatedPayment = db.update('payments', payment.id, {
+      payment_url: paymentUrl,
+      updated_at: new Date().toISOString(),
+    }) || payment;
+    await persistCore('payments', updatedPayment);
+
+    res.json({
+      success: true,
+      paymentUrl,
+      amount,
+      description,
+      itemTypes: selected,
+    });
+  } catch (err) {
+    console.error('public equipment pay error:', err.message);
+    res.status(503).json({ error: err.message || 'יצירת התשלום נכשלה' });
+  }
 });
 
 // Create/Update Group (upsert by id so re-seeds don't duplicate local cache)
@@ -3732,6 +4323,23 @@ app.post('/api/icount/webhook', async (req, res) => {
           activityId: payment.activity_id,
           paymentId: payment.id,
           paidAt: updated?.paid_at,
+        });
+      }
+
+      if (payment.equipment_payment && payment.student_id) {
+        const itemTypes = Array.isArray(payment.equipment_item_types)
+          ? payment.equipment_item_types
+          : [];
+        const settings = await loadEquipmentSettings();
+        markEquipmentItemsPaid({
+          db,
+          persist: persistCore,
+          studentId: payment.student_id,
+          itemTypes,
+          shirtSize: payment.equipment_shirt_size || null,
+          paymentId: payment.id,
+          rentalDays: payment.equipment_rental_days || settings.rental_days,
+          paidAt: updated?.paid_at || new Date().toISOString(),
         });
       }
 
@@ -6153,6 +6761,15 @@ async function runDailyAttendanceEnsureIfDue() {
 
 // Start Server (after loading CRM-core data from Supabase)
 initDb().finally(() => {
+  try {
+    ensureEquipmentWhatsappTemplate({
+      db,
+      persist: persistCore,
+      publicAppBase: process.env.FRONTEND_URL || process.env.PUBLIC_APP_URL || '',
+    });
+  } catch (err) {
+    console.warn('equipment template seed skipped:', err.message);
+  }
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   try {

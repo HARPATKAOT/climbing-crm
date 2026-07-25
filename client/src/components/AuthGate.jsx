@@ -9,6 +9,7 @@ import { isPublicPath } from '../publicPaths.js';
 // They render here only as defense in depth when a public URL hits the catch-all.
 const PublicActivityRegistration = lazy(() => import('./PublicActivityRegistration.jsx'));
 const PublicHostPayment          = lazy(() => import('./PublicHostPayment.jsx'));
+const PublicEquipmentPayment     = lazy(() => import('./PublicEquipmentPayment.jsx'));
 const PublicHealthForm           = lazy(() => import('./PublicHealthForm.jsx'));
 const PublicOnboardingForm       = lazy(() => import('./PublicOnboardingForm.jsx'));
 const LeadIntakeForm             = lazy(() => import('./LeadIntakeForm.jsx'));
@@ -292,6 +293,7 @@ export default function AuthGate({ children }) {
     else if (path === '/privacy') publicPage = <PrivacyPolicy />;
     else if (path.startsWith('/event/')) publicPage = <PublicActivityRegistration />;
     else if (path.startsWith('/event-host/')) publicPage = <PublicHostPayment />;
+    else if (path.startsWith('/equipment/')) publicPage = <PublicEquipmentPayment />;
     if (!publicPage) return null;
     return <Suspense fallback={publicFallback}>{publicPage}</Suspense>;
   }

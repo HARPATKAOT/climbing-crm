@@ -11,6 +11,7 @@ test('public API contains forms and signed webhook entrypoints only', () => {
   assert.equal(isPublicApiPath('/api/public/health-declarations'), true);
   assert.equal(isPublicApiPath('/api/public/activities/abc123'), true);
   assert.equal(isPublicApiPath('/api/public/host-payments/private-token'), true);
+  assert.equal(isPublicApiPath('/api/public/equipment/demo-token'), true);
   assert.equal(isPublicApiPath('/api/whatsapp/webhook'), true);
   assert.equal(isPublicApiPath('/api/attendance/ensure-today'), true);
   assert.equal(isPublicApiPath('/api/automations/run-scheduled'), true);
@@ -54,7 +55,10 @@ test('staff can operate leads and attendance but cannot access billing or settin
   assert.equal(isStaffRequestAllowed('PUT', '/api/safety/check-types/abc'), true);
   assert.equal(isStaffRequestAllowed('DELETE', '/api/safety/check-types/abc'), true);
   assert.equal(isStaffRequestAllowed('POST', '/api/safety/incidents'), true);
-  assert.equal(isStaffRequestAllowed('GET', '/api/level-tests'), true);
+  assert.equal(isStaffRequestAllowed('GET', '/api/students/abc/equipment'), true);
+  assert.equal(isStaffRequestAllowed('POST', '/api/students/abc/equipment/payment-link'), true);
+  assert.equal(isStaffRequestAllowed('PUT', '/api/equipment/item1'), true);
+  assert.equal(isStaffRequestAllowed('POST', '/api/equipment/item1/mark-given'), true);
 });
 
 test('roles resolve from metadata and configured email lists', () => {
