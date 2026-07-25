@@ -1,6 +1,7 @@
 import { db, persistCore } from './db.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { israelClockParts, isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
+import { recordMessage } from './channels/messageStore.js';
 
 export const LEAD_STATUSES = new Set(['lead_new', 'health_signed', 'waitlist']);
 export const CUSTOMER_STATUSES = new Set([
@@ -218,7 +219,7 @@ export async function markOutsideHoursSent(phone, now = new Date()) {
 }
 
 export function logBotControl(phone, message, meta = {}) {
-  return db.insert('whatsapp_logs', {
+  return recordMessage({
     phone: normalizeWaPhone(phone) || phone,
     channel: 'whatsapp',
     direction: 'outbound',

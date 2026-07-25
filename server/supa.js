@@ -28,6 +28,12 @@ if (isConfigured) {
     auth: { persistSession: false },
   });
   console.log('✅ Supabase data layer connected.');
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY && !process.env.SUPABASE_SERVICE_KEY) {
+    console.warn(
+      '⚠️ Running on SUPABASE_KEY instead of SUPABASE_SERVICE_ROLE_KEY — ' +
+      'row level security can silently reject writes. Set SUPABASE_SERVICE_ROLE_KEY.'
+    );
+  }
 } else {
   console.warn('⚠️ Supabase not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing). Durable data will use db.json only.');
 }
@@ -407,19 +413,43 @@ const mapperFor = (table) => mappers[table] || identityMapper;
 export const supa = {
   isEnabled: () => !!client,
 
+  /** Cheap round trip to the durable store, for the health probe. */
+  async ping() {
+    if (!client) return { ok: false, error: 'Supabase not configured' };
+    const startedAt = Date.now();
+    const { error } = await client
+      .from('parents')
+      .select('id', { count: 'exact', head: true });
+    if (error) return { ok: false, error: error.message, ms: Date.now() - startedAt };
+    return { ok: true, ms: Date.now() - startedAt };
+  },
+
+  /** True when the server holds a service role key rather than a public key. */
+  hasServiceRoleKey: () =>
+    !!(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY),
+
   // Load every row of a table, mapped to the app's JS shape.
   async getAll(table) {
     if (!client) return null;
     if (OPERATIONAL_TABLES.includes(table)) {
-      const { data, error } = await client
-        .from('kv_collections')
-        .select('data')
-        .eq('collection', table);
-      if (error) {
-        console.error(`Supabase getAll(${table}) failed:`, error.message);
-        return null;
+      // Paginate — PostgREST caps a single response (often 1000 rows).
+      const pageSize = 1000;
+      const all = [];
+      for (let from = 0; ; from += pageSize) {
+        const { data, error } = await client
+          .from('kv_collections')
+          .select('data')
+          .eq('collection', table)
+          .range(from, from + pageSize - 1);
+        if (error) {
+          console.error(`Supabase getAll(${table}) failed:`, error.message);
+          return null;
+        }
+        const chunk = (data || []).map((row) => row.data).filter(Boolean);
+        all.push(...chunk);
+        if (chunk.length < pageSize) break;
       }
-      return (data || []).map((row) => row.data).filter(Boolean);
+      return all;
     }
     const { data, error } = await client.from(table).select('*');
     if (error) {
@@ -428,6 +458,62 @@ export const supa = {
     }
     const m = mapperFor(table);
     return (data || []).map(m.fromRow);
+  },
+
+  /** Phone forms the same person may be stored under (972… / 050… / raw). */
+  phoneVariants(phone) {
+    if (!phone) return [];
+    let digits = String(phone).replace(/[^\d]/g, '');
+    if (digits.startsWith('0') && digits.length >= 9) digits = `972${digits.slice(1)}`;
+    if (digits.startsWith('9720')) digits = `972${digits.slice(4)}`;
+    const localForm = digits.startsWith('972') && digits.length >= 12
+      ? `0${digits.slice(3)}`
+      : digits;
+    return [...new Set([digits, localForm, String(phone)].filter(Boolean))];
+  },
+
+  /** Durable conversation rows for one customer, by card id and by phone. */
+  async getMessagesForParent({ parentId, phone } = {}) {
+    if (!client) return null;
+    const filters = [];
+    if (parentId) filters.push(`parent_id.eq.${parentId}`);
+    const variants = supa.phoneVariants(phone);
+    if (variants.length) filters.push(`phone.in.(${variants.join(',')})`);
+    if (!filters.length) return [];
+
+    const { data, error } = await client
+      .from('messages')
+      .select('*')
+      .or(filters.join(','))
+      .order('created_at', { ascending: true });
+    if (error) {
+      console.error('Supabase getMessagesForParent failed:', error.message);
+      return null;
+    }
+    return data || [];
+  },
+
+  /** Pull durable WhatsApp logs for one phone (handles 050… / 972… forms). */
+  async getWhatsappLogsForPhone(phone) {
+    if (!client || !phone) return null;
+    const variants = supa.phoneVariants(phone);
+
+    const byId = new Map();
+    for (const variant of variants) {
+      const { data, error } = await client
+        .from('kv_collections')
+        .select('data')
+        .eq('collection', 'whatsapp_logs')
+        .contains('data', { phone: variant });
+      if (error) {
+        console.error('Supabase getWhatsappLogsForPhone failed:', error.message);
+        return null;
+      }
+      for (const row of data || []) {
+        if (row?.data?.id) byId.set(String(row.data.id), row.data);
+      }
+    }
+    return [...byId.values()];
   },
 
   // Attendance filtered at the database level (avoids pulling the whole table).

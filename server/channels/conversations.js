@@ -11,6 +11,8 @@ import {
 import { uploadWhatsAppMedia, getMessengerCredentials, META_GRAPH_VERSION } from './media.js';
 import { whatsappService, instagramService } from '../whatsapp.js';
 import { mergeBotSettings, pauseBotForPhone } from '../whatsappBot.js';
+import { supa } from '../supa.js';
+import { recordMessage, setMessageStatusByMetaId, toLogRow } from './messageStore.js';
 
 function ageFromBirthDate(birthDate) {
   if (!birthDate) return null;
@@ -99,44 +101,7 @@ export function touchInboundForPhone(phone, channel = 'whatsapp', at = new Date(
 }
 
 function logMessage(record) {
-  const created = db.insert('whatsapp_logs', {
-    phone: record.phone || record.recipient_id || '',
-    channel: record.channel || 'whatsapp',
-    direction: record.direction || 'outbound',
-    message: record.message || '',
-    status: record.status || 'sent',
-    is_ai: !!record.is_ai,
-    source: record.source || 'crm',
-    meta_message_id: record.meta_message_id || null,
-    template_id: record.template_name || record.template_id || null,
-    message_type: record.media_type || record.message_type || 'text',
-    media_url: record.media_url || null,
-    parent_id: record.parent_id || null,
-  });
-
-  try {
-    db.insert('messages', {
-      id: `msg_${created.id}`,
-      parent_id: record.parent_id || null,
-      channel: record.channel || 'whatsapp',
-      direction: record.direction || 'outbound',
-      message: record.message || '',
-      media_url: record.media_url || null,
-      media_type: record.media_type || null,
-      template_name: record.template_name || null,
-      status: record.status || 'sent',
-      source: record.source || 'crm',
-      is_ai: !!record.is_ai,
-      meta_message_id: record.meta_message_id || null,
-      phone: record.phone || null,
-      recipient_id: record.recipient_id || null,
-      created_at: created.created_at,
-    });
-  } catch (err) {
-    console.warn('messages insert failed:', err.message);
-  }
-
-  return created;
+  return recordMessage(record);
 }
 
 export async function markInboundForParent(parent, channel, meta = {}) {
@@ -168,23 +133,32 @@ export async function markCommunicationHandled(parentId, at = new Date().toISOSt
 }
 
 export function updateMessageStatusByMetaId(metaMessageId, status) {
-  if (!metaMessageId) return;
-  const logs = db.get('whatsapp_logs') || [];
-  const log = logs.find((l) => l.meta_message_id === metaMessageId);
-  if (log) db.update('whatsapp_logs', log.id, { status });
-  const messages = db.get('messages') || [];
-  const msg = messages.find((m) => m.meta_message_id === metaMessageId);
-  if (msg) db.update('messages', msg.id, { status });
+  setMessageStatusByMetaId(metaMessageId, status);
 }
 
 function mergeThread(parent) {
   if (!parent) return [];
   const logs = (db.get('whatsapp_logs') || []).filter((l) => {
     if (l.parent_id && l.parent_id === parent.id) return true;
+    // Direct phone match — don't drop inbound rows that never got parent_id.
+    if (
+      parent.phone
+      && phonesMatch(l.phone, parent.phone)
+      && (l.channel || 'whatsapp') === 'whatsapp'
+    ) {
+      return true;
+    }
     const owner = findParentForLog(l);
     return owner?.id === parent.id;
   });
-  const msgs = (db.get('messages') || []).filter((m) => m.parent_id === parent.id);
+  const msgs = (db.get('messages') || []).filter((m) => {
+    if (m.parent_id === parent.id) return true;
+    return !!(
+      parent.phone
+      && phonesMatch(m.phone, parent.phone)
+      && (m.channel || 'whatsapp') === 'whatsapp'
+    );
+  });
 
   const byKey = new Map();
   for (const item of [...logs, ...msgs]) {
@@ -194,6 +168,64 @@ function mergeThread(parent) {
   return [...byKey.values()].sort(
     (a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0)
   );
+}
+
+function latestThreadInboundAt(messages, channel = 'whatsapp') {
+  let latest = 0;
+  for (const m of messages || []) {
+    if (m.direction !== 'inbound') continue;
+    if ((m.channel || 'whatsapp') !== channel) continue;
+    const ts = Date.parse(m.created_at || m.timestamp || '');
+    if (Number.isFinite(ts) && ts > latest) latest = ts;
+  }
+  return latest;
+}
+
+// Clock skew between the webhook timestamp and the card update.
+const INBOUND_MATCH_TOLERANCE_MS = 2000;
+
+/**
+ * True when the customer card points at an inbound message the cached thread is
+ * missing — the exact state that puts a customer in the queue with an empty chat.
+ */
+export function threadIsBehindCard(parent, thread, channel = 'whatsapp') {
+  const cardInbound = Date.parse(parent?.[`last_inbound_${channel}`] || '');
+  if (!Number.isFinite(cardInbound)) return false;
+  const latestInThread = latestThreadInboundAt(thread, channel);
+  if (!latestInThread) return true;
+  return cardInbound > latestInThread + INBOUND_MATCH_TOLERANCE_MS;
+}
+
+/**
+ * Parent.last_inbound_* is durable; the local thread cache can lag after a cold
+ * start or a missed write. When the card points at a newer inbound than the
+ * cached thread, pull the conversation back from the durable store.
+ */
+async function reconcileThreadFromDurable(parent) {
+  if (!parent?.id || !supa.isEnabled()) return false;
+  if (!threadIsBehindCard(parent, mergeThread(parent), 'whatsapp')) return false;
+
+  let added = 0;
+
+  const remoteMessages = await supa.getMessagesForParent({
+    parentId: parent.id,
+    phone: parent.phone,
+  });
+  if (remoteMessages?.length) {
+    added += db.mergeLocal('messages', remoteMessages);
+    added += db.mergeLocal('whatsapp_logs', remoteMessages.map(toLogRow));
+  }
+
+  // Legacy history still living in kv_collections (pre-migration rows).
+  if (parent.phone) {
+    const remoteLogs = await supa.getWhatsappLogsForPhone(parent.phone);
+    if (remoteLogs?.length) added += db.mergeLocal('whatsapp_logs', remoteLogs);
+  }
+
+  if (added > 0) {
+    console.log(`🩹 Reconciled ${added} conversation row(s) for card ${parent.id}`);
+  }
+  return added > 0;
 }
 
 function availableChannels(parent) {
@@ -218,6 +250,12 @@ function pickDefaultChannel(parent, windows) {
 export async function getConversation(parentId) {
   const parentRaw = findParentById(parentId);
   if (!parentRaw) return { error: 'הלקוח לא נמצא', status: 404 };
+
+  try {
+    await reconcileThreadFromDurable(parentRaw);
+  } catch (err) {
+    console.warn('conversation log reconcile failed:', err.message);
+  }
 
   const students = (db.get('students') || []).filter((s) => s.parentId === parentRaw.id);
   const messages = mergeThread(parentRaw);

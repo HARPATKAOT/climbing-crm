@@ -18,10 +18,19 @@ test('parentPhonesMatch treats 050 and 972 as the same person', () => {
 });
 
 test('local operational records migrate when the durable store is empty', () => {
-  const local = [{ id: 'log-1', message: 'hello' }];
-  const result = planDurableHydration('whatsapp_logs', [], local);
+  const local = [{ id: 'punch-1', pass_id: 'cp1' }];
+  const result = planDurableHydration('pass_punches', [], local);
   assert.equal(result.mode, 'migrate');
   assert.deepEqual(result.rows, local);
+});
+
+test('the conversation mirror is never pushed back into the durable store', () => {
+  const remote = [{ id: 'log-remote', message: 'from store' }];
+  const local = [{ id: 'log-mirror', message: 'rebuilt from messages' }];
+  const result = planDurableHydration('whatsapp_logs', remote, local);
+  assert.equal(result.mode, 'remote');
+  assert.deepEqual(result.rows, remote);
+  assert.equal(result.toMigrate, undefined);
 });
 
 test('remote operational record wins when the same id exists locally', () => {

@@ -8,6 +8,13 @@ const DB_FILE = path.join(process.cwd(), 'db.json');
 /** Tables that may exist locally (e.g. after Meta sync) before durable write completes. */
 const LOCAL_MIGRATE_IF_REMOTE_EMPTY = new Set(['message_templates', 'saved_replies']);
 
+/**
+ * Local mirrors of a durable table. They are rebuilt from their source table on
+ * boot, so local-only rows must never be pushed back into the durable store.
+ * `whatsapp_logs` mirrors `messages`, which is the source of truth for a conversation.
+ */
+const LOCAL_MIRROR_TABLES = new Set(['whatsapp_logs']);
+
 /** Normalize Israeli mobile numbers to 972… so 050… and 97250… match. */
 export function normalizeParentPhone(phone) {
   let digits = String(phone || '').replace(/[^\d]/g, '');
@@ -64,6 +71,8 @@ function sameChildName(a, b) {
 
 export function planDurableHydration(table, remoteRows, localRows = []) {
   if (remoteRows === null) return { mode: 'error', rows: localRows };
+  // A mirror is rebuilt from its source table — keep the durable copy as-is.
+  if (LOCAL_MIRROR_TABLES.has(table)) return { mode: 'remote', rows: remoteRows };
   if (OPERATIONAL_TABLES.includes(table)) {
     const remoteIds = new Set(remoteRows.map((record) => String(record.id ?? record.key)));
     const missingLocal = localRows.filter(
@@ -700,6 +709,26 @@ export const db = {
     writeDb(data);
     syncUpsert(table, newRecord);
     return newRecord;
+  },
+
+  /** Merge remote records into the in-memory cache by id (no re-upload). */
+  mergeLocal: (table, records = []) => {
+    if (!records.length) return 0;
+    const data = readDb();
+    if (!data[table]) data[table] = [];
+    const byId = new Map(data[table].map((row) => [String(row.id ?? row.key), row]));
+    let added = 0;
+    for (const record of records) {
+      const id = record?.id ?? record?.key;
+      if (id === undefined || id === null) continue;
+      const key = String(id);
+      if (byId.has(key)) continue;
+      byId.set(key, record);
+      data[table].push(record);
+      added += 1;
+    }
+    if (added) writeDb(data);
+    return added;
   },
 
   update: (table, id, updates) => {

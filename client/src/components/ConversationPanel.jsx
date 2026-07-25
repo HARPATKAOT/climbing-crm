@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Send, MessageCircle, Image as ImageIcon, FileText, Bookmark, RefreshCw, CheckCircle2 } from 'lucide-react';
 import { normalizeTemplateVariables, buildPrefillValues } from './templateVariables.js';
-import { isAwaitingHandling } from './communicationQueue.js';
+import { isAwaitingHandling, threadIsBehindCard } from './communicationQueue.js';
 
 const CHANNEL_LABELS = {
   whatsapp: 'וואטסאפ',
@@ -54,9 +54,9 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   const fileRef = useRef(null);
   const wasBlockedRef = useRef(false);
 
-  const load = async () => {
+  const load = async ({ quiet = false } = {}) => {
     if (!parent?.id) return;
-    setLoading(true);
+    if (!quiet) setLoading(true);
     setError('');
     try {
       const [convRes, tplRes, srRes] = await Promise.all([
@@ -85,12 +85,27 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     } catch (err) {
       setError(err.message);
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   };
 
   useEffect(() => {
     load();
+    // Reload when a newer inbound lands on the parent card (waiting-queue poll).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    parent?.id,
+    parent?.last_inbound_whatsapp,
+    parent?.last_inbound_instagram,
+    parent?.last_inbound_messenger,
+  ]);
+
+  useEffect(() => {
+    if (!parent?.id) return undefined;
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') load({ quiet: true });
+    }, 15000);
+    return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parent?.id]);
 
@@ -203,6 +218,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   const messages = data?.messages || [];
   const channels = data?.channels || {};
   const awaitingHandling = isAwaitingHandling(data?.parent || parent);
+  const missingNewMessage = !!data && threadIsBehindCard(data?.parent || parent, messages);
 
   return (
     <div
@@ -239,7 +255,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
             <CheckCircle2 size={12} />
             {markingHandled ? 'מסיים...' : awaitingHandling ? 'סיום טיפול' : 'הטיפול הסתיים'}
           </button>
-          <button type="button" className="btn btn-ghost btn-xs" onClick={load} disabled={loading}>
+          <button type="button" className="btn btn-ghost btn-xs" onClick={() => load()} disabled={loading}>
             <RefreshCw size={12} /> רענון
           </button>
         </div>
@@ -260,6 +276,28 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
           borderRadius: fillHeight ? 0 : undefined,
         }}
       >
+        {missingNewMessage && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              padding: '8px 12px',
+              borderBottom: '1px solid var(--border)',
+              background: 'rgba(250,204,21,0.12)',
+              color: '#FACC15',
+              fontSize: 12,
+              flexShrink: 0,
+            }}
+          >
+            <span>יש הודעה חדשה שעוד לא נטענה לשיחה</span>
+            <button type="button" className="btn btn-ghost btn-xs" onClick={() => load()} disabled={loading}>
+              <RefreshCw size={12} /> {loading ? 'טוען' : 'טעינה מחדש'}
+            </button>
+          </div>
+        )}
+
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '10px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
           {['whatsapp', 'instagram', 'messenger'].map((ch) => (
             <WindowBadge key={ch} windows={data?.windows} channel={ch} />

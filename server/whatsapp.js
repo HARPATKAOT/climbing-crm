@@ -1,6 +1,7 @@
 import { db, persistCore, syncBotFlagFromRemote } from './db.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { buildTemplateParameters } from './channels/templates.js';
+import { recordMessage, recordMessageDurable, findMessageByMetaId } from './channels/messageStore.js';
 import { automationsService } from './automations.js';
 import { israelClockParts, isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 import {
@@ -377,7 +378,7 @@ export const whatsappService = {
         text: { body }
       });
 
-      db.insert('whatsapp_logs', {
+      recordMessage({
         phone: formatWaPhone(phone) || phone,
         channel: 'whatsapp',
         direction: 'outbound',
@@ -386,11 +387,12 @@ export const whatsappService = {
         is_ai: isAi,
         source: options.source || (isAi ? 'ai' : 'crm'),
         meta_message_id: result.messageId || null,
+        parent_id: options.parentId || null,
       });
 
       return { success: true, text: body, messageId: result.messageId };
     } catch (error) {
-      db.insert('whatsapp_logs', {
+      recordMessage({
         phone: formatWaPhone(phone) || phone,
         channel: 'whatsapp',
         direction: 'outbound',
@@ -398,6 +400,7 @@ export const whatsappService = {
         status: 'failed',
         is_ai: isAi,
         source: options.source || (isAi ? 'ai' : 'crm'),
+        parent_id: options.parentId || null,
       });
       return { success: false, error: error.message };
     }
@@ -408,7 +411,7 @@ export const whatsappService = {
     try {
       const result = await callMetaWhatsAppAPI(phone, payload);
       const preview = mergeBotSettings(settings).aiGreetingMenu || DEFAULT_BOT_SETTINGS.aiGreetingMenu;
-      db.insert('whatsapp_logs', {
+      recordMessage({
         phone: formatWaPhone(phone) || phone,
         channel: 'whatsapp',
         direction: 'outbound',
@@ -500,7 +503,7 @@ export const whatsappService = {
       else if (templateName === 't3') logMessage = `שלום, תזכורת: שיעור שלכם מחר. נתראה!`;
       else if (templateName === 't4') logMessage = `שלום, לסיום תהליך הרשמה בבקשה שלמו את אימון ההכירות בקליק: https://app.icount.co.il/m/9a79f`;
 
-      db.insert('whatsapp_logs', {
+      recordMessage({
         phone: formatWaPhone(phone) || phone,
         channel: 'whatsapp',
         direction: 'outbound',
@@ -514,7 +517,7 @@ export const whatsappService = {
 
       return { success: true, message: logMessage, messageId: result.messageId || null };
     } catch (error) {
-      db.insert('whatsapp_logs', {
+      recordMessage({
         phone: formatWaPhone(phone) || phone,
         channel: 'whatsapp',
         direction: 'outbound',
@@ -538,7 +541,7 @@ export const whatsappService = {
         },
       });
       const logMessage = caption ? `📷 ${caption}` : '📷 תמונה';
-      db.insert('whatsapp_logs', {
+      recordMessage({
         phone: formatWaPhone(phone) || phone,
         channel: 'whatsapp',
         direction: 'outbound',
@@ -603,7 +606,7 @@ export const whatsappService = {
   async sendBotReply(phone, replyText, { isSimulator = false, source = 'ai' } = {}) {
     if (!replyText) return { success: false };
     if (isSimulator) {
-      db.insert('whatsapp_logs', {
+      recordMessage({
         phone: formatWaPhone(phone) || phone,
         channel: 'whatsapp',
         direction: 'outbound',
@@ -622,14 +625,9 @@ export const whatsappService = {
     if (!isSimulator) await syncBotFlagFromRemote();
     const normalizedPhone = formatWaPhone(phone) || phone;
 
-    const existingLogs = db.get('whatsapp_logs') || [];
-    if (
-      meta.messageId
-      && existingLogs.some((log) => (
-        log.direction === 'inbound'
-        && log.meta_message_id === meta.messageId
-      ))
-    ) {
+    // Already handled this exact Meta message (webhook retry) — never process twice.
+    const seen = findMessageByMetaId(meta.messageId);
+    if (seen?.durable) {
       return {
         parent: findPrimaryParent(normalizedPhone),
         student: null,
@@ -639,8 +637,18 @@ export const whatsappService = {
       };
     }
 
-    // 1. Log inbound message
-    db.insert('whatsapp_logs', {
+    // 1. Upsert lead / client details first, so the message is filed on a real card
+    const { parent: createdParent, student, isNew } = await db.createLeadFromWhatsApp(normalizedPhone, text);
+    let parent = findPrimaryParent(normalizedPhone) || createdParent;
+
+    const rawTimestamp = Number(meta.timestamp);
+    const inboundAt = Number.isFinite(rawTimestamp) && rawTimestamp > 0
+      ? new Date(rawTimestamp > 1e12 ? rawTimestamp : rawTimestamp * 1000).toISOString()
+      : new Date().toISOString();
+
+    // 2. Store the message durably BEFORE the handling queue learns about it —
+    //    a customer must never sit in the queue with an invisible conversation.
+    const storedInbound = await recordMessageDurable({
       phone: normalizedPhone,
       channel: 'whatsapp',
       direction: 'inbound',
@@ -649,16 +657,26 @@ export const whatsappService = {
       source: 'customer',
       meta_message_id: meta.messageId || null,
       message_type: meta.type || 'text',
+      parent_id: parent?.id || null,
+      created_at: inboundAt,
     });
 
-    // 2. Upsert lead / client details in DB (source=whatsapp, status=lead_new)
-    const { parent: createdParent, student, isNew } = await db.createLeadFromWhatsApp(normalizedPhone, text);
+    if (!storedInbound.ok) {
+      console.error(
+        `❌ Inbound WhatsApp message from ${normalizedPhone} was not stored durably — ` +
+        'leaving it out of the handling queue so it can be retried'
+      );
+      return {
+        parent,
+        student,
+        isNew,
+        replied: false,
+        durableError: storedInbound.error || 'durable write failed',
+        skippedReason: 'not_persisted',
+      };
+    }
 
-    // Open / refresh 24h window on EVERY parent row that shares this phone
-    const rawTimestamp = Number(meta.timestamp);
-    const inboundAt = Number.isFinite(rawTimestamp) && rawTimestamp > 0
-      ? new Date(rawTimestamp > 1e12 ? rawTimestamp : rawTimestamp * 1000).toISOString()
-      : new Date().toISOString();
+    // 3. Open / refresh the 24h window on EVERY parent row that shares this phone
     const phoneMatches = (db.get('parents') || []).filter((p) => phonesMatch(p.phone, normalizedPhone));
     for (const match of phoneMatches) {
       const updatedParent = db.update('parents', match.id, {
@@ -668,11 +686,17 @@ export const whatsappService = {
       if (updatedParent) await persistCore('parents', updatedParent);
     }
 
-    let parent = findPrimaryParent(normalizedPhone) || createdParent;
+    parent = findPrimaryParent(normalizedPhone) || parent;
+
+    // A recovered retry is now durable and queued — but it was already answered.
+    if (storedInbound.duplicate) {
+      return { parent, student, isNew: false, replied: false, skippedReason: 'duplicate' };
+    }
+
     let students = studentsForParent(parent);
     const settings = mergeBotSettings(db.getSettings());
 
-    // 3. Welcome template + automations only while the bot is enabled
+    // 4. Welcome template + automations only while the bot is enabled
     if (isBotEnabled(settings) && isNew) {
       try {
         await whatsappService.sendTemplateMessage(normalizedPhone, 't1', [parent.name || '']);
@@ -697,7 +721,7 @@ export const whatsappService = {
       return { parent, student, isNew, replied: false, skippedReason: 'empty' };
     }
 
-    // 4. Bot decision gates
+    // 5. Bot decision gates
     const gate = decideBotGate(settings, parent, students, text, { isSimulator });
 
     if (gate.action === 'reactivate') {
@@ -803,12 +827,17 @@ export const whatsappService = {
     const normalizedPhone = formatWaPhone(phone) || phone;
     if (!normalizedPhone) return { skipped: true };
 
-    const logs = db.get('whatsapp_logs') || [];
-    if (messageId && logs.some(l => l.meta_message_id === messageId)) {
+    if (findMessageByMetaId(messageId)?.durable) {
       return { skipped: true, reason: 'duplicate' };
     }
 
-    db.insert('whatsapp_logs', {
+    // Ensure parent exists so the thread shows under a lead card
+    const echoParent = db.upsertParentByPhone('לקוח וואטסאפ', normalizedPhone, '', {
+      source: 'whatsapp',
+      channel: 'whatsapp',
+    });
+
+    recordMessage({
       phone: normalizedPhone,
       channel: 'whatsapp',
       direction: 'outbound',
@@ -817,12 +846,7 @@ export const whatsappService = {
       source: 'phone',
       meta_message_id: messageId || null,
       message_type: type || 'text',
-    });
-
-    // Ensure parent exists so the thread shows under a lead card
-    db.upsertParentByPhone('לקוח וואטסאפ', normalizedPhone, '', {
-      source: 'whatsapp',
-      channel: 'whatsapp',
+      parent_id: echoParent?.id || null,
     });
 
     const settings = mergeBotSettings(db.getSettings());
@@ -838,8 +862,7 @@ export const whatsappService = {
     const normalizedPhone = formatWaPhone(phone) || phone;
     if (!normalizedPhone || !text) return { skipped: true };
 
-    const logs = db.get('whatsapp_logs') || [];
-    if (messageId && logs.some(l => l.meta_message_id === messageId)) {
+    if (findMessageByMetaId(messageId)?.durable) {
       return { skipped: true, reason: 'duplicate' };
     }
 
@@ -849,7 +872,12 @@ export const whatsappService = {
       ? new Date(Number(timestamp) > 1e12 ? Number(timestamp) : Number(timestamp) * 1000).toISOString()
       : new Date().toISOString();
 
-    db.insert('whatsapp_logs', {
+    const historyParent = db.upsertParentByPhone('לקוח וואטסאפ', normalizedPhone, '', {
+      source: 'whatsapp',
+      channel: 'whatsapp',
+    });
+
+    recordMessage({
       phone: normalizedPhone,
       channel: 'whatsapp',
       direction: resolvedDirection,
@@ -859,11 +887,7 @@ export const whatsappService = {
       meta_message_id: messageId || null,
       message_type: type || 'text',
       created_at: createdAt,
-    });
-
-    db.upsertParentByPhone('לקוח וואטסאפ', normalizedPhone, '', {
-      source: 'whatsapp',
-      channel: 'whatsapp',
+      parent_id: historyParent?.id || null,
     });
 
     if (resolvedDirection === 'inbound') {
@@ -961,23 +985,25 @@ export const instagramService = {
   sendTextMessage: async (recipientId, text, isAi = false) => {
     try {
       const result = await callMetaInstagramAPI(recipientId, text);
-      db.insert('whatsapp_logs', {
+      recordMessage({
         phone: recipientId,
+        recipient_id: recipientId,
         channel: 'instagram',
         direction: 'outbound',
         message: text,
         status: result.mock ? 'sent' : 'delivered',
-        is_ai: isAi
+        is_ai: isAi,
       });
       return { success: true, text };
     } catch (error) {
-      db.insert('whatsapp_logs', {
+      recordMessage({
         phone: recipientId,
+        recipient_id: recipientId,
         channel: 'instagram',
         direction: 'outbound',
         message: text,
         status: 'failed',
-        is_ai: isAi
+        is_ai: isAi,
       });
       return { success: false, error: error.message };
     }
@@ -985,17 +1011,33 @@ export const instagramService = {
 
   handleIncomingMessage: async (igId, text, name = 'ליד מאינסטגרם', isSimulator = false) => {
     if (!isSimulator) await syncBotFlagFromRemote();
-    // 1. Log inbound message
-    db.insert('whatsapp_logs', {
+
+    // 1. Upsert lead / client details in DB
+    const { parent, student, isNew } = await db.createLeadFromInstagram(igId, text, name);
+
+    // 2. Store durably before the handling queue sees the customer
+    const storedInbound = await recordMessageDurable({
       phone: igId,
+      recipient_id: igId,
       channel: 'instagram',
       direction: 'inbound',
       message: text,
-      status: 'received'
+      status: 'received',
+      source: 'customer',
+      parent_id: parent?.id || null,
     });
 
-    // 2. Upsert lead / client details in DB
-    const { parent, student, isNew } = await db.createLeadFromInstagram(igId, text, name);
+    if (!storedInbound.ok) {
+      console.error('❌ Inbound Instagram message was not stored durably:', storedInbound.error);
+      return {
+        parent,
+        student,
+        isNew,
+        replied: false,
+        durableError: storedInbound.error,
+        skippedReason: 'not_persisted',
+      };
+    }
 
     if (parent?.id) {
       const updatedParent = db.update('parents', parent.id, {
@@ -1016,13 +1058,15 @@ export const instagramService = {
       const hasRealToken = !!getInstagramToken();
       if (isSimulator || !hasRealToken) {
         // Simulator / missing token: log locally only (no Meta call)
-        db.insert('whatsapp_logs', {
+        recordMessage({
           phone: igId,
+          recipient_id: igId,
           channel: 'instagram',
           direction: 'outbound',
           message: aiReply,
           status: 'sent',
-          is_ai: true
+          is_ai: true,
+          parent_id: parent?.id || null,
         });
       } else {
         const sendResult = await instagramService.sendTextMessage(igId, aiReply, true);

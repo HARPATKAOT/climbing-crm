@@ -93,6 +93,12 @@ import {
   handleMessengerIncoming,
   markCommunicationHandled,
 } from './channels/conversations.js';
+import {
+  rebuildLogMirrorFromMessages,
+  startPendingMessageRetry,
+  flushPendingMessages,
+  countPendingMessages,
+} from './channels/messageStore.js';
 import { canSendFreeform } from './channels/sessionWindow.js';
 import {
   listLocalTemplates,
@@ -154,9 +160,29 @@ app.use(express.urlencoded({ extended: true }));
 // 1. CRM GENERAL ENDPOINTS (Database Synced)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Health check endpoint for Uptime monitoring & Keep-Alive
-app.get('/api/health', (req, res) => {
-  res.status(200).json({ status: 'UP', timestamp: new Date().toISOString(), uptime: process.uptime() });
+// Health check endpoint for uptime monitoring & keep-alive.
+// `?deep=1` also probes the durable store and the message write queue, so a
+// monitor can tell "process alive" apart from "actually able to serve".
+app.get('/api/health', async (req, res) => {
+  const base = {
+    status: 'UP',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+  };
+
+  if (!req.query.deep) return res.status(200).json(base);
+
+  const store = await supa.ping();
+  const pendingMessages = countPendingMessages();
+  const healthy = store.ok && pendingMessages === 0;
+
+  return res.status(healthy ? 200 : 503).json({
+    ...base,
+    status: healthy ? 'UP' : 'DEGRADED',
+    database: store.ok ? { ok: true, ms: store.ms } : { ok: false, error: store.error },
+    serviceRoleKey: supa.hasServiceRoleKey(),
+    pendingMessages,
+  });
 });
 
 /** Short public redirect: WhatsApp template button → iCount payment URL */
@@ -1211,6 +1237,8 @@ async function processInstagramEntry(body) {
 async function processWhatsAppWebhookChange(change = {}) {
   const field = change.field;
   const value = change.value || {};
+  // Messages we could not store durably — Meta must retry the delivery.
+  const notPersisted = [];
 
   // Delivery / read receipts
   if (field === 'messages' && Array.isArray(value.statuses) && value.statuses.length) {
@@ -1234,7 +1262,10 @@ async function processWhatsAppWebhookChange(change = {}) {
         type: message.type,
         timestamp: message.timestamp,
       });
-    if (leadResult?.parent) {
+      if (leadResult?.durableError) {
+        notPersisted.push({ messageId: message.id, error: leadResult.durableError });
+      }
+      if (leadResult?.parent) {
         console.log(
           `🎉 WhatsApp lead ${leadResult.isNew ? 'created' : 'updated'}: parent=${leadResult.parent.id} phone=${phone}${leadResult.student ? ` student=${leadResult.student.id}` : ' (contact only)'}`
         );
@@ -1303,6 +1334,8 @@ async function processWhatsAppWebhookChange(change = {}) {
   if (field === 'account_update') {
     console.log('ℹ️ WhatsApp account_update webhook:', JSON.stringify(value));
   }
+
+  return { notPersisted };
 }
 
 function verifyMetaWebhookSignature(req, res, next) {
@@ -1365,15 +1398,23 @@ app.post('/api/whatsapp/webhook', verifyMetaWebhookSignature, async (req, res) =
       return res.sendStatus(200);
     }
 
+    const unstored = [];
     for (const entry of body.entry || []) {
       for (const change of entry.changes || []) {
-        await processWhatsAppWebhookChange(change);
+        const result = await processWhatsAppWebhookChange(change);
+        if (result?.notPersisted?.length) unstored.push(...result.notPersisted);
       }
+    }
+
+    // Ask Meta to deliver again rather than silently losing the message.
+    if (unstored.length) {
+      console.error(`⛔ ${unstored.length} inbound message(s) not stored — asking Meta to retry`);
+      return res.status(503).json({ error: 'message store unavailable', retry: true });
     }
   } catch (error) {
     console.error('Error parsing incoming Meta WhatsApp webhook payload:', error);
   }
-  
+
   res.sendStatus(200);
 });
 
@@ -1561,7 +1602,7 @@ function normalizeActivityEndDate(date, endDate) {
 }
 
 function normalizeActivityPayload(body = {}) {
-  const type = ['birthday', 'trip', 'school', 'company', 'route_building', 'opening_hours', 'other'].includes(body.type)
+  const type = ['birthday', 'trip', 'school', 'company', 'route_building', 'opening_hours', 'training_vacation', 'other'].includes(body.type)
     ? body.type
     : (body.type || 'other');
   const hostName = body.host_name || body.contact_name || '';
@@ -5818,7 +5859,11 @@ app.get('/api/students/:id/activity-registrations', async (req, res) => {
       birthday: 'יום הולדת',
       trip: 'טיול',
       school: 'בית ספר',
-      company: 'חברה',
+      company: 'פעילות חברה',
+      route_building: 'בניית מסלולים',
+      opening_hours: 'שעות פתיחה',
+      training_vacation: 'חופשה מאימונים',
+      other: 'אחר',
     };
     const statusLabels = {
       confirmed: 'רשום',
@@ -6115,12 +6160,33 @@ app.listen(PORT, () => {
   } catch (err) {
     console.error('ensureDefaultIntroAutomations failed:', err.message);
   }
+
+  // Conversation mirror is derived from the durable `messages` table.
+  try {
+    const mirrored = rebuildLogMirrorFromMessages();
+    if (mirrored) console.log(`💬 Conversation mirror rebuilt from ${mirrored} durable message(s)`);
+  } catch (err) {
+    console.error('rebuildLogMirrorFromMessages failed:', err.message);
+  }
+
+  // Retry any message whose durable write did not land (Supabase blip).
+  startPendingMessageRetry();
+  flushPendingMessages().catch((err) =>
+    console.error('startup flushPendingMessages failed:', err.message)
+  );
   
-  // Self-Ping timer to prevent Render free instance sleep (runs every 8 minutes)
+  // Self-ping keeps the instance awake and surfaces a degraded store early.
   const renderUrl = process.env.RENDER_EXTERNAL_URL || 'https://climbing-crm-api.onrender.com';
   setInterval(() => {
-    fetch(`${renderUrl}/api/health`)
-      .then(res => console.log(`⏱️ Keep-Alive Self-Ping (${res.status}) at ${new Date().toLocaleTimeString()}`))
+    fetch(`${renderUrl}/api/health?deep=1`)
+      .then(async (res) => {
+        if (res.ok) {
+          console.log(`⏱️ Keep-Alive Self-Ping (${res.status}) at ${new Date().toLocaleTimeString()}`);
+          return;
+        }
+        const detail = await res.json().catch(() => ({}));
+        console.error(`⚠️ Health check degraded (${res.status}):`, JSON.stringify(detail));
+      })
       .catch(err => console.error('Keep-Alive ping error:', err.message));
   }, 8 * 60 * 1000);
 
