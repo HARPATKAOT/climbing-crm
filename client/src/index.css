@@ -955,19 +955,18 @@ input, select, textarea { font-family: var(--font); }
 }
 
 .reg-action-btn {
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   color: #fff;
   font-weight: 700;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+  box-shadow: none;
 }
 
 .reg-action-btn:hover:not(:disabled) {
-  filter: brightness(1.08);
-  transform: translateY(-1px);
+  filter: brightness(1.06);
 }
 
 .reg-action-btn:active:not(:disabled) {
-  transform: translateY(0);
+  filter: brightness(0.97);
 }
 
 .reg-action-btn:disabled {
@@ -978,28 +977,23 @@ input, select, textarea { font-family: var(--font); }
 }
 
 .reg-action-btn--send {
-  background: linear-gradient(135deg, #38BDF8 0%, #0EA5E9 50%, #6366F1 100%);
-  box-shadow: 0 4px 18px rgba(56, 189, 248, 0.32);
+  background: #0EA5E9;
 }
 
 .reg-action-btn--copy-host {
-  background: linear-gradient(135deg, #FBBF24 0%, #F59E0B 55%, #EA580C 100%);
-  box-shadow: 0 4px 18px rgba(245, 158, 11, 0.3);
+  background: #D97706;
 }
 
 .reg-action-btn--participants {
-  background: linear-gradient(135deg, #34D399 0%, #10B981 55%, #059669 100%);
-  box-shadow: 0 4px 18px rgba(16, 185, 129, 0.3);
+  background: #059669;
 }
 
 .reg-action-btn--refresh {
-  background: linear-gradient(135deg, #22D3EE 0%, #06B6D4 55%, #0891B2 100%);
-  box-shadow: 0 4px 18px rgba(6, 182, 212, 0.28);
+  background: #0891B2;
 }
 
 .reg-action-btn--template {
-  background: linear-gradient(135deg, #A78BFA 0%, #8B5CF6 55%, #7C3AED 100%);
-  box-shadow: 0 4px 18px rgba(139, 92, 246, 0.3);
+  background: #7C3AED;
 }
 
 .registration-actions svg,
