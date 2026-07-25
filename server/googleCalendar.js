@@ -25,6 +25,8 @@ const TYPE_COLOR = {
   school: '2', // green
   company: '5', // yellow
   route_building: '3', // purple
+  opening_hours: '7', // cyan
+  training_vacation: '4', // flamingo / pink
   other: '8', // gray
 };
 
@@ -36,10 +38,10 @@ const COLOR_TO_TYPE = {
   '2': 'school',
   '10': 'school',
   '5': 'company',
-  '7': 'company',
+  '7': 'opening_hours',
   '8': 'other',
-  '3': 'other',
-  '4': 'other',
+  '3': 'route_building',
+  '4': 'training_vacation',
 };
 
 let memorySettings = null;

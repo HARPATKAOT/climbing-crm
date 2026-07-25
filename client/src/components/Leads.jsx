@@ -32,6 +32,17 @@ function isParentOnlyLead(student) {
   return !!student?._parentOnly || String(student?.id || '').startsWith('parent:');
 }
 
+function calculateAge(birthDateStr) {
+  if (!birthDateStr) return null;
+  const birth = new Date(birthDateStr);
+  if (Number.isNaN(birth.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - birth.getFullYear();
+  const m = today.getMonth() - birth.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age -= 1;
+  return age;
+}
+
 /** WhatsApp copy for health declaration — always addressed to the parent. */
 function buildHealthWhatsAppText(parentName, studentName, link) {
   const p = String(parentName || '').trim();
@@ -244,6 +255,7 @@ function FolderRow({ id, title, icon: Icon, summary, open, onToggle, children, s
 function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, groups = [], onClose, onStatusChange, onDelete, onUpdateStudent, pricelist, refreshData, canManageBilling = false, canViewComms = true, onCommunicationHandled }) {
   if (!student) return null;
   const parentOnly = isParentOnlyLead(student);
+  const age = calculateAge(student.birthDate);
   const statusKeys = Object.keys(STATUSES);
 
   const [broadcastListDefs, setBroadcastListDefs] = useState([
@@ -259,6 +271,8 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
   const [savingEdit, setSavingEdit] = useState(false);
   const [editingGroup, setEditingGroup] = useState(false);
   const [savingGroup, setSavingGroup] = useState(false);
+  const [editingFollowup, setEditingFollowup] = useState(false);
+  const [savingFollowup, setSavingFollowup] = useState(false);
   
   // Edit Form Fields (student)
   const [editBirthDate, setEditBirthDate] = useState(student.birthDate || '');
@@ -304,6 +318,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
     setEditSource(parent?.source || student.source || 'unknown');
     setIsEditing(false);
     setEditingGroup(false);
+    setEditingFollowup(false);
     setOpenFolder(null);
     setShowPaymentModal(false);
     setShowAddChild(false);
@@ -807,6 +822,29 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
     }
   };
 
+  const handleSaveFollowup = async (value) => {
+    if (parentOnly) return;
+    setSavingFollowup(true);
+    try {
+      const res = await fetch(`/api/students/${student.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nextFollowup: value || null }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        onUpdateStudent(student.id, updated);
+        setEditNextFollowup(value || '');
+        setEditingFollowup(false);
+        if (refreshData) refreshData();
+      }
+    } catch (err) {
+      console.error('Failed to update followup:', err);
+    } finally {
+      setSavingFollowup(false);
+    }
+  };
+
   const handlePricelistSelect = (e) => {
     const itemId = e.target.value;
     setSelectedPricelistItem(itemId);
@@ -1060,15 +1098,12 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                   {parentOnly ? (parent?.name || 'ליד ללא מתאמן') : student.name}
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  <span>
-                    {parentOnly
-                      ? 'ללא מתאמן רשום'
-                      : student.isAdult
-                        ? 'מבוגר משתתף'
-                        : `תאריך לידה: ${student.birthDate || 'לא הוזן'}`}
-                  </span>
-                  {student.isAdult && !parentOnly && (
-                    <span className="badge badge-gray" style={{ fontSize: 10 }}>מבוגר</span>
+                  {parentOnly && <span>ללא מתאמן רשום</span>}
+                  {!parentOnly && student.isAdult && (
+                    <>
+                      <span>מבוגר משתתף</span>
+                      <span className="badge badge-gray" style={{ fontSize: 10 }}>מבוגר</span>
+                    </>
                   )}
                   <button className="btn btn-ghost btn-xs" onClick={() => setIsEditing(true)}>
                     <Edit2 size={11} /> ערוך
@@ -1202,10 +1237,81 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                   <div style={{ fontWeight: 600 }}>{parent?.city || '—'}</div>
                 </div>
                 <div>
+                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 2 }}><CalendarDays size={10} /> גיל</div>
+                  <div style={{ fontWeight: 600 }}>{age == null ? '—' : age}</div>
+                </div>
+                <div>
                   <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 2 }}><Bell size={10} /> מעקב</div>
-                  <div style={{ fontWeight: 600, color: student.nextFollowup ? 'var(--amber, #FCD34D)' : undefined }}>
-                    {student.nextFollowup || '—'}
-                  </div>
+                  {parentOnly ? (
+                    <div style={{ fontWeight: 600 }}>—</div>
+                  ) : editingFollowup ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                      <input
+                        type="date"
+                        className="input input-sm"
+                        value={editNextFollowup}
+                        disabled={savingFollowup}
+                        autoFocus
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setEditNextFollowup(value);
+                          if (value) handleSaveFollowup(value);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') {
+                            setEditNextFollowup(student.nextFollowup || '');
+                            setEditingFollowup(false);
+                          }
+                        }}
+                        style={{ fontSize: 12, padding: '2px 6px', width: 132 }}
+                      />
+                      {(editNextFollowup || student.nextFollowup) && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-xs"
+                          disabled={savingFollowup}
+                          onClick={() => handleSaveFollowup('')}
+                          title="נקה מעקב"
+                        >
+                          <X size={11} />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        disabled={savingFollowup}
+                        onClick={() => {
+                          setEditNextFollowup(student.nextFollowup || '');
+                          setEditingFollowup(false);
+                        }}
+                      >
+                        ביטול
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditNextFollowup(student.nextFollowup || '');
+                        setEditingFollowup(true);
+                      }}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        fontWeight: 600,
+                        color: student.nextFollowup ? 'var(--amber, #FCD34D)' : 'var(--text-3)',
+                        background: 'none',
+                        border: 'none',
+                        padding: 0,
+                        cursor: 'pointer',
+                        fontSize: 12,
+                      }}
+                      title="לחץ להוספת מעקב"
+                    >
+                      {student.nextFollowup || '+ הוסף'}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

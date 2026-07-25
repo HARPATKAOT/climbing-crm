@@ -39,6 +39,7 @@ export default function ActivityRegistrationPanel({
   setForm,
   readOnly,
   hideRegistrationToggle = false,
+  templateMode = false,
 }) {
   const navigate = useNavigate();
   const [regs, setRegs] = useState([]);
@@ -111,11 +112,13 @@ export default function ActivityRegistrationPanel({
   }, []);
 
   useEffect(() => {
+    if (templateMode) return;
     loadRegs();
     loadCustomers();
-  }, [loadRegs, loadCustomers]);
+  }, [loadRegs, loadCustomers, templateMode]);
 
   useEffect(() => {
+    if (templateMode) return;
     const refreshWhenVisible = () => {
       if (document.visibilityState === 'visible') loadRegs();
     };
@@ -125,7 +128,7 @@ export default function ActivityRegistrationPanel({
       window.removeEventListener('focus', loadRegs);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
-  }, [loadRegs]);
+  }, [loadRegs, templateMode]);
 
   useEffect(() => {
     if (!form?.registration_slug) return;
@@ -580,6 +583,8 @@ export default function ActivityRegistrationPanel({
 
   return (
     <div className="activity-registration-operations">
+      {!templateMode && (
+      <>
       <div className="activity-registration-operations-title">
         מזמין
       </div>
@@ -753,6 +758,14 @@ export default function ActivityRegistrationPanel({
           {busy === 'host-refund' ? <Loader2 size={14} className="spin" /> : <Undo2 size={14} />}
           זיכוי דמי הזמנה
         </button>
+      )}
+      </>
+      )}
+
+      {templateMode && (
+        <div className="activity-registration-operations-title">
+          תשלום והרשמה
+        </div>
       )}
 
       {!hideRegistrationToggle && (
@@ -971,7 +984,7 @@ export default function ActivityRegistrationPanel({
         </div>
       )}
 
-      {!activityId && (
+      {!activityId && !templateMode && (
         <div style={{ fontSize: 12, color: 'var(--text-3)', fontStyle: 'italic' }}>
           אחרי שמירה אפשר ליצור קישור הרשמה ולשלוח למזמין
         </div>

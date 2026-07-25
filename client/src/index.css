@@ -1686,6 +1686,20 @@ input, select, textarea { font-family: var(--font); }
   font-size: 12px;
 }
 
+.activity-settings-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.activity-settings-hint {
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .activity-type-options {
   display: flex;
   flex-wrap: wrap;
@@ -1792,21 +1806,6 @@ input, select, textarea { font-family: var(--font); }
 
 .activity-modal-btn--danger:hover:not(:disabled) {
   background: rgba(251, 113, 133, 0.18);
-}
-
-.activity-modal-btn--template {
-  color: #c4b5fd;
-  border: 1px solid rgba(167, 139, 250, 0.4);
-  background: rgba(167, 139, 250, 0.1);
-}
-
-.activity-modal-btn--template:hover:not(:disabled) {
-  background: rgba(167, 139, 250, 0.18);
-}
-
-.activity-modal-btn--template:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 
 .activity-modal-btn--ghost {
@@ -1992,10 +1991,14 @@ input, select, textarea { font-family: var(--font); }
 
 .activity-designer-cover-layout {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   padding: 0 14px;
   direction: ltr;
+}
+
+.activity-designer-cover-layout.has-image {
+  grid-template-columns: 34px minmax(0, 1fr);
 }
 
 .activity-designer-cover-column {
@@ -2169,10 +2172,28 @@ input, select, textarea { font-family: var(--font); }
   color: #94a3b8;
 }
 
+.activity-designer-details > label > svg {
+  flex: 0 0 auto;
+  color: #cbd5e1;
+  stroke: currentColor;
+}
+
 .activity-designer-details .activity-designer-inline {
   padding: 3px;
   color: #e2e8f0;
   font-size: 12px;
+}
+
+.activity-designer-details .activity-designer-inline[type="date"],
+.activity-designer-details .activity-designer-inline[type="time"] {
+  color-scheme: dark;
+}
+
+.activity-designer-details .activity-designer-inline[type="date"]::-webkit-calendar-picker-indicator,
+.activity-designer-details .activity-designer-inline[type="time"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  filter: invert(88%) sepia(8%) saturate(338%) hue-rotate(180deg);
+  opacity: 0.9;
 }
 
 .activity-designer-detail-wide {
@@ -2297,8 +2318,11 @@ input, select, textarea { font-family: var(--font); }
   }
 
   .activity-designer-cover-layout {
-    grid-template-columns: 30px minmax(0, 1fr);
     padding-inline: 8px;
+  }
+
+  .activity-designer-cover-layout.has-image {
+    grid-template-columns: 30px minmax(0, 1fr);
   }
 
   .activity-designer-cover,

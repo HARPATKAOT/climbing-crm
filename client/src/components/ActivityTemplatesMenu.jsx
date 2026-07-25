@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, FileStack, Loader2, Plus, Search, Trash2, X } from 'lucide-react';
+import { ArrowRight, FileStack, Loader2, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 
 const CATEGORY_META = {
   field: { label: 'פעילויות שטח', color: '#34D399', hint: 'טיולים, נחלים וטיפוס בטבע' },
@@ -10,13 +10,25 @@ const CATEGORY_META = {
  * Category → template picker.
  * Selecting a template opens a prefilled (unsaved) activity form.
  * "אירוע מותאם" opens a blank custom form.
+ * Supports controlled open (e.g. from day "+" on the calendar).
  */
 export default function ActivityTemplatesMenu({
   onApplyTemplate,
+  onEditTemplate,
   onCustomEvent,
   defaultDate,
+  open: controlledOpen,
+  onOpenChange,
+  onRequestOpen,
+  hideTrigger = false,
 }) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : internalOpen;
+  const setOpen = (next) => {
+    if (!isControlled) setInternalOpen(next);
+    onOpenChange?.(next);
+  };
   const [templates, setTemplates] = useState([]);
   const [categories, setCategories] = useState([
     { id: 'field', label: 'פעילויות שטח' },
@@ -27,6 +39,8 @@ export default function ActivityTemplatesMenu({
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const resolveDate = () => defaultDate || new Date().toISOString().slice(0, 10);
 
   const load = async () => {
     setLoading(true);
@@ -84,8 +98,7 @@ export default function ActivityTemplatesMenu({
     setBusy(tpl.id);
     setMsg('');
     try {
-      const date = defaultDate || new Date().toISOString().slice(0, 10);
-      onApplyTemplate?.(tpl, date);
+      onApplyTemplate?.(tpl, resolveDate());
       setOpen(false);
     } finally {
       setBusy('');
@@ -104,21 +117,37 @@ export default function ActivityTemplatesMenu({
     }
   };
 
+  const editTemplate = (tpl, e) => {
+    e.stopPropagation();
+    setOpen(false);
+    onEditTemplate?.(tpl);
+  };
+
   const startCustom = () => {
     setOpen(false);
-    onCustomEvent?.(defaultDate || new Date().toISOString().slice(0, 10));
+    onCustomEvent?.(resolveDate());
   };
+
+  const dateLabel = defaultDate
+    ? String(defaultDate).slice(0, 10).split('-').reverse().join('/')
+    : '';
 
   return (
     <div style={{ position: 'relative' }}>
-      <button
-        type="button"
-        className="btn-ghost"
-        onClick={() => setOpen(true)}
-        title="תבניות ואירוע מותאם"
-      >
-        <FileStack size={14} /> תבניות
-      </button>
+      {!hideTrigger && (
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={() => {
+            onRequestOpen?.();
+            setOpen(true);
+          }}
+          title="תבניות ואירוע מותאם"
+        >
+          <FileStack size={16} strokeWidth={2.25} />
+          תבניות
+        </button>
+      )}
 
       {open && (
         <div
@@ -152,12 +181,14 @@ export default function ActivityTemplatesMenu({
                 <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-1)' }}>
                   {categoryId
                     ? (CATEGORY_META[categoryId]?.label || categories.find((c) => c.id === categoryId)?.label || 'תבניות')
-                    : 'בחירת תבנית'}
+                    : 'אירוע חדש'}
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
                   {categoryId
-                    ? 'בחרו תבנית — אפשר לערוך לפני שמירה'
-                    : 'קטגוריה, או אירוע מותאם ללקוח'}
+                    ? 'בחרו תבנית לאירוע חדש, או ערכו תבנית קיימת'
+                    : (dateLabel
+                      ? `לתאריך ${dateLabel} — מתבנית שמורה או אירוע ריק`
+                      : 'מתבנית שמורה, או אירוע מותאם ללקוח')}
                 </div>
               </div>
               <button type="button" className="icon-btn" onClick={() => setOpen(false)} aria-label="סגור">
@@ -198,9 +229,9 @@ export default function ActivityTemplatesMenu({
                   >
                     <Plus size={18} style={{ color: '#7DD3FC' }} />
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 800, fontSize: 14 }}>אירוע מותאם ללקוח</div>
+                      <div style={{ fontWeight: 800, fontSize: 14 }}>אירוע בלי תבנית</div>
                       <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
-                        מחיר, טקסט וקישור הרשמה חופשיים — בלי תבנית
+                        טופס ריק — מחיר, טקסט וקישור הרשמה חופשיים
                       </div>
                     </div>
                   </button>
@@ -264,6 +295,7 @@ export default function ActivityTemplatesMenu({
                           tpl={tpl}
                           busy={busy === tpl.id}
                           onPick={() => pickTemplate(tpl)}
+                          onEdit={onEditTemplate ? (e) => editTemplate(tpl, e) : null}
                           onRemove={(e) => remove(tpl, e)}
                         />
                       ))}
@@ -294,6 +326,7 @@ export default function ActivityTemplatesMenu({
                         tpl={tpl}
                         busy={busy === tpl.id}
                         onPick={() => pickTemplate(tpl)}
+                        onEdit={onEditTemplate ? (e) => editTemplate(tpl, e) : null}
                         onRemove={(e) => remove(tpl, e)}
                       />
                     ))
@@ -310,7 +343,7 @@ export default function ActivityTemplatesMenu({
   );
 }
 
-function TemplateRow({ tpl, busy, onPick, onRemove }) {
+function TemplateRow({ tpl, busy, onPick, onEdit, onRemove }) {
   return (
     <div
       role="button"
@@ -338,15 +371,30 @@ function TemplateRow({ tpl, busy, onPick, onRemove }) {
       {busy ? (
         <Loader2 size={14} className="spin" />
       ) : (
-        <button
-          type="button"
-          className="icon-btn"
-          onClick={onRemove}
-          aria-label="מחיקה"
-          style={{ color: '#F87171' }}
-        >
-          <Trash2 size={12} />
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2 }} onClick={(e) => e.stopPropagation()}>
+          {onEdit && (
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={onEdit}
+              aria-label="עריכה"
+              title="עריכת תבנית"
+              style={{ color: '#7DD3FC' }}
+            >
+              <Pencil size={12} />
+            </button>
+          )}
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={onRemove}
+            aria-label="מחיקה"
+            title="מחיקת תבנית"
+            style={{ color: '#F87171' }}
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
       )}
     </div>
   );

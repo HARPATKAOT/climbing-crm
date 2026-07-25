@@ -1,22 +1,68 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Plus, ChevronLeft, ChevronRight, X, Save, Trash2, Link2, Unlink,
-  RefreshCw, Loader2, CalendarDays, CalendarRange, Layers,
-  CheckCircle, AlertCircle, Clock3, Bookmark, Check,
+  RefreshCw, Loader2, CalendarDays, CalendarRange, Layers, List,
+  CheckCircle, AlertCircle, Clock3, Check, Pencil,
 } from 'lucide-react';
 import ActivityPageDesigner from './ActivityPageDesigner.jsx';
 import ActivityRegistrationPanel from './ActivityRegistrationPanel.jsx';
 import ActivityTemplatesMenu from './ActivityTemplatesMenu.jsx';
+import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
 
 export const ACTIVITY_TYPES = [
   { id: 'birthday', label: 'יום הולדת', color: '#FB923C', bg: 'rgba(251,146,60,0.18)' },
   { id: 'trip', label: 'טיול', color: '#60A5FA', bg: 'rgba(96,165,250,0.18)' },
   { id: 'school', label: 'בית ספר', color: '#34D399', bg: 'rgba(52,211,153,0.18)' },
-  { id: 'company', label: 'חברה', color: '#FBBF24', bg: 'rgba(251,191,36,0.18)' },
+  { id: 'company', label: 'פעילות חברה', color: '#FBBF24', bg: 'rgba(251,191,36,0.18)' },
   { id: 'route_building', label: 'בניית מסלולים', color: '#A78BFA', bg: 'rgba(167,139,250,0.18)' },
   { id: 'opening_hours', label: 'שעות פתיחה', color: '#22D3EE', bg: 'rgba(34,211,238,0.16)' },
+  { id: 'training_vacation', label: 'חופשה מאימונים', color: '#F472B6', bg: 'rgba(244,114,182,0.18)' },
   { id: 'other', label: 'אחר', color: '#94A3B8', bg: 'rgba(148,163,184,0.16)' },
 ];
+
+/** סוגים שמוצגים יחד בתגית הסינון „פעילויות” */
+const ACTIVITIES_GROUP_TYPES = ['birthday', 'school', 'company'];
+
+/** תגיות סינון ביומן (מקובצות) — בטופס האירוע עדיין בוחרים סוג מדויק */
+const FILTER_CHIPS = [
+  {
+    id: 'activities',
+    label: 'פעילויות',
+    color: '#FB923C',
+    bg: 'rgba(251,146,60,0.18)',
+    match: ACTIVITIES_GROUP_TYPES,
+  },
+  ...ACTIVITY_TYPES
+    .filter((t) => !ACTIVITIES_GROUP_TYPES.includes(t.id))
+    .map((t) => ({ id: t.id, label: t.label, color: t.color, bg: t.bg, match: [t.id] })),
+];
+
+const LIST_EMPTY_COPY = {
+  activities: { empty: 'אין עדיין פעילויות', add: 'הוספת פעילות' },
+  trip: { empty: 'אין עדיין טיולים', add: 'הוספת טיול' },
+  route_building: { empty: 'אין עדיין בניית מסלולים', add: 'הוספת בניית מסלולים' },
+  opening_hours: { empty: 'אין עדיין שעות פתיחה', add: 'הוספת שעות פתיחה' },
+  training_vacation: { empty: 'אין עדיין חופשות מאימונים', add: 'הוספת חופשה מאימונים' },
+  other: { empty: 'אין עדיין אירועים', add: 'הוספת אירוע' },
+};
+
+function listCopyForFilter(typeFilter) {
+  const key = typeFilter === 'all' ? 'training_vacation' : typeFilter;
+  return LIST_EMPTY_COPY[key] || LIST_EMPTY_COPY.other;
+}
+
+function matchTypesForFilter(typeFilter) {
+  if (!typeFilter || typeFilter === 'all') return null;
+  const chip = FILTER_CHIPS.find((c) => c.id === typeFilter);
+  if (chip) return chip.match;
+  return [typeFilter];
+}
+
+function activityMatchesFilter(activityType, typeFilter) {
+  const match = matchTypesForFilter(typeFilter);
+  if (!match) return true;
+  return match.includes(activityType);
+}
 
 const WORK_TYPE_OPTIONS = [
   { id: 'counter_shift', label: 'דלפק' },
@@ -208,6 +254,24 @@ function shiftEndDatePreservingSpan(oldDate, oldEndDate, newDate) {
   return toDateStr(addDays(n, span));
 }
 
+function formatListDateRange(activity) {
+  const start = String(activity?.date || '').slice(0, 10);
+  const end = String(activity?.end_date || '').slice(0, 10);
+  if (!start) return '—';
+  const startLabel = (() => {
+    const d = parseDateStr(start);
+    if (!d) return start;
+    return `${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`;
+  })();
+  if (!end || end === start) return startLabel;
+  const endLabel = (() => {
+    const d = parseDateStr(end);
+    if (!d) return end;
+    return `${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`;
+  })();
+  return `${startLabel} ← ${endLabel}`;
+}
+
 function emptyForm(dateStr = '', opts = {}) {
   const start_time = opts.start_time || '10:00';
   let end_time = opts.end_time;
@@ -219,14 +283,18 @@ function emptyForm(dateStr = '', opts = {}) {
       end_time = '12:00';
     }
   }
+  const type = opts.type || 'birthday';
+  const allDayDefault = type === 'training_vacation'
+    ? true
+    : (opts.all_day != null ? !!opts.all_day : false);
   return {
     name: '',
-    type: 'birthday',
+    type,
     date: dateStr || toDateStr(new Date()),
     end_date: opts.end_date || '',
     start_time,
     end_time,
-    all_day: false,
+    all_day: allDayDefault,
     location: '',
     contact_name: '',
     contact_phone: '',
@@ -565,6 +633,7 @@ function RegularActivityModal({
   setForm,
   readOnly,
   isEdit,
+  isTemplateEdit,
   initial,
   onDelete,
   onClose,
@@ -573,48 +642,12 @@ function RegularActivityModal({
   submit,
   title,
 }) {
-  const [tplBusy, setTplBusy] = useState(false);
-  const [tplMsg, setTplMsg] = useState('');
-  const activityId = isEdit ? initial?.id : null;
-
-  const saveAsTemplate = async () => {
-    if (!activityId) {
-      setTplMsg('שמרו את האירוע קודם');
-      return;
-    }
-    const name = window.prompt('שם התבנית', form.name || 'תבנית אירוע');
-    if (!name) return;
-    const catRaw = window.prompt(
-      'קטגוריה: wall = אירועים בקיר, field = פעילויות שטח',
-      'wall'
-    );
-    if (catRaw == null) return;
-    const category = String(catRaw).trim().toLowerCase() === 'field' ? 'field' : 'wall';
-    setTplBusy(true);
-    setTplMsg('');
-    try {
-      const res = await fetch('/api/activity-templates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          activity_id: activityId,
-          name,
-          category,
-          theme: form.registration_theme || {},
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setTplMsg(data.error || 'שמירת תבנית נכשלה');
-        return;
-      }
-      setTplMsg(category === 'field' ? 'נשמר תחת פעילויות שטח' : 'נשמר תחת אירועים בקיר');
-    } catch {
-      setTplMsg('שגיאת רשת');
-    } finally {
-      setTplBusy(false);
-    }
-  };
+  const activityId = isEdit && !isTemplateEdit ? initial?.id : null;
+  const multiDay = !!(form.date && form.end_date && form.end_date > form.date);
+  const paidPerParticipant = form.registration_mode === 'paid_per_participant'
+    || (!form.registration_mode && form.collect_registration_payment);
+  const includesVat = normalizePriceIncludesVat(form.price_includes_vat);
+  const priceVat = vatBreakdown(form.price, includesVat);
 
   return (
     <div className="activity-modal-backdrop" onClick={onClose}>
@@ -627,7 +660,9 @@ function RegularActivityModal({
           <div>
             <div className="activity-modal-title">{title}</div>
             <div className="activity-modal-subtitle">
-              עריכת העמוד הציבורי והגדרות האירוע במקום אחד
+              {isTemplateEdit
+                ? 'עריכת התבנית — השינויים יישמרו ברשימת התבניות'
+                : 'עריכת העמוד הציבורי והגדרות האירוע במקום אחד'}
             </div>
           </div>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="סגור">
@@ -646,7 +681,37 @@ function RegularActivityModal({
 
           <div className="activity-modal-operations">
             <section className="activity-settings-card">
-              <div className="activity-settings-card-title">הגדרות האירוע</div>
+              <div className="activity-settings-card-title">
+                {isTemplateEdit ? 'הגדרות התבנית' : 'הגדרות האירוע'}
+              </div>
+              {isTemplateEdit && (
+                <div>
+                  <div className="activity-settings-label">קטגוריה</div>
+                  <div className="activity-type-options">
+                    {[
+                      { id: 'wall', label: 'אירועים בקיר', color: '#FB923C', bg: 'rgba(251,146,60,0.18)' },
+                      { id: 'field', label: 'פעילויות שטח', color: '#34D399', bg: 'rgba(52,211,153,0.18)' },
+                    ].map((cat) => {
+                      const active = (form.category || 'wall') === cat.id;
+                      return (
+                        <button
+                          key={cat.id}
+                          type="button"
+                          disabled={readOnly}
+                          onClick={() => set('category', cat.id)}
+                          className={active ? 'is-active' : ''}
+                          style={{
+                            '--activity-type-color': cat.color,
+                            '--activity-type-background': cat.bg,
+                          }}
+                        >
+                          {cat.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <div>
                 <div className="activity-settings-label">סוג האירוע</div>
                 <div className="activity-type-options">
@@ -657,7 +722,13 @@ function RegularActivityModal({
                         key={type.id}
                         type="button"
                         disabled={readOnly}
-                        onClick={() => set('type', type.id)}
+                        onClick={() => {
+                          if (type.id === 'training_vacation') {
+                            setForm((prev) => ({ ...prev, type: type.id, all_day: true }));
+                          } else {
+                            set('type', type.id);
+                          }
+                        }}
                         className={active ? 'is-active' : ''}
                         style={{
                           '--activity-type-color': type.color,
@@ -671,19 +742,21 @@ function RegularActivityModal({
                 </div>
               </div>
               <div className="activity-settings-grid">
-                <label>
-                  <span className="activity-settings-label">מצב האירוע</span>
-                  <select
-                    className="input"
-                    value={form.status || 'open'}
-                    onChange={(event) => set('status', event.target.value)}
-                    disabled={readOnly}
-                  >
-                    <option value="open">פעיל</option>
-                    <option value="completed">הסתיים</option>
-                    <option value="cancelled">בוטל</option>
-                  </select>
-                </label>
+                {!isTemplateEdit && (
+                  <label>
+                    <span className="activity-settings-label">מצב האירוע</span>
+                    <select
+                      className="input"
+                      value={form.status || 'open'}
+                      onChange={(event) => set('status', event.target.value)}
+                      disabled={readOnly}
+                    >
+                      <option value="open">פעיל</option>
+                      <option value="completed">הסתיים</option>
+                      <option value="cancelled">בוטל</option>
+                    </select>
+                  </label>
+                )}
                 <label>
                   <span className="activity-settings-label">מצב תצוגה</span>
                   <div className="activity-settings-toggle">
@@ -699,12 +772,148 @@ function RegularActivityModal({
               </div>
             </section>
 
+            <section className="activity-settings-card">
+              <div className="activity-settings-card-title">מועד, מקום ומחיר</div>
+
+              {!isTemplateEdit && (
+                <div className="activity-settings-grid">
+                  <label>
+                    <span className="activity-settings-label">תאריך</span>
+                    <input
+                      className="input"
+                      type="date"
+                      value={form.date || ''}
+                      onChange={(event) => set('date', event.target.value)}
+                      required
+                      disabled={readOnly}
+                    />
+                  </label>
+                  <label>
+                    <span className="activity-settings-label">תאריך סיום</span>
+                    <input
+                      className="input"
+                      type="date"
+                      value={form.end_date || ''}
+                      min={form.date || undefined}
+                      onChange={(event) => set('end_date', event.target.value)}
+                      disabled={readOnly}
+                    />
+                  </label>
+                </div>
+              )}
+
+              {multiDay && !form.all_day && (
+                <div className="activity-settings-hint">
+                  כל יום בין התאריכים בשעות שמוגדרות למטה
+                </div>
+              )}
+              {multiDay && form.all_day && (
+                <div className="activity-settings-hint">
+                  בלוק של יום שלם לכל הימים בטווח
+                </div>
+              )}
+
+              <label className="activity-settings-check">
+                <input
+                  type="checkbox"
+                  checked={!!form.all_day}
+                  disabled={readOnly}
+                  onChange={(event) => {
+                    if (readOnly) return;
+                    const checked = event.target.checked;
+                    setForm((prev) => ({
+                      ...prev,
+                      all_day: checked,
+                      start_time: checked ? '' : (prev.start_time || '10:00'),
+                      end_time: checked ? '' : (prev.end_time || '12:00'),
+                    }));
+                  }}
+                />
+                אירוע של יום שלם
+              </label>
+
+              {!form.all_day && (
+                <div className="activity-settings-grid">
+                  <label>
+                    <span className="activity-settings-label">שעת התחלה</span>
+                    <input
+                      className="input"
+                      type="time"
+                      value={form.start_time || ''}
+                      onChange={(event) => set('start_time', event.target.value)}
+                      disabled={readOnly}
+                    />
+                  </label>
+                  <label>
+                    <span className="activity-settings-label">שעת סיום</span>
+                    <input
+                      className="input"
+                      type="time"
+                      value={form.end_time || ''}
+                      onChange={(event) => set('end_time', event.target.value)}
+                      disabled={readOnly}
+                    />
+                  </label>
+                </div>
+              )}
+
+              <label>
+                <span className="activity-settings-label">מיקום</span>
+                <input
+                  className="input"
+                  value={form.location || ''}
+                  onChange={(event) => set('location', event.target.value)}
+                  placeholder="למשל: בקיר"
+                  disabled={readOnly}
+                />
+              </label>
+
+              <div className="activity-settings-grid">
+                <label>
+                  <span className="activity-settings-label">
+                    {includesVat ? 'מחיר כולל מע״מ' : 'מחיר לפני מע״מ'}
+                    {paidPerParticipant ? ' · למשתתף' : ' · לאירוע'}
+                  </span>
+                  <input
+                    className="input"
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={form.price ?? ''}
+                    onChange={(event) => set('price', event.target.value)}
+                    disabled={readOnly}
+                  />
+                </label>
+                <label>
+                  <span className="activity-settings-label">מכסת משתתפים</span>
+                  <input
+                    className="input"
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={form.max_participants ?? ''}
+                    onChange={(event) => set('max_participants', event.target.value)}
+                    disabled={readOnly}
+                  />
+                </label>
+              </div>
+
+              {priceVat.entered > 0 && (
+                <div className="activity-settings-hint">
+                  {includesVat
+                    ? `לפני מע״מ: ${formatIls(priceVat.net)} · לתשלום: ${formatIls(priceVat.gross)}`
+                    : `כולל מע״מ: ${formatIls(priceVat.gross)} · לתשלום: ${formatIls(priceVat.gross)}`}
+                </div>
+              )}
+            </section>
+
             <ActivityRegistrationPanel
               activityId={activityId}
               form={form}
               setForm={setForm}
               readOnly={readOnly}
               hideRegistrationToggle
+              templateMode={isTemplateEdit}
             />
 
             <section className="activity-settings-card">
@@ -719,72 +928,64 @@ function RegularActivityModal({
               />
             </section>
 
-            {isEdit ? (
-              <WorkAssignmentsBlock activityId={initial.id} />
-            ) : (
-              <div className="activity-settings-empty">
-                אחרי שמירת האירוע אפשר לשייך עובדים ולקבוע שעות לכל אחד
-              </div>
+            {!isTemplateEdit && (
+              isEdit ? (
+                <WorkAssignmentsBlock activityId={initial.id} />
+              ) : (
+                <div className="activity-settings-empty">
+                  אחרי שמירת האירוע אפשר לשייך עובדים ולקבוע שעות לכל אחד
+                </div>
+              )
             )}
           </div>
         </div>
 
-        {(showError || tplMsg) && (
-          <div className="activity-modal-error" role="alert">{showError || tplMsg}</div>
+        {showError && (
+          <div className="activity-modal-error" role="alert">{showError}</div>
         )}
 
         <footer className="activity-modal-footer">
           <div className="activity-modal-footer-start">
-            {isEdit && !readOnly && onDelete && (
+            {isEdit && !isTemplateEdit && !readOnly && onDelete && (
               <button
                 type="button"
                 className="btn activity-modal-btn activity-modal-btn--danger"
                 onClick={() => onDelete(initial)}
-                disabled={saving || tplBusy}
+                disabled={saving}
               >
                 <Trash2 size={14} /> מחיקה
               </button>
             )}
           </div>
           <div className="activity-modal-footer-actions">
-            {!readOnly && (
-              <button
-                type="button"
-                className="btn activity-modal-btn activity-modal-btn--template"
-                onClick={saveAsTemplate}
-                disabled={saving || tplBusy || !activityId}
-                title={!activityId ? 'שמרו את האירוע תחילה' : 'שמירה כתבנית'}
-              >
-                {tplBusy ? <Loader2 size={14} className="spin" /> : <Bookmark size={14} />}
-                שמירה כתבנית
-              </button>
-            )}
             <button
               type="button"
               className="btn activity-modal-btn activity-modal-btn--ghost"
               onClick={onClose}
-              disabled={saving || tplBusy}
+              disabled={saving}
             >
               {readOnly ? 'סגור' : 'ביטול'}
             </button>
             {!readOnly && (
               <>
-                <button
-                  type="button"
-                  className="btn activity-modal-btn activity-modal-btn--ghost"
-                  disabled={saving || tplBusy}
-                  onClick={(event) => submit(event, { closeAfter: false })}
-                >
-                  {saving ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
-                  החל
-                </button>
+                {!isTemplateEdit && (
+                  <button
+                    type="button"
+                    className="btn activity-modal-btn activity-modal-btn--ghost"
+                    disabled={saving}
+                    onClick={(event) => submit(event, { closeAfter: false })}
+                  >
+                    {saving ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
+                    החל
+                  </button>
+                )}
                 <button
                   type="submit"
                   className="btn activity-modal-btn activity-modal-btn--primary"
-                  disabled={saving || tplBusy}
+                  disabled={saving}
                 >
                   {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
-                  שמור וצא
+                  {isTemplateEdit ? 'שמור תבנית' : 'שמור וצא'}
                 </button>
               </>
             )}
@@ -798,6 +999,7 @@ function RegularActivityModal({
 function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }) {
   const isOverlay = !!initial?.overlay;
   const readOnly = !!initial?.read_only;
+  const isTemplateEdit = !!initial?._editing_template && !!initial?._template_id;
   const [form, setForm] = useState(() => ({
     ...emptyForm(),
     ...initial,
@@ -822,11 +1024,12 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
     registration_theme: (
       initial?.registration_theme && typeof initial.registration_theme === 'object'
         ? initial.registration_theme
-        : {}
+        : (initial?.theme && typeof initial.theme === 'object' ? initial.theme : {})
     ),
+    category: initial?.category === 'field' ? 'field' : 'wall',
   }));
   const [localError, setLocalError] = useState('');
-  const isEdit = !!initial?.id;
+  const isEdit = !!initial?.id && !isTemplateEdit;
   const showError = localError || error || '';
   const multiDay = !!(form.date && form.end_date && form.end_date > form.date);
 
@@ -840,19 +1043,49 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
     e.preventDefault();
     if (readOnly) return;
     if (!String(form.name || '').trim()) {
-      setLocalError('חסרה כותרת לאירוע');
+      setLocalError(isTemplateEdit ? 'חסר שם לתבנית' : 'חסרה כותרת לאירוע');
       return;
     }
-    if (!form.date) {
+    if (!isTemplateEdit && !form.date) {
       setLocalError('חסר תאריך');
       return;
     }
-    if (form.end_date && form.end_date < form.date) {
+    if (!isTemplateEdit && form.end_date && form.end_date < form.date) {
       setLocalError('תאריך הסיום חייב להיות אחרי תאריך ההתחלה או באותו יום');
       return;
     }
     const endDateNorm = form.end_date && form.end_date > form.date ? form.end_date : '';
     const closeAfter = options.closeAfter !== false;
+
+    if (isTemplateEdit) {
+      onSave({
+        _editing_template: true,
+        _template_id: initial._template_id,
+        name: String(form.name).trim(),
+        type: form.type || 'birthday',
+        category: form.category === 'field' ? 'field' : 'wall',
+        location: form.location || '',
+        price: form.price === '' ? 0 : Number(form.price),
+        price_includes_vat: !!form.price_includes_vat,
+        max_participants: form.max_participants === '' ? null : Number(form.max_participants),
+        description: form.description || '',
+        notes: form.notes || '',
+        start_time: form.all_day ? null : (form.start_time || null),
+        end_time: form.all_day ? null : (form.end_time || null),
+        all_day: !!form.all_day,
+        registration_enabled: !!form.registration_enabled,
+        collect_registration_payment: !!form.collect_registration_payment,
+        registration_mode: form.registration_mode || (
+          form.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
+        ),
+        registration_page_title: form.registration_page_title || '',
+        registration_page_body: form.registration_page_body || '',
+        theme: form.registration_theme || {},
+        closeAfter,
+      });
+      return;
+    }
+
     if (isOverlay) {
       onSave({
         ...form,
@@ -878,9 +1111,11 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
 
   const title = readOnly
     ? 'צפייה באירוע'
-    : isOverlay
-      ? 'עריכת אירוע מיומן חיצוני'
-      : (isEdit ? 'עריכת אירוע' : 'אירוע חדש');
+    : isTemplateEdit
+      ? 'עריכת תבנית'
+      : isOverlay
+        ? 'עריכת אירוע מיומן חיצוני'
+        : (isEdit ? 'עריכת אירוע' : 'אירוע חדש');
 
   if (!isOverlay) {
     return (
@@ -890,6 +1125,7 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
         setForm={setForm}
         readOnly={readOnly}
         isEdit={isEdit}
+        isTemplateEdit={isTemplateEdit}
         initial={initial}
         onDelete={onDelete}
         onClose={onClose}
@@ -979,7 +1215,13 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
                     <button
                       key={t.id}
                       type="button"
-                      onClick={() => set('type', t.id)}
+                      onClick={() => {
+                        if (t.id === 'training_vacation') {
+                          setForm((prev) => ({ ...prev, type: t.id, all_day: true }));
+                        } else {
+                          set('type', t.id);
+                        }
+                      }}
                       style={{
                         padding: '6px 12px',
                         borderRadius: 999,
@@ -2050,7 +2292,7 @@ function OverlaySidebar({
 export default function ActivitiesCalendar({ isOwner = false }) {
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState('month'); // month | week
+  const [viewMode, setViewMode] = useState('month'); // month | week | list
   const [cursor, setCursor] = useState(() => {
     const n = new Date();
     return new Date(n.getFullYear(), n.getMonth(), 1);
@@ -2069,6 +2311,11 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   const [overlayListLoading, setOverlayListLoading] = useState(false);
   const [dropHighlightDate, setDropHighlightDate] = useState('');
   const [scheduleBusy, setScheduleBusy] = useState(false);
+  const [tplMenuOpen, setTplMenuOpen] = useState(false);
+  const [createCtx, setCreateCtx] = useState(() => ({
+    date: toDateStr(new Date()),
+    opts: {},
+  }));
   const skipClickUntilRef = useRef(0);
   const undoStackRef = useRef([]);
   const undoBusyRef = useRef(false);
@@ -2190,7 +2437,19 @@ export default function ActivitiesCalendar({ isOwner = false }) {
 
   const filtered = useMemo(() => {
     if (typeFilter === 'all') return activities;
-    return activities.filter((a) => a.type === typeFilter);
+    return activities.filter((a) => activityMatchesFilter(a.type, typeFilter));
+  }, [activities, typeFilter]);
+
+  const listItems = useMemo(() => {
+    const rows = typeFilter === 'all'
+      ? activities.filter((a) => a.type === 'training_vacation')
+      : activities.filter((a) => activityMatchesFilter(a.type, typeFilter));
+    return [...rows].sort((a, b) => {
+      const da = String(a.date || '');
+      const db = String(b.date || '');
+      if (da !== db) return da.localeCompare(db);
+      return String(a.name || '').localeCompare(String(b.name || ''), 'he');
+    });
   }, [activities, typeFilter]);
 
   const byDate = useMemo(() => {
@@ -2328,8 +2587,95 @@ export default function ActivitiesCalendar({ isOwner = false }) {
 
   const openCreate = (dateStr, opts = {}) => {
     if (Date.now() < skipClickUntilRef.current) return;
+    if (viewMode === 'list' || typeFilter === 'training_vacation') {
+      let createType = 'training_vacation';
+      if (typeFilter === 'activities') createType = 'birthday';
+      else if (typeFilter !== 'all' && typeFilter !== 'training_vacation') createType = typeFilter;
+      setFormError('');
+      setModal(emptyForm(dateStr, {
+        ...opts,
+        type: createType,
+        all_day: createType === 'training_vacation' ? true : opts.all_day,
+      }));
+      return;
+    }
+    setFormError('');
+    setCreateCtx({ date: dateStr, opts });
+    setTplMenuOpen(true);
+  };
+
+  const openBlankCreate = (dateStr, opts = {}) => {
     setFormError('');
     setModal(emptyForm(dateStr, opts));
+    setBanner('אירוע מותאם — מלאו מחיר, מזמין ודף הרשמה');
+  };
+
+  const openFromTemplate = (tpl, dateStr, opts = {}) => {
+    setFormError('');
+    const base = emptyForm(dateStr, opts);
+    const theme = tpl.theme && typeof tpl.theme === 'object' ? tpl.theme : {};
+    const keepSlotTime = !!opts.start_time;
+    setModal({
+      ...base,
+      name: tpl.name || '',
+      type: tpl.type || 'birthday',
+      date: dateStr,
+      end_date: tpl.end_date ? String(tpl.end_date).slice(0, 10) : '',
+      start_time: keepSlotTime
+        ? base.start_time
+        : (tpl.start_time ? String(tpl.start_time).slice(0, 5) : '10:00'),
+      end_time: keepSlotTime
+        ? base.end_time
+        : (tpl.end_time ? String(tpl.end_time).slice(0, 5) : '12:00'),
+      all_day: keepSlotTime ? false : !!tpl.all_day,
+      location: tpl.location || '',
+      price: tpl.price ?? '',
+      max_participants: tpl.max_participants ?? '',
+      description: tpl.description || '',
+      notes: tpl.notes || '',
+      registration_enabled: !!tpl.registration_enabled,
+      collect_registration_payment: !!tpl.collect_registration_payment,
+      registration_mode: tpl.registration_mode || (
+        tpl.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
+      ),
+      price_includes_vat: !!tpl.price_includes_vat,
+      registration_page_title: tpl.registration_page_title || tpl.name || '',
+      registration_page_body: tpl.registration_page_body || tpl.description || '',
+      registration_theme: theme,
+      payment_status: 'unpaid',
+    });
+    setBanner(`תבנית: ${tpl.name} — ערכו ושמרו`);
+  };
+
+  const openEditTemplate = (tpl) => {
+    setFormError('');
+    const theme = tpl.theme && typeof tpl.theme === 'object' ? tpl.theme : {};
+    setModal({
+      ...emptyForm(toDateStr(new Date())),
+      name: tpl.name || '',
+      type: tpl.type || 'birthday',
+      category: tpl.category === 'field' ? 'field' : 'wall',
+      start_time: tpl.start_time ? String(tpl.start_time).slice(0, 5) : '10:00',
+      end_time: tpl.end_time ? String(tpl.end_time).slice(0, 5) : '12:00',
+      all_day: !!tpl.all_day,
+      location: tpl.location || '',
+      price: tpl.price ?? '',
+      max_participants: tpl.max_participants ?? '',
+      description: tpl.description || '',
+      notes: tpl.notes || '',
+      registration_enabled: !!tpl.registration_enabled,
+      collect_registration_payment: !!tpl.collect_registration_payment,
+      registration_mode: tpl.registration_mode || (
+        tpl.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
+      ),
+      price_includes_vat: !!tpl.price_includes_vat,
+      registration_page_title: tpl.registration_page_title || tpl.name || '',
+      registration_page_body: tpl.registration_page_body || tpl.description || '',
+      registration_theme: theme,
+      _editing_template: true,
+      _template_id: tpl.id,
+    });
+    setBanner(`עריכת תבנית: ${tpl.name}`);
   };
   const openEdit = (activity) => {
     if (Date.now() < skipClickUntilRef.current) return;
@@ -2560,6 +2906,27 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     setFormError('');
     const closeAfter = payload.closeAfter !== false;
     try {
+      if (payload._editing_template && payload._template_id) {
+        const {
+          closeAfter: _closeAfter,
+          _editing_template: _et,
+          _template_id: templateId,
+          ...body
+        } = payload;
+        const res = await fetch(`/api/activity-templates/${encodeURIComponent(templateId)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || `שמירת תבנית נכשלה (${res.status})`);
+        }
+        setModal(null);
+        setBanner('התבנית נשמרה');
+        return;
+      }
+
       if (payload.overlay) {
         const before = overlayEvents.find((e) => e.id === payload.id) || payload;
         await putOverlayEvent(payload, {
@@ -2781,27 +3148,43 @@ export default function ActivitiesCalendar({ isOwner = false }) {
         justifyContent: 'space-between',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button type="button" className="icon-btn" onClick={() => shift(-1)} aria-label="הקודם">
-            <ChevronRight size={16} />
-          </button>
-          <div style={{
-            minWidth: 160, textAlign: 'center', fontWeight: 800, fontSize: 16, color: 'var(--text-1)',
-          }}>
-            {viewMode === 'month' ? monthLabel : weekTitle}
-          </div>
-          <button type="button" className="icon-btn" onClick={() => shift(1)} aria-label="הבא">
-            <ChevronLeft size={16} />
-          </button>
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={() => setCursor(viewMode === 'month'
-              ? new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-              : new Date())}
-            style={{ fontSize: 12 }}
-          >
-            היום
-          </button>
+          {viewMode !== 'list' && (
+            <>
+              <button type="button" className="icon-btn" onClick={() => shift(-1)} aria-label="הקודם">
+                <ChevronRight size={16} />
+              </button>
+              <div style={{
+                minWidth: 160, textAlign: 'center', fontWeight: 800, fontSize: 16, color: 'var(--text-1)',
+              }}>
+                {viewMode === 'month' ? monthLabel : weekTitle}
+              </div>
+              <button type="button" className="icon-btn" onClick={() => shift(1)} aria-label="הבא">
+                <ChevronLeft size={16} />
+              </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => setCursor(viewMode === 'month'
+                  ? new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+                  : new Date())}
+                style={{ fontSize: 12 }}
+              >
+                היום
+              </button>
+            </>
+          )}
+          {viewMode === 'list' && (
+            <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--text-1)' }}>
+              {typeFilter === 'all' || typeFilter === 'training_vacation'
+                ? 'חופשות מאימונים'
+                : (FILTER_CHIPS.find((c) => c.id === typeFilter)?.label
+                  || TYPE_MAP[typeFilter]?.label
+                  || 'רשימת אירועים')}
+              <span style={{ marginInlineStart: 8, fontSize: 13, fontWeight: 600, color: 'var(--text-3)' }}>
+                ({listItems.length})
+              </span>
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
@@ -2832,49 +3215,40 @@ export default function ActivitiesCalendar({ isOwner = false }) {
             >
               <CalendarRange size={14} /> שבוע
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode('list');
+                if (typeFilter === 'all') setTypeFilter('training_vacation');
+              }}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: '7px 12px', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 700,
+                background: viewMode === 'list' ? 'rgba(244,114,182,0.18)' : 'transparent',
+                color: viewMode === 'list' ? '#F9A8D4' : 'var(--text-3)',
+              }}
+            >
+              <List size={14} /> רשימה
+            </button>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <ActivityTemplatesMenu
-              defaultDate={toDateStr(new Date())}
-              onCustomEvent={(dateStr) => {
-                setFormError('');
-                setModal(emptyForm(dateStr));
-                setBanner('אירוע מותאם — מלאו מחיר, מזמין ודף הרשמה');
+              open={tplMenuOpen}
+              onOpenChange={setTplMenuOpen}
+              defaultDate={createCtx.date}
+              onRequestOpen={() => {
+                setCreateCtx({ date: toDateStr(new Date()), opts: {} });
               }}
-              onApplyTemplate={(tpl, dateStr) => {
-                setFormError('');
-                const theme = tpl.theme && typeof tpl.theme === 'object' ? tpl.theme : {};
-                setModal({
-                  ...emptyForm(dateStr),
-                  name: tpl.name || '',
-                  type: tpl.type || 'birthday',
-                  date: dateStr,
-                  end_date: tpl.end_date ? String(tpl.end_date).slice(0, 10) : '',
-                  start_time: tpl.start_time ? String(tpl.start_time).slice(0, 5) : '10:00',
-                  end_time: tpl.end_time ? String(tpl.end_time).slice(0, 5) : '12:00',
-                  all_day: !!tpl.all_day,
-                  location: tpl.location || '',
-                  price: tpl.price ?? '',
-                  max_participants: tpl.max_participants ?? '',
-                  description: tpl.description || '',
-                  notes: tpl.notes || '',
-                  registration_enabled: !!tpl.registration_enabled,
-                  collect_registration_payment: !!tpl.collect_registration_payment,
-                  registration_mode: tpl.registration_mode || (
-                    tpl.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
-                  ),
-                  price_includes_vat: !!tpl.price_includes_vat,
-                  registration_page_title: tpl.registration_page_title || tpl.name || '',
-                  registration_page_body: tpl.registration_page_body || tpl.description || '',
-                  registration_theme: theme,
-                  payment_status: 'unpaid',
-                });
-                setBanner(`תבנית: ${tpl.name} — ערכו ושמרו`);
-              }}
+              onCustomEvent={(dateStr) => openBlankCreate(dateStr, createCtx.opts)}
+              onApplyTemplate={(tpl, dateStr) => openFromTemplate(tpl, dateStr, createCtx.opts)}
+              onEditTemplate={openEditTemplate}
             />
-            <button type="button" className="btn-primary" onClick={() => openCreate(toDateStr(new Date()))}>
-              <Plus size={14} /> אירוע חדש
+            <button type="button" className="btn btn-primary" onClick={() => openCreate(toDateStr(new Date()))}>
+              <Plus size={16} strokeWidth={2.5} />
+              {viewMode === 'list'
+                ? listCopyForFilter(typeFilter).add
+                : (typeFilter === 'training_vacation' ? 'חופשה חדשה' : 'אירוע חדש')}
             </button>
           </div>
         </div>
@@ -2899,7 +3273,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           >
             הכל
           </button>
-          {ACTIVITY_TYPES.map((t) => {
+          {FILTER_CHIPS.map((t) => {
             const active = typeFilter === t.id;
             const dimmed = typeFilter !== 'all' && !active;
             return (
@@ -2995,6 +3369,101 @@ export default function ActivitiesCalendar({ isOwner = false }) {
       {loading ? (
         <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-3)' }}>
           <Loader2 className="spin" size={22} style={{ display: 'inline' }} /> טוען יומן...
+        </div>
+      ) : viewMode === 'list' ? (
+        <div style={{
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border)',
+          borderRadius: 14,
+          overflow: 'hidden',
+        }}>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(140px, 180px) minmax(160px, 1fr) minmax(120px, 1.2fr) auto',
+            gap: 12,
+            padding: '12px 16px',
+            borderBottom: '1px solid var(--border)',
+            background: 'rgba(255,255,255,0.02)',
+            fontSize: 12,
+            fontWeight: 700,
+            color: 'var(--text-3)',
+          }}>
+            <div>תאריכים</div>
+            <div>שם</div>
+            <div>הערות</div>
+            <div style={{ textAlign: 'start' }}>פעולות</div>
+          </div>
+          {listItems.length === 0 ? (
+            <div style={{ padding: '36px 20px', textAlign: 'center', color: 'var(--text-3)', lineHeight: 1.6 }}>
+              {listCopyForFilter(typeFilter).empty}
+              <div style={{ marginTop: 12 }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => openCreate(toDateStr(new Date()))}
+                >
+                  <Plus size={15} strokeWidth={2.5} />
+                  {listCopyForFilter(typeFilter).add}
+                </button>
+              </div>
+            </div>
+          ) : (
+            listItems.map((item) => {
+              const meta = TYPE_MAP[item.type] || TYPE_MAP.other;
+              return (
+                <div
+                  key={item.id}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(140px, 180px) minmax(160px, 1fr) minmax(120px, 1.2fr) auto',
+                    gap: 12,
+                    padding: '12px 16px',
+                    borderBottom: '1px solid var(--border)',
+                    alignItems: 'center',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => openEdit(item)}
+                >
+                  <div style={{
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: meta.color,
+                    fontVariantNumeric: 'tabular-nums',
+                  }}>
+                    {formatListDateRange(item)}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <span style={{
+                      width: 8, height: 8, borderRadius: '50%', background: meta.color, flexShrink: 0,
+                    }} />
+                    <span style={{
+                      fontWeight: 700, color: 'var(--text-1)', overflow: 'hidden',
+                      textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {item.name || 'ללא שם'}
+                    </span>
+                  </div>
+                  <div style={{
+                    fontSize: 12, color: 'var(--text-3)', overflow: 'hidden',
+                    textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>
+                    {item.notes || item.description || '—'}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }} onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title="עריכה"
+                      aria-label="עריכה"
+                      onClick={() => openEdit(item)}
+                    >
+                      <Pencil size={14} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
       ) : viewMode === 'month' ? (
         <div style={{
@@ -3170,7 +3639,13 @@ export default function ActivitiesCalendar({ isOwner = false }) {
 
       {modal && (
         <ActivityFormModal
-          key={modal.overlay ? `overlay-${modal.id}` : (modal.id || 'new-activity')}
+          key={
+            modal._editing_template
+              ? `tpl-${modal._template_id}`
+              : modal.overlay
+                ? `overlay-${modal.id}`
+                : (modal.id || 'new-activity')
+          }
           initial={modal}
           onSave={handleSave}
           onDelete={handleDelete}

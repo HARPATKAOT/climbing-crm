@@ -1,8 +1,7 @@
 import React, { useRef, useState } from 'react';
-import { CalendarDays, Clock3, ImagePlus, MapPin, Users, X } from 'lucide-react';
+import { ImagePlus, X } from 'lucide-react';
 import { compressImageFile, readImageFileAsDataUrl } from './productCategories.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
-import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
 
 function parsePosition(position) {
   const raw = String(position || '50% 50%').trim().toLowerCase();
@@ -69,10 +68,6 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
   const position = formatPosition(x, y);
   const publicTitle = form.registration_page_title || form.name || '';
   const publicBody = form.registration_page_body || form.description || '';
-  const paidPerParticipant = form.registration_mode === 'paid_per_participant'
-    || (!form.registration_mode && form.collect_registration_payment);
-  const includesVat = normalizePriceIncludesVat(form.price_includes_vat);
-  const priceVat = vatBreakdown(form.price, includesVat);
 
   const patch = (values) => {
     if (readOnly) return;
@@ -141,7 +136,7 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
       <div className="activity-designer-heading">
         <div>
           <div className="activity-designer-kicker">תצוגת דף ההרשמה</div>
-          <div className="activity-designer-help">לחצו על הפרטים כדי לערוך אותם</div>
+          <div className="activity-designer-help">עריכת תמונה, כותרת ותיאור — שאר הפרטים בחלונית הימנית</div>
         </div>
         <div className="activity-designer-brand">
           {brandLogo ? (
@@ -152,7 +147,7 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
         </div>
       </div>
 
-      <div className="activity-designer-cover-layout">
+      <div className={`activity-designer-cover-layout${coverImage ? ' has-image' : ''}`}>
         {coverImage && (
           <label className="activity-designer-vertical-control">
             <span>{Math.round(y)}%</span>
@@ -277,125 +272,6 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
             placeholder="מידע קצר על הפעילות..."
             rows={3}
           />
-        )}
-
-        <div className="activity-designer-details">
-          <label>
-            <CalendarDays size={15} />
-            <InlineField
-              label="תאריך"
-              type="date"
-              value={form.date || ''}
-              onChange={(value) => patch({ date: value })}
-              readOnly={readOnly}
-              required
-            />
-          </label>
-          <label>
-            <CalendarDays size={15} />
-            <InlineField
-              label="תאריך סיום"
-              type="date"
-              value={form.end_date || ''}
-              min={form.date || undefined}
-              onChange={(value) => patch({ end_date: value })}
-              readOnly={readOnly}
-            />
-          </label>
-          {!form.all_day && (
-            <>
-              <label>
-                <Clock3 size={15} />
-                <InlineField
-                  label="שעת התחלה"
-                  type="time"
-                  value={form.start_time || ''}
-                  onChange={(value) => patch({ start_time: value })}
-                  readOnly={readOnly}
-                />
-              </label>
-              <label>
-                <Clock3 size={15} />
-                <InlineField
-                  label="שעת סיום"
-                  type="time"
-                  value={form.end_time || ''}
-                  onChange={(value) => patch({ end_time: value })}
-                  readOnly={readOnly}
-                />
-              </label>
-            </>
-          )}
-          <label className="activity-designer-detail-wide">
-            <MapPin size={15} />
-            <InlineField
-              label="מיקום הפעילות"
-              value={form.location || ''}
-              onChange={(value) => patch({ location: value })}
-              readOnly={readOnly}
-            />
-          </label>
-          <label>
-            <span className="activity-designer-currency">₪</span>
-            <InlineField
-              label={includesVat ? 'מחיר כולל מע״מ' : 'מחיר לפני מע״מ'}
-              type="number"
-              min="0"
-              step="1"
-              value={form.price ?? ''}
-              onChange={(value) => patch({ price: value })}
-              readOnly={readOnly}
-            />
-            <span className="activity-designer-suffix">
-              {paidPerParticipant ? 'למשתתף' : 'לאירוע'}
-            </span>
-          </label>
-          <label className="activity-designer-vat-mode">
-            <select
-              className="input"
-              value={includesVat ? 'incl' : 'excl'}
-              disabled={readOnly}
-              onChange={(e) => patch({ price_includes_vat: e.target.value === 'incl' })}
-            >
-              <option value="excl">לפני מע״מ</option>
-              <option value="incl">כולל מע״מ</option>
-            </select>
-          </label>
-          {priceVat.entered > 0 && (
-            <div className="activity-designer-vat-hint">
-              {includesVat
-                ? `לפני מע״מ: ${formatIls(priceVat.net)} · לתשלום: ${formatIls(priceVat.gross)}`
-                : `כולל מע״מ: ${formatIls(priceVat.gross)} · לתשלום: ${formatIls(priceVat.gross)}`}
-            </div>
-          )}
-          <label>
-            <Users size={15} />
-            <InlineField
-              label="מכסה"
-              type="number"
-              min="0"
-              step="1"
-              value={form.max_participants ?? ''}
-              onChange={(value) => patch({ max_participants: value })}
-              readOnly={readOnly}
-            />
-            <span className="activity-designer-suffix">משתתפים</span>
-          </label>
-        </div>
-
-        {!readOnly && (
-          <label className="activity-designer-all-day">
-            <input
-              type="checkbox"
-              checked={!!form.all_day}
-              onChange={(event) => patch({
-                all_day: event.target.checked,
-                start_time: event.target.checked ? '' : (form.start_time || '10:00'),
-                end_time: event.target.checked ? '' : (form.end_time || '12:00'),
-              })}
-            />
-            אירוע של יום שלם
-          </label>
         )}
       </div>
     </section>
