@@ -137,6 +137,8 @@ function buildFamilyRows(students, parents) {
 
   return [...groups.values()].map((row) => {
     const sorted = [...row.students].sort((a, b) => {
+      const adultDiff = Number(!!b.isAdult) - Number(!!a.isAdult);
+      if (adultDiff) return adultDiff;
       const da = a.created_at || a.created || '';
       const db = b.created_at || b.created || '';
       return String(da).localeCompare(String(db));
@@ -146,7 +148,9 @@ function buildFamilyRows(students, parents) {
     return {
       ...row,
       students: sorted,
-      primaryStudent: sorted.find((s) => !isParentOnlyLead(s)) || sorted[0],
+      primaryStudent: sorted.find((s) => !isParentOnlyLead(s) && !s.isAdult)
+        || sorted.find((s) => !isParentOnlyLead(s))
+        || sorted[0],
       statuses,
       created,
     };
@@ -1059,8 +1063,13 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                   <span>
                     {parentOnly
                       ? 'ללא מתאמן רשום'
-                      : `תאריך לידה: ${student.birthDate || 'לא הוזן'}`}
+                      : student.isAdult
+                        ? 'מבוגר משתתף'
+                        : `תאריך לידה: ${student.birthDate || 'לא הוזן'}`}
                   </span>
+                  {student.isAdult && !parentOnly && (
+                    <span className="badge badge-gray" style={{ fontSize: 10 }}>מבוגר</span>
+                  )}
                   <button className="btn btn-ghost btn-xs" onClick={() => setIsEditing(true)}>
                     <Edit2 size={11} /> ערוך
                   </button>
@@ -1089,6 +1098,11 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
               {parent?.name && parent?.name !== student.name && (
                 <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: 'var(--text-1)' }}>
                   {parent.name} <span style={{ fontWeight: 500, color: 'var(--text-3)' }}>(הורה/משלם)</span>
+                </div>
+              )}
+              {parent?.name && parent?.name === student.name && student.isAdult && (
+                <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 6, color: 'var(--text-3)' }}>
+                  משלם ומשתתף
                 </div>
               )}
               {(siblings.length > 0 || parent?.id) && (
@@ -1122,6 +1136,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                         }}
                       >
                         {sib.name}
+                        {sib.isAdult ? ' · מבוגר' : ''}
                       </button>
                     );
                   })}
@@ -1721,7 +1736,9 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                           <div style={{ fontWeight: 700, color: 'var(--text)' }}>{row.activity_name}</div>
                           <div style={{ color: 'var(--text-3)', marginTop: 2 }}>
                             {row.date ? new Date(row.date).toLocaleDateString('he-IL') : '—'}
-                            {row.activity_type_label ? ` · ${row.activity_type_label}` : ''}
+                            {row.activity_type_label && row.activity_type_label !== row.activity_name
+                              ? ` · ${row.activity_type_label}`
+                              : ''}
                             {row.location ? ` · ${row.location}` : ''}
                           </div>
                         </div>
@@ -2800,7 +2817,12 @@ export default function Leads({ students, setStudents, parents, setParents, grou
                               title={STATUSES[child.status]?.label || child.status}
                             >
                               {child.name}
-                              {namedChildren.length > 1 && (
+                              {child.isAdult && (
+                                <span style={{ marginInlineStart: 4, color: 'var(--text-3)', fontWeight: 500, fontSize: 10 }}>
+                                  מבוגר
+                                </span>
+                              )}
+                              {!child.isAdult && namedChildren.length > 1 && (
                                 <span style={{ marginInlineStart: 4, color: 'var(--text-3)', fontWeight: 500, fontSize: 10 }}>
                                   {STATUSES[child.status]?.label || ''}
                                 </span>

@@ -183,52 +183,52 @@ export async function saveCrmParticipants({
     const participantType = input.type === 'adult' ? 'adult' : 'child';
     const name = clean(input.name);
     let student = null;
-    if (participantType === 'child') {
-      if (input.id) {
-        student = (db.get('students') || []).find(
-          (item) => String(item.id) === String(input.id) && item.parentId === parent.id
-        );
-      }
-      if (!student) {
-        student = (db.get('students') || []).find(
-          (item) =>
-            item.parentId === parent.id &&
-            normalizedName(item.name) === normalizedName(name) &&
-            (!input.birthDate || !item.birthDate || item.birthDate === input.birthDate)
-        );
-      }
-      const previousStatus = student?.status;
-      const patch = {
-        name,
-        parentId: parent.id,
-        birthDate: clean(input.birthDate) || student?.birthDate || '',
-        gender: clean(input.gender) || student?.gender || '',
-        idNumber: clean(input.idNumber || input.climberIdNum) || student?.idNumber || '',
-        notes: clean(input.notes || input.registrationNotes) || student?.notes || '',
-        status: previousStatus === 'registered' ? 'registered' : 'health_signed',
-        healthSignedAt: student?.healthSignedAt || signedAt,
-        waiverSignedAt: student?.waiverSignedAt || signedAt,
-      };
-      if (!wantsReuse(input)) {
-        patch.healthSignedAt = signedAt;
-        patch.waiverSignedAt = signedAt;
-      }
-      if (student) {
-        student = db.update('students', student.id, patch) || { ...student, ...patch };
-        if (previousStatus !== 'registered' && previousStatus !== 'health_signed') {
-          onStudentStatusChanged?.(student);
-        }
-      } else {
-        student = db.insert('students', {
-          ...patch,
-          groupId: null,
-          source,
-          created: signedDate,
-        });
-        onStudentCreated?.(student, parent);
-      }
-      await requireDurable(persist, 'students', student);
+    if (input.id) {
+      student = (db.get('students') || []).find(
+        (item) => String(item.id) === String(input.id) && item.parentId === parent.id
+      );
     }
+    if (!student) {
+      student = (db.get('students') || []).find((item) => {
+        if (item.parentId !== parent.id) return false;
+        if (normalizedName(item.name) !== normalizedName(name)) return false;
+        if (participantType === 'adult') return item.isAdult === true;
+        if (item.isAdult === true) return false;
+        return !input.birthDate || !item.birthDate || item.birthDate === input.birthDate;
+      });
+    }
+    const previousStatus = student?.status;
+    const patch = {
+      name,
+      parentId: parent.id,
+      isAdult: participantType === 'adult',
+      birthDate: clean(input.birthDate) || student?.birthDate || '',
+      gender: clean(input.gender) || student?.gender || '',
+      idNumber: clean(input.idNumber || input.climberIdNum) || student?.idNumber || '',
+      notes: clean(input.notes || input.registrationNotes) || student?.notes || '',
+      status: previousStatus === 'registered' ? 'registered' : 'health_signed',
+      healthSignedAt: student?.healthSignedAt || signedAt,
+      waiverSignedAt: student?.waiverSignedAt || signedAt,
+    };
+    if (!wantsReuse(input)) {
+      patch.healthSignedAt = signedAt;
+      patch.waiverSignedAt = signedAt;
+    }
+    if (student) {
+      student = db.update('students', student.id, patch) || { ...student, ...patch };
+      if (previousStatus !== 'registered' && previousStatus !== 'health_signed') {
+        onStudentStatusChanged?.(student);
+      }
+    } else {
+      student = db.insert('students', {
+        ...patch,
+        groupId: null,
+        source,
+        created: signedDate,
+      });
+      onStudentCreated?.(student, parent);
+    }
+    await requireDurable(persist, 'students', student);
 
     let declaration = null;
     if (wantsReuse(input)) {

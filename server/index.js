@@ -1944,15 +1944,46 @@ app.put('/api/activities/:id/registrations/:registrationId', async (req, res) =>
       return res.status(503).json({ error: durable.error || 'שמירת המשתתף נכשלה' });
     }
 
-    if (patch.participant_name && registration.student_id) {
-      const student = db.getOne('students', registration.student_id);
-      if (student) {
-        const studentUpdated = db.update('students', student.id, { name: patch.participant_name });
+    if (patch.participant_name || patch.participant_type) {
+      let student = registration.student_id ? db.getOne('students', registration.student_id) : null;
+      const nextType = patch.participant_type || registration.participant_type || 'child';
+      const nextName = patch.participant_name || registration.participant_name || '';
+      if (!student && registration.parent_id && nextName) {
+        student = db.insert('students', {
+          name: nextName,
+          parentId: registration.parent_id,
+          isAdult: nextType === 'adult',
+          groupId: null,
+          status: 'health_signed',
+          source: 'activity_registration',
+          created: new Date().toISOString().slice(0, 10),
+          healthSignedAt: registration.created_at || new Date().toISOString(),
+          waiverSignedAt: registration.created_at || new Date().toISOString(),
+        });
+        await persistCore('students', student);
+        const linked = db.update('activity_registrations', registration.id, { student_id: student.id });
+        await persistCore('activity_registrations', linked);
+        if (registration.health_declaration_id) {
+          const declaration = (db.get('health_declarations') || []).find(
+            (row) => String(row.id) === String(registration.health_declaration_id)
+          );
+          if (declaration) {
+            const declarationUpdated = db.update('health_declarations', declaration.id, {
+              studentId: student.id,
+            });
+            await persistCore('health_declarations', declarationUpdated);
+          }
+        }
+      } else if (student) {
+        const studentUpdated = db.update('students', student.id, {
+          ...(patch.participant_name ? { name: patch.participant_name } : {}),
+          ...(patch.participant_type ? { isAdult: nextType === 'adult' } : {}),
+        });
         await persistCore('students', studentUpdated);
       }
     }
 
-    res.json({ success: true, registration: updated });
+    res.json({ success: true, registration: db.getOne('activity_registrations', registration.id) || updated });
   } catch (err) {
     console.error('put registration error:', err.message);
     res.status(500).json({ error: err.message });
@@ -2637,7 +2668,7 @@ app.get('/api/public/activities/:slug/household', publicFormRateLimit, async (re
       return res.json({ found: false, parent: null, children: [], adult_health_valid: false });
     }
     const children = (db.get('students') || [])
-      .filter((student) => String(student.parentId) === String(parent.id))
+      .filter((student) => String(student.parentId) === String(parent.id) && student.isAdult !== true)
       .map((student) => {
         const declaration = findLatestValidDeclaration(db, { studentId: student.id });
         const signedAt = declarationSignedAt(declaration) || student.healthSignedAt || null;
@@ -2653,10 +2684,21 @@ app.get('/api/public/activities/:slug/household', publicFormRateLimit, async (re
       .filter((child) => child.name)
       .sort((a, b) => a.name.localeCompare(b.name, 'he'));
 
-    const adultDeclaration = findLatestValidDeclaration(db, {
-      parentId: parent.id,
-      climberName: parent.name,
-    });
+    const adultStudent = (db.get('students') || []).find((student) => {
+      if (String(student.parentId) !== String(parent.id) || student.isAdult !== true) return false;
+      const parentName = String(parent.name || '').trim().toLowerCase();
+      const studentName = String(student.name || '').trim().toLowerCase();
+      return !parentName || studentName === parentName;
+    }) || (db.get('students') || []).find(
+      (student) => String(student.parentId) === String(parent.id) && student.isAdult === true
+    );
+    const adultDeclaration = (adultStudent
+      ? findLatestValidDeclaration(db, { studentId: adultStudent.id })
+      : null)
+      || findLatestValidDeclaration(db, {
+        parentId: parent.id,
+        climberName: parent.name,
+      });
 
     res.json({
       found: true,
@@ -2668,6 +2710,7 @@ app.get('/api/public/activities/:slug/household', publicFormRateLimit, async (re
         city: parent.city || '',
       },
       children,
+      adult_student_id: adultStudent?.id || null,
       adult_health_valid: !!adultDeclaration,
       listDefs: typeof db.getBroadcastListDefs === 'function' ? db.getBroadcastListDefs() : [],
       subscriptions: typeof db.getParentBroadcastLists === 'function'
@@ -5562,18 +5605,27 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   }
 
   const childList = (Array.isArray(children) ? children : [])
-    .map((c) => ({
-      id: c.id || null,
-      name: String(c.name || '').trim(),
-      birthDate: String(c.birthDate || '').trim(),
-      gender: String(c.gender || '').trim(),
-      idNumber: String(c.idNumber || c.climberIdNum || '').trim(),
-      childPhone: String(c.childPhone || '').trim(),
-      registrationNotes: String(c.registrationNotes || c.notes || '').trim(),
-      answers: c.answers || {},
-      signature: c.signature || '',
-      waiverAccepted: c.waiverAccepted === true || c.waiverAccepted === 'true',
-    }))
+    .map((c) => {
+      const name = String(c.name || '').trim();
+      const explicitAdult = c.type === 'adult' || c.isAdult === true || c.isAdultSelf === true;
+      const sameAsParent = name
+        && parentName
+        && name.trim().toLowerCase().replace(/\s+/g, ' ') === parentName.trim().toLowerCase().replace(/\s+/g, ' ');
+      const asAdult = explicitAdult || sameAsParent;
+      return {
+        id: c.id || null,
+        name,
+        type: asAdult ? 'adult' : 'child',
+        birthDate: String(c.birthDate || '').trim(),
+        gender: String(c.gender || '').trim(),
+        idNumber: String(c.idNumber || c.climberIdNum || '').trim(),
+        childPhone: String(c.childPhone || '').trim(),
+        registrationNotes: String(c.registrationNotes || c.notes || '').trim(),
+        answers: c.answers || {},
+        signature: c.signature || '',
+        waiverAccepted: c.waiverAccepted === true || c.waiverAccepted === 'true',
+      };
+    })
     .filter((c) => c.name);
 
   if (!childList.length) {
@@ -5581,7 +5633,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   }
 
   for (const child of childList) {
-    if (!child.birthDate) {
+    if (child.type !== 'adult' && !child.birthDate) {
       return res.status(400).json({ error: `חסר תאריך לידה עבור ${child.name}` });
     }
     if (!child.waiverAccepted || !child.signature) {
@@ -5619,7 +5671,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
         city,
         idNumber: parentIdNum,
       },
-      participants: childList.map((child) => ({ ...child, type: 'child' })),
+      participants: childList,
       template: template || resolveDeclarationTemplate(db, { templateId, templateSlug }),
       source: parentBody.source || 'form',
       onStudentCreated: (student, savedParent) => automationsService.triggerEvent('new_lead', {

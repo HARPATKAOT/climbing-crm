@@ -110,7 +110,9 @@ test('paid parent and two children reserve three slots and price units', async (
   assert.equal(db.store.health_declarations.length, 3);
   assert.ok(result.registrations.every((row) => row.health_declaration_id));
   assert.ok(db.store.health_declarations.every((row) => row.signed && row.signature_url));
-  assert.equal(result.registrations[0].student_id, null);
+  assert.equal(result.registrations[0].student_id, db.store.students.find((s) => s.isAdult)?.id);
+  assert.equal(db.store.students.filter((s) => s.isAdult).length, 1);
+  assert.equal(db.store.students.length, 3);
 });
 
 test('existing parent is deduplicated and a missing child is created', async () => {

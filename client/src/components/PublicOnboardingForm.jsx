@@ -97,6 +97,7 @@ export default function PublicOnboardingForm() {
     city: '',
   });
   const [children, setChildren] = useState([emptyChild()]);
+  const [isAdultSelf, setIsAdultSelf] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [savedDeclarations, setSavedDeclarations] = useState([]);
@@ -271,10 +272,27 @@ export default function PublicOnboardingForm() {
     setChildren((prev) => prev.map((c, i) => (i === index ? { ...c, ...patch } : c)));
   };
 
-  const addChild = () => setChildren((prev) => [...prev, emptyChild(questions)]);
+  const addChild = () => {
+    if (isAdultSelf) return;
+    setChildren((prev) => [...prev, emptyChild(questions)]);
+  };
 
   const removeChild = (index) => {
+    if (isAdultSelf) return;
     setChildren((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)));
+  };
+
+  const setAdultSelfMode = (enabled) => {
+    setIsAdultSelf(enabled);
+    if (enabled) {
+      setChildren([{
+        ...emptyChild(questions),
+        name: parent.name.trim(),
+        type: 'adult',
+      }]);
+    } else {
+      setChildren([emptyChild(questions)]);
+    }
   };
 
   const namedChildren = () => children.filter((c) => c.name.trim());
@@ -297,6 +315,14 @@ export default function PublicOnboardingForm() {
       setError('יש למלא מקום מגורים');
       return;
     }
+    if (isAdultSelf) {
+      setChildren([{
+        ...emptyChild(questions),
+        ...(children[0] || {}),
+        name: parent.name.trim(),
+        type: 'adult',
+      }]);
+    }
     setStep(2);
   };
 
@@ -308,7 +334,7 @@ export default function PublicOnboardingForm() {
       return;
     }
     for (const kid of kids) {
-      if (!kid.birthDate) {
+      if (!isAdultSelf && !kid.birthDate) {
         setError(`חסר תאריך לידה עבור ${kid.name}`);
         return;
       }
@@ -374,6 +400,7 @@ export default function PublicOnboardingForm() {
         .map((c) => ({
           id: c.id,
           name: c.name.trim(),
+          type: isAdultSelf || c.type === 'adult' ? 'adult' : 'child',
           birthDate: c.birthDate,
           gender: c.gender,
           childPhone: c.childPhone,
@@ -648,6 +675,22 @@ export default function PublicOnboardingForm() {
             <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.55)', margin: '0 0 14px' }}>
               השיבוץ לקבוצה יבוצע על ידי הצוות בהמשך.
             </p>
+            <label
+              className="checkbox-item"
+              style={{
+                cursor: 'pointer',
+                marginBottom: 14,
+                borderColor: isAdultSelf ? 'rgba(249,115,22,0.45)' : 'rgba(255,255,255,0.08)',
+                background: isAdultSelf ? 'rgba(249,115,22,0.08)' : 'rgba(255,255,255,0.03)',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={isAdultSelf}
+                onChange={(e) => setAdultSelfMode(e.target.checked)}
+              />
+              <span>אני נרשם/ת לעצמי כמבוגר</span>
+            </label>
             {children.map((child, index) => (
               <div
                 key={child.id || index}
@@ -660,53 +703,62 @@ export default function PublicOnboardingForm() {
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                  <div style={{ fontSize: 13, color: '#F97316', fontWeight: 700 }}>משתתף/ת {index + 1}</div>
-                  {children.length > 1 && (
+                  <div style={{ fontSize: 13, color: '#F97316', fontWeight: 700 }}>
+                    {isAdultSelf ? 'משתתף מבוגר' : `משתתף/ת ${index + 1}`}
+                  </div>
+                  {!isAdultSelf && children.length > 1 && (
                     <button type="button" className="clear-btn" onClick={() => removeChild(index)}>
                       <Trash2 size={12} style={{ display: 'inline', verticalAlign: 'middle' }} /> הסר
                     </button>
                   )}
                 </div>
                 <div className="form-group">
-                  <label>שם מלא של המשתתף בחוג *</label>
+                  <label>{isAdultSelf ? 'שם מלא *' : 'שם מלא של המשתתף בחוג *'}</label>
                   <input
                     value={child.name}
                     onChange={(e) => updateChild(index, { name: e.target.value })}
                     placeholder="שם מלא"
+                    readOnly={isAdultSelf}
                   />
                 </div>
                 <div className="form-group">
-                  <label>תאריך לידה *</label>
+                  <label>{isAdultSelf ? 'תאריך לידה' : 'תאריך לידה *'}</label>
                   <input
                     type="date"
                     value={child.birthDate}
                     onChange={(e) => updateChild(index, { birthDate: e.target.value })}
                   />
                   <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', marginTop: 6 }}>
-                    לבחירת שנה — לחצו על השנה עצמה בחלון שנפתח.
+                    {isAdultSelf
+                      ? 'אופציונלי למבוגר.'
+                      : 'לבחירת שנה — לחצו על השנה עצמה בחלון שנפתח.'}
                   </div>
                 </div>
-                <div className="form-group">
-                  <label>בן / בת</label>
-                  <select
-                    style={selectStyle}
-                    value={child.gender}
-                    onChange={(e) => updateChild(index, { gender: e.target.value })}
-                  >
-                    <option value="">בחרו</option>
-                    <option value="male">בן</option>
-                    <option value="female">בת</option>
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label>טלפון של הילד/ה</label>
-                  <input
-                    type="tel"
-                    value={child.childPhone}
-                    onChange={(e) => updateChild(index, { childPhone: e.target.value })}
-                    placeholder="לקבוצת המטפסים — לא נשלח דיוור"
-                  />
-                </div>
+                {!isAdultSelf && (
+                  <>
+                    <div className="form-group">
+                      <label>בן / בת</label>
+                      <select
+                        style={selectStyle}
+                        value={child.gender}
+                        onChange={(e) => updateChild(index, { gender: e.target.value })}
+                      >
+                        <option value="">בחרו</option>
+                        <option value="male">בן</option>
+                        <option value="female">בת</option>
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>טלפון של הילד/ה</label>
+                      <input
+                        type="tel"
+                        value={child.childPhone}
+                        onChange={(e) => updateChild(index, { childPhone: e.target.value })}
+                        placeholder="לקבוצת המטפסים — לא נשלח דיוור"
+                      />
+                    </div>
+                  </>
+                )}
                 <div className="form-group">
                   <label>הערות להרשמה</label>
                   <input
@@ -717,17 +769,19 @@ export default function PublicOnboardingForm() {
                 </div>
               </div>
             ))}
-            <button
-              type="button"
-              onClick={addChild}
-              style={{
-                width: '100%', background: 'transparent', border: '1px dashed rgba(249,115,22,0.5)',
-                color: '#F97316', padding: 12, borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16,
-              }}
-            >
-              <Plus size={16} /> הוסף משתתף/ת
-            </button>
+            {!isAdultSelf && (
+              <button
+                type="button"
+                onClick={addChild}
+                style={{
+                  width: '100%', background: 'transparent', border: '1px dashed rgba(249,115,22,0.5)',
+                  color: '#F97316', padding: 12, borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16,
+                }}
+              >
+                <Plus size={16} /> הוסף משתתף/ת
+              </button>
+            )}
             {error && <ErrorBox message={error} />}
             <button type="button" className="submit-btn" onClick={goNextFromChildren}>
               המשך להצהרת בריאות <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} />
