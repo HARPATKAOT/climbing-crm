@@ -6,6 +6,7 @@ import PublicHealthForm from './components/PublicHealthForm.jsx';
 import PublicOnboardingForm from './components/PublicOnboardingForm.jsx';
 import LeadIntakeForm from './components/LeadIntakeForm.jsx';
 import PrivacyPolicy from './components/PrivacyPolicy.jsx';
+import PublicActivityRegistration from './components/PublicActivityRegistration.jsx';
 import { getAccessToken } from './authClient.js';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import './index.css';
@@ -22,7 +23,7 @@ window.fetch = async function (resource, init = {}) {
       init = { ...init, headers };
     }
   }
-  if (isApiRequest && window.location.hostname !== 'localhost') {
+  if (isApiRequest && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
     resource = 'https://climbing-crm-api.onrender.com' + resource;
   }
   return originalFetch(resource, init);
@@ -37,6 +38,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Route path="/onboard" element={<PublicOnboardingForm />} />
         <Route path="/join" element={<LeadIntakeForm />} />
         <Route path="/privacy" element={<PrivacyPolicy />} />
+        <Route path="/event/:slug" element={<PublicActivityRegistration />} />
         <Route path="*" element={<AuthGate><App /></AuthGate>} />
       </Routes>
     </BrowserRouter>

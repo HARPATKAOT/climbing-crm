@@ -48,3 +48,5 @@ npm run build
 ## WhatsApp
 
 הוראות למעבר מ-Wassenger לחיבור ישיר ומאובטח מול Meta נמצאות ב-`META-WHATSAPP-SETUP.md`.
+
+הוראות לחיבור יומן גוגל למסך היומן נמצאות ב-`GOOGLE-CALENDAR-SETUP.md`.

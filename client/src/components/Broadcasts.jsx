@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, Hash, History, Settings, Smartphone, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2, FileText, Bookmark } from 'lucide-react';
 import { Modal } from './UI.jsx';
-import SegmentBuilder, { EMPTY_FILTERS } from './SegmentBuilder.jsx';
+import SegmentBuilder from './SegmentBuilder.jsx';
+import { EMPTY_FILTERS } from './segmentFilters.js';
 import TemplatesManager from './TemplatesManager.jsx';
 import SavedRepliesManager from './SavedRepliesManager.jsx';
+import BotSettingsPanel from './BotSettingsPanel.jsx';
 
 const DEFAULT_LISTS = [
   { key: 'general', label: 'כללי', description: 'עדכונים שוטפים', color: 'var(--blue)' },
@@ -21,26 +23,16 @@ const LIST_COLORS = [
 
 const WA_TEMPLATES = [];
 
-const DAY_OPTIONS = [
-  { value: 0, label: 'א׳' },
-  { value: 1, label: 'ב׳' },
-  { value: 2, label: 'ג׳' },
-  { value: 3, label: 'ד׳' },
-  { value: 4, label: 'ה׳' },
-  { value: 5, label: 'ו׳' },
-  { value: 6, label: 'ש׳' },
-];
-
 export default function Broadcasts({ parents, students, groups = [] }) {
   const [activeTab, setActiveTab] = useState('compose'); // compose | templates | saved | history | simulator | settings
   
   // Compose / Send State
   const [lists, setLists] = useState(DEFAULT_LISTS);
-  const [selectedList, setSelectedList] = useState('general');
+  const [selectedList, setSelectedList] = useState('');
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [approvedTemplates, setApprovedTemplates] = useState([]);
   const [customMessage, setCustomMessage] = useState('');
-  const [segmentFilters, setSegmentFilters] = useState({ ...EMPTY_FILTERS, listKey: 'general' });
+  const [segmentFilters, setSegmentFilters] = useState({ ...EMPTY_FILTERS });
   const [previewCount, setPreviewCount] = useState(0);
   const [sendingBroadcast, setSendingBroadcast] = useState(false);
   const [sendResult, setSendResult] = useState(null);
@@ -106,14 +98,6 @@ export default function Broadcasts({ parents, students, groups = [] }) {
     return 'לא פעיל';
   };
 
-  const toggleActiveDay = (day) => {
-    const current = Array.isArray(settings.aiActiveDays) ? settings.aiActiveDays : [];
-    const next = current.includes(day)
-      ? current.filter((d) => d !== day)
-      : [...current, day].sort((a, b) => a - b);
-    setSettings({ ...settings, aiActiveDays: next.length ? next : [day] });
-  };
-
   const fetchLists = async () => {
     try {
       const response = await fetch('/api/broadcast-list-defs');
@@ -121,7 +105,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
         const data = await response.json();
         if (Array.isArray(data) && data.length > 0) {
           setLists(data);
-          setSelectedList((prev) => (data.some((l) => l.key === prev) ? prev : data[0].key));
+          setSelectedList((prev) => (prev === '' || data.some((l) => l.key === prev) ? prev : ''));
         }
       }
     } catch (e) {
@@ -252,7 +236,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
       const next = Array.isArray(data.lists) ? data.lists : editingLists.filter((l) => l.key !== key);
       setLists(next);
       setEditingLists(next.map((l) => ({ ...l })));
-      setSelectedList((prev) => (next.some((l) => l.key === prev) ? prev : next[0]?.key));
+      setSelectedList((prev) => (prev === '' || next.some((l) => l.key === prev) ? prev : ''));
     } catch (err) {
       setListsError(err.message || 'מחיקה נכשלה');
     } finally {
@@ -413,7 +397,13 @@ export default function Broadcasts({ parents, students, groups = [] }) {
   }, [chatLogs, selectedSimThread]);
 
   useEffect(() => {
-    setSegmentFilters((prev) => ({ ...prev, listKey: selectedList || '' }));
+    setSegmentFilters((prev) => {
+      if (Array.isArray(prev.groupIds) && prev.groupIds.length > 0) {
+        return prev.listKey ? { ...prev, listKey: '' } : prev;
+      }
+      const nextKey = selectedList || '';
+      return prev.listKey === nextKey ? prev : { ...prev, listKey: nextKey };
+    });
   }, [selectedList]);
 
   useEffect(() => {
@@ -493,6 +483,12 @@ export default function Broadcasts({ parents, students, groups = [] }) {
     setSendResult(null);
 
     const campaignName = `קמפיין ${lists.find(l => l.key === selectedList)?.label || 'פילוח'} - ${new Date().toLocaleDateString('he-IL')}`;
+    const hasGroupFilter = Array.isArray(segmentFilters.groupIds) && segmentFilters.groupIds.length > 0;
+    const effectiveFilters = {
+      ...segmentFilters,
+      // קבוצה גוברת על רשימת תפוצה — לא לסנן החוצה מי שלא מנוי לרשימה
+      listKey: hasGroupFilter ? '' : (selectedList || segmentFilters.listKey || ''),
+    };
 
     try {
       const response = await fetch('/api/broadcast/jobs', {
@@ -500,10 +496,10 @@ export default function Broadcasts({ parents, students, groups = [] }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           campaignName,
-          listName: selectedList,
+          listName: hasGroupFilter ? 'קבוצות' : selectedList,
           templateId: selectedTemplate?.id || null,
           customMessage: selectedTemplate ? null : customMessage,
-          filters: { ...segmentFilters, listKey: selectedList || segmentFilters.listKey },
+          filters: effectiveFilters,
         }),
       });
 
@@ -703,6 +699,13 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                   </button>
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${selectedList === '' ? 'btn-primary' : 'btn-ghost'}`}
+                    onClick={() => setSelectedList('')}
+                  >
+                    <Hash size={13} /> כל הרשימות
+                  </button>
                   {lists.map(l => (
                     <button key={l.key} className={`btn btn-sm ${selectedList === l.key ? 'btn-primary' : 'btn-ghost'}`}
                       onClick={() => setSelectedList(l.key)}>
@@ -710,6 +713,11 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                     </button>
                   ))}
                 </div>
+                {Array.isArray(segmentFilters.groupIds) && segmentFilters.groupIds.length > 0 && (
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 10, lineHeight: 1.45 }}>
+                    נבחרו קבוצות — הדיוור יישלח לכל הרשומים בקבוצות, בלי תלות ברשימת התפוצה למעלה.
+                  </div>
+                )}
               </div>
 
               <div className="card card-p">
@@ -720,7 +728,13 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                   groups={groups}
                   lists={lists}
                   filters={segmentFilters}
-                  onChange={setSegmentFilters}
+                  onChange={(next) => {
+                    const hasGroups = Array.isArray(next.groupIds) && next.groupIds.length > 0;
+                    setSegmentFilters({
+                      ...next,
+                      listKey: hasGroups ? '' : (selectedList || next.listKey || ''),
+                    });
+                  }}
                 />
               </div>
 
@@ -1156,114 +1170,13 @@ export default function Broadcasts({ parents, students, groups = [] }) {
             </div>
 
             <form onSubmit={handleSaveSettings} className="form-grid" style={{ gap: 14 }}>
-              <div style={{
-                border: `1px solid ${settings.aiResponderEnabled ? 'rgba(37,211,102,0.45)' : 'rgba(239,68,68,0.35)'}`,
-                background: settings.aiResponderEnabled ? 'rgba(37,211,102,0.06)' : 'rgba(239,68,68,0.06)',
-                borderRadius: 12,
-                padding: 14,
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>מענה אוטומטי של הבוט</div>
-                    <div style={{ fontSize: 12, color: 'var(--text-2)' }}>
-                      {settings.aiResponderEnabled
-                        ? 'הבוט פעיל — עונה אוטומטית להודעות נכנסות'
-                        : 'הבוט כבוי — לא יישלח מענה אוטומטי'}
-                    </div>
-                  </div>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: savingBotToggle ? 'wait' : 'pointer', fontWeight: 600, fontSize: 13 }}>
-                    <input
-                      type="checkbox"
-                      checked={!!settings.aiResponderEnabled}
-                      disabled={savingBotToggle}
-                      onChange={(e) => handleBotToggle(e.target.checked)}
-                      style={{ width: 20, height: 20 }}
-                    />
-                    {savingBotToggle ? 'שומר...' : settings.aiResponderEnabled ? 'פעיל' : 'כבוי'}
-                  </label>
-                </div>
-                {botToggleError && (
-                  <div style={{ marginTop: 8, fontSize: 12, color: 'var(--red)' }}>{botToggleError}</div>
-                )}
-                {!settings.aiResponderEnabled && !botToggleError && (
-                  <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-2)' }}>
-                    הבוט כבוי — לא יישלחו תשובות אוטומטיות, גם לא ללידים חדשים.
-                  </div>
-                )}
-
-                <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
-                    <input
-                      type="checkbox"
-                      checked={!!settings.aiActiveHoursEnabled}
-                      onChange={e => setSettings({ ...settings, aiActiveHoursEnabled: e.target.checked })}
-                      disabled={!settings.aiResponderEnabled}
-                      style={{ width: 18, height: 18 }}
-                    />
-                    הגבלת שעות פעילות
-                  </label>
-                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 10, lineHeight: 1.5 }}>
-                    מחוץ לשעות האלה הבוט לא יענה (לפי שעון ישראל). בדיקת המענה במסך הזה תמשיך לעבוד גם מחוץ לשעות.
-                  </div>
-                  <div className="form-grid-2" style={{ opacity: settings.aiResponderEnabled && settings.aiActiveHoursEnabled ? 1 : 0.45, pointerEvents: settings.aiResponderEnabled && settings.aiActiveHoursEnabled ? 'auto' : 'none' }}>
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label className="form-label" style={{ fontSize: 11 }}>משעה</label>
-                      <input
-                        className="input input-sm"
-                        type="time"
-                        value={settings.aiActiveHoursStart || '09:00'}
-                        onChange={e => setSettings({ ...settings, aiActiveHoursStart: e.target.value })}
-                      />
-                    </div>
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label className="form-label" style={{ fontSize: 11 }}>עד שעה</label>
-                      <input
-                        className="input input-sm"
-                        type="time"
-                        value={settings.aiActiveHoursEnd || '21:00'}
-                        onChange={e => setSettings({ ...settings, aiActiveHoursEnd: e.target.value })}
-                      />
-                    </div>
-                  </div>
-                  <div style={{ marginTop: 10, opacity: settings.aiResponderEnabled && settings.aiActiveHoursEnabled ? 1 : 0.45, pointerEvents: settings.aiResponderEnabled && settings.aiActiveHoursEnabled ? 'auto' : 'none' }}>
-                    <div className="form-label" style={{ fontSize: 11, marginBottom: 6 }}>ימים פעילים</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                      {DAY_OPTIONS.map((day) => {
-                        const active = (settings.aiActiveDays || []).includes(day.value);
-                        return (
-                          <button
-                            key={day.value}
-                            type="button"
-                            onClick={() => toggleActiveDay(day.value)}
-                            style={{
-                              minWidth: 36,
-                              padding: '6px 8px',
-                              borderRadius: 8,
-                              border: active ? '1px solid rgba(37,211,102,0.55)' : '1px solid var(--border)',
-                              background: active ? 'rgba(37,211,102,0.18)' : 'transparent',
-                              color: 'var(--text)',
-                              fontWeight: 700,
-                              fontSize: 12,
-                              cursor: 'pointer',
-                            }}
-                          >
-                            {day.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">הנחיות אימון למענה ה-AI (System Prompt)</label>
-                <textarea className="input textarea" rows={6} style={{ fontSize: 12, lineHeight: 1.5 }}
-                  value={settings.aiSystemPrompt} onChange={e => setSettings({ ...settings, aiSystemPrompt: e.target.value })} />
-                <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4 }}>
-                  הסבר ל-AI כיצד להציג את הקיר, אלו מחירים לתת, וכיצד להתנסח (למשל: לתת קישורי רישום).
-                </div>
-              </div>
+              <BotSettingsPanel
+                settings={settings}
+                setSettings={setSettings}
+                savingBotToggle={savingBotToggle}
+                botToggleError={botToggleError}
+                handleBotToggle={handleBotToggle}
+              />
 
               <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14, marginTop: 4 }}>
                 <div style={{ fontWeight: 'bold', fontSize: 13, marginBottom: 10, color: '#E1306C', display: 'flex', alignItems: 'center', gap: 6 }}>

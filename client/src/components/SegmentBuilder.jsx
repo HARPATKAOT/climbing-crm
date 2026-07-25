@@ -1,21 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Users, Save } from 'lucide-react';
 import { STATUSES } from '../mockData.js';
-
-const EMPTY_FILTERS = {
-  ageMin: '',
-  ageMax: '',
-  cities: [],
-  statuses: [],
-  registered: 'any',
-  groupIds: [],
-  groupDays: [],
-  genders: [],
-  interests: [],
-  listKey: '',
-  marketingOptIn: true,
-  onlyOpenWindow: false,
-};
+import { getGroupDays } from '../scheduleUtils.js';
+import { EMPTY_FILTERS } from './segmentFilters.js';
 
 const DAY_OPTIONS = [
   { value: 0, label: 'א׳' },
@@ -47,6 +34,30 @@ export default function SegmentBuilder({
     const set = new Set((parents || []).map((p) => p.city).filter(Boolean));
     return [...set].sort((a, b) => a.localeCompare(b, 'he'));
   }, [parents]);
+
+  const groupsByDay = useMemo(() => {
+    const buckets = new Map();
+    for (const g of groups || []) {
+      const days = getGroupDays(g);
+      const targetDays = days.length ? days : [99];
+      for (const day of targetDays) {
+        if (!buckets.has(day)) buckets.set(day, []);
+        buckets.get(day).push(g);
+      }
+    }
+    return [...buckets.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([day, list]) => ({
+        day,
+        label: DAY_OPTIONS.find((d) => d.value === day)?.label || 'אחר',
+        groups: [...list].sort((a, b) => {
+          const aTime = String(a.time || '99:99');
+          const bTime = String(b.time || '99:99');
+          if (aTime !== bTime) return aTime.localeCompare(bTime);
+          return String(a.name || '').localeCompare(String(b.name || ''), 'he');
+        }),
+      }));
+  }, [groups]);
 
   useEffect(() => {
     fetch('/api/broadcast/interest-options')
@@ -151,12 +162,23 @@ export default function SegmentBuilder({
         </label>
         <label style={{ fontSize: 12 }}>
           רשימת תפוצה
-          <select className="input input-sm" value={f.listKey || ''} onChange={(e) => set({ listKey: e.target.value || '' })}>
+          <select
+            className="input input-sm"
+            value={f.listKey || ''}
+            onChange={(e) => set({ listKey: e.target.value || '' })}
+            disabled={Array.isArray(f.groupIds) && f.groupIds.length > 0}
+            title={Array.isArray(f.groupIds) && f.groupIds.length > 0 ? 'כשמסמנים קבוצה — הסינון לפי רשימת תפוצה מבוטל' : undefined}
+          >
             <option value="">ללא סינון רשימה</option>
             {lists.map((l) => (
               <option key={l.key} value={l.key}>{l.label}</option>
             ))}
           </select>
+          {Array.isArray(f.groupIds) && f.groupIds.length > 0 && (
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+              בוטלה זמנית — מסננים לפי קבוצה
+            </div>
+          )}
         </label>
       </div>
 
@@ -195,16 +217,57 @@ export default function SegmentBuilder({
 
       <div>
         <div style={{ fontSize: 12, marginBottom: 6, color: 'var(--text-2)' }}>קבוצה</div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 120, overflowY: 'auto' }}>
-          {groups.map((g) => (
-            <button
-              key={g.id}
-              type="button"
-              className={`btn btn-xs ${(f.groupIds || []).includes(g.id) ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => toggleInArray('groupIds', g.id)}
+        <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8, lineHeight: 1.45 }}>
+          כשמסמנים קבוצה — כל ההורים של הרשומים אליה נכללים, גם אם לא מנויים לרשימת התפוצה של החוגים.
+        </div>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(${Math.max(groupsByDay.length, 1)}, minmax(140px, 1fr))`,
+            gap: 10,
+            overflowX: 'auto',
+            paddingBottom: 4,
+          }}
+        >
+          {groupsByDay.map((section) => (
+            <div
+              key={section.day}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+                minWidth: 140,
+                padding: 8,
+                borderRadius: 10,
+                background: 'rgba(255,255,255,0.03)',
+                border: '1px solid var(--border)',
+              }}
             >
-              {g.name}
-            </button>
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 800,
+                  color: 'var(--text-1)',
+                  textAlign: 'center',
+                  paddingBottom: 4,
+                  borderBottom: '1px solid var(--border)',
+                }}
+              >
+                יום {section.label}
+              </div>
+              {section.groups.map((g) => (
+                <button
+                  key={`${section.day}-${g.id}`}
+                  type="button"
+                  className={`btn btn-xs ${(f.groupIds || []).includes(g.id) ? 'btn-primary' : 'btn-ghost'}`}
+                  onClick={() => toggleInArray('groupIds', g.id)}
+                  style={{ width: '100%', whiteSpace: 'normal', lineHeight: 1.35, height: 'auto', minHeight: 28 }}
+                  title={g.name}
+                >
+                  {g.name}
+                </button>
+              ))}
+            </div>
           ))}
         </div>
       </div>
@@ -280,8 +343,19 @@ export default function SegmentBuilder({
           {preview.recipients.length > 30 && <div>...ועוד {preview.recipients.length - 30}</div>}
         </div>
       )}
+
+      {!loadingPreview && preview.count === 0 && (
+        <div style={{ fontSize: 12, color: '#FBBF24', lineHeight: 1.45 }}>
+          אין נמענים לפי הסינון הנוכחי.
+          בדקו קבוצה/סטטוס, עיר, ואישור דיוור.
+          {!(Array.isArray(f.groupIds) && f.groupIds.length) && (
+            <>
+              {' '}
+              אם נבחרה רשימת תפוצה — ייתכן שההורה לא מנוי אליה.
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
-
-export { EMPTY_FILTERS };

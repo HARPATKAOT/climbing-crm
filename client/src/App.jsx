@@ -1,19 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
-  LayoutDashboard, Users, Calendar, ShieldCheck, UserCog, LogIn,
-  MessageSquare, Bell, Search, Coins, Tag, Award, FileHeart, Zap, LogOut
+  LayoutDashboard, Users, Calendar, CalendarRange, ShieldCheck, UserCog, LogIn,
+  MessageSquare, Bell, Search, Coins, Award, FileHeart, Zap, LogOut
 } from 'lucide-react';
 import { useAuth } from './components/AuthGate.jsx';
+import { isPublicPath } from './publicPaths.js';
 
 import Dashboard          from './components/Dashboard.jsx';
 import Leads              from './components/Leads.jsx';
 import Schedule           from './components/Schedule.jsx';
+import ActivitiesCalendar from './components/ActivitiesCalendar.jsx';
 import Safety             from './components/Safety.jsx';
 import Employees          from './components/Employees.jsx';
 import Broadcasts         from './components/Broadcasts.jsx';
 import CashRegister       from './components/CashRegister.jsx';
-import Pricelist          from './components/Pricelist.jsx';
 import LevelTests         from './components/LevelTests.jsx';
 import HealthDeclarations from './components/HealthDeclarations.jsx';
 import CheckInConsole     from './components/CheckInConsole.jsx';
@@ -25,9 +26,9 @@ const NAV = [
   { key: 'checkin',    label: 'מסוף כניסה',        icon: LogIn,            section: 'main', accent: '#2DD4BF' },
   { key: 'leads',      label: 'לקוחות ולידים',     icon: Users,            section: 'main', accent: '#A78BFA' },
   { key: 'schedule',   label: 'לוח חוגים',          icon: Calendar,         section: 'main', accent: '#FBBF24' },
+  { key: 'activities', label: 'יומן',               icon: CalendarRange,    section: 'main', accent: '#FB923C' },
   { key: 'broadcasts', label: 'דיוור וואטסאפ',     icon: MessageSquare,    section: 'main', accent: '#34D399' },
   { key: 'cash',       label: 'קופה ומכירה',      icon: Coins,            section: 'main', accent: '#F59E0B' },
-  { key: 'pricelist',  label: 'מחירון',             icon: Tag,              section: 'main', accent: '#FB7185' },
   { key: 'safety',     label: 'בדיקות בטיחות',     icon: ShieldCheck,      section: 'ops',  accent: '#4ADE80' },
   { key: 'employees',  label: 'עובדים ומשמרות',    icon: UserCog,          section: 'ops',  accent: '#60A5FA' },
   { key: 'levels',     label: 'מבחנים',             icon: Award,            section: 'ops',  accent: '#FCD34D' },
@@ -41,9 +42,9 @@ const PAGE_PATHS = {
   checkin:     '/checkin',
   leads:       '/leads',
   schedule:    '/schedule',
+  activities:  '/activities',
   broadcasts:  '/broadcasts',
   cash:        '/cash',
-  pricelist:   '/pricelist',
   safety:      '/safety',
   employees:   '/employees',
   levels:      '/levels',
@@ -56,14 +57,7 @@ const PATH_TO_PAGE = Object.fromEntries(
 );
 
 // Public routes are handled outside App (main.jsx). Never redirect these into the CRM shell.
-const PUBLIC_PATH_PREFIXES = ['/health', '/join'];
-const STAFF_PAGES = new Set(['checkin', 'leads', 'schedule', 'health', 'cash']);
-
-function isPublicPath(pathname) {
-  return PUBLIC_PATH_PREFIXES.some(
-    (p) => pathname === p || pathname.startsWith(`${p}/`)
-  );
-}
+const STAFF_PAGES = new Set(['checkin', 'leads', 'schedule', 'activities', 'health', 'cash']);
 
 function pathToPage(pathname) {
   if (pathname === '/' || pathname === '') return 'dashboard';
@@ -75,10 +69,10 @@ const PAGE_TITLES = {
   checkin:    { title: 'מסוף כניסה מהירה',       sub: 'רישום כניסות וצ׳ק-אין של לקוחות ומנויים' },
   leads:      { title: 'לקוחות ולידים',           sub: 'ניהול מאגר המתאמנים' },
   schedule:   { title: 'לוח חוגים',               sub: 'ניהול שיעורים ונוכחות' },
+  activities: { title: 'יומן',                    sub: 'ימי הולדת, טיולים ואירועים — מסונכרן עם גוגל' },
   broadcasts: { title: 'דיוור וואטסאפ',           sub: 'שליחת הודעות מסיביות' },
-  cash:       { title: 'קופה ומכירה',           sub: 'מכירה בדלפק, סגירת קופה ודוחות' },
-  pricelist:  { title: 'מחירון',                  sub: 'ניהול מחירי הכניסה, חוגים וציוד' },
-  safety:     { title: 'בדיקות בטיחות יומיות',   sub: 'אישור ובטיחות האתר' },
+  cash:       { title: 'קופה ומכירה',           sub: 'מכירה בדלפק, מוצרים, סגירת קופה ודוחות' },
+  safety:     { title: 'בדיקות בטיחות',         sub: 'תדירויות, חתימות יומן ומעקב' },
   employees:  { title: 'עובדים ומשמרות',          sub: 'שעון נוכחות וניהול שכר' },
   levels:     { title: 'מבחנים',                  sub: 'רמה · אבטחה · הובלה' },
   health:     { title: 'הצהרות בריאות וטפסים',    sub: 'עריכת טקסט ההצהרה שנשלחת ללקוחות + מעקב חתימות' },
@@ -101,6 +95,11 @@ export default function App() {
 
   useEffect(() => {
     if (isPublicPath(location.pathname)) return;
+    // Old bookmark: products lived at /pricelist — now a tab inside cash
+    if (location.pathname === '/pricelist') {
+      navigate('/cash', { replace: true, state: { cashTab: 'products' } });
+      return;
+    }
     if (pathToPage(location.pathname) === null) {
       navigate(isOwner ? '/' : '/leads', { replace: true });
       return;
@@ -210,85 +209,85 @@ export default function App() {
       <aside className="sidebar">
         {/* Logo */}
         <div className="sidebar-logo">
-          <div className="sidebar-logo-mark">🧗</div>
+          <div className="sidebar-logo-mark">
+            <img src="/logo.png" alt="קיר בועז" />
+          </div>
           <div>
-            <div className="sidebar-logo-text">My Wall</div>
+            <div className="sidebar-logo-text">קיר בועז</div>
             <div className="sidebar-logo-sub">CRM · מנהל קיר טיפוס</div>
           </div>
         </div>
 
-        {/* Nav: main */}
-        <div className="nav-section-label">ניהול</div>
-        {visibleNav.filter(n => n.section === 'main').map(n => {
-          const Icon = n.icon;
-          const isActive = page === n.key;
-          return (
-            <button
-              key={n.key}
-              className={`nav-item ${isActive ? 'active' : ''}`}
-              onClick={() => goToPage(n.key)}
-              style={{
-                '--nav-accent': n.accent,
-                ...(isActive ? {
-                  background: `${n.accent}28`,
-                  borderColor: `${n.accent}66`,
-                  color: '#fff',
-                  boxShadow: `0 4px 18px ${n.accent}33`,
-                } : {}),
-              }}
-            >
-              <span
-                className="nav-icon-wrap"
+        <nav className="sidebar-nav">
+          {/* Nav: main */}
+          <div className="nav-section-label">ניהול</div>
+          {visibleNav.filter(n => n.section === 'main').map(n => {
+            const Icon = n.icon;
+            const isActive = page === n.key;
+            return (
+              <button
+                key={n.key}
+                className={`nav-item ${isActive ? 'active' : ''}`}
+                onClick={() => goToPage(n.key)}
                 style={{
-                  background: `${n.accent}30`,
-                  color: n.accent,
-                  boxShadow: isActive ? `0 0 14px ${n.accent}66` : 'none',
+                  '--nav-accent': n.accent,
+                  ...(isActive ? {
+                    background: `${n.accent}18`,
+                    borderColor: `${n.accent}40`,
+                    color: '#fff',
+                  } : {}),
                 }}
               >
-                <Icon className="nav-icon" size={17} strokeWidth={2.25} />
-              </span>
-              <span>{n.label}</span>
-              {n.key === 'leads' && newLeadsCount > 0 && (
-                <span className="nav-badge">{newLeadsCount}</span>
-              )}
-            </button>
-          );
-        })}
+                <span
+                  className="nav-icon-wrap"
+                  style={{
+                    background: `${n.accent}18`,
+                    color: n.accent,
+                  }}
+                >
+                  <Icon className="nav-icon" size={17} strokeWidth={2.25} />
+                </span>
+                <span>{n.label}</span>
+                {n.key === 'leads' && newLeadsCount > 0 && (
+                  <span className="nav-badge">{newLeadsCount}</span>
+                )}
+              </button>
+            );
+          })}
 
-        {/* Nav: ops */}
-        <div className="nav-section-label" style={{ marginTop: 8 }}>תפעול</div>
-        {visibleNav.filter(n => n.section === 'ops').map(n => {
-          const Icon = n.icon;
-          const isActive = page === n.key;
-          return (
-            <button
-              key={n.key}
-              className={`nav-item ${isActive ? 'active' : ''}`}
-              onClick={() => goToPage(n.key)}
-              style={{
-                '--nav-accent': n.accent,
-                ...(isActive ? {
-                  background: `${n.accent}28`,
-                  borderColor: `${n.accent}66`,
-                  color: '#fff',
-                  boxShadow: `0 4px 18px ${n.accent}33`,
-                } : {}),
-              }}
-            >
-              <span
-                className="nav-icon-wrap"
+          {/* Nav: ops */}
+          <div className="nav-section-label" style={{ marginTop: 8 }}>תפעול</div>
+          {visibleNav.filter(n => n.section === 'ops').map(n => {
+            const Icon = n.icon;
+            const isActive = page === n.key;
+            return (
+              <button
+                key={n.key}
+                className={`nav-item ${isActive ? 'active' : ''}`}
+                onClick={() => goToPage(n.key)}
                 style={{
-                  background: `${n.accent}30`,
-                  color: n.accent,
-                  boxShadow: isActive ? `0 0 14px ${n.accent}66` : 'none',
+                  '--nav-accent': n.accent,
+                  ...(isActive ? {
+                    background: `${n.accent}18`,
+                    borderColor: `${n.accent}40`,
+                    color: '#fff',
+                  } : {}),
                 }}
               >
-                <Icon className="nav-icon" size={17} strokeWidth={2.25} />
-              </span>
-              <span>{n.label}</span>
-            </button>
-          );
-        })}
+                <span
+                  className="nav-icon-wrap"
+                  style={{
+                    background: `${n.accent}18`,
+                    color: n.accent,
+                  }}
+                >
+                  <Icon className="nav-icon" size={17} strokeWidth={2.25} />
+                </span>
+                <span>{n.label}</span>
+              </button>
+            );
+          })}
+        </nav>
 
         {/* Sidebar Footer */}
         <div className="sidebar-footer">
@@ -374,11 +373,11 @@ export default function App() {
         <main className="page-content">
           {page === 'dashboard'  && <Dashboard students={students} groups={groups} onNavigate={goToPage} />}
           {page === 'checkin'    && <CheckInConsole students={students} groups={groups} />}
-          {page === 'leads'      && <Leads students={students} setStudents={setStudents} parents={parents} setParents={setParents} groups={groups} canManageBilling={isOwner} />}
+          {page === 'leads'      && <Leads students={students} setStudents={setStudents} parents={parents} setParents={setParents} groups={groups} canManageBilling={isOwner} canViewComms />}
           {page === 'schedule'   && <Schedule groups={groups} students={students} parents={parents} setGroups={setGroups} setStudents={setStudents} />}
+          {page === 'activities' && <ActivitiesCalendar isOwner={isOwner} />}
           {page === 'broadcasts' && <Broadcasts parents={parents} students={students} groups={groups} />}
-          {page === 'cash'       && <CashRegister isOwner={isOwner} />}
-          {page === 'pricelist'  && <Pricelist />}
+          {page === 'cash'       && <CashRegister isOwner={isOwner} initialTab={location.state?.cashTab} />}
           {page === 'safety'     && <Safety />}
           {page === 'employees'  && <Employees />}
           {page === 'levels'     && <LevelTests students={students} groups={groups} />}

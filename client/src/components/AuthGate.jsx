@@ -1,6 +1,13 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { LogIn, LogOut, ShieldCheck } from 'lucide-react';
 import { authClient, authConfigured } from '../authClient.js';
+import { isPublicPath } from '../publicPaths.js';
+import PublicActivityRegistration from './PublicActivityRegistration.jsx';
+import PublicHealthForm from './PublicHealthForm.jsx';
+import PublicOnboardingForm from './PublicOnboardingForm.jsx';
+import LeadIntakeForm from './LeadIntakeForm.jsx';
+import PrivacyPolicy from './PrivacyPolicy.jsx';
 
 const AuthContext = createContext(null);
 
@@ -53,8 +60,10 @@ function LoginScreen() {
   return (
     <div className="auth-page">
       <form className="auth-card" onSubmit={submit}>
-        <div className="auth-logo">🧗</div>
-        <h1>כניסה ל־My Wall</h1>
+        <div className="auth-logo">
+          <img src="/logo.png" alt="קיר בועז" />
+        </div>
+        <h1>כניסה לקיר בועז</h1>
         <p>מערכת הניהול של קיר הטיפוס</p>
         <label className="form-label" htmlFor="crm-email">דואר אלקטרוני</label>
         <input
@@ -126,7 +135,9 @@ function NewPasswordScreen({ onDone }) {
   return (
     <div className="auth-page">
       <form className="auth-card" onSubmit={submit}>
-        <div className="auth-logo">🧗</div>
+        <div className="auth-logo">
+          <img src="/logo.png" alt="קיר בועז" />
+        </div>
         <h1>סיסמה חדשה</h1>
         <p>בחרו סיסמה חדשה לחשבון שלכם</p>
         <label className="form-label" htmlFor="crm-new-password">סיסמה חדשה</label>
@@ -162,6 +173,7 @@ function NewPasswordScreen({ onDone }) {
 }
 
 export default function AuthGate({ children }) {
+  const location = useLocation();
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -169,8 +181,10 @@ export default function AuthGate({ children }) {
   const [recoveryMode, setRecoveryMode] = useState(false);
   // Identity only — token refresh must not remount the whole app.
   const userId = session?.user?.id || null;
+  const onPublicPath = isPublicPath(location.pathname);
 
   useEffect(() => {
+    if (onPublicPath) return undefined;
     if (!authClient) {
       setLoading(false);
       return undefined;
@@ -190,9 +204,10 @@ export default function AuthGate({ children }) {
       }
     });
     return () => subscription.subscription.unsubscribe();
-  }, []);
+  }, [onPublicPath]);
 
   useEffect(() => {
+    if (onPublicPath) return undefined;
     if (!userId || !session?.user) return;
     let active = true;
     const user = session.user;
@@ -248,7 +263,7 @@ export default function AuthGate({ children }) {
       active = false;
     };
     // Re-run only when the signed-in user changes — not on every token refresh.
-  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps -- intentionally keyed by userId only
+  }, [userId, onPublicPath]); // eslint-disable-line react-hooks/exhaustive-deps -- intentionally keyed by userId only
 
   const value = useMemo(() => ({
     user: profile,
@@ -256,6 +271,18 @@ export default function AuthGate({ children }) {
     isOwner: profile?.role === 'owner',
     signOut: () => authClient?.auth.signOut(),
   }), [profile]);
+
+  // Public customer pages must never show staff login.
+  // Prefer dedicated routes in main.jsx; this is defense in depth if a public URL hits the catch-all.
+  if (onPublicPath) {
+    const path = location.pathname;
+    if (path === '/health' || path.startsWith('/health/')) return <PublicHealthForm />;
+    if (path === '/onboard') return <PublicOnboardingForm />;
+    if (path === '/join') return <LeadIntakeForm />;
+    if (path === '/privacy') return <PrivacyPolicy />;
+    if (path.startsWith('/event/')) return <PublicActivityRegistration />;
+    return null;
+  }
 
   if (!authConfigured) {
     return (

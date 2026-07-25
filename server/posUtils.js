@@ -19,8 +19,13 @@ export function normalizeProductType(item) {
     .filter(Boolean)
     .map((c) => String(c));
 
-  if (cats.some((c) => c.includes('כרטיס'))) return PRODUCT_TYPES.PUNCH_CARD;
-  if (cats.some((c) => c.includes('מנוי'))) return PRODUCT_TYPES.TIME_MEMBERSHIP;
+  if (cats.some((c) => c === 'כרטיסיה' || (c.includes('כרטיס') && !c.includes('מנוי')))) {
+    return PRODUCT_TYPES.PUNCH_CARD;
+  }
+  if (cats.some((c) => c.includes('מנוי') && !c.includes('כרטיס'))) {
+    return PRODUCT_TYPES.TIME_MEMBERSHIP;
+  }
+  // Combined browse category — do not guess; require product_type
   return PRODUCT_TYPES.PRODUCT;
 }
 

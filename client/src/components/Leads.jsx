@@ -9,6 +9,7 @@ import {
 } from '../utils/healthDeclarationPdf.js';
 import ConversationPanel from './ConversationPanel.jsx';
 import AttendanceCalendar from './AttendanceCalendar.jsx';
+import { isAwaitingHandling, latestInboundTime } from './communicationQueue.js';
 
 // Normalize phone for comparison (supports 05X ↔ 9725X)
 const normPhone = (p) => {
@@ -234,7 +235,7 @@ function FolderRow({ id, title, icon: Icon, summary, open, onToggle, children, s
 }
 
 // ─── Lead/Customer Card (detail sidebar) ────────────────────────────────────
-function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, groups = [], onClose, onStatusChange, onDelete, onUpdateStudent, pricelist, refreshData, canManageBilling = false }) {
+function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, groups = [], onClose, onStatusChange, onDelete, onUpdateStudent, pricelist, refreshData, canManageBilling = false, canViewComms = true, onCommunicationHandled }) {
   if (!student) return null;
   const parentOnly = isParentOnlyLead(student);
   const statusKeys = Object.keys(STATUSES);
@@ -1803,8 +1804,13 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
             overscrollBehavior: 'contain',
           }}
         >
-          {canManageBilling ? (
-            <ConversationPanel parent={parent} student={student} fillHeight />
+          {canViewComms ? (
+            <ConversationPanel
+              parent={parent}
+              student={student}
+              fillHeight
+              onHandled={onCommunicationHandled}
+            />
           ) : (
             <div style={{ padding: 20, color: 'var(--text-3)', fontSize: 13 }}>
               אין הרשאה לצפייה בתקשורת
@@ -2150,7 +2156,7 @@ function AddLeadModal({ students, parents, onAdd, onClose }) {
 }
 
 // ─── Main Leads / Customers Page ─────────────────────────────────────────────
-export default function Leads({ students, setStudents, parents, setParents, groups, canManageBilling = false }) {
+export default function Leads({ students, setStudents, parents, setParents, groups, canManageBilling = false, canViewComms = true }) {
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const [showAddModal, setShowAddModal] = useState(false);
@@ -2158,6 +2164,8 @@ export default function Leads({ students, setStudents, parents, setParents, grou
   const [pricelist, setPricelist] = useState([]);
   const [viewMode, setViewMode] = useState('table');
   const [dragOverStatus, setDragOverStatus] = useState(null);
+  const [markingHandledId, setMarkingHandledId] = useState(null);
+  const [handlingError, setHandlingError] = useState('');
 
   // Fetch pricelist for billing options
   useEffect(() => {
@@ -2179,6 +2187,12 @@ export default function Leads({ students, setStudents, parents, setParents, grou
     }
   };
 
+  useEffect(() => {
+    const timer = setInterval(refreshData, 15000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const leadEntries = buildLeadEntries(students, parents);
 
   const filtered = leadEntries.filter(({ student: s, parent: p }) => {
@@ -2186,14 +2200,30 @@ export default function Leads({ students, setStudents, parents, setParents, grou
     const matchSearch = (s.name || '').toLowerCase().includes(search.toLowerCase()) ||
       parent?.name?.toLowerCase().includes(search.toLowerCase()) ||
       (parent?.phone || '').includes(search);
-    const matchStatus = filterStatus === 'all' || s.status === filterStatus;
+    const matchStatus = filterStatus === 'all'
+      || (filterStatus === 'communication'
+        ? isAwaitingHandling(parent)
+        : s.status === filterStatus);
     return matchSearch && matchStatus;
   }).map((entry) => entry.student);
 
   // Table: one row per family. Kanban stays per-student for the funnel.
   const familyRows = buildFamilyRows(filtered, parents);
+  if (filterStatus === 'communication') {
+    familyRows.sort(
+      (a, b) => latestInboundTime(b.parent) - latestInboundTime(a.parent)
+    );
+  }
   const familyCountByStatus = (() => {
-    const map = { all: buildFamilyRows(leadEntries.map((e) => e.student), parents).length };
+    const map = {
+      all: buildFamilyRows(leadEntries.map((e) => e.student), parents).length,
+      communication: buildFamilyRows(
+        leadEntries
+          .filter(({ parent }) => isAwaitingHandling(parent))
+          .map(({ student }) => student),
+        parents
+      ).length,
+    };
     for (const key of Object.keys(STATUSES)) {
       if (key === 'archived') continue;
       const matching = leadEntries.filter((e) => e.student.status === key).map((e) => e.student);
@@ -2201,6 +2231,40 @@ export default function Leads({ students, setStudents, parents, setParents, grou
     }
     return map;
   })();
+
+  const applyHandledParents = (updatedParents = [], handledAt) => {
+    const byId = new Map(updatedParents.map((item) => [item.id, item]));
+    setParents((prev) => prev.map((item) => {
+      if (byId.has(item.id)) return { ...item, ...byId.get(item.id) };
+      return item;
+    }));
+    if (!updatedParents.length && handledAt && selectedParent?.id) {
+      setParents((prev) => prev.map((item) => (
+        item.id === selectedParent.id
+          ? { ...item, communication_handled_at: handledAt }
+          : item
+      )));
+    }
+  };
+
+  const handleMarkHandled = async (parentId) => {
+    if (!parentId || markingHandledId) return;
+    setMarkingHandledId(parentId);
+    setHandlingError('');
+    try {
+      const response = await fetch(`/api/conversations/${parentId}/handled`, { method: 'POST' });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'סימון הלקוח כטופל נכשל');
+      }
+      applyHandledParents(result.parents || [], result.handledAt);
+    } catch (error) {
+      console.error(error);
+      setHandlingError(error.message || 'סימון הלקוח כטופל נכשל');
+    } finally {
+      setMarkingHandledId(null);
+    }
+  };
 
   const selectedStudent = students.find(s => s.id === selectedStudentId)
     || (selectedStudentId?.startsWith('parent:')
@@ -2345,6 +2409,8 @@ export default function Leads({ students, setStudents, parents, setParents, grou
           onUpdateStudent={handleUpdateStudent}
           refreshData={refreshData}
           canManageBilling={canManageBilling}
+          canViewComms={canViewComms}
+          onCommunicationHandled={applyHandledParents}
         />
       )}
 
@@ -2386,6 +2452,12 @@ export default function Leads({ students, setStudents, parents, setParents, grou
       {/* Status filter tabs (table view) */}
       {viewMode === 'table' && (
       <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
+        <button
+          className={`btn btn-sm ${filterStatus === 'communication' ? 'btn-primary' : 'btn-ghost'}`}
+          onClick={() => setFilterStatus('communication')}
+        >
+          ממתינים לטיפול ({familyCountByStatus.communication})
+        </button>
         <button className={`btn btn-sm ${filterStatus === 'all' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilterStatus('all')}>
           הכל ({familyCountByStatus.all})
         </button>
@@ -2395,6 +2467,12 @@ export default function Leads({ students, setStudents, parents, setParents, grou
           </button>
         ))}
       </div>
+      )}
+
+      {handlingError && (
+        <div className="alert alert-danger" style={{ marginBottom: 14 }}>
+          {handlingError}
+        </div>
       )}
 
       {/* Kanban board (funnel by status) */}
@@ -2496,7 +2574,14 @@ export default function Leads({ students, setStudents, parents, setParents, grou
                     style={{ cursor: 'pointer' }}
                     onClick={() => primary && setSelectedStudentId(primary.id)}
                   >
-                    <td style={{ fontWeight: 700 }}>{parent?.name || '—'}</td>
+                    <td style={{ fontWeight: 700 }}>
+                      {parent?.name || '—'}
+                      {isAwaitingHandling(parent) && (
+                        <div style={{ marginTop: 4 }}>
+                          <span className="badge badge-amber" style={{ fontSize: 10 }}>ממתין לטיפול</span>
+                        </div>
+                      )}
+                    </td>
                     <td onClick={(e) => e.stopPropagation()}>
                       {namedChildren.length === 0 ? (
                         <span style={{ color: 'var(--text-3)' }}>ללא מתאמן רשום</span>
@@ -2552,6 +2637,16 @@ export default function Leads({ students, setStudents, parents, setParents, grou
                         <button className="btn btn-ghost btn-xs" onClick={() => primary && setSelectedStudentId(primary.id)}>
                           <Eye size={13} /> פרטים
                         </button>
+                        {isAwaitingHandling(parent) && (
+                          <button
+                            type="button"
+                            className="btn btn-success btn-xs"
+                            disabled={markingHandledId === parent?.id}
+                            onClick={() => handleMarkHandled(parent?.id)}
+                          >
+                            <Check size={13} /> {markingHandledId === parent?.id ? 'מסמן...' : 'לקוח טופל'}
+                          </button>
+                        )}
                         {parent?.phone && !isIg ? (
                           <a href={`https://wa.me/972${parent?.phone?.replace(/^0/, '').replace(/[-\s]/g, '')}`}
                             target="_blank" rel="noreferrer" className="btn btn-success btn-xs" onClick={(e) => e.stopPropagation()}>

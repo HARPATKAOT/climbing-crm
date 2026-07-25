@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Send, MessageCircle, Image as ImageIcon, FileText, Bookmark, RefreshCw } from 'lucide-react';
+import { Send, MessageCircle, Image as ImageIcon, FileText, Bookmark, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { normalizeTemplateVariables, buildPrefillValues } from './templateVariables.js';
+import { isAwaitingHandling } from './communicationQueue.js';
 
 const CHANNEL_LABELS = {
   whatsapp: 'וואטסאפ',
@@ -32,10 +34,11 @@ function WindowBadge({ windows, channel }) {
   );
 }
 
-export default function ConversationPanel({ parent, student, fillHeight = false }) {
+export default function ConversationPanel({ parent, student, fillHeight = false, onHandled }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  const [markingHandled, setMarkingHandled] = useState(false);
   const [error, setError] = useState('');
   const [replyText, setReplyText] = useState('');
   const [channel, setChannel] = useState('whatsapp');
@@ -169,6 +172,26 @@ export default function ConversationPanel({ parent, student, fillHeight = false 
     }
   };
 
+  const handleMarkHandled = async () => {
+    if (!parent?.id || markingHandled) return;
+    setMarkingHandled(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/conversations/${parent.id}/handled`, { method: 'POST' });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) throw new Error(json.error || 'סימון הלקוח כטופל נכשל');
+      const ownParent = (json.parents || []).find((item) => item.id === parent.id);
+      setData((prev) => prev
+        ? { ...prev, parent: ownParent || { ...prev.parent, communication_handled_at: json.handledAt } }
+        : prev);
+      onHandled?.(json.parents || [], json.handledAt);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setMarkingHandled(false);
+    }
+  };
+
   if (!parent) {
     return (
       <div className="card card-p" style={{ marginBottom: fillHeight ? 0 : 20, height: fillHeight ? '100%' : undefined }}>
@@ -179,6 +202,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false 
 
   const messages = data?.messages || [];
   const channels = data?.channels || {};
+  const awaitingHandling = isAwaitingHandling(data?.parent || parent);
 
   return (
     <div
@@ -204,9 +228,21 @@ export default function ConversationPanel({ parent, student, fillHeight = false 
         <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
           <MessageCircle size={15} /> תקשורת עם הלקוח
         </div>
-        <button type="button" className="btn btn-ghost btn-xs" onClick={load} disabled={loading}>
-          <RefreshCw size={12} /> רענון
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {awaitingHandling && (
+            <button
+              type="button"
+              className="btn btn-success btn-xs"
+              onClick={handleMarkHandled}
+              disabled={markingHandled}
+            >
+              <CheckCircle2 size={12} /> {markingHandled ? 'מסמן...' : 'לקוח טופל'}
+            </button>
+          )}
+          <button type="button" className="btn btn-ghost btn-xs" onClick={load} disabled={loading}>
+            <RefreshCw size={12} /> רענון
+          </button>
+        </div>
       </div>
 
       <div
@@ -355,8 +391,8 @@ export default function ConversationPanel({ parent, student, fillHeight = false 
                     onChange={(e) => {
                       setSelectedTemplate(e.target.value);
                       const tpl = templates.find((t) => t.id === e.target.value || t.meta_name === e.target.value);
-                      const vars = Array.isArray(tpl?.variables) ? tpl.variables : [];
-                      setTemplateVars(vars.length ? vars.map(() => student?.name || parent?.name || '') : []);
+                      const normalized = normalizeTemplateVariables(tpl?.variables, tpl?.body);
+                      setTemplateVars(buildPrefillValues(normalized, parent, student));
                     }}
                   >
                     <option value="">בחרו תבנית מאושרת...</option>
@@ -365,19 +401,27 @@ export default function ConversationPanel({ parent, student, fillHeight = false 
                     ))}
                   </select>
                 )}
-                {selectedTemplate && templateVars.map((v, idx) => (
-                  <input
-                    key={idx}
-                    className="input input-sm"
-                    placeholder={`משתנה {{${idx + 1}}}`}
-                    value={v}
-                    onChange={(e) => {
-                      const next = [...templateVars];
-                      next[idx] = e.target.value;
-                      setTemplateVars(next);
-                    }}
-                  />
-                ))}
+                {selectedTemplate && (() => {
+                  const tpl = templates.find((t) => t.id === selectedTemplate || t.meta_name === selectedTemplate);
+                  const normalized = normalizeTemplateVariables(tpl?.variables, tpl?.body);
+                  return templateVars.map((v, idx) => (
+                    <div key={idx} style={{ display: 'grid', gap: 4 }}>
+                      <label style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                        {normalized[idx]?.label || `משתנה ${idx + 1}`}
+                      </label>
+                      <input
+                        className="input input-sm"
+                        placeholder={normalized[idx]?.label || `משתנה ${idx + 1}`}
+                        value={v}
+                        onChange={(e) => {
+                          const next = [...templateVars];
+                          next[idx] = e.target.value;
+                          setTemplateVars(next);
+                        }}
+                      />
+                    </div>
+                  ));
+                })()}
               </div>
             )}
 
@@ -415,6 +459,14 @@ export default function ConversationPanel({ parent, student, fillHeight = false 
                   placeholder={mode === 'image' ? 'כיתוב לתמונה (אופציונלי)' : 'כתבו תשובה ללקוח...'}
                   value={replyText}
                   onChange={(e) => setReplyText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
+                    e.preventDefault();
+                    if (sending || freeformBlocked) return;
+                    if (mode === 'text' && !replyText.trim()) return;
+                    if (mode === 'image' && !imageBase64) return;
+                    handleSend(e);
+                  }}
                   disabled={sending || freeformBlocked}
                 />
                 <button

@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { israelDateStr } from './attendanceUtils.js';
 import { supa, CORE_TABLES, OPERATIONAL_TABLES } from './supa.js';
 
 const DB_FILE = path.join(process.cwd(), 'db.json');
@@ -167,6 +168,9 @@ const SEED_DATA = {
     { id: 'g-529e08f6', name: 'נבחרת בוגרת — ה׳ 19:10', day: 4, time: '19:10', duration: 110, trainer: '', maxSlots: 13, enrolled: 0, ageCategory: 'תיכון', priceWeek: 0, priceTwice: 550, waParents: 'https://chat.whatsapp.com/HasZy575i5XAtUVLPfOyX4', waClimbers: 'https://chat.whatsapp.com/LGg0ekCjQr10S1PkmA9OcK' },
   ],
   employees: [],
+  safety_check_types: [],
+  safety_inspections: [],
+  safety_incidents: [],
   whatsapp_settings: {
     metaWaPhoneId: '',
     metaWaAccessToken: '',
@@ -189,7 +193,28 @@ const SEED_DATA = {
     aiActiveHoursEnd: '21:00',
     // 0=ראשון … 6=שבת (אזור זמן ישראל)
     aiActiveDays: [0, 1, 2, 3, 4, 5, 6],
-    aiSystemPrompt: 'אתה בוט שירות לקוחות ידידותי של קיר הטיפוס My Wall. ענה בנימוס וקצרות בעברית. שלח קישור להצהרת בריאות (https://mywall.co.il/health) או הסבר על חוגים לפי הצורך. שמור על טון חיובי ומקצועי.',
+    aiSystemPrompt: 'אתה בוט שירות לקוחות ידידותי של קיר הטיפוס My Wall. ענה בנימוס וקצרות בעברית. שלח קישור להצהרת בריאות או הסבר על חוגים לפי הצורך. שמור על טון חיובי ומקצועי. אם אינך בטוח — התחל ב-UNSURE.',
+    aiOutsideHoursMessage: 'קיבלנו את ההודעה 🙏\nאנחנו מחוץ לשעות המענה כרגע.\nנחזור אליכם בבוקר בין 9:00 ל־21:00.',
+    aiHandoffKeywords: 'אדם,נציג,צוות,תלונה,מנהל,דחוף,לדבר עם',
+    aiHandoffAckMessage: 'מעבירים אתכם לצוות My Wall 🧗\nמישהו יחזור אליכם בהקדם.',
+    aiStopKeywords: 'עצור,הסר,stop,unsubscribe,הסר אותי',
+    aiOptOutMessage: 'הוסרתם מרשימת המענה האוטומטי.\nאם תרצו לחזור — כתבו «הפעל בוט».',
+    aiPauseOnHumanReply: true,
+    aiPauseMinutesAfterHuman: 120,
+    aiAudienceMode: 'all',
+    aiHistoryCount: 8,
+    aiMaxReplyChars: 700,
+    aiReplyDelayMs: 800,
+    aiRateLimitPerHour: 20,
+    aiKnowledgeBase: 'שאלות נפוצות:\n- חניה: יש חניה בחזית הקיר.\n- ציוד: נעלי טיפוס להשכרה במקום.\n- ביטול אימון: לעדכן את הצוות מראש בוואטסאפ.',
+    aiForbiddenTopics: 'אל תבטיח הנחות שלא אושרו.\nאל תמציא מחירים שלא מופיעים במחירון/בקבוצות.\nאל תיתן ייעוץ רפואי.\nאל תשתף פרטי לקוחות אחרים.',
+    aiBusinessFacts: 'כתובת: רחוב האורגים 12, אשדוד\nשעות: א׳–ה׳ 14:00–22:00 | שישי 09:00–15:00 | שבת סגור\nהצהרת בריאות: https://client-omega-topaz-35.vercel.app/health',
+    aiEscalateWhenUnsure: true,
+    aiUnsureReply: 'רגע — כדי לא לטעות אני מעביר את זה לצוות 🙏\nמישהו יחזור אליכם עם תשובה מדויקת.',
+    aiLeadCaptureEnabled: true,
+    aiInteractiveMenuEnabled: true,
+    aiGreetingMenu: 'היי! אני הבוט של My Wall 🧗\n\nבמה אפשר לעזור?\n1️⃣ הצהרת בריאות ✍️\n2️⃣ חוגים ומחירים 🤸\n3️⃣ שעות ומיקום 🗺️\n4️⃣ לדבר עם צוות 👤\n\nכתבו מספר או שאלה קצרה 😊',
+    aiReactivateKeywords: 'הפעל בוט,הפעל,activate',
   },
   whatsapp_logs: [],
   broadcast_campaigns: [],
@@ -202,6 +227,40 @@ const SEED_DATA = {
 };
 
 const DEFAULT_BROADCAST_LIST_DEFS = SEED_DATA.broadcast_list_defs;
+
+const DEFAULT_SAFETY_CHECK_TYPES = [
+  { id: 'sct-ropes-autobelay', name: 'בדיקת חבלים וטרובלואים', frequency: 'יומי', interval_days: 1, description: 'בדיקה יומית של חבלים ומכשירי אבטחה אוטומטיים לפני תחילת משמרת', active: true, sort_order: 1 },
+  { id: 'sct-lead-ropes', name: 'בדיקת חבלי הובלה', frequency: 'דו שבועי', interval_days: 14, description: 'בדיקת בלאי, קצוות וסימונים בחבלי הובלה', active: true, sort_order: 2 },
+  { id: 'sct-harnesses', name: 'בדיקת רתמות', frequency: 'דו חודשי', interval_days: 60, description: 'בדיקת תפרים, אבזמים ובלאי של כל רתמות הקיר', active: true, sort_order: 3 },
+  { id: 'sct-bolts', name: 'בדיקת בולטים', frequency: 'דו חודשי', interval_days: 60, description: 'בדיקת בולטים וראנרים במסלולים', active: true, sort_order: 4 },
+  { id: 'sct-toprope-anchors', name: 'בדיקת עוגני טופ רופ ורד בלוקים', frequency: 'דו חודשי', interval_days: 60, description: 'בדיקת טבעות עליונות, שאקלים וחיבורי רד בלוק', active: true, sort_order: 5 },
+  { id: 'sct-autobelay-annual', name: 'בדיקת טרובלואים תקופתית', frequency: 'שנתי', interval_days: 365, description: 'בדיקה תקופתית מקיפה למכשירי האבטחה האוטומטיים', active: true, sort_order: 6 },
+];
+
+const FREQ_INTERVAL_DAYS = {
+  יומי: 1,
+  שבועי: 7,
+  'דו שבועי': 14,
+  חודשי: 30,
+  'דו חודשי': 60,
+  'חצי שנתי': 182,
+  שנתי: 365,
+};
+
+function addDaysToDateStr(dateStr, days) {
+  const d = new Date(`${dateStr}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  d.setDate(d.getDate() + Number(days || 0));
+  return israelDateStr(d);
+}
+
+function daysBetweenDateStr(fromStr, toStr) {
+  if (!fromStr) return Infinity;
+  const from = new Date(`${fromStr}T12:00:00`);
+  const to = new Date(`${toStr}T12:00:00`);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return Infinity;
+  return Math.floor((to - from) / (1000 * 60 * 60 * 24));
+}
 
 function withoutServerSecrets(settings = {}) {
   const {
@@ -231,7 +290,16 @@ function readDb() {
 
 function writeDb(data) {
   try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    const payload = JSON.stringify(data, null, 2);
+    const tmpFile = `${DB_FILE}.tmp`;
+    fs.writeFileSync(tmpFile, payload, 'utf-8');
+    try {
+      fs.renameSync(tmpFile, DB_FILE);
+    } catch (renameErr) {
+      // Windows can fail rename when the target is briefly locked — fall back.
+      fs.writeFileSync(DB_FILE, payload, 'utf-8');
+      try { fs.unlinkSync(tmpFile); } catch (_) { /* ignore */ }
+    }
   } catch (error) {
     console.error('Error writing local JSON database:', error);
   }
@@ -550,6 +618,7 @@ export const db = {
       ? botFlagCache.value
       : (normalizeBoolFlag(settings.aiResponderEnabled) ?? false);
     return {
+      ...SEED_DATA.whatsapp_settings,
       ...settings,
       aiResponderEnabled,
       metaWaPhoneId: process.env.META_WA_PHONE_NUMBER_ID || settings.metaWaPhoneId || '',
@@ -1125,22 +1194,145 @@ export const db = {
   insertSafetyInspection: (inspection) => {
     const data = readDb();
     if (!data.safety_inspections) data.safety_inspections = [];
-    
+
+    const now = new Date();
+    const today = israelDateStr(now);
+    const checkTypeId = inspection.check_type_id || inspection.type_id || null;
+    let title = inspection.title || '';
+    let inspectionType = inspection.inspection_type || 'daily';
+
+    if (checkTypeId) {
+      const types = data.safety_check_types || [];
+      const type = types.find((t) => t.id === checkTypeId);
+      if (type) {
+        if (!title) title = type.name;
+        if (!inspection.inspection_type) {
+          inspectionType = type.frequency === 'יומי' ? 'daily'
+            : type.frequency === 'שבועי' || type.frequency === 'דו שבועי' ? 'weekly'
+            : type.frequency === 'חודשי' || type.frequency === 'דו חודשי' ? 'monthly'
+            : 'annual';
+        }
+      }
+    }
+
+    const employees = data.employees || [];
+    const empId = inspection.completed_by_employee_id || '';
+    const emp = employees.find((e) => e.id === empId);
+    const testerName = inspection.tester_name || inspection.testerName || emp?.name || '';
+
     const newInspection = {
       id: `sf${Date.now()}`,
-      title: inspection.title || 'בדיקת בטיחות יומית',
-      date: new Date().toISOString().split('T')[0],
-      inspection_type: inspection.inspection_type || 'daily',
+      check_type_id: checkTypeId,
+      title: title || 'בדיקת בטיחות',
+      date: inspection.date || today,
+      performed_at: inspection.performed_at || now.toISOString(),
+      inspection_type: inspectionType,
       description: inspection.description || '',
-      completed_by_employee_id: inspection.completed_by_employee_id || 'e-1',
-      signature_file_url: inspection.signature_file_url || 'signature_ok.png',
-      checks: inspection.checks || {}
+      status: inspection.status || 'תקין',
+      completed_by_employee_id: empId || null,
+      tester_name: testerName,
+      signature_file_url: inspection.signature_file_url || '',
+      checks: inspection.checks || {},
+      created_at: now.toISOString(),
     };
-    
+
     data.safety_inspections.unshift(newInspection);
     writeDb(data);
     syncUpsert('safety_inspections', newInspection);
     return newInspection;
+  },
+
+  ensureSafetyCheckTypes: () => {
+    const data = readDb();
+    if (!Array.isArray(data.safety_check_types) || data.safety_check_types.length === 0) {
+      data.safety_check_types = DEFAULT_SAFETY_CHECK_TYPES.map((t) => ({ ...t }));
+      writeDb(data);
+      for (const record of data.safety_check_types) syncUpsert('safety_check_types', record);
+    }
+    return data.safety_check_types;
+  },
+
+  getSafetyCheckTypes: ({ includeInactive = false } = {}) => {
+    db.ensureSafetyCheckTypes();
+    const list = db.get('safety_check_types') || [];
+    const filtered = includeInactive ? list : list.filter((t) => t.active !== false);
+    return [...filtered].sort((a, b) => (a.sort_order ?? 99) - (b.sort_order ?? 99) || String(a.name).localeCompare(String(b.name), 'he'));
+  },
+
+  createSafetyCheckType: (payload = {}) => {
+    db.ensureSafetyCheckTypes();
+    const name = String(payload.name || '').trim();
+    if (!name) return { error: 'שם הבדיקה חובה' };
+    const frequency = String(payload.frequency || 'יומי').trim();
+    const intervalDays = Number(payload.interval_days) > 0
+      ? Number(payload.interval_days)
+      : (FREQ_INTERVAL_DAYS[frequency] || 1);
+    const existing = db.get('safety_check_types') || [];
+    const maxSort = existing.reduce((m, t) => Math.max(m, Number(t.sort_order) || 0), 0);
+    return db.insert('safety_check_types', {
+      name,
+      frequency,
+      interval_days: intervalDays,
+      description: String(payload.description || '').trim(),
+      active: payload.active !== false,
+      sort_order: payload.sort_order ?? maxSort + 1,
+    });
+  },
+
+  updateSafetyCheckType: (id, updates = {}) => {
+    const existing = db.getOne('safety_check_types', id);
+    if (!existing) return null;
+    const next = { ...updates };
+    if (next.name != null) next.name = String(next.name).trim();
+    if (next.frequency != null) next.frequency = String(next.frequency).trim();
+    if (next.interval_days != null) {
+      next.interval_days = Number(next.interval_days) > 0
+        ? Number(next.interval_days)
+        : (FREQ_INTERVAL_DAYS[next.frequency || existing.frequency] || existing.interval_days || 1);
+    } else if (next.frequency && !updates.interval_days) {
+      next.interval_days = FREQ_INTERVAL_DAYS[next.frequency] || existing.interval_days;
+    }
+    if (next.description != null) next.description = String(next.description).trim();
+    return db.update('safety_check_types', id, next);
+  },
+
+  softDeleteSafetyCheckType: (id) => {
+    const existing = db.getOne('safety_check_types', id);
+    if (!existing) return null;
+    return db.update('safety_check_types', id, { active: false });
+  },
+
+  getSafetyDueToday: (dateStr = israelDateStr()) => {
+    const types = db.getSafetyCheckTypes({ includeInactive: false });
+    const logs = db.get('safety_inspections') || [];
+
+    return types.map((type) => {
+      const typeLogs = logs
+        .filter((l) => l.check_type_id === type.id || (!l.check_type_id && l.title === type.name))
+        .sort((a, b) => String(b.performed_at || b.date || '').localeCompare(String(a.performed_at || a.date || '')));
+      const last = typeLogs[0] || null;
+      const lastDate = last?.date || null;
+      const interval = Number(type.interval_days) > 0
+        ? Number(type.interval_days)
+        : (FREQ_INTERVAL_DAYS[type.frequency] || 1);
+      const nextDue = lastDate ? addDaysToDateStr(lastDate, interval) : dateStr;
+      const signedToday = typeLogs.some((l) => l.date === dateStr);
+      const todayLog = typeLogs.find((l) => l.date === dateStr) || null;
+      const daysSince = daysBetweenDateStr(lastDate, dateStr);
+      const isDue = !lastDate || daysSince >= interval;
+
+      return {
+        ...type,
+        last_performed: lastDate,
+        last_performed_at: last?.performed_at || null,
+        last_tester_name: last?.tester_name || null,
+        next_due: nextDue,
+        days_since: Number.isFinite(daysSince) ? daysSince : null,
+        is_due: isDue,
+        signed_today: signedToday,
+        today_log: todayLog,
+      };
+    }).filter((row) => row.is_due || row.signed_today);
   },
 
   insertSafetyIncident: (incident) => {

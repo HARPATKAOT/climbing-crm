@@ -17,6 +17,7 @@ export default function Dashboard({ students, groups, onNavigate }) {
   const [safetyWeekLogs, setSafetyWeekLogs]   = useState({});
   const [activities, setActivities]             = useState([]);
   const [employees, setEmployees]               = useState([]);
+  const [unpaidEvents, setUnpaidEvents]         = useState([]);
 
   // Calculate dynamic data for graphs
   const groupDistribution = useMemo(() => {
@@ -45,19 +46,23 @@ export default function Dashboard({ students, groups, onNavigate }) {
   useEffect(() => {
     async function loadDashboardStats() {
       try {
-        const todayIso = new Date().toISOString().split('T')[0];
-        
-        // 1. Fetch safety inspections
-        const inspections = await fetch('/api/safety/inspections').then(r => r.ok ? r.json() : []);
-        const hasTodaySafety = inspections.some(i => i.date === todayIso);
-        setSafetyPerformed(hasTodaySafety);
+        const [dueToday, inspections] = await Promise.all([
+          fetch('/api/safety/due-today').then(r => r.ok ? r.json() : []),
+          fetch('/api/safety/inspections').then(r => r.ok ? r.json() : []),
+        ]);
+        const pending = (dueToday || []).filter((c) => c.is_due && !c.signed_today);
+        setSafetyPerformed(pending.length === 0);
 
-        // Map past week safety status (Sun-Sat)
         const weekStatus = {};
         for (let i = 0; i < 7; i++) {
           const d = new Date();
           d.setDate(d.getDate() - i);
-          const iso = d.toISOString().split('T')[0];
+          const iso = new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'Asia/Jerusalem',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          }).format(d);
           const dayName = d.toLocaleDateString('he-IL', { weekday: 'short' });
           weekStatus[dayName] = inspections.some(insp => insp.date === iso);
         }
@@ -71,6 +76,8 @@ export default function Dashboard({ students, groups, onNavigate }) {
         const tests = await fetch('/api/level-tests').then(r => r.ok ? r.json() : []);
         const incidents = await fetch('/api/safety/incidents').then(r => r.ok ? r.json() : []);
         const waLogs = await fetch('/api/whatsapp/logs').then(r => r.ok ? r.json() : []);
+        const unpaid = await fetch('/api/activities/unpaid-open').then(r => r.ok ? r.json() : []);
+        setUnpaidEvents(Array.isArray(unpaid) ? unpaid.slice(0, 8) : []);
 
         const list = [];
         
@@ -290,6 +297,67 @@ export default function Dashboard({ students, groups, onNavigate }) {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Open unpaid calendar events */}
+      <div className="card card-p" style={{ marginBottom: 28 }}>
+        <div className="section-header">
+          <div>
+            <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <CalendarDays size={16} style={{ color: '#FB923C' }} />
+              אירועים פתוחים שלא שולמו
+            </div>
+            <div className="section-sub">דמי הזמנה מהמזמין — ימי הולדת, טיולים ואירועים</div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={() => onNavigate('activities')}>
+            ליומן ←
+          </button>
+        </div>
+        {unpaidEvents.length === 0 ? (
+          <div style={{ padding: 12, color: 'var(--text-3)', fontSize: 13 }}>
+            אין אירועים עתידיים עם סטטוס לא שולם
+          </div>
+        ) : (
+          <div className="table-wrap">
+            <table className="crm-table">
+              <thead>
+                <tr>
+                  <th>שם</th>
+                  <th>תאריך</th>
+                  <th>מזמין</th>
+                  <th>מחיר</th>
+                  <th>סטטוס</th>
+                </tr>
+              </thead>
+              <tbody>
+                {unpaidEvents.map((ev) => (
+                  <tr
+                    key={ev.id}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => onNavigate('activities')}
+                  >
+                    <td style={{ fontWeight: 700 }}>{ev.name}</td>
+                    <td>
+                      {ev.date}
+                      {ev.start_time ? ` · ${String(ev.start_time).slice(0, 5)}` : ''}
+                    </td>
+                    <td>{ev.host_name || '—'}</td>
+                    <td>{ev.price ? `₪${Math.round(ev.price)}` : '—'}</td>
+                    <td>
+                      <span style={{
+                        color: '#FBBF24',
+                        fontWeight: 700,
+                        fontSize: 12,
+                      }}>
+                        {ev.payment_status === 'partial' ? 'חלקי' : 'לא שולם'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Bottom Grid */}

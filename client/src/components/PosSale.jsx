@@ -2,7 +2,15 @@
 import {
   ShoppingCart, Plus, Minus, Trash2, Search, User, CreditCard,
   Banknote, Link2, FileText, CheckCircle2, X, Percent, Tag,
+  Package, ArrowRight,
 } from 'lucide-react';
+import {
+  PRODUCT_CATEGORIES,
+  CATEGORY_COLORS,
+  CATEGORY_ICONS,
+  DEFAULT_CATEGORY_COLOR,
+  normalizeCategories,
+} from './productCategories.js';
 
 const PAY_METHODS = [
   { id: 'cash', label: 'מזומן', icon: Banknote },
@@ -41,6 +49,10 @@ export default function PosSale() {
   const [parents, setParents] = useState([]);
   const [cart, setCart] = useState([]);
   const [productFilter, setProductFilter] = useState('');
+  const [activeCat, setActiveCat] = useState('הכל');
+  const [catalogCategories, setCatalogCategories] = useState(
+    PRODUCT_CATEGORIES.map((name) => ({ name, image: '', description: '' }))
+  );
   const [customerQuery, setCustomerQuery] = useState('');
   const [hideSuggestions, setHideSuggestions] = useState(false);
   const [selectedStudentId, setSelectedStudentId] = useState('');
@@ -64,19 +76,35 @@ export default function PosSale() {
 
   const refresh = useCallback(async () => {
     try {
-      const [pRes, sRes, parRes] = await Promise.all([
+      const [pRes, sRes, parRes, cRes] = await Promise.all([
         fetch('/api/pricelist'),
         fetch('/api/students'),
         fetch('/api/parents'),
+        fetch('/api/product-categories'),
       ]);
-      const [p, s, par] = await Promise.all([
+      const [p, s, par, cats] = await Promise.all([
         pRes.ok ? pRes.json() : [],
         sRes.ok ? sRes.json() : [],
         parRes.ok ? parRes.json() : [],
+        cRes.ok ? cRes.json() : [],
       ]);
-      setPricelist(Array.isArray(p) ? p.filter((i) => i.active !== false) : []);
+      setPricelist(
+        Array.isArray(p)
+          ? p
+              .filter((i) => i.active !== false)
+              .map((i) => ({
+                ...i,
+                categories: normalizeCategories(
+                  Array.isArray(i.categories) ? i.categories : i.category ? [i.category] : []
+                ),
+              }))
+          : []
+      );
       setStudents(Array.isArray(s) ? s : []);
       setParents(Array.isArray(par) ? par : []);
+      if (Array.isArray(cats) && cats.length) {
+        setCatalogCategories(cats.filter((c) => c.active !== false));
+      }
       if (!sRes.ok || !parRes.ok) {
         setLoadError('לא הצלחנו לטעון לקוחות — נסו לרענן');
       } else {
@@ -110,14 +138,26 @@ export default function PosSale() {
 
   const filteredProducts = useMemo(() => {
     const q = productFilter.trim().toLowerCase();
-    if (!q) return pricelist;
-    return pricelist.filter(
-      (item) =>
+    return pricelist.filter((item) => {
+      if (activeCat !== 'הכל' && !(item.categories || []).includes(activeCat)) return false;
+      if (!q) return true;
+      return (
         String(item.name || '').toLowerCase().includes(q) ||
         String(item.category || '').toLowerCase().includes(q) ||
         (item.categories || []).some((c) => String(c).toLowerCase().includes(q))
-    );
-  }, [pricelist, productFilter]);
+      );
+    });
+  }, [pricelist, productFilter, activeCat]);
+
+  const categoryCounts = useMemo(() => {
+    const counts = {};
+    for (const item of pricelist) {
+      for (const category of item.categories || []) {
+        counts[category] = (counts[category] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [pricelist]);
 
   const normalizePhoneDigits = (phone) => String(phone || '').replace(/\D/g, '');
 
@@ -479,11 +519,26 @@ export default function PosSale() {
             <input
               className="input"
               style={{ paddingRight: 34 }}
-              placeholder="חיפוש במחירון..."
+              placeholder="חיפוש מוצר..."
               value={productFilter}
               onChange={(e) => setProductFilter(e.target.value)}
             />
           </div>
+          {activeCat !== 'הכל' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => {
+                  setActiveCat('הכל');
+                  setProductFilter('');
+                }}
+              >
+                <ArrowRight size={14} /> חזרה לקטגוריות
+              </button>
+              <strong style={{ fontSize: 13 }}>{activeCat}</strong>
+            </div>
+          )}
           <button
             type="button"
             className="btn btn-ghost btn-sm"
@@ -548,51 +603,118 @@ export default function PosSale() {
               </button>
             </div>
           )}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8, maxHeight: 420, overflow: 'auto' }}>
-            {filteredProducts.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => addToCart(item)}
-                className="card"
-                style={{
-                  padding: 12,
-                  textAlign: 'right',
-                  cursor: 'pointer',
-                  border: '1px solid var(--border)',
-                  background: 'var(--bg-2)',
-                }}
-              >
-                <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>
-                  {productTypeLabel(item.product_type)}
-                </div>
-                <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6, color: 'var(--text-1)' }}>
-                  {item.name}
-                </div>
-                <div style={{ fontWeight: 800, color: 'var(--accent, #F59E0B)' }}>
-                  ₪{Number(item.price || 0).toLocaleString()}
-                </div>
-                {item.product_type === 'punch_card' && (
-                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
-                    {item.visits_total || 10} כניסות
+          {activeCat === 'הכל' && !productFilter.trim() ? (
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))',
+              gap: 10,
+              maxHeight: 440,
+              overflow: 'auto',
+            }}>
+              {catalogCategories.map((category) => {
+                const c = CATEGORY_COLORS[category.name] || DEFAULT_CATEGORY_COLOR;
+                const Icon = CATEGORY_ICONS[category.name] || Package;
+                return (
+                  <button
+                    key={category.id || category.name}
+                    type="button"
+                    onClick={() => setActiveCat(category.name)}
+                    className="card"
+                    style={{
+                      padding: 0,
+                      textAlign: 'right',
+                      cursor: 'pointer',
+                      overflow: 'hidden',
+                      border: `1px solid ${c.text}33`,
+                      background: 'var(--bg-2)',
+                    }}
+                  >
+                    <div style={{
+                      height: 82,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      background: category.image
+                        ? `center/cover no-repeat url(${category.image})`
+                        : `linear-gradient(145deg, ${c.bg}, rgba(15,20,30,0.9))`,
+                    }}>
+                      {!category.image && <Icon size={28} color={c.text} strokeWidth={1.75} />}
+                    </div>
+                    <div style={{ padding: '9px 10px' }}>
+                      <div style={{ fontWeight: 800, fontSize: 13, color: 'var(--text-1)' }}>
+                        {category.name}
+                      </div>
+                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 3 }}>
+                        {categoryCounts[category.name] || 0} מוצרים
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+              gap: 8,
+              maxHeight: 420,
+              overflow: 'auto',
+            }}>
+              {filteredProducts.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => addToCart(item)}
+                  className="card"
+                  style={{
+                    padding: 0,
+                    textAlign: 'right',
+                    cursor: 'pointer',
+                    border: '1px solid var(--border)',
+                    background: 'var(--bg-2)',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {item.image && (
+                    <img
+                      src={item.image}
+                      alt=""
+                      style={{ display: 'block', width: '100%', height: 86, objectFit: 'cover' }}
+                    />
+                  )}
+                  <div style={{ padding: 12 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>
+                      {productTypeLabel(item.product_type)}
+                    </div>
+                    <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6, color: 'var(--text-1)' }}>
+                      {item.name}
+                    </div>
+                    <div style={{ fontWeight: 800, color: 'var(--accent, #F59E0B)' }}>
+                      ₪{Number(item.price || 0).toLocaleString()}
+                    </div>
+                    {item.product_type === 'punch_card' && (
+                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                        {item.visits_total || 10} כניסות
+                      </div>
+                    )}
+                    {item.product_type === 'time_membership' && (
+                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                        {item.duration_days || 30} ימים
+                      </div>
+                    )}
+                    {item.track_inventory && item.stock_qty != null && (
+                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                        מלאי: {item.stock_qty}
+                      </div>
+                    )}
                   </div>
-                )}
-                {item.product_type === 'time_membership' && (
-                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
-                    {item.duration_days || 30} ימים
-                  </div>
-                )}
-                {item.track_inventory && item.stock_qty != null && (
-                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
-                    מלאי: {item.stock_qty}
-                  </div>
-                )}
-              </button>
-            ))}
-            {filteredProducts.length === 0 && (
-              <div style={{ color: 'var(--text-3)', fontSize: 13, padding: 12 }}>אין פריטים תואמים</div>
-            )}
-          </div>
+                </button>
+              ))}
+              {filteredProducts.length === 0 && (
+                <div style={{ color: 'var(--text-3)', fontSize: 13, padding: 12 }}>אין פריטים תואמים</div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

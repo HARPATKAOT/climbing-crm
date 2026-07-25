@@ -40,6 +40,7 @@ const DIRECT_TABLES = [
   'attendance',
   'activities',
   'activity_registrations',
+  'activity_templates',
   'health_declarations',
   'form_templates',
   'client_documents',
@@ -56,9 +57,11 @@ export const OPERATIONAL_TABLES = [
   'employees',
   'whatsapp_logs',
   'wage_agreements',
+  'work_assignments',
   'shift_hours',
   'safety_inspections',
   'safety_incidents',
+  'safety_check_types',
   'level_tests',
   'pricelist',
   'broadcast_campaigns',
@@ -66,6 +69,7 @@ export const OPERATIONAL_TABLES = [
   'broadcast_list_defs',
   'check_ins',
   'automations',
+  'automation_sends',
   'cash_register_shifts',
   'webhook_logs',
   'customer_passes',
@@ -98,6 +102,7 @@ const mappers = {
       last_inbound_whatsapp: r.last_inbound_whatsapp || null,
       last_inbound_instagram: r.last_inbound_instagram || null,
       last_inbound_messenger: r.last_inbound_messenger || null,
+      communication_handled_at: r.communication_handled_at || null,
       notes: r.notes || '',
       status: r.status || null,
       idNumber: r.id_number || '',
@@ -118,6 +123,7 @@ const mappers = {
       last_inbound_whatsapp: emptyToNull(o.last_inbound_whatsapp),
       last_inbound_instagram: emptyToNull(o.last_inbound_instagram),
       last_inbound_messenger: emptyToNull(o.last_inbound_messenger),
+      communication_handled_at: emptyToNull(o.communication_handled_at),
       notes: o.notes || '',
       status: emptyToNull(o.status),
       id_number: emptyToNull(o.idNumber || o.id_number),
@@ -222,8 +228,14 @@ const columnMapper = (allowed) => ({
 });
 
 mappers.activities = columnMapper([
-  'id', 'name', 'type', 'status', 'date', 'start_time', 'end_time', 'location',
+  'id', 'name', 'type', 'status', 'date', 'end_date', 'start_time', 'end_time', 'location',
   'price', 'max_participants', 'responsible_id', 'description', 'payment_link', 'notes',
+  'google_event_id', 'google_etag', 'synced_at', 'all_day', 'contact_name', 'contact_phone',
+  'host_name', 'host_email', 'host_phone', 'host_parent_id', 'payment_status',
+  'registration_slug', 'registration_enabled', 'registration_closes_at',
+  'collect_registration_payment', 'registration_page_title', 'registration_page_body',
+  'registration_theme',
+  'created_at', 'updated_at',
 ]);
 mappers.attendance = columnMapper([
   'id', 'student_id', 'group_id', 'date', 'status', 'marked_by', 'notes',
@@ -232,8 +244,17 @@ mappers.enrollments = columnMapper([
   'id', 'student_id', 'group_id', 'status', 'start_date', 'end_date', 'price',
 ]);
 mappers.activity_registrations = columnMapper([
-  'id', 'activity_id', 'student_id', 'parent_id', 'participant_name', 'phone',
-  'payment_status', 'amount', 'paid_at',
+  'id', 'activity_id', 'student_id', 'parent_id', 'participant_name', 'phone', 'email',
+  'payment_status', 'amount', 'paid_at', 'status', 'notes', 'payment_id',
+  'created_at', 'updated_at',
+]);
+mappers.activity_templates = columnMapper([
+  'id', 'name', 'type', 'category', 'location', 'price', 'max_participants', 'description', 'notes',
+  'start_time', 'end_time', 'all_day',
+  'registration_enabled', 'collect_registration_payment',
+  'registration_page_title', 'registration_page_body',
+  'theme', 'sort_order', 'is_active',
+  'created_at', 'updated_at',
 ]);
 
 mappers.health_declarations = {

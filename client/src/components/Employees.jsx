@@ -7,6 +7,37 @@ import { Modal } from './UI.jsx';
 
 const STATUS_OPTIONS = ['עובד פעיל', 'מנהל', 'עובד זמני', 'מדריך צעיר', 'מועמד', 'ארכיון', 'סנפלינג'];
 const PAYMENT_OPTIONS = ['תלוש', 'חשבונית'];
+const WORK_TYPE_OPTIONS = [
+  { id: 'counter_shift', label: 'דלפק' },
+  { id: 'class_shift', label: 'חוג' },
+  { id: 'private_shift', label: 'פרטי' },
+  { id: 'route_building_shift', label: 'בניית מסלולים' },
+];
+
+function monthBounds(ym) {
+  // ym = 'YYYY-MM'
+  const [y, m] = String(ym).split('-').map(Number);
+  const from = `${y}-${String(m).padStart(2, '0')}-01`;
+  const last = new Date(y, m, 0).getDate();
+  const to = `${y}-${String(m).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
+  return { from, to };
+}
+
+function currentYearMonth() {
+  const n = new Date();
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function rateForWorkType(agreement, workType) {
+  if (workType === 'class_shift') return Number(agreement.class_rate) || 0;
+  if (workType === 'private_shift') return Number(agreement.private_rate) || 0;
+  if (workType === 'route_building_shift') return Number(agreement.route_rate) || 0;
+  return Number(agreement.counter_rate) || 0;
+}
+
+function workTypeLabel(workType) {
+  return WORK_TYPE_OPTIONS.find((o) => o.id === workType)?.label || workType || 'דלפק';
+}
 const CERTIFICATION_OPTIONS = [
   'מדריך סנפלינג',
   'מפעיל קיר',
@@ -249,19 +280,28 @@ function WageFormModal({ wage, employees, onSave, onClose }) {
   const [privateRate, setPrivateRate] = useState(wage?.private_rate ?? 90);
   const [routeRate, setRouteRate]     = useState(wage?.route_rate ?? 60);
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (!employeeId) return;
+  const [saving, setSaving] = useState(false);
 
-    onSave({
-      id: wage?.id || `wa-${Date.now()}`,
-      employee_id: employeeId,
-      counter_rate: parseFloat(counterRate) || 0,
-      class_rate: parseFloat(classRate) || 0,
-      private_rate: parseFloat(privateRate) || 0,
-      route_rate: parseFloat(routeRate) || 0
-    });
-    onClose();
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!employeeId || saving) return;
+
+    setSaving(true);
+    let ok = false;
+    try {
+      ok = await onSave({
+        id: wage?.id || `wa-${Date.now()}`,
+        employee_id: employeeId,
+        counter_rate: parseFloat(counterRate) || 0,
+        class_rate: parseFloat(classRate) || 0,
+        private_rate: parseFloat(privateRate) || 0,
+        route_rate: parseFloat(routeRate) || 0
+      });
+    } finally {
+      setSaving(false);
+    }
+    if (ok) onClose();
+    else alert('שמירת הסכם השכר נכשלה. נסו שוב או פנו לתמיכה.');
   };
 
   return (
@@ -307,8 +347,8 @@ function WageFormModal({ wage, employees, onSave, onClose }) {
         </div>
         <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>ביטול</button>
-          <button form="wage-form" type="submit" className="btn btn-primary">
-            <Save size={15} /> שמור הסכם
+          <button form="wage-form" type="submit" className="btn btn-primary" disabled={saving}>
+            <Save size={15} /> {saving ? 'שומר...' : 'שמור הסכם'}
           </button>
         </div>
       </div>
@@ -321,9 +361,21 @@ export default function Employees() {
   const [employees, setEmployees] = useState([]);
   const [wages, setWages]         = useState([]);
   const [shifts, setShifts]       = useState([]);
+  const [workAssignments, setWorkAssignments] = useState([]);
+  const [activities, setActivities] = useState([]);
+  const [payrollMonth, setPayrollMonth] = useState(() => currentYearMonth());
+  const [payrollBusy, setPayrollBusy] = useState(false);
+  const [newManualRow, setNewManualRow] = useState({
+    employee_id: '',
+    date: '',
+    work_type: 'counter_shift',
+    start_time: '09:00',
+    end_time: '17:00',
+    hours: 8,
+  });
 
   // UI state
-  const [activeTab, setActiveTab]         = useState('permanent'); // permanent | certs | wages | shifts
+  const [activeTab, setActiveTab]         = useState('permanent'); // permanent | certs | wages | shifts | payroll
   const [selectedEmployee, setSelectedEmployee] = useState(null);
   const [selectedWage, setSelectedWage]         = useState(null);
   const [showEmployeeForm, setShowEmployeeForm] = useState(false);
@@ -342,18 +394,27 @@ export default function Employees() {
 
   const refreshData = async () => {
     try {
-      const emps = await fetch('/api/employees').then(r => r.json()).catch(() => null);
-      const wgs = await fetch('/api/wages').then(r => r.json()).catch(() => null);
-      const sfts = await fetch('/api/shifts').then(r => r.json()).catch(() => null);
+      const { from, to } = monthBounds(payrollMonth);
+      const [emps, wgs, sfts, asgs, acts] = await Promise.all([
+        fetch('/api/employees').then(r => r.json()).catch(() => null),
+        fetch('/api/wages').then(r => r.json()).catch(() => null),
+        fetch('/api/shifts').then(r => r.json()).catch(() => null),
+        fetch(`/api/work-assignments?from=${from}&to=${to}`).then(r => r.json()).catch(() => null),
+        fetch('/api/activities').then(r => r.json()).catch(() => null),
+      ]);
 
       setEmployees(Array.isArray(emps) ? emps : []);
       setWages(Array.isArray(wgs) ? wgs : []);
       setShifts(Array.isArray(sfts) ? sfts : []);
+      setWorkAssignments(Array.isArray(asgs) ? asgs : []);
+      setActivities(Array.isArray(acts) ? acts : []);
     } catch (err) {
       console.error('Failed to fetch staff data:', err);
       setEmployees([]);
       setWages([]);
       setShifts([]);
+      setWorkAssignments([]);
+      setActivities([]);
     }
   };
 
@@ -361,47 +422,71 @@ export default function Employees() {
     refreshData();
     const t = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [payrollMonth]);
 
   const clockedInCount = employees.filter(e => {
     const activeOpenShift = shifts.some(s => s.employee_id === e.id && s.status === 'open');
     return activeOpenShift;
   }).length;
 
+  const defaultAgreement = { counter_rate: 45, class_rate: 70, private_rate: 90, route_rate: 60 };
+
   const employeeShiftStats = useMemo(() => {
     const map = {};
+    const { from, to } = monthBounds(payrollMonth);
+
     employees.forEach(emp => {
-      const empShifts = shifts.filter(s => s.employee_id === emp.id);
-      
+      const agreement = wages.find(w => w.employee_id === emp.id) || defaultAgreement;
+      const monthAssignments = workAssignments.filter(
+        (a) => a.employee_id === emp.id && a.date >= from && a.date <= to
+      );
+
+      if (monthAssignments.length > 0) {
+        let totalHours = 0;
+        let totalPay = 0;
+        monthAssignments.forEach((a) => {
+          const hrs = Number(a.hours) || 0;
+          totalHours += hrs;
+          totalPay += hrs * rateForWorkType(agreement, a.work_type);
+        });
+        map[emp.id] = {
+          hours: Math.round(totalHours * 10) / 10,
+          pay: Math.round(totalPay),
+          fromAssignments: true,
+        };
+        return;
+      }
+
+      // Fallback: closed clock shifts in the selected month
       let totalHours = 0;
       let totalPay = 0;
-
-      const agreement = wages.find(w => w.employee_id === emp.id) || {
-        counter_rate: 45, class_rate: 70, private_rate: 90, route_rate: 60
-      };
-
-      empShifts.forEach(s => {
+      shifts.filter(s => s.employee_id === emp.id).forEach(s => {
         if (!s.clock_in || !s.clock_out) return;
+        const day = String(s.clock_in).slice(0, 10);
+        if (day < from || day > to) return;
         const diffMs = new Date(s.clock_out) - new Date(s.clock_in);
         const hrs = diffMs / (1000 * 60 * 60);
         totalHours += hrs;
-
-        // Calculate rate based on activity type
         let rate = agreement.counter_rate;
         if (s.activity_type === 'class_shift') rate = agreement.class_rate;
         else if (s.activity_type === 'private_shift') rate = agreement.private_rate;
         else if (s.activity_type === 'route_building_shift') rate = agreement.route_rate;
-
         totalPay += hrs * rate;
       });
 
       map[emp.id] = {
         hours: Math.round(totalHours * 10) / 10,
-        pay: Math.round(totalPay)
+        pay: Math.round(totalPay),
+        fromAssignments: false,
       };
     });
     return map;
-  }, [employees, shifts, wages]);
+  }, [employees, shifts, wages, workAssignments, payrollMonth]);
+
+  const activityName = (id) => {
+    if (!id) return '';
+    return activities.find((a) => a.id === id)?.name || '';
+  };
 
   const handleSort = (key) => {
     let direction = 'asc';
@@ -478,12 +563,13 @@ export default function Employees() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
       });
-      if (response.ok) {
-        refreshData();
-        setEditingWage(null);
-      }
+      if (!response.ok) return false;
+      await refreshData();
+      setEditingWage(null);
+      return true;
     } catch (err) {
       console.error(err);
+      return false;
     }
   };
 
@@ -495,18 +581,22 @@ export default function Employees() {
 
     try {
       if (openShift) {
-        // Clock out
         const res = await fetch('/api/shifts/clock-out', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ employeeId: empId, notes: 'משמרת הסתיימה' })
         });
         if (res.ok) {
-          alert('שעון נוכחות: יציאה נרשמה בהצלחה!');
-          refreshData();
+          alert('יציאה מהמשמרת נרשמה בהצלחה');
+          await refreshData();
+        } else {
+          const err = await res.json().catch(() => ({}));
+          alert(err.error === 'No active open shift found for this employee'
+            ? 'לא נמצאה משמרת פתוחה בשרת. מרעננים את המסך.'
+            : (err.error || 'יציאה מהמשמרת נכשלה'));
+          await refreshData();
         }
       } else {
-        // Clock in
         const selectedAct = clockActivity[empId] || 'counter_shift';
         const res = await fetch('/api/shifts/clock-in', {
           method: 'POST',
@@ -514,13 +604,92 @@ export default function Employees() {
           body: JSON.stringify({ employeeId: empId, activityType: selectedAct, notes: 'כניסה למשמרת' })
         });
         if (res.ok) {
-          alert('שעון נוכחות: כניסה נרשמה בהצלחה!');
-          refreshData();
+          alert('כניסה למשמרת נרשמה בהצלחה');
+          await refreshData();
+        } else {
+          alert('כניסה למשמרת נכשלה');
         }
       }
     } catch (err) {
       console.error(err);
+      alert('תקלת תקשורת מול השרת');
     }
+  };
+
+  const saveAssignmentRow = async (row) => {
+    setPayrollBusy(true);
+    try {
+      const res = await fetch(`/api/work-assignments/${row.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          work_type: row.work_type,
+          start_time: row.start_time,
+          end_time: row.end_time,
+          hours: row.hours,
+          source: 'manual',
+          notes: row.notes || '',
+          approved: row.approved,
+        }),
+      });
+      if (!res.ok) alert('שמירת השורה נכשלה');
+      else await refreshData();
+    } finally {
+      setPayrollBusy(false);
+    }
+  };
+
+  const approveAssignments = async (ids) => {
+    if (!ids.length) return;
+    setPayrollBusy(true);
+    try {
+      const res = await fetch('/api/work-assignments/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+      if (!res.ok) alert('אישור נכשל');
+      else await refreshData();
+    } finally {
+      setPayrollBusy(false);
+    }
+  };
+
+  const deleteAssignment = async (id) => {
+    if (!window.confirm('למחוק את שורת התשלום?')) return;
+    setPayrollBusy(true);
+    try {
+      await fetch(`/api/work-assignments/${id}`, { method: 'DELETE' });
+      await refreshData();
+    } finally {
+      setPayrollBusy(false);
+    }
+  };
+
+  const createManualAssignment = async () => {
+    if (!newManualRow.employee_id || !newManualRow.date) {
+      alert('נא לבחור עובד ותאריך');
+      return;
+    }
+    setPayrollBusy(true);
+    try {
+      const res = await fetch('/api/work-assignments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...newManualRow, source: 'manual', approved: false }),
+      });
+      if (!res.ok) alert('יצירת השורה נכשלה');
+      else {
+        setNewManualRow((prev) => ({ ...prev, employee_id: '', hours: 8 }));
+        await refreshData();
+      }
+    } finally {
+      setPayrollBusy(false);
+    }
+  };
+
+  const patchAssignmentLocal = (id, patch) => {
+    setWorkAssignments((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   };
 
   return (
@@ -752,6 +921,13 @@ export default function Employees() {
           onClick={() => setActiveTab('shifts')}
         >
           ⏰ שעון נוכחות ומשמרות
+        </button>
+        <button
+          className={`btn btn-sm ${activeTab === 'payroll' ? 'btn-primary' : 'btn-ghost'}`}
+          style={{ borderBottomLeftRadius: 0, borderBottomRightRadius: 0, borderBottom: activeTab === 'payroll' ? '2px solid var(--blue)' : 'none' }}
+          onClick={() => setActiveTab('payroll')}
+        >
+          💵 תשלום חודשי
         </button>
       </div>
 
@@ -1040,6 +1216,233 @@ export default function Employees() {
             </div>
           </div>
 
+        </div>
+      )}
+
+      {/* ─── Tab 5: Monthly payroll ───────────────────────────────────────── */}
+      {activeTab === 'payroll' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div className="card card-p" style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 800 }}>תשלום חודשי</div>
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
+                שורות עבודה לפי עובד — מהיומן, מהשעון או ידני. משלמים לפי שעות מאושרות.
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                חודש
+                <input
+                  className="input input-sm"
+                  type="month"
+                  value={payrollMonth}
+                  onChange={(e) => setPayrollMonth(e.target.value)}
+                />
+              </label>
+              <button
+                className="btn btn-ghost btn-sm"
+                disabled={payrollBusy || workAssignments.filter((a) => !a.approved).length === 0}
+                onClick={() => approveAssignments(workAssignments.filter((a) => !a.approved).map((a) => a.id))}
+              >
+                <UserCheck size={14} /> אשר הכל בחודש
+              </button>
+            </div>
+          </div>
+
+          <div className="grid-3" style={{ gap: 12 }}>
+            {employees.filter((e) => e.is_active !== false).map((emp) => {
+              const stats = employeeShiftStats[emp.id] || { hours: 0, pay: 0 };
+              return (
+                <div key={emp.id} className="card card-p">
+                  <div style={{ fontWeight: 800, marginBottom: 6 }}>{emp.name}</div>
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                    {stats.hours} שעות · ₪{stats.pay}
+                    {stats.fromAssignments ? '' : ' (לפי שעון)'}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="card card-p" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ fontSize: 14, fontWeight: 800 }}>הוספת שורה ידנית</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8, alignItems: 'end' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                עובד
+                <select
+                  className="input input-sm"
+                  value={newManualRow.employee_id}
+                  onChange={(e) => setNewManualRow((p) => ({ ...p, employee_id: e.target.value }))}
+                >
+                  <option value="">בחירה...</option>
+                  {employees.filter((e) => e.is_active !== false).map((e) => (
+                    <option key={e.id} value={e.id}>{e.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                תאריך
+                <input
+                  className="input input-sm"
+                  type="date"
+                  value={newManualRow.date}
+                  onChange={(e) => setNewManualRow((p) => ({ ...p, date: e.target.value }))}
+                />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                סוג
+                <select
+                  className="input input-sm"
+                  value={newManualRow.work_type}
+                  onChange={(e) => setNewManualRow((p) => ({ ...p, work_type: e.target.value }))}
+                >
+                  {WORK_TYPE_OPTIONS.map((o) => (
+                    <option key={o.id} value={o.id}>{o.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                התחלה
+                <input
+                  className="input input-sm"
+                  type="time"
+                  value={newManualRow.start_time}
+                  onChange={(e) => setNewManualRow((p) => ({ ...p, start_time: e.target.value }))}
+                />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                סיום
+                <input
+                  className="input input-sm"
+                  type="time"
+                  value={newManualRow.end_time}
+                  onChange={(e) => setNewManualRow((p) => ({ ...p, end_time: e.target.value }))}
+                />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                שעות
+                <input
+                  className="input input-sm"
+                  type="number"
+                  min="0"
+                  step="0.25"
+                  value={newManualRow.hours}
+                  onChange={(e) => setNewManualRow((p) => ({ ...p, hours: e.target.value }))}
+                />
+              </label>
+              <button className="btn btn-primary btn-sm" disabled={payrollBusy} onClick={createManualAssignment}>
+                <Plus size={14} /> הוסף
+              </button>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="table-wrap">
+              <table className="crm-table">
+                <thead>
+                  <tr>
+                    <th>תאריך</th>
+                    <th>עובד</th>
+                    <th>אירוע</th>
+                    <th>סוג</th>
+                    <th>התחלה</th>
+                    <th>סיום</th>
+                    <th>שעות</th>
+                    <th>תעריף</th>
+                    <th>סכום</th>
+                    <th>סטטוס</th>
+                    <th>פעולות</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workAssignments.map((row) => {
+                    const emp = employees.find((e) => e.id === row.employee_id);
+                    const agreement = wages.find((w) => w.employee_id === row.employee_id) || defaultAgreement;
+                    const rate = rateForWorkType(agreement, row.work_type);
+                    const hrs = Number(row.hours) || 0;
+                    const amount = Math.round(hrs * rate);
+                    return (
+                      <tr key={row.id}>
+                        <td>{row.date}</td>
+                        <td style={{ fontWeight: 700 }}>{emp?.name || '—'}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text-3)' }}>{activityName(row.activity_id) || '—'}</td>
+                        <td>
+                          <select
+                            className="input input-sm"
+                            value={row.work_type || 'counter_shift'}
+                            onChange={(e) => patchAssignmentLocal(row.id, { work_type: e.target.value })}
+                            style={{ minWidth: 110 }}
+                          >
+                            {WORK_TYPE_OPTIONS.map((o) => (
+                              <option key={o.id} value={o.id}>{o.label}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td>
+                          <input
+                            className="input input-sm"
+                            type="time"
+                            value={row.start_time || ''}
+                            onChange={(e) => patchAssignmentLocal(row.id, { start_time: e.target.value })}
+                            style={{ width: 100 }}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            className="input input-sm"
+                            type="time"
+                            value={row.end_time || ''}
+                            onChange={(e) => patchAssignmentLocal(row.id, { end_time: e.target.value })}
+                            style={{ width: 100 }}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            className="input input-sm"
+                            type="number"
+                            min="0"
+                            step="0.25"
+                            value={row.hours ?? 0}
+                            onChange={(e) => patchAssignmentLocal(row.id, { hours: e.target.value })}
+                            style={{ width: 70 }}
+                          />
+                        </td>
+                        <td>₪{rate}</td>
+                        <td style={{ fontWeight: 700, color: 'var(--green)' }}>₪{amount}</td>
+                        <td>
+                          <span className={`badge ${row.approved ? 'badge-green' : 'badge-gray'}`}>
+                            {row.approved ? 'מאושר' : 'ממתין'}
+                          </span>
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            <button className="btn btn-ghost btn-icon btn-xs" title="שמור" disabled={payrollBusy} onClick={() => saveAssignmentRow(row)}>
+                              <Save size={12} />
+                            </button>
+                            {!row.approved && (
+                              <button className="btn btn-ghost btn-icon btn-xs" title="אשר" disabled={payrollBusy} onClick={() => approveAssignments([row.id])}>
+                                <UserCheck size={12} />
+                              </button>
+                            )}
+                            <button className="btn btn-ghost btn-icon btn-xs" title="מחק" disabled={payrollBusy} onClick={() => deleteAssignment(row.id)} style={{ color: '#F87171' }}>
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {workAssignments.length === 0 && (
+                    <tr>
+                      <td colSpan={11} style={{ textAlign: 'center', padding: 30, color: 'var(--text-3)' }}>
+                        אין שורות תשלום בחודש הזה. אפשר לשייך עובדים מאירוע ביומן או להוסיף שורה ידנית.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
 

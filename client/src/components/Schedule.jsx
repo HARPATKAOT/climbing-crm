@@ -136,7 +136,7 @@ function GroupBlock({ group, enrolledCount, selected, onClick }) {
 }
 
 // ─── Group Form Modal (Add / Edit) ────────────────────────────────────────────
-function GroupFormModal({ group, employees, onSave, onClose }) {
+function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
   const [name,       setName]       = useState(group?.name || '');
   const [day,        setDay]        = useState(group?.day ?? 0);
   const [time,       setTime]       = useState(group?.time || '16:00');
@@ -148,6 +148,14 @@ function GroupFormModal({ group, employees, onSave, onClose }) {
   const [priceTwice, setPriceTwice] = useState(group?.priceTwice || 360);
   const [waParents,  setWaParents]  = useState(group?.waParents || '');
   const [waClimbers, setWaClimbers] = useState(group?.waClimbers || '');
+
+  const handleDelete = () => {
+    if (!group?.id || !onDelete) return;
+    const label = name.trim() || group.name || 'הקבוצה';
+    if (!window.confirm(`למחוק את הקבוצה "${label}" לצמיתות?`)) return;
+    onDelete(group.id);
+    onClose();
+  };
 
   // Active employees for the dropdown, but always keep the group's current
   // trainer visible even if they've since been marked inactive.
@@ -262,11 +270,20 @@ function GroupFormModal({ group, employees, onSave, onClose }) {
           </form>
         </div>
 
-        <div className="modal-footer">
-          <button className="btn btn-ghost" onClick={onClose}>ביטול</button>
-          <button form="gf" type="submit" className="btn btn-primary">
-            <Save size={15} /> {group ? 'שמור שינויים' : 'הוסף קבוצה'}
-          </button>
+        <div className="modal-footer" style={{ justifyContent: 'space-between', gap: 10 }}>
+          {group?.id && onDelete ? (
+            <button type="button" className="btn btn-ghost" style={{ color: 'var(--red)' }} onClick={handleDelete}>
+              <Trash2 size={15} /> מחק קבוצה
+            </button>
+          ) : (
+            <span />
+          )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-ghost" onClick={onClose}>ביטול</button>
+            <button form="gf" type="submit" className="btn btn-primary">
+              <Save size={15} /> {group ? 'שמור שינויים' : 'הוסף קבוצה'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -958,6 +975,8 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
   const handleDelete = async (id) => {
     setGroups(prev => prev.filter(g => g.id !== id));
     setSelectedGroup(null);
+    setEditingGroup(null);
+    setShowAddModal(false);
     try {
       await fetch(`/api/groups/${id}`, { method: 'DELETE' });
     } catch (err) {
@@ -1053,6 +1072,7 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
           group={editingGroup || null}
           employees={employees}
           onSave={handleSave}
+          onDelete={handleDelete}
           onClose={() => { setEditingGroup(null); setShowAddModal(false); }}
         />
       )}

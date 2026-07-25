@@ -8,14 +8,24 @@ const PUBLIC_API_ROUTES = [
   /^\/instagram\/webhook$/,
   /^\/icount\/webhook$/,
   /^\/attendance\/ensure-today$/,
+  /^\/automations\/run-scheduled$/,
+  /^\/google-calendar\/webhook$/,
+  /^\/google-calendar\/oauth\/callback$/,
+  /^\/google-calendar\/sync-due$/,
 ];
 
 const TEAM_RULES = [
-  { methods: ['GET', 'POST', 'PUT', 'DELETE'], pattern: /^\/(parents|students|groups|attendance|check-ins)(\/|$)/ },
+  { methods: ['GET', 'POST', 'PUT', 'DELETE'], pattern: /^\/(parents|students|groups|attendance|activities|check-ins)(\/|$)/ },
+  { methods: ['GET', 'POST', 'PUT', 'DELETE'], pattern: /^\/activity-templates(\/|$)/ },
+  { methods: ['PATCH'], pattern: /^\/activities\/[^/]+\/payment-status$/ },
+  { methods: ['GET', 'POST', 'PUT', 'DELETE'], pattern: /^\/google-calendar\/(status|sync|calendars|overlays|overlay-events)(\/|$)/ },
   { methods: ['GET', 'POST'], pattern: /^\/leads(\/|$)/ },
   { methods: ['GET', 'POST'], pattern: /^\/health-declarations(\/|$)/ },
   { methods: ['GET'], pattern: /^\/form-templates(\/|$)/ },
   { methods: ['GET', 'POST', 'PUT', 'DELETE'], pattern: /^\/employees(\/|$)/ },
+  { methods: ['GET', 'POST', 'PUT', 'DELETE'], pattern: /^\/wages(\/|$)/ },
+  { methods: ['GET', 'POST', 'PUT', 'DELETE'], pattern: /^\/work-assignments(\/|$)/ },
+  { methods: ['GET', 'POST'], pattern: /^\/shifts(\/|$)/ },
   { methods: ['GET'], pattern: /^\/trainers$/ },
   { methods: ['GET'], pattern: /^\/broadcast-list-defs(\/|$)/ },
   { methods: ['GET', 'POST'], pattern: /^\/parents\/[^/]+\/broadcast-lists$/ },
@@ -34,11 +44,14 @@ const TEAM_RULES = [
   { methods: ['GET'], pattern: /^\/channels\/status$/ },
   { methods: ['GET'], pattern: /^\/auth\/me$/ },
   { methods: ['GET', 'POST', 'PUT', 'DELETE'], pattern: /^\/pricelist(\/|$)/ },
+  { methods: ['GET', 'POST', 'PUT', 'DELETE'], pattern: /^\/product-categories(\/|$)/ },
   { methods: ['GET', 'POST'], pattern: /^\/pos\/(sale|quote|payment-link|sales)(\/|$)/ },
   { methods: ['POST'], pattern: /^\/pos\/sales\/[^/]+\/refund$/ },
   { methods: ['GET', 'POST'], pattern: /^\/pos\/passes(\/|$)/ },
   { methods: ['GET', 'POST'], pattern: /^\/cash-register(\/|$)/ },
   { methods: ['GET'], pattern: /^\/icount\/status$/ },
+  { methods: ['GET', 'POST', 'PUT', 'DELETE'], pattern: /^\/safety(\/|$)/ },
+  { methods: ['GET', 'POST'], pattern: /^\/level-tests(\/|$)/ },
 ];
 
 function emailSet(value) {

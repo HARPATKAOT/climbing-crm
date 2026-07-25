@@ -411,7 +411,9 @@ export default function PublicHealthForm() {
         )}
 
         <div className="form-header">
-          <div className="logo-circle">🧗</div>
+          <div className="logo-circle">
+            <img src="/logo.png" alt="קיר בועז" />
+          </div>
           <h2>{title}</h2>
           <p>My Wall — שלב {step} מתוך 3</p>
           {templateError && (
@@ -576,9 +578,16 @@ function FormStyles() {
       .form-header { text-align: center; margin-bottom: 30px; }
       .logo-circle {
         width: 60px; height: 60px; border-radius: 50%;
-        background: linear-gradient(135deg, #F97316 0%, #EA580C 100%);
+        background: #fff;
         display: flex; align-items: center; justify-content: center;
-        font-size: 30px; margin: 0 auto 16px auto;
+        margin: 0 auto 16px auto;
+        overflow: hidden;
+      }
+      .logo-circle img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
       }
       .form-header h2 { margin: 0 0 8px 0; font-size: 20px; font-weight: 700; }
       .form-header p { margin: 0; font-size: 14px; color: rgba(255, 255, 255, 0.6); }

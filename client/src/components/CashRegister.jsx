@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ReceiptText, RefreshCw, RotateCcw } from 'lucide-react';
 import PosSale from './PosSale.jsx';
+import Pricelist from './Pricelist.jsx';
 
 function docAmount(doc) {
   const n = Number(doc?.totalwithvat ?? doc?.total ?? doc?.sum ?? 0);
@@ -52,7 +53,7 @@ function saleStatusBadge(status) {
   return 'badge badge-gray';
 }
 
-export default function CashRegister({ isOwner = true }) {
+export default function CashRegister({ isOwner = true, initialTab = null }) {
   const [expectedAmount, setExpectedAmount] = useState('');
   const [actualAmount, setActualAmount] = useState('');
   const [shiftType, setShiftType] = useState('בוקר');
@@ -60,7 +61,9 @@ export default function CashRegister({ isOwner = true }) {
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
   const [shifts, setShifts] = useState([]);
-  const [activeTab, setActiveTab] = useState('sale');
+  const [activeTab, setActiveTab] = useState(
+    initialTab === 'products' && isOwner ? 'products' : 'sale'
+  );
   const [employees, setEmployees] = useState([]);
 
   const [icountStatus, setIcountStatus] = useState({ loading: true });
@@ -236,7 +239,7 @@ export default function CashRegister({ isOwner = true }) {
   }, [activeTab, isOwner, refreshReports]);
 
   useEffect(() => {
-    if (!isOwner && (activeTab === 'icount' || activeTab === 'reports')) {
+    if (!isOwner && (activeTab === 'icount' || activeTab === 'reports' || activeTab === 'products')) {
       setActiveTab('sale');
     }
   }, [isOwner, activeTab]);
@@ -248,6 +251,7 @@ export default function CashRegister({ isOwner = true }) {
 
   const tabs = [
     { k: 'sale', label: 'מכירה' },
+    ...(isOwner ? [{ k: 'products', label: 'מוצרים' }] : []),
     { k: 'close', label: 'סגירת קופה' },
     { k: 'history', label: 'היסטוריה' },
     ...(isOwner
@@ -345,6 +349,8 @@ export default function CashRegister({ isOwner = true }) {
       </div>
 
       {activeTab === 'sale' && <PosSale />}
+
+      {activeTab === 'products' && isOwner && <Pricelist />}
 
       {activeTab === 'close' && (
         <div className="grid-2" style={{ alignItems: 'flex-start' }}>

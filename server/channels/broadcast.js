@@ -2,6 +2,7 @@ import { db } from '../db.js';
 import { previewAudience } from './segments.js';
 import { whatsappService } from '../whatsapp.js';
 import { canSendFreeform } from './sessionWindow.js';
+import { resolveTemplateVariableValues } from './templateVarFields.js';
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -96,10 +97,20 @@ async function processBroadcastJob(jobId, { templateId, customMessage }) {
     try {
       const parent = (db.get('parents') || []).find((p) => p.id === r.parent_id);
       if (templateId) {
+        const templates = db.get('message_templates') || [];
+        const localTpl = templates.find(
+          (t) => t.id === templateId || t.meta_name === templateId || t.name === templateId
+        );
+        const student = parent
+          ? (db.get('students') || []).find((s) => s.parentId === parent.id || s.parent_id === parent.id)
+          : null;
+        const variables = localTpl
+          ? resolveTemplateVariableValues(localTpl, parent, student)
+          : [r.name || ''];
         const result = await whatsappService.sendTemplateMessage(
           r.phone,
-          templateId,
-          [r.name || ''],
+          localTpl?.meta_name || localTpl?.name || templateId,
+          variables,
           { parentId: r.parent_id, fallbackName: r.name || '' }
         );
         if (!result.success) throw new Error(result.error || 'שליחה נכשלה');

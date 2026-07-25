@@ -17,6 +17,22 @@
       "destination": "/index.html"
     },
     {
+      "source": "/onboard",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/privacy",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/event",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/event/(.*)",
+      "destination": "/index.html"
+    },
+    {
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }

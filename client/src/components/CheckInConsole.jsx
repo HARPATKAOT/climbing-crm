@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Search, LogIn, CheckCircle2, ShieldAlert, ShieldCheck, Flame, RefreshCw, QrCode } from 'lucide-react';
+import { CheckIcon } from './safetyCheckIcons.jsx';
 
 function pickBestPunchCard(passes) {
   const usable = (passes || []).filter(
@@ -22,6 +23,23 @@ export default function CheckInConsole({ students, groups }) {
   const [declarations, setDeclarations] = useState([]);
   const [successMsg, setSuccessMsg] = useState(null);
   const [scanning, setScanning] = useState(false);
+  const [dueSafety, setDueSafety] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  const [signingId, setSigningId] = useState(null);
+  const [signerByCheck, setSignerByCheck] = useState({});
+
+  const refreshSafety = async () => {
+    try {
+      const [due, emps] = await Promise.all([
+        fetch('/api/safety/due-today').then((r) => (r.ok ? r.json() : [])),
+        fetch('/api/employees').then((r) => (r.ok ? r.json() : [])),
+      ]);
+      setDueSafety(Array.isArray(due) ? due : []);
+      setEmployees(Array.isArray(emps) ? emps : []);
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const refreshCheckins = async () => {
     try {
@@ -36,7 +54,38 @@ export default function CheckInConsole({ students, groups }) {
 
   useEffect(() => {
     refreshCheckins();
+    refreshSafety();
   }, []);
+
+  const handleSignSafety = async (check) => {
+    const testerId = signerByCheck[check.id] || employees[0]?.id;
+    if (!testerId) {
+      alert('אין עובדים במערכת — הוסיפו עובד ואז חתמו');
+      return;
+    }
+    setSigningId(check.id);
+    try {
+      const response = await fetch('/api/safety/inspections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          check_type_id: check.id,
+          title: check.name,
+          completed_by_employee_id: testerId,
+          status: 'תקין',
+          description: '',
+        }),
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        alert(err.error || 'שגיאה בשמירת הבדיקה');
+        return;
+      }
+      await refreshSafety();
+    } finally {
+      setSigningId(null);
+    }
+  };
 
   const loadPasses = async (climberId) => {
     if (!climberId) {
@@ -69,12 +118,11 @@ export default function CheckInConsole({ students, groups }) {
 
   const handleCheckIn = async (climber) => {
     if (!climber) return;
-    
+
     const matchedGroup = groups.find(g => g.id === climber.groupId);
-    
-    // Check medical status
-    const hasDecl = declarations.some(d => d.studentName === climber.name && d.signed) || 
-                    (climber.status === 'registered'); // fallback
+
+    const hasDecl = declarations.some(d => d.studentName === climber.name && d.signed) ||
+                    (climber.status === 'registered');
 
     const newCheckIn = {
       climber_id: climber.id,
@@ -90,7 +138,7 @@ export default function CheckInConsole({ students, groups }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newCheckIn)
       });
-      
+
       if (response.ok) {
         let punchNote = '';
         try {
@@ -121,8 +169,7 @@ export default function CheckInConsole({ students, groups }) {
         setSelectedClimber(null);
         setSelectedPasses([]);
         refreshCheckins();
-        
-        // Voice greeting simulation using HTML5 Web Speech API!
+
         try {
           if ('speechSynthesis' in window) {
             const utterance = new SpeechSynthesisUtterance(`ברוך הבא ${climber.name.split(' ')[0]}`);
@@ -131,7 +178,7 @@ export default function CheckInConsole({ students, groups }) {
             window.speechSynthesis.speak(utterance);
           }
         } catch (_) { /* ignore */ }
-        
+
         setTimeout(() => setSuccessMsg(null), 4000);
       }
     } catch (err) {
@@ -140,40 +187,117 @@ export default function CheckInConsole({ students, groups }) {
     }
   };
 
-  // Get today's check-ins
   const today = new Date().toDateString();
   const todayCheckIns = checkIns.filter(c => new Date(c.timestamp).toDateString() === today);
+  const pendingSafety = dueSafety.filter((c) => c.is_due && !c.signed_today);
+  const doneSafety = dueSafety.filter((c) => c.signed_today);
 
   return (
     <div className="fade-in" style={{ maxWidth: 900, margin: '0 auto' }}>
       {successMsg && (
-        <div className="alert alert-success" style={{ marginBottom: 20, fontSize: 18, justify: 'flex', alignItems: 'center', gap: 10 }}>
+        <div className="alert alert-success" style={{ marginBottom: 20, fontSize: 18, display: 'flex', alignItems: 'center', gap: 10 }}>
           <CheckCircle2 size={24} /> {successMsg}
         </div>
       )}
 
+      {dueSafety.length > 0 && (
+        <div className="card" style={{ marginBottom: 24 }}>
+          <div className="section-title" style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <ShieldCheck size={18} />
+              בדיקות בטיחות להיום
+              {pendingSafety.length > 0 ? (
+                <span className="badge badge-red">{pendingSafety.length} ממתינות</span>
+              ) : (
+                <span className="badge badge-green">הכל בוצע</span>
+              )}
+            </span>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={refreshSafety}>
+              <RefreshCw size={14} />
+            </button>
+          </div>
+          <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {dueSafety.map((check) => (
+              <div
+                key={check.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  flexWrap: 'wrap',
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  background: check.signed_today ? 'rgba(16,185,129,0.08)' : 'var(--bg-2)',
+                  border: `1px solid ${check.signed_today ? 'rgba(16,185,129,0.35)' : 'var(--border)'}`,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 160 }}>
+                  <CheckIcon name={check.name} size={16} />
+                  <div>
+                    <div style={{ fontWeight: 700 }}>{check.name}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-3)' }}>{check.frequency}</div>
+                  </div>
+                </div>
+                {check.signed_today ? (
+                  <span className="badge badge-green" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <CheckCircle2 size={12} />
+                    {check.today_log?.tester_name || check.last_tester_name || 'נחתם'}
+                  </span>
+                ) : (
+                  <>
+                    <select
+                      className="input select"
+                      style={{ maxWidth: 180, height: 36 }}
+                      value={signerByCheck[check.id] || employees[0]?.id || ''}
+                      onChange={(e) => setSignerByCheck((prev) => ({ ...prev, [check.id]: e.target.value }))}
+                    >
+                      {employees.length === 0 && <option value="">אין עובדים</option>}
+                      {employees.map((emp) => (
+                        <option key={emp.id} value={emp.id}>{emp.name}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      disabled={signingId === check.id || employees.length === 0}
+                      onClick={() => handleSignSafety(check)}
+                    >
+                      {signingId === check.id ? 'שומר...' : 'אשר ביצוע'}
+                    </button>
+                  </>
+                )}
+              </div>
+            ))}
+            {doneSafety.length > 0 && pendingSafety.length === 0 && (
+              <div style={{ fontSize: 13, color: 'var(--text-3)', textAlign: 'center', paddingTop: 4 }}>
+                כל בדיקות היום נחתמו.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="grid-2" style={{ alignItems: 'start', gap: 24 }}>
-        {/* Search / Scan Panel */}
         <div className="card card-p">
           <div className="section-title" style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between' }}>
-            <span>🚪 מסוף צ׳ק-אין כניסה</span>
-            <button className="btn btn-ghost btn-sm" onClick={refreshCheckins}><RefreshCw size={14} /></button>
+            <span>מסוף כניסה</span>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={refreshCheckins}><RefreshCw size={14} /></button>
           </div>
 
           <div className="form-group" style={{ position: 'relative' }}>
             <label className="form-label">חיפוש מתאמן לפי שם</label>
             <div className="input-icon-wrap">
               <Search size={16} className="input-icon" />
-              <input 
-                className="input" 
-                placeholder="הקלד שם..." 
+              <input
+                className="input"
+                placeholder="הקלד שם..."
                 style={{ paddingRight: 36, fontSize: 18, height: 50 }}
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 autoFocus
               />
             </div>
-            
+
             {suggestions.length > 0 && (
               <div style={{
                 position: 'absolute', top: '100%', right: 0, left: 0, zIndex: 50,
@@ -182,8 +306,8 @@ export default function CheckInConsole({ students, groups }) {
                 overflow: 'hidden'
               }}>
                 {suggestions.map(s => (
-                  <div 
-                    key={s.id} 
+                  <div
+                    key={s.id}
                     onClick={() => handleSelect(s)}
                     style={{ padding: '12px 16px', cursor: 'pointer', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between' }}
                     onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-2)'}
@@ -198,13 +322,13 @@ export default function CheckInConsole({ students, groups }) {
           </div>
 
           <div style={{ textAlign: 'center', margin: '20px 0', color: 'var(--text-3)' }}>— או —</div>
-          
-          <button 
-            className={`btn ${scanning ? 'btn-primary' : 'btn-ghost'} btn-full`} 
+
+          <button
+            type="button"
+            className={`btn ${scanning ? 'btn-primary' : 'btn-ghost'} btn-full`}
             style={{ height: 60, fontSize: 16, gap: 10 }}
             onClick={() => {
               setScanning(!scanning);
-              // Simulate a scan after 2 seconds for demo
               if (!scanning) {
                 setTimeout(() => {
                   const randStudent = students[Math.floor(Math.random() * students.length)];
@@ -220,7 +344,6 @@ export default function CheckInConsole({ students, groups }) {
           </button>
         </div>
 
-        {/* Selected Climber Preview */}
         <div className="card card-p" style={{ minHeight: 300, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
           {!selectedClimber ? (
             <div style={{ textAlign: 'center', color: 'var(--text-3)' }}>
@@ -269,7 +392,7 @@ export default function CheckInConsole({ students, groups }) {
                   <div style={{ color: 'var(--text-3)' }}>אין כרטיסייה או מנוי פעיל במערכת</div>
                 )}
               </div>
-              
+
               <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginBottom: 24 }}>
                 {(declarations.some(d => d.studentName === selectedClimber.name && d.signed) || selectedClimber.status === 'registered') ? (
                   <span className="badge badge-green" style={{ fontSize: 14, padding: '6px 12px' }}><ShieldCheck size={14} /> הצהרת בריאות בתוקף</span>
@@ -278,14 +401,15 @@ export default function CheckInConsole({ students, groups }) {
                 )}
               </div>
 
-              <button 
-                className="btn btn-primary btn-full" 
+              <button
+                type="button"
+                className="btn btn-primary btn-full"
                 style={{ height: 60, fontSize: 20, fontWeight: 700 }}
                 onClick={() => handleCheckIn(selectedClimber)}
               >
                 אישור כניסה
               </button>
-              <button className="btn btn-ghost btn-full" style={{ marginTop: 8 }} onClick={() => { setSelectedClimber(null); setSelectedPasses([]); }}>
+              <button type="button" className="btn btn-ghost btn-full" style={{ marginTop: 8 }} onClick={() => { setSelectedClimber(null); setSelectedPasses([]); }}>
                 ביטול
               </button>
             </div>
@@ -293,7 +417,6 @@ export default function CheckInConsole({ students, groups }) {
         </div>
       </div>
 
-      {/* Today's Log */}
       <div className="card" style={{ marginTop: 24 }}>
         <div className="section-title" style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between' }}>
           <span>יומן כניסות להיום ({todayCheckIns.length})</span>
@@ -318,7 +441,7 @@ export default function CheckInConsole({ students, groups }) {
                   <td style={{ fontWeight: 600 }}>{c.climber_name}</td>
                   <td>{c.group_name}</td>
                   <td>
-                    {c.medical_approved 
+                    {c.medical_approved
                       ? <span className="badge badge-green"><ShieldCheck size={12} /> תקין</span>
                       : <span className="badge badge-amber"><Flame size={12} /> ללא הצהרה</span>
                     }

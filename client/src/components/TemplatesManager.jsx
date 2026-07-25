@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { RefreshCw, Plus, Send, Trash2, MousePointerClick } from 'lucide-react';
+import { TEMPLATE_VAR_FIELDS, TEMPLATE_VAR_FIELD_MAP, normalizeTemplateVariables } from './templateVariables.js';
 
 const CATEGORIES = [
   { value: 'UTILITY', label: 'תפעולי' },
@@ -87,12 +88,24 @@ function formatButtonSummary(btn) {
   return `${label}: ${btn.text}`;
 }
 
+function syncVarMetaFromBody(body, prevMeta = []) {
+  return normalizeTemplateVariables(prevMeta, body).map((v) => ({
+    field: v.field,
+    label: v.label,
+    example: v.example,
+  }));
+}
+
 export default function TemplatesManager() {
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [draft, setDraft] = useState({ ...EMPTY_DRAFT, buttons: [] });
+  const [varMeta, setVarMeta] = useState(() => syncVarMetaFromBody(EMPTY_DRAFT.body, [
+    { field: 'parent_first', label: 'שם פרטי (הורה)', example: 'דלק' },
+  ]));
+  const bodyRef = useRef(null);
 
   const mode = buttonMode(draft.buttons);
   const canAddButton = draft.buttons.length < maxButtonsForMode(mode === 'none' ? 'quick' : mode);
@@ -147,6 +160,51 @@ export default function TemplatesManager() {
     setDraft({ ...draft, buttons: draft.buttons.filter((_, i) => i !== index) });
   };
 
+  const updateBody = (nextBody, nextMeta = null) => {
+    const meta = nextMeta || syncVarMetaFromBody(nextBody, varMeta);
+    setDraft((d) => ({ ...d, body: nextBody }));
+    setVarMeta(meta);
+  };
+
+  const insertVariable = (fieldId) => {
+    const field = TEMPLATE_VAR_FIELD_MAP[fieldId] || TEMPLATE_VAR_FIELD_MAP.custom;
+    const nextIndex = varMeta.length + 1;
+    const token = `{{${nextIndex}}}`;
+    const el = bodyRef.current;
+    let nextBody = draft.body || '';
+    if (el && typeof el.selectionStart === 'number') {
+      const start = el.selectionStart;
+      const end = el.selectionEnd;
+      nextBody = `${nextBody.slice(0, start)}${token}${nextBody.slice(end)}`;
+      requestAnimationFrame(() => {
+        if (bodyRef.current) {
+          const pos = start + token.length;
+          bodyRef.current.focus();
+          bodyRef.current.setSelectionRange(pos, pos);
+        }
+      });
+    } else {
+      nextBody = `${nextBody}${token}`;
+    }
+    updateBody(nextBody, [
+      ...varMeta,
+      { field: field.id, label: field.label, example: field.example },
+    ]);
+  };
+
+  const updateVarField = (index, fieldId) => {
+    const field = TEMPLATE_VAR_FIELD_MAP[fieldId] || TEMPLATE_VAR_FIELD_MAP.custom;
+    setVarMeta((prev) => prev.map((v, i) => (
+      i === index
+        ? { field: field.id, label: field.label, example: field.example }
+        : v
+    )));
+  };
+
+  const updateVarExample = (index, example) => {
+    setVarMeta((prev) => prev.map((v, i) => (i === index ? { ...v, example } : v)));
+  };
+
   const createDraft = async (e) => {
     e.preventDefault();
     setError('');
@@ -157,14 +215,23 @@ export default function TemplatesManager() {
       return;
     }
     try {
+      const variable_fields = syncVarMetaFromBody(draft.body, varMeta);
       const res = await fetch('/api/message-templates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...draft, buttons }),
+        body: JSON.stringify({
+          ...draft,
+          buttons,
+          variable_fields,
+          body_examples: variable_fields.map((v) => v.example || 'דוגמה'),
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'יצירה נכשלה');
       setDraft({ ...EMPTY_DRAFT, buttons: [] });
+      setVarMeta(syncVarMetaFromBody(EMPTY_DRAFT.body, [
+        { field: 'parent_first', label: 'שם פרטי (הורה)', example: 'דלק' },
+      ]));
       setSuccess('טיוטה נשמרה');
       await load();
     } catch (err) {
@@ -225,7 +292,66 @@ export default function TemplatesManager() {
             </select>
           </div>
           <input className="input input-sm" placeholder="כותרת (אופציונלי)" value={draft.header} onChange={(e) => setDraft({ ...draft, header: e.target.value })} />
-          <textarea className="input" rows={3} placeholder="גוף ההודעה — השתמשו ב-{{1}}, {{2}} למשתנים" value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} required />
+
+          <div style={{ display: 'grid', gap: 8 }}>
+            <textarea
+              ref={bodyRef}
+              className="input"
+              rows={3}
+              placeholder="גוף ההודעה — לחצו על משתנה למטה או כתבו {{1}}, {{2}}"
+              value={draft.body}
+              onChange={(e) => updateBody(e.target.value)}
+              required
+            />
+            <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+              לחצו על כפתור כדי להוסיף משתנה לגוף ההודעה.
+              <br />
+              אחר כך בחרו במיפוי למה כל מספר מתאים — שם פרטי, שם משפחה, שם הילד וכו׳.
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {TEMPLATE_VAR_FIELDS.filter((f) => f.id !== 'custom').map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  className="btn btn-xs btn-ghost"
+                  onClick={() => insertVariable(f.id)}
+                  title={`הכנס ${f.label}`}
+                >
+                  + {f.label}
+                </button>
+              ))}
+              <button type="button" className="btn btn-xs btn-ghost" onClick={() => insertVariable('custom')}>
+                + טקסט חופשי
+              </button>
+            </div>
+
+            {varMeta.length > 0 && (
+              <div style={{ display: 'grid', gap: 8, padding: 10, background: 'var(--bg-2)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>מיפוי משתנים</div>
+                {varMeta.map((v, idx) => (
+                  <div key={idx} style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: 8, alignItems: 'center' }}>
+                    <code style={{ fontSize: 12, color: 'var(--blue)' }}>{`{{${idx + 1}}}`}</code>
+                    <select
+                      className="input input-sm"
+                      value={v.field || 'custom'}
+                      onChange={(e) => updateVarField(idx, e.target.value)}
+                    >
+                      {TEMPLATE_VAR_FIELDS.map((f) => (
+                        <option key={f.id} value={f.id}>{f.label}</option>
+                      ))}
+                    </select>
+                    <input
+                      className="input input-sm"
+                      placeholder="דוגמה לאישור מטא"
+                      value={v.example || ''}
+                      onChange={(e) => updateVarExample(idx, e.target.value)}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <input className="input input-sm" placeholder="כותרת תחתונה (אופציונלי)" value={draft.footer} onChange={(e) => setDraft({ ...draft, footer: e.target.value })} />
 
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12, display: 'grid', gap: 8 }}>
@@ -323,6 +449,7 @@ export default function TemplatesManager() {
               <th>Meta</th>
               <th>שפה</th>
               <th>קטגוריה</th>
+              <th>משתנים</th>
               <th>כפתורים</th>
               <th>סטטוס</th>
               <th></th>
@@ -330,36 +457,44 @@ export default function TemplatesManager() {
           </thead>
           <tbody>
             {templates.length === 0 ? (
-              <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 16 }}>אין תבניות עדיין — סנכרנו מ-Meta או צרו טיוטה</td></tr>
-            ) : templates.map((t) => (
-              <tr key={t.id}>
-                <td>
-                  <div>{t.name}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-3)', maxWidth: 240, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.body}</div>
-                </td>
-                <td>{t.meta_name}</td>
-                <td>{t.language}</td>
-                <td>{t.category}</td>
-                <td style={{ fontSize: 11, color: 'var(--text-2)', maxWidth: 180 }}>
-                  {Array.isArray(t.buttons) && t.buttons.length
-                    ? t.buttons.map((b, i) => <div key={i}>{formatButtonSummary(b)}</div>)
-                    : '—'}
-                </td>
-                <td>{STATUS_LABELS[String(t.status).toUpperCase()] || t.status}</td>
-                <td style={{ whiteSpace: 'nowrap' }}>
-                  {String(t.status).toUpperCase() === 'DRAFT' && (
-                    <button type="button" className="btn btn-xs btn-primary" onClick={() => submit(t.id)} style={{ marginLeft: 4 }}>
-                      <Send size={11} /> שלח לאישור
-                    </button>
-                  )}
-                  {String(t.status).toUpperCase() !== 'APPROVED' && (
-                    <button type="button" className="btn btn-xs btn-ghost" onClick={() => remove(t.id)}>
-                      <Trash2 size={11} />
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
+              <tr><td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 16 }}>אין תבניות עדיין — סנכרנו מ-Meta או צרו טיוטה</td></tr>
+            ) : templates.map((t) => {
+              const vars = normalizeTemplateVariables(t.variables, t.body);
+              return (
+                <tr key={t.id}>
+                  <td>
+                    <div>{t.name}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)', maxWidth: 240, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.body}</div>
+                  </td>
+                  <td>{t.meta_name}</td>
+                  <td>{t.language}</td>
+                  <td>{t.category}</td>
+                  <td style={{ fontSize: 11, color: 'var(--text-2)', maxWidth: 160 }}>
+                    {vars.length
+                      ? vars.map((v, i) => <div key={i}>{`{{${v.key}}}`} · {v.label}</div>)
+                      : '—'}
+                  </td>
+                  <td style={{ fontSize: 11, color: 'var(--text-2)', maxWidth: 180 }}>
+                    {Array.isArray(t.buttons) && t.buttons.length
+                      ? t.buttons.map((b, i) => <div key={i}>{formatButtonSummary(b)}</div>)
+                      : '—'}
+                  </td>
+                  <td>{STATUS_LABELS[String(t.status).toUpperCase()] || t.status}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {String(t.status).toUpperCase() === 'DRAFT' && (
+                      <button type="button" className="btn btn-xs btn-primary" onClick={() => submit(t.id)} style={{ marginLeft: 4 }}>
+                        <Send size={11} /> שלח לאישור
+                      </button>
+                    )}
+                    {String(t.status).toUpperCase() !== 'APPROVED' && (
+                      <button type="button" className="btn btn-xs btn-ghost" onClick={() => remove(t.id)}>
+                        <Trash2 size={11} />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

@@ -2,64 +2,37 @@ import { db, persistCore, syncBotFlagFromRemote } from './db.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { buildTemplateParameters } from './channels/templates.js';
 import { automationsService } from './automations.js';
+import { israelClockParts, isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
+import {
+  mergeBotSettings,
+  normalizeMenuChoice,
+  decideBotGate,
+  pauseBotForPhone,
+  optOutPhone,
+  clearBotPause,
+  markOutsideHoursSent,
+  shouldSendOutsideHoursMessage,
+  advanceLeadCapture,
+  shouldStartLeadCapture,
+  getIntake,
+  setIntake,
+  clipReply,
+  sleep,
+  buildAiExtraContext,
+  parseAiReply,
+  detectUnsureHeuristic,
+  interactiveMenuPayload,
+  studentsForParent,
+  findPrimaryParent,
+  DEFAULT_BOT_SETTINGS,
+} from './whatsappBot.js';
+
+export { israelClockParts, isBotEnabled, shouldAiAutoReply };
 
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v25.0';
 
 function formatWaPhone(phone) {
   return normalizeWaPhone(phone);
-}
-
-/** Current weekday (0=Sunday) and HH:mm in Asia/Jerusalem. */
-export function israelClockParts(date = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Jerusalem',
-    weekday: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).formatToParts(date);
-  const weekdayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-  const weekday = weekdayMap[parts.find((p) => p.type === 'weekday')?.value] ?? date.getDay();
-  let hour = parts.find((p) => p.type === 'hour')?.value ?? '00';
-  const minute = parts.find((p) => p.type === 'minute')?.value ?? '00';
-  // en-US hour12:false can still yield "24" for midnight in some engines
-  if (hour === '24') hour = '00';
-  return { weekday, time: `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}` };
-}
-
-function parseHm(value, fallback) {
-  const m = String(value || '').match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return fallback;
-  const h = Math.min(23, Math.max(0, Number(m[1])));
-  const min = Math.min(59, Math.max(0, Number(m[2])));
-  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
-}
-
-/** Master switch — when off, no automated WhatsApp/Instagram replies are sent. */
-export function isBotEnabled(settings = {}) {
-  const value = settings.aiResponderEnabled;
-  if (value === true || value === false) return value;
-  if (value === 'true' || value === 1 || value === '1') return true;
-  if (value === 'false' || value === 0 || value === '0') return false;
-  return false;
-}
-
-/** Whether the AI bot should auto-reply right now (Israel time). */
-export function shouldAiAutoReply(settings = {}, { ignoreSchedule = false } = {}) {
-  if (!isBotEnabled(settings)) return false;
-  if (ignoreSchedule || !settings.aiActiveHoursEnabled) return true;
-
-  const { weekday, time } = israelClockParts();
-  const days = Array.isArray(settings.aiActiveDays) && settings.aiActiveDays.length
-    ? settings.aiActiveDays.map(Number)
-    : [0, 1, 2, 3, 4, 5, 6];
-  if (!days.includes(weekday)) return false;
-
-  const start = parseHm(settings.aiActiveHoursStart, '09:00');
-  const end = parseHm(settings.aiActiveHoursEnd, '21:00');
-  if (start <= end) return time >= start && time < end;
-  // Overnight window, e.g. 22:00–06:00
-  return time >= start || time < end;
 }
 
 const DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'שבת'];
@@ -137,7 +110,8 @@ function formatClassesWhatsAppReply(groups, incomingText = '', { includePrices =
 }
 
 /** Live CRM snapshot injected into the AI prompt / heuristic replies */
-function buildCrmBotContext() {
+function buildCrmBotContext(settings = {}, { phone, parent, students } = {}) {
+  const s = mergeBotSettings(settings);
   const groups = (db.get('groups') || [])
     .slice()
     .sort((a, b) => String(a.ageCategory || '').localeCompare(String(b.ageCategory || ''), 'he')
@@ -148,12 +122,23 @@ function buildCrmBotContext() {
     ? groups.map(formatGroupLine).join('\n')
     : 'אין כרגע קבוצות במערכת.';
 
+  const extra = phone
+    ? buildAiExtraContext(s, phone, parent, students || [])
+    : [
+      '## פרטי עסק',
+      s.aiBusinessFacts || '',
+      '',
+      '## בסיס ידע / שאלות נפוצות',
+      s.aiKnowledgeBase || '',
+      '',
+      '## נושאים אסורים',
+      s.aiForbiddenTopics || '',
+    ].join('\n');
+
   return {
     groups,
     text: `## נתונים חיים ממערכת ה-CRM (השתמש רק בהם לתשובות על חוגים/זמנים/מחירים)
-כתובת: רחוב האורגים 12, אשדוד
-שעות פתיחה כלליות: א׳–ה׳ 14:00–22:00 | שישי 09:00–15:00 | שבת סגור
-הצהרת בריאות: https://client-omega-topaz-35.vercel.app/health
+${s.aiBusinessFacts || ''}
 
 ### קבוצות חוגים פעילות (${groups.length}):
 ${groupLines}
@@ -166,7 +151,9 @@ ${groupLines}
 - אל תציג מחירים אלא אם הלקוח שאל במפורש על מחיר/עלות.
 - בלי שם קבוצה, בלי קטגוריה, בלי מקומות פנויים.
 - אל תמציא קבוצות שלא מופיעות.
-- אם אין התאמה מדויקת — אמור זאת + בקש שם וטלפון לחזרה.`,
+- אם אין התאמה מדויקת — אמור זאת + בקש שם וטלפון לחזרה.
+
+${extra}`,
   };
 }
 
@@ -195,14 +182,15 @@ function findGroupsForText(text) {
   });
 }
 
-function buildHeuristicReply(incomingText) {
+function buildHeuristicReply(incomingText, settings = {}) {
+  const s = mergeBotSettings(settings);
   const raw = String(incomingText || '').trim();
   const text = raw.toLowerCase();
-  // Menu picks from the default greeting: "1" / "2" / "3"
-  const menuPick = text.match(/^[1-3]$/)?.[0]
-    || (text.match(/^(?:אופציה|אפשרות|מספר)?\s*[1-3]\b/)?.[0]?.replace(/\D/g, '') || null);
+  const menuPick = normalizeMenuChoice(raw);
 
-  const healthReply = 'היי! ✍️\nהנה קישור להצהרת הבריאות:\nhttps://client-omega-topaz-35.vercel.app/health\n\nאחרי החתימה המערכת מתעדכנת אוטומטית 🧗';
+  const healthUrl = (s.aiBusinessFacts || '').match(/https?:\/\/\S+health\S*/i)?.[0]
+    || 'https://client-omega-topaz-35.vercel.app/health';
+  const healthReply = `היי! ✍️\nהנה קישור להצהרת הבריאות:\n${healthUrl}\n\nאחרי החתימה המערכת מתעדכנת אוטומטית 🧗`;
   const matchedGroups = findGroupsForText(raw);
   const sourceGroups = matchedGroups.length ? matchedGroups : (db.get('groups') || []).slice(0, 12);
   const wantsPrices = asksAboutPrices(raw) || menuPick === '2';
@@ -213,7 +201,11 @@ function buildHeuristicReply(incomingText) {
   const pricesReply = 'היי! 💰 מחירון קצר:\n\n🎟️ כניסה חד־פעמית — ₪50\n🔟 כרטיסייה 10 כניסות — ₪450\n🗓️ מנוי חודשי — ₪280\n🧗 חוג שבועי — ₪280–₪305 (לפי גיל)\n\nנשמח לתאם אימון היכרות!';
   const hoursReply = '🕐 שעות פעילות My Wall:\n\n📅 א׳–ה׳ · 14:00–22:00\n📅 שישי · 09:00–15:00\n📅 שבת · סגור';
   const locationReply = '📍 אנחנו ברחוב האורגים 12, אשדוד\n🅿️ יש חניה בחזית\nנתראה על הקיר! 🧗';
-  const defaultMenu = 'היי! אני הבוט של My Wall 🧗\n\nבמה אפשר לעזור?\n1️⃣ הצהרת בריאות ✍️\n2️⃣ חוגים ומחירים 🤸\n3️⃣ שעות ומיקום 🗺️\n\nכתבו מספר או שאלה קצרה 😊';
+  const defaultMenu = s.aiGreetingMenu || DEFAULT_BOT_SETTINGS.aiGreetingMenu;
+
+  if (menuPick === '4') {
+    return { text: s.aiHandoffAckMessage, confidence: 'high', handoff: true };
+  }
 
   if (menuPick === '1' || text.includes('צהר') || text.includes('טופס') || text.includes('בריאות') || text.includes('חתמ')) {
     return { text: healthReply, confidence: 'high' };
@@ -239,7 +231,7 @@ function buildHeuristicReply(incomingText) {
   }
 
   if (scheduleIntent) {
-    return { text: classesReplyNeedsGrade, confidence: 'high' };
+    return { text: classesReplyNeedsGrade, confidence: 'high', startIntake: menuPick === '2' };
   }
 
   if (asksAboutPrices(raw)) {
@@ -257,7 +249,16 @@ function buildHeuristicReply(incomingText) {
   return { text: defaultMenu, confidence: 'low' };
 }
 
-async function callGeminiReply(systemPrompt, crmText, incomingText, apiKey) {
+function formatClassesForGrade(gradeText) {
+  const groups = findGroupsForText(`כיתה ${gradeText}`);
+  if (!groups.length) return '';
+  return formatClassesWhatsAppReply(groups, `כיתה ${gradeText}`, { includePrices: false });
+}
+
+async function callGeminiReply(systemPrompt, crmText, incomingText, apiKey, settings = {}) {
+  const s = mergeBotSettings(settings);
+  const healthUrl = (s.aiBusinessFacts || '').match(/https?:\/\/\S+health\S*/i)?.[0]
+    || 'https://client-omega-topaz-35.vercel.app/health';
   const models = [
     process.env.GEMINI_MODEL || 'gemini-2.5-flash',
     'gemini-2.0-flash',
@@ -277,10 +278,14 @@ async function callGeminiReply(systemPrompt, crmText, incomingText, apiKey) {
 
 ${crmText}
 
-הערה חשובה: אם הלקוח כותב רק 1 / 2 / 3 זה בחירה מתפריט:
-1 = קישור להצהרת בריאות (https://client-omega-topaz-35.vercel.app/health)
+הערה חשובה: אם הלקוח כותב רק 1 / 2 / 3 / 4 זה בחירה מתפריט:
+1 = קישור להצהרת בריאות (${healthUrl})
 2 = הרשמה ומחירי חוגים (ענה מתוך רשימת הקבוצות למעלה)
 3 = שעות פעילות ומיקום
+4 = העברה לצוות אנושי
+
+מגבלת אורך תשובה: עד ${s.aiMaxReplyChars || 700} תווים.
+אם אינך בטוח — התחל את התשובה במילה UNSURE.
 
 הודעת לקוח: "${incomingText}"
 תשובה קצרה ומנומסת של הבוט, עם נתונים מהרשימה בלבד:`
@@ -357,39 +362,70 @@ async function callMetaWhatsAppAPI(phone, payload) {
 
 export const whatsappService = {
   // Send a custom text message
-  sendTextMessage: async (phone, text, isAi = false) => {
+  sendTextMessage: async (phone, text, isAi = false, options = {}) => {
+    const settings = mergeBotSettings(db.getSettings());
+    let body = String(text || '');
+    if (isAi || options.clip !== false) {
+      body = clipReply(body, options.maxChars ?? settings.aiMaxReplyChars);
+    }
+    if (isAi && !options.skipDelay) {
+      await sleep(options.delayMs ?? settings.aiReplyDelayMs);
+    }
     try {
       const result = await callMetaWhatsAppAPI(phone, {
         type: 'text',
-        text: { body: text }
+        text: { body }
       });
 
       db.insert('whatsapp_logs', {
         phone: formatWaPhone(phone) || phone,
         channel: 'whatsapp',
         direction: 'outbound',
-        message: text,
+        message: body,
         status: result.mock ? 'sent' : 'delivered',
         is_ai: isAi,
-        source: isAi ? 'ai' : 'crm',
+        source: options.source || (isAi ? 'ai' : 'crm'),
         meta_message_id: result.messageId || null,
       });
 
-      return { success: true, text, messageId: result.messageId };
+      return { success: true, text: body, messageId: result.messageId };
     } catch (error) {
       db.insert('whatsapp_logs', {
         phone: formatWaPhone(phone) || phone,
         channel: 'whatsapp',
         direction: 'outbound',
-        message: text,
+        message: body,
         status: 'failed',
-        source: isAi ? 'ai' : 'crm',
+        is_ai: isAi,
+        source: options.source || (isAi ? 'ai' : 'crm'),
       });
       return { success: false, error: error.message };
     }
   },
 
-  // Send a template message
+  sendInteractiveMenu: async (phone, settings) => {
+    const payload = interactiveMenuPayload(settings);
+    try {
+      const result = await callMetaWhatsAppAPI(phone, payload);
+      const preview = mergeBotSettings(settings).aiGreetingMenu || DEFAULT_BOT_SETTINGS.aiGreetingMenu;
+      db.insert('whatsapp_logs', {
+        phone: formatWaPhone(phone) || phone,
+        channel: 'whatsapp',
+        direction: 'outbound',
+        message: preview,
+        status: result.mock ? 'sent' : 'delivered',
+        is_ai: true,
+        source: 'ai',
+        message_type: 'interactive',
+        meta_message_id: result.messageId || null,
+      });
+      return { success: true, messageId: result.messageId };
+    } catch (error) {
+      console.error('Interactive menu failed, falling back to text:', error.message);
+      return { success: false, error: error.message };
+    }
+  },
+
   // Send a template message
   sendTemplateMessage: async (phone, templateName, variables = [], options = {}) => {
     try {
@@ -521,28 +557,87 @@ export const whatsappService = {
   },
 
   // Generate automated AI response
-  generateAIResponse: async (incomingText) => {
-    // Clear intents (1/2/3, כיתה, אימונים...) answered immediately — don't depend on Gemini.
-    const quick = buildHeuristicReply(incomingText);
-    if (quick.confidence === 'high') return quick.text;
+  generateAIResponse: async (incomingText, context = {}) => {
+    const settings = mergeBotSettings(db.getSettings());
+    const phone = context.phone || '';
+    const parent = context.parent || (phone ? findPrimaryParent(phone) : null);
+    const students = context.students || (parent ? studentsForParent(parent) : []);
 
-    const settings = db.getSettings();
-    const systemPrompt = settings.aiSystemPrompt;
-    const apiKey = process.env.GEMINI_API_KEY;
-    const crm = buildCrmBotContext();
-
-    if (apiKey && apiKey !== 'YOUR_GEMINI_API_KEY_HERE') {
-      const geminiText = await callGeminiReply(systemPrompt, crm.text, incomingText, apiKey);
-      if (geminiText) return geminiText;
+    const quick = buildHeuristicReply(incomingText, settings);
+    if (quick.handoff) {
+      return { text: quick.text, handoff: true, confidence: 'high' };
+    }
+    if (quick.confidence === 'high') {
+      return { text: clipReply(quick.text, settings.aiMaxReplyChars), confidence: 'high', startIntake: !!quick.startIntake };
     }
 
-    return quick.text;
+    const systemPrompt = settings.aiSystemPrompt;
+    const apiKey = process.env.GEMINI_API_KEY;
+    const crm = buildCrmBotContext(settings, { phone, parent, students });
+
+    if (apiKey && apiKey !== 'YOUR_GEMINI_API_KEY_HERE') {
+      const geminiText = await callGeminiReply(systemPrompt, crm.text, incomingText, apiKey, settings);
+      if (geminiText) {
+        const parsed = parseAiReply(geminiText, settings);
+        const unsure = parsed.unsure || detectUnsureHeuristic(parsed.text);
+        if (unsure && settings.aiEscalateWhenUnsure) {
+          return {
+            text: parsed.text || settings.aiUnsureReply,
+            handoff: true,
+            unsure: true,
+            confidence: 'low',
+          };
+        }
+        return { text: parsed.text, confidence: 'medium', unsure };
+      }
+    }
+
+    if (settings.aiEscalateWhenUnsure && quick.confidence === 'low') {
+      // Still return the greeting menu — not an escalation for unknown small talk
+      return { text: clipReply(quick.text, settings.aiMaxReplyChars), confidence: 'low' };
+    }
+
+    return { text: clipReply(quick.text, settings.aiMaxReplyChars), confidence: quick.confidence || 'low' };
+  },
+
+  async sendBotReply(phone, replyText, { isSimulator = false, source = 'ai' } = {}) {
+    if (!replyText) return { success: false };
+    if (isSimulator) {
+      db.insert('whatsapp_logs', {
+        phone: formatWaPhone(phone) || phone,
+        channel: 'whatsapp',
+        direction: 'outbound',
+        message: replyText,
+        status: 'sent',
+        is_ai: true,
+        source,
+      });
+      return { success: true, text: replyText };
+    }
+    return whatsappService.sendTextMessage(phone, replyText, true, { source });
   },
 
   // Process incoming messages (webhook entrypoint / simulator)
   handleIncomingMessage: async (phone, text, isSimulator = false, meta = {}) => {
     if (!isSimulator) await syncBotFlagFromRemote();
     const normalizedPhone = formatWaPhone(phone) || phone;
+
+    const existingLogs = db.get('whatsapp_logs') || [];
+    if (
+      meta.messageId
+      && existingLogs.some((log) => (
+        log.direction === 'inbound'
+        && log.meta_message_id === meta.messageId
+      ))
+    ) {
+      return {
+        parent: findPrimaryParent(normalizedPhone),
+        student: null,
+        isNew: false,
+        replied: false,
+        skippedReason: 'duplicate',
+      };
+    }
 
     // 1. Log inbound message
     db.insert('whatsapp_logs', {
@@ -557,11 +652,13 @@ export const whatsappService = {
     });
 
     // 2. Upsert lead / client details in DB (source=whatsapp, status=lead_new)
-    const { parent, student, isNew } = await db.createLeadFromWhatsApp(normalizedPhone, text);
+    const { parent: createdParent, student, isNew } = await db.createLeadFromWhatsApp(normalizedPhone, text);
 
     // Open / refresh 24h window on EVERY parent row that shares this phone
-    // (duplicates like 050… vs 972… used to leave the CRM card closed).
-    const inboundAt = new Date().toISOString();
+    const rawTimestamp = Number(meta.timestamp);
+    const inboundAt = Number.isFinite(rawTimestamp) && rawTimestamp > 0
+      ? new Date(rawTimestamp > 1e12 ? rawTimestamp : rawTimestamp * 1000).toISOString()
+      : new Date().toISOString();
     const phoneMatches = (db.get('parents') || []).filter((p) => phonesMatch(p.phone, normalizedPhone));
     for (const match of phoneMatches) {
       const updatedParent = db.update('parents', match.id, {
@@ -571,7 +668,9 @@ export const whatsappService = {
       if (updatedParent) await persistCore('parents', updatedParent);
     }
 
-    const settings = db.getSettings();
+    let parent = findPrimaryParent(normalizedPhone) || createdParent;
+    let students = studentsForParent(parent);
+    const settings = mergeBotSettings(db.getSettings());
 
     // 3. Welcome template + automations only while the bot is enabled
     if (isBotEnabled(settings) && isNew) {
@@ -594,40 +693,109 @@ export const whatsappService = {
       }
     }
 
-    // 4. Process AI automated reply if active (and within schedule for live traffic)
-    if (shouldAiAutoReply(settings, { ignoreSchedule: isSimulator }) && text) {
-      const aiReply = await whatsappService.generateAIResponse(text);
-      if (isSimulator) {
-        db.insert('whatsapp_logs', {
-          phone: normalizedPhone,
-          channel: 'whatsapp',
-          direction: 'outbound',
-          message: aiReply,
-          status: 'sent',
-          is_ai: true,
-          source: 'ai',
-        });
-      } else {
-        await whatsappService.sendTextMessage(normalizedPhone, aiReply, true);
+    if (!text) {
+      return { parent, student, isNew, replied: false, skippedReason: 'empty' };
+    }
+
+    // 4. Bot decision gates
+    const gate = decideBotGate(settings, parent, students, text, { isSimulator });
+
+    if (gate.action === 'reactivate') {
+      await optOutPhone(normalizedPhone, false);
+      await clearBotPause(normalizedPhone);
+      parent = findPrimaryParent(normalizedPhone) || parent;
+      await whatsappService.sendBotReply(normalizedPhone, gate.reply, { isSimulator, source: 'bot_control' });
+      return { parent, student, isNew, replied: true, reply: gate.reply, reason: 'reactivated' };
+    }
+
+    if (gate.action === 'opt_out') {
+      await optOutPhone(normalizedPhone, true);
+      await whatsappService.sendBotReply(normalizedPhone, gate.reply, { isSimulator, source: 'bot_control' });
+      return { parent, student, isNew, replied: true, reply: gate.reply, reason: 'opt_out' };
+    }
+
+    if (gate.action === 'silence') {
+      console.log(`🤖 Bot silence (${gate.reason}) for ${normalizedPhone}`);
+      return { parent, student, isNew, replied: false, skippedReason: gate.reason };
+    }
+
+    if (gate.action === 'outside_hours') {
+      if (isSimulator || shouldSendOutsideHoursMessage(parent)) {
+        await whatsappService.sendBotReply(normalizedPhone, gate.reply, { isSimulator, source: 'bot_control' });
+        if (!isSimulator) await markOutsideHoursSent(normalizedPhone);
+        return { parent, student, isNew, replied: true, reply: gate.reply, reason: 'outside_hours' };
       }
-      return { parent, student, isNew, replied: true, reply: aiReply };
+      return { parent, student, isNew, replied: false, skippedReason: 'outside_hours' };
     }
 
-    if (!isBotEnabled(settings)) {
-      console.log(`🤖 Bot disabled — skipping auto-reply for ${normalizedPhone}`);
+    if (gate.action === 'handoff') {
+      await pauseBotForPhone(normalizedPhone, gate.pauseMinutes || settings.aiPauseMinutesAfterHuman, { reason: 'handoff' });
+      await whatsappService.sendBotReply(normalizedPhone, gate.reply, { isSimulator, source: 'bot_control' });
+      return { parent, student, isNew, replied: true, reply: gate.reply, reason: 'handoff' };
     }
 
-    return {
-      parent,
-      student,
-      isNew,
-      replied: false,
-      skippedReason: !isBotEnabled(settings)
-        ? 'disabled'
-        : settings.aiActiveHoursEnabled && !isSimulator
-          ? 'outside_hours'
-          : null,
-    };
+    // Active intake
+    if (gate.action === 'intake' || (getIntake(parent)?.step && getIntake(parent).step !== 'done')) {
+      const intakeResult = await advanceLeadCapture(normalizedPhone, parent, text, { formatClassesForGrade });
+      if (intakeResult.reply) {
+        await whatsappService.sendBotReply(normalizedPhone, intakeResult.reply, { isSimulator });
+        return { parent: findPrimaryParent(normalizedPhone) || parent, student, isNew, replied: true, reply: intakeResult.reply, reason: 'intake' };
+      }
+    }
+
+    // Start intake for new/incomplete leads (after menu 2 or missing details)
+    if (shouldStartLeadCapture(settings, parent, students, text, { isNew })) {
+      const choice = normalizeMenuChoice(text);
+      // If they just picked "2", acknowledge classes briefly then start intake
+      if (choice === '2') {
+        const quick = buildHeuristicReply(text, settings);
+        if (quick.text) {
+          await whatsappService.sendBotReply(normalizedPhone, quick.text, { isSimulator });
+        }
+      }
+      await setIntake(normalizedPhone, { step: 'parent_name', asked: false });
+      parent = findPrimaryParent(normalizedPhone) || parent;
+      const intakeResult = await advanceLeadCapture(normalizedPhone, parent, '', { formatClassesForGrade });
+      if (intakeResult.reply) {
+        await whatsappService.sendBotReply(normalizedPhone, intakeResult.reply, { isSimulator });
+        return {
+          parent: findPrimaryParent(normalizedPhone) || parent,
+          student,
+          isNew,
+          replied: true,
+          reply: `${choice === '2' ? '' : ''}${intakeResult.reply}`,
+          reason: 'intake_start',
+        };
+      }
+    }
+
+    // Interactive greeting for brand-new leads with low-intent first message
+    const aiResult = await whatsappService.generateAIResponse(text, { phone: normalizedPhone, parent, students });
+    if (aiResult.handoff) {
+      await pauseBotForPhone(normalizedPhone, settings.aiPauseMinutesAfterHuman, { reason: 'handoff' });
+      await whatsappService.sendBotReply(normalizedPhone, aiResult.text || settings.aiHandoffAckMessage, {
+        isSimulator,
+        source: 'bot_control',
+      });
+      return { parent, student, isNew, replied: true, reply: aiResult.text, reason: 'handoff' };
+    }
+
+    let replyText = aiResult.text;
+    if (
+      isNew
+      && settings.aiInteractiveMenuEnabled
+      && !isSimulator
+      && aiResult.confidence === 'low'
+    ) {
+      const interactive = await whatsappService.sendInteractiveMenu(normalizedPhone, settings);
+      if (interactive.success) {
+        return { parent, student, isNew, replied: true, reply: settings.aiGreetingMenu, reason: 'interactive_menu' };
+      }
+      replyText = settings.aiGreetingMenu || replyText;
+    }
+
+    await whatsappService.sendBotReply(normalizedPhone, replyText, { isSimulator });
+    return { parent, student, isNew, replied: true, reply: replyText };
   },
 
   // Messages sent from WhatsApp Business app (Coexistence echoes)
@@ -656,6 +824,11 @@ export const whatsappService = {
       source: 'whatsapp',
       channel: 'whatsapp',
     });
+
+    const settings = mergeBotSettings(db.getSettings());
+    if (settings.aiPauseOnHumanReply) {
+      await pauseBotForPhone(normalizedPhone, settings.aiPauseMinutesAfterHuman, { reason: 'human_reply' });
+    }
 
     return { success: true, phone: normalizedPhone };
   },
@@ -696,8 +869,17 @@ export const whatsappService = {
     if (resolvedDirection === 'inbound') {
       const phoneMatches = (db.get('parents') || []).filter((p) => phonesMatch(p.phone, normalizedPhone));
       for (const match of phoneMatches) {
+        const handledTime = Date.parse(match.communication_handled_at || '');
+        const historyTime = Date.parse(createdAt);
+        const communicationHandledAt = new Date(
+          Math.max(
+            Number.isFinite(handledTime) ? handledTime : 0,
+            Number.isFinite(historyTime) ? historyTime : 0
+          )
+        ).toISOString();
         const updatedParent = db.update('parents', match.id, {
           last_inbound_whatsapp: createdAt,
+          communication_handled_at: communicationHandledAt,
           channel: match.channel === 'phone' ? 'whatsapp' : (match.channel || 'whatsapp'),
         });
         if (updatedParent) persistCore('parents', updatedParent).catch(() => {});
@@ -710,7 +892,14 @@ export const whatsappService = {
   replyFromCrm: async (phone, text) => {
     if (!phone) return { success: false, error: 'חסר מספר טלפון' };
     if (!text || !String(text).trim()) return { success: false, error: 'חסר תוכן הודעה' };
-    return whatsappService.sendTextMessage(phone, String(text).trim(), false);
+    const result = await whatsappService.sendTextMessage(phone, String(text).trim(), false);
+    if (result.success) {
+      const settings = mergeBotSettings(db.getSettings());
+      if (settings.aiPauseOnHumanReply) {
+        await pauseBotForPhone(phone, settings.aiPauseMinutesAfterHuman, { reason: 'human_reply' });
+      }
+    }
+    return result;
   },
 
   getLogsForPhone: (phone) => {
@@ -819,7 +1008,11 @@ export const instagramService = {
     // 3. Process AI automated reply if active (schedule applies to live traffic)
     const settings = db.getSettings();
     if (shouldAiAutoReply(settings, { ignoreSchedule: isSimulator })) {
-      const aiReply = await whatsappService.generateAIResponse(text);
+      const aiResult = await whatsappService.generateAIResponse(text);
+      const aiReply = typeof aiResult === 'string' ? aiResult : aiResult?.text;
+      if (!aiReply) {
+        return { parent, student, isNew, replied: false };
+      }
       const hasRealToken = !!getInstagramToken();
       if (isSimulator || !hasRealToken) {
         // Simulator / missing token: log locally only (no Meta call)

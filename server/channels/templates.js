@@ -1,5 +1,9 @@
 import { db, persistCore } from '../db.js';
 import { getWaCredentials, META_GRAPH_VERSION } from './media.js';
+import {
+  enrichVariablesFromFields,
+  examplesFromVariables,
+} from './templateVarFields.js';
 
 function getWabaId() {
   const settings = db.getSettings() || {};
@@ -145,6 +149,9 @@ export async function syncTemplatesFromMeta() {
     const language = t.language || 'he';
     const key = `${t.name}:${language}`;
     const body = extractBody(t.components || []);
+    const bodyKeys = countVariables(body);
+    const previous = byMetaName.get(key);
+    const variables = enrichVariablesFromFields(bodyKeys, previous?.variables);
     const payload = {
       name: t.name,
       meta_name: t.name,
@@ -154,13 +161,13 @@ export async function syncTemplatesFromMeta() {
       body,
       header: extractHeader(t.components || []),
       footer: extractFooter(t.components || []),
-      variables: countVariables(body),
+      variables,
       buttons: extractButtons(t.components || []),
       meta_id: t.id || null,
       rejection_reason: t.rejected_reason || null,
       active_for_send: mapMetaStatus(t.status) === 'APPROVED',
     };
-    const current = byMetaName.get(key);
+    const current = previous;
     const saved = current
       ? db.update('message_templates', current.id, payload)
       : db.insert('message_templates', { id: `tpl_${t.id || Date.now()}_${language}`, ...payload });
@@ -200,6 +207,15 @@ export function createDraftTemplate(input = {}) {
   const buttonError = validateButtons(buttons);
   if (buttonError) throw new Error(buttonError);
 
+  const bodyKeys = countVariables(body);
+  const variables = enrichVariablesFromFields(
+    bodyKeys,
+    Array.isArray(input.variable_fields) ? input.variable_fields : input.variables
+  );
+  const bodyExamples = Array.isArray(input.body_examples) && input.body_examples.length
+    ? input.body_examples.map(String)
+    : examplesFromVariables(variables);
+
   return db.insert('message_templates', {
     id: `tpl_${Date.now()}`,
     name: input.name || metaName,
@@ -210,8 +226,8 @@ export function createDraftTemplate(input = {}) {
     body,
     header: input.header || '',
     footer: input.footer || '',
-    body_examples: Array.isArray(input.body_examples) ? input.body_examples : [],
-    variables: countVariables(body),
+    body_examples: bodyExamples,
+    variables,
     buttons,
     active_for_send: false,
   });
@@ -224,7 +240,15 @@ export function updateLocalTemplate(id, updates = {}) {
     // Keep approved Meta copy; allow local label tweaks only unless draft
   }
   const body = updates.body !== undefined ? updates.body : current.body;
-  const patch = { ...updates, variables: countVariables(body) };
+  const bodyKeys = countVariables(body);
+  const fieldSource = updates.variable_fields !== undefined
+    ? updates.variable_fields
+    : (updates.variables !== undefined ? updates.variables : current.variables);
+  const variables = enrichVariablesFromFields(bodyKeys, fieldSource);
+  const patch = { ...updates, variables };
+  if (updates.body_examples === undefined && Array.isArray(variables)) {
+    patch.body_examples = examplesFromVariables(variables);
+  }
   if (updates.buttons !== undefined) {
     patch.buttons = normalizeButtons(updates.buttons);
     const buttonError = validateButtons(patch.buttons);
@@ -266,7 +290,12 @@ export async function submitTemplateToMeta(id) {
   const bodyVars = parseTemplateVariables(template.body);
   const bodyExamples = Array.isArray(template.body_examples) && template.body_examples.length
     ? template.body_examples.map(String)
-    : bodyVars.map((v, i) => (i === 0 ? 'דלק' : i === 1 ? 'מוצר' : i === 2 ? '70' : 'דוגמה'));
+    : examplesFromVariables(
+      enrichVariablesFromFields(
+        bodyVars.map((v) => v.key),
+        template.variables
+      )
+    );
   if (bodyVars.length) {
     bodyComponent.example = { body_text: [bodyExamples.slice(0, bodyVars.length)] };
   }

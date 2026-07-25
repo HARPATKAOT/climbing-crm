@@ -1,0 +1,346 @@
+/**
+ * Helpers for activity public registration pages, capacity, and templates.
+ */
+import crypto from 'crypto';
+
+const PAYMENT_STATUSES = new Set(['unpaid', 'paid', 'partial']);
+
+/** Fixed MVP categories — Hebrew labels live in the UI only. */
+export const TEMPLATE_CATEGORIES = [
+  { id: 'field', label: 'פעילויות שטח' },
+  { id: 'wall', label: 'אירועים בקיר' },
+];
+
+export const TEMPLATE_CATEGORY_IDS = new Set(TEMPLATE_CATEGORIES.map((c) => c.id));
+
+export function makeRegistrationSlug() {
+  return crypto.randomBytes(6).toString('hex');
+}
+
+export function normalizeHostPaymentStatus(value) {
+  const v = String(value || 'unpaid').toLowerCase();
+  return PAYMENT_STATUSES.has(v) ? v : 'unpaid';
+}
+
+export function normalizeTemplateCategory(value) {
+  const v = String(value || 'wall').toLowerCase();
+  return TEMPLATE_CATEGORY_IDS.has(v) ? v : 'wall';
+}
+
+export function activeRegistrations(db, activityId) {
+  return (db.get('activity_registrations') || []).filter(
+    (r) =>
+      String(r.activity_id) === String(activityId) &&
+      String(r.status || 'active') !== 'cancelled'
+  );
+}
+
+export function remainingCapacity(activity, registrations) {
+  const max = activity?.max_participants;
+  if (max == null || max === '' || Number.isNaN(Number(max))) return null;
+  const used = Array.isArray(registrations) ? registrations.length : 0;
+  return Math.max(0, Number(max) - used);
+}
+
+export function registrationIsOpen(activity) {
+  if (!activity?.registration_enabled) return false;
+  if (activity.status === 'cancelled' || activity.status === 'closed') return false;
+  if (activity.registration_closes_at) {
+    const closes = new Date(activity.registration_closes_at).getTime();
+    if (!Number.isNaN(closes) && Date.now() > closes) return false;
+  }
+  return true;
+}
+
+export function findActivityBySlug(db, slug) {
+  const needle = String(slug || '').trim();
+  if (!needle) return null;
+  return (db.get('activities') || []).find(
+    (a) => String(a.registration_slug || '') === needle
+  ) || null;
+}
+
+export function publicRegistrationPayload(activity, registrations) {
+  const remaining = remainingCapacity(activity, registrations);
+  const price = Number(activity.price) || 0;
+  const collectPay = !!activity.collect_registration_payment && price > 0;
+  const theme = activity.registration_theme || activity.theme || {};
+  return {
+    id: activity.id,
+    name: activity.name,
+    type: activity.type,
+    date: activity.date,
+    end_date: activity.end_date || null,
+    start_time: activity.start_time,
+    end_time: activity.end_time,
+    all_day: !!activity.all_day,
+    location: activity.location || '',
+    description: activity.description || '',
+    price,
+    max_participants: activity.max_participants ?? null,
+    registered_count: registrations.length,
+    remaining,
+    registration_open: registrationIsOpen(activity) && (remaining == null || remaining > 0),
+    collect_payment: collectPay,
+    page_title: activity.registration_page_title || activity.name || '',
+    page_body: activity.registration_page_body || activity.description || '',
+    host_name: activity.host_name || activity.contact_name || '',
+    theme: typeof theme === 'object' && theme ? theme : {},
+  };
+}
+
+export function templateFieldsFromActivity(activity = {}) {
+  return {
+    name: activity.name || '',
+    type: activity.type || 'birthday',
+    category: normalizeTemplateCategory(activity.category),
+    location: activity.location || '',
+    price: Number(activity.price) || 0,
+    max_participants: activity.max_participants ?? null,
+    description: activity.description || '',
+    notes: activity.notes || '',
+    start_time: activity.start_time || null,
+    end_time: activity.end_time || null,
+    all_day: !!activity.all_day,
+    registration_enabled: !!activity.registration_enabled,
+    collect_registration_payment: !!activity.collect_registration_payment,
+    registration_page_title: activity.registration_page_title || '',
+    registration_page_body: activity.registration_page_body || '',
+    theme:
+      (activity.theme && typeof activity.theme === 'object' && activity.theme)
+      || (activity.registration_theme && typeof activity.registration_theme === 'object' && activity.registration_theme)
+      || {},
+    sort_order: Number(activity.sort_order) || 0,
+    is_active: activity.is_active !== false,
+  };
+}
+
+export function normalizeTemplatePayload(body = {}) {
+  const theme =
+    body.theme && typeof body.theme === 'object' && !Array.isArray(body.theme)
+      ? body.theme
+      : {};
+  return {
+    name: String(body.name || '').trim(),
+    type: body.type || 'birthday',
+    category: normalizeTemplateCategory(body.category),
+    location: body.location || '',
+    price: body.price === '' || body.price == null ? 0 : Number(body.price) || 0,
+    max_participants:
+      body.max_participants === '' || body.max_participants == null
+        ? null
+        : Number(body.max_participants) || null,
+    description: body.description || '',
+    notes: body.notes || '',
+    start_time: body.all_day ? null : (body.start_time || null),
+    end_time: body.all_day ? null : (body.end_time || null),
+    all_day: !!body.all_day,
+    registration_enabled: !!body.registration_enabled,
+    collect_registration_payment: !!body.collect_registration_payment,
+    registration_page_title: body.registration_page_title || '',
+    registration_page_body: body.registration_page_body || '',
+    theme,
+    sort_order: body.sort_order == null ? 0 : Number(body.sort_order) || 0,
+    is_active: body.is_active !== false,
+  };
+}
+
+/** Prefill shape for a new calendar activity form (not yet saved). */
+export function activityDraftFromTemplate(template = {}, { date } = {}) {
+  const fields = templateFieldsFromActivity(template);
+  return {
+    name: fields.name,
+    type: fields.type,
+    date: date || null,
+    end_date: null,
+    start_time: fields.start_time || '10:00',
+    end_time: fields.end_time || '12:00',
+    all_day: !!fields.all_day,
+    location: fields.location,
+    price: fields.price,
+    max_participants: fields.max_participants,
+    description: fields.description,
+    notes: fields.notes,
+    host_name: '',
+    host_email: '',
+    host_phone: '',
+    host_parent_id: null,
+    contact_name: '',
+    contact_phone: '',
+    payment_status: 'unpaid',
+    registration_enabled: !!fields.registration_enabled,
+    collect_registration_payment: !!fields.collect_registration_payment,
+    registration_page_title: fields.registration_page_title || fields.name,
+    registration_page_body: fields.registration_page_body || fields.description,
+    registration_theme: fields.theme || {},
+    status: 'open',
+    _from_template_id: template.id || null,
+    _from_template_category: fields.category,
+  };
+}
+
+/**
+ * Starter templates — stable ids so seed is idempotent.
+ * category: field = פעילויות שטח, wall = אירועים בקיר
+ */
+export const STARTER_ACTIVITY_TEMPLATES = [
+  {
+    id: 'tpl_field_rahaf',
+    category: 'field',
+    sort_order: 10,
+    name: 'טיול לנחל רחף',
+    type: 'trip',
+    price: 180,
+    max_participants: 25,
+    location: 'נחל רחף',
+    description: 'טיול שטח לנחל רחף — ציוד בסיסי, מים ונעלי הליכה.',
+    registration_enabled: true,
+    collect_registration_payment: true,
+    registration_page_title: 'טיול לנחל רחף',
+    registration_page_body: 'הרשמה לטיול שטח עם My Wall. מלאו פרטים ואשרו מקום.',
+    theme: { accent: '#60A5FA' },
+    start_time: '08:00',
+    end_time: '16:00',
+  },
+  {
+    id: 'tpl_field_black_canyon',
+    category: 'field',
+    sort_order: 20,
+    name: 'טיול לנקיק השחור',
+    type: 'trip',
+    price: 200,
+    max_participants: 20,
+    location: 'נקיק השחור',
+    description: 'טיול לנקיק השחור — רמת קושי בינונית, חובה נעלי הליכה.',
+    registration_enabled: true,
+    collect_registration_payment: true,
+    registration_page_title: 'טיול לנקיק השחור',
+    registration_page_body: 'מקומות מוגבלים. ההרשמה כוללת תשלום מראש.',
+    theme: { accent: '#34D399' },
+    start_time: '07:30',
+    end_time: '15:30',
+  },
+  {
+    id: 'tpl_field_kabra',
+    category: 'field',
+    sort_order: 30,
+    name: 'יום טיפוס בכברה',
+    type: 'trip',
+    price: 220,
+    max_participants: 16,
+    location: 'כברה',
+    description: 'יום טיפוס בטבע בכברה — ציוד טיפוס מסופק לפי הצורך.',
+    registration_enabled: true,
+    collect_registration_payment: true,
+    registration_page_title: 'יום טיפוס בכברה',
+    registration_page_body: 'יום שטח של טיפוס עם מדריכי My Wall.',
+    theme: { accent: '#A78BFA' },
+    start_time: '08:00',
+    end_time: '15:00',
+  },
+  {
+    id: 'tpl_wall_private',
+    category: 'wall',
+    sort_order: 10,
+    name: 'אימונים אישיים',
+    type: 'other',
+    price: 250,
+    max_participants: 2,
+    location: 'בקיר',
+    description: 'אימון אישי / זוגי עם מדריך.',
+    registration_enabled: false,
+    collect_registration_payment: false,
+    registration_page_title: 'אימון אישי',
+    registration_page_body: '',
+    theme: { accent: '#38BDF8' },
+    start_time: '16:00',
+    end_time: '17:00',
+  },
+  {
+    id: 'tpl_wall_birthday',
+    category: 'wall',
+    sort_order: 20,
+    name: 'יום הולדת',
+    type: 'birthday',
+    price: 1200,
+    max_participants: 15,
+    location: 'בקיר',
+    description: 'חבילת יום הולדת בקיר — מדריך, זמן טיפוס וכיבוד בסיסי לפי תיאום.',
+    registration_enabled: true,
+    collect_registration_payment: false,
+    registration_page_title: 'יום הולדת בקיר',
+    registration_page_body: 'מזמינים אתכם לחגוג איתנו! מלאו פרטי משתתפים.',
+    theme: { accent: '#FB923C' },
+    start_time: '10:00',
+    end_time: '12:00',
+  },
+  {
+    id: 'tpl_wall_teambuilding',
+    category: 'wall',
+    sort_order: 30,
+    name: 'פעילות גיבוש',
+    type: 'company',
+    price: 180,
+    max_participants: 30,
+    location: 'בקיר',
+    description: 'פעילות גיבוש לקבוצות וחברות — טיפוס ומשחקי צוות.',
+    registration_enabled: true,
+    collect_registration_payment: true,
+    registration_page_title: 'פעילות גיבוש',
+    registration_page_body: 'הרשמה למשתתפי הגיבוש. המחיר לאדם.',
+    theme: { accent: '#FBBF24' },
+    start_time: '09:00',
+    end_time: '12:00',
+  },
+];
+
+/**
+ * Insert missing starter templates. Never overwrites staff edits.
+ * @returns {{ inserted: number, total: number }}
+ */
+export function ensureSeedActivityTemplates(db) {
+  const existing = db.get('activity_templates') || [];
+  const byId = new Set(existing.map((t) => String(t.id)));
+  let inserted = 0;
+  for (const seed of STARTER_ACTIVITY_TEMPLATES) {
+    if (byId.has(seed.id)) continue;
+    const payload = normalizeTemplatePayload(seed);
+    db.insert('activity_templates', { id: seed.id, ...payload });
+    inserted += 1;
+  }
+  return { inserted, total: (db.get('activity_templates') || []).length };
+}
+
+export function listActivityTemplates(db, { includeInactive = false } = {}) {
+  ensureSeedActivityTemplates(db);
+  return (db.get('activity_templates') || [])
+    .filter((t) => includeInactive || t.is_active !== false)
+    .sort((a, b) => {
+      const cat = String(a.category || 'wall').localeCompare(String(b.category || 'wall'));
+      if (cat !== 0) return cat;
+      const so = (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0);
+      if (so !== 0) return so;
+      return String(a.name || '').localeCompare(String(b.name || ''), 'he');
+    });
+}
+
+export function groupTemplatesByCategory(templates) {
+  const groups = TEMPLATE_CATEGORIES.map((cat) => ({
+    ...cat,
+    templates: templates.filter((t) => normalizeTemplateCategory(t.category) === cat.id),
+  }));
+  return groups;
+}
+
+export function openUnpaidActivities(db, { fromDate } = {}) {
+  const today = fromDate || new Date().toISOString().slice(0, 10);
+  return (db.get('activities') || [])
+    .filter((a) => {
+      if (a.status === 'cancelled') return false;
+      const pay = normalizeHostPaymentStatus(a.payment_status);
+      if (pay === 'paid') return false;
+      if (!a.date) return false;
+      return String(a.date) >= today;
+    })
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+}

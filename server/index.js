@@ -6,9 +6,32 @@ import { db, initDb, persistCore, parentPhonesMatch } from './db.js';
 import { supa } from './supa.js';
 import { whatsappService, instagramService } from './whatsapp.js';
 import { whatsappConnectService } from './whatsappConnect.js';
-import { automationsService } from './automations.js';
+import { automationsService, runScheduledAutomationsIfDue } from './automations.js';
 import { icount } from './icount.js';
 import { apiAuth, requireOwner } from './auth.js';
+import { googleCalendarService } from './googleCalendar.js';
+import {
+  sendActivityRegistrationConfirmation,
+  sendHostRegistrationLink,
+  isEmailConfigured,
+} from './email.js';
+import {
+  makeRegistrationSlug,
+  normalizeHostPaymentStatus,
+  activeRegistrations,
+  remainingCapacity,
+  registrationIsOpen,
+  findActivityBySlug,
+  publicRegistrationPayload,
+  templateFieldsFromActivity,
+  normalizeTemplatePayload as normalizeActivityTemplatePayload,
+  openUnpaidActivities,
+  listActivityTemplates,
+  groupTemplatesByCategory,
+  ensureSeedActivityTemplates,
+  activityDraftFromTemplate,
+  TEMPLATE_CATEGORIES,
+} from './activityRegistration.js';
 import {
   enrichPricelistItem,
   buildPassFromItem,
@@ -23,6 +46,11 @@ import {
   aggregatePosSales,
 } from './posUtils.js';
 import {
+  ensureProductCategories,
+  renameCategoryOnProducts,
+  clampImage,
+} from './productCategories.js';
+import {
   ensureAttendanceRows,
   israelDateStr,
   israelHour,
@@ -33,7 +61,9 @@ import {
   replyToParent,
   updateMessageStatusByMetaId,
   handleMessengerIncoming,
+  markCommunicationHandled,
 } from './channels/conversations.js';
+import { canSendFreeform } from './channels/sessionWindow.js';
 import {
   listLocalTemplates,
   listApprovedTemplates,
@@ -489,6 +519,27 @@ app.post('/api/whatsapp/settings', requireOwner, (req, res) => {
     'aiActiveHoursEnd',
     'aiActiveDays',
     'aiSystemPrompt',
+    'aiOutsideHoursMessage',
+    'aiHandoffKeywords',
+    'aiHandoffAckMessage',
+    'aiStopKeywords',
+    'aiOptOutMessage',
+    'aiPauseOnHumanReply',
+    'aiPauseMinutesAfterHuman',
+    'aiAudienceMode',
+    'aiHistoryCount',
+    'aiMaxReplyChars',
+    'aiReplyDelayMs',
+    'aiRateLimitPerHour',
+    'aiKnowledgeBase',
+    'aiForbiddenTopics',
+    'aiBusinessFacts',
+    'aiEscalateWhenUnsure',
+    'aiUnsureReply',
+    'aiLeadCaptureEnabled',
+    'aiInteractiveMenuEnabled',
+    'aiGreetingMenu',
+    'aiReactivateKeywords',
     'metaIgAccountId',
     'metaIgAccessToken',
     'metaPageId',
@@ -516,6 +567,29 @@ app.post('/api/whatsapp/settings', requireOwner, (req, res) => {
   }
   if (payload.aiActiveHoursEnabled !== undefined) {
     payload.aiActiveHoursEnabled = !!payload.aiActiveHoursEnabled;
+  }
+  if (payload.aiPauseOnHumanReply !== undefined) {
+    payload.aiPauseOnHumanReply = !!payload.aiPauseOnHumanReply;
+  }
+  if (payload.aiEscalateWhenUnsure !== undefined) {
+    payload.aiEscalateWhenUnsure = !!payload.aiEscalateWhenUnsure;
+  }
+  if (payload.aiLeadCaptureEnabled !== undefined) {
+    payload.aiLeadCaptureEnabled = !!payload.aiLeadCaptureEnabled;
+  }
+  if (payload.aiInteractiveMenuEnabled !== undefined) {
+    payload.aiInteractiveMenuEnabled = !!payload.aiInteractiveMenuEnabled;
+  }
+  if (payload.aiAudienceMode !== undefined) {
+    const mode = String(payload.aiAudienceMode);
+    payload.aiAudienceMode = ['all', 'leads_only', 'customers_only'].includes(mode) ? mode : 'all';
+  }
+  for (const numKey of ['aiPauseMinutesAfterHuman', 'aiHistoryCount', 'aiMaxReplyChars', 'aiReplyDelayMs', 'aiRateLimitPerHour']) {
+    if (payload[numKey] !== undefined) {
+      const n = Number(payload[numKey]);
+      payload[numKey] = Number.isFinite(n) ? n : undefined;
+      if (payload[numKey] === undefined) delete payload[numKey];
+    }
   }
   const settings = db.saveSettings(payload);
   const {
@@ -611,6 +685,16 @@ app.post('/api/conversations/:parentId/reply', async (req, res) => {
   } catch (err) {
     console.error('Error in /reply:', err);
     res.status(500).json({ success: false, error: err.message || 'שגיאת שרת פנימית' });
+  }
+});
+
+app.post('/api/conversations/:parentId/handled', async (req, res) => {
+  try {
+    const result = await markCommunicationHandled(req.params.parentId);
+    if (!result.success) return res.status(result.status || 400).json(result);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -1087,6 +1171,7 @@ async function processWhatsAppWebhookChange(change = {}) {
       const leadResult = await whatsappService.handleIncomingMessage(phone, text || `[${message.type || 'media'}]`, false, {
         messageId: message.id,
         type: message.type,
+        timestamp: message.timestamp,
       });
     if (leadResult?.parent) {
         console.log(
@@ -1343,6 +1428,28 @@ app.delete('/api/automations/:id', (req, res) => {
   res.json({ success: true });
 });
 
+// Cron / external scheduler: intro reminders (today) + followups (yesterday)
+app.post('/api/automations/run-scheduled', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) {
+    return res.status(503).json({ error: 'CRON_SECRET is not configured' });
+  }
+  const provided = req.get('x-cron-secret') || '';
+  if (provided !== secret) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    await refreshStudentsAndGroupsCache();
+    await refreshAttendanceCache();
+    automationsService.ensureDefaultIntroAutomations();
+    const result = await automationsService.runScheduled();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('run-scheduled automations failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Delete student/lead
 app.delete('/api/students/:id', (req, res) => {
   const { id } = req.params;
@@ -1385,27 +1492,804 @@ app.delete('/api/groups/:id', (req, res) => {
 });
 
 // ─── Activities (trips, birthdays, special events) — Supabase-backed ─────────
-app.get('/api/activities', (req, res) => {
-  res.json(db.get('activities'));
+function normalizeActivityEndDate(date, endDate) {
+  const start = date ? String(date).slice(0, 10) : '';
+  const end = endDate ? String(endDate).slice(0, 10) : '';
+  if (!start || !end || end === start) return null;
+  return end;
+}
+
+function normalizeActivityPayload(body = {}) {
+  const type = ['birthday', 'trip', 'school', 'company', 'route_building', 'other'].includes(body.type)
+    ? body.type
+    : (body.type || 'other');
+  const hostName = body.host_name || body.contact_name || '';
+  const hostPhone = body.host_phone || body.contact_phone || '';
+  const hostParentId = body.host_parent_id || body.hostParentId || null;
+  const date = body.date || null;
+  return {
+    name: String(body.name || '').trim(),
+    type,
+    status: body.status || 'open',
+    date,
+    end_date: normalizeActivityEndDate(date, body.end_date),
+    start_time: body.all_day ? null : (body.start_time || null),
+    end_time: body.all_day ? null : (body.end_time || null),
+    location: body.location || '',
+    price: body.price === '' || body.price === undefined ? 0 : Number(body.price) || 0,
+    max_participants: body.max_participants === '' || body.max_participants == null
+      ? null
+      : Number(body.max_participants) || null,
+    responsible_id: body.responsible_id || null,
+    description: body.description || '',
+    payment_link: body.payment_link || '',
+    notes: body.notes || '',
+    all_day: !!body.all_day,
+    contact_name: hostName || body.contact_name || '',
+    contact_phone: hostPhone || body.contact_phone || '',
+    host_name: hostName,
+    host_email: body.host_email || '',
+    host_phone: hostPhone,
+    host_parent_id: hostParentId || null,
+    payment_status: normalizeHostPaymentStatus(body.payment_status),
+    registration_slug: body.registration_slug || null,
+    registration_enabled: !!body.registration_enabled,
+    registration_closes_at: body.registration_closes_at || null,
+    collect_registration_payment: !!body.collect_registration_payment,
+    registration_page_title: body.registration_page_title || '',
+    registration_page_body: body.registration_page_body || '',
+    registration_theme:
+      body.registration_theme && typeof body.registration_theme === 'object'
+        ? body.registration_theme
+        : (body.theme && typeof body.theme === 'object' ? body.theme : {}),
+  };
+}
+
+function frontendPublicBase(req) {
+  // Prefer configured public app URL over browser Origin (Origin may be localhost during staff testing).
+  const requested =
+    process.env.FRONTEND_URL ||
+    process.env.PUBLIC_APP_URL ||
+    req?.headers?.origin ||
+    '';
+  return resolvePublicAppOrigin(requested);
+}
+
+function buildActivityRegistrationUrl(req, slug) {
+  if (!slug) return '';
+  return `${frontendPublicBase(req)}/event/${encodeURIComponent(slug)}`;
+}
+
+function ensureActivityRegistrationSlug(activity) {
+  if (activity?.registration_slug) return activity;
+  const slug = makeRegistrationSlug();
+  return db.update('activities', activity.id, { registration_slug: slug }) || {
+    ...activity,
+    registration_slug: slug,
+  };
+}
+
+async function syncActivityToGoogle(record, { deleted = false } = {}) {
+  try {
+    const result = await googleCalendarService.pushActivity(record, { deleted });
+    if (deleted || result?.skipped) return record;
+    if (result?.google_event_id) {
+      return db.update('activities', record.id, {
+        google_event_id: result.google_event_id,
+        google_etag: result.google_etag || null,
+        synced_at: result.synced_at || new Date().toISOString(),
+      }) || record;
+    }
+  } catch (err) {
+    console.error('Google Calendar push failed:', err.message);
+  }
+  return record;
+}
+
+function applyGooglePull(dbRef) {
+  return googleCalendarService.pullChanges({
+    getActivities: () => dbRef.get('activities') || [],
+    upsertFromGoogle: (local, fields, crmId) => {
+      if (local) {
+        dbRef.update('activities', local.id, {
+          ...fields,
+          // Keep local commercial fields if Google didn't carry them
+          price: local.price ?? fields.price,
+          max_participants: local.max_participants ?? fields.max_participants,
+          payment_link: local.payment_link || '',
+          notes: local.notes || fields.notes || '',
+          responsible_id: local.responsible_id || null,
+          host_name: local.host_name || local.contact_name || '',
+          host_email: local.host_email || '',
+          host_phone: local.host_phone || local.contact_phone || '',
+          host_parent_id: local.host_parent_id || null,
+          payment_status: local.payment_status || 'unpaid',
+          registration_slug: local.registration_slug || null,
+          registration_enabled: !!local.registration_enabled,
+          registration_closes_at: local.registration_closes_at || null,
+          collect_registration_payment: !!local.collect_registration_payment,
+          registration_page_title: local.registration_page_title || '',
+          registration_page_body: local.registration_page_body || '',
+          registration_theme: local.registration_theme || {},
+        });
+        return 'updated';
+      }
+      const id = crmId && !dbRef.getOne('activities', crmId)
+        ? crmId
+        : undefined;
+      const payload = { ...fields };
+      if (id) payload.id = id;
+      dbRef.insert('activities', payload);
+      return 'created';
+    },
+    deleteByGoogleId: (googleEventId, localId) => {
+      if (localId) dbRef.delete('activities', localId);
+      else {
+        const row = (dbRef.get('activities') || []).find((a) => a.google_event_id === googleEventId);
+        if (row) dbRef.delete('activities', row.id);
+      }
+    },
+  });
+}
+
+app.get('/api/activities', async (req, res) => {
+  try {
+    if (supa.isEnabled()) {
+      const rows = await supa.getAll('activities');
+      if (rows) {
+        if (typeof db.set === 'function') db.set('activities', rows);
+        return res.json(rows);
+      }
+    }
+  } catch (err) {
+    console.error('activities refresh failed:', err.message);
+  }
+  res.json(db.get('activities') || []);
 });
 
-app.post('/api/activities', (req, res) => {
-  const record = db.insert('activities', req.body);
+app.post('/api/activities', async (req, res) => {
+  const payload = normalizeActivityPayload(req.body || {});
+  if (!payload.name) return res.status(400).json({ error: 'חסר שם פעילות' });
+  if (!payload.date) return res.status(400).json({ error: 'חסר תאריך' });
+  if (payload.end_date && payload.end_date < payload.date) {
+    return res.status(400).json({ error: 'תאריך הסיום לפני תאריך ההתחלה' });
+  }
+  const record = db.insert('activities', payload);
   res.status(201).json(record);
+  // Don't block the UI on Google — sync in the background
+  syncActivityToGoogle(record).catch((err) =>
+    console.error('Background Google push failed:', err.message)
+  );
 });
 
-app.put('/api/activities/:id', (req, res) => {
+app.put('/api/activities/:id', async (req, res) => {
   const { id } = req.params;
-  const updated = db.update('activities', id, req.body);
-  if (!updated) return res.status(404).json({ error: 'Activity not found' });
+  const existing = db.getOne('activities', id);
+  if (!existing) return res.status(404).json({ error: 'Activity not found' });
+  const payload = normalizeActivityPayload({ ...existing, ...(req.body || {}) });
+  if (!payload.name) return res.status(400).json({ error: 'חסר שם פעילות' });
+  if (!payload.date) return res.status(400).json({ error: 'חסר תאריך' });
+  if (payload.end_date && payload.end_date < payload.date) {
+    return res.status(400).json({ error: 'תאריך הסיום לפני תאריך ההתחלה' });
+  }
+  if (payload.registration_enabled && !payload.registration_slug) {
+    payload.registration_slug = existing.registration_slug || makeRegistrationSlug();
+  } else if (!payload.registration_slug && existing.registration_slug) {
+    payload.registration_slug = existing.registration_slug;
+  }
+  const updated = db.update('activities', id, {
+    ...payload,
+    google_event_id: existing.google_event_id || null,
+    google_etag: existing.google_etag || null,
+  });
   res.json(updated);
+  syncActivityToGoogle(updated).catch((err) =>
+    console.error('Background Google push failed:', err.message)
+  );
 });
 
-app.delete('/api/activities/:id', (req, res) => {
+app.delete('/api/activities/:id', async (req, res) => {
   const { id } = req.params;
+  const existing = db.getOne('activities', id);
+  if (!existing) return res.status(404).json({ error: 'Activity not found' });
   const deleted = db.delete('activities', id);
   if (!deleted) return res.status(404).json({ error: 'Activity not found' });
   res.json({ success: true });
+  syncActivityToGoogle(existing, { deleted: true }).catch((err) =>
+    console.error('Background Google delete failed:', err.message)
+  );
+});
+
+app.get('/api/activities/unpaid-open', (req, res) => {
+  const rows = openUnpaidActivities(db).map((a) => ({
+    id: a.id,
+    name: a.name,
+    type: a.type,
+    date: a.date,
+    start_time: a.start_time,
+    host_name: a.host_name || a.contact_name || '',
+    payment_status: normalizeHostPaymentStatus(a.payment_status),
+    price: Number(a.price) || 0,
+  }));
+  res.json(rows);
+});
+
+app.get('/api/activities/:id/registrations', (req, res) => {
+  const activity = db.getOne('activities', req.params.id);
+  if (!activity) return res.status(404).json({ error: 'Activity not found' });
+  const regs = activeRegistrations(db, activity.id).sort((a, b) =>
+    String(b.created_at || '').localeCompare(String(a.created_at || ''))
+  );
+  res.json({
+    activity_id: activity.id,
+    max_participants: activity.max_participants ?? null,
+    remaining: remainingCapacity(activity, regs),
+    registrations: regs,
+  });
+});
+
+app.post('/api/activities/:id/registration-link', (req, res) => {
+  const activity = db.getOne('activities', req.params.id);
+  if (!activity) return res.status(404).json({ error: 'Activity not found' });
+  const regenerate = !!(req.body || {}).regenerate;
+  let updated = activity;
+  if (regenerate || !activity.registration_slug) {
+    updated = db.update('activities', activity.id, {
+      registration_slug: makeRegistrationSlug(),
+      registration_enabled:
+        req.body?.enable === false ? false : (activity.registration_enabled || true),
+    }) || activity;
+  } else if (req.body?.enable) {
+    updated = db.update('activities', activity.id, { registration_enabled: true }) || activity;
+  }
+  const url = buildActivityRegistrationUrl(req, updated.registration_slug);
+  res.json({
+    success: true,
+    slug: updated.registration_slug,
+    url,
+    registration_enabled: !!updated.registration_enabled,
+  });
+});
+
+app.post('/api/activities/:id/send-registration-link', async (req, res) => {
+  try {
+    let activity = db.getOne('activities', req.params.id);
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+
+    const hostParentId = req.body?.host_parent_id || activity.host_parent_id || null;
+    if (!hostParentId) {
+      return res.status(400).json({
+        error: 'יש לבחור מזמין מתוך לקוחות המערכת לפני השליחה',
+      });
+    }
+
+    const parent = (db.get('parents') || []).find(
+      (p) => String(p.id) === String(hostParentId)
+    );
+    if (!parent) {
+      return res.status(400).json({ error: 'המזמין שנבחר לא נמצא ברשימת הלקוחות' });
+    }
+
+    const hostPhone = normalizePhone(parent.phone || req.body?.phone || activity.host_phone);
+    if (!hostPhone) {
+      return res.status(400).json({ error: 'ללקוח שנבחר אין מספר טלפון לשליחה בוואטסאפ' });
+    }
+
+    const hostName = parent.name || activity.host_name || activity.contact_name || '';
+    const hostEmail = String(
+      req.body?.email || parent.email || activity.host_email || ''
+    ).trim();
+
+    // Keep snapshot fields in sync with the CRM customer
+    activity = db.update('activities', activity.id, {
+      host_parent_id: parent.id,
+      host_name: hostName,
+      host_phone: parent.phone || activity.host_phone || '',
+      host_email: hostEmail || activity.host_email || '',
+      contact_name: hostName,
+      contact_phone: parent.phone || activity.contact_phone || '',
+    }) || activity;
+
+    if (!activity.registration_enabled && req.body?.enable !== false) {
+      activity = db.update('activities', activity.id, { registration_enabled: true }) || activity;
+    }
+    if (!activity.registration_enabled) {
+      return res.status(400).json({ error: 'דף ההרשמה הציבורי כבוי — יש להפעיל אותו קודם' });
+    }
+
+    activity = ensureActivityRegistrationSlug(activity);
+    if (!activity.registration_slug) {
+      return res.status(400).json({ error: 'לא נוצר קישור הרשמה לאירוע' });
+    }
+
+    const url = buildActivityRegistrationUrl(req, activity.registration_slug);
+
+    let emailed = false;
+    let emailStub = false;
+    if (hostEmail && req.body?.via !== 'whatsapp') {
+      const result = await sendHostRegistrationLink({
+        to: hostEmail,
+        hostName,
+        activityName: activity.name,
+        date: activity.date,
+        registrationUrl: url,
+      });
+      emailed = !!result.sent;
+      emailStub = !!result.stub;
+    }
+
+    let whatsappSent = false;
+    let whatsappError = null;
+    if (req.body?.via !== 'email') {
+      if (!canSendFreeform(parent, 'whatsapp')) {
+        whatsappError =
+          'חלון התקשורת של 24 שעות סגור. אפשר לשלוח טקסט חופשי רק אחרי שהלקוח כתב אלינו, או דרך תבנית מאושרת.';
+      } else {
+        const msg =
+          `שלום${hostName ? ` ${hostName}` : ''}!\n` +
+          `קישור להרשמה ותשלום עבור "${activity.name}":\n${url}`;
+        const waResult = await whatsappService.sendTextMessage(hostPhone, msg, false, {
+          clip: false,
+          parentId: parent.id,
+          source: 'activity_registration',
+        });
+        if (waResult?.success) {
+          whatsappSent = true;
+        } else {
+          whatsappError = waResult?.error || 'שליחת וואטסאפ נכשלה';
+        }
+      }
+    }
+
+    if (!whatsappSent && !emailed && !emailStub) {
+      return res.status(400).json({
+        error: whatsappError || 'השליחה למזמין נכשלה',
+        url,
+        whatsappSent: false,
+        windowClosed: !!whatsappError && whatsappError.includes('24'),
+      });
+    }
+
+    res.json({
+      success: true,
+      url,
+      emailed,
+      emailStub,
+      emailConfigured: isEmailConfigured(),
+      whatsappSent,
+      whatsappError: whatsappSent ? null : whatsappError,
+      host_parent_id: parent.id,
+      host_name: hostName,
+      host_phone: parent.phone || '',
+    });
+  } catch (err) {
+    console.error('send-registration-link error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/activities/:id/payment-status', (req, res) => {
+  const activity = db.getOne('activities', req.params.id);
+  if (!activity) return res.status(404).json({ error: 'Activity not found' });
+  const payment_status = normalizeHostPaymentStatus(req.body?.payment_status);
+  const updated = db.update('activities', activity.id, { payment_status });
+  res.json(updated);
+});
+
+// ─── Activity templates ──────────────────────────────────────────────────────
+app.get('/api/activity-templates', (req, res) => {
+  try {
+    ensureSeedActivityTemplates(db);
+  } catch (err) {
+    console.warn('activity template seed failed:', err.message);
+  }
+  const includeInactive = String(req.query.include_inactive || '') === '1';
+  const rows = listActivityTemplates(db, { includeInactive });
+  if (String(req.query.grouped || '') === '1') {
+    return res.json({
+      categories: TEMPLATE_CATEGORIES,
+      groups: groupTemplatesByCategory(rows),
+      templates: rows,
+    });
+  }
+  res.json(rows);
+});
+
+app.get('/api/activity-templates/categories', (_req, res) => {
+  res.json(TEMPLATE_CATEGORIES);
+});
+
+app.post('/api/activity-templates', (req, res) => {
+  const body = req.body || {};
+  let payload;
+  if (body.activity_id) {
+    const activity = db.getOne('activities', body.activity_id);
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+    payload = {
+      ...templateFieldsFromActivity(activity),
+      name: String(body.name || activity.name || '').trim() || 'תבנית',
+      category: body.category || activity.category || 'wall',
+    };
+  } else {
+    payload = normalizeActivityTemplatePayload(body);
+  }
+  if (!payload.name) return res.status(400).json({ error: 'חסר שם תבנית' });
+  const record = db.insert('activity_templates', payload);
+  res.status(201).json(record);
+});
+
+app.put('/api/activity-templates/:id', (req, res) => {
+  const existing = db.getOne('activity_templates', req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Template not found' });
+  const payload = normalizeActivityTemplatePayload({ ...existing, ...(req.body || {}) });
+  if (!payload.name) return res.status(400).json({ error: 'חסר שם תבנית' });
+  const updated = db.update('activity_templates', existing.id, payload);
+  res.json(updated);
+});
+
+app.delete('/api/activity-templates/:id', (req, res) => {
+  const deleted = db.delete('activity_templates', req.params.id);
+  if (!deleted) return res.status(404).json({ error: 'Template not found' });
+  res.json({ success: true });
+});
+
+/** Prefill draft for the calendar form — does not save an activity yet. */
+app.get('/api/activity-templates/:id/draft', (req, res) => {
+  const template = db.getOne('activity_templates', req.params.id);
+  if (!template) return res.status(404).json({ error: 'Template not found' });
+  const date = req.query.date || null;
+  res.json(activityDraftFromTemplate(template, { date }));
+});
+
+app.post('/api/activity-templates/:id/create-activity', async (req, res) => {
+  const template = db.getOne('activity_templates', req.params.id);
+  if (!template) return res.status(404).json({ error: 'Template not found' });
+  const body = req.body || {};
+  if (!body.date) return res.status(400).json({ error: 'חסר תאריך' });
+  const payload = normalizeActivityPayload({
+    ...templateFieldsFromActivity(template),
+    name: body.name || template.name,
+    date: body.date,
+    end_date: body.end_date ?? null,
+    start_time: body.start_time ?? template.start_time,
+    end_time: body.end_time ?? template.end_time,
+    all_day: body.all_day != null ? body.all_day : template.all_day,
+    host_name: body.host_name || '',
+    host_email: body.host_email || '',
+    host_phone: body.host_phone || '',
+    host_parent_id: body.host_parent_id || null,
+    payment_status: 'unpaid',
+    registration_slug: makeRegistrationSlug(),
+    registration_enabled: !!template.registration_enabled,
+  });
+  if (payload.end_date && payload.end_date < payload.date) {
+    return res.status(400).json({ error: 'תאריך הסיום לפני תאריך ההתחלה' });
+  }
+  const record = db.insert('activities', payload);
+  res.status(201).json(record);
+  syncActivityToGoogle(record).catch((err) =>
+    console.error('Background Google push failed:', err.message)
+  );
+});
+
+// ─── Public activity registration ────────────────────────────────────────────
+app.get('/api/public/activities/:slug', publicFormRateLimit, (req, res) => {
+  const activity = findActivityBySlug(db, req.params.slug);
+  if (!activity) return res.status(404).json({ error: 'הפעילות לא נמצאה' });
+  const regs = activeRegistrations(db, activity.id);
+  res.json(publicRegistrationPayload(activity, regs));
+});
+
+app.post('/api/public/activities/:slug/register', publicFormRateLimit, async (req, res) => {
+  try {
+    const activity = findActivityBySlug(db, req.params.slug);
+    if (!activity) return res.status(404).json({ error: 'הפעילות לא נמצאה' });
+    if (!registrationIsOpen(activity)) {
+      return res.status(400).json({ error: 'ההרשמה לפעילות זו סגורה' });
+    }
+
+    const participant_name = String(req.body?.participant_name || req.body?.name || '').trim();
+    const phone = String(req.body?.phone || '').trim();
+    const email = String(req.body?.email || '').trim();
+    const notes = String(req.body?.notes || '').trim();
+    if (!participant_name) return res.status(400).json({ error: 'חסר שם משתתף' });
+    if (!phone && !email) return res.status(400).json({ error: 'חסר טלפון או אימייל' });
+
+    const regs = activeRegistrations(db, activity.id);
+    const remaining = remainingCapacity(activity, regs);
+    if (remaining != null && remaining <= 0) {
+      return res.status(400).json({ error: 'אין מקומות פנויים בפעילות' });
+    }
+
+    const price = Number(activity.price) || 0;
+    const collectPay = !!activity.collect_registration_payment && price > 0;
+    const registration = db.insert('activity_registrations', {
+      activity_id: activity.id,
+      student_id: null,
+      parent_id: null,
+      participant_name,
+      phone,
+      email,
+      notes,
+      status: 'active',
+      payment_status: collectPay ? 'pending' : 'n/a',
+      amount: collectPay ? price : 0,
+      paid_at: null,
+      payment_id: null,
+      updated_at: new Date().toISOString(),
+    });
+
+    let paymentUrl = null;
+    let payment = null;
+    if (collectPay) {
+      payment = db.insert('payments', {
+        parent_id: null,
+        student_id: null,
+        amount: price,
+        description: `הרשמה: ${activity.name} — ${participant_name}`,
+        status: 'pending',
+        payment_url: null,
+        activity_id: activity.id,
+        activity_registration_id: registration.id,
+        icount_client_id: null,
+        icount_doc_id: null,
+        icount_doc_number: null,
+        icount_doctype: null,
+        paid_at: null,
+        updated_at: new Date().toISOString(),
+      });
+      const ipnUrl = icount.buildIpnUrl({ paymentId: payment.id });
+      const successUrl = `${frontendPublicBase(req)}/event/${encodeURIComponent(activity.registration_slug)}?paid=1`;
+      paymentUrl = await icount.buildPaymentUrl({
+        amount: price,
+        description: `הרשמה — ${activity.name}`,
+        name: participant_name,
+        phone: normalizePhone(phone),
+        email,
+        paymentId: payment.id,
+        ipnUrl,
+        successUrl,
+      });
+      payment = db.update('payments', payment.id, {
+        payment_url: paymentUrl,
+        updated_at: new Date().toISOString(),
+      }) || payment;
+      db.update('activity_registrations', registration.id, {
+        payment_id: payment.id,
+        updated_at: new Date().toISOString(),
+      });
+    }
+
+    let emailResult = { sent: false };
+    if (email) {
+      emailResult = await sendActivityRegistrationConfirmation({
+        to: email,
+        participantName: participant_name,
+        activityName: activity.name,
+        date: activity.date,
+        startTime: activity.start_time,
+        location: activity.location,
+        paymentUrl,
+      });
+    }
+
+    const updatedRegs = activeRegistrations(db, activity.id);
+    res.status(201).json({
+      success: true,
+      registration: {
+        id: registration.id,
+        participant_name,
+        payment_status: collectPay ? 'pending' : 'n/a',
+      },
+      paymentUrl,
+      emailSent: !!emailResult.sent,
+      emailStub: !!emailResult.stub,
+      remaining: remainingCapacity(activity, updatedRegs),
+      activity: publicRegistrationPayload(activity, updatedRegs),
+    });
+  } catch (err) {
+    console.error('public activity register error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Google Calendar connection + sync ───────────────────────────────────────
+app.get('/api/google-calendar/status', async (req, res) => {
+  try {
+    res.json(await googleCalendarService.getStatus());
+  } catch (err) {
+    res.status(500).json({ configured: false, connected: false, error: err.message });
+  }
+});
+
+app.get('/api/google-calendar/auth-url', requireOwner, (req, res) => {
+  try {
+    res.json({ url: googleCalendarService.getAuthUrl() });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/google-calendar/oauth/callback', async (req, res) => {
+  try {
+    const code = req.query.code;
+    if (!code) {
+      return res.redirect(`${googleCalendarService.frontendBase()}/activities?google=error`);
+    }
+    const result = await googleCalendarService.completeOAuth(String(code));
+    // Initial pull after connect
+    try {
+      await applyGooglePull(db);
+    } catch (err) {
+      console.error('Initial Google pull failed:', err.message);
+    }
+    res.redirect(googleCalendarService.oauthCallbackRedirectUrl(result));
+  } catch (err) {
+    console.error('Google OAuth callback failed:', err.message);
+    res.redirect(
+      `${googleCalendarService.frontendBase()}/activities?google=error&msg=${encodeURIComponent(err.message)}`
+    );
+  }
+});
+
+app.post('/api/google-calendar/disconnect', requireOwner, async (req, res) => {
+  try {
+    res.json(await googleCalendarService.disconnect());
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/google-calendar/sync', async (req, res) => {
+  try {
+    // Push local activities missing a Google id (or force refresh)
+    const activities = db.get('activities') || [];
+    let pushed = 0;
+    let pushFailed = 0;
+    const pushErrors = [];
+    for (const activity of activities) {
+      if (activity.status === 'cancelled') continue;
+      try {
+        const updated = await syncActivityToGoogle(activity);
+        if (updated?.google_event_id) pushed += 1;
+      } catch (err) {
+        pushFailed += 1;
+        pushErrors.push({ id: activity.id, error: err.message });
+      }
+    }
+
+    const result = await applyGooglePull(db);
+    res.json({
+      success: true,
+      pushed,
+      pushFailed,
+      pushErrors: pushErrors.slice(0, 5),
+      ...result,
+    });
+  } catch (err) {
+    console.error('Google Calendar sync failed:', err.message);
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/google-calendar/calendars', async (req, res) => {
+  try {
+    const calendars = await googleCalendarService.listCalendars();
+    const status = await googleCalendarService.getStatus();
+    res.json({
+      calendars,
+      overlayCalendarIds: status.overlayCalendarIds || [],
+      wallCalendarId: status.calendarId || null,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put('/api/google-calendar/overlays', async (req, res) => {
+  try {
+    const ids = req.body?.calendarIds ?? req.body?.overlayCalendarIds ?? [];
+    const result = await googleCalendarService.setOverlayCalendars(ids);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/google-calendar/overlay-events', async (req, res) => {
+  try {
+    const from = String(req.query.from || '').slice(0, 10);
+    const to = String(req.query.to || '').slice(0, 10);
+    const events = await googleCalendarService.listOverlayEvents({ from, to });
+    res.json(events);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put('/api/google-calendar/overlay-events', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const updated = await googleCalendarService.updateOverlayEvent({
+      calendarId: body.calendar_id || body.calendarId,
+      eventId: body.google_event_id || body.eventId,
+      patch: {
+        name: body.name,
+        date: body.date,
+        start_time: body.start_time,
+        end_time: body.end_time,
+        all_day: body.all_day,
+        location: body.location,
+        description: body.description,
+      },
+    });
+    res.json(updated);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/google-calendar/overlay-events', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const created = await googleCalendarService.createOverlayEvent({
+      calendarId: body.calendar_id || body.calendarId,
+      patch: {
+        name: body.name,
+        date: body.date,
+        start_time: body.start_time,
+        end_time: body.end_time,
+        all_day: body.all_day,
+        location: body.location,
+        description: body.description,
+      },
+    });
+    res.status(201).json(created);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/google-calendar/overlay-events', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const result = await googleCalendarService.deleteOverlayEvent({
+      calendarId: body.calendar_id || body.calendarId || req.query.calendar_id,
+      eventId: body.google_event_id || body.eventId || req.query.event_id,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Public webhook from Google push notifications
+app.post('/api/google-calendar/webhook', async (req, res) => {
+  res.status(200).end();
+  const resourceState = req.get('X-Goog-Resource-State');
+  if (resourceState === 'sync') return;
+  try {
+    const status = await googleCalendarService.getStatus();
+    if (status.connected) {
+      await applyGooglePull(db);
+    }
+  } catch (err) {
+    console.error('Google webhook sync failed:', err.message);
+  }
+});
+
+// Cron-friendly pull (same secret pattern as attendance ensure)
+app.post('/api/google-calendar/sync-due', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (secret && req.get('x-cron-secret') !== secret && req.query.secret !== secret) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const result = await applyGooglePull(db);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // ─── Attendance — Supabase-backed ────────────────────────────────────────────
@@ -1604,16 +2488,28 @@ app.get('/api/pricelist', (req, res) => {
 
 // Create pricelist item
 app.post('/api/pricelist', (req, res) => {
-  const record = db.insert('pricelist', req.body);
-  res.status(201).json(record);
+  try {
+    const body = { ...req.body };
+    if (body.image !== undefined) body.image = body.image ? clampImage(body.image) : '';
+    const record = db.insert('pricelist', body);
+    res.status(201).json(enrichPricelistItem(record));
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'שגיאה' });
+  }
 });
 
 // Update pricelist item
 app.put('/api/pricelist/:id', (req, res) => {
-  const { id } = req.params;
-  const updated = db.update('pricelist', id, req.body);
-  if (!updated) return res.status(404).json({ error: 'Pricelist item not found' });
-  res.json(updated);
+  try {
+    const { id } = req.params;
+    const body = { ...req.body };
+    if (body.image !== undefined) body.image = body.image ? clampImage(body.image) : '';
+    const updated = db.update('pricelist', id, body);
+    if (!updated) return res.status(404).json({ error: 'Pricelist item not found' });
+    res.json(enrichPricelistItem(updated));
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'שגיאה' });
+  }
 });
 
 // Delete pricelist item
@@ -1622,6 +2518,80 @@ app.delete('/api/pricelist/:id', (req, res) => {
   const deleted = db.delete('pricelist', id);
   if (!deleted) return res.status(404).json({ error: 'Pricelist item not found' });
   res.json({ success: true });
+});
+
+// ─── Product categories (catalog folders) ───────────────────────────────────
+app.get('/api/product-categories', (req, res) => {
+  res.json(ensureProductCategories(db));
+});
+
+app.post('/api/product-categories', requireOwner, (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'שם קטגוריה חובה' });
+    const existing = ensureProductCategories(db);
+    if (existing.some((c) => c.name === name)) {
+      return res.status(400).json({ error: 'קטגוריה בשם הזה כבר קיימת' });
+    }
+    let image = '';
+    if (req.body?.image) image = clampImage(req.body.image);
+    const record = db.insert('product_categories', {
+      name,
+      image,
+      description: String(req.body?.description || '').trim(),
+      sort_order: existing.length,
+      active: req.body?.active !== false,
+    });
+    res.status(201).json(record);
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'שגיאה' });
+  }
+});
+
+app.put('/api/product-categories/:id', requireOwner, (req, res) => {
+  try {
+    const { id } = req.params;
+    const current = (db.get('product_categories') || []).find((c) => c.id === id);
+    if (!current) return res.status(404).json({ error: 'קטגוריה לא נמצאה' });
+
+    const updates = {};
+    if (req.body?.name != null) {
+      const name = String(req.body.name).trim();
+      if (!name) return res.status(400).json({ error: 'שם קטגוריה חובה' });
+      const clash = (db.get('product_categories') || []).find(
+        (c) => c.id !== id && c.name === name
+      );
+      if (clash) return res.status(400).json({ error: 'קטגוריה בשם הזה כבר קיימת' });
+      updates.name = name;
+    }
+    if (req.body?.description != null) {
+      updates.description = String(req.body.description).trim();
+    }
+    if (req.body?.sort_order != null) {
+      updates.sort_order = Number(req.body.sort_order) || 0;
+    }
+    if (req.body?.active != null) updates.active = !!req.body.active;
+    if (req.body?.image !== undefined) {
+      updates.image = req.body.image ? clampImage(req.body.image) : '';
+    }
+
+    const updated = db.update('product_categories', id, updates);
+    if (updates.name && updates.name !== current.name) {
+      renameCategoryOnProducts(db, current.name, updates.name);
+    }
+    res.json(updated);
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'שגיאה' });
+  }
+});
+
+app.delete('/api/product-categories/:id', requireOwner, (req, res) => {
+  const { id } = req.params;
+  const current = (db.get('product_categories') || []).find((c) => c.id === id);
+  if (!current) return res.status(404).json({ error: 'קטגוריה לא נמצאה' });
+  const deleted = db.delete('product_categories', id);
+  if (!deleted) return res.status(404).json({ error: 'קטגוריה לא נמצאה' });
+  res.json({ success: true, name: current.name });
 });
 
 // ─── iCount: status, clients, invoices, payments, webhook ───────────────────
@@ -1979,6 +2949,18 @@ app.post('/api/icount/webhook', async (req, res) => {
         }
       }
 
+      // Mark linked activity registration paid (public event page)
+      if (payment.activity_registration_id) {
+        const reg = db.getOne('activity_registrations', payment.activity_registration_id);
+        if (reg && reg.payment_status !== 'paid') {
+          db.update('activity_registrations', reg.id, {
+            payment_status: 'paid',
+            paid_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          });
+        }
+      }
+
       return res.json({
         ok: true,
         matched: true,
@@ -2179,6 +3161,21 @@ app.get('/api/wages', (req, res) => {
   res.json(db.get('wage_agreements'));
 });
 
+app.post('/api/wages', (req, res) => {
+  const { employee_id } = req.body || {};
+  if (!employee_id) return res.status(400).json({ error: 'employee_id is required' });
+
+  // One agreement per employee: reuse the existing row instead of creating a duplicate.
+  const existing = (db.get('wage_agreements') || []).find((w) => w.employee_id === employee_id);
+  if (existing) {
+    const updated = db.update('wage_agreements', existing.id, { ...req.body, id: existing.id });
+    return res.json(updated);
+  }
+
+  const created = db.insert('wage_agreements', req.body);
+  res.status(201).json(created);
+});
+
 app.put('/api/wages/:id', (req, res) => {
   const { id } = req.params;
   const updated = db.update('wage_agreements', id, req.body);
@@ -2186,14 +3183,268 @@ app.put('/api/wages/:id', (req, res) => {
   res.json(updated);
 });
 
-// Safety Inspections & Incidents
+// ─── Work assignments (pay segments per employee) ────────────────────────────
+const WORK_TYPES = ['counter_shift', 'class_shift', 'private_shift', 'route_building_shift'];
+
+function activityTypeToWorkType(activityType) {
+  if (activityType === 'route_building') return 'route_building_shift';
+  return 'counter_shift';
+}
+
+function parseHmToMinutes(hm) {
+  if (!hm || typeof hm !== 'string') return null;
+  const m = hm.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+
+function minutesToHm(total) {
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function hoursBetweenHm(startHm, endHm) {
+  const a = parseHmToMinutes(startHm);
+  const b = parseHmToMinutes(endHm);
+  if (a == null || b == null || b <= a) return 0;
+  return Math.round(((b - a) / 60) * 100) / 100;
+}
+
+function israelLocalParts(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Jerusalem',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(d);
+  const get = (type) => parts.find((p) => p.type === type)?.value;
+  return {
+    date: `${get('year')}-${get('month')}-${get('day')}`,
+    hm: `${get('hour')}:${get('minute')}`,
+    minutes: parseHmToMinutes(`${get('hour')}:${get('minute')}`),
+  };
+}
+
+function suggestHoursFromClock(employeeId, dateStr, eventStartHm, eventEndHm) {
+  const shifts = (db.get('shift_hours') || []).filter((s) => s.employee_id === employeeId && s.clock_in);
+  let best = null;
+  for (const shift of shifts) {
+    const cin = israelLocalParts(shift.clock_in);
+    if (!cin || cin.date !== dateStr) continue;
+    const cout = shift.clock_out ? israelLocalParts(shift.clock_out) : null;
+    const shiftStart = cin.minutes;
+    const shiftEnd = cout?.minutes ?? shiftStart;
+    if (shiftEnd <= shiftStart) continue;
+
+    const evStart = parseHmToMinutes(eventStartHm);
+    const evEnd = parseHmToMinutes(eventEndHm);
+    let startMin = shiftStart;
+    let endMin = shiftEnd;
+    let source = 'clock';
+
+    if (evStart != null && evEnd != null && evEnd > evStart) {
+      const overlapStart = Math.max(shiftStart, evStart);
+      const overlapEnd = Math.min(shiftEnd, evEnd);
+      if (overlapEnd > overlapStart) {
+        startMin = overlapStart;
+        endMin = overlapEnd;
+      } else {
+        // No overlap — use full clock duration for that day
+        source = 'clock';
+      }
+    }
+
+    const hours = Math.round(((endMin - startMin) / 60) * 100) / 100;
+    if (!best || hours > best.hours) {
+      best = {
+        start_time: minutesToHm(startMin),
+        end_time: minutesToHm(endMin),
+        hours,
+        source,
+        shift_id: shift.id,
+      };
+    }
+  }
+  return best;
+}
+
+function normalizeWorkAssignment(body = {}, { existing = null } = {}) {
+  const workType = WORK_TYPES.includes(body.work_type)
+    ? body.work_type
+    : (existing?.work_type || 'counter_shift');
+  let startTime = body.start_time ?? existing?.start_time ?? null;
+  let endTime = body.end_time ?? existing?.end_time ?? null;
+  let hours = body.hours;
+  if (hours === undefined || hours === null || hours === '') {
+    hours = hoursBetweenHm(startTime, endTime);
+  } else {
+    hours = Math.round((Number(hours) || 0) * 100) / 100;
+  }
+  return {
+    employee_id: body.employee_id || existing?.employee_id || null,
+    activity_id: body.activity_id !== undefined ? (body.activity_id || null) : (existing?.activity_id ?? null),
+    date: body.date || existing?.date || null,
+    work_type: workType,
+    start_time: startTime,
+    end_time: endTime,
+    hours,
+    source: body.source || existing?.source || 'manual',
+    shift_id: body.shift_id !== undefined ? (body.shift_id || null) : (existing?.shift_id ?? null),
+    approved: body.approved !== undefined ? !!body.approved : !!(existing?.approved),
+    notes: body.notes !== undefined ? (body.notes || '') : (existing?.notes || ''),
+  };
+}
+
+app.get('/api/work-assignments', (req, res) => {
+  let rows = db.get('work_assignments') || [];
+  const { from, to, employee_id, activity_id } = req.query;
+  if (employee_id) rows = rows.filter((r) => r.employee_id === employee_id);
+  if (activity_id) rows = rows.filter((r) => r.activity_id === activity_id);
+  if (from) rows = rows.filter((r) => r.date && r.date >= from);
+  if (to) rows = rows.filter((r) => r.date && r.date <= to);
+  rows = [...rows].sort((a, b) => String(a.date || '').localeCompare(String(b.date || ''))
+    || String(a.start_time || '').localeCompare(String(b.start_time || '')));
+  res.json(rows);
+});
+
+app.post('/api/work-assignments/from-activity', (req, res) => {
+  const { activity_id, employee_ids } = req.body || {};
+  if (!activity_id) return res.status(400).json({ error: 'activity_id is required' });
+  const activity = db.getOne('activities', activity_id);
+  if (!activity) return res.status(404).json({ error: 'Activity not found' });
+  if (!activity.date) return res.status(400).json({ error: 'Activity has no date' });
+
+  const ids = Array.isArray(employee_ids)
+    ? employee_ids.filter(Boolean)
+    : [];
+  if (!ids.length) return res.status(400).json({ error: 'employee_ids is required' });
+
+  const workType = activityTypeToWorkType(activity.type);
+  const eventStart = activity.start_time || '09:00';
+  const eventEnd = activity.end_time || '17:00';
+  const eventHours = hoursBetweenHm(eventStart, eventEnd) || 2;
+  const existing = (db.get('work_assignments') || []).filter((r) => r.activity_id === activity_id);
+  const created = [];
+
+  for (const employeeId of ids) {
+    if (existing.some((r) => r.employee_id === employeeId)) continue;
+    const suggestion = suggestHoursFromClock(employeeId, activity.date, eventStart, eventEnd);
+    const row = db.insert('work_assignments', {
+      employee_id: employeeId,
+      activity_id,
+      date: activity.date,
+      work_type: workType,
+      start_time: suggestion?.start_time || eventStart,
+      end_time: suggestion?.end_time || eventEnd,
+      hours: suggestion?.hours || eventHours,
+      source: suggestion ? suggestion.source : 'calendar',
+      shift_id: suggestion?.shift_id || null,
+      approved: false,
+      notes: '',
+    });
+    created.push(row);
+  }
+
+  res.status(201).json({ created, existing_count: existing.length });
+});
+
+app.post('/api/work-assignments/approve', (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+  if (!ids.length) return res.status(400).json({ error: 'ids is required' });
+  const updated = [];
+  for (const id of ids) {
+    const row = db.getOne('work_assignments', id);
+    if (!row) continue;
+    updated.push(db.update('work_assignments', id, { approved: true }));
+  }
+  res.json({ success: true, updated });
+});
+
+app.post('/api/work-assignments', (req, res) => {
+  const normalized = normalizeWorkAssignment(req.body || {});
+  if (!normalized.employee_id) return res.status(400).json({ error: 'employee_id is required' });
+  if (!normalized.date) return res.status(400).json({ error: 'date is required' });
+  const created = db.insert('work_assignments', normalized);
+  res.status(201).json(created);
+});
+
+app.put('/api/work-assignments/:id', (req, res) => {
+  const { id } = req.params;
+  const existing = db.getOne('work_assignments', id);
+  if (!existing) return res.status(404).json({ error: 'Work assignment not found' });
+  const normalized = normalizeWorkAssignment(req.body || {}, { existing });
+  const updated = db.update('work_assignments', id, normalized);
+  res.json(updated);
+});
+
+app.delete('/api/work-assignments/:id', (req, res) => {
+  const { id } = req.params;
+  const ok = db.delete('work_assignments', id);
+  if (!ok) return res.status(404).json({ error: 'Work assignment not found' });
+  res.json({ success: true });
+});
+
+// Safety check types, inspections & incidents
+app.get('/api/safety/check-types', (req, res) => {
+  const includeInactive = req.query.includeInactive === '1' || req.query.includeInactive === 'true';
+  res.json(db.getSafetyCheckTypes({ includeInactive }));
+});
+
+app.post('/api/safety/check-types', (req, res) => {
+  const record = db.createSafetyCheckType(req.body || {});
+  if (record?.error) return res.status(400).json(record);
+  res.status(201).json(record);
+});
+
+app.put('/api/safety/check-types/:id', (req, res) => {
+  const updated = db.updateSafetyCheckType(req.params.id, req.body || {});
+  if (!updated) return res.status(404).json({ error: 'בדיקה לא נמצאה' });
+  res.json(updated);
+});
+
+app.delete('/api/safety/check-types/:id', (req, res) => {
+  const updated = db.softDeleteSafetyCheckType(req.params.id);
+  if (!updated) return res.status(404).json({ error: 'בדיקה לא נמצאה' });
+  res.json(updated);
+});
+
+app.get('/api/safety/due-today', (req, res) => {
+  const date = req.query.date || undefined;
+  res.json(db.getSafetyDueToday(date));
+});
+
 app.get('/api/safety/inspections', (req, res) => {
-  res.json(db.get('safety_inspections'));
+  let logs = db.get('safety_inspections') || [];
+  if (req.query.checkTypeId) {
+    logs = logs.filter((l) => l.check_type_id === req.query.checkTypeId);
+  }
+  if (req.query.date) {
+    logs = logs.filter((l) => l.date === req.query.date);
+  }
+  res.json(logs);
 });
 
 app.post('/api/safety/inspections', (req, res) => {
-  const record = db.insertSafetyInspection(req.body);
-  res.status(201).json(record);
+  try {
+    const body = req.body || {};
+    if (!body.completed_by_employee_id && !body.tester_name && !body.testerName) {
+      return res.status(400).json({ error: 'נא לבחור את שם הבודק' });
+    }
+    const record = db.insertSafetyInspection(body);
+    return res.status(201).json(record);
+  } catch (err) {
+    console.error('POST /api/safety/inspections failed:', err);
+    return res.status(500).json({ error: 'שגיאה בשמירת הבדיקה בשרת' });
+  }
 });
 
 app.get('/api/safety/incidents', (req, res) => {
@@ -3071,7 +4322,7 @@ function clearOtherDefaultTemplates(keepId) {
   }
 }
 
-function normalizeTemplatePayload(body, existing = null) {
+function normalizeFormTemplatePayload(body, existing = null) {
   const slug = slugifyFormTemplate(body.slug || existing?.slug || body.title || `form-${Date.now()}`);
   if (!slug) return { error: 'חסר מזהה קישור (slug)' };
   const healthQuestions = Array.isArray(body.healthQuestions)
@@ -3096,7 +4347,7 @@ app.get('/api/form-templates', (req, res) => {
 });
 
 app.post('/api/form-templates', (req, res) => {
-  const normalized = normalizeTemplatePayload(req.body);
+  const normalized = normalizeFormTemplatePayload(req.body);
   if (normalized.error) return res.status(400).json({ error: normalized.error });
   const duplicate = listFormTemplates().find((t) => t.slug === normalized.slug);
   if (duplicate) return res.status(400).json({ error: 'קיים כבר טופס עם אותו מזהה קישור' });
@@ -3116,7 +4367,7 @@ app.put('/api/form-templates/:id', (req, res) => {
   const existing = listFormTemplates().find((t) => t.id === req.params.id);
   if (!existing) return res.status(404).json({ error: 'התבנית לא נמצאה' });
 
-  const normalized = normalizeTemplatePayload(req.body, existing);
+  const normalized = normalizeFormTemplatePayload(req.body, existing);
   if (normalized.error) return res.status(400).json({ error: normalized.error });
   const duplicate = listFormTemplates().find((t) => t.slug === normalized.slug && t.id !== existing.id);
   if (duplicate) return res.status(400).json({ error: 'קיים כבר טופס עם אותו מזהה קישור' });
@@ -3983,6 +5234,11 @@ async function runDailyAttendanceEnsureIfDue() {
 initDb().finally(() => {
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
+  try {
+    automationsService.ensureDefaultIntroAutomations();
+  } catch (err) {
+    console.error('ensureDefaultIntroAutomations failed:', err.message);
+  }
   
   // Self-Ping timer to prevent Render free instance sleep (runs every 8 minutes)
   const renderUrl = process.env.RENDER_EXTERNAL_URL || 'https://climbing-crm-api.onrender.com';
@@ -3995,6 +5251,28 @@ app.listen(PORT, () => {
   // Check every 15 minutes whether the daily attendance ensure should run
   setTimeout(() => { runDailyAttendanceEnsureIfDue(); }, 20_000);
   setInterval(() => { runDailyAttendanceEnsureIfDue(); }, 15 * 60 * 1000);
+
+  // Intro class reminder + day-after followup (from 08:00 Asia/Jerusalem)
+  setTimeout(() => { runScheduledAutomationsIfDue(8); }, 45_000);
+  setInterval(() => { runScheduledAutomationsIfDue(8); }, 15 * 60 * 1000);
+
+  // Google Calendar pull every 10 minutes (backup for missed webhooks)
+  const runGooglePullIfConnected = async () => {
+    try {
+      const status = await googleCalendarService.getStatus();
+      if (!status.connected) return;
+      const result = await applyGooglePull(db);
+      if (result && !result.skipped) {
+        console.log(
+          `📅 Google Calendar sync: +${result.created || 0} ~${result.updated || 0} -${result.deleted || 0}`
+        );
+      }
+    } catch (err) {
+      console.error('Periodic Google Calendar sync failed:', err.message);
+    }
+  };
+  setTimeout(() => { runGooglePullIfConnected(); }, 60_000);
+  setInterval(() => { runGooglePullIfConnected(); }, 10 * 60 * 1000);
 });
 });
 

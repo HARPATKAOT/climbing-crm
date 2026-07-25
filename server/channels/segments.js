@@ -1,4 +1,5 @@
 import { db } from '../db.js';
+import { getGroupDays } from '../attendanceUtils.js';
 import { ageFromBirthDate } from './conversations.js';
 import { canSendFreeform } from './sessionWindow.js';
 
@@ -27,8 +28,11 @@ export function previewAudience(filters = {}, { parents, students, groups } = {}
   const groupById = new Map(allGroups.map((g) => [g.id, g]));
 
   const listKey = filters.listKey || null;
+  // כשמסננים לפי קבוצה ספציפית — הרישום לחוג מספיק,
+  // ולא מסננים החוצה מי שלא מנוי לרשימת התפוצה (למשל «חוגים»).
+  const hasGroupFilter = Array.isArray(filters.groupIds) && filters.groupIds.length > 0;
   let listSubs = null;
-  if (listKey) {
+  if (listKey && !hasGroupFilter) {
     const records = db.get('broadcast_lists') || [];
     listSubs = new Map(
       records.filter((r) => r.listName === listKey).map((r) => [r.parentId, r.subscribed !== false])
@@ -106,7 +110,9 @@ function matchStudent(student, filters, groupById) {
 
   if (Array.isArray(filters.groupDays) && filters.groupDays.length) {
     const group = groupById.get(student.groupId);
-    if (!group || !filters.groupDays.map(Number).includes(Number(group.day))) return false;
+    const days = group ? getGroupDays(group).map(Number) : [];
+    const wanted = filters.groupDays.map(Number);
+    if (!days.some((d) => wanted.includes(d))) return false;
   }
 
   if (Array.isArray(filters.genders) && filters.genders.length) {

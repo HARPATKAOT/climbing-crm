@@ -41,6 +41,14 @@ export function phonesMatch(a, b) {
 function extractMessageText(message = {}) {
   if (message.text?.body) return message.text.body;
   if (message.button?.text) return message.button.text;
+  if (message.interactive?.button_reply?.id) {
+    const id = String(message.interactive.button_reply.id);
+    if (/^menu_([1-4])$/.test(id)) return id.replace('menu_', '');
+  }
+  if (message.interactive?.list_reply?.id) {
+    const id = String(message.interactive.list_reply.id);
+    if (/^menu_([1-4])$/.test(id)) return id.replace('menu_', '');
+  }
   if (message.interactive?.button_reply?.title) return message.interactive.button_reply.title;
   if (message.interactive?.list_reply?.title) return message.interactive.list_reply.title;
   if (message.image) return message.image.caption || '[תמונה]';

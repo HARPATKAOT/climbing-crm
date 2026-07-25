@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Plus, Trash2, Edit2, Play, Save, X, ToggleLeft, ToggleRight, Check } from 'lucide-react';
+import { Settings, Plus, Trash2, Edit2, Play, Save, X, ToggleLeft, ToggleRight } from 'lucide-react';
 
 const TRIGGER_EVENTS = [
   { value: 'new_lead', label: 'ליד חדש נוצר במערכת' },
-  { value: 'status_changed', label: 'סטטוס של ליד התעדכן' }
+  { value: 'status_changed', label: 'סטטוס של ליד התעדכן' },
+  { value: 'intro_reminder_day_of', label: 'תזכורת ביום אימון הכירות (אוטומטי בבוקר)' },
+  { value: 'intro_followup_day_after', label: 'בדיקה יום אחרי אימון הכירות (אוטומטי)' },
 ];
 
 const STATUS_CONDITIONS = [
@@ -11,12 +13,40 @@ const STATUS_CONDITIONS = [
   { value: 'health_signed', label: 'חתם על הצהרת בריאות' },
   { value: 'intro_scheduled', label: 'קבע אימון הכירות' },
   { value: 'registered', label: 'נרשם' },
-  { value: 'archive', label: 'ארכיון' }
+  { value: 'archive', label: 'ארכיון' },
 ];
 
 const ACTION_TYPES = [
-  { value: 'send_whatsapp', label: 'שלח הודעת וואטסאפ (אוטומטי)' }
+  { value: 'send_whatsapp', label: 'שלח הודעת וואטסאפ (אוטומטי)' },
 ];
+
+const SCHEDULED_TRIGGERS = new Set([
+  'intro_reminder_day_of',
+  'intro_followup_day_after',
+]);
+
+const DEFAULT_MESSAGES = {
+  intro_reminder_day_of:
+    'שלום {{parentName}}, תזכורת לאימון ההיכרות של {{name}} היום בשעה {{time}}.\n' +
+    'המדריך/ה: {{trainer}}.\n' +
+    'הגעה: {{arrival}}.\n' +
+    'נתראה על הקיר! 🧗',
+  intro_followup_day_after:
+    'שלום {{parentName}}, מקווים שאימון ההיכרות של {{name}} היה כיף!\n' +
+    'נשמח לשמוע איך היה, ואם תרצו להירשם לחוג — אנחנו כאן 🙂',
+};
+
+const DEFAULT_VAR_KEYS = {
+  intro_reminder_day_of: 'name,time,trainer,arrival',
+  intro_followup_day_after: 'name',
+};
+
+function parseVarKeys(text) {
+  return String(text || '')
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 function AutomationModal({ automation, onSave, onClose }) {
   const isEdit = !!automation;
@@ -27,6 +57,14 @@ function AutomationModal({ automation, onSave, onClose }) {
   const [message, setMessage] = useState(automation?.action_payload?.message || '');
   const [templateName, setTemplateName] = useState(automation?.action_payload?.templateName || '');
   const [preferTemplate, setPreferTemplate] = useState(!!automation?.action_payload?.preferTemplate);
+  const [templateVarKeys, setTemplateVarKeys] = useState(
+    Array.isArray(automation?.action_payload?.templateVarKeys)
+      ? automation.action_payload.templateVarKeys.join(',')
+      : ''
+  );
+  const [arrivalText, setArrivalText] = useState(
+    automation?.action_payload?.arrivalText || 'רחוב האורגים 12, אשדוד. יש חניה בחזית.'
+  );
   const [templates, setTemplates] = useState([]);
   const [isActive, setIsActive] = useState(automation?.is_active ?? true);
 
@@ -37,10 +75,20 @@ function AutomationModal({ automation, onSave, onClose }) {
       .catch(() => {});
   }, []);
 
+  const handleTriggerChange = (value) => {
+    setTriggerEvent(value);
+    if (!isEdit && DEFAULT_MESSAGES[value] && !message.trim()) {
+      setMessage(DEFAULT_MESSAGES[value]);
+    }
+    if (!isEdit && DEFAULT_VAR_KEYS[value] && !templateVarKeys.trim()) {
+      setTemplateVarKeys(DEFAULT_VAR_KEYS[value]);
+    }
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!name.trim()) return;
-    
+
     onSave({
       id: automation?.id,
       name,
@@ -51,15 +99,19 @@ function AutomationModal({ automation, onSave, onClose }) {
         message,
         templateName: templateName || null,
         preferTemplate: !!preferTemplate,
+        templateVarKeys: parseVarKeys(templateVarKeys),
+        arrivalText: arrivalText || null,
       },
-      is_active: isActive
+      is_active: isActive,
     });
     onClose();
   };
 
+  const isScheduled = SCHEDULED_TRIGGERS.has(triggerEvent);
+
   return (
-    <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal slide-up" style={{ maxWidth: 500 }}>
+    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal slide-up" style={{ maxWidth: 560 }}>
         <div className="modal-header">
           <div className="modal-title">{isEdit ? 'ערוך אוטומציה' : 'יצירת אוטומציה חדשה'}</div>
           <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose}><X size={18} /></button>
@@ -68,77 +120,140 @@ function AutomationModal({ automation, onSave, onClose }) {
           <form id="automation-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div className="form-group">
               <label className="form-label">שם האוטומציה</label>
-              <input className="input" required value={name} onChange={e => setName(e.target.value)} placeholder="לדוגמה: שליחת הודעת ברוכים הבאים" />
+              <input className="input" required value={name} onChange={(e) => setName(e.target.value)} placeholder="לדוגמה: תזכורת אימון הכירות" />
             </div>
-            
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
               <div className="form-group">
                 <label className="form-label">טריגר (מתי מופעל?)</label>
-                <select className="input select" value={triggerEvent} onChange={e => setTriggerEvent(e.target.value)}>
-                  {TRIGGER_EVENTS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                <select className="input select" value={triggerEvent} onChange={(e) => handleTriggerChange(e.target.value)}>
+                  {TRIGGER_EVENTS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
               </div>
-              
+
               {triggerEvent === 'status_changed' && (
                 <div className="form-group">
                   <label className="form-label">לאיזה סטטוס?</label>
-                  <select className="input select" value={triggerCondition} onChange={e => setTriggerCondition(e.target.value)}>
+                  <select className="input select" value={triggerCondition} onChange={(e) => setTriggerCondition(e.target.value)}>
                     <option value="">(כל עדכון סטטוס)</option>
-                    {STATUS_CONDITIONS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                    {STATUS_CONDITIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
                   </select>
                 </div>
               )}
             </div>
 
+            {isScheduled && (
+              <div style={{ fontSize: 12, color: 'var(--text-2)', background: 'var(--bg-2)', padding: '10px 12px', borderRadius: 8, lineHeight: 1.5 }}>
+                {triggerEvent === 'intro_reminder_day_of'
+                  ? 'נשלח אוטומטית בבוקר למתאמנים עם סטטוס אימון הכירות שקבוצתם מתאמנת היום. כולל שעה, מדריך והוראות הגעה.'
+                  : 'נשלח אוטומטית בבוקר למי שסומן אתמול בנוכחות כהגיע, וסטטוס שלו עדיין אימון הכירות — לבירור איך היה ולעניין בהרשמה.'}
+              </div>
+            )}
+
             <div className="form-group" style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
               <label className="form-label">פעולה לביצוע</label>
-              <select className="input select" value={actionType} onChange={e => setActionType(e.target.value)}>
-                {ACTION_TYPES.map(a => <option key={a.value} value={a.value}>{a.label}</option>)}
+              <select className="input select" value={actionType} onChange={(e) => setActionType(e.target.value)}>
+                {ACTION_TYPES.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
               </select>
             </div>
-            
+
             {actionType === 'send_whatsapp' && (
               <>
-              <div className="form-group">
-                <label className="form-label">תבנית Meta (מומלץ מחוץ לחלון 24ש)</label>
-                <select
-                  className="input select"
-                  value={templateName}
-                  onChange={(e) => setTemplateName(e.target.value)}
-                >
-                  <option value="">ללא תבנית — טקסט חופשי בלבד</option>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.meta_name || t.name}>
-                      {t.name || t.meta_name}
-                    </option>
-                  ))}
-                </select>
-                <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 8, fontSize: 12 }}>
-                  <input type="checkbox" checked={preferTemplate} onChange={(e) => setPreferTemplate(e.target.checked)} />
-                  העדף תבנית גם כשהחלון פתוח
-                </label>
-              </div>
-              <div className="form-group">
-                <label className="form-label">תוכן ההודעה (כשהחלון פתוח)</label>
-                <textarea 
-                  className="input textarea" 
-                  rows={4} 
-                  value={message} 
-                  onChange={e => setMessage(e.target.value)} 
-                  placeholder="שלום {{name}}, שמחים שבאת לקיר הטיפוס..."
-                  required={!templateName}
-                />
-                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
-                  טיפ: ניתן להשתמש ב- <code>{'{{name}}'}</code> כדי להציג את שם המתאמן.
-                  אם החלון סגור ואין תבנית — האוטומציה תדולג.
+                <div className="form-group">
+                  <label className="form-label">תבנית מאושרת (חובה כשהחלון סגור)</label>
+                  <select
+                    className="input select"
+                    value={templateName}
+                    onChange={(e) => setTemplateName(e.target.value)}
+                  >
+                    <option value="">ללא תבנית — טקסט חופשי בלבד</option>
+                    {templates.map((t) => (
+                      <option key={t.id} value={t.meta_name || t.name}>
+                        {t.name || t.meta_name}
+                      </option>
+                    ))}
+                  </select>
+                  <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 8, fontSize: 12 }}>
+                    <input type="checkbox" checked={preferTemplate} onChange={(e) => setPreferTemplate(e.target.checked)} />
+                    העדף תבנית גם כשהחלון פתוח
+                  </label>
                 </div>
-              </div>
+
+                {templateName && (
+                  <div className="form-group">
+                    <label className="form-label">סדר משתנים לתבנית (מופרד בפסיקים)</label>
+                    <input
+                      className="input"
+                      value={templateVarKeys}
+                      onChange={(e) => setTemplateVarKeys(e.target.value)}
+                      placeholder="name,time,trainer,arrival"
+                      dir="ltr"
+                      style={{ textAlign: 'left' }}
+                    />
+                    <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                      אפשרויות:
+                      {' '}
+                      <code>name</code>
+                      {', '}
+                      <code>parentName</code>
+                      {', '}
+                      <code>time</code>
+                      {', '}
+                      <code>trainer</code>
+                      {', '}
+                      <code>arrival</code>
+                      {', '}
+                      <code>group</code>
+                    </div>
+                  </div>
+                )}
+
+                {triggerEvent === 'intro_reminder_day_of' && (
+                  <div className="form-group">
+                    <label className="form-label">הוראות הגעה</label>
+                    <input
+                      className="input"
+                      value={arrivalText}
+                      onChange={(e) => setArrivalText(e.target.value)}
+                    />
+                  </div>
+                )}
+
+                <div className="form-group">
+                  <label className="form-label">תוכן ההודעה (כשהחלון פתוח)</label>
+                  <textarea
+                    className="input textarea"
+                    rows={5}
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                    placeholder="שלום {{name}}, שמחים שבאת לקיר הטיפוס..."
+                    required={!templateName}
+                  />
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4, lineHeight: 1.5 }}>
+                    משתנים זמינים:
+                    {' '}
+                    <code>{'{{name}}'}</code>
+                    {', '}
+                    <code>{'{{parentName}}'}</code>
+                    {', '}
+                    <code>{'{{time}}'}</code>
+                    {', '}
+                    <code>{'{{trainer}}'}</code>
+                    {', '}
+                    <code>{'{{arrival}}'}</code>
+                    {', '}
+                    <code>{'{{group}}'}</code>
+                    .
+                    <br />
+                    אם החלון סגור ואין תבנית מאושרת — ההודעה לא תישלח.
+                  </div>
+                </div>
               </>
             )}
-            
+
             <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
               <label className="form-label" style={{ marginBottom: 0 }}>סטטוס אוטומציה:</label>
-              <div 
+              <div
                 style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', color: isActive ? 'var(--green)' : 'var(--text-3)' }}
                 onClick={() => setIsActive(!isActive)}
               >
@@ -185,7 +300,7 @@ export default function Automations() {
       const res = await fetch(isEdit ? `/api/automations/${data.id}` : '/api/automations', {
         method: isEdit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
+        body: JSON.stringify(data),
       });
       if (res.ok) {
         fetchAutomations();
@@ -212,17 +327,17 @@ export default function Automations() {
   return (
     <div className="fade-in">
       {showForm && (
-        <AutomationModal 
-          automation={editingItem} 
-          onSave={handleSave} 
-          onClose={() => { setShowForm(false); setEditingItem(null); }} 
+        <AutomationModal
+          automation={editingItem}
+          onSave={handleSave}
+          onClose={() => { setShowForm(false); setEditingItem(null); }}
         />
       )}
-      
+
       <div className="section-header" style={{ marginBottom: 20 }}>
         <div>
           <div className="section-title">אוטומציות ומסעות לקוח</div>
-          <div className="section-sub">הגדר חוקים חכמים לשליחת הודעות ללא התערבות אנושית</div>
+          <div className="section-sub">הגדרת פעולות שיווק ותפעול חכמות למסעות אוטומטיים</div>
         </div>
         <button className="btn btn-primary btn-sm" onClick={() => { setEditingItem(null); setShowForm(true); }}>
           <Plus size={15} /> יצירת אוטומציה חדשה
@@ -232,7 +347,7 @@ export default function Automations() {
       <div className="stats-grid" style={{ marginBottom: 20 }}>
         <div className="card stat-card" style={{ '--stat-color': '#10B981' }}>
           <div className="stat-label">אוטומציות פעילות</div>
-          <div className="stat-value">{automations.filter(a => a.is_active).length}</div>
+          <div className="stat-value">{automations.filter((a) => a.is_active).length}</div>
         </div>
         <div className="card stat-card" style={{ '--stat-color': '#6366F1' }}>
           <div className="stat-label">סך הכל חוקים</div>
@@ -260,38 +375,39 @@ export default function Automations() {
                 </tr>
               </thead>
               <tbody>
-                {automations.map(auto => (
+                {automations.map((auto) => (
                   <tr key={auto.id} style={{ opacity: auto.is_active ? 1 : 0.6 }}>
                     <td>
-                      <div 
-                        style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }} 
+                      <div
+                        style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}
                         onClick={() => toggleStatus(auto)}
                         title={auto.is_active ? 'כיבוי' : 'הפעלה'}
                       >
-                        {auto.is_active ? 
-                          <ToggleRight size={22} color="var(--green)" /> : 
-                          <ToggleLeft size={22} color="var(--text-3)" />
-                        }
+                        {auto.is_active
+                          ? <ToggleRight size={22} color="var(--green)" />
+                          : <ToggleLeft size={22} color="var(--text-3)" />}
                       </div>
                     </td>
                     <td style={{ fontWeight: 600 }}>{auto.name}</td>
                     <td style={{ fontSize: 13, color: 'var(--text-3)' }}>
                       <span className="badge badge-gray" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                         <Play size={10} />
-                        {TRIGGER_EVENTS.find(t => t.value === auto.trigger_event)?.label || auto.trigger_event}
+                        {TRIGGER_EVENTS.find((t) => t.value === auto.trigger_event)?.label || auto.trigger_event}
                         {auto.trigger_condition && (
-                           <span style={{ fontWeight: 600, color: 'var(--text-1)', marginRight: 4 }}>
-                             ({STATUS_CONDITIONS.find(s => s.value === auto.trigger_condition)?.label || auto.trigger_condition})
-                           </span>
+                          <span style={{ fontWeight: 600, color: 'var(--text-1)', marginRight: 4 }}>
+                            ({STATUS_CONDITIONS.find((s) => s.value === auto.trigger_condition)?.label || auto.trigger_condition})
+                          </span>
                         )}
                       </span>
                     </td>
                     <td>
                       <div style={{ fontSize: 13 }}>
-                        <strong>{ACTION_TYPES.find(a => a.value === auto.action_type)?.label || auto.action_type}</strong>
+                        <strong>{ACTION_TYPES.find((a) => a.value === auto.action_type)?.label || auto.action_type}</strong>
                         {auto.action_type === 'send_whatsapp' && (
                           <div style={{ color: 'var(--text-3)', marginTop: 2, fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 250 }}>
-                            "{auto.action_payload?.message}"
+                            {auto.action_payload?.templateName
+                              ? `תבנית: ${auto.action_payload.templateName}`
+                              : `"${auto.action_payload?.message || ''}"`}
                           </div>
                         )}
                       </div>

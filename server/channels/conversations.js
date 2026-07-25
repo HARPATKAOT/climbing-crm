@@ -10,6 +10,7 @@ import {
 } from './sessionWindow.js';
 import { uploadWhatsAppMedia, getMessengerCredentials, META_GRAPH_VERSION } from './media.js';
 import { whatsappService, instagramService } from '../whatsapp.js';
+import { mergeBotSettings, pauseBotForPhone } from '../whatsappBot.js';
 
 function ageFromBirthDate(birthDate) {
   if (!birthDate) return null;
@@ -62,6 +63,21 @@ function touchInbound(parent, channel, at = new Date().toISOString()) {
   const field = inboundFieldForChannel(channel);
   if (!field) return null;
   return db.update('parents', parent.id, { [field]: at, channel: parent.channel || channel });
+}
+
+export function latestInboundAt(parent) {
+  const timestamps = Object.values(CHANNEL_INBOUND_FIELDS)
+    .map((field) => Date.parse(parent?.[field] || ''))
+    .filter(Number.isFinite);
+  if (!timestamps.length) return null;
+  return new Date(Math.max(...timestamps)).toISOString();
+}
+
+export function isAwaitingHandling(parent) {
+  const inboundAt = latestInboundAt(parent);
+  if (!inboundAt) return false;
+  const handledAt = Date.parse(parent?.communication_handled_at || '');
+  return !Number.isFinite(handledAt) || Date.parse(inboundAt) > handledAt;
 }
 
 /** Open/refresh the 24h window on every parent row that shares this phone. */
@@ -123,12 +139,32 @@ function logMessage(record) {
   return created;
 }
 
-export function markInboundForParent(parent, channel, meta = {}) {
+export async function markInboundForParent(parent, channel, meta = {}) {
   if (!parent) return;
   const at = meta.timestamp
     ? new Date(Number(meta.timestamp) > 1e12 ? Number(meta.timestamp) : Number(meta.timestamp) * 1000).toISOString()
     : new Date().toISOString();
-  touchInbound(parent, channel, at);
+  const updated = touchInbound(parent, channel, at);
+  if (updated) await persistCore('parents', updated);
+}
+
+export async function markCommunicationHandled(parentId, at = new Date().toISOString()) {
+  const parent = findParentById(parentId);
+  if (!parent) return { success: false, error: 'הלקוח לא נמצא', status: 404 };
+
+  const related = parent.phone ? findParentsByPhone(parent.phone) : [parent];
+  const updatedParents = [];
+  for (const match of related) {
+    const updated = db.update('parents', match.id, { communication_handled_at: at });
+    if (!updated) continue;
+    updatedParents.push(updated);
+    const durable = await persistCore('parents', updated);
+    if (durable?.ok === false) {
+      console.error('markCommunicationHandled persistence failed:', durable.error);
+    }
+  }
+
+  return { success: true, handledAt: at, parents: updatedParents };
 }
 
 export function updateMessageStatusByMetaId(metaMessageId, status) {
@@ -295,6 +331,14 @@ export async function replyToParent(parentId, payload = {}) {
       variables.length ? variables : [parent.name || ''],
       { language: payload.language, parentId: parent.id }
     );
+    if (result.success) {
+      try {
+        const settings = mergeBotSettings(db.getSettings());
+        if (settings.aiPauseOnHumanReply) {
+          await pauseBotForPhone(parent.phone, settings.aiPauseMinutesAfterHuman, { reason: 'human_reply' });
+        }
+      } catch (_) { /* ignore */ }
+    }
     return result;
   }
 
@@ -320,6 +364,14 @@ export async function replyToParent(parentId, payload = {}) {
     const result = await whatsappService.sendImageMessage(parent.phone, mediaId, caption, {
       parentId: parent.id,
     });
+    if (result.success) {
+      try {
+        const settings = mergeBotSettings(db.getSettings());
+        if (settings.aiPauseOnHumanReply) {
+          await pauseBotForPhone(parent.phone, settings.aiPauseMinutesAfterHuman, { reason: 'human_reply' });
+        }
+      } catch (_) { /* ignore */ }
+    }
     return result;
   }
 
@@ -364,7 +416,18 @@ export async function replyToParent(parentId, payload = {}) {
   }
 
   // WhatsApp text — respect session window (already checked)
-  return whatsappService.sendTextMessage(parent.phone, text.trim(), false);
+  const result = await whatsappService.sendTextMessage(parent.phone, text.trim(), false);
+  if (result.success) {
+    try {
+      const settings = mergeBotSettings(db.getSettings());
+      if (settings.aiPauseOnHumanReply) {
+        await pauseBotForPhone(parent.phone, settings.aiPauseMinutesAfterHuman, { reason: 'human_reply' });
+      }
+    } catch (err) {
+      console.error('pause bot after CRM reply failed:', err.message);
+    }
+  }
+  return result;
 }
 
 export async function handleMessengerIncoming({ psid, text, messageId, name } = {}) {
@@ -390,7 +453,7 @@ export async function handleMessengerIncoming({ psid, text, messageId, name } = 
     });
     if (parent) await persistCore('parents', parent);
   }
-  markInboundForParent(parent, 'messenger');
+  await markInboundForParent(parent, 'messenger');
   logMessage({
     parent_id: parent.id,
     channel: 'messenger',
