@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   markHostedActivityPaid,
   markRegistrationOrderPaid,
+  normalizeGroupedRegistrationPayload,
+  normalizeSubscriptions,
   registerActivityGroup,
 } from './activityRegistrationOrderService.js';
 
@@ -346,4 +348,19 @@ test('reuse_health skips creating a new declaration for valid student', async ()
   assert.equal(db.store.health_declarations.length, before);
   assert.equal(result.registrations[0].health_declaration_id, 'hd1');
   assert.equal(result.registrations[0].student_id, 's1');
+});
+
+test('activity mailing lists are optional including classes', () => {
+  assert.deepEqual(normalizeSubscriptions({ classes: false, trips: true }), {
+    classes: false,
+    trips: true,
+  });
+  assert.deepEqual(normalizeSubscriptions({}), {});
+  const payload = normalizeGroupedRegistrationPayload({
+    parent: { name: 'א', phone: '050', email: 'a@b.com' },
+    subscriptions: { classes: false, events: true },
+    participants: [{ name: 'ילד', type: 'child' }],
+  });
+  assert.equal(payload.subscriptions.classes, false);
+  assert.equal(payload.subscriptions.events, true);
 });

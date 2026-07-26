@@ -78,6 +78,8 @@ export default function PublicHostPayment() {
   }, []);
 
   const paid = activity?.payment_status === 'paid' || searchParams.get('paid') === '1';
+  const coverImage = activity?.cover_image || '';
+  const coverPosition = activity?.cover_position || '50% 50%';
   const priceVat = vatBreakdown(
     activity?.price,
     normalizePriceIncludesVat(activity?.price_includes_vat)
@@ -99,51 +101,62 @@ export default function PublicHostPayment() {
       />
       <main className={`host-payment-shell ${paymentUrl && !paid ? 'host-payment-shell--wide' : ''}`}>
         <header className="host-payment-header">
-          <div className="host-payment-brand">{brandName}</div>
-          {loading ? (
-            <div className="host-payment-loading">
-              <Loader2 className="spin" size={28} />
-              <p>טוען את דף התשלום...</p>
+          {coverImage && !loading && activity ? (
+            <div className="host-payment-cover">
+              <img
+                src={coverImage}
+                alt=""
+                style={{ objectPosition: coverPosition }}
+              />
             </div>
-          ) : error && !activity ? (
-            <>
-              <h1>לא ניתן לפתוח את הקישור</h1>
-              <p className="host-payment-sub">{error}</p>
-            </>
-          ) : paid ? (
-            <div className="host-payment-success">
-              <CheckCircle size={64} color="#34d399" />
-              <h1>התשלום התקבל</h1>
-            </div>
-          ) : (
-            <>
-              <p className="host-payment-kicker">תשלום לאירוע</p>
-              <h1 className="host-payment-title">{activity?.name || 'אירוע'}</h1>
-              <p className="host-payment-sub">
-                שלום {activity?.host_name || 'מזמין האירוע'}, השלימו כאן את התשלום המלא.
-              </p>
-              <div className="host-payment-meta">
-                {dateLabel && <span>{dateLabel}</span>}
-                {activity?.start_time && <span>{String(activity.start_time).slice(0, 5)}</span>}
-                {activity?.location && <span>{activity.location}</span>}
-                <strong>
-                  {formatIls(priceVat.gross)}
-                  {' '}
-                  כולל מע״מ
-                </strong>
+          ) : null}
+          <div className="host-payment-header-body">
+            <div className="host-payment-brand">{brandName}</div>
+            {loading ? (
+              <div className="host-payment-loading">
+                <Loader2 className="spin" size={28} />
+                <p>טוען את דף התשלום...</p>
               </div>
-              {!priceVat.includesVat && priceVat.entered > 0 && (
-                <p className="host-payment-vat-note">
-                  מחיר לפני מע״מ: {formatIls(priceVat.net)}
+            ) : error && !activity ? (
+              <>
+                <h1>לא ניתן לפתוח את הקישור</h1>
+                <p className="host-payment-sub">{error}</p>
+              </>
+            ) : paid ? (
+              <div className="host-payment-success">
+                <CheckCircle size={64} color="#34d399" />
+                <h1>התשלום התקבל</h1>
+              </div>
+            ) : (
+              <>
+                <p className="host-payment-kicker">תשלום לאירוע</p>
+                <h1 className="host-payment-title">{activity?.name || 'אירוע'}</h1>
+                <p className="host-payment-sub">
+                  שלום {activity?.host_name || 'מזמין האירוע'}, השלימו כאן את התשלום המלא.
                 </p>
-              )}
-              {priceVat.includesVat && priceVat.entered > 0 && (
-                <p className="host-payment-vat-note">
-                  מתוכו לפני מע״מ: {formatIls(priceVat.net)}
-                </p>
-              )}
-            </>
-          )}
+                <div className="host-payment-meta">
+                  {dateLabel && <span>{dateLabel}</span>}
+                  {activity?.start_time && <span>{String(activity.start_time).slice(0, 5)}</span>}
+                  {activity?.location && <span>{activity.location}</span>}
+                  <strong>
+                    {formatIls(priceVat.gross)}
+                    {' '}
+                    כולל מע״מ
+                  </strong>
+                </div>
+                {!priceVat.includesVat && priceVat.entered > 0 && (
+                  <p className="host-payment-vat-note">
+                    מחיר לפני מע״מ: {formatIls(priceVat.net)}
+                  </p>
+                )}
+                {priceVat.includesVat && priceVat.entered > 0 && (
+                  <p className="host-payment-vat-note">
+                    מתוכו לפני מע״מ: {formatIls(priceVat.net)}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
         </header>
 
         {!paid && !loading && activity && (
@@ -195,11 +208,27 @@ export default function PublicHostPayment() {
         .host-payment-shell--wide{width:min(920px,100%)}
         .host-payment-header{
           text-align:center;
-          padding:28px 22px 22px;
+          padding:0;
+          overflow:hidden;
           border:1px solid rgba(255,255,255,.12);
           border-radius:22px;
           background:rgba(15,23,42,.96);
           box-shadow:0 24px 70px rgba(0,0,0,.45);
+        }
+        .host-payment-cover{
+          width:100%;
+          height:210px;
+          background:#0b1220;
+        }
+        .host-payment-cover img{
+          display:block;
+          width:100%;
+          height:100%;
+          object-fit:cover;
+          object-position:center center;
+        }
+        .host-payment-header-body{
+          padding:28px 22px 22px;
         }
         .host-payment-brand{
           color:#fb923c;
@@ -291,6 +320,10 @@ export default function PublicHostPayment() {
         }
         .spin{animation:host-spin .8s linear infinite}
         @keyframes host-spin{to{transform:rotate(360deg)}}
+        @media(max-width:520px){
+          .host-payment-cover{height:170px}
+          .host-payment-header-body{padding:22px 15px 18px}
+        }
       `}</style>
     </div>
   );

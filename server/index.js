@@ -31,6 +31,7 @@ import {
   groupTemplatesByCategory,
   ensureSeedActivityTemplates,
   sanitizeRegistrationTheme,
+  normalizeActivityTheme,
   activityDraftFromTemplate,
   TEMPLATE_CATEGORIES,
 } from './activityRegistration.js';
@@ -214,11 +215,24 @@ app.get('/api/health', async (req, res) => {
 });
 
 /** Short public redirect: WhatsApp template button → iCount payment URL */
+function resolveStoredPaymentUrl(paymentId) {
+  const id = String(paymentId || '').trim();
+  if (!id) return '';
+  const payment = db.getOne('payments', id);
+  if (payment?.payment_url) return String(payment.payment_url);
+  const sales = db.get('pos_sales') || [];
+  const sale =
+    sales.find((row) => String(row.payment_id || '') === id) ||
+    sales.find((row) => String(row.id || '') === String(payment?.pos_sale_id || '')) ||
+    null;
+  if (sale?.payment_url) return String(sale.payment_url);
+  return '';
+}
+
 function redirectPaymentLink(req, res) {
   const paymentId = String(req.params.paymentId || '').trim();
   if (!paymentId) return res.status(400).send('חסר מזהה תשלום');
-  const payment = db.getOne('payments', paymentId);
-  const payUrl = payment?.payment_url || '';
+  const payUrl = resolveStoredPaymentUrl(paymentId);
   if (!payUrl) {
     return res
       .status(404)
@@ -229,6 +243,18 @@ function redirectPaymentLink(req, res) {
           '<h1>קישור התשלום לא נמצא או שפג תוקפו</h1>' +
           '<p>פנו לצוות My Wall לקבלת קישור חדש.</p></body></html>'
       );
+  }
+  // Heal payments row if the URL only lived on the sale (older / partial writes).
+  try {
+    const payment = db.getOne('payments', paymentId);
+    if (payment && !payment.payment_url) {
+      db.update('payments', paymentId, {
+        payment_url: payUrl,
+        updated_at: new Date().toISOString(),
+      });
+    }
+  } catch {
+    /* non-fatal */
   }
   return res.redirect(302, payUrl);
 }
@@ -3394,6 +3420,9 @@ app.get('/api/public/host-payments/:token', publicFormRateLimit, async (req, res
     if (!activity) {
       return res.status(404).json({ error: 'קישור התשלום לא נמצא' });
     }
+    const theme = normalizeActivityTheme(
+      activity.registration_theme || activity.theme || {}
+    );
     res.json({
       id: activity.id,
       name: activity.name,
@@ -3404,6 +3433,8 @@ app.get('/api/public/host-payments/:token', publicFormRateLimit, async (req, res
       price: Number(activity.price) || 0,
       price_includes_vat: normalizePriceIncludesVat(activity.price_includes_vat),
       payment_status: activity.payment_status || 'unpaid',
+      cover_image: theme.cover_image || '',
+      cover_position: theme.cover_position || '50% 50%',
     });
   } catch (err) {
     console.error('host payment lookup error:', err.message);
@@ -4309,6 +4340,57 @@ function normalizeIcountNotifyPayload(raw = {}, query = {}) {
   return { payload, docId, docnum, doctype };
 }
 
+async function resolveCcClearing({ payload, doctype, docnum } = {}) {
+  let clearing = icount.extractCcClearing(payload || {});
+  if (clearing.cc_confirmation_code || !docnum || !icount.isConfigured()) {
+    return clearing;
+  }
+  try {
+    const info = await icount.getDocInfo({
+      doctype: doctype || 'invrec',
+      docnum,
+    });
+    clearing = icount.extractCcClearing(info);
+  } catch (err) {
+    console.warn('⚠️ [iCount] clearing lookup failed:', err.message);
+  }
+  return clearing;
+}
+
+function clearingPatch(clearing = {}) {
+  if (!clearing?.cc_confirmation_code && !clearing?.cc_last4 && !clearing?.cc_card_type) {
+    return null;
+  }
+  return {
+    cc_confirmation_code: clearing.cc_confirmation_code || null,
+    cc_last4: clearing.cc_last4 || null,
+    cc_card_type: clearing.cc_card_type || null,
+  };
+}
+
+async function persistClearingOnPaymentAndSale({ payment, sale, clearing } = {}) {
+  const patch = clearingPatch(clearing);
+  if (!patch) return { payment, sale };
+
+  let nextPayment = payment;
+  let nextSale = sale;
+  if (payment?.id) {
+    nextPayment = db.update('payments', payment.id, {
+      ...patch,
+      updated_at: new Date().toISOString(),
+    });
+    if (nextPayment) await persistCore('payments', nextPayment);
+  }
+  if (sale?.id) {
+    nextSale = db.update('pos_sales', sale.id, {
+      ...patch,
+      updated_at: new Date().toISOString(),
+    });
+    if (nextSale) await persistCore('pos_sales', nextSale);
+  }
+  return { payment: nextPayment || payment, sale: nextSale || sale };
+}
+
 app.get('/api/icount/status', async (req, res) => {
   if (!icount.isConfigured()) {
     return res.json({ ok: false, configured: false, message: 'חסר אסימון iCount בהגדרות השרת' });
@@ -4500,6 +4582,13 @@ app.post('/api/icount/webhook', async (req, res) => {
     }
 
     if (payment) {
+      const clearing = await resolveCcClearing({
+        payload,
+        doctype: doctype || payment.icount_doctype || 'invrec',
+        docnum: docnum || payment.icount_doc_number,
+      });
+      const clearFields = clearingPatch(clearing) || {};
+
       const updated = db.update('payments', payment.id, {
         status: 'paid',
         icount_doc_id: docId || payment.icount_doc_id,
@@ -4512,6 +4601,7 @@ app.post('/api/icount/webhook', async (req, res) => {
           payload?.doc?.docurl ||
           payment.icount_doc_url ||
           null,
+        ...clearFields,
         paid_at: payment.paid_at || new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
@@ -4553,9 +4643,19 @@ app.post('/api/icount/webhook', async (req, res) => {
             icount_doctype: doctype || sale.icount_doctype || 'invrec',
             icount_doc_url: docUrl,
             payment_url: sale.payment_url || payment.payment_url || null,
+            ...clearFields,
             updated_at: new Date().toISOString(),
           });
           if (paidSale) await persistCore('pos_sales', paidSale);
+        } else if (sale?.id && Object.keys(clearFields).length) {
+          const patchedSale = db.update('pos_sales', sale.id, {
+            ...clearFields,
+            icount_doc_id: docId || sale.icount_doc_id,
+            icount_doc_number: docnum || sale.icount_doc_number,
+            icount_doctype: doctype || sale.icount_doctype || 'invrec',
+            updated_at: new Date().toISOString(),
+          });
+          if (patchedSale) await persistCore('pos_sales', patchedSale);
         }
       }
 
@@ -5423,7 +5523,7 @@ function punchPass(pass, { punchedBy, source, note }) {
   return { pass: updated, punch };
 }
 
-app.get('/api/pos/sales', (req, res) => {
+app.get('/api/pos/sales', async (req, res) => {
   let sales = db.get('pos_sales') || [];
   if (req.crmUser?.role === 'staff') {
     const today = new Date().toISOString().slice(0, 10);
@@ -5434,6 +5534,45 @@ app.get('/api/pos/sales', (req, res) => {
     );
   }
   const payments = db.get('payments') || [];
+
+  // Backfill clearing codes for a few recent paid card sales that lack them
+  if (icount.isConfigured()) {
+    const needsClearing = sales
+      .filter(
+        (s) =>
+          s.status === 'paid' &&
+          s.icount_doc_number &&
+          !s.cc_confirmation_code &&
+          ['online', 'emv', 'credit', 'cc', 'card'].includes(
+            String(s.payment_method || '').toLowerCase()
+          )
+      )
+      .slice(0, 3);
+    for (const sale of needsClearing) {
+      try {
+        const clearing = await resolveCcClearing({
+          doctype: sale.icount_doctype || 'invrec',
+          docnum: sale.icount_doc_number,
+        });
+        const payment =
+          (sale.payment_id && payments.find((p) => String(p.id) === String(sale.payment_id))) ||
+          payments.find((p) => String(p.pos_sale_id) === String(sale.id)) ||
+          null;
+        const { sale: patched } = await persistClearingOnPaymentAndSale({
+          payment,
+          sale,
+          clearing,
+        });
+        if (patched) {
+          const idx = sales.findIndex((s) => String(s.id) === String(sale.id));
+          if (idx >= 0) sales[idx] = { ...sales[idx], ...patched };
+        }
+      } catch (err) {
+        console.warn('⚠️ [POS sales] clearing backfill failed:', err.message);
+      }
+    }
+  }
+
   sales = [...sales]
     .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
     .map((sale) => {
@@ -5448,6 +5587,10 @@ app.get('/api/pos/sales', (req, res) => {
         icount_doc_number: sale.icount_doc_number || payment?.icount_doc_number || null,
         icount_doc_id: sale.icount_doc_id || payment?.icount_doc_id || null,
         icount_doctype: sale.icount_doctype || payment?.icount_doctype || null,
+        cc_confirmation_code:
+          sale.cc_confirmation_code || payment?.cc_confirmation_code || null,
+        cc_last4: sale.cc_last4 || payment?.cc_last4 || null,
+        cc_card_type: sale.cc_card_type || payment?.cc_card_type || null,
       };
     });
   res.json(sales);
@@ -5605,6 +5748,14 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
       }
       if (docInfo?.has_cc != null) {
         docHasCc = !!docInfo.has_cc;
+      }
+      if (!sale.cc_confirmation_code) {
+        const clearing = icount.extractCcClearing(info);
+        const payment =
+          (sale.payment_id && db.getOne('payments', sale.payment_id)) ||
+          (db.get('payments') || []).find((p) => String(p.pos_sale_id) === String(sale.id)) ||
+          null;
+        await persistClearingOnPaymentAndSale({ payment, sale, clearing });
       }
     } catch (err) {
       console.warn('⚠️ [POS refund] doc info check failed:', err.message);
@@ -6103,7 +6254,10 @@ app.post('/api/pos/payment-link', async (req, res) => {
       paymentId: payment.id,
       ipnUrl,
     });
-    const updatedPayment = db.update('payments', payment.id, { payment_url: payUrl });
+    const updatedPayment = db.update('payments', payment.id, {
+      payment_url: payUrl,
+      updated_at: new Date().toISOString(),
+    });
     const updatedSale = db.update('pos_sales', sale.id, {
       payment_url: payUrl,
       updated_at: new Date().toISOString(),
@@ -6111,7 +6265,11 @@ app.post('/api/pos/payment-link', async (req, res) => {
     if (updatedPayment) await persistCore('payments', updatedPayment);
     if (updatedSale) await persistCore('pos_sales', updatedSale);
 
-    console.log(`💳 [POS] payment-link created sale=${sale.id} total=${total} url=${payUrl}`);
+    const shortUrl = icount.buildPaymentRedirectUrl(payment.id);
+    const shareUrl = icount.isLocalPublicApiBase() ? payUrl : shortUrl || payUrl;
+    console.log(
+      `💳 [POS] payment-link created sale=${sale.id} total=${total} url=${payUrl} short=${shortUrl}`
+    );
 
     let whatsappUrl = null;
     let whatsappSent = false;
@@ -6128,9 +6286,11 @@ app.post('/api/pos/payment-link', async (req, res) => {
         const tplApproved =
           localTpl &&
           (String(localTpl.status).toUpperCase() === 'APPROVED' || localTpl.active_for_send);
+        // Meta template button is fixed to the live /r/ host. Never use it from local
+        // (the payment only exists on this machine, and localhost short links fail on phones).
+        const canUseMetaTemplate = tplApproved && !icount.isLocalPublicApiBase();
 
-        // Prefer approved Meta template (works outside 24h window)
-        if (tplApproved) {
+        if (canUseMetaTemplate) {
           try {
             const waResult = await whatsappService.sendTemplateMessage(
               phone,
@@ -6155,7 +6315,7 @@ app.post('/api/pos/payment-link', async (req, res) => {
         if (!whatsappSent) {
           const waMsg =
             `שלום${customerName ? ` ${customerName}` : ''},\n` +
-            `לסיום התשלום ב-My Wall:\n${payUrl}\n\n` +
+            `לסיום התשלום ב-My Wall:\n${shareUrl}\n\n` +
             `לאחר התשלום תופק חשבונית מס קבלה אוטומטית.`;
           try {
             const waResult = await whatsappService.sendTextMessage(phone, waMsg);
@@ -6184,6 +6344,8 @@ app.post('/api/pos/payment-link', async (req, res) => {
       sale: updatedSale || { ...sale, payment_url: payUrl },
       payment: updatedPayment || { ...payment, payment_url: payUrl },
       payUrl,
+      shortUrl,
+      shareUrl,
       whatsappUrl,
       whatsappSent,
       whatsappError,

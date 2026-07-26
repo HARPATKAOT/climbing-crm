@@ -12,7 +12,6 @@ import { chargeAmount, normalizePriceIncludesVat } from './vat.js';
 
 const activityLocks = new Map();
 const HOLD_MINUTES = 20;
-const REQUIRED_BROADCAST_LIST = 'classes';
 
 // Serializes capacity checks inside one Node process. The database unique key
 // prevents duplicate idempotency keys across instances; a database transaction
@@ -35,16 +34,15 @@ function clean(value) {
   return String(value || '').trim();
 }
 
-function normalizeSubscriptions(raw = {}) {
+/** Activity registration: all mailing lists are optional (unlike class onboarding). */
+export function normalizeSubscriptions(raw = {}) {
   const subscriptions = {};
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    subscriptions[REQUIRED_BROADCAST_LIST] = true;
     return subscriptions;
   }
   for (const [key, value] of Object.entries(raw)) {
     subscriptions[String(key)] = value === true || value === 'true' || value === 1 || value === '1';
   }
-  subscriptions[REQUIRED_BROADCAST_LIST] = true;
   return subscriptions;
 }
 

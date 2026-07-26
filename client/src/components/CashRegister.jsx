@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
-import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X } from 'lucide-react';
+import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X, Printer } from 'lucide-react';
 import PosSale from './PosSale.jsx';
 import Pricelist from './Pricelist.jsx';
 
@@ -173,6 +173,20 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
     } catch (err) {
       setSyncInventoryMsg(err.message || 'סנכרון נכשל');
     }
+  };
+
+  const printSaleInvoice = (sale, kind = 'charge') => {
+    const directUrl = kind === 'refund' ? sale?.refund_doc_url : sale?.icount_doc_url;
+    const url =
+      directUrl ||
+      `/api/pos/sales/${encodeURIComponent(sale.id)}/invoice?kind=${encodeURIComponent(kind)}`;
+    const win = window.open(url, '_blank', 'noopener');
+    if (!win) {
+      setHistoryError('הדפדפן חסם את חלון ההדפסה — אשרו חלונות קופצים ונסו שוב');
+      return;
+    }
+    setHistoryError('');
+    setHistoryOk('נפתחה החשבונית להדפסה — בחרו את המדפסת הטרמית בחלון ההדפסה');
   };
 
   const copyPaymentLink = async (sale) => {
@@ -852,16 +866,6 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
                                   <div>
                                     <div style={{ fontSize: 11, color: 'var(--text-3)' }}>אופן תשלום</div>
                                     <div>{payMethodLabel(sale.payment_method)}</div>
-                                    {isCardPaymentMethod(sale.payment_method) && sale.status === 'paid' && (
-                                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
-                                        זיכוי יחזיר לכרטיס
-                                      </div>
-                                    )}
-                                    {String(sale.payment_method || '').toLowerCase() === 'cash' && sale.status === 'paid' && (
-                                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
-                                        זיכוי = ביטול חשבונית
-                                      </div>
-                                    )}
                                   </div>
                                   <div>
                                     <div style={{ fontSize: 11, color: 'var(--text-3)' }}>נמכר על ידי</div>
@@ -871,6 +875,19 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
                                     <div style={{ fontSize: 11, color: 'var(--text-3)' }}>מספר מסמך</div>
                                     <div>{sale.icount_doc_number || '—'}</div>
                                   </div>
+                                  {(sale.cc_confirmation_code || sale.cc_last4 || sale.cc_card_type) && (
+                                    <div>
+                                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>אישור סליקה</div>
+                                      <div>{sale.cc_confirmation_code || '—'}</div>
+                                      {(sale.cc_card_type || sale.cc_last4) && (
+                                        <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                                          {[sale.cc_card_type, sale.cc_last4 ? `••••${sale.cc_last4}` : null]
+                                            .filter(Boolean)
+                                            .join(' · ')}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
                                   {sale.refund_doc_number && (
                                     <div>
                                       <div style={{ fontSize: 11, color: 'var(--text-3)' }}>מסמך זיכוי</div>
@@ -934,6 +951,19 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
                                         ? <Loader2 size={13} className="spin" />
                                         : <Download size={13} />}
                                       הורדת חשבונית
+                                    </button>
+                                  )}
+                                  {canDownloadCharge && (
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-sm"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        printSaleInvoice(sale, 'charge');
+                                      }}
+                                    >
+                                      <Printer size={13} />
+                                      הדפסת חשבונית
                                     </button>
                                   )}
                                   {canDownloadRefund && (

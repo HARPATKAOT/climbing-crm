@@ -327,7 +327,7 @@ export default function PosSale() {
   };
 
   const setQty = (cartLineId, qty) => {
-    const n = Math.max(1, Number(qty) || 1);
+    const n = Math.max(1, Math.round(Number(qty) || 1));
     setCart((prev) =>
       prev.map((l) => (l.cartLineId === cartLineId ? { ...l, quantity: n } : l))
     );
@@ -462,7 +462,7 @@ export default function PosSale() {
       if (!res.ok) throw new Error(data.error || 'הפעולה נכשלה');
       setResult(data);
 
-      const payUrl = data.payUrl || data.sale?.payment_url || '';
+      const payUrl = data.shareUrl || data.payUrl || data.sale?.payment_url || '';
       if (payUrl) {
         setLastPayUrl(payUrl);
         // When WhatsApp send is requested, don't auto-open the payment page —
@@ -974,7 +974,7 @@ export default function PosSale() {
                             value={line.unitprice}
                             onChange={(e) => setLinePrice(line.cartLineId, e.target.value)}
                             style={{ width: 84, padding: '4px 8px', fontSize: 12 }}
-                            title="שינוי מחיר"
+                            title="שינוי מחיר ליחידה"
                           />
                           <button
                             type="button"
@@ -1004,23 +1004,50 @@ export default function PosSale() {
                           שורה: ₪{lineTotal.toLocaleString()}
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => setQty(line.cartLineId, line.quantity - 1)}
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          flexShrink: 0,
+                          paddingTop: 2,
+                        }}
+                        title="כמות יחידות"
                       >
-                        <Minus size={12} />
-                      </button>
-                      <span style={{ minWidth: 20, textAlign: 'center', fontWeight: 700, paddingTop: 4 }}>
-                        {line.quantity}
-                      </span>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => setQty(line.cartLineId, line.quantity + 1)}
-                      >
-                        <Plus size={12} />
-                      </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => setQty(line.cartLineId, line.quantity - 1)}
+                          aria-label="הקטנת כמות"
+                        >
+                          <Minus size={12} />
+                        </button>
+                        <input
+                          className="input input-sm"
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={line.quantity}
+                          onChange={(e) => setQty(line.cartLineId, e.target.value)}
+                          style={{
+                            width: 56,
+                            padding: '4px 6px',
+                            fontSize: 13,
+                            fontWeight: 700,
+                            textAlign: 'center',
+                          }}
+                          title="מספר יחידות"
+                          aria-label="כמות"
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => setQty(line.cartLineId, line.quantity + 1)}
+                          aria-label="הגדלת כמות"
+                        >
+                          <Plus size={12} />
+                        </button>
+                      </div>
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm"
@@ -1140,7 +1167,7 @@ export default function PosSale() {
           {error && (
             <div className="alert alert-error" style={{ marginTop: 12 }}>{error}</div>
           )}
-          {(lastPayUrl || result?.payUrl) && (
+          {(lastPayUrl || result?.shareUrl || result?.payUrl) && (
             <div
               className="alert alert-success"
               style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}
@@ -1162,12 +1189,12 @@ export default function PosSale() {
                   borderRadius: 8,
                 }}
               >
-                {lastPayUrl || result.payUrl}
+                {lastPayUrl || result.shareUrl || result.payUrl}
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <a
                   className="btn btn-primary btn-sm"
-                  href={lastPayUrl || result.payUrl}
+                  href={lastPayUrl || result.shareUrl || result.payUrl}
                   target="_blank"
                   rel="noreferrer"
                 >
@@ -1176,7 +1203,7 @@ export default function PosSale() {
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
-                  onClick={() => copyPayUrl(lastPayUrl || result.payUrl)}
+                  onClick={() => copyPayUrl(lastPayUrl || result.shareUrl || result.payUrl)}
                 >
                   {copied ? 'הועתק!' : 'העתק קישור'}
                 </button>

@@ -4,8 +4,6 @@ import { useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
 
-const REQUIRED_LIST = 'classes';
-
 const emptyParticipant = (questions = [], extras = {}) => ({
   key: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
   type: 'child',
@@ -126,7 +124,7 @@ export default function PublicActivityRegistration() {
   const [participants, setParticipants] = useState([]);
   const [household, setHousehold] = useState(null);
   const [listDefs, setListDefs] = useState([]);
-  const [subscriptions, setSubscriptions] = useState({ [REQUIRED_LIST]: true });
+  const [subscriptions, setSubscriptions] = useState({});
   const [selectedChildIds, setSelectedChildIds] = useState([]);
   const [idempotencyKey] = useState(
     () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`
@@ -252,7 +250,7 @@ export default function PublicActivityRegistration() {
       }
       if (Array.isArray(body.listDefs) && body.listDefs.length) setListDefs(body.listDefs);
       if (body.subscriptions && typeof body.subscriptions === 'object') {
-        setSubscriptions({ ...body.subscriptions, [REQUIRED_LIST]: true });
+        setSubscriptions({ ...body.subscriptions });
       }
       if (!isAdultSelf && Array.isArray(body.children) && body.children.length === 1) {
         setSelectedChildIds([body.children[0].id]);
@@ -341,7 +339,7 @@ export default function PublicActivityRegistration() {
         body: JSON.stringify({
           idempotency_key: idempotencyKey,
           parent,
-          subscriptions: { ...subscriptions, [REQUIRED_LIST]: true },
+          subscriptions,
           participants: payloadParticipants,
         }),
       });
@@ -452,30 +450,25 @@ export default function PublicActivityRegistration() {
             <Field label="עיר" value={parent.city} onChange={(city) => setParent({ ...parent, city })} />
 
             <h2 style={{ marginTop: 28 }}>רשימות דיוור</h2>
-            <p className="event-hint">רשימת החוגים חובה. אפשר לסמן גם טיולים, אירועים ועוד.</p>
+            <p className="event-hint">אפשר לסמן רשימות שמעניינות אתכם — חוגים, טיולים, אירועים ועוד.</p>
             <div className="event-lists">
               {listDefs.map((list) => {
-                const isRequired = list.key === REQUIRED_LIST;
-                const checked = isRequired ? true : subscriptions[list.key] === true;
+                const checked = subscriptions[list.key] === true;
                 return (
                   <label className="event-check" key={list.key}>
                     <input
                       type="checkbox"
                       checked={checked}
-                      disabled={isRequired}
                       onChange={() => {
-                        if (isRequired) return;
                         setSubscriptions((prev) => ({
                           ...prev,
                           [list.key]: !prev[list.key],
-                          [REQUIRED_LIST]: true,
                         }));
                       }}
                     />
                     <span>
                       <strong>{list.label || list.key}</strong>
                       {list.description ? ` — ${list.description}` : ''}
-                      {isRequired ? ' (חובה)' : ''}
                     </span>
                   </label>
                 );

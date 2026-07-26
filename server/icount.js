@@ -364,6 +364,56 @@ export async function getDocInfo({ doctype, docnum } = {}) {
 }
 
 /**
+ * Pull clearing / card fields from doc/info (or IPN-like payload).
+ * confirmation_code is the approval number from the terminal/clearing house.
+ */
+export function extractCcClearing(source = {}) {
+  const root = source?.doc_info || source?.doc || source || {};
+  const ccList = Array.isArray(root.cc)
+    ? root.cc
+    : Array.isArray(source?.cc)
+      ? source.cc
+      : [];
+  const first = ccList[0] || null;
+
+  const codeRaw =
+    first?.confirmation_code ||
+    root.confirmation_code ||
+    source?.confirmation_code ||
+    source?.cc_confirmation_code ||
+    null;
+  const last4Raw =
+    first?.card_number ||
+    root.card_number ||
+    source?.card_number ||
+    source?.cc_last4 ||
+    null;
+  const typeRaw =
+    first?.card_type ||
+    root.card_type ||
+    source?.card_type ||
+    source?.cc_card_type ||
+    null;
+
+  const cc_confirmation_code = codeRaw != null && String(codeRaw).trim()
+    ? String(codeRaw).trim()
+    : null;
+  const digits = last4Raw != null ? String(last4Raw).replace(/\D/g, '') : '';
+  const cc_last4 = digits ? digits.slice(-4) : null;
+  const cc_card_type = typeRaw != null && String(typeRaw).trim()
+    ? String(typeRaw).trim()
+    : null;
+  const has_cc = !!(
+    root.has_cc ||
+    source?.has_cc ||
+    first ||
+    cc_confirmation_code
+  );
+
+  return { cc_confirmation_code, cc_last4, cc_card_type, has_cc };
+}
+
+/**
  * Cancel / credit an existing document in iCount.
  * Creates a cancellation document linked to the original.
  *
@@ -448,18 +498,42 @@ export async function buildPaymentUrl({
   return `${base}?${params.toString()}`;
 }
 
+const LIVE_API_BASE = 'https://climbing-crm-api.onrender.com';
+
+export function isLocalHostname(hostname) {
+  const host = String(hostname || '')
+    .trim()
+    .toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
 /**
- * Public base used for short WhatsApp payment redirects / template URL buttons.
- * Example button URL: https://climbing-crm-api.onrender.com/r/{{1}}
+ * Public base used for short payment redirects / IPN callbacks.
+ * Honors PUBLIC_API_URL / RENDER_EXTERNAL_URL; otherwise matches the current environment
+ * (localhost in local dev, live API in production).
+ * Meta WhatsApp template buttons are still fixed to the live host — see isLocalPublicApiBase.
  */
 export function getPublicApiBase() {
-  return (
-    process.env.PUBLIC_API_URL ||
-    process.env.RENDER_EXTERNAL_URL ||
-    'https://climbing-crm-api.onrender.com'
+  const explicit = String(
+    process.env.PUBLIC_API_URL || process.env.RENDER_EXTERNAL_URL || ''
   )
     .trim()
     .replace(/\/$/, '');
+  if (explicit) return explicit;
+
+  if (process.env.NODE_ENV === 'production') return LIVE_API_BASE;
+
+  const port = process.env.PORT || 5000;
+  return `http://localhost:${port}`;
+}
+
+/** True when short /r/ links would point at this machine (not reachable from customer phones). */
+export function isLocalPublicApiBase() {
+  try {
+    return isLocalHostname(new URL(getPublicApiBase()).hostname);
+  } catch {
+    return true;
+  }
 }
 
 export function getPaymentRedirectBase() {
@@ -512,6 +586,7 @@ export const icount = {
   searchDocs,
   getDoc,
   getDocInfo,
+  extractCcClearing,
   cancelDoc,
   listInventoryItems,
   updateInventoryQty,
@@ -519,6 +594,8 @@ export const icount = {
   resolvePayPageUrl,
   buildIpnUrl,
   getPublicApiBase,
+  isLocalPublicApiBase,
+  isLocalHostname,
   getPaymentRedirectBase,
   buildPaymentRedirectUrl,
   getPaymentTemplateName,
