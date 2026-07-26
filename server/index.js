@@ -2,7 +2,7 @@ import 'dotenv/config';
 import crypto from 'crypto';
 import express from 'express';
 import cors from 'cors';
-import { db, initDb, persistCore, parentPhonesMatch } from './db.js';
+import { db, initDb, persistCore, parentPhonesMatch, setBotEnabledDurable } from './db.js';
 import { supa } from './supa.js';
 import { requiresDurableStore, publicStoreUnavailableError } from './runtimeSafety.js';
 import { whatsappService, instagramService } from './whatsapp.js';
@@ -702,21 +702,25 @@ app.get('/api/whatsapp/settings', async (req, res) => {
   });
 });
 
-// Toggle bot on/off immediately (staff + owner)
-app.post('/api/whatsapp/bot-enabled', (req, res) => {
+// Toggle bot on/off immediately (staff + owner) — awaits durable store write
+app.post('/api/whatsapp/bot-enabled', async (req, res) => {
   const enabled = !!req.body?.enabled;
-  const settings = db.saveSettings({ aiResponderEnabled: enabled });
-  console.log(`🤖 Bot auto-reply ${enabled ? 'enabled' : 'disabled'} by ${req.crmUser?.email || 'unknown'}`);
-  res.json({
-    aiResponderEnabled: !!settings.aiResponderEnabled,
-    message: enabled ? 'הבוט הופעל' : 'הבוט כובה',
-  });
+  try {
+    const settings = await setBotEnabledDurable(enabled);
+    console.log(`🤖 Bot auto-reply ${enabled ? 'enabled' : 'disabled'} by ${req.crmUser?.email || 'unknown'}`);
+    res.json({
+      aiResponderEnabled: !!settings.aiResponderEnabled,
+      message: enabled ? 'הבוט הופעל' : 'הבוט כובה',
+    });
+  } catch (error) {
+    console.error('bot-enabled failed:', error?.message || error);
+    res.status(500).json({ error: 'שמירת מצב הבוט נכשלה' });
+  }
 });
 
 // Update WhatsApp Settings
 app.post('/api/whatsapp/settings', requireOwner, async (req, res) => {
   const allowed = [
-    'aiResponderEnabled',
     'aiActiveHoursEnabled',
     'aiActiveHoursStart',
     'aiActiveHoursEnd',
@@ -765,9 +769,7 @@ app.post('/api/whatsapp/settings', requireOwner, async (req, res) => {
   if (payload.aiActiveHoursEnd !== undefined) {
     payload.aiActiveHoursEnd = String(payload.aiActiveHoursEnd).slice(0, 5);
   }
-  if (payload.aiResponderEnabled !== undefined) {
-    payload.aiResponderEnabled = !!payload.aiResponderEnabled;
-  }
+  // Master switch is only changed via POST /api/whatsapp/bot-enabled
   if (payload.aiActiveHoursEnabled !== undefined) {
     payload.aiActiveHoursEnabled = !!payload.aiActiveHoursEnabled;
   }

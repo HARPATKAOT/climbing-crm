@@ -406,10 +406,12 @@ export default function Broadcasts({ parents, students, groups = [] }) {
     setSavingSettings(true);
     setSaveSettingsSuccess(false);
     try {
+      // Master switch is saved only via /bot-enabled — never clobber it from this form.
+      const { aiResponderEnabled: _ignoreBotFlag, ...settingsToSave } = settings;
       const response = await fetch('/api/whatsapp/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings)
+        body: JSON.stringify(settingsToSave)
       });
       if (response.ok) {
         setSaveSettingsSuccess(true);

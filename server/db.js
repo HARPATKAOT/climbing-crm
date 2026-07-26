@@ -196,7 +196,8 @@ const SEED_DATA = {
     metaPageId: '',
     metaPageAccessToken: '',
     verifyToken: '',
-    aiResponderEnabled: true,
+    // Safer default for ephemeral disks: stay silent until explicitly enabled.
+    aiResponderEnabled: false,
     aiActiveHoursEnabled: false,
     aiActiveHoursStart: '09:00',
     aiActiveHoursEnd: '21:00',
@@ -368,6 +369,8 @@ function normalizeBoolFlag(value) {
 
 let botFlagCache = { value: null, fetchedAt: 0 };
 const BOT_FLAG_TTL_MS = 2000;
+/** Dedicated durable key — survives stale full-blob writes of whatsapp_settings. */
+const BOT_FLAG_SETTING_KEY = 'ai_responder_enabled';
 
 function patchLocalBotFlag(enabled) {
   const data = readDb();
@@ -379,23 +382,60 @@ function patchLocalBotFlag(enabled) {
   botFlagCache = { value: enabled, fetchedAt: Date.now() };
 }
 
+function resolvePinnedBotFlag(explicitValue) {
+  if (explicitValue !== null) return explicitValue;
+  if (botFlagCache.value !== null) return botFlagCache.value;
+  const local = normalizeBoolFlag(readDb().whatsapp_settings?.aiResponderEnabled);
+  return local === null ? false : local;
+}
+
+async function persistBotFlagRemote(enabled, whatsappSettings) {
+  if (!supa.isEnabled()) return { ok: true };
+  const [flagResult, settingsResult] = await Promise.all([
+    supa.setAppSetting(BOT_FLAG_SETTING_KEY, !!enabled),
+    supa.setAppSetting('whatsapp_settings', withoutServerSecrets(whatsappSettings || readDb().whatsapp_settings || {})),
+  ]);
+  if (!flagResult?.ok) return flagResult;
+  if (!settingsResult?.ok) return settingsResult;
+  return { ok: true };
+}
+
 /** Pull aiResponderEnabled from Supabase before handling live bot traffic. */
 export async function syncBotFlagFromRemote() {
   if (!supa.isEnabled()) return;
   if (botFlagCache.value !== null && Date.now() - botFlagCache.fetchedAt < BOT_FLAG_TTL_MS) {
     return;
   }
-  const remote = await supa.getAppSetting('whatsapp_settings');
-  botFlagCache.fetchedAt = Date.now();
-  if (!remote || typeof remote !== 'object') return;
-  const enabled = normalizeBoolFlag(remote.aiResponderEnabled);
+  // Prefer the dedicated flag so a stale whatsapp_settings blob cannot re-enable the bot.
+  let enabled = normalizeBoolFlag(await supa.getAppSetting(BOT_FLAG_SETTING_KEY));
+  if (enabled === null) {
+    const remote = await supa.getAppSetting('whatsapp_settings');
+    if (!remote || typeof remote !== 'object') {
+      // Do not bump fetchedAt — retry on the next inbound message.
+      return;
+    }
+    enabled = normalizeBoolFlag(remote.aiResponderEnabled);
+  }
   if (enabled === null) return;
+  botFlagCache.fetchedAt = Date.now();
   botFlagCache.value = enabled;
   const localEnabled = normalizeBoolFlag(readDb().whatsapp_settings?.aiResponderEnabled);
   if (localEnabled !== enabled) {
     patchLocalBotFlag(enabled);
     console.log(`🤖 Bot flag synced from Supabase: ${enabled ? 'ON' : 'OFF'}`);
   }
+}
+
+/** Turn the master bot switch on/off and wait for durable persistence. */
+export async function setBotEnabledDurable(enabled) {
+  const flag = !!enabled;
+  patchLocalBotFlag(flag);
+  const settings = readDb().whatsapp_settings;
+  const result = await persistBotFlagRemote(flag, settings);
+  if (!result?.ok && supa.isEnabled()) {
+    console.error('Failed to persist bot flag:', result?.error || 'unknown');
+  }
+  return db.getSettings();
 }
 
 export function botFlagLabel() {
@@ -440,6 +480,7 @@ export async function initDb({ requireDurable = false } = {}) {
         }
       }
     }
+    const remoteBotFlag = normalizeBoolFlag(await supa.getAppSetting(BOT_FLAG_SETTING_KEY));
     const remoteSettings = await supa.getAppSetting('whatsapp_settings');
     if (remoteSettings && typeof remoteSettings === 'object') {
       data.whatsapp_settings = {
@@ -447,11 +488,22 @@ export async function initDb({ requireDurable = false } = {}) {
         metaWaAccessToken: '',
         verifyToken: '',
       };
-      const enabled = normalizeBoolFlag(data.whatsapp_settings.aiResponderEnabled);
-      if (enabled !== null) botFlagCache = { value: enabled, fetchedAt: Date.now() };
+      const fromSettings = normalizeBoolFlag(data.whatsapp_settings.aiResponderEnabled);
+      const enabled = remoteBotFlag !== null ? remoteBotFlag : (fromSettings === null ? false : fromSettings);
+      data.whatsapp_settings.aiResponderEnabled = enabled;
+      botFlagCache = { value: enabled, fetchedAt: Date.now() };
+      if (remoteBotFlag === null) {
+        await supa.setAppSetting(BOT_FLAG_SETTING_KEY, enabled);
+      }
       counts.app_settings = 'remote';
     } else if (data.whatsapp_settings) {
-      await supa.setAppSetting('whatsapp_settings', withoutServerSecrets(data.whatsapp_settings));
+      // Never migrate a missing remote into "ON" from an ephemeral seed disk.
+      const enabled = remoteBotFlag !== null
+        ? remoteBotFlag
+        : (normalizeBoolFlag(data.whatsapp_settings.aiResponderEnabled) ?? false);
+      data.whatsapp_settings.aiResponderEnabled = enabled;
+      botFlagCache = { value: enabled, fetchedAt: Date.now() };
+      await persistBotFlagRemote(enabled, data.whatsapp_settings);
       counts.app_settings = 'migrated';
     }
     writeDb(data);
@@ -684,21 +736,21 @@ export const db = {
 
   saveSettings: (newSettings) => {
     const data = readDb();
+    const explicitFlag = newSettings?.aiResponderEnabled !== undefined
+      ? normalizeBoolFlag(newSettings.aiResponderEnabled)
+      : null;
+    const pinnedFlag = resolvePinnedBotFlag(explicitFlag);
     data.whatsapp_settings = {
       ...withoutServerSecrets(data.whatsapp_settings),
       ...withoutServerSecrets(newSettings),
       metaWaAccessToken: '',
       verifyToken: '',
+      // Pin master switch so a stale full-settings save cannot re-enable the bot.
+      aiResponderEnabled: pinnedFlag,
     };
-    if (newSettings?.aiResponderEnabled !== undefined) {
-      const enabled = normalizeBoolFlag(newSettings.aiResponderEnabled);
-      if (enabled !== null) {
-        data.whatsapp_settings.aiResponderEnabled = enabled;
-        botFlagCache = { value: enabled, fetchedAt: Date.now() };
-      }
-    }
+    botFlagCache = { value: pinnedFlag, fetchedAt: Date.now() };
     writeDb(data);
-    Promise.resolve(supa.setAppSetting('whatsapp_settings', withoutServerSecrets(data.whatsapp_settings))).catch((error) =>
+    Promise.resolve(persistBotFlagRemote(pinnedFlag, data.whatsapp_settings)).catch((error) =>
       console.error('sync whatsapp_settings error:', error?.message || error)
     );
     return data.whatsapp_settings;

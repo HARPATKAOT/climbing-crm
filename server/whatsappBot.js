@@ -498,6 +498,12 @@ export async function advanceLeadCapture(phone, parent, incomingText, helpers = 
 export function decideBotGate(settings, parent, students, text, { isSimulator = false } = {}) {
   const s = mergeBotSettings(settings);
 
+  // Master switch first: when live auto-reply is off, send nothing at all
+  // (including opt-out / handoff / outside-hours templates).
+  if (!isSimulator && !isBotEnabled(s)) {
+    return { action: 'silence', reason: 'disabled' };
+  }
+
   if (textMatchesKeywords(text, s.aiReactivateKeywords) && isOptedOut(parent)) {
     return { action: 'reactivate', reply: 'הבוט הופעל מחדש. במה אפשר לעזור?' };
   }
@@ -512,12 +518,6 @@ export function decideBotGate(settings, parent, students, text, { isSimulator = 
 
   if (isBotPaused(parent) && !isSimulator) {
     return { action: 'silence', reason: 'paused' };
-  }
-
-  // The playground must remain usable while live automatic replies are disabled.
-  // Simulator replies are recorded locally and never sent through Meta.
-  if (!isSimulator && !isBotEnabled(s)) {
-    return { action: 'silence', reason: 'disabled' };
   }
 
   // Live traffic only: shouldAiAutoReply is false both when the bot is off and

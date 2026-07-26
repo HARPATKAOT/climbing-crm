@@ -74,6 +74,8 @@ test('decideBotGate: disabled / opted out / handoff / outside hours', () => {
     aiActiveHoursEnabled: false,
   });
   assert.equal(decideBotGate({ ...base, aiResponderEnabled: false }, {}, [], 'שלום').action, 'silence');
+  assert.equal(decideBotGate({ ...base, aiResponderEnabled: false }, {}, [], 'עצור').action, 'silence');
+  assert.equal(decideBotGate({ ...base, aiResponderEnabled: false }, {}, [], 'רוצה נציג').action, 'silence');
   assert.equal(
     decideBotGate({ ...base, aiResponderEnabled: false }, {}, [], 'שלום', { isSimulator: true }).action,
     'reply'
