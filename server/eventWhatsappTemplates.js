@@ -3,8 +3,10 @@
  * Seeded as drafts; staff submit to Meta from Templates → דיוור.
  */
 
-export const EVENT_HOST_PAYMENT_TEMPLATE = 'event_host_payment_v2';
-export const EVENT_PARTICIPANT_LINK_TEMPLATE = 'event_participant_link_v2';
+export const EVENT_HOST_PAYMENT_TEMPLATE = 'event_host_payment_v3';
+export const EVENT_PARTICIPANT_LINK_TEMPLATE = 'event_participant_link_v3';
+export const EVENT_HOST_PAYMENT_TEMPLATE_FALLBACK = 'event_host_payment_v2';
+export const EVENT_PARTICIPANT_LINK_TEMPLATE_FALLBACK = 'event_participant_link_v2';
 
 /** Legacy Meta names (deleted; blocked from reuse for ~4 weeks). */
 export const EVENT_WHATSAPP_TEMPLATE_LEGACY_META_NAMES = new Set([
@@ -15,6 +17,8 @@ export const EVENT_WHATSAPP_TEMPLATE_LEGACY_META_NAMES = new Set([
 export const EVENT_WHATSAPP_TEMPLATE_META_NAMES = new Set([
   EVENT_HOST_PAYMENT_TEMPLATE,
   EVENT_PARTICIPANT_LINK_TEMPLATE,
+  EVENT_HOST_PAYMENT_TEMPLATE_FALLBACK,
+  EVENT_PARTICIPANT_LINK_TEMPLATE_FALLBACK,
 ]);
 
 const LIVE_APP_BASE = 'https://client-omega-topaz-35.vercel.app';
@@ -69,7 +73,7 @@ function insertDraft(db, persist, row) {
 function hostPaymentDraftFields(publicAppBase = '') {
   const buttonUrl = `${publicBase(publicAppBase)}/event-host/{{1}}`;
   return {
-    id: 'tpl-event-host-payment-v2',
+    id: 'tpl-event-host-payment-v3',
     name: 'אירוע · קישור תשלום מזמין',
     meta_name: EVENT_HOST_PAYMENT_TEMPLATE,
     language: 'he',
@@ -80,7 +84,7 @@ function hostPaymentDraftFields(publicAppBase = '') {
       'קישור פרטי לתשלום עבור האירוע {{2}}.\n' +
       'לחצו על הכפתור להשלמת התשלום.',
     header: '',
-    footer: 'אירוע · My Wall',
+    footer: '',
     body_examples: ['דנה כהן', 'יום הולדת בקיר'],
     variables: [
       { key: '1', field: 'parent_name', label: 'שם המזמין', example: 'דנה כהן' },
@@ -101,7 +105,7 @@ function hostPaymentDraftFields(publicAppBase = '') {
 function participantLinkDraftFields(publicAppBase = '') {
   const buttonUrl = `${publicBase(publicAppBase)}/event/{{1}}`;
   return {
-    id: 'tpl-event-participant-link-v2',
+    id: 'tpl-event-participant-link-v3',
     name: 'אירוע · קישור למשתתפים',
     meta_name: EVENT_PARTICIPANT_LINK_TEMPLATE,
     language: 'he',
@@ -112,7 +116,7 @@ function participantLinkDraftFields(publicAppBase = '') {
       'קישור להרשמת משתתפים לאירוע {{2}}.\n' +
       'לחצו על הכפתור והעבירו לכל מי שמגיע.',
     header: '',
-    footer: 'אירוע · My Wall',
+    footer: '',
     body_examples: ['דנה כהן', 'יום הולדת בקיר'],
     variables: [
       { key: '1', field: 'parent_name', label: 'שם המזמין', example: 'דנה כהן' },
@@ -135,7 +139,7 @@ export function ensureEventHostPaymentTemplate({ db, persist, publicAppBase = ''
   if (!db) return null;
   const existing = findTemplate(db, {
     metaName: EVENT_HOST_PAYMENT_TEMPLATE,
-    id: 'tpl-event-host-payment-v2',
+    id: 'tpl-event-host-payment-v3',
   });
   if (existing) return existing;
   return insertDraft(db, persist, hostPaymentDraftFields(publicAppBase));
@@ -146,7 +150,7 @@ export function ensureEventParticipantLinkTemplate({ db, persist, publicAppBase 
   if (!db) return null;
   const existing = findTemplate(db, {
     metaName: EVENT_PARTICIPANT_LINK_TEMPLATE,
-    id: 'tpl-event-participant-link-v2',
+    id: 'tpl-event-participant-link-v3',
   });
   if (existing) return existing;
   return insertDraft(db, persist, participantLinkDraftFields(publicAppBase));
@@ -174,8 +178,10 @@ export async function recreateEventWhatsappTemplates({
   }
   const base = publicBase(publicAppBase);
   const targets = [
-    { metaName: EVENT_HOST_PAYMENT_TEMPLATE, id: 'tpl-event-host-payment-v2' },
-    { metaName: EVENT_PARTICIPANT_LINK_TEMPLATE, id: 'tpl-event-participant-link-v2' },
+    { metaName: EVENT_HOST_PAYMENT_TEMPLATE, id: 'tpl-event-host-payment-v3' },
+    { metaName: EVENT_PARTICIPANT_LINK_TEMPLATE, id: 'tpl-event-participant-link-v3' },
+    { metaName: EVENT_HOST_PAYMENT_TEMPLATE_FALLBACK, id: 'tpl-event-host-payment-v2' },
+    { metaName: EVENT_PARTICIPANT_LINK_TEMPLATE_FALLBACK, id: 'tpl-event-participant-link-v2' },
     // Clean up failed recreate drafts / legacy rows with localhost buttons.
     { metaName: 'event_host_payment', id: 'tpl-event-host-payment' },
     { metaName: 'event_participant_link', id: 'tpl-event-participant-link' },

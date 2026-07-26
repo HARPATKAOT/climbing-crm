@@ -27,6 +27,7 @@ function LoginScreen() {
   const brandLogo = profile.logo_url || '/logo.png';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [savePassword, setSavePassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [error, setError] = useState('');
@@ -37,11 +38,24 @@ function LoginScreen() {
     setLoading(true);
     setError('');
     setInfo('');
+    const trimmedEmail = email.trim();
     const { error: signInError } = await authClient.auth.signInWithPassword({
-      email: email.trim(),
+      email: trimmedEmail,
       password,
     });
-    if (signInError) setError('פרטי הכניסה אינם נכונים');
+    if (signInError) {
+      setError('פרטי הכניסה אינם נכונים');
+    } else if (savePassword && window.PasswordCredential && navigator.credentials?.store) {
+      try {
+        await navigator.credentials.store(new window.PasswordCredential({
+          id: trimmedEmail,
+          password,
+          name: trimmedEmail,
+        }));
+      } catch {
+        // Password saving remains under the browser's control.
+      }
+    }
     setLoading(false);
   };
 
@@ -94,6 +108,14 @@ function LoginScreen() {
           onChange={(event) => setPassword(event.target.value)}
           required
         />
+        <label className="auth-save-password">
+          <input
+            type="checkbox"
+            checked={savePassword}
+            onChange={(event) => setSavePassword(event.target.checked)}
+          />
+          <span>שמירת הסיסמה במכשיר זה</span>
+        </label>
         {error && <div className="alert alert-danger">{error}</div>}
         {info && <div className="alert alert-success">{info}</div>}
         <button className="btn btn-primary" type="submit" disabled={loading || resetting}>

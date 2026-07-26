@@ -11,6 +11,7 @@ const PAYMENT_STATUSES = new Set(['unpaid', 'paid', 'partial', 'refunded']);
 export const TEMPLATE_CATEGORIES = [
   { id: 'field', label: 'פעילויות שטח' },
   { id: 'wall', label: 'אירועים בקיר' },
+  { id: 'ops', label: 'תפעול' },
 ];
 
 export const TEMPLATE_CATEGORY_IDS = new Set(TEMPLATE_CATEGORIES.map((c) => c.id));
@@ -261,7 +262,7 @@ export function activityDraftFromTemplate(template = {}, { date } = {}) {
 
 /**
  * Starter templates — stable ids so seed is idempotent.
- * category: field = פעילויות שטח, wall = אירועים בקיר
+ * category: field = פעילויות שטח, wall = אירועים בקיר, ops = תפעול
  */
 export const STARTER_ACTIVITY_TEMPLATES = [
   {
@@ -371,6 +372,60 @@ export const STARTER_ACTIVITY_TEMPLATES = [
     theme: { accent: '#FBBF24' },
     start_time: '09:00',
     end_time: '12:00',
+  },
+  {
+    id: 'tpl_ops_cleaning',
+    category: 'ops',
+    sort_order: 10,
+    name: 'יום ניקיון',
+    type: 'other',
+    price: 0,
+    max_participants: null,
+    location: 'בקיר',
+    description: 'יום ניקיון ותחזוקה של הקיר והמתקנים.',
+    registration_enabled: false,
+    collect_registration_payment: false,
+    registration_page_title: '',
+    registration_page_body: '',
+    theme: { accent: '#7DD3FC' },
+    start_time: '09:00',
+    end_time: '13:00',
+  },
+  {
+    id: 'tpl_ops_team_meeting',
+    category: 'ops',
+    sort_order: 20,
+    name: 'ישיבת צוות',
+    type: 'other',
+    price: 0,
+    max_participants: null,
+    location: 'בקיר',
+    description: 'ישיבת צוות — עדכונים, תיאום ומשימות.',
+    registration_enabled: false,
+    collect_registration_payment: false,
+    registration_page_title: '',
+    registration_page_body: '',
+    theme: { accent: '#7DD3FC' },
+    start_time: '20:00',
+    end_time: '21:30',
+  },
+  {
+    id: 'tpl_ops_route_building',
+    category: 'ops',
+    sort_order: 30,
+    name: 'בניית מסלולים',
+    type: 'route_building',
+    price: 0,
+    max_participants: null,
+    location: 'בקיר',
+    description: 'החלפת אחיזות ובניית מסלולים חדשים.',
+    registration_enabled: false,
+    collect_registration_payment: false,
+    registration_page_title: '',
+    registration_page_body: '',
+    theme: { accent: '#A78BFA' },
+    start_time: '08:00',
+    end_time: '14:00',
   },
 ];
 

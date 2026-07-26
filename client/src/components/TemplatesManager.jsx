@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   RefreshCw, Plus, Send, Trash2, MousePointerClick, ExternalLink, Phone,
   ArrowUp, ArrowDown, Archive, ArchiveRestore, Pencil, X, Save,
-  Wrench, Megaphone, KeyRound,
+  Wrench, Megaphone, KeyRound, Search, FilterX, FileText,
 } from 'lucide-react';
 import { TEMPLATE_VAR_FIELDS, TEMPLATE_VAR_FIELD_MAP, normalizeTemplateVariables } from './templateVariables.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
@@ -29,6 +29,12 @@ const STATUS_META = {
   APPROVED: { label: 'מאושר', color: '#34D399' },
   REJECTED: { label: 'נדחה', color: '#F87171' },
 };
+
+const STATUS_SORT_RANK = { APPROVED: 4, PENDING: 3, DRAFT: 2, REJECTED: 1 };
+
+function statusRank(status) {
+  return STATUS_SORT_RANK[String(status || '').toUpperCase()] || 0;
+}
 
 function CategoryIcon({ category }) {
   const meta = CATEGORY_META[String(category || '').toUpperCase()] || CATEGORY_META.UTILITY;
@@ -123,7 +129,7 @@ function fillTemplateBody(body, varMeta = []) {
   });
 }
 
-function TemplatePreview({ draft, varMeta }) {
+export function TemplatePreview({ draft, varMeta }) {
   const { profile } = useBusinessProfile();
   const brandName = profile.display_name || 'הרפתקאות';
   const bodyFilled = fillTemplateBody(draft.body, varMeta);
@@ -262,23 +268,36 @@ function TemplatePreview({ draft, varMeta }) {
                   {buttons.map((btn, i) => {
                     const type = String(btn.type || 'QUICK_REPLY').toUpperCase();
                     const Icon = type === 'URL' ? ExternalLink : type === 'PHONE_NUMBER' ? Phone : null;
+                    const target = type === 'URL' ? btn.url : type === 'PHONE_NUMBER' ? btn.phone_number : '';
                     return (
                       <div
                         key={i}
                         style={{
                           borderTop: i === 0 ? 'none' : '1px solid rgba(255,255,255,0.08)',
-                          padding: '10px 12px',
+                          padding: '8px 12px',
                           display: 'flex',
+                          flexDirection: 'column',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          gap: 6,
-                          color: '#53bdeb',
-                          fontSize: 13,
-                          fontWeight: 500,
+                          gap: 3,
                         }}
                       >
-                        {Icon && <Icon size={13} />}
-                        <span>{String(btn.text || '').trim().slice(0, 25)}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#53bdeb', fontSize: 13, fontWeight: 500 }}>
+                          {Icon && <Icon size={13} />}
+                          <span>{String(btn.text || '').trim().slice(0, 25) || 'טקסט כפתור'}</span>
+                        </div>
+                        {String(target || '').trim() && (
+                          <div style={{
+                            fontSize: 10,
+                            color: '#8696a0',
+                            direction: 'ltr',
+                            wordBreak: 'break-all',
+                            textAlign: 'center',
+                            maxWidth: '100%',
+                          }}>
+                            {target}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -370,12 +389,46 @@ export default function TemplatesManager() {
   const [editVarMeta, setEditVarMeta] = useState([]);
   const [busyId, setBusyId] = useState(null);
   const bodyRef = useRef(null);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [categoryFilter, setCategoryFilter] = useState('ALL');
+  const [sortBy, setSortBy] = useState('custom');
 
   const mode = buttonMode(draft.buttons);
   const canAddButton = draft.buttons.length < maxButtonsForMode(mode === 'none' ? 'quick' : mode);
 
-  const activeTemplates = templates.filter((t) => !t.archived);
-  const archivedTemplates = templates.filter((t) => !!t.archived);
+  const filtersActive = !!search.trim() || statusFilter !== 'ALL' || categoryFilter !== 'ALL';
+
+  const matchesFilters = (t) => {
+    if (statusFilter !== 'ALL' && String(t.status).toUpperCase() !== statusFilter) return false;
+    if (categoryFilter !== 'ALL' && String(t.category || '').toUpperCase() !== categoryFilter) return false;
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      const hay = `${t.name || ''} ${t.meta_name || ''} ${t.body || ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  };
+
+  const sortTemplates = (list) => {
+    if (sortBy === 'name') return [...list].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'he'));
+    if (sortBy === 'status') return [...list].sort((a, b) => statusRank(b.status) - statusRank(a.status));
+    if (sortBy === 'category') return [...list].sort((a, b) => String(a.category || '').localeCompare(String(b.category || '')));
+    return list;
+  };
+
+  const resetFilters = () => {
+    setSearch('');
+    setStatusFilter('ALL');
+    setCategoryFilter('ALL');
+  };
+
+  const showMoveArrows = sortBy === 'custom' && !filtersActive;
+
+  const activeTemplates = sortTemplates(templates.filter((t) => !t.archived && matchesFilters(t)));
+  const archivedTemplates = sortTemplates(templates.filter((t) => !!t.archived && matchesFilters(t)));
+  const totalArchivedCount = templates.filter((t) => !!t.archived).length;
 
   const load = async ({ quiet = false } = {}) => {
     if (!quiet) setLoading(true);
@@ -506,6 +559,7 @@ export default function TemplatesManager() {
         { field: 'parent_first', label: 'שם פרטי (הורה)', example: 'דלק' },
       ]));
       setSuccess('טיוטה נשמרה');
+      setShowCreateForm(false);
       await load();
     } catch (err) {
       setError(err.message);
@@ -740,7 +794,8 @@ export default function TemplatesManager() {
           {isEditing && editForm && (
             <tr>
               <td colSpan={5} style={{ background: 'var(--bg-2)', padding: 14 }}>
-                <div style={{ display: 'grid', gap: 10, maxWidth: 720 }}>
+                <div className="template-builder-layout">
+                <div style={{ display: 'grid', gap: 10, minWidth: 0 }}>
                   <div style={{ fontSize: 12, fontWeight: 600 }}>
                     {editForm.locked
                       ? 'עריכה מוגבלת — שם לתצוגה ומיפוי משתנים בלבד (גוף ההודעה נעול אצל Meta)'
@@ -835,6 +890,9 @@ export default function TemplatesManager() {
                     <button type="button" className="btn btn-ghost btn-sm" onClick={cancelEdit}>ביטול</button>
                   </div>
                 </div>
+
+                <TemplatePreview draft={editForm} varMeta={editVarMeta} />
+                </div>
               </td>
             </tr>
           )}
@@ -845,16 +903,38 @@ export default function TemplatesManager() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <button type="button" className="btn btn-primary btn-sm" onClick={sync} disabled={loading}>
+      <div className="section-header">
+        <div>
+          <div className="section-title">תבניות הודעה</div>
+          <div className="section-sub">{templates.length} תבניות סה"כ</div>
+        </div>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={sync} disabled={loading}>
           <RefreshCw size={13} /> סנכרון מ-Meta
         </button>
-        {loading && <span style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען...</span>}
       </div>
 
+      <div style={{ display: 'flex', gap: 8, borderBottom: '1px solid var(--border)', paddingBottom: 10, flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          className={`btn btn-sm ${!showCreateForm ? 'btn-primary' : 'btn-ghost'}`}
+          onClick={() => setShowCreateForm(false)}
+        >
+          <FileText size={14} /> תבניות קיימות
+        </button>
+        <button
+          type="button"
+          className={`btn btn-sm ${showCreateForm ? 'btn-primary' : 'btn-ghost'}`}
+          onClick={() => setShowCreateForm(true)}
+        >
+          <Plus size={14} /> יצירת תבנית חדשה
+        </button>
+      </div>
+
+      {loading && <span style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען...</span>}
       {error && <div style={{ color: '#F87171', fontSize: 13 }}>{error}</div>}
       {success && <div style={{ color: '#4ade80', fontSize: 13 }}>{success}</div>}
 
+      {showCreateForm ? (
       <div className="card card-p">
         <div className="section-title" style={{ marginBottom: 12 }}>יצירת תבנית חדשה</div>
         <div className="template-builder-layout">
@@ -1023,21 +1103,53 @@ export default function TemplatesManager() {
           <TemplatePreview draft={draft} varMeta={varMeta} />
         </div>
       </div>
-
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', fontSize: 12, color: 'var(--text-3)' }}>
-        <span style={{ fontWeight: 600, color: 'var(--text-2)' }}>מקרא קטגוריה:</span>
-        {CATEGORIES.map((c) => (
-          <span key={c.value} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <CategoryIcon category={c.value} /> {c.label}
-          </span>
-        ))}
+      ) : (
+      <>
+      <div className="card card-p" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div className="input-icon-wrap">
+          <Search className="input-icon" size={16} />
+          <input
+            className="input input-sm"
+            placeholder="חיפוש לפי שם או טקסט..."
+            style={{ width: 220, paddingRight: 34 }}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <select className="input input-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+          <option value="ALL">כל הסטטוסים</option>
+          {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        </select>
+        <select className="input input-sm" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+          <option value="ALL">כל הקטגוריות</option>
+          {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+        </select>
+        <select className="input input-sm" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+          <option value="custom">מיון: סדר ידני</option>
+          <option value="name">מיון: שם</option>
+          <option value="status">מיון: סטטוס</option>
+          <option value="category">מיון: קטגוריה</option>
+        </select>
+        {filtersActive && (
+          <button type="button" className="btn btn-xs btn-ghost" onClick={resetFilters}>
+            <FilterX size={12} /> נקה סינון
+          </button>
+        )}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', fontSize: 12, color: 'var(--text-3)', marginRight: 'auto' }}>
+          <span style={{ fontWeight: 600, color: 'var(--text-2)' }}>מקרא קטגוריה:</span>
+          {CATEGORIES.map((c) => (
+            <span key={c.value} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <CategoryIcon category={c.value} /> {c.label}
+            </span>
+          ))}
+        </div>
       </div>
 
       <div className="card card-p" style={{ padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>
           תבניות פעילות
           <span style={{ fontWeight: 400, color: 'var(--text-3)', marginRight: 8 }}>
-            ({activeTemplates.length}) — סדר הרשימה כאן הוא הסדר בשליחה
+            ({activeTemplates.length}) — {showMoveArrows ? 'סדר הרשימה כאן הוא הסדר בשליחה' : 'לפי מיון/סינון נוכחי — נקו סינון כדי לשנות סדר ידני'}
           </span>
         </div>
         <table className="table" style={{ width: '100%', fontSize: 13 }}>
@@ -1052,13 +1164,17 @@ export default function TemplatesManager() {
           </thead>
           <tbody>
             {activeTemplates.length === 0 && !loading ? (
-              <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 16 }}>אין תבניות עדיין — סנכרנו מ-Meta או צרו טיוטה</td></tr>
-            ) : renderTemplateRows(activeTemplates)}
+              <tr>
+                <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 16 }}>
+                  {templates.length === 0 ? 'אין תבניות עדיין — סנכרנו מ-Meta או צרו תבנית חדשה' : 'אין תבניות התואמות את הסינון'}
+                </td>
+              </tr>
+            ) : renderTemplateRows(activeTemplates, { showMove: showMoveArrows })}
           </tbody>
         </table>
       </div>
 
-      {archivedTemplates.length > 0 && (
+      {totalArchivedCount > 0 && (
         <div className="card card-p" style={{ padding: 0, overflow: 'hidden', opacity: 0.92 }}>
           <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>
             ארכיון
@@ -1077,10 +1193,14 @@ export default function TemplatesManager() {
               </tr>
             </thead>
             <tbody>
-              {renderTemplateRows(archivedTemplates, { showMove: true })}
+              {archivedTemplates.length === 0 ? (
+                <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 16 }}>אין תבניות בארכיון התואמות את הסינון</td></tr>
+              ) : renderTemplateRows(archivedTemplates, { showMove: showMoveArrows })}
             </tbody>
           </table>
         </div>
+      )}
+      </>
       )}
     </div>
   );

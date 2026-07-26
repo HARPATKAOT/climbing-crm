@@ -107,11 +107,12 @@ test('publicRegistrationPayload parses theme JSON string', () => {
   assert.equal(payload.cover_position, '50% 20%');
 });
 
-test('starter templates cover both categories', () => {
+test('starter templates cover all categories', () => {
   const cats = new Set(STARTER_ACTIVITY_TEMPLATES.map((t) => t.category));
   assert.ok(cats.has('field'));
   assert.ok(cats.has('wall'));
-  assert.ok(STARTER_ACTIVITY_TEMPLATES.length >= 6);
+  assert.ok(cats.has('ops'));
+  assert.ok(STARTER_ACTIVITY_TEMPLATES.length >= 9);
 });
 
 test('ensureSeedActivityTemplates is idempotent', () => {
@@ -131,7 +132,8 @@ test('ensureSeedActivityTemplates is idempotent', () => {
   assert.equal(second.inserted, 0);
   assert.equal(store.activity_templates.length, STARTER_ACTIVITY_TEMPLATES.length);
   const grouped = groupTemplatesByCategory(store.activity_templates);
-  assert.equal(grouped.length, 2);
+  assert.equal(grouped.length, 3);
   assert.ok(grouped.find((g) => g.id === 'field').templates.length >= 3);
   assert.ok(grouped.find((g) => g.id === 'wall').templates.length >= 3);
+  assert.ok(grouped.find((g) => g.id === 'ops').templates.length >= 3);
 });

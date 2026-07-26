@@ -26,6 +26,7 @@ import {
   publicRegistrationPayload,
   templateFieldsFromActivity,
   normalizeTemplatePayload as normalizeActivityTemplatePayload,
+  normalizeTemplateCategory,
   openUnpaidActivities,
   listActivityTemplates,
   groupTemplatesByCategory,
@@ -92,6 +93,8 @@ import {
 import {
   EVENT_HOST_PAYMENT_TEMPLATE,
   EVENT_PARTICIPANT_LINK_TEMPLATE,
+  EVENT_HOST_PAYMENT_TEMPLATE_FALLBACK,
+  EVENT_PARTICIPANT_LINK_TEMPLATE_FALLBACK,
   ensureEventWhatsappTemplates,
   findApprovedEventTemplate,
 } from './eventWhatsappTemplates.js';
@@ -105,6 +108,7 @@ import {
   saveBusinessProfile,
   safeBusinessProfile,
 } from './businessProfile.js';
+import { calculateDashboardStats } from './dashboardStats.js';
 import { applyBusinessBrand, resetPlaygroundConversation } from './whatsappBot.js';
 import { countEnrolled } from './groupCapacity.js';
 import {
@@ -265,6 +269,37 @@ app.use('/api', apiAuth);
 
 app.get('/api/auth/me', (req, res) => {
   res.json(req.crmUser);
+});
+
+app.get('/api/dashboard/stats', requireOwner, async (_req, res) => {
+  try {
+    const cached = {
+      sales: db.get('pos_sales') || [],
+      parents: db.get('parents') || [],
+      students: db.get('students') || [],
+      history: db.get('lead_status_history') || [],
+    };
+    const [sales, parents, students, history] = await Promise.all([
+      supa.getAll('pos_sales'),
+      supa.getAll('parents'),
+      supa.getAll('students'),
+      supa.getAll('lead_status_history'),
+    ]);
+    res.json(calculateDashboardStats({
+      sales: sales ?? cached.sales,
+      parents: parents ?? cached.parents,
+      students: students ?? cached.students,
+      history: history ?? cached.history,
+    }));
+  } catch (error) {
+    console.error('GET /api/dashboard/stats failed:', error.message);
+    res.json(calculateDashboardStats({
+      sales: db.get('pos_sales') || [],
+      parents: db.get('parents') || [],
+      students: db.get('students') || [],
+      history: db.get('lead_status_history') || [],
+    }));
+  }
 });
 
 app.get('/api/public/business-profile', async (_req, res) => {
@@ -500,7 +535,17 @@ app.post('/api/public/leads', publicFormRateLimit, async (req, res) => {
 // Update parent details (name, phone, email, city, source, notes)
 app.put('/api/parents/:id', (req, res) => {
   const { id } = req.params;
-  const allowed = ['name', 'phone', 'email', 'city', 'source', 'notes', 'icount_client_id', 'status'];
+  const allowed = [
+    'name',
+    'phone',
+    'email',
+    'city',
+    'source',
+    'notes',
+    'icount_client_id',
+    'status',
+    'nextFollowup',
+  ];
   const updates = {};
   for (const key of allowed) {
     if (req.body[key] !== undefined) updates[key] = req.body[key];
@@ -518,7 +563,12 @@ app.put('/api/parents/:id', (req, res) => {
         updates.name || existing.name,
         updates.phone,
         updates.email || existing.email,
-        { city: updates.city, source: updates.source, status: updates.status }
+        {
+          city: updates.city,
+          source: updates.source,
+          status: updates.status,
+          nextFollowup: updates.nextFollowup,
+        }
       );
       return res.json(merged);
     }
@@ -2270,23 +2320,26 @@ function normalizeActivityPayload(body = {}) {
   const registrationMode = body.registration_mode === 'host_pays'
     ? 'host_pays'
     : 'paid_per_participant';
+  const category = normalizeTemplateCategory(body.category);
+  const isOps = category === 'ops';
   return {
     name: String(body.name || '').trim(),
     type,
+    category,
     status: body.status || 'open',
     date,
     end_date: normalizeActivityEndDate(date, body.end_date),
     start_time: body.all_day ? null : (body.start_time || null),
     end_time: body.all_day ? null : (body.end_time || null),
     location: body.location || '',
-    price: body.price === '' || body.price === undefined ? 0 : Number(body.price) || 0,
-    price_includes_vat: normalizePriceIncludesVat(body.price_includes_vat),
-    max_participants: body.max_participants === '' || body.max_participants == null
+    price: isOps ? 0 : (body.price === '' || body.price === undefined ? 0 : Number(body.price) || 0),
+    price_includes_vat: isOps ? false : normalizePriceIncludesVat(body.price_includes_vat),
+    max_participants: isOps ? null : (body.max_participants === '' || body.max_participants == null
       ? null
-      : Number(body.max_participants) || null,
+      : Number(body.max_participants) || null),
     responsible_id: body.responsible_id || null,
     description: body.description || '',
-    payment_link: body.payment_link || '',
+    payment_link: isOps ? '' : (body.payment_link || ''),
     notes: body.notes || '',
     all_day: !!body.all_day,
     contact_name: hostName || body.contact_name || '',
@@ -2296,13 +2349,13 @@ function normalizeActivityPayload(body = {}) {
     host_phone: hostPhone,
     host_parent_id: hostParentId || null,
     payment_status: normalizeHostPaymentStatus(body.payment_status),
-    registration_slug: body.registration_slug || null,
+    registration_slug: isOps ? null : (body.registration_slug || null),
     participant_registration_slug:
-      body.participant_registration_slug || body.registration_slug || null,
-    registration_enabled: !!body.registration_enabled,
+      isOps ? null : (body.participant_registration_slug || body.registration_slug || null),
+    registration_enabled: isOps ? false : !!body.registration_enabled,
     registration_closes_at: body.registration_closes_at || null,
     collect_registration_payment:
-      registrationMode === 'paid_per_participant' && Number(body.price || 0) > 0,
+      !isOps && registrationMode === 'paid_per_participant' && Number(body.price || 0) > 0,
     registration_mode: registrationMode,
     host_payment_token: body.host_payment_token || null,
     host_payment_id: body.host_payment_id || null,
@@ -3218,10 +3271,16 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
     let whatsappViaTemplate = false;
     if (req.body?.via !== 'email') {
       const inWindow = canSendFreeform(parent, 'whatsapp');
-      const metaName = sendHostPayment
+      const preferredMetaName = sendHostPayment
         ? EVENT_HOST_PAYMENT_TEMPLATE
         : EVENT_PARTICIPANT_LINK_TEMPLATE;
-      const localTpl = findApprovedEventTemplate(db, metaName);
+      const fallbackMetaName = sendHostPayment
+        ? EVENT_HOST_PAYMENT_TEMPLATE_FALLBACK
+        : EVENT_PARTICIPANT_LINK_TEMPLATE_FALLBACK;
+      const localTpl =
+        findApprovedEventTemplate(db, preferredMetaName) ||
+        findApprovedEventTemplate(db, fallbackMetaName);
+      const metaName = localTpl?.meta_name || preferredMetaName;
       const freeformMsg = sendHostPayment
         ? (
           `שלום${hostName ? ` ${hostName}` : ''}!\n` +

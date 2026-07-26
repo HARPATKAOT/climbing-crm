@@ -681,21 +681,12 @@ export default function ActivityRegistrationPanel({
         </div>
 
         {hasLinkedCustomer ? (
-          <div style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            justifyContent: 'space-between',
-            gap: 10,
-            padding: '10px 12px',
-            borderRadius: 10,
-            border: '1px solid var(--border)',
-            background: 'rgba(0,0,0,0.18)',
-          }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-1)' }}>
+          <div className="activity-registration-customer">
+            <div className="activity-registration-customer-details">
+              <div className="activity-registration-customer-name">
                 {displayName || 'לקוח נבחר'}
               </div>
-              <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+              <div className="activity-registration-customer-contact">
                 {[displayPhone, displayEmail].filter(Boolean).join(' · ') || 'אין טלפון או אימייל'}
               </div>
               {selectedParent == null && customersLoaded && (
@@ -819,8 +810,8 @@ export default function ActivityRegistrationPanel({
         תשלום והרשמה
       </div>
 
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-3)' }}>
-        סטטוס תשלום המזמין (דמי הזמנה לקיר)
+      <label className="activity-registration-field">
+        <span className="activity-registration-field-label">סטטוס תשלום המזמין</span>
         <select
           className="input"
           value={form.payment_status || 'unpaid'}
@@ -869,8 +860,8 @@ export default function ActivityRegistrationPanel({
         </label>
       )}
 
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-3)' }}>
-        אופן ההרשמה והתשלום
+      <label className="activity-registration-field">
+        <span className="activity-registration-field-label">אופן ההרשמה והתשלום</span>
         <select
           className="input"
           value={form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')}
@@ -883,15 +874,15 @@ export default function ActivityRegistrationPanel({
           <option value="paid_per_participant">הרשמה בתשלום לכל משתתף</option>
           <option value="host_pays">המזמין משלם על כל האירוע</option>
         </select>
-        <span>
+        <span className="activity-registration-field-hint">
           {(form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')) === 'host_pays'
             ? 'המזמין מקבל קישור תשלום פרטי. המשתתפים נרשמים בחינם עם הצהרה וחתימה.'
             : 'כל הורה, ילד או מבוגר נספר במכסה ומחויב במחיר הפעילות.'}
         </span>
       </label>
 
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-3)' }}>
-        האם המחיר כולל מע״מ
+      <label className="activity-registration-field">
+        <span className="activity-registration-field-label">חישוב מע״מ</span>
         <select
           className="input"
           value={normalizePriceIncludesVat(form.price_includes_vat) ? 'incl' : 'excl'}

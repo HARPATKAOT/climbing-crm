@@ -20,6 +20,17 @@ export const ACTIVITY_TYPES = [
   { id: 'other', label: 'אחר', color: '#94A3B8', bg: 'rgba(148,163,184,0.16)' },
 ];
 
+/** קטגוריות תבניות אירוע — חייב להתאים לרשימה בצד השרת */
+const TEMPLATE_CATEGORIES = [
+  { id: 'wall', label: 'אירועים בקיר', color: '#FB923C', bg: 'rgba(251,146,60,0.18)' },
+  { id: 'field', label: 'פעילויות שטח', color: '#34D399', bg: 'rgba(52,211,153,0.18)' },
+  { id: 'ops', label: 'תפעול', color: '#7DD3FC', bg: 'rgba(125,211,252,0.18)' },
+];
+
+const normalizeTemplateCategory = (value) => (
+  TEMPLATE_CATEGORIES.some((c) => c.id === value) ? value : 'wall'
+);
+
 /** סוגים שמוצגים יחד בתגית הסינון „פעילויות” */
 const ACTIVITIES_GROUP_TYPES = ['birthday', 'school', 'company'];
 
@@ -648,22 +659,30 @@ function RegularActivityModal({
     || (!form.registration_mode && form.collect_registration_payment);
   const includesVat = normalizePriceIncludesVat(form.price_includes_vat);
   const priceVat = vatBreakdown(form.price, includesVat);
+  const isOps = normalizeTemplateCategory(form.category) === 'ops';
 
   return (
     <div className="activity-modal-backdrop" onClick={onClose}>
       <form
-        className="activity-modal activity-modal--wide"
+        className={`activity-modal activity-modal--wide${isOps ? ' activity-modal--ops' : ''}`}
         onClick={(event) => event.stopPropagation()}
         onSubmit={submit}
       >
         <header className="activity-modal-header">
-          <div>
-            <div className="activity-modal-title">{title}</div>
-            <div className="activity-modal-subtitle">
-              {isTemplateEdit
-                ? 'עריכת התבנית — השינויים יישמרו ברשימת התבניות'
-                : 'עריכת העמוד הציבורי והגדרות האירוע במקום אחד'}
+          <div className="activity-modal-heading">
+            <div className="activity-modal-title-row">
+              <div className="activity-modal-title">{title}</div>
+              {isEdit && !isTemplateEdit && !isOps && (
+                <PaymentStatusBadge status={form.payment_status} />
+              )}
             </div>
+            {(isOps || isTemplateEdit) && (
+              <div className="activity-modal-subtitle">
+                {isOps
+                  ? 'פעילות תפעולית פנימית — בלי מחיר ובלי דף הרשמה'
+                  : 'עריכת התבנית — השינויים יישמרו ברשימת התבניות'}
+              </div>
+            )}
           </div>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="סגור">
             <X size={16} />
@@ -671,15 +690,18 @@ function RegularActivityModal({
         </header>
 
         <div className="activity-modal-grid">
-          <div className="activity-modal-preview-pane">
-            <ActivityPageDesigner
-              form={form}
-              setForm={setForm}
-              readOnly={readOnly}
-            />
-          </div>
+          {!isOps && (
+            <div className="activity-modal-preview-pane">
+              <ActivityPageDesigner
+                form={form}
+                setForm={setForm}
+                readOnly={readOnly}
+              />
+            </div>
+          )}
 
           <div className="activity-modal-operations">
+            {(isTemplateEdit || !isOps) && (
             <section className="activity-settings-card">
               <div className="activity-settings-card-title">
                 {isTemplateEdit ? 'הגדרות התבנית' : 'הגדרות האירוע'}
@@ -688,10 +710,7 @@ function RegularActivityModal({
                 <div>
                   <div className="activity-settings-label">קטגוריה</div>
                   <div className="activity-type-options">
-                    {[
-                      { id: 'wall', label: 'אירועים בקיר', color: '#FB923C', bg: 'rgba(251,146,60,0.18)' },
-                      { id: 'field', label: 'פעילויות שטח', color: '#34D399', bg: 'rgba(52,211,153,0.18)' },
-                    ].map((cat) => {
+                    {TEMPLATE_CATEGORIES.map((cat) => {
                       const active = (form.category || 'wall') === cat.id;
                       return (
                         <button
@@ -712,37 +731,39 @@ function RegularActivityModal({
                   </div>
                 </div>
               )}
-              <div>
-                <div className="activity-settings-label">סוג האירוע</div>
-                <div className="activity-type-options">
-                  {ACTIVITY_TYPES.map((type) => {
-                    const active = form.type === type.id;
-                    return (
-                      <button
-                        key={type.id}
-                        type="button"
-                        disabled={readOnly}
-                        onClick={() => {
-                          if (type.id === 'training_vacation') {
-                            setForm((prev) => ({ ...prev, type: type.id, all_day: true }));
-                          } else {
-                            set('type', type.id);
-                          }
-                        }}
-                        className={active ? 'is-active' : ''}
-                        style={{
-                          '--activity-type-color': type.color,
-                          '--activity-type-background': type.bg,
-                        }}
-                      >
-                        {type.label}
-                      </button>
-                    );
-                  })}
+              {!isOps && (
+                <div>
+                  <div className="activity-settings-label">סוג האירוע</div>
+                  <div className="activity-type-options">
+                    {ACTIVITY_TYPES.map((type) => {
+                      const active = form.type === type.id;
+                      return (
+                        <button
+                          key={type.id}
+                          type="button"
+                          disabled={readOnly}
+                          onClick={() => {
+                            if (type.id === 'training_vacation') {
+                              setForm((prev) => ({ ...prev, type: type.id, all_day: true }));
+                            } else {
+                              set('type', type.id);
+                            }
+                          }}
+                          className={active ? 'is-active' : ''}
+                          style={{
+                            '--activity-type-color': type.color,
+                            '--activity-type-background': type.bg,
+                          }}
+                        >
+                          {type.label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
+              )}
               <div className="activity-settings-grid">
-                {!isTemplateEdit && (
+                {!isTemplateEdit && !isOps && (
                   <label>
                     <span className="activity-settings-label">מצב האירוע</span>
                     <select
@@ -757,23 +778,28 @@ function RegularActivityModal({
                     </select>
                   </label>
                 )}
-                <label>
-                  <span className="activity-settings-label">מצב תצוגה</span>
-                  <div className="activity-settings-toggle">
-                    <input
-                      type="checkbox"
-                      checked={!!form.registration_enabled}
-                      onChange={(event) => set('registration_enabled', event.target.checked)}
-                      disabled={readOnly}
-                    />
-                    דף הרשמה ציבורי
-                  </div>
-                </label>
+                {!isOps && (
+                  <label>
+                    <span className="activity-settings-label">מצב תצוגה</span>
+                    <div className="activity-settings-toggle">
+                      <input
+                        type="checkbox"
+                        checked={!!form.registration_enabled}
+                        onChange={(event) => set('registration_enabled', event.target.checked)}
+                        disabled={readOnly}
+                      />
+                      דף הרשמה ציבורי
+                    </div>
+                  </label>
+                )}
               </div>
             </section>
+            )}
 
             <section className="activity-settings-card">
-              <div className="activity-settings-card-title">מועד, מקום ומחיר</div>
+              <div className="activity-settings-card-title">
+                {isOps ? 'מועד ומקום' : 'מועד, מקום ומחיר'}
+              </div>
 
               {!isTemplateEdit && (
                 <div className="activity-settings-grid">
@@ -868,62 +894,70 @@ function RegularActivityModal({
                 />
               </label>
 
-              <div className="activity-settings-grid">
-                <label>
-                  <span className="activity-settings-label">
-                    {includesVat ? 'מחיר כולל מע״מ' : 'מחיר לפני מע״מ'}
-                    {paidPerParticipant ? ' · למשתתף' : ' · לאירוע'}
-                  </span>
-                  <input
-                    className="input"
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={form.price ?? ''}
-                    onChange={(event) => set('price', event.target.value)}
-                    disabled={readOnly}
-                  />
-                </label>
-                <label>
-                  <span className="activity-settings-label">מכסת משתתפים</span>
-                  <input
-                    className="input"
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={form.max_participants ?? ''}
-                    onChange={(event) => set('max_participants', event.target.value)}
-                    disabled={readOnly}
-                  />
-                </label>
-              </div>
+              {!isOps && (
+                <>
+                  <div className="activity-settings-grid">
+                    <label>
+                      <span className="activity-settings-label">
+                        {includesVat ? 'מחיר כולל מע״מ' : 'מחיר לפני מע״מ'}
+                        {paidPerParticipant ? ' · למשתתף' : ' · לאירוע'}
+                      </span>
+                      <input
+                        className="input"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={form.price ?? ''}
+                        onChange={(event) => set('price', event.target.value)}
+                        disabled={readOnly}
+                      />
+                    </label>
+                    <label>
+                      <span className="activity-settings-label">מכסת משתתפים</span>
+                      <input
+                        className="input"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={form.max_participants ?? ''}
+                        onChange={(event) => set('max_participants', event.target.value)}
+                        disabled={readOnly}
+                      />
+                    </label>
+                  </div>
 
-              {priceVat.entered > 0 && (
-                <div className="activity-settings-hint">
-                  {includesVat
-                    ? `לפני מע״מ: ${formatIls(priceVat.net)} · לתשלום: ${formatIls(priceVat.gross)}`
-                    : `כולל מע״מ: ${formatIls(priceVat.gross)} · לתשלום: ${formatIls(priceVat.gross)}`}
-                </div>
+                  {priceVat.entered > 0 && (
+                    <div className="activity-settings-hint">
+                      {includesVat
+                        ? `לפני מע״מ: ${formatIls(priceVat.net)} · לתשלום: ${formatIls(priceVat.gross)}`
+                        : `כולל מע״מ: ${formatIls(priceVat.gross)} · לתשלום: ${formatIls(priceVat.gross)}`}
+                    </div>
+                  )}
+                </>
               )}
             </section>
 
-            <ActivityRegistrationPanel
-              activityId={activityId}
-              form={form}
-              setForm={setForm}
-              readOnly={readOnly}
-              hideRegistrationToggle
-              templateMode={isTemplateEdit}
-            />
+            {!isOps && (
+              <ActivityRegistrationPanel
+                activityId={activityId}
+                form={form}
+                setForm={setForm}
+                readOnly={readOnly}
+                hideRegistrationToggle
+                templateMode={isTemplateEdit}
+              />
+            )}
 
             <section className="activity-settings-card">
-              <div className="activity-settings-card-title">הערות פנימיות</div>
+              <div className="activity-settings-card-title">
+                {isOps ? 'מה עושים בפעילות' : 'הערות פנימיות'}
+              </div>
               <textarea
                 className="input"
                 rows={3}
                 value={form.notes || ''}
                 onChange={(event) => set('notes', event.target.value)}
-                placeholder="הערות לצוות בלבד..."
+                placeholder={isOps ? 'תיאור המשימות ליום הזה...' : 'הערות לצוות בלבד...'}
                 disabled={readOnly}
               />
             </section>
@@ -1026,7 +1060,7 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
         ? initial.registration_theme
         : (initial?.theme && typeof initial.theme === 'object' ? initial.theme : {})
     ),
-    category: initial?.category === 'field' ? 'field' : 'wall',
+    category: normalizeTemplateCategory(initial?.category),
   }));
   const [localError, setLocalError] = useState('');
   const isEdit = !!initial?.id && !isTemplateEdit;
@@ -1063,7 +1097,7 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
         _template_id: initial._template_id,
         name: String(form.name).trim(),
         type: form.type || 'birthday',
-        category: form.category === 'field' ? 'field' : 'wall',
+        category: normalizeTemplateCategory(form.category),
         location: form.location || '',
         price: form.price === '' ? 0 : Number(form.price),
         price_includes_vat: !!form.price_includes_vat,
@@ -1460,6 +1494,28 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
         </div>
       </form>
     </div>
+  );
+}
+
+function PaymentStatusBadge({ status }) {
+  const normalized =
+    status === 'paid' || status === 'partial' || status === 'refunded'
+      ? status
+      : 'unpaid';
+  const config = normalized === 'paid'
+    ? { Icon: CheckCircle, label: 'שולם' }
+    : normalized === 'partial'
+      ? { Icon: Clock3, label: 'שולם חלקית' }
+      : normalized === 'refunded'
+        ? { Icon: Undo2, label: 'זוכה' }
+        : { Icon: AlertCircle, label: 'לא שולם' };
+  const { Icon, label } = config;
+
+  return (
+    <span className={`activity-payment-badge activity-payment-badge--${normalized}`}>
+      <Icon size={15} strokeWidth={2.6} aria-hidden="true" />
+      תשלום: {label}
+    </span>
   );
 }
 
@@ -2633,6 +2689,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
         ? base.end_time
         : (tpl.end_time ? String(tpl.end_time).slice(0, 5) : '12:00'),
       all_day: keepSlotTime ? false : !!tpl.all_day,
+      category: normalizeTemplateCategory(tpl.category),
       location: tpl.location || '',
       price: tpl.price ?? '',
       max_participants: tpl.max_participants ?? '',
@@ -2659,7 +2716,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
       ...emptyForm(toDateStr(new Date())),
       name: tpl.name || '',
       type: tpl.type || 'birthday',
-      category: tpl.category === 'field' ? 'field' : 'wall',
+      category: normalizeTemplateCategory(tpl.category),
       start_time: tpl.start_time ? String(tpl.start_time).slice(0, 5) : '10:00',
       end_time: tpl.end_time ? String(tpl.end_time).slice(0, 5) : '12:00',
       all_day: !!tpl.all_day,

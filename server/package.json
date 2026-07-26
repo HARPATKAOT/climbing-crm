@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon --ignore db.json --ignore db.json.tmp --ignore db.json.bak index.js",
-    "test": "node --test auth.test.js db.test.js whatsappConnect.test.js whatsappBotSchedule.test.js whatsappBot.test.js groupCapacity.test.js activityRegistration.test.js activityRegistrationOrder.test.js googleCalendar.multiday.test.js channels/conversations.test.js channels/messageStore.test.js channels/templates.test.js icountPublicBase.test.js",
+    "test": "node --test auth.test.js db.test.js supa.test.js dashboardStats.test.js posUtils.test.js whatsappConnect.test.js whatsappBotSchedule.test.js whatsappBot.test.js groupCapacity.test.js activityRegistration.test.js activityRegistrationOrder.test.js googleCalendar.multiday.test.js channels/conversations.test.js channels/messageStore.test.js channels/templates.test.js icountPublicBase.test.js",
     "verify:conversations": "node scripts/verifyConversationStore.js",
     "migrate:messages": "node scripts/migrateLogsToMessages.js"
   },

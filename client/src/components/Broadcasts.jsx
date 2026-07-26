@@ -3,7 +3,7 @@ import { Send, Hash, History, Settings, Smartphone, CheckCircle, RefreshCw, Spar
 import { Modal } from './UI.jsx';
 import SegmentBuilder from './SegmentBuilder.jsx';
 import { EMPTY_FILTERS } from './segmentFilters.js';
-import TemplatesManager from './TemplatesManager.jsx';
+import TemplatesManager, { TemplatePreview } from './TemplatesManager.jsx';
 import SavedRepliesManager from './SavedRepliesManager.jsx';
 import BotSettingsPanel from './BotSettingsPanel.jsx';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
@@ -82,7 +82,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
   const [workbenchMessages, setWorkbenchMessages] = useState([]);
   const [testingAi, setTestingAi] = useState(false);
   const [resettingPlayground, setResettingPlayground] = useState(false);
-  const workbenchEndRef = useRef(null);
+  const workbenchMessagesRef = useRef(null);
 
   const coexistenceLabel = () => {
     if (waStatus.coexistenceEnabled || waStatus.isOnBizApp) return 'פעיל (טלפון + מערכת)';
@@ -391,6 +391,16 @@ export default function Broadcasts({ parents, students, groups = [] }) {
 
   const messageText = selectedTemplate ? (selectedTemplate.text || selectedTemplate.body || `[תבנית: ${selectedTemplate.id}]`) : customMessage;
 
+  const previewDraft = selectedTemplate
+    ? {
+      header: selectedTemplate.header || '',
+      body: messageText,
+      footer: selectedTemplate.footer || '',
+      buttons: Array.isArray(selectedTemplate.buttons) ? selectedTemplate.buttons : [],
+    }
+    : { header: '', body: customMessage, footer: '', buttons: [] };
+  const previewVarMeta = Array.isArray(selectedTemplate?.variables) ? selectedTemplate.variables : [];
+
   const handleSaveSettings = async (e) => {
     e.preventDefault();
     setSavingSettings(true);
@@ -577,8 +587,12 @@ export default function Broadcasts({ parents, students, groups = [] }) {
   };
 
   useEffect(() => {
-    if (workbenchEndRef.current) {
-      workbenchEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    const messagesElement = workbenchMessagesRef.current;
+    if (messagesElement) {
+      messagesElement.scrollTo({
+        top: messagesElement.scrollHeight,
+        behavior: 'smooth',
+      });
     }
   }, [workbenchMessages, testingAi]);
 
@@ -752,14 +766,8 @@ export default function Broadcasts({ parents, students, groups = [] }) {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
-              <div className="card card-p" style={{ background: 'rgba(16,185,129,0.03)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-                  <span style={{ color: 'var(--green)' }}>📝</span>
-                  <div className="section-title">תצוגה מקדימה</div>
-                </div>
-                <div style={{ background: 'rgba(16,185,129,0.06)', padding: 16, borderRadius: 8, fontSize: 13, minHeight: 80 }}>
-                  {messageText || 'בחר תבנית או כתוב הודעה...'}
-                </div>
+              <div className="card card-p">
+                <TemplatePreview draft={previewDraft} varMeta={previewVarMeta} />
               </div>
 
               <button className="btn btn-primary btn-full" style={{ paddingBlock: 14 }} onClick={handleSendBroadcast}
@@ -1167,7 +1175,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
               שיחת ניסוי עם היסטוריה — אפשר להמשיך לענות לבוט. לא נשלח ללקוחות אמיתיים.
             </div>
 
-            <div style={{
+            <div ref={workbenchMessagesRef} style={{
               height: 320,
               overflowY: 'auto',
               display: 'flex',
@@ -1220,7 +1228,6 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                   הבוט מקליד...
                 </div>
               )}
-              <div ref={workbenchEndRef} />
             </div>
 
             <div style={{ display: 'flex', gap: 8, alignItems: 'stretch' }}>

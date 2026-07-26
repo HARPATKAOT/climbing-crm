@@ -31,6 +31,8 @@ test('ensureEventWhatsappTemplates creates both drafts once', () => {
   assert.equal(first.hostPayment.status, 'DRAFT');
   assert.match(first.hostPayment.name, /אירוע/);
   assert.match(first.participantLink.name, /אירוע/);
+  assert.equal(first.hostPayment.footer, '');
+  assert.equal(first.participantLink.footer, '');
   assert.ok(first.hostPayment.buttons[0].url.startsWith('https://example.com/event-host/'));
   assert.ok(first.participantLink.buttons[0].url.startsWith('https://example.com/event/'));
 
@@ -42,7 +44,7 @@ test('ensureEventWhatsappTemplates creates both drafts once', () => {
 
 test('isEventWhatsappTemplate and findApprovedEventTemplate', () => {
   const draft = {
-    id: 'tpl-event-host-payment-v2',
+    id: 'tpl-event-host-payment-v3',
     meta_name: EVENT_HOST_PAYMENT_TEMPLATE,
     status: 'DRAFT',
     active_for_send: false,

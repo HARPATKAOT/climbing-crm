@@ -9,6 +9,11 @@ import {
   downloadHealthDeclarationPdf,
 } from '../utils/healthDeclarationPdf.js';
 import { healthExpiryDate } from '../utils/healthValidity.js';
+import {
+  buildLeadEntries,
+  isParentOnlyLead,
+  normalizePhone,
+} from '../utils/leadUtils.js';
 import ConversationPanel from './ConversationPanel.jsx';
 import AttendanceCalendar from './AttendanceCalendar.jsx';
 import { isAwaitingHandling, latestInboundTime } from './communicationQueue.js';
@@ -31,12 +36,7 @@ const EQUIPMENT_ICONS = {
 };
 
 // Normalize phone for comparison (supports 05X ↔ 9725X)
-const normPhone = (p) => {
-  if (!p) return '';
-  let d = String(p).replace(/[^\d]/g, '');
-  if (d.startsWith('0') && d.length >= 9) d = `972${d.slice(1)}`;
-  return d;
-};
+const normPhone = normalizePhone;
 
 const phoneTailMatch = (a, b) => {
   const na = normPhone(a);
@@ -44,10 +44,6 @@ const phoneTailMatch = (a, b) => {
   if (!na || !nb) return false;
   return na === nb || na.slice(-9) === nb.slice(-9);
 };
-
-function isParentOnlyLead(student) {
-  return !!student?._parentOnly || String(student?.id || '').startsWith('parent:');
-}
 
 function calculateAge(birthDateStr) {
   if (!birthDateStr) return null;
@@ -99,40 +95,6 @@ function buildShareHealthLink(studentId, phone, healthPath = '/health') {
   }
   const qs = params.toString();
   return `${publicShareOrigin()}${healthPath}${qs ? `?${qs}` : ''}`;
-}
-
-/** Students + parent-only contacts (no child record required). */
-function buildLeadEntries(students, parents) {
-  const entries = (students || []).map((student) => ({
-    key: student.id,
-    student,
-    parent: (parents || []).find((p) => p.id === student.parentId) || null,
-  }));
-  const parentIdsWithStudents = new Set((students || []).map((s) => s.parentId).filter(Boolean));
-  for (const parent of parents || []) {
-    if (parentIdsWithStudents.has(parent.id)) continue;
-    const status = parent.status || 'lead_new';
-    if (status === 'archived') continue;
-    entries.push({
-      key: `parent:${parent.id}`,
-      parent,
-      student: {
-        id: `parent:${parent.id}`,
-        name: '',
-        parentId: parent.id,
-        groupId: null,
-        status,
-        birthDate: '',
-        notes: parent.notes || '',
-        levelGrade: null,
-        source: parent.source || 'unknown',
-        created: parent.created_at ? String(parent.created_at).split('T')[0] : '',
-        created_at: parent.created_at || null,
-        _parentOnly: true,
-      },
-    });
-  }
-  return entries;
 }
 
 /** Group lead rows by parent (and merge same-phone duplicate parent cards). */
@@ -269,7 +231,7 @@ function FolderRow({ id, title, icon: Icon, summary, open, onToggle, children, s
 }
 
 // ─── Lead/Customer Card (detail sidebar) ────────────────────────────────────
-function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, groups = [], onClose, onStatusChange, onDelete, onUpdateStudent, pricelist, refreshData, canManageBilling = false, canViewComms = true, onCommunicationHandled }) {
+function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, groups = [], onClose, onStatusChange, onDelete, onUpdateStudent, onUpdateParent, pricelist, refreshData, canManageBilling = false, canViewComms = true, onCommunicationHandled }) {
   if (!student) return null;
   const parentOnly = isParentOnlyLead(student);
   const age = calculateAge(student.birthDate);
@@ -919,17 +881,26 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
   };
 
   const handleSaveFollowup = async (value) => {
-    if (parentOnly) return;
     setSavingFollowup(true);
     try {
-      const res = await fetch(`/api/students/${student.id}`, {
+      const endpoint = parentOnly
+        ? `/api/parents/${parent.id}`
+        : `/api/students/${student.id}`;
+      const res = await fetch(endpoint, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nextFollowup: value || null }),
       });
       if (res.ok) {
         const updated = await res.json();
-        onUpdateStudent(student.id, updated);
+        if (parentOnly) {
+          onUpdateParent?.(parent.id, {
+            ...updated,
+            nextFollowup: updated.nextFollowup ?? (value || null),
+          });
+        } else {
+          onUpdateStudent(student.id, updated);
+        }
         setEditNextFollowup(value || '');
         setEditingFollowup(false);
         if (refreshData) refreshData();
@@ -1352,9 +1323,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                 </div>
                 <div>
                   <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 2 }}><Bell size={10} /> מעקב</div>
-                  {parentOnly ? (
-                    <div style={{ fontWeight: 600 }}>—</div>
-                  ) : editingFollowup ? (
+                  {editingFollowup ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
                       <input
                         type="date"
@@ -2725,7 +2694,17 @@ function AddLeadModal({ students, parents, onAdd, onClose }) {
 }
 
 // ─── Main Leads / Customers Page ─────────────────────────────────────────────
-export default function Leads({ students, setStudents, parents, setParents, groups, canManageBilling = false, canViewComms = true }) {
+export default function Leads({
+  students,
+  setStudents,
+  parents,
+  setParents,
+  groups,
+  canManageBilling = false,
+  canViewComms = true,
+  loadError = '',
+  onRetryLoad,
+}) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('communication');
@@ -2771,10 +2750,16 @@ export default function Leads({ students, setStudents, parents, setParents, grou
 
   const refreshData = async () => {
     try {
-      const [freshStudents, freshParents] = await Promise.all([
-        fetch('/api/students').then(r => r.json()),
-        fetch('/api/parents').then(r => r.json()),
+      const [studentsResponse, parentsResponse] = await Promise.all([
+        fetch('/api/students'),
+        fetch('/api/parents'),
       ]);
+      if (!studentsResponse.ok || !parentsResponse.ok) return;
+      const [freshStudents, freshParents] = await Promise.all([
+        studentsResponse.json(),
+        parentsResponse.json(),
+      ]);
+      if (!Array.isArray(freshStudents) || !Array.isArray(freshParents)) return;
       setStudents(freshStudents);
       setParents(freshParents);
     } catch (e) {
@@ -2998,6 +2983,10 @@ export default function Leads({ students, setStudents, parents, setParents, grou
     setStudents(prev => prev.map(s => s.id === studentId ? { ...s, ...updatedData } : s));
   };
 
+  const handleUpdateParent = (parentId, updatedData) => {
+    setParents(prev => prev.map(p => p.id === parentId ? { ...p, ...updatedData } : p));
+  };
+
   return (
     <div className="fade-in">
       {selectedStudentId && (
@@ -3013,6 +3002,7 @@ export default function Leads({ students, setStudents, parents, setParents, grou
           onStatusChange={handleStatusChange}
           onDelete={handleDelete}
           onUpdateStudent={handleUpdateStudent}
+          onUpdateParent={handleUpdateParent}
           refreshData={refreshData}
           canManageBilling={canManageBilling}
           canViewComms={canViewComms}
@@ -3054,6 +3044,20 @@ export default function Leads({ students, setStudents, parents, setParents, grou
           </button>
         </div>
       </div>
+
+      {loadError && (
+        <div
+          className="alert alert-error"
+          style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
+        >
+          <span>{loadError}. הנתונים לא נמחקו ואפשר לנסות לטעון אותם שוב.</span>
+          {onRetryLoad && (
+            <button className="btn btn-sm btn-ghost" type="button" onClick={onRetryLoad}>
+              נסה שוב
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Status filter tabs (table view) */}
       {viewMode === 'table' && (

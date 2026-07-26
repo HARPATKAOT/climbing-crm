@@ -98,11 +98,22 @@ export function isPublicApiPath(requestPath) {
   return PUBLIC_API_ROUTES.some((pattern) => pattern.test(path));
 }
 
+function isLoopbackRequest(req) {
+  const hostname = String(req.hostname || '').toLowerCase();
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+}
+
 export async function apiAuth(req, res, next) {
   const path = req.path.replace(/^\/api/, '') || '/';
   if (isPublicApiPath(path)) return next();
 
-  if (process.env.NODE_ENV !== 'production' && process.env.CRM_AUTH_DISABLED === 'true') {
+  const localDevelopment =
+    process.env.NODE_ENV !== 'production' &&
+    (
+      process.env.CRM_AUTH_DISABLED === 'true' ||
+      (!supa.isEnabled() && isLoopbackRequest(req))
+    );
+  if (localDevelopment) {
     req.crmUser = { id: 'local-development', email: 'local@mywall.test', role: 'owner' };
     return next();
   }

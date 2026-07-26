@@ -4,6 +4,7 @@ import { ArrowRight, FileStack, Loader2, Pencil, Plus, Search, Trash2, X } from 
 const CATEGORY_META = {
   field: { label: 'פעילויות שטח', color: '#34D399', hint: 'טיולים, נחלים וטיפוס בטבע' },
   wall: { label: 'אירועים בקיר', color: '#FB923C', hint: 'ימי הולדת, גיבוש ואימונים' },
+  ops: { label: 'תפעול', color: '#7DD3FC', hint: 'יום ניקיון, ישיבת צוות ובניית מסלולים' },
 };
 
 /**
@@ -33,6 +34,7 @@ export default function ActivityTemplatesMenu({
   const [categories, setCategories] = useState([
     { id: 'field', label: 'פעילויות שטח' },
     { id: 'wall', label: 'אירועים בקיר' },
+    { id: 'ops', label: 'תפעול' },
   ]);
   const [categoryId, setCategoryId] = useState(null); // null = pick category
   const [query, setQuery] = useState('');
@@ -52,9 +54,17 @@ export default function ActivityTemplatesMenu({
         return;
       }
       const data = await res.json();
-      if (Array.isArray(data.categories) && data.categories.length) {
-        setCategories(data.categories);
+      // Always keep local CATEGORY_META (incl. ops) even if API is stale.
+      const fromApi = Array.isArray(data.categories) ? data.categories : [];
+      const byId = new Map(fromApi.map((c) => [c.id, c]));
+      const merged = Object.keys(CATEGORY_META).map((id) => ({
+        id,
+        label: byId.get(id)?.label || CATEGORY_META[id].label,
+      }));
+      for (const c of fromApi) {
+        if (!CATEGORY_META[c.id] && c.id) merged.push({ id: c.id, label: c.label || c.id });
       }
+      setCategories(merged);
       setTemplates(Array.isArray(data.templates) ? data.templates : (Array.isArray(data) ? data : []));
     } catch {
       setMsg('שגיאת רשת');

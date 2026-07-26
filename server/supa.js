@@ -9,18 +9,34 @@
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
-// Prefer service role. Fall back to SUPABASE_KEY so existing Render/local
-// setups keep working until the service role key is configured.
 const SUPABASE_SERVICE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.SUPABASE_SERVICE_KEY ||
-  process.env.SUPABASE_KEY;
+  process.env.SUPABASE_SERVICE_KEY;
+const SUPABASE_AUTH_KEY =
+  SUPABASE_SERVICE_KEY ||
+  process.env.SUPABASE_KEY ||
+  process.env.SUPABASE_ANON_KEY;
+
+export function isServiceRoleKey(value) {
+  const key = String(value || '').trim();
+  if (!key) return false;
+  if (key.startsWith('sb_secret_')) return true;
+  const parts = key.split('.');
+  if (parts.length !== 3) return false;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    return payload?.role === 'service_role';
+  } catch {
+    return false;
+  }
+}
 
 const isConfigured =
   SUPABASE_URL &&
   SUPABASE_URL !== 'YOUR_SUPABASE_URL_HERE' &&
   SUPABASE_SERVICE_KEY &&
-  SUPABASE_SERVICE_KEY !== 'YOUR_SUPABASE_ANON_KEY_HERE';
+  SUPABASE_SERVICE_KEY !== 'YOUR_SUPABASE_ANON_KEY_HERE' &&
+  isServiceRoleKey(SUPABASE_SERVICE_KEY);
 
 let client = null;
 if (isConfigured) {
@@ -28,15 +44,22 @@ if (isConfigured) {
     auth: { persistSession: false },
   });
   console.log('✅ Supabase data layer connected.');
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY && !process.env.SUPABASE_SERVICE_KEY) {
-    console.warn(
-      '⚠️ Running on SUPABASE_KEY instead of SUPABASE_SERVICE_ROLE_KEY — ' +
-      'row level security can silently reject writes. Set SUPABASE_SERVICE_ROLE_KEY.'
-    );
-  }
 } else {
-  console.warn('⚠️ Supabase not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing). Durable data will use db.json only.');
+  console.warn('⚠️ Supabase not configured with a valid service-role key. Durable data will use db.json only.');
 }
+
+// Verifying a signed-in user does not require service-role privileges. Keep a
+// separate auth client so local development can authenticate with the public
+// key while durable database reads and writes remain service-role-only.
+const authClient =
+  SUPABASE_URL &&
+  SUPABASE_URL !== 'YOUR_SUPABASE_URL_HERE' &&
+  SUPABASE_AUTH_KEY &&
+  SUPABASE_AUTH_KEY !== 'YOUR_SUPABASE_ANON_KEY_HERE'
+    ? createClient(SUPABASE_URL, SUPABASE_AUTH_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
+    : null;
 
 const DIRECT_TABLES = [
   'parents',
@@ -58,6 +81,7 @@ const DIRECT_TABLES = [
   'broadcast_jobs',
   'broadcast_recipients',
   'student_equipment',
+  'lead_status_history',
 ];
 
 export const OPERATIONAL_TABLES = [
@@ -94,50 +118,58 @@ const emptyToNull = (v) => (v === '' || v === undefined ? null : v);
 const numOrNull = (v) => (v === '' || v === undefined || v === null ? null : Number(v));
 
 // ─── Per-table mappers (DB row <-> JS object used by the app/client) ──────────
+export const parentFromRow = (r) => ({
+  id: r.id,
+  name: r.name || '',
+  phone: r.phone || '',
+  email: r.email || '',
+  city: r.city || '',
+  source: r.source || 'unknown',
+  instagram_id: r.instagram_id || undefined,
+  messenger_psid: r.messenger_psid || undefined,
+  channel: r.channel || undefined,
+  gender: r.gender || '',
+  marketing_opt_in: r.marketing_opt_in !== false,
+  last_inbound_whatsapp: r.last_inbound_whatsapp || null,
+  last_inbound_instagram: r.last_inbound_instagram || null,
+  last_inbound_messenger: r.last_inbound_messenger || null,
+  communication_handled_at: r.communication_handled_at || null,
+  notes: r.notes || '',
+  status: r.status || null,
+  nextFollowup: r.next_followup || null,
+  created_at: r.created_at || null,
+  updated_at: r.updated_at || null,
+  idNumber: r.id_number || '',
+  icount_client_id: r.icount_client_id || undefined,
+});
+
+export const parentToRow = (o) => ({
+  id: o.id,
+  name: o.name || '',
+  phone: o.phone || '',
+  email: o.email || '',
+  city: o.city || '',
+  source: o.source || 'unknown',
+  instagram_id: emptyToNull(o.instagram_id),
+  messenger_psid: emptyToNull(o.messenger_psid),
+  channel: emptyToNull(o.channel),
+  gender: emptyToNull(o.gender),
+  marketing_opt_in: o.marketing_opt_in !== false,
+  last_inbound_whatsapp: emptyToNull(o.last_inbound_whatsapp),
+  last_inbound_instagram: emptyToNull(o.last_inbound_instagram),
+  last_inbound_messenger: emptyToNull(o.last_inbound_messenger),
+  communication_handled_at: emptyToNull(o.communication_handled_at),
+  notes: o.notes || '',
+  status: emptyToNull(o.status),
+  next_followup: emptyToNull(o.nextFollowup ?? o.next_followup),
+  id_number: emptyToNull(o.idNumber || o.id_number),
+  icount_client_id: emptyToNull(o.icount_client_id),
+});
+
 const mappers = {
   parents: {
-    fromRow: (r) => ({
-      id: r.id,
-      name: r.name || '',
-      phone: r.phone || '',
-      email: r.email || '',
-      city: r.city || '',
-      source: r.source || 'unknown',
-      instagram_id: r.instagram_id || undefined,
-      messenger_psid: r.messenger_psid || undefined,
-      channel: r.channel || undefined,
-      gender: r.gender || '',
-      marketing_opt_in: r.marketing_opt_in !== false,
-      last_inbound_whatsapp: r.last_inbound_whatsapp || null,
-      last_inbound_instagram: r.last_inbound_instagram || null,
-      last_inbound_messenger: r.last_inbound_messenger || null,
-      communication_handled_at: r.communication_handled_at || null,
-      notes: r.notes || '',
-      status: r.status || null,
-      idNumber: r.id_number || '',
-      icount_client_id: r.icount_client_id || undefined,
-    }),
-    toRow: (o) => ({
-      id: o.id,
-      name: o.name || '',
-      phone: o.phone || '',
-      email: o.email || '',
-      city: o.city || '',
-      source: o.source || 'unknown',
-      instagram_id: emptyToNull(o.instagram_id),
-      messenger_psid: emptyToNull(o.messenger_psid),
-      channel: emptyToNull(o.channel),
-      gender: emptyToNull(o.gender),
-      marketing_opt_in: o.marketing_opt_in !== false,
-      last_inbound_whatsapp: emptyToNull(o.last_inbound_whatsapp),
-      last_inbound_instagram: emptyToNull(o.last_inbound_instagram),
-      last_inbound_messenger: emptyToNull(o.last_inbound_messenger),
-      communication_handled_at: emptyToNull(o.communication_handled_at),
-      notes: o.notes || '',
-      status: emptyToNull(o.status),
-      id_number: emptyToNull(o.idNumber || o.id_number),
-      icount_client_id: emptyToNull(o.icount_client_id),
-    }),
+    fromRow: parentFromRow,
+    toRow: parentToRow,
   },
 
   students: {
@@ -239,7 +271,7 @@ const columnMapper = (allowed) => ({
 });
 
 mappers.activities = columnMapper([
-  'id', 'name', 'type', 'status', 'date', 'end_date', 'start_time', 'end_time', 'location',
+  'id', 'name', 'type', 'category', 'status', 'date', 'end_date', 'start_time', 'end_time', 'location',
   'price', 'max_participants', 'responsible_id', 'description', 'payment_link', 'notes',
   'google_event_id', 'google_etag', 'synced_at', 'all_day', 'contact_name', 'contact_phone',
   'host_name', 'host_email', 'host_phone', 'host_parent_id', 'payment_status',
@@ -415,6 +447,10 @@ mappers.broadcast_recipients = columnMapper([
   'id', 'job_id', 'parent_id', 'phone', 'name', 'status', 'error',
   'meta_message_id', 'sent_at', 'created_at',
 ]);
+mappers.lead_status_history = columnMapper([
+  'id', 'entity_type', 'entity_id', 'parent_id', 'from_status', 'to_status',
+  'source', 'changed_at', 'is_baseline',
+]);
 
 const identityMapper = { fromRow: (r) => r, toRow: (o) => o };
 const mapperFor = (table) => mappers[table] || identityMapper;
@@ -435,8 +471,7 @@ export const supa = {
   },
 
   /** True when the server holds a service role key rather than a public key. */
-  hasServiceRoleKey: () =>
-    !!(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY),
+  hasServiceRoleKey: () => isServiceRoleKey(SUPABASE_SERVICE_KEY),
 
   // Load every row of a table, mapped to the app's JS shape.
   async getAll(table) {
@@ -456,6 +491,25 @@ export const supa = {
           return null;
         }
         const chunk = (data || []).map((row) => row.data).filter(Boolean);
+        all.push(...chunk);
+        if (chunk.length < pageSize) break;
+      }
+      return all;
+    }
+    if (table === 'lead_status_history') {
+      const pageSize = 1000;
+      const all = [];
+      for (let from = 0; ; from += pageSize) {
+        const { data, error } = await client
+          .from(table)
+          .select('*')
+          .order('id', { ascending: true })
+          .range(from, from + pageSize - 1);
+        if (error) {
+          console.error(`Supabase getAll(${table}) failed:`, error.message);
+          return null;
+        }
+        const chunk = data || [];
         all.push(...chunk);
         if (chunk.length < pageSize) break;
       }
@@ -591,8 +645,8 @@ export const supa = {
   },
 
   async verifyAccessToken(token) {
-    if (!client || !token) return null;
-    const { data, error } = await client.auth.getUser(token);
+    if (!authClient || !token) return null;
+    const { data, error } = await authClient.auth.getUser(token);
     if (error || !data?.user) return null;
     return data.user;
   },

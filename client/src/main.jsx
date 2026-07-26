@@ -17,7 +17,8 @@ const PublicActivityRegistration = lazy(() => import('./components/PublicActivit
 const PublicHostPayment          = lazy(() => import('./components/PublicHostPayment.jsx'));
 const PublicEquipmentPayment     = lazy(() => import('./components/PublicEquipmentPayment.jsx'));
 
-// Automatically route all /api calls directly to live cloud Render backend when running on Vercel
+// Attach the current session to API calls. In production, Vercel's rewrite
+// proxies /api to Render on the same origin, avoiding browser CORS failures.
 const originalFetch = window.fetch.bind(window);
 window.fetch = async function (resource, init = {}) {
   const isApiRequest = typeof resource === 'string' && resource.startsWith('/api');
@@ -28,9 +29,6 @@ window.fetch = async function (resource, init = {}) {
       headers.set('Authorization', `Bearer ${token}`);
       init = { ...init, headers };
     }
-  }
-  if (isApiRequest && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-    resource = 'https://climbing-crm-api.onrender.com' + resource;
   }
   return originalFetch(resource, init);
 };

@@ -2,15 +2,16 @@ import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Calendar, CalendarRange, ShieldCheck, UserCog, LogIn,
-  MessageSquare, Bell, Search, Coins, Award, FileHeart, Zap, LogOut, Building2, Package,
+  MessageSquare, Bell, Coins, Award, FileHeart, Zap, LogOut, Building2, Package,
 } from 'lucide-react';
 import { useAuth } from './components/AuthGate.jsx';
 import { useBusinessProfile } from './BusinessProfileContext.jsx';
 import { isPublicPath } from './publicPaths.js';
+import GlobalSearch from './components/GlobalSearch.jsx';
 
 // Code-splitting: each screen is downloaded only when first visited,
 // which keeps the initial bundle (and first paint) small.
-const Dashboard          = lazy(() => import('./components/Dashboard.jsx'));
+const DailyWork          = lazy(() => import('./components/DailyWork.jsx'));
 const Leads              = lazy(() => import('./components/Leads.jsx'));
 const Schedule           = lazy(() => import('./components/Schedule.jsx'));
 const ActivitiesCalendar = lazy(() => import('./components/ActivitiesCalendar.jsx'));
@@ -35,7 +36,7 @@ function PageLoader() {
 
 // ─── Nav Config ─────────────────────────────────────────────────────────────
 const NAV = [
-  { key: 'dashboard',  label: 'דשבורד',            icon: LayoutDashboard,  section: 'main', accent: '#38BDF8' },
+  { key: 'dashboard',  label: 'מסך עבודה',          icon: LayoutDashboard,  section: 'main', accent: '#38BDF8' },
   { key: 'checkin',    label: 'מסוף כניסה',        icon: LogIn,            section: 'main', accent: '#2DD4BF' },
   { key: 'leads',      label: 'לקוחות ולידים',     icon: Users,            section: 'main', accent: '#A78BFA' },
   { key: 'schedule',   label: 'לוח חוגים',          icon: Calendar,         section: 'main', accent: '#FBBF24' },
@@ -82,7 +83,7 @@ function pathToPage(pathname) {
 }
 
 const PAGE_TITLES = {
-  dashboard:  { title: 'שלום 👋 Eyal',            sub: 'סקירה כללית של המערכת' },
+  dashboard:  { title: 'מסך העבודה שלי',          sub: 'כל המשימות והפניות שדורשות טיפול היום' },
   checkin:    { title: 'מסוף כניסה מהירה',       sub: 'רישום כניסות וצ׳ק-אין של לקוחות ומנויים' },
   leads:      { title: 'לקוחות ולידים',           sub: 'ניהול מאגר המתאמנים' },
   schedule:   { title: 'לוח חוגים',               sub: 'ניהול שיעורים ונוכחות' },
@@ -133,12 +134,12 @@ export default function App() {
     }
   }, [isOwner, location.pathname, navigate]);
 
-  const [searchQ, setSearchQ]   = useState('');
-
   // Start empty so deleted/demo records never flash before the API responds.
   const [students, setStudents] = useState([]);
   const [parents, setParents] = useState([]);
   const [groups, setGroups] = useState([]);
+  const [coreLoadError, setCoreLoadError] = useState('');
+  const [coreReloadKey, setCoreReloadKey] = useState(0);
   const coreEmptyRef = useRef(true);
 
   useEffect(() => {
@@ -150,32 +151,40 @@ export default function App() {
     let retryTimer = null;
     let attempt = 0;
 
+    async function fetchCollection(path, label) {
+      const response = await fetch(path);
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(body?.error || `טעינת ${label} נכשלה`);
+      }
+      if (!Array.isArray(body)) {
+        throw new Error(`השרת החזיר תשובה לא תקינה עבור ${label}`);
+      }
+      return body;
+    }
+
     async function fetchData() {
       try {
         const [resStudents, resParents, resGroups] = await Promise.all([
-          fetch('/api/students').then(r => r.ok ? r.json() : null),
-          fetch('/api/parents').then(r => r.ok ? r.json() : null),
-          fetch('/api/groups').then(r => r.ok ? r.json() : null),
+          fetchCollection('/api/students', 'מתאמנים'),
+          fetchCollection('/api/parents', 'הורים'),
+          fetchCollection('/api/groups', 'חוגים'),
         ]);
         if (cancelled) return;
-        const gotStudents = Array.isArray(resStudents);
-        const gotParents = Array.isArray(resParents);
-        const gotGroups = Array.isArray(resGroups);
-        if (gotStudents) setStudents(resStudents);
-        if (gotParents) setParents(resParents);
-        if (gotGroups) {
-          // Dedupe by id in case the API cache briefly contains re-seed duplicates.
-          const byId = new Map();
-          for (const g of resGroups) {
-            if (g?.id) byId.set(g.id, g);
-          }
-          setGroups([...byId.values()]);
+        setStudents(resStudents);
+        setParents(resParents);
+        // Dedupe by id in case the API cache briefly contains re-seed duplicates.
+        const byId = new Map();
+        for (const g of resGroups) {
+          if (g?.id) byId.set(g.id, g);
         }
-        if (gotStudents || gotParents || gotGroups) return;
-        throw new Error('empty core response');
+        setGroups([...byId.values()]);
+        setCoreLoadError('');
+        attempt = 0;
       } catch (error) {
         if (cancelled) return;
         console.warn('Backend server offline.', error);
+        setCoreLoadError(error.message || 'טעינת הלקוחות נכשלה');
         // Nodemon restarts briefly refuse connections — retry instead of staying at 0.
         if (attempt < 8) {
           const delay = Math.min(1000 * (2 ** attempt), 8000);
@@ -202,7 +211,7 @@ export default function App() {
     };
     // Fetch core data once on mount (plus retry/visibility logic above) —
     // NOT on every tab change, which used to re-download all parents/students/groups.
-  }, []);
+  }, [coreReloadKey]);
   const [showNotifications, setShowNotifications] = useState(false);
   const info   = PAGE_TITLES[page] || {};
 
@@ -319,15 +328,11 @@ export default function App() {
             <div className="page-sub">{info.sub}</div>
           </div>
           <div className="topbar-right">
-            <div className="search-box">
-              <Search className="search-box-icon" size={16} />
-              <input
-                className="search-input"
-                placeholder="חיפוש מהיר..."
-                value={searchQ}
-                onChange={e => setSearchQ(e.target.value)}
-              />
-            </div>
+            <GlobalSearch
+              students={students}
+              parents={parents}
+              onOpen={(recordId) => navigate(`/leads?open=${encodeURIComponent(recordId)}`)}
+            />
             <div style={{ position: 'relative' }}>
               <button className="icon-btn" onClick={() => setShowNotifications(!showNotifications)}>
                 <Bell size={17} />
@@ -378,9 +383,32 @@ export default function App() {
         {/* Page Content */}
         <main className="page-content">
           <Suspense fallback={<PageLoader />}>
-            {page === 'dashboard'  && <Dashboard students={students} groups={groups} onNavigate={goToPage} />}
+            {page === 'dashboard'  && (
+              <DailyWork
+                students={students}
+                parents={parents}
+                groups={groups}
+                setParents={setParents}
+                onNavigate={navigate}
+              />
+            )}
             {page === 'checkin'    && <CheckInConsole students={students} groups={groups} />}
-            {page === 'leads'      && <Leads students={students} setStudents={setStudents} parents={parents} setParents={setParents} groups={groups} canManageBilling={isOwner} canViewComms />}
+            {page === 'leads'      && (
+              <Leads
+                students={students}
+                setStudents={setStudents}
+                parents={parents}
+                setParents={setParents}
+                groups={groups}
+                canManageBilling={isOwner}
+                canViewComms
+                loadError={coreLoadError}
+                onRetryLoad={() => {
+                  setCoreLoadError('');
+                  setCoreReloadKey((value) => value + 1);
+                }}
+              />
+            )}
             {page === 'schedule'   && <Schedule groups={groups} students={students} parents={parents} setGroups={setGroups} setStudents={setStudents} />}
             {page === 'equipment'  && (
               <EquipmentTracker

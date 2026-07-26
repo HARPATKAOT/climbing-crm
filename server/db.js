@@ -768,6 +768,7 @@ export const db = {
         channel: extras.channel || extras.source || undefined,
         notes: extras.notes || '',
         status: extras.status || 'lead_new',
+        nextFollowup: extras.nextFollowup || null,
       };
       data.parents.push(parent);
       writeDb(data);
@@ -799,6 +800,7 @@ export const db = {
       if (extras.source && (!parent.source || parent.source === 'unknown')) parent.source = extras.source;
       if (extras.channel && !parent.channel) parent.channel = extras.channel;
       if (extras.status) parent.status = extras.status;
+      if (extras.nextFollowup !== undefined) parent.nextFollowup = extras.nextFollowup || null;
       if (extras.notes) parent.notes = (parent.notes ? `${parent.notes}\n` : '') + extras.notes;
       // Always store one canonical phone format.
       if (cleanPhone) parent.phone = cleanPhone;
@@ -814,6 +816,7 @@ export const db = {
         channel: extras.channel || extras.source || undefined,
         notes: extras.notes || '',
         status: extras.status || 'lead_new',
+        nextFollowup: extras.nextFollowup || null,
       };
       data.parents.push(parent);
       writeDb(data);

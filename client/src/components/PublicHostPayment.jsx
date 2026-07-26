@@ -144,16 +144,6 @@ export default function PublicHostPayment() {
                     כולל מע״מ
                   </strong>
                 </div>
-                {!priceVat.includesVat && priceVat.entered > 0 && (
-                  <p className="host-payment-vat-note">
-                    מחיר לפני מע״מ: {formatIls(priceVat.net)}
-                  </p>
-                )}
-                {priceVat.includesVat && priceVat.entered > 0 && (
-                  <p className="host-payment-vat-note">
-                    מתוכו לפני מע״מ: {formatIls(priceVat.net)}
-                  </p>
-                )}
               </>
             )}
           </div>
