@@ -419,9 +419,15 @@ export default function ActivityRegistrationPanel({
         });
       }
       if (data.whatsappSent) {
-        setMsg(resolvedType === 'participant'
-          ? 'קישור המשתתפים נשלח למזמין בוואטסאפ'
-          : 'קישור התשלום נשלח למזמין בוואטסאפ');
+        if (data.whatsappViaTemplate) {
+          setMsg(resolvedType === 'participant'
+            ? 'קישור המשתתפים נשלח למזמין בתבנית מאושרת'
+            : 'קישור התשלום נשלח למזמין בתבנית מאושרת');
+        } else {
+          setMsg(resolvedType === 'participant'
+            ? 'קישור המשתתפים נשלח למזמין בוואטסאפ'
+            : 'קישור התשלום נשלח למזמין בוואטסאפ');
+        }
       } else if (data.whatsappError) {
         setMsg(data.whatsappError);
       } else {

@@ -3218,6 +3218,10 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
     let whatsappViaTemplate = false;
     if (req.body?.via !== 'email') {
       const inWindow = canSendFreeform(parent, 'whatsapp');
+      const metaName = sendHostPayment
+        ? EVENT_HOST_PAYMENT_TEMPLATE
+        : EVENT_PARTICIPANT_LINK_TEMPLATE;
+      const localTpl = findApprovedEventTemplate(db, metaName);
       const freeformMsg = sendHostPayment
         ? (
           `שלום${hostName ? ` ${hostName}` : ''}!\n` +
@@ -3229,7 +3233,36 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
           `אפשר להעביר את הקישור לכל מי שמגיע לאירוע.`
         );
 
-      if (inWindow) {
+      // Prefer approved Meta templates for activity links (host payment / participants).
+      if (localTpl) {
+        const buttonParam = sendHostPayment
+          ? activity.host_payment_token
+          : (activity.participant_registration_slug || activity.registration_slug);
+        try {
+          const waResult = await whatsappService.sendTemplateMessage(
+            hostPhone,
+            metaName,
+            [hostName || 'לקוח', activity.name || 'אירוע'],
+            {
+              fallbackName: hostName,
+              parentId: parent.id,
+              buttonUrlParam: buttonParam,
+            }
+          );
+          if (waResult?.success) {
+            whatsappSent = true;
+            whatsappViaTemplate = true;
+            whatsappError = null;
+          } else {
+            whatsappError = waResult?.error || 'שליחת תבנית וואטסאפ נכשלה';
+          }
+        } catch (waErr) {
+          whatsappError = waErr.message || 'שליחת תבנית וואטסאפ נכשלה';
+        }
+      }
+
+      // Fallback: free-form only when no approved template is available and the 24h window is open.
+      if (!whatsappSent && inWindow) {
         const waResult = await whatsappService.sendTextMessage(hostPhone, freeformMsg, false, {
           clip: false,
           parentId: parent.id,
@@ -3237,46 +3270,19 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
         });
         if (waResult?.success) {
           whatsappSent = true;
-        } else {
+          whatsappViaTemplate = false;
+          whatsappError = null;
+        } else if (!whatsappError) {
           whatsappError = waResult?.error || 'שליחת וואטסאפ נכשלה';
         }
       }
 
-      if (!whatsappSent) {
-        const metaName = sendHostPayment
-          ? EVENT_HOST_PAYMENT_TEMPLATE
-          : EVENT_PARTICIPANT_LINK_TEMPLATE;
-        const localTpl = findApprovedEventTemplate(db, metaName);
-        if (localTpl) {
-          const buttonParam = sendHostPayment
-            ? activity.host_payment_token
-            : (activity.participant_registration_slug || activity.registration_slug);
-          try {
-            const waResult = await whatsappService.sendTemplateMessage(
-              hostPhone,
-              metaName,
-              [hostName || 'לקוח', activity.name || 'אירוע'],
-              {
-                fallbackName: hostName,
-                parentId: parent.id,
-                buttonUrlParam: buttonParam,
-              }
-            );
-            if (waResult?.success) {
-              whatsappSent = true;
-              whatsappViaTemplate = true;
-              whatsappError = null;
-            } else {
-              whatsappError = waResult?.error || 'שליחת תבנית וואטסאפ נכשלה';
-            }
-          } catch (waErr) {
-            whatsappError = waErr.message || 'שליחת תבנית וואטסאפ נכשלה';
-          }
-        } else if (!inWindow) {
-          whatsappError =
-            'חלון התקשורת של 24 שעות סגור, והתבנית עדיין לא מאושרת במטא. ' +
-            'במסך דיוור ← תבניות Meta: שלחו לאישור את «אירוע · קישור תשלום מזמין» או «אירוע · קישור למשתתפים».';
-        }
+      if (!whatsappSent && !localTpl && !inWindow) {
+        whatsappError =
+          'חלון התקשורת של 24 שעות סגור, והתבנית עדיין לא מאושרת במטא. ' +
+          'במסך דיוור ← תבניות Meta: שלחו לאישור את «אירוע · קישור תשלום מזמין» או «אירוע · קישור למשתתפים».';
+      } else if (!whatsappSent && localTpl && !whatsappError) {
+        whatsappError = 'שליחת תבנית וואטסאפ נכשלה';
       }
     }
 
