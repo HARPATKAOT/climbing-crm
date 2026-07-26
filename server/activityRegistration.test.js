@@ -34,6 +34,7 @@ test('registrationIsOpen checks flags and close date', () => {
 
 test('normalizeHostPaymentStatus', () => {
   assert.equal(normalizeHostPaymentStatus('paid'), 'paid');
+  assert.equal(normalizeHostPaymentStatus('refunded'), 'refunded');
   assert.equal(normalizeHostPaymentStatus('weird'), 'unpaid');
 });
 
@@ -50,6 +51,7 @@ test('openUnpaidActivities filters past and paid', () => {
       { id: '2', name: 'B', date: '2099-01-02', payment_status: 'paid', status: 'open' },
       { id: '3', name: 'C', date: '2000-01-01', payment_status: 'unpaid', status: 'open' },
       { id: '4', name: 'D', date: '2099-01-03', payment_status: 'unpaid', status: 'cancelled' },
+      { id: '5', name: 'E', date: '2099-01-04', payment_status: 'refunded', status: 'open' },
     ],
   };
   const rows = openUnpaidActivities(db, { fromDate: '2026-07-25' });

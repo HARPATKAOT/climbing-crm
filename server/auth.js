@@ -47,6 +47,7 @@ const TEAM_RULES = [
   { methods: ['GET', 'POST', 'PUT', 'DELETE'], pattern: /^\/pricelist(\/|$)/ },
   { methods: ['GET', 'POST', 'PUT', 'DELETE'], pattern: /^\/product-categories(\/|$)/ },
   { methods: ['GET', 'POST'], pattern: /^\/pos\/(sale|quote|payment-link|sales)(\/|$)/ },
+  { methods: ['GET'], pattern: /^\/pos\/sales\/[^/]+\/invoice$/ },
   { methods: ['POST'], pattern: /^\/pos\/sales\/[^/]+\/refund$/ },
   { methods: ['GET', 'POST'], pattern: /^\/pos\/passes(\/|$)/ },
   { methods: ['GET', 'POST'], pattern: /^\/cash-register(\/|$)/ },

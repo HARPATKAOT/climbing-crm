@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Plus, ChevronLeft, ChevronRight, X, Save, Trash2, Link2, Unlink,
   RefreshCw, Loader2, CalendarDays, CalendarRange, Layers, List,
-  CheckCircle, AlertCircle, Clock3, Check, Pencil,
+  CheckCircle, AlertCircle, Clock3, Check, Pencil, Undo2,
 } from 'lucide-react';
 import ActivityPageDesigner from './ActivityPageDesigner.jsx';
 import ActivityRegistrationPanel from './ActivityRegistrationPanel.jsx';
@@ -1464,12 +1464,17 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
 }
 
 function PaymentStatusIcon({ status, size = 12 }) {
-  const normalized = status === 'paid' || status === 'partial' ? status : 'unpaid';
+  const normalized =
+    status === 'paid' || status === 'partial' || status === 'refunded'
+      ? status
+      : 'unpaid';
   const config = normalized === 'paid'
     ? { Icon: CheckCircle, label: 'שולם', color: '#34D399' }
     : normalized === 'partial'
       ? { Icon: Clock3, label: 'שולם חלקית', color: '#FBBF24' }
-      : { Icon: AlertCircle, label: 'טרם שולם', color: '#FB7185' };
+      : normalized === 'refunded'
+        ? { Icon: Undo2, label: 'זוכה', color: '#94A3B8' }
+        : { Icon: AlertCircle, label: 'טרם שולם', color: '#FB7185' };
   const { Icon, label, color } = config;
 
   return (

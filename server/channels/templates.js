@@ -10,12 +10,70 @@ function getWabaId() {
   return process.env.META_WA_WABA_ID || settings.metaWaWabaId || '';
 }
 
-function mapMetaStatus(status) {
+export function mapMetaStatus(status) {
   const s = String(status || '').toUpperCase();
   if (s === 'APPROVED') return 'APPROVED';
   if (s === 'PENDING' || s === 'IN_APPEAL' || s === 'PENDING_DELETION') return 'PENDING';
-  if (s === 'REJECTED' || s === 'DISABLED') return 'REJECTED';
+  if (s === 'REJECTED' || s === 'DISABLED' || s === 'FLAGGED') return 'REJECTED';
+  if (s === 'PAUSED') return 'PENDING';
   return s || 'DRAFT';
+}
+
+const STATUS_RANK = {
+  APPROVED: 4,
+  PENDING: 3,
+  REJECTED: 2,
+  DRAFT: 1,
+};
+
+function statusRank(status) {
+  return STATUS_RANK[mapMetaStatus(status)] || 0;
+}
+
+function templateKey(name, language = 'he') {
+  return `${String(name || '').trim()}:${language || 'he'}`;
+}
+
+/** When Meta returns duplicates for the same name+language, keep the best status. */
+export function preferMetaTemplate(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const rankA = statusRank(a.status);
+  const rankB = statusRank(b.status);
+  if (rankA !== rankB) return rankA >= rankB ? a : b;
+  const timeA = Date.parse(a.last_updated_time || 0) || 0;
+  const timeB = Date.parse(b.last_updated_time || 0) || 0;
+  if (timeA !== timeB) return timeA >= timeB ? a : b;
+  return String(a.id || '') >= String(b.id || '') ? a : b;
+}
+
+export function dedupeRemoteTemplates(remote = []) {
+  const byKey = new Map();
+  for (const t of remote) {
+    if (!t?.name) continue;
+    const key = templateKey(t.name, t.language || 'he');
+    byKey.set(key, preferMetaTemplate(byKey.get(key), t));
+  }
+  return [...byKey.values()];
+}
+
+/** Prefer meta_id match; otherwise best local row for name+language. */
+export function findLocalTemplateMatch(existing = [], remoteTpl = {}) {
+  const language = remoteTpl.language || 'he';
+  const metaId = remoteTpl.id != null ? String(remoteTpl.id) : '';
+  if (metaId) {
+    const byId = existing.find((t) => String(t.meta_id || '') === metaId);
+    if (byId) return byId;
+  }
+  const sameName = existing.filter(
+    (t) =>
+      String(t.meta_name || t.name || '') === String(remoteTpl.name || '')
+      && (t.language || 'he') === language
+  );
+  if (!sameName.length) return null;
+  return sameName.reduce((best, t) =>
+    (statusRank(t.status) > statusRank(best.status) ? t : best)
+  );
 }
 
 function extractBody(components = []) {
@@ -189,7 +247,7 @@ export async function syncTemplatesFromMeta() {
     return { success: false, error: 'חסר חיבור Meta או מזהה חשבון וואטסאפ עסקי', templates: listLocalTemplates() };
   }
 
-  const url = `https://graph.facebook.com/${META_GRAPH_VERSION}/${wabaId}/message_templates?limit=100`;
+  const url = `https://graph.facebook.com/${META_GRAPH_VERSION}/${wabaId}/message_templates?limit=100&fields=name,status,language,category,components,rejected_reason,id,last_updated_time`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
@@ -198,43 +256,57 @@ export async function syncTemplatesFromMeta() {
     throw new Error(data?.error?.message || 'סנכרון תבניות נכשל');
   }
 
-  const remote = Array.isArray(data.data) ? data.data : [];
-  const existing = db.get('message_templates') || [];
-  const byMetaName = new Map(existing.map((t) => [`${t.meta_name || t.name}:${t.language || 'he'}`, t]));
+  const remoteAll = Array.isArray(data.data) ? data.data : [];
+  const remote = dedupeRemoteTemplates(remoteAll);
+  const existing = [...(db.get('message_templates') || [])];
+  const keptIds = new Set();
+  const syncedKeys = new Set();
 
   for (const t of remote) {
     const language = t.language || 'he';
-    const key = `${t.name}:${language}`;
+    const key = templateKey(t.name, language);
+    syncedKeys.add(key);
     const body = extractBody(t.components || []);
     const bodyKeys = countVariables(body);
-    const previous = byMetaName.get(key);
+    const previous = findLocalTemplateMatch(existing, t);
     const variables = enrichVariablesFromFields(bodyKeys, previous?.variables);
+    const mappedStatus = mapMetaStatus(t.status);
     const payload = {
-      name: t.name,
+      name:
+        previous?.name &&
+        previous.name !== (previous.meta_name || previous.name)
+          ? previous.name
+          : t.name,
       meta_name: t.name,
       language,
       category: t.category || 'UTILITY',
-      status: mapMetaStatus(t.status),
+      status: mappedStatus,
       body,
       header: extractHeader(t.components || []),
       footer: extractFooter(t.components || []),
       variables,
       buttons: extractButtons(t.components || []),
       meta_id: t.id || null,
-      rejection_reason: t.rejected_reason || null,
-      active_for_send: mapMetaStatus(t.status) === 'APPROVED',
+      rejection_reason: t.rejected_reason && t.rejected_reason !== 'NONE'
+        ? t.rejected_reason
+        : null,
+      active_for_send: mappedStatus === 'APPROVED',
     };
-    const current = previous;
     // Manual order and archive flag are ours — Meta never sends them back.
-    const saved = current
-      ? db.update('message_templates', current.id, payload)
+    const saved = previous
+      ? db.update('message_templates', previous.id, payload)
       : db.insert('message_templates', {
         id: `tpl_${t.id || Date.now()}_${language}`,
         ...payload,
         sort_order: nextSortOrder(),
         archived: false,
       });
-    // Await durable write so a restart right after sync cannot wipe templates.
+    if (saved?.id) {
+      keptIds.add(saved.id);
+      const idx = existing.findIndex((row) => row.id === saved.id);
+      if (idx >= 0) existing[idx] = saved;
+      else existing.push(saved);
+    }
     if (saved) {
       const persist = await persistCore('message_templates', saved);
       if (!persist.ok) {
@@ -243,7 +315,73 @@ export async function syncTemplatesFromMeta() {
     }
   }
 
-  return { success: true, synced: remote.length, templates: listLocalTemplates() };
+  // Drop stale local duplicates for names we just synced (keep never-submitted drafts).
+  for (const local of [...(db.get('message_templates') || [])]) {
+    const key = templateKey(local.meta_name || local.name, local.language || 'he');
+    if (!syncedKeys.has(key) || keptIds.has(local.id)) continue;
+    if (String(local.status || '').toUpperCase() === 'DRAFT' && !local.meta_id) continue;
+    db.delete('message_templates', local.id);
+  }
+
+  return {
+    success: true,
+    synced: remote.length,
+    remote_total: remoteAll.length,
+    templates: listLocalTemplates(),
+  };
+}
+
+/**
+ * Apply a Meta message_template_status_update webhook to the local row.
+ * Falls back to a full sync when the payload has no clear event.
+ */
+export async function applyTemplateStatusUpdate(value = {}) {
+  const event = String(value.event || value.message_template_event || '').toUpperCase();
+  const name = String(value.message_template_name || '').trim();
+  const language = value.message_template_language || 'he';
+  const metaId = value.message_template_id != null
+    ? String(value.message_template_id)
+    : '';
+
+  if (!event) {
+    return syncTemplatesFromMeta();
+  }
+
+  const status = mapMetaStatus(event);
+  const existing = db.get('message_templates') || [];
+  const match = findLocalTemplateMatch(existing, {
+    id: metaId || undefined,
+    name,
+    language,
+  }) || (name
+    ? existing.find(
+      (t) =>
+        String(t.meta_name || t.name || '') === name
+        && (t.language || 'he') === language
+    )
+    : null);
+
+  if (!match) {
+    return syncTemplatesFromMeta();
+  }
+
+  const rejection = value.reason && value.reason !== 'NONE' ? value.reason : null;
+  const saved = db.update('message_templates', match.id, {
+    status,
+    meta_id: metaId || match.meta_id || null,
+    rejection_reason: rejection,
+    active_for_send: status === 'APPROVED',
+    ...(value.message_template_category
+      ? { category: value.message_template_category }
+      : {}),
+  });
+  if (saved) {
+    const persist = await persistCore('message_templates', saved);
+    if (!persist.ok) {
+      console.error('persist message_templates status webhook failed:', persist.error);
+    }
+  }
+  return { success: true, template: saved };
 }
 
 export function listLocalTemplates() {

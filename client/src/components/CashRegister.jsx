@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { ReceiptText, RefreshCw, RotateCcw } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
+import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X } from 'lucide-react';
 import PosSale from './PosSale.jsx';
 import Pricelist from './Pricelist.jsx';
 
@@ -34,7 +34,22 @@ function payMethodLabel(method) {
   if (method === 'emv' || method === 'credit' || method === 'cc') return 'אשראי במסוף';
   if (method === 'online') return 'סליקה בקישור';
   if (method === 'quote') return 'הצעת מחיר';
-  return method || '—';
+  return method || 'לא ידוע';
+}
+
+function payMethodBadge(method) {
+  const m = String(method || '').toLowerCase();
+  if (m === 'cash') return 'badge badge-gray';
+  if (m === 'online') return 'badge badge-blue';
+  if (m === 'emv' || m === 'credit' || m === 'cc' || m === 'card') {
+    return 'badge badge-purple';
+  }
+  if (m === 'quote') return 'badge badge-amber';
+  return 'badge';
+}
+
+function isCardPaymentMethod(method) {
+  return ['emv', 'credit', 'cc', 'online', 'card'].includes(String(method || '').toLowerCase());
 }
 
 function saleStatusLabel(status) {
@@ -74,8 +89,16 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
   const [posSales, setPosSales] = useState([]);
   const [salesLoading, setSalesLoading] = useState(false);
   const [refundBusyId, setRefundBusyId] = useState('');
+  const [invoiceBusyKey, setInvoiceBusyKey] = useState('');
   const [historyError, setHistoryError] = useState('');
   const [historyOk, setHistoryOk] = useState('');
+  const [expandedSaleId, setExpandedSaleId] = useState('');
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyStatus, setHistoryStatus] = useState('all');
+  const [historyPaymentMethod, setHistoryPaymentMethod] = useState('all');
+  const [historyDateFrom, setHistoryDateFrom] = useState('');
+  const [historyDateTo, setHistoryDateTo] = useState('');
+  const [historySort, setHistorySort] = useState('newest');
   const [reports, setReports] = useState(null);
   const [reportsLoading, setReportsLoading] = useState(false);
   const [syncInventoryMsg, setSyncInventoryMsg] = useState('');
@@ -152,12 +175,61 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
     }
   };
 
+  const copyPaymentLink = async (sale) => {
+    const url = sale?.payment_url;
+    if (!url) {
+      setHistoryError('אין קישור תשלום שמור לעסקה הזו');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      setHistoryError('');
+      setHistoryOk('קישור התשלום הועתק');
+    } catch {
+      setHistoryError('לא הצלחנו להעתיק את הקישור');
+    }
+  };
+
+  const downloadSaleInvoice = async (sale, kind = 'charge') => {
+    if (!sale?.id) return;
+    const key = `${sale.id}:${kind}`;
+    setInvoiceBusyKey(key);
+    setHistoryError('');
+    try {
+      const res = await fetch(
+        `/api/pos/sales/${encodeURIComponent(sale.id)}/invoice?kind=${encodeURIComponent(kind)}`
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'הורדת החשבונית נכשלה');
+      }
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const disposition = res.headers.get('Content-Disposition') || '';
+      const match = disposition.match(/filename="([^"]+)"/);
+      a.href = objectUrl;
+      a.download = match?.[1] || (kind === 'refund' ? 'refund.pdf' : 'invoice.pdf');
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      setHistoryError(err.message || 'הורדת החשבונית נכשלה');
+    } finally {
+      setInvoiceBusyKey('');
+    }
+  };
+
   const refundSale = async (sale) => {
     if (!sale?.id) return;
     const ok = window.confirm(
       `לזכות את העסקה של ${sale.customer_name || 'לקוח'} בסך ₪${Number(sale.total || 0).toLocaleString()}?\n` +
         (sale.icount_doc_number ? `מספר מסמך: ${sale.icount_doc_number}\n` : '') +
-        'יווצר מסמך ביטול במערכת החיוב, וכרטיסיות או מנויים מהעסקה יבוטלו.'
+        (isCardPaymentMethod(sale.payment_method)
+          ? 'יווצר מסמך ביטול במערכת החיוב, והכסף יוחזר לכרטיס אם העסקה שולמה באשראי.\n'
+          : 'יווצר מסמך ביטול במערכת החיוב (עסקת מזומן — בלי החזר לכרטיס).\n') +
+        'כרטיסיות או מנויים מהעסקה יבוטלו.'
     );
     if (!ok) return;
 
@@ -302,6 +374,89 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
   const totalCash = shifts.reduce((sum, s) => sum + Number(s.actual || 0), 0);
   const problemShifts = shifts.filter((s) => Number(s.discrepancy) !== 0).length;
   const pendingPayments = payments.filter((p) => p.status === 'pending');
+
+  const filteredPosSales = useMemo(() => {
+    const query = historySearch.trim().toLowerCase();
+    const filtered = posSales.filter((sale) => {
+      if (historyStatus !== 'all' && sale.status !== historyStatus) return false;
+      if (
+        historyPaymentMethod !== 'all' &&
+        sale.payment_method !== historyPaymentMethod
+      ) {
+        return false;
+      }
+
+      const saleDate = String(sale.created_at || '').slice(0, 10);
+      if (historyDateFrom && saleDate < historyDateFrom) return false;
+      if (historyDateTo && saleDate > historyDateTo) return false;
+
+      if (query) {
+        const itemText = (Array.isArray(sale.items) ? sale.items : [])
+          .map((item) => item.name || item.description || '')
+          .join(' ');
+        const searchable = [
+          sale.customer_name,
+          sale.customer_phone,
+          sale.customer_email,
+          sale.icount_doc_number,
+          sale.refund_doc_number,
+          sale.sold_by,
+          itemText,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        if (!searchable.includes(query)) return false;
+      }
+
+      return true;
+    });
+
+    return filtered.sort((a, b) => {
+      if (historySort === 'oldest') {
+        return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+      }
+      if (historySort === 'amount-high') {
+        return Number(b.total || 0) - Number(a.total || 0);
+      }
+      if (historySort === 'amount-low') {
+        return Number(a.total || 0) - Number(b.total || 0);
+      }
+      if (historySort === 'customer') {
+        return String(a.customer_name || '').localeCompare(
+          String(b.customer_name || ''),
+          'he'
+        );
+      }
+      return String(b.created_at || '').localeCompare(String(a.created_at || ''));
+    });
+  }, [
+    posSales,
+    historySearch,
+    historyStatus,
+    historyPaymentMethod,
+    historyDateFrom,
+    historyDateTo,
+    historySort,
+  ]);
+
+  const clearHistoryFilters = () => {
+    setHistorySearch('');
+    setHistoryStatus('all');
+    setHistoryPaymentMethod('all');
+    setHistoryDateFrom('');
+    setHistoryDateTo('');
+    setHistorySort('newest');
+    setExpandedSaleId('');
+  };
+
+  const hasActiveHistoryFilters =
+    !!historySearch.trim() ||
+    historyStatus !== 'all' ||
+    historyPaymentMethod !== 'all' ||
+    !!historyDateFrom ||
+    !!historyDateTo ||
+    historySort !== 'newest';
 
   const statusLine = icountStatus.loading
     ? 'בודק חיבור...'
@@ -500,13 +655,105 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
                 <div className="section-title" style={{ marginBottom: 4 }}>היסטוריית עסקאות</div>
                 <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
                   {isOwner
-                    ? 'מכירות מהקופה · אפשר לזכות עסקה ששולמה (יוצר מסמך ביטול במערכת החיוב)'
-                    : 'מכירות של היום ושלך · זיכוי זמין לעסקאות האלה'}
+                    ? 'לחיצה על שורה פותחת פירוט · זיכוי וקישורים נמצאים בתוך הפירוט'
+                    : 'לחיצה על שורה פותחת פירוט · זיכוי זמין לעסקאות שלך בתוך הפירוט'}
                 </div>
               </div>
               <button className="btn btn-ghost btn-sm" onClick={refreshSales} disabled={salesLoading}>
                 <RefreshCw size={14} /> {salesLoading ? 'מרענן...' : 'רענון'}
               </button>
+            </div>
+            <div className="pos-history-filters">
+              <div className="pos-history-filters-grid">
+                <label className="form-group pos-history-filter-search">
+                  <span className="form-label">חיפוש</span>
+                  <div className="input-icon-wrap">
+                    <Search size={15} className="input-icon" />
+                    <input
+                      className="input input-sm"
+                      value={historySearch}
+                      onChange={(e) => setHistorySearch(e.target.value)}
+                      placeholder="לקוח, טלפון, פריט או מסמך"
+                    />
+                  </div>
+                </label>
+                <label className="form-group">
+                  <span className="form-label">סטטוס</span>
+                  <select
+                    className="input select input-sm"
+                    value={historyStatus}
+                    onChange={(e) => setHistoryStatus(e.target.value)}
+                  >
+                    <option value="all">הכול</option>
+                    <option value="paid">שולם</option>
+                    <option value="pending_payment">ממתין לתשלום</option>
+                    <option value="refunded">זוכה</option>
+                    <option value="cancelled">בוטל</option>
+                    <option value="quoted">הצעה</option>
+                  </select>
+                </label>
+                <label className="form-group">
+                  <span className="form-label">אופן תשלום</span>
+                  <select
+                    className="input select input-sm"
+                    value={historyPaymentMethod}
+                    onChange={(e) => setHistoryPaymentMethod(e.target.value)}
+                  >
+                    <option value="all">הכול</option>
+                    <option value="cash">מזומן</option>
+                    <option value="online">סליקה בקישור</option>
+                    <option value="emv">אשראי במסוף</option>
+                    <option value="quote">הצעת מחיר</option>
+                  </select>
+                </label>
+                <label className="form-group">
+                  <span className="form-label">מתאריך</span>
+                  <input
+                    className="input input-sm"
+                    type="date"
+                    value={historyDateFrom}
+                    onChange={(e) => setHistoryDateFrom(e.target.value)}
+                  />
+                </label>
+                <label className="form-group">
+                  <span className="form-label">עד תאריך</span>
+                  <input
+                    className="input input-sm"
+                    type="date"
+                    value={historyDateTo}
+                    onChange={(e) => setHistoryDateTo(e.target.value)}
+                  />
+                </label>
+                <label className="form-group">
+                  <span className="form-label">מיון</span>
+                  <select
+                    className="input select input-sm"
+                    value={historySort}
+                    onChange={(e) => setHistorySort(e.target.value)}
+                  >
+                    <option value="newest">החדש ביותר</option>
+                    <option value="oldest">הישן ביותר</option>
+                    <option value="amount-high">סכום: גבוה לנמוך</option>
+                    <option value="amount-low">סכום: נמוך לגבוה</option>
+                    <option value="customer">שם לקוח</option>
+                  </select>
+                </label>
+              </div>
+              <div className="pos-history-filters-meta">
+                <span>
+                  מוצגות {filteredPosSales.length} מתוך {posSales.length} עסקאות
+                </span>
+                {hasActiveHistoryFilters && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={clearHistoryFilters}
+                  >
+                    <X size={13} />
+                    ניקוי סינון
+                  </button>
+                )}
+              </div>
             </div>
             {historyError && (
               <div className="alert alert-error" style={{ marginTop: 12 }}>{historyError}</div>
@@ -524,75 +771,207 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
                     <th>תאריך</th>
                     <th>לקוח</th>
                     <th>פריטים</th>
-                    <th>אמצעי</th>
+                    <th>אופן תשלום</th>
                     <th>סכום</th>
-                    <th>מסמך</th>
                     <th>סטטוס</th>
-                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {posSales.length === 0 && (
+                  {filteredPosSales.length === 0 && (
                     <tr>
-                      <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-3)' }}>
-                        {salesLoading ? 'טוען עסקאות...' : 'עדיין אין עסקאות קופה'}
+                      <td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-3)' }}>
+                        {salesLoading
+                          ? 'טוען עסקאות...'
+                          : posSales.length
+                            ? 'לא נמצאו עסקאות שמתאימות לסינון'
+                            : 'עדיין אין עסקאות קופה'}
                       </td>
                     </tr>
                   )}
-                  {posSales.map((sale) => {
+                  {filteredPosSales.map((sale) => {
                     const items = Array.isArray(sale.items) ? sale.items : [];
                     const canRefund =
                       sale.status === 'paid' &&
                       !!sale.icount_doc_number &&
                       sale.payment_method !== 'quote';
+                    const canDownloadCharge = !!(
+                      sale.icount_doc_url ||
+                      sale.icount_doc_number ||
+                      sale.icount_doc_id
+                    );
+                    const canDownloadRefund = !!(
+                      sale.refund_doc_url ||
+                      sale.refund_doc_number
+                    );
+                    const expanded = expandedSaleId === sale.id;
                     return (
-                      <tr key={sale.id}>
-                        <td>
-                          {sale.created_at
-                            ? new Date(sale.created_at).toLocaleString('he-IL')
-                            : '—'}
-                        </td>
-                        <td>
-                          <div style={{ fontWeight: 600 }}>{sale.customer_name || 'לקוח'}</div>
-                          {sale.customer_phone && (
-                            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{sale.customer_phone}</div>
-                          )}
-                        </td>
-                        <td style={{ fontSize: 12, maxWidth: 220 }}>
-                          {items.length
-                            ? items.map((i) => i.name || i.description).filter(Boolean).join(', ')
-                            : '—'}
-                        </td>
-                        <td>{payMethodLabel(sale.payment_method)}</td>
-                        <td style={{ fontWeight: 700 }}>₪{Number(sale.total || 0).toLocaleString()}</td>
-                        <td>{sale.icount_doc_number || sale.refund_doc_number || '—'}</td>
-                        <td>
-                          <span className={saleStatusBadge(sale.status)}>
-                            {saleStatusLabel(sale.status)}
-                          </span>
-                          {sale.refund_doc_number && (
-                            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
-                              ביטול: {sale.refund_doc_number}
-                            </div>
-                          )}
-                        </td>
-                        <td>
-                          {canRefund ? (
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
-                              disabled={refundBusyId === sale.id}
-                              onClick={() => refundSale(sale)}
-                              title="זיכוי / ביטול עסקה"
-                            >
-                              <RotateCcw size={13} />
-                              {refundBusyId === sale.id ? 'מזכה...' : 'זיכוי'}
-                            </button>
-                          ) : (
-                            <span style={{ color: 'var(--text-3)', fontSize: 12 }}>—</span>
-                          )}
-                        </td>
-                      </tr>
+                      <Fragment key={sale.id}>
+                        <tr
+                          onClick={() =>
+                            setExpandedSaleId((prev) => (prev === sale.id ? '' : sale.id))
+                          }
+                          style={{
+                            cursor: 'pointer',
+                            background: expanded ? 'rgba(255,255,255,0.04)' : undefined,
+                          }}
+                          title="לחיצה לפירוט העסקה"
+                        >
+                          <td>
+                            {sale.created_at
+                              ? new Date(sale.created_at).toLocaleString('he-IL')
+                              : '—'}
+                          </td>
+                          <td>
+                            <div style={{ fontWeight: 600 }}>{sale.customer_name || 'לקוח'}</div>
+                            {sale.customer_phone && (
+                              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{sale.customer_phone}</div>
+                            )}
+                          </td>
+                          <td style={{ fontSize: 12, maxWidth: 220 }}>
+                            {items.length
+                              ? items.map((i) => i.name || i.description).filter(Boolean).join(', ')
+                              : '—'}
+                          </td>
+                          <td>
+                            <span className={payMethodBadge(sale.payment_method)}>
+                              {payMethodLabel(sale.payment_method)}
+                            </span>
+                          </td>
+                          <td style={{ fontWeight: 700 }}>₪{Number(sale.total || 0).toLocaleString()}</td>
+                          <td>
+                            <span className={saleStatusBadge(sale.status)}>
+                              {saleStatusLabel(sale.status)}
+                            </span>
+                          </td>
+                        </tr>
+                        {expanded && (
+                          <tr>
+                            <td colSpan={6} style={{ background: 'rgba(255,255,255,0.03)', padding: 16 }}>
+                              <div style={{ display: 'grid', gap: 14 }}>
+                                <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+                                  <div>
+                                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>אופן תשלום</div>
+                                    <div>{payMethodLabel(sale.payment_method)}</div>
+                                    {isCardPaymentMethod(sale.payment_method) && sale.status === 'paid' && (
+                                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                                        זיכוי יחזיר לכרטיס
+                                      </div>
+                                    )}
+                                    {String(sale.payment_method || '').toLowerCase() === 'cash' && sale.status === 'paid' && (
+                                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                                        זיכוי = ביטול חשבונית
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div>
+                                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>נמכר על ידי</div>
+                                    <div>{sale.sold_by || '—'}</div>
+                                  </div>
+                                  <div>
+                                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>מספר מסמך</div>
+                                    <div>{sale.icount_doc_number || '—'}</div>
+                                  </div>
+                                  {sale.refund_doc_number && (
+                                    <div>
+                                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>מסמך זיכוי</div>
+                                      <div>{sale.refund_doc_number}</div>
+                                    </div>
+                                  )}
+                                </div>
+
+                                <div>
+                                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>פריטים</div>
+                                  <div style={{ fontSize: 13 }}>
+                                    {items.length
+                                      ? items.map((i, idx) => (
+                                          <div key={`${sale.id}-item-${idx}`}>
+                                            {(i.name || i.description || 'פריט')}
+                                            {Number(i.quantity) > 1 ? ` × ${i.quantity}` : ''}
+                                            {i.unitprice != null ? ` · ₪${Number(i.unitprice).toLocaleString()}` : ''}
+                                          </div>
+                                        ))
+                                      : '—'}
+                                  </div>
+                                </div>
+
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                                  {sale.payment_url && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-sm"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          copyPaymentLink(sale);
+                                        }}
+                                      >
+                                        <Copy size={13} />
+                                        העתקת קישור תשלום
+                                      </button>
+                                      <a
+                                        className="btn btn-ghost btn-sm"
+                                        href={sale.payment_url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        <ExternalLink size={13} />
+                                        פתיחת קישור תשלום
+                                      </a>
+                                    </>
+                                  )}
+                                  {canDownloadCharge && (
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-sm"
+                                      disabled={invoiceBusyKey === `${sale.id}:charge`}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        downloadSaleInvoice(sale, 'charge');
+                                      }}
+                                    >
+                                      {invoiceBusyKey === `${sale.id}:charge`
+                                        ? <Loader2 size={13} className="spin" />
+                                        : <Download size={13} />}
+                                      הורדת חשבונית
+                                    </button>
+                                  )}
+                                  {canDownloadRefund && (
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-sm"
+                                      disabled={invoiceBusyKey === `${sale.id}:refund`}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        downloadSaleInvoice(sale, 'refund');
+                                      }}
+                                    >
+                                      {invoiceBusyKey === `${sale.id}:refund`
+                                        ? <Loader2 size={13} className="spin" />
+                                        : <Download size={13} />}
+                                      הורדת מסמך זיכוי
+                                    </button>
+                                  )}
+                                  {canRefund && (
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-sm"
+                                      disabled={refundBusyId === sale.id}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        refundSale(sale);
+                                      }}
+                                    >
+                                      <RotateCcw size={13} />
+                                      {refundBusyId === sale.id ? 'מזכה...' : 'זיכוי עסקה'}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     );
                   })}
                 </tbody>

@@ -1,6 +1,6 @@
 ﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ShoppingCart, Plus, Minus, Trash2, Search, User, CreditCard,
+  ShoppingCart, Plus, Minus, Trash2, Search, User,
   Banknote, Link2, FileText, CheckCircle2, X, Percent, Tag,
   Package, ArrowRight,
 } from 'lucide-react';
@@ -14,7 +14,6 @@ import {
 
 const PAY_METHODS = [
   { id: 'cash', label: 'מזומן', icon: Banknote },
-  { id: 'emv', label: 'אשראי במסוף', icon: CreditCard },
   { id: 'online', label: 'סליקה בקישור', icon: Link2 },
 ];
 
@@ -1105,7 +1104,7 @@ export default function PosSale() {
                 );
               })}
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontWeight: 800, fontSize: 18 }}>
-                <span>סה״כ</span>
+                <span>סה״כ כולל מע״מ</span>
                 <span>₪{total.toLocaleString()}</span>
               </div>
             </div>
@@ -1222,11 +1221,6 @@ export default function PosSale() {
               {sendWhatsapp
                 ? 'אחרי יצירת הקישור הוא יישלח בוואטסאפ ללקוח (חובה טלפון). אפשר גם להעתיק או לפתוח את עמוד הסליקה.'
                 : 'אחרי יצירת הקישור ייפתח עמוד הסליקה. אפשר גם להעתיק ולשלוח ללקוח.'}
-            </div>
-          )}
-          {paymentMethod === 'emv' && (
-            <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 8 }}>
-              סלקו במסוף ואז לחצו על גבייה — המערכת תפיק חשבונית מס קבלה.
             </div>
           )}
         </div>

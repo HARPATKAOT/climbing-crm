@@ -29,7 +29,7 @@ const WA_TEMPLATES = [];
 export default function Broadcasts({ parents, students, groups = [] }) {
   const { profile } = useBusinessProfile();
   const brandName = profile.display_name || 'הרפתקאות';
-  const [activeTab, setActiveTab] = useState('compose'); // compose | templates | saved | history | simulator | channels | settings
+  const [activeTab, setActiveTab] = useState('compose'); // compose | templates | saved | history | channels | settings
   
   // Compose / Send State
   const [lists, setLists] = useState(DEFAULT_LISTS);
@@ -83,21 +83,6 @@ export default function Broadcasts({ parents, students, groups = [] }) {
   const [testingAi, setTestingAi] = useState(false);
   const [resettingPlayground, setResettingPlayground] = useState(false);
   const workbenchEndRef = useRef(null);
-
-  // Chat Log & Simulator State
-  const [chatLogs, setChatLogs] = useState([]);
-  const [loadingLogs, setLoadingLogs] = useState(false);
-  
-  // Simulator specific
-  const [simChannel, setSimChannel] = useState('whatsapp'); // 'whatsapp' | 'instagram'
-  const [simPhone, setSimPhone] = useState('0547654321');
-  const [simIgId, setSimIgId] = useState('moti_climber');
-  const [simIgName, setSimIgName] = useState('מוטי מטפס (אינסטגרם)');
-  const [simInput, setSimInput] = useState('');
-  const [simSending, setSimSending] = useState(false);
-  const [selectedSimThread, setSelectedSimThread] = useState('0547654321');
-
-  const phoneMessagesEndRef = useRef(null);
 
   const coexistenceLabel = () => {
     if (waStatus.coexistenceEnabled || waStatus.isOnBizApp) return 'פעיל (טלפון + מערכת)';
@@ -347,25 +332,9 @@ export default function Broadcasts({ parents, students, groups = [] }) {
     }
   };
 
-  const fetchChatLogs = async () => {
-    setLoadingLogs(true);
-    try {
-      const response = await fetch('/api/whatsapp/logs');
-      if (response.ok) {
-        const data = await response.json();
-        setChatLogs(data);
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoadingLogs(false);
-    }
-  };
-
   useEffect(() => {
     fetchLists();
     fetchSettings();
-    fetchChatLogs();
     fetchWaStatus();
     fetchWaConnectConfig();
     fetchApprovedTemplates();
@@ -390,18 +359,10 @@ export default function Broadcasts({ parents, students, groups = [] }) {
   useEffect(() => {
     if (activeTab === 'history') {
       fetchBroadcasts();
-    } else if (activeTab === 'simulator') {
-      fetchChatLogs();
     } else if (activeTab === 'templates') {
       fetchApprovedTemplates();
     }
   }, [activeTab]);
-
-  useEffect(() => {
-    if (phoneMessagesEndRef.current) {
-      phoneMessagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [chatLogs, selectedSimThread]);
 
   useEffect(() => {
     setSegmentFilters((prev) => {
@@ -521,7 +482,6 @@ export default function Broadcasts({ parents, students, groups = [] }) {
         });
         setSelectedTemplate(null);
         setCustomMessage('');
-        fetchChatLogs();
       } else {
         setSendResult({
           success: false,
@@ -534,42 +494,6 @@ export default function Broadcasts({ parents, students, groups = [] }) {
       setSendResult({ success: false, error: 'שגיאה בחיבור' });
     } finally {
       setSendingBroadcast(false);
-    }
-  };
-
-  const handleSimSend = async (e) => {
-    e.preventDefault();
-    if (!simInput.trim()) return;
-
-    setSimSending(true);
-    const messageToSend = simInput;
-    setSimInput('');
-
-    try {
-      const endpoint = simChannel === 'instagram' ? '/api/instagram/simulate-incoming' : '/api/whatsapp/simulate-incoming';
-      const bodyPayload = simChannel === 'instagram'
-        ? { igId: simIgId, message: messageToSend, name: simIgName }
-        : { phone: simPhone, message: messageToSend };
-
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(bodyPayload)
-      });
-
-      if (response.ok) {
-        const targetThread = simChannel === 'instagram' ? simIgId : simPhone;
-        setSelectedSimThread(targetThread);
-        setTimeout(async () => {
-          await fetchChatLogs();
-          setSimSending(false);
-        }, 800);
-      } else {
-        setSimSending(false);
-      }
-    } catch (err) {
-      console.error(err);
-      setSimSending(false);
     }
   };
 
@@ -689,37 +613,6 @@ export default function Broadcasts({ parents, students, groups = [] }) {
     return () => { cancelled = true; };
   }, [activeTab]);
 
-  const threadMessages = chatLogs
-    .filter(log => log.phone === selectedSimThread)
-    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-
-  const threads = chatLogs.reduce((acc, current) => {
-    const existing = acc.find(item => item.phone === current.phone);
-    if (!existing) {
-      acc.push({
-        phone: current.phone,
-        lastMessage: current.message,
-        lastTime: current.created_at
-      });
-    }
-    return acc;
-  }, []);
-
-  if (simPhone && !threads.some(t => t.phone === simPhone)) {
-    threads.unshift({
-      phone: simPhone,
-      lastMessage: 'הקש הודעה בסימולטור כדי להתחיל שיחה...',
-      lastTime: new Date().toISOString()
-    });
-  }
-  if (simIgId && !threads.some(t => t.phone === simIgId)) {
-    threads.unshift({
-      phone: simIgId,
-      lastMessage: 'הודעת DM מאינסטגרם...',
-      lastTime: new Date().toISOString()
-    });
-  }
-
   return (
     <div className="fade-in">
       <div className="section-header" style={{ marginBottom: 16 }}>
@@ -742,9 +635,6 @@ export default function Broadcasts({ parents, students, groups = [] }) {
         </button>
         <button className={`btn btn-sm ${activeTab === 'history' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('history')}>
           <History size={14} /> היסטוריית קמפיינים
-        </button>
-        <button className={`btn btn-sm ${activeTab === 'simulator' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('simulator')}>
-          <Smartphone size={14} /> סימולטור שיחות
         </button>
         <button className={`btn btn-sm ${activeTab === 'channels' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('channels')}>
           <Smartphone size={14} /> חיבורי ערוצים
@@ -913,93 +803,6 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                 )}
               </tbody>
             </table>
-          </div>
-        </div>
-      )}
-
-      {/* SIMULATOR */}
-      {activeTab === 'simulator' && (
-        <div className="grid-21" style={{ gap: 20, alignItems: 'flex-start' }}>
-          <div className="card" style={{ display: 'flex', flexDirection: 'column', height: '540px', minWidth: 0 }}>
-            <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <span className="section-title" style={{ fontSize: 14 }}>יומן צ׳אט וסימולטור פעיל</span>
-                <div style={{ display: 'flex', background: 'var(--bg-2)', borderRadius: 8, padding: 2 }}>
-                  <button type="button" className={`btn btn-xs ${simChannel === 'whatsapp' ? 'btn-success' : 'btn-ghost'}`}
-                    onClick={() => { setSimChannel('whatsapp'); setSelectedSimThread(simPhone); }} style={{ gap: 4, padding: '4px 8px' }}>
-                    💬 WhatsApp
-                  </button>
-                  <button type="button" className={`btn btn-xs ${simChannel === 'instagram' ? 'btn-primary' : 'btn-ghost'}`}
-                    onClick={() => { setSimChannel('instagram'); setSelectedSimThread(simIgId); }} style={{ gap: 4, padding: '4px 8px', background: simChannel === 'instagram' ? 'linear-gradient(45deg, #f09433, #dc2743, #bc1888)' : undefined, color: simChannel === 'instagram' ? 'white' : undefined }}>
-                    📱 Instagram DM
-                  </button>
-                </div>
-              </div>
-              <button className="btn btn-ghost btn-xs" onClick={fetchChatLogs}><RefreshCw size={12} /></button>
-            </div>
-            
-            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-              <div style={{ width: '180px', borderLeft: '1px solid var(--border)', overflowY: 'auto' }}>
-                {threads.map(t => {
-                  const isIg = t.phone?.includes('ig_') || t.phone?.includes('_ig') || t.phone?.includes('climber');
-                  return (
-                    <div key={t.phone} onClick={() => setSelectedSimThread(t.phone)}
-                      style={{ padding: 12, borderBottom: '1px solid var(--border)', cursor: 'pointer', background: selectedSimThread === t.phone ? 'rgba(99,102,241,0.08)' : undefined }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ fontSize: 13 }}>{isIg ? '📱' : '💬'}</span>
-                        <div style={{ fontWeight: 'bold', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.phone}</div>
-                      </div>
-                      <div style={{ fontSize: 10, color: 'var(--text-3)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', marginTop: 4 }}>{t.lastMessage}</div>
-                    </div>
-                  );
-                })}
-              </div>
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#090d16', padding: 12 }}>
-                <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {threadMessages.map(msg => (
-                    <div key={msg.id} style={{ alignSelf: msg.direction === 'inbound' ? 'flex-end' : 'flex-start', maxWidth: '80%' }}>
-                      <div style={{ background: msg.direction === 'inbound' ? (msg.channel === 'instagram' ? 'linear-gradient(135deg, rgba(225,48,108,0.2), rgba(193,53,132,0.2))' : 'rgba(99,102,241,0.15)') : 'rgba(255,255,255,0.05)', border: msg.channel === 'instagram' && msg.direction === 'inbound' ? '1px solid rgba(225,48,108,0.4)' : undefined, padding: '8px 12px', borderRadius: 10, fontSize: 12 }}>
-                        {msg.message}
-                        {msg.is_ai && <span style={{ display: 'block', fontSize: 9, color: msg.channel === 'instagram' ? '#ff80bf' : 'var(--green)', marginTop: 4 }}>🤖 מענה אוטומטי AI ({msg.channel === 'instagram' ? 'אינסטגרם' : 'וואטסאפ'})</span>}
-                      </div>
-                    </div>
-                  ))}
-                  <div ref={phoneMessagesEndRef} />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 0 }}>
-            <div style={{ width: '100%', maxWidth: '300px', height: '540px', border: '8px solid #1f2937', borderRadius: 24, background: simChannel === 'instagram' ? '#000000' : '#e5ddd5', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
-              <div style={{ background: simChannel === 'instagram' ? 'linear-gradient(90deg, #833ab4, #fd1d1d, #fcb045)' : '#075e54', color: 'white', padding: 10, fontSize: 12, fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <div style={{ width: 24, height: 24, borderRadius: '50%', background: simChannel === 'instagram' ? 'rgba(255,255,255,0.2)' : '#128c7e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13 }}>{simChannel === 'instagram' ? '📸' : 'MW'}</div>
-                  <span>{simChannel === 'instagram' ? `${brandName} Instagram DM` : `תמיכה ${brandName} 🧗`}</span>
-                </div>
-                <span style={{ fontSize: 10, opacity: 0.85 }}>{simChannel === 'instagram' ? 'Active now' : 'מחובר'}</span>
-              </div>
-
-              {simChannel === 'instagram' && (
-                <div style={{ background: '#121212', padding: '6px 10px', borderBottom: '1px solid #262626', display: 'flex', gap: 6, fontSize: 11 }}>
-                  <input className="input input-sm" style={{ flex: 1, background: '#262626', color: 'white', fontSize: 11 }} placeholder="IG Username (לדוגמה: moti_ig)" value={simIgId} onChange={e => setSimIgId(e.target.value)} />
-                  <input className="input input-sm" style={{ flex: 1.2, background: '#262626', color: 'white', fontSize: 11 }} placeholder="שם מלא (מוטי)" value={simIgName} onChange={e => setSimIgName(e.target.value)} />
-                </div>
-              )}
-
-              <div style={{ flex: 1, padding: 10, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, direction: 'rtl' }}>
-                {threadMessages.map(msg => (
-                  <div key={msg.id} style={{ alignSelf: msg.direction === 'inbound' ? 'flex-start' : 'flex-end', background: msg.direction === 'inbound' ? (simChannel === 'instagram' ? '#262626' : '#d9fdd3') : (simChannel === 'instagram' ? 'linear-gradient(45deg, #7b4397, #dc2430)' : '#ffffff'), padding: '8px 12px', borderRadius: 14, fontSize: 11, maxWidth: '85%', color: simChannel === 'instagram' || msg.direction !== 'inbound' ? (simChannel === 'instagram' && msg.direction === 'inbound' ? '#ffffff' : '#ffffff') : '#111827', borderBottomLeftRadius: msg.direction === 'inbound' ? 4 : 14, borderBottomRightRadius: msg.direction === 'inbound' ? 14 : 4 }}>
-                    {msg.message}
-                  </div>
-                ))}
-                {simSending && <span style={{ fontSize: 10, color: 'var(--text-3)' }}>✍️ הבוט מנתח ומקליד...</span>}
-              </div>
-              <form onSubmit={handleSimSend} style={{ background: simChannel === 'instagram' ? '#121212' : '#f0f2f5', padding: 8, display: 'flex', gap: 6, borderTop: simChannel === 'instagram' ? '1px solid #262626' : undefined }}>
-                <input className="input" style={{ fontSize: 12, padding: 8, background: simChannel === 'instagram' ? '#262626' : 'white', color: simChannel === 'instagram' ? 'white' : 'black' }} placeholder={simChannel === 'instagram' ? 'שלח DM באינסטגרם...' : 'שלח הודעה כלקוח...'} value={simInput} onChange={e => setSimInput(e.target.value)} />
-                <button type="submit" className="btn btn-primary btn-sm btn-icon" disabled={simSending} style={{ background: simChannel === 'instagram' ? 'linear-gradient(45deg, #f09433, #dc2743)' : undefined }}>Go</button>
-              </form>
-            </div>
           </div>
         </div>
       )}

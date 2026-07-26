@@ -41,7 +41,7 @@ import {
   applyHostRefundMarks,
   summarizeHostPayment,
 } from './activityRegistrationRefund.js';
-import { chargeAmount, normalizePriceIncludesVat } from './vat.js';
+import { chargeAmount, normalizePriceIncludesVat, icountVatType } from './vat.js';
 import {
   registerActivityGroup,
   markRegistrationOrderPaid,
@@ -89,6 +89,12 @@ import {
   ensureEquipmentWhatsappTemplate,
 } from './equipmentService.js';
 import {
+  EVENT_HOST_PAYMENT_TEMPLATE,
+  EVENT_PARTICIPANT_LINK_TEMPLATE,
+  ensureEventWhatsappTemplates,
+  findApprovedEventTemplate,
+} from './eventWhatsappTemplates.js';
+import {
   ensureProductCategories,
   renameCategoryOnProducts,
   clampImage,
@@ -129,6 +135,7 @@ import {
   moveTemplate,
   submitTemplateToMeta,
   syncTemplatesFromMeta,
+  applyTemplateStatusUpdate,
 } from './channels/templates.js';
 import {
   previewAudience,
@@ -822,6 +829,15 @@ app.post('/api/conversations/:parentId/handled', async (req, res) => {
 
 // ─── Message templates ───────────────────────────────────────────────────────
 app.get('/api/message-templates', (req, res) => {
+  try {
+    ensureEventWhatsappTemplates({
+      db,
+      persist: persistCore,
+      publicAppBase: process.env.FRONTEND_URL || process.env.PUBLIC_APP_URL || '',
+    });
+  } catch (err) {
+    console.warn('event whatsapp templates ensure on list skipped:', err.message);
+  }
   const approvedOnly = req.query.approved === '1' || req.query.approved === 'true';
   res.json(approvedOnly ? listApprovedTemplates() : listLocalTemplates());
 });
@@ -1382,6 +1398,19 @@ async function processWhatsAppWebhookChange(change = {}) {
 
   if (field === 'account_update') {
     console.log('ℹ️ WhatsApp account_update webhook:', JSON.stringify(value));
+  }
+
+  // Template review result (APPROVED / REJECTED / …)
+  if (field === 'message_template_status_update') {
+    try {
+      const result = await applyTemplateStatusUpdate(value);
+      console.log(
+        `📄 Template status update: ${value.message_template_name || value.message_template_id} → ${value.event || 'sync'}`,
+        result?.template?.status || result?.success
+      );
+    } catch (err) {
+      console.error('Template status webhook failed:', err.message);
+    }
   }
 
   return { notPersisted };
@@ -2297,12 +2326,16 @@ function matchHostPaymentActivity(rows, token) {
 /** Resolve host-payment activity, refreshing from durable store when local cache is stale. */
 async function findActivityByHostPaymentToken(token) {
   let activity = matchHostPaymentActivity(db.get('activities'), token);
-  if (activity) return activity;
-  if (!supa.isEnabled()) return null;
-  const remote = await supa.getAll('activities');
-  if (!remote) return null;
-  db.set('activities', remote);
-  return matchHostPaymentActivity(remote, token);
+  // Always refresh from durable store so host edits (name / linked customer)
+  // are visible on the public payment link even when the server cache is stale.
+  if (supa.isEnabled()) {
+    const remote = await supa.getAll('activities');
+    if (remote) {
+      db.set('activities', remote);
+      activity = matchHostPaymentActivity(remote, token) || activity;
+    }
+  }
+  return activity;
 }
 
 function ensureActivityRegistrationSlug(activity) {
@@ -2537,6 +2570,40 @@ app.get('/api/activities/:id/registrations', async (req, res) => {
       }
     } catch (err) {
       console.warn('⚠️ [host payment] doc url lookup failed:', err.message);
+    }
+  }
+
+  if (
+    hostPayment?.refund_doc_number &&
+    !hostPayment.refund_doc_url &&
+    icount.isConfigured()
+  ) {
+    try {
+      const info = await icount.getDocInfo({
+        doctype: hostPayment.refund_doctype || hostPayment.icount_doctype || 'invrec',
+        docnum: hostPayment.refund_doc_number,
+      });
+      const docInfo = info.doc_info || info;
+      const url =
+        docInfo?.doc_url ||
+        docInfo?.docurl ||
+        info?.doc_url ||
+        info?.docurl ||
+        null;
+      if (url && hostPayment.payment_id) {
+        const updated = db.update('payments', hostPayment.payment_id, {
+          refund_doc_url: url,
+          updated_at: new Date().toISOString(),
+        });
+        if (updated) {
+          await persistCore('payments', updated);
+          hostPayment = { ...hostPayment, refund_doc_url: url };
+        }
+      } else if (url) {
+        hostPayment = { ...hostPayment, refund_doc_url: url };
+      }
+    } catch (err) {
+      console.warn('⚠️ [host payment] refund doc url lookup failed:', err.message);
     }
   }
 
@@ -2800,13 +2867,33 @@ app.post('/api/activities/:id/host-payment/refund', async (req, res) => {
       const info = await icount.getDocInfo({ doctype: plan.doctype, docnum: plan.docnum });
       const docInfo = info.doc_info || info;
       if (docInfo?.is_cancelled) {
+        const cancelDocnum =
+          docInfo.cancellation_docnum ||
+          docInfo.cancelled_by_docnum ||
+          docInfo.cancel_docnum ||
+          null;
+        const cancelDoctype =
+          docInfo.cancellation_doctype ||
+          docInfo.cancelled_by_doctype ||
+          plan.doctype;
+        const distinctCancel =
+          cancelDocnum && String(cancelDocnum) !== String(plan.docnum)
+            ? {
+                doctype: cancelDoctype,
+                docnum: cancelDocnum,
+                docUrl:
+                  docInfo.cancellation_doc_url ||
+                  docInfo.cancelled_by_doc_url ||
+                  null,
+              }
+            : null;
         const marked = await applyHostRefundMarks({
           db,
           persist: persistCore,
           activity: fresh,
           payment: plan.payment,
           reason: 'המסמך כבר בוטל במערכת החיוב',
-          cancellation: { doctype: plan.doctype, docnum: plan.docnum },
+          cancellation: distinctCancel,
           refundedBy: req.crmUser?.email || req.crmUser?.name || null,
         });
         return res.json({
@@ -2861,6 +2948,103 @@ app.post('/api/activities/:id/host-payment/refund', async (req, res) => {
       error: details || err.message,
       code: err.code,
     });
+  }
+});
+
+app.get('/api/activities/:id/host-payment/invoice', async (req, res) => {
+  try {
+    const activity = db.getOne('activities', req.params.id);
+    if (!activity) return res.status(404).json({ error: 'האירוע לא נמצא' });
+    if (supa.isEnabled()) {
+      const [remoteActivities, remotePayments] = await Promise.all([
+        supa.getAll('activities'),
+        supa.getAll('payments'),
+      ]);
+      if (remoteActivities) db.set('activities', remoteActivities);
+      if (remotePayments) db.set('payments', remotePayments);
+    }
+    const fresh = db.getOne('activities', req.params.id) || activity;
+    const summary = summarizeHostPayment(db, fresh);
+    if (!summary) return res.status(404).json({ error: 'לא נמצא תשלום מזמין' });
+
+    const kind = String(req.query.kind || 'charge') === 'refund' ? 'refund' : 'charge';
+    let url = kind === 'refund' ? summary.refund_doc_url : summary.icount_doc_url;
+    let docnum = kind === 'refund' ? summary.refund_doc_number : summary.icount_doc_number;
+    const doctype =
+      kind === 'refund'
+        ? summary.refund_doctype || summary.icount_doctype || 'invrec'
+        : summary.icount_doctype || 'invrec';
+
+    if (!url && kind === 'charge' && summary.icount_doc_id && icount.isConfigured()) {
+      try {
+        const info = await icount.getDoc(summary.icount_doc_id);
+        url =
+          info?.doc_url ||
+          info?.docurl ||
+          info?.doc?.doc_url ||
+          info?.doc?.docurl ||
+          null;
+        if (url && summary.payment_id) {
+          const updated = db.update('payments', summary.payment_id, {
+            icount_doc_url: url,
+            updated_at: new Date().toISOString(),
+          });
+          if (updated) await persistCore('payments', updated);
+        }
+      } catch (err) {
+        console.warn('⚠️ [host invoice] charge url lookup failed:', err.message);
+      }
+    }
+
+    if (!url && kind === 'refund' && docnum && icount.isConfigured()) {
+      try {
+        const info = await icount.getDocInfo({ doctype, docnum });
+        const docInfo = info.doc_info || info;
+        url =
+          docInfo?.doc_url ||
+          docInfo?.docurl ||
+          info?.doc_url ||
+          info?.docurl ||
+          null;
+        if (url && summary.payment_id) {
+          const updated = db.update('payments', summary.payment_id, {
+            refund_doc_url: url,
+            updated_at: new Date().toISOString(),
+          });
+          if (updated) await persistCore('payments', updated);
+        }
+      } catch (err) {
+        console.warn('⚠️ [host invoice] refund url lookup failed:', err.message);
+      }
+    }
+
+    if (!url) {
+      return res.status(404).json({
+        error:
+          kind === 'refund'
+            ? 'אין קישור להורדת מסמך הזיכוי'
+            : 'אין קישור להורדת חשבונית החיוב',
+      });
+    }
+
+    const upstream = await fetch(url);
+    if (!upstream.ok) {
+      return res.status(502).json({ error: 'הורדת המסמך ממערכת החיוב נכשלה' });
+    }
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    const contentType = upstream.headers.get('content-type') || 'application/pdf';
+    const safeDoc = String(docnum || kind).replace(/[^\w.-]+/g, '_');
+    const filename =
+      kind === 'refund'
+        ? `invoice-refund-${safeDoc}.pdf`
+        : `invoice-charge-${safeDoc}.pdf`;
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.length);
+    res.send(buffer);
+  } catch (err) {
+    console.error('host payment invoice download error:', err.message);
+    res.status(502).json({ error: err.message || 'הורדת המסמך נכשלה' });
   }
 });
 
@@ -2993,24 +3177,34 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
       emailStub = !!result.stub;
     }
 
+    try {
+      ensureEventWhatsappTemplates({
+        db,
+        persist: persistCore,
+        publicAppBase: frontendPublicBase(req),
+      });
+    } catch (tplErr) {
+      console.warn('event whatsapp templates ensure skipped:', tplErr.message);
+    }
+
     let whatsappSent = false;
     let whatsappError = null;
+    let whatsappViaTemplate = false;
     if (req.body?.via !== 'email') {
-      if (!canSendFreeform(parent, 'whatsapp')) {
-        whatsappError =
-          'חלון התקשורת של 24 שעות סגור. אפשר לשלוח טקסט חופשי רק אחרי שהלקוח כתב אלינו, או דרך תבנית מאושרת.';
-      } else {
-        const msg = sendHostPayment
-          ? (
-            `שלום${hostName ? ` ${hostName}` : ''}!\n` +
-            `קישור פרטי לתשלום עבור "${activity.name}":\n${url}`
-          )
-          : (
-            `שלום${hostName ? ` ${hostName}` : ''}!\n` +
-            `קישור להרשמת משתתפים עבור "${activity.name}":\n${url}\n` +
-            `אפשר להעביר את הקישור לכל מי שמגיע לאירוע.`
-          );
-        const waResult = await whatsappService.sendTextMessage(hostPhone, msg, false, {
+      const inWindow = canSendFreeform(parent, 'whatsapp');
+      const freeformMsg = sendHostPayment
+        ? (
+          `שלום${hostName ? ` ${hostName}` : ''}!\n` +
+          `קישור פרטי לתשלום עבור "${activity.name}":\n${url}`
+        )
+        : (
+          `שלום${hostName ? ` ${hostName}` : ''}!\n` +
+          `קישור להרשמת משתתפים עבור "${activity.name}":\n${url}\n` +
+          `אפשר להעביר את הקישור לכל מי שמגיע לאירוע.`
+        );
+
+      if (inWindow) {
+        const waResult = await whatsappService.sendTextMessage(hostPhone, freeformMsg, false, {
           clip: false,
           parentId: parent.id,
           source: 'activity_registration',
@@ -3021,6 +3215,43 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
           whatsappError = waResult?.error || 'שליחת וואטסאפ נכשלה';
         }
       }
+
+      if (!whatsappSent) {
+        const metaName = sendHostPayment
+          ? EVENT_HOST_PAYMENT_TEMPLATE
+          : EVENT_PARTICIPANT_LINK_TEMPLATE;
+        const localTpl = findApprovedEventTemplate(db, metaName);
+        if (localTpl) {
+          const buttonParam = sendHostPayment
+            ? activity.host_payment_token
+            : (activity.participant_registration_slug || activity.registration_slug);
+          try {
+            const waResult = await whatsappService.sendTemplateMessage(
+              hostPhone,
+              metaName,
+              [hostName || 'לקוח', activity.name || 'אירוע'],
+              {
+                fallbackName: hostName,
+                parentId: parent.id,
+                buttonUrlParam: buttonParam,
+              }
+            );
+            if (waResult?.success) {
+              whatsappSent = true;
+              whatsappViaTemplate = true;
+              whatsappError = null;
+            } else {
+              whatsappError = waResult?.error || 'שליחת תבנית וואטסאפ נכשלה';
+            }
+          } catch (waErr) {
+            whatsappError = waErr.message || 'שליחת תבנית וואטסאפ נכשלה';
+          }
+        } else if (!inWindow) {
+          whatsappError =
+            'חלון התקשורת של 24 שעות סגור, והתבנית עדיין לא מאושרת במטא. ' +
+            'במסך דיוור ← תבניות Meta: שלחו לאישור את «אירוע · קישור תשלום מזמין» או «אירוע · קישור למשתתפים».';
+        }
+      }
     }
 
     if (!whatsappSent && !emailed && !emailStub) {
@@ -3028,7 +3259,8 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
         error: whatsappError || 'השליחה למזמין נכשלה',
         url,
         whatsappSent: false,
-        windowClosed: !!whatsappError && whatsappError.includes('24'),
+        windowClosed: !!whatsappError && String(whatsappError).includes('24'),
+        templatePending: !!whatsappError && String(whatsappError).includes('תבנית'),
       });
     }
 
@@ -3039,6 +3271,7 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
       emailStub,
       emailConfigured: isEmailConfigured(),
       whatsappSent,
+      whatsappViaTemplate,
       whatsappError: whatsappSent ? null : whatsappError,
       host_parent_id: parent.id,
       host_name: hostName,
@@ -3203,7 +3436,12 @@ app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req
     const includesVat = normalizePriceIncludesVat(activity.price_includes_vat);
     const amount = chargeAmount(activity.price, includesVat);
     const description = `תשלום אירוע: ${activity.name}`;
-    if (!payment || payment.status === 'failed') {
+    if (
+      !payment ||
+      payment.status === 'failed' ||
+      payment.status === 'refunded' ||
+      payment.status === 'cancelled'
+    ) {
       payment = db.insert('payments', {
         parent_id: parent.id,
         student_id: null,
@@ -3219,6 +3457,7 @@ app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req
       });
     } else {
       payment = db.update('payments', payment.id, {
+        parent_id: parent.id,
         amount,
         price_includes_vat: includesVat,
         description,
@@ -4299,13 +4538,24 @@ app.post('/api/icount/webhook', async (req, res) => {
             docNumber: docnum || payment.icount_doc_number,
           });
           decrementInventory(lines);
-          db.update('pos_sales', sale.id, {
+          const docUrl =
+            updated?.icount_doc_url ||
+            payload.doc_url ||
+            payload.docurl ||
+            payload?.doc?.doc_url ||
+            payload?.doc?.docurl ||
+            sale.icount_doc_url ||
+            null;
+          const paidSale = db.update('pos_sales', sale.id, {
             status: 'paid',
             icount_doc_id: docId || sale.icount_doc_id,
             icount_doc_number: docnum || sale.icount_doc_number,
             icount_doctype: doctype || sale.icount_doctype || 'invrec',
+            icount_doc_url: docUrl,
+            payment_url: sale.payment_url || payment.payment_url || null,
             updated_at: new Date().toISOString(),
           });
+          if (paidSale) await persistCore('pos_sales', paidSale);
         }
       }
 
@@ -5183,10 +5433,121 @@ app.get('/api/pos/sales', (req, res) => {
         String(s.created_at || '').slice(0, 10) === today
     );
   }
-  sales = [...sales].sort((a, b) =>
-    String(b.created_at || '').localeCompare(String(a.created_at || ''))
-  );
+  const payments = db.get('payments') || [];
+  sales = [...sales]
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+    .map((sale) => {
+      const payment =
+        (sale.payment_id && payments.find((p) => String(p.id) === String(sale.payment_id))) ||
+        payments.find((p) => String(p.pos_sale_id) === String(sale.id)) ||
+        null;
+      return {
+        ...sale,
+        payment_url: sale.payment_url || payment?.payment_url || null,
+        icount_doc_url: sale.icount_doc_url || payment?.icount_doc_url || null,
+        icount_doc_number: sale.icount_doc_number || payment?.icount_doc_number || null,
+        icount_doc_id: sale.icount_doc_id || payment?.icount_doc_id || null,
+        icount_doctype: sale.icount_doctype || payment?.icount_doctype || null,
+      };
+    });
   res.json(sales);
+});
+
+app.get('/api/pos/sales/:id/invoice', async (req, res) => {
+  try {
+    const sale = db.getOne('pos_sales', req.params.id);
+    if (!sale) return res.status(404).json({ error: 'עסקה לא נמצאה' });
+
+    if (req.crmUser?.role === 'staff') {
+      const today = new Date().toISOString().slice(0, 10);
+      const allowed =
+        String(sale.sold_by || '') === String(req.crmUser.email || '') ||
+        String(sale.created_at || '').slice(0, 10) === today;
+      if (!allowed) {
+        return res.status(403).json({ error: 'אין הרשאה להוריד חשבונית לעסקה זו' });
+      }
+    }
+
+    const kind = String(req.query.kind || 'charge') === 'refund' ? 'refund' : 'charge';
+    let url = kind === 'refund' ? sale.refund_doc_url : sale.icount_doc_url;
+    let docnum = kind === 'refund' ? sale.refund_doc_number : sale.icount_doc_number;
+    const doctype =
+      kind === 'refund'
+        ? sale.refund_doctype || sale.icount_doctype || 'invrec'
+        : sale.icount_doctype || 'invrec';
+
+    if (!url && kind === 'charge' && sale.icount_doc_id && icount.isConfigured()) {
+      try {
+        const info = await icount.getDoc(sale.icount_doc_id);
+        url =
+          info?.doc_url ||
+          info?.docurl ||
+          info?.doc?.doc_url ||
+          info?.doc?.docurl ||
+          null;
+        if (url) {
+          const updated = db.update('pos_sales', sale.id, {
+            icount_doc_url: url,
+            updated_at: new Date().toISOString(),
+          });
+          if (updated) await persistCore('pos_sales', updated);
+        }
+      } catch (err) {
+        console.warn('⚠️ [POS invoice] charge url lookup failed:', err.message);
+      }
+    }
+
+    if (!url && docnum && icount.isConfigured()) {
+      try {
+        const info = await icount.getDocInfo({ doctype, docnum });
+        const docInfo = info.doc_info || info;
+        url =
+          docInfo?.doc_url ||
+          docInfo?.docurl ||
+          info?.doc_url ||
+          info?.docurl ||
+          null;
+        if (url) {
+          const patch =
+            kind === 'refund'
+              ? { refund_doc_url: url, updated_at: new Date().toISOString() }
+              : { icount_doc_url: url, updated_at: new Date().toISOString() };
+          const updated = db.update('pos_sales', sale.id, patch);
+          if (updated) await persistCore('pos_sales', updated);
+        }
+      } catch (err) {
+        console.warn('⚠️ [POS invoice] doc info url lookup failed:', err.message);
+      }
+    }
+
+    if (!url) {
+      return res.status(404).json({
+        error:
+          kind === 'refund'
+            ? 'אין קישור להורדת מסמך הזיכוי'
+            : 'אין קישור להורדת חשבונית החיוב',
+      });
+    }
+
+    const upstream = await fetch(url);
+    if (!upstream.ok) {
+      return res.status(502).json({ error: 'הורדת המסמך ממערכת החיוב נכשלה' });
+    }
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    const contentType = upstream.headers.get('content-type') || 'application/pdf';
+    const safeDoc = String(docnum || kind).replace(/[^\w.-]+/g, '_');
+    const filename =
+      kind === 'refund'
+        ? `invoice-refund-${safeDoc}.pdf`
+        : `invoice-charge-${safeDoc}.pdf`;
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.length);
+    res.send(buffer);
+  } catch (err) {
+    console.error('POS invoice download error:', err.message);
+    res.status(502).json({ error: err.message || 'הורדת המסמך נכשלה' });
+  }
 });
 
 app.post('/api/pos/sales/:id/refund', async (req, res) => {
@@ -5222,6 +5583,10 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
       String(req.body?.reason || '').trim() ||
       `ביטול עסקת קופה ${sale.id}`;
 
+    let docHasCc = ['emv', 'credit', 'cc', 'online', 'card'].includes(
+      String(sale.payment_method || '').toLowerCase()
+    );
+
     // Verify still cancellable when possible
     try {
       const info = await icount.getDocInfo({ doctype, docnum: sale.icount_doc_number });
@@ -5231,12 +5596,15 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
           status: 'refunded',
           refunded_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
-          refund_note: 'המסמך כבר בוטל ב-iCount',
+          refund_note: 'המסמך כבר בוטל במערכת החיוב',
         });
         return res.json({ sale: updated, alreadyCancelled: true });
       }
       if (docInfo && docInfo.is_cancellable === false) {
-        return res.status(400).json({ error: 'המסמך ב-iCount לא ניתן לביטול' });
+        return res.status(400).json({ error: 'המסמך במערכת החיוב לא ניתן לביטול' });
+      }
+      if (docInfo?.has_cc != null) {
+        docHasCc = !!docInfo.has_cc;
       }
     } catch (err) {
       console.warn('⚠️ [POS refund] doc info check failed:', err.message);
@@ -5246,7 +5614,7 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
       doctype,
       docnum: sale.icount_doc_number,
       reason,
-      refundCc: true,
+      refundCc: docHasCc,
     });
 
     // Void passes issued by this sale
@@ -5279,6 +5647,7 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
       refund_reason: reason,
       refund_doc_number: cancellation.docnum,
       refund_doctype: cancellation.doctype,
+      refund_doc_url: cancellation.docUrl || null,
       refunded_by: req.crmUser?.email || req.crmUser?.name || null,
       updated_at: new Date().toISOString(),
     });
@@ -5297,8 +5666,14 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
     const details = Array.isArray(err.details?.error_details)
       ? err.details.error_details.filter(Boolean).join(' · ')
       : '';
+    let message = details || err.message;
+    const lower = String(message || '').toLowerCase();
+    if (lower.includes('no cc payment') || lower.includes('no credit')) {
+      message =
+        'לעסקה אין תשלום באשראי — אי אפשר להחזיר כסף לכרטיס. אם זו עסקת מזומן, רענן את המסך ונסה שוב (ביטול מסמך בלבד).';
+    }
     res.status(502).json({
-      error: details || err.message,
+      error: message,
       code: err.code,
     });
   }
@@ -5427,6 +5802,13 @@ app.post('/api/pos/sale', async (req, res) => {
     }
 
     const total = computeSaleTotal(lines);
+    const method = String(paymentMethod || 'cash').toLowerCase();
+    if (method === 'emv' || method === 'credit' || method === 'cc' || method === 'card') {
+      return res.status(400).json({
+        error:
+          'אשראי במסוף לא זמין כרגע — אין חיבור למסוף פיזי. השתמשו במזומן או בסליקה בקישור.',
+      });
+    }
     let clientId = parent?.icount_client_id || null;
     let syncedParent = parent;
     if (parent?.id && icount.isConfigured()) {
@@ -5448,6 +5830,7 @@ app.post('/api/pos/sale', async (req, res) => {
         comment: `מכירה בדלפק · ${paymentMethod}${student?.name ? ` · עבור: ${student.name}` : ''}`,
         emailTo: sendEmail ? syncedParent?.email || walkInEmail : undefined,
         paymentMethod,
+        vattype: icountVatType(true),
       });
     }
 
@@ -5456,6 +5839,7 @@ app.post('/api/pos/sale', async (req, res) => {
       total,
       payment_method: paymentMethod,
       status: 'paid',
+      price_includes_vat: true,
       student_id: student?.id || null,
       parent_id: syncedParent?.id || parentId || null,
       customer_name: syncedParent?.name || student?.name || walkInName || 'לקוח מדלפק',
@@ -5573,6 +5957,7 @@ app.post('/api/pos/quote', async (req, res) => {
       })),
       comment: student?.name ? `עבור: ${student.name}` : undefined,
       emailTo: sendEmail && email ? email : undefined,
+      vattype: icountVatType(true),
     });
 
     const total = computeSaleTotal(lines);
@@ -5581,6 +5966,7 @@ app.post('/api/pos/quote', async (req, res) => {
       total,
       payment_method: null,
       status: 'quoted',
+      price_includes_vat: true,
       student_id: student?.id || null,
       parent_id: syncedParent?.id || parentId || null,
       customer_name: syncedParent?.name || student?.name || walkInName || 'לקוח',
@@ -5679,6 +6065,7 @@ app.post('/api/pos/payment-link', async (req, res) => {
       description,
       status: 'pending',
       payment_url: null,
+      price_includes_vat: true,
       icount_client_id: clientId,
       icount_doc_id: null,
       icount_doc_number: null,
@@ -5691,6 +6078,7 @@ app.post('/api/pos/payment-link', async (req, res) => {
       total,
       payment_method: 'online',
       status: 'pending_payment',
+      price_includes_vat: true,
       student_id: student?.id || null,
       parent_id: syncedParent?.id || null,
       customer_name: syncedParent?.name || student?.name || walkInName || 'לקוח',
@@ -5720,6 +6108,8 @@ app.post('/api/pos/payment-link', async (req, res) => {
       payment_url: payUrl,
       updated_at: new Date().toISOString(),
     });
+    if (updatedPayment) await persistCore('payments', updatedPayment);
+    if (updatedSale) await persistCore('pos_sales', updatedSale);
 
     console.log(`💳 [POS] payment-link created sale=${sale.id} total=${total} url=${payUrl}`);
 
@@ -6781,6 +7171,15 @@ initDb().finally(() => {
     });
   } catch (err) {
     console.warn('equipment template seed skipped:', err.message);
+  }
+  try {
+    ensureEventWhatsappTemplates({
+      db,
+      persist: persistCore,
+      publicAppBase: process.env.FRONTEND_URL || process.env.PUBLIC_APP_URL || '',
+    });
+  } catch (err) {
+    console.warn('event whatsapp templates seed skipped:', err.message);
   }
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);

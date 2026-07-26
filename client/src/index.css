@@ -672,11 +672,67 @@ input, select, textarea { font-family: var(--font); }
   background: var(--bg-card-hover);
 }
 .input::placeholder { color: var(--text-3); }
+.input-sm { padding: 8px 12px; font-size: 13px; }
 .input-icon-wrap { position: relative; }
 .input-icon-wrap .input { padding-right: 40px; }
 .input-icon { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: var(--text-3); pointer-events: none; }
 .input-error { border-color: var(--red) !important; box-shadow: 0 0 0 3px rgba(239,68,68,0.2) !important; }
 .form-error { font-size: 12px; color: var(--red); }
+
+/* POS history filters */
+.pos-history-filters {
+  margin-top: 16px;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+.pos-history-filters-grid {
+  display: grid;
+  grid-template-columns: minmax(200px, 1.6fr) repeat(5, minmax(120px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+.pos-history-filter-search {
+  min-width: 0;
+}
+.pos-history-filters .input[type="date"] {
+  color-scheme: dark;
+  min-height: 38px;
+}
+.pos-history-filters-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-3);
+}
+@media (max-width: 1100px) {
+  .pos-history-filters-grid {
+    grid-template-columns: repeat(3, minmax(140px, 1fr));
+  }
+  .pos-history-filter-search {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 700px) {
+  .pos-history-filters-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 520px) {
+  .pos-history-filters-grid {
+    grid-template-columns: 1fr;
+  }
+  .pos-history-filters-meta {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
 
 /* === DIVIDER === */
 .divider { height: 1px; background: var(--border); margin: 20px 0; }
@@ -980,10 +1036,37 @@ input, select, textarea { font-family: var(--font); }
   background: rgba(0, 0, 0, 0.22);
 }
 
+.registration-host-payment-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .registration-host-payment-title {
   font-size: 12px;
   font-weight: 700;
   color: var(--text-1);
+}
+
+.registration-host-payment-status {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-2);
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.registration-host-payment-status--paid {
+  color: #34D399;
+  background: rgba(52, 211, 153, 0.14);
+}
+
+.registration-host-payment-status--refunded {
+  color: #CBD5E1;
+  background: rgba(148, 163, 184, 0.2);
 }
 
 .registration-host-payment-grid {
@@ -1010,11 +1093,39 @@ input, select, textarea { font-family: var(--font); }
   color: var(--text-1);
 }
 
+.registration-host-payment-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.registration-host-payment-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.registration-host-payment-row > span {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.registration-host-payment-row > strong {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-1);
+  text-align: left;
+}
+
 .registration-host-payment-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  margin-top: 2px;
 }
 
 .registration-host-payment-actions .btn {
@@ -1026,6 +1137,41 @@ input, select, textarea { font-family: var(--font); }
 .registration-host-payment-hint {
   font-size: 11px;
   color: var(--text-3);
+}
+
+.registration-host-payment-ledger {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.registration-host-payment-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.registration-host-payment-block--refund {
+  border-color: rgba(148, 163, 184, 0.35);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.registration-host-payment-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.registration-host-payment-block-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-2);
+  letter-spacing: 0.02em;
 }
 
 .registration-section--participants {

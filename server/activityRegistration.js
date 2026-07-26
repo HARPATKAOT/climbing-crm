@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import { clampImage } from './productCategories.js';
 import { normalizePriceIncludesVat } from './vat.js';
 
-const PAYMENT_STATUSES = new Set(['unpaid', 'paid', 'partial']);
+const PAYMENT_STATUSES = new Set(['unpaid', 'paid', 'partial', 'refunded']);
 
 /** Fixed MVP categories — Hebrew labels live in the UI only. */
 export const TEMPLATE_CATEGORIES = [
@@ -418,7 +418,7 @@ export function openUnpaidActivities(db, { fromDate } = {}) {
     .filter((a) => {
       if (a.status === 'cancelled') return false;
       const pay = normalizeHostPaymentStatus(a.payment_status);
-      if (pay === 'paid') return false;
+      if (pay === 'paid' || pay === 'refunded') return false;
       if (!a.date) return false;
       return String(a.date) >= today;
     })

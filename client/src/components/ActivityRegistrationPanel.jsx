@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Copy, ExternalLink, Loader2, Pencil, RefreshCw,
+  Copy, Download, ExternalLink, Loader2, Pencil, RefreshCw,
   Search, Send, Trash2, Undo2, Users, X,
 } from 'lucide-react';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
@@ -27,6 +27,49 @@ function formatPaidAt(value) {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function HostPaymentDetailRow({ label, value }) {
+  if (value == null || value === '') return null;
+  return (
+    <div className="registration-host-payment-row">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+async function downloadHostInvoice(activityId, kind, fallbackUrl) {
+  if (!activityId) {
+    if (fallbackUrl) window.open(fallbackUrl, '_blank', 'noopener,noreferrer');
+    return;
+  }
+  try {
+    const res = await fetch(
+      `/api/activities/${encodeURIComponent(activityId)}/host-payment/invoice?kind=${encodeURIComponent(kind)}`
+    );
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'הורדה נכשלה');
+    }
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/);
+    a.href = objectUrl;
+    a.download = match?.[1] || (kind === 'refund' ? 'refund.pdf' : 'invoice.pdf');
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(objectUrl);
+  } catch (err) {
+    if (fallbackUrl) {
+      window.open(fallbackUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    throw err;
+  }
 }
 
 /**
@@ -526,7 +569,7 @@ export default function ActivityRegistrationPanel({
     }
     const ok = window.confirm(
       'לזכות את דמי ההזמנה של המזמין?\n\n' +
-      'הכסף יוחזר לכרטיס דרך מסוף מקס, והסטטוס יחזור ל„לא שולם”.\n\n' +
+      'הכסף יוחזר לכרטיס דרך מסוף מקס, והסטטוס ישתנה ל„זוכה”.\n\n' +
       'פעולה זו לא ניתנת לביטול מהמערכת.'
     );
     if (!ok) return;
@@ -551,11 +594,11 @@ export default function ActivityRegistrationPanel({
       if (data.activity) {
         setForm((prev) => ({
           ...prev,
-          payment_status: data.activity.payment_status || 'unpaid',
+          payment_status: data.activity.payment_status || 'refunded',
           host_paid_at: data.activity.host_paid_at || null,
         }));
       } else {
-        set('payment_status', 'unpaid');
+        set('payment_status', 'refunded');
       }
       const amountPart = data.amount != null ? ` · ₪${data.amount}` : '';
       setMsg(`דמי ההזמנה זוכו${amountPart}`);
@@ -571,6 +614,7 @@ export default function ActivityRegistrationPanel({
     unpaid: 'לא שולם',
     paid: 'שולם',
     partial: 'שולם חלקית',
+    refunded: 'זוכה',
   };
 
   const displayName = form.host_name || form.contact_name || selectedParent?.name || '';
@@ -580,6 +624,42 @@ export default function ActivityRegistrationPanel({
   const hasLegacyHost = !hasLinkedCustomer && !!(displayName || displayPhone || displayEmail);
   const isHostPays =
     (form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')) === 'host_pays';
+  const hostPayStatus = form.payment_status || hostPayment?.payment_status || 'unpaid';
+  const isHostRefunded =
+    hostPayment?.status === 'refunded' || hostPayStatus === 'refunded';
+  const hostStatusLabel = isHostRefunded
+    ? 'זוכה'
+    : hostPayStatus === 'paid'
+      ? 'שולם'
+      : hostPayStatus === 'partial'
+        ? 'שולם חלקית'
+        : 'לא שולם';
+  const hostAmountIncludesVat = normalizePriceIncludesVat(
+    hostPayment?.price_includes_vat ?? form.price_includes_vat
+  );
+  const hostEnteredAmountLabel = formatIls(
+    hostPayment?.entered_amount ?? form.price ?? hostPayment?.amount ?? 0
+  );
+  const hostChargeAmountLabel = formatIls(
+    hostPayment?.amount ?? vatBreakdown(form.price, hostAmountIncludesVat).gross
+  );
+  const canDownloadCharge = !!(hostPayment?.icount_doc_url || hostPayment?.icount_doc_number || hostPayment?.icount_doc_id);
+  const canDownloadRefund = !!(hostPayment?.refund_doc_url || hostPayment?.refund_doc_number);
+
+  const downloadHostDoc = async (kind) => {
+    if (!activityId) return;
+    const fallback =
+      kind === 'refund' ? hostPayment?.refund_doc_url : hostPayment?.icount_doc_url;
+    setBusy(kind === 'refund' ? 'dl-refund' : 'dl-charge');
+    setMsg('');
+    try {
+      await downloadHostInvoice(activityId, kind, fallback);
+    } catch (err) {
+      setMsg(err.message || 'הורדת המסמך נכשלה');
+    } finally {
+      setBusy('');
+    }
+  };
 
   return (
     <div className="activity-registration-operations">
@@ -744,6 +824,7 @@ export default function ActivityRegistrationPanel({
           <option value="unpaid">{payLabel.unpaid}</option>
           <option value="paid">{payLabel.paid}</option>
           <option value="partial">{payLabel.partial}</option>
+          <option value="refunded">{payLabel.refunded}</option>
         </select>
       </label>
 
@@ -851,101 +932,142 @@ export default function ActivityRegistrationPanel({
               </div>
 
               <div className="registration-host-payment-card">
-                <div className="registration-host-payment-title">פרטי תשלום המזמין</div>
-                <div className="registration-host-payment-grid">
-                  <div>
-                    <span className="registration-host-payment-label">סטטוס</span>
-                    <strong>
-                      {hostPayment?.status === 'refunded'
-                        ? 'זוכה'
-                        : (form.payment_status || hostPayment?.payment_status || 'unpaid') === 'paid'
-                          ? 'שולם'
-                          : (form.payment_status || 'unpaid') === 'partial'
-                            ? 'שולם חלקית'
-                            : 'לא שולם'}
-                    </strong>
-                  </div>
-                  <div>
-                    <span className="registration-host-payment-label">
-                      {normalizePriceIncludesVat(
-                        hostPayment?.price_includes_vat ?? form.price_includes_vat
-                      )
-                        ? 'סכום כולל מע״מ'
-                        : 'סכום לפני מע״מ'}
-                    </span>
-                    <strong>
-                      {formatIls(
-                        hostPayment?.entered_amount
-                          ?? form.price
-                          ?? hostPayment?.amount
-                          ?? 0
-                      )}
-                    </strong>
-                  </div>
-                  <div>
-                    <span className="registration-host-payment-label">סכום לתשלום</span>
-                    <strong>
-                      {formatIls(
-                        hostPayment?.amount
-                          ?? vatBreakdown(
-                            form.price,
-                            normalizePriceIncludesVat(form.price_includes_vat)
-                          ).gross
-                      )}
-                    </strong>
-                  </div>
-                  {(hostPayment?.paid_at || form.host_paid_at) && (
-                    <div>
-                      <span className="registration-host-payment-label">תאריך תשלום</span>
-                      <strong>{formatPaidAt(hostPayment?.paid_at || form.host_paid_at)}</strong>
-                    </div>
-                  )}
-                  {hostPayment?.icount_doc_number && (
-                    <div>
-                      <span className="registration-host-payment-label">מספר מסמך</span>
-                      <strong>{hostPayment.icount_doc_number}</strong>
-                    </div>
-                  )}
+                <div className="registration-host-payment-title-row">
+                  <div className="registration-host-payment-title">פרטי תשלום המזמין</div>
+                  <span
+                    className={`registration-host-payment-status${
+                      isHostRefunded
+                        ? ' registration-host-payment-status--refunded'
+                        : hostPayStatus === 'paid'
+                          ? ' registration-host-payment-status--paid'
+                          : ''
+                    }`}
+                  >
+                    {hostStatusLabel}
+                  </span>
                 </div>
 
-                <div className="registration-host-payment-actions">
-                  {hostPayment?.icount_doc_url ? (
-                    <a
-                      className="btn btn-ghost btn-sm"
-                      href={hostPayment.icount_doc_url}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      <ExternalLink size={14} />
-                      פתיחת חשבונית
-                    </a>
-                  ) : hostPayment?.icount_doc_number ? (
-                    <span className="registration-host-payment-hint">
-                      יש מספר מסמך, אבל אין קישור ישיר לחשבונית
-                    </span>
-                  ) : (form.payment_status || 'unpaid') === 'paid' ? (
-                    <span className="registration-host-payment-hint">
-                      אין עדיין מסמך חיוב מקושר — ייתכן שהתשלום סומן ידנית
-                    </span>
-                  ) : null}
+                {!isHostRefunded && (
+                  <div className="registration-host-payment-block">
+                    <div className="registration-host-payment-rows">
+                      <HostPaymentDetailRow
+                        label={hostAmountIncludesVat ? 'סכום כולל מע״מ' : 'סכום לפני מע״מ'}
+                        value={hostEnteredAmountLabel}
+                      />
+                      <HostPaymentDetailRow label="סכום לתשלום" value={hostChargeAmountLabel} />
+                      <HostPaymentDetailRow
+                        label="תאריך תשלום"
+                        value={formatPaidAt(hostPayment?.paid_at || form.host_paid_at)}
+                      />
+                      <HostPaymentDetailRow
+                        label="מספר מסמך"
+                        value={hostPayment?.icount_doc_number || ''}
+                      />
+                    </div>
+                    <div className="registration-host-payment-actions">
+                      {canDownloadCharge ? (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => downloadHostDoc('charge')}
+                          disabled={busy === 'dl-charge'}
+                        >
+                          {busy === 'dl-charge'
+                            ? <Loader2 size={14} className="spin" />
+                            : <Download size={14} />}
+                          הורדת חשבונית
+                        </button>
+                      ) : hostPayStatus === 'paid' ? (
+                        <span className="registration-host-payment-hint">
+                          אין עדיין מסמך חיוב מקושר — ייתכן שהתשלום סומן ידנית
+                        </span>
+                      ) : null}
+                      {!readOnly && (
+                        (hostPayment?.refundable ||
+                          (hostPayStatus === 'paid' && hostPayment?.status !== 'refunded')) && (
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            onClick={refundHostPayment}
+                            disabled={busy === 'host-refund'}
+                          >
+                            {busy === 'host-refund'
+                              ? <Loader2 size={14} className="spin" />
+                              : <Undo2 size={14} />}
+                            זיכוי דמי הזמנה
+                          </button>
+                        )
+                      )}
+                    </div>
+                  </div>
+                )}
 
-                  {!readOnly && (
-                    (hostPayment?.refundable ||
-                      ((form.payment_status || 'unpaid') === 'paid' && hostPayment?.status !== 'refunded')) && (
-                      <button
-                        type="button"
-                        className="btn btn-sm"
-                        onClick={refundHostPayment}
-                        disabled={busy === 'host-refund'}
-                      >
-                        {busy === 'host-refund'
-                          ? <Loader2 size={14} className="spin" />
-                          : <Undo2 size={14} />}
-                        זיכוי דמי הזמנה
-                      </button>
-                    )
-                  )}
-                </div>
+                {isHostRefunded && (
+                  <div className="registration-host-payment-ledger">
+                    <div className="registration-host-payment-block">
+                      <div className="registration-host-payment-block-header">
+                        <div className="registration-host-payment-block-title">חיוב</div>
+                        {canDownloadCharge && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => downloadHostDoc('charge')}
+                            disabled={busy === 'dl-charge'}
+                          >
+                            {busy === 'dl-charge'
+                              ? <Loader2 size={14} className="spin" />
+                              : <Download size={14} />}
+                            הורדה
+                          </button>
+                        )}
+                      </div>
+                      <div className="registration-host-payment-rows">
+                        <HostPaymentDetailRow label="סכום" value={hostChargeAmountLabel} />
+                        <HostPaymentDetailRow
+                          label="תאריך"
+                          value={formatPaidAt(hostPayment?.paid_at || form.host_paid_at)}
+                        />
+                        <HostPaymentDetailRow
+                          label="מסמך"
+                          value={hostPayment?.icount_doc_number || ''}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="registration-host-payment-block registration-host-payment-block--refund">
+                      <div className="registration-host-payment-block-header">
+                        <div className="registration-host-payment-block-title">זיכוי</div>
+                        {canDownloadRefund && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => downloadHostDoc('refund')}
+                            disabled={busy === 'dl-refund'}
+                          >
+                            {busy === 'dl-refund'
+                              ? <Loader2 size={14} className="spin" />
+                              : <Download size={14} />}
+                            הורדה
+                          </button>
+                        )}
+                      </div>
+                      <div className="registration-host-payment-rows">
+                        <HostPaymentDetailRow label="סכום" value={hostChargeAmountLabel} />
+                        <HostPaymentDetailRow
+                          label="תאריך"
+                          value={formatPaidAt(hostPayment?.refunded_at)}
+                        />
+                        <HostPaymentDetailRow
+                          label="מסמך ביטול"
+                          value={
+                            hostPayment?.refund_doc_number ||
+                            'לא נשמר מספר נפרד'
+                          }
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

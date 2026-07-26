@@ -28,6 +28,10 @@ export function summarizeHostPayment(db, activity) {
   const docUrl = payment?.icount_doc_url || null;
   const paidAt = payment?.paid_at || activity.host_paid_at || null;
   const paymentRecordStatus = payment?.status || null;
+  const isRefunded =
+    paymentRecordStatus === 'refunded' ||
+    paymentRecordStatus === 'cancelled' ||
+    paymentStatus === 'refunded';
 
   return {
     payment_status: paymentStatus,
@@ -42,11 +46,22 @@ export function summarizeHostPayment(db, activity) {
     icount_doc_number: docnum,
     icount_doctype: doctype,
     icount_doc_url: docUrl,
+    refunded_at: payment?.refunded_at || null,
+    refund_reason: payment?.refund_reason || null,
+    refund_doc_number:
+      payment?.refund_doc_number &&
+      String(payment.refund_doc_number) !== String(docnum || '')
+        ? payment.refund_doc_number
+        : null,
+    refund_doctype: payment?.refund_doctype || null,
+    refund_doc_url: payment?.refund_doc_url || null,
+    refunded_by: payment?.refunded_by || null,
     refundable:
       paymentStatus === 'paid' &&
       paymentRecordStatus !== 'refunded' &&
       paymentRecordStatus !== 'cancelled' &&
       !!docnum,
+    has_refund: isRefunded && !!(payment?.refund_doc_number || payment?.refunded_at),
   };
 }
 
@@ -253,19 +268,25 @@ export async function applyHostRefundMarks({
     return persist(table, row);
   };
   const now = new Date().toISOString();
+  const originalDoc = payment.icount_doc_number || null;
+  const refundDoc =
+    cancellation?.docnum && String(cancellation.docnum) !== String(originalDoc || '')
+      ? cancellation.docnum
+      : null;
   const updatedPayment = db.update('payments', payment.id, {
     status: 'refunded',
     refunded_at: now,
     refund_reason: reason || 'זיכוי דמי הזמנה',
-    refund_doc_number: cancellation?.docnum || null,
-    refund_doctype: cancellation?.doctype || null,
+    refund_doc_number: refundDoc,
+    refund_doctype: refundDoc ? (cancellation?.doctype || null) : null,
+    refund_doc_url: cancellation?.docUrl || payment.refund_doc_url || null,
     refunded_by: refundedBy || null,
     updated_at: now,
   });
   if (updatedPayment) await durable('payments', updatedPayment);
 
   const updatedActivity = db.update('activities', activity.id, {
-    payment_status: 'unpaid',
+    payment_status: 'refunded',
     host_paid_at: null,
     updated_at: now,
   });

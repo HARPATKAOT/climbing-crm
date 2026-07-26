@@ -5,6 +5,7 @@ import {
   findPaymentForRegistration,
   registrationsSharingPayment,
   summarizeHostPayment,
+  applyHostRefundMarks,
 } from './activityRegistrationRefund.js';
 
 function makeDb(store) {
@@ -138,4 +139,71 @@ test('summarizeHostPayment charges VAT when price is before tax', () => {
   assert.equal(summary.amount, 118);
   assert.equal(summary.entered_amount, 100);
   assert.equal(summary.price_includes_vat, false);
+});
+
+test('applyHostRefundMarks sets activity payment_status to refunded', async () => {
+  const db = makeDb({
+    activities: [{
+      id: 'a1',
+      name: 'יום הולדת',
+      payment_status: 'paid',
+      host_paid_at: '2026-07-26T06:13:00.000Z',
+      host_payment_id: 'hp1',
+    }],
+    payments: [{
+      id: 'hp1',
+      amount: 1,
+      status: 'paid',
+      icount_doc_number: '4072',
+      icount_doctype: 'invrec',
+      activity_host_payment: true,
+      activity_id: 'a1',
+    }],
+  });
+  const marked = await applyHostRefundMarks({
+    db,
+    activity: db.getOne('activities', 'a1'),
+    payment: db.getOne('payments', 'hp1'),
+    reason: 'בדיקה',
+    cancellation: { doctype: 'invrec', docnum: '9001' },
+    refundedBy: 'test@example.com',
+  });
+  assert.equal(marked.activity.payment_status, 'refunded');
+  assert.equal(marked.activity.host_paid_at, null);
+  assert.equal(marked.payment.status, 'refunded');
+  assert.equal(marked.payment.refund_doc_number, '9001');
+  assert.equal(summarizeHostPayment(db, marked.activity).refundable, false);
+  assert.equal(summarizeHostPayment(db, marked.activity).status, 'refunded');
+  const summary = summarizeHostPayment(db, marked.activity);
+  assert.equal(summary.icount_doc_number, '4072');
+  assert.equal(summary.refund_doc_number, '9001');
+  assert.equal(summary.has_refund, true);
+  assert.ok(summary.refunded_at);
+});
+
+test('applyHostRefundMarks ignores duplicate cancellation doc number', async () => {
+  const db = makeDb({
+    activities: [{
+      id: 'a1',
+      payment_status: 'paid',
+      host_payment_id: 'hp1',
+    }],
+    payments: [{
+      id: 'hp1',
+      amount: 1,
+      status: 'paid',
+      icount_doc_number: '4072',
+      icount_doctype: 'invrec',
+      activity_host_payment: true,
+      activity_id: 'a1',
+    }],
+  });
+  const marked = await applyHostRefundMarks({
+    db,
+    activity: db.getOne('activities', 'a1'),
+    payment: db.getOne('payments', 'hp1'),
+    cancellation: { doctype: 'invrec', docnum: '4072' },
+  });
+  assert.equal(marked.payment.refund_doc_number, null);
+  assert.equal(summarizeHostPayment(db, marked.activity).refund_doc_number, null);
 });

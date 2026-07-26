@@ -7,6 +7,12 @@ import {
 import { TEMPLATE_VAR_FIELDS, TEMPLATE_VAR_FIELD_MAP, normalizeTemplateVariables } from './templateVariables.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 
+const EVENT_SYSTEM_META_NAMES = new Set([
+  'event_host_payment',
+  'event_participant_link',
+  'equipment_payment',
+]);
+
 const CATEGORY_META = {
   UTILITY: { label: 'תפעולי', icon: Wrench, color: '#38BDF8' },
   MARKETING: { label: 'שיווקי', icon: Megaphone, color: '#34D399' },
@@ -46,6 +52,41 @@ function StatusBadge({ status }) {
     }}>
       <span style={{ width: 8, height: 8, borderRadius: '50%', background: meta.color, flexShrink: 0 }} />
       {meta.label}
+    </span>
+  );
+}
+
+function SystemBadge({ template }) {
+  const meta = String(template?.meta_name || template?.name || '');
+  const id = String(template?.id || '');
+  if (
+    !EVENT_SYSTEM_META_NAMES.has(meta) &&
+    !id.startsWith('tpl-event-') &&
+    id !== 'tpl-equipment-payment'
+  ) {
+    return null;
+  }
+  const label = meta.startsWith('event_') || id.startsWith('tpl-event-')
+    ? 'אירוע'
+    : 'ציוד';
+  return (
+    <span
+      title="תבנית מערכת — נשלחת אוטומטית מהמסך המתאים כשהחלון סגור"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        padding: '1px 7px',
+        borderRadius: 999,
+        fontSize: 10,
+        fontWeight: 800,
+        color: '#FCD34D',
+        background: 'rgba(234, 179, 8, 0.16)',
+        border: '1px solid rgba(234, 179, 8, 0.35)',
+        marginInlineStart: 6,
+        verticalAlign: 'middle',
+      }}
+    >
+      {label}
     </span>
   );
 }
@@ -640,7 +681,10 @@ export default function TemplatesManager() {
         <React.Fragment key={t.id}>
           <tr style={isEditing ? { background: 'rgba(56,189,248,0.06)' } : undefined}>
             <td>
-              <div style={{ fontWeight: 600 }}>{t.name}</div>
+              <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
+                <span>{t.name}</span>
+                <SystemBadge template={t} />
+              </div>
               <div style={{ fontSize: 11, color: 'var(--text-3)', maxWidth: 320, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.body}</div>
             </td>
             <td style={{ color: 'var(--text-3)', fontSize: 12 }}>{t.meta_name}</td>

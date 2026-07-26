@@ -308,12 +308,13 @@ export async function createOffer({
   items,
   comment,
   emailTo,
+  vattype = 1,
 }) {
   const fields = {
     doctype: 'offer',
     doc_date: todayYyyymmdd(),
     currency: 'NIS',
-    vattype: 1,
+    vattype,
     ...buildDocLineFields(items),
   };
 
@@ -389,6 +390,11 @@ export async function cancelDoc({
   return {
     doctype: data.cancellation_doctype || doctype,
     docnum: data.cancellation_docnum || data.docnum || null,
+    docUrl:
+      data.cancellation_doc_url ||
+      data.doc_url ||
+      data.docurl ||
+      null,
     raw: data,
   };
 }
