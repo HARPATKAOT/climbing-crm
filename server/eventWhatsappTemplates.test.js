@@ -31,8 +31,8 @@ test('ensureEventWhatsappTemplates creates both drafts once', () => {
   assert.equal(first.hostPayment.status, 'DRAFT');
   assert.match(first.hostPayment.name, /אירוע/);
   assert.match(first.participantLink.name, /אירוע/);
-  assert.ok(first.hostPayment.buttons[0].url.includes('/event-host/{{1}}'));
-  assert.ok(first.participantLink.buttons[0].url.includes('/event/{{1}}'));
+  assert.ok(first.hostPayment.buttons[0].url.startsWith('https://example.com/event-host/'));
+  assert.ok(first.participantLink.buttons[0].url.startsWith('https://example.com/event/'));
 
   const second = ensureEventWhatsappTemplates({ db });
   assert.equal(second.hostPayment.id, first.hostPayment.id);
@@ -42,7 +42,7 @@ test('ensureEventWhatsappTemplates creates both drafts once', () => {
 
 test('isEventWhatsappTemplate and findApprovedEventTemplate', () => {
   const draft = {
-    id: 'tpl-event-host-payment',
+    id: 'tpl-event-host-payment-v2',
     meta_name: EVENT_HOST_PAYMENT_TEMPLATE,
     status: 'DRAFT',
     active_for_send: false,
@@ -57,4 +57,12 @@ test('isEventWhatsappTemplate and findApprovedEventTemplate', () => {
   });
   assert.ok(findApprovedEventTemplate(db, EVENT_HOST_PAYMENT_TEMPLATE));
   assert.equal(findApprovedEventTemplate(db, EVENT_PARTICIPANT_LINK_TEMPLATE), null);
+});
+
+test('publicBase rejects localhost and falls back to live app', async () => {
+  const { publicBase } = await import('./eventWhatsappTemplates.js');
+  assert.equal(
+    publicBase('http://localhost:3001'),
+    'https://client-omega-topaz-35.vercel.app'
+  );
 });

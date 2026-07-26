@@ -161,6 +161,21 @@ export function parseTemplateVariables(text) {
   return vars;
 }
 
+function buttonUrlsArePublicHttps(buttons = []) {
+  for (const button of normalizeButtons(buttons)) {
+    if (button.type !== 'URL') continue;
+    const url = String(button.url || '').trim();
+    if (!url) return 'חסרה כתובת לכפתור קישור';
+    if (/localhost|127\.0\.0\.1/i.test(url)) {
+      return 'כתובת כפתור לא יכולה להיות מקומית — השתמשו בכתובת האתר החי';
+    }
+    if (!/^https:\/\//i.test(url)) {
+      return 'כתובת כפתור חייבת להתחיל ב־https';
+    }
+  }
+  return null;
+}
+
 /** Local checks before calling Meta — clearer errors than "Invalid parameter". */
 export function validateTemplateForMeta(template = {}) {
   const metaName = String(template.meta_name || template.name || '').trim();
@@ -201,6 +216,9 @@ export function validateTemplateForMeta(template = {}) {
       return 'חסרה דוגמה לכל משתנה — מלאו את עמודת הדוגמה במיפוי';
     }
   }
+
+  const urlError = buttonUrlsArePublicHttps(template.buttons);
+  if (urlError) return urlError;
 
   return validateButtons(normalizeButtons(template.buttons));
 }

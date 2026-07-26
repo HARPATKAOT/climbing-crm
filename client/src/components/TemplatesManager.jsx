@@ -8,6 +8,8 @@ import { TEMPLATE_VAR_FIELDS, TEMPLATE_VAR_FIELD_MAP, normalizeTemplateVariables
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 
 const EVENT_SYSTEM_META_NAMES = new Set([
+  'event_host_payment_v2',
+  'event_participant_link_v2',
   'event_host_payment',
   'event_participant_link',
   'equipment_payment',
