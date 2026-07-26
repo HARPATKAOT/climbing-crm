@@ -4,6 +4,7 @@ import express from 'express';
 import cors from 'cors';
 import { db, initDb, persistCore, parentPhonesMatch } from './db.js';
 import { supa } from './supa.js';
+import { requiresDurableStore, publicStoreUnavailableError } from './runtimeSafety.js';
 import { whatsappService, instagramService } from './whatsapp.js';
 import { whatsappConnectService } from './whatsappConnect.js';
 import { automationsService, runScheduledAutomationsIfDue } from './automations.js';
@@ -194,16 +195,18 @@ app.use(express.urlencoded({ extended: true }));
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Health check endpoint for uptime monitoring & keep-alive.
-// `?deep=1` also probes the durable store and the message write queue, so a
-// monitor can tell "process alive" apart from "actually able to serve".
-app.get('/api/health', async (req, res) => {
+// `/api/health/deep` (or legacy `?deep=1`) also probes the durable store and
+// message write queue, so a monitor can tell "alive" from "actually able to serve".
+app.get(['/api/health', '/api/health/deep'], async (req, res) => {
   const base = {
     status: 'UP',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
   };
 
-  if (!req.query.deep) return res.status(200).json(base);
+  if (!req.query.deep && req.path !== '/api/health/deep') {
+    return res.status(200).json(base);
+  }
 
   const store = await supa.ping();
   const pendingMessages = countPendingMessages();
@@ -463,7 +466,7 @@ app.put('/api/students/:id/status', (req, res) => {
 
 // Shared lead intake helper (CRM + public form)
 async function ingestLeadPayload(body, defaultSource = 'unknown') {
-  const { parentName, phone, email, children, city, source, interest } = body;
+  const { parentName, lastName, idNumber, phone, email, children, city, source, interest } = body;
   const childList = Array.isArray(children)
     ? children
     : (typeof children === 'string' && children.trim()
@@ -481,6 +484,8 @@ async function ingestLeadPayload(body, defaultSource = 'unknown') {
     phone,
     email: email || '',
     city: city || '',
+    lastName: lastName || '',
+    idNumber: idNumber || '',
     children: childList,
     interest: interest || '',
     source: leadSource,
@@ -537,6 +542,8 @@ app.put('/api/parents/:id', (req, res) => {
   const { id } = req.params;
   const allowed = [
     'name',
+    'lastName',
+    'idNumber',
     'phone',
     'email',
     'city',
@@ -565,6 +572,8 @@ app.put('/api/parents/:id', (req, res) => {
         updates.email || existing.email,
         {
           city: updates.city,
+          lastName: updates.lastName,
+          idNumber: updates.idNumber,
           source: updates.source,
           status: updates.status,
           nextFollowup: updates.nextFollowup,
@@ -2250,6 +2259,8 @@ app.post('/api/public/equipment/:token/pay', publicFormRateLimit, async (req, re
       amount,
       description,
       name: parent.name,
+      lastName: parent.lastName,
+      idNumber: parent.idNumber,
       phone: normalizePhone(parent.phone),
       email: parent.email,
       paymentId: payment.id,
@@ -2402,19 +2413,26 @@ function matchHostPaymentActivity(rows, token) {
   ) || null;
 }
 
+async function refreshPublicActivities() {
+  if (!supa.isEnabled()) {
+    return { storeAvailable: !requiresDurableStore(), rows: null };
+  }
+  const rows = await supa.getAll('activities');
+  if (rows === null) return { storeAvailable: false, rows: null };
+  db.set('activities', rows);
+  return { storeAvailable: true, rows };
+}
+
 /** Resolve host-payment activity, refreshing from durable store when local cache is stale. */
 async function findActivityByHostPaymentToken(token) {
   let activity = matchHostPaymentActivity(db.get('activities'), token);
   // Always refresh from durable store so host edits (name / linked customer)
   // are visible on the public payment link even when the server cache is stale.
-  if (supa.isEnabled()) {
-    const remote = await supa.getAll('activities');
-    if (remote) {
-      db.set('activities', remote);
-      activity = matchHostPaymentActivity(remote, token) || activity;
-    }
+  const refreshed = await refreshPublicActivities();
+  if (refreshed.rows) {
+    activity = matchHostPaymentActivity(refreshed.rows, token) || activity;
   }
-  return activity;
+  return { activity, storeAvailable: refreshed.storeAvailable };
 }
 
 function ensureActivityRegistrationSlug(activity) {
@@ -3481,7 +3499,11 @@ app.post('/api/activity-templates/:id/create-activity', async (req, res) => {
 // ─── Public activity registration ────────────────────────────────────────────
 app.get('/api/public/host-payments/:token', publicFormRateLimit, async (req, res) => {
   try {
-    const activity = await findActivityByHostPaymentToken(req.params.token);
+    const { activity, storeAvailable } = await findActivityByHostPaymentToken(req.params.token);
+    if (!storeAvailable) {
+      const unavailable = publicStoreUnavailableError();
+      return res.status(unavailable.status).json(unavailable.body);
+    }
     if (!activity) {
       return res.status(404).json({ error: 'קישור התשלום לא נמצא' });
     }
@@ -3509,7 +3531,11 @@ app.get('/api/public/host-payments/:token', publicFormRateLimit, async (req, res
 
 app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req, res) => {
   try {
-    const activity = await findActivityByHostPaymentToken(req.params.token);
+    const { activity, storeAvailable } = await findActivityByHostPaymentToken(req.params.token);
+    if (!storeAvailable) {
+      const unavailable = publicStoreUnavailableError();
+      return res.status(unavailable.status).json(unavailable.body);
+    }
     if (!activity) {
       return res.status(404).json({ error: 'קישור התשלום לא נמצא' });
     }
@@ -3564,6 +3590,8 @@ app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req
       amount,
       description,
       name: parent.name,
+      lastName: parent.lastName,
+      idNumber: parent.idNumber,
       phone: normalizePhone(parent.phone),
       email: parent.email,
       paymentId: payment.id,
@@ -3594,19 +3622,20 @@ async function findActivityBySlugFresh(slug) {
   let activity = findActivityBySlug(db, slug);
   // Always refresh from durable store so cover/theme edits are visible on public links
   // even when the in-memory cache on the server is stale.
-  if (supa.isEnabled()) {
-    const remote = await supa.getAll('activities');
-    if (remote) {
-      db.set('activities', remote);
-      activity = findActivityBySlug(db, slug) || activity;
-    }
+  const refreshed = await refreshPublicActivities();
+  if (refreshed.rows) {
+    activity = findActivityBySlug(db, slug) || activity;
   }
-  return activity;
+  return { activity, storeAvailable: refreshed.storeAvailable };
 }
 
 app.get('/api/public/activities/:slug', publicFormRateLimit, async (req, res) => {
   try {
-    const activity = await findActivityBySlugFresh(req.params.slug);
+    const { activity, storeAvailable } = await findActivityBySlugFresh(req.params.slug);
+    if (!storeAvailable) {
+      const unavailable = publicStoreUnavailableError();
+      return res.status(unavailable.status).json(unavailable.body);
+    }
     if (!activity) return res.status(404).json({ error: 'הפעילות לא נמצאה' });
     if (supa.isEnabled()) {
       const remoteRegs = await supa.getAll('activity_registrations');
@@ -3626,7 +3655,11 @@ app.get('/api/public/activities/:slug', publicFormRateLimit, async (req, res) =>
 
 app.get('/api/public/activities/:slug/household', publicFormRateLimit, async (req, res) => {
   try {
-    const activity = await findActivityBySlugFresh(req.params.slug);
+    const { activity, storeAvailable } = await findActivityBySlugFresh(req.params.slug);
+    if (!storeAvailable) {
+      const unavailable = publicStoreUnavailableError();
+      return res.status(unavailable.status).json(unavailable.body);
+    }
     if (!activity) return res.status(404).json({ error: 'הפעילות לא נמצאה' });
     const phone = normalizePhone(req.query.phone || '');
     if (!phone || phone.replace(/\D/g, '').length < 9) {
@@ -3704,7 +3737,11 @@ app.get('/api/public/activities/:slug/household', publicFormRateLimit, async (re
 
 app.post('/api/public/activities/:slug/register', publicFormRateLimit, async (req, res) => {
   try {
-    const activity = await findActivityBySlugFresh(req.params.slug);
+    const { activity, storeAvailable } = await findActivityBySlugFresh(req.params.slug);
+    if (!storeAvailable) {
+      const unavailable = publicStoreUnavailableError();
+      return res.status(unavailable.status).json(unavailable.body);
+    }
     if (!activity) return res.status(404).json({ error: 'הפעילות לא נמצאה' });
     if (!registrationIsOpen(activity)) {
       return res.status(400).json({ error: 'ההרשמה לפעילות זו סגורה' });
@@ -3728,6 +3765,8 @@ app.post('/api/public/activities/:slug/register', publicFormRateLimit, async (re
         amount,
         description: `הרשמה — ${activity.name}`,
         name: parent.name,
+        lastName: parent.lastName,
+        idNumber: parent.idNumber,
         phone: normalizePhone(parent.phone),
         email: parent.email,
         paymentId: payment.id,
@@ -4877,6 +4916,8 @@ app.post('/api/checkout/payment-request', async (req, res) => {
     amount,
     description: description || 'חוג טיפוס קיר',
     name: payName,
+    lastName: parent?.lastName,
+    idNumber: parent?.idNumber,
     phone: cleanPhone,
     email: parent?.email || '',
     paymentId: payment.id,
@@ -6314,6 +6355,8 @@ app.post('/api/pos/payment-link', async (req, res) => {
       amount: total,
       description: description || 'רכישה ב-My Wall',
       name: syncedParent?.name || student?.name || walkInName || 'לקוח',
+      lastName: syncedParent?.lastName,
+      idNumber: syncedParent?.idNumber,
       phone: syncedParent?.phone || walkInPhone,
       email: syncedParent?.email || walkInEmail,
       paymentId: payment.id,
@@ -7389,7 +7432,7 @@ async function runDailyAttendanceEnsureIfDue() {
 }
 
 // Start Server (after loading CRM-core data from Supabase)
-initDb().finally(() => {
+initDb({ requireDurable: requiresDurableStore() }).then(() => {
   try {
     ensureEquipmentWhatsappTemplate({
       db,
@@ -7487,5 +7530,8 @@ app.listen(PORT, () => {
   setTimeout(() => { runTemplateSyncIfConfigured(); }, 90_000);
   setInterval(() => { runTemplateSyncIfConfigured(); }, 15 * 60 * 1000);
 });
+}).catch((error) => {
+  console.error('FATAL: server startup aborted because durable data is unavailable:', error.message);
+  process.exit(1);
 });
 

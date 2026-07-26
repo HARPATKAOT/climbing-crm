@@ -31,3 +31,18 @@ test('parent mapper persists nextFollowup and allows clearing it', () => {
   );
   assert.equal(parentToRow({ id: 'p1', nextFollowup: '' }).next_followup, null);
 });
+
+test('parent mapper preserves last name and identity number', () => {
+  const parent = parentFromRow({
+    id: 'p1',
+    name: 'דלק אייל',
+    last_name: 'אייל',
+    id_number: '032702656',
+  });
+  assert.equal(parent.lastName, 'אייל');
+  assert.equal(parent.idNumber, '032702656');
+
+  const row = parentToRow(parent);
+  assert.equal(row.last_name, 'אייל');
+  assert.equal(row.id_number, '032702656');
+});

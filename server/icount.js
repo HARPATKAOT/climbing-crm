@@ -464,6 +464,8 @@ export async function buildPaymentUrl({
   amount,
   description,
   name,
+  lastName,
+  idNumber,
   phone,
   email,
   paymentId,
@@ -481,9 +483,25 @@ export async function buildPaymentUrl({
   const params = new URLSearchParams();
   if (amount != null && amount !== '') params.set('cs', String(amount));
   if (description) params.set('cd', description);
-  if (name) {
-    params.set('full_name', name);
-    params.set('ccfname', name);
+  const fullName = String(name || '').trim();
+  let familyName = String(lastName || '').trim();
+  let firstName = fullName;
+  if (familyName) {
+    const suffix = ` ${familyName}`;
+    if (firstName.endsWith(suffix)) firstName = firstName.slice(0, -suffix.length).trim();
+  } else {
+    const parts = fullName.split(/\s+/).filter(Boolean);
+    if (parts.length > 1) {
+      familyName = parts.pop();
+      firstName = parts.join(' ');
+    }
+  }
+  if (fullName) params.set('full_name', fullName);
+  if (firstName) params.set('ccfname', firstName);
+  if (familyName) params.set('cclname', familyName);
+  const cleanIdNumber = String(idNumber || '').replace(/\D/g, '');
+  if (cleanIdNumber) {
+    params.set('ccid', cleanIdNumber);
   }
   if (phone) {
     const clean = String(phone).replace(/[-\s]/g, '');

@@ -6,6 +6,7 @@ services:
     rootDir: server
     buildCommand: npm install
     startCommand: npm start
+    healthCheckPath: /api/health/deep
     envVars:
       - key: NODE_VERSION
         value: "20"

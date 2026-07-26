@@ -45,6 +45,23 @@ const phoneTailMatch = (a, b) => {
   return na === nb || na.slice(-9) === nb.slice(-9);
 };
 
+function parentNameParts(parent) {
+  const fullName = String(parent?.name || '').trim();
+  const storedLastName = String(parent?.lastName || '').trim();
+  if (storedLastName) {
+    const suffix = ` ${storedLastName}`;
+    return {
+      firstName: fullName.endsWith(suffix)
+        ? fullName.slice(0, -suffix.length).trim()
+        : fullName,
+      lastName: storedLastName,
+    };
+  }
+  const parts = fullName.split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return { firstName: fullName, lastName: '' };
+  return { firstName: parts.slice(0, -1).join(' '), lastName: parts.at(-1) };
+}
+
 function calculateAge(birthDateStr) {
   if (!birthDateStr) return null;
   const birth = new Date(birthDateStr);
@@ -260,7 +277,10 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
   const [editNextFollowup, setEditNextFollowup] = useState(student.nextFollowup || '');
   const [editGroupId, setEditGroupId] = useState(student.groupId || '');
   // Edit Form Fields (parent)
-  const [editParentName, setEditParentName] = useState(parent?.name || '');
+  const initialParentName = parentNameParts(parent);
+  const [editParentName, setEditParentName] = useState(initialParentName.firstName);
+  const [editParentLastName, setEditParentLastName] = useState(initialParentName.lastName);
+  const [editParentIdNumber, setEditParentIdNumber] = useState(parent?.idNumber || '');
   const [editPhone, setEditPhone] = useState(parent?.phone || '');
   const [editEmail, setEditEmail] = useState(parent?.email || '');
   const [editCity, setEditCity] = useState(parent?.city || '');
@@ -290,7 +310,10 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
     setEditSegment(student.segment || '');
     setEditNextFollowup(student.nextFollowup || '');
     setEditGroupId(student.groupId || '');
-    setEditParentName(parent?.name || '');
+    const nextParentName = parentNameParts(parent);
+    setEditParentName(nextParentName.firstName);
+    setEditParentLastName(nextParentName.lastName);
+    setEditParentIdNumber(parent?.idNumber || '');
     setEditPhone(parent?.phone || '');
     setEditEmail(parent?.email || '');
     setEditCity(parent?.city || '');
@@ -840,7 +863,9 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            name: editParentName,
+            name: [editParentName.trim(), editParentLastName.trim()].filter(Boolean).join(' '),
+            lastName: editParentLastName.trim(),
+            idNumber: editParentIdNumber.trim(),
             phone: editPhone,
             email: editEmail,
             city: editCity,
@@ -2463,12 +2488,22 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', margin: '10px 0 4px' }}>פרטי הורה / משלם</div>
             <div className="form-grid-2">
               <div className="form-group">
-                <label className="form-label">שם ההורה</label>
+                <label className="form-label">שם פרטי</label>
                 <input className="input" value={editParentName} onChange={e => setEditParentName(e.target.value)} />
               </div>
               <div className="form-group">
+                <label className="form-label">שם משפחה</label>
+                <input className="input" value={editParentLastName} onChange={e => setEditParentLastName(e.target.value)} />
+              </div>
+            </div>
+            <div className="form-grid-2">
+              <div className="form-group">
                 <label className="form-label">טלפון</label>
                 <input className="input" type="tel" value={editPhone} onChange={e => setEditPhone(e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">תעודת זהות</label>
+                <input className="input" inputMode="numeric" value={editParentIdNumber} onChange={e => setEditParentIdNumber(e.target.value)} />
               </div>
             </div>
             <div className="form-grid-2">
@@ -2574,6 +2609,8 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
 // ─── Add Lead Modal ──────────────────────────────────────────────────────────
 function AddLeadModal({ students, parents, onAdd, onClose }) {
   const [parentName, setParentName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [idNumber, setIdNumber] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [city, setCity] = useState('');
@@ -2609,11 +2646,21 @@ function AddLeadModal({ students, parents, onAdd, onClose }) {
     if (!parentName || !phone) return;
     
     let finalChildren = children.map(c => c.trim()).filter(Boolean);
+    const fullParentName = [parentName.trim(), lastName.trim()].filter(Boolean).join(' ');
     if (isAdult && finalChildren.length === 0) {
-      finalChildren = [parentName.trim()];
+      finalChildren = [fullParentName];
     }
 
-    onAdd({ parentName: parentName.trim(), phone: phone.trim(), email: email.trim(), city: city.trim(), source, children: finalChildren });
+    onAdd({
+      parentName: fullParentName,
+      lastName: lastName.trim(),
+      idNumber: idNumber.trim(),
+      phone: phone.trim(),
+      email: email.trim(),
+      city: city.trim(),
+      source,
+      children: finalChildren,
+    });
     onClose();
   };
 
@@ -2636,8 +2683,18 @@ function AddLeadModal({ students, parents, onAdd, onClose }) {
 
         <div className="form-grid-2">
           <div className="form-group">
-            <label className="form-label">{isAdult ? 'שם המתאמן *' : 'שם ההורה *'}</label>
-            <input className="input" placeholder="דניאל כהן" required value={parentName} onChange={e => setParentName(e.target.value)} />
+            <label className="form-label">שם פרטי *</label>
+            <input className="input" placeholder="דניאל" required value={parentName} onChange={e => setParentName(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">שם משפחה</label>
+            <input className="input" placeholder="כהן" value={lastName} onChange={e => setLastName(e.target.value)} />
+          </div>
+        </div>
+        <div className="form-grid-2">
+          <div className="form-group">
+            <label className="form-label">תעודת זהות</label>
+            <input className="input" inputMode="numeric" placeholder="9 ספרות" value={idNumber} onChange={e => setIdNumber(e.target.value)} />
           </div>
           <div className="form-group">
             <label className="form-label">טלפון וואטסאפ *</label>
@@ -2871,14 +2928,23 @@ export default function Leads({
       })
     : [];
 
-  const handleAdd = async ({ parentName, phone, email, city, source, children }) => {
+  const handleAdd = async ({ parentName, lastName, idNumber, phone, email, city, source, children }) => {
     let updatedParents = [...parents];
     let updatedStudents = [...students];
 
     // Find or create parent
     let parent = updatedParents.find(p => normPhone(p.phone) === normPhone(phone));
     if (!parent) {
-      parent = { id: `p${Date.now()}`, name: parentName, phone, email, city, source };
+      parent = {
+        id: `p${Date.now()}`,
+        name: parentName,
+        lastName,
+        idNumber,
+        phone,
+        email,
+        city,
+        source,
+      };
       updatedParents.push(parent);
     }
 
@@ -2918,7 +2984,7 @@ export default function Leads({
       const response = await fetch('/api/leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ parentName, phone, email, city, source, children }),
+        body: JSON.stringify({ parentName, lastName, idNumber, phone, email, city, source, children }),
       });
       if (response.ok) {
         refreshData();

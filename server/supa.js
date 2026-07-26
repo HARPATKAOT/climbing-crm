@@ -139,6 +139,7 @@ export const parentFromRow = (r) => ({
   nextFollowup: r.next_followup || null,
   created_at: r.created_at || null,
   updated_at: r.updated_at || null,
+  lastName: r.last_name || '',
   idNumber: r.id_number || '',
   icount_client_id: r.icount_client_id || undefined,
 });
@@ -162,6 +163,7 @@ export const parentToRow = (o) => ({
   notes: o.notes || '',
   status: emptyToNull(o.status),
   next_followup: emptyToNull(o.nextFollowup ?? o.next_followup),
+  last_name: emptyToNull(o.lastName || o.last_name),
   id_number: emptyToNull(o.idNumber || o.id_number),
   icount_client_id: emptyToNull(o.icount_client_id),
 });

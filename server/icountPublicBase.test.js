@@ -4,10 +4,17 @@ import {
   getPublicApiBase,
   isLocalPublicApiBase,
   buildPaymentRedirectUrl,
+  buildPaymentUrl,
   extractCcClearing,
 } from './icount.js';
 
-const ENV_KEYS = ['PUBLIC_API_URL', 'RENDER_EXTERNAL_URL', 'NODE_ENV', 'PORT'];
+const ENV_KEYS = [
+  'PUBLIC_API_URL',
+  'RENDER_EXTERNAL_URL',
+  'NODE_ENV',
+  'PORT',
+  'ICOUNT_EVENT_PAY_PAGE_URL',
+];
 
 function snapshotEnv() {
   const snap = {};
@@ -73,5 +80,39 @@ describe('extractCcClearing', () => {
     assert.equal(clearing.cc_last4, '7024');
     assert.equal(clearing.cc_card_type, 'VISA');
     assert.equal(clearing.has_cc, true);
+  });
+});
+
+describe('buildPaymentUrl customer details', () => {
+  const snap = snapshotEnv();
+
+  afterEach(() => {
+    restoreEnv(snap);
+  });
+
+  it('sends separate first name, last name and identity number', async () => {
+    process.env.ICOUNT_EVENT_PAY_PAGE_URL = 'https://example.test/pay';
+    const result = await buildPaymentUrl({
+      amount: 100,
+      name: 'דלק אייל',
+      lastName: 'אייל',
+      idNumber: '032-702-656',
+      pageKind: 'event',
+    });
+    const url = new URL(result);
+    assert.equal(url.searchParams.get('ccfname'), 'דלק');
+    assert.equal(url.searchParams.get('cclname'), 'אייל');
+    assert.equal(url.searchParams.get('ccid'), '032702656');
+  });
+
+  it('splits a legacy full name when no separate last name exists', async () => {
+    process.env.ICOUNT_EVENT_PAY_PAGE_URL = 'https://example.test/pay';
+    const result = await buildPaymentUrl({
+      name: 'דניאל כהן',
+      pageKind: 'event',
+    });
+    const url = new URL(result);
+    assert.equal(url.searchParams.get('ccfname'), 'דניאל');
+    assert.equal(url.searchParams.get('cclname'), 'כהן');
   });
 });

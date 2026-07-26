@@ -409,8 +409,11 @@ export function botFlagLabel() {
 // Called once on server startup: pulls the authoritative CRM-core collections
 // from Supabase into the local db.json so the ephemeral Render disk always
 // reflects the durable store. Non-core collections are left untouched.
-export async function initDb() {
+export async function initDb({ requireDurable = false } = {}) {
   if (!supa.isEnabled()) {
+    if (requireDurable) {
+      throw new Error('Durable Supabase store is required but no valid service-role key is configured');
+    }
     console.warn('⚠️ Supabase disabled — CRM data will not persist across restarts.');
     return;
   }
@@ -432,6 +435,9 @@ export async function initDb() {
         }
       } else {
         counts[table] = 'error';
+        if (requireDurable) {
+          throw new Error(`Durable store hydration failed for ${table}`);
+        }
       }
     }
     const remoteSettings = await supa.getAppSetting('whatsapp_settings');
@@ -466,6 +472,7 @@ export async function initDb() {
       Object.entries(counts).map(([t, n]) => `${t}=${n}`).join(', ')
     );
   } catch (error) {
+    if (requireDurable) throw error;
     console.error('initDb() failed — falling back to local db.json:', error.message);
   }
 }
@@ -486,6 +493,7 @@ function absorbDuplicateParentsInto(data, canonical, duplicates) {
 
     if (dup.email && !canonical.email) canonical.email = dup.email;
     if (dup.city && !canonical.city) canonical.city = dup.city;
+    if (dup.lastName && !canonical.lastName) canonical.lastName = dup.lastName;
     if (dup.idNumber && !canonical.idNumber) canonical.idNumber = dup.idNumber;
     if (dup.icount_client_id && !canonical.icount_client_id) {
       canonical.icount_client_id = dup.icount_client_id;
@@ -761,6 +769,8 @@ export const db = {
       const parent = {
         id: `p${Date.now()}`,
         name: name || 'לקוח וואטסאפ',
+        lastName: extras.lastName || '',
+        idNumber: extras.idNumber || '',
         phone: '',
         email: email || '',
         city: extras.city || '',
@@ -797,6 +807,8 @@ export const db = {
         parent.name = name;
       }
       if (extras.city && !parent.city) parent.city = extras.city;
+      if (extras.lastName) parent.lastName = extras.lastName;
+      if (extras.idNumber) parent.idNumber = extras.idNumber;
       if (extras.source && (!parent.source || parent.source === 'unknown')) parent.source = extras.source;
       if (extras.channel && !parent.channel) parent.channel = extras.channel;
       if (extras.status) parent.status = extras.status;
@@ -809,6 +821,8 @@ export const db = {
       parent = {
         id: `p${Date.now()}`,
         name: name || 'לקוח וואטסאפ',
+        lastName: extras.lastName || '',
+        idNumber: extras.idNumber || '',
         phone: cleanPhone || phone || '',
         email: email || '',
         city: extras.city || '',
@@ -956,9 +970,21 @@ export const db = {
     return { parent, student: null, isNew: !hadParent };
   },
 
-  createLeadFromForm: async ({ parentName, phone, email, city, children, interest, source = 'form' }) => {
+  createLeadFromForm: async ({
+    parentName,
+    lastName,
+    idNumber,
+    phone,
+    email,
+    city,
+    children,
+    interest,
+    source = 'form',
+  }) => {
     const parent = db.upsertParentByPhone(parentName, phone, email, {
       city: city || '',
+      lastName: lastName || '',
+      idNumber: idNumber || '',
       source,
       channel: source,
       notes: interest ? `עניין: ${interest}` : '',
