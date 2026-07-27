@@ -58,3 +58,7 @@ $$;
 -- Identity sequence used by the new audit table.
 REVOKE ALL ON SEQUENCE public.lead_status_history_id_seq FROM anon, authenticated;
 GRANT ALL ON SEQUENCE public.lead_status_history_id_seq TO service_role, postgres;
+
+-- Trigger helper must not be callable via PostgREST by public roles.
+REVOKE ALL ON FUNCTION public.record_lead_status_change() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.record_lead_status_change() TO service_role, postgres;
