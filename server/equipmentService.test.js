@@ -14,6 +14,8 @@ import {
   equipmentGapFlags,
   unpaidEquipmentItems,
   DEFAULT_EQUIPMENT_SETTINGS,
+  equipmentPublicBase,
+  EQUIPMENT_LIVE_APP_BASE,
 } from './equipmentService.js';
 
 function makeDb(seed = {}) {
@@ -149,4 +151,25 @@ test('markEquipmentDeclined is not a payment gap', () => {
   const gaps = equipmentGapFlags(db.get('student_equipment'));
   assert.equal(gaps.unpaidCount, 2);
   assert.equal(unpaidEquipmentItems(db.get('student_equipment')).length, 2);
+});
+
+test('equipment template base never falls back to a local address', () => {
+  const original = { front: process.env.FRONTEND_URL, pub: process.env.PUBLIC_APP_URL };
+  try {
+    process.env.FRONTEND_URL = 'http://localhost:3001';
+    delete process.env.PUBLIC_APP_URL;
+    assert.equal(equipmentPublicBase(), EQUIPMENT_LIVE_APP_BASE);
+    assert.equal(equipmentPublicBase('http://localhost:3000'), EQUIPMENT_LIVE_APP_BASE);
+    assert.equal(equipmentPublicBase('https://127.0.0.1:3000'), EQUIPMENT_LIVE_APP_BASE);
+    assert.equal(equipmentPublicBase('http://my-wall.example'), EQUIPMENT_LIVE_APP_BASE);
+
+    process.env.FRONTEND_URL = 'https://mywall.co.il/';
+    assert.equal(equipmentPublicBase(), 'https://mywall.co.il');
+    assert.equal(equipmentPublicBase('https://staging.example'), 'https://staging.example');
+  } finally {
+    if (original.front === undefined) delete process.env.FRONTEND_URL;
+    else process.env.FRONTEND_URL = original.front;
+    if (original.pub === undefined) delete process.env.PUBLIC_APP_URL;
+    else process.env.PUBLIC_APP_URL = original.pub;
+  }
 });

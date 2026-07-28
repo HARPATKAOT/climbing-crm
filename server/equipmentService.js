@@ -353,6 +353,29 @@ export function unpaidEquipmentItems(rows = []) {
   return (Array.isArray(rows) ? rows : []).filter((r) => r.payment_status === 'unpaid');
 }
 
+export const EQUIPMENT_LIVE_APP_BASE = 'https://client-omega-topaz-35.vercel.app';
+
+/**
+ * A template button URL is frozen the moment Meta approves it, so a staff
+ * machine running with a localhost FRONTEND_URL must never seed one.
+ */
+export function equipmentPublicBase(publicAppBase = '') {
+  const candidates = [publicAppBase, process.env.FRONTEND_URL, process.env.PUBLIC_APP_URL];
+  for (const candidate of candidates) {
+    const base = String(candidate || '').trim().replace(/\/$/, '');
+    if (!base || !base.startsWith('https://')) continue;
+    let host = '';
+    try {
+      host = new URL(base).hostname;
+    } catch {
+      continue;
+    }
+    if (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local')) continue;
+    return base;
+  }
+  return EQUIPMENT_LIVE_APP_BASE;
+}
+
 /** Seed WhatsApp draft template for equipment payment link (idempotent). */
 export function ensureEquipmentWhatsappTemplate({ db, persist, publicAppBase = '' } = {}) {
   if (!db) return null;
@@ -364,8 +387,7 @@ export function ensureEquipmentWhatsappTemplate({ db, persist, publicAppBase = '
   );
   if (existing) return existing;
 
-  const base = String(publicAppBase || process.env.FRONTEND_URL || process.env.PUBLIC_APP_URL || 'https://client-omega-topaz-35.vercel.app')
-    .replace(/\/$/, '');
+  const base = equipmentPublicBase(publicAppBase);
   const buttonUrl = `${base}/equipment/{{1}}`;
 
   const template = db.insert('message_templates', {
