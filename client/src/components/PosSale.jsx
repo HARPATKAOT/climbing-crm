@@ -62,6 +62,8 @@ export default function PosSale() {
   const [paymentMethod, setPaymentMethod] = useState('cash');
   const [sendEmail, setSendEmail] = useState(false);
   const [sendWhatsapp, setSendWhatsapp] = useState(true);
+  const [quoteIncludePaymentLink, setQuoteIncludePaymentLink] = useState(true);
+  const [showQuoteOptions, setShowQuoteOptions] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
@@ -338,17 +340,6 @@ export default function PosSale() {
     if (editingDiscountId === cartLineId) setEditingDiscountId(null);
   };
 
-  const setLinePrice = (cartLineId, price) => {
-    const n = roundMoney(Math.max(0, Number(price) || 0));
-    setCart((prev) =>
-      prev.map((l) =>
-        l.cartLineId === cartLineId
-          ? { ...l, unitprice: n, discountType: null, discountValue: 0 }
-          : l
-      )
-    );
-  };
-
   const openDiscountEditor = (line) => {
     setEditingDiscountId(line.cartLineId);
     setDiscountDraft({
@@ -447,8 +438,17 @@ export default function PosSale() {
     return true;
   };
 
-  const runAction = async (endpoint, extra = {}) => {
-    if (!validate()) return;
+  const validateQuote = () => {
+    if (!validate()) return false;
+    if (quoteIncludePaymentLink && !(Number(total) > 0)) {
+      setError('לא ניתן לכלול קישור תשלום בסכום 0 — בטלו את הסימון או שנו מחיר');
+      return false;
+    }
+    return true;
+  };
+
+  const runAction = async (endpoint, extra = {}, { validateFn = validate } = {}) => {
+    if (!validateFn()) return;
     setBusy(true);
     setError('');
     setResult(null);
@@ -487,6 +487,7 @@ export default function PosSale() {
 
       // Clear cart after any successful checkout action
       setCart([]);
+      setShowQuoteOptions(false);
       if (data.isNewLead || (!selectedParentId && !selectedStudentId && pendingNewLeadName)) {
         clearCustomer();
       }
@@ -929,8 +930,6 @@ export default function PosSale() {
               {cart.map((line) => {
                 const hasDiscount =
                   line.discountType && Number(line.discountValue) > 0;
-                const lineTotal =
-                  (Number(line.unitprice) || 0) * (Number(line.quantity) || 1);
                 const isEditingDiscount = editingDiscountId === line.cartLineId;
                 return (
                   <div
@@ -963,19 +962,6 @@ export default function PosSale() {
                             flexWrap: 'wrap',
                           }}
                         >
-                          <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                            {productTypeLabel(line.isCustom ? 'custom' : line.product_type)} · ₪
-                          </span>
-                          <input
-                            className="input input-sm"
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={line.unitprice}
-                            onChange={(e) => setLinePrice(line.cartLineId, e.target.value)}
-                            style={{ width: 84, padding: '4px 8px', fontSize: 12 }}
-                            title="שינוי מחיר ליחידה"
-                          />
                           <button
                             type="button"
                             className="btn btn-ghost btn-sm"
@@ -999,9 +985,6 @@ export default function PosSale() {
                                 : ''}
                             </span>
                           )}
-                        </div>
-                        <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
-                          שורה: ₪{lineTotal.toLocaleString()}
                         </div>
                       </div>
                       <div
@@ -1153,7 +1136,7 @@ export default function PosSale() {
             })}
           </div>
 
-          <div style={{ display: 'flex', gap: 16, marginTop: 12, fontSize: 13 }}>
+          <div style={{ display: 'flex', gap: 16, marginTop: 12, fontSize: 13, flexWrap: 'wrap' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
               <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} />
               שליחה למייל
@@ -1174,7 +1157,7 @@ export default function PosSale() {
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700 }}>
                 <CheckCircle2 size={14} />
-                קישור תשלום מוכן
+                {result?.doc?.docnum ? 'הצעת מחיר וקישור תשלום מוכנים' : 'קישור תשלום מוכן'}
                 {result?.whatsappSent ? ' · נשלח בוואטסאפ' : ''}
                 {result?.passes?.length ? ` · הופעלו ${result.passes.length} כרטיסים/מנויים` : ''}
               </div>
@@ -1237,12 +1220,60 @@ export default function PosSale() {
               type="button"
               className="btn btn-ghost"
               disabled={busy}
-              onClick={() => runAction('/api/pos/quote', { sendEmail: true })}
-              title="הצעת מחיר"
+              onClick={() => {
+                if (!showQuoteOptions) {
+                  setShowQuoteOptions(true);
+                  setError('');
+                  return;
+                }
+                runAction(
+                  '/api/pos/quote',
+                  { includePaymentLink: quoteIncludePaymentLink },
+                  { validateFn: validateQuote }
+                );
+              }}
+              title={showQuoteOptions ? 'שליחת הצעת מחיר' : 'פתיחת אפשרויות הצעת מחיר'}
             >
-              <FileText size={14} /> הצעת מחיר
+              <FileText size={14} /> {showQuoteOptions ? 'שלח הצעה' : 'הצעת מחיר'}
             </button>
           </div>
+          {showQuoteOptions && (
+            <div
+              style={{
+                marginTop: 10,
+                padding: 12,
+                borderRadius: 10,
+                border: '1px solid var(--border)',
+                background: 'var(--bg-2)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+              }}
+            >
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13 }}>
+                <input
+                  type="checkbox"
+                  checked={quoteIncludePaymentLink}
+                  onChange={(e) => setQuoteIncludePaymentLink(e.target.checked)}
+                />
+                הצעת מחיר עם קישור תשלום
+              </label>
+              <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                {quoteIncludePaymentLink
+                  ? 'בהצעה ייכלל גם קישור לתשלום. אחרי תשלום תופק חשבונית אוטומטית.'
+                  : 'תישלח הצעת מחיר בלבד, בלי קישור לתשלום.'}
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ alignSelf: 'flex-start' }}
+                disabled={busy}
+                onClick={() => setShowQuoteOptions(false)}
+              >
+                <X size={13} /> ביטול
+              </button>
+            </div>
+          )}
           {paymentMethod === 'online' && (
             <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 8 }}>
               {sendWhatsapp

@@ -4,6 +4,7 @@ node_modules
 !.env.example
 !**/.env.example
 *.log
+logs/
 dist
 tunnel-url.txt
 url.txt

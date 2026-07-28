@@ -190,6 +190,7 @@ const mappers = {
       segment: r.segment || null,
       nextFollowup: r.next_followup || null,
       notes: r.notes || '',
+      phone: r.phone || '',
       isAdult: r.is_adult === true,
       created: r.created || null,
       created_at: r.created_at || null,
@@ -211,6 +212,7 @@ const mappers = {
       segment: emptyToNull(o.segment),
       next_followup: emptyToNull(o.nextFollowup),
       notes: o.notes || '',
+      phone: emptyToNull(o.phone),
       is_adult: o.isAdult === true,
       created: emptyToNull(o.created),
       created_at: emptyToNull(o.created_at),
@@ -424,7 +426,7 @@ mappers.form_templates = {
 };
 
 mappers.messages = columnMapper([
-  'id', 'parent_id', 'channel', 'direction', 'message', 'media_url', 'media_type',
+  'id', 'parent_id', 'student_id', 'channel', 'direction', 'message', 'media_url', 'media_type',
   'template_name', 'status', 'source', 'is_ai', 'meta_message_id', 'phone', 'recipient_id',
   'created_at', 'updated_at',
 ]);
@@ -538,12 +540,16 @@ export const supa = {
     return [...new Set([digits, localForm, String(phone)].filter(Boolean))];
   },
 
-  /** Durable conversation rows for one customer, by card id and by phone. */
-  async getMessagesForParent({ parentId, phone } = {}) {
+  /** Durable conversation rows for one customer, by card id and by phone(s). */
+  async getMessagesForParent({ parentId, phone, phones } = {}) {
     if (!client) return null;
     const filters = [];
     if (parentId) filters.push(`parent_id.eq.${parentId}`);
-    const variants = supa.phoneVariants(phone);
+    const phoneList = [
+      ...(Array.isArray(phones) ? phones : []),
+      ...(phone ? [phone] : []),
+    ].filter(Boolean);
+    const variants = [...new Set(phoneList.flatMap((p) => supa.phoneVariants(p)))];
     if (variants.length) filters.push(`phone.in.(${variants.join(',')})`);
     if (!filters.length) return [];
 

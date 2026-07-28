@@ -2,6 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import { israelDateStr } from './attendanceUtils.js';
 import { supa, CORE_TABLES, OPERATIONAL_TABLES } from './supa.js';
+import {
+  enrichStudentWithGroupIds,
+  enrichStudentsWithGroupIds,
+  enrollmentId,
+  studentGroupIds,
+  activeEnrollmentGroupIds,
+} from './studentGroups.js';
 
 const DB_FILE = path.join(process.cwd(), 'db.json');
 
@@ -518,6 +525,22 @@ export async function initDb({ requireDurable = false } = {}) {
     } catch (mergeErr) {
       console.error('Parent phone de-dupe failed:', mergeErr.message);
     }
+    try {
+      const phoneBackfill = db.backfillStudentPhonesFromNotes();
+      if (phoneBackfill.updated > 0) {
+        console.log(`📞 Student phone backfill from notes: ${phoneBackfill.updated} row(s)`);
+      }
+    } catch (phoneErr) {
+      console.error('Student phone backfill failed:', phoneErr.message);
+    }
+    try {
+      const enrollBackfill = db.backfillEnrollmentsFromGroupId();
+      if (enrollBackfill.created > 0) {
+        console.log(`📚 Enrollment backfill from group_id: ${enrollBackfill.created} row(s)`);
+      }
+    } catch (enrollErr) {
+      console.error('Enrollment backfill failed:', enrollErr.message);
+    }
     console.log(`🤖 Bot auto-reply after initDb: ${botFlagLabel()}`);
     console.log(
       `✅ Loaded CRM-core from Supabase:`,
@@ -924,19 +947,90 @@ export const db = {
     return { mergedGroups, absorbedCount };
   },
 
+  /**
+   * One-time heal: notes like "טלפון ילד/ה: 05…" → students.phone
+   * when the dedicated column is still empty.
+   */
+  backfillStudentPhonesFromNotes: () => {
+    const data = readDb();
+    const noteRe = /טלפון\s*ילד\/?ה\s*:\s*([+\d][\d\s\-()]{6,})/i;
+    let updated = 0;
+    for (const student of data.students || []) {
+      if (String(student.phone || '').trim()) continue;
+      const notes = String(student.notes || '');
+      const match = notes.match(noteRe);
+      if (!match) continue;
+      const raw = String(match[1] || '').trim();
+      const normalized = normalizeParentPhone(raw);
+      if (!normalized && !raw) continue;
+      student.phone = normalized || raw;
+      // Drop the duplicated note line so we don't keep two sources of truth.
+      student.notes = notes
+        .split(/\r?\n/)
+        .filter((line) => !noteRe.test(line))
+        .join('\n')
+        .trim();
+      syncUpsert('students', student);
+      updated += 1;
+    }
+    if (updated) writeDb(data);
+    return { updated };
+  },
+
   createLeadFromWhatsApp: async (phone, text) => {
     const dataBefore = readDb();
-    const normalize = (p) => {
-      let d = String(p || '').replace(/[^\d]/g, '');
-      if (d.startsWith('0') && d.length >= 9) d = `972${d.slice(1)}`;
-      return d;
-    };
-    const cleanPhone = normalize(phone);
-    const phoneTail = cleanPhone.slice(-9);
-    const hadParent = dataBefore.parents.some((p) => {
-      const np = normalize(p.phone);
-      return np === cleanPhone || (phoneTail && np.slice(-9) === phoneTail);
-    });
+
+    // Prefer a real parent card when the number is already on a parent.
+    const parentMatch = (dataBefore.parents || []).find((p) => parentPhonesMatch(p.phone, phone));
+    if (parentMatch) {
+      const parent = db.upsertParentByPhone(
+        parentMatch.name || 'לקוח וואטסאפ',
+        phone,
+        parentMatch.email || '',
+        {
+          source: parentMatch.source || 'whatsapp',
+          channel: 'whatsapp',
+          status: parentMatch.status || 'lead_new',
+        }
+      );
+      const data = readDb();
+      const existingStudent = data.students.find((s) => s.parentId === parent.id);
+      if (existingStudent) {
+        if (existingStudent.status === 'archived') existingStudent.status = 'lead_new';
+        existingStudent.notes = (existingStudent.notes ? `${existingStudent.notes}\n` : '')
+          + `הודעה נוספת מוואטסאפ: "${text}"`;
+        writeDb(data);
+        await persistLeadPair(parent, existingStudent);
+        return {
+          parent,
+          student: existingStudent,
+          isNew: false,
+          matchedVia: 'parent_phone',
+        };
+      }
+      if (parent.status === 'archived') parent.status = 'lead_new';
+      writeDb(data);
+      await persistCore('parents', parent);
+      return { parent, student: null, isNew: false, matchedVia: 'parent_phone' };
+    }
+
+    // Child / trainee phone: attach to the existing parent card — never invent a new lead.
+    const studentMatch = (dataBefore.students || []).find((s) => parentPhonesMatch(s.phone, phone));
+    if (studentMatch?.parentId) {
+      const parent = dataBefore.parents.find((p) => p.id === studentMatch.parentId);
+      if (parent) {
+        const updatedParent = db.update('parents', parent.id, {
+          channel: parent.channel === 'phone' ? 'whatsapp' : (parent.channel || 'whatsapp'),
+        }) || parent;
+        await persistCore('parents', updatedParent);
+        return {
+          parent: updatedParent,
+          student: studentMatch,
+          isNew: false,
+          matchedVia: 'child_phone',
+        };
+      }
+    }
 
     const parent = db.upsertParentByPhone('לקוח וואטסאפ', phone, '', {
       source: 'whatsapp',
@@ -953,13 +1047,18 @@ export const db = {
         + `הודעה נוספת מוואטסאפ: "${text}"`;
       writeDb(data);
       await persistLeadPair(parent, existingStudent);
-      return { parent, student: existingStudent, isNew: false };
+      return { parent, student: existingStudent, isNew: false, matchedVia: 'parent_phone' };
     }
 
     if (parent.status === 'archived') parent.status = 'lead_new';
     writeDb(data);
     await persistCore('parents', parent);
-    return { parent, student: null, isNew: !hadParent };
+    return {
+      parent,
+      student: null,
+      isNew: true,
+      matchedVia: 'new_lead',
+    };
   },
 
   upsertParentByInstagram: (igId, name = 'ליד מאינסטגרם') => {
@@ -1562,5 +1661,128 @@ export const db = {
     writeDb(data);
     syncUpsert('level_tests', newTest);
     return newTest;
-  }
+  },
+
+  /** Enrich students with groupIds from the enrollments table. */
+  withStudentGroupIds(students) {
+    const enrollments = db.get('enrollments') || [];
+    return enrichStudentsWithGroupIds(students || [], enrollments);
+  },
+
+  withStudentGroupId(student) {
+    if (!student) return student;
+    return enrichStudentWithGroupIds(student, db.get('enrollments') || []);
+  },
+
+  /** Ensure enrollment rows exist for every students.group_id (local + durable). */
+  backfillEnrollmentsFromGroupId() {
+    const students = db.get('students') || [];
+    const existing = db.get('enrollments') || [];
+    const have = new Set(
+      existing.map((e) => `${e.student_id}|${e.group_id}`)
+    );
+    let created = 0;
+    const today = israelDateStr();
+    for (const s of students) {
+      if (!s?.id || !s.groupId) continue;
+      const key = `${s.id}|${s.groupId}`;
+      if (have.has(key)) continue;
+      db.insert('enrollments', {
+        id: enrollmentId(s.id, s.groupId),
+        student_id: s.id,
+        group_id: s.groupId,
+        status: s.status === 'waitlist' ? 'waitlist' : 'active',
+        start_date: today,
+        end_date: null,
+        price: null,
+      });
+      have.add(key);
+      created += 1;
+    }
+    return { created };
+  },
+
+  /**
+   * Replace the full set of groups for a student.
+   * Writes enrollments + keeps students.group_id as the primary pointer.
+   */
+  setStudentGroups(studentId, nextGroupIds = [], { primaryGroupId } = {}) {
+    const student = db.getOne('students', studentId);
+    if (!student) return null;
+
+    const wanted = [...new Set((nextGroupIds || []).map((id) => String(id)).filter(Boolean))];
+    const enrollments = db.get('enrollments') || [];
+    const current = activeEnrollmentGroupIds(enrollments, studentId);
+    const currentSet = new Set(current);
+    const wantedSet = new Set(wanted);
+    const today = israelDateStr();
+
+    for (const gid of wanted) {
+      if (currentSet.has(gid)) continue;
+      const id = enrollmentId(studentId, gid);
+      const already = (db.get('enrollments') || []).some((e) => String(e.id) === String(id));
+      if (already) {
+        // Heal local row that exists by id but wasn't counted (e.g. ended status).
+        db.update('enrollments', id, {
+          status: student.status === 'waitlist' ? 'waitlist' : 'active',
+          end_date: null,
+          student_id: studentId,
+          group_id: gid,
+        });
+      } else {
+        db.insert('enrollments', {
+          id,
+          student_id: studentId,
+          group_id: gid,
+          status: student.status === 'waitlist' ? 'waitlist' : 'active',
+          start_date: today,
+          end_date: null,
+          price: null,
+        });
+      }
+    }
+
+    for (const gid of current) {
+      if (wantedSet.has(gid)) continue;
+      const row = (db.get('enrollments') || []).find(
+        (e) => String(e.student_id) === String(studentId) && String(e.group_id) === String(gid) && !e.end_date
+      );
+      if (row?.id) db.delete('enrollments', row.id);
+    }
+
+    const primary = primaryGroupId && wanted.includes(String(primaryGroupId))
+      ? String(primaryGroupId)
+      : (wanted[0] || null);
+
+    const updated = db.update('students', studentId, {
+      groupId: primary,
+      groupIds: wanted,
+    });
+    return db.withStudentGroupId(updated);
+  },
+
+  addStudentToGroup(studentId, groupId) {
+    const gid = String(groupId || '');
+    if (!gid) return db.withStudentGroupId(db.getOne('students', studentId));
+    const current = studentGroupIds(db.withStudentGroupId(db.getOne('students', studentId)));
+    if (current.includes(gid)) {
+      return db.withStudentGroupId(db.getOne('students', studentId));
+    }
+    return db.setStudentGroups(studentId, [...current, gid], {
+      primaryGroupId: current[0] || gid,
+    });
+  },
+
+  removeStudentFromGroup(studentId, groupId) {
+    const gid = String(groupId || '');
+    const current = studentGroupIds(db.withStudentGroupId(db.getOne('students', studentId)));
+    if (!gid) {
+      return db.setStudentGroups(studentId, []);
+    }
+    return db.setStudentGroups(
+      studentId,
+      current.filter((id) => id !== gid),
+      { primaryGroupId: current.find((id) => id !== gid) || null }
+    );
+  },
 };

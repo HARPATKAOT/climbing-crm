@@ -1,5 +1,7 @@
 /** 24-hour customer care window helpers (Meta messaging). */
 
+import { phonesMatch } from '../whatsappConnect.js';
+
 const WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const CHANNEL_INBOUND_FIELDS = {
@@ -90,6 +92,21 @@ export function canSendFreeform(parent, channel) {
   const field = CHANNEL_INBOUND_FIELDS[channel];
   if (!field) return false;
   return getSessionWindow(parent?.[field]).open;
+}
+
+/** 24h window for a specific WhatsApp peer number (parent or child). */
+export function getPhoneSessionWindow(messages = [], phone, now = Date.now()) {
+  if (!phone) return getSessionWindow(null, now);
+  let latest = null;
+  for (const m of messages || []) {
+    if (m.direction !== 'inbound') continue;
+    if ((m.channel || 'whatsapp') !== 'whatsapp') continue;
+    if (!phonesMatch(m.phone, phone)) continue;
+    const raw = m.created_at || m.timestamp;
+    if (!raw) continue;
+    latest = newerInboundIso(latest, raw);
+  }
+  return getSessionWindow(latest, now);
 }
 
 export function inboundFieldForChannel(channel) {

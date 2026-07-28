@@ -44,8 +44,9 @@ export default function ActivityTemplatesMenu({
 
   const resolveDate = () => defaultDate || new Date().toISOString().slice(0, 10);
 
-  const load = async () => {
-    setLoading(true);
+  const load = async ({ silent = false } = {}) => {
+    // Keep existing UI stable when we already have data — avoids modal height jump.
+    if (!silent) setLoading(true);
     setMsg('');
     try {
       const res = await fetch('/api/activity-templates?grouped=1');
@@ -69,7 +70,7 @@ export default function ActivityTemplatesMenu({
     } catch {
       setMsg('שגיאת רשת');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -77,7 +78,8 @@ export default function ActivityTemplatesMenu({
     if (open) {
       setCategoryId(null);
       setQuery('');
-      load();
+      // Silent refresh when templates already cached — prevents spinner/height jump.
+      load({ silent: templates.length > 0 });
     }
   }, [open]);
 
@@ -270,7 +272,7 @@ export default function ActivityTemplatesMenu({
                         <div style={{ flex: 1 }}>
                           <div style={{ fontWeight: 800, fontSize: 14 }}>{cat.label || meta.label}</div>
                           <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
-                            {meta.hint || ''} · {count} תבניות
+                            {meta.hint || ''} · {loading ? '…' : `${count} תבניות`}
                           </div>
                         </div>
                         <ArrowRight size={16} style={{ color: 'var(--text-3)', transform: 'scaleX(-1)' }} />
@@ -280,7 +282,8 @@ export default function ActivityTemplatesMenu({
                 </>
               )}
 
-              {loading && (
+              {/* Spinner only when content depends on templates (search / category) — not on the category picker itself */}
+              {loading && (categoryId || !!query.trim()) && (
                 <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-3)' }}>
                   <Loader2 size={20} className="spin" />
                 </div>

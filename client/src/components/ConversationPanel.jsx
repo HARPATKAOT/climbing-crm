@@ -15,6 +15,17 @@ const CHANNEL_COLORS = {
   messenger: 'rgba(0,132,255,0.14)',
 };
 
+function phonesMatchClient(a, b) {
+  const digits = (p) => String(p || '').replace(/[^\d]/g, '');
+  let na = digits(a);
+  let nb = digits(b);
+  if (!na || !nb) return false;
+  if (na.startsWith('0') && na.length >= 9) na = `972${na.slice(1)}`;
+  if (nb.startsWith('0') && nb.length >= 9) nb = `972${nb.slice(1)}`;
+  if (na === nb) return true;
+  return na.slice(-9).length === 9 && na.slice(-9) === nb.slice(-9);
+}
+
 function WindowBadge({ windows, channel }) {
   const w = windows?.[channel];
   if (!w) return null;
@@ -34,6 +45,23 @@ function WindowBadge({ windows, channel }) {
   );
 }
 
+function messageMatchesThread(message, thread, parentPhone) {
+  if (!thread) return true;
+  const ch = message.channel || 'whatsapp';
+  if (thread.role === 'parent') {
+    if (ch !== 'whatsapp') return true;
+    if (message.student_id || message.fromChild) return false;
+    if (!thread.phone) return !message.phone || phonesMatchClient(message.phone, parentPhone);
+    return !message.phone || phonesMatchClient(message.phone, thread.phone) || phonesMatchClient(message.phone, parentPhone);
+  }
+  // Child thread — WhatsApp only, matching that student's phone / id
+  if (ch !== 'whatsapp') return false;
+  if (message.student_id && thread.studentId) {
+    return String(message.student_id) === String(thread.studentId);
+  }
+  return phonesMatchClient(message.phone, thread.phone);
+}
+
 export default function ConversationPanel({ parent, student, fillHeight = false, onHandled }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -42,6 +70,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   const [error, setError] = useState('');
   const [replyText, setReplyText] = useState('');
   const [channel, setChannel] = useState('whatsapp');
+  const [activeThreadId, setActiveThreadId] = useState('parent');
   const [mode, setMode] = useState('text'); // text | template | saved | image
   const [templates, setTemplates] = useState([]);
   const [savedReplies, setSavedReplies] = useState([]);
@@ -53,6 +82,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   const messagesRef = useRef(null);
   const fileRef = useRef(null);
   const wasBlockedRef = useRef(false);
+  const userPickedThreadRef = useRef(false);
 
   const load = async ({ quiet = false } = {}) => {
     if (!parent?.id) return;
@@ -74,8 +104,25 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
       const conv = await convRes.json().catch(() => ({}));
       if (!convRes.ok) throw new Error(conv.error || 'טעינת שיחה נכשלה');
       setData(conv);
-      setChannel(conv.defaultChannel || 'whatsapp');
-      const openNow = !!conv.windows?.[conv.defaultChannel || 'whatsapp']?.open;
+
+      const threads = Array.isArray(conv.threads) ? conv.threads : [];
+      const preferredThreadId = conv.defaultThreadId || 'parent';
+      const nextThreadId = userPickedThreadRef.current
+        && threads.some((t) => t.id === activeThreadId)
+        ? activeThreadId
+        : preferredThreadId;
+      setActiveThreadId(nextThreadId);
+
+      const activeThread = threads.find((t) => t.id === nextThreadId) || threads[0];
+      const available = activeThread?.channels || conv.channels || {};
+      const nextChannel = available[conv.defaultChannel]
+        ? (conv.defaultChannel || 'whatsapp')
+        : (['whatsapp', 'instagram', 'messenger'].find((ch) => available[ch]) || 'whatsapp');
+      setChannel(nextChannel);
+
+      const openNow = nextChannel === 'whatsapp'
+        ? !!activeThread?.window?.open
+        : !!conv.windows?.[nextChannel]?.open;
       if (openNow) {
         setMode((prev) => (prev === 'template' ? 'text' : prev));
         wasBlockedRef.current = false;
@@ -90,6 +137,8 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   };
 
   useEffect(() => {
+    userPickedThreadRef.current = false;
+    setActiveThreadId('parent');
     load();
     // Reload when a newer inbound lands on the parent card (waiting-queue poll).
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -112,9 +161,24 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   useEffect(() => {
     const el = messagesRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [data?.messages?.length]);
+  }, [data?.messages?.length, activeThreadId]);
 
-  const windowOpen = data?.windows?.[channel]?.open;
+  const threads = Array.isArray(data?.threads) ? data.threads : [];
+  const activeThread = threads.find((t) => t.id === activeThreadId) || threads[0] || {
+    id: 'parent',
+    role: 'parent',
+    label: parent?.name || 'הורה',
+    phone: parent?.phone || '',
+    channels: data?.channels || {},
+    window: data?.windows?.whatsapp,
+  };
+  const threadChannels = activeThread?.channels || data?.channels || {};
+  const allMessages = data?.messages || [];
+  const messages = allMessages.filter((m) => messageMatchesThread(m, activeThread, parent?.phone));
+
+  const windowOpen = channel === 'whatsapp'
+    ? !!activeThread?.window?.open
+    : !!data?.windows?.[channel]?.open;
   const freeformBlocked = !windowOpen;
 
   useEffect(() => {
@@ -129,6 +193,17 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     }
     wasBlockedRef.current = !!freeformBlocked;
   }, [freeformBlocked, mode, channel]);
+
+  const selectThread = (threadId) => {
+    userPickedThreadRef.current = true;
+    setActiveThreadId(threadId);
+    const thread = threads.find((t) => t.id === threadId);
+    const available = thread?.channels || {};
+    if (!available[channel]) {
+      const next = ['whatsapp', 'instagram', 'messenger'].find((ch) => available[ch]) || 'whatsapp';
+      setChannel(next);
+    }
+  };
 
   const onPickImage = (e) => {
     const file = e.target.files?.[0];
@@ -149,7 +224,12 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     setSending(true);
     setError('');
     try {
-      let body = { channel, type: mode === 'saved' ? 'saved_reply' : mode };
+      let body = {
+        channel,
+        type: mode === 'saved' ? 'saved_reply' : mode,
+        studentId: activeThread?.studentId || null,
+        targetPhone: activeThread?.phone || null,
+      };
       if (mode === 'text') {
         if (!replyText.trim()) return;
         body.text = replyText.trim();
@@ -179,7 +259,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
       setReplyText('');
       setImageBase64('');
       setImagePreview(null);
-      await load();
+      await load({ quiet: true });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -215,10 +295,11 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     );
   }
 
-  const messages = data?.messages || [];
-  const channels = data?.channels || {};
   const awaitingHandling = isAwaitingHandling(data?.parent || parent);
-  const missingNewMessage = !!data && threadIsBehindCard(data?.parent || parent, messages);
+  const missingNewMessage = !!data && threadIsBehindCard(data?.parent || parent, allMessages);
+  const templateStudent = activeThread?.studentId
+    ? (data?.students || []).find((s) => String(s.id) === String(activeThread.studentId)) || student
+    : student;
 
   return (
     <div
@@ -298,10 +379,44 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
           </div>
         )}
 
+        {threads.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, padding: '8px 12px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap', flexShrink: 0 }}>
+            {threads.map((thread) => (
+              <button
+                key={thread.id}
+                type="button"
+                className={`btn btn-xs ${activeThreadId === thread.id ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => selectThread(thread.id)}
+                title={thread.phone || ''}
+              >
+                {thread.role === 'parent' ? `הורה · ${thread.label}` : thread.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '10px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-          {['whatsapp', 'instagram', 'messenger'].map((ch) => (
-            <WindowBadge key={ch} windows={data?.windows} channel={ch} />
-          ))}
+          {channel === 'whatsapp' && activeThread?.window ? (
+            <span
+              style={{
+                fontSize: 10,
+                padding: '2px 6px',
+                borderRadius: 6,
+                background: activeThread.window.open ? 'rgba(34,197,94,0.15)' : 'rgba(248,113,113,0.12)',
+                color: activeThread.window.open ? '#4ade80' : '#F87171',
+                border: '1px solid var(--border)',
+              }}
+            >
+              וואטסאפ: {activeThread.window.label}
+            </span>
+          ) : (
+            <WindowBadge windows={data?.windows} channel={channel} />
+          )}
+          {activeThread?.role === 'student' && (
+            <span style={{ fontSize: 10, color: 'var(--text-3)', alignSelf: 'center' }}>
+              שיחה עם המתאמן · תשובות נשלחות למספר שלו
+            </span>
+          )}
         </div>
 
         <div style={{ display: 'flex', gap: 6, padding: '8px 12px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap', flexShrink: 0 }}>
@@ -310,9 +425,9 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
               key={ch}
               type="button"
               className={`btn btn-xs ${channel === ch ? 'btn-primary' : 'btn-ghost'}`}
-              disabled={!channels[ch]}
+              disabled={!threadChannels[ch]}
               onClick={() => setChannel(ch)}
-              title={!channels[ch] ? 'ערוץ לא מחובר ללקוח זה' : ''}
+              title={!threadChannels[ch] ? 'ערוץ לא מחובר לשיחה זו' : ''}
             >
               {CHANNEL_LABELS[ch]}
             </button>
@@ -337,12 +452,15 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
               <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center', marginTop: 20 }}>טוען שיחה...</div>
             ) : messages.length === 0 ? (
               <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center', marginTop: 20 }}>
-                עדיין אין הודעות. שלחו הודעה או המתינו לפנייה מהלקוח.
+                עדיין אין הודעות בשיחה הזו. שלחו הודעה או המתינו לפנייה.
               </div>
             ) : (
               messages.map((m, i) => {
                 const inbound = m.direction === 'inbound';
                 const ch = m.channel || 'whatsapp';
+                const childLabel = m.fromChild || m.student_id
+                  ? (m.studentName || activeThread?.label || 'מתאמן')
+                  : null;
                 return (
                   <div
                     key={m.id || i}
@@ -358,6 +476,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
                   >
                     <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>
                       {CHANNEL_LABELS[ch] || ch}
+                      {childLabel ? ` · מאת ${childLabel}` : ''}
                       {m.template_id || m.template_name ? ' · תבנית' : ''}
                       {m.is_ai ? ' · בוט' : ''}
                     </div>
@@ -430,7 +549,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
                       setSelectedTemplate(e.target.value);
                       const tpl = templates.find((t) => t.id === e.target.value || t.meta_name === e.target.value);
                       const normalized = normalizeTemplateVariables(tpl?.variables, tpl?.body);
-                      setTemplateVars(buildPrefillValues(normalized, parent, student));
+                      setTemplateVars(buildPrefillValues(normalized, parent, templateStudent));
                     }}
                   >
                     <option value="">בחרו תבנית מאושרת...</option>

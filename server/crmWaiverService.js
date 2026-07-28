@@ -198,6 +198,7 @@ export async function saveCrmParticipants({
       });
     }
     const previousStatus = student?.status;
+    const childPhone = clean(input.childPhone || input.phone);
     const patch = {
       name,
       parentId: parent.id,
@@ -206,6 +207,7 @@ export async function saveCrmParticipants({
       gender: clean(input.gender) || student?.gender || '',
       idNumber: clean(input.idNumber || input.climberIdNum) || student?.idNumber || '',
       notes: clean(input.notes || input.registrationNotes) || student?.notes || '',
+      phone: childPhone || student?.phone || '',
       status: previousStatus === 'registered' ? 'registered' : 'health_signed',
       healthSignedAt: student?.healthSignedAt || signedAt,
       waiverSignedAt: student?.waiverSignedAt || signedAt,

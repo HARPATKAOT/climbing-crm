@@ -36,6 +36,15 @@ function rateForWorkType(agreement, workType) {
   return Number(agreement.counter_rate) || 0;
 }
 
+function payAmountForAssignment(row, agreement) {
+  if ((row.pay_mode || 'hourly') === 'flat') {
+    const n = Number(row.flat_amount);
+    return Number.isFinite(n) && n >= 0 ? Math.round(n) : 0;
+  }
+  const hrs = Number(row.hours) || 0;
+  return Math.round(hrs * rateForWorkType(agreement, row.work_type));
+}
+
 function roundHoursQuarter(h) {
   const n = Number(h);
   if (!Number.isFinite(n) || n < 0) return 0;
@@ -547,6 +556,8 @@ export default function Employees() {
     employee_id: '',
     date: '',
     work_type: 'counter_shift',
+    pay_mode: 'hourly',
+    flat_amount: '',
     start_time: '09:00',
     end_time: '17:00',
     hours: 8,
@@ -585,7 +596,12 @@ export default function Employees() {
       setWages(Array.isArray(wgs) ? wgs : []);
       setShifts(Array.isArray(sfts) ? sfts : []);
       setWorkAssignments(Array.isArray(asgs)
-        ? asgs.map((r) => ({ ...r, hours: roundHoursQuarter(r.hours) }))
+        ? asgs.map((r) => ({
+          ...r,
+          hours: roundHoursQuarter(r.hours),
+          pay_mode: r.pay_mode === 'flat' ? 'flat' : 'hourly',
+          flat_amount: r.flat_amount ?? '',
+        }))
         : []);
       setActivities(Array.isArray(acts) ? acts : []);
     } catch (err) {
@@ -627,7 +643,7 @@ export default function Employees() {
         monthAssignments.forEach((a) => {
           const hrs = Number(a.hours) || 0;
           totalHours += hrs;
-          totalPay += hrs * rateForWorkType(agreement, a.work_type);
+          totalPay += payAmountForAssignment(a, agreement);
         });
         map[emp.id] = {
           hours: Math.round(totalHours * 10) / 10,
@@ -846,6 +862,7 @@ export default function Employees() {
   const saveAssignmentRow = async (row) => {
     setPayrollBusy(true);
     try {
+      const payMode = row.pay_mode === 'flat' ? 'flat' : 'hourly';
       const res = await fetch(`/api/work-assignments/${row.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -854,6 +871,8 @@ export default function Employees() {
           start_time: row.start_time,
           end_time: row.end_time,
           hours: roundHoursQuarter(row.hours),
+          pay_mode: payMode,
+          flat_amount: payMode === 'flat' ? Number(row.flat_amount) || 0 : null,
           source: 'manual',
           notes: row.notes || '',
           approved: row.approved,
@@ -900,19 +919,22 @@ export default function Employees() {
     }
     setPayrollBusy(true);
     try {
+      const payMode = newManualRow.pay_mode === 'flat' ? 'flat' : 'hourly';
       const res = await fetch('/api/work-assignments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...newManualRow,
           hours: roundHoursQuarter(newManualRow.hours),
+          pay_mode: payMode,
+          flat_amount: payMode === 'flat' ? Number(newManualRow.flat_amount) || 0 : null,
           source: 'manual',
           approved: false,
         }),
       });
       if (!res.ok) alert('יצירת השורה נכשלה');
       else {
-        setNewManualRow((prev) => ({ ...prev, employee_id: '', hours: 8 }));
+        setNewManualRow((prev) => ({ ...prev, employee_id: '', hours: 8, flat_amount: '', pay_mode: 'hourly' }));
         await refreshData();
       }
     } finally {
@@ -928,6 +950,7 @@ export default function Employees() {
         const computed = hoursFromTimes(next.start_time, next.end_time);
         if (computed != null) next.hours = computed;
       }
+      if (patch.pay_mode === 'hourly') next.flat_amount = '';
       return next;
     }));
   };
@@ -1507,7 +1530,7 @@ export default function Employees() {
             <div>
               <div style={{ fontSize: 15, fontWeight: 800 }}>תשלום חודשי</div>
               <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
-                שורות עבודה לפי עובד — מהיומן, מהשעון או ידני. משלמים לפי שעות מאושרות.
+                שורות עבודה לפי עובד — שעתי לפי תעריף מהסכם, או סכום גלובלי לפעילות. משלמים לפי שורות מאושרות.
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1571,6 +1594,21 @@ export default function Employees() {
                 />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                אופן תשלום
+                <select
+                  className="input input-sm"
+                  value={newManualRow.pay_mode || 'hourly'}
+                  onChange={(e) => setNewManualRow((p) => ({
+                    ...p,
+                    pay_mode: e.target.value,
+                    ...(e.target.value === 'hourly' ? { flat_amount: '' } : {}),
+                  }))}
+                >
+                  <option value="hourly">שעתי</option>
+                  <option value="flat">גלובלי</option>
+                </select>
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
                 סוג
                 <select
                   className="input input-sm"
@@ -1582,44 +1620,60 @@ export default function Employees() {
                   ))}
                 </select>
               </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
-                התחלה
-                <input
-                  className="input input-sm"
-                  type="time"
-                  value={newManualRow.start_time}
-                  onChange={(e) => setNewManualRow((p) => {
-                    const start_time = e.target.value;
-                    const hours = hoursFromTimes(start_time, p.end_time);
-                    return { ...p, start_time, ...(hours != null ? { hours } : {}) };
-                  })}
-                />
-              </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
-                סיום
-                <input
-                  className="input input-sm"
-                  type="time"
-                  value={newManualRow.end_time}
-                  onChange={(e) => setNewManualRow((p) => {
-                    const end_time = e.target.value;
-                    const hours = hoursFromTimes(p.start_time, end_time);
-                    return { ...p, end_time, ...(hours != null ? { hours } : {}) };
-                  })}
-                />
-              </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
-                שעות
-                <input
-                  className="input input-sm"
-                  type="number"
-                  min="0"
-                  step="0.25"
-                  value={newManualRow.hours}
-                  onChange={(e) => setNewManualRow((p) => ({ ...p, hours: e.target.value }))}
-                  onBlur={(e) => setNewManualRow((p) => ({ ...p, hours: roundHoursQuarter(e.target.value) }))}
-                />
-              </label>
+              {(newManualRow.pay_mode || 'hourly') === 'flat' ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                  סכום גלובלי
+                  <input
+                    className="input input-sm"
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={newManualRow.flat_amount}
+                    onChange={(e) => setNewManualRow((p) => ({ ...p, flat_amount: e.target.value }))}
+                  />
+                </label>
+              ) : (
+                <>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                    התחלה
+                    <input
+                      className="input input-sm"
+                      type="time"
+                      value={newManualRow.start_time}
+                      onChange={(e) => setNewManualRow((p) => {
+                        const start_time = e.target.value;
+                        const hours = hoursFromTimes(start_time, p.end_time);
+                        return { ...p, start_time, ...(hours != null ? { hours } : {}) };
+                      })}
+                    />
+                  </label>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                    סיום
+                    <input
+                      className="input input-sm"
+                      type="time"
+                      value={newManualRow.end_time}
+                      onChange={(e) => setNewManualRow((p) => {
+                        const end_time = e.target.value;
+                        const hours = hoursFromTimes(p.start_time, end_time);
+                        return { ...p, end_time, ...(hours != null ? { hours } : {}) };
+                      })}
+                    />
+                  </label>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                    שעות
+                    <input
+                      className="input input-sm"
+                      type="number"
+                      min="0"
+                      step="0.25"
+                      value={newManualRow.hours}
+                      onChange={(e) => setNewManualRow((p) => ({ ...p, hours: e.target.value }))}
+                      onBlur={(e) => setNewManualRow((p) => ({ ...p, hours: roundHoursQuarter(e.target.value) }))}
+                    />
+                  </label>
+                </>
+              )}
               <button className="btn btn-primary btn-sm" disabled={payrollBusy} onClick={createManualAssignment}>
                 <Plus size={14} /> הוסף
               </button>
@@ -1634,11 +1688,12 @@ export default function Employees() {
                     <th>תאריך</th>
                     <th>עובד</th>
                     <th>אירוע</th>
+                    <th>אופן</th>
                     <th>סוג</th>
                     <th>התחלה</th>
                     <th>סיום</th>
                     <th>שעות</th>
-                    <th>תעריף</th>
+                    <th>תעריף / גלובלי</th>
                     <th>סכום</th>
                     <th>סטטוס</th>
                     <th>פעולות</th>
@@ -1649,8 +1704,8 @@ export default function Employees() {
                     const emp = employees.find((e) => e.id === row.employee_id);
                     const agreement = wages.find((w) => w.employee_id === row.employee_id) || defaultAgreement;
                     const rate = rateForWorkType(agreement, row.work_type);
-                    const hrs = Number(row.hours) || 0;
-                    const amount = Math.round(hrs * rate);
+                    const payMode = row.pay_mode === 'flat' ? 'flat' : 'hourly';
+                    const amount = payAmountForAssignment(row, agreement);
                     return (
                       <tr key={row.id}>
                         <td>{row.date}</td>
@@ -1659,12 +1714,27 @@ export default function Employees() {
                         <td>
                           <select
                             className="input input-sm"
+                            value={payMode}
+                            onChange={(e) => patchAssignmentLocal(row.id, { pay_mode: e.target.value })}
+                            style={{ minWidth: 90 }}
+                          >
+                            <option value="hourly">שעתי</option>
+                            <option value="flat">גלובלי</option>
+                          </select>
+                        </td>
+                        <td>
+                          <select
+                            className="input input-sm"
                             value={row.work_type || 'counter_shift'}
                             onChange={(e) => patchAssignmentLocal(row.id, { work_type: e.target.value })}
                             style={{ minWidth: 110 }}
                           >
                             {WORK_TYPE_OPTIONS.map((o) => (
-                              <option key={o.id} value={o.id}>{o.label}</option>
+                              <option key={o.id} value={o.id}>
+                                {payMode === 'hourly'
+                                  ? `${o.label} — ₪${rateForWorkType(agreement, o.id)}`
+                                  : o.label}
+                              </option>
                             ))}
                           </select>
                         </td>
@@ -1696,9 +1766,24 @@ export default function Employees() {
                             onChange={(e) => patchAssignmentLocal(row.id, { hours: e.target.value })}
                             onBlur={(e) => patchAssignmentLocal(row.id, { hours: roundHoursQuarter(e.target.value) })}
                             style={{ width: 70 }}
+                            disabled={payMode === 'flat'}
                           />
                         </td>
-                        <td>₪{rate}</td>
+                        <td>
+                          {payMode === 'flat' ? (
+                            <input
+                              className="input input-sm"
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={row.flat_amount ?? ''}
+                              onChange={(e) => patchAssignmentLocal(row.id, { flat_amount: e.target.value })}
+                              style={{ width: 90 }}
+                            />
+                          ) : (
+                            <>₪{rate}</>
+                          )}
+                        </td>
                         <td style={{ fontWeight: 700, color: 'var(--green)' }}>₪{amount}</td>
                         <td>
                           <span className={`badge ${row.approved ? 'badge-green' : 'badge-gray'}`}>
@@ -1725,7 +1810,7 @@ export default function Employees() {
                   })}
                   {workAssignments.length === 0 && (
                     <tr>
-                      <td colSpan={11} style={{ textAlign: 'center', padding: 30, color: 'var(--text-3)' }}>
+                      <td colSpan={12} style={{ textAlign: 'center', padding: 30, color: 'var(--text-3)' }}>
                         אין שורות תשלום בחודש הזה. אפשר לשייך עובדים מאירוע ביומן או להוסיף שורה ידנית.
                       </td>
                     </tr>

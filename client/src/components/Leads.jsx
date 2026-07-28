@@ -13,10 +13,13 @@ import {
   buildLeadEntries,
   isParentOnlyLead,
   normalizePhone,
+  resolveLeadOpenTarget,
 } from '../utils/leadUtils.js';
 import ConversationPanel from './ConversationPanel.jsx';
 import AttendanceCalendar from './AttendanceCalendar.jsx';
 import { isAwaitingHandling, latestInboundTime } from './communicationQueue.js';
+import { isAttAbsent, isAttPending } from '../scheduleUtils.js';
+import { studentGroupIds } from '../utils/studentGroups.js';
 import {
   EQUIPMENT_LABELS,
   EQUIPMENT_ORDER,
@@ -71,6 +74,37 @@ function calculateAge(birthDateStr) {
   const m = today.getMonth() - birth.getMonth();
   if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age -= 1;
   return age;
+}
+
+function genderLabel(gender) {
+  const g = String(gender || '').trim().toLowerCase();
+  if (g === 'male' || g === 'בן' || g === 'm') return 'בן';
+  if (g === 'female' || g === 'בת' || g === 'f') return 'בת';
+  return gender || '—';
+}
+
+function parentDisplayName(parent) {
+  if (!parent) return 'ללא הורה';
+  const parts = parentNameParts(parent);
+  return [parts.firstName, parts.lastName].filter(Boolean).join(' ') || parent.name || 'ללא שם';
+}
+
+/** Count consecutive absences from the newest marked class (skip pending/holiday). */
+function consecutiveAbsences(history = []) {
+  const rows = (Array.isArray(history) ? history : [])
+    .slice()
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  let count = 0;
+  for (const row of rows) {
+    const status = row?.status;
+    if (isAttPending(status) || status === 'holiday') continue;
+    if (isAttAbsent(status)) {
+      count += 1;
+      continue;
+    }
+    break;
+  }
+  return count;
 }
 
 /** WhatsApp copy for health declaration — always addressed to the parent. */
@@ -272,10 +306,12 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
   
   // Edit Form Fields (student)
   const [editBirthDate, setEditBirthDate] = useState(student.birthDate || '');
+  const [editStudentPhone, setEditStudentPhone] = useState(student.phone || '');
+  const [editGender, setEditGender] = useState(student.gender || '');
   const [editNotes, setEditNotes] = useState(student.notes || '');
   const [editSegment, setEditSegment] = useState(student.segment || '');
   const [editNextFollowup, setEditNextFollowup] = useState(student.nextFollowup || '');
-  const [editGroupId, setEditGroupId] = useState(student.groupId || '');
+  const [editGroupIds, setEditGroupIds] = useState(() => studentGroupIds(student));
   // Edit Form Fields (parent)
   const initialParentName = parentNameParts(parent);
   const [editParentName, setEditParentName] = useState(initialParentName.firstName);
@@ -285,6 +321,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
   const [editEmail, setEditEmail] = useState(parent?.email || '');
   const [editCity, setEditCity] = useState(parent?.city || '');
   const [editSource, setEditSource] = useState(parent?.source || student.source || 'unknown');
+  const [editFocus, setEditFocus] = useState('student'); // student | parent
 
   // Health declaration + waiver status for this student
   const [healthDecl, setHealthDecl] = useState(null);
@@ -306,10 +343,12 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
 
   useEffect(() => {
     setEditBirthDate(student.birthDate || '');
+    setEditStudentPhone(student.phone || '');
+    setEditGender(student.gender || '');
     setEditNotes(student.notes || '');
     setEditSegment(student.segment || '');
     setEditNextFollowup(student.nextFollowup || '');
-    setEditGroupId(student.groupId || '');
+    setEditGroupIds(studentGroupIds(student));
     const nextParentName = parentNameParts(parent);
     setEditParentName(nextParentName.firstName);
     setEditParentLastName(nextParentName.lastName);
@@ -319,6 +358,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
     setEditCity(parent?.city || '');
     setEditSource(parent?.source || student.source || 'unknown');
     setIsEditing(false);
+    setEditFocus('student');
     setEditingGroup(false);
     setEditingFollowup(false);
     setOpenFolder(null);
@@ -615,7 +655,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
       await applyEquipmentTone(item.id, targetTone, { currentItem: item });
       await refreshEquipment();
       setEquipmentEditId('');
-      setEquipmentMsg(`עודכן ל„${equipmentToneLabel(targetTone)}”`);
+      setEquipmentMsg(`עודכן ל„${equipmentToneLabel(targetTone, item.item_type)}”`);
     } catch (err) {
       setEquipmentMsg(err.message);
     } finally {
@@ -839,16 +879,18 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
   const handleUpdateDetails = async () => {
     setSavingEdit(true);
     try {
-      if (!parentOnly) {
+      if (!parentOnly && editFocus !== 'parent') {
         const sRes = await fetch(`/api/students/${student.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             birthDate: editBirthDate,
+            phone: editStudentPhone.trim(),
+            gender: editGender || null,
             notes: editNotes,
             segment: editSegment || null,
             nextFollowup: editNextFollowup || null,
-            groupId: editGroupId || null,
+            groupIds: editGroupIds,
             source: editSource
           })
         });
@@ -858,7 +900,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
         }
       }
 
-      if (parent?.id) {
+      if (parent?.id && editFocus !== 'student') {
         await fetch(`/api/parents/${parent.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -875,6 +917,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
           })
         });
       }
+
       setIsEditing(false);
       if (refreshData) refreshData();
     } catch (err) {
@@ -890,7 +933,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
       const res = await fetch(`/api/students/${student.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupId: editGroupId || null }),
+        body: JSON.stringify({ groupIds: editGroupIds }),
       });
       if (res.ok) {
         const updated = await res.json();
@@ -960,11 +1003,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
       const data = await res.json();
       const list = Array.isArray(data) ? data : [];
       setStudentPayments(
-        list.filter(
-          (p) =>
-            p.student_id === student.id ||
-            (parent?.id && p.parent_id === parent.id)
-        )
+        list.filter((p) => (parent?.id && p.parent_id === parent.id) || p.student_id === student.id)
       );
     } catch (err) {
       console.error('Failed to load payments:', err);
@@ -1109,9 +1148,12 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
     : healthExpired
       ? `פג תוקף · ${healthExpiry.toLocaleDateString('he-IL')}`
       : `חתום${healthExpiry ? ` · בתוקף עד ${healthExpiry.toLocaleDateString('he-IL')}` : ''}`;
-  const groupSummary = group
-    ? `${group.name}${group.day ? ` · יום ${group.day}` : ''}`
-    : 'לא משויך';
+  const studentGroups = groups.filter((g) => studentGroupIds(student).includes(String(g.id)));
+  const groupSummary = studentGroups.length === 0
+    ? 'לא משויך'
+    : studentGroups.length === 1
+      ? `${studentGroups[0].name}${studentGroups[0].day != null ? ` · יום ${studentGroups[0].day}` : ''}`
+      : `${studentGroups.length} חוגים`;
   const activePasses = customerPasses.filter((p) => p.status === 'active').length;
   const passesSummary = passesLoading
     ? 'טוען...'
@@ -1199,30 +1241,57 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
         >
           <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-              <div style={{ minWidth: 0 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-1)', lineHeight: 1.3 }}>
-                  {parentOnly ? (parent?.name || 'ליד ללא מתאמן') : student.name}
+                  {parentDisplayName(parent) || (parentOnly ? 'ליד ללא מתאמן' : 'הורה')}
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  {parentOnly && <span>ללא מתאמן רשום</span>}
-                  {!parentOnly && student.isAdult && (
-                    <>
-                      <span>מבוגר משתתף</span>
-                      <span className="badge badge-gray" style={{ fontSize: 10 }}>מבוגר</span>
-                    </>
-                  )}
-                  <button className="btn btn-ghost btn-xs" onClick={() => setIsEditing(true)}>
-                    <Edit2 size={11} /> ערוך
-                  </button>
-                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>הורה / משלם</div>
               </div>
-              <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} aria-label="סגור">
-                <X size={18} />
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  onClick={() => { setEditFocus('parent'); setIsEditing(true); }}
+                  title="עריכת פרטי הורה"
+                  style={{ border: '1px solid var(--border)', gap: 4 }}
+                >
+                  <Edit2 size={11} /> ערוך
+                </button>
+                <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} aria-label="סגור">
+                  <X size={18} />
+                </button>
+              </div>
             </div>
-            <div style={{ marginTop: 10 }}>
-              <StatusBadge status={student.status} />
+
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
+              {parent?.phone ? (
+                <a href={`tel:${parent.phone}`} className="btn btn-ghost btn-xs">
+                  <Phone size={12} /> {parent.phone}
+                </a>
+              ) : (
+                <span style={{ fontSize: 12, color: 'var(--text-3)' }}>אין טלפון</span>
+              )}
+              {parent?.phone && (
+                <a
+                  href={`https://wa.me/${String(parent.phone).replace(/[^\d]/g, '').replace(/^0/, '972')}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn btn-success btn-xs"
+                >
+                  וואטסאפ
+                </a>
+              )}
+              {parent?.email && (
+                <a href={`mailto:${parent.email}`} className="btn btn-ghost btn-xs">
+                  <Mail size={12} /> {parent.email}
+                </a>
+              )}
             </div>
+            {parent?.city && (
+              <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 6 }}>
+                <MapPin size={11} style={{ verticalAlign: -1 }} /> {parent.city}
+              </div>
+            )}
           </div>
 
           <div
@@ -1234,243 +1303,309 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
               minHeight: 0,
             }}
           >
-            {/* Contact — always visible compact */}
-            <div style={{ marginBottom: 12 }}>
-              {parent?.name && parent?.name !== student.name && (
-                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, color: 'var(--text-1)' }}>
-                  {parent.name} <span style={{ fontWeight: 500, color: 'var(--text-3)' }}>(הורה/משלם)</span>
-                </div>
-              )}
-              {parent?.name && parent?.name === student.name && student.isAdult && (
-                <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 6, color: 'var(--text-3)' }}>
-                  משלם ומשתתף
-                </div>
-              )}
-              {(siblings.length > 0 || parent?.id) && (
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8, alignItems: 'center' }}>
-                  {siblings.map((sib) => {
-                    const active = !parentOnly && sib.id === student.id;
-                    return (
+            {/* Parent-level sections — above child tabs */}
+            {parent?.id && (
+              <div style={{ marginBottom: 12 }}>
+                <FolderRow
+                  id="mailing"
+                  title="רשימות תפוצה"
+                  icon={Bell}
+                  summary={mailingListSummary}
+                  open={openFolder === 'mailing'}
+                  onToggle={toggleFolder}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>רשימות פעילות</div>
+                    {!loadingLists && (
                       <button
-                        key={sib.id}
                         type="button"
-                        onClick={() => onSelectSibling?.(sib.id)}
-                        title={sib.name}
-                        style={{
-                          border: active
-                            ? '1px solid rgba(249, 115, 22, 0.65)'
-                            : '1px solid var(--border)',
-                          background: active
-                            ? 'rgba(249, 115, 22, 0.18)'
-                            : 'rgba(255,255,255,0.04)',
-                          color: active ? 'var(--text-1)' : 'var(--text-2)',
-                          borderRadius: 999,
-                          padding: '4px 10px',
-                          fontSize: 12,
-                          fontWeight: active ? 700 : 600,
-                          cursor: 'pointer',
-                          lineHeight: 1.3,
-                          maxWidth: '100%',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
+                        className={`btn btn-xs ${editingBroadcastLists ? 'btn-primary' : 'btn-ghost'}`}
+                        onClick={() => setEditingBroadcastLists((v) => !v)}
                       >
-                        {sib.name}
-                        {sib.isAdult ? ' · מבוגר' : ''}
+                        {editingBroadcastLists ? <><Check size={11} /> סיום</> : <><Edit2 size={11} /> עריכה</>}
                       </button>
-                    );
-                  })}
-                  {parent?.id && (
-                    <button
-                      type="button"
-                      className={`btn btn-xs ${parentOnly ? 'btn-primary' : 'btn-ghost'}`}
-                      onClick={() => {
-                        setAddChildError('');
-                        setNewChildName('');
-                        setSendHealthOnAdd(true);
-                        setShowAddChild(true);
-                      }}
-                      style={{
-                        borderRadius: 999,
-                        border: parentOnly ? undefined : '1px dashed var(--border)',
-                        gap: 4,
-                      }}
-                    >
-                      <Plus size={12} /> הוסף ילד / מתאמן
-                    </button>
+                    )}
+                  </div>
+                  {loadingLists ? (
+                    <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען רשימות תפוצה...</div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, pointerEvents: editingBroadcastLists ? 'auto' : 'none', opacity: editingBroadcastLists ? 1 : 0.85 }}>
+                      {broadcastListDefs.map((list) => {
+                        const label = list.description ? `${list.label} (${list.description})` : list.label;
+                        const checked = broadcastLists[list.key] !== false;
+                        return (
+                          <label key={list.key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: editingBroadcastLists ? 'pointer' : 'default' }}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={!editingBroadcastLists}
+                              onChange={() => handleListToggle(list.key)}
+                              style={{ cursor: editingBroadcastLists ? 'pointer' : 'default', width: 15, height: 15 }}
+                            />
+                            <span style={{ color: checked ? 'var(--text-1)' : 'var(--text-3)', fontWeight: checked ? '600' : 'normal' }}>
+                              {label}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
                   )}
-                </div>
-              )}
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
-                {parent?.phone && (
-                  <a href={`tel:${parent.phone}`} className="btn btn-ghost btn-xs">
-                    <Phone size={12} /> {parent.phone}
-                  </a>
-                )}
-                {parent?.email && (
-                  <a href={`mailto:${parent.email}`} className="btn btn-ghost btn-xs">
-                    <Mail size={12} /> אימייל
-                  </a>
-                )}
-                {parent?.phone && (
-                  <a
-                    href={`https://wa.me/972${parent.phone.replace(/^0/, '')}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="btn btn-success btn-xs"
+                </FolderRow>
+
+                {canManageBilling && (
+                  <FolderRow
+                    id="payments"
+                    title="תשלומים"
+                    icon={CreditCard}
+                    summary={paymentsSummary}
+                    open={openFolder === 'payments'}
+                    onToggle={toggleFolder}
                   >
-                    וואטסאפ
-                  </a>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={() => setShowPaymentModal(true)}
+                      >
+                        <Send size={13} /> שלח בקשת תשלום
+                      </button>
+                    </div>
+                    {studentPayments.length === 0 ? (
+                      <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין היסטוריית תשלומים</div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 180, overflowY: 'auto', overscrollBehavior: 'contain' }}>
+                        {studentPayments.slice(0, 8).map((p) => (
+                          <div
+                            key={p.id}
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              gap: 8,
+                              fontSize: 12,
+                              padding: '6px 0',
+                              borderBottom: '1px solid var(--border)',
+                            }}
+                          >
+                            <span style={{ color: 'var(--text-2)' }}>
+                              {p.description}
+                              {p.icount_doc_number ? ` · מס׳ ${p.icount_doc_number}` : ''}
+                            </span>
+                            <span>
+                              ₪{Number(p.amount).toLocaleString()}{' '}
+                              <span className={p.status === 'paid' ? 'badge badge-green' : 'badge badge-amber'}>
+                                {p.status === 'paid' ? 'שולם' : p.status === 'pending' ? 'ממתין' : p.status}
+                              </span>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </FolderRow>
                 )}
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 12 }}>
-                <div>
-                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 2 }}><Tag size={10} /> מקור</div>
-                  <div style={{ fontWeight: 600 }}>
-                    {(LEAD_SOURCES[parent?.source || student.source] || LEAD_SOURCES.unknown).icon}{' '}
-                    {(LEAD_SOURCES[parent?.source || student.source] || LEAD_SOURCES.unknown).label}
+            )}
+
+            {/* Child tabs */}
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                {siblings.map((sib) => {
+                  const active = !parentOnly && sib.id === student.id;
+                  return (
+                    <button
+                      key={sib.id}
+                      type="button"
+                      onClick={() => onSelectSibling?.(sib.id)}
+                      title="החלפת תיק מתאמן — השיחה מימין לא משתנה"
+                      style={{
+                        border: active
+                          ? '1px solid rgba(249, 115, 22, 0.65)'
+                          : '1px solid var(--border)',
+                        background: active
+                          ? 'rgba(249, 115, 22, 0.18)'
+                          : 'rgba(255,255,255,0.04)',
+                        color: active ? 'var(--text-1)' : 'var(--text-2)',
+                        borderRadius: 999,
+                        padding: '4px 10px',
+                        fontSize: 12,
+                        fontWeight: active ? 700 : 600,
+                        cursor: 'pointer',
+                        lineHeight: 1.3,
+                        maxWidth: '100%',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {sib.name}
+                      {sib.isAdult ? ' · מבוגר' : ''}
+                    </button>
+                  );
+                })}
+                {parent?.id && (
+                  <button
+                    type="button"
+                    className={`btn btn-xs ${parentOnly ? 'btn-primary' : 'btn-ghost'}`}
+                    onClick={() => {
+                      setAddChildError('');
+                      setNewChildName('');
+                      setSendHealthOnAdd(true);
+                      setShowAddChild(true);
+                    }}
+                    style={{
+                      borderRadius: 999,
+                      border: parentOnly ? undefined : '1px dashed var(--border)',
+                      gap: 4,
+                    }}
+                  >
+                    <Plus size={12} /> הוסף ילד / מתאמן
+                  </button>
+                )}
+              </div>
+              {parentOnly && (
+                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 8 }}>
+                  אין מתאמן רשום עדיין
+                </div>
+              )}
+            </div>
+
+            {/* Selected child details — compact inline rows */}
+            {!parentOnly && (() => {
+              const streak = consecutiveAbsences(attendanceHistory);
+              const streakColor = streak >= 2 ? '#F87171' : streak === 1 ? '#FBBF24' : 'var(--text-1)';
+              const detailRow = (label, value, valueStyle = {}) => (
+                <div
+                  key={label}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    padding: '5px 0',
+                    borderBottom: '1px solid rgba(255,255,255,0.06)',
+                    fontSize: 12,
+                  }}
+                >
+                  <span style={{ color: 'var(--text-3)', flexShrink: 0 }}>{label}</span>
+                  <span style={{ fontWeight: 600, color: 'var(--text-1)', textAlign: 'left', ...valueStyle }}>{value}</span>
+                </div>
+              );
+              return (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
+                    {student.name}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <StatusBadge status={student.status} />
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => { setEditFocus('student'); setIsEditing(true); }}
+                      style={{ borderRadius: 999, border: '1px solid var(--border)', gap: 4 }}
+                    >
+                      <Edit2 size={11} /> ערוך
+                    </button>
                   </div>
                 </div>
+
                 <div>
-                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 2 }}><UserCheck size={10} /> פלח</div>
-                  <div style={{ fontWeight: 600 }}>
-                    {student.segment ? (LEAD_SEGMENTS[student.segment]?.label || student.segment) : '—'}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 2 }}><MapPin size={10} /> עיר</div>
-                  <div style={{ fontWeight: 600 }}>{parent?.city || '—'}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 2 }}><CalendarDays size={10} /> גיל</div>
-                  <div style={{ fontWeight: 600 }}>{age == null ? '—' : age}</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 2 }}><Bell size={10} /> מעקב</div>
-                  {editingFollowup ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
-                      <input
-                        type="date"
-                        className="input input-sm"
-                        value={editNextFollowup}
-                        disabled={savingFollowup}
-                        autoFocus
-                        onChange={(e) => {
-                          const value = e.target.value;
-                          setEditNextFollowup(value);
-                          if (value) handleSaveFollowup(value);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Escape') {
-                            setEditNextFollowup(student.nextFollowup || '');
-                            setEditingFollowup(false);
-                          }
-                        }}
-                        style={{ fontSize: 12, padding: '2px 6px', width: 132 }}
-                      />
-                      {(editNextFollowup || student.nextFollowup) && (
+                  {detailRow('גיל', age == null ? '—' : age)}
+                  {detailRow('בן / בת', genderLabel(student.gender))}
+                  {detailRow('טלפון', student.phone || '—')}
+                  {detailRow('רמה מקסימלית', student.levelGrade || '—')}
+                  {detailRow(
+                    'העדרויות רצופות',
+                    attendanceLoading ? '…' : streak,
+                    { color: streakColor }
+                  )}
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                      padding: '5px 0',
+                      fontSize: 12,
+                    }}
+                  >
+                    <span style={{ color: 'var(--text-3)', flexShrink: 0 }}>מעקב</span>
+                    {editingFollowup ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                        <input
+                          type="date"
+                          className="input input-sm"
+                          value={editNextFollowup}
+                          disabled={savingFollowup}
+                          autoFocus
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setEditNextFollowup(value);
+                            if (value) handleSaveFollowup(value);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') {
+                              setEditNextFollowup(student.nextFollowup || '');
+                              setEditingFollowup(false);
+                            }
+                          }}
+                          style={{ fontSize: 12, padding: '2px 6px', width: 132 }}
+                        />
+                        {(editNextFollowup || student.nextFollowup) && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs"
+                            disabled={savingFollowup}
+                            onClick={() => handleSaveFollowup('')}
+                            title="נקה מעקב"
+                          >
+                            <X size={11} />
+                          </button>
+                        )}
                         <button
                           type="button"
                           className="btn btn-ghost btn-xs"
                           disabled={savingFollowup}
-                          onClick={() => handleSaveFollowup('')}
-                          title="נקה מעקב"
+                          onClick={() => {
+                            setEditNextFollowup(student.nextFollowup || '');
+                            setEditingFollowup(false);
+                          }}
                         >
-                          <X size={11} />
+                          ביטול
                         </button>
-                      )}
+                      </div>
+                    ) : (
                       <button
                         type="button"
-                        className="btn btn-ghost btn-xs"
-                        disabled={savingFollowup}
                         onClick={() => {
                           setEditNextFollowup(student.nextFollowup || '');
-                          setEditingFollowup(false);
+                          setEditingFollowup(true);
                         }}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          fontWeight: 600,
+                          color: student.nextFollowup ? 'var(--amber, #FCD34D)' : 'var(--text-3)',
+                          background: 'none',
+                          border: 'none',
+                          padding: 0,
+                          cursor: 'pointer',
+                          fontSize: 12,
+                        }}
+                        title="לחץ להוספת מעקב"
                       >
-                        ביטול
+                        {student.nextFollowup || '+ הוסף'}
                       </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditNextFollowup(student.nextFollowup || '');
-                        setEditingFollowup(true);
-                      }}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 4,
-                        fontWeight: 600,
-                        color: student.nextFollowup ? 'var(--amber, #FCD34D)' : 'var(--text-3)',
-                        background: 'none',
-                        border: 'none',
-                        padding: 0,
-                        cursor: 'pointer',
-                        fontSize: 12,
-                      }}
-                      title="לחץ להוספת מעקב"
-                    >
-                      {student.nextFollowup || '+ הוסף'}
-                    </button>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
+              );
+            })()}
 
-            {/* Parent-level mailing lists — one subscription for the whole family */}
-            {parent?.id && (
-              <FolderRow
-                id="mailing"
-                title="רשימות תפוצה (הורה)"
-                icon={Bell}
-                summary={mailingListSummary}
-                open={openFolder === 'mailing'}
-                onToggle={toggleFolder}
-              >
-
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-3)' }}>רשימות פעילות</div>
-                  {!loadingLists && (
-                    <button
-                      type="button"
-                      className={`btn btn-xs ${editingBroadcastLists ? 'btn-primary' : 'btn-ghost'}`}
-                      onClick={() => setEditingBroadcastLists((v) => !v)}
-                    >
-                      {editingBroadcastLists ? <><Check size={11} /> סיום</> : <><Edit2 size={11} /> עריכה</>}
-                    </button>
-                  )}
-                </div>
-                {loadingLists ? (
-                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען רשימות תפוצה...</div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, pointerEvents: editingBroadcastLists ? 'auto' : 'none', opacity: editingBroadcastLists ? 1 : 0.85 }}>
-                    {broadcastListDefs.map((list) => {
-                      const label = list.description ? `${list.label} (${list.description})` : list.label;
-                      const checked = broadcastLists[list.key] !== false;
-                      return (
-                        <label key={list.key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: editingBroadcastLists ? 'pointer' : 'default' }}>
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            disabled={!editingBroadcastLists}
-                            onChange={() => handleListToggle(list.key)}
-                            style={{ cursor: editingBroadcastLists ? 'pointer' : 'default', width: 15, height: 15 }}
-                          />
-                          <span style={{ color: checked ? 'var(--text-1)' : 'var(--text-3)', fontWeight: checked ? '600' : 'normal' }}>
-                            {label}
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                )}
-              </FolderRow>
-            )}
-
-            {/* Health folder */}
+            {/* Selected child folders */}
+            {!parentOnly && (
+              <>
             <FolderRow
               id="health"
               title="הצהרת בריאות"
@@ -1759,17 +1894,29 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
               >
                 {editingGroup ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <select
-                      className="input input-sm"
-                      value={editGroupId}
-                      disabled={savingGroup}
-                      onChange={e => setEditGroupId(e.target.value)}
-                    >
-                      <option value="">— לא משויך —</option>
-                      {groups.map(g => (
-                        <option key={g.id} value={g.id}>{g.name}</option>
-                      ))}
-                    </select>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto' }}>
+                      {groups.map((g) => {
+                        const checked = editGroupIds.includes(String(g.id));
+                        return (
+                          <label key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={savingGroup}
+                              onChange={() => {
+                                setEditGroupIds((prev) => (
+                                  checked
+                                    ? prev.filter((id) => id !== String(g.id))
+                                    : [...prev, String(g.id)]
+                                ));
+                              }}
+                              style={{ width: 15, height: 15 }}
+                            />
+                            <span>{g.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button type="button" className="btn btn-primary btn-sm" disabled={savingGroup} onClick={handleSaveGroup}>
                         <Check size={13} /> {savingGroup ? 'שומר...' : 'שמור'}
@@ -1779,7 +1926,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                         className="btn btn-ghost btn-sm"
                         disabled={savingGroup}
                         onClick={() => {
-                          setEditGroupId(student.groupId || '');
+                          setEditGroupIds(studentGroupIds(student));
                           setEditingGroup(false);
                         }}
                       >
@@ -1789,13 +1936,17 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                   </div>
                 ) : (
                   <div>
-                    {group ? (
-                      <>
-                        <div style={{ fontWeight: 700 }}>{group.name}</div>
-                        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
-                          יום {group.day} בשעה {group.time}
-                        </div>
-                      </>
+                    {studentGroups.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {studentGroups.map((g) => (
+                          <div key={g.id}>
+                            <div style={{ fontWeight: 700 }}>{g.name}</div>
+                            <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
+                              יום {g.day} בשעה {g.time}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     ) : (
                       <div style={{ color: 'var(--text-3)', fontSize: 13 }}>לא משויך לחוג עדיין</div>
                     )}
@@ -1804,7 +1955,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                       className="btn btn-ghost btn-xs"
                       style={{ marginTop: 8 }}
                       onClick={() => {
-                        setEditGroupId(student.groupId || '');
+                        setEditGroupIds(studentGroupIds(student));
                         setEditingGroup(true);
                       }}
                     >
@@ -1989,7 +2140,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                                 maxWidth: '100%',
                               }}
                             >
-                              {busy ? '...' : equipmentToneLabel(tone)}
+                              {busy ? '...' : equipmentToneLabel(tone, type)}
                             </div>
                             {type === 'shirt' && item.shirt_size && (
                               <div style={{ fontSize: 10, color: 'var(--text-3)' }}>מידה {item.shirt_size}</div>
@@ -2041,7 +2192,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                                     opacity: selected ? 1 : 0.95,
                                   }}
                                 >
-                                  {equipmentToneLabel(opt)}
+                                  {equipmentToneLabel(opt, item.item_type)}
                                   {selected ? ' · נוכחי' : ''}
                                 </button>
                               );
@@ -2128,58 +2279,6 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                           </div>
                         </div>
                         <span className="badge badge-gray">{row.status_label || row.status || '—'}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </FolderRow>
-            )}
-
-            {/* Payments folder */}
-            {canManageBilling && (
-              <FolderRow
-                id="payments"
-                title="תשלומים"
-                icon={CreditCard}
-                summary={paymentsSummary}
-                open={openFolder === 'payments'}
-                onToggle={toggleFolder}
-              >
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    onClick={() => setShowPaymentModal(true)}
-                  >
-                    <Send size={13} /> שלח בקשת תשלום
-                  </button>
-                </div>
-                {studentPayments.length === 0 ? (
-                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין היסטוריית תשלומים</div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 180, overflowY: 'auto', overscrollBehavior: 'contain' }}>
-                    {studentPayments.slice(0, 8).map((p) => (
-                      <div
-                        key={p.id}
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          gap: 8,
-                          fontSize: 12,
-                          padding: '6px 0',
-                          borderBottom: '1px solid var(--border)',
-                        }}
-                      >
-                        <span style={{ color: 'var(--text-2)' }}>
-                          {p.description}
-                          {p.icount_doc_number ? ` · מס׳ ${p.icount_doc_number}` : ''}
-                        </span>
-                        <span>
-                          ₪{Number(p.amount).toLocaleString()}{' '}
-                          <span className={p.status === 'paid' ? 'badge badge-green' : 'badge badge-amber'}>
-                            {p.status === 'paid' ? 'שולם' : p.status === 'pending' ? 'ממתין' : p.status}
-                          </span>
-                        </span>
                       </div>
                     ))}
                   </div>
@@ -2338,20 +2437,8 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                 </>
               )}
             </FolderRow>
-
-            <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-              <button
-                className="btn btn-danger btn-xs w-full"
-                style={{ justifyContent: 'center', gap: 6 }}
-                onClick={() => {
-                  if (confirm('האם אתה בטוח שברצונך למחוק את הלקוח לצמיתות ממאגר הלקוחות? פעולה זו תסיר גם את ההורה במידה ואין לו ילדים נוספים.')) {
-                    onDelete(student.id);
-                  }
-                }}
-              >
-                <Trash2 size={12} /> מחק לקוח לצמיתות
-              </button>
-            </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -2448,7 +2535,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
       )}
 
       {isEditing && (
-        <Modal title={`עריכת פרטי ליד: ${student.name}`} onClose={() => setIsEditing(false)}
+        <Modal title={editFocus === 'parent' ? `עריכת הורה: ${parentDisplayName(parent)}` : `עריכת מתאמן: ${student.name}`} onClose={() => setIsEditing(false)}
           footer={
             <><button className="btn btn-ghost" onClick={() => setIsEditing(false)}>ביטול</button>
               <button className="btn btn-primary" disabled={savingEdit} onClick={handleUpdateDetails}>
@@ -2457,35 +2544,72 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
           }
         >
           <div className="form-grid">
-            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', marginBottom: 4 }}>פרטי המתאמן</div>
-            <div className="form-grid-2">
-              <div className="form-group">
-                <label className="form-label">תאריך לידה</label>
-                <input type="date" className="input" value={editBirthDate} onChange={e => setEditBirthDate(e.target.value)} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">שיוך לחוג</label>
-                <select className="input" value={editGroupId} onChange={e => setEditGroupId(e.target.value)}>
-                  <option value="">— לא משויך —</option>
-                  {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-                </select>
-              </div>
-            </div>
-            <div className="form-grid-2">
-              <div className="form-group">
-                <label className="form-label">פלח</label>
-                <select className="input" value={editSegment} onChange={e => setEditSegment(e.target.value)}>
-                  <option value="">— לא הוגדר —</option>
-                  {Object.entries(LEAD_SEGMENTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-                </select>
-              </div>
-              <div className="form-group">
-                <label className="form-label">תאריך מעקב הבא</label>
-                <input type="date" className="input" value={editNextFollowup} onChange={e => setEditNextFollowup(e.target.value)} />
-              </div>
-            </div>
+            {(editFocus === 'student' && !parentOnly) && (
+              <>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', marginBottom: 4 }}>פרטי המתאמן</div>
+                <div className="form-grid-2">
+                  <div className="form-group">
+                    <label className="form-label">תאריך לידה</label>
+                    <input type="date" className="input" value={editBirthDate} onChange={e => setEditBirthDate(e.target.value)} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">טלפון מתאמן</label>
+                    <input
+                      className="input"
+                      type="tel"
+                      value={editStudentPhone}
+                      onChange={(e) => setEditStudentPhone(e.target.value)}
+                      placeholder="050..."
+                    />
+                  </div>
+                </div>
+                <div className="form-grid-2">
+                  <div className="form-group">
+                    <label className="form-label">בן / בת</label>
+                    <select className="input" value={editGender} onChange={(e) => setEditGender(e.target.value)}>
+                      <option value="">— לא הוגדר —</option>
+                      <option value="male">בן</option>
+                      <option value="female">בת</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">שיוך לחוגים</label>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 180, overflowY: 'auto', padding: '6px 0' }}>
+                      {groups.map((g) => {
+                        const checked = editGroupIds.includes(String(g.id));
+                        return (
+                          <label key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                setEditGroupIds((prev) => (
+                                  checked
+                                    ? prev.filter((id) => id !== String(g.id))
+                                    : [...prev, String(g.id)]
+                                ));
+                              }}
+                              style={{ width: 15, height: 15 }}
+                            />
+                            <span>{g.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">תאריך מעקב הבא</label>
+                  <input type="date" className="input" value={editNextFollowup} onChange={e => setEditNextFollowup(e.target.value)} />
+                </div>
+              </>
+            )}
 
-            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', margin: '10px 0 4px' }}>פרטי הורה / משלם</div>
+            {(editFocus !== 'student' || parentOnly) && (
+              <>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', margin: editFocus === 'student' && !parentOnly ? '10px 0 4px' : '0 0 4px' }}>
+              פרטי הורה / משלם
+            </div>
             <div className="form-grid-2">
               <div className="form-group">
                 <label className="form-label">שם פרטי</label>
@@ -2517,15 +2641,32 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
               </div>
             </div>
             <div className="form-group">
-              <label className="form-label">מקור ליד</label>
-              <select className="input" value={editSource} onChange={e => setEditSource(e.target.value)}>
-                {Object.entries(LEAD_SOURCES).map(([k, v]) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
-              </select>
-            </div>
-            <div className="form-group">
               <label className="form-label">הערות מעקב</label>
               <textarea className="input" style={{ minHeight: 80 }} value={editNotes} onChange={e => setEditNotes(e.target.value)} />
             </div>
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+              <button
+                type="button"
+                className="btn btn-danger btn-xs w-full"
+                style={{ justifyContent: 'center', gap: 6 }}
+                onClick={() => {
+                  if (confirm('האם אתה בטוח שברצונך למחוק את הלקוח לצמיתות ממאגר הלקוחות? פעולה זו תסיר גם את ההורה במידה ואין לו ילדים נוספים.')) {
+                    setIsEditing(false);
+                    onDelete(student.id);
+                  }
+                }}
+              >
+                <Trash2 size={12} /> מחק לקוח לצמיתות
+              </button>
+            </div>
+              </>
+            )}
+            {(editFocus === 'student' && !parentOnly) && (
+              <div className="form-group">
+                <label className="form-label">הערות מעקב</label>
+                <textarea className="input" style={{ minHeight: 80 }} value={editNotes} onChange={e => setEditNotes(e.target.value)} />
+              </div>
+            )}
           </div>
         </Modal>
       )}
@@ -2777,24 +2918,51 @@ export default function Leads({
   useEffect(() => {
     const openId = searchParams.get('open');
     if (!openId) return;
-    const exists =
-      students.some((s) => String(s.id) === String(openId)) ||
-      (String(openId).startsWith('parent:') &&
-        parents.some((p) => String(p.id) === String(openId).replace(/^parent:/, ''))) ||
-      buildLeadEntries(students, parents).some((e) => String(e.key) === String(openId));
-    if (!exists && (students.length > 0 || parents.length > 0)) {
-      // Data loaded but target missing — still clear the param.
+    let cancelled = false;
+
+    (async () => {
+      let studs = students;
+      let pars = parents;
+
+      // Always refresh once — registrations may have created records after App load.
+      try {
+        const [studentsResponse, parentsResponse] = await Promise.all([
+          fetch('/api/students'),
+          fetch('/api/parents'),
+        ]);
+        if (studentsResponse.ok && parentsResponse.ok) {
+          const [freshStudents, freshParents] = await Promise.all([
+            studentsResponse.json(),
+            parentsResponse.json(),
+          ]);
+          if (
+            !cancelled
+            && Array.isArray(freshStudents)
+            && Array.isArray(freshParents)
+          ) {
+            studs = freshStudents;
+            pars = freshParents;
+            setStudents(freshStudents);
+            setParents(freshParents);
+          }
+        }
+      } catch {
+        /* keep existing in-memory lists */
+      }
+
+      if (cancelled) return;
+
+      const targetId = resolveLeadOpenTarget(openId, studs, pars);
       const next = new URLSearchParams(searchParams);
       next.delete('open');
       setSearchParams(next, { replace: true });
-      return;
-    }
-    if (!exists) return;
-    setSelectedStudentId(openId);
-    const next = new URLSearchParams(searchParams);
-    next.delete('open');
-    setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams, students, parents]);
+      if (targetId) setSelectedStudentId(targetId);
+    })();
+
+    return () => { cancelled = true; };
+    // Intentionally omit students/parents — run once per open param, then refresh from API.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, setSearchParams, setStudents, setParents]);
 
   // Fetch pricelist for billing options
   useEffect(() => {
@@ -2914,11 +3082,11 @@ export default function Leads({
     }
   };
 
-  const selectedStudent = students.find(s => s.id === selectedStudentId)
-    || (selectedStudentId?.startsWith('parent:')
-      ? buildLeadEntries(students, parents).find((e) => e.key === selectedStudentId)?.student
+  const selectedStudent = students.find((s) => String(s.id) === String(selectedStudentId))
+    || (String(selectedStudentId || '').startsWith('parent:')
+      ? buildLeadEntries(students, parents).find((e) => String(e.key) === String(selectedStudentId))?.student
       : null);
-  const selectedParent = selectedStudent ? parents.find(p => p.id === selectedStudent.parentId) : null;
+  const selectedParent = selectedStudent ? parents.find((p) => String(p.id) === String(selectedStudent.parentId)) : null;
   const selectedGroup = selectedStudent?.groupId ? groups.find(g => g.id === selectedStudent.groupId) : null;
   const selectedSiblings = selectedParent
     ? students.filter((s) => {
@@ -3182,7 +3350,7 @@ export default function Leads({
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minHeight: 40 }}>
                   {colStudents.map(s => {
                     const parent = parents.find(p => p.id === s.parentId);
-                    const group = s.groupId ? groups.find(g => g.id === s.groupId) : null;
+                    const groupList = groups.filter((g) => studentGroupIds(s).includes(String(g.id)));
                     const src = LEAD_SOURCES[parent?.source || s.source] || LEAD_SOURCES.unknown;
                     return (
                       <div
@@ -3198,7 +3366,9 @@ export default function Leads({
                         {parent?.phone && <div style={{ fontSize: 11, color: 'var(--text-3)', direction: 'ltr', unicodeBidi: 'plaintext' }}>{parent.phone}</div>}
                         <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
                           <span className="badge badge-gray" style={{ fontSize: 10 }}>{src.icon} {src.label}</span>
-                          {group && <span className="badge badge-blue" style={{ fontSize: 10 }}>{group.name.split(' ')[0]}</span>}
+                          {groupList.map((g) => (
+                            <span key={g.id} className="badge badge-blue" style={{ fontSize: 10 }}>{g.name.split(' ')[0]}</span>
+                          ))}
                           {s.nextFollowup && <span className="badge badge-amber" style={{ fontSize: 10 }}>🔔 {s.nextFollowup}</span>}
                         </div>
                       </div>
@@ -3241,7 +3411,7 @@ export default function Leads({
                   || family.students.some((s) => s.notes?.includes('אינסטגרם'));
                 const namedChildren = family.students.filter((s) => s.name && !isParentOnlyLead(s));
                 const groupsInFamily = [...new Set(
-                  family.students.map((s) => s.groupId).filter(Boolean)
+                  family.students.flatMap((s) => studentGroupIds(s))
                 )].map((gid) => groups.find((g) => g.id === gid)).filter(Boolean);
 
                 return (

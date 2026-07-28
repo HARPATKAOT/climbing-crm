@@ -868,6 +868,15 @@ input, select, textarea { font-family: var(--font); }
   transition: all var(--t-fast);
   width: 100%;
 }
+.input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.input[type="number"]::-webkit-outer-spin-button,
+.input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
 .input:focus, .select:focus, .textarea:focus {
   outline: none;
   border-color: var(--blue);
@@ -935,6 +944,75 @@ input, select, textarea { font-family: var(--font); }
     flex-direction: column;
     align-items: stretch;
   }
+}
+
+/* POS sale expanded detail */
+.pos-sale-detail {
+  display: grid;
+  gap: 16px;
+}
+.pos-sale-detail-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px 20px;
+}
+.pos-sale-detail-field {
+  min-width: 0;
+}
+.pos-sale-detail-label {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+.pos-sale-detail-value {
+  font-size: 13px;
+  color: var(--text);
+  word-break: break-word;
+}
+.pos-sale-detail-sub {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 4px;
+}
+.pos-sale-detail-section-title {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-bottom: 8px;
+}
+.pos-sale-detail-items {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.pos-sale-detail-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  padding: 4px 0;
+}
+.pos-sale-detail-item + .pos-sale-detail-item {
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+.pos-sale-detail-item-name {
+  color: var(--text);
+}
+.pos-sale-detail-item-price {
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+.pos-sale-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.pos-sale-detail-actions-spacer {
+  flex: 1 1 8px;
+  min-width: 0;
 }
 
 /* === DIVIDER === */
@@ -2081,6 +2159,10 @@ input, select, textarea { font-family: var(--font); }
   gap: 8px;
 }
 
+.activity-settings-grid--price-vat {
+  grid-template-columns: minmax(110px, 0.9fr) minmax(180px, 1.4fr) minmax(90px, 0.7fr);
+}
+
 .activity-settings-toggle {
   min-height: 38px;
   display: flex;
@@ -2237,6 +2319,29 @@ input, select, textarea { font-family: var(--font); }
 .activity-registration-field-hint {
   grid-column: 2;
   line-height: 1.35;
+}
+
+.activity-registration-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.activity-registration-status-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.activity-registration-status-value {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-1);
+  font-size: 14px;
 }
 
 .activity-registration-operations .registration-sections {

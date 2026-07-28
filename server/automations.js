@@ -8,6 +8,7 @@ import {
   israelDateStr,
   israelHour,
 } from './attendanceUtils.js';
+import { studentGroupIds } from './studentGroups.js';
 
 export const DEFAULT_ARRIVAL =
   'רחוב האורגים 12, אשדוד. יש חניה בחזית.';
@@ -135,16 +136,19 @@ export function findIntroReminderCandidates(date = israelDateStr()) {
 
   for (const student of students) {
     if (!INTRO_STATUSES.has(student.status)) continue;
-    if (!student.groupId) continue;
-    const group = groupById.get(student.groupId);
-    if (!group || group.active === false) continue;
-    if (!getGroupDays(group).includes(weekday)) continue;
-    out.push({
-      student,
-      group,
-      date,
-      payload: buildIntroClassPayload(student, group, { date }),
-    });
+    const gids = studentGroupIds(student);
+    if (!gids.length) continue;
+    for (const gid of gids) {
+      const group = groupById.get(gid);
+      if (!group || group.active === false) continue;
+      if (!getGroupDays(group).includes(weekday)) continue;
+      out.push({
+        student,
+        group,
+        date,
+        payload: buildIntroClassPayload(student, group, { date }),
+      });
+    }
   }
   return out;
 }

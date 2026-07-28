@@ -3,6 +3,7 @@ import { phonesMatch, normalizeWaPhone } from '../whatsappConnect.js';
 import {
   getParentChannelWindows,
   canSendFreeform,
+  getPhoneSessionWindow,
   inboundFieldForChannel,
   enrichParentInboundFromMessages,
   enrichParentInboundFromSiblings,
@@ -136,15 +137,144 @@ export function updateMessageStatusByMetaId(metaMessageId, status) {
   setMessageStatusByMetaId(metaMessageId, status);
 }
 
+function studentsForParent(parentId) {
+  return (db.get('students') || []).filter((s) => s.parentId === parentId);
+}
+
+function familyWhatsappPhones(parent, students = []) {
+  const phones = [];
+  if (parent?.phone) phones.push(parent.phone);
+  for (const student of students) {
+    if (student?.phone) phones.push(student.phone);
+  }
+  return phones;
+}
+
+function findStudentByPhone(students, phone) {
+  if (!phone) return null;
+  return students.find((s) => phonesMatch(s.phone, phone)) || null;
+}
+
+function phoneBelongsToFamily(phone, familyPhones) {
+  if (!phone) return false;
+  return familyPhones.some((p) => phonesMatch(p, phone));
+}
+
+function buildConversationThreads(parent, students, messages = []) {
+  const threads = [];
+  if (parent?.phone) {
+    threads.push({
+      id: 'parent',
+      role: 'parent',
+      label: parent.name || 'הורה',
+      studentId: null,
+      phone: parent.phone,
+      channels: {
+        whatsapp: true,
+        instagram: !!parent.instagram_id,
+        messenger: !!parent.messenger_psid,
+      },
+      window: getPhoneSessionWindow(messages, parent.phone),
+    });
+  } else {
+    threads.push({
+      id: 'parent',
+      role: 'parent',
+      label: parent?.name || 'הורה',
+      studentId: null,
+      phone: '',
+      channels: {
+        whatsapp: false,
+        instagram: !!parent?.instagram_id,
+        messenger: !!parent?.messenger_psid,
+      },
+      window: getParentChannelWindows(parent).whatsapp,
+    });
+  }
+
+  for (const student of students) {
+    if (!String(student.phone || '').trim()) continue;
+    threads.push({
+      id: `student:${student.id}`,
+      role: 'student',
+      label: student.name || 'מתאמן',
+      studentId: student.id,
+      phone: student.phone,
+      channels: { whatsapp: true, instagram: false, messenger: false },
+      window: getPhoneSessionWindow(messages, student.phone),
+    });
+  }
+  return threads;
+}
+
+function annotateMessages(messages, parent, students) {
+  return (messages || []).map((m) => {
+    const channel = m.channel || 'whatsapp';
+    let studentId = m.student_id || null;
+    let studentName = null;
+    if (!studentId && channel === 'whatsapp' && m.phone) {
+      const matched = findStudentByPhone(students, m.phone);
+      if (matched && !phonesMatch(parent?.phone, m.phone)) {
+        studentId = matched.id;
+        studentName = matched.name || null;
+      }
+    } else if (studentId) {
+      studentName = students.find((s) => s.id === studentId)?.name || null;
+    }
+    return {
+      ...m,
+      student_id: studentId,
+      studentName,
+      fromChild: !!studentId,
+    };
+  });
+}
+
+function resolveReplyTarget(parent, students, payload = {}) {
+  const studentId = payload.studentId || payload.student_id || null;
+  if (studentId) {
+    const student = students.find((s) => String(s.id) === String(studentId));
+    if (!student) return { error: 'המתאמן לא נמצא', status: 404 };
+    if (!student.phone) return { error: 'למתאמן אין מספר טלפון', status: 400 };
+    return {
+      phone: student.phone,
+      studentId: student.id,
+      student,
+      role: 'student',
+    };
+  }
+  const targetPhone = payload.targetPhone || payload.phone || null;
+  if (targetPhone) {
+    const student = findStudentByPhone(students, targetPhone);
+    if (student) {
+      return {
+        phone: student.phone,
+        studentId: student.id,
+        student,
+        role: 'student',
+      };
+    }
+    if (parent?.phone && phonesMatch(parent.phone, targetPhone)) {
+      return { phone: parent.phone, studentId: null, student: null, role: 'parent' };
+    }
+  }
+  return {
+    phone: parent?.phone || '',
+    studentId: null,
+    student: null,
+    role: 'parent',
+  };
+}
+
 function mergeThread(parent) {
   if (!parent) return [];
+  const students = studentsForParent(parent.id);
+  const familyPhones = familyWhatsappPhones(parent, students);
   const logs = (db.get('whatsapp_logs') || []).filter((l) => {
     if (l.parent_id && l.parent_id === parent.id) return true;
-    // Direct phone match — don't drop inbound rows that never got parent_id.
     if (
-      parent.phone
-      && phonesMatch(l.phone, parent.phone)
-      && (l.channel || 'whatsapp') === 'whatsapp'
+      (l.channel || 'whatsapp') === 'whatsapp'
+      && phoneBelongsToFamily(l.phone, familyPhones)
     ) {
       return true;
     }
@@ -153,10 +283,9 @@ function mergeThread(parent) {
   });
   const msgs = (db.get('messages') || []).filter((m) => {
     if (m.parent_id === parent.id) return true;
-    return !!(
-      parent.phone
-      && phonesMatch(m.phone, parent.phone)
-      && (m.channel || 'whatsapp') === 'whatsapp'
+    return (
+      (m.channel || 'whatsapp') === 'whatsapp'
+      && phoneBelongsToFamily(m.phone, familyPhones)
     );
   });
 
@@ -206,10 +335,12 @@ async function reconcileThreadFromDurable(parent) {
   if (!threadIsBehindCard(parent, mergeThread(parent), 'whatsapp')) return false;
 
   let added = 0;
+  const students = studentsForParent(parent.id);
+  const familyPhones = familyWhatsappPhones(parent, students);
 
   const remoteMessages = await supa.getMessagesForParent({
     parentId: parent.id,
-    phone: parent.phone,
+    phones: familyPhones,
   });
   if (remoteMessages?.length) {
     added += db.mergeLocal('messages', remoteMessages);
@@ -217,8 +348,8 @@ async function reconcileThreadFromDurable(parent) {
   }
 
   // Legacy history still living in kv_collections (pre-migration rows).
-  if (parent.phone) {
-    const remoteLogs = await supa.getWhatsappLogsForPhone(parent.phone);
+  for (const phone of familyPhones) {
+    const remoteLogs = await supa.getWhatsappLogsForPhone(phone);
     if (remoteLogs?.length) added += db.mergeLocal('whatsapp_logs', remoteLogs);
   }
 
@@ -257,10 +388,11 @@ export async function getConversation(parentId) {
     console.warn('conversation log reconcile failed:', err.message);
   }
 
-  const students = (db.get('students') || []).filter((s) => s.parentId === parentRaw.id);
-  const messages = mergeThread(parentRaw);
+  const students = studentsForParent(parentRaw.id);
+  const messagesRaw = mergeThread(parentRaw);
+  const messages = annotateMessages(messagesRaw, parentRaw, students);
   const siblings = findParentsByPhone(parentRaw.phone).filter((p) => p.id !== parentRaw.id);
-  let parent = enrichParentInboundFromMessages(parentRaw, messages);
+  let parent = enrichParentInboundFromMessages(parentRaw, messagesRaw);
   parent = enrichParentInboundFromSiblings(parent, siblings);
 
   // Heal stale last_inbound_* when the thread / sibling card has a newer inbound.
@@ -276,6 +408,7 @@ export async function getConversation(parentId) {
   const windows = getParentChannelWindows(parent);
   const channels = availableChannels(parent);
   const defaultChannel = pickDefaultChannel(parent, windows);
+  const threads = buildConversationThreads(parent, students, messagesRaw);
 
   const messengerCreds = getMessengerCredentials();
   const channelStatus = {
@@ -284,10 +417,25 @@ export async function getConversation(parentId) {
     messenger: channels.messenger && !!(messengerCreds.pageId && messengerCreds.accessToken),
   };
 
+  // Prefer opening the thread that last wrote in, when it is a child phone.
+  let defaultThreadId = 'parent';
+  let latestInbound = 0;
+  for (const m of messages) {
+    if (m.direction !== 'inbound') continue;
+    if ((m.channel || 'whatsapp') !== 'whatsapp') continue;
+    const ts = Date.parse(m.created_at || '');
+    if (!Number.isFinite(ts) || ts < latestInbound) continue;
+    latestInbound = ts;
+    if (m.student_id) defaultThreadId = `student:${m.student_id}`;
+    else defaultThreadId = 'parent';
+  }
+
   return {
     parent,
     students,
     messages,
+    threads,
+    defaultThreadId,
     windows,
     channels: channelStatus,
     defaultChannel,
@@ -331,7 +479,7 @@ export async function replyToParent(parentId, payload = {}) {
   const parentRaw = findParentById(parentId);
   if (!parentRaw) return { success: false, error: 'הלקוח לא נמצא', status: 404 };
 
-  const students = (db.get('students') || []).filter((s) => s.parentId === parentRaw.id);
+  const students = studentsForParent(parentRaw.id);
   const messages = mergeThread(parentRaw);
   const siblings = findParentsByPhone(parentRaw.phone).filter((p) => p.id !== parentRaw.id);
   let parent = enrichParentInboundFromMessages(parentRaw, messages);
@@ -339,7 +487,14 @@ export async function replyToParent(parentId, payload = {}) {
   const channel = payload.channel || pickDefaultChannel(parent, getParentChannelWindows(parent));
   const type = payload.type || 'text';
 
-  const windowOpen = canSendFreeform(parent, channel);
+  const target = resolveReplyTarget(parent, students, payload);
+  if (target.error) return { success: false, error: target.error, status: target.status || 400 };
+
+  // WhatsApp freeform is gated by the peer you reply to (parent or child number).
+  // Instagram / Messenger still use the parent-card channel window.
+  const windowOpen = channel === 'whatsapp'
+    ? getPhoneSessionWindow(messages, target.phone).open
+    : canSendFreeform(parent, channel);
   if ((type === 'text' || type === 'image' || type === 'saved_reply') && !windowOpen) {
     return {
       success: false,
@@ -349,12 +504,18 @@ export async function replyToParent(parentId, payload = {}) {
     };
   }
 
+  const replyStudents = target.student ? [target.student, ...students] : students;
   let text = payload.text || payload.message || '';
   if (type === 'saved_reply') {
     const reply = (db.get('saved_replies') || []).find((r) => r.id === payload.savedReplyId);
     if (!reply) return { success: false, error: 'הודעה שמורה לא נמצאה', status: 404 };
-    text = applySavedReplyVars(reply.body, parent, students);
+    text = applySavedReplyVars(reply.body, parent, replyStudents);
   }
+
+  const sendOpts = {
+    parentId: parent.id,
+    studentId: target.studentId || null,
+  };
 
   if (type === 'template') {
     const templateName = payload.templateName || payload.templateId;
@@ -363,17 +524,18 @@ export async function replyToParent(parentId, payload = {}) {
     if (channel !== 'whatsapp') {
       return { success: false, error: 'תבניות Meta זמינות רק בוואטסאפ', status: 400 };
     }
+    if (!target.phone) return { success: false, error: 'אין מספר טלפון לשליחה', status: 400 };
     const result = await whatsappService.sendTemplateMessage(
-      parent.phone,
+      target.phone,
       templateName,
       variables.length ? variables : [parent.name || ''],
-      { language: payload.language, parentId: parent.id }
+      { language: payload.language, ...sendOpts }
     );
     if (result.success) {
       try {
         const settings = mergeBotSettings(db.getSettings());
         if (settings.aiPauseOnHumanReply) {
-          await pauseBotForPhone(parent.phone, settings.aiPauseMinutesAfterHuman, { reason: 'human_reply' });
+          await pauseBotForPhone(target.phone, settings.aiPauseMinutesAfterHuman, { reason: 'human_reply' });
         }
       } catch (_) { /* ignore */ }
     }
@@ -384,6 +546,7 @@ export async function replyToParent(parentId, payload = {}) {
     if (channel !== 'whatsapp') {
       return { success: false, error: 'שליחת תמונה נתמכת כרגע בוואטסאפ', status: 400 };
     }
+    if (!target.phone) return { success: false, error: 'אין מספר טלפון לשליחה', status: 400 };
     if (!payload.imageBase64 && !payload.mediaId) {
       return { success: false, error: 'חסרה תמונה', status: 400 };
     }
@@ -399,14 +562,12 @@ export async function replyToParent(parentId, payload = {}) {
       mediaId = uploaded.id;
     }
     const caption = text || payload.caption || '';
-    const result = await whatsappService.sendImageMessage(parent.phone, mediaId, caption, {
-      parentId: parent.id,
-    });
+    const result = await whatsappService.sendImageMessage(target.phone, mediaId, caption, sendOpts);
     if (result.success) {
       try {
         const settings = mergeBotSettings(db.getSettings());
         if (settings.aiPauseOnHumanReply) {
-          await pauseBotForPhone(parent.phone, settings.aiPauseMinutesAfterHuman, { reason: 'human_reply' });
+          await pauseBotForPhone(target.phone, settings.aiPauseMinutesAfterHuman, { reason: 'human_reply' });
         }
       } catch (_) { /* ignore */ }
     }
@@ -416,6 +577,9 @@ export async function replyToParent(parentId, payload = {}) {
   if (!text.trim()) return { success: false, error: 'חסר תוכן הודעה', status: 400 };
 
   if (channel === 'instagram') {
+    if (target.role === 'student') {
+      return { success: false, error: 'אינסטגרם זמין רק בשיחת ההורה', status: 400 };
+    }
     if (!parent.instagram_id) return { success: false, error: 'אין מזהה אינסטגרם ללקוח', status: 400 };
     const result = await instagramService.sendTextMessage(parent.instagram_id, text.trim(), false);
     if (result.success) {
@@ -433,6 +597,9 @@ export async function replyToParent(parentId, payload = {}) {
   }
 
   if (channel === 'messenger') {
+    if (target.role === 'student') {
+      return { success: false, error: 'מסנג׳ר זמין רק בשיחת ההורה', status: 400 };
+    }
     if (!parent.messenger_psid) return { success: false, error: 'אין מזהה מסנג׳ר ללקוח', status: 400 };
     try {
       const result = await sendMessengerText(parent.messenger_psid, text.trim());
@@ -454,12 +621,13 @@ export async function replyToParent(parentId, payload = {}) {
   }
 
   // WhatsApp text — respect session window (already checked)
-  const result = await whatsappService.sendTextMessage(parent.phone, text.trim(), false);
+  if (!target.phone) return { success: false, error: 'אין מספר טלפון לשליחה', status: 400 };
+  const result = await whatsappService.sendTextMessage(target.phone, text.trim(), false, sendOpts);
   if (result.success) {
     try {
       const settings = mergeBotSettings(db.getSettings());
       if (settings.aiPauseOnHumanReply) {
-        await pauseBotForPhone(parent.phone, settings.aiPauseMinutesAfterHuman, { reason: 'human_reply' });
+        await pauseBotForPhone(target.phone, settings.aiPauseMinutesAfterHuman, { reason: 'human_reply' });
       }
     } catch (err) {
       console.error('pause bot after CRM reply failed:', err.message);

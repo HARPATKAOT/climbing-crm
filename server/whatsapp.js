@@ -564,6 +564,7 @@ export const whatsappService = {
         source: options.source || (isAi ? 'ai' : 'crm'),
         meta_message_id: result.messageId || null,
         parent_id: options.parentId || null,
+        student_id: options.studentId || null,
       });
 
       return { success: true, text: body, messageId: result.messageId };
@@ -577,6 +578,7 @@ export const whatsappService = {
         is_ai: isAi,
         source: options.source || (isAi ? 'ai' : 'crm'),
         parent_id: options.parentId || null,
+        student_id: options.studentId || null,
       });
       return { success: false, error: error.message };
     }
@@ -689,6 +691,7 @@ export const whatsappService = {
         source: 'crm',
         meta_message_id: result.messageId || null,
         parent_id: options.parentId || null,
+        student_id: options.studentId || null,
       });
 
       return { success: true, message: logMessage, messageId: result.messageId || null };
@@ -702,6 +705,7 @@ export const whatsappService = {
         template_id: templateName,
         source: 'crm',
         parent_id: options.parentId || null,
+        student_id: options.studentId || null,
       });
       return { success: false, error: error.message };
     }
@@ -728,6 +732,7 @@ export const whatsappService = {
         message_type: 'image',
         media_url: mediaId,
         parent_id: options.parentId || null,
+        student_id: options.studentId || null,
       });
       return { success: true, message: logMessage, messageId: result.messageId || null };
     } catch (error) {
@@ -814,8 +819,15 @@ export const whatsappService = {
     }
 
     // 1. Upsert lead / client details first, so the message is filed on a real card
-    const { parent: createdParent, student, isNew } = await db.createLeadFromWhatsApp(normalizedPhone, text);
-    let parent = findPrimaryParent(normalizedPhone) || createdParent;
+    const {
+      parent: createdParent,
+      student,
+      isNew,
+      matchedVia,
+    } = await db.createLeadFromWhatsApp(normalizedPhone, text);
+    let parent = (matchedVia === 'child_phone'
+      ? createdParent
+      : (findPrimaryParent(normalizedPhone) || createdParent));
 
     const rawTimestamp = Number(meta.timestamp);
     const inboundAt = Number.isFinite(rawTimestamp) && rawTimestamp > 0
@@ -834,6 +846,7 @@ export const whatsappService = {
       meta_message_id: meta.messageId || null,
       message_type: meta.type || 'text',
       parent_id: parent?.id || null,
+      student_id: matchedVia === 'child_phone' ? (student?.id || null) : null,
       created_at: inboundAt,
     });
 
@@ -849,12 +862,17 @@ export const whatsappService = {
         replied: false,
         durableError: storedInbound.error || 'durable write failed',
         skippedReason: 'not_persisted',
+        matchedVia,
       };
     }
 
-    // 3. Open / refresh the 24h window on EVERY parent row that shares this phone
+    // 3. Open / refresh the 24h window on the resolved parent card(s).
+    // Child-phone inbound must touch the parent card even when parent.phone differs.
     const phoneMatches = (db.get('parents') || []).filter((p) => phonesMatch(p.phone, normalizedPhone));
-    for (const match of phoneMatches) {
+    const parentsToTouch = matchedVia === 'child_phone' && parent?.id
+      ? [parent, ...phoneMatches.filter((p) => p.id !== parent.id)]
+      : (phoneMatches.length ? phoneMatches : (parent ? [parent] : []));
+    for (const match of parentsToTouch) {
       const updatedParent = db.update('parents', match.id, {
         last_inbound_whatsapp: inboundAt,
         channel: match.channel === 'phone' ? 'whatsapp' : (match.channel || 'whatsapp'),
@@ -862,11 +880,20 @@ export const whatsappService = {
       if (updatedParent) await persistCore('parents', updatedParent);
     }
 
-    parent = findPrimaryParent(normalizedPhone) || parent;
+    parent = (matchedVia === 'child_phone'
+      ? (db.getOne('parents', parent?.id) || parent)
+      : (findPrimaryParent(normalizedPhone) || parent));
 
     // A recovered retry is now durable and queued — but it was already answered.
     if (storedInbound.duplicate) {
-      return { parent, student, isNew: false, replied: false, skippedReason: 'duplicate' };
+      return {
+        parent,
+        student,
+        isNew: false,
+        replied: false,
+        skippedReason: 'duplicate',
+        matchedVia,
+      };
     }
 
     let students = studentsForParent(parent);

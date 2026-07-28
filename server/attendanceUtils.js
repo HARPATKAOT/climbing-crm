@@ -1,5 +1,7 @@
 // Server-side attendance helpers (mirror client scheduleUtils for ensure logic)
 
+import { studentInGroup } from './studentGroups.js';
+
 const HEB_DAY_IDX = { א: 0, ב: 1, ג: 2, ד: 3, ה: 4, ו: 5 };
 
 export function getGroupDays(group) {
@@ -46,11 +48,96 @@ export function normalizeAttStatus(status) {
   return 'pending';
 }
 
+// ─── Training-vacation automation ────────────────────────────────────────────
+// A «חופשה מאימונים» activity in the calendar turns every training day it
+// covers into "יום חג" attendance. Rows written by the automation carry this
+// marker so a deleted / moved vacation can be rolled back without touching
+// anything a trainer marked by hand.
+export const VACATION_ACTIVITY_TYPE = 'training_vacation';
+export const VACATION_MARKER = 'auto:training_vacation';
+export const VACATION_ATT_STATUS = 'holiday';
+
+function dayKey(value) {
+  return value ? String(value).slice(0, 10) : '';
+}
+
+/** The training-vacation activity covering `date`, or null. */
+export function findTrainingVacation(activities, date) {
+  const day = dayKey(date);
+  if (!day) return null;
+  return (activities || []).find((a) => {
+    if (a?.type !== VACATION_ACTIVITY_TYPE) return null;
+    if (a.status === 'cancelled') return null;
+    const start = dayKey(a.date);
+    if (!start) return null;
+    const rawEnd = dayKey(a.end_date);
+    const end = rawEnd && rawEnd > start ? rawEnd : start;
+    return day >= start && day <= end;
+  }) || null;
+}
+
+export function isTrainingVacationDate(activities, date) {
+  return Boolean(findTrainingVacation(activities, date));
+}
+
+/** Every YYYY-MM-DD an activity spans (inclusive). Capped so a typo can't blow up. */
+export function activityDateRange(activity, { maxDays = 120 } = {}) {
+  const start = dayKey(activity?.date);
+  if (!start) return [];
+  const rawEnd = dayKey(activity?.end_date);
+  const end = rawEnd && rawEnd > start ? rawEnd : start;
+  const out = [];
+  // UTC arithmetic keeps the walk exact regardless of the server's timezone.
+  const cursor = new Date(`${start}T00:00:00Z`);
+  if (Number.isNaN(cursor.getTime())) return [];
+  while (out.length < maxDays) {
+    const day = cursor.toISOString().slice(0, 10);
+    out.push(day);
+    if (day >= end) break;
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return out;
+}
+
+function matchesDates(dates, day) {
+  return !dates || dates.has(day);
+}
+
+function toDateSet(dates) {
+  if (!dates) return null;
+  const list = Array.isArray(dates) ? dates : [dates];
+  return new Set(list.map(dayKey).filter(Boolean));
+}
+
+/** Pending rows on vacation days — these become "יום חג". */
+export function planVacationAttendanceUpdates({ activities, attendance, dates = null }) {
+  const wanted = toDateSet(dates);
+  return (attendance || []).filter((row) => {
+    const day = dayKey(row?.date);
+    if (!day || !matchesDates(wanted, day)) return false;
+    if (normalizeAttStatus(row.status) !== 'pending') return false;
+    return isTrainingVacationDate(activities, day);
+  });
+}
+
+/** Auto-marked rows whose vacation was deleted or moved — back to "ממתין למילוי". */
+export function planVacationAttendanceReverts({ activities, attendance, dates = null }) {
+  const wanted = toDateSet(dates);
+  return (attendance || []).filter((row) => {
+    const day = dayKey(row?.date);
+    if (!day || !matchesDates(wanted, day)) return false;
+    if (row.marked_by !== VACATION_MARKER) return false;
+    if (normalizeAttStatus(row.status) !== VACATION_ATT_STATUS) return false;
+    return !isTrainingVacationDate(activities, day);
+  });
+}
+
 /**
  * Ensure pending attendance rows exist for every enrolled student in groups
  * that meet on `date`. Never overwrites existing rows.
+ * Rows created on a training-vacation day start as "יום חג" instead of pending.
  */
-export function ensureAttendanceRows({ groups, students, attendance, date, groupId }) {
+export function ensureAttendanceRows({ groups, students, attendance, date, groupId, activities }) {
   const weekday = dateToWeekday(date);
   let targetGroups = (groups || []).filter((g) => {
     if (g.active === false) return false;
@@ -70,10 +157,11 @@ export function ensureAttendanceRows({ groups, students, attendance, date, group
     existing.map((r) => `${r.student_id}|${r.group_id}|${r.date}`)
   );
 
+  const vacation = findTrainingVacation(activities, date);
   const created = [];
   for (const g of targetGroups) {
     const members = (students || []).filter(
-      (s) => s.groupId === g.id && s.status !== 'archived'
+      (s) => studentInGroup(s, g.id) && s.status !== 'archived'
     );
     for (const s of members) {
       const key = `${s.id}|${g.id}|${date}`;
@@ -83,8 +171,8 @@ export function ensureAttendanceRows({ groups, students, attendance, date, group
         student_id: s.id,
         group_id: g.id,
         date,
-        status: 'pending',
-        marked_by: null,
+        status: vacation ? VACATION_ATT_STATUS : 'pending',
+        marked_by: vacation ? VACATION_MARKER : null,
         notes: '',
       };
       created.push(row);
@@ -97,6 +185,7 @@ export function ensureAttendanceRows({ groups, students, attendance, date, group
     existing: existing.length,
     groups: targetGroups.map((g) => g.id),
     date,
+    vacation: vacation ? { id: vacation.id, name: vacation.name || '' } : null,
   };
 }
 

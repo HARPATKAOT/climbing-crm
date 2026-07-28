@@ -2,6 +2,7 @@ import { db } from '../db.js';
 import { getGroupDays } from '../attendanceUtils.js';
 import { ageFromBirthDate } from './conversations.js';
 import { canSendFreeform } from './sessionWindow.js';
+import { studentGroupIds, studentInGroup } from '../studentGroups.js';
 
 const REGISTERED_STATUSES = new Set(['registered', 'active', 'health_signed', 'intro_scheduled']);
 
@@ -100,17 +101,21 @@ function matchStudent(student, filters, groupById) {
   }
 
   const registered = filters.registered || 'any';
-  const isRegistered = !!(student.groupId && REGISTERED_STATUSES.has(student.status));
+  const groupIds = studentGroupIds(student);
+  const isRegistered = !!(groupIds.length && REGISTERED_STATUSES.has(student.status));
   if (registered === 'yes' && !isRegistered) return false;
   if (registered === 'no' && isRegistered) return false;
 
   if (Array.isArray(filters.groupIds) && filters.groupIds.length) {
-    if (!filters.groupIds.includes(student.groupId)) return false;
+    if (!filters.groupIds.some((gid) => studentInGroup(student, gid))) return false;
   }
 
   if (Array.isArray(filters.groupDays) && filters.groupDays.length) {
-    const group = groupById.get(student.groupId);
-    const days = group ? getGroupDays(group).map(Number) : [];
+    const days = [];
+    for (const gid of groupIds) {
+      const group = groupById.get(gid);
+      if (group) days.push(...getGroupDays(group).map(Number));
+    }
     const wanted = filters.groupDays.map(Number);
     if (!days.some((d) => wanted.includes(d))) return false;
   }

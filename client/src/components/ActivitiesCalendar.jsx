@@ -82,6 +82,24 @@ const WORK_TYPE_OPTIONS = [
   { id: 'route_building_shift', label: 'בניית מסלולים' },
 ];
 
+const DEFAULT_WAGE = { counter_rate: 45, class_rate: 70, private_rate: 90, route_rate: 60 };
+
+function rateForWorkType(agreement, workType) {
+  if (workType === 'class_shift') return Number(agreement?.class_rate) || 0;
+  if (workType === 'private_shift') return Number(agreement?.private_rate) || 0;
+  if (workType === 'route_building_shift') return Number(agreement?.route_rate) || 0;
+  return Number(agreement?.counter_rate) || 0;
+}
+
+function payAmountForAssignment(row, agreement) {
+  if ((row.pay_mode || 'hourly') === 'flat') {
+    const n = Number(row.flat_amount);
+    return Number.isFinite(n) && n >= 0 ? Math.round(n) : 0;
+  }
+  const hrs = Number(row.hours) || 0;
+  return Math.round(hrs * rateForWorkType(agreement, row.work_type));
+}
+
 const SOURCE_LABELS = {
   clock: 'שעון',
   calendar: 'יומן',
@@ -352,6 +370,7 @@ function hoursFromTimes(startHm, endHm) {
 
 function WorkAssignmentsBlock({ activityId }) {
   const [employees, setEmployees] = useState([]);
+  const [wages, setWages] = useState([]);
   const [rows, setRows] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -359,18 +378,27 @@ function WorkAssignmentsBlock({ activityId }) {
 
   const load = useCallback(async () => {
     try {
-      const [empRes, asgRes] = await Promise.all([
+      const [empRes, asgRes, wageRes] = await Promise.all([
         fetch('/api/employees'),
         fetch(`/api/work-assignments?activity_id=${encodeURIComponent(activityId)}`),
+        fetch('/api/wages'),
       ]);
       const emps = empRes.ok ? await empRes.json() : [];
       const asgs = asgRes.ok ? await asgRes.json() : [];
+      const wageList = wageRes.ok ? await wageRes.json() : [];
       setEmployees(Array.isArray(emps) ? emps.filter((e) => e.is_active !== false) : []);
+      setWages(Array.isArray(wageList) ? wageList : []);
       setRows(Array.isArray(asgs)
-        ? asgs.map((r) => ({ ...r, hours: roundHoursQuarter(r.hours) }))
+        ? asgs.map((r) => ({
+          ...r,
+          hours: roundHoursQuarter(r.hours),
+          pay_mode: r.pay_mode === 'flat' ? 'flat' : 'hourly',
+          flat_amount: r.flat_amount ?? '',
+        }))
         : []);
     } catch {
       setEmployees([]);
+      setWages([]);
       setRows([]);
     }
   }, [activityId]);
@@ -378,6 +406,7 @@ function WorkAssignmentsBlock({ activityId }) {
   useEffect(() => { load(); }, [load]);
 
   const empName = (id) => employees.find((e) => e.id === id)?.name || 'עובד';
+  const agreementFor = (employeeId) => wages.find((w) => w.employee_id === employeeId) || DEFAULT_WAGE;
 
   const addFromPlan = async () => {
     if (!selectedIds.length) {
@@ -394,13 +423,13 @@ function WorkAssignmentsBlock({ activityId }) {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        setMsg(err.error || 'הוספה נכשלה');
+        setMsg(err.error || 'שיבוץ נכשל');
       } else {
         setSelectedIds([]);
         await load();
       }
     } catch {
-      setMsg('הוספה נכשלה');
+      setMsg('שיבוץ נכשל');
     } finally {
       setBusy(false);
     }
@@ -410,6 +439,7 @@ function WorkAssignmentsBlock({ activityId }) {
     setBusy(true);
     setMsg('');
     try {
+      const payMode = row.pay_mode === 'flat' ? 'flat' : 'hourly';
       const res = await fetch(`/api/work-assignments/${row.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -418,6 +448,8 @@ function WorkAssignmentsBlock({ activityId }) {
           start_time: row.start_time,
           end_time: row.end_time,
           hours: roundHoursQuarter(row.hours),
+          pay_mode: payMode,
+          flat_amount: payMode === 'flat' ? Number(row.flat_amount) || 0 : null,
           source: 'manual',
           notes: row.notes || '',
         }),
@@ -450,11 +482,13 @@ function WorkAssignmentsBlock({ activityId }) {
         const computed = hoursFromTimes(next.start_time, next.end_time);
         if (computed != null) next.hours = computed;
       }
+      if (patch.pay_mode === 'hourly') next.flat_amount = '';
       return next;
     }));
   };
 
   const available = employees.filter((e) => !rows.some((r) => r.employee_id === e.id));
+  const assignLabel = selectedIds.length > 1 ? 'שבץ עובדים' : 'שבץ עובד';
 
   return (
     <div style={{
@@ -474,7 +508,7 @@ function WorkAssignmentsBlock({ activityId }) {
       {available.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end' }}>
           <div style={{ flex: 1, minWidth: 180, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>הוספת עובדים</div>
+            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>בחירת עובדים לשיבוץ</div>
             <div style={{
               display: 'flex',
               flexDirection: 'column',
@@ -527,7 +561,7 @@ function WorkAssignmentsBlock({ activityId }) {
             style={{ whiteSpace: 'nowrap' }}
           >
             {busy ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
-            הוסף מהשעון / תכנון
+            {assignLabel}
           </button>
         </div>
       )}
@@ -538,96 +572,166 @@ function WorkAssignmentsBlock({ activityId }) {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {rows.map((row) => (
-            <div
-              key={row.id}
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '1.2fr 1fr 0.8fr 0.8fr 0.7fr auto',
-                gap: 6,
-                alignItems: 'end',
-                padding: 8,
-                borderRadius: 8,
-                border: '1px solid var(--border)',
-              }}
-            >
-              <div>
-                <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>עובד</div>
-                <div style={{ fontSize: 13, fontWeight: 700 }}>{empName(row.employee_id)}</div>
-                <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
-                  {SOURCE_LABELS[row.source] || row.source}
-                  {row.approved ? ' · מאושר' : ''}
+          {rows.map((row) => {
+            const agreement = agreementFor(row.employee_id);
+            const payMode = row.pay_mode === 'flat' ? 'flat' : 'hourly';
+            const rate = rateForWorkType(agreement, row.work_type);
+            const amount = payAmountForAssignment(row, agreement);
+            return (
+              <div
+                key={row.id}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                  padding: 8,
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                }}
+              >
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1.2fr 1fr 1fr auto',
+                  gap: 6,
+                  alignItems: 'end',
+                }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>עובד</div>
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>{empName(row.employee_id)}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
+                      {SOURCE_LABELS[row.source] || row.source}
+                      {row.approved ? ' · מאושר' : ''}
+                    </div>
+                  </div>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                    אופן תשלום
+                    <select
+                      className="input"
+                      value={payMode}
+                      onChange={(e) => patchLocal(row.id, { pay_mode: e.target.value })}
+                      style={{ fontSize: 12, padding: '4px 6px' }}
+                    >
+                      <option value="hourly">שעתי</option>
+                      <option value="flat">גלובלי</option>
+                    </select>
+                  </label>
+                  {payMode === 'hourly' ? (
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                      תעריף
+                      <select
+                        className="input"
+                        value={row.work_type || 'counter_shift'}
+                        onChange={(e) => patchLocal(row.id, { work_type: e.target.value })}
+                        style={{ fontSize: 12, padding: '4px 6px' }}
+                      >
+                        {WORK_TYPE_OPTIONS.map((o) => (
+                          <option key={o.id} value={o.id}>
+                            {o.label} — ₪{rateForWorkType(agreement, o.id)}/שעה
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : (
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                      סכום גלובלי
+                      <input
+                        className="input"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={row.flat_amount ?? ''}
+                        onChange={(e) => patchLocal(row.id, { flat_amount: e.target.value })}
+                        style={{ fontSize: 12, padding: '4px 6px' }}
+                      />
+                    </label>
+                  )}
+                  <div style={{ display: 'flex', gap: 4, paddingBottom: 2, alignItems: 'center' }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--green)', marginInlineEnd: 4 }}>
+                      ₪{amount}
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-ghost btn-icon btn-xs"
+                      title="שמור"
+                      disabled={busy}
+                      onClick={() => saveRow(row)}
+                    >
+                      <Save size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost btn-icon btn-xs"
+                      title="מחק"
+                      disabled={busy}
+                      onClick={() => deleteRow(row.id)}
+                      style={{ color: '#F87171' }}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                </div>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 0.8fr 0.8fr 0.7fr',
+                  gap: 6,
+                  alignItems: 'end',
+                }}>
+                  {payMode === 'hourly' ? (
+                    <div style={{ fontSize: 11, color: 'var(--text-3)', alignSelf: 'center' }}>
+                      תעריף נבחר: ₪{rate}/שעה
+                    </div>
+                  ) : (
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                      סוג תפקיד
+                      <select
+                        className="input"
+                        value={row.work_type || 'counter_shift'}
+                        onChange={(e) => patchLocal(row.id, { work_type: e.target.value })}
+                        style={{ fontSize: 12, padding: '4px 6px' }}
+                      >
+                        {WORK_TYPE_OPTIONS.map((o) => (
+                          <option key={o.id} value={o.id}>{o.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                    התחלה
+                    <input
+                      className="input"
+                      type="time"
+                      value={row.start_time || ''}
+                      onChange={(e) => patchLocal(row.id, { start_time: e.target.value })}
+                      style={{ fontSize: 12, padding: '4px 6px' }}
+                    />
+                  </label>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                    סיום
+                    <input
+                      className="input"
+                      type="time"
+                      value={row.end_time || ''}
+                      onChange={(e) => patchLocal(row.id, { end_time: e.target.value })}
+                      style={{ fontSize: 12, padding: '4px 6px' }}
+                    />
+                  </label>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                    שעות
+                    <input
+                      className="input"
+                      type="number"
+                      min="0"
+                      step="0.25"
+                      value={row.hours ?? 0}
+                      onChange={(e) => patchLocal(row.id, { hours: e.target.value })}
+                      onBlur={(e) => patchLocal(row.id, { hours: roundHoursQuarter(e.target.value) })}
+                      style={{ fontSize: 12, padding: '4px 6px' }}
+                    />
+                  </label>
                 </div>
               </div>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
-                סוג
-                <select
-                  className="input"
-                  value={row.work_type || 'counter_shift'}
-                  onChange={(e) => patchLocal(row.id, { work_type: e.target.value })}
-                  style={{ fontSize: 12, padding: '4px 6px' }}
-                >
-                  {WORK_TYPE_OPTIONS.map((o) => (
-                    <option key={o.id} value={o.id}>{o.label}</option>
-                  ))}
-                </select>
-              </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
-                התחלה
-                <input
-                  className="input"
-                  type="time"
-                  value={row.start_time || ''}
-                  onChange={(e) => patchLocal(row.id, { start_time: e.target.value })}
-                  style={{ fontSize: 12, padding: '4px 6px' }}
-                />
-              </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
-                סיום
-                <input
-                  className="input"
-                  type="time"
-                  value={row.end_time || ''}
-                  onChange={(e) => patchLocal(row.id, { end_time: e.target.value })}
-                  style={{ fontSize: 12, padding: '4px 6px' }}
-                />
-              </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
-                שעות
-                <input
-                  className="input"
-                  type="number"
-                  min="0"
-                  step="0.25"
-                  value={row.hours ?? 0}
-                  onChange={(e) => patchLocal(row.id, { hours: e.target.value })}
-                  onBlur={(e) => patchLocal(row.id, { hours: roundHoursQuarter(e.target.value) })}
-                  style={{ fontSize: 12, padding: '4px 6px' }}
-                />
-              </label>
-              <div style={{ display: 'flex', gap: 4, paddingBottom: 2 }}>
-                <button
-                  type="button"
-                  className="btn-ghost btn-icon btn-xs"
-                  title="שמור"
-                  disabled={busy}
-                  onClick={() => saveRow(row)}
-                >
-                  <Save size={12} />
-                </button>
-                <button
-                  type="button"
-                  className="btn-ghost btn-icon btn-xs"
-                  title="מחק"
-                  disabled={busy}
-                  onClick={() => deleteRow(row.id)}
-                  style={{ color: '#F87171' }}
-                >
-                  <Trash2 size={12} />
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -896,7 +1000,7 @@ function RegularActivityModal({
 
               {!isOps && (
                 <>
-                  <div className="activity-settings-grid">
+                  <div className="activity-settings-grid activity-settings-grid--price-vat">
                     <label>
                       <span className="activity-settings-label">
                         {includesVat ? 'מחיר כולל מע״מ' : 'מחיר לפני מע״מ'}
@@ -911,6 +1015,18 @@ function RegularActivityModal({
                         onChange={(event) => set('price', event.target.value)}
                         disabled={readOnly}
                       />
+                    </label>
+                    <label>
+                      <span className="activity-settings-label">חישוב מע״מ</span>
+                      <select
+                        className="input"
+                        value={includesVat ? 'incl' : 'excl'}
+                        onChange={(event) => set('price_includes_vat', event.target.value === 'incl')}
+                        disabled={readOnly}
+                      >
+                        <option value="excl">לא כולל מע״מ</option>
+                        <option value="incl">כולל מע״מ</option>
+                      </select>
                     </label>
                     <label>
                       <span className="activity-settings-label">מכסת משתתפים</span>

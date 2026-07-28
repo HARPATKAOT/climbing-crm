@@ -16,6 +16,40 @@ export function parentLeadId(parentId) {
 }
 
 /**
+ * Resolve deep-link targets like student ids or `parent:<id>` into the
+ * selection id used by the leads screen.
+ */
+export function resolveLeadOpenTarget(openId, students = [], parents = []) {
+  if (openId == null || openId === '') return null;
+  const raw = String(openId);
+
+  const byStudent = (students || []).find((student) => student && String(student.id) === raw);
+  if (byStudent) return String(byStudent.id);
+
+  if (raw.startsWith('parent:')) {
+    const parentId = raw.slice('parent:'.length);
+    if (!parentId) return null;
+    const parent = (parents || []).find((row) => row && String(row.id) === parentId);
+    if (!parent) return null;
+
+    const children = (students || []).filter(
+      (student) => student && String(student.parentId) === parentId
+    );
+    if (children.length) {
+      const preferred =
+        children.find((student) => student.name && !isParentOnlyLead(student) && !student.isAdult)
+        || children.find((student) => student.name && !isParentOnlyLead(student))
+        || children[0];
+      return String(preferred.id);
+    }
+    return parentLeadId(parentId);
+  }
+
+  const entry = buildLeadEntries(students, parents).find((row) => String(row.key) === raw);
+  return entry ? String(entry.key) : null;
+}
+
+/**
  * Produces one safe, uniform entry per student and one synthetic entry for
  * each parent who has no student record. Synthetic records are UI-only.
  */

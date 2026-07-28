@@ -5,10 +5,14 @@ import {
   markEquipmentItemsPaid,
   resetShoeRental,
   markEquipmentGiven,
+  markEquipmentOwn,
+  markEquipmentUnpaid,
+  markEquipmentDeclined,
   computeEquipmentTotal,
   normalizeEquipmentSettings,
   isKidStudent,
   equipmentGapFlags,
+  unpaidEquipmentItems,
   DEFAULT_EQUIPMENT_SETTINGS,
 } from './equipmentService.js';
 
@@ -105,9 +109,44 @@ test('computeEquipmentTotal and gap flags', () => {
     { payment_status: 'unpaid', fulfillment_status: 'pending' },
     { payment_status: 'paid', fulfillment_status: 'pending' },
     { payment_status: 'paid', fulfillment_status: 'given' },
+    { payment_status: 'own', fulfillment_status: 'pending' },
   ]);
   assert.equal(gaps.hasUnpaid, true);
   assert.equal(gaps.hasAwaitingHandoff, true);
   assert.equal(gaps.unpaidCount, 1);
   assert.equal(gaps.awaitingCount, 1);
+  assert.equal(unpaidEquipmentItems([
+    { payment_status: 'unpaid' },
+    { payment_status: 'own' },
+    { payment_status: 'paid' },
+  ]).length, 1);
+});
+
+test('markEquipmentOwn clears payment and rental; unpaid restores gap', () => {
+  const db = makeDb({ students: [{ id: 's1', parentId: 'p1', isAdult: false }], student_equipment: [] });
+  const rows = ensureStudentEquipment({ db, student: db.getOne('students', 's1') });
+  markEquipmentItemsPaid({ db, studentId: 's1', itemTypes: ['shoes'], paymentId: 'pay1' });
+  const shoes = rows.find((r) => r.item_type === 'shoes');
+  const own = markEquipmentOwn({ db, rowId: shoes.id });
+  assert.equal(own.ok, true);
+  assert.equal(own.row.payment_status, 'own');
+  assert.equal(own.row.paid_at, null);
+  assert.equal(own.row.rental_starts_at, null);
+  const gaps = equipmentGapFlags(db.get('student_equipment'));
+  assert.equal(gaps.unpaidCount, 2); // shirt + chalk still unpaid; shoes own
+  const back = markEquipmentUnpaid({ db, rowId: shoes.id });
+  assert.equal(back.ok, true);
+  assert.equal(back.row.payment_status, 'unpaid');
+});
+
+test('markEquipmentDeclined is not a payment gap', () => {
+  const db = makeDb({ students: [{ id: 's1', parentId: 'p1', isAdult: false }], student_equipment: [] });
+  const rows = ensureStudentEquipment({ db, student: db.getOne('students', 's1') });
+  const shirt = rows.find((r) => r.item_type === 'shirt');
+  const declined = markEquipmentDeclined({ db, rowId: shirt.id });
+  assert.equal(declined.ok, true);
+  assert.equal(declined.row.payment_status, 'declined');
+  const gaps = equipmentGapFlags(db.get('student_equipment'));
+  assert.equal(gaps.unpaidCount, 2);
+  assert.equal(unpaidEquipmentItems(db.get('student_equipment')).length, 2);
 });

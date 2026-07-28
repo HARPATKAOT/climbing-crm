@@ -1,13 +1,16 @@
 /**
  * Shared helpers for class-group capacity and waitlist.
  * Waitlisted students may keep a groupId for association but do not take a seat.
+ * Membership can be multi-group via groupIds / enrollments.
  */
+
+import { studentInGroup } from './studentGroups.js';
 
 export const CAPACITY_EXCLUDED_STATUSES = new Set(['archived', 'waitlist']);
 
 export function countsTowardCapacity(student, groupId) {
   if (!student || !groupId) return false;
-  if (String(student.groupId || '') !== String(groupId)) return false;
+  if (!studentInGroup(student, groupId)) return false;
   return !CAPACITY_EXCLUDED_STATUSES.has(String(student.status || ''));
 }
 
@@ -46,7 +49,7 @@ export function enrichGroupsWithCapacity(groups = [], students = []) {
 
 export function waitlistForGroup(groupId, students = []) {
   return (students || []).filter(
-    (s) => String(s.groupId || '') === String(groupId) && String(s.status || '') === 'waitlist'
+    (s) => studentInGroup(s, groupId) && String(s.status || '') === 'waitlist'
   );
 }
 

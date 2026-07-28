@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Package, RefreshCw, Send, Check, RotateCcw, Settings, X } from 'lucide-react';
+import { Package, RefreshCw, Send, Check, RotateCcw, Settings, X, Home } from 'lucide-react';
 import {
   EQUIPMENT_LABELS,
   EQUIPMENT_LABELS_FULL,
   EQUIPMENT_ORDER,
+  EQUIPMENT_OWN_LABELS,
   equipmentItemTone,
   equipmentToneColor,
   equipmentToneLabel,
@@ -31,7 +32,7 @@ function StatusChip({ item }) {
     >
       {EQUIPMENT_LABELS[item?.item_type] || item?.item_type}
       {' · '}
-      {equipmentToneLabel(tone)}
+      {equipmentToneLabel(tone, item?.item_type)}
       {item?.item_type === 'shirt' && item?.shirt_size ? ` · ${item.shirt_size}` : ''}
     </span>
   );
@@ -83,6 +84,38 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || 'סימון המסירה נכשל');
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusyId('');
+    }
+  };
+
+  const markOwn = async (itemId) => {
+    setBusyId(itemId);
+    try {
+      const res = await fetch(`/api/equipment/${encodeURIComponent(itemId)}/mark-own`, {
+        method: 'POST',
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'סימון מהבית נכשל');
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusyId('');
+    }
+  };
+
+  const markUnpaid = async (itemId) => {
+    setBusyId(itemId);
+    try {
+      const res = await fetch(`/api/equipment/${encodeURIComponent(itemId)}/mark-unpaid`, {
+        method: 'POST',
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'ביטול הסטטוס נכשל');
       await load();
     } catch (err) {
       setError(err.message);
@@ -419,6 +452,29 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
                             title="סמן שנמסר"
                           >
                             <Check size={11} /> נמסר
+                          </button>
+                        )}
+                        {(tone === 'unpaid' || tone === 'awaiting') && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs"
+                            disabled={busyId === item.id}
+                            onClick={() => markOwn(item.id)}
+                            title={EQUIPMENT_OWN_LABELS[type] || 'מהבית'}
+                            style={{ color: '#fb923c' }}
+                          >
+                            <Home size={11} /> {EQUIPMENT_OWN_LABELS[type] || 'מהבית'}
+                          </button>
+                        )}
+                        {tone === 'own' && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs"
+                            disabled={busyId === item.id}
+                            onClick={() => markUnpaid(item.id)}
+                            title="בטל — חזרה לממתין לתשלום"
+                          >
+                            <RotateCcw size={11} /> בטל
                           </button>
                         )}
                         {type === 'shoes' && (

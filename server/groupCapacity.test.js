@@ -25,6 +25,14 @@ test('waitlist and archived do not take a seat', () => {
   assert.equal(isGroupFull(group, students), true);
 });
 
+test('multi-group student counts in each group', () => {
+  const multi = [
+    { id: 'm1', groupIds: ['g1', 'gx'], groupId: 'g1', status: 'registered' },
+  ];
+  assert.equal(countEnrolled('g1', multi), 1);
+  assert.equal(countEnrolled('gx', multi), 1);
+});
+
 test('enrichGroupsWithCapacity adds freeSlots', () => {
   const [row] = enrichGroupsWithCapacity([group], students);
   assert.equal(row.enrolled, 2);

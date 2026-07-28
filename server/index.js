@@ -85,9 +85,13 @@ import {
   resetShoeRental,
   markEquipmentGiven,
   markEquipmentPendingFulfillment,
+  markEquipmentOwn,
+  markEquipmentUnpaid,
+  markEquipmentDeclined,
   computeEquipmentTotal,
   describeEquipmentItems,
   equipmentGapFlags,
+  unpaidEquipmentItems,
   newCheckoutToken,
   ensureEquipmentWhatsappTemplate,
 } from './equipmentService.js';
@@ -112,11 +116,18 @@ import {
 import { calculateDashboardStats } from './dashboardStats.js';
 import { applyBusinessBrand, resetPlaygroundConversation } from './whatsappBot.js';
 import { countEnrolled } from './groupCapacity.js';
+import { enrichStudentsWithGroupIds, studentInGroup } from './studentGroups.js';
 import {
   ensureAttendanceRows,
   israelDateStr,
   israelHour,
   normalizeAttStatus,
+  activityDateRange,
+  planVacationAttendanceUpdates,
+  planVacationAttendanceReverts,
+  VACATION_ACTIVITY_TYPE,
+  VACATION_ATT_STATUS,
+  VACATION_MARKER,
 } from './attendanceUtils.js';
 import {
   getConversation,
@@ -407,16 +418,20 @@ app.get('/api/parents', async (req, res) => {
 app.get('/api/students', async (req, res) => {
   try {
     if (supa.isEnabled()) {
-      const rows = await supa.getAll('students');
+      const [rows, enrollments] = await Promise.all([
+        supa.getAll('students'),
+        supa.getAll('enrollments'),
+      ]);
       if (rows) {
         if (typeof db.set === 'function') db.set('students', rows);
-        return res.json(rows);
+        if (enrollments && typeof db.set === 'function') db.set('enrollments', enrollments);
+        return res.json(enrichStudentsWithGroupIds(rows, enrollments || db.get('enrollments') || []));
       }
     }
   } catch (err) {
     console.error('GET /api/students Supabase error:', err.message);
   }
-  res.json(db.get('students'));
+  res.json(db.withStudentGroupIds(db.get('students')));
 });
 
 function withGroupEnrollmentCounts(groups, students) {
@@ -437,18 +452,29 @@ function withGroupEnrollmentCounts(groups, students) {
 app.get('/api/groups', async (req, res) => {
   try {
     if (supa.isEnabled()) {
-      const rows = await supa.getAll('groups');
+      const [rows, studentRows, enrollments] = await Promise.all([
+        supa.getAll('groups'),
+        supa.getAll('students'),
+        supa.getAll('enrollments'),
+      ]);
       if (rows) {
-        const students = (await supa.getAll('students')) || db.get('students') || [];
+        const students = enrichStudentsWithGroupIds(
+          studentRows || db.get('students') || [],
+          enrollments || db.get('enrollments') || []
+        );
         // Keep the local cache warm for write paths that still use db.json.
-        if (typeof db.set === 'function') db.set('groups', rows);
+        if (typeof db.set === 'function') {
+          db.set('groups', rows);
+          if (studentRows) db.set('students', studentRows);
+          if (enrollments) db.set('enrollments', enrollments);
+        }
         return res.json(withGroupEnrollmentCounts(rows, students));
       }
     }
   } catch (err) {
     console.error('GET /api/groups Supabase error:', err.message);
   }
-  res.json(withGroupEnrollmentCounts(db.get('groups'), db.get('students')));
+  res.json(withGroupEnrollmentCounts(db.get('groups'), db.withStudentGroupIds(db.get('students'))));
 });
 
 // Update student status
@@ -1736,11 +1762,70 @@ app.delete('/api/students/:id', (req, res) => {
   res.json({ success: true, message: 'Student and associated childless parents deleted successfully' });
 });
 
-// Update student/lead details
+// Update student/lead details (supports multi-group via groupIds / addGroupId / removeGroupId)
 app.put('/api/students/:id', (req, res) => {
   const { id } = req.params;
-  const updated = db.update('students', id, req.body);
-  if (!updated) return res.status(404).json({ error: 'Student not found' });
+  const body = req.body || {};
+  const {
+    addGroupId,
+    removeGroupId,
+    groupIds,
+    groupId,
+    ...rest
+  } = body;
+
+  const hasGroupIds = Object.prototype.hasOwnProperty.call(body, 'groupIds');
+  const hasAdd = Object.prototype.hasOwnProperty.call(body, 'addGroupId');
+  const hasRemove = Object.prototype.hasOwnProperty.call(body, 'removeGroupId');
+  const hasGroupId = Object.prototype.hasOwnProperty.call(body, 'groupId');
+
+  // Strip membership fields from a plain field update; they are handled below.
+  const fieldUpdates = { ...rest };
+  delete fieldUpdates.groupIds;
+  delete fieldUpdates.addGroupId;
+  delete fieldUpdates.removeGroupId;
+
+  let updated = null;
+  if (Object.keys(fieldUpdates).length) {
+    // Keep groupId out of fieldUpdates when we're managing membership separately,
+    // unless it's the only membership signal (legacy single-group set/clear).
+    if (hasAdd || hasRemove || hasGroupIds) {
+      delete fieldUpdates.groupId;
+    } else if (hasGroupId) {
+      // Legacy: groupId alone — add without wiping other groups, or clear all if null.
+      delete fieldUpdates.groupId;
+    }
+    if (Object.keys(fieldUpdates).length) {
+      updated = db.update('students', id, fieldUpdates);
+      if (!updated) return res.status(404).json({ error: 'Student not found' });
+    }
+  }
+
+  if (!db.getOne('students', id)) {
+    return res.status(404).json({ error: 'Student not found' });
+  }
+
+  if (hasAdd && addGroupId) {
+    updated = db.addStudentToGroup(id, addGroupId);
+  } else if (hasRemove) {
+    updated = db.removeStudentFromGroup(id, removeGroupId);
+  } else if (hasGroupIds) {
+    const list = Array.isArray(groupIds) ? groupIds : [];
+    updated = db.setStudentGroups(id, list, {
+      primaryGroupId: groupId || list[0] || null,
+    });
+  } else if (hasGroupId) {
+    if (groupId) {
+      // Add (do not replace other groups) and set as primary.
+      const current = db.withStudentGroupId(db.getOne('students', id));
+      const ids = Array.from(new Set([...(current?.groupIds || []), String(groupId)]));
+      updated = db.setStudentGroups(id, ids, { primaryGroupId: groupId });
+    } else {
+      updated = db.setStudentGroups(id, []);
+    }
+  }
+
+  if (!updated) updated = db.withStudentGroupId(db.getOne('students', id));
   res.json(updated);
 });
 
@@ -1852,10 +1937,11 @@ app.get('/api/equipment', async (req, res) => {
     let parents = db.get('parents') || [];
     let groups = db.get('groups') || [];
     if (supa.isEnabled()) {
-      const [remoteStudents, remoteParents, remoteGroups] = await Promise.all([
+      const [remoteStudents, remoteParents, remoteGroups, remoteEnrollments] = await Promise.all([
         supa.getAll('students'),
         supa.getAll('parents'),
         supa.getAll('groups'),
+        supa.getAll('enrollments'),
       ]);
       if (remoteStudents) {
         students = remoteStudents;
@@ -1869,12 +1955,18 @@ app.get('/api/equipment', async (req, res) => {
         groups = remoteGroups;
         if (typeof db.set === 'function') db.set('groups', remoteGroups);
       }
+      if (remoteEnrollments && typeof db.set === 'function') {
+        db.set('enrollments', remoteEnrollments);
+      }
+      students = enrichStudentsWithGroupIds(students, remoteEnrollments || db.get('enrollments') || []);
+    } else {
+      students = db.withStudentGroupIds(students);
     }
 
     const groupId = req.query.groupId ? String(req.query.groupId) : '';
     const filter = String(req.query.filter || 'gaps'); // gaps | unpaid | awaiting | all
     const kids = students.filter(
-      (s) => isKidStudent(s) && s.status !== 'archived' && (!groupId || s.groupId === groupId)
+      (s) => isKidStudent(s) && s.status !== 'archived' && (!groupId || studentInGroup(s, groupId))
     );
 
     const parentById = new Map(parents.map((p) => [p.id, p]));
@@ -1919,7 +2011,28 @@ app.put('/api/equipment/:id', async (req, res) => {
     if (req.body?.shirt_size !== undefined) {
       patch.shirt_size = String(req.body.shirt_size || '').trim() || null;
     }
-    if (req.body?.payment_status === 'paid' || req.body?.payment_status === 'unpaid') {
+    if (req.body?.payment_status === 'paid' || req.body?.payment_status === 'unpaid' || req.body?.payment_status === 'own' || req.body?.payment_status === 'declined') {
+      if (req.body.payment_status === 'own') {
+        const result = markEquipmentOwn({ db, persist: persistCore, rowId: row.id });
+        if (!result.ok) return res.status(400).json({ error: result.error });
+        // Allow shirt_size alongside own in same request
+        if (patch.shirt_size !== undefined) {
+          const withSize = db.update('student_equipment', row.id, { shirt_size: patch.shirt_size });
+          if (withSize) await persistCore('student_equipment', withSize);
+          return res.json(withSize || result.row);
+        }
+        return res.json(result.row);
+      }
+      if (req.body.payment_status === 'declined') {
+        const result = markEquipmentDeclined({ db, persist: persistCore, rowId: row.id });
+        if (!result.ok) return res.status(400).json({ error: result.error });
+        if (patch.shirt_size !== undefined) {
+          const withSize = db.update('student_equipment', row.id, { shirt_size: patch.shirt_size });
+          if (withSize) await persistCore('student_equipment', withSize);
+          return res.json(withSize || result.row);
+        }
+        return res.json(result.row);
+      }
       patch.payment_status = req.body.payment_status;
       if (req.body.payment_status === 'paid' && !row.paid_at) {
         patch.paid_at = new Date().toISOString();
@@ -1927,6 +2040,9 @@ app.put('/api/equipment/:id', async (req, res) => {
       if (req.body.payment_status === 'unpaid') {
         patch.paid_at = null;
         patch.payment_id = null;
+        patch.given_at = null;
+        patch.given_by = null;
+        patch.fulfillment_status = 'pending';
         if (row.item_type === 'shoes') {
           patch.rental_starts_at = null;
           patch.rental_ends_at = null;
@@ -1985,6 +2101,51 @@ app.post('/api/equipment/:id/mark-pending', async (req, res) => {
   try {
     await refreshStudentEquipmentCache();
     const result = markEquipmentPendingFulfillment({
+      db,
+      persist: persistCore,
+      rowId: req.params.id,
+    });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json(result.row);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/equipment/:id/mark-own', async (req, res) => {
+  try {
+    await refreshStudentEquipmentCache();
+    const result = markEquipmentOwn({
+      db,
+      persist: persistCore,
+      rowId: req.params.id,
+    });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json(result.row);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/equipment/:id/mark-declined', async (req, res) => {
+  try {
+    await refreshStudentEquipmentCache();
+    const result = markEquipmentDeclined({
+      db,
+      persist: persistCore,
+      rowId: req.params.id,
+    });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json(result.row);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/equipment/:id/mark-unpaid', async (req, res) => {
+  try {
+    await refreshStudentEquipmentCache();
+    const result = markEquipmentUnpaid({
       db,
       persist: persistCore,
       rowId: req.params.id,
@@ -2173,7 +2334,7 @@ app.get('/api/public/equipment/:token', publicFormRateLimit, async (req, res) =>
 
     const items = ensureStudentEquipment({ db, student, persist: persistCore });
     const settings = await loadEquipmentSettings();
-    const unpaid = items.filter((i) => i.payment_status !== 'paid');
+    const unpaid = unpaidEquipmentItems(items);
     res.json({
       student_name: student.name,
       parent_name: parent?.name || '',
@@ -2215,7 +2376,7 @@ app.post('/api/public/equipment/:token/pay', publicFormRateLimit, async (req, re
     const items = ensureStudentEquipment({ db, student, persist: persistCore });
     const settings = await loadEquipmentSettings();
     const unpaidTypes = new Set(
-      items.filter((i) => i.payment_status !== 'paid').map((i) => i.item_type)
+      unpaidEquipmentItems(items).map((i) => i.item_type)
     );
 
     let selected = Array.isArray(req.body?.itemTypes)
@@ -2539,10 +2700,18 @@ app.post('/api/activities', async (req, res) => {
     payload.host_payment_token = makePrivatePaymentToken();
   }
   const record = db.insert('activities', payload);
+  const durable = await persistCore('activities', record);
+  if (durable?.ok === false) {
+    console.error('activity create persist failed:', durable.error);
+    return res.status(503).json({ error: durable.error || 'שמירת האירוע למסד נכשלה' });
+  }
   res.status(201).json(record);
   // Don't block the UI on Google — sync in the background
   syncActivityToGoogle(record).catch((err) =>
     console.error('Background Google push failed:', err.message)
+  );
+  applyVacationAttendanceForActivities(record).catch((err) =>
+    console.error('Vacation attendance sync failed:', err.message)
   );
 });
 
@@ -2577,9 +2746,18 @@ app.put('/api/activities/:id', async (req, res) => {
     google_event_id: existing.google_event_id || null,
     google_etag: existing.google_etag || null,
   });
+  if (!updated) return res.status(404).json({ error: 'Activity not found' });
+  const durable = await persistCore('activities', updated);
+  if (durable?.ok === false) {
+    console.error('activity update persist failed:', durable.error);
+    return res.status(503).json({ error: durable.error || 'שמירת האירוע למסד נכשלה' });
+  }
   res.json(updated);
   syncActivityToGoogle(updated).catch((err) =>
     console.error('Background Google push failed:', err.message)
+  );
+  applyVacationAttendanceForActivities(existing, updated).catch((err) =>
+    console.error('Vacation attendance sync failed:', err.message)
   );
 });
 
@@ -2592,6 +2770,9 @@ app.delete('/api/activities/:id', async (req, res) => {
   res.json({ success: true });
   syncActivityToGoogle(existing, { deleted: true }).catch((err) =>
     console.error('Background Google delete failed:', err.message)
+  );
+  applyVacationAttendanceForActivities(existing).catch((err) =>
+    console.error('Vacation attendance sync failed:', err.message)
   );
 });
 
@@ -2631,7 +2812,7 @@ app.get('/api/activities/:id/registrations', async (req, res) => {
   const declarations = db.get('health_declarations') || [];
   const enriched = regs.map((registration) => ({
     ...registration,
-    parent_name: parents.find((parent) => parent.id === registration.parent_id)?.name || '',
+    parent_name: parents.find((parent) => String(parent.id) === String(registration.parent_id))?.name || '',
     declaration_signed: declarations.some(
       (declaration) =>
         declaration.id === registration.health_declaration_id &&
@@ -3394,11 +3575,17 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
   }
 });
 
-app.patch('/api/activities/:id/payment-status', (req, res) => {
+app.patch('/api/activities/:id/payment-status', async (req, res) => {
   const activity = db.getOne('activities', req.params.id);
   if (!activity) return res.status(404).json({ error: 'Activity not found' });
   const payment_status = normalizeHostPaymentStatus(req.body?.payment_status);
   const updated = db.update('activities', activity.id, { payment_status });
+  if (!updated) return res.status(404).json({ error: 'Activity not found' });
+  const durable = await persistCore('activities', updated);
+  if (durable?.ok === false) {
+    console.error('activity payment-status persist failed:', durable.error);
+    return res.status(503).json({ error: durable.error || 'שמירת סטטוס התשלום נכשלה' });
+  }
   res.json(updated);
 });
 
@@ -3425,7 +3612,7 @@ app.get('/api/activity-templates/categories', (_req, res) => {
   res.json(TEMPLATE_CATEGORIES);
 });
 
-app.post('/api/activity-templates', (req, res) => {
+app.post('/api/activity-templates', async (req, res) => {
   const body = req.body || {};
   let payload;
   if (body.activity_id) {
@@ -3441,15 +3628,26 @@ app.post('/api/activity-templates', (req, res) => {
   }
   if (!payload.name) return res.status(400).json({ error: 'חסר שם תבנית' });
   const record = db.insert('activity_templates', payload);
+  const durable = await persistCore('activity_templates', record);
+  if (durable?.ok === false) {
+    console.error('activity template create persist failed:', durable.error);
+    return res.status(503).json({ error: durable.error || 'שמירת התבנית למסד נכשלה' });
+  }
   res.status(201).json(record);
 });
 
-app.put('/api/activity-templates/:id', (req, res) => {
+app.put('/api/activity-templates/:id', async (req, res) => {
   const existing = db.getOne('activity_templates', req.params.id);
   if (!existing) return res.status(404).json({ error: 'Template not found' });
   const payload = normalizeActivityTemplatePayload({ ...existing, ...(req.body || {}) });
   if (!payload.name) return res.status(400).json({ error: 'חסר שם תבנית' });
   const updated = db.update('activity_templates', existing.id, payload);
+  if (!updated) return res.status(404).json({ error: 'Template not found' });
+  const durable = await persistCore('activity_templates', updated);
+  if (durable?.ok === false) {
+    console.error('activity template update persist failed:', durable.error);
+    return res.status(503).json({ error: durable.error || 'שמירת התבנית למסד נכשלה' });
+  }
   res.json(updated);
 });
 
@@ -3492,6 +3690,11 @@ app.post('/api/activity-templates/:id/create-activity', async (req, res) => {
     return res.status(400).json({ error: 'תאריך הסיום לפני תאריך ההתחלה' });
   }
   const record = db.insert('activities', payload);
+  const durable = await persistCore('activities', record);
+  if (durable?.ok === false) {
+    console.error('template create-activity persist failed:', durable.error);
+    return res.status(503).json({ error: durable.error || 'שמירת האירוע למסד נכשלה' });
+  }
   res.status(201).json(record);
   syncActivityToGoogle(record).catch((err) =>
     console.error('Background Google push failed:', err.message)
@@ -4068,15 +4271,86 @@ async function refreshAttendanceCache() {
   }
 }
 
+async function refreshActivitiesCache() {
+  try {
+    if (supa.isEnabled()) {
+      const rows = await supa.getAll('activities');
+      if (rows && typeof db.set === 'function') db.set('activities', rows);
+    }
+  } catch (err) {
+    console.error('activities cache refresh failed:', err.message);
+  }
+}
+
+/**
+ * Keep attendance in sync with «חופשה מאימונים» calendar events:
+ * pending rows on a vacation day become "יום חג", and rows the automation
+ * marked earlier revert to pending once the vacation no longer covers them.
+ * Manually marked rows are never touched. Source of truth is our own calendar
+ * (`activities`), never a Google push.
+ * `dates` = the YYYY-MM-DD days to sync.
+ * Operates on the current caches; callers refresh what they need first.
+ */
+function syncVacationAttendance(dates) {
+  if (!Array.isArray(dates) || dates.length === 0) return { marked: 0, reverted: 0 };
+  const activities = db.get('activities') || [];
+  const attendance = db.get('attendance') || [];
+
+  const toMark = planVacationAttendanceUpdates({ activities, attendance, dates });
+  for (const row of toMark) {
+    db.update('attendance', row.id, {
+      status: VACATION_ATT_STATUS,
+      marked_by: VACATION_MARKER,
+    });
+  }
+
+  const toRevert = planVacationAttendanceReverts({ activities, attendance, dates });
+  for (const row of toRevert) {
+    db.update('attendance', row.id, { status: 'pending', marked_by: null });
+  }
+
+  if (toMark.length || toRevert.length) {
+    console.log(
+      `🏖️ Training-vacation attendance sync: ${toMark.length} marked, ${toRevert.length} reverted`
+    );
+  }
+  return { marked: toMark.length, reverted: toRevert.length };
+}
+
+/** Dates a vacation edit touches — old range ∪ new range. */
+function vacationSyncDates(...activities) {
+  const dates = new Set();
+  for (const activity of activities) {
+    if (!activity) continue;
+    if (activity.type !== VACATION_ACTIVITY_TYPE) continue;
+    for (const day of activityDateRange(activity)) dates.add(day);
+  }
+  return [...dates];
+}
+
+/**
+ * Called after a calendar activity is created / edited / deleted.
+ * Uses the local activities cache on purpose: it already reflects the change,
+ * while a remote re-read could still return the pre-change rows.
+ */
+async function applyVacationAttendanceForActivities(...activities) {
+  const dates = vacationSyncDates(...activities);
+  if (!dates.length) return { marked: 0, reverted: 0 };
+  await refreshAttendanceCache();
+  return syncVacationAttendance(dates);
+}
+
 async function refreshStudentsAndGroupsCache() {
   try {
     if (supa.isEnabled()) {
-      const [groups, students] = await Promise.all([
+      const [groups, students, enrollments] = await Promise.all([
         supa.getAll('groups'),
         supa.getAll('students'),
+        supa.getAll('enrollments'),
       ]);
       if (groups && typeof db.set === 'function') db.set('groups', groups);
       if (students && typeof db.set === 'function') db.set('students', students);
+      if (enrollments && typeof db.set === 'function') db.set('enrollments', enrollments);
     }
   } catch (err) {
     console.error('groups/students cache refresh failed:', err.message);
@@ -4089,11 +4363,13 @@ app.post('/api/attendance/ensure', async (req, res) => {
 
   await refreshStudentsAndGroupsCache();
   await refreshAttendanceCache();
+  await refreshActivitiesCache();
 
   const result = ensureAttendanceRows({
     groups: db.get('groups') || [],
-    students: db.get('students') || [],
+    students: db.withStudentGroupIds(db.get('students') || []),
     attendance: db.get('attendance') || [],
+    activities: db.get('activities') || [],
     date,
     groupId,
   });
@@ -4102,11 +4378,16 @@ app.post('/api/attendance/ensure', async (req, res) => {
     db.insert('attendance', row);
   }
 
+  // Caches are already fresh — flip any pre-existing pending rows on this date.
+  const vacationSync = syncVacationAttendance([date]);
+
   res.status(201).json({
     created: result.created.length,
     existing: result.existing,
     groups: result.groups,
     date: result.date,
+    vacation: result.vacation,
+    vacationSync,
     rows: result.created,
   });
 });
@@ -4125,22 +4406,27 @@ app.post('/api/attendance/ensure-today', async (req, res) => {
   // Reuse ensure handler logic
   await refreshStudentsAndGroupsCache();
   await refreshAttendanceCache();
+  await refreshActivitiesCache();
   const result = ensureAttendanceRows({
     groups: db.get('groups') || [],
-    students: db.get('students') || [],
+    students: db.withStudentGroupIds(db.get('students') || []),
     attendance: db.get('attendance') || [],
+    activities: db.get('activities') || [],
     date: israelDateStr(),
     groupId: null,
   });
   for (const row of result.created) {
     db.insert('attendance', row);
   }
+  const vacationSync = syncVacationAttendance([result.date]);
   console.log(`📋 Daily attendance ensure: created ${result.created.length} for ${result.date}`);
   res.status(201).json({
     created: result.created.length,
     existing: result.existing,
     groups: result.groups,
     date: result.date,
+    vacation: result.vacation,
+    vacationSync,
   });
 });
 
@@ -5269,6 +5555,19 @@ function suggestHoursFromClock(employeeId, dateStr, eventStartHm, eventEndHm) {
   return best;
 }
 
+function normalizePayMode(value, existing = null) {
+  const raw = value !== undefined ? value : existing?.pay_mode;
+  return raw === 'flat' ? 'flat' : 'hourly';
+}
+
+function normalizeFlatAmount(value, payMode, existing = null) {
+  if (payMode !== 'flat') return null;
+  const raw = value !== undefined ? value : existing?.flat_amount;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.round(n * 100) / 100;
+}
+
 function normalizeWorkAssignment(body = {}, { existing = null } = {}) {
   const workType = WORK_TYPES.includes(body.work_type)
     ? body.work_type
@@ -5281,6 +5580,8 @@ function normalizeWorkAssignment(body = {}, { existing = null } = {}) {
   } else {
     hours = roundHoursQuarter(hours);
   }
+  const payMode = normalizePayMode(body.pay_mode, existing);
+  const flatAmount = normalizeFlatAmount(body.flat_amount, payMode, existing);
   return {
     employee_id: body.employee_id || existing?.employee_id || null,
     activity_id: body.activity_id !== undefined ? (body.activity_id || null) : (existing?.activity_id ?? null),
@@ -5289,6 +5590,8 @@ function normalizeWorkAssignment(body = {}, { existing = null } = {}) {
     start_time: startTime,
     end_time: endTime,
     hours,
+    pay_mode: payMode,
+    flat_amount: flatAmount,
     source: body.source || existing?.source || 'manual',
     shift_id: body.shift_id !== undefined ? (body.shift_id || null) : (existing?.shift_id ?? null),
     approved: body.approved !== undefined ? !!body.approved : !!(existing?.approved),
@@ -5338,6 +5641,8 @@ app.post('/api/work-assignments/from-activity', (req, res) => {
       start_time: suggestion?.start_time || eventStart,
       end_time: suggestion?.end_time || eventEnd,
       hours: suggestion?.hours || eventHours,
+      pay_mode: 'hourly',
+      flat_amount: null,
       source: suggestion ? suggestion.source : 'calendar',
       shift_id: suggestion?.shift_id || null,
       approved: false,
@@ -6182,13 +6487,15 @@ app.post('/api/pos/quote', async (req, res) => {
       walkInName,
       walkInPhone,
       walkInEmail,
-      sendEmail = true,
+      sendEmail = false,
       sendWhatsapp = false,
+      includePaymentLink = false,
     } = req.body || {};
 
     const lines = mapCartLines(cart);
     if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
 
+    const needsCustomer = lines.some((l) => requiresCustomer(l.product_type));
     const { student, parent, isNewLead } = resolvePosCustomer({
       studentId,
       parentId,
@@ -6196,6 +6503,17 @@ app.post('/api/pos/quote', async (req, res) => {
       walkInPhone,
       walkInEmail,
     });
+    if (includePaymentLink && needsCustomer && !student?.id) {
+      return res.status(400).json({ error: 'מנוי או כרטיסייה דורשים בחירת מתאמן' });
+    }
+
+    const total = computeSaleTotal(lines);
+    if (includePaymentLink && !(Number(total) > 0)) {
+      return res.status(400).json({
+        error:
+          'לא ניתן לכלול קישור תשלום בסכום 0. הסר את הסימון או שנה מחיר.',
+      });
+    }
 
     let clientId = parent?.icount_client_id || null;
     let syncedParent = parent;
@@ -6206,29 +6524,73 @@ app.post('/api/pos/quote', async (req, res) => {
     }
 
     const email = syncedParent?.email || walkInEmail || '';
+    const customerName = syncedParent?.name || student?.name || walkInName || 'לקוח';
+    const description = lines
+      .map((l) => `${l.name}${Number(l.quantity) > 1 ? ` (${l.quantity})` : ''}`)
+      .join(', ')
+      .slice(0, 180);
+
+    let payment = null;
+    let payUrl = null;
+    let shortUrl = null;
+    let shareUrl = null;
+    if (includePaymentLink) {
+      payment = db.insert('payments', {
+        parent_id: syncedParent?.id || null,
+        student_id: student?.id || null,
+        amount: total,
+        description: description || 'הצעת מחיר',
+        status: 'pending',
+        payment_url: null,
+        price_includes_vat: true,
+        icount_client_id: clientId,
+        icount_doc_id: null,
+        icount_doc_number: null,
+        paid_at: null,
+        updated_at: new Date().toISOString(),
+      });
+      const ipnUrl = icount.buildIpnUrl({ paymentId: payment.id });
+      payUrl = await icount.buildPaymentUrl({
+        amount: total,
+        description: description || 'הצעת מחיר מ־My Wall',
+        name: customerName,
+        lastName: syncedParent?.lastName,
+        idNumber: syncedParent?.idNumber,
+        phone: syncedParent?.phone || walkInPhone,
+        email: syncedParent?.email || walkInEmail,
+        paymentId: payment.id,
+        ipnUrl,
+      });
+      shortUrl = icount.buildPaymentRedirectUrl(payment.id);
+      shareUrl = icount.isLocalPublicApiBase() ? payUrl : shortUrl || payUrl;
+    }
+
+    const commentParts = [];
+    if (student?.name) commentParts.push(`עבור: ${student.name}`);
+    if (shareUrl) commentParts.push(`קישור לתשלום: ${shareUrl}`);
+
     const doc = await icount.createOffer({
       clientId,
-      clientName: syncedParent?.name || student?.name || walkInName || 'לקוח',
+      clientName: customerName,
       items: lines.map((l) => ({
         description: l.description,
         unitprice: l.unitprice,
         quantity: l.quantity,
       })),
-      comment: student?.name ? `עבור: ${student.name}` : undefined,
+      comment: commentParts.length ? commentParts.join('\n') : undefined,
       emailTo: sendEmail && email ? email : undefined,
       vattype: icountVatType(true),
     });
 
-    const total = computeSaleTotal(lines);
-    const sale = db.insert('pos_sales', {
+    let sale = db.insert('pos_sales', {
       items: lines.map(({ item, ...rest }) => rest),
       total,
-      payment_method: null,
+      payment_method: includePaymentLink ? 'online' : null,
       status: 'quoted',
       price_includes_vat: true,
       student_id: student?.id || null,
       parent_id: syncedParent?.id || parentId || null,
-      customer_name: syncedParent?.name || student?.name || walkInName || 'לקוח',
+      customer_name: customerName,
       customer_phone: syncedParent?.phone || walkInPhone || '',
       customer_email: email,
       icount_client_id: clientId,
@@ -6236,6 +6598,8 @@ app.post('/api/pos/quote', async (req, res) => {
       icount_doc_number: doc.docnum,
       icount_doc_url: doc.docUrl,
       icount_doctype: 'offer',
+      payment_id: payment?.id || null,
+      payment_url: payUrl || null,
       sold_by: req.crmUser?.email || req.crmUser?.name || null,
       sent_email: !!(sendEmail && email),
       sent_whatsapp: !!sendWhatsapp,
@@ -6243,23 +6607,117 @@ app.post('/api/pos/quote', async (req, res) => {
       updated_at: new Date().toISOString(),
     });
 
+    if (payment) {
+      const updatedPayment = db.update('payments', payment.id, {
+        pos_sale_id: sale.id,
+        payment_url: payUrl,
+        updated_at: new Date().toISOString(),
+      });
+      if (updatedPayment) {
+        payment = updatedPayment;
+        await persistCore('payments', updatedPayment);
+      }
+      await persistCore('pos_sales', sale);
+      console.log(
+        `💳 [POS] quote+payment-link sale=${sale.id} total=${total} url=${payUrl} short=${shortUrl}`
+      );
+    }
+
     let whatsappUrl = null;
+    let whatsappSent = false;
+    let whatsappError = null;
     if (sendWhatsapp) {
       const phone = normalizePhone(syncedParent?.phone || walkInPhone);
       if (phone) {
-        const digits = phone.replace(/^0/, '972');
-        const text = encodeURIComponent(
-          `שלום${syncedParent?.name ? ` ${syncedParent.name}` : ''},\n` +
-            `מצורפת הצעת מחיר מ־My Wall.\n` +
-            `סכום: ₪${total}` +
-            (doc.docnum ? `\nמספר הצעה: ${doc.docnum}` : '') +
-            (doc.docUrl ? `\nקישור: ${doc.docUrl}` : '')
-        );
-        whatsappUrl = `https://wa.me/${digits}?text=${text}`;
+        const waMsg =
+          `שלום${customerName ? ` ${customerName}` : ''},\n` +
+          `מצורפת הצעת מחיר מ־My Wall.\n` +
+          `סכום: ₪${total}` +
+          (doc.docnum ? `\nמספר הצעה: ${doc.docnum}` : '') +
+          (doc.docUrl ? `\nקישור להצעה: ${doc.docUrl}` : '') +
+          (shareUrl
+            ? `\n\nלתשלום מאובטח:\n${shareUrl}\nלאחר התשלום תופק חשבונית מס קבלה אוטומטית.`
+            : '');
+
+        // Prefer Meta template for the payment button when a pay link is included
+        if (shareUrl && payment?.id) {
+          const tplName = icount.getPaymentTemplateName();
+          const localTpl = (db.get('message_templates') || []).find(
+            (t) => (t.meta_name || t.name) === tplName
+          );
+          const tplApproved =
+            localTpl &&
+            (String(localTpl.status).toUpperCase() === 'APPROVED' || localTpl.active_for_send);
+          const canUseMetaTemplate = tplApproved && !icount.isLocalPublicApiBase();
+          if (canUseMetaTemplate) {
+            try {
+              const waResult = await whatsappService.sendTemplateMessage(
+                phone,
+                tplName,
+                [customerName, description || 'הצעת מחיר', String(total)],
+                {
+                  fallbackName: customerName,
+                  parentId: syncedParent?.id || null,
+                  buttonUrlParam: payment.id,
+                }
+              );
+              whatsappSent = !!waResult?.success;
+              if (!whatsappSent) {
+                whatsappError = waResult?.error || 'שליחת תבנית וואטסאפ נכשלה';
+              }
+            } catch (waErr) {
+              whatsappError = waErr.message || 'שליחת תבנית וואטסאפ נכשלה';
+            }
+          }
+        }
+
+        if (!whatsappSent) {
+          try {
+            const waResult = await whatsappService.sendTextMessage(phone, waMsg);
+            whatsappSent = !!waResult?.success;
+            if (!whatsappSent) {
+              whatsappError = waResult?.error || whatsappError || 'שליחת וואטסאפ נכשלה';
+            } else {
+              whatsappError = null;
+            }
+          } catch (waErr) {
+            whatsappError = waErr.message || whatsappError || 'שליחת וואטסאפ נכשלה';
+          }
+          if (!whatsappSent) {
+            const digits = phone.startsWith('972') ? phone : phone.replace(/^0/, '972');
+            whatsappUrl = `https://wa.me/${digits}?text=${encodeURIComponent(waMsg)}`;
+          }
+        }
+
+        if (whatsappSent || whatsappUrl) {
+          const patched = db.update('pos_sales', sale.id, {
+            sent_whatsapp: true,
+            updated_at: new Date().toISOString(),
+          });
+          if (patched) {
+            sale = patched;
+            if (payment) await persistCore('pos_sales', patched);
+          }
+        }
+      } else {
+        whatsappError = 'אין מספר טלפון לשליחה בוואטסאפ';
       }
     }
 
-    res.status(201).json({ sale, doc, whatsappUrl, emailedTo: sendEmail ? email : null, isNewLead: !!isNewLead, parent: syncedParent });
+    res.status(201).json({
+      sale,
+      doc,
+      payment: payment || null,
+      payUrl: payUrl || null,
+      shortUrl: shortUrl || null,
+      shareUrl: shareUrl || null,
+      whatsappUrl,
+      whatsappSent,
+      whatsappError,
+      emailedTo: sendEmail ? email : null,
+      isNewLead: !!isNewLead,
+      parent: syncedParent,
+    });
   } catch (err) {
     console.error('POS quote error:', err.message);
     res.status(502).json({ error: err.message, code: err.code });
@@ -7019,7 +7477,6 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     const child = childList[index];
     const noteParts = [];
     if (interestText) noteParts.push(`עניין: ${interestText}`);
-    if (child.childPhone) noteParts.push(`טלפון ילד/ה: ${child.childPhone}`);
     if (child.registrationNotes) noteParts.push(child.registrationNotes);
     const mergedNotes = noteParts.join('\n');
     const interests = interestText
@@ -7032,9 +7489,11 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
             : /הולדת|birthday/i.test(interestText) ? 'birthday'
               : null
     );
+    const phone = child.childPhone || student.phone || '';
     const updatedStudent = db.update('students', student.id, {
       interests,
       segment,
+      phone,
       notes: mergedNotes
         ? (student.notes && !String(student.notes).includes(mergedNotes)
             ? `${student.notes}\n${mergedNotes}`
@@ -7416,17 +7875,23 @@ async function runDailyAttendanceEnsureIfDue() {
     lastAttendanceEnsureDate = today;
     await refreshStudentsAndGroupsCache();
     await refreshAttendanceCache();
+    await refreshActivitiesCache();
     const result = ensureAttendanceRows({
       groups: db.get('groups') || [],
-      students: db.get('students') || [],
+      students: db.withStudentGroupIds(db.get('students') || []),
       attendance: db.get('attendance') || [],
+      activities: db.get('activities') || [],
       date: today,
       groupId: null,
     });
     for (const row of result.created) {
       db.insert('attendance', row);
     }
-    console.log(`📋 Daily attendance ensure (${today}): created ${result.created.length}`);
+    syncVacationAttendance([today]);
+    console.log(
+      `📋 Daily attendance ensure (${today}): created ${result.created.length}` +
+      (result.vacation ? ` · יום חופש: ${result.vacation.name || 'חופשה מאימונים'}` : '')
+    );
   } catch (err) {
     console.error('Daily attendance ensure failed:', err.message);
     lastAttendanceEnsureDate = null;

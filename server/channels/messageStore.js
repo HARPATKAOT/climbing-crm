@@ -35,6 +35,7 @@ export function normalizeMessage(input = {}) {
   return {
     id: input.id || newMessageId(),
     parent_id: input.parent_id || null,
+    student_id: input.student_id || null,
     channel: input.channel || 'whatsapp',
     direction,
     message: input.message || '',
@@ -67,6 +68,7 @@ export function toLogRow(message) {
     message_type: message.media_type || 'text',
     media_url: message.media_url || null,
     parent_id: message.parent_id || null,
+    student_id: message.student_id || null,
     created_at: message.created_at,
   };
 }

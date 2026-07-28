@@ -414,7 +414,7 @@ export default function PublicActivityRegistration() {
             </span>
             {activity.location && <span>{activity.location}</span>}
           </div>
-          {(activity.page_body || activity.description) && (
+          {step < 4 && (activity.page_body || activity.description) && (
             <p className="event-body">{activity.page_body || activity.description}</p>
           )}
           {paidMode && unitVat.entered > 0 && (
@@ -615,7 +615,7 @@ export default function PublicActivityRegistration() {
                 </>
               )}
             </div>
-            {!paidMode && <p className="event-free-note">אין תשלום בטופס המשתתפים.</p>}
+            {!paidMode && <p className="event-free-note">אין צורך בתשלום</p>}
           </section>
         )}
 

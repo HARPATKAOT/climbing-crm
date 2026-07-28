@@ -861,26 +861,28 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
                         {expanded && (
                           <tr>
                             <td colSpan={6} style={{ background: 'rgba(255,255,255,0.03)', padding: 16 }}>
-                              <div style={{ display: 'grid', gap: 14 }}>
-                                <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
-                                  <div>
-                                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>אופן תשלום</div>
-                                    <div>{payMethodLabel(sale.payment_method)}</div>
+                              <div className="pos-sale-detail">
+                                <div className="pos-sale-detail-meta">
+                                  {sale.customer_email && (
+                                    <div className="pos-sale-detail-field">
+                                      <div className="pos-sale-detail-label">אימייל לקוח</div>
+                                      <div className="pos-sale-detail-value">{sale.customer_email}</div>
+                                    </div>
+                                  )}
+                                  <div className="pos-sale-detail-field">
+                                    <div className="pos-sale-detail-label">נמכר על ידי</div>
+                                    <div className="pos-sale-detail-value">{sale.sold_by || '—'}</div>
                                   </div>
-                                  <div>
-                                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>נמכר על ידי</div>
-                                    <div>{sale.sold_by || '—'}</div>
-                                  </div>
-                                  <div>
-                                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>מספר מסמך</div>
-                                    <div>{sale.icount_doc_number || '—'}</div>
+                                  <div className="pos-sale-detail-field">
+                                    <div className="pos-sale-detail-label">מספר מסמך</div>
+                                    <div className="pos-sale-detail-value">{sale.icount_doc_number || '—'}</div>
                                   </div>
                                   {(sale.cc_confirmation_code || sale.cc_last4 || sale.cc_card_type) && (
-                                    <div>
-                                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>אישור סליקה</div>
-                                      <div>{sale.cc_confirmation_code || '—'}</div>
+                                    <div className="pos-sale-detail-field">
+                                      <div className="pos-sale-detail-label">אישור סליקה</div>
+                                      <div className="pos-sale-detail-value">{sale.cc_confirmation_code || '—'}</div>
                                       {(sale.cc_card_type || sale.cc_last4) && (
-                                        <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                                        <div className="pos-sale-detail-sub">
                                           {[sale.cc_card_type, sale.cc_last4 ? `••••${sale.cc_last4}` : null]
                                             .filter(Boolean)
                                             .join(' · ')}
@@ -889,30 +891,47 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
                                     </div>
                                   )}
                                   {sale.refund_doc_number && (
-                                    <div>
-                                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>מסמך זיכוי</div>
-                                      <div>{sale.refund_doc_number}</div>
+                                    <div className="pos-sale-detail-field">
+                                      <div className="pos-sale-detail-label">מסמך זיכוי</div>
+                                      <div className="pos-sale-detail-value">{sale.refund_doc_number}</div>
                                     </div>
                                   )}
                                 </div>
 
-                                <div>
-                                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>פריטים</div>
-                                  <div style={{ fontSize: 13 }}>
-                                    {items.length
-                                      ? items.map((i, idx) => (
-                                          <div key={`${sale.id}-item-${idx}`}>
-                                            {(i.name || i.description || 'פריט')}
-                                            {Number(i.quantity) > 1 ? ` × ${i.quantity}` : ''}
-                                            {i.unitprice != null ? ` · ₪${Number(i.unitprice).toLocaleString()}` : ''}
-                                          </div>
-                                        ))
-                                      : '—'}
-                                  </div>
+                                <div className="pos-sale-detail-items">
+                                  <div className="pos-sale-detail-section-title">פירוט פריטים</div>
+                                  {items.length ? (
+                                    items.map((i, idx) => {
+                                      const qty = Number(i.quantity) || 1;
+                                      const unit = i.unitprice != null ? Number(i.unitprice) : null;
+                                      const lineTotal =
+                                        unit != null
+                                          ? unit * qty
+                                          : i.total != null
+                                            ? Number(i.total)
+                                            : null;
+                                      return (
+                                        <div key={`${sale.id}-item-${idx}`} className="pos-sale-detail-item">
+                                          <span className="pos-sale-detail-item-name">
+                                            {i.name || i.description || 'פריט'}
+                                            {qty > 1 ? ` × ${qty}` : ''}
+                                          </span>
+                                          <span className="pos-sale-detail-item-price">
+                                            {lineTotal != null
+                                              ? `₪${lineTotal.toLocaleString()}`
+                                              : '—'}
+                                          </span>
+                                        </div>
+                                      );
+                                    })
+                                  ) : (
+                                    <div className="pos-sale-detail-value">—</div>
+                                  )}
                                 </div>
 
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-                                  {sale.payment_url && (
+                                <div className="pos-sale-detail-actions">
+                                  {sale.payment_url &&
+                                    (sale.status === 'pending_payment' || sale.status === 'quoted') && (
                                     <>
                                       <button
                                         type="button"
@@ -983,18 +1002,21 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
                                     </button>
                                   )}
                                   {canRefund && (
-                                    <button
-                                      type="button"
-                                      className="btn btn-ghost btn-sm"
-                                      disabled={refundBusyId === sale.id}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        refundSale(sale);
-                                      }}
-                                    >
-                                      <RotateCcw size={13} />
-                                      {refundBusyId === sale.id ? 'מזכה...' : 'זיכוי עסקה'}
-                                    </button>
+                                    <>
+                                      <span className="pos-sale-detail-actions-spacer" />
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-sm"
+                                        disabled={refundBusyId === sale.id}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          refundSale(sale);
+                                        }}
+                                      >
+                                        <RotateCcw size={13} />
+                                        {refundBusyId === sale.id ? 'מזכה...' : 'זיכוי עסקה'}
+                                      </button>
+                                    </>
                                   )}
                                 </div>
                               </div>

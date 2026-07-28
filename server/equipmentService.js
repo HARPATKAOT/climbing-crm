@@ -150,9 +150,9 @@ export function markEquipmentItemsPaid({
 
   for (const row of rows) {
     if (!wanted.has(row.item_type)) continue;
-    if (row.payment_status === 'paid') {
-      // Still allow shirt size update if missing
-      if (row.item_type === 'shirt' && shirtSize && !row.shirt_size) {
+    if (row.payment_status === 'paid' || row.payment_status === 'own' || row.payment_status === 'declined') {
+      // Still allow shirt size update if missing on already-paid rows
+      if (row.payment_status === 'paid' && row.item_type === 'shirt' && shirtSize && !row.shirt_size) {
         const patched = db.update('student_equipment', row.id, {
           shirt_size: String(shirtSize).trim(),
         });
@@ -248,6 +248,71 @@ export function markEquipmentPendingFulfillment({ db, persist, rowId } = {}) {
   return { ok: true, row: next };
 }
 
+/** Child has own gear — no payment / no club handoff. */
+export function markEquipmentOwn({ db, persist, rowId } = {}) {
+  const row = db.getOne('student_equipment', rowId);
+  if (!row) return { ok: false, error: 'פריט הציוד לא נמצא' };
+  if (row.payment_status === 'own') return { ok: true, row };
+
+  const next = db.update('student_equipment', row.id, {
+    payment_status: 'own',
+    fulfillment_status: 'pending',
+    paid_at: null,
+    payment_id: null,
+    given_at: null,
+    given_by: null,
+    rental_starts_at: null,
+    rental_ends_at: null,
+  });
+  if (next && typeof persist === 'function') {
+    Promise.resolve(persist('student_equipment', next)).catch(() => {});
+  }
+  return { ok: true, row: next };
+}
+
+/** Family not interested — no payment / no handoff needed. */
+export function markEquipmentDeclined({ db, persist, rowId } = {}) {
+  const row = db.getOne('student_equipment', rowId);
+  if (!row) return { ok: false, error: 'פריט הציוד לא נמצא' };
+  if (row.payment_status === 'declined') return { ok: true, row };
+
+  const next = db.update('student_equipment', row.id, {
+    payment_status: 'declined',
+    fulfillment_status: 'pending',
+    paid_at: null,
+    payment_id: null,
+    given_at: null,
+    given_by: null,
+    rental_starts_at: null,
+    rental_ends_at: null,
+  });
+  if (next && typeof persist === 'function') {
+    Promise.resolve(persist('student_equipment', next)).catch(() => {});
+  }
+  return { ok: true, row: next };
+}
+
+/** Clear resolved statuses back to unpaid + pending — ready for payment again. */
+export function markEquipmentUnpaid({ db, persist, rowId } = {}) {
+  const row = db.getOne('student_equipment', rowId);
+  if (!row) return { ok: false, error: 'פריט הציוד לא נמצא' };
+
+  const next = db.update('student_equipment', row.id, {
+    payment_status: 'unpaid',
+    fulfillment_status: 'pending',
+    paid_at: null,
+    payment_id: null,
+    given_at: null,
+    given_by: null,
+    rental_starts_at: null,
+    rental_ends_at: null,
+  });
+  if (next && typeof persist === 'function') {
+    Promise.resolve(persist('student_equipment', next)).catch(() => {});
+  }
+  return { ok: true, row: next };
+}
+
 export function computeEquipmentTotal(settings, itemTypes = []) {
   const prices = normalizeEquipmentSettings(settings).prices;
   return (Array.isArray(itemTypes) ? itemTypes : []).reduce((sum, type) => {
@@ -269,7 +334,8 @@ export function describeEquipmentItems(itemTypes = [], shirtSize = null) {
 
 export function equipmentGapFlags(rows = []) {
   const list = Array.isArray(rows) ? rows : [];
-  const unpaid = list.filter((r) => r.payment_status !== 'paid');
+  // "own" (from home) is resolved — not a payment gap.
+  const unpaid = list.filter((r) => r.payment_status === 'unpaid');
   const awaitingHandoff = list.filter(
     (r) => r.payment_status === 'paid' && r.fulfillment_status !== 'given'
   );
@@ -280,6 +346,11 @@ export function equipmentGapFlags(rows = []) {
     unpaidCount: unpaid.length,
     awaitingCount: awaitingHandoff.length,
   };
+}
+
+/** Items still owed for payment links / public checkout (excludes paid + own). */
+export function unpaidEquipmentItems(rows = []) {
+  return (Array.isArray(rows) ? rows : []).filter((r) => r.payment_status === 'unpaid');
 }
 
 /** Seed WhatsApp draft template for equipment payment link (idempotent). */

@@ -102,6 +102,7 @@ export default function ActivityRegistrationPanel({
   const [editingId, setEditingId] = useState(null);
   const [editDraft, setEditDraft] = useState({ participant_name: '', participant_type: 'child' });
   const [editBusy, setEditBusy] = useState('');
+  const [editingPaymentStatus, setEditingPaymentStatus] = useState(false);
 
   const openLeadFile = useCallback((openId) => {
     if (!openId) return;
@@ -810,20 +811,50 @@ export default function ActivityRegistrationPanel({
         תשלום והרשמה
       </div>
 
-      <label className="activity-registration-field">
+      <div className="activity-registration-field">
         <span className="activity-registration-field-label">סטטוס תשלום המזמין</span>
-        <select
-          className="input"
-          value={form.payment_status || 'unpaid'}
-          onChange={(e) => set('payment_status', e.target.value)}
-          disabled={readOnly}
-        >
-          <option value="unpaid">{payLabel.unpaid}</option>
-          <option value="paid">{payLabel.paid}</option>
-          <option value="partial">{payLabel.partial}</option>
-          <option value="refunded">{payLabel.refunded}</option>
-        </select>
-      </label>
+        {editingPaymentStatus && !readOnly ? (
+          <div className="activity-registration-status-row">
+            <select
+              className="input"
+              value={form.payment_status || 'unpaid'}
+              onChange={(e) => {
+                set('payment_status', e.target.value);
+                setEditingPaymentStatus(false);
+              }}
+              autoFocus
+            >
+              <option value="unpaid">{payLabel.unpaid}</option>
+              <option value="paid">{payLabel.paid}</option>
+              <option value="partial">{payLabel.partial}</option>
+              <option value="refunded">{payLabel.refunded}</option>
+            </select>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setEditingPaymentStatus(false)}
+            >
+              ביטול
+            </button>
+          </div>
+        ) : (
+          <div className="activity-registration-status-row">
+            <span className="activity-registration-status-value">
+              {payLabel[form.payment_status || 'unpaid'] || payLabel.unpaid}
+            </span>
+            {!readOnly && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setEditingPaymentStatus(true)}
+              >
+                <Pencil size={14} />
+                עריכה
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
       {activityId && !readOnly && (form.payment_status || 'unpaid') === 'paid' && !isHostPays && (
         <button
@@ -879,19 +910,6 @@ export default function ActivityRegistrationPanel({
             ? 'המזמין מקבל קישור תשלום פרטי. המשתתפים נרשמים בחינם עם הצהרה וחתימה.'
             : 'כל הורה, ילד או מבוגר נספר במכסה ומחויב במחיר הפעילות.'}
         </span>
-      </label>
-
-      <label className="activity-registration-field">
-        <span className="activity-registration-field-label">חישוב מע״מ</span>
-        <select
-          className="input"
-          value={normalizePriceIncludesVat(form.price_includes_vat) ? 'incl' : 'excl'}
-          onChange={(e) => set('price_includes_vat', e.target.value === 'incl')}
-          disabled={readOnly}
-        >
-          <option value="excl">לפני מע״מ — הלקוח משלם מחיר + מע״מ</option>
-          <option value="incl">כולל מע״מ — הלקוח משלם בדיוק את הסכום שהוזן</option>
-        </select>
       </label>
 
       {activityId && (

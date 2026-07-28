@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight, Package, Check } from 'lucide-react';
+import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight, Package, Footprints, Shirt, Sparkles } from 'lucide-react';
 import { DAYS_FULL } from '../mockData.js';
 import {
   getGroupDays,
@@ -16,11 +16,30 @@ import {
 import { StatusPill } from './AttendanceCalendar.jsx';
 import {
   EQUIPMENT_LABELS,
-  EQUIPMENT_ORDER,
+  applyEquipmentTone,
   equipmentItemTone,
   equipmentToneColor,
+  equipmentToneBg,
   equipmentToneLabel,
 } from './equipmentUtils.js';
+import { studentInGroup, studentGroupIds } from '../utils/studentGroups.js';
+
+const EQUIPMENT_ICONS = {
+  shoes: Footprints,
+  shirt: Shirt,
+  chalk_bag: Sparkles,
+};
+
+/** Matrix columns (RTL: after kid name, right→left): chalk, shoes, shirt */
+const EQUIPMENT_MATRIX_COLS = ['chalk_bag', 'shoes', 'shirt'];
+
+const EQUIPMENT_LEGEND_TONES = [
+  { tone: 'unpaid', label: 'ממתין לתשלום' },
+  { tone: 'awaiting', label: 'שולם' },
+  { tone: 'given', label: 'נמסר' },
+  { tone: 'own', label: 'מהבית' },
+  { tone: 'declined', label: 'לא מעוניינים' },
+];
 
 async function ensureAttendance({ date, groupId } = {}) {
   const res = await fetch('/api/attendance/ensure', {
@@ -299,7 +318,7 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
 
 // ─── Attendance Modal (Supabase-persisted via API) ────────────────────────────
 function AttendanceModal({ group, students, parents, employees, initialDate, onClose, onMarked }) {
-  const members = students.filter(s => s.groupId === group.id && s.status !== 'archived');
+  const members = students.filter(s => studentInGroup(s, group.id) && s.status !== 'archived');
   const [date, setDate] = useState(initialDate || localDateStr());
   const [view, setView] = useState('sheet'); // 'sheet' | 'history'
   const [state, setState] = useState({});          // studentId -> status
@@ -555,20 +574,21 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
   const [eqByStudent, setEqByStudent] = useState({});
   const [eqLoading, setEqLoading] = useState(false);
   const [eqBusyId, setEqBusyId] = useState('');
+  const [eqEditId, setEqEditId] = useState('');
   const [eqError, setEqError] = useState('');
   const c = AGE_COLORS[group.ageCategory] || DEF_COLOR;
 
   const seatedMembers = students.filter(s =>
-    s.groupId === group.id
+    studentInGroup(s, group.id)
     && s.status !== 'archived'
     && s.status !== 'waitlist'
   );
   const waitlistMembers = students.filter(s =>
-    s.groupId === group.id && s.status === 'waitlist'
+    studentInGroup(s, group.id) && s.status === 'waitlist'
   );
   const members = seatedMembers;
   const kidMembers = members.filter(s => !s.isAdult);
-  const assignable = students.filter(s => s.groupId !== group.id && s.status !== 'archived');
+  const assignable = students.filter(s => !studentInGroup(s, group.id) && s.status !== 'archived');
 
   const pct    = group.maxSlots > 0 ? Math.round(members.length / group.maxSlots * 100) : 0;
   const isFull = members.length >= group.maxSlots;
@@ -581,8 +601,8 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
     return items.some((i) => i.payment_status === 'paid' && i.fulfillment_status !== 'given');
   }).length;
 
-  const loadGroupEquipment = async () => {
-    setEqLoading(true);
+  const loadGroupEquipment = async ({ silent = false } = {}) => {
+    if (!silent) setEqLoading(true);
     setEqError('');
     try {
       const res = await fetch(`/api/equipment?groupId=${encodeURIComponent(group.id)}&filter=all`);
@@ -595,9 +615,9 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
       setEqByStudent(map);
     } catch (err) {
       setEqError(err.message);
-      setEqByStudent({});
+      if (!silent) setEqByStudent({});
     } finally {
-      setEqLoading(false);
+      if (!silent) setEqLoading(false);
     }
   };
 
@@ -606,13 +626,14 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, group.id]);
 
-  const markEqGiven = async (itemId) => {
-    setEqBusyId(itemId);
+  const markEqStatus = async (item, targetTone) => {
+    if (!item?.id) return;
+    setEqBusyId(item.id);
+    setEqError('');
     try {
-      const res = await fetch(`/api/equipment/${encodeURIComponent(itemId)}/mark-given`, { method: 'POST' });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error || 'סימון המסירה נכשל');
-      await loadGroupEquipment();
+      await applyEquipmentTone(item.id, targetTone, { currentItem: item });
+      setEqEditId('');
+      await loadGroupEquipment({ silent: true });
     } catch (err) {
       setEqError(err.message);
     } finally {
@@ -882,7 +903,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                       )}
                       <button className="btn btn-ghost btn-icon btn-xs" title="הסר מהקבוצה"
                         style={{ color: 'var(--red)' }}
-                        onClick={() => onRemoveStudent(s.id)}>
+                        onClick={() => onRemoveStudent(s.id, group.id)}>
                         <UserMinus size={14} />
                       </button>
                     </div>
@@ -915,7 +936,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                         <span className="badge badge-gray">המתנה</span>
                         <button className="btn btn-ghost btn-icon btn-xs" title="הסר מהמתנה"
                           style={{ color: 'var(--red)' }}
-                          onClick={() => onRemoveStudent(s.id)}>
+                          onClick={() => onRemoveStudent(s.id, group.id)}>
                           <UserMinus size={14} />
                         </button>
                       </div>
@@ -930,10 +951,54 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
         {/* EQUIPMENT TAB */}
         {tab === 'equipment' && (
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
               <Package size={14} style={{ color: 'var(--text-3)' }} />
               <div style={{ fontSize: 13, fontWeight: 700 }}>ציוד לאימונים — ילדים בקבוצה</div>
             </div>
+
+            {/* Color legend */}
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 8,
+                marginBottom: 12,
+                padding: '8px 10px',
+                borderRadius: 10,
+                border: '1px solid var(--border)',
+                background: 'rgba(255,255,255,0.03)',
+              }}
+            >
+              {EQUIPMENT_LEGEND_TONES.map(({ tone, label }) => {
+                const color = equipmentToneColor(tone);
+                return (
+                  <span
+                    key={tone}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      fontSize: 11,
+                      fontWeight: 600,
+                      color: 'var(--text-2)',
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: '50%',
+                        background: color,
+                        boxShadow: `0 0 0 2px ${color}33`,
+                        flexShrink: 0,
+                      }}
+                    />
+                    {label}
+                  </span>
+                );
+              })}
+            </div>
+
             {eqError && (
               <div style={{ marginBottom: 10, padding: 8, borderRadius: 8, background: 'rgba(248,113,113,.12)', color: '#f87171', fontSize: 12 }}>
                 {eqError}
@@ -950,75 +1015,227 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                 <div className="empty-state-sub">ציוד לאימונים מיועד לילדים בלבד</div>
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {kidMembers.map((s) => {
-                  const p = parents.find((pp) => pp.id === s.parentId);
-                  const items = eqByStudent[s.id] || [];
-                  const byType = Object.fromEntries(items.map((i) => [i.item_type, i]));
-                  const awaiting = items.filter(
-                    (i) => i.payment_status === 'paid' && i.fulfillment_status !== 'given'
-                  );
+              <>
+                <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>
+                  לחצו על אייקון כדי לשנות סטטוס
+                </div>
+                <div
+                  style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 12,
+                    overflow: 'hidden',
+                  }}
+                >
+                  {/* Header row */}
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'minmax(0, 1fr) 52px 52px 52px',
+                      gap: 0,
+                      alignItems: 'center',
+                      padding: '8px 10px',
+                      borderBottom: '1px solid var(--border)',
+                      background: 'rgba(255,255,255,0.04)',
+                      fontSize: 11,
+                      fontWeight: 700,
+                      color: 'var(--text-3)',
+                    }}
+                  >
+                    <div>ילד</div>
+                    {EQUIPMENT_MATRIX_COLS.map((type) => {
+                      const Icon = EQUIPMENT_ICONS[type] || Package;
+                      return (
+                        <div
+                          key={type}
+                          title={EQUIPMENT_LABELS[type]}
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            gap: 2,
+                          }}
+                        >
+                          <Icon size={14} />
+                          <span style={{ fontSize: 9, fontWeight: 700 }}>{EQUIPMENT_LABELS[type]}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {kidMembers.map((s, idx) => {
+                    const p = parents.find((pp) => pp.id === s.parentId);
+                    const items = eqByStudent[s.id] || [];
+                    const byType = Object.fromEntries(items.map((i) => [i.item_type, i]));
+                    const awaiting = items.some(
+                      (i) => i.payment_status === 'paid' && i.fulfillment_status !== 'given'
+                    );
+                    return (
+                      <div
+                        key={s.id}
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'minmax(0, 1fr) 52px 52px 52px',
+                          gap: 0,
+                          alignItems: 'center',
+                          padding: '8px 10px',
+                          borderBottom: idx < kidMembers.length - 1 ? '1px solid var(--border)' : 'none',
+                          background: awaiting ? 'rgba(251,191,36,.06)' : 'transparent',
+                        }}
+                      >
+                        <div style={{ minWidth: 0, paddingInlineEnd: 8 }}>
+                          <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {s.name}
+                          </div>
+                          <div style={{ fontSize: 10, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {p?.name || '—'}
+                          </div>
+                        </div>
+                        {EQUIPMENT_MATRIX_COLS.map((type) => {
+                          const item = byType[type];
+                          const Icon = EQUIPMENT_ICONS[type] || Package;
+                          const tone = item ? equipmentItemTone(item) : 'missing';
+                          const color = item ? equipmentToneColor(tone) : '#64748b';
+                          const busy = item && eqBusyId === item.id;
+                          const editing = item && eqEditId === item.id;
+                          const title = item
+                            ? `${EQUIPMENT_LABELS[type]} · ${equipmentToneLabel(tone, type)}${type === 'shirt' && item.shirt_size ? ` · מידה ${item.shirt_size}` : ''}`
+                            : `${EQUIPMENT_LABELS[type]} · אין רשומה`;
+                          return (
+                            <div key={type} style={{ display: 'flex', justifyContent: 'center' }}>
+                              <button
+                                type="button"
+                                disabled={!item || busy}
+                                onClick={() => item && setEqEditId(editing ? '' : item.id)}
+                                title={title}
+                                aria-label={title}
+                                style={{
+                                  width: 36,
+                                  height: 36,
+                                  borderRadius: 10,
+                                  border: editing ? `2px solid ${color}` : `1px solid ${color}55`,
+                                  background: item ? equipmentToneBg(tone) : 'rgba(100,116,139,0.12)',
+                                  color,
+                                  display: 'inline-flex',
+                                  flexDirection: 'column',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  gap: 1,
+                                  cursor: item ? 'pointer' : 'default',
+                                  opacity: busy ? 0.55 : 1,
+                                  padding: 0,
+                                }}
+                              >
+                                {busy ? <Loader2 size={14} className="spin" /> : <Icon size={15} />}
+                                {type === 'shirt' && item?.shirt_size && (
+                                  <span style={{ fontSize: 8, fontWeight: 800, lineHeight: 1 }}>{item.shirt_size}</span>
+                                )}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Status picker for selected cell */}
+                {eqEditId && (() => {
+                  let editItem = null;
+                  let editStudent = null;
+                  for (const s of kidMembers) {
+                    const found = (eqByStudent[s.id] || []).find((i) => i.id === eqEditId);
+                    if (found) {
+                      editItem = found;
+                      editStudent = s;
+                      break;
+                    }
+                  }
+                  if (!editItem) return null;
+                  const tone = equipmentItemTone(editItem);
+                  const type = editItem.item_type;
+                  const Icon = EQUIPMENT_ICONS[type] || Package;
+                  const busy = eqBusyId === editItem.id;
                   return (
                     <div
-                      key={s.id}
                       style={{
-                        border: awaiting.length ? '1px solid rgba(251,191,36,.45)' : '1px solid var(--border)',
+                        marginTop: 12,
+                        padding: 12,
                         borderRadius: 12,
-                        padding: 10,
-                        background: awaiting.length ? 'rgba(251,191,36,.06)' : 'transparent',
+                        border: '1px solid var(--border)',
+                        background: 'rgba(255,255,255,0.04)',
                       }}
                     >
-                      <div style={{ fontWeight: 700, fontSize: 13 }}>{s.name}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>
-                        {p?.name || '—'}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                        <Icon size={16} style={{ color: equipmentToneColor(tone) }} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 800 }}>
+                            {editStudent?.name} · {EQUIPMENT_LABELS[type]}
+                          </div>
+                          {type === 'shirt' && (
+                            <div style={{ fontSize: 11, color: editItem.shirt_size ? 'var(--text-2)' : '#fbbf24', marginTop: 2 }}>
+                              {editItem.shirt_size
+                                ? `מידה לתת: ${editItem.shirt_size}`
+                                : 'מידה: לא נבחרה'}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-xs"
+                          onClick={() => setEqEditId('')}
+                          aria-label="סגור"
+                        >
+                          <X size={14} />
+                        </button>
                       </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                        {EQUIPMENT_ORDER.map((type) => {
-                          const item = byType[type];
-                          if (!item) {
-                            return (
-                              <span key={type} style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                                {EQUIPMENT_LABELS[type]} · —
-                              </span>
-                            );
-                          }
-                          const tone = equipmentItemTone(item);
-                          const color = equipmentToneColor(tone);
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {EQUIPMENT_LEGEND_TONES.map(({ tone: opt, label }) => {
+                          const optColor = equipmentToneColor(opt);
+                          const selected = opt === tone;
                           return (
                             <button
-                              key={type}
+                              key={opt}
                               type="button"
-                              disabled={tone !== 'awaiting' || eqBusyId === item.id}
-                              onClick={() => tone === 'awaiting' && markEqGiven(item.id)}
-                              title={tone === 'awaiting' ? 'לחצו לסימון מסירה' : equipmentToneLabel(tone)}
+                              disabled={busy || selected}
+                              onClick={() => markEqStatus(editItem, opt)}
                               style={{
-                                display: 'inline-flex',
+                                width: '100%',
+                                display: 'flex',
                                 alignItems: 'center',
-                                gap: 4,
-                                padding: '4px 8px',
-                                borderRadius: 999,
-                                border: `1px solid ${color}66`,
-                                background: `${color}18`,
-                                color,
-                                fontSize: 11,
+                                gap: 10,
+                                fontSize: 14,
                                 fontWeight: 700,
-                                cursor: tone === 'awaiting' ? 'pointer' : 'default',
-                                opacity: eqBusyId === item.id ? 0.6 : 1,
+                                padding: '11px 12px',
+                                borderRadius: 10,
+                                border: selected ? `2px solid ${optColor}` : '1px solid var(--border)',
+                                background: selected ? `${optColor}28` : 'rgba(255,255,255,0.06)',
+                                color: '#f8fafc',
+                                cursor: selected ? 'default' : 'pointer',
+                                textAlign: 'right',
                               }}
                             >
-                              {tone === 'awaiting' && <Check size={11} />}
-                              {EQUIPMENT_LABELS[type]}
-                              {' · '}
-                              {equipmentToneLabel(tone)}
-                              {type === 'shirt' && item.shirt_size ? ` · ${item.shirt_size}` : ''}
+                              <span
+                                style={{
+                                  width: 12,
+                                  height: 12,
+                                  borderRadius: '50%',
+                                  background: optColor,
+                                  boxShadow: `0 0 0 3px ${optColor}44`,
+                                  flexShrink: 0,
+                                }}
+                              />
+                              <span style={{ flex: 1 }}>{label}</span>
+                              {selected && (
+                                <span style={{ fontSize: 11, fontWeight: 700, color: optColor }}>נוכחי</span>
+                              )}
                             </button>
                           );
                         })}
                       </div>
                     </div>
                   );
-                })}
-              </div>
+                })()}
+              </>
             )}
           </div>
         )}
@@ -1091,6 +1308,7 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
   const [attendanceGroup, setAttendanceGroup]  = useState(null);
   const [attendanceDate,  setAttendanceDate]   = useState(localDateStr());
   const [dayMarks,        setDayMarks]         = useState({}); // groupId -> { marked, present, total }
+  const [dayVacation,     setDayVacation]      = useState(null); // «חופשה מאימונים» covering the day
   const [viewMode,        setViewMode]         = useState('week');
   const [employees,       setEmployees]        = useState([]);
 
@@ -1108,9 +1326,11 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
     let cancelled = false;
     (async () => {
       try {
-        await ensureAttendance({ date: attendanceDate });
+        const ensured = await ensureAttendance({ date: attendanceDate });
+        if (!cancelled) setDayVacation(ensured?.vacation || null);
       } catch (e) {
         console.error(e);
+        if (!cancelled) setDayVacation(null);
       }
       if (cancelled) return;
       try {
@@ -1180,12 +1400,18 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
   };
 
   const handleAssignStudent = async (studentId, groupId) => {
-    setStudents(prev => prev.map(s => s.id === studentId ? { ...s, groupId } : s));
+    setStudents(prev => prev.map(s => {
+      if (s.id !== studentId) return s;
+      const ids = studentGroupIds(s);
+      if (ids.includes(String(groupId))) return s;
+      const next = [...ids, String(groupId)];
+      return { ...s, groupIds: next, groupId: s.groupId || groupId };
+    }));
     try {
       await fetch(`/api/students/${studentId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupId })
+        body: JSON.stringify({ addGroupId: groupId })
       });
       refreshStudents();
     } catch (err) {
@@ -1193,13 +1419,17 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
     }
   };
 
-  const handleRemoveStudent = async (studentId) => {
-    setStudents(prev => prev.map(s => s.id === studentId ? { ...s, groupId: null } : s));
+  const handleRemoveStudent = async (studentId, groupId) => {
+    setStudents(prev => prev.map(s => {
+      if (s.id !== studentId) return s;
+      const next = studentGroupIds(s).filter((id) => id !== String(groupId));
+      return { ...s, groupIds: next, groupId: next[0] || null };
+    }));
     try {
       await fetch(`/api/students/${studentId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupId: null })
+        body: JSON.stringify({ removeGroupId: groupId })
       });
       refreshStudents();
     } catch (err) {
@@ -1226,7 +1456,7 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
 
   const getEnrolledCount = (groupId) => {
     return students.filter(s =>
-      s.groupId === groupId
+      studentInGroup(s, groupId)
       && s.status !== 'archived'
       && s.status !== 'waitlist'
     ).length;
@@ -1346,6 +1576,24 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
               <span style={{ fontSize: 12, color: 'var(--text-3)' }}>צפייה ביום עבר / עתיד</span>
             )}
           </div>
+
+          {dayVacation && (
+            <div
+              className="card card-p"
+              style={{
+                marginBottom: 16,
+                borderRight: '3px solid #C084FC',
+                background: 'rgba(168, 85, 247, 0.10)',
+              }}
+            >
+              <div style={{ fontWeight: 800, fontSize: 14, color: '#C084FC' }}>
+                🏖️ יום חופש — {dayVacation.name || 'חופשה מאימונים'}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
+                כל הנוכחות ביום זה סומנה אוטומטית כ״יום חג״. סימון ידני של מאמן גובר ולא נדרס.
+              </div>
+            </div>
+          )}
 
           {dayGroupsForAttendance.length === 0 ? (
             <div className="card empty-state" style={{ padding: 48 }}>

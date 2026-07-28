@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS public.student_equipment (
   item_type text NOT NULL
     CHECK (item_type IN ('shoes', 'shirt', 'chalk_bag')),
   payment_status text NOT NULL DEFAULT 'unpaid'
-    CHECK (payment_status IN ('unpaid', 'paid')),
+    CHECK (payment_status IN ('unpaid', 'paid', 'own', 'declined')),
   fulfillment_status text NOT NULL DEFAULT 'pending'
     CHECK (fulfillment_status IN ('pending', 'given')),
   shirt_size text,
