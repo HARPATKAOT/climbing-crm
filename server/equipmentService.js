@@ -10,7 +10,13 @@ export const EQUIPMENT_ITEM_LABELS = {
   chalk_bag: 'שק מגנזיום ומגנזיום',
 };
 
-export const EQUIPMENT_TEMPLATE_NAME = 'equipment_payment';
+/**
+ * The first template (`equipment_payment`) was approved with a localhost button
+ * and can never be repaired in place — an approved button host is frozen.
+ * This one points at the server redirect instead, so the destination stays ours.
+ */
+export const EQUIPMENT_TEMPLATE_NAME = 'equipment_payment_link';
+export const EQUIPMENT_TEMPLATE_LEGACY_NAMES = ['equipment_payment'];
 
 export const DEFAULT_EQUIPMENT_SETTINGS = {
   prices: {
@@ -359,39 +365,62 @@ export const EQUIPMENT_LIVE_APP_BASE = 'https://client-omega-topaz-35.vercel.app
  * A template button URL is frozen the moment Meta approves it, so a staff
  * machine running with a localhost FRONTEND_URL must never seed one.
  */
+function isLocalOrigin(origin) {
+  try {
+    const host = new URL(String(origin || '')).hostname;
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local');
+  } catch {
+    return true;
+  }
+}
+
 export function equipmentPublicBase(publicAppBase = '') {
   const candidates = [publicAppBase, process.env.FRONTEND_URL, process.env.PUBLIC_APP_URL];
   for (const candidate of candidates) {
     const base = String(candidate || '').trim().replace(/\/$/, '');
-    if (!base || !base.startsWith('https://')) continue;
-    let host = '';
-    try {
-      host = new URL(base).hostname;
-    } catch {
-      continue;
-    }
-    if (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local')) continue;
+    if (!base || !base.startsWith('https://') || isLocalOrigin(base)) continue;
     return base;
   }
   return EQUIPMENT_LIVE_APP_BASE;
 }
 
+export const EQUIPMENT_LIVE_API_BASE = 'https://climbing-crm-api.onrender.com';
+export const EQUIPMENT_REDIRECT_PATH = '/e';
+
+/**
+ * Host for the approved button. Meta freezes it, so it must be the live API even
+ * when a staff machine is running locally — the redirect itself resolves the
+ * final page at click time, which is what keeps a future domain move free.
+ */
+export function equipmentRedirectBase() {
+  const explicit = String(process.env.PUBLIC_API_URL || process.env.RENDER_EXTERNAL_URL || '')
+    .trim()
+    .replace(/\/$/, '');
+  if (explicit && !isLocalOrigin(explicit) && explicit.startsWith('https://')) return explicit;
+  return EQUIPMENT_LIVE_API_BASE;
+}
+
+/** Short link that survives a domain change: the server picks the destination. */
+export function buildEquipmentRedirectUrl(token) {
+  if (!token) return '';
+  return `${equipmentRedirectBase()}${EQUIPMENT_REDIRECT_PATH}/${encodeURIComponent(String(token))}`;
+}
+
 /** Seed WhatsApp draft template for equipment payment link (idempotent). */
-export function ensureEquipmentWhatsappTemplate({ db, persist, publicAppBase = '' } = {}) {
+export function ensureEquipmentWhatsappTemplate({ db, persist } = {}) {
   if (!db) return null;
   const templates = db.get('message_templates') || [];
   const existing = templates.find(
     (t) =>
       (t.meta_name || t.name) === EQUIPMENT_TEMPLATE_NAME ||
-      t.id === 'tpl-equipment-payment'
+      t.id === 'tpl-equipment-payment-link'
   );
   if (existing) return existing;
 
-  const base = equipmentPublicBase(publicAppBase);
-  const buttonUrl = `${base}/equipment/{{1}}`;
+  const buttonUrl = `${equipmentRedirectBase()}${EQUIPMENT_REDIRECT_PATH}/{{1}}`;
 
   const template = db.insert('message_templates', {
-    id: 'tpl-equipment-payment',
+    id: 'tpl-equipment-payment-link',
     name: EQUIPMENT_TEMPLATE_NAME,
     meta_name: EQUIPMENT_TEMPLATE_NAME,
     language: 'he',

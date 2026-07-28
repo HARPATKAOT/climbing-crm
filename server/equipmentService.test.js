@@ -16,6 +16,11 @@ import {
   DEFAULT_EQUIPMENT_SETTINGS,
   equipmentPublicBase,
   EQUIPMENT_LIVE_APP_BASE,
+  EQUIPMENT_LIVE_API_BASE,
+  EQUIPMENT_TEMPLATE_NAME,
+  equipmentRedirectBase,
+  buildEquipmentRedirectUrl,
+  ensureEquipmentWhatsappTemplate,
 } from './equipmentService.js';
 
 function makeDb(seed = {}) {
@@ -171,5 +176,43 @@ test('equipment template base never falls back to a local address', () => {
     else process.env.FRONTEND_URL = original.front;
     if (original.pub === undefined) delete process.env.PUBLIC_APP_URL;
     else process.env.PUBLIC_APP_URL = original.pub;
+  }
+});
+
+test('the template button points at the server redirect, never at the app itself', () => {
+  const original = {
+    front: process.env.FRONTEND_URL,
+    api: process.env.PUBLIC_API_URL,
+    render: process.env.RENDER_EXTERNAL_URL,
+  };
+  try {
+    // A staff machine running locally must still seed the live redirect host.
+    process.env.FRONTEND_URL = 'http://localhost:3001';
+    process.env.PUBLIC_API_URL = 'http://localhost:5001';
+    delete process.env.RENDER_EXTERNAL_URL;
+    assert.equal(equipmentRedirectBase(), EQUIPMENT_LIVE_API_BASE);
+
+    const db = makeDb({ message_templates: [] });
+    const tpl = ensureEquipmentWhatsappTemplate({ db });
+    assert.equal(tpl.name, EQUIPMENT_TEMPLATE_NAME);
+    assert.equal(tpl.buttons[0].url, `${EQUIPMENT_LIVE_API_BASE}/e/{{1}}`);
+    assert.ok(!tpl.buttons[0].url.includes('localhost'));
+    // Seeding twice must not create a second template.
+    assert.equal(ensureEquipmentWhatsappTemplate({ db }).id, tpl.id);
+    assert.equal(db.get('message_templates').length, 1);
+
+    process.env.PUBLIC_API_URL = 'https://api.example/';
+    assert.equal(equipmentRedirectBase(), 'https://api.example');
+    assert.equal(buildEquipmentRedirectUrl('tok 1'), 'https://api.example/e/tok%201');
+    assert.equal(buildEquipmentRedirectUrl(''), '');
+  } finally {
+    for (const [key, value] of [
+      ['FRONTEND_URL', original.front],
+      ['PUBLIC_API_URL', original.api],
+      ['RENDER_EXTERNAL_URL', original.render],
+    ]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });

@@ -94,6 +94,7 @@ import {
   unpaidEquipmentItems,
   newCheckoutToken,
   ensureEquipmentWhatsappTemplate,
+  equipmentPublicBase,
 } from './equipmentService.js';
 import {
   EVENT_HOST_PAYMENT_TEMPLATE,
@@ -278,6 +279,20 @@ function redirectPaymentLink(req, res) {
 }
 app.get('/r/:paymentId', redirectPaymentLink);
 app.get('/api/r/:paymentId', redirectPaymentLink);
+
+/**
+ * Short link behind the approved equipment template button. Meta freezes the
+ * button host, so it points here and the app address is resolved per click —
+ * moving the site to another domain never needs a new template approval.
+ */
+function redirectEquipmentCheckout(req, res) {
+  const token = String(req.params.token || '').trim();
+  if (!token) return res.status(400).send('חסר מזהה תשלום');
+  const target = `${equipmentPublicBase()}/equipment/${encodeURIComponent(token)}`;
+  return res.redirect(302, target);
+}
+app.get('/e/:token', redirectEquipmentCheckout);
+app.get('/api/e/:token', redirectEquipmentCheckout);
 
 app.use('/api', apiAuth);
 
@@ -2195,11 +2210,7 @@ app.post('/api/students/:id/equipment/payment-link', async (req, res) => {
 
     ensureStudentEquipment({ db, student, persist: persistCore });
     try {
-      ensureEquipmentWhatsappTemplate({
-        db,
-        persist: persistCore,
-        publicAppBase: frontendPublicBase(req),
-      });
+      ensureEquipmentWhatsappTemplate({ db, persist: persistCore });
     } catch (tplErr) {
       console.warn('equipment template ensure skipped:', tplErr.message);
     }
@@ -7901,11 +7912,7 @@ async function runDailyAttendanceEnsureIfDue() {
 // Start Server (after loading CRM-core data from Supabase)
 initDb({ requireDurable: requiresDurableStore() }).then(() => {
   try {
-    ensureEquipmentWhatsappTemplate({
-      db,
-      persist: persistCore,
-      publicAppBase: process.env.FRONTEND_URL || process.env.PUBLIC_APP_URL || '',
-    });
+    ensureEquipmentWhatsappTemplate({ db, persist: persistCore });
   } catch (err) {
     console.warn('equipment template seed skipped:', err.message);
   }
