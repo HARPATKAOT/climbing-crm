@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, Users, Ticket, CalendarDays, Package, Footprints, Shirt, Sparkles } from 'lucide-react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Footprints, Shirt, Sparkles, Gift } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
 import {
@@ -16,9 +16,14 @@ import {
   resolveLeadOpenTarget,
 } from '../utils/leadUtils.js';
 import ConversationPanel from './ConversationPanel.jsx';
-import AttendanceCalendar from './AttendanceCalendar.jsx';
+import AttendanceList from './AttendanceList.jsx';
+import {
+  AttendanceToggle,
+  activityDayLabel,
+  saveActivityAttendance,
+} from './ActivityAttendance.jsx';
 import { isAwaitingHandling, latestInboundTime } from './communicationQueue.js';
-import { isAttAbsent, isAttPending } from '../scheduleUtils.js';
+import { consecutiveAbsences } from '../scheduleUtils.js';
 import { studentGroupIds } from '../utils/studentGroups.js';
 import {
   EQUIPMENT_LABELS,
@@ -38,10 +43,85 @@ const EQUIPMENT_ICONS = {
   chalk_bag: Sparkles,
 };
 
+const COUPON_STATE_BADGE = {
+  active: { label: 'בתוקף', cls: 'badge badge-green' },
+  redeemed: { label: 'מומש', cls: 'badge badge-blue' },
+  expired: { label: 'פג תוקף', cls: 'badge badge-gray' },
+  cancelled: { label: 'בוטל', cls: 'badge badge-red' },
+};
+
+/** Mirrors passDiscountNote in server/posUtils.js — kept local like pickBestPunchCard. */
+function passDiscountNote(pass) {
+  if (!pass?.coupon_label && pass?.list_price == null) return '';
+  const list = Number(pass.list_price);
+  const paid = Number(pass.paid_price);
+  const label = pass.coupon_label || 'הטבה';
+  if (Number.isFinite(list) && Number.isFinite(paid) && list > paid) {
+    return `נקנתה ב${label} · שולם ₪${paid} במקום ₪${list}`;
+  }
+  return `נקנתה ב${label}`;
+}
+
+const EMPTY_COUPON_DRAFT = {
+  type: 'percent',
+  value: '50',
+  units: '1',
+  validityDays: '30',
+  pricelistId: '',
+  label: '',
+};
+
+/** One labelled row in the manual-benefit form. */
+function CouponField({ label, hint, children }) {
+  return (
+    <div>
+      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-3)', marginBottom: 3 }}>{label}</div>
+      {children}
+      {hint && <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 3 }}>{hint}</div>}
+    </div>
+  );
+}
+
+function couponExpiryPreview(validityDays) {
+  const days = Number(validityDays);
+  if (!Number.isFinite(days) || days <= 0) return '';
+  const until = new Date();
+  until.setDate(until.getDate() + days);
+  return `בתוקף עד ${until.toLocaleDateString('he-IL')}`;
+}
+
+/** What the benefit would be called if nobody types a name — also the placeholder. */
+function suggestedCouponLabel(draft, pricelist = []) {
+  const product = draft.pricelistId
+    ? (pricelist || []).find((p) => String(p.id) === String(draft.pricelistId))
+    : null;
+  const on = product ? ` על ${product.name}` : '';
+  if (draft.type === 'percent') return `${Number(draft.value) || 0}% הנחה${on}`;
+  if (draft.type === 'amount') return `₪${Number(draft.value) || 0} הנחה${on}`;
+  if (draft.type === 'free_item') return product ? `${product.name} חינם` : 'פריט חינם';
+  return `אחד פלוס אחד${on}`;
+}
+
+const PAYMENT_STATUS_BADGES = {
+  paid: { label: 'שולם', cls: 'badge badge-green' },
+  pending: { label: 'ממתין', cls: 'badge badge-amber' },
+  refunded: { label: 'זוכה', cls: 'badge badge-gray' },
+  cancelled: { label: 'בוטל', cls: 'badge badge-gray' },
+  failed: { label: 'נכשל', cls: 'badge badge-red' },
+};
+
+function paymentStatusBadge(status) {
+  return PAYMENT_STATUS_BADGES[status] || { label: status || '—', cls: 'badge badge-gray' };
+}
+
+function paymentHasRefundDoc(payment) {
+  return !!(payment?.refund_doc_number || payment?.refund_doc_url);
+}
+
 // Normalize phone for comparison (supports 05X ↔ 9725X)
 const normPhone = normalizePhone;
 
-const phoneTailMatch = (a, b) => {
+export const phoneTailMatch = (a, b) => {
   const na = normPhone(a);
   const nb = normPhone(b);
   if (!na || !nb) return false;
@@ -90,23 +170,6 @@ function parentDisplayName(parent) {
 }
 
 /** Count consecutive absences from the newest marked class (skip pending/holiday). */
-function consecutiveAbsences(history = []) {
-  const rows = (Array.isArray(history) ? history : [])
-    .slice()
-    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
-  let count = 0;
-  for (const row of rows) {
-    const status = row?.status;
-    if (isAttPending(status) || status === 'holiday') continue;
-    if (isAttAbsent(status)) {
-      count += 1;
-      continue;
-    }
-    break;
-  }
-  return count;
-}
-
 /** WhatsApp copy for health declaration — always addressed to the parent. */
 function buildHealthWhatsAppText(parentName, studentName, link) {
   const p = String(parentName || '').trim();
@@ -128,7 +191,7 @@ function isLocalOrigin(origin) {
 }
 
 /** Prefer public site for WhatsApp share links (localhost is not clickable on phones). */
-const PUBLIC_APP_FALLBACK = 'https://client-omega-topaz-35.vercel.app';
+const PUBLIC_APP_FALLBACK = 'https://app.kirboaz.co.il';
 
 function publicShareOrigin() {
   const env = String(import.meta.env.VITE_PUBLIC_APP_URL || '').trim().replace(/\/$/, '');
@@ -226,7 +289,7 @@ const TEST_TYPE_COLORS = {
 /** Collapsible folder row for lead detail panel */
 function FolderRow({ id, title, icon: Icon, summary, open, onToggle, children, summaryColor }) {
   return (
-    <div style={{
+    <div data-folder-id={id} style={{
       border: '1px solid var(--border)',
       borderRadius: 10,
       marginBottom: 8,
@@ -282,11 +345,12 @@ function FolderRow({ id, title, icon: Icon, summary, open, onToggle, children, s
 }
 
 // ─── Lead/Customer Card (detail sidebar) ────────────────────────────────────
-function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, groups = [], onClose, onStatusChange, onDelete, onUpdateStudent, onUpdateParent, pricelist, refreshData, canManageBilling = false, canViewComms = true, onCommunicationHandled }) {
+export function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, groups = [], onClose, onStatusChange, onDelete, onUpdateStudent, onUpdateParent, pricelist, refreshData, canManageBilling = false, canViewComms = true, onCommunicationHandled }) {
   if (!student) return null;
   const parentOnly = isParentOnlyLead(student);
   const age = calculateAge(student.birthDate);
   const statusKeys = Object.keys(STATUSES);
+  const navigate = useNavigate();
 
   const [broadcastListDefs, setBroadcastListDefs] = useState([
     { key: 'general', label: 'כללי', description: 'עדכונים שוטפים' },
@@ -387,7 +451,29 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
     } catch { /* ignore */ }
   }, [student.id]);
 
-  const toggleFolder = (id) => setOpenFolder((cur) => (cur === id ? null : id));
+  // Opening a folder collapses the previous one, which used to shift the whole
+  // column. We remember where the clicked header sat and put it back after the
+  // re-render, so the page stays still under the cursor.
+  const foldersScrollRef = useRef(null);
+  const folderAnchorRef = useRef(null);
+
+  const toggleFolder = (id) => {
+    const container = foldersScrollRef.current;
+    const row = container?.querySelector(`[data-folder-id="${id}"]`);
+    folderAnchorRef.current = row ? { id, top: row.getBoundingClientRect().top } : null;
+    setOpenFolder((cur) => (cur === id ? null : id));
+  };
+
+  useLayoutEffect(() => {
+    const anchor = folderAnchorRef.current;
+    folderAnchorRef.current = null;
+    const container = foldersScrollRef.current;
+    if (!anchor || !container) return;
+    const row = container.querySelector(`[data-folder-id="${anchor.id}"]`);
+    if (!row) return;
+    const drift = row.getBoundingClientRect().top - anchor.top;
+    if (drift) container.scrollTop += drift;
+  }, [openFolder]);
 
   useEffect(() => {
     fetch('/api/health-declarations')
@@ -576,6 +662,10 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
   const [billingLink, setBillingLink] = useState('');
   const [lastInvoice, setLastInvoice] = useState(null);
   const [studentPayments, setStudentPayments] = useState([]);
+  const [paymentMenuId, setPaymentMenuId] = useState(null);
+  const [paymentBusyKey, setPaymentBusyKey] = useState('');
+  const [paymentActionError, setPaymentActionError] = useState('');
+  const [paymentActionOk, setPaymentActionOk] = useState('');
 
   // Level Test Fields
   const [testLevel, setTestLevel] = useState('5A');
@@ -592,17 +682,98 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [activityHistory, setActivityHistory] = useState([]);
   const [activityHistoryLoading, setActivityHistoryLoading] = useState(false);
+  const [activityDayBusy, setActivityDayBusy] = useState('');
+  const [activityDayError, setActivityDayError] = useState('');
   const [customerPasses, setCustomerPasses] = useState([]);
   const [passesLoading, setPassesLoading] = useState(false);
   const [punchingId, setPunchingId] = useState(null);
   const [passPunches, setPassPunches] = useState({});
+  const [openPunchLog, setOpenPunchLog] = useState('');
+  const [cancellingPunchId, setCancellingPunchId] = useState('');
   const [equipmentItems, setEquipmentItems] = useState([]);
   const [equipmentLoading, setEquipmentLoading] = useState(false);
   const [equipmentBusyId, setEquipmentBusyId] = useState('');
   const [equipmentMsg, setEquipmentMsg] = useState('');
   const [equipmentLink, setEquipmentLink] = useState('');
   const [equipmentEditId, setEquipmentEditId] = useState('');
+  const [coupons, setCoupons] = useState([]);
+  const [couponsLoading, setCouponsLoading] = useState(false);
+  const [couponBusyId, setCouponBusyId] = useState('');
+  const [showIssueCoupon, setShowIssueCoupon] = useState(false);
+  const [couponDraft, setCouponDraft] = useState({ ...EMPTY_COUPON_DRAFT });
+  const [couponError, setCouponError] = useState('');
   const showEquipment = !parentOnly && !student.isAdult;
+
+  // Benefits follow the family: a campaign issues against the customer card,
+  // manual ones may be tied to one trainee.
+  const refreshCoupons = async () => {
+    const params = new URLSearchParams();
+    if (parent?.id) params.set('parentId', parent.id);
+    if (!parentOnly && student?.id) params.set('studentId', student.id);
+    if (!params.toString()) {
+      setCoupons([]);
+      return;
+    }
+    setCouponsLoading(true);
+    try {
+      const data = await fetch(`/api/coupons?${params}`).then((r) => (r.ok ? r.json() : []));
+      setCoupons(Array.isArray(data) ? data : []);
+    } catch {
+      setCoupons([]);
+    } finally {
+      setCouponsLoading(false);
+    }
+  };
+
+  const handleIssueCoupon = async () => {
+    setCouponError('');
+    setCouponBusyId('issue');
+    try {
+      const res = await fetch('/api/coupons', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parentId: parent?.id || null,
+          studentId: parentOnly ? null : student?.id || null,
+          offer: {
+            type: couponDraft.type,
+            value: Number(couponDraft.value) || 0,
+            units: Number(couponDraft.units) || 1,
+            validityDays: Number(couponDraft.validityDays) || 30,
+            // An untyped name still reads correctly, so nobody ends up with a
+            // benefit called "50% הנחה" when it only covers one product.
+            label: couponDraft.label.trim() || suggestedCouponLabel(couponDraft, pricelist),
+            appliesTo: couponDraft.pricelistId ? 'items' : 'all',
+            pricelistIds: couponDraft.pricelistId ? [String(couponDraft.pricelistId)] : [],
+          },
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'הנפקת ההטבה נכשלה');
+      setShowIssueCoupon(false);
+      setCouponDraft({ ...EMPTY_COUPON_DRAFT });
+      await refreshCoupons();
+    } catch (err) {
+      setCouponError(err.message);
+    } finally {
+      setCouponBusyId('');
+    }
+  };
+
+  const handleCancelCoupon = async (coupon) => {
+    if (!window.confirm(`לבטל את ההטבה ${coupon.code}?`)) return;
+    setCouponBusyId(coupon.id);
+    try {
+      await fetch(`/api/coupons/${coupon.id}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'בוטל מתיק הלקוח' }),
+      });
+      await refreshCoupons();
+    } finally {
+      setCouponBusyId('');
+    }
+  };
 
   const refreshPasses = async () => {
     if (parentOnly || !student?.id) {
@@ -719,6 +890,14 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
     return () => { cancelled = true; };
   }, [parentOnly, student.id]);
 
+  // Keep the dossier in sync after an inline status edit, so the absence
+  // streak above the folders reflects the change without a reload.
+  const handleAttendanceStatusSaved = (rowId, status, savedRow) => {
+    setAttendanceHistory((prev) => prev.map((row) => (
+      row.id === rowId ? { ...row, ...(savedRow || {}), status } : row
+    )));
+  };
+
   useEffect(() => {
     if (parentOnly || !student?.id) {
       setActivityHistory([]);
@@ -740,9 +919,41 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
     return () => { cancelled = true; };
   }, [parentOnly, student.id]);
 
+  // Marking a day here writes the same row the activity's attendance list does.
+  const markActivityDay = async (row, date, status) => {
+    setActivityDayBusy(`${row.id}|${date}`);
+    setActivityDayError('');
+    try {
+      await saveActivityAttendance([{
+        activity_id: row.activity_id,
+        registration_id: row.id,
+        date,
+        status,
+      }]);
+      setActivityHistory((prev) => prev.map((item) => (
+        item.id === row.id
+          ? { ...item, days: (item.days || []).map((day) => (day.date === date ? { ...day, status } : day)) }
+          : item
+      )));
+    } catch (err) {
+      setActivityDayError(err.message || 'שמירת הנוכחות נכשלה');
+    } finally {
+      setActivityDayBusy('');
+    }
+  };
+
   useEffect(() => {
     refreshPasses();
+    setOpenPunchLog('');
+    setPassPunches({});
   }, [parentOnly, student.id]);
+
+  useEffect(() => {
+    refreshCoupons();
+    setShowIssueCoupon(false);
+    setCouponError('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parentOnly, student.id, parent?.id]);
 
   const handlePunchPass = async (passId) => {
     if (!window.confirm('לנקב כניסה אחת מהכרטיסייה?')) return;
@@ -756,8 +967,8 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'ניקוב נכשל');
       await refreshPasses();
-      const punches = await fetch(`/api/pos/passes/${passId}/punches`).then((r) => (r.ok ? r.json() : []));
-      setPassPunches((prev) => ({ ...prev, [passId]: punches }));
+      await reloadPassPunches(passId);
+      setOpenPunchLog(passId);
     } catch (err) {
       alert(err.message || 'ניקוב נכשל');
     } finally {
@@ -765,10 +976,38 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
     }
   };
 
-  const loadPassPunches = async (passId) => {
-    if (passPunches[passId]) return;
+  const reloadPassPunches = async (passId) => {
     const punches = await fetch(`/api/pos/passes/${passId}/punches`).then((r) => (r.ok ? r.json() : []));
     setPassPunches((prev) => ({ ...prev, [passId]: punches }));
+  };
+
+  const togglePassPunches = async (passId) => {
+    if (openPunchLog === passId) {
+      setOpenPunchLog('');
+      return;
+    }
+    setOpenPunchLog(passId);
+    if (!passPunches[passId]) await reloadPassPunches(passId);
+  };
+
+  const handleCancelPunch = async (passId, punchId) => {
+    if (!window.confirm('לבטל את הניקוב ולהחזיר כניסה אחת לכרטיסייה?')) return;
+    setCancellingPunchId(punchId);
+    try {
+      const res = await fetch(`/api/pos/passes/${passId}/punches/${punchId}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'בוטל מתיק הלקוח' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'ביטול הניקוב נכשל');
+      await refreshPasses();
+      await reloadPassPunches(passId);
+    } catch (err) {
+      alert(err.message || 'ביטול הניקוב נכשל');
+    } finally {
+      setCancellingPunchId('');
+    }
   };
 
   // Fetch student level tests history
@@ -1014,6 +1253,98 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
     if (canManageBilling) loadStudentPayments();
   }, [canManageBilling, student.id, parent?.id]);
 
+  useEffect(() => {
+    setPaymentMenuId(null);
+    setPaymentActionError('');
+    setPaymentActionOk('');
+  }, [student.id, parent?.id]);
+
+  const downloadPaymentInvoice = async (payment, kind = 'charge') => {
+    const key = `${payment.id}:download:${kind}`;
+    setPaymentBusyKey(key);
+    setPaymentActionError('');
+    setPaymentActionOk('');
+    try {
+      const res = await fetch(
+        `/api/payments/${encodeURIComponent(payment.id)}/invoice?kind=${encodeURIComponent(kind)}`
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'הורדת המסמך נכשלה');
+      }
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const disposition = res.headers.get('Content-Disposition') || '';
+      const match = disposition.match(/filename="([^"]+)"/);
+      link.href = objectUrl;
+      link.download = match?.[1] || (kind === 'refund' ? 'refund.pdf' : 'invoice.pdf');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+      setPaymentActionOk(kind === 'refund' ? 'מסמך הזיכוי הורד' : 'החשבונית הורדה');
+    } catch (err) {
+      setPaymentActionError(err.message || 'הורדת המסמך נכשלה');
+    } finally {
+      setPaymentBusyKey('');
+    }
+  };
+
+  const sendPaymentInvoice = async (payment, kind = 'charge') => {
+    const key = `${payment.id}:send:${kind}`;
+    setPaymentBusyKey(key);
+    setPaymentActionError('');
+    setPaymentActionOk('');
+    try {
+      const res = await fetch(`/api/payments/${encodeURIComponent(payment.id)}/send-invoice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'שליחת המסמך נכשלה');
+      setPaymentActionOk(
+        kind === 'refund' ? 'מסמך הזיכוי נשלח בוואטסאפ' : 'החשבונית נשלחה בוואטסאפ'
+      );
+    } catch (err) {
+      setPaymentActionError(err.message || 'שליחת המסמך נכשלה');
+    } finally {
+      setPaymentBusyKey('');
+    }
+  };
+
+  const refundPayment = async (payment) => {
+    const amountText = `₪${Number(payment.amount || 0).toLocaleString()}`;
+    const ok = window.confirm(
+      `לזכות את התשלום "${payment.description || 'תשלום'}" על ${amountText}?\n` +
+        'המסמך יבוטל במערכת החיוב, ואם החיוב היה באשראי — הכסף יוחזר לכרטיס.'
+    );
+    if (!ok) return;
+    const reason = window.prompt('סיבת הזיכוי (לא חובה):', '') ?? '';
+    const key = `${payment.id}:refund`;
+    setPaymentBusyKey(key);
+    setPaymentActionError('');
+    setPaymentActionOk('');
+    try {
+      const res = await fetch(`/api/payments/${encodeURIComponent(payment.id)}/refund`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'הזיכוי נכשל');
+      setPaymentActionOk(`הזיכוי בוצע${data.cancellation?.docnum ? ` · מסמך ${data.cancellation.docnum}` : ''}`);
+      setPaymentMenuId(null);
+      await loadStudentPayments();
+      refreshData?.();
+    } catch (err) {
+      setPaymentActionError(err.message || 'הזיכוי נכשל');
+    } finally {
+      setPaymentBusyKey('');
+    }
+  };
+
   const handleSendPayment = async (e) => {
     e.preventDefault();
     if (!billAmount || !billDescription) return;
@@ -1153,7 +1484,32 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
     ? 'לא משויך'
     : studentGroups.length === 1
       ? `${studentGroups[0].name}${studentGroups[0].day != null ? ` · יום ${studentGroups[0].day}` : ''}`
-      : `${studentGroups.length} חוגים`;
+      : (
+        // More than one group — flag it so the staff notices the double assignment
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span
+            title="המתאמן משובץ ליותר מחוג אחד"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 15,
+              height: 15,
+              borderRadius: '50%',
+              background: 'rgba(251,191,36,0.18)',
+              border: '1px solid rgba(251,191,36,0.5)',
+              color: '#FBBF24',
+              fontSize: 10,
+              fontWeight: 800,
+              lineHeight: 1,
+              flexShrink: 0,
+            }}
+          >
+            !
+          </span>
+          {`${studentGroups.length} חוגים`}
+        </span>
+      );
   const activePasses = customerPasses.filter((p) => p.status === 'active').length;
   const passesSummary = passesLoading
     ? 'טוען...'
@@ -1162,6 +1518,14 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
       : customerPasses.length === 0
         ? 'אין מנוי או כרטיסייה'
         : 'אין פעילים';
+  const activeCoupons = coupons.filter((c) => c.state === 'active');
+  const couponsSummary = couponsLoading
+    ? 'טוען...'
+    : activeCoupons.length > 0
+      ? `${activeCoupons.length} בתוקף`
+      : coupons.length === 0
+        ? 'אין הטבות'
+        : 'אין בתוקף';
   const equipmentUnpaid = equipmentItems.filter((i) => i.payment_status !== 'paid').length;
   const equipmentAwaiting = equipmentItems.filter(
     (i) => i.payment_status === 'paid' && i.fulfillment_status !== 'given'
@@ -1189,6 +1553,8 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
   const paymentsSummary = studentPayments.length === 0
     ? 'אין תשלומים'
     : `${studentPayments.length} רשומות`;
+  // Same client for every row here, so the first one that carries a link wins.
+  const icountClientLink = studentPayments.find((p) => p.icount_client_app_url)?.icount_client_app_url || '';
   const testsSummary = levelTestsHistory.length === 0
     ? 'אין מבחנים'
     : `${levelTestsHistory.length} מבחנים`;
@@ -1295,6 +1661,7 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
           </div>
 
           <div
+            ref={foldersScrollRef}
             style={{
               flex: 1,
               overflowY: 'auto',
@@ -1369,35 +1736,158 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                       >
                         <Send size={13} /> שלח בקשת תשלום
                       </button>
+                      {icountClientLink && (
+                        <a
+                          className="btn btn-ghost btn-sm"
+                          href={icountClientLink}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <ReceiptText size={13} /> תיק הלקוח במערכת החיוב
+                        </a>
+                      )}
                     </div>
+                    {paymentActionError && (
+                      <div className="alert alert-error" style={{ marginBottom: 8, fontSize: 12 }}>
+                        {paymentActionError}
+                      </div>
+                    )}
+                    {paymentActionOk && (
+                      <div className="alert alert-success" style={{ marginBottom: 8, fontSize: 12 }}>
+                        {paymentActionOk}
+                      </div>
+                    )}
                     {studentPayments.length === 0 ? (
                       <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין היסטוריית תשלומים</div>
                     ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 180, overflowY: 'auto', overscrollBehavior: 'contain' }}>
-                        {studentPayments.slice(0, 8).map((p) => (
-                          <div
-                            key={p.id}
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              gap: 8,
-                              fontSize: 12,
-                              padding: '6px 0',
-                              borderBottom: '1px solid var(--border)',
-                            }}
-                          >
-                            <span style={{ color: 'var(--text-2)' }}>
-                              {p.description}
-                              {p.icount_doc_number ? ` · מס׳ ${p.icount_doc_number}` : ''}
-                            </span>
-                            <span>
-                              ₪{Number(p.amount).toLocaleString()}{' '}
-                              <span className={p.status === 'paid' ? 'badge badge-green' : 'badge badge-amber'}>
-                                {p.status === 'paid' ? 'שולם' : p.status === 'pending' ? 'ממתין' : p.status}
-                              </span>
-                            </span>
-                          </div>
-                        ))}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 260, overflowY: 'auto', overscrollBehavior: 'contain' }}>
+                        {studentPayments.slice(0, 8).map((p) => {
+                          const badge = paymentStatusBadge(p.status);
+                          const menuOpen = paymentMenuId === p.id;
+                          const busy = paymentBusyKey.startsWith(`${p.id}:`);
+                          const hasRefundDoc = paymentHasRefundDoc(p);
+                          const canRefund = p.status === 'paid' && !!p.icount_doc_number;
+                          return (
+                            <div
+                              key={p.id}
+                              style={{
+                                fontSize: 12,
+                                padding: '6px 0',
+                                borderBottom: '1px solid var(--border)',
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+                                <span style={{ color: 'var(--text-2)' }}>
+                                  {p.description}
+                                  {p.icount_doc_number ? ` · מס׳ ${p.icount_doc_number}` : ''}
+                                </span>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                                  ₪{Number(p.amount).toLocaleString()}{' '}
+                                  <span className={badge.cls}>{badge.label}</span>
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-xs"
+                                    disabled={busy}
+                                    onClick={() => {
+                                      setPaymentActionError('');
+                                      setPaymentActionOk('');
+                                      setPaymentMenuId(menuOpen ? null : p.id);
+                                    }}
+                                  >
+                                    פעולות <ChevronDown size={12} style={{ transform: menuOpen ? 'rotate(180deg)' : 'none' }} />
+                                  </button>
+                                </span>
+                              </div>
+                              {menuOpen && (
+                                <div
+                                  style={{
+                                    display: 'flex',
+                                    flexWrap: 'wrap',
+                                    gap: 6,
+                                    marginTop: 8,
+                                    padding: 8,
+                                    background: 'var(--bg-2)',
+                                    border: '1px solid var(--border)',
+                                    borderRadius: 8,
+                                  }}
+                                >
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-xs"
+                                    disabled={busy}
+                                    onClick={() => downloadPaymentInvoice(p, 'charge')}
+                                  >
+                                    <Download size={12} />{' '}
+                                    {paymentBusyKey === `${p.id}:download:charge` ? 'מוריד...' : 'הורדת חשבונית'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-xs"
+                                    disabled={busy}
+                                    onClick={() => sendPaymentInvoice(p, 'charge')}
+                                  >
+                                    <Send size={12} />{' '}
+                                    {paymentBusyKey === `${p.id}:send:charge` ? 'שולח...' : 'שליחת חשבונית בוואטסאפ'}
+                                  </button>
+                                  {hasRefundDoc && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-xs"
+                                        disabled={busy}
+                                        onClick={() => downloadPaymentInvoice(p, 'refund')}
+                                      >
+                                        <Download size={12} />{' '}
+                                        {paymentBusyKey === `${p.id}:download:refund` ? 'מוריד...' : 'הורדת מסמך זיכוי'}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-xs"
+                                        disabled={busy}
+                                        onClick={() => sendPaymentInvoice(p, 'refund')}
+                                      >
+                                        <Send size={12} />{' '}
+                                        {paymentBusyKey === `${p.id}:send:refund` ? 'שולח...' : 'שליחת מסמך זיכוי'}
+                                      </button>
+                                    </>
+                                  )}
+                                  {canRefund && (
+                                    <button
+                                      type="button"
+                                      className="btn btn-danger btn-xs"
+                                      disabled={busy}
+                                      onClick={() => refundPayment(p)}
+                                    >
+                                      <History size={12} />{' '}
+                                      {paymentBusyKey === `${p.id}:refund` ? 'מזכה...' : 'זיכוי מלא'}
+                                    </button>
+                                  )}
+                                  {p.icount_doc_app_url && (
+                                    <a
+                                      className="btn btn-ghost btn-xs"
+                                      href={p.icount_doc_app_url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      title="לזיכוי חלקי — פותחים את המסמך במערכת החיוב"
+                                    >
+                                      <ReceiptText size={12} /> פתח מסמך במערכת החיוב
+                                    </a>
+                                  )}
+                                  {!canRefund && p.status === 'paid' && (
+                                    <span style={{ fontSize: 11, color: 'var(--text-3)', alignSelf: 'center' }}>
+                                      אין מספר מסמך במערכת החיוב — זיכוי אוטומטי לא זמין
+                                    </span>
+                                  )}
+                                  {p.icount_doc_app_url && p.status === 'paid' && (
+                                    <div style={{ fontSize: 11, color: 'var(--text-3)', width: '100%' }}>
+                                      זיכוי חלקי נעשה במערכת החיוב. הסטטוס כאן יישאר „שולם” עד שתזכה את התשלום גם מכאן.
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </FolderRow>
@@ -1940,7 +2430,27 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         {studentGroups.map((g) => (
                           <div key={g.id}>
-                            <div style={{ fontWeight: 700 }}>{g.name}</div>
+                            <button
+                              type="button"
+                              onClick={() => navigate(`/schedule?group=${encodeURIComponent(g.id)}`)}
+                              title="פתיחת החוג בלוח החוגים"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 5,
+                                padding: 0,
+                                background: 'none',
+                                border: 'none',
+                                font: 'inherit',
+                                fontWeight: 700,
+                                color: 'var(--text-1)',
+                                cursor: 'pointer',
+                                textAlign: 'right',
+                              }}
+                            >
+                              <span style={{ textDecoration: 'underline', textUnderlineOffset: 3 }}>{g.name}</span>
+                              <ChevronLeft size={13} style={{ opacity: 0.6, flexShrink: 0 }} />
+                            </button>
                             <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
                               יום {g.day} בשעה {g.time}
                             </div>
@@ -1999,6 +2509,14 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                                 {isPunch ? 'כרטיסייה' : 'מנוי'} · {statusLabel}
                                 {pass.valid_until ? ` · עד ${pass.valid_until}` : ''}
                               </div>
+                              {/* Bought under a benefit — must be obvious before anyone credits it */}
+                              {passDiscountNote(pass) && (
+                                <div style={{ marginTop: 4 }}>
+                                  <span className="badge badge-amber" style={{ fontSize: 10 }}>
+                                    <Gift size={10} /> {passDiscountNote(pass)}
+                                  </span>
+                                </div>
+                              )}
                               {isPunch && (
                                 <div style={{ marginTop: 4, fontSize: 14, fontWeight: 800, color: remaining > 0 ? 'var(--green)' : 'var(--red)' }}>
                                   נשארו {remaining} מתוך {totalVisits}
@@ -2020,19 +2538,40 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                             type="button"
                             className="btn btn-ghost btn-xs"
                             style={{ marginTop: 4, fontSize: 11 }}
-                            onClick={() => loadPassPunches(pass.id)}
+                            onClick={() => togglePassPunches(pass.id)}
                           >
-                            היסטוריית ניקובים
+                            {openPunchLog === pass.id ? 'סגירת היסטוריית ניקובים' : 'היסטוריית ניקובים'}
                           </button>
-                          {Array.isArray(passPunches[pass.id]) && passPunches[pass.id].length > 0 && (
-                            <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-3)' }}>
-                              {passPunches[pass.id].slice(0, 5).map((p) => (
-                                <div key={p.id}>
-                                  {new Date(p.punched_at).toLocaleString('he-IL')} · נשאר {p.visits_after}
-                                  {p.punched_by ? ` · ${p.punched_by}` : ''}
-                                </div>
-                              ))}
-                            </div>
+                          {openPunchLog === pass.id && Array.isArray(passPunches[pass.id]) && (
+                            passPunches[pass.id].length === 0 ? (
+                              <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-3)' }}>עדיין לא נוקבה כניסה</div>
+                            ) : (
+                              <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-3)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                {passPunches[pass.id].slice(0, 10).map((p) => (
+                                  <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <span style={{ textDecoration: p.cancelled_at ? 'line-through' : 'none' }}>
+                                      {new Date(p.punched_at).toLocaleString('he-IL')} · נשאר {p.visits_after}
+                                      {p.punched_by ? ` · ${p.punched_by}` : ''}
+                                    </span>
+                                    {p.cancelled_at ? (
+                                      <span className="badge badge-gray" style={{ fontSize: 10 }}>
+                                        בוטל{p.cancelled_by ? ` · ${p.cancelled_by}` : ''}
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-xs"
+                                        style={{ fontSize: 10, color: 'var(--red)' }}
+                                        disabled={cancellingPunchId === p.id}
+                                        onClick={() => handleCancelPunch(pass.id, p.id)}
+                                      >
+                                        {cancellingPunchId === p.id ? 'מבטל...' : 'ביטול כניסה'}
+                                      </button>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )
                           )}
                         </div>
                       );
@@ -2041,6 +2580,199 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                 )}
               </FolderRow>
             )}
+
+            {/* Coupons folder — benefits from campaigns, or issued by hand */}
+            <FolderRow
+              id="coupons"
+              title="הטבות וקופונים"
+              icon={Gift}
+              summary={couponsSummary}
+              summaryColor={activeCoupons.length > 0 ? 'var(--green)' : undefined}
+              open={openFolder === 'coupons'}
+              onToggle={toggleFolder}
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {couponsLoading ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען...</div>
+                ) : coupons.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                    עדיין אין הטבות. אפשר להנפיק אחת ידנית, או שקמפיין ינפיק לבד.
+                  </div>
+                ) : (
+                  coupons.map((coupon) => (
+                    <div key={coupon.id} style={{ borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 700, fontSize: 13 }}>{coupon.label}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+                            קוד <strong style={{ fontFamily: 'monospace' }}>{coupon.code}</strong>
+                            {coupon.expires_at
+                              ? coupon.state === 'expired'
+                                ? ` · פג ב-${coupon.expires_at}`
+                                : ` · בתוקף עד ${coupon.expires_at}`
+                              : ''}
+                            {coupon.state === 'active' && coupon.days_left != null
+                              ? ` · עוד ${coupon.days_left} ימים`
+                              : ''}
+                          </div>
+                          {/* When it was used and for how much — the detail a refund needs */}
+                          {coupon.state === 'redeemed' && (
+                            <div style={{ fontSize: 11, color: 'var(--green)', marginTop: 2 }}>
+                              מומש{coupon.redeemed_at ? ` ב-${new Date(coupon.redeemed_at).toLocaleDateString('he-IL')}` : ''}
+                              {coupon.redeemed_amount != null
+                                ? ` · הנחה של ₪${Number(coupon.redeemed_amount).toLocaleString()}`
+                                : ''}
+                            </div>
+                          )}
+                          {coupon.state === 'cancelled' && coupon.cancelled_reason && (
+                            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+                              {coupon.cancelled_reason}
+                            </div>
+                          )}
+                          <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+                            {coupon.source === 'campaign' ? coupon.campaign_name || 'מקמפיין' : 'הונפק ידנית'}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end', flexShrink: 0 }}>
+                          <span className={COUPON_STATE_BADGE[coupon.state]?.cls || 'badge badge-gray'}>
+                            {COUPON_STATE_BADGE[coupon.state]?.label || coupon.state}
+                          </span>
+                          {coupon.state === 'active' && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs"
+                              style={{ fontSize: 10, color: 'var(--red)' }}
+                              disabled={couponBusyId === coupon.id}
+                              onClick={() => handleCancelCoupon(coupon)}
+                            >
+                              ביטול
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+
+                {activeCoupons.length > 0 && (
+                  <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                    ההטבה תוצע אוטומטית בקופה כשבוחרים את הלקוח הזה.
+                  </div>
+                )}
+
+                {showIssueCoupon ? (
+                  <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <CouponField label="סוג ההטבה">
+                      <select
+                        className="input input-sm"
+                        value={couponDraft.type}
+                        onChange={(e) => setCouponDraft((d) => ({ ...d, type: e.target.value }))}
+                      >
+                        <option value="percent">אחוז הנחה</option>
+                        <option value="amount">סכום הנחה בשקלים</option>
+                        <option value="free_item">פריט חינם</option>
+                        <option value="bogo">אחד פלוס אחד</option>
+                      </select>
+                    </CouponField>
+
+                    {(couponDraft.type === 'percent' || couponDraft.type === 'amount') && (
+                      <CouponField label={couponDraft.type === 'percent' ? 'גובה ההנחה באחוזים' : 'גובה ההנחה בשקלים'}>
+                        <input
+                          className="input input-sm"
+                          type="number"
+                          value={couponDraft.value}
+                          onChange={(e) => setCouponDraft((d) => ({ ...d, value: e.target.value }))}
+                        />
+                      </CouponField>
+                    )}
+
+                    <CouponField
+                      label="על מה ההטבה חלה"
+                      hint={
+                        couponDraft.pricelistId
+                          ? 'ההנחה תינתן רק על המוצר הזה'
+                          : 'ההנחה תינתן על הפריט היקר ביותר בעגלה'
+                      }
+                    >
+                      <select
+                        className="input input-sm"
+                        value={couponDraft.pricelistId}
+                        onChange={(e) => setCouponDraft((d) => ({ ...d, pricelistId: e.target.value }))}
+                      >
+                        <option value="">כל מוצר בעגלה</option>
+                        {(pricelist || [])
+                          .filter((p) => p.active !== false)
+                          .map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.name} · ₪{item.price}
+                            </option>
+                          ))}
+                      </select>
+                    </CouponField>
+
+                    {couponDraft.type !== 'amount' && (
+                      <CouponField label="על כמה פריטים" hint="בדרך כלל אחד">
+                        <input
+                          className="input input-sm"
+                          type="number"
+                          min="1"
+                          value={couponDraft.units}
+                          onChange={(e) => setCouponDraft((d) => ({ ...d, units: e.target.value }))}
+                        />
+                      </CouponField>
+                    )}
+
+                    <CouponField
+                      label="תוקף ההטבה בימים"
+                      hint={couponExpiryPreview(couponDraft.validityDays)}
+                    >
+                      <input
+                        className="input input-sm"
+                        type="number"
+                        min="1"
+                        value={couponDraft.validityDays}
+                        onChange={(e) => setCouponDraft((d) => ({ ...d, validityDays: e.target.value }))}
+                      />
+                    </CouponField>
+
+                    <CouponField label="איך ההטבה תיקרא ללקוח" hint="מופיע בתיק, בהודעה ובקופה">
+                      <input
+                        className="input input-sm"
+                        value={couponDraft.label}
+                        onChange={(e) => setCouponDraft((d) => ({ ...d, label: e.target.value }))}
+                        placeholder={suggestedCouponLabel(couponDraft, pricelist)}
+                      />
+                    </CouponField>
+
+                    <div style={{ fontSize: 11, color: 'var(--text-2)', background: 'rgba(255,255,255,0.04)', borderRadius: 6, padding: 8 }}>
+                      <Gift size={11} />{' '}
+                      {couponDraft.label || suggestedCouponLabel(couponDraft, pricelist)}
+                      {' · '}
+                      {couponExpiryPreview(couponDraft.validityDays) || 'בלי תוקף'}
+                    </div>
+
+                    {couponError && <div style={{ fontSize: 11, color: '#fb7185' }}>{couponError}</div>}
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-xs"
+                        disabled={couponBusyId === 'issue'}
+                        onClick={handleIssueCoupon}
+                      >
+                        {couponBusyId === 'issue' ? 'מנפיק...' : 'הנפקה'}
+                      </button>
+                      <button type="button" className="btn btn-ghost btn-xs" onClick={() => setShowIssueCoupon(false)}>
+                        ביטול
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowIssueCoupon(true)}>
+                    <Gift size={13} /> הנפקת הטבה ידנית
+                  </button>
+                )}
+              </div>
+            </FolderRow>
 
             {/* Equipment folder — kids only */}
             {showEquipment && (
@@ -2232,10 +2964,9 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                 ) : attendanceHistory.length === 0 ? (
                   <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין רשומות נוכחות עדיין</div>
                 ) : (
-                  <AttendanceCalendar
+                  <AttendanceList
                     rows={attendanceHistory}
-                    groups={groups}
-                    group={group}
+                    onStatusSaved={handleAttendanceStatusSaved}
                   />
                 )}
               </FolderRow>
@@ -2256,29 +2987,58 @@ function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, 
                   <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין הרשמות לאירועים עדיין</div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {activityDayError && (
+                      <div className="alert alert-danger" style={{ fontSize: 12 }}>{activityDayError}</div>
+                    )}
                     {activityHistory.map((row) => (
                       <div
                         key={row.id}
                         style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          gap: 10,
                           fontSize: 12,
                           padding: '8px 0',
                           borderBottom: '1px solid var(--border)',
                         }}
                       >
-                        <div>
-                          <div style={{ fontWeight: 700, color: 'var(--text)' }}>{row.activity_name}</div>
-                          <div style={{ color: 'var(--text-3)', marginTop: 2 }}>
-                            {row.date ? new Date(row.date).toLocaleDateString('he-IL') : '—'}
-                            {row.activity_type_label && row.activity_type_label !== row.activity_name
-                              ? ` · ${row.activity_type_label}`
-                              : ''}
-                            {row.location ? ` · ${row.location}` : ''}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+                          <div>
+                            <div style={{ fontWeight: 700, color: 'var(--text)' }}>{row.activity_name}</div>
+                            <div style={{ color: 'var(--text-3)', marginTop: 2 }}>
+                              {row.date ? new Date(row.date).toLocaleDateString('he-IL') : '—'}
+                              {row.activity_type_label && row.activity_type_label !== row.activity_name
+                                ? ` · ${row.activity_type_label}`
+                                : ''}
+                              {row.location ? ` · ${row.location}` : ''}
+                            </div>
                           </div>
+                          <span className="badge badge-gray">{row.status_label || row.status || '—'}</span>
                         </div>
-                        <span className="badge badge-gray">{row.status_label || row.status || '—'}</span>
+
+                        {/* Every day of the activity — a camp gets one line per day. */}
+                        {(row.days || []).length > 0 && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 8 }}>
+                            {row.days.map((day) => (
+                              <div
+                                key={day.date}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  gap: 8,
+                                }}
+                              >
+                                <span style={{ color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
+                                  {activityDayLabel(day.date)}
+                                </span>
+                                <AttendanceToggle
+                                  size="xs"
+                                  status={day.status}
+                                  busy={activityDayBusy === `${row.id}|${day.date}`}
+                                  onMark={(status) => markActivityDay(row, day.date, status)}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -3433,33 +4193,41 @@ export default function Leads({
                         <span style={{ color: 'var(--text-3)' }}>ללא מתאמן רשום</span>
                       ) : (
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                          {namedChildren.map((child) => (
-                            <button
-                              key={child.id}
-                              type="button"
-                              className="btn btn-ghost btn-xs"
-                              style={{
-                                padding: '2px 8px',
-                                border: '1px solid var(--border)',
-                                borderRadius: 999,
-                                fontWeight: 600,
-                              }}
-                              onClick={() => setSelectedStudentId(child.id)}
-                              title={STATUSES[child.status]?.label || child.status}
-                            >
-                              {child.name}
-                              {child.isAdult && (
-                                <span style={{ marginInlineStart: 4, color: 'var(--text-3)', fontWeight: 500, fontSize: 10 }}>
-                                  מבוגר
-                                </span>
-                              )}
-                              {!child.isAdult && namedChildren.length > 1 && (
-                                <span style={{ marginInlineStart: 4, color: 'var(--text-3)', fontWeight: 500, fontSize: 10 }}>
-                                  {STATUSES[child.status]?.label || ''}
-                                </span>
-                              )}
-                            </button>
-                          ))}
+                          {namedChildren.map((child) => {
+                            const st = STATUSES[child.status];
+                            const statusColor = st?.color;
+                            return (
+                              <button
+                                key={child.id}
+                                type="button"
+                                className="btn btn-ghost btn-xs"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 5,
+                                  padding: '2px 8px',
+                                  border: `1px solid ${statusColor ? `${statusColor}66` : 'var(--border)'}`,
+                                  background: statusColor ? `${statusColor}1F` : undefined,
+                                  borderRadius: 999,
+                                  fontWeight: 600,
+                                }}
+                                onClick={() => setSelectedStudentId(child.id)}
+                                title={st?.label || child.status}
+                              >
+                                {child.name}
+                                {child.isAdult && (
+                                  <span style={{ color: 'var(--text-3)', fontWeight: 500, fontSize: 10 }}>
+                                    מבוגר
+                                  </span>
+                                )}
+                                {!child.isAdult && namedChildren.length > 1 && (
+                                  <span style={{ color: statusColor || 'var(--text-3)', fontWeight: 500, fontSize: 10 }}>
+                                    {st?.label || ''}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
                         </div>
                       )}
                     </td>

@@ -2,7 +2,7 @@
 import {
   ShoppingCart, Plus, Minus, Trash2, Search, User,
   Banknote, Link2, FileText, CheckCircle2, X, Percent, Tag,
-  Package, ArrowRight,
+  Package, ArrowRight, Gift,
 } from 'lucide-react';
 import {
   PRODUCT_CATEGORIES,
@@ -72,6 +72,10 @@ export default function PosSale() {
   const [loadError, setLoadError] = useState('');
   const [editingDiscountId, setEditingDiscountId] = useState(null);
   const [discountDraft, setDiscountDraft] = useState({ type: 'percent', value: '' });
+  const [customerCoupons, setCustomerCoupons] = useState([]);
+  const [appliedCoupon, setAppliedCoupon] = useState(null);
+  const [couponError, setCouponError] = useState('');
+  const [couponBusy, setCouponBusy] = useState(false);
   const [showCustomForm, setShowCustomForm] = useState(false);
   const [customDraft, setCustomDraft] = useState({ name: '', price: '', quantity: '1' });
 
@@ -251,14 +255,74 @@ export default function PosSale() {
   const showNewLeadBanner =
     isPendingNewLead && (customerSuggestions.length === 0 || hideSuggestions);
 
-  const total = cart.reduce(
+  const cartTotal = cart.reduce(
     (sum, line) => sum + (Number(line.unitprice) || 0) * (Number(line.quantity) || 1),
     0
   );
+  const couponDiscount = appliedCoupon ? Number(appliedCoupon.discount) || 0 : 0;
+  const total = roundMoney(Math.max(0, cartTotal - couponDiscount));
 
   const needsCustomer = cart.some(
     (line) => line.product_type === 'punch_card' || line.product_type === 'time_membership'
   );
+
+  // Benefits waiting for whoever is at the counter right now.
+  useEffect(() => {
+    setAppliedCoupon(null);
+    setCouponError('');
+    if (!selectedParentId && !selectedStudentId) {
+      setCustomerCoupons([]);
+      return;
+    }
+    const params = new URLSearchParams();
+    if (selectedParentId) params.set('parentId', selectedParentId);
+    if (selectedStudentId) params.set('studentId', selectedStudentId);
+    let cancelled = false;
+    fetch(`/api/pos/coupons?${params}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows) => { if (!cancelled) setCustomerCoupons(Array.isArray(rows) ? rows : []); })
+      .catch(() => { if (!cancelled) setCustomerCoupons([]); });
+    return () => { cancelled = true; };
+  }, [selectedParentId, selectedStudentId]);
+
+  /**
+   * Ask the server what the coupon is worth against this cart. The answer is a
+   * preview only — the sale route recomputes it before the discount is given.
+   */
+  const applyCoupon = async (coupon) => {
+    setCouponBusy(true);
+    setCouponError('');
+    try {
+      const res = await fetch('/api/pos/coupon-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cart,
+          couponId: coupon.id,
+          parentId: selectedParentId || undefined,
+          studentId: selectedStudentId || undefined,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'לא ניתן להשתמש בהטבה');
+      setAppliedCoupon({ id: coupon.id, code: coupon.code, label: coupon.label, discount: body.discount });
+    } catch (err) {
+      setAppliedCoupon(null);
+      setCouponError(err.message);
+    } finally {
+      setCouponBusy(false);
+    }
+  };
+
+  // The cart changed under an applied benefit — re-price it rather than keep a
+  // discount that no longer matches what is being bought.
+  useEffect(() => {
+    if (!appliedCoupon) return;
+    const coupon = customerCoupons.find((c) => c.id === appliedCoupon.id);
+    if (!coupon) return;
+    applyCoupon(coupon);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cart.length, cartTotal]);
 
   const addToCart = (item) => {
     setResult(null);
@@ -504,7 +568,12 @@ export default function PosSale() {
       await runAction('/api/pos/payment-link');
       return;
     }
-    await runAction('/api/pos/sale', { paymentMethod });
+    // A coupon is only honoured on the counter sale: it is consumed the moment
+    // the sale is recorded, which a payment link cannot promise.
+    await runAction('/api/pos/sale', {
+      paymentMethod,
+      couponCode: appliedCoupon?.code || undefined,
+    });
   };
 
   return (
@@ -1113,10 +1182,76 @@ export default function PosSale() {
                   </div>
                 );
               })}
+              {appliedCoupon && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 13, color: 'var(--green)' }}>
+                  <span>הטבה · {appliedCoupon.label} ({appliedCoupon.code})</span>
+                  <span>−₪{couponDiscount.toLocaleString()}</span>
+                </div>
+              )}
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontWeight: 800, fontSize: 18 }}>
                 <span>סה״כ כולל מע״מ</span>
                 <span>₪{total.toLocaleString()}</span>
               </div>
+            </div>
+          )}
+
+          {/* Benefits the selected customer is holding */}
+          {customerCoupons.length > 0 && (
+            <div
+              className="card card-p"
+              style={{ marginTop: 12, borderColor: 'var(--green)', background: 'rgba(52,211,153,0.06)' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, fontSize: 13, marginBottom: 8 }}>
+                <Gift size={14} /> יש ללקוח הטבה
+              </div>
+              {customerCoupons.map((coupon) => {
+                const isApplied = appliedCoupon?.id === coupon.id;
+                return (
+                  <div
+                    key={coupon.id}
+                    style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '5px 0' }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>{coupon.label}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                        קוד {coupon.code} · בתוקף עד {coupon.expires_at}
+                        {coupon.days_left != null ? ` · עוד ${coupon.days_left} ימים` : ''}
+                      </div>
+                    </div>
+                    {isApplied ? (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={() => { setAppliedCoupon(null); setCouponError(''); }}
+                      >
+                        הסרה
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-success btn-xs"
+                        disabled={couponBusy || !cart.length || paymentMethod !== 'cash'}
+                        onClick={() => applyCoupon(coupon)}
+                      >
+                        {couponBusy ? 'בודק...' : 'החלה'}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+              {couponError && (
+                <div style={{ fontSize: 11, color: '#fb7185', marginTop: 6 }}>{couponError}</div>
+              )}
+              {!cart.length && (
+                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
+                  הוסיפו פריט לעגלה כדי להחיל את ההטבה
+                </div>
+              )}
+              {paymentMethod !== 'cash' && (
+                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
+                  הטבה מתקזזת רק במכירה בדלפק. בסליקה בקישור צריך לגבות במחיר מלא.
+                </div>
+              )}
             </div>
           )}
 
@@ -1128,7 +1263,10 @@ export default function PosSale() {
                   key={m.id}
                   type="button"
                   className={`btn btn-sm ${paymentMethod === m.id ? 'btn-primary' : 'btn-ghost'}`}
-                  onClick={() => setPaymentMethod(m.id)}
+                  onClick={() => {
+                    setPaymentMethod(m.id);
+                    if (m.id !== 'cash') setAppliedCoupon(null);
+                  }}
                 >
                   <Icon size={13} /> {m.label}
                 </button>

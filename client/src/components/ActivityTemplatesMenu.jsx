@@ -7,6 +7,14 @@ const CATEGORY_META = {
   ops: { label: 'תפעול', color: '#7DD3FC', hint: 'יום ניקיון, ישיבת צוות ובניית מסלולים' },
 };
 
+// Pseudo-category: drills into the writable Google calendars instead of templates.
+const GOOGLE_CAT = '__google_calendars__';
+const GOOGLE_CAT_META = {
+  label: 'יומני גוגל',
+  color: '#A78BFA',
+  hint: 'אירוע ישירות ביומן חיצוני',
+};
+
 /**
  * Category → template picker.
  * Selecting a template opens a prefilled (unsaved) activity form.
@@ -17,6 +25,8 @@ export default function ActivityTemplatesMenu({
   onApplyTemplate,
   onEditTemplate,
   onCustomEvent,
+  onExternalEvent,
+  externalCalendars = [],
   defaultDate,
   open: controlledOpen,
   onOpenChange,
@@ -106,6 +116,15 @@ export default function ActivityTemplatesMenu({
     })).filter((g) => g.templates.length > 0);
   }, [query, categoryId, filtered, categories]);
 
+  const inGoogleCat = categoryId === GOOGLE_CAT;
+  const showGoogleCat = !!onExternalEvent && externalCalendars.length > 0;
+
+  const filteredCalendars = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return externalCalendars;
+    return externalCalendars.filter((c) => String(c.name || '').toLowerCase().includes(q));
+  }, [externalCalendars, query]);
+
   const pickTemplate = (tpl) => {
     setBusy(tpl.id);
     setMsg('');
@@ -138,6 +157,11 @@ export default function ActivityTemplatesMenu({
   const startCustom = () => {
     setOpen(false);
     onCustomEvent?.(resolveDate());
+  };
+
+  const startExternal = (calendarId) => {
+    setOpen(false);
+    onExternalEvent?.(calendarId, resolveDate());
   };
 
   const dateLabel = defaultDate
@@ -191,16 +215,20 @@ export default function ActivityTemplatesMenu({
             }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-1)' }}>
-                  {categoryId
-                    ? (CATEGORY_META[categoryId]?.label || categories.find((c) => c.id === categoryId)?.label || 'תבניות')
-                    : 'אירוע חדש'}
+                  {inGoogleCat
+                    ? GOOGLE_CAT_META.label
+                    : categoryId
+                      ? (CATEGORY_META[categoryId]?.label || categories.find((c) => c.id === categoryId)?.label || 'תבניות')
+                      : 'אירוע חדש'}
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
-                  {categoryId
-                    ? 'בחרו תבנית לאירוע חדש, או ערכו תבנית קיימת'
-                    : (dateLabel
-                      ? `לתאריך ${dateLabel} — מתבנית שמורה או אירוע ריק`
-                      : 'מתבנית שמורה, או אירוע מותאם ללקוח')}
+                  {inGoogleCat
+                    ? 'בחרו יומן — האירוע ייווצר ישירות בגוגל'
+                    : categoryId
+                      ? 'בחרו תבנית לאירוע חדש, או ערכו תבנית קיימת'
+                      : (dateLabel
+                        ? `לתאריך ${dateLabel} — מתבנית שמורה או אירוע ריק`
+                        : 'מתבנית שמורה, או אירוע מותאם ללקוח')}
                 </div>
               </div>
               <button type="button" className="icon-btn" onClick={() => setOpen(false)} aria-label="סגור">
@@ -218,7 +246,9 @@ export default function ActivityTemplatesMenu({
                   className="input"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder={categoryId ? 'חיפוש בתוך הקטגוריה...' : 'חיפוש בכל הקטגוריות...'}
+                  placeholder={inGoogleCat
+                    ? 'חיפוש יומן...'
+                    : (categoryId ? 'חיפוש בתוך הקטגוריה...' : 'חיפוש בכל הקטגוריות...')}
                   style={{ paddingInlineStart: 32 }}
                 />
               </div>
@@ -279,11 +309,91 @@ export default function ActivityTemplatesMenu({
                       </button>
                     );
                   })}
+
+                  {showGoogleCat && (
+                    <button
+                      type="button"
+                      onClick={() => { setCategoryId(GOOGLE_CAT); setQuery(''); }}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 12,
+                        padding: '14px 14px', borderRadius: 12, cursor: 'pointer',
+                        border: `1px solid ${GOOGLE_CAT_META.color}44`,
+                        background: `${GOOGLE_CAT_META.color}14`,
+                        textAlign: 'right', width: '100%',
+                        color: 'var(--text-1)',
+                      }}
+                    >
+                      <div style={{
+                        width: 10, height: 10, borderRadius: '50%',
+                        background: GOOGLE_CAT_META.color, flexShrink: 0,
+                      }} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 800, fontSize: 14 }}>{GOOGLE_CAT_META.label}</div>
+                        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
+                          {GOOGLE_CAT_META.hint} · {externalCalendars.length} יומנים
+                        </div>
+                      </div>
+                      <ArrowRight size={16} style={{ color: 'var(--text-3)', transform: 'scaleX(-1)' }} />
+                    </button>
+                  )}
+                </>
+              )}
+
+              {/* Inside the Google calendars category */}
+              {inGoogleCat && (
+                <>
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    onClick={() => { setCategoryId(null); setQuery(''); }}
+                    style={{ alignSelf: 'flex-start', marginBottom: 4 }}
+                  >
+                    ← חזרה לקטגוריות
+                  </button>
+                  {filteredCalendars.length === 0 ? (
+                    <div style={{ padding: 16, fontSize: 13, color: 'var(--text-3)' }}>
+                      לא נמצאו יומנים
+                    </div>
+                  ) : (
+                    filteredCalendars.map((cal) => (
+                      <button
+                        key={cal.id}
+                        type="button"
+                        onClick={() => startExternal(cal.id)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          padding: '10px 12px', borderRadius: 10, cursor: 'pointer',
+                          border: '1px solid var(--border)',
+                          background: 'rgba(255,255,255,0.02)',
+                          textAlign: 'right', width: '100%',
+                          color: 'var(--text-1)',
+                          marginBottom: 6,
+                        }}
+                      >
+                        <div style={{
+                          width: 9, height: 9, borderRadius: '50%',
+                          background: cal.backgroundColor || '#94A3B8', flexShrink: 0,
+                        }} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{
+                            fontSize: 13, fontWeight: 700,
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                          }}>
+                            {cal.name}
+                          </div>
+                          <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+                            נשמר ישירות ביומן גוגל — בלי הרשמה או תשלום
+                          </div>
+                        </div>
+                        <Plus size={14} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+                      </button>
+                    ))
+                  )}
                 </>
               )}
 
               {/* Spinner only when content depends on templates (search / category) — not on the category picker itself */}
-              {loading && (categoryId || !!query.trim()) && (
+              {loading && !inGoogleCat && (categoryId || !!query.trim()) && (
                 <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-3)' }}>
                   <Loader2 size={20} className="spin" />
                 </div>
@@ -317,8 +427,8 @@ export default function ActivityTemplatesMenu({
                 )
               )}
 
-              {/* Inside a category */}
-              {categoryId && !loading && (
+              {/* Inside a template category */}
+              {categoryId && !inGoogleCat && !loading && (
                 <>
                   <button
                     type="button"

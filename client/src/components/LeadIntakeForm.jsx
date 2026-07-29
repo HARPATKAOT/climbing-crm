@@ -2,6 +2,26 @@ import React, { useState } from 'react';
 import { CheckCircle, Plus, Trash2 } from 'lucide-react';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 
+/**
+ * Prefill "what are you interested in" when the visitor arrived from a page
+ * that already says it — e.g. the site's birthdays page links to
+ * `/join?interest=event`, so the lead lands tagged instead of blank.
+ */
+const INTEREST_PRESETS = {
+  event: 'יום הולדת / אירוע פרטי',
+  classes: 'חוג טיפוס',
+  trip: 'טיול שטח',
+};
+
+function presetInterest() {
+  try {
+    const key = new URLSearchParams(window.location.search).get('interest');
+    return INTEREST_PRESETS[key] || '';
+  } catch {
+    return '';
+  }
+}
+
 export default function LeadIntakeForm() {
   const { profile } = useBusinessProfile();
   const brandName = profile.display_name || 'הרפתקאות';
@@ -11,7 +31,7 @@ export default function LeadIntakeForm() {
     phone: '',
     email: '',
     city: '',
-    interest: '',
+    interest: presetInterest(),
     children: [''],
   });
   const [isSubmitting, setIsSubmitting] = useState(false);

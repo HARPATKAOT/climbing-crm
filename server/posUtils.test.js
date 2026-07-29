@@ -6,6 +6,7 @@ import {
   pickBestPunchCard,
   isPassUsable,
   computeSaleTotal,
+  passDiscountNote,
   PRODUCT_TYPES,
 } from './posUtils.js';
 
@@ -39,6 +40,42 @@ test('buildPassFromItem creates punch card with remaining visits', () => {
   assert.equal(pass.visits_remaining, 10);
   assert.ok(pass.valid_until);
   assert.equal(pass.status, 'active');
+});
+
+test('a pass bought under a benefit records what was paid, not a renamed product', () => {
+  const pass = buildPassFromItem({
+    item: { id: 'p1', name: 'כרטיסייה 10', product_type: 'punch_card', visits_total: 10 },
+    studentId: 's1',
+    saleId: 'sale1',
+    discount: { listPrice: 400, paidPrice: 200, couponCode: 'ABC123', couponLabel: '50% הנחה' },
+  });
+  // The product name stays clean; the benefit lives in its own fields.
+  assert.equal(pass.name, 'כרטיסייה 10');
+  assert.equal(pass.list_price, 400);
+  assert.equal(pass.paid_price, 200);
+  assert.equal(pass.coupon_code, 'ABC123');
+  assert.equal(pass.coupon_label, '50% הנחה');
+});
+
+test('a pass sold at list price carries no benefit fields or note', () => {
+  const pass = buildPassFromItem({
+    item: { id: 'p1', name: 'כרטיסייה 10', product_type: 'punch_card', visits_total: 10 },
+    studentId: 's1',
+    saleId: 'sale1',
+  });
+  assert.equal(pass.coupon_code, null);
+  assert.equal(pass.list_price, null);
+  assert.equal(passDiscountNote(pass), '');
+});
+
+test('the benefit note spells out what was paid against the list price', () => {
+  assert.equal(
+    passDiscountNote({ coupon_label: '50% הנחה', list_price: 400, paid_price: 200 }),
+    'נקנתה ב50% הנחה · שולם ₪200 במקום ₪400'
+  );
+  // No prices recorded — still say it was a benefit rather than stay silent.
+  assert.equal(passDiscountNote({ coupon_label: 'כניסה חינם' }), 'נקנתה בכניסה חינם');
+  assert.equal(passDiscountNote(null), '');
 });
 
 test('pickBestPunchCard prefers sooner expiry', () => {

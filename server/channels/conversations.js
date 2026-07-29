@@ -11,7 +11,13 @@ import {
 } from './sessionWindow.js';
 import { uploadWhatsAppMedia, getMessengerCredentials, META_GRAPH_VERSION } from './media.js';
 import { whatsappService, instagramService } from '../whatsapp.js';
-import { mergeBotSettings, pauseBotForPhone } from '../whatsappBot.js';
+import {
+  mergeBotSettings,
+  pauseBotForPhone,
+  clearBotPause,
+  optOutPhone,
+  describeBotState,
+} from '../whatsappBot.js';
 import { supa } from '../supa.js';
 import { recordMessage, setMessageStatusByMetaId, toLogRow } from './messageStore.js';
 
@@ -439,6 +445,89 @@ export async function getConversation(parentId) {
     windows,
     channels: channelStatus,
     defaultChannel,
+    bot: describeBotState(parent, mergeBotSettings(db.getSettings())),
+  };
+}
+
+/**
+ * Manual override of the auto-reply bot for one customer.
+ * `mute` is permanent until someone resumes it; `resume` also drops the
+ * automatic pause that a human reply leaves behind.
+ */
+export async function setBotState(parentId, action) {
+  const parent = findParentById(parentId);
+  if (!parent) return { success: false, error: 'הלקוח לא נמצא', status: 404 };
+  if (!parent.phone) return { success: false, error: 'ללקוח אין מספר טלפון', status: 400 };
+
+  if (action === 'mute') {
+    await optOutPhone(parent.phone, true, { source: 'crm' });
+  } else if (action === 'resume') {
+    await optOutPhone(parent.phone, false);
+    await clearBotPause(parent.phone);
+  } else {
+    return { success: false, error: 'פעולה לא מוכרת', status: 400 };
+  }
+
+  const updated = findParentById(parentId) || parent;
+  return {
+    success: true,
+    bot: describeBotState(updated, mergeBotSettings(db.getSettings())),
+  };
+}
+
+/** Newest inbound message on this thread — what a draft reply answers. */
+function lastInboundForTarget(messages, target, parent) {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m.direction !== 'inbound') continue;
+    if ((m.channel || 'whatsapp') !== 'whatsapp') continue;
+    if (target.studentId) {
+      if (String(m.student_id || '') !== String(target.studentId)
+        && !phonesMatch(m.phone, target.phone)) continue;
+    } else if (m.student_id && !phonesMatch(parent?.phone, m.phone)) {
+      continue;
+    }
+    if (String(m.message || '').trim()) return m;
+  }
+  return null;
+}
+
+/**
+ * Draft a reply without sending anything. Same generator the bot uses, so the
+ * text obeys the same rules — but a human reads it before the customer does.
+ */
+export async function draftReply(parentId, payload = {}) {
+  const parent = findParentById(parentId);
+  if (!parent) return { success: false, error: 'הלקוח לא נמצא', status: 404 };
+
+  const students = studentsForParent(parent.id);
+  const target = resolveReplyTarget(parent, students, payload);
+  if (target.error) return { success: false, error: target.error, status: target.status || 400 };
+
+  const messages = annotateMessages(mergeThread(parent), parent, students);
+  const inbound = lastInboundForTarget(messages, target, parent);
+  if (!inbound) {
+    return { success: false, error: 'אין הודעה נכנסת מהלקוח לענות עליה', status: 400 };
+  }
+
+  const incoming = String(inbound.message || '').trim();
+  const result = await whatsappService.generateAIResponse(incoming, {
+    phone: target.phone || parent.phone,
+    parent,
+    students: target.student ? [target.student, ...students] : students,
+    preferModel: true,
+  });
+
+  const text = String(result?.text || '').trim();
+  if (!text) return { success: false, error: 'לא הצלחתי לנסח תשובה', status: 502 };
+
+  return {
+    success: true,
+    text,
+    // `handoff` means the generator wanted a human anyway — worth flagging.
+    unsure: !!(result?.unsure || result?.handoff),
+    confidence: result?.confidence || 'low',
+    basedOn: { message: incoming, at: inbound.created_at || null },
   };
 }
 

@@ -3,7 +3,17 @@ import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { buildTemplateParameters } from './channels/templates.js';
 import { recordMessage, recordMessageDurable, findMessageByMetaId } from './channels/messageStore.js';
 import { automationsService } from './automations.js';
+import { israelDateStr, israelHour } from './attendanceUtils.js';
+import {
+  HISTORY_MESSAGES,
+  analysisAllowed,
+  analyzeConversation,
+  loadAssistantSettings,
+  selectSweepCandidates,
+  suggestionsAutoEnabled,
+} from './aiActions.js';
 import { israelClockParts, isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
+import { DEFAULT_BUSINESS_PROFILE } from './businessProfile.js';
 import {
   enrichGroupsWithCapacity,
   spotsLeft,
@@ -29,6 +39,8 @@ import {
   clipReply,
   sleep,
   buildAiExtraContext,
+  buildParentCardContext,
+  getConversationHistory,
   parseAiReply,
   detectUnsureHeuristic,
   interactiveMenuPayload,
@@ -264,7 +276,7 @@ function buildHeuristicReply(incomingText, settings = {}) {
   const menuPick = normalizeMenuChoice(raw);
 
   const healthUrl = (s.aiBusinessFacts || '').match(/https?:\/\/\S+health\S*/i)?.[0]
-    || 'https://client-omega-topaz-35.vercel.app/health';
+    || 'https://app.kirboaz.co.il/health';
   const healthReply = `היי! ✍️\nהנה קישור להצהרת הבריאות:\n${healthUrl}\n\nאחרי החתימה המערכת מתעדכנת אוטומטית 🧗`;
   const matchedGroups = findGroupsForText(raw);
   const sourceGroups = matchedGroups.length ? matchedGroups : (db.get('groups') || []).slice(0, 12);
@@ -430,11 +442,12 @@ async function callGeminiReply(systemPrompt, crmText, incomingText, apiKey, sett
   const s = mergeBotSettings(settings);
   const brand = s.brandName || 'הרפתקאות';
   const healthUrl = (s.aiBusinessFacts || '').match(/https?:\/\/\S+health\S*/i)?.[0]
-    || 'https://client-omega-topaz-35.vercel.app/health';
+    || 'https://app.kirboaz.co.il/health';
+  // ראה ההערה ב-aiActions.js: גרסאות נעוצות נסגרות בלי התראה ושורפות בקשות.
   const models = [
-    process.env.GEMINI_MODEL || 'gemini-2.5-flash',
-    'gemini-2.0-flash',
-    'gemini-flash-latest',
+    process.env.GEMINI_MODEL || 'gemini-flash-latest',
+    'gemini-3.6-flash',
+    'gemini-3.5-flash',
   ];
   let lastError = '';
   for (const model of models) {
@@ -485,6 +498,89 @@ ${crmText}
   }
   if (lastError) console.error('Gemini API call failed, falling back to heuristics:', lastError);
   return null;
+}
+
+/**
+ * מנתח שיחה ומייצר הצעות פעולה לצוות (תור אישורים, לא ביצוע).
+ * `auto` = הפעלה אוטומטית מהודעה נכנסת; היא כפופה לדגל הסביבה ולקירור.
+ */
+export async function runConversationAnalysis(phone, { parent, students, auto = false } = {}) {
+  try {
+    const normalizedPhone = formatWaPhone(phone) || phone;
+    const assistant = loadAssistantSettings(db);
+    if (auto) {
+      if (!suggestionsAutoEnabled(assistant)) return { created: [], skipped: 0, reason: 'disabled' };
+      const cooldownMs = Number(assistant.cooldown_minutes) * 60000;
+      if (!analysisAllowed(normalizedPhone, { cooldownMs })) {
+        return { created: [], skipped: 0, reason: 'cooldown' };
+      }
+    } else if (!assistant.enabled) {
+      return { created: [], skipped: 0, reason: 'disabled' };
+    }
+
+    const card = parent || findPrimaryParent(normalizedPhone);
+    const kids = students || studentsForParent(card);
+    const settings = await loadBrandedBotSettings();
+
+    return await analyzeConversation({
+      db,
+      persist: persistCore,
+      parent: card,
+      students: kids,
+      history: getConversationHistory(normalizedPhone, HISTORY_MESSAGES),
+      cardContext: buildParentCardContext(card, kids),
+      phone: normalizedPhone,
+      brandName: settings.brandName || '',
+    });
+  } catch (err) {
+    console.error('runConversationAnalysis failed:', err.message);
+    return { created: [], skipped: 0, reason: 'error' };
+  }
+}
+
+/**
+ * סריקה לילית של שיחות ששקטו. הניתוח האוטומטי רץ רק על הודעה נכנסת, ולכן
+ * שיחה שהצוות דיבר בה אחרון לא נבדקת לעולם — כאן סוגרים את הפער.
+ * הקריאות מרווחות כדי לא להיתקל במגבלת הקצב של המודל.
+ */
+export async function runNightlySweep({ force = false, spacingMs = 2000 } = {}) {
+  const settings = loadAssistantSettings(db);
+  if (!settings.enabled) return { ran: false, reason: 'disabled', analyzed: 0, created: 0 };
+  if (!force && !settings.nightly_sweep) return { ran: false, reason: 'sweep_off', analyzed: 0, created: 0 };
+
+  const phones = selectSweepCandidates(db, {
+    quietHours: settings.nightly_quiet_hours,
+    lookbackDays: settings.nightly_lookback_days,
+    max: settings.nightly_max_conversations,
+  });
+
+  let created = 0;
+  let analyzed = 0;
+  for (const phone of phones) {
+    const result = await runConversationAnalysis(phone, { auto: false });
+    created += (result.created || []).length;
+    analyzed += 1;
+    if (spacingMs) await sleep(spacingMs);
+  }
+
+  console.log(`🧠 Nightly sweep: ${analyzed} conversation(s) analysed, ${created} suggestion(s) created`);
+  return { ran: true, reason: 'ok', analyzed, created, candidates: phones.length };
+}
+
+/** פעם ביום לפי שעון ישראל, באותה תבנית של האוטומציות. */
+let lastSweepDate = null;
+export async function runNightlySweepIfDue(hour = 3) {
+  try {
+    const today = israelDateStr();
+    if (lastSweepDate === today) return null;
+    if (israelHour() < hour) return null;
+    lastSweepDate = today;
+    return await runNightlySweep();
+  } catch (err) {
+    console.error('Nightly sweep failed:', err.message);
+    lastSweepDate = null;
+    return null;
+  }
 }
 
 // Call Meta WhatsApp Cloud API
@@ -676,8 +772,8 @@ export const whatsappService = {
           preview = preview.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), p.text);
         });
         logMessage = preview;
-      } else if (templateName === 't1') logMessage = `שלום! ברוכים הבאים לקיר הטיפוס My Wall 🧗‍♂️`;
-      else if (templateName === 't2') logMessage = `שלום, בבקשה מלאו את הצהרת הבריאות לפני הגעתכם: https://client-omega-topaz-35.vercel.app/health`;
+      } else if (templateName === 't1') logMessage = `שלום! ברוכים הבאים לקיר הטיפוס ${DEFAULT_BUSINESS_PROFILE.display_name} 🧗‍♂️`;
+      else if (templateName === 't2') logMessage = `שלום, בבקשה מלאו את הצהרת הבריאות לפני הגעתכם: https://app.kirboaz.co.il/health`;
       else if (templateName === 't3') logMessage = `שלום, תזכורת: שיעור שלכם מחר. נתראה!`;
       else if (templateName === 't4') logMessage = `שלום, לסיום תהליך הרשמה בבקשה שלמו את אימון ההכירות בקליק: https://app.icount.co.il/m/9a79f`;
 
@@ -747,19 +843,24 @@ export const whatsappService = {
     const parent = context.parent || (phone ? findPrimaryParent(phone) : null);
     const students = context.students || (parent ? studentsForParent(parent) : []);
 
+    const systemPrompt = settings.aiSystemPrompt;
+    const apiKey = process.env.GEMINI_API_KEY;
+    const hasModel = !!apiKey && apiKey !== 'YOUR_GEMINI_API_KEY_HERE';
+
     const quick = buildHeuristicReply(incomingText, settings);
     if (quick.handoff) {
       return { text: quick.text, handoff: true, confidence: 'high' };
     }
-    if (quick.confidence === 'high') {
+    // A canned answer is a fair trade for an autonomous reply, but a human who
+    // asked for a draft wants the model to actually read the question.
+    const skipCanned = !!context.preferModel && hasModel;
+    if (quick.confidence === 'high' && !skipCanned) {
       return { text: clipReply(quick.text, settings.aiMaxReplyChars), confidence: 'high', startIntake: !!quick.startIntake };
     }
 
-    const systemPrompt = settings.aiSystemPrompt;
-    const apiKey = process.env.GEMINI_API_KEY;
     const crm = buildCrmBotContext(settings, { phone, parent, students });
 
-    if (apiKey && apiKey !== 'YOUR_GEMINI_API_KEY_HERE') {
+    if (hasModel) {
       const geminiText = await callGeminiReply(systemPrompt, crm.text, incomingText, apiKey, settings);
       if (geminiText) {
         const parsed = parseAiReply(geminiText, settings);
@@ -899,6 +1000,12 @@ export const whatsappService = {
     let students = studentsForParent(parent);
     const settings = await loadBrandedBotSettings();
 
+    // הצעות פעולה לצוות — רקע בלבד, לעולם לא מעכב את התשובה ללקוח.
+    if (text && !isSimulator) {
+      Promise.resolve(runConversationAnalysis(normalizedPhone, { parent, students, auto: true }))
+        .catch((err) => console.error('AI suggestion analysis failed:', err.message));
+    }
+
     // 4. Welcome template + automations only while the bot is enabled
     if (isBotEnabled(settings) && isNew) {
       try {
@@ -936,7 +1043,7 @@ export const whatsappService = {
     }
 
     if (gate.action === 'opt_out') {
-      await optOutPhone(normalizedPhone, true);
+      await optOutPhone(normalizedPhone, true, { source: 'customer' });
       await whatsappService.sendBotReply(normalizedPhone, gate.reply, { isSimulator, source: 'bot_control' });
       return { parent, student, isNew, replied: true, reply: gate.reply, reason: 'opt_out' };
     }

@@ -12,15 +12,18 @@ export const CUSTOMER_STATUSES = new Set([
   'active',
 ]);
 
-/** Legacy gym name still present in older prompts / defaults. */
-export const LEGACY_BRAND_NAME = 'My Wall';
+/**
+ * Retired gym name. Kept only so prompts already saved in app_settings get
+ * rewritten to the current business name on read — never used in new defaults.
+ */
 const LEGACY_BRAND_RE = /My Wall/gi;
+const BRAND_NAME = DEFAULT_BUSINESS_PROFILE.display_name;
 
 export const DEFAULT_BOT_SETTINGS = {
   aiOutsideHoursMessage:
     'קיבלנו את ההודעה 🙏\nאנחנו מחוץ לשעות המענה כרגע.\nנחזור אליכם בבוקר בין 9:00 ל־21:00.',
   aiHandoffKeywords: 'אדם,נציג,צוות,תלונה,מנהל,דחוף,לדבר עם',
-  aiHandoffAckMessage: `מעבירים אתכם לצוות ${LEGACY_BRAND_NAME} 🧗\nמישהו יחזור אליכם בהקדם.`,
+  aiHandoffAckMessage: `מעבירים אתכם לצוות ${BRAND_NAME} 🧗\nמישהו יחזור אליכם בהקדם.`,
   aiStopKeywords: 'עצור,הסר,stop,unsubscribe,הסר אותי',
   aiOptOutMessage: 'הוסרתם מרשימת המענה האוטומטי.\nאם תרצו לחזור — כתבו «הפעל בוט».',
   aiPauseOnHumanReply: true,
@@ -35,13 +38,13 @@ export const DEFAULT_BOT_SETTINGS = {
   aiForbiddenTopics:
     'אל תציין מחירים או סכומים.\nאל תבטיח הנחות.\nאל תיתן ייעוץ רפואי.\nאל תשתף פרטי לקוחות אחרים.',
   aiBusinessFacts:
-    'כתובת: רחוב האורגים 12, אשדוד\nשעות: א׳–ה׳ 14:00–22:00 | שישי 09:00–15:00 | שבת סגור\nהצהרת בריאות: https://client-omega-topaz-35.vercel.app/health',
+    'כתובת: השקד 1, תל מונד\nשעות הפתיחה משתנות לפי העונה ומזג האוויר — לשעות מעודכנות הפנה לאתר או לצוות\nהצהרת בריאות: https://app.kirboaz.co.il/health',
   aiEscalateWhenUnsure: true,
   aiUnsureReply: 'רגע — כדי לא לטעות אני מעביר את זה לצוות 🙏\nמישהו יחזור אליכם עם תשובה מדויקת.',
   aiLeadCaptureEnabled: true,
   aiInteractiveMenuEnabled: true,
   aiGreetingMenu:
-    `היי! אני הבוט של ${LEGACY_BRAND_NAME} 🧗\n\nבמה אפשר לעזור?\n1️⃣ הצהרת בריאות ✍️\n2️⃣ חוגים ורישום 🤸\n3️⃣ שעות ומיקום 🗺️\n4️⃣ לדבר עם צוות 👤\n\nכתבו מספר או שאלה קצרה 😊`,
+    `היי! אני הבוט של ${BRAND_NAME} 🧗\n\nבמה אפשר לעזור?\n1️⃣ הצהרת בריאות ✍️\n2️⃣ חוגים ורישום 🤸\n3️⃣ שעות ומיקום 🗺️\n4️⃣ לדבר עם צוות 👤\n\nכתבו מספר או שאלה קצרה 😊`,
   aiReactivateKeywords: 'הפעל בוט,הפעל,activate',
 };
 
@@ -205,10 +208,53 @@ export function isOptedOut(parent) {
   return !!parent?.bot_opted_out;
 }
 
+/**
+ * What the bot will do for this customer right now, in a shape the CRM can
+ * render. `until` is the authority on a pause — `minutesLeft` is a snapshot
+ * that goes stale the moment it leaves the server.
+ */
+export function describeBotState(parent, settings = {}, now = new Date()) {
+  const globallyOff = !isBotEnabled(mergeBotSettings(settings));
+
+  if (isOptedOut(parent)) {
+    return {
+      status: 'opted_out',
+      // Who asked for the silence decides the wording in the CRM.
+      source: parent?.bot_opt_out_source === 'crm' ? 'crm' : 'customer',
+      until: null,
+      minutesLeft: null,
+      reason: null,
+      globallyOff,
+    };
+  }
+
+  if (isBotPaused(parent, now)) {
+    const until = parent.bot_paused_until;
+    const msLeft = new Date(until).getTime() - now.getTime();
+    return {
+      status: 'paused',
+      source: 'crm',
+      until,
+      minutesLeft: Math.max(1, Math.ceil(msLeft / 60000)),
+      reason: parent?.bot_pause_reason || (parent?.bot_handoff_at ? 'handoff' : 'human_reply'),
+      globallyOff,
+    };
+  }
+
+  return {
+    status: 'active',
+    source: null,
+    until: null,
+    minutesLeft: null,
+    reason: null,
+    globallyOff,
+  };
+}
+
 export async function pauseBotForPhone(phone, minutes, { reason = 'human_reply' } = {}) {
   const mins = Math.max(1, Number(minutes) || 120);
   const until = new Date(Date.now() + mins * 60 * 1000).toISOString();
-  const patch = { bot_paused_until: until };
+  const patch = { bot_paused_until: until, bot_pause_reason: reason };
   if (reason === 'handoff') patch.bot_handoff_at = new Date().toISOString();
   const updated = await updateParentsForPhone(phone, patch);
   return { until, updated };
@@ -217,14 +263,17 @@ export async function pauseBotForPhone(phone, minutes, { reason = 'human_reply' 
 export async function clearBotPause(phone) {
   return updateParentsForPhone(phone, {
     bot_paused_until: null,
+    bot_pause_reason: null,
     bot_handoff_at: null,
   });
 }
 
-export async function optOutPhone(phone, optedOut = true) {
+export async function optOutPhone(phone, optedOut = true, { source = 'customer' } = {}) {
   return updateParentsForPhone(phone, {
     bot_opted_out: !!optedOut,
-    bot_paused_until: optedOut ? null : undefined,
+    bot_opt_out_source: optedOut ? source : null,
+    // An opt-out outranks a pause; clearing it leaves any pause alone.
+    ...(optedOut ? { bot_paused_until: null, bot_pause_reason: null } : {}),
   });
 }
 
@@ -381,6 +430,8 @@ export async function resetPlaygroundConversation(phone) {
     bot_paused_until: null,
     bot_pause_reason: null,
     bot_opted_out: false,
+    bot_opt_out_source: null,
+    bot_handoff_at: null,
     bot_outside_hours_date: null,
   });
 

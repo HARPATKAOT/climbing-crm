@@ -1,0 +1,334 @@
+/* ==========================================================================
+   קיר בועז — public marketing site
+   Palette sampled from the logo artwork (public/brand/logo-kirboaz.png) so the
+   site and the sign on the wall are the same colours.
+   ========================================================================== */
+
+.ks {
+  --ks-amber: #FDBB5A;
+  --ks-amber-soft: #FFE9C6;
+  --ks-brown: #774B24;
+  --ks-brown-deep: #3E2712;
+  --ks-blue: #2675B7;
+  --ks-blue-deep: #1B5183;
+  --ks-teal: #15999E;
+  --ks-red: #B2252D;
+  --ks-grey: #A1A5A4;
+
+  --ks-ink: #1C2126;
+  --ks-ink-2: #495159;
+  --ks-ink-3: #7B848C;
+  --ks-bg: #FFFFFF;
+  --ks-bg-warm: #FBF6EF;
+  --ks-line: #EAE3D9;
+
+  --ks-r: 6px;
+  --ks-r-lg: 8px;
+  --ks-shadow: 0 1px 2px rgba(28,33,38,.04), 0 4px 16px rgba(28,33,38,.05);
+  --ks-shadow-lift: 0 2px 6px rgba(28,33,38,.07), 0 18px 44px rgba(28,33,38,.13);
+  --ks-max: 1120px;
+
+  direction: rtl;
+  color: var(--ks-ink);
+  background: var(--ks-bg);
+  font-family: 'Assistant', 'Rubik', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  line-height: 1.65;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  -webkit-font-smoothing: antialiased;
+}
+
+.ks *, .ks *::before, .ks *::after { box-sizing: border-box; }
+/* Scoped with :not() so component classes are not out-specified by these
+   resets — an unqualified `.ks a` silently overrode every button colour. */
+.ks img { max-width: 100%; height: auto; }
+.ks a { text-decoration: none; }
+.ks a:not([class*="ks-btn"]) { color: inherit; }
+
+.ks-wrap { width: 100%; max-width: var(--ks-max); margin: 0 auto; padding: 0 20px; }
+.ks-main { flex: 1; }
+
+/* --- header -------------------------------------------------------------- */
+.ks-header {
+  position: sticky; top: 0; z-index: 40;
+  background: rgba(255,255,255,.88);
+  backdrop-filter: saturate(180%) blur(12px);
+  border-bottom: 1px solid var(--ks-line);
+}
+.ks-header-inner { display: flex; align-items: center; gap: 14px; min-height: 72px; }
+.ks-logo { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
+.ks-logo img { height: 42px; width: auto; }
+.ks-wordmark { font-size: 24px; font-weight: 800; color: var(--ks-brown); letter-spacing: -.015em; }
+
+.ks-nav { display: flex; gap: 2px; flex-wrap: wrap; margin-inline-start: auto; align-items: center; }
+.ks-nav a {
+  padding: 8px 13px; border-radius: 999px; font-weight: 600; font-size: 15px;
+  color: var(--ks-ink-2); white-space: nowrap; transition: background .15s, color .15s;
+}
+.ks-nav a:hover { background: var(--ks-bg-warm); color: var(--ks-ink); }
+.ks-nav a.is-active { background: var(--ks-brown); color: #fff; }
+
+.ks-burger {
+  display: none; margin-inline-start: auto; background: var(--ks-bg-warm);
+  border: 1px solid var(--ks-line); border-radius: 12px; color: var(--ks-brown);
+  padding: 8px 12px; font-size: 18px; cursor: pointer;
+}
+
+/* --- hero ---------------------------------------------------------------- */
+.ks-hero {
+  position: relative; overflow: hidden;
+  min-height: min(66vh, 560px);
+  display: flex; align-items: center;
+  background-image:
+    linear-gradient(to left, rgba(24,17,10,.90) 0%, rgba(24,17,10,.72) 42%, rgba(24,17,10,.15) 100%),
+    linear-gradient(to top, rgba(24,17,10,.55), transparent 55%),
+    url('/gallery/gallery-01.jpg');
+  background-size: cover, cover, cover;
+  background-position: center, center, center 32%;
+  color: #fff;
+}
+.ks-hero-grid { padding: 56px 0; max-width: 660px; margin-inline-end: 0; }
+.ks-hero .ks-h1 {
+  color: #fff; font-size: clamp(32px, 5vw, 56px); font-weight: 600; line-height: 1.08;
+  text-shadow: 0 2px 18px rgba(0,0,0,.34);
+}
+.ks-hero .ks-lede { color: rgba(255,255,255,.93); font-size: clamp(16px, 2vw, 20px); }
+.ks-hero .ks-eyebrow { color: var(--ks-amber); }
+
+/* Editorial photo tiles: flat, tight radius, title bottom with a gold rule.
+   Modelled on radius.co.il, which the owner picked as the reference. */
+.ks-tiles { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+.ks-tile {
+  position: relative; overflow: hidden; border-radius: 4px;
+  aspect-ratio: 3 / 3.4; display: flex; align-items: flex-end;
+  color: #fff; isolation: isolate;
+}
+.ks-tile img {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+  z-index: -2; transition: transform .7s cubic-bezier(.2,.7,.3,1);
+}
+.ks-tile::after {
+  content: ''; position: absolute; inset: 0; z-index: -1;
+  background: linear-gradient(to top, rgba(12,9,6,.86) 0%, rgba(12,9,6,.34) 46%, rgba(12,9,6,.06) 100%);
+  transition: background .35s ease;
+}
+.ks-tile:hover img { transform: scale(1.07); }
+.ks-tile:hover::after { background: rgba(12,9,6,.72); }
+.ks-tile-body { padding: 22px 20px; width: 100%; }
+.ks-tile h3 {
+  margin: 0; font-size: 20px; font-weight: 600; line-height: 1.3;
+  letter-spacing: .01em; text-shadow: 0 1px 10px rgba(0,0,0,.4);
+}
+.ks-tile-rule {
+  display: block; width: 46px; height: 2px; background: var(--ks-amber);
+  margin-top: 12px; transition: width .35s ease;
+}
+.ks-tile:hover .ks-tile-rule { width: 78px; }
+.ks-tile p {
+  margin: 10px 0 0; font-size: 14px; color: rgba(255,255,255,.86);
+  max-height: 0; opacity: 0; overflow: hidden;
+  transition: max-height .35s ease, opacity .3s ease;
+}
+.ks-tile:hover p { max-height: 90px; opacity: 1; }
+
+/* Section header: title on one side, a quiet "see all" on the other. */
+.ks-sectionhead {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 18px; flex-wrap: wrap; margin-bottom: 22px;
+}
+.ks-sectionhead h2 {
+  margin: 0; font-size: clamp(24px, 3.2vw, 34px); font-weight: 500;
+  letter-spacing: .06em; color: var(--ks-ink);
+}
+.ks-seeall {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 9px 18px; border: 1px solid var(--ks-line); border-radius: 3px;
+  font-size: 14px; font-weight: 500; color: var(--ks-ink-2);
+  transition: border-color .2s, color .2s;
+}
+.ks-seeall:hover { border-color: var(--ks-brown); color: var(--ks-brown); }
+.ks-seeall::before {
+  content: '⁙'; font-size: 15px; color: var(--ks-amber);
+}
+
+/* trip categories — title, photo, then the copy, as on the previous site */
+.ks-cats { display: grid; gap: 26px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.ks-cat { display: flex; flex-direction: column; gap: 14px; }
+.ks-cat-title { margin: 0; font-size: 24px; font-weight: 600; line-height: 1.2; letter-spacing: .02em; }
+.ks-cat img { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; border-radius: 4px; }
+.ks-cat p { margin: 0; font-size: 15.5px; color: var(--ks-ink-2); }
+
+/* full-width photo strip */
+.ks-strip {
+  position: relative; padding: 78px 0; color: #fff; text-align: center;
+  background-image:
+    linear-gradient(rgba(24,17,11,.78), rgba(24,17,11,.78)),
+    url('/gallery/gallery-04.jpg');
+  background-size: cover; background-position: center; background-attachment: fixed;
+}
+.ks-strip .ks-h2 { color: #fff; }
+.ks-strip p { color: rgba(255,255,255,.9); max-width: 60ch; margin: 0 auto 22px; }
+
+/* --- sections ------------------------------------------------------------ */
+.ks-section { padding: 72px 0; }
+.ks-section--warm { background: var(--ks-bg-warm); }
+.ks-section--tight { padding: 40px 0; }
+
+.ks-h1 { font-size: clamp(30px, 4.4vw, 46px); font-weight: 600; margin: 0 0 16px; line-height: 1.14; letter-spacing: .01em; }
+.ks-h2 { font-size: clamp(23px, 3vw, 32px); font-weight: 500; margin: 0 0 10px; letter-spacing: .05em; }
+.ks-lede { font-size: 18px; color: var(--ks-ink-2); margin: 0 0 24px; max-width: 60ch; }
+.ks-eyebrow {
+  display: inline-block; font-size: 12px; font-weight: 800; letter-spacing: .1em;
+  color: var(--ks-teal); margin-bottom: 10px; text-transform: uppercase;
+}
+
+.ks-grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); }
+
+.ks-card {
+  background: #fff; border: 1px solid var(--ks-line); border-radius: var(--ks-r);
+  padding: 22px; box-shadow: var(--ks-shadow);
+  display: flex; flex-direction: column; gap: 9px;
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+a.ks-card:hover { transform: translateY(-3px); box-shadow: var(--ks-shadow-lift); }
+.ks-card h3 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.01em; }
+.ks-meta { font-size: 14.5px; color: var(--ks-ink-3); }
+
+.ks-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 12px 26px; border-radius: 3px; font-weight: 600; font-size: 15.5px;
+  border: 1.5px solid transparent; cursor: pointer;
+  transition: transform .15s ease, box-shadow .15s ease, background .15s;
+}
+.ks-btn:hover { transform: translateY(-2px); box-shadow: var(--ks-shadow); }
+.ks .ks-btn--primary { background: var(--ks-brown); color: #fff; }
+.ks .ks-btn--primary:hover { background: var(--ks-brown-deep); }
+.ks .ks-btn--wa { background: #1FB855; color: #fff; }
+.ks .ks-btn--ghost { background: #fff; color: var(--ks-brown); border-color: var(--ks-line); }
+/* On a photo a white button disappears; outline it instead. */
+.ks-hero .ks-btn--ghost, .ks-strip .ks-btn--ghost {
+  background: rgba(255,255,255,.10); color: #fff; border-color: rgba(255,255,255,.75);
+  backdrop-filter: blur(4px);
+}
+.ks-hero .ks-btn--ghost:hover, .ks-strip .ks-btn--ghost:hover {
+  background: rgba(255,255,255,.20);
+}
+
+.ks-pill { display: inline-block; padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 700; }
+.ks-pill--open { background: rgba(21,153,158,.12); color: #0E7C80; }
+.ks-pill--closed { background: rgba(178,37,45,.09); color: var(--ks-red); }
+
+/* --- opening hours ------------------------------------------------------- */
+.ks-hours { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; max-width: 480px; }
+.ks-hours li {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 11px 16px; border-radius: 13px;
+  border: 1px solid var(--ks-line); background: #fff;
+}
+.ks-hours li.is-open { background: rgba(21,153,158,.06); border-color: rgba(21,153,158,.24); }
+.ks-hours-day { font-weight: 700; }
+.ks-hours-val { font-weight: 700; color: var(--ks-ink-3); }
+.ks-hours li.is-open .ks-hours-val { color: #0E7C80; }
+
+/* --- weekly class board -------------------------------------------------- */
+.ks-board-scroll {
+  overflow-x: auto; border: 1px solid var(--ks-line); border-radius: var(--ks-r);
+  background: #fff; box-shadow: var(--ks-shadow);
+}
+.ks-board { min-width: 720px; }
+.ks-board-head { display: flex; border-bottom: 1px solid var(--ks-line); background: var(--ks-bg-warm); }
+.ks-board-day {
+  flex: 1; padding: 12px 8px; text-align: center; font-weight: 700; font-size: 15px;
+  border-inline-start: 1px solid var(--ks-line);
+}
+.ks-board-count {
+  display: inline-block; margin-inline-start: 6px; padding: 1px 8px; border-radius: 999px;
+  background: var(--ks-amber-soft); color: var(--ks-brown); font-size: 12px; font-weight: 800;
+}
+.ks-board-body { display: flex; position: relative; }
+.ks-board-hourcol { width: 58px; flex-shrink: 0; position: relative; }
+.ks-board-hour {
+  position: absolute; inset-inline-start: 0; padding: 2px 8px;
+  font-size: 11px; color: var(--ks-ink-3); transform: translateY(-50%);
+}
+.ks-board-col { flex: 1; position: relative; border-inline-start: 1px solid var(--ks-line); }
+.ks-board-line { position: absolute; inset-inline: 0; border-top: 1px dashed #F0EAE1; }
+
+.ks-chip {
+  position: absolute; inset-inline: 5px; overflow: hidden;
+  border-radius: 11px; padding: 6px 9px; font-size: 13px; line-height: 1.3;
+  background: linear-gradient(140deg, #2675B7, #1B5183); color: #fff;
+  display: flex; flex-direction: column; gap: 1px;
+  box-shadow: 0 3px 10px rgba(27,81,131,.28);
+}
+.ks-chip strong { font-size: 13.5px; font-weight: 800; }
+.ks-chip span { opacity: .92; font-size: 12.5px; }
+.ks-chip em { font-style: normal; font-size: 11px; opacity: .95; font-weight: 700; }
+.ks-chip--full { background: linear-gradient(140deg, #A1A5A4, #7C807F); box-shadow: none; }
+
+/* Mobile fallback for the board */
+.ks-daylist { display: none; }
+.ks-daylist-day { margin: 22px 0 8px; font-size: 18px; font-weight: 800; }
+.ks-daylist-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 15px; border: 1px solid var(--ks-line); border-radius: 13px;
+  margin-bottom: 7px; background: #fff;
+}
+.ks-daylist-row strong { font-size: 16px; min-width: 54px; color: var(--ks-blue); }
+.ks-daylist-row span { flex: 1; }
+.ks-daylist-row em { font-style: normal; font-size: 13px; font-weight: 700; color: #0E7C80; }
+.ks-daylist-row.is-full em { color: var(--ks-ink-3); }
+
+/* --- floating WhatsApp --------------------------------------------------- */
+.ks-wa-float {
+  position: fixed; inset-inline-end: 18px; bottom: 18px; z-index: 60;
+  width: 58px; height: 58px; border-radius: 50%; background: #1FB855;
+  display: grid; place-items: center; box-shadow: 0 8px 24px rgba(31,184,85,.42);
+  transition: transform .18s ease;
+}
+.ks-wa-float:hover { transform: scale(1.06); }
+.ks-wa-float svg { width: 31px; height: 31px; fill: #fff; }
+
+/* --- footer -------------------------------------------------------------- */
+.ks-footer { background: var(--ks-brown-deep); color: #E9DECF; margin-top: 56px; padding: 44px 0 26px; }
+.ks-footer a { color: var(--ks-amber); }
+.ks-footer a:hover { text-decoration: underline; }
+.ks-footer-grid { display: grid; gap: 30px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.ks-footer h4 { margin: 0 0 10px; font-size: 16px; color: #fff; font-weight: 700; }
+.ks-partners { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.ks-partners img { height: 58px; width: auto; background: #fff; border-radius: 10px; padding: 7px; }
+.ks-colophon {
+  margin-top: 30px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,.14);
+  font-size: 13.5px; display: flex; gap: 14px; flex-wrap: wrap; justify-content: space-between;
+  color: #B9AA96;
+}
+
+/* --- mobile -------------------------------------------------------------- */
+@media (max-width: 860px) {
+  .ks-hero { min-height: min(72vh, 520px); }
+  .ks-hero-grid { padding: 52px 0 40px; }
+  /* fixed attachment is unreliable on mobile browsers */
+  .ks-strip { background-attachment: scroll; padding: 56px 0; }
+}
+
+@media (max-width: 760px) {
+  .ks-burger { display: block; }
+  .ks-nav {
+    display: none; position: absolute; inset-inline: 0; top: 100%;
+    background: #fff; flex-direction: column; gap: 2px; padding: 10px 14px 16px;
+    border-bottom: 1px solid var(--ks-line); box-shadow: var(--ks-shadow-lift);
+  }
+  .ks-nav.is-open { display: flex; }
+  .ks-nav a { padding: 12px 10px; font-size: 17px; border-radius: 12px; }
+  .ks-header-inner { position: relative; }
+
+  .ks-h1 { font-size: 31px; }
+  .ks-h2 { font-size: 23px; }
+  .ks-lede { font-size: 16.5px; }
+  .ks-section { padding: 38px 0; }
+
+  /* The weekly grid does not fit a phone — show the day list instead. */
+  .ks-board-scroll { display: none; }
+  .ks-daylist { display: block; }
+}

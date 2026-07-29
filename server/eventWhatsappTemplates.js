@@ -1,12 +1,28 @@
 /**
  * System WhatsApp templates for calendar event links.
  * Seeded as drafts; staff submit to Meta from Templates → דיוור.
+ *
+ * v4 moved the button off the site and onto the API redirect (`/eh`, `/ev`).
+ * Meta freezes a button URL on approval, so a button pointing straight at the
+ * site had to be re-approved on every domain move; now the API resolves the
+ * destination per click and the site can move without touching Meta at all.
  */
 
-export const EVENT_HOST_PAYMENT_TEMPLATE = 'event_host_payment_v3';
-export const EVENT_PARTICIPANT_LINK_TEMPLATE = 'event_participant_link_v3';
-export const EVENT_HOST_PAYMENT_TEMPLATE_FALLBACK = 'event_host_payment_v2';
-export const EVENT_PARTICIPANT_LINK_TEMPLATE_FALLBACK = 'event_participant_link_v2';
+import { apiRedirectBase, appPublicBase } from './publicLinks.js';
+
+export const EVENT_HOST_PAYMENT_TEMPLATE = 'event_host_payment_v4';
+export const EVENT_PARTICIPANT_LINK_TEMPLATE = 'event_participant_link_v4';
+
+/** Older approved versions, newest first — used until v4 clears Meta review. */
+export const EVENT_HOST_PAYMENT_FALLBACKS = ['event_host_payment_v3', 'event_host_payment_v2'];
+export const EVENT_PARTICIPANT_LINK_FALLBACKS = [
+  'event_participant_link_v3',
+  'event_participant_link_v2',
+];
+
+/** Kept for callers that still reference the single previous version. */
+export const EVENT_HOST_PAYMENT_TEMPLATE_FALLBACK = EVENT_HOST_PAYMENT_FALLBACKS[0];
+export const EVENT_PARTICIPANT_LINK_TEMPLATE_FALLBACK = EVENT_PARTICIPANT_LINK_FALLBACKS[0];
 
 /** Legacy Meta names (deleted; blocked from reuse for ~4 weeks). */
 export const EVENT_WHATSAPP_TEMPLATE_LEGACY_META_NAMES = new Set([
@@ -17,34 +33,15 @@ export const EVENT_WHATSAPP_TEMPLATE_LEGACY_META_NAMES = new Set([
 export const EVENT_WHATSAPP_TEMPLATE_META_NAMES = new Set([
   EVENT_HOST_PAYMENT_TEMPLATE,
   EVENT_PARTICIPANT_LINK_TEMPLATE,
-  EVENT_HOST_PAYMENT_TEMPLATE_FALLBACK,
-  EVENT_PARTICIPANT_LINK_TEMPLATE_FALLBACK,
+  ...EVENT_HOST_PAYMENT_FALLBACKS,
+  ...EVENT_PARTICIPANT_LINK_FALLBACKS,
 ]);
 
-const LIVE_APP_BASE = 'https://client-omega-topaz-35.vercel.app';
+export const EVENT_HOST_REDIRECT_PATH = 'eh';
+export const EVENT_PARTICIPANT_REDIRECT_PATH = 'ev';
 
-function isUnsafeAppBase(value = '') {
-  const raw = String(value || '').trim().toLowerCase();
-  if (!raw) return true;
-  if (raw.includes('localhost') || raw.includes('127.0.0.1')) return true;
-  if (raw.startsWith('http://')) return true;
-  return false;
-}
-
-export function publicBase(publicAppBase = '') {
-  const candidates = [
-    publicAppBase,
-    process.env.FRONTEND_URL,
-    process.env.PUBLIC_APP_URL,
-    LIVE_APP_BASE,
-  ];
-  for (const candidate of candidates) {
-    const base = String(candidate || '').trim().replace(/\/$/, '');
-    if (!base || isUnsafeAppBase(base)) continue;
-    return base;
-  }
-  return LIVE_APP_BASE;
-}
+/** Where a click ends up. Exported because staff-facing screens preview it. */
+export const publicBase = appPublicBase;
 
 function findTemplate(db, { metaName, id }) {
   const templates = db.get('message_templates') || [];
@@ -70,15 +67,17 @@ function insertDraft(db, persist, row) {
   return template;
 }
 
-function hostPaymentDraftFields(publicAppBase = '') {
-  const buttonUrl = `${publicBase(publicAppBase)}/event-host/{{1}}`;
+function hostPaymentDraftFields() {
   return {
-    id: 'tpl-event-host-payment-v3',
+    id: 'tpl-event-host-payment-v4',
     name: 'אירוע · קישור תשלום מזמין',
     meta_name: EVENT_HOST_PAYMENT_TEMPLATE,
     language: 'he',
     category: 'UTILITY',
     status: 'DRAFT',
+    usage:
+      'נשלחת למזמין של אירוע (יום הולדת, קבוצה, חברה) בלחיצה על «שלח קישור תשלום» ' +
+      'במסך האירוע ביומן. הכפתור מוביל לדף תשלום פרטי של המזמין בלבד — לא להעביר הלאה.',
     body:
       'שלום {{1}},\n' +
       'קישור פרטי לתשלום עבור האירוע {{2}}.\n' +
@@ -94,7 +93,7 @@ function hostPaymentDraftFields(publicAppBase = '') {
       {
         type: 'URL',
         text: 'לתשלום האירוע',
-        url: buttonUrl,
+        url: `${apiRedirectBase()}/${EVENT_HOST_REDIRECT_PATH}/{{1}}`,
         example: ['demo-host-token'],
       },
     ],
@@ -102,15 +101,17 @@ function hostPaymentDraftFields(publicAppBase = '') {
   };
 }
 
-function participantLinkDraftFields(publicAppBase = '') {
-  const buttonUrl = `${publicBase(publicAppBase)}/event/{{1}}`;
+function participantLinkDraftFields() {
   return {
-    id: 'tpl-event-participant-link-v3',
+    id: 'tpl-event-participant-link-v4',
     name: 'אירוע · קישור למשתתפים',
     meta_name: EVENT_PARTICIPANT_LINK_TEMPLATE,
     language: 'he',
     category: 'UTILITY',
     status: 'DRAFT',
+    usage:
+      'נשלחת למזמין האירוע כדי שיפיץ הלאה. הכפתור מוביל לדף הרשמה פתוח לאירוע, ' +
+      'שכל משתתף ממלא בעצמו. מיועד להעברה בקבוצות.',
     body:
       'שלום {{1}},\n' +
       'קישור להרשמת משתתפים לאירוע {{2}}.\n' +
@@ -126,7 +127,7 @@ function participantLinkDraftFields(publicAppBase = '') {
       {
         type: 'URL',
         text: 'להרשמת משתתפים',
-        url: buttonUrl,
+        url: `${apiRedirectBase()}/${EVENT_PARTICIPANT_REDIRECT_PATH}/{{1}}`,
         example: ['demo-event-slug'],
       },
     ],
@@ -135,25 +136,25 @@ function participantLinkDraftFields(publicAppBase = '') {
 }
 
 /** Seed host-payment link template (idempotent). */
-export function ensureEventHostPaymentTemplate({ db, persist, publicAppBase = '' } = {}) {
+export function ensureEventHostPaymentTemplate({ db, persist } = {}) {
   if (!db) return null;
   const existing = findTemplate(db, {
     metaName: EVENT_HOST_PAYMENT_TEMPLATE,
-    id: 'tpl-event-host-payment-v3',
+    id: 'tpl-event-host-payment-v4',
   });
   if (existing) return existing;
-  return insertDraft(db, persist, hostPaymentDraftFields(publicAppBase));
+  return insertDraft(db, persist, hostPaymentDraftFields());
 }
 
 /** Seed participant-registration link template (idempotent). */
-export function ensureEventParticipantLinkTemplate({ db, persist, publicAppBase = '' } = {}) {
+export function ensureEventParticipantLinkTemplate({ db, persist } = {}) {
   if (!db) return null;
   const existing = findTemplate(db, {
     metaName: EVENT_PARTICIPANT_LINK_TEMPLATE,
-    id: 'tpl-event-participant-link-v3',
+    id: 'tpl-event-participant-link-v4',
   });
   if (existing) return existing;
-  return insertDraft(db, persist, participantLinkDraftFields(publicAppBase));
+  return insertDraft(db, persist, participantLinkDraftFields());
 }
 
 export function ensureEventWhatsappTemplates(opts = {}) {
@@ -164,24 +165,29 @@ export function ensureEventWhatsappTemplates(opts = {}) {
 }
 
 /**
- * Delete existing event system templates (Meta + local) and recreate drafts
- * with a public https app base — never localhost.
+ * Delete existing event system templates (Meta + local) and recreate the v4
+ * drafts. Buttons always point at the API redirect, so no caller can seed a
+ * template that a later domain move would invalidate.
  */
 export async function recreateEventWhatsappTemplates({
   db,
   persist,
-  publicAppBase = '',
   deleteTemplate,
 } = {}) {
   if (!db || typeof deleteTemplate !== 'function') {
     throw new Error('recreateEventWhatsappTemplates requires db and deleteTemplate');
   }
-  const base = publicBase(publicAppBase);
   const targets = [
-    { metaName: EVENT_HOST_PAYMENT_TEMPLATE, id: 'tpl-event-host-payment-v3' },
-    { metaName: EVENT_PARTICIPANT_LINK_TEMPLATE, id: 'tpl-event-participant-link-v3' },
-    { metaName: EVENT_HOST_PAYMENT_TEMPLATE_FALLBACK, id: 'tpl-event-host-payment-v2' },
-    { metaName: EVENT_PARTICIPANT_LINK_TEMPLATE_FALLBACK, id: 'tpl-event-participant-link-v2' },
+    { metaName: EVENT_HOST_PAYMENT_TEMPLATE, id: 'tpl-event-host-payment-v4' },
+    { metaName: EVENT_PARTICIPANT_LINK_TEMPLATE, id: 'tpl-event-participant-link-v4' },
+    ...EVENT_HOST_PAYMENT_FALLBACKS.map((metaName) => ({
+      metaName,
+      id: `tpl-event-host-payment-${metaName.split('_').pop()}`,
+    })),
+    ...EVENT_PARTICIPANT_LINK_FALLBACKS.map((metaName) => ({
+      metaName,
+      id: `tpl-event-participant-link-${metaName.split('_').pop()}`,
+    })),
     // Clean up failed recreate drafts / legacy rows with localhost buttons.
     { metaName: 'event_host_payment', id: 'tpl-event-host-payment' },
     { metaName: 'event_participant_link', id: 'tpl-event-participant-link' },
@@ -214,15 +220,15 @@ export async function recreateEventWhatsappTemplates({
     }
   }
 
-  const hostPayment = insertDraft(db, persist, hostPaymentDraftFields(base));
-  const participantLink = insertDraft(db, persist, participantLinkDraftFields(base));
+  const hostPayment = insertDraft(db, persist, hostPaymentDraftFields());
+  const participantLink = insertDraft(db, persist, participantLinkDraftFields());
   if (typeof persist === 'function') {
     await Promise.resolve(persist('message_templates', hostPayment));
     await Promise.resolve(persist('message_templates', participantLink));
   }
 
   return {
-    base,
+    base: apiRedirectBase(),
     deleted,
     hostPayment,
     participantLink,
@@ -246,4 +252,20 @@ export function findApprovedEventTemplate(db, metaName) {
   const approved =
     String(localTpl.status).toUpperCase() === 'APPROVED' || localTpl.active_for_send;
   return approved ? localTpl : null;
+}
+
+/**
+ * Newest approved version for a link kind, falling back through older ones so
+ * a pending v4 review never blocks sending outside the 24h window.
+ */
+export function resolveEventTemplate(db, kind) {
+  const chain =
+    kind === 'host'
+      ? [EVENT_HOST_PAYMENT_TEMPLATE, ...EVENT_HOST_PAYMENT_FALLBACKS]
+      : [EVENT_PARTICIPANT_LINK_TEMPLATE, ...EVENT_PARTICIPANT_LINK_FALLBACKS];
+  for (const metaName of chain) {
+    const found = findApprovedEventTemplate(db, metaName);
+    if (found) return found;
+  }
+  return null;
 }

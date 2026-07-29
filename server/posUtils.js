@@ -48,6 +48,10 @@ export function todayIsoDate() {
 
 /**
  * Build customer_pass record fields from a sold pricelist item.
+ *
+ * `discount` records that the pass was bought under a benefit. It is kept as
+ * fields rather than baked into the name so the pass still reads as the plain
+ * product everywhere, while a refund can still see it was not sold at list price.
  */
 export function buildPassFromItem({
   item,
@@ -56,6 +60,7 @@ export function buildPassFromItem({
   saleId,
   docId,
   docNumber,
+  discount = null,
 }) {
   const productType = normalizeProductType(item);
   if (productType === PRODUCT_TYPES.PRODUCT) return null;
@@ -91,9 +96,25 @@ export function buildPassFromItem({
     status: 'active',
     icount_doc_id: docId || null,
     icount_doc_number: docNumber || null,
+    list_price: discount?.listPrice != null ? Number(discount.listPrice) : null,
+    paid_price: discount?.paidPrice != null ? Number(discount.paidPrice) : null,
+    coupon_code: discount?.couponCode || null,
+    coupon_label: discount?.couponLabel || null,
     created_at: now,
     updated_at: now,
   };
+}
+
+/** Short Hebrew note for a pass that was not sold at list price. */
+export function passDiscountNote(pass) {
+  if (!pass?.coupon_label && pass?.list_price == null) return '';
+  const list = Number(pass.list_price);
+  const paid = Number(pass.paid_price);
+  const label = pass.coupon_label || 'הטבה';
+  if (Number.isFinite(list) && Number.isFinite(paid) && list > paid) {
+    return `נקנתה ב${label} · שולם ₪${paid} במקום ₪${list}`;
+  }
+  return `נקנתה ב${label}`;
 }
 
 export function isPassUsable(pass, onDate = todayIsoDate()) {

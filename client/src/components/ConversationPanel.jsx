@@ -1,5 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Send, MessageCircle, Image as ImageIcon, FileText, Bookmark, RefreshCw, CheckCircle2 } from 'lucide-react';
+import {
+  Send,
+  MessageCircle,
+  Image as ImageIcon,
+  FileText,
+  Bookmark,
+  RefreshCw,
+  CheckCircle2,
+  Bot,
+  PowerOff,
+  Sparkles,
+} from 'lucide-react';
 import { normalizeTemplateVariables, buildPrefillValues } from './templateVariables.js';
 import { isAwaitingHandling, threadIsBehindCard } from './communicationQueue.js';
 
@@ -45,6 +56,99 @@ function WindowBadge({ windows, channel }) {
   );
 }
 
+/** "1:47 שע׳" for a long pause, "47 דק׳" for a short one. */
+export function formatPauseLeft(until, now = Date.now()) {
+  const ms = new Date(until || 0).getTime() - now;
+  if (!Number.isFinite(ms) || ms <= 0) return '';
+  const minutes = Math.ceil(ms / 60000);
+  if (minutes < 60) return `${minutes} דק׳`;
+  return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')} שע׳`;
+}
+
+const PAUSE_REASONS = {
+  handoff: 'אחרי שהלקוח ביקש לדבר עם אדם',
+  human_reply: 'אחרי שענית ללקוח',
+};
+
+/**
+ * Every reason the bot is silent for this customer, worst first. Each one
+ * carries the way out of it, so the badge is never a dead end: a system-wide
+ * switch and a per-customer mute are separate blocks that need separate fixes.
+ */
+export function describeBotBlocks(bot, now = Date.now()) {
+  if (!bot) return [];
+  const blocks = [];
+
+  if (bot.globallyOff) {
+    blocks.push({
+      kind: 'global',
+      label: 'כבוי לכל הלקוחות',
+      reason: 'המתג הראשי במסך ההגדרות כבוי, כך שהבוט לא עונה לאף לקוח.',
+      action: 'enable-global',
+      actionLabel: 'הדלקת הבוט לכל הלקוחות',
+    });
+  }
+
+  if (bot.status === 'opted_out') {
+    blocks.push({
+      kind: 'customer',
+      label: bot.source === 'crm' ? 'מושתק ידנית' : 'מנותק — הלקוח ביקש',
+      reason: bot.source === 'crm'
+        ? 'הבוט הושתק ידנית ללקוח הזה, ללא הגבלת זמן — עד שתחזירו אותו כאן.'
+        : 'הלקוח כתב מילת עצירה בוואטסאפ, ולכן הבוט לא יפנה אליו יותר.',
+      action: 'resume',
+      actionLabel: 'החזרת הבוט ללקוח',
+    });
+  } else if (bot.status === 'paused') {
+    // The pause can lapse between polls — an expired one is not a block.
+    const left = formatPauseLeft(bot.until, now);
+    if (left) {
+      blocks.push({
+        kind: 'customer',
+        label: `מושתק · עוד ${left}`,
+        reason: `הבוט הושתק אוטומטית ${PAUSE_REASONS[bot.reason] || 'אחרי טיפול אנושי'}, ויחזור לענות בעוד ${left}.`,
+        action: 'resume',
+        actionLabel: 'החזרת הבוט עכשיו',
+      });
+    }
+  }
+
+  return blocks;
+}
+
+export function describeBotBadge(bot, now = Date.now()) {
+  if (!bot) return null;
+  const blocks = describeBotBlocks(bot, now);
+  if (!blocks.length) {
+    return {
+      icon: Bot,
+      label: 'בוט פעיל',
+      tone: 'active',
+      action: 'mute',
+      actionLabel: 'השתקת הבוט ללקוח זה',
+      blocks,
+    };
+  }
+  const [first] = blocks;
+  return {
+    icon: PowerOff,
+    // Two blocks at once ("כבוי במערכת" + "מושתק ללקוח") — say so, don't pick one.
+    label: blocks.length > 1
+      ? `בוט ${first.label} · וגם ${blocks[1].label}`
+      : `בוט ${first.label}`,
+    tone: first.kind === 'global' ? 'off' : 'paused',
+    action: first.action,
+    actionLabel: first.actionLabel,
+    blocks,
+  };
+}
+
+const BOT_TONES = {
+  active: { color: '#4ade80', background: 'rgba(34,197,94,0.15)' },
+  paused: { color: '#FBBF24', background: 'rgba(251,191,36,0.14)' },
+  off: { color: '#94A3B8', background: 'rgba(148,163,184,0.14)' },
+};
+
 function messageMatchesThread(message, thread, parentPhone) {
   if (!thread) return true;
   const ch = message.channel || 'whatsapp';
@@ -79,10 +183,23 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   const [selectedSaved, setSelectedSaved] = useState('');
   const [imagePreview, setImagePreview] = useState(null);
   const [imageBase64, setImageBase64] = useState('');
+  const [botBusy, setBotBusy] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [draftInfo, setDraftInfo] = useState(null);
+  // Ticks the pause countdown between the 15s conversation polls.
+  const [clockTick, setClockTick] = useState(Date.now());
   const messagesRef = useRef(null);
   const fileRef = useRef(null);
   const wasBlockedRef = useRef(false);
   const userPickedThreadRef = useRef(false);
+  // The 15s poll keeps an old `load` closure — read the live thread id from a ref
+  // so a refresh never drags the user back to the parent thread.
+  const activeThreadIdRef = useRef('parent');
+
+  const pickThread = (threadId) => {
+    activeThreadIdRef.current = threadId;
+    setActiveThreadId(threadId);
+  };
 
   const load = async ({ quiet = false } = {}) => {
     if (!parent?.id) return;
@@ -107,11 +224,12 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
 
       const threads = Array.isArray(conv.threads) ? conv.threads : [];
       const preferredThreadId = conv.defaultThreadId || 'parent';
+      const pickedThreadId = activeThreadIdRef.current;
       const nextThreadId = userPickedThreadRef.current
-        && threads.some((t) => t.id === activeThreadId)
-        ? activeThreadId
+        && threads.some((t) => t.id === pickedThreadId)
+        ? pickedThreadId
         : preferredThreadId;
-      setActiveThreadId(nextThreadId);
+      pickThread(nextThreadId);
 
       const activeThread = threads.find((t) => t.id === nextThreadId) || threads[0];
       const available = activeThread?.channels || conv.channels || {};
@@ -138,7 +256,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
 
   useEffect(() => {
     userPickedThreadRef.current = false;
-    setActiveThreadId('parent');
+    pickThread('parent');
     load();
     // Reload when a newer inbound lands on the parent card (waiting-queue poll).
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -162,6 +280,12 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     const el = messagesRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [data?.messages?.length, activeThreadId]);
+
+  useEffect(() => {
+    if (data?.bot?.status !== 'paused') return undefined;
+    const timer = setInterval(() => setClockTick(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, [data?.bot?.status, data?.bot?.until]);
 
   const threads = Array.isArray(data?.threads) ? data.threads : [];
   const activeThread = threads.find((t) => t.id === activeThreadId) || threads[0] || {
@@ -196,7 +320,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
 
   const selectThread = (threadId) => {
     userPickedThreadRef.current = true;
-    setActiveThreadId(threadId);
+    pickThread(threadId);
     const thread = threads.find((t) => t.id === threadId);
     const available = thread?.channels || {};
     if (!available[channel]) {
@@ -259,11 +383,74 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
       setReplyText('');
       setImageBase64('');
       setImagePreview(null);
+      setDraftInfo(null);
       await load({ quiet: true });
     } catch (err) {
       setError(err.message);
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleBotToggle = async (action) => {
+    if (!parent?.id || !action || botBusy) return;
+    // The master switch is not a per-customer setting — make that explicit
+    // before one conversation turns the bot back on for everybody.
+    if (action === 'enable-global'
+      && !window.confirm('הדלקת הבוט תחזיר אותו לענות אוטומטית לכל הלקוחות, לא רק ללקוח הזה. להמשיך?')) {
+      return;
+    }
+    setBotBusy(true);
+    setError('');
+    try {
+      if (action === 'enable-global') {
+        const res = await fetch('/api/whatsapp/bot-enabled', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: true }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error || 'הדלקת הבוט נכשלה');
+        await load({ quiet: true });
+        return;
+      }
+      const res = await fetch(`/api/conversations/${parent.id}/bot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) throw new Error(json.error || 'עדכון מצב הבוט נכשל');
+      setData((prev) => (prev ? { ...prev, bot: json.bot } : prev));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBotBusy(false);
+    }
+  };
+
+  const handleDraft = async () => {
+    if (!parent?.id || drafting) return;
+    setDrafting(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/conversations/${parent.id}/draft`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentId: activeThread?.studentId || null,
+          targetPhone: activeThread?.phone || null,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) throw new Error(json.error || 'ניסוח התשובה נכשל');
+      setMode('text');
+      setReplyText(json.text);
+      setDraftInfo({ unsure: !!json.unsure, confidence: json.confidence });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDrafting(false);
     }
   };
 
@@ -296,6 +483,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   }
 
   const awaitingHandling = isAwaitingHandling(data?.parent || parent);
+  const botBadge = describeBotBadge(data?.bot, clockTick);
   const missingNewMessage = !!data && threadIsBehindCard(data?.parent || parent, allMessages);
   const templateStudent = activeThread?.studentId
     ? (data?.students || []).find((s) => String(s.id) === String(activeThread.studentId)) || student
@@ -326,6 +514,28 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
           <MessageCircle size={15} /> תקשורת עם הלקוח
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {botBadge && (
+            <button
+              type="button"
+              onClick={() => handleBotToggle(botBadge.action)}
+              disabled={botBusy}
+              title={botBadge.actionLabel}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                fontSize: 10,
+                padding: '3px 7px',
+                borderRadius: 6,
+                cursor: botBusy ? 'default' : 'pointer',
+                border: '1px solid var(--border)',
+                ...BOT_TONES[botBadge.tone],
+              }}
+            >
+              <botBadge.icon size={11} />
+              {botBusy ? 'מעדכן...' : botBadge.label}
+            </button>
+          )}
           <button
             type="button"
             className={`btn btn-xs ${awaitingHandling ? 'btn-success' : 'btn-ghost'}`}
@@ -357,6 +567,36 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
           borderRadius: fillHeight ? 0 : undefined,
         }}
       >
+        {(botBadge?.blocks || []).map((block) => (
+          <div
+            key={block.kind}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              padding: '8px 12px',
+              borderBottom: '1px solid var(--border)',
+              background: block.kind === 'global' ? 'rgba(148,163,184,0.10)' : 'rgba(251,191,36,0.10)',
+              color: block.kind === 'global' ? '#CBD5E1' : '#FBBF24',
+              fontSize: 11,
+              lineHeight: 1.45,
+              flexShrink: 0,
+            }}
+          >
+            <span>{block.reason}</span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              style={{ flexShrink: 0 }}
+              onClick={() => handleBotToggle(block.action)}
+              disabled={botBusy}
+            >
+              {botBusy ? 'מעדכן...' : block.actionLabel}
+            </button>
+          </div>
+        ))}
+
         {missingNewMessage && (
           <div
             style={{
@@ -412,9 +652,11 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
           ) : (
             <WindowBadge windows={data?.windows} channel={channel} />
           )}
-          {activeThread?.role === 'student' && (
+          {channel === 'whatsapp' && activeThread?.phone && (
             <span style={{ fontSize: 10, color: 'var(--text-3)', alignSelf: 'center' }}>
-              שיחה עם המתאמן · תשובות נשלחות למספר שלו
+              {activeThread.role === 'student' ? 'נשלח למתאמן' : 'נשלח להורה'}
+              {' · '}
+              <span style={{ direction: 'ltr', unicodeBidi: 'plaintext' }}>{activeThread.phone}</span>
             </span>
           )}
         </div>
@@ -527,7 +769,36 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
                 <m.icon size={11} /> {m.label}
               </button>
             ))}
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              style={{ marginInlineStart: 'auto' }}
+              onClick={handleDraft}
+              disabled={drafting || freeformBlocked}
+              title={freeformBlocked
+                ? 'חלון 24 השעות סגור — אפשר לשלוח רק תבנית מאושרת'
+                : 'ניסוח תשובה לפי ההודעה האחרונה של הלקוח. התשובה נכנסת לתיבה לעריכה — לא נשלחת.'}
+            >
+              <Sparkles size={11} /> {drafting ? 'מנסח...' : 'הצע תשובה'}
+            </button>
           </div>
+
+          {draftInfo && (
+            <div
+              style={{
+                fontSize: 11,
+                padding: '6px 12px',
+                borderTop: '1px solid var(--border)',
+                flexShrink: 0,
+                background: draftInfo.unsure ? 'rgba(251,191,36,0.08)' : 'rgba(59,130,246,0.08)',
+                color: draftInfo.unsure ? '#FBBF24' : '#93C5FD',
+              }}
+            >
+              {draftInfo.unsure
+                ? 'טיוטה — המערכת לא בטוחה בתשובה. קראו ותקנו לפני שליחה.'
+                : 'טיוטה מוכנה לעריכה. שום דבר לא נשלח עד שתלחצו שלח.'}
+            </div>
+          )}
 
           <form onSubmit={handleSend} style={{ padding: 10, background: 'var(--bg-input)', flexShrink: 0 }}>
             {mode === 'template' && (
@@ -615,7 +886,10 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
                   style={{ flex: 1 }}
                   placeholder={mode === 'image' ? 'כיתוב לתמונה (אופציונלי)' : 'כתבו תשובה ללקוח...'}
                   value={replyText}
-                  onChange={(e) => setReplyText(e.target.value)}
+                  onChange={(e) => {
+                    setReplyText(e.target.value);
+                    setDraftInfo(null);
+                  }}
                   onKeyDown={(e) => {
                     if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
                     e.preventDefault();

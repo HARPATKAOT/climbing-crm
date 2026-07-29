@@ -7,6 +7,7 @@ import {
   audienceAllows,
   isBotPaused,
   isOptedOut,
+  describeBotState,
   decideBotGate,
   parseAiReply,
   classifyAudience,
@@ -66,6 +67,60 @@ test('pause and opt-out flags', () => {
   assert.equal(isBotPaused({ bot_paused_until: future }), true);
   assert.equal(isBotPaused({ bot_paused_until: past }), false);
   assert.equal(isOptedOut({ bot_opted_out: true }), true);
+});
+
+test('describeBotState reports an active bot', () => {
+  const state = describeBotState({}, { aiResponderEnabled: true });
+  assert.equal(state.status, 'active');
+  assert.equal(state.globallyOff, false);
+});
+
+test('describeBotState flags the master switch without hiding the per-customer state', () => {
+  const off = describeBotState({}, { aiResponderEnabled: false });
+  assert.equal(off.status, 'active');
+  assert.equal(off.globallyOff, true);
+});
+
+test('describeBotState counts down a live pause and ignores a lapsed one', () => {
+  const now = new Date('2026-07-29T12:00:00.000Z');
+  const live = describeBotState(
+    { bot_paused_until: '2026-07-29T13:47:00.000Z', bot_pause_reason: 'human_reply' },
+    { aiResponderEnabled: true },
+    now
+  );
+  assert.equal(live.status, 'paused');
+  assert.equal(live.minutesLeft, 107);
+  assert.equal(live.reason, 'human_reply');
+
+  const lapsed = describeBotState(
+    { bot_paused_until: '2026-07-29T11:00:00.000Z' },
+    { aiResponderEnabled: true },
+    now
+  );
+  assert.equal(lapsed.status, 'active');
+});
+
+test('describeBotState separates a customer opt-out from a CRM mute', () => {
+  const byCustomer = describeBotState({ bot_opted_out: true }, { aiResponderEnabled: true });
+  assert.equal(byCustomer.status, 'opted_out');
+  assert.equal(byCustomer.source, 'customer');
+
+  const byStaff = describeBotState(
+    { bot_opted_out: true, bot_opt_out_source: 'crm' },
+    { aiResponderEnabled: true }
+  );
+  assert.equal(byStaff.source, 'crm');
+});
+
+test('an opt-out outranks a still-running pause', () => {
+  const state = describeBotState(
+    {
+      bot_opted_out: true,
+      bot_paused_until: new Date(Date.now() + 60_000).toISOString(),
+    },
+    { aiResponderEnabled: true }
+  );
+  assert.equal(state.status, 'opted_out');
 });
 
 test('decideBotGate: disabled / opted out / handoff / outside hours', () => {

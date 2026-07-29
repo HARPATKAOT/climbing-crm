@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight, Package, Footprints, Shirt, Sparkles } from 'lucide-react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight, Package, Footprints, Shirt, Sparkles, ExternalLink, FolderOpen, AlertTriangle } from 'lucide-react';
 import { DAYS_FULL } from '../mockData.js';
 import {
   getGroupDays,
@@ -7,13 +8,14 @@ import {
   dateToWeekday,
   ATT_STATUS,
   ATT_MARK_KEYS,
+  consecutiveAbsences,
   normalizeAttStatus,
   isAttPresent,
   isAttPending,
   isAttAbsent,
   attStatusMeta,
 } from '../scheduleUtils.js';
-import { StatusPill } from './AttendanceCalendar.jsx';
+import { StatusPill } from './AttendanceList.jsx';
 import {
   EQUIPMENT_LABELS,
   applyEquipmentTone,
@@ -23,6 +25,9 @@ import {
   equipmentToneLabel,
 } from './equipmentUtils.js';
 import { studentInGroup, studentGroupIds } from '../utils/studentGroups.js';
+
+// Pulled in only when a trainee file is actually opened from the schedule.
+const StudentFilePanel = lazy(() => import('./StudentFilePanel.jsx'));
 
 const EQUIPMENT_ICONS = {
   shoes: Footprints,
@@ -92,6 +97,92 @@ const DUR_OPTIONS = [
   { val: 80, label: '80 דקות' },
   { val: 110, label: '110 דקות' },
 ];
+
+/** Consecutive-absence warning, amber for one meeting and red from two on. */
+function AbsenceStreakPill({ streak }) {
+  if (!streak) return null;
+  const color = streak >= 2 ? 'var(--red)' : 'var(--amber)';
+  const label = streak === 1 ? 'החמיץ אימון אחרון' : `${streak} היעדרויות רצופות`;
+  return (
+    <span
+      title={`${label} — בקבוצה זו`}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '2px 8px',
+        borderRadius: 999,
+        background: `${streak >= 2 ? 'rgba(248,113,113,' : 'rgba(251,191,36,'}0.14)`,
+        border: `1px solid ${color}55`,
+        color,
+        fontSize: 10,
+        fontWeight: 700,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <AlertTriangle size={10} strokeWidth={2.5} />
+      {label}
+    </span>
+  );
+}
+
+/** Explicit "open the customer file" button, next to the trainee it belongs to. */
+function StudentFileButton({ student, onOpen }) {
+  if (!onOpen) return null;
+  return (
+    <button
+      type="button"
+      className="btn btn-ghost btn-xs"
+      onClick={(e) => { e.stopPropagation(); onOpen(student.id); }}
+      title={`פתיחת תיק הלקוח של ${student.name}`}
+      style={{ border: '1px solid var(--border)', color: 'var(--blue)', gap: 4, flexShrink: 0 }}
+    >
+      <FolderOpen size={12} /> תיק לקוח
+    </button>
+  );
+}
+
+/** Trainee name as a link into their customer file; plain text when no handler. */
+function StudentNameLink({ student, onOpen, size = 13, truncate = false, showIcon = true }) {
+  const nameStyle = {
+    fontWeight: 700,
+    fontSize: size,
+    ...(truncate
+      ? { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
+      : {}),
+  };
+
+  if (!onOpen) return <div style={nameStyle}>{student.name}</div>;
+
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onOpen(student.id); }}
+      title={`פתיחת תיק המתאמן — ${student.name}`}
+      style={{
+        ...nameStyle,
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        maxWidth: '100%',
+        padding: 0,
+        background: 'none',
+        border: 'none',
+        color: 'var(--blue)',
+        textDecoration: 'underline',
+        textUnderlineOffset: 3,
+        textDecorationColor: 'rgba(56,189,248,0.5)',
+        cursor: 'pointer',
+        textAlign: 'right',
+      }}
+    >
+      <span style={truncate ? { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } : undefined}>
+        {student.name}
+      </span>
+      {showIcon && <ExternalLink size={11} style={{ flexShrink: 0, opacity: 0.85 }} />}
+    </button>
+  );
+}
 
 function t2m(t) { const [h, m] = t.split(':').map(Number); return h * 60 + m; }
 function topPx(time)   { return (t2m(time) - START_MIN) * PX_PER_MIN; }
@@ -317,7 +408,7 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
 }
 
 // ─── Attendance Modal (Supabase-persisted via API) ────────────────────────────
-function AttendanceModal({ group, students, parents, employees, initialDate, onClose, onMarked }) {
+function AttendanceModal({ group, students, parents, employees, initialDate, onClose, onMarked, onOpenStudent }) {
   const members = students.filter(s => studentInGroup(s, group.id) && s.status !== 'archived');
   const [date, setDate] = useState(initialDate || localDateStr());
   const [view, setView] = useState('sheet'); // 'sheet' | 'history'
@@ -327,6 +418,7 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
   const [savingId, setSavingId] = useState(null);
   const [savedMsg, setSavedMsg] = useState('');
   const [history, setHistory] = useState([]);
+  const [studentHistory, setStudentHistory] = useState({}); // studentId -> rows
 
   const trainer = employees?.find(e => e.id === group.trainer);
   const dayLabel = DAYS_FULL[dateToWeekday(date)] || '';
@@ -369,6 +461,7 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
       .then(r => (r.ok ? r.json() : []))
       .then(rows => {
         const byDate = {};
+        const byStudent = {};
         (rows || []).forEach(r => {
           if (!byDate[r.date]) byDate[r.date] = { date: r.date, present: 0, absent: 0, pending: 0, intro: 0, total: 0 };
           byDate[r.date].total++;
@@ -377,11 +470,19 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
           if (s === 'pending') byDate[r.date].pending++;
           else if (isAttPresent(r.status)) byDate[r.date].present++;
           else if (isAttAbsent(r.status)) byDate[r.date].absent++;
+          if (!byStudent[r.student_id]) byStudent[r.student_id] = [];
+          byStudent[r.student_id].push(r);
         });
         setHistory(Object.values(byDate).sort((a, b) => b.date.localeCompare(a.date)));
+        setStudentHistory(byStudent);
       })
       .catch(() => {});
   };
+
+  /** Counted up to the meeting on screen, so past dates read as they did then. */
+  const absenceStreakFor = (studentId) => consecutiveAbsences(
+    (studentHistory[studentId] || []).filter((row) => String(row.date || '') <= date)
+  );
   useEffect(() => { loadHistory(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [group.id]);
 
   const markStatus = async (sid, status) => {
@@ -482,15 +583,16 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
                       flexWrap: 'wrap',
                     }}>
                       <div style={{ minWidth: 120 }}>
-                        <div style={{ fontWeight: 700, fontSize: 13 }}>{s.name}</div>
+                        <StudentNameLink student={s} onOpen={onOpenStudent} />
                         <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
                           {isIntro ? 'אימון הכירות · ' : ''}
                           {parent?.name ? `הורה: ${parent.name}` : ''}
                           {parent?.phone ? ` · ${parent.phone}` : ''}
                         </div>
-                        <div style={{ fontSize: 11, color: meta.color, marginTop: 3, fontWeight: 600 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 3 }}>
                           <StatusPill meta={meta} />
-                          {savingId === s.id && <span style={{ marginRight: 6, color: 'var(--text-3)' }}>שומר...</span>}
+                          <AbsenceStreakPill streak={absenceStreakFor(s.id)} />
+                          {savingId === s.id && <span style={{ fontSize: 11, color: 'var(--text-3)' }}>שומר...</span>}
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
@@ -561,7 +663,7 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
 }
 
 // ─── Group Detail Side Panel ──────────────────────────────────────────────────
-function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDelete, onAttendance, onAssignStudent, onRemoveStudent, initialAttDate }) {
+function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDelete, onAttendance, onAssignStudent, onRemoveStudent, initialAttDate, onOpenStudent }) {
   const days = getGroupDays(group);
   const meetsToday = days.includes(dateToWeekday(localDateStr()));
   const [tab, setTab] = useState(meetsToday ? 'attendance' : 'members');
@@ -571,6 +673,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
   const [attIds, setAttIds] = useState({});
   const [attLoading, setAttLoading] = useState(false);
   const [attSavingId, setAttSavingId] = useState(null);
+  const [attHistory, setAttHistory] = useState({}); // studentId -> rows in this group
   const [eqByStudent, setEqByStudent] = useState({});
   const [eqLoading, setEqLoading] = useState(false);
   const [eqBusyId, setEqBusyId] = useState('');
@@ -664,16 +767,48 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
     }
   };
 
+  /** Whole-group history, so each row can show the climber's absence run. */
+  const loadAttHistory = async () => {
+    try {
+      const r = await fetch(`/api/attendance?groupId=${encodeURIComponent(group.id)}`);
+      const rows = r.ok ? await r.json() : [];
+      const byStudent = {};
+      (rows || []).forEach((row) => {
+        if (!byStudent[row.student_id]) byStudent[row.student_id] = [];
+        byStudent[row.student_id].push(row);
+      });
+      setAttHistory(byStudent);
+    } catch {
+      setAttHistory({});
+    }
+  };
+
   useEffect(() => {
     if (tab !== 'attendance') return;
     loadPanelAttendance(attDate);
+    loadAttHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, attDate, group.id, members.length]);
+
+  /** Counted up to the meeting on screen, so past dates read as they did then. */
+  const absenceStreakFor = (studentId) => consecutiveAbsences(
+    (attHistory[studentId] || []).filter((row) => String(row.date || '') <= attDate)
+  );
 
   const handleAssign = () => {
     if (!assignId) return;
     onAssignStudent(assignId, group.id);
     setAssignId('');
+  };
+
+  // The remove button sits next to the name, so it needs a deliberate confirm.
+  const confirmRemove = (student, { waitlist = false } = {}) => {
+    const name = student?.name || 'המתאמן';
+    const where = waitlist ? 'מרשימת ההמתנה של' : 'מהקבוצה';
+    const message = `להסיר את ${name} ${where} "${group.name}"?\n\n`
+      + 'המתאמן יישאר במאגר הלקוחות — רק השיבוץ לקבוצה יוסר.';
+    if (!window.confirm(message)) return;
+    onRemoveStudent(student.id, group.id);
   };
 
   const markFromPanel = async (sid, status) => {
@@ -689,6 +824,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
         marked_by: group.trainer || null,
       });
       if (saved?.id) setAttIds(prev => ({ ...prev, [sid]: saved.id }));
+      loadAttHistory();
     } catch (e) {
       console.error(e);
     } finally {
@@ -758,7 +894,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
           { key: 'attendance', label: pendingCount > 0 ? `נוכחות (${pendingCount})` : 'נוכחות' },
           { key: 'members', label: `משתתפים (${members.length})` },
           { key: 'equipment', label: eqAwaitingCount > 0 ? `ציוד (${eqAwaitingCount})` : 'ציוד' },
-          { key: 'info',    label: 'פרטים' },
+          { key: 'info',    label: 'פרטי הקבוצה' },
         ].map(t => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
             flex: 1, padding: '10px 4px', fontSize: 13, fontWeight: tab === t.key ? 700 : 400,
@@ -807,15 +943,23 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                 {members.map(s => {
                   const status = normalizeAttStatus(attState[s.id] || 'pending');
                   const meta = attStatusMeta(status);
+                  const streak = absenceStreakFor(s.id);
                   return (
                     <div key={s.id} style={{
                       padding: '10px 12px', borderRadius: 8,
                       background: 'rgba(255,255,255,0.02)',
                       border: `1px solid ${isAttPending(status) ? 'rgba(59,130,246,0.45)' : 'var(--border)'}`,
                     }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                        <div style={{ fontWeight: 700, fontSize: 13 }}>{s.name}</div>
-                        <StatusPill meta={meta} />
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 8 }}>
+                        <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 5 }}>
+                          {/* No arrow here — the "תיק לקוח" button on this row already says it. */}
+                          <StudentNameLink student={s} onOpen={onOpenStudent} truncate showIcon={false} />
+                          <AbsenceStreakPill streak={streak} />
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                          <StatusPill meta={meta} />
+                          <StudentFileButton student={s} onOpen={onOpenStudent} />
+                        </div>
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         {ATT_STATUS.filter(o => ATT_MARK_KEYS.includes(o.key)).map(opt => (
@@ -893,7 +1037,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                         {s.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 13 }}>{s.name}</div>
+                        <StudentNameLink student={s} onOpen={onOpenStudent} truncate />
                         <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 1 }}>
                           {parent?.name}{parent?.phone ? ` · ${parent.phone}` : ''}
                         </div>
@@ -901,9 +1045,10 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                       {s.levelGrade && (
                         <span style={{ fontWeight: 900, color: c.text, fontSize: 13 }}>{s.levelGrade}</span>
                       )}
+                      <StudentFileButton student={s} onOpen={onOpenStudent} />
                       <button className="btn btn-ghost btn-icon btn-xs" title="הסר מהקבוצה"
                         style={{ color: 'var(--red)' }}
-                        onClick={() => onRemoveStudent(s.id, group.id)}>
+                        onClick={() => confirmRemove(s)}>
                         <UserMinus size={14} />
                       </button>
                     </div>
@@ -928,15 +1073,16 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                         border: '1px dashed var(--border)',
                       }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 700, fontSize: 13 }}>{s.name}</div>
+                          <StudentNameLink student={s} onOpen={onOpenStudent} truncate />
                           <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 1 }}>
                             {parent?.name}{parent?.phone ? ` · ${parent.phone}` : ''}
                           </div>
                         </div>
                         <span className="badge badge-gray">המתנה</span>
+                        <StudentFileButton student={s} onOpen={onOpenStudent} />
                         <button className="btn btn-ghost btn-icon btn-xs" title="הסר מהמתנה"
                           style={{ color: 'var(--red)' }}
-                          onClick={() => onRemoveStudent(s.id, group.id)}>
+                          onClick={() => confirmRemove(s, { waitlist: true })}>
                           <UserMinus size={14} />
                         </button>
                       </div>
@@ -1083,9 +1229,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                         }}
                       >
                         <div style={{ minWidth: 0, paddingInlineEnd: 8 }}>
-                          <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {s.name}
-                          </div>
+                          <StudentNameLink student={s} onOpen={onOpenStudent} truncate />
                           <div style={{ fontSize: 10, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {p?.name || '—'}
                           </div>
@@ -1301,7 +1445,8 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
 }
 
 // ─── Main Schedule Component ──────────────────────────────────────────────────
-export default function Schedule({ groups, students, parents, setGroups, setStudents }) {
+export default function Schedule({ groups, students, parents, setGroups, setStudents, setParents, canManageBilling = false }) {
+  const [studentFileId,   setStudentFileId]   = useState(null);
   const [selectedGroup,   setSelectedGroup]   = useState(null);
   const [editingGroup,    setEditingGroup]     = useState(null);
   const [showAddModal,    setShowAddModal]     = useState(false);
@@ -1311,6 +1456,24 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
   const [dayVacation,     setDayVacation]      = useState(null); // «חופשה מאימונים» covering the day
   const [viewMode,        setViewMode]         = useState('week');
   const [employees,       setEmployees]        = useState([]);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Deep link from the customer card: /schedule?group=<id> opens that group.
+  // Waits for the groups list to arrive, then drops the parameter from the address.
+  useEffect(() => {
+    const linkedId = searchParams.get('group');
+    if (!linkedId) return;
+    const match = groups.find((g) => String(g.id) === String(linkedId));
+    if (!match) return;
+    setSelectedGroup(match);
+    setEditingGroup(null);
+    setShowAddModal(false);
+    setAttendanceGroup(null);
+    setViewMode('week');
+    const next = new URLSearchParams(searchParams);
+    next.delete('group');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, groups, setSearchParams]);
 
   // Fetch employees list dynamically for trainers dropdown
   useEffect(() => {
@@ -1483,6 +1646,25 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
 
   return (
     <div className="fade-in">
+      {/* Trainee file opened from a group — layers above the group panel/sheet
+          so both stay on screen side by side. */}
+      {studentFileId && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 600 }}>
+          <Suspense fallback={null}>
+            <StudentFilePanel
+              studentId={studentFileId}
+              students={students}
+              parents={parents}
+              groups={groups}
+              setStudents={setStudents}
+              setParents={setParents}
+              canManageBilling={canManageBilling}
+              onClose={() => setStudentFileId(null)}
+            />
+          </Suspense>
+        </div>
+      )}
+
       {/* ── Modals ─────────────────────────────────────────────────────────── */}
       {liveAttendanceGroup && !editingGroup && !showAddModal && (
         <AttendanceModal
@@ -1494,6 +1676,7 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
           initialDate={attendanceDate}
           onClose={() => setAttendanceGroup(null)}
           onMarked={() => setAttendanceGroup(g => (g ? { ...g } : g))}
+          onOpenStudent={setStudentFileId}
         />
       )}
       {(showAddModal || editingGroup) && (
@@ -1518,6 +1701,7 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
           onAttendance={g => openAttendance(g, attendanceDate)}
           onAssignStudent={handleAssignStudent}
           onRemoveStudent={handleRemoveStudent}
+          onOpenStudent={setStudentFileId}
         />
       )}
 

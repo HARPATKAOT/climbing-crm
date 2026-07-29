@@ -451,6 +451,9 @@ export function createDraftTemplate(input = {}) {
     language: input.language || 'he',
     category: input.category || 'UTILITY',
     status: 'DRAFT',
+    // Staff note on when this template gets sent. Internal only — Meta never
+    // sees it, so it stays editable after approval unlike the content fields.
+    usage: String(input.usage || '').trim(),
     body,
     header: input.header || '',
     footer: input.footer || '',

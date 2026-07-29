@@ -368,7 +368,13 @@ function hoursFromTimes(startHm, endHm) {
   return roundHoursQuarter((b - a) / 60);
 }
 
-function WorkAssignmentsBlock({ activityId }) {
+/**
+ * שיבוץ עובדים לאירוע.
+ * לפני שמירת האירוע (`activityId` ריק) הבלוק עובד במצב טיוטה: אפשר לבחור עובדים
+ * ולראות שעות ועלות משוערות לפי שעות האירוע והסכם השכר, והשורות עצמן נוצרות
+ * ברגע שהאירוע נשמר. אחרי השמירה זו אותה רשימה, עם עריכה מלאה של כל שורה.
+ */
+function WorkAssignmentsBlock({ activityId, draft = null }) {
   const [employees, setEmployees] = useState([]);
   const [wages, setWages] = useState([]);
   const [rows, setRows] = useState([]);
@@ -376,15 +382,19 @@ function WorkAssignmentsBlock({ activityId }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
 
+  const draftMode = !activityId && !!draft;
+
   const load = useCallback(async () => {
     try {
       const [empRes, asgRes, wageRes] = await Promise.all([
         fetch('/api/employees'),
-        fetch(`/api/work-assignments?activity_id=${encodeURIComponent(activityId)}`),
+        activityId
+          ? fetch(`/api/work-assignments?activity_id=${encodeURIComponent(activityId)}`)
+          : Promise.resolve(null),
         fetch('/api/wages'),
       ]);
       const emps = empRes.ok ? await empRes.json() : [];
-      const asgs = asgRes.ok ? await asgRes.json() : [];
+      const asgs = asgRes?.ok ? await asgRes.json() : [];
       const wageList = wageRes.ok ? await wageRes.json() : [];
       setEmployees(Array.isArray(emps) ? emps.filter((e) => e.is_active !== false) : []);
       setWages(Array.isArray(wageList) ? wageList : []);
@@ -408,9 +418,31 @@ function WorkAssignmentsBlock({ activityId }) {
   const empName = (id) => employees.find((e) => e.id === id)?.name || 'עובד';
   const agreementFor = (employeeId) => wages.find((w) => w.employee_id === employeeId) || DEFAULT_WAGE;
 
+  // Before the event exists there is nothing to attach a row to, so the picked
+  // employees wait on the form and become real rows the moment it is saved.
+  const draftIds = draftMode ? (draft.employeeIds || []) : [];
+  const draftRows = draftMode
+    ? draftIds.map((employeeId) => ({
+      id: `draft-${employeeId}`,
+      employee_id: employeeId,
+      work_type: draft.activityType === 'route_building' ? 'route_building_shift' : 'counter_shift',
+      start_time: draft.startTime || '09:00',
+      end_time: draft.endTime || '17:00',
+      hours: hoursFromTimes(draft.startTime || '09:00', draft.endTime || '17:00') ?? 2,
+      pay_mode: 'hourly',
+      flat_amount: '',
+    }))
+    : [];
+
   const addFromPlan = async () => {
     if (!selectedIds.length) {
       setMsg('בחרו לפחות עובד אחד');
+      return;
+    }
+    if (draftMode) {
+      draft.setEmployeeIds([...draftIds, ...selectedIds.filter((id) => !draftIds.includes(id))]);
+      setSelectedIds([]);
+      setMsg('');
       return;
     }
     setBusy(true);
@@ -487,7 +519,8 @@ function WorkAssignmentsBlock({ activityId }) {
     }));
   };
 
-  const available = employees.filter((e) => !rows.some((r) => r.employee_id === e.id));
+  const shownRows = draftMode ? draftRows : rows;
+  const available = employees.filter((e) => !shownRows.some((r) => r.employee_id === e.id));
   const assignLabel = selectedIds.length > 1 ? 'שבץ עובדים' : 'שבץ עובד';
 
   return (
@@ -504,6 +537,13 @@ function WorkAssignmentsBlock({ activityId }) {
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-1)' }}>
         עובדים במשמרת
       </div>
+
+      {draftMode && (
+        <div style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-3)' }}>
+          אפשר לבחור עובדים כבר עכשיו. השעות והעלות כאן הן הערכה לפי שעות האירוע,
+          והשיבוץ עצמו ייווצר עם שמירת האירוע — אז אפשר יהיה לשנות שעות ותשלום לכל אחד.
+        </div>
+      )}
 
       {available.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end' }}>
@@ -566,9 +606,50 @@ function WorkAssignmentsBlock({ activityId }) {
         </div>
       )}
 
-      {rows.length === 0 ? (
+      {shownRows.length === 0 ? (
         <div style={{ fontSize: 12, color: 'var(--text-3)', fontStyle: 'italic' }}>
           עדיין אין עובדים משויכים לאירוע הזה
+        </div>
+      ) : draftMode ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {draftRows.map((row) => {
+            const agreement = agreementFor(row.employee_id);
+            const rate = rateForWorkType(agreement, row.work_type);
+            const amount = payAmountForAssignment(row, agreement);
+            return (
+              <div
+                key={row.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  padding: '6px 8px',
+                  borderRadius: 8,
+                  border: '1px dashed var(--border)',
+                  background: 'rgba(255,255,255,0.02)',
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
+                    {empName(row.employee_id)}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                    {row.start_time}–{row.end_time} · {row.hours} שעות · ₪{rate} לשעה · הערכה ₪{amount}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={() => draft.setEmployeeIds(draftIds.filter((id) => id !== row.employee_id))}
+                  aria-label="הסרת עובד"
+                  title="הסרה"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            );
+          })}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1078,14 +1159,17 @@ function RegularActivityModal({
               />
             </section>
 
-            {!isTemplateEdit && (
-              isEdit ? (
-                <WorkAssignmentsBlock activityId={initial.id} />
-              ) : (
-                <div className="activity-settings-empty">
-                  אחרי שמירת האירוע אפשר לשייך עובדים ולקבוע שעות לכל אחד
-                </div>
-              )
+            {!isTemplateEdit && (isEdit || !readOnly) && (
+              <WorkAssignmentsBlock
+                activityId={isEdit ? initial.id : null}
+                draft={isEdit ? null : {
+                  employeeIds: form._pending_employee_ids || [],
+                  setEmployeeIds: (ids) => setForm((prev) => ({ ...prev, _pending_employee_ids: ids })),
+                  activityType: form.type,
+                  startTime: form.start_time,
+                  endTime: form.end_time,
+                }}
+              />
             )}
           </div>
         </div>
@@ -1146,8 +1230,18 @@ function RegularActivityModal({
   );
 }
 
-function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }) {
+function ActivityFormModal({
+  initial,
+  onSave,
+  onDelete,
+  onClose,
+  saving,
+  error,
+  externalCalendars = [],
+}) {
   const isOverlay = !!initial?.overlay;
+  // New external event: overlay form with no Google event behind it yet.
+  const isOverlayNew = isOverlay && !initial?.google_event_id;
   const readOnly = !!initial?.read_only;
   const isTemplateEdit = !!initial?._editing_template && !!initial?._template_id;
   const [form, setForm] = useState(() => ({
@@ -1182,6 +1276,9 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
   const isEdit = !!initial?.id && !isTemplateEdit;
   const showError = localError || error || '';
   const multiDay = !!(form.date && form.end_date && form.end_date > form.date);
+  const selectedCalendarName = isOverlay
+    ? (externalCalendars.find((c) => c.id === form.calendar_id)?.name || initial?.calendar_name || '')
+    : '';
 
   const set = (key, value) => {
     if (readOnly) return;
@@ -1237,13 +1334,18 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
     }
 
     if (isOverlay) {
+      const calendarId = form.calendar_id || initial.calendar_id || '';
+      if (!calendarId) {
+        setLocalError('בחרו יומן יעד');
+        return;
+      }
       onSave({
         ...form,
         end_date: endDateNorm || null,
         overlay: true,
         name: String(form.name).trim(),
-        calendar_id: initial.calendar_id,
-        google_event_id: initial.google_event_id,
+        calendar_id: calendarId,
+        google_event_id: initial.google_event_id || '',
         closeAfter,
       });
       return;
@@ -1263,9 +1365,11 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
     ? 'צפייה באירוע'
     : isTemplateEdit
       ? 'עריכת תבנית'
-      : isOverlay
-        ? 'עריכת אירוע מיומן חיצוני'
-        : (isEdit ? 'עריכת אירוע' : 'אירוע חדש');
+      : isOverlayNew
+        ? 'אירוע חדש ביומן חיצוני'
+        : isOverlay
+          ? 'עריכת אירוע מיומן חיצוני'
+          : (isEdit ? 'עריכת אירוע' : 'אירוע חדש');
 
   if (!isOverlay) {
     return (
@@ -1321,9 +1425,9 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
             <div style={{ fontSize: 17, fontWeight: 800, color: 'var(--text-1)' }}>
               {title}
             </div>
-            {isOverlay && initial?.calendar_name && (
+            {isOverlay && selectedCalendarName && (
               <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
-                {initial.calendar_name}
+                {selectedCalendarName}
                 {readOnly ? ' · לצפייה בלבד' : ''}
               </div>
             )}
@@ -1354,6 +1458,21 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
               disabled={readOnly}
             />
           </label>
+
+          {isOverlayNew && externalCalendars.length > 0 && (
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-3)' }}>
+              יומן יעד
+              <select
+                className="input"
+                value={form.calendar_id || ''}
+                onChange={(e) => set('calendar_id', e.target.value)}
+              >
+                {externalCalendars.map((cal) => (
+                  <option key={cal.id} value={cal.id}>{cal.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
 
           {!isOverlay && (
             <div>
@@ -1391,7 +1510,7 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
             </div>
           )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: isOverlay ? '1fr' : '1fr 1fr', gap: 10 }}>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-3)' }}>
               תאריך
               <input
@@ -1403,25 +1522,29 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
                 disabled={readOnly}
               />
             </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-3)' }}>
-              תאריך סיום
-              <input
-                className="input"
-                type="date"
-                value={form.end_date || ''}
-                min={form.date || undefined}
-                onChange={(e) => set('end_date', e.target.value)}
-                disabled={readOnly}
-              />
-            </label>
+            {/* Google's end date on external events is exclusive and the overlay
+                write path only moves the start day — no end-date editor here. */}
+            {!isOverlay && (
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-3)' }}>
+                תאריך סיום
+                <input
+                  className="input"
+                  type="date"
+                  value={form.end_date || ''}
+                  min={form.date || undefined}
+                  onChange={(e) => set('end_date', e.target.value)}
+                  disabled={readOnly}
+                />
+              </label>
+            )}
           </div>
 
-          {multiDay && !form.all_day && (
+          {!isOverlay && multiDay && !form.all_day && (
             <div style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.45 }}>
               כל יום בין התאריכים בשעות שמוגדרות למטה
             </div>
           )}
-          {multiDay && form.all_day && (
+          {!isOverlay && multiDay && form.all_day && (
             <div style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.45 }}>
               בלוק של יום שלם לכל הימים בטווח
             </div>
@@ -1539,14 +1662,17 @@ function ActivityFormModal({ initial, onSave, onDelete, onClose, saving, error }
             />
           )}
 
-          {!isOverlay && (
-            isEdit ? (
-              <WorkAssignmentsBlock activityId={initial.id} />
-            ) : (
-              <div style={{ fontSize: 12, color: 'var(--text-3)', fontStyle: 'italic' }}>
-                אחרי שמירת האירוע אפשר לשייך עובדים ולקבוע שעות לכל אחד
-              </div>
-            )
+          {!isOverlay && (isEdit || !readOnly) && (
+            <WorkAssignmentsBlock
+              activityId={isEdit ? initial.id : null}
+              draft={isEdit ? null : {
+                employeeIds: form._pending_employee_ids || [],
+                setEmployeeIds: (ids) => setForm((prev) => ({ ...prev, _pending_employee_ids: ids })),
+                activityType: form.type,
+                startTime: form.start_time,
+                endTime: form.end_time,
+              }}
+            />
           )}
         </div>
 
@@ -2532,6 +2658,37 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     return data;
   };
 
+  const postOverlayEvent = async (fields) => {
+    const res = await fetch('/api/google-calendar/overlay-events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        calendar_id: fields.calendar_id,
+        name: fields.name,
+        date: fields.date,
+        start_time: fields.all_day ? null : fields.start_time,
+        end_time: fields.all_day ? null : fields.end_time,
+        all_day: !!fields.all_day,
+        location: fields.location || '',
+        description: fields.description || '',
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'יצירת האירוע נכשלה');
+    return data;
+  };
+
+  const deleteOverlayEvent = async ({ calendar_id, google_event_id }) => {
+    const qs = new URLSearchParams({
+      calendar_id: calendar_id || '',
+      event_id: google_event_id || '',
+    });
+    const res = await fetch(`/api/google-calendar/overlay-events?${qs}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'מחיקה נכשלה');
+    return data;
+  };
+
   const putActivity = async (event, fields) => {
     const res = await fetch(`/api/activities/${event.id}`, {
       method: 'PUT',
@@ -2616,6 +2773,19 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     if (typeFilter === 'all') return activities;
     return activities.filter((a) => activityMatchesFilter(a.type, typeFilter));
   }, [activities, typeFilter]);
+
+  // Google calendars we may create events on: shown on the board, not the synced
+  // wall calendar, and the connected account has write access.
+  const writableOverlayCalendars = useMemo(() => {
+    const wallId = googleStatus?.calendarId || null;
+    const shown = new Set(overlaySelectedIds || []);
+    return (overlayCalendars || []).filter((cal) => (
+      cal.id !== wallId
+      && !cal.isWallCalendar
+      && shown.has(cal.id)
+      && ['owner', 'writer'].includes(String(cal.accessRole || ''))
+    ));
+  }, [overlayCalendars, overlaySelectedIds, googleStatus?.calendarId]);
 
   const listItems = useMemo(() => {
     const rows = typeFilter === 'all'
@@ -2785,6 +2955,26 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     setFormError('');
     setModal(emptyForm(dateStr, opts));
     setBanner('אירוע מותאם — מלאו מחיר, מזמין ודף הרשמה');
+  };
+
+  const openExternalCreate = (calendarId, dateStr, opts = {}) => {
+    const cal = writableOverlayCalendars.find((c) => c.id === calendarId)
+      || writableOverlayCalendars[0]
+      || null;
+    if (!cal) {
+      setBanner('אין יומן גוגל עם הרשאת כתיבה מסומן להצגה');
+      return;
+    }
+    setFormError('');
+    setModal({
+      ...emptyForm(dateStr, opts),
+      overlay: true,
+      read_only: false,
+      calendar_id: cal.id,
+      calendar_name: cal.name,
+      google_event_id: '',
+    });
+    setBanner(`אירוע חדש ביומן "${cal.name}"`);
   };
 
   const openFromTemplate = (tpl, dateStr, opts = {}) => {
@@ -2985,6 +3175,10 @@ export default function ActivitiesCalendar({ isOwner = false }) {
         await putOverlayEvent(entry.before, entry.before);
         await loadOverlayEvents(visibleRangeRef.current.from, visibleRangeRef.current.to);
         setBanner('בוטלה עריכת האירוע');
+      } else if (entry.type === 'overlay_create') {
+        await deleteOverlayEvent(entry.created);
+        await loadOverlayEvents(visibleRangeRef.current.from, visibleRangeRef.current.to);
+        setBanner('בוטלה יצירת האירוע');
       } else if (entry.type === 'activity_create') {
         const res = await fetch(`/api/activities/${entry.createdId}`, { method: 'DELETE' });
         if (!res.ok) throw new Error('ביטול יצירה נכשל');
@@ -3105,6 +3299,29 @@ export default function ActivitiesCalendar({ isOwner = false }) {
         return;
       }
 
+      if (payload.overlay && !payload.google_event_id) {
+        const created = await postOverlayEvent(payload);
+        pushUndo({
+          type: 'overlay_create',
+          label: 'יצירת אירוע ביומן חיצוני',
+          created: { ...created },
+        });
+        if (closeAfter) {
+          setModal(null);
+        } else {
+          // Keep editing the event we just created — further saves become updates.
+          setModal({
+            ...created,
+            overlay: true,
+            start_time: created.start_time ? String(created.start_time).slice(0, 5) : '',
+            end_time: created.end_time ? String(created.end_time).slice(0, 5) : '',
+          });
+        }
+        await loadOverlayEvents(visibleRangeRef.current.from, visibleRangeRef.current.to);
+        setBanner(closeAfter ? 'האירוע נוצר ביומן החיצוני' : 'האירוע נוצר — ממשיכים לערוך');
+        return;
+      }
+
       if (payload.overlay) {
         const before = overlayEvents.find((e) => e.id === payload.id) || payload;
         await putOverlayEvent(payload, {
@@ -3133,7 +3350,12 @@ export default function ActivitiesCalendar({ isOwner = false }) {
 
       const isEdit = !!payload.id;
       const before = isEdit ? activities.find((a) => a.id === payload.id) : null;
-      const { closeAfter: _closeAfter, ...body } = payload;
+      const {
+        closeAfter: _closeAfter,
+        // Employees picked before the event existed — attached right after it is created.
+        _pending_employee_ids: pendingEmployeeIds = [],
+        ...body
+      } = payload;
       const res = await fetch(isEdit ? `/api/activities/${payload.id}` : '/api/activities', {
         method: isEdit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3148,13 +3370,36 @@ export default function ActivitiesCalendar({ isOwner = false }) {
       } else if (!isEdit && data?.id) {
         pushUndo({ type: 'activity_create', label: 'יצירת אירוע', createdId: data.id });
       }
+
+      // The event now exists, so the employees picked in the form become real
+      // work rows. A failure here must not read as "the event was not saved".
+      let assignmentWarning = '';
+      if (!isEdit && data?.id && pendingEmployeeIds.length) {
+        try {
+          const assignRes = await fetch('/api/work-assignments/from-activity', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ activity_id: data.id, employee_ids: pendingEmployeeIds }),
+          });
+          if (!assignRes.ok) {
+            const assignErr = await assignRes.json().catch(() => ({}));
+            assignmentWarning = assignErr.error || 'שיבוץ העובדים נכשל — אפשר לשבץ מתוך האירוע';
+          }
+        } catch {
+          assignmentWarning = 'שיבוץ העובדים נכשל — אפשר לשבץ מתוך האירוע';
+        }
+      }
+
       await loadActivities();
+      const savedBanner = assignmentWarning
+        ? `האירוע נשמר · ${assignmentWarning}`
+        : 'האירוע נשמר';
       if (closeAfter) {
         setModal(null);
-        setBanner('האירוע נשמר');
+        setBanner(savedBanner);
       } else {
         setModal(data?.id ? data : { ...body, ...(data || {}) });
-        setBanner('השינויים הוחלו');
+        setBanner(assignmentWarning ? `השינויים הוחלו · ${assignmentWarning}` : 'השינויים הוחלו');
       }
     } catch (err) {
       const msg = err.message || 'שמירה נכשלה';
@@ -3170,13 +3415,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     setSaving(true);
     try {
       if (activity.overlay) {
-        const qs = new URLSearchParams({
-          calendar_id: activity.calendar_id || '',
-          event_id: activity.google_event_id || '',
-        });
-        const res = await fetch(`/api/google-calendar/overlay-events?${qs}`, { method: 'DELETE' });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'מחיקה נכשלה');
+        await deleteOverlayEvent(activity);
         pushUndo({
           type: 'overlay_delete',
           label: 'מחיקת אירוע חיצוני',
@@ -3421,6 +3660,8 @@ export default function ActivitiesCalendar({ isOwner = false }) {
               onCustomEvent={(dateStr) => openBlankCreate(dateStr, createCtx.opts)}
               onApplyTemplate={(tpl, dateStr) => openFromTemplate(tpl, dateStr, createCtx.opts)}
               onEditTemplate={openEditTemplate}
+              externalCalendars={writableOverlayCalendars}
+              onExternalEvent={(calendarId, dateStr) => openExternalCreate(calendarId, dateStr, createCtx.opts)}
             />
             <button type="button" className="btn btn-primary" onClick={() => openCreate(toDateStr(new Date()))}>
               <Plus size={16} strokeWidth={2.5} />
@@ -3821,7 +4062,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
             modal._editing_template
               ? `tpl-${modal._template_id}`
               : modal.overlay
-                ? `overlay-${modal.id}`
+                ? `overlay-${modal.id || `new-${modal.calendar_id}`}`
                 : (modal.id || 'new-activity')
           }
           initial={modal}
@@ -3830,6 +4071,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           onClose={() => { setModal(null); setFormError(''); }}
           saving={saving}
           error={formError}
+          externalCalendars={writableOverlayCalendars}
         />
       )}
 

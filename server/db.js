@@ -9,8 +9,10 @@ import {
   studentGroupIds,
   activeEnrollmentGroupIds,
 } from './studentGroups.js';
+import { DEFAULT_BUSINESS_PROFILE } from './businessProfile.js';
 
 const DB_FILE = path.join(process.cwd(), 'db.json');
+const BRAND_NAME = DEFAULT_BUSINESS_PROFILE.display_name;
 
 /** Tables that may exist locally (e.g. after Meta sync) before durable write completes. */
 const LOCAL_MIGRATE_IF_REMOTE_EMPTY = new Set(['message_templates', 'saved_replies']);
@@ -210,10 +212,10 @@ const SEED_DATA = {
     aiActiveHoursEnd: '21:00',
     // 0=ראשון … 6=שבת (אזור זמן ישראל)
     aiActiveDays: [0, 1, 2, 3, 4, 5, 6],
-    aiSystemPrompt: 'אתה בוט שירות לקוחות ידידותי של קיר הטיפוס My Wall. ענה בנימוס וקצרות בעברית. שלח קישור להצהרת בריאות או הסבר על חוגים לפי הצורך. שמור על טון חיובי ומקצועי. אם אינך בטוח — התחל ב-UNSURE.',
+    aiSystemPrompt: `אתה בוט שירות לקוחות ידידותי של קיר הטיפוס ${BRAND_NAME}. ענה בנימוס וקצרות בעברית. שלח קישור להצהרת בריאות או הסבר על חוגים לפי הצורך. שמור על טון חיובי ומקצועי. אם אינך בטוח — התחל ב-UNSURE.`,
     aiOutsideHoursMessage: 'קיבלנו את ההודעה 🙏\nאנחנו מחוץ לשעות המענה כרגע.\nנחזור אליכם בבוקר בין 9:00 ל־21:00.',
     aiHandoffKeywords: 'אדם,נציג,צוות,תלונה,מנהל,דחוף,לדבר עם',
-    aiHandoffAckMessage: 'מעבירים אתכם לצוות My Wall 🧗\nמישהו יחזור אליכם בהקדם.',
+    aiHandoffAckMessage: `מעבירים אתכם לצוות ${BRAND_NAME} 🧗\nמישהו יחזור אליכם בהקדם.`,
     aiStopKeywords: 'עצור,הסר,stop,unsubscribe,הסר אותי',
     aiOptOutMessage: 'הוסרתם מרשימת המענה האוטומטי.\nאם תרצו לחזור — כתבו «הפעל בוט».',
     aiPauseOnHumanReply: true,
@@ -225,12 +227,12 @@ const SEED_DATA = {
     aiRateLimitPerHour: 20,
     aiKnowledgeBase: 'שאלות נפוצות:\n- חניה: יש חניה בחזית הקיר.\n- ציוד: נעלי טיפוס להשכרה במקום.\n- ביטול אימון: לעדכן את הצוות מראש בוואטסאפ.',
     aiForbiddenTopics: 'אל תציין מחירים או סכומים.\nאל תבטיח הנחות.\nאל תיתן ייעוץ רפואי.\nאל תשתף פרטי לקוחות אחרים.',
-    aiBusinessFacts: 'כתובת: רחוב האורגים 12, אשדוד\nשעות: א׳–ה׳ 14:00–22:00 | שישי 09:00–15:00 | שבת סגור\nהצהרת בריאות: https://client-omega-topaz-35.vercel.app/health',
+    aiBusinessFacts: 'כתובת: השקד 1, תל מונד\nשעות הפתיחה משתנות לפי העונה ומזג האוויר — לשעות מעודכנות הפנה לאתר או לצוות\nהצהרת בריאות: https://app.kirboaz.co.il/health',
     aiEscalateWhenUnsure: true,
     aiUnsureReply: 'רגע — כדי לא לטעות אני מעביר את זה לצוות 🙏\nמישהו יחזור אליכם עם תשובה מדויקת.',
     aiLeadCaptureEnabled: true,
     aiInteractiveMenuEnabled: true,
-    aiGreetingMenu: 'היי! אני הבוט של My Wall 🧗\n\nבמה אפשר לעזור?\n1️⃣ הצהרת בריאות ✍️\n2️⃣ חוגים ורישום 🤸\n3️⃣ שעות ומיקום 🗺️\n4️⃣ לדבר עם צוות 👤\n\nכתבו מספר או שאלה קצרה 😊',
+    aiGreetingMenu: `היי! אני הבוט של ${BRAND_NAME} 🧗\n\nבמה אפשר לעזור?\n1️⃣ הצהרת בריאות ✍️\n2️⃣ חוגים ורישום 🤸\n3️⃣ שעות ומיקום 🗺️\n4️⃣ לדבר עם צוות 👤\n\nכתבו מספר או שאלה קצרה 😊`,
     aiReactivateKeywords: 'הפעל בוט,הפעל,activate',
   },
   whatsapp_logs: [],

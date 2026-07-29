@@ -76,7 +76,7 @@ function frontendBase() {
   return (
     process.env.FRONTEND_URL ||
     (process.env.NODE_ENV === 'production'
-      ? 'https://client-omega-topaz-35.vercel.app'
+      ? 'https://app.kirboaz.co.il'
       : 'http://localhost:3000')
   );
 }

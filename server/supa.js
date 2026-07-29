@@ -108,6 +108,16 @@ export const OPERATIONAL_TABLES = [
   'pass_punches',
   'pos_sales',
   'equipment_checkouts',
+  'activity_interest',
+  'activity_attendance',
+  'ai_suggestions',
+  'crm_tasks',
+  'ai_scenarios',
+  'ai_assistant_settings',
+  'campaigns',
+  'campaign_sends',
+  'campaign_runs',
+  'customer_coupons',
 ];
 
 // Kept as the public name used by db.js: every listed collection is durable.
@@ -280,6 +290,9 @@ mappers.activities = columnMapper([
   'google_event_id', 'google_etag', 'synced_at', 'all_day', 'contact_name', 'contact_phone',
   'host_name', 'host_email', 'host_phone', 'host_parent_id', 'payment_status',
   'registration_slug', 'registration_enabled', 'registration_closes_at',
+  // Opt-in publishing to the marketing site — separate from having a
+  // registration link, so private events are never advertised.
+  'show_on_site',
   'collect_registration_payment', 'registration_page_title', 'registration_page_body',
   'registration_theme', 'registration_mode', 'participant_registration_slug',
   'host_payment_token', 'host_payment_id', 'host_paid_at',

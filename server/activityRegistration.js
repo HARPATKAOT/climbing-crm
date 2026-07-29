@@ -3,6 +3,7 @@
  */
 import crypto from 'crypto';
 import { clampImage } from './productCategories.js';
+import { DEFAULT_BUSINESS_PROFILE } from './businessProfile.js';
 import { normalizePriceIncludesVat } from './vat.js';
 
 const PAYMENT_STATUSES = new Set(['unpaid', 'paid', 'partial', 'refunded']);
@@ -174,6 +175,7 @@ export function templateFieldsFromActivity(activity = {}) {
     end_time: activity.end_time || null,
     all_day: !!activity.all_day,
     registration_enabled: !!activity.registration_enabled,
+    show_on_site: !!activity.show_on_site,
     collect_registration_payment: !!activity.collect_registration_payment,
     registration_mode: activity.registration_mode || (
       activity.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
@@ -212,6 +214,9 @@ export function normalizeTemplatePayload(body = {}) {
     end_time: body.all_day ? null : (body.end_time || null),
     all_day: !!body.all_day,
     registration_enabled: !!body.registration_enabled,
+    // Opt-in publishing: a private birthday must never reach the public site
+    // just because it has a registration link.
+    show_on_site: !!body.show_on_site,
     collect_registration_payment: !!body.collect_registration_payment,
     registration_mode: body.registration_mode === 'host_pays'
       ? 'host_pays'
@@ -249,6 +254,7 @@ export function activityDraftFromTemplate(template = {}, { date } = {}) {
     contact_phone: '',
     payment_status: 'unpaid',
     registration_enabled: !!fields.registration_enabled,
+    show_on_site: !!fields.show_on_site,
     collect_registration_payment: !!fields.collect_registration_payment,
     registration_mode: fields.registration_mode,
     registration_page_title: fields.registration_page_title || fields.name,
@@ -278,7 +284,7 @@ export const STARTER_ACTIVITY_TEMPLATES = [
     registration_enabled: true,
     collect_registration_payment: true,
     registration_page_title: 'טיול לנחל רחף',
-    registration_page_body: 'הרשמה לטיול שטח עם My Wall. מלאו פרטים ואשרו מקום.',
+    registration_page_body: `הרשמה לטיול שטח עם ${DEFAULT_BUSINESS_PROFILE.display_name}. מלאו פרטים ואשרו מקום.`,
     theme: { accent: '#60A5FA' },
     start_time: '08:00',
     end_time: '16:00',
@@ -314,7 +320,7 @@ export const STARTER_ACTIVITY_TEMPLATES = [
     registration_enabled: true,
     collect_registration_payment: true,
     registration_page_title: 'יום טיפוס בכברה',
-    registration_page_body: 'יום שטח של טיפוס עם מדריכי My Wall.',
+    registration_page_body: `יום שטח של טיפוס עם מדריכי ${DEFAULT_BUSINESS_PROFILE.display_name}.`,
     theme: { accent: '#A78BFA' },
     start_time: '08:00',
     end_time: '15:00',

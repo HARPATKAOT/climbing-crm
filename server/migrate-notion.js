@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
+import { DEFAULT_BUSINESS_PROFILE } from './businessProfile.js';
 
 // Load env from current directory
 dotenv.config();
@@ -159,7 +160,7 @@ async function run() {
       metaWaAccessToken: "",
       verifyToken: process.env.META_WEBHOOK_VERIFY_TOKEN || "",
       aiResponderEnabled: true,
-      aiSystemPrompt: "אתה בבוט שירות לקוחות ידידותי של קיר הטיפוס My Wall. ענה בנימוס וקצרות בעברית. שלח קישור להצהרת בריאות (https://mywall.co.il/health) או הסבר על חוגים לפי הצורך. שמור על טון חיובי ומקצועי."
+      aiSystemPrompt: `אתה בבוט שירות לקוחות ידידותי של קיר הטיפוס ${DEFAULT_BUSINESS_PROFILE.display_name}. ענה בנימוס וקצרות בעברית. שלח קישור להצהרת בריאות או הסבר על חוגים לפי הצורך. שמור על טון חיובי ומקצועי.`
     },
     whatsapp_logs: [],
     broadcast_campaigns: [],

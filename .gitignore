@@ -16,3 +16,5 @@ db.json
 .env.local
 .env.production
 _archive/
+# Wix site snapshot: tens of MB of images, backed up outside git
+archive/

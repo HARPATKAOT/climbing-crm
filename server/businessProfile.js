@@ -4,7 +4,7 @@ import { clampImage } from './productCategories.js';
 const SETTINGS_KEY = 'business_profile';
 
 export const DEFAULT_BUSINESS_PROFILE = Object.freeze({
-  display_name: 'הרפתקאות',
+  display_name: 'הרפתקאות - קיר בועז',
   legal_name: '',
   logo_url: '/logo.png',
   phone: '',

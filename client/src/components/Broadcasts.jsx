@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Send, Hash, History, Settings, Smartphone, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2, FileText, Bookmark, RotateCcw } from 'lucide-react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import { Send, Hash, History, Settings, Smartphone, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2, FileText, Bookmark, RotateCcw, Target } from 'lucide-react';
 import { Modal } from './UI.jsx';
 import SegmentBuilder from './SegmentBuilder.jsx';
 import { EMPTY_FILTERS } from './segmentFilters.js';
@@ -7,6 +7,9 @@ import TemplatesManager, { TemplatePreview } from './TemplatesManager.jsx';
 import SavedRepliesManager from './SavedRepliesManager.jsx';
 import BotSettingsPanel from './BotSettingsPanel.jsx';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
+
+// Only downloaded when the campaigns tab is opened.
+const Campaigns = lazy(() => import('./Campaigns.jsx'));
 
 const PLAYGROUND_PHONE = '0599111000';
 
@@ -649,8 +652,11 @@ export default function Broadcasts({ parents, students, groups = [] }) {
         <button className={`btn btn-sm ${activeTab === 'saved' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('saved')}>
           <Bookmark size={14} /> הודעות שמורות
         </button>
+        <button className={`btn btn-sm ${activeTab === 'campaigns' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('campaigns')}>
+          <Target size={14} /> קמפיינים אוטומטיים
+        </button>
         <button className={`btn btn-sm ${activeTab === 'history' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('history')}>
-          <History size={14} /> היסטוריית קמפיינים
+          <History size={14} /> היסטוריית שידורים
         </button>
         <button className={`btn btn-sm ${activeTab === 'channels' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('channels')}>
           <Smartphone size={14} /> חיבורי ערוצים
@@ -662,6 +668,11 @@ export default function Broadcasts({ parents, students, groups = [] }) {
 
       {activeTab === 'templates' && <TemplatesManager />}
       {activeTab === 'saved' && <SavedRepliesManager />}
+      {activeTab === 'campaigns' && (
+        <Suspense fallback={<div style={{ color: 'var(--text-3)', fontSize: 13 }}>טוען קמפיינים...</div>}>
+          <Campaigns />
+        </Suspense>
+      )}
 
       {/* COMPOSE */}
       {activeTab === 'compose' && (

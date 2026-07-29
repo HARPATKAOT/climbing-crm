@@ -4,9 +4,12 @@ import {
   Check,
   CircleDollarSign,
   Clock3,
+  ListChecks,
   MessageSquare,
+  Sparkles,
   UserRoundPlus,
   UsersRound,
+  X,
 } from 'lucide-react';
 import { StatCard } from './UI.jsx';
 import { isAwaitingHandling, latestInboundTime } from './communicationQueue.js';
@@ -21,6 +24,14 @@ const ACTIVE_LEAD_STATUSES = new Set([
   'waitlist',
 ]);
 const INTRO_STATUSES = new Set(['intro_scheduled', 'intro_paid']);
+/** אותם שלבים שהשרת מחזיר (FUNNEL_STAGES), כדי לשריין את מקום המשפך כבר בטעינה. */
+const FUNNEL_STAGE_ORDER = [
+  'lead_new',
+  'health_signed',
+  'intro_scheduled',
+  'intro_paid',
+  'registered',
+];
 
 function dateValue(value) {
   if (!value) return null;
@@ -62,7 +73,7 @@ function leadPath(entry) {
   return `/leads?open=${encodeURIComponent(entry.key)}`;
 }
 
-function WorkSection({ icon: Icon, title, count, empty, children, tone = '#38BDF8' }) {
+function WorkSection({ icon: Icon, title, count, empty, loading = false, children, tone = '#38BDF8' }) {
   return (
     <section className="card daily-work-section">
       <header className="daily-work-section-header">
@@ -72,12 +83,13 @@ function WorkSection({ icon: Icon, title, count, empty, children, tone = '#38BDF
           </span>
           <div>
             <h2>{title}</h2>
-            <span>{count} לטיפול</span>
+            <span>{loading ? 'טוען…' : `${count} לטיפול`}</span>
           </div>
         </div>
       </header>
       <div className="daily-work-list">
-        {count ? children : <div className="daily-work-empty"><Check size={16} /> {empty}</div>}
+        {loading && <div className="daily-work-empty" aria-hidden="true" />}
+        {!loading && (count ? children : <div className="daily-work-empty"><Check size={16} /> {empty}</div>)}
       </div>
     </section>
   );
@@ -105,6 +117,35 @@ function WorkRow({ entry, meta, badge, onOpen, action }) {
   );
 }
 
+/** שורת הצעה או משימה — לא נגזרת מכרטיס ליד, ולכן לא משתמשת ב-WorkRow. */
+function ItemRow({ title, meta, note, badge, badgeTone = 'badge-amber', onOpen, actions }) {
+  const clickable = typeof onOpen === 'function';
+  return (
+    <div
+      className="daily-work-row"
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={clickable ? onOpen : undefined}
+      onKeyDown={clickable ? (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onOpen();
+        }
+      } : undefined}
+    >
+      <div className="daily-work-row-copy">
+        <strong>{title}</strong>
+        {meta && <span>{meta}</span>}
+        {note && <small>{note}</small>}
+      </div>
+      <div className="daily-work-row-actions" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+        {badge && <span className={`badge ${badgeTone}`}>{badge}</span>}
+        {actions}
+      </div>
+    </div>
+  );
+}
+
 export default function DailyWork({
   students = [],
   parents = [],
@@ -113,7 +154,12 @@ export default function DailyWork({
   onNavigate,
 }) {
   const [stats, setStats] = useState({});
+  const [statsLoaded, setStatsLoaded] = useState(false);
   const [markingId, setMarkingId] = useState(null);
+  const [suggestions, setSuggestions] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [queuesLoaded, setQueuesLoaded] = useState(false);
+  const [busyId, setBusyId] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -124,7 +170,29 @@ export default function DailyWork({
       })
       .catch(() => {
         if (!cancelled) setStats({});
+      })
+      .finally(() => {
+        if (!cancelled) setStatsLoaded(true);
       });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = (url, apply) => fetch(url)
+      .then((response) => (response.ok ? response.json() : []))
+      .then((data) => {
+        if (!cancelled) apply(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        if (!cancelled) apply([]);
+      });
+    Promise.all([
+      load('/api/ai/suggestions?status=pending', setSuggestions),
+      load('/api/tasks?status=open', setTasks),
+    ]).then(() => {
+      if (!cancelled) setQueuesLoaded(true);
+    });
     return () => { cancelled = true; };
   }, []);
 
@@ -155,9 +223,65 @@ export default function DailyWork({
   const activeLeads = entries.filter((entry) => ACTIVE_LEAD_STATUSES.has(entry.student?.status));
   const dailySales = stats?.dailySales || {};
   const conversion = stats?.conversion;
-  const funnelStages = Array.isArray(stats?.funnel?.stages) ? stats.funnel.stages : [];
+  const loadedStages = Array.isArray(stats?.funnel?.stages) ? stats.funnel.stages : [];
+  /** לפני שהנתונים חוזרים מציגים את אותם חמישה שלבים בלי מספרים, כדי שהמשפך לא ידחוף את הדף. */
+  const funnelStages = loadedStages.length
+    ? loadedStages
+    : FUNNEL_STAGE_ORDER.map((status) => ({ status, count: null }));
+  const funnelNote = (() => {
+    if (!statsLoaded) return 'טוען נתוני המרה';
+    if (!loadedStages.length) return 'נתוני המשפך אינם זמינים';
+    return conversion
+      ? `${Math.round(Number(conversion.rate || 0) * 100)}% המרה מאז תחילת המדידה`
+      : 'מדידת ההמרה מתחילה כעת';
+  })();
 
   const openEntry = (entry) => onNavigate?.(leadPath(entry));
+
+  /** קפיצה לכרטיס הלקוח מתוך הצעה/משימה, כשיש כרטיס להגיע אליו. */
+  const openParentCard = (parentId) => {
+    if (!parentId) return undefined;
+    const entry = entries.find((item) => String(item.parent?.id) === String(parentId));
+    return entry ? () => openEntry(entry) : undefined;
+  };
+
+  const reviewSuggestion = async (id, decision) => {
+    if (busyId) return;
+    setBusyId(id);
+    try {
+      const response = await fetch(`/api/ai/suggestions/${id}/${decision}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'review failed');
+      setSuggestions((current) => current.filter((row) => String(row.id) !== String(id)));
+      if (decision === 'approve' && result.task) setTasks((current) => [...current, result.task]);
+    } catch (error) {
+      console.error('Failed to review AI suggestion:', error);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const completeTask = async (id) => {
+    if (busyId) return;
+    setBusyId(id);
+    try {
+      const response = await fetch(`/api/tasks/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'done' }),
+      });
+      if (!response.ok) throw new Error('complete failed');
+      setTasks((current) => current.filter((row) => String(row.id) !== String(id)));
+    } catch (error) {
+      console.error('Failed to complete task:', error);
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   const markHandled = async (event, entry) => {
     event.stopPropagation();
@@ -206,31 +330,101 @@ export default function DailyWork({
         <StatCard label="פניות פעילות" value={activeLeads.length} sub="פניות שעדיין בתהליך" icon={UsersRound} color="#A78BFA" />
       </div>
 
-      {funnelStages.length > 0 && (
-        <section className="card daily-work-funnel">
-          <div className="daily-work-funnel-heading">
-            <div>
-              <h2>מצב משפך המכירה</h2>
-              <span>משפחה נספרת פעם אחת, לפי השלב המתקדם ביותר</span>
-            </div>
-            <div className="daily-work-conversion">
-              {conversion
-                ? `${Math.round(Number(conversion.rate || 0) * 100)}% המרה מאז תחילת המדידה`
-                : 'מדידת ההמרה מתחילה כעת'}
-            </div>
+      <section className="card daily-work-funnel">
+        <div className="daily-work-funnel-heading">
+          <div>
+            <h2>מצב משפך המכירה</h2>
+            <span>משפחה נספרת פעם אחת, לפי השלב המתקדם ביותר</span>
           </div>
-          <div className="daily-work-funnel-stages">
-            {funnelStages.map((stage) => (
-              <div key={stage.status}>
-                <strong>{Number(stage.count || 0)}</strong>
-                <span>{STATUSES[stage.status]?.label || stage.status}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+          <div className="daily-work-conversion">{funnelNote}</div>
+        </div>
+        <div className="daily-work-funnel-stages">
+          {funnelStages.map((stage) => (
+            <div key={stage.status}>
+              <strong>{stage.count === null ? '—' : Number(stage.count || 0)}</strong>
+              <span>{STATUSES[stage.status]?.label || stage.status}</span>
+            </div>
+          ))}
+        </div>
+      </section>
 
       <div className="daily-work-grid">
+        <WorkSection
+          icon={Sparkles}
+          title="הצעות AI לאישור"
+          count={suggestions.length}
+          empty="אין הצעות שממתינות לאישור"
+          loading={!queuesLoaded}
+          tone="#818CF8"
+        >
+          {suggestions.map((row) => (
+            <ItemRow
+              key={row.id}
+              title={row.args?.title || ''}
+              meta={[row.scenario_name, row.parent_name, row.student_name].filter(Boolean).join(' · ')}
+              note={row.reason}
+              badge={row.args?.due_date ? `יעד ${formatFollowup(row.args.due_date)}` : null}
+              badgeTone={row.args?.priority === 'high' ? 'badge-amber' : 'badge-gray'}
+              onOpen={openParentCard(row.args?.parent_id)}
+              actions={(
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-success btn-sm"
+                    disabled={busyId === row.id}
+                    onClick={() => reviewSuggestion(row.id, 'approve')}
+                  >
+                    <Check size={14} /> אשר
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    disabled={busyId === row.id}
+                    onClick={() => reviewSuggestion(row.id, 'reject')}
+                  >
+                    <X size={14} /> דחה
+                  </button>
+                </>
+              )}
+            />
+          ))}
+        </WorkSection>
+
+        <WorkSection
+          icon={ListChecks}
+          title="משימות פתוחות"
+          count={tasks.length}
+          empty="אין משימות פתוחות"
+          loading={!queuesLoaded}
+          tone="#34D399"
+        >
+          {tasks.map((row) => {
+            const due = dateValue(row.due_date);
+            const overdue = due && due < today;
+            return (
+              <ItemRow
+                key={row.id}
+                title={row.title}
+                meta={[row.parent_name, row.student_name].filter(Boolean).join(' · ')}
+                note={row.notes}
+                badge={due ? `${overdue ? 'באיחור · ' : ''}${formatFollowup(row.due_date)}` : null}
+                badgeTone={overdue ? 'badge-amber' : 'badge-gray'}
+                onOpen={openParentCard(row.parent_id)}
+                actions={(
+                  <button
+                    type="button"
+                    className="btn btn-success btn-sm"
+                    disabled={busyId === row.id}
+                    onClick={() => completeTask(row.id)}
+                  >
+                    <Check size={14} /> בוצע
+                  </button>
+                )}
+              />
+            );
+          })}
+        </WorkSection>
+
         <WorkSection icon={MessageSquare} title="הודעות ממתינות" count={pendingEntries.length} empty="אין הודעות שממתינות לטיפול" tone="#FBBF24">
           {pendingEntries.map((entry) => (
             <WorkRow

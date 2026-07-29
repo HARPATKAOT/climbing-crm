@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Calendar, CalendarRange, ShieldCheck, UserCog, LogIn,
-  MessageSquare, Bell, Coins, Award, FileHeart, Zap, LogOut, Building2, Package,
+  MessageSquare, Bell, Coins, Award, FileHeart, Zap, LogOut, Building2, Package, Sparkles,
 } from 'lucide-react';
 import { useAuth } from './components/AuthGate.jsx';
 import { useBusinessProfile } from './BusinessProfileContext.jsx';
@@ -23,6 +23,7 @@ const LevelTests         = lazy(() => import('./components/LevelTests.jsx'));
 const HealthDeclarations = lazy(() => import('./components/HealthDeclarations.jsx'));
 const CheckInConsole     = lazy(() => import('./components/CheckInConsole.jsx'));
 const Automations        = lazy(() => import('./components/Automations.jsx'));
+const AiAssistant        = lazy(() => import('./components/AiAssistant.jsx'));
 const BusinessSettings   = lazy(() => import('./components/BusinessSettings.jsx'));
 const EquipmentTracker   = lazy(() => import('./components/EquipmentTracker.jsx'));
 
@@ -40,7 +41,7 @@ const NAV = [
   { key: 'checkin',    label: 'מסוף כניסה',        icon: LogIn,            section: 'main', accent: '#2DD4BF' },
   { key: 'leads',      label: 'לקוחות ולידים',     icon: Users,            section: 'main', accent: '#A78BFA' },
   { key: 'schedule',   label: 'לוח חוגים',          icon: Calendar,         section: 'main', accent: '#FBBF24' },
-  { key: 'equipment',  label: 'ציוד לאימונים',      icon: Package,          section: 'main', accent: '#38BDF8' },
+  { key: 'equipment',  label: 'ציוד לאימונים',      icon: Package,          section: 'main', accent: '#A3E635' },
   { key: 'activities', label: 'יומן',               icon: CalendarRange,    section: 'main', accent: '#FB923C' },
   { key: 'broadcasts', label: 'דיוור וואטסאפ',     icon: MessageSquare,    section: 'main', accent: '#34D399' },
   { key: 'cash',       label: 'קופה ומכירה',      icon: Coins,            section: 'main', accent: '#F59E0B' },
@@ -48,7 +49,8 @@ const NAV = [
   { key: 'employees',  label: 'עובדים ומשמרות',    icon: UserCog,          section: 'ops',  accent: '#60A5FA' },
   { key: 'levels',     label: 'מבחנים',             icon: Award,            section: 'ops',  accent: '#FCD34D' },
   { key: 'health',     label: 'הצהרות וטפסים',      icon: FileHeart,        section: 'ops',  accent: '#F472B6' },
-  { key: 'automations',label: 'אוטומציות',         icon: Zap,              section: 'ops',  accent: '#FACC15' },
+  { key: 'automations',label: 'אוטומציות',         icon: Zap,              section: 'ops',  accent: '#22D3EE' },
+  { key: 'assistant',  label: 'עוזר חכם',           icon: Sparkles,         section: 'ops',  accent: '#818CF8' },
   { key: 'business',   label: 'הגדרות עסק',        icon: Building2,        section: 'ops',  accent: '#C084FC', ownerOnly: true },
 ];
 
@@ -67,6 +69,7 @@ const PAGE_PATHS = {
   levels:      '/levels',
   health:      '/health-declarations',
   automations: '/automations',
+  assistant:   '/ai-assistant',
   business:    '/business-settings',
 };
 
@@ -266,10 +269,7 @@ export default function App() {
                 onClick={() => goToPage(n.key)}
                 style={{ '--nav-accent': n.accent }}
               >
-                <span
-                  className="nav-icon-wrap"
-                  style={{ color: n.accent }}
-                >
+                <span className="nav-icon-wrap">
                   <Icon className="nav-icon" size={17} strokeWidth={2} />
                 </span>
                 <span>{n.label}</span>
@@ -292,10 +292,7 @@ export default function App() {
                 onClick={() => goToPage(n.key)}
                 style={{ '--nav-accent': n.accent }}
               >
-                <span
-                  className="nav-icon-wrap"
-                  style={{ color: n.accent }}
-                >
+                <span className="nav-icon-wrap">
                   <Icon className="nav-icon" size={17} strokeWidth={2} />
                 </span>
                 <span>{n.label}</span>
@@ -409,7 +406,17 @@ export default function App() {
                 }}
               />
             )}
-            {page === 'schedule'   && <Schedule groups={groups} students={students} parents={parents} setGroups={setGroups} setStudents={setStudents} />}
+            {page === 'schedule'   && (
+              <Schedule
+                groups={groups}
+                students={students}
+                parents={parents}
+                setGroups={setGroups}
+                setStudents={setStudents}
+                setParents={setParents}
+                canManageBilling={isOwner}
+              />
+            )}
             {page === 'equipment'  && (
               <EquipmentTracker
                 groups={groups}
@@ -427,6 +434,7 @@ export default function App() {
             {page === 'levels'     && <LevelTests students={students} groups={groups} />}
             {page === 'health'     && <HealthDeclarations parents={parents} students={students} canManageTemplates={isOwner} />}
             {page === 'automations'&& <Automations />}
+            {page === 'assistant'  && <AiAssistant />}
             {page === 'business'   && isOwner && <BusinessSettings />}
           </Suspense>
         </main>

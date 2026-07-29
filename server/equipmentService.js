@@ -1,6 +1,14 @@
 /** Training equipment kit for kids: shoes rental, club shirt, chalk bag. */
 
 import { randomBytes } from 'crypto';
+import { DEFAULT_BUSINESS_PROFILE } from './businessProfile.js';
+import {
+  LIVE_API_BASE,
+  LIVE_APP_BASE,
+  apiRedirectBase,
+  appPublicBase,
+  buildRedirectUrl,
+} from './publicLinks.js';
 
 export const EQUIPMENT_ITEM_TYPES = ['shoes', 'shirt', 'chalk_bag'];
 
@@ -359,51 +367,16 @@ export function unpaidEquipmentItems(rows = []) {
   return (Array.isArray(rows) ? rows : []).filter((r) => r.payment_status === 'unpaid');
 }
 
-export const EQUIPMENT_LIVE_APP_BASE = 'https://client-omega-topaz-35.vercel.app';
-
-/**
- * A template button URL is frozen the moment Meta approves it, so a staff
- * machine running with a localhost FRONTEND_URL must never seed one.
- */
-function isLocalOrigin(origin) {
-  try {
-    const host = new URL(String(origin || '')).hostname;
-    return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local');
-  } catch {
-    return true;
-  }
-}
-
-export function equipmentPublicBase(publicAppBase = '') {
-  const candidates = [publicAppBase, process.env.FRONTEND_URL, process.env.PUBLIC_APP_URL];
-  for (const candidate of candidates) {
-    const base = String(candidate || '').trim().replace(/\/$/, '');
-    if (!base || !base.startsWith('https://') || isLocalOrigin(base)) continue;
-    return base;
-  }
-  return EQUIPMENT_LIVE_APP_BASE;
-}
-
-export const EQUIPMENT_LIVE_API_BASE = 'https://climbing-crm-api.onrender.com';
+export const EQUIPMENT_LIVE_APP_BASE = LIVE_APP_BASE;
+export const EQUIPMENT_LIVE_API_BASE = LIVE_API_BASE;
 export const EQUIPMENT_REDIRECT_PATH = '/e';
 
-/**
- * Host for the approved button. Meta freezes it, so it must be the live API even
- * when a staff machine is running locally — the redirect itself resolves the
- * final page at click time, which is what keeps a future domain move free.
- */
-export function equipmentRedirectBase() {
-  const explicit = String(process.env.PUBLIC_API_URL || process.env.RENDER_EXTERNAL_URL || '')
-    .trim()
-    .replace(/\/$/, '');
-  if (explicit && !isLocalOrigin(explicit) && explicit.startsWith('https://')) return explicit;
-  return EQUIPMENT_LIVE_API_BASE;
-}
+export const equipmentPublicBase = appPublicBase;
+export const equipmentRedirectBase = apiRedirectBase;
 
 /** Short link that survives a domain change: the server picks the destination. */
 export function buildEquipmentRedirectUrl(token) {
-  if (!token) return '';
-  return `${equipmentRedirectBase()}${EQUIPMENT_REDIRECT_PATH}/${encodeURIComponent(String(token))}`;
+  return buildRedirectUrl('e', token);
 }
 
 /** Seed WhatsApp draft template for equipment payment link (idempotent). */
@@ -426,12 +399,15 @@ export function ensureEquipmentWhatsappTemplate({ db, persist } = {}) {
     language: 'he',
     category: 'UTILITY',
     status: 'DRAFT',
+    usage:
+      'נשלחת להורה כשיש לילד פריטי ציוד שטרם שולמו (נעליים, חולצת חוג, שק מגנזיום). ' +
+      'נשלחת מתיק המתאמן או ממסך הציוד. הכפתור מוביל לדף תשלום הציוד של אותו ילד.',
     body:
       'שלום {{1}},\n' +
       'לתשלום ציוד האימונים של {{2}} לחצו על הכפתור.\n' +
       'אפשר לבחור נעליים, חולצת חוג ושק מגנזיום.',
     header: '',
-    footer: 'My Wall',
+    footer: DEFAULT_BUSINESS_PROFILE.display_name,
     body_examples: ['דנה כהן', 'נועם כהן'],
     variables: [
       { key: '1', field: 'parent_name', label: 'שם הורה', example: 'דנה כהן' },

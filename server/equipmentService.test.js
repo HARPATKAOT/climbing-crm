@@ -168,8 +168,8 @@ test('equipment template base never falls back to a local address', () => {
     assert.equal(equipmentPublicBase('https://127.0.0.1:3000'), EQUIPMENT_LIVE_APP_BASE);
     assert.equal(equipmentPublicBase('http://my-wall.example'), EQUIPMENT_LIVE_APP_BASE);
 
-    process.env.FRONTEND_URL = 'https://mywall.co.il/';
-    assert.equal(equipmentPublicBase(), 'https://mywall.co.il');
+    process.env.FRONTEND_URL = 'https://app.kirboaz.co.il/';
+    assert.equal(equipmentPublicBase(), 'https://app.kirboaz.co.il');
     assert.equal(equipmentPublicBase('https://staging.example'), 'https://staging.example');
   } finally {
     if (original.front === undefined) delete process.env.FRONTEND_URL;

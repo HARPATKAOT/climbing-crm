@@ -14,11 +14,6 @@ function getToken() {
   ).trim();
 }
 
-/** Legacy slug that never existed as DNS; map to intro-training pay page. */
-const LEGACY_PAY_PAGE_ALIASES = {
-  mywall: '45',
-};
-
 function getPayPage() {
   return (process.env.ICOUNT_PAY_PAGE || process.env.ICOUNT_PAY_PAGE_ID || '45')
     .trim()
@@ -44,10 +39,7 @@ export async function resolvePayPageUrl() {
   const fullOverride = (process.env.ICOUNT_PAY_PAGE_URL || '').trim().replace(/\/$/, '');
   if (fullOverride) return fullOverride;
 
-  let key = getPayPage();
-  if (LEGACY_PAY_PAGE_ALIASES[key.toLowerCase()]) {
-    key = LEGACY_PAY_PAGE_ALIASES[key.toLowerCase()];
-  }
+  const key = getPayPage();
 
   const now = Date.now();
   if (_payPageUrlCache.key === key && _payPageUrlCache.url && now - _payPageUrlCache.at < 5 * 60 * 1000) {
@@ -595,9 +587,36 @@ export async function updateInventoryQty() {
   throw err;
 }
 
+/**
+ * Deep links into the iCount web interface, for work we do not do ourselves —
+ * a partial credit, for example, which the API cannot express.
+ *
+ * The exact paths differ between accounts, so both are templates in the
+ * environment. When a template is missing we return null and the button
+ * simply does not appear, instead of sending staff to a dead address.
+ *
+ * Placeholders: {clientId} / {doctype} / {docnum} / {docId}
+ */
+export function clientCardUrl(clientId) {
+  const template = (process.env.ICOUNT_CLIENT_URL_TEMPLATE || '').trim();
+  if (!template || !clientId) return null;
+  return template.replace(/\{clientId\}/g, encodeURIComponent(clientId));
+}
+
+export function docAppUrl({ doctype, docnum, docId } = {}) {
+  const template = (process.env.ICOUNT_DOC_URL_TEMPLATE || '').trim();
+  if (!template || (!docnum && !docId)) return null;
+  return template
+    .replace(/\{doctype\}/g, encodeURIComponent(doctype || ''))
+    .replace(/\{docnum\}/g, encodeURIComponent(docnum || ''))
+    .replace(/\{docId\}/g, encodeURIComponent(docId || ''));
+}
+
 export const icount = {
   isConfigured,
   ping,
+  clientCardUrl,
+  docAppUrl,
   ensureClient,
   createInvRec,
   createOffer,

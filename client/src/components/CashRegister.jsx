@@ -20,10 +20,13 @@ function docLabel(doc) {
 }
 
 function docDate(doc) {
-  const raw = doc?.docdate || doc?.doc_date || doc?.date || '';
+  const raw = doc?.docdate || doc?.doc_date || doc?.dateissued || doc?.timeissued || doc?.date || '';
   const s = String(raw);
   if (/^\d{8}$/.test(s)) {
     return `${s.slice(6, 8)}/${s.slice(4, 6)}/${s.slice(0, 4)}`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    return `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)}`;
   }
   if (s.includes('T')) return new Date(s).toLocaleDateString('he-IL');
   return s || '—';
@@ -85,6 +88,8 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
   const [icountDocs, setIcountDocs] = useState([]);
   const [icountTotal, setIcountTotal] = useState(0);
   const [icountLoading, setIcountLoading] = useState(false);
+  const [docLinkBusyKey, setDocLinkBusyKey] = useState('');
+  const [docLinkError, setDocLinkError] = useState('');
   const [payments, setPayments] = useState([]);
   const [posSales, setPosSales] = useState([]);
   const [salesLoading, setSalesLoading] = useState(false);
@@ -243,6 +248,9 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
         (isCardPaymentMethod(sale.payment_method)
           ? 'יווצר מסמך ביטול במערכת החיוב, והכסף יוחזר לכרטיס אם העסקה שולמה באשראי.\n'
           : 'יווצר מסמך ביטול במערכת החיוב (עסקת מזומן — בלי החזר לכרטיס).\n') +
+        (sale.coupon_code
+          ? `שימו לב: העסקה כללה הטבה (${sale.coupon_code}, −₪${Number(sale.coupon_discount || 0).toLocaleString()}) — הזיכוי הוא על הסכום ששולם בפועל, וההטבה תחזור ללקוח.\n`
+          : '') +
         'כרטיסיות או מנויים מהעסקה יבוטלו.'
     );
     if (!ok) return;
@@ -269,6 +277,41 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
       setHistoryError(err.message || 'הזיכוי נכשל');
     } finally {
       setRefundBusyId('');
+    }
+  };
+
+  /**
+   * Open the printable copy of a document from the billing system. The list
+   * only knows type + number, so the link is resolved on click — the tab is
+   * opened first so the browser still counts it as a user gesture.
+   */
+  const openIcountDoc = async (doc) => {
+    const doctype = doc?.doctype;
+    const docnum = doc?.docnum;
+    if (!doctype || !docnum) return;
+    const key = `${doctype}:${docnum}`;
+    const win = window.open('', '_blank');
+    setDocLinkBusyKey(key);
+    setDocLinkError('');
+    try {
+      const res = await fetch(
+        `/api/icount/docs/link?doctype=${encodeURIComponent(doctype)}&docnum=${encodeURIComponent(docnum)}`
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'לא הצלחנו לאתר את המסמך');
+      const url = data.url || data.appUrl;
+      if (!url) throw new Error('לא נמצא קישור למסמך');
+      if (!win) {
+        setDocLinkError('הדפדפן חסם את חלון המסמך — אשרו חלונות קופצים ונסו שוב');
+        return;
+      }
+      win.opener = null;
+      win.location = url;
+    } catch (err) {
+      if (win) win.close();
+      setDocLinkError(err.message || 'פתיחת המסמך נכשלה');
+    } finally {
+      setDocLinkBusyKey('');
     }
   };
 
@@ -890,6 +933,17 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
                                       )}
                                     </div>
                                   )}
+                                  {sale.coupon_code && (
+                                    <div className="pos-sale-detail-field">
+                                      <div className="pos-sale-detail-label">הטבה שמומשה</div>
+                                      <div className="pos-sale-detail-value">
+                                        {sale.coupon_code} · −₪{Number(sale.coupon_discount || 0).toLocaleString()}
+                                      </div>
+                                      <div className="pos-sale-detail-sub">
+                                        זיכוי יחזיר את ההטבה ללקוח אם התוקף לא פג
+                                      </div>
+                                    </div>
+                                  )}
                                   {sale.refund_doc_number && (
                                     <div className="pos-sale-detail-field">
                                       <div className="pos-sale-detail-label">מסמך זיכוי</div>
@@ -1278,6 +1332,11 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
           </div>
 
           <div className="card">
+            {docLinkError && (
+              <div className="alert alert-error" style={{ margin: '14px 16px 0' }}>
+                {docLinkError}
+              </div>
+            )}
             <div className="table-wrap">
               <table className="crm-table">
                 <thead>
@@ -1286,31 +1345,70 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
                     <th>מס׳ מסמך</th>
                     <th>לקוח / תיאור</th>
                     <th>סכום</th>
+                    <th>מסמך</th>
                   </tr>
                 </thead>
                 <tbody>
                   {!icountStatus.ok && (
                     <tr>
-                      <td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-3)' }}>
+                      <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-3)' }}>
                         {icountStatus.message || 'אין חיבור ל-iCount — בדוק את האסימון בשרת'}
                       </td>
                     </tr>
                   )}
                   {icountStatus.ok && icountDocs.length === 0 && (
                     <tr>
-                      <td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-3)' }}>
+                      <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-3)' }}>
                         לא נמצאו מסמכים ב־30 הימים האחרונים
                       </td>
                     </tr>
                   )}
-                  {icountDocs.map((doc, i) => (
-                    <tr key={doc.doc_id || doc.docnum || i}>
-                      <td>{docDate(doc)}</td>
-                      <td>{doc.docnum || doc.doc_id || '—'}</td>
-                      <td>{docLabel(doc)}</td>
-                      <td style={{ fontWeight: 700 }}>₪{docAmount(doc).toLocaleString()}</td>
-                    </tr>
-                  ))}
+                  {icountDocs.map((doc, i) => {
+                    const docKey = `${doc.doctype || ''}:${doc.docnum || ''}`;
+                    return (
+                      <tr key={doc.doc_id || doc.docnum || i}>
+                        <td>{docDate(doc)}</td>
+                        <td>
+                          {doc.doc_app_url ? (
+                            <a
+                              href={doc.doc_app_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="פתיחת המסמך ב-iCount"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 6,
+                                color: 'var(--blue)',
+                              }}
+                            >
+                              {doc.docnum || doc.doc_id || 'מסמך'}
+                              <ExternalLink size={13} />
+                            </a>
+                          ) : (
+                            doc.docnum || doc.doc_id || '—'
+                          )}
+                        </td>
+                        <td>{docLabel(doc)}</td>
+                        <td style={{ fontWeight: 700 }}>₪{docAmount(doc).toLocaleString()}</td>
+                        <td>
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => openIcountDoc(doc)}
+                            disabled={!doc.docnum || !doc.doctype || docLinkBusyKey === docKey}
+                            title="פתיחת העתק המסמך להדפסה"
+                          >
+                            {docLinkBusyKey === docKey ? (
+                              <Loader2 size={14} className="spin" />
+                            ) : (
+                              <Printer size={14} />
+                            )}
+                            צפייה
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

@@ -5,9 +5,43 @@ import cors from 'cors';
 import { db, initDb, persistCore, parentPhonesMatch, setBotEnabledDurable } from './db.js';
 import { supa } from './supa.js';
 import { requiresDurableStore, publicStoreUnavailableError } from './runtimeSafety.js';
-import { whatsappService, instagramService } from './whatsapp.js';
+import {
+  whatsappService,
+  instagramService,
+  runConversationAnalysis,
+  runNightlySweep,
+  runNightlySweepIfDue,
+} from './whatsapp.js';
 import { whatsappConnectService } from './whatsappConnect.js';
 import { automationsService, runScheduledAutomationsIfDue } from './automations.js';
+import {
+  OFFER_TYPES,
+  OFFER_TYPE_LABELS,
+  offerSummary,
+  listCoupons,
+  activeCouponsFor,
+  issueCoupon,
+  checkCouponForSale,
+  redeemCoupon,
+  releaseCouponsForSale,
+  cancelCoupon,
+  couponStats,
+  todayIsoDate,
+} from './coupons.js';
+import {
+  TRIGGER_TYPES,
+  TRIGGER_LABELS,
+  SEND_STATUS,
+  normalizeCampaign,
+  campaignPresets,
+  deliverCampaignEntry,
+} from './campaigns.js';
+import {
+  runCampaignNow,
+  runCampaignsIfDue,
+  sendCampaignMessage,
+  businessDisplayName,
+} from './campaignRunner.js';
 import { icount } from './icount.js';
 import { apiAuth, requireOwner } from './auth.js';
 import { googleCalendarService } from './googleCalendar.js';
@@ -38,12 +72,64 @@ import {
   TEMPLATE_CATEGORIES,
 } from './activityRegistration.js';
 import {
+  upcomingPublicActivities,
+  upcomingOpeningHours,
+  publicGroups,
+} from './publicSite.js';
+import {
+  SUGGESTION_PENDING,
+  approveSuggestion,
+  createScenario,
+  createTask,
+  deleteScenario,
+  ensureDefaultScenarios,
+  enrichForDisplay,
+  listScenarios,
+  listSuggestions,
+  listTasks,
+  loadAssistantSettings,
+  rejectSuggestion,
+  saveAssistantSettings,
+  scenarioStats,
+  updateScenario,
+  updateTask,
+} from './aiActions.js';
+import {
+  INTEREST_COLLECTION,
+  addInterest,
+  closeInterestForRegistrations,
+  convertInterestToRegistration,
+  enrichInterest,
+  listInterest,
+  normalizeInterestInput,
+  updateInterest,
+} from './activityInterest.js';
+import {
+  ACTIVITY_ATTENDANCE_COLLECTION,
+  activityAttendanceId,
+  activityAttendanceRows,
+  attendanceDaysFor,
+  buildActivityAttendance,
+  indexSavedAttendance,
+  planAttendanceMark,
+  registrationCountsForAttendance,
+  summarizeDays,
+} from './activityAttendance.js';
+import {
   buildRegistrationRefundPlan,
   applyRegistrationRefundMarks,
   buildHostRefundPlan,
   applyHostRefundMarks,
   summarizeHostPayment,
 } from './activityRegistrationRefund.js';
+import {
+  paymentOwner,
+  paymentDocRefs,
+  paymentHasCardCharge,
+  checkPaymentRefundable,
+  applyGenericRefundMarks,
+  buildInvoiceWhatsAppText,
+} from './paymentActions.js';
 import { chargeAmount, normalizePriceIncludesVat, icountVatType } from './vat.js';
 import {
   registerActivityGroup,
@@ -99,10 +185,10 @@ import {
 import {
   EVENT_HOST_PAYMENT_TEMPLATE,
   EVENT_PARTICIPANT_LINK_TEMPLATE,
-  EVENT_HOST_PAYMENT_TEMPLATE_FALLBACK,
-  EVENT_PARTICIPANT_LINK_TEMPLATE_FALLBACK,
   ensureEventWhatsappTemplates,
   findApprovedEventTemplate,
+  resolveEventTemplate,
+  publicBase as eventPublicBase,
 } from './eventWhatsappTemplates.js';
 import {
   ensureProductCategories,
@@ -110,6 +196,7 @@ import {
   clampImage,
 } from './productCategories.js';
 import {
+  DEFAULT_BUSINESS_PROFILE,
   getBusinessProfile,
   saveBusinessProfile,
   safeBusinessProfile,
@@ -136,6 +223,8 @@ import {
   updateMessageStatusByMetaId,
   handleMessengerIncoming,
   markCommunicationHandled,
+  setBotState,
+  draftReply,
 } from './channels/conversations.js';
 import {
   rebuildLogMirrorFromMessages,
@@ -175,6 +264,7 @@ const configuredOrigins = String(process.env.ALLOWED_ORIGINS || '')
   .map((origin) => origin.trim())
   .filter(Boolean);
 const allowedOrigins = new Set([
+  'https://app.kirboaz.co.il',
   'https://client-omega-topaz-35.vercel.app',
   'http://localhost:3000',
   'http://127.0.0.1:3000',
@@ -233,6 +323,17 @@ app.get(['/api/health', '/api/health/deep'], async (req, res) => {
   });
 });
 
+const DEFAULT_BRAND_NAME = DEFAULT_BUSINESS_PROFILE.display_name;
+
+/** Business name for customer-facing text; follows the saved business profile. */
+async function businessBrand() {
+  try {
+    return (await getBusinessProfile()).display_name || DEFAULT_BRAND_NAME;
+  } catch {
+    return DEFAULT_BRAND_NAME;
+  }
+}
+
 /** Short public redirect: WhatsApp template button → iCount payment URL */
 function resolveStoredPaymentUrl(paymentId) {
   const id = String(paymentId || '').trim();
@@ -260,7 +361,7 @@ function redirectPaymentLink(req, res) {
         '<!doctype html><html lang="he" dir="rtl"><meta charset="utf-8" />' +
           '<title>קישור לא נמצא</title><body style="font-family:sans-serif;padding:24px">' +
           '<h1>קישור התשלום לא נמצא או שפג תוקפו</h1>' +
-          '<p>פנו לצוות My Wall לקבלת קישור חדש.</p></body></html>'
+          `<p>פנו לצוות ${DEFAULT_BRAND_NAME} לקבלת קישור חדש.</p></body></html>`
       );
   }
   // Heal payments row if the URL only lived on the sale (older / partial writes).
@@ -293,6 +394,22 @@ function redirectEquipmentCheckout(req, res) {
 }
 app.get('/e/:token', redirectEquipmentCheckout);
 app.get('/api/e/:token', redirectEquipmentCheckout);
+
+/** Same contract as /e, for the two approved event template buttons. */
+function eventRedirect(pagePath) {
+  return (req, res) => {
+    const token = String(req.params.token || '').trim();
+    if (!token) return res.status(400).send('חסר מזהה אירוע');
+    const target = `${eventPublicBase()}${pagePath}/${encodeURIComponent(token)}`;
+    return res.redirect(302, target);
+  };
+}
+const redirectEventHost = eventRedirect('/event-host');
+const redirectEventParticipant = eventRedirect('/event');
+app.get('/eh/:token', redirectEventHost);
+app.get('/api/eh/:token', redirectEventHost);
+app.get('/ev/:token', redirectEventParticipant);
+app.get('/api/ev/:token', redirectEventParticipant);
 
 app.use('/api', apiAuth);
 
@@ -955,13 +1072,33 @@ app.post('/api/conversations/:parentId/handled', async (req, res) => {
   }
 });
 
+app.post('/api/conversations/:parentId/bot', async (req, res) => {
+  try {
+    const result = await setBotState(req.params.parentId, req.body?.action);
+    if (!result.success) return res.status(result.status || 400).json(result);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/conversations/:parentId/draft', async (req, res) => {
+  try {
+    const result = await draftReply(req.params.parentId, req.body || {});
+    if (!result.success) return res.status(result.status || 400).json(result);
+    res.json(result);
+  } catch (err) {
+    console.error('AI draft failed:', err);
+    res.status(500).json({ success: false, error: err.message || 'ניסוח התשובה נכשל' });
+  }
+});
+
 // ─── Message templates ───────────────────────────────────────────────────────
 app.get('/api/message-templates', (req, res) => {
   try {
     ensureEventWhatsappTemplates({
       db,
       persist: persistCore,
-      publicAppBase: process.env.FRONTEND_URL || process.env.PUBLIC_APP_URL || '',
     });
   } catch (err) {
     console.warn('event whatsapp templates ensure on list skipped:', err.message);
@@ -1766,6 +1903,192 @@ app.post('/api/automations/run-scheduled', async (req, res) => {
   } catch (err) {
     console.error('run-scheduled automations failed:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── הצעות AI ומשימות ────────────────────────────────────────────────────────
+// המודל מציע, הצוות מאשר, הקוד מבצע. אישור הוא הפעולה היחידה שכותבת ל-CRM.
+
+app.get('/api/ai/suggestions', (req, res) => {
+  const status = req.query.status === 'all' ? null : (req.query.status || SUGGESTION_PENDING);
+  const rows = listSuggestions(db, {
+    status,
+    parentId: req.query.parentId || null,
+    scenarioId: req.query.scenarioId || null,
+  });
+  res.json(rows.map((row) => enrichForDisplay(db, row)));
+});
+
+// ─── תרחישים: מה העוזר מורשה להציע. הרשימה הפעילה היא רשימת ההיתר של המודל ───
+
+app.get('/api/ai/scenarios', (req, res) => {
+  res.json(listScenarios(db, { enabledOnly: req.query.enabled === '1' }));
+});
+
+app.post('/api/ai/scenarios', async (req, res) => {
+  try {
+    const row = await createScenario({
+      db,
+      persist: persistCore,
+      input: req.body || {},
+      actor: req.crmUser?.email || '',
+    });
+    res.status(201).json(row);
+  } catch (err) {
+    if (!err.status) console.error('create scenario error:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.put('/api/ai/scenarios/:id', async (req, res) => {
+  try {
+    const row = await updateScenario({ db, persist: persistCore, id: req.params.id, patch: req.body || {} });
+    res.json(row);
+  } catch (err) {
+    if (!err.status) console.error('update scenario error:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/ai/scenarios/:id', async (req, res) => {
+  try {
+    await deleteScenario({ db, id: req.params.id });
+    res.json({ success: true });
+  } catch (err) {
+    if (!err.status) console.error('delete scenario error:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.get('/api/ai/scenarios/stats', (req, res) => {
+  res.json(scenarioStats(db));
+});
+
+app.get('/api/ai/assistant-settings', (req, res) => {
+  res.json(loadAssistantSettings(db));
+});
+
+app.put('/api/ai/assistant-settings', async (req, res) => {
+  try {
+    const saved = await saveAssistantSettings({ db, persist: persistCore, patch: req.body || {} });
+    console.log(`🧠 AI assistant settings updated by ${req.crmUser?.email || 'unknown'}`);
+    res.json(saved);
+  } catch (err) {
+    if (!err.status) console.error('save assistant settings error:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/ai/suggestions/:id/approve', async (req, res) => {
+  try {
+    const result = await approveSuggestion({
+      db,
+      persist: persistCore,
+      id: req.params.id,
+      actor: req.crmUser?.email || '',
+    });
+    res.json({
+      success: true,
+      suggestion: enrichForDisplay(db, result.suggestion),
+      task: enrichForDisplay(db, result.task),
+    });
+  } catch (err) {
+    if (!err.status) console.error('approve suggestion error:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/ai/suggestions/:id/reject', async (req, res) => {
+  try {
+    const row = await rejectSuggestion({
+      db,
+      persist: persistCore,
+      id: req.params.id,
+      actor: req.crmUser?.email || '',
+      note: req.body?.note || '',
+    });
+    res.json({ success: true, suggestion: enrichForDisplay(db, row) });
+  } catch (err) {
+    if (!err.status) console.error('reject suggestion error:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+/** ניתוח ידני של שיחה אחת — עובד גם כשההפעלה האוטומטית כבויה. */
+app.post('/api/ai/suggestions/analyze', async (req, res) => {
+  const phone = String(req.body?.phone || '').trim();
+  if (!phone) return res.status(400).json({ error: 'phone חובה' });
+  try {
+    const result = await runConversationAnalysis(phone, { auto: false });
+    res.json({
+      success: true,
+      reason: result.reason,
+      skipped: result.skipped,
+      created: (result.created || []).map((row) => enrichForDisplay(db, row)),
+    });
+  } catch (err) {
+    console.error('analyze conversation error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * סריקה לילית — מופעלת מ-Cron חיצוני עם אותו סוד של האוטומציות.
+ * `force` מריץ גם כשהמתג הלילי כבוי, כדי שאפשר יהיה לבדוק ידנית.
+ */
+app.post('/api/ai/suggestions/run-nightly', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  const fromCron = secret && req.get('x-cron-secret') === secret;
+  // בעלים מחובר יכול להריץ ידנית; בלי כניסה נדרש סוד ה-Cron.
+  if (!fromCron && req.crmUser?.role !== 'owner') {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const result = await runNightlySweep({ force: req.body?.force === true });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('nightly sweep failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/tasks', (req, res) => {
+  const status = req.query.status === 'all' ? null : (req.query.status || undefined);
+  const rows = listTasks(db, {
+    ...(status === undefined ? {} : { status }),
+    parentId: req.query.parentId || null,
+  });
+  res.json(rows.map((row) => enrichForDisplay(db, row)));
+});
+
+app.post('/api/tasks', async (req, res) => {
+  try {
+    const task = await createTask({
+      db,
+      persist: persistCore,
+      input: req.body || {},
+      actor: req.crmUser?.email || '',
+    });
+    res.status(201).json(enrichForDisplay(db, task));
+  } catch (err) {
+    if (!err.status) console.error('create task error:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.put('/api/tasks/:id', async (req, res) => {
+  try {
+    const task = await updateTask({
+      db,
+      persist: persistCore,
+      id: req.params.id,
+      patch: req.body || {},
+      actor: req.crmUser?.email || '',
+    });
+    res.json(enrichForDisplay(db, task));
+  } catch (err) {
+    if (!err.status) console.error('update task error:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -2805,16 +3128,18 @@ app.get('/api/activities/:id/registrations', async (req, res) => {
   const activity = db.getOne('activities', req.params.id);
   if (!activity) return res.status(404).json({ error: 'Activity not found' });
   if (supa.isEnabled()) {
-    const [remoteRegs, remoteOrders, remoteDeclarations, remotePayments] = await Promise.all([
+    const [remoteRegs, remoteOrders, remoteDeclarations, remotePayments, remoteInterest] = await Promise.all([
       supa.getAll('activity_registrations'),
       supa.getAll('activity_registration_orders'),
       supa.getAll('health_declarations'),
       supa.getAll('payments'),
+      supa.getAll(INTEREST_COLLECTION),
     ]);
     if (remoteRegs) db.set('activity_registrations', remoteRegs);
     if (remoteOrders) db.set('activity_registration_orders', remoteOrders);
     if (remoteDeclarations) db.set('health_declarations', remoteDeclarations);
     if (remotePayments) db.set('payments', remotePayments);
+    if (remoteInterest) db.set(INTEREST_COLLECTION, remoteInterest);
   }
   const regs = activeRegistrations(db, activity.id).sort((a, b) =>
     String(b.created_at || '').localeCompare(String(a.created_at || ''))
@@ -2903,8 +3228,118 @@ app.get('/api/activities/:id/registrations', async (req, res) => {
     max_participants: activity.max_participants ?? null,
     remaining: remainingCapacity(activity, regs),
     registrations: enriched,
+    interested: listInterest(db, activity.id).map((row) => enrichInterest(db, row)),
     host_payment: hostPayment,
   });
+});
+
+// ─── מתעניינים: שיבוץ לפני הרשמה ותשלום ──────────────────────────────────────
+/** Interested people never consume capacity — only real registrations do. */
+function interestResponse(activity) {
+  return {
+    interested: listInterest(db, activity.id).map((row) => enrichInterest(db, row)),
+    remaining: remainingCapacity(activity, activeRegistrations(db, activity.id)),
+  };
+}
+
+async function loadInterestRow(activityId, interestId) {
+  if (supa.isEnabled()) {
+    const remote = await supa.getAll(INTEREST_COLLECTION);
+    if (remote) db.set(INTEREST_COLLECTION, remote);
+  }
+  const row = db.getOne(INTEREST_COLLECTION, interestId);
+  if (!row || String(row.activity_id) !== String(activityId)) return null;
+  return row;
+}
+
+app.post('/api/activities/:id/interested', async (req, res) => {
+  try {
+    const activity = db.getOne('activities', req.params.id);
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+    const input = normalizeInterestInput(req.body || {});
+    if (supa.isEnabled()) {
+      const remote = await supa.getAll(INTEREST_COLLECTION);
+      if (remote) db.set(INTEREST_COLLECTION, remote);
+    }
+    const row = await addInterest({ db, persist: persistCore, activityId: activity.id, input });
+    res.status(201).json({ success: true, interest: enrichInterest(db, row), ...interestResponse(activity) });
+  } catch (err) {
+    if (!err.status) console.error('add interest error:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.put('/api/activities/:id/interested/:interestId', async (req, res) => {
+  try {
+    const activity = db.getOne('activities', req.params.id);
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+    const row = await loadInterestRow(activity.id, req.params.interestId);
+    if (!row) return res.status(404).json({ error: 'המתעניין לא נמצא באירוע' });
+    const input = normalizeInterestInput({ ...row, ...req.body });
+    const updated = await updateInterest({ db, persist: persistCore, row, patch: input });
+    res.json({ success: true, interest: enrichInterest(db, updated), ...interestResponse(activity) });
+  } catch (err) {
+    if (!err.status) console.error('update interest error:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/activities/:id/interested/:interestId', async (req, res) => {
+  try {
+    const activity = db.getOne('activities', req.params.id);
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+    const row = await loadInterestRow(activity.id, req.params.interestId);
+    if (!row) return res.status(404).json({ error: 'המתעניין לא נמצא באירוע' });
+    await updateInterest({
+      db,
+      persist: persistCore,
+      row,
+      patch: { status: 'cancelled', cancelled_at: new Date().toISOString() },
+    });
+    res.json({ success: true, ...interestResponse(activity) });
+  } catch (err) {
+    console.error('delete interest error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/activities/:id/interested/:interestId/convert', async (req, res) => {
+  try {
+    const activity = db.getOne('activities', req.params.id);
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+    if (supa.isEnabled()) {
+      const [remoteRegs, remoteParents] = await Promise.all([
+        supa.getAll('activity_registrations'),
+        supa.getAll('parents'),
+      ]);
+      if (remoteRegs) db.set('activity_registrations', remoteRegs);
+      if (remoteParents) db.set('parents', remoteParents);
+    }
+    const row = await loadInterestRow(activity.id, req.params.interestId);
+    if (!row) return res.status(404).json({ error: 'המתעניין לא נמצא באירוע' });
+
+    const remainingBefore = remainingCapacity(activity, activeRegistrations(db, activity.id));
+    if (remainingBefore != null && remainingBefore < 1) {
+      return res.status(409).json({ error: 'אין מקומות פנויים באירוע' });
+    }
+
+    const result = await convertInterestToRegistration({
+      db,
+      persist: persistCore,
+      activity,
+      row,
+      paymentStatus: req.body?.payment_status,
+    });
+    res.json({
+      success: true,
+      registration: result.registration,
+      parent_id: result.parent.id,
+      ...interestResponse(activity),
+    });
+  } catch (err) {
+    if (!err.status) console.error('convert interest error:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
 });
 
 app.put('/api/activities/:id/registrations/:registrationId', async (req, res) => {
@@ -3023,6 +3458,129 @@ app.delete('/api/activities/:id/registrations/:registrationId', async (req, res)
   } catch (err) {
     console.error('delete registration error:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Activity attendance ─────────────────────────────────────────────────────
+// The list is derived on every read (participants × activity days), so a
+// participant who registers after the list was opened is already on it.
+
+/** Pull the tables an attendance read/write depends on, so we never act on stale rows. */
+async function refreshActivityAttendanceTables() {
+  if (!supa.isEnabled()) return;
+  const [remoteRegs, remoteMarks] = await Promise.all([
+    supa.getAll('activity_registrations'),
+    supa.getAll(ACTIVITY_ATTENDANCE_COLLECTION),
+  ]);
+  if (remoteRegs) db.set('activity_registrations', remoteRegs);
+  if (remoteMarks) db.set(ACTIVITY_ATTENDANCE_COLLECTION, remoteMarks);
+}
+
+/** An event created elsewhere may be missing from the local cache — pull once before giving up. */
+async function findActivityForAttendance(id) {
+  const local = db.getOne('activities', id);
+  if (local) return local;
+  await refreshActivitiesCache();
+  return db.getOne('activities', id) || null;
+}
+
+app.get('/api/activities/:id/attendance', async (req, res) => {
+  try {
+    const activity = await findActivityForAttendance(req.params.id);
+    if (!activity) return res.status(404).json({ error: 'האירוע לא נמצא' });
+    await refreshActivityAttendanceTables();
+
+    const parents = db.get('parents') || [];
+    const registrations = activeRegistrations(db, activity.id)
+      .slice()
+      .sort((a, b) => String(a.participant_name || '').localeCompare(String(b.participant_name || ''), 'he'))
+      .map((registration) => ({
+        ...registration,
+        parent_name:
+          parents.find((parent) => String(parent.id) === String(registration.parent_id))?.name || '',
+      }));
+
+    res.json(buildActivityAttendance({
+      activity,
+      registrations,
+      saved: activityAttendanceRows(db).filter(
+        (row) => String(row.activity_id || '') === String(activity.id)
+      ),
+    }));
+  } catch (err) {
+    console.error('get activity attendance error:', err.message);
+    res.status(500).json({ error: err.message || 'טעינת רשימת הנוכחות נכשלה' });
+  }
+});
+
+/**
+ * Mark attendance for activity participants.
+ * Body: { records: [{ activity_id?, registration_id, date, status }] }
+ * Records may span activities, so the customer file can save from one call.
+ */
+app.post('/api/activity-attendance', async (req, res) => {
+  try {
+    const records = Array.isArray(req.body?.records) ? req.body.records : null;
+    if (!records) return res.status(400).json({ error: 'records חייב להיות מערך' });
+    if (records.length === 0) return res.json({ success: true, rows: [] });
+
+    await refreshActivityAttendanceTables();
+    const markedBy = req.crmUser?.email || req.crmUser?.name || null;
+    const saved = [];
+
+    for (const record of records) {
+      const registration = db.getOne('activity_registrations', String(record?.registration_id || ''));
+      if (!registration) {
+        return res.status(404).json({ error: 'המשתתף לא נמצא באירוע' });
+      }
+      if (record.activity_id && String(record.activity_id) !== String(registration.activity_id)) {
+        return res.status(400).json({ error: 'המשתתף לא שייך לאירוע הזה' });
+      }
+      const activity = await findActivityForAttendance(registration.activity_id);
+      if (!activity) return res.status(404).json({ error: 'האירוע לא נמצא' });
+      if (!registrationCountsForAttendance(registration)) {
+        return res.status(400).json({ error: 'לא ניתן לסמן נוכחות למשתתף שבוטל' });
+      }
+
+      const id = activityAttendanceId(registration.id, record.date);
+      const existing = db.getOne(ACTIVITY_ATTENDANCE_COLLECTION, id) || null;
+      const plan = planAttendanceMark({
+        activity,
+        registration,
+        date: record.date,
+        status: record.status,
+        existing,
+        markedBy,
+      });
+
+      if (plan.action === 'invalid') return res.status(400).json({ error: plan.error });
+      if (plan.action === 'none') {
+        saved.push({ id, date: String(record.date || '').slice(0, 10), status: 'pending' });
+        continue;
+      }
+      if (plan.action === 'delete') {
+        db.delete(ACTIVITY_ATTENDANCE_COLLECTION, id);
+        // Awaited on purpose: the next read pulls the durable store, and a
+        // fire-and-forget removal could resurrect the mark it just cleared.
+        await supa.remove(ACTIVITY_ATTENDANCE_COLLECTION, id);
+        saved.push({ id, date: String(record.date || '').slice(0, 10), status: 'pending' });
+        continue;
+      }
+
+      const row = plan.action === 'insert'
+        ? db.insert(ACTIVITY_ATTENDANCE_COLLECTION, plan.row)
+        : db.update(ACTIVITY_ATTENDANCE_COLLECTION, id, plan.row) || plan.row;
+      const durable = await persistCore(ACTIVITY_ATTENDANCE_COLLECTION, row);
+      if (durable?.ok === false) {
+        return res.status(503).json({ error: durable.error || 'שמירת הנוכחות נכשלה' });
+      }
+      saved.push(row);
+    }
+
+    res.json({ success: true, rows: saved });
+  } catch (err) {
+    console.error('mark activity attendance error:', err.message);
+    res.status(500).json({ error: err.message || 'שמירת הנוכחות נכשלה' });
   }
 });
 
@@ -3472,7 +4030,6 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
       ensureEventWhatsappTemplates({
         db,
         persist: persistCore,
-        publicAppBase: frontendPublicBase(req),
       });
     } catch (tplErr) {
       console.warn('event whatsapp templates ensure skipped:', tplErr.message);
@@ -3486,12 +4043,7 @@ app.post('/api/activities/:id/send-registration-link', async (req, res) => {
       const preferredMetaName = sendHostPayment
         ? EVENT_HOST_PAYMENT_TEMPLATE
         : EVENT_PARTICIPANT_LINK_TEMPLATE;
-      const fallbackMetaName = sendHostPayment
-        ? EVENT_HOST_PAYMENT_TEMPLATE_FALLBACK
-        : EVENT_PARTICIPANT_LINK_TEMPLATE_FALLBACK;
-      const localTpl =
-        findApprovedEventTemplate(db, preferredMetaName) ||
-        findApprovedEventTemplate(db, fallbackMetaName);
+      const localTpl = resolveEventTemplate(db, sendHostPayment ? 'host' : 'participant');
       const metaName = localTpl?.meta_name || preferredMetaName;
       const freeformMsg = sendHostPayment
         ? (
@@ -3845,6 +4397,35 @@ async function findActivityBySlugFresh(slug) {
   return { activity, storeAvailable: refreshed.storeAvailable };
 }
 
+// Marketing-site reads. Registered before the :slug route so the bare path is
+// not swallowed by it.
+app.get('/api/public/activities', publicFormRateLimit, (_req, res) => {
+  try {
+    res.json({ activities: upcomingPublicActivities(db) });
+  } catch (err) {
+    console.error('public activities list error:', err.message);
+    res.status(500).json({ error: 'טעינת הפעילויות נכשלה' });
+  }
+});
+
+app.get('/api/public/opening-hours', publicFormRateLimit, (_req, res) => {
+  try {
+    res.json({ days: upcomingOpeningHours(db) });
+  } catch (err) {
+    console.error('public opening hours error:', err.message);
+    res.status(500).json({ error: 'טעינת שעות הפתיחה נכשלה' });
+  }
+});
+
+app.get('/api/public/groups', publicFormRateLimit, (_req, res) => {
+  try {
+    res.json({ groups: publicGroups(db) });
+  } catch (err) {
+    console.error('public groups error:', err.message);
+    res.status(500).json({ error: 'טעינת החוגים נכשלה' });
+  }
+});
+
 app.get('/api/public/activities/:slug', publicFormRateLimit, async (req, res) => {
   try {
     const { activity, storeAvailable } = await findActivityBySlugFresh(req.params.slug);
@@ -4000,6 +4581,25 @@ app.post('/api/public/activities/:slug/register', publicFormRateLimit, async (re
       }),
     });
     const parent = result.crm?.parent || db.getOne('parents', result.order.parent_id);
+    if (!result.duplicate) {
+      // Someone the staff had slotted as "מתעניין" just registered — close that slot.
+      try {
+        if (supa.isEnabled()) {
+          const remoteInterest = await supa.getAll(INTEREST_COLLECTION);
+          if (remoteInterest) db.set(INTEREST_COLLECTION, remoteInterest);
+        }
+        await closeInterestForRegistrations({
+          db,
+          persist: persistCore,
+          activityId: activity.id,
+          parentId: parent?.id || null,
+          phone: parent?.phone || '',
+          registrations: result.registrations,
+        });
+      } catch (interestErr) {
+        console.warn('⚠️ [activity interest] auto-close skipped:', interestErr.message);
+      }
+    }
     let emailResult = { sent: false };
     if (parent?.email && !result.duplicate) {
       emailResult = await sendActivityRegistrationConfirmation({
@@ -4906,10 +5506,16 @@ app.get('/api/icount/docs', async (req, res) => {
     if (!icount.isConfigured()) {
       return res.status(503).json({ error: 'iCount לא מוגדר בשרת' });
     }
-    const docs = await icount.searchDocs({
+    const found = await icount.searchDocs({
       startDate: req.query.start,
       endDate: req.query.end,
     });
+    // doc/search does not carry a link, so hand back the deep link into the
+    // billing interface — the printable copy is resolved per row on demand.
+    const docs = found.map((doc) => ({
+      ...doc,
+      doc_app_url: icount.docAppUrl({ doctype: doc?.doctype, docnum: doc?.docnum }),
+    }));
     const total = docs.reduce((sum, d) => {
       const n = Number(d.totalwithvat ?? d.total ?? d.sum ?? 0);
       return sum + (Number.isNaN(n) ? 0 : n);
@@ -4917,6 +5523,44 @@ app.get('/api/icount/docs', async (req, res) => {
     res.json({ docs, total, count: docs.length });
   } catch (err) {
     console.error('iCount docs error:', err.message);
+    res.status(502).json({ error: err.message, code: err.code });
+  }
+});
+
+/**
+ * Resolve the shareable copy of one document in the billing system. The docs
+ * list only knows type + number, so ask for the document itself when staff
+ * actually want to open it.
+ */
+app.get('/api/icount/docs/link', async (req, res) => {
+  try {
+    if (!icount.isConfigured()) {
+      return res.status(503).json({ error: 'iCount לא מוגדר בשרת' });
+    }
+    const doctype = String(req.query.doctype || '').trim();
+    const docnum = String(req.query.docnum || '').trim();
+    if (!doctype || !docnum) {
+      return res.status(400).json({ error: 'חסרים סוג ומספר מסמך' });
+    }
+
+    const appUrl = icount.docAppUrl({ doctype, docnum });
+    let url = null;
+    let clientName = null;
+    try {
+      const info = await icount.getDocInfo({ doctype, docnum });
+      const docInfo = info.doc_info || info;
+      url = docInfo?.doc_url || docInfo?.docurl || info?.doc_url || info?.docurl || null;
+      clientName = docInfo?.client_name || null;
+    } catch (err) {
+      console.warn('⚠️ [iCount doc link] lookup failed:', err.message);
+    }
+
+    if (!url && !appUrl) {
+      return res.status(404).json({ error: 'לא נמצא קישור למסמך' });
+    }
+    res.json({ url, appUrl, clientName, doctype, docnum });
+  } catch (err) {
+    console.error('iCount doc link error:', err.message);
     res.status(502).json({ error: err.message, code: err.code });
   }
 });
@@ -4935,12 +5579,347 @@ app.get('/api/payments', async (req, res) => {
     if (req.query.parentId) {
       payments = payments.filter((p) => p.parent_id === req.query.parentId);
     }
-    payments = [...payments].sort((a, b) =>
-      String(b.created_at || '').localeCompare(String(a.created_at || ''))
-    );
+    payments = [...payments]
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+      .map((payment) => {
+        // Deep links into the billing interface, for anything we cannot do
+        // from here — a partial credit, for example.
+        const refs = paymentDocRefs(db, payment);
+        const parent = payment.parent_id ? db.getOne('parents', payment.parent_id) : null;
+        return {
+          ...payment,
+          icount_doc_app_url: icount.docAppUrl({
+            doctype: refs.charge.doctype,
+            docnum: refs.charge.docnum,
+            docId: refs.charge.docId,
+          }),
+          icount_client_app_url: icount.clientCardUrl(
+            payment.icount_client_id || parent?.icount_client_id
+          ),
+        };
+      });
     res.json(payments);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+/** Pull the tables a payment action may touch, so we never act on a stale row. */
+async function refreshPaymentTables() {
+  if (!supa.isEnabled()) return;
+  const tables = [
+    'payments',
+    'pos_sales',
+    'customer_passes',
+    'activities',
+    'activity_registrations',
+    'activity_registration_orders',
+  ];
+  const rows = await Promise.all(tables.map((table) => supa.getAll(table)));
+  tables.forEach((table, i) => {
+    if (rows[i]) db.set(table, rows[i]);
+  });
+}
+
+/**
+ * Find the public document link for one side of a payment (charge / refund),
+ * asking the billing system once when we only have a document number.
+ */
+async function resolvePaymentDocUrl(payment, kind) {
+  const refs = paymentDocRefs(db, payment);
+  const side = kind === 'refund' ? refs.refund : refs.charge;
+  if (side.url) return { url: side.url, docnum: side.docnum, doctype: side.doctype };
+  if (!icount.isConfigured()) return { url: null, docnum: side.docnum, doctype: side.doctype };
+
+  let url = null;
+  if (side.docId) {
+    try {
+      const info = await icount.getDoc(side.docId);
+      url = info?.doc_url || info?.docurl || info?.doc?.doc_url || info?.doc?.docurl || null;
+    } catch (err) {
+      console.warn('⚠️ [payment invoice] doc lookup failed:', err.message);
+    }
+  }
+  if (!url && side.docnum) {
+    try {
+      const info = await icount.getDocInfo({ doctype: side.doctype, docnum: side.docnum });
+      const docInfo = info.doc_info || info;
+      url = docInfo?.doc_url || docInfo?.docurl || info?.doc_url || info?.docurl || null;
+    } catch (err) {
+      console.warn('⚠️ [payment invoice] doc info lookup failed:', err.message);
+    }
+  }
+
+  if (url) {
+    const patch =
+      kind === 'refund'
+        ? { refund_doc_url: url, updated_at: new Date().toISOString() }
+        : { icount_doc_url: url, updated_at: new Date().toISOString() };
+    const updated = db.update('payments', payment.id, patch);
+    if (updated) await persistCore('payments', updated);
+  }
+  return { url, docnum: side.docnum, doctype: side.doctype };
+}
+
+app.get('/api/payments/:id/invoice', async (req, res) => {
+  try {
+    await refreshPaymentTables();
+    const payment = db.getOne('payments', req.params.id);
+    if (!payment) return res.status(404).json({ error: 'התשלום לא נמצא' });
+
+    const kind = String(req.query.kind || 'charge') === 'refund' ? 'refund' : 'charge';
+    const { url, docnum } = await resolvePaymentDocUrl(payment, kind);
+    if (!url) {
+      return res.status(404).json({
+        error:
+          kind === 'refund'
+            ? 'אין קישור להורדת מסמך הזיכוי'
+            : 'אין קישור להורדת חשבונית החיוב',
+      });
+    }
+
+    const upstream = await fetch(url);
+    if (!upstream.ok) {
+      return res.status(502).json({ error: 'הורדת המסמך ממערכת החיוב נכשלה' });
+    }
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    const contentType = upstream.headers.get('content-type') || 'application/pdf';
+    const safeDoc = String(docnum || kind).replace(/[^\w.-]+/g, '_');
+    const filename =
+      kind === 'refund' ? `invoice-refund-${safeDoc}.pdf` : `invoice-charge-${safeDoc}.pdf`;
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.length);
+    res.send(buffer);
+  } catch (err) {
+    console.error('payment invoice download error:', err.message);
+    res.status(502).json({ error: err.message || 'הורדת המסמך נכשלה' });
+  }
+});
+
+app.post('/api/payments/:id/send-invoice', async (req, res) => {
+  try {
+    await refreshPaymentTables();
+    const payment = db.getOne('payments', req.params.id);
+    if (!payment) return res.status(404).json({ error: 'התשלום לא נמצא' });
+
+    const kind = String(req.body?.kind || 'charge') === 'refund' ? 'refund' : 'charge';
+    const { url, docnum } = await resolvePaymentDocUrl(payment, kind);
+    if (!url) {
+      return res.status(404).json({
+        error:
+          kind === 'refund'
+            ? 'אין מסמך זיכוי לשליחה'
+            : 'אין חשבונית לשליחה — ייתכן שהמסמך עדיין לא הופק במערכת החיוב',
+      });
+    }
+
+    const parent = payment.parent_id ? db.getOne('parents', payment.parent_id) : null;
+    const student = payment.student_id ? db.getOne('students', payment.student_id) : null;
+    const phone = normalizePhone(req.body?.phone || parent?.phone || student?.phone);
+    if (!phone) {
+      return res.status(400).json({ error: 'אין מספר טלפון לשליחה' });
+    }
+
+    const profile = await getBusinessProfile();
+    const text = buildInvoiceWhatsAppText({
+      businessName: profile?.display_name,
+      parentName: parent?.name || student?.name,
+      description: payment.description,
+      amount: payment.amount,
+      docNumber: docnum,
+      url,
+      kind,
+    });
+
+    // clip:false — the document link must never be cut by the bot reply limit.
+    const result = await whatsappService.sendTextMessage(phone, text, false, {
+      clip: false,
+      parentId: parent?.id || null,
+      studentId: payment.student_id || null,
+    });
+    if (!result?.success) {
+      return res.status(502).json({
+        error:
+          result?.error ||
+          'שליחת ההודעה נכשלה — ייתכן שחלון 24 השעות סגור ואין תבנית מאושרת למסמכים',
+      });
+    }
+
+    console.log(`📄 [payment] invoice sent payment=${payment.id} kind=${kind} doc=${docnum || '-'}`);
+    res.json({ success: true, url, docNumber: docnum, phone });
+  } catch (err) {
+    console.error('payment invoice send error:', err.message);
+    res.status(502).json({ error: err.message || 'שליחת החשבונית נכשלה' });
+  }
+});
+
+/**
+ * Refund one payment row from the customer file.
+ * The row can belong to a counter sale, an event registration or an event
+ * host payment — each of those has extra bookkeeping, so we dispatch to the
+ * helper that already handles it instead of only cancelling the document.
+ */
+app.post('/api/payments/:id/refund', async (req, res) => {
+  try {
+    if (!icount.isConfigured()) {
+      return res.status(503).json({ error: 'מערכת החיוב לא מוגדרת בשרת' });
+    }
+    await refreshPaymentTables();
+    const payment = db.getOne('payments', req.params.id);
+    if (!payment) return res.status(404).json({ error: 'התשלום לא נמצא' });
+
+    const check = checkPaymentRefundable(db, payment);
+    if (!check.ok) {
+      return res.status(400).json({ error: check.error, code: check.code || null });
+    }
+
+    const owner = paymentOwner(db, payment);
+    const reason =
+      String(req.body?.reason || '').trim() ||
+      `זיכוי · ${payment.description || 'תשלום'}`;
+    const refundedBy = req.crmUser?.email || req.crmUser?.name || null;
+
+    // Event registration — the shared-payment plan also frees the seats.
+    if (owner.kind === 'registration') {
+      const plan = buildRegistrationRefundPlan(db, {
+        activity: owner.activity,
+        registration: owner.registration,
+      });
+      if (!plan.ok) return res.status(400).json({ error: plan.error, code: plan.code || null });
+      const cancellation = await icount.cancelDoc({
+        doctype: plan.doctype,
+        docnum: plan.docnum,
+        reason,
+        refundCc: true,
+      });
+      const marked = await applyRegistrationRefundMarks({
+        db,
+        persist: persistCore,
+        plan,
+        reason,
+        cancellation,
+        refundedBy,
+      });
+      console.log(`↩️ [payment] registration refund payment=${payment.id} doc=${plan.docnum}`);
+      return res.json({
+        success: true,
+        kind: 'registration',
+        cancellation,
+        amount: plan.amount,
+        payment: db.getOne('payments', payment.id),
+        registrations: marked.registrations,
+      });
+    }
+
+    // Event host payment — also flips the event back to "refunded".
+    if (owner.kind === 'host') {
+      const plan = buildHostRefundPlan(db, owner.activity);
+      if (!plan.ok) return res.status(400).json({ error: plan.error, code: plan.code || null });
+      const cancellation = await icount.cancelDoc({
+        doctype: plan.doctype,
+        docnum: plan.docnum,
+        reason,
+        refundCc: true,
+      });
+      const marked = await applyHostRefundMarks({
+        db,
+        persist: persistCore,
+        activity: owner.activity,
+        payment: plan.payment,
+        reason,
+        cancellation,
+        refundedBy,
+      });
+      console.log(`↩️ [payment] host refund payment=${payment.id} doc=${plan.docnum}`);
+      return res.json({
+        success: true,
+        kind: 'host',
+        cancellation,
+        amount: plan.amount,
+        payment: marked.payment,
+        activity: marked.activity,
+      });
+    }
+
+    const doctype = check.refs.charge.doctype;
+    const docnum = check.refs.charge.docnum;
+    const cancellation = await icount.cancelDoc({
+      doctype,
+      docnum,
+      reason,
+      refundCc: paymentHasCardCharge(db, payment),
+    });
+
+    // Counter sale — void whatever passes the sale issued and mark the sale.
+    if (owner.kind === 'pos') {
+      const now = new Date().toISOString();
+      const voidedPasses = [];
+      for (const pass of db.get('customer_passes') || []) {
+        if (String(pass.sale_id) !== String(owner.sale.id)) continue;
+        if (pass.status === 'void') continue;
+        const updatedPass = db.update('customer_passes', pass.id, {
+          status: 'void',
+          void_reason: reason,
+          updated_at: now,
+        });
+        if (updatedPass) {
+          await persistCore('customer_passes', updatedPass);
+          voidedPasses.push(updatedPass);
+        }
+      }
+      const updatedSale = db.update('pos_sales', owner.sale.id, {
+        status: 'refunded',
+        refunded_at: now,
+        refund_reason: reason,
+        refund_doc_number: cancellation.docnum,
+        refund_doctype: cancellation.doctype,
+        refund_doc_url: cancellation.docUrl || null,
+        refunded_by: refundedBy,
+        updated_at: now,
+      });
+      if (updatedSale) await persistCore('pos_sales', updatedSale);
+      const marked = await applyGenericRefundMarks({
+        db,
+        persist: persistCore,
+        payment,
+        reason,
+        cancellation,
+        refundedBy,
+      });
+      console.log(`↩️ [payment] pos refund payment=${payment.id} sale=${owner.sale.id} doc=${docnum}`);
+      return res.json({
+        success: true,
+        kind: 'pos',
+        cancellation,
+        payment: marked.payment,
+        sale: updatedSale,
+        voidedPasses,
+      });
+    }
+
+    const marked = await applyGenericRefundMarks({
+      db,
+      persist: persistCore,
+      payment,
+      reason,
+      cancellation,
+      refundedBy,
+    });
+    console.log(`↩️ [payment] refund payment=${payment.id} doc=${docnum} → ${cancellation.docnum}`);
+    res.json({ success: true, kind: 'generic', cancellation, payment: marked.payment });
+  } catch (err) {
+    console.error('payment refund error:', err.message, err.details?.error_details || '');
+    const details = Array.isArray(err.details?.error_details)
+      ? err.details.error_details.filter(Boolean).join(' · ')
+      : '';
+    let message = details || err.message;
+    const lower = String(message || '').toLowerCase();
+    if (lower.includes('no cc payment') || lower.includes('no credit')) {
+      message =
+        'לתשלום אין חיוב אשראי — אי אפשר להחזיר כסף לכרטיס. אם זה תשלום במזומן, רענן ונסה שוב (ביטול מסמך בלבד).';
+    }
+    res.status(502).json({ error: message, code: err.code });
   }
 });
 
@@ -5892,6 +6871,14 @@ function fulfillSalePasses({ sale, lines, studentId, parentId, docId, docNumber 
         saleId: sale.id,
         docId,
         docNumber,
+        discount: line.coupon_applied
+          ? {
+              listPrice: line.list_price,
+              paidPrice: line.unitprice,
+              couponCode: line.coupon_code || null,
+              couponLabel: line.coupon_label || null,
+            }
+          : null,
       });
       if (passFields) issued.push(db.insert('customer_passes', passFields));
     }
@@ -5945,6 +6932,45 @@ function punchPass(pass, { punchedBy, source, note }) {
     visits_after: after,
   });
   return { pass: updated, punch };
+}
+
+/** Undo an accidental punch: give the visit back and keep the row as a cancelled record. */
+function cancelPunch(pass, punch, { cancelledBy, reason }) {
+  if (!pass) {
+    const err = new Error('כרטיסייה לא נמצאה');
+    err.status = 404;
+    throw err;
+  }
+  if (!punch || String(punch.pass_id) !== String(pass.id)) {
+    const err = new Error('הניקוב לא נמצא בכרטיסייה הזאת');
+    err.status = 404;
+    throw err;
+  }
+  if (punch.cancelled_at) {
+    const err = new Error('הניקוב כבר בוטל');
+    err.status = 400;
+    throw err;
+  }
+  const total = Number(pass.visits_total);
+  const before = Number(pass.visits_remaining) || 0;
+  const after = Number.isNaN(total) ? before + 1 : Math.min(total, before + 1);
+  if (after === before) {
+    const err = new Error('אי אפשר להחזיר כניסה — הכרטיסייה כבר מלאה');
+    err.status = 400;
+    throw err;
+  }
+  const updated = db.update('customer_passes', pass.id, {
+    visits_remaining: after,
+    // A depleted card comes back to life; an expired one stays expired.
+    status: pass.status === 'depleted' && after > 0 ? 'active' : pass.status,
+    updated_at: new Date().toISOString(),
+  });
+  const cancelled = db.update('pass_punches', punch.id, {
+    cancelled_at: new Date().toISOString(),
+    cancelled_by: cancelledBy || null,
+    cancel_reason: reason || '',
+  });
+  return { pass: updated, punch: cancelled };
 }
 
 app.get('/api/pos/sales', async (req, res) => {
@@ -6227,6 +7253,13 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
       updated_at: new Date().toISOString(),
     });
 
+    // Reversing the sale reverses the benefit too: the customer keeps the
+    // coupon unless it has expired in the meantime.
+    const restoredCoupons = releaseCouponsForSale(db, sale.id);
+    for (const restored of restoredCoupons) {
+      await persistCore('customer_coupons', restored);
+    }
+
     console.log(
       `↩️ [POS] refund sale=${sale.id} doc=${sale.icount_doc_number} → cancel=${cancellation.docnum}`
     );
@@ -6235,6 +7268,7 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
       sale: updatedSale,
       cancellation,
       voidedPasses,
+      restoredCoupons,
     });
   } catch (err) {
     console.error('POS refund error:', err.message, err.details?.error_details || '');
@@ -6252,6 +7286,234 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
       code: err.code,
     });
   }
+});
+
+// ─── Coupons ────────────────────────────────────────────────────────────────
+// A coupon is the benefit a campaign (or a member of staff) handed to one
+// customer. Staff may read and issue them; only the owner deletes campaigns.
+
+app.get('/api/coupons', (req, res) => {
+  const { parentId, studentId, campaignId, status } = req.query;
+  res.json(
+    listCoupons(db, {
+      parentId: parentId || undefined,
+      studentId: studentId || undefined,
+      campaignId: campaignId || undefined,
+      status: status || undefined,
+    })
+  );
+});
+
+app.post('/api/coupons', async (req, res) => {
+  try {
+    const { offer, parentId, studentId, campaignId, campaignName } = req.body || {};
+    if (!parentId && !studentId) {
+      return res.status(400).json({ error: 'בחרו לקוח שיקבל את ההטבה' });
+    }
+    const coupon = issueCoupon(db, {
+      offer,
+      parentId: parentId || null,
+      studentId: studentId || null,
+      campaignId: campaignId || null,
+      campaignName: campaignName || '',
+      source: 'manual',
+      issuedBy: req.crmUser?.email || req.crmUser?.name || '',
+    });
+    await persistCore('customer_coupons', coupon);
+    res.status(201).json(coupon);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/coupons/:id/cancel', async (req, res) => {
+  const updated = cancelCoupon(db, req.params.id, req.body?.reason || '');
+  if (!updated) return res.status(404).json({ error: 'ההטבה לא נמצאה' });
+  await persistCore('customer_coupons', updated);
+  res.json(updated);
+});
+
+/** Active benefits for the customer the register has selected. */
+app.get('/api/pos/coupons', (req, res) => {
+  const { parentId, studentId } = req.query;
+  if (!parentId && !studentId) return res.json([]);
+  res.json(activeCouponsFor(db, { parentId, studentId }));
+});
+
+/**
+ * What a coupon would be worth against the cart on screen. Only a preview —
+ * `/api/pos/sale` recomputes the same thing before honouring it.
+ */
+app.post('/api/pos/coupon-preview', (req, res) => {
+  const { cart = [], code, couponId, parentId, studentId } = req.body || {};
+  const lines = mapCartLines(cart);
+  const check = checkCouponForSale(db, { code, couponId, parentId, studentId, lines });
+  if (!check.ok) return res.status(400).json({ error: check.error });
+  res.json({
+    coupon: check.coupon,
+    discount: check.discount,
+    total: computeSaleTotal(check.lines),
+    lines: check.lines.map(({ item, ...rest }) => rest),
+  });
+});
+
+// ─── Campaigns ──────────────────────────────────────────────────────────────
+
+/** Everything the campaign screen needs to draw its forms. */
+app.get('/api/campaigns/meta', requireOwner, (req, res) => {
+  res.json({
+    triggers: Object.values(TRIGGER_TYPES).map((key) => ({ key, label: TRIGGER_LABELS[key] })),
+    offerTypes: Object.values(OFFER_TYPES).map((key) => ({ key, label: OFFER_TYPE_LABELS[key] })),
+    presets: campaignPresets(),
+  });
+});
+
+/** The approval queue: suggestions waiting for a member of staff to decide. */
+app.get('/api/campaigns/pending', requireOwner, (req, res) => {
+  const rows = (db.get('campaign_sends') || [])
+    .filter((row) => row.status === SEND_STATUS.PENDING)
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  res.json(rows);
+});
+
+app.get('/api/campaigns', requireOwner, (req, res) => {
+  const today = todayIsoDate();
+  const sends = db.get('campaign_sends') || [];
+  const rows = (db.get('campaigns') || []).map((raw) => {
+    const campaign = normalizeCampaign(raw);
+    const mine = sends.filter((s) => String(s.campaign_id) === String(campaign.id));
+    return {
+      ...campaign,
+      trigger_label: TRIGGER_LABELS[campaign.trigger_type],
+      offer_summary: campaign.offer ? offerSummary(campaign.offer) : '',
+      stats: {
+        ...couponStats(db, campaign.id, today),
+        sent: mine.filter((s) => s.status === SEND_STATUS.SENT).length,
+        pending: mine.filter((s) => s.status === SEND_STATUS.PENDING).length,
+        failed: mine.filter((s) => s.status === SEND_STATUS.FAILED).length,
+      },
+    };
+  });
+  res.json(rows);
+});
+
+app.post('/api/campaigns', requireOwner, async (req, res) => {
+  try {
+    const draft = normalizeCampaign({ ...req.body, id: undefined });
+    // A new campaign starts today, so switching it on never mails the back
+    // catalogue that happens to match the trigger.
+    const record = db.insert('campaigns', {
+      ...draft,
+      id: undefined,
+      start_date: req.body?.start_date || todayIsoDate(),
+      created_at: new Date().toISOString(),
+    });
+    await persistCore('campaigns', record);
+    res.status(201).json(record);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put('/api/campaigns/:id', requireOwner, async (req, res) => {
+  const existing = db.getOne('campaigns', req.params.id);
+  if (!existing) return res.status(404).json({ error: 'הקמפיין לא נמצא' });
+  const merged = normalizeCampaign({ ...existing, ...req.body, id: existing.id });
+  const updated = db.update('campaigns', existing.id, {
+    ...merged,
+    created_at: existing.created_at,
+    updated_at: new Date().toISOString(),
+  });
+  await persistCore('campaigns', updated);
+  res.json(updated);
+});
+
+app.delete('/api/campaigns/:id', requireOwner, (req, res) => {
+  const removed = db.delete('campaigns', req.params.id);
+  if (!removed) return res.status(404).json({ error: 'הקמפיין לא נמצא' });
+  res.json({ ok: true });
+});
+
+/** Who would this catch today, and who would be held back and why. */
+app.post('/api/campaigns/:id/dry-run', requireOwner, async (req, res) => {
+  try {
+    const campaign = db.getOne('campaigns', req.params.id) || req.body?.campaign;
+    if (!campaign) return res.status(404).json({ error: 'הקמפיין לא נמצא' });
+    res.json(await runCampaignNow(campaign, { dryRun: true }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** Run now, without waiting for the daily pass. */
+app.post('/api/campaigns/:id/run', requireOwner, async (req, res) => {
+  try {
+    const campaign = db.getOne('campaigns', req.params.id);
+    if (!campaign) return res.status(404).json({ error: 'הקמפיין לא נמצא' });
+    res.json(await runCampaignNow(campaign));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/campaigns/:id/sends', requireOwner, (req, res) => {
+  const rows = (db.get('campaign_sends') || [])
+    .filter((row) => String(row.campaign_id) === String(req.params.id))
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+    .slice(0, 300);
+  res.json(rows);
+});
+
+/** Approving a suggestion is the moment the coupon is created and sent. */
+app.post('/api/campaigns/pending/:sendId/approve', requireOwner, async (req, res) => {
+  try {
+    const pending = db.getOne('campaign_sends', req.params.sendId);
+    if (!pending) return res.status(404).json({ error: 'הפנייה לא נמצאה' });
+    if (pending.status !== SEND_STATUS.PENDING) {
+      return res.status(400).json({ error: 'הפנייה כבר טופלה' });
+    }
+    const campaign = db.getOne('campaigns', pending.campaign_id);
+    if (!campaign) return res.status(404).json({ error: 'הקמפיין לא נמצא' });
+
+    const result = await deliverCampaignEntry(
+      db,
+      campaign,
+      {
+        parentId: pending.parent_id,
+        parentName: pending.parent_name,
+        studentId: pending.student_id,
+        studentName: pending.student_name,
+        phone: pending.phone,
+        reason: pending.reason,
+      },
+      {
+        sendMessage: sendCampaignMessage,
+        businessName: await businessDisplayName(),
+        offer: pending.offer || campaign.offer,
+        decidedBy: req.crmUser?.email || req.crmUser?.name || '',
+      }
+    );
+
+    // The pending row becomes the record of the decision; the delivery row
+    // holds what actually happened.
+    db.delete('campaign_sends', pending.id);
+    if (result.coupon) await persistCore('customer_coupons', result.coupon);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/campaigns/pending/:sendId/reject', requireOwner, async (req, res) => {
+  const pending = db.getOne('campaign_sends', req.params.sendId);
+  if (!pending) return res.status(404).json({ error: 'הפנייה לא נמצאה' });
+  const updated = db.update('campaign_sends', pending.id, {
+    status: SEND_STATUS.REJECTED,
+    decided_by: req.crmUser?.email || req.crmUser?.name || '',
+    decided_at: new Date().toISOString(),
+  });
+  await persistCore('campaign_sends', updated);
+  res.json(updated);
 });
 
 app.get('/api/pos/passes', (req, res) => {
@@ -6287,6 +7549,20 @@ app.post('/api/pos/passes/:id/punch', (req, res) => {
       note: req.body?.note || '',
     });
     res.status(201).json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/pos/passes/:id/punches/:punchId/cancel', (req, res) => {
+  try {
+    const pass = db.getOne('customer_passes', req.params.id);
+    const punch = db.getOne('pass_punches', req.params.punchId);
+    const result = cancelPunch(pass, punch, {
+      cancelledBy: req.crmUser?.name || req.crmUser?.email || 'צוות',
+      reason: req.body?.reason || '',
+    });
+    res.json(result);
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });
   }
@@ -6359,9 +7635,10 @@ app.post('/api/pos/sale', async (req, res) => {
       paymentMethod = 'cash',
       sendEmail = false,
       sendWhatsapp = false,
+      couponCode,
     } = req.body || {};
 
-    const lines = mapCartLines(cart);
+    let lines = mapCartLines(cart);
     if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
 
     const needsCustomer = lines.some((l) => requiresCustomer(l.product_type));
@@ -6374,6 +7651,23 @@ app.post('/api/pos/sale', async (req, res) => {
     });
     if (needsCustomer && !student?.id) {
       return res.status(400).json({ error: 'מנוי או כרטיסייה דורשים בחירת מתאמן' });
+    }
+
+    // The register only previews a coupon — the benefit is recomputed here so a
+    // stale screen or a hand-edited request can never hand out a bigger discount.
+    let coupon = null;
+    let couponDiscount = 0;
+    if (couponCode) {
+      const check = checkCouponForSale(db, {
+        code: couponCode,
+        parentId: parent?.id || parentId || null,
+        studentId: student?.id || null,
+        lines,
+      });
+      if (!check.ok) return res.status(400).json({ error: check.error });
+      lines = check.lines;
+      coupon = check.coupon;
+      couponDiscount = check.discount;
     }
 
     const total = computeSaleTotal(lines);
@@ -6428,9 +7722,18 @@ app.post('/api/pos/sale', async (req, res) => {
       sold_by: req.crmUser?.email || req.crmUser?.name || null,
       sent_email: !!sendEmail,
       sent_whatsapp: !!sendWhatsapp,
+      coupon_id: coupon?.id || null,
+      coupon_code: coupon?.code || null,
+      coupon_discount: couponDiscount || 0,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
+
+    if (coupon) {
+      redeemCoupon(db, coupon.id, { saleId: sale.id, amount: couponDiscount });
+      await persistCore('customer_coupons', db.getOne('customer_coupons', coupon.id));
+      console.log(`🎟️ [POS] coupon ${coupon.code} redeemed on sale ${sale.id} (₪${couponDiscount})`);
+    }
 
     const passes = fulfillSalePasses({
       sale,
@@ -6464,7 +7767,7 @@ app.post('/api/pos/sale', async (req, res) => {
         const digits = phone.replace(/^0/, '972');
         const text = encodeURIComponent(
           `שלום${syncedParent?.name ? ` ${syncedParent.name}` : ''},\n` +
-            `תודה על הרכישה ב־My Wall.\n` +
+            `תודה על הרכישה ב־${await businessBrand()}.\n` +
             `סכום: ₪${total}` +
             (doc?.docnum ? `\nמספר מסמך: ${doc.docnum}` : '') +
             (doc?.docUrl ? `\nקישור למסמך: ${doc.docUrl}` : '')
@@ -6473,7 +7776,15 @@ app.post('/api/pos/sale', async (req, res) => {
       }
     }
 
-    res.status(201).json({ sale, passes, doc, whatsappUrl, isNewLead: !!isNewLead, parent: syncedParent });
+    res.status(201).json({
+      sale,
+      passes,
+      doc,
+      whatsappUrl,
+      isNewLead: !!isNewLead,
+      parent: syncedParent,
+      coupon: coupon ? { code: coupon.code, discount: couponDiscount } : null,
+    });
   } catch (err) {
     console.error('POS sale error:', err.message, err.details?.error_details || '');
     const details = Array.isArray(err.details?.error_details)
@@ -6563,7 +7874,7 @@ app.post('/api/pos/quote', async (req, res) => {
       const ipnUrl = icount.buildIpnUrl({ paymentId: payment.id });
       payUrl = await icount.buildPaymentUrl({
         amount: total,
-        description: description || 'הצעת מחיר מ־My Wall',
+        description: description || `הצעת מחיר מ־${await businessBrand()}`,
         name: customerName,
         lastName: syncedParent?.lastName,
         idNumber: syncedParent?.idNumber,
@@ -6642,7 +7953,7 @@ app.post('/api/pos/quote', async (req, res) => {
       if (phone) {
         const waMsg =
           `שלום${customerName ? ` ${customerName}` : ''},\n` +
-          `מצורפת הצעת מחיר מ־My Wall.\n` +
+          `מצורפת הצעת מחיר מ־${await businessBrand()}.\n` +
           `סכום: ₪${total}` +
           (doc.docnum ? `\nמספר הצעה: ${doc.docnum}` : '') +
           (doc.docUrl ? `\nקישור להצעה: ${doc.docUrl}` : '') +
@@ -6824,7 +8135,7 @@ app.post('/api/pos/payment-link', async (req, res) => {
     const ipnUrl = icount.buildIpnUrl({ paymentId: payment.id });
     const payUrl = await icount.buildPaymentUrl({
       amount: total,
-      description: description || 'רכישה ב-My Wall',
+      description: description || `רכישה ב-${await businessBrand()}`,
       name: syncedParent?.name || student?.name || walkInName || 'לקוח',
       lastName: syncedParent?.lastName,
       idNumber: syncedParent?.idNumber,
@@ -6894,7 +8205,7 @@ app.post('/api/pos/payment-link', async (req, res) => {
         if (!whatsappSent) {
           const waMsg =
             `שלום${customerName ? ` ${customerName}` : ''},\n` +
-            `לסיום התשלום ב-My Wall:\n${shareUrl}\n\n` +
+            `לסיום התשלום ב-${await businessBrand()}:\n${shareUrl}\n\n` +
             `לאחר התשלום תופק חשבונית מס קבלה אוטומטית.`;
           try {
             const waResult = await whatsappService.sendTextMessage(phone, waMsg);
@@ -7600,13 +8911,16 @@ app.get('/api/students/:id/activity-registrations', async (req, res) => {
     const studentId = String(req.params.id || '').trim();
     if (!studentId) return res.status(400).json({ error: 'חסר מזהה מתאמן' });
     if (supa.isEnabled()) {
-      const [remoteRegs, remoteActivities] = await Promise.all([
+      const [remoteRegs, remoteActivities, remoteMarks] = await Promise.all([
         supa.getAll('activity_registrations'),
         supa.getAll('activities'),
+        supa.getAll(ACTIVITY_ATTENDANCE_COLLECTION),
       ]);
       if (remoteRegs) db.set('activity_registrations', remoteRegs);
       if (remoteActivities) db.set('activities', remoteActivities);
+      if (remoteMarks) db.set(ACTIVITY_ATTENDANCE_COLLECTION, remoteMarks);
     }
+    const savedById = indexSavedAttendance(activityAttendanceRows(db));
     const typeLabels = {
       birthday: 'יום הולדת',
       trip: 'טיול',
@@ -7627,6 +8941,10 @@ app.get('/api/students/:id/activity-registrations', async (req, res) => {
       .filter((registration) => String(registration.student_id || '') === studentId)
       .map((registration) => {
         const activity = db.getOne('activities', registration.activity_id) || {};
+        // Every day of the activity, so a multi-day camp is markable per day.
+        const days = registrationCountsForAttendance(registration)
+          ? attendanceDaysFor({ activity, registration, savedById })
+          : [];
         return {
           id: registration.id,
           activity_id: registration.activity_id,
@@ -7641,6 +8959,8 @@ app.get('/api/students/:id/activity-registrations', async (req, res) => {
           status_label: statusLabels[registration.status] || registration.status || '',
           payment_status: registration.payment_status || '',
           created_at: registration.created_at || registration.updated_at || '',
+          days,
+          attendance_summary: summarizeDays(days),
         };
       })
       .sort((a, b) => String(b.date || b.created_at).localeCompare(String(a.date || a.created_at)));
@@ -7731,7 +9051,7 @@ function isLocalAppOrigin(origin) {
 }
 
 /** Prefer a public HTTPS origin for WhatsApp — localhost links are not clickable on phones. */
-const PUBLIC_APP_FALLBACK = 'https://client-omega-topaz-35.vercel.app';
+const PUBLIC_APP_FALLBACK = 'https://app.kirboaz.co.il';
 
 function resolvePublicAppOrigin(requestedOrigin) {
   const candidates = [
@@ -7920,11 +9240,15 @@ initDb({ requireDurable: requiresDurableStore() }).then(() => {
     ensureEventWhatsappTemplates({
       db,
       persist: persistCore,
-      publicAppBase: process.env.FRONTEND_URL || process.env.PUBLIC_APP_URL || '',
     });
   } catch (err) {
     console.warn('event whatsapp templates seed skipped:', err.message);
   }
+  Promise.resolve(ensureDefaultScenarios({ db, persist: persistCore }))
+    .then((created) => {
+      if (created) console.log(`🧠 Seeded ${created} default AI scenario(s)`);
+    })
+    .catch((err) => console.warn('AI scenario seed skipped:', err.message));
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   try {
@@ -7969,6 +9293,13 @@ app.listen(PORT, () => {
   // Intro class reminder + day-after followup (from 08:00 Asia/Jerusalem)
   setTimeout(() => { runScheduledAutomationsIfDue(8); }, 45_000);
   setInterval(() => { runScheduledAutomationsIfDue(8); }, 15 * 60 * 1000);
+
+  // Campaigns + coupon expiry (from 10:00 Asia/Jerusalem, after the morning jobs)
+  setTimeout(() => { runCampaignsIfDue(10); }, 90_000);
+  setInterval(() => { runCampaignsIfDue(10); }, 15 * 60 * 1000);
+
+  // AI assistant sweep over conversations that went quiet (from 03:00 Asia/Jerusalem)
+  setInterval(() => { runNightlySweepIfDue(3); }, 15 * 60 * 1000);
 
   // Google Calendar pull every 10 minutes (backup for missed webhooks)
   const runGooglePullIfConnected = async () => {

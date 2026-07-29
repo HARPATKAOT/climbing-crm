@@ -14,6 +14,16 @@ const DAY_OPTIONS = [
   { value: 6, label: 'ש׳' },
 ];
 
+// «כיתות ג'-ד' — יום א' 15:30» → «כיתות ג'-ד' 15:30». היום כבר מופיע בכותרת העמודה.
+// דורש «יום» או צמד «ב׳+ה׳» אחרי המקף כדי לא לבלוע שמות כמו «כיתות ג'-ד'».
+const DAY_IN_NAME_RE = /\s*[—–-]\s*(?:יום\s*[א-ו][׳'’]?|[א-ו][׳'’]?\s*\+\s*(?:יום\s*)?[א-ו][׳'’]?)(?=\s|$)/g;
+
+function nameWithoutDay(name) {
+  const raw = String(name || '');
+  const short = raw.replace(DAY_IN_NAME_RE, ' ').replace(/\s{2,}/g, ' ').trim();
+  return short || raw;
+}
+
 export default function SegmentBuilder({
   parents = [],
   students = [],
@@ -130,7 +140,7 @@ export default function SegmentBuilder({
   };
 
   return (
-    <div style={{ display: 'grid', gap: 14, minWidth: 0, maxWidth: '100%' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 14, minWidth: 0, maxWidth: '100%' }}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <Users size={16} />
         <strong style={{ fontSize: 14 }}>
@@ -233,12 +243,13 @@ export default function SegmentBuilder({
         </div>
         <div
           style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(min(150px, 100%), 1fr))',
+            display: 'flex',
+            flexWrap: 'nowrap',
             gap: 10,
             paddingBottom: 4,
             minWidth: 0,
             maxWidth: '100%',
+            overflowX: 'auto',
           }}
         >
           {groupsByDay.map((section) => {
@@ -252,8 +263,8 @@ export default function SegmentBuilder({
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 6,
-                minWidth: 0,
-                maxWidth: '100%',
+                flex: '1 1 0',
+                minWidth: 110,
                 padding: 8,
                 borderRadius: 10,
                 background: 'rgba(255,255,255,0.03)',
@@ -298,7 +309,7 @@ export default function SegmentBuilder({
                   }}
                   title={g.name}
                 >
-                  {g.name}
+                  {nameWithoutDay(g.name)}
                 </button>
               ))}
             </div>

@@ -1,5 +1,5 @@
 /* ==========================================
-   My Wall CRM - Premium Design System
+   קיר בועז CRM - Premium Design System
    ========================================== */
 
 /* --- Google Fonts --- */
@@ -262,14 +262,18 @@ input, select, textarea { font-family: var(--font); }
 }
 .nav-item:hover {
   color: var(--text-1);
-  background: rgba(255,255,255,0.05);
-  border-color: var(--border);
+  background: color-mix(in srgb, var(--nav-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--nav-accent) 26%, transparent);
 }
 .nav-item.active {
   color: #fff;
   font-weight: 600;
-  background: rgba(255,255,255,0.06);
-  border-color: var(--border);
+  background: linear-gradient(
+    270deg,
+    color-mix(in srgb, var(--nav-accent) 22%, transparent),
+    color-mix(in srgb, var(--nav-accent) 6%, transparent)
+  );
+  border-color: color-mix(in srgb, var(--nav-accent) 40%, transparent);
 }
 .nav-item.active::before {
   content: '';
@@ -315,15 +319,22 @@ input, select, textarea { font-family: var(--font); }
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
+  color: var(--nav-accent);
+  background: color-mix(in srgb, var(--nav-accent) 15%, var(--bg-input));
+  border: 1px solid color-mix(in srgb, var(--nav-accent) 32%, transparent);
   box-shadow: none;
   filter: none;
-  transition: border-color var(--t-fast), background var(--t-fast);
+  transition: border-color var(--t-fast), background var(--t-fast), color var(--t-fast);
+}
+.nav-item:hover .nav-icon-wrap {
+  background: color-mix(in srgb, var(--nav-accent) 26%, var(--bg-input));
+  border-color: color-mix(in srgb, var(--nav-accent) 50%, transparent);
 }
 .nav-item.active .nav-icon-wrap {
-  background: var(--bg-card);
-  border-color: var(--border-hover);
+  color: #14172a;
+  background: var(--nav-accent);
+  border-color: var(--nav-accent);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--nav-accent) 35%, transparent);
 }
 .nav-icon {
   flex-shrink: 0;
@@ -705,7 +716,8 @@ input, select, textarea { font-family: var(--font); }
   justify-content: center;
   border-radius: 9px;
 }
-.daily-work-list { max-height: 350px; overflow-y: auto; }
+/* min-height משריין מקום לשתי שורות, כך שמילוי הרשימה אחרי הטעינה לא מזיז את הכרטיסים שמתחת. */
+.daily-work-list { min-height: 160px; max-height: 350px; overflow-y: auto; }
 .daily-work-row {
   min-height: 67px;
   display: flex;
@@ -738,7 +750,7 @@ input, select, textarea { font-family: var(--font); }
 .daily-work-row-copy small { color: var(--text-3); font-size: 11px; direction: rtl; }
 .daily-work-row-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .daily-work-empty {
-  min-height: 96px;
+  min-height: 160px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1886,6 +1898,42 @@ input, select, textarea { font-family: var(--font); }
   flex-shrink: 0;
 }
 
+/* נוכחות בתוך שורת המשתתף — לא טבלה נפרדת */
+.registration-participant-attendance {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.registration-attendance-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.registration-attendance-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.registration-attendance-bar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.registration-attendance-day-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+
 .registration-participant-edit {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 110px;
@@ -1948,6 +1996,102 @@ input, select, textarea { font-family: var(--font); }
 
 .registration-participant-link--inline {
   font-weight: 500;
+}
+
+/* כחול = רשומים · סגול = מתעניינים */
+.registration-participants-summary--registered {
+  border-color: rgba(37, 99, 235, 0.4);
+  background: rgba(37, 99, 235, 0.1);
+}
+
+.registration-participants-summary--registered .registration-participants-label {
+  color: #93C5FD;
+}
+
+.registration-participants-summary--interest {
+  border-color: rgba(167, 139, 250, 0.4);
+  background: rgba(167, 139, 250, 0.1);
+}
+
+.registration-participants-summary--interest .registration-participants-label {
+  color: #C4B5FD;
+}
+
+.registration-participant-row--registered {
+  border-inline-start: 3px solid rgba(37, 99, 235, 0.65);
+  background: rgba(37, 99, 235, 0.07);
+}
+
+.registration-participant-row--interest {
+  border-inline-start: 3px solid rgba(167, 139, 250, 0.65);
+  background: rgba(167, 139, 250, 0.07);
+}
+
+/* מתעניינים — שיבוץ לפני הרשמה ותשלום */
+.registration-interest-hint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.registration-interest-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 140px 100px;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(167, 139, 250, 0.3);
+  border-radius: var(--radius-sm);
+  background: rgba(167, 139, 250, 0.05);
+}
+
+.registration-interest-notes,
+.registration-interest-form-actions {
+  grid-column: 1 / -1;
+}
+
+.registration-interest-form-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.registration-interest-suggestions {
+  position: absolute;
+  z-index: 80;
+  right: 0;
+  left: 0;
+  top: 100%;
+  margin-top: 4px;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-card, #0f172a);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+}
+
+.registration-interest-convert {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.registration-interest-convert .input {
+  min-width: 128px;
+  height: 30px;
+  padding-block: 0;
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .registration-interest-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .registration-interest-convert {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
 }
 
 .registration-actions .btn:focus-visible,

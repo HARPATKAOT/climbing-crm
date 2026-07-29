@@ -114,7 +114,7 @@ export async function apiAuth(req, res, next) {
       (!supa.isEnabled() && isLoopbackRequest(req))
     );
   if (localDevelopment) {
-    req.crmUser = { id: 'local-development', email: 'local@mywall.test', role: 'owner' };
+    req.crmUser = { id: 'local-development', email: 'local@crm.test', role: 'owner' };
     return next();
   }
 

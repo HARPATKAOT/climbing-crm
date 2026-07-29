@@ -166,3 +166,25 @@ export function attStatusMeta(status) {
   const key = normalizeAttStatus(status);
   return ATT_STATUS.find((s) => s.key === key) || ATT_STATUS[0];
 }
+
+/**
+ * How many meetings in a row the climber missed, counting back from the most
+ * recent one. Unmarked meetings and holidays don't break the run — they simply
+ * aren't evidence either way.
+ */
+export function consecutiveAbsences(history = []) {
+  const rows = (Array.isArray(history) ? history : [])
+    .slice()
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  let count = 0;
+  for (const row of rows) {
+    const status = row?.status;
+    if (isAttPending(status) || normalizeAttStatus(status) === 'holiday') continue;
+    if (isAttAbsent(status)) {
+      count += 1;
+      continue;
+    }
+    break;
+  }
+  return count;
+}

@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Copy, Download, ExternalLink, Loader2, Pencil, RefreshCw,
-  Search, Send, Trash2, Undo2, Users, X,
+  Copy, Download, ExternalLink, Loader2, Pencil, Plus, RefreshCw,
+  Search, Send, Trash2, Undo2, UserCheck, UserPlus, Users, X,
 } from 'lucide-react';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
+import { AttendanceDayBar, AttendanceToggle, useActivityAttendance } from './ActivityAttendance.jsx';
 
 function leadOpenTarget(registration) {
   if (registration?.student_id) return String(registration.student_id);
@@ -14,6 +15,54 @@ function leadOpenTarget(registration) {
 
 function normalizePhoneDigits(phone) {
   return String(phone || '').replace(/\D/g, '');
+}
+
+/** Customer lookup shared by the host picker and the interested-people picker. */
+function matchCustomers(query, parents, students) {
+  const q = String(query || '').trim().toLowerCase();
+  if (q.length < 1) return [];
+  const phoneQ = normalizePhoneDigits(query);
+  const results = [];
+
+  for (const parent of parents) {
+    const name = String(parent.name || '').toLowerCase();
+    const phone = normalizePhoneDigits(parent.phone);
+    const email = String(parent.email || '').toLowerCase();
+    if (
+      name.includes(q) ||
+      email.includes(q) ||
+      (phoneQ.length >= 3 && phone.includes(phoneQ))
+    ) {
+      results.push({
+        key: `parent:${parent.id}`,
+        type: 'parent',
+        id: parent.id,
+        name: parent.name || 'לקוח',
+        phone: parent.phone || '',
+        email: parent.email || '',
+      });
+    }
+  }
+
+  for (const student of students) {
+    const name = String(student.name || '').toLowerCase();
+    if (!name.includes(q)) continue;
+    const parent = parents.find((p) => p.id === student.parentId);
+    if (!parent) continue;
+    results.push({
+      key: `student:${student.id}`,
+      type: 'student',
+      id: parent.id,
+      studentId: student.id,
+      name: parent.name || 'לקוח',
+      childName: student.name || '',
+      isAdult: student.isAdult === true,
+      phone: parent.phone || '',
+      email: parent.email || '',
+    });
+  }
+
+  return results.slice(0, 12);
 }
 
 function formatPaidAt(value) {
@@ -103,6 +152,21 @@ export default function ActivityRegistrationPanel({
   const [editDraft, setEditDraft] = useState({ participant_name: '', participant_type: 'child' });
   const [editBusy, setEditBusy] = useState('');
   const [editingPaymentStatus, setEditingPaymentStatus] = useState(false);
+  const [interested, setInterested] = useState([]);
+  const [interestDraft, setInterestDraft] = useState(null);
+  const [interestSuggestOpen, setInterestSuggestOpen] = useState(false);
+  const [interestBusy, setInterestBusy] = useState('');
+  const [convertingId, setConvertingId] = useState(null);
+  const [convertStatus, setConvertStatus] = useState('paid');
+
+  // Attendance lives inside the registered-participants list, not beside it.
+  // The token changes with the participant list, so a newcomer becomes
+  // markable without reopening the event.
+  const attendance = useActivityAttendance({
+    activityId,
+    enabled: !templateMode,
+    refreshToken: regs.map((r) => r.id).join(','),
+  });
 
   const openLeadFile = useCallback((openId) => {
     if (!openId) return;
@@ -126,6 +190,7 @@ export default function ActivityRegistrationPanel({
       if (!res.ok) return;
       const data = await res.json();
       setRegs(Array.isArray(data.registrations) ? data.registrations : []);
+      setInterested(Array.isArray(data.interested) ? data.interested : []);
       setRemaining(data.remaining ?? null);
       setHostPayment(data.host_payment || null);
       if (data.host_payment?.payment_status && setForm) {
@@ -223,50 +288,10 @@ export default function ActivityRegistrationPanel({
     return parents.find((p) => String(p.id) === String(form.host_parent_id)) || null;
   }, [form?.host_parent_id, parents]);
 
-  const customerSuggestions = useMemo(() => {
-    const q = customerQuery.trim().toLowerCase();
-    if (q.length < 1) return [];
-    const phoneQ = normalizePhoneDigits(customerQuery);
-    const results = [];
-
-    for (const parent of parents) {
-      const name = String(parent.name || '').toLowerCase();
-      const phone = normalizePhoneDigits(parent.phone);
-      const email = String(parent.email || '').toLowerCase();
-      if (
-        name.includes(q) ||
-        email.includes(q) ||
-        (phoneQ.length >= 3 && phone.includes(phoneQ))
-      ) {
-        results.push({
-          key: `parent:${parent.id}`,
-          type: 'parent',
-          id: parent.id,
-          name: parent.name || 'לקוח',
-          phone: parent.phone || '',
-          email: parent.email || '',
-        });
-      }
-    }
-
-    for (const student of students) {
-      const name = String(student.name || '').toLowerCase();
-      if (!name.includes(q)) continue;
-      const parent = parents.find((p) => p.id === student.parentId);
-      if (!parent) continue;
-      results.push({
-        key: `student:${student.id}`,
-        type: 'student',
-        id: parent.id,
-        name: parent.name || 'לקוח',
-        childName: student.name || '',
-        phone: parent.phone || '',
-        email: parent.email || '',
-      });
-    }
-
-    return results.slice(0, 12);
-  }, [customerQuery, parents, students]);
+  const customerSuggestions = useMemo(
+    () => matchCustomers(customerQuery, parents, students),
+    [customerQuery, parents, students]
+  );
 
   const selectCustomer = (hit) => {
     if (readOnly) return;
@@ -565,6 +590,134 @@ export default function ActivityRegistrationPanel({
       setMsg('שגיאת רשת');
     } finally {
       setEditBusy('');
+    }
+  };
+
+  // ─── מתעניינים: שיבוץ לפני הרשמה ותשלום ───────────────────────────────────
+  const emptyInterestDraft = () => ({
+    id: null,
+    name: '',
+    phone: '',
+    email: '',
+    parent_id: null,
+    student_id: null,
+    participant_type: 'child',
+    notes: '',
+  });
+
+  const interestSuggestions = useMemo(() => {
+    if (!interestSuggestOpen || interestDraft?.parent_id) return [];
+    return matchCustomers(interestDraft?.name || '', parents, students);
+  }, [interestSuggestOpen, interestDraft?.name, interestDraft?.parent_id, parents, students]);
+
+  const pickInterestCustomer = (hit) => {
+    setInterestDraft((prev) => ({
+      ...(prev || emptyInterestDraft()),
+      name: hit.childName || hit.name,
+      phone: hit.phone || '',
+      email: hit.email || '',
+      parent_id: hit.id,
+      student_id: hit.studentId || null,
+      participant_type: hit.childName && !hit.isAdult ? 'child' : 'adult',
+    }));
+    setInterestSuggestOpen(false);
+  };
+
+  const saveInterest = async () => {
+    if (!activityId || !interestDraft) return;
+    const name = String(interestDraft.name || '').trim();
+    if (!name) {
+      setMsg('יש למלא שם מתעניין');
+      return;
+    }
+    setInterestBusy('save');
+    setMsg('');
+    try {
+      const editing = !!interestDraft.id;
+      const res = await fetch(
+        editing
+          ? `/api/activities/${encodeURIComponent(activityId)}/interested/${encodeURIComponent(interestDraft.id)}`
+          : `/api/activities/${encodeURIComponent(activityId)}/interested`,
+        {
+          method: editing ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...interestDraft, name }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMsg(data.error || 'שמירת המתעניין נכשלה');
+        return;
+      }
+      setInterested(Array.isArray(data.interested) ? data.interested : interested);
+      setInterestDraft(null);
+      setInterestSuggestOpen(false);
+      setMsg(editing ? 'פרטי המתעניין עודכנו' : `${name} נוסף/ה לרשימת המתעניינים`);
+    } catch {
+      setMsg('שגיאת רשת');
+    } finally {
+      setInterestBusy('');
+    }
+  };
+
+  const removeInterest = async (row) => {
+    if (!activityId || !row?.id || readOnly) return;
+    if (!window.confirm(`להסיר את ${row.name || 'המתעניין'} מרשימת המתעניינים?`)) return;
+    setInterestBusy(row.id);
+    setMsg('');
+    try {
+      const res = await fetch(
+        `/api/activities/${encodeURIComponent(activityId)}/interested/${encodeURIComponent(row.id)}`,
+        { method: 'DELETE' }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMsg(data.error || 'הסרת המתעניין נכשלה');
+        return;
+      }
+      setInterested(Array.isArray(data.interested) ? data.interested : []);
+      setMsg('המתעניין הוסר');
+    } catch {
+      setMsg('שגיאת רשת');
+    } finally {
+      setInterestBusy('');
+    }
+  };
+
+  const beginConvert = (row) => {
+    if (readOnly) return;
+    const hostPays =
+      (form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')) === 'host_pays';
+    setConvertStatus(hostPays ? 'not_required' : 'paid');
+    setConvertingId(row.id);
+    setMsg('');
+  };
+
+  const confirmConvert = async (row) => {
+    if (!activityId || !row?.id) return;
+    setInterestBusy(`convert:${row.id}`);
+    setMsg('');
+    try {
+      const res = await fetch(
+        `/api/activities/${encodeURIComponent(activityId)}/interested/${encodeURIComponent(row.id)}/convert`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ payment_status: convertStatus }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMsg(data.error || 'ההעברה לרשומים נכשלה');
+        return;
+      }
+      setConvertingId(null);
+      setMsg(`${row.name} עבר/ה לרשומים`);
+      await loadRegs();
+    } catch {
+      setMsg('שגיאת רשת');
+    } finally {
+      setInterestBusy('');
     }
   };
 
@@ -891,6 +1044,28 @@ export default function ActivityRegistrationPanel({
         </label>
       )}
 
+      {/* Separate from the registration link: a private birthday has a link the
+          host shares themselves, and must not be advertised on the website. */}
+      {!hideRegistrationToggle && form.registration_enabled && (
+        <label style={{
+          display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13, color: 'var(--text-2)',
+        }}>
+          <input
+            type="checkbox"
+            checked={!!form.show_on_site}
+            onChange={(e) => set('show_on_site', e.target.checked)}
+            disabled={readOnly}
+            style={{ marginTop: 3 }}
+          />
+          <span>
+            להציג באתר הציבורי
+            <span style={{ display: 'block', fontSize: 11, color: 'var(--text-3)' }}>
+              לפעילויות פתוחות לקהל בלבד. אירוע פרטי — להשאיר לא מסומן.
+            </span>
+          </span>
+        </label>
+      )}
+
       <label className="activity-registration-field">
         <span className="activity-registration-field-label">אופן ההרשמה והתשלום</span>
         <select
@@ -1129,7 +1304,7 @@ export default function ActivityRegistrationPanel({
 
       {activityId && (
         <div className="registration-participants">
-          <div className="registration-participants-summary">
+          <div className="registration-participants-summary registration-participants-summary--registered">
             <div className="registration-participants-label">
               <Users size={14} />
               <span>משתתפים רשומים</span>
@@ -1138,17 +1313,28 @@ export default function ActivityRegistrationPanel({
                   · נותרו {remaining}
                 </span>
               )}
+              {attendance.dayTotals && (
+                <span className="registration-participants-remaining">
+                  · הגיעו {attendance.dayTotals.attended} מתוך {attendance.dayTotals.total}
+                </span>
+              )}
             </div>
             <button
               type="button"
               className="icon-btn registration-refresh-btn"
-              onClick={loadRegs}
+              onClick={() => { loadRegs(); attendance.reload(); }}
               aria-label="רענון"
               title="רענון"
             >
               <RefreshCw size={14} />
             </button>
           </div>
+          {attendance.error && (
+            <div className="alert alert-danger" style={{ fontSize: 12 }}>{attendance.error}</div>
+          )}
+          {regs.length > 0 && attendance.hasList && (
+            <AttendanceDayBar attendance={attendance} readOnly={readOnly} />
+          )}
           {regs.length === 0 ? (
             <div style={{ fontSize: 12, color: 'var(--text-3)' }}>עדיין אין נרשמים</div>
           ) : (
@@ -1161,7 +1347,7 @@ export default function ActivityRegistrationPanel({
                 return (
                 <div
                   key={r.id}
-                  className="registration-participant-row"
+                  className="registration-participant-row registration-participant-row--registered"
                 >
                   {isEditing ? (
                     <div className="registration-participant-edit">
@@ -1246,6 +1432,16 @@ export default function ActivityRegistrationPanel({
                               : ' · ללא תשלום'}
                         </small>
                       </span>
+                      {attendance.hasList && (
+                        <span className="registration-participant-attendance">
+                          <AttendanceToggle
+                            status={attendance.statusFor(r.id)}
+                            busy={attendance.busyFor(r.id)}
+                            disabled={readOnly}
+                            onMark={(status) => attendance.mark(r.id, status)}
+                          />
+                        </span>
+                      )}
                       {!readOnly && (
                         <span className="registration-participant-actions">
                           {r.payment_status === 'paid' && (
@@ -1289,6 +1485,253 @@ export default function ActivityRegistrationPanel({
                 </div>
                 );
               })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {activityId && (
+        <div className="registration-participants">
+          <div className="registration-participants-summary registration-participants-summary--interest">
+            <div className="registration-participants-label">
+              <UserPlus size={14} />
+              <span>מתעניינים</span>
+              {interested.length > 0 && (
+                <span className="registration-participants-remaining">
+                  · {interested.length} {interested.length === 1 ? 'ממתין' : 'ממתינים'} להרשמה
+                </span>
+              )}
+            </div>
+            {!readOnly && !interestDraft && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => {
+                  setInterestDraft(emptyInterestDraft());
+                  setInterestSuggestOpen(false);
+                }}
+              >
+                <Plus size={14} />
+                שיבוץ מתעניין
+              </button>
+            )}
+          </div>
+
+          <div className="registration-interest-hint">
+            שיבוץ מתעניינים שעדיין לא נרשמו ולא שילמו. הם לא נספרים במכסת המקומות,
+            וברגע שיירשמו דרך קישור המשתתפים הם יעברו לרשומים אוטומטית.
+          </div>
+
+          {interestDraft && !readOnly && (
+            <div className="registration-interest-form">
+              <div style={{ position: 'relative' }}>
+                <input
+                  className="input"
+                  placeholder="שם המתעניין (או חיפוש לקוח קיים)"
+                  value={interestDraft.name}
+                  onChange={(e) => {
+                    setInterestDraft((prev) => ({
+                      ...prev,
+                      name: e.target.value,
+                      parent_id: null,
+                      student_id: null,
+                    }));
+                    setInterestSuggestOpen(true);
+                  }}
+                  autoComplete="off"
+                  autoFocus
+                />
+                {interestSuggestions.length > 0 && (
+                  <div className="registration-interest-suggestions">
+                    {interestSuggestions.map((hit) => (
+                      <button
+                        key={hit.key}
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        style={{
+                          width: '100%',
+                          justifyContent: 'flex-start',
+                          borderRadius: 0,
+                          gap: 8,
+                          padding: '10px 12px',
+                          textAlign: 'right',
+                        }}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => pickInterestCustomer(hit)}
+                      >
+                        <span style={{ fontWeight: 700 }}>{hit.childName || hit.name}</span>
+                        <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                          {hit.childName ? `לקוח: ${hit.name}` : 'לקוח / הורה'}
+                          {hit.phone ? ` · ${hit.phone}` : ''}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <input
+                className="input"
+                placeholder="טלפון"
+                value={interestDraft.phone}
+                onChange={(e) => setInterestDraft((prev) => ({ ...prev, phone: e.target.value }))}
+                autoComplete="off"
+              />
+              <select
+                className="input"
+                value={interestDraft.participant_type}
+                onChange={(e) => setInterestDraft((prev) => ({ ...prev, participant_type: e.target.value }))}
+              >
+                <option value="child">ילד</option>
+                <option value="adult">מבוגר</option>
+              </select>
+              <input
+                className="input registration-interest-notes"
+                placeholder="הערה (למשל: מחכה לתשובה מההורה)"
+                value={interestDraft.notes}
+                onChange={(e) => setInterestDraft((prev) => ({ ...prev, notes: e.target.value }))}
+              />
+              <div className="registration-interest-form-actions">
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  onClick={saveInterest}
+                  disabled={interestBusy === 'save'}
+                >
+                  {interestBusy === 'save'
+                    ? <Loader2 size={14} className="spin" />
+                    : (interestDraft.id ? 'שמירה' : 'הוספה')}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  onClick={() => {
+                    setInterestDraft(null);
+                    setInterestSuggestOpen(false);
+                  }}
+                  disabled={interestBusy === 'save'}
+                >
+                  ביטול
+                </button>
+              </div>
+            </div>
+          )}
+
+          {interested.length === 0 ? (
+            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין מתעניינים משובצים</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 280, overflowY: 'auto' }}>
+              {interested.map((row) => {
+                const rowBusy = interestBusy === row.id || interestBusy === `convert:${row.id}`;
+                const parentOpenId = row.parent_id ? `parent:${row.parent_id}` : null;
+                return (
+                  <div key={row.id} className="registration-participant-row registration-participant-row--interest">
+                    <span className="registration-participant-main">
+                      {parentOpenId ? (
+                        <button
+                          type="button"
+                          className="registration-participant-link"
+                          onClick={() => openLeadFile(row.student_id ? String(row.student_id) : parentOpenId)}
+                          title="פתיחת תיק לקוח"
+                        >
+                          <span>{row.name}</span>
+                          <ExternalLink size={12} />
+                        </button>
+                      ) : (
+                        <span className="registration-participant-name">{row.name}</span>
+                      )}
+                      <small className="registration-participant-meta">
+                        {row.participant_type === 'adult' ? 'מבוגר' : 'ילד'}
+                        {row.phone ? ` · ${row.phone}` : ''}
+                        {row.parent_name ? ` · לקוח: ${row.parent_name}` : ''}
+                        {row.notes ? ` · ${row.notes}` : ''}
+                      </small>
+                    </span>
+
+                    {convertingId === row.id && !readOnly ? (
+                      <span className="registration-interest-convert">
+                        <select
+                          className="input"
+                          value={convertStatus}
+                          onChange={(e) => setConvertStatus(e.target.value)}
+                          disabled={rowBusy}
+                        >
+                          <option value="paid">שולם</option>
+                          <option value="pending">ממתין לתשלום</option>
+                          <option value="not_required">ללא תשלום</option>
+                        </select>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-primary"
+                          onClick={() => confirmConvert(row)}
+                          disabled={rowBusy}
+                        >
+                          {rowBusy ? <Loader2 size={14} className="spin" /> : 'רישום'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          onClick={() => setConvertingId(null)}
+                          disabled={rowBusy}
+                        >
+                          ביטול
+                        </button>
+                      </span>
+                    ) : !readOnly ? (
+                      <span className="registration-participant-actions">
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          onClick={() => beginConvert(row)}
+                          disabled={!!interestBusy}
+                          aria-label="העברה לרשומים"
+                          title="העברה לרשומים"
+                        >
+                          <UserCheck size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          onClick={() => {
+                            setInterestDraft({
+                              id: row.id,
+                              name: row.name || '',
+                              phone: row.phone || '',
+                              email: row.email || '',
+                              parent_id: row.parent_id || null,
+                              student_id: row.student_id || null,
+                              participant_type: row.participant_type === 'adult' ? 'adult' : 'child',
+                              notes: row.notes || '',
+                            });
+                            setInterestSuggestOpen(false);
+                          }}
+                          disabled={!!interestBusy}
+                          aria-label="עריכת מתעניין"
+                          title="עריכה"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          onClick={() => removeInterest(row)}
+                          disabled={!!interestBusy}
+                          aria-label="הסרת מתעניין"
+                          title="הסרה"
+                        >
+                          {interestBusy === row.id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+                        </button>
+                      </span>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {convertingId && (
+            <div className="registration-interest-hint">
+              רישום ידני לא מפיק חשבונית — לגבייה עם מסמך חיוב שלחו את קישור המשתתפים
+              או גבו דרך הקופה.
             </div>
           )}
         </div>

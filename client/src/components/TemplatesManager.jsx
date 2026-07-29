@@ -2,12 +2,16 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   RefreshCw, Plus, Send, Trash2, MousePointerClick, ExternalLink, Phone,
   ArrowUp, ArrowDown, Archive, ArchiveRestore, Pencil, X, Save,
-  Wrench, Megaphone, KeyRound, Search, FilterX, FileText,
+  Wrench, Megaphone, KeyRound, Search, FilterX, FileText, Info,
 } from 'lucide-react';
 import { TEMPLATE_VAR_FIELDS, TEMPLATE_VAR_FIELD_MAP, normalizeTemplateVariables } from './templateVariables.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 
 const EVENT_SYSTEM_META_NAMES = new Set([
+  'event_host_payment_v4',
+  'event_participant_link_v4',
+  'event_host_payment_v3',
+  'event_participant_link_v3',
   'event_host_payment_v2',
   'event_participant_link_v2',
   'event_host_payment',
@@ -109,6 +113,7 @@ const BUTTON_TYPE_LABELS = Object.fromEntries(BUTTON_TYPES.map((t) => [t.value, 
 
 const EMPTY_DRAFT = {
   name: '',
+  usage: '',
   meta_name: '',
   language: 'he',
   category: 'UTILITY',
@@ -591,6 +596,7 @@ export default function TemplatesManager() {
     setEditingId(t.id);
     setEditForm({
       name: t.name || '',
+      usage: t.usage || '',
       meta_name: t.meta_name || '',
       language: t.language || 'he',
       category: t.category || 'UTILITY',
@@ -619,11 +625,13 @@ export default function TemplatesManager() {
       const payload = editForm.locked
         ? {
           name: editForm.name,
+          usage: editForm.usage,
           variable_fields: editVarMeta,
           body_examples: editVarMeta.map((v) => v.example || 'דוגמה'),
         }
         : {
           name: editForm.name,
+          usage: editForm.usage,
           meta_name: editForm.meta_name,
           language: editForm.language,
           category: editForm.category,
@@ -742,6 +750,23 @@ export default function TemplatesManager() {
                 <SystemBadge template={t} />
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-3)', maxWidth: 320, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.body}</div>
+              {t.usage && (
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: 'var(--text-2)',
+                    maxWidth: 320,
+                    marginTop: 4,
+                    display: 'flex',
+                    gap: 5,
+                    alignItems: 'flex-start',
+                    lineHeight: 1.45,
+                  }}
+                >
+                  <Info size={11} style={{ marginTop: 2, flexShrink: 0, opacity: 0.7 }} />
+                  <span>{t.usage}</span>
+                </div>
+              )}
             </td>
             <td style={{ color: 'var(--text-3)', fontSize: 12 }}>{t.meta_name}</td>
             <td style={{ textAlign: 'center' }}><CategoryIcon category={t.category} /></td>
@@ -806,6 +831,14 @@ export default function TemplatesManager() {
                     placeholder="שם לתצוגה"
                     value={editForm.name}
                     onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                  />
+                  {/* Internal note — Meta never sees it, so it stays editable after approval. */}
+                  <textarea
+                    className="input input-sm"
+                    rows={2}
+                    placeholder="מתי משתמשים בתבנית? (הערה פנימית לצוות — לא נשלח ללקוח)"
+                    value={editForm.usage}
+                    onChange={(e) => setEditForm({ ...editForm, usage: e.target.value })}
                   />
                   {!editForm.locked && (
                     <>
@@ -940,6 +973,7 @@ export default function TemplatesManager() {
         <div className="template-builder-layout">
           <form onSubmit={createDraft} style={{ display: 'grid', gap: 8, minWidth: 0 }}>
             <input className="input input-sm" placeholder="שם לתצוגה" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} required />
+            <textarea className="input input-sm" rows={2} placeholder="מתי משתמשים בתבנית? (הערה פנימית לצוות — לא נשלח ללקוח)" value={draft.usage} onChange={(e) => setDraft({ ...draft, usage: e.target.value })} />
             <input className="input input-sm" placeholder="שם ב-Meta (אנגלית/קו תחתון)" value={draft.meta_name} onChange={(e) => setDraft({ ...draft, meta_name: e.target.value })} />
             <div style={{ display: 'flex', gap: 8 }}>
               <select className="input input-sm" value={draft.language} onChange={(e) => setDraft({ ...draft, language: e.target.value })}>
