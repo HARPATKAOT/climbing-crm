@@ -934,3 +934,5 @@ export function resetAnalysisCooldown(phone) {
 }
 
 export { HISTORY_MESSAGES, MAX_ACTIONS_PER_RUN, MIN_CONFIDENCE, REANALYZE_COOLDOWN_MS };
+
+// Auto-deploy connectivity check — see git history for context.
