@@ -14,6 +14,7 @@ const EMPTY_TEMPLATE = {
   slug: '',
   activityType: 'wall',
   waiverText: '',
+  waiverSummary: '',
   healthQuestionsText: 'האם המתאמן סובל מאסתמה, קוצר נשימה או מחלת ריאות?\nהאם המתאמן סובל מבעיות לב, לחץ דם, או סחרחורות/התעלפויות?\nהאם יש בעיה אורתופדית (גב, פרקים, שברים) המגבילה פעילות מאומצת?',
   isDefault: false,
   isActive: true,
@@ -63,6 +64,7 @@ function FormTemplatesPanel() {
       slug: t.slug || '',
       activityType: t.activityType || 'wall',
       waiverText: t.waiverText || '',
+      waiverSummary: t.waiverSummary || '',
       healthQuestionsText: questionsToText(t.healthQuestions),
       isDefault: !!t.isDefault,
       isActive: t.isActive !== false,
@@ -95,6 +97,7 @@ function FormTemplatesPanel() {
       slug: form.slug.trim().toLowerCase(),
       activityType: form.activityType,
       waiverText: form.waiverText,
+      waiverSummary: form.waiverSummary,
       healthQuestions: textToQuestions(form.healthQuestionsText),
       isDefault: form.isDefault,
       isActive: form.isActive,
@@ -220,7 +223,24 @@ function FormTemplatesPanel() {
             </div>
           </div>
           <div className="form-group">
+            <label className="form-label">תקציר בשפה פשוטה — „מה זה בעצם?”</label>
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, lineHeight: 1.5 }}>
+              זה מה שההורה קורא בפועל. הנוסח המשפטי המלא נפתח מאחוריו בלחיצה.
+              שורה לכל נקודה. ריק — יוצג נוסח ברירת מחדל.
+            </div>
+            <textarea
+              className="textarea"
+              rows={6}
+              value={form.waiverSummary}
+              onChange={(e) => setForm((f) => ({ ...f, waiverSummary: e.target.value }))}
+              style={{ resize: 'vertical', fontFamily: 'inherit' }}
+            />
+          </div>
+          <div className="form-group">
             <label className="form-label">טקסט כתב ויתור / הסרת אחריות *</label>
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, lineHeight: 1.5 }}>
+              הנוסח המחייב. נשמר בהצהרה החתומה ובקובץ ה-PDF.
+            </div>
             <textarea
               required
               className="textarea"

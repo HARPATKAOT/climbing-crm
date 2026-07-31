@@ -153,6 +153,7 @@ export const parentFromRow = (r) => ({
   updated_at: r.updated_at || null,
   lastName: r.last_name || '',
   idNumber: r.id_number || '',
+  relation: r.relation || '',
   icount_client_id: r.icount_client_id || undefined,
 });
 
@@ -177,6 +178,7 @@ export const parentToRow = (o) => ({
   next_followup: emptyToNull(o.nextFollowup ?? o.next_followup),
   last_name: emptyToNull(o.lastName || o.last_name),
   id_number: emptyToNull(o.idNumber || o.id_number),
+  relation: emptyToNull(o.relation),
   icount_client_id: emptyToNull(o.icount_client_id),
 });
 
@@ -420,6 +422,7 @@ mappers.form_templates = {
     title: r.title || '',
     activityType: r.activity_type || 'wall',
     waiverText: r.waiver_text || '',
+    waiverSummary: r.waiver_summary || '',
     healthQuestions: Array.isArray(r.health_questions) ? r.health_questions : [],
     isDefault: !!r.is_default,
     isActive: r.is_active !== false,
@@ -432,6 +435,7 @@ mappers.form_templates = {
     title: o.title || '',
     activity_type: o.activityType || o.activity_type || 'wall',
     waiver_text: o.waiverText || o.waiver_text || '',
+    waiver_summary: o.waiverSummary || o.waiver_summary || '',
     health_questions: Array.isArray(o.healthQuestions)
       ? o.healthQuestions
       : (Array.isArray(o.health_questions) ? o.health_questions : []),

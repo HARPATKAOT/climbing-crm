@@ -171,6 +171,7 @@ import {
   linkGuardian,
   mergeFamily,
   normalizedChildName,
+  normalizedIdNumber,
   publicChildMatchPayload,
   publicFamilyCandidatesPayload,
   setPrimaryGuardian,
@@ -4909,6 +4910,7 @@ app.get('/api/public/child-check', publicFormRateLimit, async (req, res) => {
     const matches = findChildMatches(db, {
       name: req.query.name,
       birthDate: req.query.birthDate,
+      idNumber: req.query.idNumber,
       excludeParentId: ownParent?.id || null,
     });
     if (matches.length === 1 && supa.isEnabled()) {
@@ -9240,6 +9242,8 @@ function normalizeFormTemplatePayload(body, existing = null) {
     title: (body.title ?? existing?.title ?? '').trim() || 'הצהרת בריאות',
     activityType: body.activityType || body.activity_type || existing?.activityType || 'wall',
     waiverText: body.waiverText ?? body.waiver_text ?? existing?.waiverText ?? '',
+    // The plain-language layer shown in front of the legal text.
+    waiverSummary: body.waiverSummary ?? body.waiver_summary ?? existing?.waiverSummary ?? '',
     healthQuestions: healthQuestions.map((q, i) => ({
       id: q.id || `q${i + 1}`,
       label: q.label || q.text || '',
@@ -9523,7 +9527,7 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
 
 const REQUIRED_BROADCAST_LIST = 'classes';
 
-function findParentForOnboard({ parentId, phone, studentId }) {
+function findParentForOnboard({ parentId, phone, studentId, idNumber }) {
   const parents = db.get('parents') || [];
   const students = db.get('students') || [];
   if (parentId) {
@@ -9542,7 +9546,15 @@ function findParentForOnboard({ parentId, phone, studentId }) {
     // Cards are stored in 972… form while customers type 050… — comparing the
     // raw strings would miss the very customer we are trying to spare a second
     // signature, so match on the same normalized phone the CRM merges cards by.
-    return parents.find((p) => parentPhonesMatch(p.phone, phoneKey)) || null;
+    const byPhone = parents.find((p) => parentPhonesMatch(p.phone, phoneKey));
+    if (byPhone) return byPhone;
+  }
+  // The phone is the usual key, but a parent registering a second child from a
+  // different handset — the other parent's, a new number — is still the same
+  // person, and their ID says so.
+  const idKey = normalizedIdNumber(idNumber);
+  if (idKey.length >= 5) {
+    return parents.find((p) => normalizedIdNumber(p.idNumber) === idKey) || null;
   }
   return null;
 }
@@ -9596,9 +9608,10 @@ app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
   const parentId = String(req.query.parentId || '').trim();
   const studentId = String(req.query.studentId || '').trim();
   const phone = String(req.query.phone || '').trim();
+  const idNumber = String(req.query.idNumber || '').trim();
 
-  const parent = (parentId || studentId || phone)
-    ? findParentForOnboard({ parentId, phone, studentId })
+  const parent = (parentId || studentId || phone || idNumber)
+    ? findParentForOnboard({ parentId, phone, studentId, idNumber })
     : null;
   const listDefs = db.getBroadcastListDefs();
   const students = parent
@@ -9630,6 +9643,7 @@ app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
           // Sent separately so the form can fill its own surname box instead of
           // guessing the surname from the last word of the name.
           lastName: parent.lastName || '',
+          relation: parent.relation || '',
           phone: parent.phone || '',
           email: parent.email || '',
           city: parent.city || '',
@@ -9675,6 +9689,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
 
   const parentName = String(parentBody.name || '').trim();
   const parentLast = String(parentBody.lastName || '').trim();
+  const parentRelation = String(parentBody.relation || '').trim();
   const phone = String(parentBody.phone || '').trim();
   const parentIdNum = String(parentBody.idNumber || parentBody.parentIdNum || '').trim();
   const email = String(parentBody.email || '').trim();
@@ -9761,6 +9776,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
         ...parentBody,
         name: parentName,
         lastName: parentLast,
+        relation: parentRelation,
         phone,
         email,
         city,

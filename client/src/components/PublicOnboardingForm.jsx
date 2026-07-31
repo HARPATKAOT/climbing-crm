@@ -18,6 +18,22 @@ import { checkKnownChild, checkKnownFamily, linkFieldsFor } from '../utils/child
 import { joinParentName, splitParentName } from '../utils/parentName.js';
 
 /**
+ * What the waiver actually means, in the words someone would use out loud.
+ *
+ * This is the layer people read; `buildFallbackWaiver` below is the layer they
+ * can open. Informed consent needs the signer to understand what they agreed
+ * to, and a wall of legal text is read by nobody.
+ */
+function buildFallbackWaiverSummary(legalName) {
+  return `• טיפוס הוא פעילות אתגרית, וגם כשמקפידים על כל הוראות הבטיחות קיים סיכון להיפצע.
+• אם נגרמת פציעה במסגרת הסיכון הרגיל של הפעילות, זה הסיכון שאני לוקח/ת על עצמי.
+• "${legalName}" יישא באחריות אם ייגרם נזק מרשלנות של המקום.
+• מילאתי את הצהרת הבריאות במלואה, ואין מגבלה רפואית שלא סיפרתי עליה.
+• אני מתחייב/ת למלא את הוראות הבטיחות שסימנתי, ולדווח מיד על כל פציעה או תחושה לא טובה.
+• הצוות רשאי להפסיק את ההשתתפות אם היא מסכנת את המשתתף/ת או אחרים.`;
+}
+
+/**
  * The liability release only. The safety rules are not repeated here — they are
  * the ticked items on the previous step, where each one is acknowledged
  * separately, which is both better evidence and one list instead of two.
@@ -43,12 +59,31 @@ function buildFallbackQuestions(legalName) {
   ];
 }
 
+/**
+ * Age in whole years, shown next to a birth date the moment one is typed.
+ *
+ * It is there to be checked, not stored: a date that lands a nine-year-old on
+ * "גיל 90" is a typo the person filling the form catches instantly, and nobody
+ * catches it by re-reading DD/MM/YYYY.
+ */
+function ageFromBirthDate(value) {
+  const born = new Date(`${String(value || '').trim()}T00:00:00`);
+  if (Number.isNaN(born.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - born.getFullYear();
+  const monthDiff = today.getMonth() - born.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < born.getDate())) age -= 1;
+  if (age < 0 || age > 120) return null;
+  return age;
+}
+
 const emptyChild = (questions = []) => {
   const answers = {};
   questions.forEach((q) => { answers[q.id] = false; });
   return {
     id: null,
     name: '',
+    idNumber: '',
     birthDate: '',
     gender: '',
     childPhone: '',
@@ -66,6 +101,7 @@ export default function PublicOnboardingForm() {
   const brandName = profile.display_name || 'הרפתקאות';
   const brandLogo = profile.logo_url || '/logo.png';
   const fallbackWaiver = useMemo(() => buildFallbackWaiver(legalName), [legalName]);
+  const fallbackWaiverSummary = useMemo(() => buildFallbackWaiverSummary(legalName), [legalName]);
   const fallbackQuestions = useMemo(() => buildFallbackQuestions(legalName), [legalName]);
   const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
@@ -84,6 +120,8 @@ export default function PublicOnboardingForm() {
   const [parent, setParent] = useState({
     name: '',
     lastName: '',
+    idNumber: '',
+    relation: '',
     phone: searchParams.get('phone') || '',
     email: '',
     city: '',
@@ -102,12 +140,17 @@ export default function PublicOnboardingForm() {
     ? template.healthQuestions
     : fallbackQuestions);
   const waiverText = template?.waiverText || fallbackWaiver;
+  const waiverSummary = template?.waiverSummary || fallbackWaiverSummary;
+  // The full legal text opens on demand; nothing is signed from inside it.
+  const [showFullWaiver, setShowFullWaiver] = useState(false);
   // participant key -> { match, student_id, guardian_first_name, health_valid, linked }
   const [knownChildren, setKnownChildren] = useState({});
   // Families on file under the same surname, and the one chosen ('' = new family).
   const [families, setFamilies] = useState([]);
   const [familyParentId, setFamilyParentId] = useState(null);
   const [prefilledParentId, setPrefilledParentId] = useState('');
+  // Set once the typed phone turns out to be on a file already: { name, children }.
+  const [knownFile, setKnownFile] = useState(null);
 
   /**
    * The parent's name as one string, always first name then surname. The CRM
@@ -209,6 +252,8 @@ export default function PublicOnboardingForm() {
           setParent({
             name: knownName.first,
             lastName: knownName.lastName,
+            idNumber: data.parent.idNumber || '',
+            relation: data.parent.relation || '',
             phone: data.parent.phone || searchParams.get('phone') || '',
             email: data.parent.email || '',
             city: data.parent.city || '',
@@ -221,6 +266,7 @@ export default function PublicOnboardingForm() {
             return {
               id: s.id,
               name: s.name || '',
+              idNumber: s.idNumber || '',
               birthDate: s.birthDate || '',
               gender: s.gender || '',
               childPhone: '',
@@ -329,6 +375,59 @@ export default function PublicOnboardingForm() {
     }
   };
 
+  /**
+   * "We already know this phone" — the household lookup the form was missing.
+   *
+   * Children already on the file are added to the participant list rather than
+   * left invisible, so a returning parent adds the new one instead of a second
+   * copy of the one who is already there. Anything typed here wins over what is
+   * stored: the parent is looking at the form, we are not.
+   *
+   * A failed lookup returns null and the form carries on as if nobody was
+   * found — recognising a returning parent is a convenience, never a gate.
+   */
+  const lookupOwnFile = async (phone, idNumber = '') => {
+    const digits = String(phone || '').replace(/\D/g, '');
+    const idDigits = String(idNumber || '').replace(/\D/g, '');
+    if (digits.length < 9 && idDigits.length < 5) return null;
+    try {
+      const params = new URLSearchParams({ phone: phone || '', idNumber: idDigits });
+      const res = await fetch(`/api/public/onboard-context?${params.toString()}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (!data?.parent?.id) return null;
+
+      setPrefilledParentId(data.parent.id);
+      setKnownFile({
+        name: data.parent.name || '',
+        children: (data.students || []).map((s) => s.name).filter(Boolean),
+      });
+
+      const existing = Array.isArray(data.students) ? data.students : [];
+      if (existing.length) {
+        setChildren((current) => {
+          const typed = current.filter((c) => c.name.trim());
+          const alreadyListed = new Set(typed.map((c) => c.name.trim()));
+          const fromFile = existing
+            .filter((s) => s.name && !alreadyListed.has(String(s.name).trim()))
+            .map((s) => ({
+              ...emptyChild(questions),
+              id: s.id,
+              name: s.name || '',
+              idNumber: s.idNumber || '',
+              birthDate: s.birthDate || '',
+              gender: s.gender || '',
+            }));
+          const merged = [...fromFile, ...typed];
+          return merged.length ? merged : current;
+        });
+      }
+      return data.parent;
+    } catch {
+      return null;
+    }
+  };
+
   const namedChildren = () => children.filter((c) => c.name.trim());
 
   const healthChildren = () => namedChildren().filter((child) => !reusesDeclaration(child));
@@ -347,9 +446,16 @@ export default function PublicOnboardingForm() {
       setError('יש למלא מקום מגורים');
       return;
     }
+    // The phone may already be on a file even when the form was opened cold,
+    // without a link that says whose. Looking it up here is what the event and
+    // shop pages already do; without it a returning parent was met with silence
+    // and could add a child who is on their file already.
+    const own = await lookupOwnFile(parent.phone, parent.idNumber);
+
     // A parent we have never seen may still belong to a family we know — only
-    // they can tell us, and only before a second file is opened.
-    if (!prefilledParentId && familyParentId === null) {
+    // they can tell us, and only before a second file is opened. Someone whose
+    // own file we just found is not that case.
+    if (!own && !prefilledParentId && familyParentId === null) {
       const known = await checkKnownFamily({ lastName: parent.lastName, phone: parent.phone });
       setFamilies(known.families);
       if (known.families.length) return;
@@ -388,6 +494,7 @@ export default function PublicOnboardingForm() {
           const match = await checkKnownChild({
             name: childFullName(kid),
             birthDate: kid.birthDate,
+            idNumber: kid.idNumber,
             phone: parent.phone,
           });
           return [childKey(kid), { ...match, linked: match.match ? null : false }];
@@ -464,6 +571,7 @@ export default function PublicOnboardingForm() {
           return {
             id: c.id,
             name: childFullName(c),
+            idNumber: (c.idNumber || '').trim(),
             type: isAdultSelf || c.type === 'adult' ? 'adult' : 'child',
             birthDate: c.birthDate,
             gender: c.gender,
@@ -483,6 +591,8 @@ export default function PublicOnboardingForm() {
           parent: {
             name: parentFullName(),
             lastName: parent.lastName.trim(),
+            idNumber: parent.idNumber.trim(),
+            relation: parent.relation,
             phone: parent.phone.trim(),
             email: parent.email.trim(),
             city: parent.city.trim(),
@@ -696,6 +806,47 @@ export default function PublicOnboardingForm() {
                 placeholder="עיר / יישוב"
               />
             </div>
+            <div className="form-row">
+              <div className="form-group">
+                {/* Identifies one person where a name cannot, and it is what the
+                    invoice is issued against. Optional: a missing ID must never
+                    be the reason a registration does not go through. */}
+                <label>תעודת זהות</label>
+                <input
+                  inputMode="numeric"
+                  value={parent.idNumber}
+                  onChange={(e) => setParent((p) => ({ ...p, idNumber: e.target.value }))}
+                  placeholder="9 ספרות"
+                />
+              </div>
+              <div className="form-group">
+                <label>קשר למשתתפים</label>
+                <select
+                  value={parent.relation}
+                  onChange={(e) => setParent((p) => ({ ...p, relation: e.target.value }))}
+                >
+                  <option value="">בחרו</option>
+                  <option value="father">אב</option>
+                  <option value="mother">אם</option>
+                  <option value="guardian">אפוטרופוס</option>
+                  <option value="other">אחר</option>
+                </select>
+              </div>
+            </div>
+            {knownFile && (
+              <div style={{
+                background: 'rgba(249,115,22,.12)', border: '1px solid rgba(249,115,22,.35)',
+                borderRadius: 12, padding: 12, fontSize: 13, lineHeight: 1.6,
+                color: '#fdba74', marginTop: 4,
+              }}>
+                מצאנו את התיק שלך במערכת.
+                {knownFile.children.length
+                  ? ` ${knownFile.children.join(', ')} ${knownFile.children.length > 1
+                    ? 'כבר רשומים ומופיעים'
+                    : 'כבר רשום/ה ומופיע/ה'} בשלב הבא, ואפשר להוסיף שם עוד משתתפים.`
+                  : ' אפשר להוסיף משתתפים בשלב הבא.'}
+              </div>
+            )}
 
             <div className="section-title" style={{ marginTop: 22 }}>רשימות דיוור של ההורה</div>
             <p style={{ fontSize: 13, color: 'var(--text-3)', marginTop: -6, marginBottom: 12, lineHeight: 1.45 }}>
@@ -821,6 +972,15 @@ export default function PublicOnboardingForm() {
                   )}
                 </div>
                 <div className="form-group">
+                  <label>תעודת זהות</label>
+                  <input
+                    inputMode="numeric"
+                    value={child.idNumber || ''}
+                    onChange={(e) => updateChild(index, { idNumber: e.target.value })}
+                    placeholder="9 ספרות"
+                  />
+                </div>
+                <div className="form-group">
                   <label>{isAdultSelf ? 'תאריך לידה' : 'תאריך לידה *'}</label>
                   <input
                     type="date"
@@ -828,9 +988,13 @@ export default function PublicOnboardingForm() {
                     onChange={(e) => updateChild(index, { birthDate: e.target.value })}
                   />
                   <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', marginTop: 6 }}>
-                    {isAdultSelf
-                      ? 'אופציונלי למבוגר.'
-                      : 'לבחירת שנה — לחצו על השנה עצמה בחלון שנפתח.'}
+                    {/* The age is here to be glanced at: a wrong year is obvious
+                        as an age and invisible as a date. */}
+                    {ageFromBirthDate(child.birthDate) !== null
+                      ? `גיל: ${ageFromBirthDate(child.birthDate)}`
+                      : (isAdultSelf
+                        ? 'אופציונלי למבוגר.'
+                        : 'לבחירת שנה — לחצו על השנה עצמה בחלון שנפתח.')}
                   </div>
                 </div>
                 <KnownChildPrompt
@@ -930,14 +1094,73 @@ export default function PublicOnboardingForm() {
             {healthSubStep === 2 && (
               <>
                 <div className="section-title">הסרת אחריות — {currentChild.name}</div>
+                {/* Two layers: what it means, and what it says. The summary is
+                    what people actually read, so it is the one on the page; the
+                    legal text is one tap away and is what gets signed. */}
                 <div style={{
                   background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: 12, padding: 14, fontSize: 13, lineHeight: 1.7,
-                  color: 'rgba(255,255,255,0.85)', whiteSpace: 'pre-wrap', marginBottom: 16,
-                  maxHeight: 220, overflowY: 'auto',
+                  borderRadius: 12, padding: 14, marginBottom: 16,
                 }}>
-                  {waiverText}
+                  <div style={{ fontSize: 12, color: '#fb923c', fontWeight: 800, marginBottom: 8 }}>
+                    מה זה בעצם?
+                  </div>
+                  <div style={{
+                    fontSize: 13, lineHeight: 1.75, color: 'rgba(255,255,255,0.85)',
+                    whiteSpace: 'pre-wrap',
+                  }}>
+                    {waiverSummary}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowFullWaiver(true)}
+                    style={{
+                      marginTop: 12, width: '100%', background: 'rgba(255,255,255,.08)',
+                      border: '1px solid rgba(255,255,255,.15)', borderRadius: 10,
+                      color: '#e2e8f0', padding: '10px 12px', font: 'inherit', fontSize: 13,
+                      fontWeight: 700, cursor: 'pointer',
+                    }}
+                  >
+                    קראו את כתב הוויתור המלא
+                  </button>
                 </div>
+                {showFullWaiver && (
+                  <div
+                    onClick={() => setShowFullWaiver(false)}
+                    style={{
+                      position: 'fixed', inset: 0, background: 'rgba(2,6,15,.82)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      padding: 16, zIndex: 60,
+                    }}
+                  >
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        background: '#0f172a', border: '1px solid rgba(255,255,255,.15)',
+                        borderRadius: 16, padding: 18, width: 'min(620px,100%)',
+                        maxHeight: '80vh', display: 'flex', flexDirection: 'column',
+                      }}
+                    >
+                      <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}>כתב ויתור מלא</div>
+                      <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>
+                        זהו הנוסח המחייב. הסימון נעשה במסך שמאחור.
+                      </div>
+                      <div style={{
+                        overflowY: 'auto', fontSize: 13, lineHeight: 1.75,
+                        color: 'rgba(255,255,255,0.85)', whiteSpace: 'pre-wrap',
+                      }}>
+                        {waiverText}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowFullWaiver(false)}
+                        className="event-primary"
+                        style={{ marginTop: 14 }}
+                      >
+                        סגירה
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <label className="event-check">
                   <input
                     type="checkbox"

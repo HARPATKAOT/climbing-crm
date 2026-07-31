@@ -132,27 +132,62 @@ export function unlinkGuardian(db, { studentId, parentId } = {}) {
  * `excludeParentId` drops children the person filling the form already has —
  * those are handled by the ordinary household lookup.
  */
-export function findChildMatches(db, { name, birthDate, excludeParentId = null } = {}) {
+/** Digits only — an ID typed with dashes or spaces is the same ID. */
+export function normalizedIdNumber(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+export function findChildMatches(db, {
+  name,
+  birthDate,
+  idNumber = '',
+  excludeParentId = null,
+} = {}) {
   const wantedName = normalizedChildName(name);
   const wantedBirth = String(birthDate || '').trim();
+  const wantedId = normalizedIdNumber(idNumber);
+
+  const notAlreadyMine = (student) => {
+    if (!excludeParentId) return true;
+    return !isChildOfParent(
+      { ...student, guardianIds: guardianParentIds(db, student) },
+      excludeParentId
+    );
+  };
+  const withGuardians = (student) => ({
+    student,
+    guardians: guardianParentIds(db, student)
+      .map((id) => db.getOne('parents', id))
+      .filter(Boolean),
+  });
+
+  const students = db.get('students') || [];
+
+  // An ID number identifies one person, which name and birth date do not: two
+  // children of the same age can share a name. When one was given, it decides —
+  // and a match on it is never ambiguous.
+  if (wantedId) {
+    const byId = students.filter(
+      (student) => normalizedIdNumber(student.idNumber) === wantedId && notAlreadyMine(student)
+    );
+    if (byId.length) return byId.map(withGuardians);
+  }
+
   if (!wantedName || !wantedBirth) return [];
 
-  return (db.get('students') || [])
+  // Falling back to name and birth date is the common case, not the exception:
+  // almost no student on file carries an ID yet, so a parent who supplies one
+  // still has to be matched by name. What the fallback must not do is match a
+  // child whose stored ID says outright that this is somebody else.
+  return students
     .filter((student) => {
       if (normalizedChildName(student.name) !== wantedName) return false;
       if (String(student.birthDate || '').trim() !== wantedBirth) return false;
-      if (!excludeParentId) return true;
-      return !isChildOfParent(
-        { ...student, guardianIds: guardianParentIds(db, student) },
-        excludeParentId
-      );
+      const storedId = normalizedIdNumber(student.idNumber);
+      if (wantedId && storedId && storedId !== wantedId) return false;
+      return notAlreadyMine(student);
     })
-    .map((student) => ({
-      student,
-      guardians: guardianParentIds(db, student)
-        .map((id) => db.getOne('parents', id))
-        .filter(Boolean),
-    }));
+    .map(withGuardians);
 }
 
 /**

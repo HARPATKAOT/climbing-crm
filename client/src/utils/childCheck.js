@@ -5,12 +5,15 @@
  * The answer only ever offers a link; a failed or slow check must never block a
  * registration, so every error resolves to "no match".
  */
-export async function checkKnownChild({ name, birthDate, phone = '' } = {}) {
+export async function checkKnownChild({ name, birthDate, idNumber = '', phone = '' } = {}) {
   const child = String(name || '').trim();
   const born = String(birthDate || '').trim();
-  if (!child || !born) return { match: false };
+  const id = String(idNumber || '').replace(/\D/g, '');
+  // An ID identifies the child on its own; otherwise the name and the birth
+  // date are only meaningful together.
+  if (!id && (!child || !born)) return { match: false };
   try {
-    const params = new URLSearchParams({ name: child, birthDate: born, phone });
+    const params = new URLSearchParams({ name: child, birthDate: born, idNumber: id, phone });
     const response = await fetch(`/api/public/child-check?${params.toString()}`);
     if (!response.ok) return { match: false };
     const body = await response.json();

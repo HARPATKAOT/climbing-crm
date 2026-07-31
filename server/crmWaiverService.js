@@ -2,7 +2,7 @@ import {
   declarationSignedAt,
   isHealthDeclarationValid,
 } from './healthValidity.js';
-import { linkGuardian, mergeFamily } from './studentGuardians.js';
+import { linkGuardian, mergeFamily, normalizedIdNumber } from './studentGuardians.js';
 
 export const STANDARD_WAIVER_TEXT = `אני מצהיר/ה כי אני מודע/ת לסיכונים הכרוכים בפעילות המתקיימת ב"קיר בועז", אני פוטר/ת את "קיר בועז" ו/או מי מטעמו מכל אחריות לפגיעה אם תקרה למשתתף אותו אני רושם לפעילות וזאת אלא אם יוכח כי הינה תוצאה של רשלנות המקום.
 
@@ -160,18 +160,36 @@ export async function saveCrmParticipants({
   // free-text name, which is the wrong word whenever someone writes their
   // family name first.
   const lastName = clean(parentInput?.lastName || parentInput?.last_name);
-  let parent = db.upsertParentByPhone(parentName, phone, email, {
+  // אב / אם / אפוטרופוס — נשאל פעם אחת על ההורה, לא לכל ילד בנפרד.
+  const relation = clean(parentInput?.relation);
+  const idNumber = clean(parentInput?.idNumber || parentInput?.parentIdNum);
+
+  // The phone is the usual key. An ID is a stronger one: the same parent
+  // registering a second child from a different handset would otherwise open a
+  // second card. Only an unambiguous match counts — if two cards somehow carry
+  // the same ID, fall back to the phone rather than guessing between them.
+  const idKey = normalizedIdNumber(idNumber);
+  const byIdNumber = idKey.length >= 5
+    ? (db.get('parents') || []).filter((row) => normalizedIdNumber(row.idNumber) === idKey)
+    : [];
+  const existingById = byIdNumber.length === 1 ? byIdNumber[0] : null;
+
+  let parent = existingById || db.upsertParentByPhone(parentName, phone, email, {
     city: clean(parentInput?.city),
-    idNumber: clean(parentInput?.idNumber || parentInput?.parentIdNum),
+    idNumber,
     lastName,
     source,
   });
   parent = db.update('parents', parent.id, {
     name: parentName,
     lastName: lastName || parent.lastName || '',
+    relation: relation || parent.relation || '',
     email: email || parent.email || '',
     city: clean(parentInput?.city) || parent.city || '',
-    idNumber: clean(parentInput?.idNumber || parentInput?.parentIdNum) || parent.idNumber || '',
+    idNumber: idNumber || parent.idNumber || '',
+    // Reached through the ID from a number the card does not carry: record it,
+    // so the next visit is recognised by phone like everyone else.
+    phone: existingById ? (phone || parent.phone || '') : parent.phone,
   }) || parent;
   await requireDurable(persist, 'parents', parent);
 
@@ -202,10 +220,16 @@ export async function saveCrmParticipants({
         (item) => String(item.id) === linkStudentId
       );
       const birthDate = clean(input.birthDate);
-      const identityHolds = candidate
-        && !!birthDate
-        && normalizedName(candidate.name) === normalizedName(name)
-        && String(candidate.birthDate || '').trim() === birthDate;
+      // Whichever identifier the form actually matched on has to hold here too.
+      // An ID number stands on its own; without one, name and birth date must
+      // both agree, so a posted id cannot attach anyone to a stranger's child.
+      const claimedId = normalizedIdNumber(input.idNumber || input.climberIdNum);
+      const idHolds = !!claimedId
+        && normalizedIdNumber(candidate?.idNumber) === claimedId;
+      const nameAndBirthHold = !!birthDate
+        && normalizedName(candidate?.name) === normalizedName(name)
+        && String(candidate?.birthDate || '').trim() === birthDate;
+      const identityHolds = !!candidate && (idHolds || nameAndBirthHold);
       if (!identityHolds) {
         throw Object.assign(
           new Error(`הפרטים של ${name} לא תואמים את הילד שנבחר במערכת`),

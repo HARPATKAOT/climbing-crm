@@ -95,6 +95,34 @@ test('a match needs both the name and the exact date of birth', () => {
   assert.equal(findChildMatches(db, { name: 'נועם לוי', birthDate: '' }).length, 0);
 });
 
+test('an ID number identifies the child even when the name was typed differently', () => {
+  const db = createDb({
+    students: [
+      { id: 's-noam', name: 'נועם לוי', parentId: 'p-avner', birthDate: '2014-03-02', idNumber: '123456782' },
+    ],
+  });
+  // Nickname instead of the registered name, and the birth date mistyped —
+  // exactly the submission the name+date matcher misses.
+  const byId = findChildMatches(db, { name: 'נומי', birthDate: '2014-03-03', idNumber: '123456782' });
+  assert.equal(byId.length, 1);
+  assert.equal(byId[0].student.id, 's-noam');
+
+  // Punctuation is not part of an ID.
+  assert.equal(findChildMatches(db, { name: '', birthDate: '', idNumber: '123-456-782' }).length, 1);
+  // A stored ID that contradicts the one typed says this is somebody else,
+  // however well the name and the birth date line up.
+  assert.equal(findChildMatches(db, { name: 'נועם לוי', birthDate: '2014-03-02', idNumber: '999999999' }).length, 0);
+  // Without an ID the old behaviour stands.
+  assert.equal(findChildMatches(db, { name: 'נועם לוי', birthDate: '2014-03-02' }).length, 1);
+  // And a child on file with no ID recorded — nearly all of them — is still
+  // matched by name and birth date when the form supplies an ID.
+  const noIdOnFile = createDb();
+  assert.equal(
+    findChildMatches(noIdOnFile, { name: 'נועם לוי', birthDate: '2014-03-02', idNumber: '123456782' }).length,
+    1
+  );
+});
+
 test('a child already on the caller own card is not offered as a match', () => {
   const db = createDb();
   const mine = findChildMatches(db, {
@@ -188,6 +216,45 @@ test('a surname typed first still finds the household', async () => {
     familyCandidates(db, { lastName: 'לוי', excludeParentId: saved.id }).map((row) => row.parent.id),
     ['p-avner']
   );
+});
+
+test('the same parent on a new phone lands on their own card, not a second one', async () => {
+  const db = createDb({
+    parents: [
+      { id: 'p-avner', name: 'אבנר לוי', phone: '0521112222', email: 'avner@example.com', idNumber: '311111119' },
+    ],
+  });
+  await saveCrmParticipants({
+    db,
+    persist,
+    // New handset, same person — the ID is the only thread between the two.
+    parent: { name: 'אבנר לוי', lastName: 'לוי', phone: '0587776666', idNumber: '311111119' },
+    participants: [{ ...signedNoam, name: 'עידו לוי', birthDate: '2016-05-05' }],
+  });
+
+  assert.equal(db.store.parents.length, 1, 'no second card for the same person');
+  const saved = db.store.parents[0];
+  assert.equal(saved.id, 'p-avner');
+  assert.equal(saved.phone, '0587776666', 'the card now carries the number they actually used');
+  assert.equal(db.store.students.filter((s) => s.parentId === 'p-avner').length, 2);
+});
+
+test('an ID shared by two cards is too ambiguous to merge on', async () => {
+  const db = createDb({
+    parents: [
+      { id: 'p-avner', name: 'אבנר לוי', phone: '0521112222', idNumber: '311111119' },
+      { id: 'p-dana', name: 'דנה כהן', phone: '0533334444', idNumber: '311111119' },
+    ],
+  });
+  await saveCrmParticipants({
+    db,
+    persist,
+    parent: { name: 'רותם לוי', lastName: 'לוי', phone: '0539998888', idNumber: '311111119' },
+    participants: [{ ...signedNoam, name: 'עידו לוי', birthDate: '2016-05-05' }],
+  });
+  // Falls back to the phone rather than picking one of the two.
+  assert.equal(db.store.parents.length, 3);
+  assert.equal(db.store.parents.at(-1).phone, '0539998888');
 });
 
 test('a link whose details do not match the child is refused', async () => {
