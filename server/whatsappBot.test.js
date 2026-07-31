@@ -13,6 +13,7 @@ import {
   classifyAudience,
   mergeBotSettings,
   applyBusinessBrand,
+  isStaffPhone,
 } from './whatsappBot.js';
 import { isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 
@@ -47,8 +48,28 @@ test('handoff and stop keywords match', () => {
 test('normalizeMenuChoice maps numbers and titles', () => {
   assert.equal(normalizeMenuChoice('2'), '2');
   assert.equal(normalizeMenuChoice('4'), '4');
+  assert.equal(normalizeMenuChoice('5'), '5');
   assert.equal(normalizeMenuChoice('הצהרת בריאות'), '1');
   assert.equal(normalizeMenuChoice('לדבר עם צוות'), '4');
+  assert.equal(normalizeMenuChoice('אירועים וטיולים'), '5');
+  // "יש טיול בקרוב?" is an events question, not a classes one
+  assert.equal(normalizeMenuChoice('יש טיול בקרוב?'), '5');
+});
+
+test('money and injury words reach a human', () => {
+  const settings = mergeBotSettings({ aiResponderEnabled: true });
+  for (const text of ['אני רוצה לבטל את החוג', 'מגיע לי החזר כספי', 'הילד נפצע באימון']) {
+    const gate = decideBotGate(settings, { status: 'active' }, [], text);
+    assert.equal(gate.action, 'handoff', text);
+  }
+});
+
+test('only a listed staff number gets the CRM agent', () => {
+  const settings = { aiStaffPhones: '0501234567, 972529876543' };
+  assert.equal(isStaffPhone(settings, '972501234567'), true);
+  assert.equal(isStaffPhone(settings, '0529876543'), true);
+  assert.equal(isStaffPhone(settings, '972544444444'), false);
+  assert.equal(isStaffPhone({ aiStaffPhones: '' }, '972501234567'), false);
 });
 
 test('audience modes', () => {

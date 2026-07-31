@@ -19,10 +19,17 @@ export const CUSTOMER_STATUSES = new Set([
 const LEGACY_BRAND_RE = /My Wall/gi;
 const BRAND_NAME = DEFAULT_BUSINESS_PROFILE.display_name;
 
+/** Prices are allowed, invented prices are not. Stamped onto every system prompt. */
+export const PRICE_SOURCE_RULE =
+  'כלל קשיח: מסור רק מחירים שמופיעים בנתוני המערכת — מחיר הקבוצה, מחירי הציוד ודמי ההעשרה. '
+  + 'כל שאלת תשלום אחרת (מנוי, כרטיסייה, יום הולדת, הנחה, החזר, חשבונית) — הפנה לצוות בלי לנקוב בסכום.';
+
 export const DEFAULT_BOT_SETTINGS = {
   aiOutsideHoursMessage:
     'קיבלנו את ההודעה 🙏\nאנחנו מחוץ לשעות המענה כרגע.\nנחזור אליכם בבוקר בין 9:00 ל־21:00.',
-  aiHandoffKeywords: 'אדם,נציג,צוות,תלונה,מנהל,דחוף,לדבר עם',
+  // Money and injury never get an automated answer, whatever the model thinks.
+  aiHandoffKeywords:
+    'אדם,נציג,צוות,תלונה,מנהל,דחוף,לדבר עם,ביטול,לבטל,החזר,זיכוי,חשבונית,פציעה,נפצע,כאב',
   aiHandoffAckMessage: `מעבירים אתכם לצוות ${BRAND_NAME} 🧗\nמישהו יחזור אליכם בהקדם.`,
   aiStopKeywords: 'עצור,הסר,stop,unsubscribe,הסר אותי',
   aiOptOutMessage: 'הוסרתם מרשימת המענה האוטומטי.\nאם תרצו לחזור — כתבו «הפעל בוט».',
@@ -34,18 +41,37 @@ export const DEFAULT_BOT_SETTINGS = {
   aiReplyDelayMs: 800,
   aiRateLimitPerHour: 20,
   aiKnowledgeBase:
-    'שאלות נפוצות:\n- חניה: יש חניה בחזית הקיר.\n- גיל מינימום לחוג ילדים: לפי כיתה בקבוצות במערכת.\n- ציוד: נעלי טיפוס להשכרה במקום.\n- ביטול אימון: לעדכן את הצוות מראש בוואטסאפ.',
+    'שאלות נפוצות:\n'
+    + '- חניה: יש חניה בחזית הקיר.\n'
+    + '- גיל מינימום לחוג ילדים: לפי כיתה בקבוצות במערכת.\n'
+    + '- ציוד: נעלי טיפוס להשכרה במקום, חולצת חוג ושק מגנזיום.\n'
+    + '- שעות פתיחה: רק לפי מה שמסומן ביומן כ«שעות פתיחה».\n'
+    + '- אירועים וטיולים: רק אירועים שסומנו לפרסום, כולל קישור הרשמה.\n'
+    + '- ביטול אימון: לעדכן את הצוות מראש בוואטסאפ.',
   aiForbiddenTopics:
-    'אל תציין מחירים או סכומים.\nאל תבטיח הנחות.\nאל תיתן ייעוץ רפואי.\nאל תשתף פרטי לקוחות אחרים.',
+    'אל תיתן ייעוץ רפואי — הצהרת בריאות היא טופס, לא אישור רפואי.\n'
+    + 'אל תשתף פרטים של לקוחות אחרים.\n'
+    + 'אל תבטיח הנחות, פטורים או החזרים.\n'
+    + 'אל תמציא מחיר שלא מופיע בקבוצה או בהגדרות הציוד.\n'
+    + 'אל תמציא שעות פתיחה שלא מופיעות ביומן.\n'
+    + 'אל תמציא קבוצות או אירועים שלא במערכת.\n'
+    + 'אל תפרסם אירוע פרטי (יום הולדת) גם אם יש לו קישור הרשמה.\n'
+    + 'ביטול, החזר כספי, שינוי תשלום, חשבונית, תלונה או פציעה — העבר לצוות מיד.',
   aiBusinessFacts:
-    'כתובת: השקד 1, תל מונד\nשעות הפתיחה משתנות לפי העונה ומזג האוויר — לשעות מעודכנות הפנה לאתר או לצוות\nהצהרת בריאות: https://app.kirboaz.co.il/health',
+    'כתובת: השקד 1, תל מונד\n'
+    + 'חניה: יש חניה בחזית הקיר\n'
+    + 'שעות פתיחה: לפי הרשומות שמסומנות «שעות פתיחה» ביומן המערכת\n'
+    + 'דמי העשרה: 110 ₪\n'
+    + 'הצהרת בריאות: https://app.kirboaz.co.il/health',
   aiEscalateWhenUnsure: true,
   aiUnsureReply: 'רגע — כדי לא לטעות אני מעביר את זה לצוות 🙏\nמישהו יחזור אליכם עם תשובה מדויקת.',
   aiLeadCaptureEnabled: true,
   aiInteractiveMenuEnabled: true,
   aiGreetingMenu:
-    `היי! אני הבוט של ${BRAND_NAME} 🧗\n\nבמה אפשר לעזור?\n1️⃣ הצהרת בריאות ✍️\n2️⃣ חוגים ורישום 🤸\n3️⃣ שעות ומיקום 🗺️\n4️⃣ לדבר עם צוות 👤\n\nכתבו מספר או שאלה קצרה 😊`,
+    `היי! אני הבוט של ${BRAND_NAME} 🧗\n\nבמה אפשר לעזור?\n1️⃣ הצהרת בריאות ✍️\n2️⃣ חוגים, מחירים ורישום 🤸\n3️⃣ שעות פתיחה ומיקום 🗺️\n4️⃣ לדבר עם צוות 👤\n5️⃣ אירועים וטיולים 🎒\n\nכתבו מספר או שאלה קצרה 😊`,
   aiReactivateKeywords: 'הפעל בוט,הפעל,activate',
+  // מספרי צוות שמקבלים את סוכן ה-CRM במקום בוט הלקוחות. ריק = אין אף אחד.
+  aiStaffPhones: '',
 };
 
 const BRANDED_TEXT_KEYS = [
@@ -87,9 +113,11 @@ export async function loadBrandedBotSettings() {
   }
   const branded = applyBusinessBrand(db.getSettings(), brand);
   const prompt = String(branded.aiSystemPrompt || '').trim();
-  const priceBan = 'כלל קשיח: אל תציין מחירים או סכומים. על מחיר — הפנה לצוות בלבד.';
-  if (!prompt.includes('אל תציין מחירים')) {
-    branded.aiSystemPrompt = prompt ? `${prompt}\n\n${priceBan}` : priceBan;
+  // The bot may quote a price, but only one the CRM holds — a figure it made up
+  // reaches the customer as a promise the gym has to honour.
+  const priceRule = PRICE_SOURCE_RULE;
+  if (!prompt.includes('רק מחירים שמופיעים בנתוני המערכת')) {
+    branded.aiSystemPrompt = prompt ? `${prompt}\n\n${priceRule}` : priceRule;
   }
   return branded;
 }
@@ -127,11 +155,12 @@ export function sleep(ms) {
 export function normalizeMenuChoice(text) {
   const raw = String(text || '').trim();
   const lower = raw.toLowerCase();
-  if (/^[1-4]$/.test(raw)) return raw;
-  const numbered = lower.match(/^(?:אופציה|אפשרות|מספר)?\s*([1-4])\b/);
+  if (/^[1-5]$/.test(raw)) return raw;
+  const numbered = lower.match(/^(?:אופציה|אפשרות|מספר)?\s*([1-5])\b/);
   if (numbered) return numbered[1];
 
   if (/הצהר|בריאות|טופס|חתמ/.test(raw)) return '1';
+  if (/טיול|אירוע|קייטנ/.test(raw)) return '5';
   if (/חוג|רישום|אימון|כית/.test(raw) && !/שע|מיקום|כתובת|מחיר|עלות|כסף|שקל/.test(raw)) return '2';
   if (/שע|מיקום|כתובת|פתוח|הגע/.test(raw)) return '3';
   if (/צוות|אדם|נציג|לדבר עם/.test(raw)) return '4';
@@ -139,8 +168,9 @@ export function normalizeMenuChoice(text) {
   // Interactive list / button titles
   if (/הצהרת בריאות/.test(raw)) return '1';
   if (/חוגים ורישום|חוגים ומחירים|חוגים/.test(raw)) return '2';
-  if (/שעות ומיקום/.test(raw)) return '3';
+  if (/שעות ומיקום|שעות פתיחה ומיקום/.test(raw)) return '3';
   if (/לדבר עם צוות|עם צוות/.test(raw)) return '4';
+  if (/אירועים וטיולים/.test(raw)) return '5';
   return null;
 }
 
@@ -325,6 +355,38 @@ export function logBotControl(phone, message, meta = {}) {
     source: 'bot_control',
     ...meta,
   });
+}
+
+/**
+ * Numbers that get the CRM agent instead of the customer bot — the classes
+ * coordinator asking about a specific trainee, not a parent asking about a
+ * class. Matching is on the number alone, so the list is the whole guard:
+ * every reply on this path may contain customer data.
+ */
+export function staffPhones(settings = {}) {
+  return parseKeywordList(settings.aiStaffPhones)
+    .map((value) => normalizeWaPhone(value) || value)
+    .filter(Boolean);
+}
+
+export function isStaffPhone(settings, phone) {
+  if (!phone) return false;
+  return staffPhones(settings).some((staff) => phonesMatch(staff, phone));
+}
+
+/** Recent turns of this conversation in the shape the CRM agent expects. */
+export function getChatHistoryMessages(phone, limit = 6) {
+  const n = Math.max(0, Math.min(20, Number(limit) || 6));
+  const logs = db.get('whatsapp_logs') || [];
+  return logs
+    .filter((l) => (l.channel || 'whatsapp') === 'whatsapp' && phonesMatch(l.phone || l.to || l.from, phone))
+    .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0))
+    .slice(-n)
+    .map((l) => ({
+      role: l.direction === 'inbound' ? 'user' : 'assistant',
+      content: String(l.message || '').slice(0, 1000),
+    }))
+    .filter((m) => m.content);
 }
 
 export function getConversationHistory(phone, limit = 8) {
@@ -626,9 +688,10 @@ export function interactiveMenuPayload(settings) {
             title: 'תפריט',
             rows: [
               { id: 'menu_1', title: 'הצהרת בריאות', description: 'קישור לחתימה' },
-              { id: 'menu_2', title: 'חוגים ורישום', description: 'זמנים ומקומות' },
-              { id: 'menu_3', title: 'שעות ומיקום', description: 'כתובת ושעות' },
+              { id: 'menu_2', title: 'חוגים ורישום', description: 'זמנים, מקומות ומחיר' },
+              { id: 'menu_3', title: 'שעות ומיקום', description: 'כתובת ושעות פתיחה' },
               { id: 'menu_4', title: 'לדבר עם צוות', description: 'העברה לנציג' },
+              { id: 'menu_5', title: 'אירועים וטיולים', description: 'מה קרוב וקישור הרשמה' },
             ],
           },
         ],

@@ -251,7 +251,7 @@ export default function BotSettingsPanel({
             onChange={(e) => patch('aiKnowledgeBase', e.target.value)}
           />
         </div>
-        <div className="form-group" style={{ marginBottom: 0 }}>
+        <div className="form-group">
           <label className="form-label" style={{ fontSize: 11 }}>נושאים אסורים</label>
           <textarea
             className="input textarea"
@@ -260,6 +260,20 @@ export default function BotSettingsPanel({
             value={settings.aiForbiddenTopics || ''}
             onChange={(e) => patch('aiForbiddenTopics', e.target.value)}
           />
+        </div>
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <label className="form-label" style={{ fontSize: 11 }}>מספרי צוות (סוכן CRM במקום בוט לקוחות)</label>
+          <textarea
+            className="input textarea"
+            rows={2}
+            style={{ fontSize: 12 }}
+            placeholder="0501234567, 0527654321"
+            value={settings.aiStaffPhones || ''}
+            onChange={(e) => patch('aiStaffPhones', e.target.value)}
+          />
+          <div className="text-muted" style={{ fontSize: 10, marginTop: 4 }}>
+            המספרים האלה מקבלים תשובות מנתוני ה-CRM, כולל פרטי לקוחות. פעולות כתיבה עדיין ממתינות לאישור במסך העוזר.
+          </div>
         </div>
       </Section>
 

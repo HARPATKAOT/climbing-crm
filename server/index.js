@@ -1057,6 +1057,7 @@ app.post('/api/whatsapp/settings', requireOwner, async (req, res) => {
     'aiInteractiveMenuEnabled',
     'aiGreetingMenu',
     'aiReactivateKeywords',
+    'aiStaffPhones',
     'metaIgAccountId',
     'metaIgAccessToken',
     'metaPageId',

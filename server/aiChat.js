@@ -11,7 +11,13 @@
  * מהכלי, ורק מזהה שחזר מכלי קריאה מתקבל בפעולת כתיבה.
  */
 
-import { israelDateStr } from './attendanceUtils.js';
+import {
+  INTRO_ATT_STATUSES,
+  consecutiveAbsences,
+  israelDateStr,
+  normalizeAttStatus,
+} from './attendanceUtils.js';
+import { resolveJoinDate } from './equipmentService.js';
 import { countEnrolled, maxSlotsOf } from './groupCapacity.js';
 import { activeRegistrations, remainingCapacity } from './activityRegistration.js';
 import { REGISTRATION_PAYMENT_STATUSES, listInterest } from './activityInterest.js';
@@ -106,6 +112,56 @@ function toolSearchCustomers(db, { query = '' } = {}) {
         .filter(Boolean),
     })),
     truncated: matches.length > SEARCH_LIMIT,
+  };
+}
+
+/**
+ * מתי מתאמן התחיל להתאמן, וכמה נוכחות יש לו מאז.
+ *
+ * „התחיל” הוא האימון הראשון שאינו אימון היכרות — אותה הגדרה שקיזוז דמי
+ * הנעליים נשען עליה, ולכן נגזרת מ-`resolveJoinDate` ולא מחושבת כאן מחדש.
+ */
+function toolGetStudentAttendance(db, { student_id: studentId } = {}) {
+  const student = rows(db, 'students').find((row) => String(row.id) === String(studentId));
+  if (!student) return { error: 'לא נמצא מתאמן עם המזהה הזה' };
+
+  const attendance = rows(db, 'attendance')
+    .filter((row) => String(row.student_id) === String(student.id))
+    .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+
+  if (!attendance.length) {
+    return {
+      student_id: student.id,
+      name: student.name || '',
+      status: student.status || '',
+      group: groupName(db, student.groupId),
+      started_on: null,
+      note: 'אין שורות נוכחות למתאמן הזה',
+    };
+  }
+
+  const intro = attendance.filter((row) => INTRO_ATT_STATUSES.has(normalizeAttStatus(row.status)));
+  const regular = attendance.filter((row) => !INTRO_ATT_STATUSES.has(normalizeAttStatus(row.status)));
+  const arrived = regular.filter((row) => ['attended', 'makeup', 'saturday_makeup'].includes(normalizeAttStatus(row.status)));
+
+  return {
+    student_id: student.id,
+    name: student.name || '',
+    status: student.status || '',
+    group: groupName(db, student.groupId),
+    // תאריך תחילת האימונים בפועל, אחרי אימון ההיכרות
+    started_on: resolveJoinDate(attendance),
+    intro_dates: intro.map((row) => row.date),
+    first_regular_training: regular[0]?.date || null,
+    last_training: arrived[arrived.length - 1]?.date || null,
+    attended_count: arrived.length,
+    absent_count: regular.filter((row) => normalizeAttStatus(row.status) === 'absent').length,
+    consecutive_absences: consecutiveAbsences(attendance),
+    recent: attendance.slice(-10).map((row) => ({
+      date: row.date,
+      status: normalizeAttStatus(row.status),
+      group: groupName(db, row.group_id),
+    })),
   };
 }
 
@@ -375,6 +431,7 @@ function toolBusinessSnapshot(db, { today = israelDateStr() } = {}) {
 export const READ_TOOLS = {
   search_customers: toolSearchCustomers,
   get_customer: toolGetCustomer,
+  get_student_attendance: toolGetStudentAttendance,
   list_groups: toolListGroups,
   list_activities: toolListActivities,
   get_activity: toolGetActivity,
@@ -403,6 +460,17 @@ export function toolDeclarations() {
         type: 'object',
         properties: { parent_id: { type: 'string', description: 'מזהה שחזר מ-search_customers' } },
         required: ['parent_id'],
+      },
+    },
+    {
+      name: 'get_student_attendance',
+      description:
+        'נוכחות של מתאמן: מתי התחיל להתאמן בפועל (האימון הראשון שאינו אימון היכרות), '
+        + 'תאריכי ההיכרות, אימון אחרון, כמה הגיע, כמה החסיר וכמה החסיר ברצף.',
+      parameters: {
+        type: 'object',
+        properties: { student_id: { type: 'string', description: 'מזהה מתאמן מ-get_customer' } },
+        required: ['student_id'],
       },
     },
     {

@@ -13,7 +13,31 @@ import {
   suggestionsAutoEnabled,
 } from './aiActions.js';
 import { israelClockParts, isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
-import { DEFAULT_BUSINESS_PROFILE } from './businessProfile.js';
+import { DEFAULT_BUSINESS_PROFILE, getBusinessProfile } from './businessProfile.js';
+import { runChatTurn } from './aiChat.js';
+import { EQUIPMENT_ITEM_LABELS as EQUIPMENT_LABELS } from './equipmentService.js';
+import {
+  NO_EVENTS_REPLY,
+  NO_OPENING_HOURS_REPLY,
+  asksAboutAssistants,
+  asksAboutEvents,
+  asksAboutGroupChat,
+  asksAboutGroupSize,
+  asksAboutSignupLink,
+  asksAboutOpeningHours,
+  asksAboutPrices,
+  asksAboutTrainer,
+  buildPriceReply,
+  enrichmentFeeFromSettings,
+  formatGroupChatReply,
+  formatGroupDetailsReply,
+  formatOpeningHoursReply,
+  formatPublicEventsReply,
+  formatSignupLinkReply,
+  groupSignupUrl,
+  loadEquipmentPrices,
+  trainerNameForGroup,
+} from './botFacts.js';
 import {
   enrichGroupsWithCapacity,
   spotsLeft,
@@ -41,6 +65,8 @@ import {
   buildAiExtraContext,
   buildParentCardContext,
   getConversationHistory,
+  getChatHistoryMessages,
+  isStaffPhone,
   parseAiReply,
   detectUnsureHeuristic,
   interactiveMenuPayload,
@@ -75,23 +101,22 @@ function formatGroupLine(group) {
     ? group.freeSlots
     : spotsLeft(group, db.get('students') || []);
   const seat = free > 0 ? `${free} פנויים` : 'מלאה';
-  return `• ${cleanGroupTitle(group)} | יום ${dayLabel} ${group.time || ''} | ${group.ageCategory || ''} | ${seat}`;
+  const week = Number(group.priceWeek) || 0;
+  const twice = Number(group.priceTwice) || 0;
+  const price = [
+    week ? `פעם בשבוע ${week} ₪` : '',
+    twice ? `פעמיים בשבוע ${twice} ₪` : '',
+  ].filter(Boolean).join(' / ') || 'מחיר לא מעודכן';
+  const trainer = trainerNameForGroup(db, group);
+  const max = Number(group.maxSlots) || 0;
+  return `• ${cleanGroupTitle(group)} | יום ${dayLabel} ${group.time || ''} | ${group.ageCategory || ''} | ${seat}`
+    + ` | ${price}${trainer ? ` | מדריך: ${trainer}` : ''}${max ? ` | עד ${max} מתאמנים` : ''}`;
 }
 
 function extractGradeLetter(text) {
   const m = String(text || '').match(/כית(?:ה|ות)?\s*([א-ו])['׳']?/i);
   return m?.[1] || '';
 }
-
-function asksAboutPrices(text) {
-  const t = String(text || '').toLowerCase();
-  return /מחיר|כמה עולה|עלות|מנוי|כסף|₪|שקל|מחירון/.test(t);
-}
-
-export const NO_PRICE_REPLY =
-  'לגבי מחירים אני לא מוסר מספרים כאן 🙏\n' +
-  'הצוות יחזור אליכם עם מחיר מדויק.\n' +
-  'אפשר לכתוב 4 לדבר עם נציג, או לשאול על חוגים ושעות.';
 
 function asksAboutAvailability(text) {
   const t = String(text || '');
@@ -185,7 +210,7 @@ function formatClassesWhatsAppReply(groups, incomingText = '', _ignoredOptions =
 }
 
 /** Live CRM snapshot injected into the AI prompt / heuristic replies */
-function buildCrmBotContext(settings = {}, { phone, parent, students } = {}) {
+function buildCrmBotContext(settings = {}, { phone, parent, students, equipmentPrices = null } = {}) {
   const s = mergeBotSettings(settings);
   const brand = s.brandName || 'הרפתקאות';
   const allStudents = db.get('students') || [];
@@ -219,9 +244,23 @@ function buildCrmBotContext(settings = {}, { phone, parent, students } = {}) {
       s.aiForbiddenTopics || '',
     ].join('\n');
 
+  const hoursText = formatOpeningHoursReply(db) || 'אין שעות פתיחה מעודכנות ביומן.';
+  const eventsText = formatPublicEventsReply(db) || 'אין אירועים פתוחים להרשמה כרגע.';
+  const signupBase = groupSignupUrl(null);
+  const chatLinks = formatGroupChatReply(db, students || [], '');
+  const chatLinksText = chatLinks.handoff || !chatLinks.text
+    ? 'אין קישור לקבוצת וואטסאפ עבור הלקוח הזה.'
+    : chatLinks.text;
+  const equipmentText = equipmentPrices
+    ? Object.entries(equipmentPrices)
+      .filter(([, price]) => Number(price) > 0)
+      .map(([item, price]) => `${EQUIPMENT_LABELS[item] || item}: ${price} ₪`)
+      .join(' | ')
+    : 'מחירי ציוד לא נטענו — אל תנקוב בהם.';
+
   return {
     groups,
-    text: `## נתונים חיים ממערכת ה-CRM (השתמש רק בהם לתשובות על חוגים/זמנים)
+    text: `## נתונים חיים ממערכת ה-CRM (השתמש רק בהם לתשובות על חוגים/זמנים/מחירים)
 שם העסק הרשמי: ${brand}
 
 ${s.aiBusinessFacts || ''}
@@ -229,15 +268,34 @@ ${s.aiBusinessFacts || ''}
 ### קבוצות חוגים פעילות (${groups.length}):
 ${groupLines}
 
+### שעות פתיחה (מהיומן)
+${hoursText}
+
+### אירועים פתוחים להרשמה
+${eventsText}
+
+### קבוצות וואטסאפ של הלקוח הזה
+${chatLinksText}
+
+### מחירי ציוד
+${equipmentText}
+(נעליים מושכרות לחצי עונה; מי שמצטרף באמצע משלם יחסית.)
+
 ### כללים לתשובה לפי נתונים
 - אם שאלו על כיתה/גיל — הצג רק קבוצות רלוונטיות מהרשימה.
 - כברירת מחדל ציין רק איפה יש מקום (בלי מספרים). דוגמה: «15:30 · יש מקום».
 - פתח תשובות על חוגים ב־«כן, בטח!» והצג כל יום/שעה בשורה נפרדת.
 - מספר מקומות פנויים — רק אם הלקוח שאל במפורש כמה מקומות / תפוסה.
 - כשקבוצה מלאה — הצע שיבוץ לרשימת המתנה.
-- אסור לציין מחירים, סכומים או מחירון — גם אם מופיעים בהנחיות ישנות. על מחיר: הפנה לצוות.
+- מחיר: רק מהרשימות שלמעלה (מחיר קבוצה, מחירי ציוד, דמי העשרה). כל מחיר אחר — מנוי, כרטיסייה, יום הולדת, הנחה, החזר — הפנה לצוות ואל תנקוב בסכום.
+- שעות פתיחה: רק מהרשימה שלמעלה. אם אין — אמור שהשעות לא עודכנו והפנה לצוות.
+- אירועים: רק מהרשימה שלמעלה, כולל קישור ההרשמה. אל תזכיר אירועים אחרים.
+- מדריך וגודל קבוצה: רק מהרשימה. עוזרי מדריך אינם במערכת — הפנה לצוות.
+- קישורים: השתמש רק בכתובות שמופיעות בנתונים שלמעלה. אל תמציא כתובת, ואל תשלח קישור לקבוצת וואטסאפ של חוג שהילד לא רשום אליו.
+- טופס הרשמה לחוג מסוים: ${signupBase}?interest=<כיתה ויום>.
+- ביטול, החזר כספי, שינוי תשלום, חשבונית, תלונה או פציעה — העבר לצוות מיד.
 - בלי שם קבוצה פנימי ארוך; אפשר כיתה/גיל קצר.
-- אל תמציא קבוצות שלא מופיעות.
+- אל תמציא קבוצות, שעות או אירועים שלא מופיעים.
 - אם אין התאמה מדויקת — אמור זאת + בקש שם וטלפון לחזרה.
 
 ${extra}`,
@@ -269,7 +327,14 @@ function findGroupsForText(text) {
   });
 }
 
-function buildHeuristicReply(incomingText, settings = {}) {
+/** Street address as the owner wrote it in the bot settings. */
+function addressFromSettings(settings = {}) {
+  const facts = String(settings.aiBusinessFacts || '');
+  const line = facts.split('\n').find((l) => /^\s*כתובת\s*:/.test(l));
+  return line ? line.replace(/^\s*כתובת\s*:\s*/, '').trim() : '';
+}
+
+async function buildHeuristicReply(incomingText, settings = {}, { phone = '', students = [] } = {}) {
   const s = mergeBotSettings(settings);
   const raw = String(incomingText || '').trim();
   const text = raw.toLowerCase();
@@ -279,14 +344,22 @@ function buildHeuristicReply(incomingText, settings = {}) {
     || 'https://app.kirboaz.co.il/health';
   const healthReply = `היי! ✍️\nהנה קישור להצהרת הבריאות:\n${healthUrl}\n\nאחרי החתימה המערכת מתעדכנת אוטומטית 🧗`;
   const matchedGroups = findGroupsForText(raw);
+  // A named weekday narrows "כיתה ה׳" down to the one class they mean.
+  const dayHint = extractPreferredDayIndex(raw);
+  const sameDay = dayHint == null
+    ? matchedGroups
+    : matchedGroups.filter((g) => Number(g.day) === dayHint);
+  const exactGroups = sameDay.length ? sameDay : matchedGroups;
   const sourceGroups = matchedGroups.length ? matchedGroups : (db.get('groups') || []).slice(0, 12);
   const classesReply = formatClassesWhatsAppReply(sourceGroups, raw);
   const classesReplyNeedsGrade = !matchedGroups.length
     ? `${formatClassesWhatsAppReply(sourceGroups, raw)}\n\nכדי לדייק יותר — מהי כיתת הילד/ה?`
     : classesReply;
-  const brand = s.brandName || 'הרפתקאות';
-  const hoursReply = `🕐 שעות פעילות ${brand}:\n\n📅 א׳–ה׳ · 14:00–22:00\n📅 שישי · 09:00–15:00\n📅 שבת · סגור`;
-  const locationReply = '📍 אנחנו ברחוב האורגים 12, אשדוד\n🅿️ יש חניה בחזית\nנתראה על הקיר! 🧗';
+  const address = addressFromSettings(s);
+  const hoursReply = formatOpeningHoursReply(db) || NO_OPENING_HOURS_REPLY;
+  const locationReply = address
+    ? `📍 אנחנו ב${address}\n🅿️ יש חניה בחזית\nנתראה על הקיר! 🧗`
+    : 'הכתובת שלנו לא מעודכנת אצלי כרגע 🙏\nכתבו 4 והצוות ישלח לכם הוראות הגעה.';
   const defaultMenu = s.aiGreetingMenu || DEFAULT_BOT_SETTINGS.aiGreetingMenu;
 
   if (menuPick === '4') {
@@ -297,9 +370,46 @@ function buildHeuristicReply(incomingText, settings = {}) {
     return { text: healthReply, confidence: 'high' };
   }
 
-  // Price questions never quote amounts — hand off to staff.
+  if (asksAboutGroupChat(raw)) {
+    const chat = formatGroupChatReply(db, students, raw);
+    if (chat.text) return { text: chat.text, confidence: 'high', handoff: chat.handoff };
+  }
+
+  if (asksAboutSignupLink(raw)) {
+    return {
+      text: formatSignupLinkReply(exactGroups, { phone }),
+      confidence: 'high',
+    };
+  }
+
+  // Trainer / group size come before the schedule branch — "כמה ילדים בקבוצה"
+  // reads as a schedule question otherwise.
+  if (asksAboutAssistants(raw) || asksAboutTrainer(raw) || asksAboutGroupSize(raw)) {
+    const details = formatGroupDetailsReply(db, exactGroups, raw);
+    if (details.text) {
+      return { text: details.text, confidence: 'high', handoff: details.handoff };
+    }
+  }
+
+  if (menuPick === '5' || asksAboutEvents(raw)) {
+    return { text: formatPublicEventsReply(db) || NO_EVENTS_REPLY, confidence: 'high' };
+  }
+
+  // Prices come from the CRM; anything the CRM does not price goes to staff.
   if (asksAboutPrices(raw)) {
-    return { text: NO_PRICE_REPLY, confidence: 'high', handoff: true };
+    const priceReply = buildPriceReply({
+      groups: exactGroups.length ? exactGroups : (db.get('groups') || []),
+      equipmentPrices: await loadEquipmentPrices(),
+      enrichmentFee: enrichmentFeeFromSettings(s),
+      text: raw,
+    });
+    return { text: priceReply.text, confidence: 'high', handoff: priceReply.handoff };
+  }
+
+  // "מתי אתם פתוחים" is an opening-hours question, and «מתי» alone would drag
+  // it into the class-schedule branch below.
+  if (asksAboutOpeningHours(raw)) {
+    return { text: `${hoursReply}\n\n${locationReply}`, confidence: 'high' };
   }
 
   const scheduleIntent =
@@ -323,7 +433,12 @@ function buildHeuristicReply(incomingText, settings = {}) {
     return { text: classesReplyNeedsGrade, confidence: 'high', startIntake: menuPick === '2' };
   }
 
-  if (menuPick === '3' || text.includes('שע') || text.includes('מתי פתוח') || text.includes('פתיח') || text.includes('מתי אתם פתוחים')) {
+  if (
+    menuPick === '3'
+    || asksAboutOpeningHours(raw)
+    || text.includes('שע')
+    || text.includes('פתיח')
+  ) {
     return { text: `${hoursReply}\n\n${locationReply}`, confidence: 'high' };
   }
 
@@ -466,13 +581,15 @@ ${systemPrompt}
 
 ${crmText}
 
-הערה חשובה: אם הלקוח כותב רק 1 / 2 / 3 / 4 זה בחירה מתפריט:
+הערה חשובה: אם הלקוח כותב רק 1 / 2 / 3 / 4 / 5 זה בחירה מתפריט:
 1 = קישור להצהרת בריאות (${healthUrl})
-2 = הרשמה וחוגים (שעות ומקום — בלי מחירים)
-3 = שעות פעילות ומיקום
+2 = הרשמה וחוגים (ימים, שעות, מחיר הקבוצה)
+3 = שעות פתיחה ומיקום
 4 = העברה לצוות אנושי
+5 = אירועים וטיולים פתוחים להרשמה
 
-אסור לציין מחירים או סכומים בכל תשובה. על מחיר — הפנה לצוות.
+מחירים: מותר לנקוב רק במחיר שמופיע בנתונים שלמעלה — מחיר קבוצה, מחירי ציוד או דמי העשרה.
+כל שאלת תשלום אחרת (מנוי, כרטיסייה, יום הולדת, הנחה, החזר, חשבונית) — הפנה לצוות בלי סכום.
 
 מגבלת אורך תשובה: עד ${s.aiMaxReplyChars || 700} תווים.
 אם אינך בטוח — התחל את התשובה במילה UNSURE.
@@ -847,7 +964,7 @@ export const whatsappService = {
     const apiKey = process.env.GEMINI_API_KEY;
     const hasModel = !!apiKey && apiKey !== 'YOUR_GEMINI_API_KEY_HERE';
 
-    const quick = buildHeuristicReply(incomingText, settings);
+    const quick = await buildHeuristicReply(incomingText, settings, { phone, students });
     if (quick.handoff) {
       return { text: quick.text, handoff: true, confidence: 'high' };
     }
@@ -858,7 +975,12 @@ export const whatsappService = {
       return { text: clipReply(quick.text, settings.aiMaxReplyChars), confidence: 'high', startIntake: !!quick.startIntake };
     }
 
-    const crm = buildCrmBotContext(settings, { phone, parent, students });
+    const crm = buildCrmBotContext(settings, {
+      phone,
+      parent,
+      students,
+      equipmentPrices: await loadEquipmentPrices(),
+    });
 
     if (hasModel) {
       const geminiText = await callGeminiReply(systemPrompt, crm.text, incomingText, apiKey, settings);
@@ -883,6 +1005,33 @@ export const whatsappService = {
     }
 
     return { text: clipReply(quick.text, settings.aiMaxReplyChars), confidence: quick.confidence || 'low' };
+  },
+
+  /**
+   * A staff question answered by the CRM agent. Write tools stay staged for
+   * approval inside `runChatTurn` — WhatsApp never becomes a way to change data
+   * without someone confirming it on the screen.
+   */
+  async runStaffChat(phone, text) {
+    const messages = getChatHistoryMessages(phone, 6);
+    if (!messages.length || messages[messages.length - 1]?.content !== text) {
+      messages.push({ role: 'user', content: text });
+    }
+    try {
+      const profile = await getBusinessProfile().catch(() => null);
+      const result = await runChatTurn({
+        db,
+        persist: persistCore,
+        messages,
+        actor: `whatsapp:${phone}`,
+        brandName: profile?.display_name || DEFAULT_BUSINESS_PROFILE.display_name,
+      });
+      if (result.reply) return clipReply(result.reply, 1500);
+      return 'לא הצלחתי לענות על זה כרגע 🙏 נסו לנסח מחדש או לבדוק במסך העוזר החכם.';
+    } catch (err) {
+      console.error('staff chat failed:', err.message);
+      return 'משהו נתקע בשליפת הנתונים 🙏 נסו שוב בעוד רגע.';
+    }
   },
 
   async sendBotReply(phone, replyText, { isSimulator = false, source = 'ai' } = {}) {
@@ -1031,6 +1180,17 @@ export const whatsappService = {
       return { parent, student, isNew, replied: false, skippedReason: 'empty' };
     }
 
+    // 4b. Staff numbers talk to the CRM agent, not to the customer bot.
+    if (isStaffPhone(settings, normalizedPhone)) {
+      if (!isBotEnabled(settings) && !isSimulator) {
+        console.log(`🤖 Staff query ignored while the bot is off (${normalizedPhone})`);
+        return { parent, student, isNew, replied: false, skippedReason: 'disabled' };
+      }
+      const staffReply = await whatsappService.runStaffChat(normalizedPhone, text);
+      await whatsappService.sendBotReply(normalizedPhone, staffReply, { isSimulator, source: 'staff_chat' });
+      return { parent, student, isNew, replied: true, reply: staffReply, reason: 'staff_chat' };
+    }
+
     // 5. Bot decision gates
     const gate = decideBotGate(settings, parent, students, text, { isSimulator });
 
@@ -1099,7 +1259,7 @@ export const whatsappService = {
       const choice = normalizeMenuChoice(text);
       // If they just picked "2", acknowledge classes briefly then start intake
       if (choice === '2') {
-        const quick = buildHeuristicReply(text, settings);
+        const quick = await buildHeuristicReply(text, settings, { phone: normalizedPhone, students });
         if (quick.text) {
           await whatsappService.sendBotReply(normalizedPhone, quick.text, { isSimulator });
         }

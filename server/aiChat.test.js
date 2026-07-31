@@ -139,6 +139,35 @@ test('get_customer מחזיר כרטיס מלא, ושגיאה על מזהה של
   assert.ok(READ_TOOLS.get_customer(db, { parent_id: 'nope' }).error);
 });
 
+test('get_student_attendance מדווח על האימון הראשון שאינו היכרות', () => {
+  const db = makeDb({
+    attendance: [
+      { id: 'at1', student_id: 's1', group_id: 'g1', date: '2026-06-07', status: 'intro_attended' },
+      { id: 'at2', student_id: 's1', group_id: 'g1', date: '2026-06-14', status: 'attended' },
+      { id: 'at3', student_id: 's1', group_id: 'g1', date: '2026-06-21', status: 'absent' },
+      { id: 'at4', student_id: 's2', group_id: 'g2', date: '2026-06-14', status: 'attended' },
+    ],
+  });
+  const summary = READ_TOOLS.get_student_attendance(db, { student_id: 's1' });
+  assert.equal(summary.name, 'עומרי לוי');
+  assert.deepEqual(summary.intro_dates, ['2026-06-07']);
+  assert.equal(summary.first_regular_training, '2026-06-14');
+  assert.equal(summary.started_on, '2026-06-14');
+  assert.equal(summary.attended_count, 1);
+  assert.equal(summary.absent_count, 1);
+  assert.equal(summary.consecutive_absences, 1);
+  // שורות של מתאמן אחר לא נספרות
+  assert.equal(summary.recent.length, 3);
+});
+
+test('get_student_attendance אומר במפורש כשאין שורות נוכחות', () => {
+  const db = makeDb({ attendance: [] });
+  const summary = READ_TOOLS.get_student_attendance(db, { student_id: 's1' });
+  assert.equal(summary.started_on, null);
+  assert.match(summary.note, /אין שורות נוכחות/);
+  assert.ok(READ_TOOLS.get_student_attendance(db, { student_id: 'nope' }).error);
+});
+
 test('list_groups מחשב תפוסה בפועל ומסנן לפי יום', () => {
   const db = makeDb();
   const all = READ_TOOLS.list_groups(db, {});
