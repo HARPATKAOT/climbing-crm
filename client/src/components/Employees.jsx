@@ -78,6 +78,22 @@ const CERTIFICATION_OPTIONS = [
   'בונה מסלולים רמה 2'
 ];
 
+// הסמכה שהוזנה ידנית לעובד כלשהו הופכת לאופציה קבועה לכל שאר העובדים.
+function collectCertificationOptions(employees) {
+  const seen = new Set(CERTIFICATION_OPTIONS);
+  const extra = [];
+  (employees || []).forEach((emp) => {
+    (emp?.certifications || []).forEach((cert) => {
+      const value = String(cert || '').trim();
+      if (!value || seen.has(value)) return;
+      seen.add(value);
+      extra.push(value);
+    });
+  });
+  extra.sort((a, b) => a.localeCompare(b, 'he'));
+  return [...CERTIFICATION_OPTIONS, ...extra];
+}
+
 const EMPLOYEE_DOC_FIELDS = [
   { key: 'contract', label: 'חוזה העסקה חתום' },
   { key: 'police', label: 'אישור משטרה (סקס)' },
@@ -180,7 +196,7 @@ function EmployeeDocField({ label, savedDoc, pendingFile, onPick, onClearPending
 }
 
 // ─── Modal: Employee Form (Add/Edit) ──────────────────────────────────────────
-function EmployeeFormModal({ employee, onSave, onClose }) {
+function EmployeeFormModal({ employee, employees, onSave, onClose }) {
   const isEdit = !!employee;
   const [name, setName]               = useState(employee?.name || '');
   const [phone, setPhone]             = useState(employee?.phone || '');
@@ -198,6 +214,7 @@ function EmployeeFormModal({ employee, onSave, onClose }) {
   const [pendingFiles, setPendingFiles] = useState({});
   const [certifications, setCertifications] = useState(employee?.certifications || []);
   const [customCert, setCustomCert]   = useState('');
+  const certOptions = useMemo(() => collectCertificationOptions(employees), [employees]);
   const [saving, setSaving]           = useState(false);
   const [saveError, setSaveError]     = useState('');
 
@@ -396,7 +413,7 @@ function EmployeeFormModal({ employee, onSave, onClose }) {
               </div>
             )}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {CERTIFICATION_OPTIONS.filter((c) => !certifications.includes(c)).map((c) => (
+              {certOptions.filter((c) => !certifications.includes(c)).map((c) => (
                 <button
                   key={c}
                   type="button"
@@ -962,6 +979,7 @@ export default function Employees() {
       {showEmployeeForm && (
         <EmployeeFormModal
           employee={editingEmployee}
+          employees={employees}
           onSave={handleSaveEmployee}
           onClose={() => { setShowEmployeeForm(false); setEditingEmployee(null); }}
         />
