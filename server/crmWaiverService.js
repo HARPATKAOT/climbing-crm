@@ -155,13 +155,20 @@ export async function saveCrmParticipants({
   const template = templateInput || resolveDeclarationTemplate(db);
   validateParticipantDeclarations(participants, template);
 
+  // The forms collect the surname in its own field. Storing it means the
+  // household matcher and the invoice stop depending on the last word of a
+  // free-text name, which is the wrong word whenever someone writes their
+  // family name first.
+  const lastName = clean(parentInput?.lastName || parentInput?.last_name);
   let parent = db.upsertParentByPhone(parentName, phone, email, {
     city: clean(parentInput?.city),
     idNumber: clean(parentInput?.idNumber || parentInput?.parentIdNum),
+    lastName,
     source,
   });
   parent = db.update('parents', parent.id, {
     name: parentName,
+    lastName: lastName || parent.lastName || '',
     email: email || parent.email || '',
     city: clean(parentInput?.city) || parent.city || '',
     idNumber: clean(parentInput?.idNumber || parentInput?.parentIdNum) || parent.idNumber || '',

@@ -14,6 +14,7 @@ import {
   KnownFamilyPrompt,
 } from './publicFormKit.jsx';
 import { checkKnownChild, checkKnownFamily } from '../utils/childCheck.js';
+import { joinParentName, splitParentName } from '../utils/parentName.js';
 
 function buildFallbackWaiver(legalName) {
   return `כתב ויתור והסרת אחריות — קיר הטיפוס ${legalName}
@@ -51,6 +52,11 @@ export default function PublicHealthForm() {
   const [isAdult, setIsAdult] = useState(false);
   const [answers, setAnswers] = useState({});
   const [formData, setFormData] = useState({
+    // The two boxes the form actually shows. `parentName` is kept in sync as
+    // the joined version so the declaration, the PDF and the server keep
+    // receiving one readable name.
+    parentFirstName: '',
+    parentLastName: '',
     parentName: '',
     parentIdNum: '',
     phone: searchParams.get('phone') || '',
@@ -165,8 +171,11 @@ export default function PublicHealthForm() {
       const samePerson = parentName
         && climberName
         && parentName.toLowerCase() === climberName.toLowerCase();
+      const parentParts = splitParentName(parent || {});
       setFormData((prev) => ({
         ...prev,
+        parentFirstName: parentParts.first || prev.parentFirstName,
+        parentLastName: parentParts.lastName || prev.parentLastName,
         parentName: parentName || prev.parentName,
         parentIdNum: trimStr(parent?.idNumber) || prev.parentIdNum,
         phone: trimStr(parent?.phone) || prev.phone || phone,
@@ -220,10 +229,14 @@ export default function PublicHealthForm() {
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : value
-    }));
+    setFormData(prev => {
+      const next = { ...prev, [name]: type === 'checkbox' ? checked : value };
+      // Either half of the name rebuilds the joined one.
+      if (name === 'parentFirstName' || name === 'parentLastName') {
+        next.parentName = joinParentName(next.parentFirstName, next.parentLastName);
+      }
+      return next;
+    });
   };
 
   const handleAnswerChange = (id, checked) => {
@@ -283,7 +296,7 @@ export default function PublicHealthForm() {
       // A parent we have never seen may belong to a family we already know.
       if (!formData.studentId && !formData.parentId && familyParentId === null) {
         const known = await checkKnownFamily({
-          parentName: formData.parentName,
+          lastName: formData.parentLastName,
           phone: formData.phone,
         });
         setFamilies(known.families);
@@ -477,8 +490,15 @@ export default function PublicHealthForm() {
 
               <div className="section-title">{isAdult ? 'פרטים אישיים' : 'פרטי הורה / אפוטרופוס'}</div>
               <div className="form-group">
-                <label>{isAdult ? 'שם מלא' : 'שם מלא (הורה)'}</label>
-                <input required type="text" name="parentName" value={formData.parentName} onChange={handleChange} placeholder="לדוגמה: ישראל ישראלי" />
+                <label>{isAdult ? 'שם פרטי' : 'שם פרטי (הורה)'}</label>
+                <input required type="text" name="parentFirstName" value={formData.parentFirstName} onChange={handleChange} placeholder="ישראל" />
+              </div>
+              <div className="form-group">
+                {/* Separate box: the surname decides which household this joins
+                    and how the invoice reads, so it is not guessed from the
+                    last word of a free-text name. */}
+                <label>{isAdult ? 'שם משפחה' : 'שם משפחה (הורה)'}</label>
+                <input required type="text" name="parentLastName" value={formData.parentLastName} onChange={handleChange} placeholder="ישראלי" />
               </div>
               <div className="form-group">
                 <label>{isAdult ? 'תעודת זהות' : 'תעודת זהות (הורה)'}</label>

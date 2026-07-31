@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { CheckCircle, Plus, Trash2 } from 'lucide-react';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
+import { joinParentName } from '../utils/parentName.js';
 
 /**
  * Prefill "what are you interested in" when the visitor arrived from a page
@@ -28,6 +29,7 @@ export default function LeadIntakeForm() {
   const brandLogo = profile.logo_url || '/logo.png';
   const [formData, setFormData] = useState({
     parentName: '',
+    lastName: '',
     phone: '',
     email: '',
     city: '',
@@ -72,6 +74,8 @@ export default function LeadIntakeForm() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...formData,
+          parentName: joinParentName(formData.parentName, formData.lastName),
+          lastName: formData.lastName.trim(),
           children: formData.children.map(c => c.trim()).filter(Boolean),
           source: 'form',
         }),
@@ -122,9 +126,17 @@ export default function LeadIntakeForm() {
 
         <form onSubmit={handleSubmit} className="public-form">
           <div className="section-title">פרטי הורה / איש קשר</div>
+          {/* Separate boxes: the surname is what links this lead to a family
+              already on file, and what the invoice is issued under. Taking it
+              from the last word of a full name is wrong for anyone who writes
+              the family name first. */}
           <div className="form-group">
-            <label>שם מלא</label>
-            <input required name="parentName" value={formData.parentName} onChange={handleChange} placeholder="ישראל ישראלי" />
+            <label>שם פרטי</label>
+            <input required name="parentName" value={formData.parentName} onChange={handleChange} placeholder="ישראל" />
+          </div>
+          <div className="form-group">
+            <label>שם משפחה</label>
+            <input required name="lastName" value={formData.lastName} onChange={handleChange} placeholder="ישראלי" />
           </div>
           <div className="form-group">
             <label>טלפון</label>

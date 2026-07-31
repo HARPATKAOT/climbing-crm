@@ -22,6 +22,7 @@ import {
   SignaturePad,
 } from './publicFormKit.jsx';
 import { checkKnownChild, checkKnownFamily, linkFieldsFor } from '../utils/childCheck.js';
+import { joinParentName } from '../utils/parentName.js';
 
 const NEW_HOLDER = '__new__';
 
@@ -107,7 +108,10 @@ function ShopPurchase({ slug }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [step, setStep] = useState(1);
-  const [buyer, setBuyer] = useState({ name: '', phone: '', email: '', city: '', idNumber: '' });
+  // `firstName`/`lastName` are the boxes on screen; `name` stays as the joined
+  // version, because the surname alone is what matches a household and what the
+  // invoice is issued under.
+  const [buyer, setBuyer] = useState({ name: '', firstName: '', lastName: '', phone: '', email: '', city: '', idNumber: '' });
   const [forSelf, setForSelf] = useState(false);
   const [household, setHousehold] = useState(null);
   const [holderId, setHolderId] = useState('');
@@ -204,8 +208,8 @@ function ShopPurchase({ slug }) {
   const next = async () => {
     setError('');
     if (step === 1) {
-      if (!buyer.name.trim() || !buyer.phone.trim() || !buyer.email.trim()) {
-        setError('יש למלא שם, טלפון ודואר אלקטרוני');
+      if (!buyer.firstName.trim() || !buyer.lastName.trim() || !buyer.phone.trim() || !buyer.email.trim()) {
+        setError('יש למלא שם פרטי, שם משפחה, טלפון ודואר אלקטרוני');
         return;
       }
       let found = null;
@@ -218,7 +222,7 @@ function ShopPurchase({ slug }) {
       // A payer we have never seen may still be the second parent of a family
       // we know. Only they can tell, so ask before opening a new file.
       if (!found?.found && familyParentId === null) {
-        const known = await checkKnownFamily({ parentName: buyer.name, phone: buyer.phone });
+        const known = await checkKnownFamily({ lastName: buyer.lastName, phone: buyer.phone });
         setFamilies(known.families);
         if (known.families.length) return;
         setFamilyParentId('');
@@ -351,7 +355,16 @@ function ShopPurchase({ slug }) {
               הכרטיסייה עבורי (בוגר מעל גיל 18)
             </label>
             <h2>{forSelf ? 'הפרטים שלי' : 'פרטי המשלם'}</h2>
-            <Field label="שם מלא" value={buyer.name} onChange={(name) => setBuyer({ ...buyer, name })} />
+            <Field
+              label="שם פרטי"
+              value={buyer.firstName}
+              onChange={(firstName) => setBuyer((b) => ({ ...b, firstName, name: joinParentName(firstName, b.lastName) }))}
+            />
+            <Field
+              label="שם משפחה"
+              value={buyer.lastName}
+              onChange={(lastName) => setBuyer((b) => ({ ...b, lastName, name: joinParentName(b.firstName, lastName) }))}
+            />
             <Field label="טלפון" type="tel" value={buyer.phone} onChange={(phone) => setBuyer({ ...buyer, phone })} />
             <Field label="דואר אלקטרוני (לחשבונית)" type="email" value={buyer.email} onChange={(email) => setBuyer({ ...buyer, email })} />
             <Field label="עיר" value={buyer.city} onChange={(city) => setBuyer({ ...buyer, city })} />

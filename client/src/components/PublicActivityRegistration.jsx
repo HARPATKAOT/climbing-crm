@@ -14,6 +14,7 @@ import {
   SignaturePad,
 } from './publicFormKit.jsx';
 import { checkKnownChild, checkKnownFamily, linkFieldsFor } from '../utils/childCheck.js';
+import { joinParentName } from '../utils/parentName.js';
 
 const emptyParticipant = (questions = [], extras = {}) => ({
   key: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
@@ -57,7 +58,10 @@ export default function PublicActivityRegistration() {
   const [step, setStep] = useState(1);
   const [healthIndex, setHealthIndex] = useState(0);
   const [isAdultSelf, setIsAdultSelf] = useState(false);
-  const [parent, setParent] = useState({ name: '', phone: '', email: '', city: '' });
+  // `firstName` and `lastName` are what the form shows; `name` is kept as the
+  // joined version, because the surname on its own is what matches a household
+  // and what reaches the invoice.
+  const [parent, setParent] = useState({ name: '', firstName: '', lastName: '', phone: '', email: '', city: '' });
   const [participants, setParticipants] = useState([]);
   const [household, setHousehold] = useState(null);
   const [listDefs, setListDefs] = useState([]);
@@ -224,8 +228,8 @@ export default function PublicActivityRegistration() {
   const next = async () => {
     setError('');
     if (step === 1) {
-      if (!parent.name.trim() || !parent.phone.trim() || !parent.email.trim()) {
-        setError('יש למלא שם, טלפון ודואר אלקטרוני');
+      if (!parent.firstName.trim() || !parent.lastName.trim() || !parent.phone.trim() || !parent.email.trim()) {
+        setError('יש למלא שם פרטי, שם משפחה, טלפון ודואר אלקטרוני');
         return;
       }
       let found = null;
@@ -237,7 +241,7 @@ export default function PublicActivityRegistration() {
       }
       // A parent we have never seen may still belong to a family we know.
       if (!found?.found && familyParentId === null) {
-        const known = await checkKnownFamily({ parentName: parent.name, phone: parent.phone });
+        const known = await checkKnownFamily({ lastName: parent.lastName, phone: parent.phone });
         setFamilies(known.families);
         if (known.families.length) return;
         setFamilyParentId('');
@@ -431,7 +435,16 @@ export default function PublicActivityRegistration() {
               אני ממלא עבור עצמי (בוגר מעל גיל 18)
             </label>
             <h2>{step1Title}</h2>
-            <Field label={isAdultSelf ? 'שם מלא' : 'שם מלא (הורה)'} value={parent.name} onChange={(name) => setParent({ ...parent, name })} />
+            <Field
+              label={isAdultSelf ? 'שם פרטי' : 'שם פרטי (הורה)'}
+              value={parent.firstName}
+              onChange={(firstName) => setParent((p) => ({ ...p, firstName, name: joinParentName(firstName, p.lastName) }))}
+            />
+            <Field
+              label={isAdultSelf ? 'שם משפחה' : 'שם משפחה (הורה)'}
+              value={parent.lastName}
+              onChange={(lastName) => setParent((p) => ({ ...p, lastName, name: joinParentName(p.firstName, lastName) }))}
+            />
             <Field label="טלפון" type="tel" value={parent.phone} onChange={(phone) => setParent({ ...parent, phone })} />
             <Field label="דואר אלקטרוני" type="email" value={parent.email} onChange={(email) => setParent({ ...parent, email })} />
             <Field label="עיר" value={parent.city} onChange={(city) => setParent({ ...parent, city })} />

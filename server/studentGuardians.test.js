@@ -169,6 +169,27 @@ test('a second parent joins the child file instead of creating a copy', async ()
   assert.equal(studentsForParent([enriched], mumId).length, 1);
 });
 
+test('a surname typed first still finds the household', async () => {
+  const db = createDb();
+  // The form sends the two halves separately, so the family name no longer
+  // depends on which order the parent wrote them in.
+  await saveCrmParticipants({
+    db,
+    persist,
+    parent: { name: 'לוי רותם', lastName: 'לוי', phone: '0539998888' },
+    participants: [{ ...signedNoam, name: 'עידו לוי', birthDate: '2016-05-05' }],
+  });
+
+  const saved = db.store.parents.find((p) => p.phone === '0539998888');
+  assert.equal(saved.lastName, 'לוי');
+  assert.equal(parentLastName(saved), 'לוי', 'not "רותם", the last word of the name');
+  // Which is what lets the other parent of this household be offered it.
+  assert.deepEqual(
+    familyCandidates(db, { lastName: 'לוי', excludeParentId: saved.id }).map((row) => row.parent.id),
+    ['p-avner']
+  );
+});
+
 test('a link whose details do not match the child is refused', async () => {
   const db = createDb();
   await assert.rejects(

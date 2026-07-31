@@ -9368,11 +9368,22 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
     : (templateSlug ? findFormTemplateBySlug(templateSlug) : findDefaultFormTemplate());
 
   // 1. Upsert parent (phone de-dupe) and resolve / create student
-  const parent = db.upsertParentByPhone(parentName, phone, '', { source: 'form', channel: 'form' });
+  // The form asks for the surname separately; storing it keeps the household
+  // matcher and the invoice off the last word of a free-text name.
+  const parentLastName = String(req.body?.parentLastName || req.body?.lastName || '').trim();
+  const parent = db.upsertParentByPhone(parentName, phone, '', {
+    source: 'form',
+    channel: 'form',
+    lastName: parentLastName,
+  });
   // Always refresh parent name from form when provided
   if (parentName && parent.name !== parentName) {
     db.update('parents', parent.id, { name: parentName });
     parent.name = parentName;
+  }
+  if (parentLastName && parent.lastName !== parentLastName) {
+    db.update('parents', parent.id, { lastName: parentLastName });
+    parent.lastName = parentLastName;
   }
 
   // Confirmed on the form as a child already on another parent's file. The
@@ -9548,6 +9559,7 @@ app.get('/api/public/health-context', publicFormRateLimit, (req, res) => {
       ? {
           id: parent.id,
           name: String(parent.name || '').trim(),
+          lastName: String(parent.lastName || '').trim(),
           phone: parent.phone || '',
           idNumber: parent.idNumber || parent.parentIdNum || '',
         }
@@ -9599,6 +9611,9 @@ app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
       ? {
           id: parent.id,
           name: parent.name || '',
+          // Sent separately so the form can fill its own surname box instead of
+          // guessing the surname from the last word of the name.
+          lastName: parent.lastName || '',
           phone: parent.phone || '',
           email: parent.email || '',
           city: parent.city || '',
@@ -9643,6 +9658,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   } = req.body || {};
 
   const parentName = String(parentBody.name || '').trim();
+  const parentLast = String(parentBody.lastName || '').trim();
   const phone = String(parentBody.phone || '').trim();
   const parentIdNum = String(parentBody.idNumber || parentBody.parentIdNum || '').trim();
   const email = String(parentBody.email || '').trim();
@@ -9728,6 +9744,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
       parent: {
         ...parentBody,
         name: parentName,
+        lastName: parentLast,
         phone,
         email,
         city,

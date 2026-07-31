@@ -98,6 +98,9 @@ export function normalizePurchasePayload(body = {}) {
     idempotencyKey: clean(body.idempotency_key || body.idempotencyKey),
     parent: {
       name: clean(body.parent?.name),
+      // Asked for separately on the form — the household matcher and the
+      // invoice use it instead of the last word of the full name.
+      lastName: clean(body.parent?.lastName || body.parent?.last_name),
       phone: clean(body.parent?.phone),
       email: clean(body.parent?.email),
       city: clean(body.parent?.city),

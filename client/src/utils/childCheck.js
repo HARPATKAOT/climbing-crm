@@ -26,10 +26,16 @@ export async function checkKnownChild({ name, birthDate, phone = '' } = {}) {
 /**
  * Families already on file under the same surname — the only thread between
  * two parents of one household who registered different children.
+ *
+ * The forms ask for the surname in its own field, so it arrives here already
+ * separated. Deriving it from the last word of a full name is only a fallback
+ * for callers that still pass one, and it is wrong for anyone who writes their
+ * family name first.
  */
-export async function checkKnownFamily({ parentName, phone = '' } = {}) {
+export async function checkKnownFamily({ parentName, lastName: explicitLast, phone = '' } = {}) {
   const parts = String(parentName || '').trim().split(/\s+/).filter(Boolean);
-  const lastName = parts.length > 1 ? parts[parts.length - 1] : '';
+  const lastName = String(explicitLast || '').trim()
+    || (parts.length > 1 ? parts[parts.length - 1] : '');
   if (lastName.length < 2) return { families: [] };
   try {
     const params = new URLSearchParams({ lastName, phone });

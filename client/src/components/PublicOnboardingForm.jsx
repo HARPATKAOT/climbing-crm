@@ -15,16 +15,17 @@ import {
   KnownFamilyPrompt,
 } from './publicFormKit.jsx';
 import { checkKnownChild, checkKnownFamily, linkFieldsFor } from '../utils/childCheck.js';
+import { joinParentName, splitParentName } from '../utils/parentName.js';
 
+/**
+ * The liability release only. The safety rules are not repeated here — they are
+ * the ticked items on the previous step, where each one is acknowledged
+ * separately, which is both better evidence and one list instead of two.
+ */
 function buildFallbackWaiver(legalName) {
   return `אני מצהיר/ה כי אני מודע/ת לסיכונים הכרוכים בפעילות המתקיימת ב"${legalName}", אני פוטר/ת את "${legalName}" ו/או מי מטעמו מכל אחריות לפגיעה אם תקרה למשתתף אותו אני רושם לפעילות וזאת אלא אם יוכח כי הינה תוצאה של רשלנות המקום.
 
-אני הח"מ מתחייב/ת בזאת למלא את כל הוראות הבטיחות המפורטות להלן:
-• אין להשאיר ילד עד גיל 11 ללא ליווי מבוגר שלא במסגרת חוג מסודר
-• נא להימנע מריצה והשתוללות בכל מתחם הקיר
-• יש להישמע להוראות המדריכים
-• טיפוס על הקיר יתאפשר רק לאלו שקיבלו תדריך מסודר
-• אין להשתמש במתקנים השונים ללא קבלת אישור ממדריך`;
+אני הח"מ מתחייב/ת בזאת למלא את כל הוראות הבטיחות שסימנתי בשלב הקודם.`;
 }
 
 function buildFallbackQuestions(legalName) {
@@ -78,8 +79,11 @@ export default function PublicOnboardingForm() {
   // state only so a prefilled link (?interest=) still passes it through.
   const [interest, setInterest] = useState(searchParams.get('interest') || '');
   const [template, setTemplate] = useState(null);
+  // `name` is the first name only; the surname has its own field. Everything
+  // downstream that wants one string uses parentFullName() below.
   const [parent, setParent] = useState({
     name: '',
+    lastName: '',
     phone: searchParams.get('phone') || '',
     email: '',
     city: '',
@@ -104,6 +108,29 @@ export default function PublicOnboardingForm() {
   const [families, setFamilies] = useState([]);
   const [familyParentId, setFamilyParentId] = useState(null);
   const [prefilledParentId, setPrefilledParentId] = useState('');
+
+  /**
+   * The parent's name as one string, always first name then surname. The CRM
+   * stores this alongside the separate surname, so records stay readable even
+   * where only a single name field exists.
+   */
+  const parentFullName = () => joinParentName(parent.name, parent.lastName);
+
+  /**
+   * Participants are asked for a first name only — the family name is already
+   * on the parent's card, and typing it twice is how the two drift apart. It is
+   * still appended before the name is sent, so attendance lists and the child
+   * matcher keep working on a full name.
+   *
+   * A name that already carries a surname is left exactly as typed: a child
+   * whose family name differs from the parent's is the case that must not be
+   * overwritten.
+   */
+  const childFullName = (child) => {
+    const typed = String(child?.name || '').trim().replace(/\s+/g, ' ');
+    if (!typed || typed.includes(' ')) return typed;
+    return joinParentName(typed, parent.lastName);
+  };
 
   /** Children have no stable id until they are saved — identify them by what was typed. */
   const childKey = (child) => `${String(child?.name || '').trim()}|${child?.birthDate || ''}`;
@@ -178,8 +205,10 @@ export default function PublicOnboardingForm() {
           // Opened from a link that already knows this parent — no family
           // question needed, we are on their file already.
           setPrefilledParentId(data.parent.id || '');
+          const knownName = splitParentName(data.parent);
           setParent({
-            name: data.parent.name || '',
+            name: knownName.first,
+            lastName: knownName.lastName,
             phone: data.parent.phone || searchParams.get('phone') || '',
             email: data.parent.email || '',
             city: data.parent.city || '',
@@ -292,7 +321,7 @@ export default function PublicOnboardingForm() {
     if (enabled) {
       setChildren([{
         ...emptyChild(questions),
-        name: parent.name.trim(),
+        name: parentFullName(),
         type: 'adult',
       }]);
     } else {
@@ -306,8 +335,8 @@ export default function PublicOnboardingForm() {
 
   const goNextFromParent = async () => {
     setError('');
-    if (!parent.name.trim() || !parent.phone.trim()) {
-      setError('יש למלא שם הורה ומספר טלפון');
+    if (!parent.name.trim() || !parent.lastName.trim() || !parent.phone.trim()) {
+      setError('יש למלא שם פרטי, שם משפחה ומספר טלפון');
       return;
     }
     if (!parent.email.trim()) {
@@ -321,7 +350,7 @@ export default function PublicOnboardingForm() {
     // A parent we have never seen may still belong to a family we know — only
     // they can tell us, and only before a second file is opened.
     if (!prefilledParentId && familyParentId === null) {
-      const known = await checkKnownFamily({ parentName: parent.name, phone: parent.phone });
+      const known = await checkKnownFamily({ lastName: parent.lastName, phone: parent.phone });
       setFamilies(known.families);
       if (known.families.length) return;
       setFamilyParentId('');
@@ -330,7 +359,7 @@ export default function PublicOnboardingForm() {
       setChildren([{
         ...emptyChild(questions),
         ...(children[0] || {}),
-        name: parent.name.trim(),
+        name: parentFullName(),
         type: 'adult',
       }]);
     }
@@ -357,7 +386,7 @@ export default function PublicOnboardingForm() {
       if (unanswered.length) {
         const checked = await Promise.all(unanswered.map(async (kid) => {
           const match = await checkKnownChild({
-            name: kid.name,
+            name: childFullName(kid),
             birthDate: kid.birthDate,
             phone: parent.phone,
           });
@@ -434,7 +463,7 @@ export default function PublicOnboardingForm() {
           const reuse = reusesDeclaration(c);
           return {
             id: c.id,
-            name: c.name.trim(),
+            name: childFullName(c),
             type: isAdultSelf || c.type === 'adult' ? 'adult' : 'child',
             birthDate: c.birthDate,
             gender: c.gender,
@@ -452,7 +481,8 @@ export default function PublicOnboardingForm() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           parent: {
-            name: parent.name.trim(),
+            name: parentFullName(),
+            lastName: parent.lastName.trim(),
             phone: parent.phone.trim(),
             email: parent.email.trim(),
             city: parent.city.trim(),
@@ -474,14 +504,14 @@ export default function PublicOnboardingForm() {
 
       const decls = (data.declarations || []).map((d, i) => ({
         ...d,
-        parentName: parent.name,
+        parentName: parentFullName(),
         phone: parent.phone,
         climberName: kids[i]?.name || d.climberName,
         birthDate: kids[i]?.birthDate || d.birthDate,
         answers: kids[i]?.answers || d.answers,
         signature_url: kids[i]?.signature || d.signature_url,
         signature: kids[i]?.signature || d.signature_url,
-        signedBy: parent.name,
+        signedBy: parentFullName(),
         studentName: kids[i]?.name || d.climberName,
         signedDate: d.signedDate || d.date,
         templateSlug: template?.slug || 'wall',
@@ -616,15 +646,25 @@ export default function PublicOnboardingForm() {
         {step === 1 && (
           <div className="fade-in">
             <div className="section-title">פרטי הורה / איש קשר</div>
+            {/* First name and surname are separate on purpose: the surname is
+                what recognises a second parent of a household we already know,
+                and it also reaches the invoice. Guessing it from the last word
+                of a free-text name gets it backwards for anyone who writes the
+                family name first. */}
             <div className="form-group">
-              {/* Full name, like every other public form: the family name is
-                  what lets us recognise a second parent of a household we
-                  already know, and a first name alone carries none. */}
-              <label>שם מלא של ההורה *</label>
+              <label>שם פרטי של ההורה *</label>
               <input
                 value={parent.name}
                 onChange={(e) => setParent((p) => ({ ...p, name: e.target.value }))}
-                placeholder="שם פרטי ושם משפחה"
+                placeholder="ישראל"
+              />
+            </div>
+            <div className="form-group">
+              <label>שם משפחה של ההורה *</label>
+              <input
+                value={parent.lastName}
+                onChange={(e) => setParent((p) => ({ ...p, lastName: e.target.value }))}
+                placeholder="ישראלי"
               />
             </div>
             <div className="form-group">
@@ -761,13 +801,21 @@ export default function PublicOnboardingForm() {
                   )}
                 </div>
                 <div className="form-group">
-                  <label>{isAdultSelf ? 'שם מלא *' : 'שם מלא של המשתתף בחוג *'}</label>
+                  <label>{isAdultSelf ? 'שם מלא *' : 'שם פרטי של המשתתף בחוג *'}</label>
                   <input
                     value={child.name}
                     onChange={(e) => updateChild(index, { name: e.target.value })}
-                    placeholder="שם מלא"
+                    placeholder={isAdultSelf ? 'שם מלא' : 'שם פרטי'}
                     readOnly={isAdultSelf}
                   />
+                  {/* Shown rather than assumed: the surname is completed from
+                      the parent, and anyone whose child carries a different one
+                      can type it here in full. */}
+                  {!isAdultSelf && childFullName(child) !== child.name.trim() && (
+                    <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', marginTop: 6 }}>
+                      ייכנס למערכת כ־{childFullName(child)} — אפשר להקליד שם משפחה אחר במידת הצורך
+                    </div>
+                  )}
                 </div>
                 <div className="form-group">
                   <label>{isAdultSelf ? 'תאריך לידה' : 'תאריך לידה *'}</label>
@@ -990,7 +1038,10 @@ function FormStyles() {
           color: #fff; font: inherit;
         }
         .form-group input:focus, .form-group select:focus { outline: none; border-color: #f97316; }
-        .form-group select option { color: #111; }
+        /* The page sets color-scheme:dark, so the native list opens dark —
+           near-black option text on it is invisible. Same pair as the
+           equipment page. */
+        .form-group select option { background: #0b1220; color: #fff; }
         .onboard-back { margin: 14px 24px 0; }
         .canvas-container {
           background: #111827; border: 1px solid rgba(255,255,255,.2);
