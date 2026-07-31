@@ -5,14 +5,14 @@ import {
 import { linkGuardian, mergeFamily, normalizedIdNumber } from './studentGuardians.js';
 import { declarationGap } from './healthQuestions.js';
 
+// The safety rules are not repeated here: they are the items ticked one by one
+// on the declaration step, which is both better evidence and one list instead
+// of two. Kept in step with the templates in the live database.
 export const STANDARD_WAIVER_TEXT = `אני מצהיר/ה כי אני מודע/ת לסיכונים הכרוכים בפעילות המתקיימת ב"קיר בועז", אני פוטר/ת את "קיר בועז" ו/או מי מטעמו מכל אחריות לפגיעה אם תקרה למשתתף אותו אני רושם לפעילות וזאת אלא אם יוכח כי הינה תוצאה של רשלנות המקום.
 
-אני הח"מ מתחייב/ת בזאת למלא את כל הוראות הבטיחות המפורטות להלן:
-• אין להשאיר ילד עד גיל 11 ללא ליווי מבוגר שלא במסגרת חוג מסודר
-• נא להימנע מריצה והשתוללות בכל מתחם הקיר
-• יש להישמע להוראות המדריכים
-• טיפוס על הקיר יתאפשר רק לאלו שקיבלו תדריך מסודר
-• אין להשתמש במתקנים השונים ללא קבלת אישור ממדריך`;
+אני הח"מ מתחייב/ת בזאת למלא את כל הוראות הבטיחות שסימנתי בשלב הקודם.
+
+אני מאשר/ת כי מסמך זה הוא חוזה מחייב לכל דבר ועניין, כי קראתי אותו והבנתי את תוכנו, וכי אני חותם/ת עליו מרצוני החופשי.`;
 
 export const STANDARD_HEALTH_QUESTIONS = [
   {
