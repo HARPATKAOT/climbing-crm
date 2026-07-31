@@ -3,9 +3,11 @@ import { clampImage } from './productCategories.js';
 
 const SETTINGS_KEY = 'business_profile';
 
+// „קיר בועז” is the trade name customers know; „הרפתקאות” is the registered
+// business, and it is the one that belongs in a waiver or a privacy policy.
 export const DEFAULT_BUSINESS_PROFILE = Object.freeze({
-  display_name: 'הרפתקאות - קיר בועז',
-  legal_name: '',
+  display_name: 'קיר בועז',
+  legal_name: 'הרפתקאות',
   logo_url: '/logo.png',
   phone: '',
   email: '',
