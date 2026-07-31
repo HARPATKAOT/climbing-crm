@@ -358,6 +358,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [loadingLists, setLoadingLists] = useState(false);
   const [editingBroadcastLists, setEditingBroadcastLists] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [phoneCopied, setPhoneCopied] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editingGroup, setEditingGroup] = useState(false);
   const [savingGroup, setSavingGroup] = useState(false);
@@ -1705,9 +1706,26 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
 
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
               {parent?.phone ? (
-                <a href={`tel:${parent.phone}`} className="btn btn-ghost btn-xs">
-                  <Phone size={12} /> {parent.phone}
-                </a>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                  <a href={`tel:${parent.phone}`} className="btn btn-ghost btn-xs">
+                    <Phone size={12} /> {parent.phone}
+                  </a>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-icon btn-xs"
+                    title={phoneCopied ? 'הועתק' : 'העתקת המספר'}
+                    aria-label="העתקת מספר הטלפון"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(parent.phone);
+                        setPhoneCopied(true);
+                        setTimeout(() => setPhoneCopied(false), 1500);
+                      } catch { /* ignore */ }
+                    }}
+                  >
+                    {phoneCopied ? <Check size={12} color="var(--green)" /> : <Clipboard size={12} />}
+                  </button>
+                </span>
               ) : (
                 <span style={{ fontSize: 12, color: 'var(--text-3)' }}>אין טלפון</span>
               )}
