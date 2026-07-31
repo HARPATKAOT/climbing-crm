@@ -62,7 +62,7 @@ https://climbing-crm-api.onrender.com/api/google-calendar/oauth/callback
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 GOOGLE_REDIRECT_URI=https://climbing-crm-api.onrender.com/api/google-calendar/oauth/callback
-FRONTEND_URL=https://client-omega-topaz-35.vercel.app
+FRONTEND_URL=https://app.kirboaz.co.il
 PUBLIC_API_URL=https://climbing-crm-api.onrender.com
 ```
 
