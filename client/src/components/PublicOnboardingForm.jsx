@@ -73,6 +73,26 @@ function buildFallbackQuestions(legalName) {
  * "גיל 90" is a typo the person filling the form catches instantly, and nobody
  * catches it by re-reading DD/MM/YYYY.
  */
+/**
+ * Israeli ID check digit — the standard Luhn-like sum over nine digits.
+ *
+ * Used to warn, never to block. A passport number, a foreign resident's
+ * document or a nine-digit number this function has no business judging must
+ * still get through; the point is to catch the transposed digit that would
+ * otherwise reach an invoice and a household match.
+ */
+function looksLikeIsraeliId(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (digits.length !== 9) return false;
+  let sum = 0;
+  for (let i = 0; i < 9; i += 1) {
+    let step = Number(digits[i]) * ((i % 2) + 1);
+    if (step > 9) step -= 9;
+    sum += step;
+  }
+  return sum % 10 === 0;
+}
+
 function ageFromBirthDate(value) {
   const born = new Date(`${String(value || '').trim()}T00:00:00`);
   if (Number.isNaN(born.getTime())) return null;
@@ -157,6 +177,9 @@ export default function PublicOnboardingForm() {
   const [prefilledParentId, setPrefilledParentId] = useState('');
   // Set once the typed phone turns out to be on a file already: { name, children }.
   const [knownFile, setKnownFile] = useState(null);
+  // Which participant has already been told their ID looks wrong, so the
+  // warning is a warning and not a wall.
+  const [idWarnedFor, setIdWarnedFor] = useState('');
 
   /**
    * The parent's name as one string, always first name then surname. The CRM
@@ -496,6 +519,18 @@ export default function PublicOnboardingForm() {
     for (const kid of kids) {
       if (!isAdultSelf && !kid.birthDate) {
         setError(`חסר תאריך לידה עבור ${kid.name}`);
+        return;
+      }
+      if (!String(kid.idNumber || '').trim()) {
+        setError(`חסרה תעודת זהות עבור ${kid.name}`);
+        return;
+      }
+      // A failed check digit is almost always a typo, but a passport or a
+      // foreign document is not wrong — so it warns once and lets it through
+      // on the second attempt rather than locking the family out.
+      if (!looksLikeIsraeliId(kid.idNumber) && idWarnedFor !== childKey(kid)) {
+        setIdWarnedFor(childKey(kid));
+        setError(`תעודת הזהות של ${kid.name} לא נראית תקינה — בדקו שוב. אם זה דרכון או מסמך אחר, לחצו „המשך” שוב.`);
         return;
       }
     }
@@ -845,17 +880,35 @@ export default function PublicOnboardingForm() {
                 />
               </div>
               <div className="form-group">
+                {/* Buttons for the same reason as בן / בת below: a native list
+                    paints its own highlight and ignores the page. */}
                 <label>קשר למשתתפים</label>
-                <select
-                  value={parent.relation}
-                  onChange={(e) => setParent((p) => ({ ...p, relation: e.target.value }))}
-                >
-                  <option value="">בחרו</option>
-                  <option value="father">אב</option>
-                  <option value="mother">אם</option>
-                  <option value="guardian">אפוטרופוס</option>
-                  <option value="other">אחר</option>
-                </select>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {[['אב', 'father'], ['אם', 'mother'], ['אפוטרופוס', 'guardian'], ['אחר', 'other']]
+                    .map(([text, value]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setParent((p) => ({
+                          ...p,
+                          relation: p.relation === value ? '' : value,
+                        }))}
+                        style={{
+                          flex: '1 1 auto', padding: '11px 8px', borderRadius: 11, font: 'inherit',
+                          fontWeight: 700, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap',
+                          border: parent.relation === value
+                            ? '1px solid #f97316'
+                            : '1px solid rgba(255,255,255,.15)',
+                          background: parent.relation === value
+                            ? 'rgba(249,115,22,.18)'
+                            : '#0b1220',
+                          color: parent.relation === value ? '#fdba74' : '#e2e8f0',
+                        }}
+                      >
+                        {text}
+                      </button>
+                    ))}
+                </div>
               </div>
             </div>
             {knownFile && (
@@ -997,7 +1050,7 @@ export default function PublicOnboardingForm() {
                   )}
                 </div>
                 <div className="form-group">
-                  <label>תעודת זהות</label>
+                  <label>תעודת זהות *</label>
                   <input
                     inputMode="numeric"
                     value={child.idNumber || ''}
@@ -1034,15 +1087,35 @@ export default function PublicOnboardingForm() {
                 {!isAdultSelf && (
                   <>
                     <div className="form-group">
+                      {/* Two buttons rather than a native list: the dropdown is
+                          drawn by the operating system, so its highlighted row
+                          keeps its own light colours however the page is
+                          styled. Same control as the health questions. */}
                       <label>בן / בת</label>
-                      <select
-                        value={child.gender}
-                        onChange={(e) => updateChild(index, { gender: e.target.value })}
-                      >
-                        <option value="">בחרו</option>
-                        <option value="male">בן</option>
-                        <option value="female">בת</option>
-                      </select>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        {[['בן', 'male'], ['בת', 'female']].map(([text, value]) => (
+                          <button
+                            key={value}
+                            type="button"
+                            onClick={() => updateChild(index, {
+                              gender: child.gender === value ? '' : value,
+                            })}
+                            style={{
+                              flex: 1, padding: '11px 0', borderRadius: 11, font: 'inherit',
+                              fontWeight: 700, fontSize: 14, cursor: 'pointer',
+                              border: child.gender === value
+                                ? '1px solid #f97316'
+                                : '1px solid rgba(255,255,255,.15)',
+                              background: child.gender === value
+                                ? 'rgba(249,115,22,.18)'
+                                : '#0b1220',
+                              color: child.gender === value ? '#fdba74' : '#e2e8f0',
+                            }}
+                          >
+                            {text}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                     <div className="form-group">
                       <label>טלפון של הילד/ה</label>
