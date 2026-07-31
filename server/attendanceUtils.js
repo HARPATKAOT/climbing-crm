@@ -49,6 +49,34 @@ export function normalizeAttStatus(status) {
   return 'pending';
 }
 
+const ABSENT_ATT_STATUSES = new Set(['absent', 'intro_absent']);
+const SKIPPED_IN_STREAK = new Set(['pending', 'intro_pending', 'holiday']);
+
+/**
+ * כמה אימונים ברצף המתאמן החמיץ, לאחור מהמפגש האחרון.
+ *
+ * נספר על פני כל הקבוצות שלו — ילד שמתאמן פעמיים בשבוע נעדר מהחוג,
+ * לא מקבוצה מסוימת. שורה שלא סומנה או יום חג מדולגים: הם לא היעדרות
+ * ולא נוכחות, ואין סיבה שישברו את הרצף.
+ */
+export function consecutiveAbsences(rows = [], { until = null } = {}) {
+  const list = (Array.isArray(rows) ? rows : [])
+    .filter((row) => row?.date && (!until || String(row.date) <= String(until)))
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+
+  let count = 0;
+  for (const row of list) {
+    const status = normalizeAttStatus(row.status);
+    if (SKIPPED_IN_STREAK.has(status)) continue;
+    if (ABSENT_ATT_STATUSES.has(status)) {
+      count += 1;
+      continue;
+    }
+    break;
+  }
+  return count;
+}
+
 // ─── אימון הכירות ────────────────────────────────────────────────────────────
 // היות השורה „אימון הכירות” נקבעת פעם אחת, כשהשורה נוצרת, ונשמרת עליה.
 // היא לא נגזרת מהסטטוס של הילד — אחרת שינוי סטטוס בדיעבד היה משכתב

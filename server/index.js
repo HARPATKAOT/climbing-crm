@@ -242,6 +242,7 @@ import {
   normalizeAttStatus,
   isIntroStudent,
   keepIntroStatus,
+  consecutiveAbsences,
   activityDateRange,
   planVacationAttendanceUpdates,
   planVacationAttendanceReverts,
@@ -7507,6 +7508,18 @@ app.get('/api/groups/:id/training-brief', async (req, res) => {
     const tests = db.get('level_tests') || [];
     const refDate = req.query.date || israelDateStr();
 
+    // רצף ההיעדרויות נספר על פני כל הקבוצות של המתאמן, ולכן צריך את
+    // כל הנוכחות ולא רק את זו של הקבוצה הנוכחית.
+    await refreshAttendanceCache();
+    const attendance = db.get('attendance') || [];
+    const attendanceByStudent = new Map();
+    for (const row of attendance) {
+      if (!row?.student_id) continue;
+      const list = attendanceByStudent.get(row.student_id);
+      if (list) list.push(row);
+      else attendanceByStudent.set(row.student_id, [row]);
+    }
+
     const rows = students.map((student) => {
       const equipment = isKidStudent(student)
         ? ensureStudentEquipment({ db, student, persist: persistCore }).map((item) => ({
@@ -7526,6 +7539,9 @@ app.get('/api/groups/:id/training-brief', async (req, res) => {
         student_id: student.id,
         equipment,
         safety: safetyTestStatus(studentTests, refDate),
+        absence_streak: consecutiveAbsences(attendanceByStudent.get(student.id) || [], {
+          until: refDate,
+        }),
       };
     });
 

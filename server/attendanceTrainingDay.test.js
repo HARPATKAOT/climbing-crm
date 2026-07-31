@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ensureAttendanceRows } from './attendanceUtils.js';
+import { consecutiveAbsences, ensureAttendanceRows } from './attendanceUtils.js';
 
 // day: 2 = יום שלישי. 2026-07-31 הוא יום שישי, 2026-08-04 הוא יום שלישי.
 const GROUPS = [{ id: 'g1', name: "ילדים ג'-ד' — יום ג'", day: 2, active: true }];
@@ -59,4 +59,57 @@ test('קבוצה לא פעילה לא מייצרת שורות גם ביום הא
     groupId: 'g1',
   });
   assert.equal(result.created.length, 0);
+});
+
+// ─── רצף היעדרויות ───────────────────────────────────────────────────────────
+
+const att = (date, status, group_id = 'g1') => ({ date, status, group_id, student_id: 's1' });
+
+test('רצף היעדרויות נספר על פני כל הקבוצות של המתאמן', () => {
+  // שתי קבוצות לסירוגין — בכל אחת בנפרד יש 2, יחד 4.
+  const rows = [
+    att('2026-08-03', 'absent', 'g1'),
+    att('2026-08-05', 'absent', 'g2'),
+    att('2026-08-10', 'absent', 'g1'),
+    att('2026-08-12', 'absent', 'g2'),
+    att('2026-07-27', 'attended', 'g1'),
+  ];
+  assert.equal(consecutiveAbsences(rows), 4);
+});
+
+test('נוכחות שוברת את הרצף', () => {
+  const rows = [
+    att('2026-08-03', 'absent'),
+    att('2026-08-10', 'attended'),
+    att('2026-08-17', 'absent'),
+  ];
+  assert.equal(consecutiveAbsences(rows), 1);
+});
+
+test('שורה שלא סומנה ויום חג מדולגים ואינם שוברים', () => {
+  const rows = [
+    att('2026-08-03', 'absent'),
+    att('2026-08-10', 'holiday'),
+    att('2026-08-17', 'pending'),
+    att('2026-08-24', 'absent'),
+  ];
+  assert.equal(consecutiveAbsences(rows), 2);
+});
+
+test('היעדרות מאימון הכירות נספרת', () => {
+  assert.equal(consecutiveAbsences([att('2026-08-03', 'intro_absent')]), 1);
+});
+
+test('until מגביל לתאריך המפגש שעל המסך', () => {
+  const rows = [
+    att('2026-08-03', 'absent'),
+    att('2026-08-10', 'absent'),
+    att('2026-08-17', 'attended'),
+  ];
+  assert.equal(consecutiveAbsences(rows), 0);
+  assert.equal(consecutiveAbsences(rows, { until: '2026-08-10' }), 2);
+});
+
+test('בלי נוכחות בכלל אין רצף', () => {
+  assert.equal(consecutiveAbsences([]), 0);
 });

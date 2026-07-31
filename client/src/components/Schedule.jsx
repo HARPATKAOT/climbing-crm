@@ -768,7 +768,7 @@ function AbsenceStreakPill({ streak }) {
   const label = streak === 1 ? 'החמיץ אימון אחרון' : `${streak} היעדרויות רצופות`;
   return (
     <span
-      title={`${label} — בקבוצה זו`}
+      title={`${label} — בכל הקבוצות של המתאמן`}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -1143,10 +1143,17 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
       .catch(() => {});
   };
 
-  /** Counted up to the meeting on screen, so past dates read as they did then. */
-  const absenceStreakFor = (studentId) => consecutiveAbsences(
-    (studentHistory[studentId] || []).filter((row) => String(row.date || '') <= date)
-  );
+  /**
+   * הרצף מגיע מהשרת, שסופר על פני כל הקבוצות של המתאמן. החישוב המקומי
+   * נשאר כגיבוי לשורות שנמשכו לפני שהתשובה חזרה.
+   */
+  const absenceStreakFor = (studentId) => {
+    const fromServer = brief[studentId]?.absence_streak;
+    if (Number.isFinite(fromServer)) return fromServer;
+    return consecutiveAbsences(
+      (studentHistory[studentId] || []).filter((row) => String(row.date || '') <= date)
+    );
+  };
   useEffect(() => { loadHistory(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [group.id]);
 
   /** ציוד למסירה ומצב מבחן האבטחה — מה שהמדריך צריך לראות ליד השם. */
@@ -1571,10 +1578,17 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, attDate, group.id, members.length]);
 
-  /** Counted up to the meeting on screen, so past dates read as they did then. */
-  const absenceStreakFor = (studentId) => consecutiveAbsences(
-    (attHistory[studentId] || []).filter((row) => String(row.date || '') <= attDate)
-  );
+  /**
+   * הרצף מגיע מהשרת, שסופר על פני כל הקבוצות של המתאמן. החישוב המקומי
+   * נשאר כגיבוי לשורות שנמשכו לפני שהתשובה חזרה.
+   */
+  const absenceStreakFor = (studentId) => {
+    const fromServer = attBrief[studentId]?.absence_streak;
+    if (Number.isFinite(fromServer)) return fromServer;
+    return consecutiveAbsences(
+      (attHistory[studentId] || []).filter((row) => String(row.date || '') <= attDate)
+    );
+  };
 
   const handleAssign = () => {
     if (!assignId) return;
