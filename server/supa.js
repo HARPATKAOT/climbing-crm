@@ -321,7 +321,7 @@ mappers.activity_registration_orders = columnMapper([
 ]);
 mappers.student_equipment = columnMapper([
   'id', 'student_id', 'parent_id', 'item_type',
-  'payment_status', 'fulfillment_status', 'shirt_size',
+  'payment_status', 'fulfillment_status', 'shirt_size', 'shoe_size',
   'paid_at', 'given_at', 'given_by', 'payment_id',
   'rental_starts_at', 'rental_ends_at',
   'created_at', 'updated_at',
