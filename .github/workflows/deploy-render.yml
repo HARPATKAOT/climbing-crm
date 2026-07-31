@@ -1,0 +1,25 @@
+name: Deploy API to Render
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - 'render.yaml'
+      - '.github/workflows/deploy-render.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger the Render deploy
+        run: |
+          status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}")
+          echo "deploy hook responded $status"
+          case "$status" in
+            2*) ;;
+            *) echo "::error::Render did not accept the deploy trigger"; exit 1 ;;
+          esac
+      
