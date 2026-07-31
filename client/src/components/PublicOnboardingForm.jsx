@@ -650,22 +650,25 @@ export default function PublicOnboardingForm() {
                 what recognises a second parent of a household we already know,
                 and it also reaches the invoice. Guessing it from the last word
                 of a free-text name gets it backwards for anyone who writes the
-                family name first. */}
-            <div className="form-group">
-              <label>שם פרטי של ההורה *</label>
-              <input
-                value={parent.name}
-                onChange={(e) => setParent((p) => ({ ...p, name: e.target.value }))}
-                placeholder="ישראל"
-              />
-            </div>
-            <div className="form-group">
-              <label>שם משפחה של ההורה *</label>
-              <input
-                value={parent.lastName}
-                onChange={(e) => setParent((p) => ({ ...p, lastName: e.target.value }))}
-                placeholder="ישראלי"
-              />
+                family name first. Side by side, they read as one name — and the
+                section heading above already says whose. */}
+            <div className="form-row">
+              <div className="form-group">
+                <label>שם פרטי *</label>
+                <input
+                  value={parent.name}
+                  onChange={(e) => setParent((p) => ({ ...p, name: e.target.value }))}
+                  placeholder="ישראל"
+                />
+              </div>
+              <div className="form-group">
+                <label>שם משפחה *</label>
+                <input
+                  value={parent.lastName}
+                  onChange={(e) => setParent((p) => ({ ...p, lastName: e.target.value }))}
+                  placeholder="ישראלי"
+                />
+              </div>
             </div>
             <div className="form-group">
               <label>טלפון *</label>
@@ -1027,10 +1030,14 @@ function FormStyles() {
         .form-header h2 { margin: 0 0 6px; padding: 0; font-size: 22px; font-weight: 800; }
         .form-header p { margin: 0; font-size: 13px; color: #94a3b8; }
         .section-title {
-          font-size: 13px; letter-spacing: .5px; color: #fb923c;
-          font-weight: 800; margin: 22px 0 12px;
+          font-size: 17px; letter-spacing: .2px; color: #fb923c;
+          font-weight: 800; margin: 24px 0 14px;
         }
         .form-group { margin-bottom: 14px; }
+        /* Two halves of one name read as one line. They wrap on a narrow
+           phone rather than squeezing both into half a screen. */
+        .form-row { display: flex; gap: 12px; flex-wrap: wrap; }
+        .form-row .form-group { flex: 1 1 140px; margin-bottom: 14px; }
         .form-group label { display: block; margin-bottom: 6px; font-size: 14px; color: #cbd5e1; }
         .form-group input, .form-group select, .form-group textarea {
           width: 100%; padding: 12px 14px; border-radius: 11px;
