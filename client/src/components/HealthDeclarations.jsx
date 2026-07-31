@@ -20,9 +20,22 @@ const EMPTY_TEMPLATE = {
   isActive: true,
 };
 
+/**
+ * One line per question. A line starting with "?" is a medical screening
+ * question — answered כן/לא, and a "yes" never blocks the form. Everything else
+ * is a confirmation the signer must tick.
+ */
 function questionsToText(questions) {
   if (!Array.isArray(questions) || !questions.length) return EMPTY_TEMPLATE.healthQuestionsText;
-  return questions.map((q) => q.label || q.question || '').filter(Boolean).join('\n');
+  return questions
+    .map((q) => {
+      const label = String(q.label || q.question || '').trim();
+      if (!label) return '';
+      const screening = q.kind === 'screen' || label.startsWith('?');
+      return screening && !label.startsWith('?') ? `?${label}` : label;
+    })
+    .filter(Boolean)
+    .join('\n');
 }
 
 function textToQuestions(text) {
@@ -30,7 +43,18 @@ function textToQuestions(text) {
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((label, i) => ({ id: `q${i + 1}`, label }));
+    .map((line, i) => {
+      const screening = line.startsWith('?');
+      const label = screening ? line.slice(1).trim() : line;
+      // `requireYes` used to be dropped here, which quietly turned every
+      // mandatory clause optional the first time a template was saved from
+      // this screen. A confirmation is mandatory; a screening question is not,
+      // because there "yes" is an answer rather than a signature.
+      return screening
+        ? { id: `q${i + 1}`, label, kind: 'screen', requireYes: false }
+        : { id: `q${i + 1}`, label, kind: 'confirm', requireYes: true };
+    })
+    .filter((q) => q.label);
 }
 
 function FormTemplatesPanel() {

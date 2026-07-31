@@ -16,6 +16,13 @@ import {
 } from './publicFormKit.jsx';
 import { checkKnownChild, checkKnownFamily, linkFieldsFor } from '../utils/childCheck.js';
 import { joinParentName, splitParentName } from '../utils/parentName.js';
+import {
+  blankAnswers,
+  hasPositiveScreening,
+  isScreeningQuestion,
+  questionLabel,
+  unansweredQuestions,
+} from '../utils/healthQuestions.js';
 
 /**
  * What the waiver actually means, in the words someone would use out loud.
@@ -78,8 +85,7 @@ function ageFromBirthDate(value) {
 }
 
 const emptyChild = (questions = []) => {
-  const answers = {};
-  questions.forEach((q) => { answers[q.id] = false; });
+  const answers = blankAnswers(questions);
   return {
     id: null,
     name: '',
@@ -348,8 +354,16 @@ export default function PublicOnboardingForm() {
     canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
   };
 
+  /**
+   * `patch` may be a function of the current participant, which is the only
+   * safe form when several updates can land in one render — answering a row of
+   * health questions quickly, for instance, where a patch built from a captured
+   * copy would drop every answer but the last.
+   */
   const updateChild = (index, patch) => {
-    setChildren((prev) => prev.map((c, i) => (i === index ? { ...c, ...patch } : c)));
+    setChildren((prev) => prev.map((c, i) => (
+      i === index ? { ...c, ...(typeof patch === 'function' ? patch(c) : patch) } : c
+    )));
   };
 
   const addChild = () => {
@@ -523,9 +537,19 @@ export default function PublicOnboardingForm() {
     );
 
     if (healthSubStep === 1) {
-      const missing = questions.filter((q) => q.requireYes && !(children[fullIndex]?.answers || {})[q.id]);
+      const answers = children[fullIndex]?.answers || {};
+      const missing = unansweredQuestions(questions, answers);
       if (missing.length) {
-        setError('יש לסמן את כל סעיפי ההצהרה והבטיחות');
+        setError(
+          missing.some(isScreeningQuestion)
+            ? 'יש לענות כן או לא על כל שאלות הבריאות'
+            : 'יש לסמן את כל סעיפי ההצהרה והבטיחות'
+        );
+        return;
+      }
+      // A condition nobody described is a condition the instructor cannot act on.
+      if (hasPositiveScreening(questions, answers) && !String(children[fullIndex]?.healthNotes || '').trim()) {
+        setError('סימנת „כן” על שאלה רפואית — יש לפרט בשדה ההערות');
         return;
       }
       setHealthSubStep(2);
@@ -578,6 +602,7 @@ export default function PublicOnboardingForm() {
             childPhone: c.childPhone,
             registrationNotes: c.registrationNotes,
             answers: c.answers || {},
+            healthNotes: (c.healthNotes || '').trim(),
             signature: c.signature,
             waiverAccepted: !reuse,
             ...linkFieldsFor(knownChildren[childKey(c)]),
@@ -1064,26 +1089,89 @@ export default function PublicOnboardingForm() {
           <div className="fade-in">
             {healthSubStep === 1 && (
               <>
-                <div className="section-title">הצהרת בריאות ובטיחות — {currentChild.name}</div>
-                <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
-                  יש לסמן את כל הסעיפים לאישור.
-                </p>
-                {questions.map((q) => (
-                  <label key={q.id} className="event-check" style={{ marginBottom: 10 }}>
-                    <input
-                      type="checkbox"
-                      checked={!!(children[currentFullIndex]?.answers || {})[q.id]}
-                      onChange={(e) => {
-                        const answers = {
-                          ...(children[currentFullIndex]?.answers || {}),
-                          [q.id]: e.target.checked,
-                        };
-                        updateChild(currentFullIndex, { answers });
-                      }}
-                    />
-                    <span>{q.label}</span>
-                  </label>
-                ))}
+                {(() => {
+                  const answers = children[currentFullIndex]?.answers || {};
+                  const setAnswer = (id, value) => updateChild(currentFullIndex, (child) => ({
+                    answers: { ...(child.answers || {}), [id]: value },
+                  }));
+                  const screening = questions.filter(isScreeningQuestion);
+                  const confirmations = questions.filter((q) => !isScreeningQuestion(q));
+                  return (
+                    <>
+                      {/* Screening first: what we need to know before anyone
+                          climbs, and answered כן/לא rather than ticked — a blank
+                          box would file "nobody asked" as "no". */}
+                      {screening.length > 0 && (
+                        <>
+                          <div className="section-title">שאלון בריאות — {currentChild.name}</div>
+                          <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
+                            תשובה „כן” לא מונעת השתתפות. היא רק מאפשרת לצוות לדעת ולהיערך.
+                          </p>
+                          {screening.map((q) => (
+                            <div key={q.id} style={{
+                              background: 'rgba(0,0,0,0.18)', borderRadius: 12, padding: 12,
+                              marginBottom: 10,
+                            }}>
+                              <div style={{ fontSize: 14, lineHeight: 1.5, marginBottom: 10 }}>
+                                {questionLabel(q)}
+                              </div>
+                              <div style={{ display: 'flex', gap: 8 }}>
+                                {[['כן', true], ['לא', false]].map(([text, value]) => (
+                                  <button
+                                    key={text}
+                                    type="button"
+                                    onClick={() => setAnswer(q.id, value)}
+                                    style={{
+                                      flex: 1, padding: '9px 0', borderRadius: 10, font: 'inherit',
+                                      fontWeight: 700, fontSize: 14, cursor: 'pointer',
+                                      border: answers[q.id] === value
+                                        ? '1px solid #f97316'
+                                        : '1px solid rgba(255,255,255,.15)',
+                                      background: answers[q.id] === value
+                                        ? 'rgba(249,115,22,.18)'
+                                        : 'rgba(255,255,255,.05)',
+                                      color: answers[q.id] === value ? '#fdba74' : '#e2e8f0',
+                                    }}
+                                  >
+                                    {text}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                          {hasPositiveScreening(questions, answers) && (
+                            <div className="form-group" style={{ marginTop: 4 }}>
+                              <label>פרטו בבקשה *</label>
+                              <textarea
+                                rows={3}
+                                value={children[currentFullIndex]?.healthNotes || ''}
+                                onChange={(e) => updateChild(currentFullIndex, { healthNotes: e.target.value })}
+                                placeholder="מה המצב, תרופות קבועות, ומה שחשוב שהמדריך ידע"
+                                style={{ resize: 'vertical' }}
+                              />
+                            </div>
+                          )}
+                        </>
+                      )}
+                      <div className="section-title" style={{ marginTop: screening.length ? 20 : 0 }}>
+                        הצהרה ובטיחות — {currentChild.name}
+                      </div>
+                      <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
+                        יש לסמן את כל הסעיפים לאישור.
+                      </p>
+                      {confirmations.map((q) => (
+                        <label key={q.id} className="event-check" style={{ marginBottom: 10 }}>
+                          <input
+                            type="checkbox"
+                            checked={answers[q.id] === true}
+                            onChange={(e) => setAnswer(q.id, e.target.checked)}
+                          />
+                          <span>{questionLabel(q)}</span>
+                        </label>
+                      ))}
+                    </>
+                  );
+                })()}
                 {error && <ErrorBox message={error} />}
                 <button type="button" className="event-primary" style={{ marginTop: 16 }} onClick={advanceHealthOrSubmit}>
                   המשך להסרת אחריות וחתימה <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} />

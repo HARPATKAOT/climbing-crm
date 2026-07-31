@@ -147,6 +147,7 @@ import {
   findLatestValidDeclaration,
   saveCrmParticipants,
 } from './crmWaiverService.js';
+import { declarationGap } from './healthQuestions.js';
 import {
   declarationSignedAt,
   isHealthDeclarationValid,
@@ -9244,10 +9245,19 @@ function normalizeFormTemplatePayload(body, existing = null) {
     waiverText: body.waiverText ?? body.waiver_text ?? existing?.waiverText ?? '',
     // The plain-language layer shown in front of the legal text.
     waiverSummary: body.waiverSummary ?? body.waiver_summary ?? existing?.waiverSummary ?? '',
-    healthQuestions: healthQuestions.map((q, i) => ({
-      id: q.id || `q${i + 1}`,
-      label: q.label || q.text || '',
-    })).filter((q) => q.label),
+    // `kind` and `requireYes` used to be dropped here, so saving a template
+    // from the CRM screen turned every mandatory clause into an optional one
+    // and every screening question into a tick box.
+    healthQuestions: healthQuestions.map((q, i) => {
+      const rawLabel = String(q.label || q.text || '').trim();
+      const screening = q.kind === 'screen' || rawLabel.startsWith('?');
+      return {
+        id: q.id || `q${i + 1}`,
+        label: screening && rawLabel.startsWith('?') ? rawLabel.slice(1).trim() : rawLabel,
+        kind: screening ? 'screen' : 'confirm',
+        requireYes: !screening,
+      };
+    }).filter((q) => q.label),
     isDefault: body.isDefault === true || body.isDefault === 'true' || body.is_default === true,
     isActive: body.isActive !== false && body.is_active !== false,
   };
@@ -9724,6 +9734,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
         childPhone: String(c.childPhone || '').trim(),
         registrationNotes: String(c.registrationNotes || c.notes || '').trim(),
         answers: c.answers || {},
+        healthNotes: String(c.healthNotes || '').trim(),
         signature: c.signature || '',
         waiverAccepted: c.waiverAccepted === true || c.waiverAccepted === 'true',
         // Confirmed on the form as a child already on another parent's file.
@@ -9755,16 +9766,10 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     ? (db.get('form_templates') || []).find((t) => t.id === templateId)
     : (templateSlug ? findFormTemplateBySlug(templateSlug) : findDefaultFormTemplate());
 
-  const requiredQs = (template?.healthQuestions || []).filter((q) => q.requireYes);
   for (const child of childList) {
     if (child.reuse_health) continue;
-    for (const q of requiredQs) {
-      if (!child.answers?.[q.id]) {
-        return res.status(400).json({
-          error: `יש לסמן את כל סעיפי ההצהרה עבור ${child.name}`,
-        });
-      }
-    }
+    const gap = declarationGap(template?.healthQuestions || [], child.answers, child.name);
+    if (gap) return res.status(400).json({ error: gap });
   }
 
   let crmResult;

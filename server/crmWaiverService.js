@@ -3,6 +3,7 @@ import {
   isHealthDeclarationValid,
 } from './healthValidity.js';
 import { linkGuardian, mergeFamily, normalizedIdNumber } from './studentGuardians.js';
+import { declarationGap } from './healthQuestions.js';
 
 export const STANDARD_WAIVER_TEXT = `אני מצהיר/ה כי אני מודע/ת לסיכונים הכרוכים בפעילות המתקיימת ב"קיר בועז", אני פוטר/ת את "קיר בועז" ו/או מי מטעמו מכל אחריות לפגיעה אם תקרה למשתתף אותו אני רושם לפעילות וזאת אלא אם יוכח כי הינה תוצאה של רשלנות המקום.
 
@@ -100,7 +101,7 @@ export function validateParticipantDeclarations(participants, template) {
   if (!Array.isArray(participants) || participants.length === 0) {
     throw Object.assign(new Error('יש להוסיף לפחות משתתף אחד'), { status: 400 });
   }
-  const required = (template.healthQuestions || []).filter((question) => question.requireYes);
+  const questions = template.healthQuestions || [];
   for (const participant of participants) {
     const name = clean(participant.name);
     if (!name) throw Object.assign(new Error('חסר שם משתתף'), { status: 400 });
@@ -114,9 +115,10 @@ export function validateParticipantDeclarations(participants, template) {
     if (!clean(participant.signature)) {
       throw Object.assign(new Error(`חסרה חתימה עבור ${name}`), { status: 400 });
     }
-    if (required.some((question) => !participant.answers?.[question.id])) {
-      throw Object.assign(new Error(`יש לסמן את כל סעיפי ההצהרה עבור ${name}`), { status: 400 });
-    }
+    // Confirmations must be ticked; screening questions must be answered
+    // either way, so a condition nobody was asked about is never filed as "no".
+    const gap = declarationGap(questions, participant.answers, name);
+    if (gap) throw Object.assign(new Error(gap), { status: 400 });
   }
 }
 
@@ -269,6 +271,8 @@ export async function saveCrmParticipants({
       gender: clean(input.gender) || student?.gender || '',
       idNumber: clean(input.idNumber || input.climberIdNum) || student?.idNumber || '',
       notes: clean(input.notes || input.registrationNotes) || student?.notes || '',
+      // Kept on the card too: this is what an instructor needs at the wall.
+      healthNotes: clean(input.healthNotes) || student?.healthNotes || '',
       phone: childPhone || student?.phone || '',
       status: previousStatus === 'registered' ? 'registered' : 'health_signed',
       healthSignedAt: student?.healthSignedAt || signedAt,
@@ -334,6 +338,10 @@ export async function saveCrmParticipants({
         climberIdNum: clean(input.idNumber || input.climberIdNum),
         birthDate: clean(input.birthDate),
         answers: input.answers || {},
+        // What a "yes" on a screening question actually was. It belongs on the
+        // signed declaration, not only on the card, because that is the record
+        // of what was disclosed at the time.
+        healthNotes: clean(input.healthNotes),
         waiverAccepted: true,
         signature_url: input.signature,
         status: 'approved',

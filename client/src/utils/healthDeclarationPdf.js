@@ -62,17 +62,23 @@ function toPrintableSignature(dataUrl) {
   });
 }
 
-function answerRows(answers = {}, questionLabels = {}) {
+function answerRows(answers = {}, questionLabels = {}, questionKinds = {}) {
   const keys = Object.keys(answers);
   if (!keys.length) {
     return '<div class="muted">לא נרשמו תשובות לשאלון הרפואי</div>';
   }
   return keys.map((id) => {
-    const yes = !!answers[id];
+    const value = answers[id];
+    const yes = value === true;
     const label = questionLabels[id] || DEFAULT_QUESTIONS[id] || id;
+    // A screening question is a question, so the record has to say which way it
+    // was answered. "—" on a confirmation means unticked; on a screening
+    // question it would be indistinguishable from "we never asked".
+    const screening = questionKinds[id] === 'screen';
+    const mark = screening ? (yes ? 'כן' : (value === false ? 'לא' : '—')) : (yes ? '✓' : '—');
     return `
       <div class="qa ${yes ? 'yes' : 'no'}">
-        <span class="mark">${yes ? '✓' : '—'}</span>
+        <span class="mark">${escapeHtml(mark)}</span>
         <span>${escapeHtml(label)}</span>
       </div>`;
   }).join('');
@@ -81,9 +87,10 @@ function answerRows(answers = {}, questionLabels = {}) {
 async function resolveWaiverAndQuestions(decl) {
   let waiverText = '';
   const questionLabels = { ...DEFAULT_QUESTIONS };
+  const questionKinds = {};
   const slug = decl.templateSlug || decl.template_slug;
   if (!slug) {
-    return { waiverText, questionLabels };
+    return { waiverText, questionLabels, questionKinds };
   }
   try {
     const res = await fetch(`/api/public/form-templates/${encodeURIComponent(slug)}`);
@@ -92,15 +99,16 @@ async function resolveWaiverAndQuestions(decl) {
       waiverText = t.waiverText || '';
       (t.healthQuestions || []).forEach((q) => {
         if (q?.id && q?.label) questionLabels[q.id] = q.label;
+        if (q?.id && q?.kind) questionKinds[q.id] = q.kind;
       });
     }
   } catch {
     // keep defaults
   }
-  return { waiverText, questionLabels };
+  return { waiverText, questionLabels, questionKinds };
 }
 
-function buildCertificateHtml(decl, { waiverText, questionLabels, signatureSrc }) {
+function buildCertificateHtml(decl, { waiverText, questionLabels, questionKinds = {}, signatureSrc }) {
   const parentName = decl.parentName || decl.signedBy || '—';
   const climberName = decl.climberName || decl.studentName || '—';
   const phone = decl.phone || decl.emergencyPhone || '—';
@@ -194,7 +202,10 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, signatureSrc }
       </div>
 
       <h2>הצהרת בריאות ובטיחות</h2>
-      ${answerRows(decl.answers || {}, questionLabels)}
+      ${answerRows(decl.answers || {}, questionLabels, questionKinds)}
+      ${decl.healthNotes
+        ? `<div class="field" style="margin-top:10px"><div class="label">פירוט שנמסר</div><div class="value">${escapeHtml(decl.healthNotes)}</div></div>`
+        : ''}
 
       ${waiverText ? `<h2>כתב ויתור / הסרת אחריות</h2><div class="waiver">${escapeHtml(waiverText)}</div>` : ''}
 
