@@ -253,7 +253,11 @@ export async function buildHealthDeclarationPdf(decl) {
 
     // PNG avoids JPEG seam artifacts that look like a black bar through the signature
     const imgData = canvas.toDataURL('image/png');
-    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    // `compress` is not optional here. jsPDF embeds a PNG as a raw RGB stream —
+    // width × height × 3 bytes — so this page went out as 13 MB of bitmap for
+    // half a megabyte of image, and the upload was refused by the server's body
+    // limit. The declaration saved, the signed copy silently did not.
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
     const pageWidth = pdf.internal.pageSize.getWidth();
     const pageHeight = pdf.internal.pageSize.getHeight();
     let imgWidth = pageWidth;
