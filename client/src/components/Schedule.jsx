@@ -875,6 +875,25 @@ function GroupBlock({ group, enrolledCount, selected, onClick }) {
     assistantNames.length ? `עוזרי מדריך: ${assistantNames.join(', ')}` : '',
   ].filter(Boolean).join(' · ');
 
+  // Under ~90px the four rows do not fit and the text collides with the
+  // capacity bar, so the staff shares the time row there.
+  const compactStaff = h < 90;
+  const staffLine = (
+    <>
+      <Users size={9} style={{ flexShrink: 0, opacity: 0.7, color: c.text }} />
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        color: group.trainerName ? c.text : 'rgba(255,255,255,0.35)', fontWeight: 600 }}>
+        {group.trainerName || 'ללא מדריך'}
+      </span>
+      {assistantNames.length > 0 && (
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          color: 'rgba(255,255,255,0.5)' }}>
+          +{assistantNames.join(', ')}
+        </span>
+      )}
+    </>
+  );
+
   return (
     <div onClick={onClick} style={{
       position: 'absolute',
@@ -897,40 +916,35 @@ function GroupBlock({ group, enrolledCount, selected, onClick }) {
     }}>
       {/* Name */}
       <div style={{ fontSize: Math.min(12, h > 65 ? 12 : 10), fontWeight: 700, color: c.text,
-        lineHeight: 1.25, overflow: 'hidden', display: '-webkit-box',
-        WebkitLineClamp: h > 55 ? 2 : 1, WebkitBoxOrient: 'vertical' }}>
+        lineHeight: 1.25, overflow: 'hidden', display: '-webkit-box', flexShrink: 0,
+        WebkitLineClamp: compactStaff ? 1 : 2, WebkitBoxOrient: 'vertical' }}>
         {label}
       </div>
 
-      {/* Time */}
+      {/* Time. A 50′ block is only 75px tall — there is no room for a fourth
+          row there, so the staff joins this line instead of getting its own. */}
       {h >= 60 && (
-        <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', marginTop: 2 }}>
-          {group.time} · {group.duration}′
+        <div title={compactStaff ? staffTitle : undefined}
+          style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', marginTop: 2,
+            flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+          <span style={{ flexShrink: 0 }}>{group.time} · {group.duration}′</span>
+          {compactStaff && staffLine}
         </div>
       )}
 
       {/* Who is on the mat — lead trainer first, assistants after it. A group
           with nobody assigned says so, so an empty slot is visible at a glance. */}
-      {h >= 60 && (
-        <div title={staffTitle} style={{ fontSize: 10, marginTop: 1, display: 'flex',
-          alignItems: 'center', gap: 4, minWidth: 0 }}>
-          <Users size={9} style={{ flexShrink: 0, opacity: 0.7, color: c.text }} />
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            color: group.trainerName ? c.text : 'rgba(255,255,255,0.35)', fontWeight: 600 }}>
-            {group.trainerName || 'ללא מדריך'}
-          </span>
-          {assistantNames.length > 0 && (
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              color: 'rgba(255,255,255,0.5)' }}>
-              +{assistantNames.join(', ')}
-            </span>
-          )}
+      {h >= 60 && !compactStaff && (
+        <div title={staffTitle} style={{ fontSize: 10, marginTop: 1, flexShrink: 0,
+          display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+          {staffLine}
         </div>
       )}
 
       {/* Capacity bar */}
       {h >= 55 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 'auto', paddingTop: 3 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 'auto',
+          paddingTop: 3, flexShrink: 0 }}>
           <div style={{ flex: 1, height: 2.5, borderRadius: 2, background: 'rgba(255,255,255,0.1)' }}>
             <div style={{ width: `${Math.min(pct,100)}%`, height: '100%', borderRadius: 2,
               background: full ? '#EF4444' : c.text }} />
