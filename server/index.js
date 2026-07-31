@@ -5060,6 +5060,9 @@ app.post('/api/public/activities/:slug/register', publicFormRateLimit, async (re
       });
     }
     const updatedRegs = activeRegistrations(db, activity.id);
+    // Same reason as the other public forms: a customer the address book has
+    // never heard of shows up as an unknown number when they call.
+    touchGoogleContacts();
     res.status(201).json({
       success: true,
       duplicate: result.duplicate,
@@ -5199,6 +5202,11 @@ app.post('/api/public/shop/:slug/purchase', publicFormRateLimit, async (req, res
     if (!result.paymentUrl) {
       return res.status(502).json({ error: 'יצירת קישור התשלום נכשלה' });
     }
+    // A customer created by a public form is a customer the phone should
+    // recognise on an incoming call. Only staff-side paths used to schedule
+    // this, so families who joined through a form never reached the address
+    // book at all — there is no nightly sweep behind it.
+    touchGoogleContacts();
     console.log(
       `🛒 [shop] ${result.duplicate ? 'retry' : 'new'} purchase item=${item.name} sale=${result.sale.id}`
     );
@@ -9546,6 +9554,11 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
     });
   }
 
+  // A family created by a public form should be recognised on an incoming
+  // call like any other customer. Only staff-side paths scheduled this, and
+  // there is no nightly sweep behind it, so these families never reached the
+  // address book at all.
+  touchGoogleContacts();
   res.status(201).json({ success: true, record, student, parent });
 });
 
@@ -9868,6 +9881,11 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   }
   const savedLists = db.updateParentBroadcastLists(parent.id, nextSubs);
 
+  // A family created by a public form should be recognised on an incoming
+  // call like any other customer. Only staff-side paths scheduled this, and
+  // there is no nightly sweep behind it, so these families never reached the
+  // address book at all.
+  touchGoogleContacts();
   res.status(201).json({
     success: true,
     parent,
