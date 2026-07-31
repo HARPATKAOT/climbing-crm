@@ -27,10 +27,16 @@ export const OFFER_TYPE_LABELS = {
 
 export const COUPON_STATUS = {
   ACTIVE: 'active',
+  // Held against an unpaid payment link: the price was already locked into the
+  // link, so it must not be spent anywhere else while that link is live.
+  RESERVED: 'reserved',
   REDEEMED: 'redeemed',
   EXPIRED: 'expired',
   CANCELLED: 'cancelled',
 };
+
+/** A payment link left unpaid this long gives the benefit back to the customer. */
+export const RESERVATION_DAYS = 7;
 
 /** Unambiguous alphabet — no O/0, I/1, so staff can read a code off a screen. */
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -137,6 +143,9 @@ export function couponState(coupon, today = todayIsoDate()) {
   if (!coupon) return COUPON_STATUS.CANCELLED;
   if (coupon.status === COUPON_STATUS.REDEEMED) return COUPON_STATUS.REDEEMED;
   if (coupon.status === COUPON_STATUS.CANCELLED) return COUPON_STATUS.CANCELLED;
+  // A reservation survives its own expiry: the customer was already quoted the
+  // discounted price, so paying that link late is still honoured.
+  if (coupon.status === COUPON_STATUS.RESERVED) return COUPON_STATUS.RESERVED;
   if (coupon.expires_at && String(coupon.expires_at) < String(today)) return COUPON_STATUS.EXPIRED;
   return COUPON_STATUS.ACTIVE;
 }
@@ -383,6 +392,9 @@ export function checkCouponForSale(db, { code, couponId, parentId, studentId, li
   if (state === COUPON_STATUS.REDEEMED) return { ok: false, error: 'הקופון כבר מומש', coupon };
   if (state === COUPON_STATUS.EXPIRED) return { ok: false, error: 'תוקף הקופון פג', coupon };
   if (state === COUPON_STATUS.CANCELLED) return { ok: false, error: 'הקופון בוטל', coupon };
+  if (state === COUPON_STATUS.RESERVED) {
+    return { ok: false, error: 'ההטבה שמורה לקישור תשלום שכבר נשלח וטרם שולם', coupon };
+  }
 
   if (!couponBelongsTo(coupon, { parentId, studentId })) {
     return { ok: false, error: 'הקופון שייך ללקוח אחר', coupon };
@@ -409,16 +421,66 @@ export function redeemCoupon(db, couponId, { saleId = null, amount = 0 } = {}) {
   });
 }
 
-/** A refunded sale gives the benefit back — unless it has since expired. */
+/**
+ * Hold the benefit against a payment link. The discount is already baked into
+ * the amount the customer is about to pay, so it cannot also be spent at the
+ * counter — but it is not consumed either, because the payment may never come.
+ */
+export function reserveCoupon(db, couponId, { saleId = null, amount = 0, today = todayIsoDate() } = {}) {
+  return db.update('customer_coupons', couponId, {
+    status: COUPON_STATUS.RESERVED,
+    reserved_at: new Date().toISOString(),
+    reserved_on: today,
+    pos_sale_id: saleId,
+    redeemed_amount: roundMoney(amount),
+  });
+}
+
+/**
+ * A refunded sale, or a payment link that was never paid, gives the benefit
+ * back — unless it has since expired.
+ */
 export function releaseCouponsForSale(db, saleId, today = todayIsoDate()) {
   const released = [];
+  const holding = new Set([COUPON_STATUS.REDEEMED, COUPON_STATUS.RESERVED]);
   for (const coupon of db.get('customer_coupons') || []) {
     if (String(coupon.pos_sale_id || '') !== String(saleId)) continue;
-    if (coupon.status !== COUPON_STATUS.REDEEMED) continue;
+    if (!holding.has(coupon.status)) continue;
     const expired = coupon.expires_at && String(coupon.expires_at) < String(today);
     const updated = db.update('customer_coupons', coupon.id, {
       status: expired ? COUPON_STATUS.EXPIRED : COUPON_STATUS.ACTIVE,
       redeemed_at: null,
+      reserved_at: null,
+      reserved_on: null,
+      pos_sale_id: null,
+      redeemed_amount: null,
+    });
+    if (updated) released.push(updated);
+  }
+  return released;
+}
+
+/**
+ * Safety valve: a payment link nobody ever paid must not hold a benefit
+ * hostage. After `RESERVATION_DAYS` the coupon goes back to the customer.
+ */
+export function releaseStaleReservations(db, today = todayIsoDate(), maxDays = RESERVATION_DAYS) {
+  const released = [];
+  for (const coupon of db.get('customer_coupons') || []) {
+    if (coupon.status !== COUPON_STATUS.RESERVED) continue;
+    const since = coupon.reserved_on ? daysBetween(coupon.reserved_on, today) : null;
+    if (since == null || since <= maxDays) continue;
+    // If the sale did get paid in the meantime, leave the reservation alone —
+    // the payment hook will settle it.
+    const sale = coupon.pos_sale_id
+      ? (db.get('pos_sales') || []).find((s) => String(s.id) === String(coupon.pos_sale_id))
+      : null;
+    if (sale && sale.status === 'paid') continue;
+    const expired = coupon.expires_at && String(coupon.expires_at) < String(today);
+    const updated = db.update('customer_coupons', coupon.id, {
+      status: expired ? COUPON_STATUS.EXPIRED : COUPON_STATUS.ACTIVE,
+      reserved_at: null,
+      reserved_on: null,
       pos_sale_id: null,
       redeemed_amount: null,
     });
@@ -450,10 +512,13 @@ export function expireDueCoupons(db, today = todayIsoDate()) {
 /** Redemption and revenue per campaign — the only numbers worth reporting. */
 export function couponStats(db, campaignId, today = todayIsoDate()) {
   const rows = listCoupons(db, { campaignId, today });
-  const stats = { issued: rows.length, active: 0, redeemed: 0, expired: 0, cancelled: 0, revenue: 0 };
+  const stats = {
+    issued: rows.length, active: 0, reserved: 0, redeemed: 0, expired: 0, cancelled: 0, revenue: 0,
+  };
   const sales = db.get('pos_sales') || [];
   for (const coupon of rows) {
     if (coupon.state === COUPON_STATUS.ACTIVE) stats.active += 1;
+    else if (coupon.state === COUPON_STATUS.RESERVED) stats.reserved += 1;
     else if (coupon.state === COUPON_STATUS.REDEEMED) stats.redeemed += 1;
     else if (coupon.state === COUPON_STATUS.EXPIRED) stats.expired += 1;
     else stats.cancelled += 1;

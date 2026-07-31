@@ -7,6 +7,13 @@ import {
   downloadHealthDeclarationPdf,
 } from '../utils/healthDeclarationPdf.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
+import {
+  KnownChildNote,
+  KnownChildPrompt,
+  KnownFamilyNote,
+  KnownFamilyPrompt,
+} from './publicFormKit.jsx';
+import { checkKnownChild, checkKnownFamily } from '../utils/childCheck.js';
 
 function buildFallbackWaiver(legalName) {
   return `כתב ויתור והסרת אחריות — קיר הטיפוס ${legalName}
@@ -62,6 +69,11 @@ export default function PublicHealthForm() {
   const [error, setError] = useState('');
   const canvasRef = useRef(null);
   const [isDrawing, setIsDrawing] = useState(false);
+  // { match, student_id, guardian_first_name, health_valid, linked } once answered.
+  const [knownChild, setKnownChild] = useState(null);
+  // Families on file under the same surname, and the one chosen ('' = new family).
+  const [families, setFamilies] = useState([]);
+  const [familyParentId, setFamilyParentId] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -268,6 +280,27 @@ export default function PublicHealthForm() {
     setError('');
 
     if (step === 1) {
+      // A parent we have never seen may belong to a family we already know.
+      if (!formData.studentId && !formData.parentId && familyParentId === null) {
+        const known = await checkKnownFamily({
+          parentName: formData.parentName,
+          phone: formData.phone,
+        });
+        setFamilies(known.families);
+        if (known.families.length) return;
+        setFamilyParentId('');
+      }
+      // The climber may already be on another parent's file — ask before the
+      // declaration is signed, so it lands on the existing child.
+      if (!isAdult && !formData.studentId && !knownChild) {
+        const match = await checkKnownChild({
+          name: formData.climberName,
+          birthDate: formData.birthDate,
+          phone: formData.phone,
+        });
+        setKnownChild({ ...match, linked: match.match ? null : false });
+        if (match.match) return;
+      }
       setStep(2);
       return;
     }
@@ -294,6 +327,9 @@ export default function PublicHealthForm() {
           waiverAccepted: true,
           templateSlug: template?.slug || routeSlug || 'wall',
           templateId: template?.id || null,
+          // Confirmed as the same child already on another parent's file.
+          link_student_id: knownChild?.linked ? knownChild.student_id : null,
+          family_parent_id: familyParentId || null,
         };
         if (isAdult) {
           payload.climberName = formData.parentName;
@@ -477,6 +513,19 @@ export default function PublicHealthForm() {
                   </div>
                 </>
               )}
+
+              <KnownFamilyPrompt
+                families={families}
+                chosenId={familyParentId}
+                onChoose={setFamilyParentId}
+              />
+              <KnownFamilyNote families={families} chosenId={familyParentId} />
+              <KnownChildPrompt
+                childName={formData.climberName}
+                match={knownChild}
+                onAnswer={(linked) => setKnownChild((current) => ({ ...current, linked }))}
+              />
+              <KnownChildNote childName={formData.climberName} match={knownChild} />
 
               <button type="submit" className="submit-btn primary-btn">
                 המשך לשאלון רפואי <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginLeft: 8 }} />

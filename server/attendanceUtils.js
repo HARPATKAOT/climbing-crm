@@ -41,11 +41,52 @@ export function normalizeAttStatus(status) {
     'holiday',
     'cancelled',
     'saturday_makeup',
+    'intro_pending',
     'intro_attended',
     'intro_absent',
   ];
   if (known.includes(status)) return status;
   return 'pending';
+}
+
+// ─── אימון הכירות ────────────────────────────────────────────────────────────
+// היות השורה „אימון הכירות” נקבעת פעם אחת, כשהשורה נוצרת, ונשמרת עליה.
+// היא לא נגזרת מהסטטוס של הילד — אחרת שינוי סטטוס בדיעבד היה משכתב
+// היסטוריה, וקיזוז דמי הנעליים נשען עליה.
+
+/** סטטוס של מתאמן שעדיין באימון הכירות. */
+export const INTRO_STUDENT_STATUSES = new Set(['intro_scheduled', 'intro_paid']);
+
+/** סטטוסי נוכחות שמסמנים אימון הכירות. */
+export const INTRO_ATT_STATUSES = new Set(['intro_pending', 'intro_attended', 'intro_absent']);
+
+export function isIntroStudent(student) {
+  return INTRO_STUDENT_STATUSES.has(student?.status);
+}
+
+export function isIntroAttStatus(status) {
+  return INTRO_ATT_STATUSES.has(normalizeAttStatus(status));
+}
+
+/** המקבילה של סטטוס רגיל בשורת הכירות. */
+const INTRO_EQUIVALENT = {
+  pending: 'intro_pending',
+  attended: 'intro_attended',
+  makeup: 'intro_attended',
+  saturday_makeup: 'intro_attended',
+  absent: 'intro_absent',
+};
+
+/**
+ * שומר על שורת הכירות גם כשמגיע עדכון עם סטטוס רגיל — למשל מלקוח ישן
+ * או ממסך שלא יודע על ההכירות. „חג” ו„בוטל” עוברים כמו שהם, כי הם
+ * מתארים את היום ולא את הילד.
+ */
+export function keepIntroStatus(existingStatus, nextStatus) {
+  const next = normalizeAttStatus(nextStatus);
+  if (!isIntroAttStatus(existingStatus)) return next;
+  if (isIntroAttStatus(next)) return next;
+  return INTRO_EQUIVALENT[next] || next;
 }
 
 // ─── Training-vacation automation ────────────────────────────────────────────
@@ -139,18 +180,17 @@ export function planVacationAttendanceReverts({ activities, attendance, dates = 
  */
 export function ensureAttendanceRows({ groups, students, attendance, date, groupId, activities }) {
   const weekday = dateToWeekday(date);
+  // שורות נוכחות נוצרות רק ביום שבו הקבוצה מתאמנת. פתיחת הגיליון
+  // בתאריך אחר היא צפייה בלבד — קודם היא יצרה שורות „ממתין למילוי”
+  // ליום שלא היה בו אימון.
   let targetGroups = (groups || []).filter((g) => {
     if (g.active === false) return false;
     return getGroupDays(g).includes(weekday);
   });
-  if (groupId) {
-    targetGroups = targetGroups.filter((g) => g.id === groupId);
-    // If filtering by groupId, still ensure even if weekday mismatch (manual open)
-    if (targetGroups.length === 0) {
-      const g = (groups || []).find((x) => x.id === groupId);
-      if (g && g.active !== false) targetGroups = [g];
-    }
-  }
+  if (groupId) targetGroups = targetGroups.filter((g) => g.id === groupId);
+
+  const requestedGroup = groupId ? (groups || []).find((g) => g.id === groupId) : null;
+  const skippedNotTrainingDay = Boolean(groupId && requestedGroup && !targetGroups.length);
 
   const existing = attendance || [];
   const keySet = new Set(
@@ -171,7 +211,11 @@ export function ensureAttendanceRows({ groups, students, attendance, date, group
         student_id: s.id,
         group_id: g.id,
         date,
-        status: vacation ? VACATION_ATT_STATUS : 'pending',
+        status: vacation
+          ? VACATION_ATT_STATUS
+          : isIntroStudent(s)
+            ? 'intro_pending'
+            : 'pending',
         marked_by: vacation ? VACATION_MARKER : null,
         notes: '',
       };
@@ -186,6 +230,8 @@ export function ensureAttendanceRows({ groups, students, attendance, date, group
     groups: targetGroups.map((g) => g.id),
     date,
     vacation: vacation ? { id: vacation.id, name: vacation.name || '' } : null,
+    // הקבוצה קיימת אבל לא מתאמנת בתאריך הזה — הגיליון לצפייה בלבד.
+    notTrainingDay: skippedNotTrainingDay,
   };
 }
 

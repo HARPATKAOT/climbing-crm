@@ -7,6 +7,14 @@ import {
   downloadHealthDeclarationPdf,
 } from '../utils/healthDeclarationPdf.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
+import {
+  EventStyles,
+  KnownChildNote,
+  KnownChildPrompt,
+  KnownFamilyNote,
+  KnownFamilyPrompt,
+} from './publicFormKit.jsx';
+import { checkKnownChild, checkKnownFamily, linkFieldsFor } from '../utils/childCheck.js';
 
 function buildFallbackWaiver(legalName) {
   return `אני מצהיר/ה כי אני מודע/ת לסיכונים הכרוכים בפעילות המתקיימת ב"${legalName}", אני פוטר/ת את "${legalName}" ו/או מי מטעמו מכל אחריות לפגיעה אם תקרה למשתתף אותו אני רושם לפעילות וזאת אלא אם יוכח כי הינה תוצאה של רשלנות המקום.
@@ -34,18 +42,6 @@ function buildFallbackQuestions(legalName) {
   ];
 }
 
-const FALLBACK_INTERESTS = [
-  'אימון הכירות',
-  'חוגי ילדים / נוער',
-  'חוג בוגרים',
-  'קייטנה',
-  'יום הולדת',
-  'ימי שטח',
-  'אימון אישי',
-  'קורס הובלה',
-  'טיפוס בשעות הפתיחה',
-];
-
 const emptyChild = (questions = []) => {
   const answers = {};
   questions.forEach((q) => { answers[q.id] = false; });
@@ -62,16 +58,7 @@ const emptyChild = (questions = []) => {
   };
 };
 
-const selectStyle = {
-  width: '100%',
-  background: 'rgba(0,0,0,0.2)',
-  border: '1px solid rgba(255,255,255,0.1)',
-  color: 'white',
-  padding: '12px 16px',
-  borderRadius: 12,
-  fontSize: 15,
-  fontFamily: 'inherit',
-};
+
 
 export default function PublicOnboardingForm() {
   const { profile, legalName } = useBusinessProfile();
@@ -87,8 +74,9 @@ export default function PublicOnboardingForm() {
   const [listDefs, setListDefs] = useState([]);
   const [requiredListKey, setRequiredListKey] = useState('classes');
   const [subscriptions, setSubscriptions] = useState({ classes: true });
-  const [interestOptions, setInterestOptions] = useState(FALLBACK_INTERESTS);
-  const [interest, setInterest] = useState('');
+  // No interest picker on this form any more — staff set it in the CRM. Kept as
+  // state only so a prefilled link (?interest=) still passes it through.
+  const [interest, setInterest] = useState(searchParams.get('interest') || '');
   const [template, setTemplate] = useState(null);
   const [parent, setParent] = useState({
     name: '',
@@ -110,7 +98,26 @@ export default function PublicOnboardingForm() {
     ? template.healthQuestions
     : fallbackQuestions);
   const waiverText = template?.waiverText || fallbackWaiver;
-  const totalStepsLabel = 2 + Math.max(children.filter((c) => c.name.trim()).length, 1);
+  // participant key -> { match, student_id, guardian_first_name, health_valid, linked }
+  const [knownChildren, setKnownChildren] = useState({});
+  // Families on file under the same surname, and the one chosen ('' = new family).
+  const [families, setFamilies] = useState([]);
+  const [familyParentId, setFamilyParentId] = useState(null);
+  const [prefilledParentId, setPrefilledParentId] = useState('');
+
+  /** Children have no stable id until they are saved — identify them by what was typed. */
+  const childKey = (child) => `${String(child?.name || '').trim()}|${child?.birthDate || ''}`;
+
+  /** A child linked to an existing file with a valid declaration signs nothing. */
+  const reusesDeclaration = (child) => {
+    const known = knownChildren[childKey(child)];
+    return !!(known?.linked && known.health_valid);
+  };
+
+  const totalStepsLabel = 2 + Math.max(
+    children.filter((c) => c.name.trim() && !reusesDeclaration(c)).length,
+    1
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -163,14 +170,14 @@ export default function PublicOnboardingForm() {
           // Still allow filling the form with list defs loaded above
           return;
         }
-        if (Array.isArray(data.interestOptions) && data.interestOptions.length) {
-          setInterestOptions(data.interestOptions);
-        }
         if (data.template) setTemplate(data.template);
         const qs = data.template?.healthQuestions?.length
           ? data.template.healthQuestions
           : fallbackQuestions;
         if (data.parent) {
+          // Opened from a link that already knows this parent — no family
+          // question needed, we are on their file already.
+          setPrefilledParentId(data.parent.id || '');
           setParent({
             name: data.parent.name || '',
             phone: data.parent.phone || searchParams.get('phone') || '',
@@ -182,8 +189,6 @@ export default function PublicOnboardingForm() {
           setChildren(data.students.map((s) => {
             const answers = {};
             qs.forEach((q) => { answers[q.id] = false; });
-            const firstInterest = Array.isArray(s.interests) && s.interests[0] ? s.interests[0] : '';
-            if (firstInterest) setInterest((prev) => prev || firstInterest);
             return {
               id: s.id,
               name: s.name || '',
@@ -297,12 +302,10 @@ export default function PublicOnboardingForm() {
 
   const namedChildren = () => children.filter((c) => c.name.trim());
 
-  const goNextFromParent = () => {
+  const healthChildren = () => namedChildren().filter((child) => !reusesDeclaration(child));
+
+  const goNextFromParent = async () => {
     setError('');
-    if (!interest) {
-      setError('יש לבחור במה מתעניינים');
-      return;
-    }
     if (!parent.name.trim() || !parent.phone.trim()) {
       setError('יש למלא שם הורה ומספר טלפון');
       return;
@@ -315,6 +318,14 @@ export default function PublicOnboardingForm() {
       setError('יש למלא מקום מגורים');
       return;
     }
+    // A parent we have never seen may still belong to a family we know — only
+    // they can tell us, and only before a second file is opened.
+    if (!prefilledParentId && familyParentId === null) {
+      const known = await checkKnownFamily({ parentName: parent.name, phone: parent.phone });
+      setFamilies(known.families);
+      if (known.families.length) return;
+      setFamilyParentId('');
+    }
     if (isAdultSelf) {
       setChildren([{
         ...emptyChild(questions),
@@ -326,7 +337,7 @@ export default function PublicOnboardingForm() {
     setStep(2);
   };
 
-  const goNextFromChildren = () => {
+  const goNextFromChildren = async () => {
     setError('');
     const kids = namedChildren();
     if (!kids.length) {
@@ -339,6 +350,28 @@ export default function PublicOnboardingForm() {
         return;
       }
     }
+    // A child already on another parent's file joins it instead of becoming a
+    // second copy — but only the person filling this in can confirm that.
+    if (!isAdultSelf) {
+      const unanswered = kids.filter((kid) => !kid.id && !knownChildren[childKey(kid)]);
+      if (unanswered.length) {
+        const checked = await Promise.all(unanswered.map(async (kid) => {
+          const match = await checkKnownChild({
+            name: kid.name,
+            birthDate: kid.birthDate,
+            phone: parent.phone,
+          });
+          return [childKey(kid), { ...match, linked: match.match ? null : false }];
+        }));
+        setKnownChildren((current) => ({ ...current, ...Object.fromEntries(checked) }));
+        if (checked.some(([, match]) => match.match)) return;
+      }
+    }
+    // Everyone here already has a declaration in force on their existing file.
+    if (!healthChildren().length) {
+      await submitAll(children);
+      return;
+    }
     setChildHealthIndex(0);
     setHealthSubStep(1);
     setStep(3);
@@ -346,7 +379,7 @@ export default function PublicOnboardingForm() {
 
   const advanceHealthOrSubmit = async () => {
     setError('');
-    const kids = namedChildren();
+    const kids = healthChildren();
     const current = kids[childHealthIndex];
     if (!current) return;
     const fullIndex = children.findIndex(
@@ -397,18 +430,22 @@ export default function PublicOnboardingForm() {
     try {
       const kids = (childrenSnapshot || children)
         .filter((c) => c.name.trim())
-        .map((c) => ({
-          id: c.id,
-          name: c.name.trim(),
-          type: isAdultSelf || c.type === 'adult' ? 'adult' : 'child',
-          birthDate: c.birthDate,
-          gender: c.gender,
-          childPhone: c.childPhone,
-          registrationNotes: c.registrationNotes,
-          answers: c.answers || {},
-          signature: c.signature,
-          waiverAccepted: true,
-        }));
+        .map((c) => {
+          const reuse = reusesDeclaration(c);
+          return {
+            id: c.id,
+            name: c.name.trim(),
+            type: isAdultSelf || c.type === 'adult' ? 'adult' : 'child',
+            birthDate: c.birthDate,
+            gender: c.gender,
+            childPhone: c.childPhone,
+            registrationNotes: c.registrationNotes,
+            answers: c.answers || {},
+            signature: c.signature,
+            waiverAccepted: !reuse,
+            ...linkFieldsFor(knownChildren[childKey(c)]),
+          };
+        });
 
       const res = await fetch('/api/public/onboard', {
         method: 'POST',
@@ -420,6 +457,7 @@ export default function PublicOnboardingForm() {
             email: parent.email.trim(),
             city: parent.city.trim(),
             source: 'form',
+            family_parent_id: familyParentId || null,
           },
           interest,
           children: kids,
@@ -478,8 +516,8 @@ export default function PublicOnboardingForm() {
 
   if (loading) {
     return (
-      <div className="public-health-wrapper">
-        <div className="glass-card" style={{ textAlign: 'center', padding: 40 }}>
+      <div className="event-page">
+        <div className="event-card" style={{ textAlign: 'center', padding: 40 }}>
           <p style={{ color: 'rgba(255,255,255,0.7)' }}>טוען טופס השלמת פרטים...</p>
         </div>
         <FormStyles />
@@ -489,8 +527,8 @@ export default function PublicOnboardingForm() {
 
   if (isSuccess) {
     return (
-      <div className="public-health-wrapper">
-        <div className="glass-card success-card">
+      <div className="event-page">
+        <div className="event-card event-centered">
           <CheckCircle size={60} color="#F97316" style={{ margin: '0 auto', marginBottom: 20 }} />
           <h1 style={{ color: '#fff', fontSize: 24, marginBottom: 10 }}>הפרטים התקבלו!</h1>
           <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16 }}>
@@ -508,7 +546,7 @@ export default function PublicOnboardingForm() {
             <button
               key={decl.id}
               type="button"
-              className="submit-btn"
+              className="event-primary"
               style={{ marginTop: 14, background: 'rgba(255,255,255,0.08)' }}
               onClick={() => downloadHealthDeclarationPdf(decl)}
             >
@@ -527,14 +565,17 @@ export default function PublicOnboardingForm() {
   const currentFullIndex = currentChild
     ? children.findIndex((c) => c === currentChild || (c.name === currentChild.name && c.id === currentChild.id))
     : 0;
+  // Steps 1 and 2 are fixed; step 3 repeats once per child who still has to sign.
+  const displayStep = step === 3 ? 2 + childHealthIndex + 1 : step;
+  const progressPercent = Math.round((displayStep / totalStepsLabel) * 100);
 
   return (
-    <div className="public-health-wrapper">
-      <div className="glass-card">
+    <div className="event-page">
+      <div className="event-card">
         {step > 1 && (
           <button
             type="button"
-            className="back-btn"
+            className="event-secondary onboard-back"
             onClick={() => {
               setError('');
               if (step === 3 && healthSubStep === 2) setHealthSubStep(1);
@@ -556,34 +597,34 @@ export default function PublicOnboardingForm() {
           </div>
           <h2>מילוי פרטים והרשמה</h2>
           <p>
-            {step === 1 && 'שלב 1 — עניין, פרטי הורה ורשימות עדכונים'}
-            {step === 2 && 'שלב 2 — פרטי המשתתפים בחוג'}
-            {step === 3 && `שלב ${2 + childHealthIndex + 1} מתוך ${totalStepsLabel} — הצהרה וחתימה: ${currentChild?.name || ''}`}
+            {step === 1 && 'פרטי הורה ורשימות עדכונים'}
+            {step === 2 && 'פרטי המשתתפים בחוג'}
+            {step === 3 && `הצהרה וחתימה: ${currentChild?.name || ''}`}
           </p>
+          {/* Same progress strip as the event and shop pages. */}
+          <div className="event-progress-label">
+            שלב {displayStep} מתוך {totalStepsLabel}
+          </div>
+          <div
+            className="event-progress"
+            style={{
+              background: `linear-gradient(90deg,#f97316 0 ${progressPercent}%,rgba(255,255,255,.1) ${progressPercent}%)`,
+            }}
+          />
         </div>
 
         {step === 1 && (
           <div className="fade-in">
-            <div className="section-title">מתעניינים בחוג מבוגרים / נוער / ילדים *</div>
-            <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', margin: '0 0 10px' }}>
-              מוזמנים למלא את כל הפעילויות שמעניינות אתכם אצלנו.
-            </p>
+            <div className="section-title">פרטי הורה / איש קשר</div>
             <div className="form-group">
-              <select style={selectStyle} value={interest} onChange={(e) => setInterest(e.target.value)}>
-                <option value="">בחרו עניין</option>
-                {interestOptions.map((opt) => (
-                  <option key={opt} value={opt}>{opt}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="section-title" style={{ marginTop: 18 }}>פרטי הורה / איש קשר</div>
-            <div className="form-group">
-              <label>שם פרטי של ההורה *</label>
+              {/* Full name, like every other public form: the family name is
+                  what lets us recognise a second parent of a household we
+                  already know, and a first name alone carries none. */}
+              <label>שם מלא של ההורה *</label>
               <input
                 value={parent.name}
                 onChange={(e) => setParent((p) => ({ ...p, name: e.target.value }))}
-                placeholder="שם ההורה"
+                placeholder="שם פרטי ושם משפחה"
               />
             </div>
             <div className="form-group">
@@ -627,7 +668,7 @@ export default function PublicOnboardingForm() {
                 return (
                   <label
                     key={list.key}
-                    className="checkbox-item"
+                    className="event-check"
                     style={{
                       cursor: isRequired ? 'default' : 'pointer',
                       borderColor: checked ? 'rgba(249,115,22,0.45)' : 'rgba(255,255,255,0.08)',
@@ -662,8 +703,15 @@ export default function PublicOnboardingForm() {
               )}
             </div>
 
+            <KnownFamilyPrompt
+              families={families}
+              chosenId={familyParentId}
+              onChoose={setFamilyParentId}
+            />
+            <KnownFamilyNote families={families} chosenId={familyParentId} />
+
             {error && <ErrorBox message={error} />}
-            <button type="button" className="submit-btn" onClick={goNextFromParent}>
+            <button type="button" className="event-primary" onClick={goNextFromParent}>
               המשך לפרטי משתתפים <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} />
             </button>
           </div>
@@ -676,7 +724,7 @@ export default function PublicOnboardingForm() {
               השיבוץ לקבוצה יבוצע על ידי הצוות בהמשך.
             </p>
             <label
-              className="checkbox-item"
+              className="event-check"
               style={{
                 cursor: 'pointer',
                 marginBottom: 14,
@@ -734,12 +782,20 @@ export default function PublicOnboardingForm() {
                       : 'לבחירת שנה — לחצו על השנה עצמה בחלון שנפתח.'}
                   </div>
                 </div>
+                <KnownChildPrompt
+                  childName={child.name}
+                  match={knownChildren[childKey(child)]}
+                  onAnswer={(linked) => setKnownChildren((current) => ({
+                    ...current,
+                    [childKey(child)]: { ...current[childKey(child)], linked },
+                  }))}
+                />
+                <KnownChildNote childName={child.name} match={knownChildren[childKey(child)]} />
                 {!isAdultSelf && (
                   <>
                     <div className="form-group">
                       <label>בן / בת</label>
                       <select
-                        style={selectStyle}
                         value={child.gender}
                         onChange={(e) => updateChild(index, { gender: e.target.value })}
                       >
@@ -783,7 +839,7 @@ export default function PublicOnboardingForm() {
               </button>
             )}
             {error && <ErrorBox message={error} />}
-            <button type="button" className="submit-btn" onClick={goNextFromChildren}>
+            <button type="button" className="event-primary" onClick={goNextFromChildren}>
               המשך להצהרת בריאות <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} />
             </button>
           </div>
@@ -798,7 +854,7 @@ export default function PublicOnboardingForm() {
                   יש לסמן את כל הסעיפים לאישור.
                 </p>
                 {questions.map((q) => (
-                  <label key={q.id} className="checkbox-item" style={{ marginBottom: 10 }}>
+                  <label key={q.id} className="event-check" style={{ marginBottom: 10 }}>
                     <input
                       type="checkbox"
                       checked={!!(children[currentFullIndex]?.answers || {})[q.id]}
@@ -814,7 +870,7 @@ export default function PublicOnboardingForm() {
                   </label>
                 ))}
                 {error && <ErrorBox message={error} />}
-                <button type="button" className="submit-btn" style={{ marginTop: 16 }} onClick={advanceHealthOrSubmit}>
+                <button type="button" className="event-primary" style={{ marginTop: 16 }} onClick={advanceHealthOrSubmit}>
                   המשך להסרת אחריות וחתימה <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} />
                 </button>
               </>
@@ -831,7 +887,7 @@ export default function PublicOnboardingForm() {
                 }}>
                   {waiverText}
                 </div>
-                <label className="checkbox-item">
+                <label className="event-check">
                   <input
                     type="checkbox"
                     checked={!!children[currentFullIndex]?.waiverAccepted}
@@ -857,14 +913,14 @@ export default function PublicOnboardingForm() {
                     onTouchStart={startDrawing}
                     onTouchEnd={stopDrawing}
                     onTouchMove={draw}
-                    className="signature-pad"
+                    className="event-signature"
                   />
                 </div>
 
                 {error && <ErrorBox message={error} />}
                 <button
                   type="button"
-                  className="submit-btn"
+                  className="event-primary"
                   style={{ marginTop: 16 }}
                   disabled={isSubmitting}
                   onClick={advanceHealthOrSubmit}
@@ -896,90 +952,63 @@ function ErrorBox({ message }) {
   );
 }
 
+/**
+ * The page, card, fields, buttons and signature come from the shared kit — the
+ * same look as the event and shop pages. Only what this form alone has (the
+ * brand circle, the step body padding, the canvas toolbar) is defined here.
+ */
 function FormStyles() {
   return (
-    <style>{`
-      .public-health-wrapper {
-        min-height: 100vh; width: 100vw;
-        background: linear-gradient(135deg, #0F172A 0%, #1E1B4B 100%);
-        display: flex; align-items: center; justify-content: center;
-        padding: 20px; font-family: 'Heebo', 'Rubik', system-ui, sans-serif;
-        direction: rtl; color: white;
-      }
-      .glass-card {
-        background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(16px);
-        border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 24px;
-        padding: 30px; width: 100%; max-width: 540px;
-        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); position: relative;
-      }
-      .success-card { text-align: center; padding: 50px 30px; border: 1px solid rgba(249, 115, 22, 0.3); }
-      .back-btn {
-        position: absolute; top: 24px; right: 24px; background: none; border: none;
-        color: rgba(255,255,255,0.6); display: flex; align-items: center; gap: 6px;
-        cursor: pointer; font-family: inherit;
-      }
-      .form-header { text-align: center; margin-bottom: 30px; }
-      .logo-circle {
-        width: 60px; height: 60px; border-radius: 50%;
-        background: #fff;
-        display: flex; align-items: center; justify-content: center;
-        margin: 0 auto 16px auto;
-        overflow: hidden;
-      }
-      .logo-circle img {
-        width: 100%;
-        height: 100%;
-        object-fit: contain;
-        display: block;
-      }
-      .form-header h2 { margin: 0 0 8px 0; font-size: 20px; font-weight: 700; }
-      .form-header p { margin: 0; font-size: 14px; color: rgba(255, 255, 255, 0.6); }
-      .section-title {
-        font-size: 13px; letter-spacing: 0.5px; color: #F97316;
-        font-weight: 700; margin-bottom: 16px;
-      }
-      .form-group { margin-bottom: 16px; }
-      .form-group label { display: block; margin-bottom: 6px; font-size: 13px; color: rgba(255,255,255,0.8); }
-      .form-group input, .form-group select {
-        width: 100%; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.1);
-        color: white; padding: 12px 16px; border-radius: 12px; font-size: 15px; font-family: inherit;
-      }
-      .form-group input:focus, .form-group select:focus { outline: none; border-color: #F97316; }
-      .form-group select option { color: #111; }
-      .submit-btn {
-        width: 100%; background: linear-gradient(135deg, #F97316 0%, #EA580C 100%);
-        color: white; border: none; padding: 14px; border-radius: 12px;
-        font-size: 16px; font-weight: 600; cursor: pointer; font-family: inherit;
-        display: flex; align-items: center; justify-content: center;
-      }
-      .submit-btn:disabled { opacity: 0.7; cursor: not-allowed; }
-      .checkbox-item {
-        display: flex; align-items: flex-start; gap: 12px; margin-bottom: 0; cursor: pointer;
-        background: rgba(255,255,255,0.03); padding: 14px; border-radius: 12px;
-        border: 1px solid rgba(255,255,255,0.05);
-      }
-      .checkbox-item input { margin-top: 2px; width: 18px; height: 18px; accent-color: #F97316; flex-shrink: 0; }
-      .checkbox-item span { font-size: 14px; line-height: 1.45; color: rgba(255,255,255,0.9); }
-      .canvas-container {
-        background: rgba(0, 0, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 12px; overflow: hidden; margin-bottom: 10px;
-      }
-      .canvas-toolbar {
-        display: flex; justify-content: space-between; align-items: center;
-        padding: 8px 12px; background: rgba(255, 255, 255, 0.05);
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-      }
-      .clear-btn {
-        background: none; border: 1px solid rgba(255,255,255,0.2);
-        color: rgba(255,255,255,0.8); border-radius: 4px; padding: 2px 8px;
-        font-size: 11px; cursor: pointer;
-      }
-      .signature-pad { width: 100%; height: 150px; cursor: crosshair; touch-action: none; }
-      .fade-in { animation: fadeIn 0.4s ease; }
-      @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(10px); }
-        to { opacity: 1; transform: translateY(0); }
-      }
-    `}</style>
+    <>
+      <EventStyles />
+      <style>{`
+        .event-card { padding-bottom: 24px; }
+        .fade-in { padding: 0 24px; animation: fadeIn .4s ease; }
+        .event-centered .fade-in { padding: 0; }
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .form-header { text-align: center; padding: 22px 24px 0; }
+        .logo-circle {
+          width: 60px; height: 60px; border-radius: 50%; background: #fff;
+          display: flex; align-items: center; justify-content: center;
+          margin: 0 auto 14px; overflow: hidden;
+        }
+        .logo-circle img { width: 100%; height: 100%; object-fit: contain; display: block; }
+        .form-header h2 { margin: 0 0 6px; padding: 0; font-size: 22px; font-weight: 800; }
+        .form-header p { margin: 0; font-size: 13px; color: #94a3b8; }
+        .section-title {
+          font-size: 13px; letter-spacing: .5px; color: #fb923c;
+          font-weight: 800; margin: 22px 0 12px;
+        }
+        .form-group { margin-bottom: 14px; }
+        .form-group label { display: block; margin-bottom: 6px; font-size: 14px; color: #cbd5e1; }
+        .form-group input, .form-group select, .form-group textarea {
+          width: 100%; padding: 12px 14px; border-radius: 11px;
+          border: 1px solid rgba(255,255,255,.15); background: #0b1220;
+          color: #fff; font: inherit;
+        }
+        .form-group input:focus, .form-group select:focus { outline: none; border-color: #f97316; }
+        .form-group select option { color: #111; }
+        .onboard-back { margin: 14px 24px 0; }
+        .canvas-container {
+          background: #111827; border: 1px solid rgba(255,255,255,.2);
+          border-radius: 12px; overflow: hidden; margin-bottom: 10px;
+        }
+        .canvas-toolbar {
+          display: flex; justify-content: space-between; align-items: center;
+          padding: 8px 12px; background: rgba(255,255,255,.05);
+          border-bottom: 1px solid rgba(255,255,255,.05);
+        }
+        .clear-btn {
+          background: none; border: 1px solid rgba(255,255,255,.2);
+          color: #cbd5e1; border-radius: 6px; padding: 2px 8px;
+          font-size: 11px; cursor: pointer;
+        }
+        .event-signature { border: 0; border-radius: 0; height: 150px; cursor: crosshair; }
+        .event-primary { width: 100%; margin-top: 6px; }
+      `}</style>
+    </>
   );
 }

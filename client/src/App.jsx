@@ -8,6 +8,7 @@ import { useAuth } from './components/AuthGate.jsx';
 import { useBusinessProfile } from './BusinessProfileContext.jsx';
 import { isPublicPath } from './publicPaths.js';
 import GlobalSearch from './components/GlobalSearch.jsx';
+import AgentDock from './components/AgentDock.jsx';
 
 // Code-splitting: each screen is downloaded only when first visited,
 // which keeps the initial bundle (and first paint) small.
@@ -43,7 +44,7 @@ const NAV = [
   { key: 'schedule',   label: 'לוח חוגים',          icon: Calendar,         section: 'main', accent: '#FBBF24' },
   { key: 'equipment',  label: 'ציוד לאימונים',      icon: Package,          section: 'main', accent: '#A3E635' },
   { key: 'activities', label: 'יומן',               icon: CalendarRange,    section: 'main', accent: '#FB923C' },
-  { key: 'broadcasts', label: 'דיוור וואטסאפ',     icon: MessageSquare,    section: 'main', accent: '#34D399' },
+  { key: 'broadcasts', label: 'דיוור',              icon: MessageSquare,    section: 'main', accent: '#34D399' },
   { key: 'cash',       label: 'קופה ומכירה',      icon: Coins,            section: 'main', accent: '#F59E0B' },
   { key: 'safety',     label: 'בדיקות בטיחות',     icon: ShieldCheck,      section: 'ops',  accent: '#4ADE80' },
   { key: 'employees',  label: 'עובדים ומשמרות',    icon: UserCog,          section: 'ops',  accent: '#60A5FA' },
@@ -92,7 +93,7 @@ const PAGE_TITLES = {
   schedule:   { title: 'לוח חוגים',               sub: 'ניהול שיעורים ונוכחות' },
   equipment:  { title: 'ציוד לאימונים',           sub: 'מעקב תשלום ומסירה של נעליים, חולצה ומגנזיום' },
   activities: { title: 'יומן',                    sub: 'ימי הולדת, טיולים ואירועים — מסונכרן עם גוגל' },
-  broadcasts: { title: 'דיוור וואטסאפ',           sub: 'שליחת הודעות מסיביות' },
+  broadcasts: { title: 'דיוור',                   sub: 'שליחת הודעות מסיביות' },
   cash:       { title: 'קופה ומכירה',           sub: 'מכירה בדלפק, מוצרים, סגירת קופה ודוחות' },
   safety:     { title: 'בדיקות בטיחות',         sub: 'תדירויות, חתימות יומן ומעקב' },
   employees:  { title: 'עובדים ומשמרות',          sub: 'שעון נוכחות וניהול שכר' },
@@ -158,7 +159,9 @@ export default function App() {
       const response = await fetch(path);
       const body = await response.json().catch(() => null);
       if (!response.ok) {
-        throw new Error(body?.error || `טעינת ${label} נכשלה`);
+        // No JSON body means the failure came from a gateway (Cloudflare/Vercel/
+        // Render), not from us — keep the status so the screenshot says which.
+        throw new Error(body?.error || `טעינת ${label} נכשלה (שגיאה ${response.status})`);
       }
       if (!Array.isArray(body)) {
         throw new Error(`השרת החזיר תשובה לא תקינה עבור ${label}`);
@@ -240,6 +243,12 @@ export default function App() {
     .slice()
     .sort((a, b) => leadTs(b) - leadTs(a));
   const newLeadsCount = newLeads.length;
+  const agentRef = useRef(null);
+
+  const openAgentChat = (event) => {
+    event.stopPropagation();
+    agentRef.current?.openNewChat();
+  };
 
   return (
     <div className="app-shell">
@@ -285,6 +294,31 @@ export default function App() {
           {visibleNav.filter(n => n.section === 'ops').map(n => {
             const Icon = n.icon;
             const isActive = page === n.key;
+            if (n.key === 'assistant') {
+              return (
+                <div key={n.key} className="nav-item-with-action">
+                  <button
+                    className={`nav-item ${isActive ? 'active' : ''}`}
+                    onClick={() => goToPage(n.key)}
+                    style={{ '--nav-accent': n.accent }}
+                  >
+                    <span className="nav-icon-wrap">
+                      <Icon className="nav-icon" size={17} strokeWidth={2} />
+                    </span>
+                    <span>{n.label}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="nav-agent-launch"
+                    onClick={openAgentChat}
+                    title="שיחה חדשה עם הסוכן"
+                    aria-label="שיחה חדשה עם הסוכן"
+                  >
+                    <Sparkles size={15} strokeWidth={2.2} />
+                  </button>
+                </div>
+              );
+            }
             return (
               <button
                 key={n.key}
@@ -438,6 +472,9 @@ export default function App() {
             {page === 'business'   && isOwner && <BusinessSettings />}
           </Suspense>
         </main>
+
+        {/* מחוץ ל-<main> בכוונה: כך השיחה עם הסוכן שורדת מעבר בין מסכים. */}
+        <AgentDock ref={agentRef} page={info.title || ''} />
       </div>
     </div>
   );

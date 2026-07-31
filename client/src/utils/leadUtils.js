@@ -11,6 +11,14 @@ export function isParentOnlyLead(record) {
   return Boolean(record?._parentOnly) || String(record?.id || '').startsWith('parent:');
 }
 
+/**
+ * Archiving is a customer-level decision, so it lives on the payer: an archived
+ * parent takes the whole family off the working lists, trainees included.
+ */
+export function isArchivedParent(parent) {
+  return String(parent?.status || '') === 'archived';
+}
+
 export function parentLeadId(parentId) {
   return `parent:${parentId}`;
 }
@@ -52,14 +60,18 @@ export function resolveLeadOpenTarget(openId, students = [], parents = []) {
 /**
  * Produces one safe, uniform entry per student and one synthetic entry for
  * each parent who has no student record. Synthetic records are UI-only.
+ * Archived customers are left out unless `includeArchived` asks for them.
  */
-export function buildLeadEntries(students = [], parents = []) {
+export function buildLeadEntries(students = [], parents = [], { includeArchived = false } = {}) {
   const safeStudents = Array.isArray(students) ? students.filter(Boolean) : [];
   const safeParents = Array.isArray(parents) ? parents.filter(Boolean) : [];
   const parentById = new Map(safeParents.map((parent) => [String(parent.id), parent]));
 
   const entries = safeStudents
     .filter((student) => student.id != null)
+    .filter(
+      (student) => includeArchived || !isArchivedParent(parentById.get(String(student.parentId)))
+    )
     .map((student) => ({
       key: String(student.id),
       student,
@@ -73,7 +85,7 @@ export function buildLeadEntries(students = [], parents = []) {
   for (const parent of safeParents) {
     if (parent.id == null || parentIdsWithStudents.has(String(parent.id))) continue;
     const status = parent.status || 'lead_new';
-    if (status === 'archived') continue;
+    if (!includeArchived && status === 'archived') continue;
 
     const id = parentLeadId(parent.id);
     entries.push({

@@ -11,7 +11,7 @@ import { whatsappService } from './whatsapp.js';
 import { canSendFreeform } from './channels/sessionWindow.js';
 import { israelDateStr, israelHour } from './attendanceUtils.js';
 import { getBusinessProfile, DEFAULT_BUSINESS_PROFILE } from './businessProfile.js';
-import { expireDueCoupons } from './coupons.js';
+import { expireDueCoupons, releaseStaleReservations } from './coupons.js';
 import { runCampaign, runCouponReminders, runDueCampaigns } from './campaigns.js';
 
 /**
@@ -87,15 +87,17 @@ export async function runCampaignsIfDue(hour = 10) {
     if (israelHour() < hour) return null;
     lastCampaignRunDate = today;
 
+    // Hand back benefits held by payment links nobody paid, before expiring.
+    const released = releaseStaleReservations(db, today);
     const expired = expireDueCoupons(db, today);
     const results = await runDueCampaigns(db, {
       today,
       sendMessage: sendCampaignMessage,
       businessName: await businessDisplayName(),
     });
-    if (results.length || expired) {
+    if (results.length || expired || released.length) {
       console.log(
-        `🎯 Campaigns (${today}): ${results.length} ran, ${expired} coupons expired`,
+        `🎯 Campaigns (${today}): ${results.length} ran, ${expired} coupons expired, ${released.length} reservations released`,
         JSON.stringify(results.map((r) => ({
           name: r.campaign_name,
           sent: r.sent,
@@ -104,7 +106,7 @@ export async function runCampaignsIfDue(hour = 10) {
         })))
       );
     }
-    return { date: today, expired, results };
+    return { date: today, expired, released: released.length, results };
   } catch (err) {
     console.error('Scheduled campaigns failed:', err.message);
     lastCampaignRunDate = null;

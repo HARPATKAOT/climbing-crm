@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Footprints, Shirt, Sparkles, Gift } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, Archive, ArchiveRestore } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
 import {
@@ -11,11 +11,13 @@ import {
 import { healthExpiryDate } from '../utils/healthValidity.js';
 import {
   buildLeadEntries,
+  isArchivedParent,
   isParentOnlyLead,
   normalizePhone,
   resolveLeadOpenTarget,
 } from '../utils/leadUtils.js';
 import ConversationPanel from './ConversationPanel.jsx';
+import ConversationInbox from './ConversationInbox.jsx';
 import AttendanceList from './AttendanceList.jsx';
 import {
   AttendanceToggle,
@@ -25,7 +27,11 @@ import {
 import { isAwaitingHandling, latestInboundTime } from './communicationQueue.js';
 import { consecutiveAbsences } from '../scheduleUtils.js';
 import { studentGroupIds } from '../utils/studentGroups.js';
+import { passPurchasedText, passSubtitle } from '../utils/passes.js';
+import { isChildOfParent, otherGuardians } from '../utils/studentGuardians.js';
 import {
+  EQUIPMENT_ICONS,
+  EQUIPMENT_ICON_COLORS,
   EQUIPMENT_LABELS,
   EQUIPMENT_ORDER,
   EQUIPMENT_STATUS_TONES,
@@ -34,17 +40,13 @@ import {
   equipmentToneBg,
   equipmentToneColor,
   equipmentToneLabel,
+  equipmentToneTransition,
   formatRentalRange,
 } from './equipmentUtils.js';
 
-const EQUIPMENT_ICONS = {
-  shoes: Footprints,
-  shirt: Shirt,
-  chalk_bag: Sparkles,
-};
-
 const COUPON_STATE_BADGE = {
   active: { label: 'בתוקף', cls: 'badge badge-green' },
+  reserved: { label: 'ממתין לתשלום', cls: 'badge badge-amber' },
   redeemed: { label: 'מומש', cls: 'badge badge-blue' },
   expired: { label: 'פג תוקף', cls: 'badge badge-gray' },
   cancelled: { label: 'בוטל', cls: 'badge badge-red' },
@@ -287,32 +289,15 @@ const TEST_TYPE_COLORS = {
 };
 
 /** Collapsible folder row for lead detail panel */
-function FolderRow({ id, title, icon: Icon, summary, open, onToggle, children, summaryColor }) {
+function FolderRow({ id, title, icon: Icon, summary, open, onToggle, children, summaryColor, accent = 'var(--blue)' }) {
   return (
-    <div data-folder-id={id} style={{
-      border: '1px solid var(--border)',
-      borderRadius: 10,
-      marginBottom: 8,
-      overflow: 'hidden',
-      background: 'rgba(255,255,255,0.02)',
-    }}>
-      <button
-        type="button"
-        onClick={() => onToggle(id)}
-        style={{
-          width: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '10px 12px',
-          background: open ? 'rgba(255,255,255,0.04)' : 'transparent',
-          border: 'none',
-          cursor: 'pointer',
-          color: 'inherit',
-          textAlign: 'right',
-        }}
-      >
-        {Icon && <Icon size={15} style={{ flexShrink: 0, opacity: 0.85 }} />}
+    <div
+      data-folder-id={id}
+      className={`folder-row ${open ? 'open' : ''}`}
+      style={{ '--folder-accent': accent }}
+    >
+      <button type="button" className="folder-row-head" onClick={() => onToggle(id)}>
+        {Icon && <Icon className="folder-row-icon" size={15} />}
         <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', flexShrink: 0 }}>{title}</span>
         <span style={{
           fontSize: 12,
@@ -335,19 +320,30 @@ function FolderRow({ id, title, icon: Icon, summary, open, onToggle, children, s
           }}
         />
       </button>
-      {open && (
-        <div style={{ padding: '12px 12px 14px', borderTop: '1px solid var(--border)' }}>
-          {children}
-        </div>
-      )}
+      {open && <div className="folder-row-body">{children}</div>}
     </div>
   );
 }
 
 // ─── Lead/Customer Card (detail sidebar) ────────────────────────────────────
-export function CustomerCard({ student, parent, siblings = [], onSelectSibling, group, groups = [], onClose, onStatusChange, onDelete, onUpdateStudent, onUpdateParent, pricelist, refreshData, canManageBilling = false, canViewComms = true, onCommunicationHandled }) {
+export function CustomerCard({ student, parent: primaryParent, parents: allParents = [], siblings = [], onSelectSibling, group, groups = [], onClose, onStatusChange, onDelete, onArchive, onUpdateStudent, onUpdateParent, pricelist, refreshData, canManageBilling = false, canViewComms = true, onCommunicationHandled }) {
   if (!student) return null;
+
+  /**
+   * A child can have two parents on file — mum and dad, each with their own
+   * phone, mailing lists and conversation. The card shows one of them at a
+   * time, chosen by the tabs below, and everything else here reads `parent`,
+   * so the whole page follows the tab without a second code path.
+   */
+  const [activeParentId, setActiveParentId] = useState(primaryParent?.id || null);
+  useEffect(() => {
+    setActiveParentId(primaryParent?.id || null);
+  }, [student.id, primaryParent?.id]);
+  const parent = (allParents || []).find((item) => String(item.id) === String(activeParentId))
+    || primaryParent;
+
   const parentOnly = isParentOnlyLead(student);
+  const parentArchived = isArchivedParent(parent);
   const age = calculateAge(student.birthDate);
   const statusKeys = Object.keys(STATUSES);
   const navigate = useNavigate();
@@ -404,6 +400,8 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
   const [sendHealthOnAdd, setSendHealthOnAdd] = useState(true);
   const [addingChild, setAddingChild] = useState(false);
   const [addChildError, setAddChildError] = useState('');
+  const [removingChildId, setRemovingChildId] = useState('');
+  const [removeChildError, setRemoveChildError] = useState('');
 
   useEffect(() => {
     setEditBirthDate(student.birthDate || '');
@@ -428,6 +426,7 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
     setOpenFolder(null);
     setShowPaymentModal(false);
     setShowAddChild(false);
+    setRemoveChildError('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [student.id, parent?.id]);
 
@@ -685,6 +684,8 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
   const [activityDayBusy, setActivityDayBusy] = useState('');
   const [activityDayError, setActivityDayError] = useState('');
   const [customerPasses, setCustomerPasses] = useState([]);
+  const [guardians, setGuardians] = useState([]);
+  const [settingPrimary, setSettingPrimary] = useState(false);
   const [passesLoading, setPassesLoading] = useState(false);
   const [punchingId, setPunchingId] = useState(null);
   const [passPunches, setPassPunches] = useState({});
@@ -792,6 +793,46 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
     }
   };
 
+  /**
+   * Hand the "primary" badge to the parent whose tab is open. Primary is the
+   * parent the CRM addresses by default — reminders, links, invoices.
+   */
+  const handleMakePrimary = async () => {
+    if (!student?.id || !parent?.id || settingPrimary) return;
+    setSettingPrimary(true);
+    try {
+      const response = await fetch(
+        `/api/students/${encodeURIComponent(student.id)}/guardians/${encodeURIComponent(parent.id)}/primary`,
+        { method: 'PUT' }
+      );
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || 'עדכון ההורה הראשי נכשל');
+      }
+      await refreshGuardians();
+      refreshData?.();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSettingPrimary(false);
+    }
+  };
+
+  /** Every parent on this child's file — mum and dad each keep their own card. */
+  const refreshGuardians = async () => {
+    if (parentOnly || !student?.id) {
+      setGuardians([]);
+      return;
+    }
+    try {
+      const body = await fetch(`/api/students/${encodeURIComponent(student.id)}/guardians`)
+        .then((r) => (r.ok ? r.json() : { guardians: [] }));
+      setGuardians(Array.isArray(body.guardians) ? body.guardians : []);
+    } catch {
+      setGuardians([]);
+    }
+  };
+
   const refreshEquipment = async () => {
     if (!showEquipment || !student?.id) {
       setEquipmentItems([]);
@@ -825,7 +866,8 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
     try {
       await applyEquipmentTone(item.id, targetTone, { currentItem: item });
       await refreshEquipment();
-      setEquipmentEditId('');
+      // הפאנל נשאר פתוח: סגירתו מקצרת את התיק בדיוק ברגע הלחיצה
+      // ומזיזה את כל מה שמתחתיו. הסטטוס החדש מסומן „נוכחי”.
       setEquipmentMsg(`עודכן ל„${equipmentToneLabel(targetTone, item.item_type)}”`);
     } catch (err) {
       setEquipmentMsg(err.message);
@@ -944,6 +986,7 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
 
   useEffect(() => {
     refreshPasses();
+    refreshGuardians();
     setOpenPunchLog('');
     setPassPunches({});
   }, [parentOnly, student.id]);
@@ -1112,6 +1155,37 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
       setAddChildError('לא ניתן להתחבר לשרת');
     } finally {
       setAddingChild(false);
+    }
+  };
+
+  const handleRemoveChild = async (sib) => {
+    if (removingChildId) return;
+    const lastChild = siblings.length <= 1;
+    const question = lastChild
+      ? `להסיר את ${sib.name} מהרשימה? זה המתאמן היחיד, ולכן גם כרטיס ההורה יימחק. הפעולה אינה הפיכה.`
+      : `להסיר את ${sib.name} מהרשימה? תיק המתאמן יימחק לצמיתות. הפעולה אינה הפיכה.`;
+    if (!confirm(question)) return;
+    setRemovingChildId(sib.id);
+    setRemoveChildError('');
+    try {
+      const res = await fetch(`/api/students/${sib.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setRemoveChildError(data.error || 'שגיאה בהסרת המתאמן');
+        return;
+      }
+      // Switch away before the refresh drops the deleted student from the list
+      if (sib.id === student.id) {
+        const next = siblings.find((s) => s.id !== sib.id);
+        if (next) onSelectSibling?.(next.id);
+        else onClose?.();
+      }
+      if (refreshData) await refreshData();
+    } catch (err) {
+      console.error(err);
+      setRemoveChildError('לא ניתן להתחבר לשרת');
+    } finally {
+      setRemovingChildId('');
     }
   };
 
@@ -1658,6 +1732,49 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                 <MapPin size={11} style={{ verticalAlign: -1 }} /> {parent.city}
               </div>
             )}
+            {/* Parent tabs — the same idea as the child tabs below: one child,
+                two parents, each with their own details, lists and conversation. */}
+            {guardians.length > 1 && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
+                {guardians.map((guardian) => {
+                  const active = String(guardian.id) === String(parent?.id);
+                  return (
+                    <button
+                      key={guardian.id}
+                      type="button"
+                      onClick={() => setActiveParentId(guardian.id)}
+                      title={active ? 'ההורה המוצג' : `מעבר לפרטים ולשיחה של ${guardian.name}`}
+                      style={{
+                        border: active ? '1px solid rgba(56,189,248,0.65)' : '1px solid var(--border)',
+                        background: active ? 'rgba(56,189,248,0.18)' : 'rgba(255,255,255,0.04)',
+                        color: active ? 'var(--text-1)' : 'var(--text-2)',
+                        borderRadius: 999,
+                        padding: '4px 10px',
+                        fontSize: 12,
+                        fontWeight: active ? 700 : 600,
+                        cursor: 'pointer',
+                        lineHeight: 1.3,
+                      }}
+                    >
+                      {guardian.name || 'הורה'}
+                      {guardian.primary ? ' · ראשי' : ''}
+                    </button>
+                  );
+                })}
+                {guardians.some((g) => String(g.id) === String(parent?.id) && !g.primary) && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    style={{ border: '1px solid var(--border)' }}
+                    disabled={settingPrimary}
+                    title="ההורה הראשי הוא זה שאליו המערכת פונה כברירת מחדל"
+                    onClick={handleMakePrimary}
+                  >
+                    {settingPrimary ? 'מעדכן...' : 'קבע כהורה ראשי'}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           <div
@@ -1677,6 +1794,7 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                   id="mailing"
                   title="רשימות תפוצה"
                   icon={Bell}
+                  accent="#FBBF24"
                   summary={mailingListSummary}
                   open={openFolder === 'mailing'}
                   onToggle={toggleFolder}
@@ -1724,6 +1842,7 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                     id="payments"
                     title="תשלומים"
                     icon={CreditCard}
+                    accent="#34D399"
                     summary={paymentsSummary}
                     open={openFolder === 'payments'}
                     onToggle={toggleFolder}
@@ -1806,7 +1925,7 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                                     gap: 6,
                                     marginTop: 8,
                                     padding: 8,
-                                    background: 'var(--bg-2)',
+                                    background: 'var(--bg-input)',
                                     border: '1px solid var(--border)',
                                     borderRadius: 8,
                                   }}
@@ -1895,10 +2014,15 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
               </div>
             )}
 
-            {/* Child tabs */}
+            {/* Child tabs — of the parent whose tab is open, so a second parent
+                sees their own children rather than the whole other household.
+                The child being viewed always stays in the strip. */}
             <div style={{ marginBottom: 12 }}>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                {siblings.map((sib) => {
+                {siblings
+                  .filter((sib) => String(sib.id) === String(student.id)
+                    || isChildOfParent(sib, parent?.id))
+                  .map((sib) => {
                   const active = !parentOnly && sib.id === student.id;
                   return (
                     <button
@@ -2100,6 +2224,7 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
               id="health"
               title="הצהרת בריאות"
               icon={FileCheck2}
+              accent="#F472B6"
               summary={healthSummary}
               summaryColor={isHealthSigned && !healthExpired ? '#34D399' : '#FCD34D'}
               open={openFolder === 'health'}
@@ -2378,6 +2503,7 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                 id="group"
                 title="חוג ושיוך"
                 icon={Users}
+                accent="#A78BFA"
                 summary={groupSummary}
                 open={openFolder === 'group'}
                 onToggle={toggleFolder}
@@ -2482,6 +2608,7 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                 id="passes"
                 title="מנויים וכרטיסיות"
                 icon={Ticket}
+                accent="#38BDF8"
                 summary={passesSummary}
                 open={openFolder === 'passes'}
                 onToggle={toggleFolder}
@@ -2496,18 +2623,16 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                       const isPunch = pass.pass_type === 'punch_card';
                       const remaining = Number(pass.visits_remaining);
                       const totalVisits = Number(pass.visits_total);
-                      const statusLabel =
-                        pass.status === 'active' ? 'פעיל' :
-                        pass.status === 'depleted' ? 'נגמר' :
-                        pass.status === 'expired' ? 'פג תוקף' : pass.status;
+                      // A credited or expired pass stays in the file as history —
+                      // it must not read like an asset the customer can still use.
+                      const isLive = pass.status === 'active';
                       return (
-                        <div key={pass.id} style={{ borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
+                        <div key={pass.id} style={{ borderBottom: '1px solid var(--border)', paddingBottom: 8, opacity: isLive ? 1 : 0.6 }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
                             <div>
                               <div style={{ fontWeight: 700, fontSize: 13 }}>{pass.name}</div>
                               <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
-                                {isPunch ? 'כרטיסייה' : 'מנוי'} · {statusLabel}
-                                {pass.valid_until ? ` · עד ${pass.valid_until}` : ''}
+                                {passSubtitle(pass)}
                               </div>
                               {/* Bought under a benefit — must be obvious before anyone credits it */}
                               {passDiscountNote(pass) && (
@@ -2518,7 +2643,12 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                                 </div>
                               )}
                               {isPunch && (
-                                <div style={{ marginTop: 4, fontSize: 14, fontWeight: 800, color: remaining > 0 ? 'var(--green)' : 'var(--red)' }}>
+                                <div style={{
+                                  marginTop: 4,
+                                  fontSize: 14,
+                                  fontWeight: 800,
+                                  color: !isLive ? 'var(--text-3)' : (remaining > 0 ? 'var(--green)' : 'var(--red)'),
+                                }}>
                                   נשארו {remaining} מתוך {totalVisits}
                                 </div>
                               )}
@@ -2542,14 +2672,25 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                           >
                             {openPunchLog === pass.id ? 'סגירת היסטוריית ניקובים' : 'היסטוריית ניקובים'}
                           </button>
+                          {openPunchLog === pass.id && passPurchasedText(pass) && (
+                            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--green)', fontWeight: 700 }}>
+                              {passPurchasedText(pass)}
+                            </div>
+                          )}
                           {openPunchLog === pass.id && Array.isArray(passPunches[pass.id]) && (
                             passPunches[pass.id].length === 0 ? (
                               <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-3)' }}>עדיין לא נוקבה כניסה</div>
                             ) : (
                               <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-3)', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                {passPunches[pass.id].slice(0, 10).map((p) => (
+                                {/* The server sends newest first; the log reads as a timeline —
+                                    purchase, then punches in the order they happened. */}
+                                {passPunches[pass.id].slice(0, 10).reverse().map((p) => (
                                   <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                    <span style={{ textDecoration: p.cancelled_at ? 'line-through' : 'none' }}>
+                                    <span style={{
+                                      textDecoration: p.cancelled_at ? 'line-through' : 'none',
+                                      // A cancelled punch gave the visit back — it is not a punch any more.
+                                      color: p.cancelled_at ? 'var(--text-3)' : 'var(--blue)',
+                                    }}>
                                       {new Date(p.punched_at).toLocaleString('he-IL')} · נשאר {p.visits_after}
                                       {p.punched_by ? ` · ${p.punched_by}` : ''}
                                     </span>
@@ -2586,6 +2727,7 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
               id="coupons"
               title="הטבות וקופונים"
               icon={Gift}
+              accent="#FB923C"
               summary={couponsSummary}
               summaryColor={activeCoupons.length > 0 ? 'var(--green)' : undefined}
               open={openFolder === 'coupons'}
@@ -2622,6 +2764,11 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                               {coupon.redeemed_amount != null
                                 ? ` · הנחה של ₪${Number(coupon.redeemed_amount).toLocaleString()}`
                                 : ''}
+                            </div>
+                          )}
+                          {coupon.state === 'reserved' && (
+                            <div style={{ fontSize: 11, color: 'var(--amber, #FBBF24)', marginTop: 2 }}>
+                              שמורה לקישור תשלום שנשלח · תמומש כשהתשלום ייקלט
                             </div>
                           )}
                           {coupon.state === 'cancelled' && coupon.cancelled_reason && (
@@ -2780,11 +2927,15 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                 id="equipment"
                 title="ציוד לאימונים"
                 icon={Package}
+                accent="#A3E635"
                 summary={equipmentSummary}
                 open={openFolder === 'equipment'}
                 onToggle={toggleFolder}
               >
-                {equipmentLoading ? (
+                {/* רק הטעינה הראשונה מחליפה את התוכן. רענון אחרי שינוי סטטוס
+                    משאיר את הכרטיסיות במקום, אחרת התיק מתכווץ לשורה אחת
+                    וכל מה שמתחתיו קופץ למעלה וחזרה. */}
+                {equipmentLoading && !equipmentItems.length ? (
                   <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען...</div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -2854,7 +3005,11 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                               color: 'var(--text-1)',
                             }}
                           >
-                            <Icon size={24} color="var(--text-2)" strokeWidth={2.2} />
+                            <Icon
+                              size={24}
+                              color={EQUIPMENT_ICON_COLORS[type] || 'var(--text-2)'}
+                              strokeWidth={2.2}
+                            />
                             <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--text-1)' }}>
                               {EQUIPMENT_LABELS[type] || type}
                             </div>
@@ -2904,12 +3059,15 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                             {EQUIPMENT_STATUS_TONES.map((opt) => {
                               const optColor = equipmentToneColor(opt);
                               const selected = opt === tone;
+                              const { allowed, reason } = equipmentToneTransition(opt, item);
+                              const locked = !selected && !allowed;
                               return (
                                 <button
                                   key={opt}
                                   type="button"
-                                  disabled={busy || selected}
+                                  disabled={busy || selected || locked}
                                   onClick={() => handleEquipmentSetStatus(item, opt)}
+                                  title={locked ? reason : ''}
                                   style={{
                                     width: '100%',
                                     fontSize: 13,
@@ -2919,17 +3077,23 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                                     border: selected ? `2px solid ${optColor}` : `1px solid ${optColor}55`,
                                     background: equipmentToneBg(opt),
                                     color: optColor,
-                                    cursor: selected ? 'default' : 'pointer',
+                                    cursor: selected || locked ? 'default' : 'pointer',
                                     textAlign: 'center',
-                                    opacity: selected ? 1 : 0.95,
+                                    opacity: locked ? 0.4 : 1,
                                   }}
                                 >
                                   {equipmentToneLabel(opt, item.item_type)}
                                   {selected ? ' · נוכחי' : ''}
+                                  {locked ? ' 🔒' : ''}
                                 </button>
                               );
                             })}
                           </div>
+                          {tone === 'unpaid' && (
+                            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 8 }}>
+                              „שולם” ו„נמסר” נפתחים רק אחרי תשלום בדף התשלום.
+                            </div>
+                          )}
                         </div>
                       );
                     })()}
@@ -2955,6 +3119,7 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                 id="attendance"
                 title="נוכחות"
                 icon={History}
+                accent="#2DD4BF"
                 summary={attendanceSummary}
                 open={openFolder === 'attendance'}
                 onToggle={toggleFolder}
@@ -2977,6 +3142,7 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                 id="activities"
                 title="פעילויות"
                 icon={CalendarDays}
+                accent="#818CF8"
                 summary={activityHistorySummary}
                 open={openFolder === 'activities'}
                 onToggle={toggleFolder}
@@ -3052,6 +3218,7 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                 id="tests"
                 title="מבחנים"
                 icon={Award}
+                accent="#FCD34D"
                 summary={testsSummary}
                 open={openFolder === 'tests'}
                 onToggle={toggleFolder}
@@ -3168,6 +3335,7 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
               id="status"
               title="סטטוס והערות"
               icon={Clipboard}
+              accent="#60A5FA"
               summary={statusSummary}
               open={openFolder === 'status'}
               onToggle={toggleFolder}
@@ -3274,7 +3442,7 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
                 alignItems: 'center',
                 gap: 8,
                 cursor: 'pointer',
-                background: 'var(--bg-2)',
+                background: 'var(--bg-input)',
                 padding: 10,
                 borderRadius: 8,
               }}
@@ -3404,7 +3572,22 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
               <label className="form-label">הערות מעקב</label>
               <textarea className="input" style={{ minHeight: 80 }} value={editNotes} onChange={e => setEditNotes(e.target.value)} />
             </div>
-            <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs w-full"
+                style={{ justifyContent: 'center', gap: 6 }}
+                onClick={() => {
+                  const next = !parentArchived;
+                  if (next && !confirm(`להעביר את ${parentDisplayName(parent) || 'הלקוח'} לארכיון? הכרטיס ייעלם מרשימת הלקוחות ומהחיפוש, וההיסטוריה תישמר. אפשר להחזיר בכל רגע.`)) return;
+                  setIsEditing(false);
+                  onArchive?.(parent?.id, next);
+                }}
+              >
+                {parentArchived
+                  ? <><ArchiveRestore size={12} /> החזר מהארכיון</>
+                  : <><Archive size={12} /> העבר לארכיון</>}
+              </button>
               <button
                 type="button"
                 className="btn btn-danger btn-xs w-full"
@@ -3422,10 +3605,26 @@ export function CustomerCard({ student, parent, siblings = [], onSelectSibling, 
               </>
             )}
             {(editFocus === 'student' && !parentOnly) && (
-              <div className="form-group">
-                <label className="form-label">הערות מעקב</label>
-                <textarea className="input" style={{ minHeight: 80 }} value={editNotes} onChange={e => setEditNotes(e.target.value)} />
-              </div>
+              <>
+                <div className="form-group">
+                  <label className="form-label">הערות מעקב</label>
+                  <textarea className="input" style={{ minHeight: 80 }} value={editNotes} onChange={e => setEditNotes(e.target.value)} />
+                </div>
+                <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-xs w-full"
+                    disabled={!!removingChildId}
+                    style={{ justifyContent: 'center', gap: 6 }}
+                    onClick={() => handleRemoveChild(student)}
+                  >
+                    <Trash2 size={12} /> {removingChildId ? 'מסיר...' : `הסר את ${student.name} מהרשימה`}
+                  </button>
+                  {removeChildError && (
+                    <div className="alert alert-warn" style={{ marginTop: 8 }}>{removeChildError}</div>
+                  )}
+                </div>
+              </>
             )}
           </div>
         </Modal>
@@ -3576,7 +3775,7 @@ function AddLeadModal({ students, parents, onAdd, onClose }) {
     >
       <form id="add-lead-form" onSubmit={handleSubmit} className="form-grid">
         <div className="form-group" style={{ marginBottom: 16 }}>
-          <label className="checkbox-item" style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', background: 'var(--bg-2)', padding: 10, borderRadius: 8 }}>
+          <label className="checkbox-item" style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', background: 'var(--bg-input)', padding: 10, borderRadius: 8 }}>
             <input type="checkbox" checked={isAdult} onChange={e => setIsAdult(e.target.checked)} style={{ accentColor: 'var(--primary)' }} />
             <span style={{ fontSize: 14 }}>מתאמן בוגר (מעל גיל 18, נרשם לעצמו)</span>
           </label>
@@ -3769,17 +3968,21 @@ export default function Leads({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const leadEntries = buildLeadEntries(students, parents);
+  // The archive tab is the only place archived customers surface.
+  const showArchived = filterStatus === 'archived';
+  const leadEntries = buildLeadEntries(students, parents, { includeArchived: showArchived });
 
   const filtered = leadEntries.filter(({ student: s, parent: p }) => {
     const parent = p || parents.find((x) => x.id === s.parentId);
     const matchSearch = (s.name || '').toLowerCase().includes(search.toLowerCase()) ||
       parent?.name?.toLowerCase().includes(search.toLowerCase()) ||
       (parent?.phone || '').includes(search);
-    const matchStatus = filterStatus === 'all'
-      || (filterStatus === 'communication'
-        ? isAwaitingHandling(parent)
-        : s.status === filterStatus);
+    const matchStatus = showArchived
+      ? isArchivedParent(parent)
+      : filterStatus === 'all'
+        || (filterStatus === 'communication'
+          ? isAwaitingHandling(parent)
+          : s.status === filterStatus);
     return matchSearch && matchStatus;
   }).map((entry) => entry.student);
 
@@ -3805,6 +4008,12 @@ export default function Leads({
       const matching = leadEntries.filter((e) => e.student.status === key).map((e) => e.student);
       map[key] = buildFamilyRows(matching, parents).length;
     }
+    map.archived = buildFamilyRows(
+      buildLeadEntries(students, parents, { includeArchived: true })
+        .filter(({ parent }) => isArchivedParent(parent))
+        .map((e) => e.student),
+      parents
+    ).length;
     return map;
   })();
 
@@ -3844,13 +4053,14 @@ export default function Leads({
 
   const selectedStudent = students.find((s) => String(s.id) === String(selectedStudentId))
     || (String(selectedStudentId || '').startsWith('parent:')
-      ? buildLeadEntries(students, parents).find((e) => String(e.key) === String(selectedStudentId))?.student
+      ? buildLeadEntries(students, parents, { includeArchived: true }).find((e) => String(e.key) === String(selectedStudentId))?.student
       : null);
   const selectedParent = selectedStudent ? parents.find((p) => String(p.id) === String(selectedStudent.parentId)) : null;
   const selectedGroup = selectedStudent?.groupId ? groups.find(g => g.id === selectedStudent.groupId) : null;
   const selectedSiblings = selectedParent
     ? students.filter((s) => {
-        if (String(s.parentId) === String(selectedParent.id)) return true;
+        // A second parent sees the same child, once — not a copy of their own.
+        if (isChildOfParent(s, selectedParent.id)) return true;
         const otherParent = parents.find((p) => p.id === s.parentId);
         return phoneTailMatch(otherParent?.phone, selectedParent.phone);
       })
@@ -3951,25 +4161,45 @@ export default function Leads({
   };
 
   const handleDelete = async (studentId) => {
+    const parentOnly = isParentOnlyLead({ id: studentId });
+    const url = parentOnly
+      ? `/api/parents/${encodeURIComponent(String(studentId).replace(/^parent:/, ''))}`
+      : `/api/students/${encodeURIComponent(studentId)}`;
     try {
-      if (isParentOnlyLead({ id: studentId })) {
-        const parentId = studentId.replace(/^parent:/, '');
-        const response = await fetch(`/api/parents/${parentId}`, { method: 'DELETE' });
-        if (response.ok) {
-          setSelectedStudentId(null);
-          refreshData();
-        }
+      const response = await fetch(url, { method: 'DELETE' });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        alert(body.error || 'מחיקת הלקוח נכשלה');
         return;
       }
-      const response = await fetch(`/api/students/${studentId}`, {
-        method: 'DELETE'
-      });
-      if (response.ok) {
-        setSelectedStudentId(null);
-        refreshData();
-      }
+      if (body.parentWarning) alert(body.parentWarning);
+      setSelectedStudentId(null);
+      refreshData();
     } catch (err) {
       console.error(err);
+      alert('מחיקת הלקוח נכשלה — אין חיבור לשרת');
+    }
+  };
+
+  const handleArchive = async (parentId, archived) => {
+    if (!parentId) return;
+    try {
+      const response = await fetch(`/api/parents/${encodeURIComponent(parentId)}/archive`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ archived }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        alert(body.error || 'העברה לארכיון נכשלה');
+        return;
+      }
+      // The card is about to leave the list it was opened from.
+      setSelectedStudentId(null);
+      refreshData();
+    } catch (err) {
+      console.error(err);
+      alert('העברה לארכיון נכשלה — אין חיבור לשרת');
     }
   };
 
@@ -3987,6 +4217,7 @@ export default function Leads({
         <CustomerCard
           student={selectedStudent}
           parent={selectedParent}
+          parents={parents}
           siblings={selectedSiblings}
           onSelectSibling={setSelectedStudentId}
           group={selectedGroup}
@@ -3995,6 +4226,7 @@ export default function Leads({
           onClose={() => setSelectedStudentId(null)}
           onStatusChange={handleStatusChange}
           onDelete={handleDelete}
+          onArchive={handleArchive}
           onUpdateStudent={handleUpdateStudent}
           onUpdateParent={handleUpdateParent}
           refreshData={refreshData}
@@ -4025,13 +4257,31 @@ export default function Leads({
               onChange={e => setSearch(e.target.value)}
             />
           </div>
-          <div style={{ display: 'flex', gap: 2, background: 'var(--bg-2)', borderRadius: 8, padding: 2 }}>
-            <button className={`btn btn-sm ${viewMode === 'table' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setViewMode('table')} title="תצוגת טבלה">
+          <div className="tab-bar tab-bar-inline">
+            <button className={`tab-pill tab-pill-icon ${viewMode === 'table' ? 'active' : ''}`} onClick={() => setViewMode('table')} title="תצוגת טבלה">
               <List size={16} />
             </button>
-            <button className={`btn btn-sm ${viewMode === 'kanban' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setViewMode('kanban')} title="תצוגת קנבן">
+            <button className={`tab-pill tab-pill-icon ${viewMode === 'kanban' ? 'active' : ''}`} onClick={() => setViewMode('kanban')} title="תצוגת קנבן">
               <LayoutGrid size={16} />
             </button>
+            {canViewComms && (
+              <button
+                className={`tab-pill tab-pill-icon ${viewMode === 'inbox' ? 'active' : ''}`}
+                onClick={() => setViewMode('inbox')}
+                title="תצוגת שיחות"
+                style={{ position: 'relative' }}
+              >
+                <MessageCircle size={16} />
+                {familyCountByStatus.communication > 0 && viewMode !== 'inbox' && (
+                  <span
+                    style={{
+                      position: 'absolute', top: 1, insetInlineEnd: 1,
+                      width: 7, height: 7, borderRadius: '50%', background: '#FBBF24',
+                    }}
+                  />
+                )}
+              </button>
+            )}
           </div>
           <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>
             <Plus size={16} /> ליד חדש
@@ -4070,6 +4320,15 @@ export default function Leads({
             {v.label} ({familyCountByStatus[k] || 0})
           </button>
         ))}
+        {(familyCountByStatus.archived > 0 || showArchived) && (
+          <button
+            className={`btn btn-sm ${showArchived ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setFilterStatus('archived')}
+            style={{ gap: 6 }}
+          >
+            <Archive size={13} /> ארכיון ({familyCountByStatus.archived})
+          </button>
+        )}
       </div>
       )}
 
@@ -4077,6 +4336,11 @@ export default function Leads({
         <div className="alert alert-danger" style={{ marginBottom: 14 }}>
           {handlingError}
         </div>
+      )}
+
+      {/* Inbox — every conversation in one list, WhatsApp style */}
+      {viewMode === 'inbox' && (
+        <ConversationInbox parents={parents} onHandled={applyHandledParents} />
       )}
 
       {/* Kanban board (funnel by status) */}
@@ -4097,7 +4361,7 @@ export default function Leads({
                 }}
                 style={{
                   minWidth: 240, width: 240, flexShrink: 0,
-                  background: dragOverStatus === statusKey ? 'rgba(129,140,248,0.08)' : 'var(--bg-2)',
+                  background: dragOverStatus === statusKey ? 'rgba(129,140,248,0.08)' : 'var(--bg-input)',
                   border: `1px solid ${dragOverStatus === statusKey ? statusVal.color : 'var(--border)'}`,
                   borderRadius: 12, padding: 10, transition: 'background 0.15s, border-color 0.15s'
                 }}

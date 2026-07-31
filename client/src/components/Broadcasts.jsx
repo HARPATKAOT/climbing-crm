@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { Send, Hash, History, Settings, Smartphone, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2, FileText, Bookmark, RotateCcw, Target } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 import { Modal } from './UI.jsx';
 import SegmentBuilder from './SegmentBuilder.jsx';
 import { EMPTY_FILTERS } from './segmentFilters.js';
@@ -29,10 +30,26 @@ const LIST_COLORS = [
 
 const WA_TEMPLATES = [];
 
+// Colours come from the .tab-bar accent cycle in index.css, by position.
+const TABS = [
+  { key: 'compose',   label: 'שליחת דיוור',        icon: Send },
+  { key: 'templates', label: 'תבניות Meta',         icon: FileText },
+  { key: 'saved',     label: 'הודעות שמורות',      icon: Bookmark },
+  { key: 'campaigns', label: 'קמפיינים אוטומטיים', icon: Target },
+  { key: 'history',   label: 'היסטוריית שידורים',  icon: History },
+  { key: 'channels',  label: 'חיבורי ערוצים',      icon: Smartphone },
+  { key: 'settings',  label: 'הגדרות ואימון AI',    icon: Settings },
+];
+
 export default function Broadcasts({ parents, students, groups = [] }) {
   const { profile } = useBusinessProfile();
   const brandName = profile.display_name || 'הרפתקאות';
-  const [activeTab, setActiveTab] = useState('compose'); // compose | templates | saved | history | channels | settings
+  const location = useLocation();
+  // Other screens link straight to a tab here (e.g. "full template details"
+  // from the conversation panel), so the deep link decides the opening tab.
+  const [activeTab, setActiveTab] = useState(
+    location.state?.broadcastTab || 'compose'
+  ); // compose | templates | saved | history | channels | settings
   
   // Compose / Send State
   const [lists, setLists] = useState(DEFAULT_LISTS);
@@ -642,28 +659,19 @@ export default function Broadcasts({ parents, students, groups = [] }) {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 10, flexWrap: 'wrap' }}>
-        <button className={`btn btn-sm ${activeTab === 'compose' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setActiveTab('compose'); setSendResult(null); }}>
-          <Send size={14} /> שליחת דיוור
-        </button>
-        <button className={`btn btn-sm ${activeTab === 'templates' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('templates')}>
-          <FileText size={14} /> תבניות Meta
-        </button>
-        <button className={`btn btn-sm ${activeTab === 'saved' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('saved')}>
-          <Bookmark size={14} /> הודעות שמורות
-        </button>
-        <button className={`btn btn-sm ${activeTab === 'campaigns' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('campaigns')}>
-          <Target size={14} /> קמפיינים אוטומטיים
-        </button>
-        <button className={`btn btn-sm ${activeTab === 'history' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('history')}>
-          <History size={14} /> היסטוריית שידורים
-        </button>
-        <button className={`btn btn-sm ${activeTab === 'channels' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('channels')}>
-          <Smartphone size={14} /> חיבורי ערוצים
-        </button>
-        <button className={`btn btn-sm ${activeTab === 'settings' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('settings')}>
-          <Settings size={14} /> הגדרות ואימון AI
-        </button>
+      <div className="tab-bar">
+        {TABS.map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            className={`tab-pill ${activeTab === key ? 'active' : ''}`}
+            onClick={() => {
+              setActiveTab(key);
+              if (key === 'compose') setSendResult(null);
+            }}
+          >
+            <Icon size={14} /> {label}
+          </button>
+        ))}
       </div>
 
       {activeTab === 'templates' && <TemplatesManager />}

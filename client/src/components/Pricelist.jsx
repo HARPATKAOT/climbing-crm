@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Plus, Edit2, Trash2, Save, Search, AlertCircle, ArrowRight,
-  ImagePlus, X, Package, FolderOpen,
+  ImagePlus, X, Package, FolderOpen, Crop, Maximize2, Link2,
 } from 'lucide-react';
 import {
   PRODUCT_CATEGORIES,
@@ -10,6 +10,8 @@ import {
   DEFAULT_CATEGORY_COLOR,
   normalizeCategories,
   compressImageFile,
+  catTint,
+  imageBackground,
 } from './productCategories.js';
 
 const NOTION_PRICELIST = [
@@ -20,11 +22,19 @@ const NOTION_PRICELIST = [
 
 const defaultColor = DEFAULT_CATEGORY_COLOR;
 
+/** Virtual folder for products whose category was deleted or never set. */
+const UNCATEGORIZED = '__uncategorized__';
+const UNCATEGORIZED_LABEL = 'ללא קטגוריה';
+
+function catLabel(name) {
+  return name === UNCATEGORIZED ? UNCATEGORIZED_LABEL : name;
+}
+
 function catColor(name) {
   return CATEGORY_COLORS[name] || defaultColor;
 }
 
-function ImagePicker({ value, onChange, label = 'תמונה', tall = false }) {
+function ImagePicker({ value, onChange, label = 'תמונה', tall = false, fit = 'cover', onFitChange }) {
   const inputRef = useRef(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -64,7 +74,7 @@ function ImagePicker({ value, onChange, label = 'תמונה', tall = false }) {
           }}
         >
           {value ? (
-            <img src={value} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            <img src={value} alt="" style={{ width: '100%', height: '100%', objectFit: fit }} />
           ) : (
             <ImagePlus size={22} style={{ color: 'var(--text-3)' }} />
           )}
@@ -78,6 +88,26 @@ function ImagePicker({ value, onChange, label = 'תמונה', tall = false }) {
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange('')}>
               <X size={14} /> הסר תמונה
             </button>
+          )}
+          {value && onFitChange && (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <button
+                type="button"
+                className={`btn btn-xs ${fit === 'cover' ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => onFitChange('cover')}
+                title="התמונה ממלאת את המסגרת, הקצוות נחתכים"
+              >
+                <Crop size={12} /> מילוי
+              </button>
+              <button
+                type="button"
+                className={`btn btn-xs ${fit === 'contain' ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => onFitChange('contain')}
+                title="כל התמונה נכנסת למסגרת בלי חיתוך"
+              >
+                <Maximize2 size={12} /> התאמה למסגרת
+              </button>
+            </div>
           )}
           {err && <div style={{ fontSize: 12, color: 'var(--red)' }}>{err}</div>}
         </div>
@@ -109,6 +139,9 @@ function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory }) 
   const [stockQty, setStockQty] = useState(item?.stock_qty ?? '');
   const [trackInventory, setTrackInventory] = useState(item?.track_inventory ?? false);
   const [image, setImage] = useState(item?.image || '');
+  const [imageFit, setImageFit] = useState(item?.image_fit === 'contain' ? 'contain' : 'cover');
+  const [selfServe, setSelfServe] = useState(item?.self_serve === true);
+  const sellableOnline = productType === 'punch_card' || productType === 'time_membership';
 
   const toggleCat = (cat) => setCats((prev) =>
     prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]
@@ -129,12 +162,14 @@ function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory }) 
       ages: item?.ages || [],
       active,
       image: image || '',
+      image_fit: imageFit,
       product_type: productType,
       visits_total: productType === 'punch_card' ? (parseInt(visitsTotal, 10) || 10) : null,
       validity_days: productType === 'punch_card' && validityDays !== '' ? parseInt(validityDays, 10) : null,
       duration_days: productType === 'time_membership' ? (parseInt(durationDays, 10) || 30) : null,
       track_inventory: productType === 'product' ? !!trackInventory : false,
       stock_qty: productType === 'product' && stockQty !== '' ? parseInt(stockQty, 10) : null,
+      self_serve: sellableOnline && selfServe,
     });
   };
 
@@ -142,7 +177,8 @@ function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory }) 
 
   return (
     <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <ImagePicker value={image} onChange={setImage} label="תמונת מוצר" tall />
+      <ImagePicker value={image} onChange={setImage} label="תמונת מוצר" tall
+        fit={imageFit} onFitChange={setImageFit} />
 
       <div className="form-grid-2">
         <div className="form-group" style={{ gridColumn: 'span 2' }}>
@@ -217,6 +253,20 @@ function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory }) 
         </div>
       </div>
 
+      {sellableOnline && (
+        <div className="form-group" style={{ padding: 12, borderRadius: 10, background: 'rgba(52,211,153,0.06)', border: '1px solid rgba(52,211,153,0.25)' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+            <input type="checkbox" checked={selfServe} onChange={(e) => setSelfServe(e.target.checked)}
+              style={{ width: 18, height: 18, cursor: 'pointer' }} />
+            <span style={{ fontWeight: 700 }}>מכירה עצמית בקישור ציבורי</span>
+          </label>
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
+            כל אחד יוכל להיכנס לקישור, למלא פרטים והצהרת בריאות (אם אין לו בתוקף) ולשלם.
+            הכרטיסייה נכנסת לתיק הלקוח מיד עם אישור התשלום. הפעלה זמינה למנהל בלבד.
+          </div>
+        </div>
+      )}
+
       <div className="form-group">
         <label className="form-label">תיאור</label>
         <textarea className="input textarea" rows={2} value={desc}
@@ -241,7 +291,7 @@ function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory }) 
                   padding: '4px 10px', borderRadius: 20, fontSize: 12, cursor: 'pointer', border: 'none',
                   background: sel ? c.bg : 'rgba(255,255,255,0.04)',
                   color: sel ? c.text : 'var(--text-3)',
-                  outline: sel ? `1px solid ${c.text}55` : '1px solid var(--border)',
+                  outline: sel ? `1px solid ${catTint(c.text, '55')}` : '1px solid var(--border)',
                   fontWeight: sel ? 700 : 400,
                 }}>
                 {cat}
@@ -266,6 +316,7 @@ function CategoryForm({ category, onSave, onCancel }) {
   const [name, setName] = useState(category?.name || '');
   const [description, setDescription] = useState(category?.description || '');
   const [image, setImage] = useState(category?.image || '');
+  const [imageFit, setImageFit] = useState(category?.image_fit === 'contain' ? 'contain' : 'cover');
   const [active, setActive] = useState(category?.active ?? true);
 
   const handleSubmit = (e) => {
@@ -276,13 +327,15 @@ function CategoryForm({ category, onSave, onCancel }) {
       name: name.trim(),
       description: description.trim(),
       image: image || '',
+      image_fit: imageFit,
       active,
     });
   };
 
   return (
     <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <ImagePicker value={image} onChange={setImage} label="תמונת קטגוריה" tall />
+      <ImagePicker value={image} onChange={setImage} label="תמונת קטגוריה" tall
+        fit={imageFit} onFitChange={setImageFit} />
       <div className="form-group">
         <label className="form-label">שם הקטגוריה *</label>
         <input className="input" required value={name} onChange={(e) => setName(e.target.value)}
@@ -356,41 +409,66 @@ export default function Pricelist() {
     [categories]
   );
 
+  /** Products pointing at a category that no longer exists would be unreachable. */
+  const isOrphan = useMemo(() => {
+    const known = new Set(categoryNames);
+    return (item) => !(item.categories || []).some((c) => known.has(c));
+  }, [categoryNames]);
+
   const countsByCat = useMemo(() => {
     const map = {};
     for (const name of categoryNames) map[name] = 0;
+    map[UNCATEGORIZED] = 0;
     for (const item of items) {
       if (!showInactive && !item.active) continue;
+      if (isOrphan(item)) {
+        map[UNCATEGORIZED] += 1;
+        continue;
+      }
       for (const c of item.categories || []) {
         map[c] = (map[c] || 0) + 1;
       }
     }
     return map;
-  }, [items, categoryNames, showInactive]);
+  }, [items, categoryNames, showInactive, isOrphan]);
 
   const visibleCats = useMemo(() => {
     const list = categories.length
       ? categories.filter((c) => showInactive || c.active !== false)
       : PRODUCT_CATEGORIES.map((name, i) => ({ id: `fallback-${i}`, name, image: '', description: '', active: true }));
+    const withOrphans = countsByCat[UNCATEGORIZED] > 0
+      ? [...list, {
+          id: UNCATEGORIZED,
+          name: UNCATEGORIZED,
+          image: '',
+          description: 'מוצרים שהקטגוריה שלהם נמחקה — פתחו ושייכו מחדש',
+          active: true,
+          virtual: true,
+        }]
+      : list;
     const q = search.trim().toLowerCase();
-    if (!q || openCatName) return list;
-    return list.filter((c) =>
-      c.name.toLowerCase().includes(q) ||
+    if (!q || openCatName) return withOrphans;
+    return withOrphans.filter((c) =>
+      catLabel(c.name).toLowerCase().includes(q) ||
       String(c.description || '').toLowerCase().includes(q)
     );
-  }, [categories, showInactive, search, openCatName]);
+  }, [categories, showInactive, search, openCatName, countsByCat]);
 
   const visibleItems = useMemo(() => {
     if (!openCatName) return [];
     return items.filter((item) => {
       if (!showInactive && !item.active) return false;
-      if (!item.categories?.includes(openCatName)) return false;
+      if (openCatName === UNCATEGORIZED) {
+        if (!isOrphan(item)) return false;
+      } else if (!item.categories?.includes(openCatName)) {
+        return false;
+      }
       const q = search.toLowerCase();
       if (q && !item.name.toLowerCase().includes(q) &&
           !item.description?.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [items, openCatName, search, showInactive]);
+  }, [items, openCatName, search, showInactive, isOrphan]);
 
   const openCatMeta = useMemo(
     () => categories.find((c) => c.name === openCatName) || { name: openCatName, image: '', description: '' },
@@ -430,6 +508,17 @@ export default function Pricelist() {
       }
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  /** The public routes are served by this same app, so the current origin is the customer's link too. */
+  const copyShopLink = async (item) => {
+    const url = `${window.location.origin}/shop/${item.public_slug}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      alert(`הקישור הועתק:\n${url}`);
+    } catch {
+      window.prompt('העתיקו את הקישור:', url);
     }
   };
 
@@ -506,7 +595,7 @@ export default function Pricelist() {
               >
                 <ArrowRight size={14} /> חזרה לקטגוריות
               </button>
-              <div className="section-title">{openCatName}</div>
+              <div className="section-title">{catLabel(openCatName)}</div>
               <div className="section-sub">
                 {openCatMeta.description || `${visibleItems.length} מוצרים בקטגוריה`}
               </div>
@@ -524,7 +613,7 @@ export default function Pricelist() {
               <FolderOpen size={15} /> קטגוריה חדשה
             </button>
           )}
-          {openCatName && (
+          {openCatName && openCatName !== UNCATEGORIZED && (
             <button
               className="btn btn-ghost btn-sm"
               onClick={() => {
@@ -535,19 +624,21 @@ export default function Pricelist() {
               <Edit2 size={14} /> ערוך קטגוריה
             </button>
           )}
-          <button
-            className="btn btn-primary btn-sm"
-            onClick={() => {
-              if (!openCatName) {
-                alert('בחרו קטגוריה ואז הוסיפו מוצר');
-                return;
-              }
-              setAddingNew(true);
-              setEditingId(null);
-            }}
-          >
-            <Plus size={15} /> הוסף מוצר
-          </button>
+          {openCatName !== UNCATEGORIZED && (
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => {
+                if (!openCatName) {
+                  alert('בחרו קטגוריה ואז הוסיפו מוצר');
+                  return;
+                }
+                setAddingNew(true);
+                setEditingId(null);
+              }}
+            >
+              <Plus size={15} /> הוסף מוצר
+            </button>
+          )}
         </div>
       </div>
 
@@ -582,7 +673,7 @@ export default function Pricelist() {
         </div>
       )}
 
-      {addingNew && openCatName && (
+      {addingNew && openCatName && openCatName !== UNCATEGORIZED && (
         <div className="card card-p" style={{ marginBottom: 20, borderColor: 'rgba(99,102,241,0.3)' }}>
           <div style={{ fontWeight: 700, marginBottom: 16, color: '#A5B4FC' }}>
             <Plus size={16} style={{ verticalAlign: 'middle', marginLeft: 6 }} />
@@ -648,14 +739,14 @@ export default function Pricelist() {
                 style={{
                   overflow: 'hidden',
                   cursor: 'pointer',
-                  borderColor: `${c.text}33`,
+                  borderColor: catTint(c.text, '33'),
                   transition: 'transform 0.15s, box-shadow 0.15s',
                   opacity: cat.active === false ? 0.5 : 1,
                 }}
                 onClick={() => { setOpenCatName(cat.name); setSearch(''); }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.transform = 'translateY(-2px)';
-                  e.currentTarget.style.boxShadow = `0 8px 24px ${c.text}22`;
+                  e.currentTarget.style.boxShadow = `0 8px 24px ${catTint(c.text, '22')}`;
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.transform = '';
@@ -665,9 +756,10 @@ export default function Pricelist() {
                 <div
                   style={{
                     height: 110,
-                    background: cat.image
-                      ? `center/cover no-repeat url(${cat.image})`
-                      : `linear-gradient(145deg, ${c.bg}, rgba(15,20,30,0.9))`,
+                    background: imageBackground(
+                      cat,
+                      `linear-gradient(145deg, ${c.bg}, rgba(15,20,30,0.9))`
+                    ),
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -675,6 +767,7 @@ export default function Pricelist() {
                   }}
                 >
                   {!cat.image && <Icon size={36} color={c.text} strokeWidth={1.75} />}
+                  {!cat.virtual && (
                   <div style={{ position: 'absolute', top: 8, left: 8, display: 'flex', gap: 4 }} onClick={(e) => e.stopPropagation()}>
                     <button
                       type="button"
@@ -695,9 +788,10 @@ export default function Pricelist() {
                       <Trash2 size={12} />
                     </button>
                   </div>
+                  )}
                 </div>
                 <div style={{ padding: '12px 14px' }}>
-                  <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>{cat.name}</div>
+                  <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>{catLabel(cat.name)}</div>
                   <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
                     {count === 0 ? 'אין מוצרים עדיין' : `${count} מוצרים`}
                   </div>
@@ -728,10 +822,14 @@ export default function Pricelist() {
           {visibleItems.length === 0 && !addingNew ? (
             <div className="card card-p" style={{ gridColumn: '1 / -1', textAlign: 'center', padding: 48 }}>
               <div className="empty-state-title">אין מוצרים בקטגוריה הזו</div>
-              <div style={{ color: 'var(--text-3)', marginTop: 8, marginBottom: 16 }}>הוסיפו את המוצר הראשון</div>
-              <button className="btn btn-primary btn-sm" onClick={() => setAddingNew(true)}>
-                <Plus size={14} /> הוסף מוצר
-              </button>
+              {openCatName !== UNCATEGORIZED && (
+                <>
+                  <div style={{ color: 'var(--text-3)', marginTop: 8, marginBottom: 16 }}>הוסיפו את המוצר הראשון</div>
+                  <button className="btn btn-primary btn-sm" onClick={() => setAddingNew(true)}>
+                    <Plus size={14} /> הוסף מוצר
+                  </button>
+                </>
+              )}
             </div>
           ) : (
             visibleItems.map((item) => {
@@ -740,8 +838,10 @@ export default function Pricelist() {
                 return (
                   <div key={item.id} className="card card-p" style={{ gridColumn: '1 / -1', borderRight: '3px solid #6366F1' }}>
                     <ItemForm
-                      item={item}
-                      defaultCategory={openCatName}
+                      // Orphans keep a stale label the picker can't show — clear it so
+                      // the owner re-assigns the product to a live category.
+                      item={openCatName === UNCATEGORIZED ? { ...item, categories: [] } : item}
+                      defaultCategory={openCatName === UNCATEGORIZED ? null : openCatName}
                       categoryOptions={categoryNames}
                       onSave={handleSaveItem}
                       onCancel={() => setEditingId(null)}
@@ -758,9 +858,10 @@ export default function Pricelist() {
                   <div
                     style={{
                       height: 140,
-                      background: item.image
-                        ? `center/cover no-repeat url(${item.image})`
-                        : 'linear-gradient(145deg, rgba(255,255,255,0.04), rgba(15,20,30,0.85))',
+                      background: imageBackground(
+                        item,
+                        'linear-gradient(145deg, rgba(255,255,255,0.04), rgba(15,20,30,0.85))'
+                      ),
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -787,6 +888,16 @@ export default function Pricelist() {
                         <span style={{ fontSize: 13, color: 'var(--text-3)' }}>ללא מחיר</span>
                       )}
                       <div style={{ display: 'flex', gap: 4 }}>
+                        {item.self_serve && item.public_slug && (
+                          <button
+                            className="btn btn-ghost btn-icon btn-xs"
+                            style={{ color: 'var(--green)' }}
+                            title="העתקת קישור הרכישה הציבורי"
+                            onClick={() => copyShopLink(item)}
+                          >
+                            <Link2 size={13} />
+                          </button>
+                        )}
                         <button
                           className="btn btn-ghost btn-icon btn-xs"
                           onClick={() => toggleActive(item)}

@@ -785,6 +785,10 @@ export default function ActivityRegistrationPanel({
   const isHostPays =
     (form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')) === 'host_pays';
   const hostPayStatus = form.payment_status || hostPayment?.payment_status || 'unpaid';
+  // בהרשמה בתשלום לכל משתתף אין דמי הזמנה מהמזמין, ולכן הסטטוס שלו יישאר
+  // „לא שולם” לנצח. מציגים אותו רק כשהוא באמת אומר משהו.
+  const showHostPayStatus =
+    isHostPays || ['paid', 'partial', 'refunded'].includes(form.payment_status);
   const isHostRefunded =
     hostPayment?.status === 'refunded' || hostPayStatus === 'refunded';
   const hostStatusLabel = isHostRefunded
@@ -964,6 +968,19 @@ export default function ActivityRegistrationPanel({
         תשלום והרשמה
       </div>
 
+      {!showHostPayStatus ? (
+        <div className="activity-registration-field">
+          <span className="activity-registration-field-label">גביית תשלום</span>
+          <div className="activity-registration-status-row">
+            <span className="activity-registration-status-value">
+              נגבה מכל משתתף בנפרד
+            </span>
+          </div>
+          <span className="activity-registration-field-hint">
+            אין דמי הזמנה מהמזמין — מעקב התשלומים הוא ברשימת המשתתפים.
+          </span>
+        </div>
+      ) : (
       <div className="activity-registration-field">
         <span className="activity-registration-field-label">סטטוס תשלום המזמין</span>
         {editingPaymentStatus && !readOnly ? (
@@ -1008,8 +1025,9 @@ export default function ActivityRegistrationPanel({
           </div>
         )}
       </div>
+      )}
 
-      {activityId && !readOnly && (form.payment_status || 'unpaid') === 'paid' && !isHostPays && (
+      {activityId && !readOnly && (form.payment_status || 'unpaid') === 'paid' && isHostPays && (
         <button
           type="button"
           className="btn-ghost"

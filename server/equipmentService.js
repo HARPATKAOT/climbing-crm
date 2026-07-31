@@ -28,6 +28,8 @@ export const EQUIPMENT_TEMPLATE_LEGACY_NAMES = ['equipment_payment'];
 
 export const DEFAULT_EQUIPMENT_SETTINGS = {
   prices: {
+    // נעליים מושכרות לחצי עונת חוגים. זה המחיר המלא לחצי עונה,
+    // ומי שמצטרף באמצע משלם ממנו יחסית — ראו shoesSeasonPricing.
     shoes: 150,
     shirt: 120,
     chalk_bag: 80,
@@ -35,7 +37,26 @@ export const DEFAULT_EQUIPMENT_SETTINGS = {
   shirt_sizes: ['6', '8', '10', '12', '14', 'XS', 'S', 'M', 'L'],
   rental_days: 182,
   price_includes_vat: true,
+  // שנת חוגים חוזרת כל שנה, לכן נשמר יום-חודש בלבד ולא תאריך מלא.
+  // ברירת המחדל: 11 חודשי חוגים, 5.5 לכל חצי.
+  season_start: '09-01',
+  season_mid: '02-15',
+  season_end: '07-31',
 };
+
+const MD_PATTERN = /^(\d{2})-(\d{2})$/;
+
+/** יום-חודש תקין ('09-01') או null. */
+function normalizeMonthDay(value, fallback) {
+  const raw = String(value || '').trim();
+  const match = MD_PATTERN.exec(raw);
+  if (match) {
+    const month = Number(match[1]);
+    const day = Number(match[2]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) return raw;
+  }
+  return fallback;
+}
 
 export function normalizeEquipmentSettings(raw = {}) {
   const base = DEFAULT_EQUIPMENT_SETTINGS;
@@ -56,6 +77,9 @@ export function normalizeEquipmentSettings(raw = {}) {
     shirt_sizes: shirtSizes,
     rental_days: rentalDays,
     price_includes_vat: raw.price_includes_vat !== false,
+    season_start: normalizeMonthDay(raw.season_start, base.season_start),
+    season_mid: normalizeMonthDay(raw.season_mid, base.season_mid),
+    season_end: normalizeMonthDay(raw.season_end, base.season_end),
   };
 }
 
@@ -97,6 +121,7 @@ export function ensureStudentEquipment({ db, student, persist } = {}) {
         payment_status: 'unpaid',
         fulfillment_status: 'pending',
         shirt_size: null,
+        shoe_size: null,
         paid_at: null,
         given_at: null,
         given_by: null,
@@ -131,6 +156,198 @@ export function addDaysIso(fromIso, days) {
   return end.toISOString();
 }
 
+// ─── שנת חוגים וקיזוז דמי השכרת נעליים ──────────────────────────────────────
+// נעליים מושכרות לחצי עונה. מי שמצטרף באמצע משלם רק על מה שנשאר לו,
+// בעיגול לחצי חודש הקרוב — כך שהצטרפות חודש אחרי הפתיחה יורדת מ-5.5 ל-4.5.
+
+const DAY_MS = 86400000;
+const AVG_MONTH_DAYS = 30.4375;
+
+/** תאריך בחצות UTC, כדי שהפרשי ימים לא יזוזו עם אזור הזמן. */
+function utcDay(year, month, day) {
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+/** 'YYYY-MM-DD' או ISO מלא → תאריך בחצות UTC, או null. */
+export function parseDayDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    return utcDay(value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate());
+  }
+  const raw = String(value).trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+  if (match) return utcDay(Number(match[1]), Number(match[2]), Number(match[3]));
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return utcDay(parsed.getUTCFullYear(), parsed.getUTCMonth() + 1, parsed.getUTCDate());
+}
+
+function isoDay(date) {
+  return date ? date.toISOString().slice(0, 10) : null;
+}
+
+/** אורך תקופה ביחידות של חצי חודש. הסוף בלעדי. */
+export function halfMonthUnits(from, toExclusive) {
+  const start = parseDayDate(from);
+  const end = parseDayDate(toExclusive);
+  if (!start || !end) return 0;
+  const days = (end.getTime() - start.getTime()) / DAY_MS;
+  if (days <= 0) return 0;
+  return Math.round((days / AVG_MONTH_DAYS) * 2) / 2;
+}
+
+/**
+ * שני חצאי עונת החוגים שמכילים את התאריך הנתון.
+ * יום-חודש שקטן מיום פתיחת העונה שייך לשנה הקלנדרית הבאה,
+ * כך ש-09-01 → 07-31 נפרש נכון על פני מעבר השנה.
+ */
+export function resolveSeasonHalves(settings = {}, refDate = new Date()) {
+  const s = normalizeEquipmentSettings(settings);
+  const ref = parseDayDate(refDate) || parseDayDate(new Date());
+  const [startMonth, startDay] = s.season_start.split('-').map(Number);
+
+  const build = (seasonYear) => {
+    const inSeason = (md) => {
+      const [month, day] = md.split('-').map(Number);
+      const year = md < s.season_start ? seasonYear + 1 : seasonYear;
+      return utcDay(year, month, day);
+    };
+    const start = utcDay(seasonYear, startMonth, startDay);
+    const end = inSeason(s.season_end);
+    let mid = inSeason(s.season_mid);
+    // אמצע לא תקין → חוצים את העונה לפי ימים, כדי שתמיד יהיו שני חצאים.
+    if (!(mid > start && mid < end)) {
+      mid = new Date(start.getTime() + Math.round((end.getTime() - start.getTime()) / 2));
+      mid = parseDayDate(mid);
+    }
+    const endExclusive = new Date(end.getTime() + DAY_MS);
+    return {
+      seasonYear,
+      start,
+      mid,
+      end,
+      halves: [
+        { index: 0, label: 'חצי ראשון', start, endExclusive: mid },
+        { index: 1, label: 'חצי שני', start: mid, endExclusive },
+      ],
+    };
+  };
+
+  const refMd = isoDay(ref).slice(5);
+  let season = build(refMd < s.season_start ? ref.getUTCFullYear() - 1 : ref.getUTCFullYear());
+  // בין העונות (למשל אוגוסט) — מתמחרים את החצי הראשון של העונה הבאה.
+  if (ref.getTime() > season.end.getTime()) season = build(season.seasonYear + 1);
+
+  const current =
+    season.halves.find((h) => ref.getTime() < h.endExclusive.getTime()) || season.halves[0];
+  return { ...season, current };
+}
+
+/** סטטוסים שאינם מעידים על השתתפות בחוג. */
+const NON_JOIN_ATT_STATUSES = new Set(['cancelled', 'holiday']);
+const INTRO_ATT_STATUSES = new Set(['intro_pending', 'intro_attended', 'intro_absent']);
+/** סטטוסים שמעידים שהילד באמת הגיע לאימון. */
+const ARRIVED_ATT_STATUSES = new Set(['attended', 'makeup', 'saturday_makeup']);
+/** אימון ההכירות כבר כולל נעליים; החוג עצמו מתחיל שבוע אחריו. */
+export const INTRO_GRACE_DAYS = 7;
+
+function addDays(day, days) {
+  const date = parseDayDate(day);
+  if (!date) return null;
+  return isoDay(new Date(date.getTime() + days * DAY_MS));
+}
+
+/**
+ * תאריך ההצטרפות לחוג לפי רשימת הנוכחות.
+ *
+ * יש שורת הכירות → שבוע אחריה, בלי להמתין לשורה הבאה. חריג אחד: אם
+ * הילד לא באמת התחיל אז — סומן „לא הגיע” באימונים שאחרי, או שלא נפתחו
+ * לו שורות בכלל — האימון הראשון שהגיע אליו בפועל גובר. שורה שעדיין לא
+ * סומנה איננה ראיה שלא התחיל, ולכן אינה מפעילה את החריג.
+ *
+ * אין שורת הכירות → האימון הראשון ברשימה הוא ההצטרפות.
+ */
+export function resolveJoinDate(attendance = []) {
+  const rows = (Array.isArray(attendance) ? attendance : [])
+    .map((row) => ({ ...row, day: isoDay(parseDayDate(row?.date)) }))
+    .filter((row) => row.day && !NON_JOIN_ATT_STATUSES.has(row.status))
+    .sort((a, b) => a.day.localeCompare(b.day));
+  if (!rows.length) return null;
+
+  let lastIntro = null;
+  for (const row of rows) {
+    if (INTRO_ATT_STATUSES.has(row.status)) lastIntro = row.day;
+  }
+
+  if (!lastIntro) {
+    const first = rows.find((row) => !INTRO_ATT_STATUSES.has(row.status));
+    return first ? first.day : null;
+  }
+
+  const base = addDays(lastIntro, INTRO_GRACE_DAYS);
+  const after = rows.filter((row) => !INTRO_ATT_STATUSES.has(row.status) && row.day > lastIntro);
+  const firstArrived = after.find((row) => ARRIVED_ATT_STATUSES.has(row.status));
+  if (firstArrived && firstArrived.day > base) {
+    const between = after.filter((row) => row.day < firstArrived.day);
+    if (between.every((row) => row.status === 'absent')) return firstArrived.day;
+  }
+  return base;
+}
+
+/**
+ * מחיר הנעליים לחצי העונה הנוכחי, מקוזז לפי תאריך ההצטרפות.
+ * @returns {{amount:number, full_price:number, remaining_units:number,
+ *   total_units:number, prorated:boolean, join_date:string|null,
+ *   half_label:string, half_start:string, half_end:string}}
+ */
+export function shoesSeasonPricing({ settings = {}, attendance = [], refDate = new Date() } = {}) {
+  const s = normalizeEquipmentSettings(settings);
+  const fullPrice = s.prices.shoes;
+  const ref = parseDayDate(refDate) || parseDayDate(new Date());
+  const joinDate = resolveJoinDate(attendance);
+  // בלי נוכחות רשומה — הקישור נשלח בהרשמה, לפני האימון הראשון,
+  // ולכן ההצטרפות היא היום. אחרת חדש בדצמבר היה משלם חצי עונה מלאה.
+  const joined = parseDayDate(joinDate) || ref;
+
+  // מחייבים את החצי שבו הילד מתחיל להתאמן. שורות נוכחות עתידיות
+  // (אימונים שכבר נפתחו ליומן) מזיזות את החיוב לחצי הנכון במקום
+  // לגבות מינימום על חצי שכבר נגמר.
+  const anchor = joined.getTime() > ref.getTime() ? joined : ref;
+  const season = resolveSeasonHalves(s, anchor);
+  const half = season.current;
+
+  // מי שכבר התאמן לפני שהחצי נפתח משלם עליו במלואו.
+  const effectiveStart = joined.getTime() > half.start.getTime() ? joined : half.start;
+
+  const totalUnits = halfMonthUnits(half.start, half.endExclusive);
+  let remainingUnits = halfMonthUnits(effectiveStart, half.endExclusive);
+  if (remainingUnits > totalUnits) remainingUnits = totalUnits;
+  // גם מי שמצטרף שבוע לפני הסוף משלם לפחות חצי חודש.
+  if (remainingUnits < 0.5) remainingUnits = 0.5;
+
+  const amount =
+    totalUnits > 0
+      ? Math.min(fullPrice, Math.max(0, Math.round((fullPrice * remainingUnits) / totalUnits)))
+      : fullPrice;
+
+  return {
+    amount,
+    full_price: fullPrice,
+    remaining_units: remainingUnits,
+    total_units: totalUnits,
+    prorated: remainingUnits < totalUnits,
+    join_date: joinDate,
+    join_source: joinDate ? 'attendance' : 'today',
+    intro_grace_days: INTRO_GRACE_DAYS,
+    half_label: half.label,
+    half_start: isoDay(half.start),
+    // סוף כולל, לתצוגה להורה
+    half_end: isoDay(new Date(half.endExclusive.getTime() - DAY_MS)),
+    rental_starts_at: isoDay(effectiveStart),
+  };
+}
+
 /**
  * Mark selected equipment items as paid after checkout / webhook.
  * @returns {{ updated: object[], errors: string[] }}
@@ -143,6 +360,7 @@ export function markEquipmentItemsPaid({
   shirtSize = null,
   paymentId = null,
   rentalDays = DEFAULT_EQUIPMENT_SETTINGS.rental_days,
+  rentalEndsAt = null,
   paidAt = null,
 } = {}) {
   const errors = [];
@@ -192,7 +410,10 @@ export function markEquipmentItemsPaid({
     }
     if (row.item_type === 'shoes') {
       patch.rental_starts_at = when;
-      patch.rental_ends_at = addDaysIso(when, rentalDays);
+      // ההשכרה נגמרת עם חצי העונה, לא כעבור מספר ימים קבוע מהתשלום.
+      patch.rental_ends_at = rentalEndsAt
+        ? new Date(rentalEndsAt).toISOString()
+        : addDaysIso(when, rentalDays);
     }
 
     const next = db.update('student_equipment', row.id, patch);
@@ -288,6 +509,10 @@ export function markEquipmentOwn({ db, persist, rowId } = {}) {
 export function markEquipmentDeclined({ db, persist, rowId } = {}) {
   const row = db.getOne('student_equipment', rowId);
   if (!row) return { ok: false, error: 'פריט הציוד לא נמצא' };
+  // נעליים הן חובה — אין „לא מעוניינים” עליהן.
+  if (row.item_type === 'shoes') {
+    return { ok: false, error: 'נעליים הן ציוד חובה — אי אפשר לסמן „לא מעוניינים”' };
+  }
   if (row.payment_status === 'declined') return { ok: true, row };
 
   const next = db.update('student_equipment', row.id, {
@@ -327,8 +552,12 @@ export function markEquipmentUnpaid({ db, persist, rowId } = {}) {
   return { ok: true, row: next };
 }
 
-export function computeEquipmentTotal(settings, itemTypes = []) {
-  const prices = normalizeEquipmentSettings(settings).prices;
+/** @param {{shoes?:number}} [overrides] מחיר נעליים מקוזז, כשהוא ידוע */
+export function computeEquipmentTotal(settings, itemTypes = [], overrides = {}) {
+  const prices = { ...normalizeEquipmentSettings(settings).prices };
+  if (Number.isFinite(Number(overrides?.shoes))) {
+    prices.shoes = Math.max(0, Number(overrides.shoes));
+  }
   return (Array.isArray(itemTypes) ? itemTypes : []).reduce((sum, type) => {
     if (!EQUIPMENT_ITEM_TYPES.includes(type)) return sum;
     return sum + (Number(prices[type]) || 0);

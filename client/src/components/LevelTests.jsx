@@ -454,13 +454,15 @@ export default function LevelTests({ students, groups }) {
           <div className="section-title">מבחנים ונבחרת</div>
           <div className="section-sub">מבחני רמה, אבטחה והובלה · לוח הישגים של הנבחרת</div>
         </div>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button className={`btn btn-sm ${activeTab === 'tests' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('tests')}>
-            <Award size={15} /> מבחנים
-          </button>
-          <button className={`btn btn-sm ${activeTab === 'leaderboard' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActiveTab('leaderboard')}>
-            <Trophy size={15} /> לוח הנבחרת
-          </button>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div className="tab-bar tab-bar-inline">
+            <button className={`tab-pill ${activeTab === 'tests' ? 'active' : ''}`} onClick={() => setActiveTab('tests')}>
+              <Award size={15} /> מבחנים
+            </button>
+            <button className={`tab-pill ${activeTab === 'leaderboard' ? 'active' : ''}`} onClick={() => setActiveTab('leaderboard')}>
+              <Trophy size={15} /> לוח הנבחרת
+            </button>
+          </div>
           <button className="btn btn-primary btn-sm" onClick={() => setShowAdd(true)}>
             <Plus size={15} /> שמירת מבחן חדש
           </button>

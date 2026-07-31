@@ -1,4 +1,24 @@
-/** Shared labels and status helpers for training equipment UI. */
+/** Shared labels, icons and status helpers for training equipment UI. */
+
+import { Footprints, Shirt, Sparkles } from 'lucide-react';
+
+/** אותו אייקון לכל פריט בכל מסך — תיק הלקוח, מעקב הציוד ופרטי הקבוצה. */
+export const EQUIPMENT_ICONS = {
+  shoes: Footprints,
+  shirt: Shirt,
+  chalk_bag: Sparkles,
+};
+
+/**
+ * צבע קבוע לכל סוג פריט, שלא משתנה לעולם — הוא מזהה את הפריט, לא את מצבו.
+ * הצבע של הסטטוס נשאר לטקסט הסטטוס ולרקע הצ׳יפ, כך שסריקה מהירה של השורה
+ * עונה על שתי שאלות נפרדות: איזה פריט זה, ובאיזה מצב הוא.
+ */
+export const EQUIPMENT_ICON_COLORS = {
+  shoes: '#A3E635',
+  shirt: '#22D3EE',
+  chalk_bag: '#FBBF24',
+};
 
 export const EQUIPMENT_LABELS = {
   shoes: 'נעליים',
@@ -38,7 +58,11 @@ export const EQUIPMENT_GIVEN_LABELS = {
 export function equipmentItemTone(item) {
   if (!item) return 'missing';
   if (item.payment_status === 'own') return 'own';
-  if (item.payment_status === 'declined') return 'declined';
+  // נעליים הן חובה, ולכן „לא מעוניינים” אינו מצב חוקי עבורן. רשומות
+  // ישנות שנשמרו כך נקראות כ„ממתין לתשלום” בכל המסכים.
+  if (item.payment_status === 'declined') {
+    return item.item_type === 'shoes' ? 'unpaid' : 'declined';
+  }
   if (item.payment_status !== 'paid') return 'unpaid';
   if (item.fulfillment_status !== 'given') return 'awaiting';
   return 'given';
@@ -75,9 +99,39 @@ export function equipmentToneLabel(tone, itemType = null) {
 }
 
 /**
+ * מי מותר לסמן ידנית ומי לא.
+ *
+ * „שולם” נקבע רק כשמתקבל תשלום בדף התשלום, ו„נמסר” נפתח רק אחרי שיש תשלום.
+ * בלי זה אפשר להעביר פריט ישר מ„ממתין לתשלום” ל„נמסר” ולעקוף סליקה.
+ * השרת אוכף את אותו כלל — זה כאן רק כדי להסביר למשתמש למה הכפתור סגור.
+ *
+ * @returns {{allowed: boolean, reason: string}}
+ */
+export function equipmentToneTransition(targetTone, item) {
+  const current = equipmentItemTone(item);
+  if (targetTone === current) return { allowed: false, reason: 'זה הסטטוס הנוכחי' };
+  if (targetTone === 'awaiting') {
+    // חזרה מ„נמסר” ל„שולם” היא ביטול מסירה בלבד — התשלום עצמו נשאר.
+    return current === 'given'
+      ? { allowed: true, reason: '' }
+      : { allowed: false, reason: 'הסטטוס מתעדכן לבד כשמתקבל תשלום בדף התשלום' };
+  }
+  if (targetTone === 'given') {
+    return current === 'awaiting'
+      ? { allowed: true, reason: '' }
+      : { allowed: false, reason: 'אפשר לסמן מסירה רק אחרי תשלום' };
+  }
+  return { allowed: true, reason: '' };
+}
+
+/**
  * Apply a target tone via existing equipment endpoints.
  */
-export async function applyEquipmentTone(itemId, targetTone, { currentItem } = {}) {
+export async function applyEquipmentTone(
+  itemId,
+  targetTone,
+  { currentItem, allowManualPaid = false } = {}
+) {
   const id = encodeURIComponent(itemId);
   const put = async (body) => {
     const res = await fetch(`/api/equipment/${id}`, {
@@ -118,31 +172,23 @@ export async function applyEquipmentTone(itemId, targetTone, { currentItem } = {
   }
 
   if (targetTone === 'awaiting') {
-    let row = currentItem;
-    if (row?.payment_status === 'own' || row?.payment_status === 'declined') {
-      row = await post('mark-unpaid');
+    // מ„נמסר” אפשר לחזור ל„שולם” — התשלום עצמו לא משתנה.
+    if (currentItem?.payment_status === 'paid') {
+      return post('mark-pending');
     }
-    if (row?.payment_status !== 'paid') {
-      row = await put({ payment_status: 'paid' });
+    // סימון ידני של תשלום שהתקבל מחוץ לדף התשלום. השרת אוכף שוב שהמבקש
+    // הוא מנהל, ולכן הדגל הזה הוא נוחות בממשק ולא הרשאה.
+    if (allowManualPaid) {
+      return put({ payment_status: 'paid' });
     }
-    if (row?.fulfillment_status === 'given') {
-      row = await post('mark-pending');
-    }
-    return row;
+    throw new Error('הסטטוס „שולם” מתעדכן רק כשמתקבל תשלום בדף התשלום');
   }
 
   if (targetTone === 'given') {
-    let row = currentItem;
-    if (row?.payment_status === 'own' || row?.payment_status === 'declined') {
-      row = await post('mark-unpaid');
+    if (currentItem?.payment_status !== 'paid') {
+      throw new Error('אפשר לסמן מסירה רק אחרי תשלום');
     }
-    if (row?.payment_status !== 'paid') {
-      row = await put({ payment_status: 'paid' });
-    }
-    if (row?.fulfillment_status !== 'given') {
-      row = await post('mark-given');
-    }
-    return row;
+    return post('mark-given');
   }
 
   throw new Error('סטטוס לא תקין');

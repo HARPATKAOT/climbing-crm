@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
-import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X, Printer } from 'lucide-react';
+import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X, Printer, ShoppingCart, Package, Calculator, History, BarChart3 } from 'lucide-react';
 import PosSale from './PosSale.jsx';
 import Pricelist from './Pricelist.jsx';
 
@@ -379,14 +379,14 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
       : null;
 
   const tabs = [
-    { k: 'sale', label: 'מכירה' },
-    ...(isOwner ? [{ k: 'products', label: 'מוצרים' }] : []),
-    { k: 'close', label: 'סגירת קופה' },
-    { k: 'history', label: 'היסטוריה' },
+    { k: 'sale', label: 'מכירה', icon: ShoppingCart },
+    ...(isOwner ? [{ k: 'products', label: 'מוצרים', icon: Package }] : []),
+    { k: 'close', label: 'סגירת קופה', icon: Calculator },
+    { k: 'history', label: 'היסטוריה', icon: History },
     ...(isOwner
       ? [
-          { k: 'reports', label: 'דוחות' },
-          { k: 'icount', label: 'סליקה ומסמכים' },
+          { k: 'reports', label: 'דוחות', icon: BarChart3 },
+          { k: 'icount', label: 'סליקה ומסמכים', icon: ReceiptText },
         ]
       : []),
   ];
@@ -548,19 +548,21 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
-        {tabs.map((t) => (
+      <div className="tab-bar">
+        {tabs.map(({ k, label, icon: Icon }) => (
           <button
-            key={t.k}
-            className={`btn btn-sm ${activeTab === t.k ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => setActiveTab(t.k)}
+            key={k}
+            className={`tab-pill ${activeTab === k ? 'active' : ''}`}
+            onClick={() => setActiveTab(k)}
           >
-            {t.label}
+            <Icon size={14} /> {label}
           </button>
         ))}
       </div>
 
-      {activeTab === 'sale' && <PosSale />}
+      {activeTab === 'sale' && (
+        <PosSale onManageProducts={isOwner ? () => setActiveTab('products') : null} />
+      )}
 
       {activeTab === 'products' && isOwner && <Pricelist />}
 

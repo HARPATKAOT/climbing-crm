@@ -15,7 +15,9 @@ export const INTEREST_OPEN = 'interested';
 export const INTEREST_CONVERTED = 'converted';
 export const INTEREST_CANCELLED = 'cancelled';
 
-const REGISTRATION_PAYMENT_STATUSES = new Set(['paid', 'pending', 'not_required']);
+/** אוצר המילים היחיד לסטטוס תשלום של הרשמה. מיוצא כדי שקוראים אחרים
+ *  (למשל שכבת הסוכן) לא ימציאו ערך שנפילתו היא ברירת מחדל שקטה. */
+export const REGISTRATION_PAYMENT_STATUSES = new Set(['paid', 'pending', 'not_required']);
 
 function clean(value) {
   return String(value ?? '').trim();
@@ -233,9 +235,46 @@ export function registrationAmount(activity, paymentStatus) {
 }
 
 /**
- * Staff conversion: מתעניין → משתתף רשום.
+ * משתתף רשום חדש, בלי לעבור דרך רשימת המתעניינים.
  * No health declaration is invented here — the row shows "חסרה הצהרה" until the
  * customer signs one, exactly like any participant added by hand.
+ */
+export async function insertRegistration({
+  db,
+  persist,
+  activity,
+  parent,
+  participant = {},
+  paymentStatus,
+  note = '',
+} = {}) {
+  const status = normalizeConversionPaymentStatus(paymentStatus, activity);
+  const now = new Date().toISOString();
+  const registration = db.insert('activity_registrations', {
+    activity_id: activity.id,
+    order_id: null,
+    student_id: participant.student_id || null,
+    parent_id: parent.id,
+    participant_type: participant.participant_type === 'adult' ? 'adult' : 'child',
+    participant_name: participant.name,
+    phone: participant.phone || parent.phone || '',
+    email: participant.email || parent.email || '',
+    health_declaration_id: null,
+    status: 'confirmed',
+    hold_expires_at: null,
+    payment_status: status,
+    amount: registrationAmount(activity, status),
+    paid_at: status === 'paid' ? now : null,
+    payment_id: null,
+    notes: [participant.notes, note].filter(Boolean).join(' · '),
+    updated_at: now,
+  });
+  await requireDurable(persist, 'activity_registrations', registration);
+  return registration;
+}
+
+/**
+ * Staff conversion: מתעניין → משתתף רשום.
  */
 export async function convertInterestToRegistration({
   db,
@@ -261,28 +300,23 @@ export async function convertInterestToRegistration({
     throw badRequest('יש לקשר לקוח או למלא טלפון לפני העברה לרשומים');
   }
 
-  const status = normalizeConversionPaymentStatus(paymentStatus, activity);
   const now = new Date().toISOString();
-  const registration = db.insert('activity_registrations', {
-    activity_id: activity.id,
-    order_id: null,
-    student_id: row.student_id || null,
-    parent_id: parent.id,
-    participant_type: row.participant_type === 'adult' ? 'adult' : 'child',
-    participant_name: row.name,
-    phone: row.phone || parent.phone || '',
-    email: row.email || parent.email || '',
-    health_declaration_id: null,
-    status: 'confirmed',
-    hold_expires_at: null,
-    payment_status: status,
-    amount: registrationAmount(activity, status),
-    paid_at: status === 'paid' ? now : null,
-    payment_id: null,
-    notes: [row.notes, 'נרשם ידנית מרשימת המתעניינים'].filter(Boolean).join(' · '),
-    updated_at: now,
+  const registration = await insertRegistration({
+    db,
+    persist,
+    activity,
+    parent,
+    participant: {
+      student_id: row.student_id,
+      participant_type: row.participant_type,
+      name: row.name,
+      phone: row.phone,
+      email: row.email,
+      notes: row.notes,
+    },
+    paymentStatus,
+    note: 'נרשם ידנית מרשימת המתעניינים',
   });
-  await requireDurable(persist, 'activity_registrations', registration);
 
   const closed = await updateInterest({
     db,

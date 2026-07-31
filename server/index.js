@@ -26,6 +26,8 @@ import {
   releaseCouponsForSale,
   cancelCoupon,
   couponStats,
+  reserveCoupon,
+  COUPON_STATUS,
   todayIsoDate,
 } from './coupons.js';
 import {
@@ -45,6 +47,7 @@ import {
 import { icount } from './icount.js';
 import { apiAuth, requireOwner } from './auth.js';
 import { googleCalendarService } from './googleCalendar.js';
+import { googleContactsService } from './googleContacts.js';
 import {
   sendActivityRegistrationConfirmation,
   sendHostRegistrationLink,
@@ -55,6 +58,7 @@ import {
   makePrivatePaymentToken,
   normalizeHostPaymentStatus,
   activeRegistrations,
+  heldRegistrationsBy,
   remainingCapacity,
   registrationIsOpen,
   findActivityBySlug,
@@ -94,6 +98,7 @@ import {
   updateScenario,
   updateTask,
 } from './aiActions.js';
+import { runChatTurn } from './aiChat.js';
 import {
   INTEREST_COLLECTION,
   addInterest,
@@ -160,6 +165,26 @@ import {
   aggregatePosSales,
 } from './posUtils.js';
 import {
+  familyCandidates,
+  findChildMatches,
+  guardianParentIds,
+  linkGuardian,
+  mergeFamily,
+  normalizedChildName,
+  publicChildMatchPayload,
+  publicFamilyCandidatesPayload,
+  setPrimaryGuardian,
+  unlinkGuardian,
+} from './studentGuardians.js';
+import {
+  createShopPurchase,
+  findShopItemBySlug,
+  isSellableProductType,
+  makeShopSlug,
+  publicShopItems,
+  shopItemPayload,
+} from './publicShop.js';
+import {
   EQUIPMENT_ITEM_TYPES,
   EQUIPMENT_ITEM_LABELS,
   EQUIPMENT_TEMPLATE_NAME,
@@ -181,7 +206,9 @@ import {
   newCheckoutToken,
   ensureEquipmentWhatsappTemplate,
   equipmentPublicBase,
+  shoesSeasonPricing,
 } from './equipmentService.js';
+import { safetyTestStatus } from './safetyTestService.js';
 import {
   EVENT_HOST_PAYMENT_TEMPLATE,
   EVENT_PARTICIPANT_LINK_TEMPLATE,
@@ -190,9 +217,12 @@ import {
   resolveEventTemplate,
   publicBase as eventPublicBase,
 } from './eventWhatsappTemplates.js';
+import { ensureOnboardingLinkTemplate } from './onboardingWhatsappTemplate.js';
 import {
   ensureProductCategories,
   renameCategoryOnProducts,
+  normalizeProductCategories,
+  backfillPricelistCategories,
   clampImage,
 } from './productCategories.js';
 import {
@@ -210,6 +240,8 @@ import {
   israelDateStr,
   israelHour,
   normalizeAttStatus,
+  isIntroStudent,
+  keepIntroStatus,
   activityDateRange,
   planVacationAttendanceUpdates,
   planVacationAttendanceReverts,
@@ -219,6 +251,7 @@ import {
 } from './attendanceUtils.js';
 import {
   getConversation,
+  listConversations,
   replyToParent,
   updateMessageStatusByMetaId,
   handleMessengerIncoming,
@@ -411,6 +444,20 @@ app.get('/api/eh/:token', redirectEventHost);
 app.get('/ev/:token', redirectEventParticipant);
 app.get('/api/ev/:token', redirectEventParticipant);
 
+/**
+ * Onboarding form behind an approved template button. Same contract as /e and
+ * /ev, with no token: the form identifies the customer by the phone they type.
+ * `?phone=` is passed through when a caller already knows it, so the form opens
+ * prefilled instead of asking a returning customer to type it again.
+ */
+function redirectOnboarding(req, res) {
+  const phone = String(req.query.phone || '').trim();
+  const query = phone ? `?phone=${encodeURIComponent(phone)}` : '';
+  return res.redirect(302, `${eventPublicBase()}/onboard${query}`);
+}
+app.get('/o', redirectOnboarding);
+app.get('/api/o', redirectOnboarding);
+
 app.use('/api', apiAuth);
 
 app.get('/api/auth/me', (req, res) => {
@@ -550,20 +597,24 @@ app.get('/api/parents', async (req, res) => {
 app.get('/api/students', async (req, res) => {
   try {
     if (supa.isEnabled()) {
-      const [rows, enrollments] = await Promise.all([
+      const [rows, enrollments, guardians] = await Promise.all([
         supa.getAll('students'),
         supa.getAll('enrollments'),
+        supa.getAll('student_guardians'),
       ]);
       if (rows) {
         if (typeof db.set === 'function') db.set('students', rows);
         if (enrollments && typeof db.set === 'function') db.set('enrollments', enrollments);
-        return res.json(enrichStudentsWithGroupIds(rows, enrollments || db.get('enrollments') || []));
+        if (guardians && typeof db.set === 'function') db.set('student_guardians', guardians);
+        // Same enrichment as the local path — a screen must never see a child
+        // with groups but no guardians just because the fresh read was used.
+        return res.json(db.withStudentRelations(rows));
       }
     }
   } catch (err) {
     console.error('GET /api/students Supabase error:', err.message);
   }
-  res.json(db.withStudentGroupIds(db.get('students')));
+  res.json(db.withStudentRelations(db.get('students')));
 });
 
 function withGroupEnrollmentCounts(groups, students) {
@@ -606,7 +657,7 @@ app.get('/api/groups', async (req, res) => {
   } catch (err) {
     console.error('GET /api/groups Supabase error:', err.message);
   }
-  res.json(withGroupEnrollmentCounts(db.get('groups'), db.withStudentGroupIds(db.get('students'))));
+  res.json(withGroupEnrollmentCounts(db.get('groups'), db.withStudentRelations(db.get('students'))));
 });
 
 // Update student status
@@ -618,7 +669,8 @@ app.put('/api/students/:id/status', (req, res) => {
   
   // Trigger automation event
   automationsService.triggerEvent('status_changed', { ...updated, new_status: status });
-  
+  touchGoogleContacts();
+
   res.json(updated);
 });
 
@@ -669,6 +721,7 @@ async function ingestLeadPayload(body, defaultSource = 'unknown') {
     });
   }
 
+  touchGoogleContacts();
   return { parent, students: createdStudents, status: 201 };
 }
 
@@ -737,23 +790,117 @@ app.put('/api/parents/:id', (req, res) => {
           nextFollowup: updates.nextFollowup,
         }
       );
+      touchGoogleContacts();
       return res.json(merged);
     }
   }
 
   const updated = db.update('parents', id, updates);
   if (!updated) return res.status(404).json({ error: 'Parent not found' });
+  touchGoogleContacts();
   res.json(updated);
 });
 
-app.delete('/api/parents/:id', (req, res) => {
+/** What a record still attached to the card is called, for the refusal message. */
+const DELETE_BLOCKER_LABELS = {
+  activity_registration_orders: 'הזמנות לאירוע',
+  activity_registrations: 'הרשמות לאירוע',
+  health_declarations: 'הצהרות בריאות',
+  client_documents: 'מסמכים',
+  student_equipment: 'ציוד',
+  messages: 'התכתבויות',
+  payments: 'תשלומים',
+  lead_status_history: 'היסטוריית סטטוס',
+  enrollments: 'רישום לחוג',
+  attendance: 'נוכחות',
+  students: 'מתאמנים',
+};
+
+/**
+ * Turn a foreign-key refusal from the durable store into something the screen
+ * can show. Postgres names the blocking table last: `… on table "x"`.
+ */
+function durableDeleteMessage(error, fallback) {
+  const tables = [...String(error || '').matchAll(/on table "([a-z_]+)"/g)].map((m) => m[1]);
+  const blocker = tables.length ? tables[tables.length - 1] : '';
+  const label = DELETE_BLOCKER_LABELS[blocker];
+  if (label) return `לא ניתן למחוק — לכרטיס משויכות ${label}. יש להסיר אותן קודם`;
+  return fallback;
+}
+
+/**
+ * Archive is the answer for a customer who cannot be deleted — one who took part
+ * in an event that already happened. The flag lives on the payer, so the whole
+ * family leaves the working lists together and comes back together.
+ */
+app.post('/api/parents/:id/archive', async (req, res) => {
+  const archived = req.body?.archived !== false;
+  const updated = db.update('parents', req.params.id, {
+    status: archived ? 'archived' : 'lead_new',
+  });
+  if (!updated) return res.status(404).json({ error: 'הלקוח לא נמצא' });
+  const durable = await persistCore('parents', updated);
+  if (durable?.ok === false) {
+    return res.status(503).json({ error: durable.error || 'העדכון לא נשמר' });
+  }
+  touchGoogleContacts();
+  res.json({ success: true, archived, parent: updated });
+});
+
+/**
+ * Refuse to delete someone who still holds a place on an event. Deleting them
+ * leaves a participant on the list that no CRM card explains — the registration
+ * has to be cancelled from the event screen first. The durable store is the
+ * authority: a stale cache would let the delete through.
+ * @param {'student_id'|'parent_id'} field
+ */
+async function activeRegistrationBlock(field, id) {
+  if (supa.isEnabled()) {
+    const remote = await supa.getAll('activity_registrations');
+    if (remote) db.set('activity_registrations', remote);
+  }
+  const held = heldRegistrationsBy(db, field, id);
+  if (!held.length) return null;
+
+  const today = israelDateStr();
+  const upcoming = [];
+  const past = [];
+  for (const registration of held) {
+    const activity = db.getOne('activities', registration.activity_id);
+    const lastDay = String(activity?.end_date || activity?.date || '').slice(0, 10);
+    // A dateless activity counts as still open — never advise archiving by guess.
+    (lastDay && lastDay < today ? past : upcoming).push(activity?.name || '');
+  }
+  const names = (list) => {
+    const unique = [...new Set(list.filter(Boolean))];
+    return unique.length ? `: ${unique.join(', ')}` : '';
+  };
+
+  if (upcoming.length) {
+    return `לא ניתן למחוק — קיימת הרשמה פעילה לאירוע${names(upcoming)}. יש לבטל אותה במסך האירוע ואז למחוק`;
+  }
+  // The event already happened. Cancelling the registration now would falsify who
+  // took part, so deletion is not the tool here.
+  return `לא ניתן למחוק — קיימת היסטוריית השתתפות באירוע${names(past)}. אפשר להעביר את הכרטיס לארכיון במקום למחוק`;
+}
+
+app.delete('/api/parents/:id', async (req, res) => {
   const { id } = req.params;
   const linked = (db.get('students') || []).filter((s) => s.parentId === id);
   if (linked.length) {
     return res.status(400).json({ error: 'לא ניתן למחוק — יש מתאמנים מקושרים' });
   }
-  const ok = db.delete('parents', id);
-  if (!ok) return res.status(404).json({ error: 'הלקוח לא נמצא' });
+  const registered = await activeRegistrationBlock('parent_id', id);
+  if (registered) return res.status(409).json({ error: registered });
+  const result = await db.deleteDurable('parents', id);
+  if (result.notFound) return res.status(404).json({ error: 'הלקוח לא נמצא' });
+  if (!result.ok) {
+    return res.status(409).json({
+      error: durableDeleteMessage(result.error, 'מחיקת הלקוח נכשלה בשרת הנתונים'),
+      detail: result.error,
+    });
+  }
+  touchGoogleContacts();
   res.json({ success: true });
 });
 
@@ -781,6 +928,7 @@ app.post('/api/parents/:id/students', async (req, res) => {
     parentName: parent?.name,
   });
 
+  touchGoogleContacts();
   res.status(201).json({ parent, student: result.student });
 });
 
@@ -1045,6 +1193,18 @@ app.post('/api/whatsapp/reply', async (req, res) => {
 });
 
 // ─── Unified conversations (multi-channel) ───────────────────────────────────
+// Inbox list — every conversation at once. Must stay above the :parentId route
+// so "conversations" is never read as a customer id.
+app.get('/api/conversations', (req, res) => {
+  try {
+    const limit = Number(req.query.limit);
+    res.json(listConversations(Number.isFinite(limit) && limit > 0 ? { limit } : {}));
+  } catch (err) {
+    console.error('Error listing conversations:', err);
+    res.status(500).json({ error: err.message || 'טעינת השיחות נכשלה' });
+  }
+});
+
 app.get('/api/conversations/:parentId', async (req, res) => {
   const result = await getConversation(req.params.parentId);
   if (result.error) return res.status(result.status || 404).json(result);
@@ -1100,11 +1260,13 @@ app.get('/api/message-templates', (req, res) => {
       db,
       persist: persistCore,
     });
+    ensureOnboardingLinkTemplate({ db, persist: persistCore });
   } catch (err) {
     console.warn('event whatsapp templates ensure on list skipped:', err.message);
   }
   const approvedOnly = req.query.approved === '1' || req.query.approved === 'true';
-  res.json(approvedOnly ? listApprovedTemplates() : listLocalTemplates());
+  const includeArchived = req.query.archived === '1' || req.query.archived === 'true';
+  res.json(approvedOnly ? listApprovedTemplates({ includeArchived }) : listLocalTemplates());
 });
 
 app.post('/api/message-templates', requireOwner, (req, res) => {
@@ -1990,7 +2152,8 @@ app.post('/api/ai/suggestions/:id/approve', async (req, res) => {
     res.json({
       success: true,
       suggestion: enrichForDisplay(db, result.suggestion),
-      task: enrichForDisplay(db, result.task),
+      // רק `create_task` מייצר משימה. לשאר הפעולות אין משימה להחזיר.
+      task: result.task ? enrichForDisplay(db, result.task) : null,
     });
   } catch (err) {
     if (!err.status) console.error('approve suggestion error:', err.message);
@@ -2010,6 +2173,42 @@ app.post('/api/ai/suggestions/:id/reject', async (req, res) => {
     res.json({ success: true, suggestion: enrichForDisplay(db, row) });
   } catch (err) {
     if (!err.status) console.error('reject suggestion error:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+/**
+ * סוכן השיחה — הצוות שואל, המודל קורא נתונים בכלים ועונה.
+ * חסר-מצב: ההיסטוריה מגיעה מהלקוח בכל קריאה. פעולות כתיבה לא מבוצעות כאן,
+ * הן חוזרות כהצעות ממתינות שעוברות דרך אותם /approve ו-/reject שלמעלה.
+ */
+app.post('/api/ai/chat', async (req, res) => {
+  const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
+  if (!messages.length) return res.status(400).json({ error: 'messages חובה' });
+
+  const settings = loadAssistantSettings(db);
+  if (!settings.enabled) {
+    return res.status(409).json({ error: 'העוזר החכם כבוי. הדליקו אותו במסך העוזר → הגדרות.' });
+  }
+
+  try {
+    const result = await runChatTurn({
+      db,
+      persist: persistCore,
+      messages,
+      actor: req.crmUser?.email || '',
+      page: String(req.body?.page || '').slice(0, 40),
+      brandName: await businessBrand(),
+    });
+    res.json({
+      reply: result.reply,
+      reason: result.reason,
+      tools_used: result.tools_used,
+      model_calls: result.model_calls,
+      actions: result.proposals.map((row) => enrichForDisplay(db, row)),
+    });
+  } catch (err) {
+    if (!err.status) console.error('ai chat error:', err.message);
     res.status(err.status || 500).json({ error: err.message });
   }
 });
@@ -2093,11 +2292,95 @@ app.put('/api/tasks/:id', async (req, res) => {
 });
 
 // Delete student/lead
-app.delete('/api/students/:id', (req, res) => {
+app.delete('/api/students/:id', async (req, res) => {
   const { id } = req.params;
-  const deleted = db.deleteStudent(id);
-  if (!deleted) return res.status(404).json({ error: 'Student not found' });
-  res.json({ success: true, message: 'Student and associated childless parents deleted successfully' });
+  const registered = await activeRegistrationBlock('student_id', id);
+  if (registered) return res.status(409).json({ error: registered });
+  const result = await db.deleteStudent(id);
+  if (result.notFound) return res.status(404).json({ error: 'המתאמן לא נמצא' });
+  if (!result.ok) {
+    return res.status(409).json({
+      error: durableDeleteMessage(result.error, 'מחיקת המתאמן נכשלה בשרת הנתונים'),
+      detail: result.error,
+    });
+  }
+  touchGoogleContacts();
+  res.json({
+    success: true,
+    // The child is gone either way; say so when the parent card had to stay.
+    parentWarning: result.parentError
+      ? durableDeleteMessage(result.parentError, 'כרטיס ההורה נשאר במערכת')
+      : undefined,
+  });
+});
+
+// ─── Guardians: the parents attached to one child ────────────────────────────
+
+/** Every parent on the child's file, primary first. */
+app.get('/api/students/:id/guardians', (req, res) => {
+  const student = db.getOne('students', req.params.id);
+  if (!student) return res.status(404).json({ error: 'המתאמן לא נמצא' });
+  const parents = guardianParentIds(db, student)
+    .map((parentId) => db.getOne('parents', parentId))
+    .filter(Boolean)
+    .map((parent) => ({
+      id: parent.id,
+      name: parent.name || '',
+      phone: parent.phone || '',
+      email: parent.email || '',
+      primary: String(parent.id) === String(student.parentId),
+    }));
+  res.json({ student_id: student.id, guardians: parents });
+});
+
+/** Staff linking a second parent by hand — the public forms do it themselves. */
+app.post('/api/students/:id/guardians', async (req, res) => {
+  const student = db.getOne('students', req.params.id);
+  if (!student) return res.status(404).json({ error: 'המתאמן לא נמצא' });
+  const parentId = String(req.body?.parentId || '').trim();
+  if (!db.getOne('parents', parentId)) {
+    return res.status(400).json({ error: 'כרטיס ההורה לא נמצא' });
+  }
+  const link = linkGuardian(db, { studentId: student.id, parentId, source: 'staff' });
+  if (link) await persistCore('student_guardians', link);
+  res.status(201).json({ linked: !!link, student_id: student.id, parent_id: parentId });
+});
+
+/** Who the CRM addresses by default for this child. */
+app.put('/api/students/:id/guardians/:parentId/primary', async (req, res) => {
+  const result = setPrimaryGuardian(db, {
+    studentId: req.params.id,
+    parentId: req.params.parentId,
+  });
+  if (!result) {
+    return res.status(400).json({ error: 'אפשר לקבוע כהורה ראשי רק הורה שכבר משויך למתאמן' });
+  }
+  if (result.changed) {
+    await persistCore('students', result.student);
+    if (result.added) await persistCore('student_guardians', result.added);
+    if (result.removed && supa.isEnabled()) {
+      await supa.remove('student_guardians', `sg-${req.params.id}-${req.params.parentId}`);
+    }
+  }
+  res.json({ changed: !!result.changed, student: db.withStudentRelation(result.student) });
+});
+
+app.delete('/api/students/:id/guardians/:parentId', async (req, res) => {
+  const student = db.getOne('students', req.params.id);
+  if (!student) return res.status(404).json({ error: 'המתאמן לא נמצא' });
+  if (String(student.parentId || '') === String(req.params.parentId)) {
+    return res.status(400).json({
+      error: 'אי אפשר להסיר את ההורה הראשי — שנו קודם את השיוך של המתאמן',
+    });
+  }
+  const removed = unlinkGuardian(db, {
+    studentId: student.id,
+    parentId: req.params.parentId,
+  });
+  if (removed && supa.isEnabled()) {
+    await supa.remove('student_guardians', `sg-${student.id}-${req.params.parentId}`);
+  }
+  res.json({ removed });
 });
 
 // Update student/lead details (supports multi-group via groupIds / addGroupId / removeGroupId)
@@ -2155,7 +2438,7 @@ app.put('/api/students/:id', (req, res) => {
   } else if (hasGroupId) {
     if (groupId) {
       // Add (do not replace other groups) and set as primary.
-      const current = db.withStudentGroupId(db.getOne('students', id));
+      const current = db.withStudentRelation(db.getOne('students', id));
       const ids = Array.from(new Set([...(current?.groupIds || []), String(groupId)]));
       updated = db.setStudentGroups(id, ids, { primaryGroupId: groupId });
     } else {
@@ -2163,7 +2446,8 @@ app.put('/api/students/:id', (req, res) => {
     }
   }
 
-  if (!updated) updated = db.withStudentGroupId(db.getOne('students', id));
+  if (!updated) updated = db.withStudentRelation(db.getOne('students', id));
+  touchGoogleContacts();
   res.json(updated);
 });
 
@@ -2198,6 +2482,18 @@ async function saveEquipmentSettings(next) {
     throw new Error(result.error || 'שמירת הגדרות הציוד נכשלה');
   }
   return normalized;
+}
+
+/**
+ * מחיר הנעליים לחצי העונה הנוכחי, מקוזז לפי תאריך ההצטרפות של המתאמן
+ * כפי שהוא עולה מרשימת הנוכחות שלו.
+ */
+async function shoesPricingForStudent(studentId, settings) {
+  await refreshAttendanceCache();
+  const attendance = (db.get('attendance') || []).filter(
+    (row) => row && row.student_id === studentId
+  );
+  return shoesSeasonPricing({ settings, attendance });
 }
 
 function buildEquipmentPageUrl(req, token) {
@@ -2298,7 +2594,7 @@ app.get('/api/equipment', async (req, res) => {
       }
       students = enrichStudentsWithGroupIds(students, remoteEnrollments || db.get('enrollments') || []);
     } else {
-      students = db.withStudentGroupIds(students);
+      students = db.withStudentRelations(students);
     }
 
     const groupId = req.query.groupId ? String(req.query.groupId) : '';
@@ -2346,16 +2642,69 @@ app.put('/api/equipment/:id', async (req, res) => {
     const row = db.getOne('student_equipment', req.params.id);
     if (!row) return res.status(404).json({ error: 'פריט הציוד לא נמצא' });
     const patch = {};
+    // מידות: החולצה נבחרת בדף התשלום, הנעליים נרשמות על ידי המדריך.
+    const sizePatch = {};
     if (req.body?.shirt_size !== undefined) {
-      patch.shirt_size = String(req.body.shirt_size || '').trim() || null;
+      sizePatch.shirt_size = String(req.body.shirt_size || '').trim() || null;
     }
-    if (req.body?.payment_status === 'paid' || req.body?.payment_status === 'unpaid' || req.body?.payment_status === 'own' || req.body?.payment_status === 'declined') {
+    if (req.body?.shoe_size !== undefined) {
+      sizePatch.shoe_size = String(req.body.shoe_size || '').trim() || null;
+    }
+    Object.assign(patch, sizePatch);
+    // „שולם” נקבע בדרך כלל מזרימת התשלום (markEquipmentItemsPaid מתוך
+    // ה-IPN). סימון ידני עוקף סליקה, ולכן הוא שמור למנהל בלבד — מדריך
+    // שינסה יקבל 403 גם אם המסך אצלו מציג את הכפתור.
+    if (req.body?.payment_status === 'paid') {
+      if (req.crmUser?.role !== 'owner') {
+        return res.status(403).json({
+          error: 'סימון „שולם” ידני שמור למנהל — תשלום רגיל נקלט מדף התשלום',
+        });
+      }
+      const student = db.getOne('students', row.student_id);
+      const settings = await loadEquipmentSettings();
+      const shoesPricing =
+        row.item_type === 'shoes' ? await shoesPricingForStudent(row.student_id, settings) : null;
+      // markEquipmentItemsPaid מדלג על „מהבית”/„לא מעוניינים” בכוונה, כדי
+      // שתשלום נכנס לא ידרוס החלטה של הורה. מנהל שמסמן ידנית מתכוון בדיוק
+      // להפוך אותה, ולכן מאפסים את השורה לפני הסימון.
+      if (row.payment_status === 'own' || row.payment_status === 'declined') {
+        const reset = markEquipmentUnpaid({ db, persist: persistCore, rowId: row.id });
+        if (!reset.ok) return res.status(400).json({ error: reset.error });
+      }
+      const result = markEquipmentItemsPaid({
+        db,
+        persist: persistCore,
+        studentId: row.student_id,
+        itemTypes: [row.item_type],
+        shirtSize: sizePatch.shirt_size ?? row.shirt_size ?? null,
+        rentalDays: settings.rental_days,
+        rentalEndsAt: shoesPricing?.half_end || null,
+      });
+      if (!result.updated.length) {
+        return res.status(400).json({
+          error: result.errors[0] || 'הפריט כבר מסומן כשולם',
+        });
+      }
+      const marked = result.updated.find((r) => r.item_type === row.item_type) || result.updated[0];
+      if (sizePatch.shoe_size !== undefined) {
+        const withSize = db.update('student_equipment', row.id, { shoe_size: sizePatch.shoe_size });
+        if (withSize) {
+          await persistCore('student_equipment', withSize);
+          return res.json(withSize);
+        }
+      }
+      console.log(
+        `equipment manual paid: ${row.id} (${student?.name || row.student_id}) by ${req.crmUser?.email || 'owner'}`
+      );
+      return res.json(marked);
+    }
+    if (req.body?.payment_status === 'unpaid' || req.body?.payment_status === 'own' || req.body?.payment_status === 'declined') {
       if (req.body.payment_status === 'own') {
         const result = markEquipmentOwn({ db, persist: persistCore, rowId: row.id });
         if (!result.ok) return res.status(400).json({ error: result.error });
-        // Allow shirt_size alongside own in same request
-        if (patch.shirt_size !== undefined) {
-          const withSize = db.update('student_equipment', row.id, { shirt_size: patch.shirt_size });
+        // מותר לשלוח מידה יחד עם שינוי הסטטוס באותה בקשה
+        if (Object.keys(sizePatch).length) {
+          const withSize = db.update("student_equipment", row.id, sizePatch);
           if (withSize) await persistCore('student_equipment', withSize);
           return res.json(withSize || result.row);
         }
@@ -2364,17 +2713,14 @@ app.put('/api/equipment/:id', async (req, res) => {
       if (req.body.payment_status === 'declined') {
         const result = markEquipmentDeclined({ db, persist: persistCore, rowId: row.id });
         if (!result.ok) return res.status(400).json({ error: result.error });
-        if (patch.shirt_size !== undefined) {
-          const withSize = db.update('student_equipment', row.id, { shirt_size: patch.shirt_size });
+        if (Object.keys(sizePatch).length) {
+          const withSize = db.update("student_equipment", row.id, sizePatch);
           if (withSize) await persistCore('student_equipment', withSize);
           return res.json(withSize || result.row);
         }
         return res.json(result.row);
       }
       patch.payment_status = req.body.payment_status;
-      if (req.body.payment_status === 'paid' && !row.paid_at) {
-        patch.paid_at = new Date().toISOString();
-      }
       if (req.body.payment_status === 'unpaid') {
         patch.paid_at = null;
         patch.payment_id = null;
@@ -2385,14 +2731,6 @@ app.put('/api/equipment/:id', async (req, res) => {
           patch.rental_starts_at = null;
           patch.rental_ends_at = null;
         }
-      }
-      if (req.body.payment_status === 'paid' && row.item_type === 'shoes' && !row.rental_starts_at) {
-        const settings = await loadEquipmentSettings();
-        const when = patch.paid_at || new Date().toISOString();
-        patch.rental_starts_at = when;
-        const end = new Date(when);
-        end.setDate(end.getDate() + settings.rental_days);
-        patch.rental_ends_at = end.toISOString();
       }
     }
     if (req.body?.fulfillment_status === 'given' || req.body?.fulfillment_status === 'pending') {
@@ -2669,12 +3007,15 @@ app.get('/api/public/equipment/:token', publicFormRateLimit, async (req, res) =>
     const items = ensureStudentEquipment({ db, student, persist: persistCore });
     const settings = await loadEquipmentSettings();
     const unpaid = unpaidEquipmentItems(items);
+    const shoesPricing = await shoesPricingForStudent(student.id, settings);
     res.json({
       student_name: student.name,
       parent_name: parent?.name || '',
       items,
       unpaid_items: unpaid,
-      settings,
+      // מחיר הנעליים שמוצג הוא המקוזז, כדי שהסכום בדף יתאים לחיוב בפועל.
+      settings: { ...settings, prices: { ...settings.prices, shoes: shoesPricing.amount } },
+      shoes_pricing: shoesPricing,
       labels: EQUIPMENT_ITEM_LABELS,
       all_paid: unpaid.length === 0,
     });
@@ -2729,7 +3070,8 @@ app.post('/api/public/equipment/:token/pay', publicFormRateLimit, async (req, re
       }
     }
 
-    const entered = computeEquipmentTotal(settings, selected);
+    const shoesPricing = await shoesPricingForStudent(student.id, settings);
+    const entered = computeEquipmentTotal(settings, selected, { shoes: shoesPricing.amount });
     if (entered <= 0) return res.status(400).json({ error: 'סכום התשלום אינו תקף — פנו לצוות' });
     const includesVat = normalizePriceIncludesVat(settings.price_includes_vat, true);
     const amount = chargeAmount(entered, includesVat);
@@ -2749,6 +3091,11 @@ app.post('/api/public/equipment/:token/pay', publicFormRateLimit, async (req, re
       equipment_item_types: selected,
       equipment_shirt_size: selected.includes('shirt') ? shirtSize : null,
       equipment_rental_days: settings.rental_days,
+      // נשמר על התשלום כדי שה-IPN יסמן את חלון ההשכרה לפי חצי העונה
+      // שתומחר בפועל, גם אם ההגדרות ישתנו בין היצירה לאישור.
+      equipment_rental_starts_at: shoesPricing.rental_starts_at,
+      equipment_rental_ends_at: shoesPricing.half_end,
+      equipment_shoes_amount: selected.includes('shoes') ? shoesPricing.amount : null,
       updated_at: new Date().toISOString(),
     });
 
@@ -2777,6 +3124,7 @@ app.post('/api/public/equipment/:token/pay', publicFormRateLimit, async (req, re
       amount,
       description,
       itemTypes: selected,
+      shoesPricing,
     });
   } catch (err) {
     console.error('public equipment pay error:', err.message);
@@ -4450,6 +4798,166 @@ app.get('/api/public/activities/:slug', publicFormRateLimit, async (req, res) =>
   }
 });
 
+/**
+ * What a public form may know about a household before anyone signs anything:
+ * who is on the card, and which of them still has a declaration in force — so
+ * a returning customer is never asked to sign the same waiver twice.
+ *
+ * Shared by every public flow that opens with a phone number. Nothing here
+ * leaves the allowlist below: no notes, no siblings' declarations, no history.
+ */
+async function loadPublicHousehold(rawPhone) {
+  const phone = normalizePhone(rawPhone || '');
+  if (!phone || phone.replace(/\D/g, '').length < 9) {
+    return { found: false, parent: null, children: [], adult_health_valid: false };
+  }
+  if (supa.isEnabled()) {
+    const [remoteParents, remoteStudents, remoteDecls] = await Promise.all([
+      supa.getAll('parents'),
+      supa.getAll('students'),
+      supa.getAll('health_declarations'),
+    ]);
+    if (remoteParents) db.set('parents', remoteParents);
+    if (remoteStudents) db.set('students', remoteStudents);
+    if (remoteDecls) db.set('health_declarations', remoteDecls);
+  }
+  const parent = findParentForOnboard({ phone });
+  if (!parent) {
+    return { found: false, parent: null, children: [], adult_health_valid: false };
+  }
+  const children = (db.get('students') || [])
+    .filter((student) => String(student.parentId) === String(parent.id) && student.isAdult !== true)
+    .map((student) => {
+      const declaration = findLatestValidDeclaration(db, { studentId: student.id });
+      const signedAt = declarationSignedAt(declaration) || student.healthSignedAt || null;
+      // A missing signature date is *not* a valid declaration here. Elsewhere an
+      // unknown date is read generously so old records are not flagged; on a
+      // public form that generosity would offer to reuse a signature that was
+      // never given.
+      const healthValid = !!declaration
+        || (!!student.healthSignedAt && isHealthDeclarationValid(student.healthSignedAt));
+      return {
+        id: student.id,
+        name: String(student.name || '').trim(),
+        birthDate: student.birthDate || '',
+        health_valid: healthValid,
+        health_signed_at: signedAt,
+      };
+    })
+    .filter((child) => child.name)
+    .sort((a, b) => a.name.localeCompare(b.name, 'he'));
+
+  const adultStudent = (db.get('students') || []).find((student) => {
+    if (String(student.parentId) !== String(parent.id) || student.isAdult !== true) return false;
+    const parentName = String(parent.name || '').trim().toLowerCase();
+    const studentName = String(student.name || '').trim().toLowerCase();
+    return !parentName || studentName === parentName;
+  }) || (db.get('students') || []).find(
+    (student) => String(student.parentId) === String(parent.id) && student.isAdult === true
+  );
+  const adultDeclaration = (adultStudent
+    ? findLatestValidDeclaration(db, { studentId: adultStudent.id })
+    : null)
+    || findLatestValidDeclaration(db, {
+      parentId: parent.id,
+      climberName: parent.name,
+    });
+
+  return {
+    found: true,
+    parent: {
+      id: parent.id,
+      name: parent.name || '',
+      phone: parent.phone || '',
+      email: parent.email || '',
+      city: parent.city || '',
+    },
+    children,
+    adult_student_id: adultStudent?.id || null,
+    adult_health_valid: !!adultDeclaration,
+    listDefs: typeof db.getBroadcastListDefs === 'function' ? db.getBroadcastListDefs() : [],
+    subscriptions: typeof db.getParentBroadcastLists === 'function'
+      ? db.getParentBroadcastLists(parent.id)
+      : { classes: true },
+  };
+}
+
+/**
+ * "Is this child already on someone else's file?" — asked by every public form
+ * after the child's details are filled in, before anything is written.
+ *
+ * Answers with the holder's **first name only**: enough for the person filling
+ * the form to recognise their own family ("נועם רשום על שם אבנר"), and nothing
+ * that identifies or reaches that household. A match needs both the name and
+ * the exact date of birth, so it cannot be produced by guessing a name.
+ */
+app.get('/api/public/child-check', publicFormRateLimit, async (req, res) => {
+  try {
+    if (supa.isEnabled()) {
+      const [remoteStudents, remoteParents, remoteGuardians] = await Promise.all([
+        supa.getAll('students'),
+        supa.getAll('parents'),
+        supa.getAll('student_guardians'),
+      ]);
+      if (remoteStudents) db.set('students', remoteStudents);
+      if (remoteParents) db.set('parents', remoteParents);
+      if (remoteGuardians) db.set('student_guardians', remoteGuardians);
+    }
+    // Children already on the caller's own card are the household lookup's job.
+    const ownParent = findParentForOnboard({ phone: normalizePhone(req.query.phone || '') });
+    const matches = findChildMatches(db, {
+      name: req.query.name,
+      birthDate: req.query.birthDate,
+      excludeParentId: ownParent?.id || null,
+    });
+    if (matches.length === 1 && supa.isEnabled()) {
+      const remoteDecls = await supa.getAll('health_declarations');
+      if (remoteDecls) db.set('health_declarations', remoteDecls);
+    }
+    const matched = matches.length === 1 ? matches[0].student : null;
+    res.json(publicChildMatchPayload(matches, {
+      healthValid: matched
+        ? !!findLatestValidDeclaration(db, { studentId: matched.id })
+          || (!!matched.healthSignedAt && isHealthDeclarationValid(matched.healthSignedAt))
+        : false,
+    }));
+  } catch (err) {
+    console.error('public child check error:', err.message);
+    // A failed check must never block a registration — it only offers a link.
+    res.json({ match: false });
+  }
+});
+
+/**
+ * "Do we already know this family?" — asked when a parent we have never seen
+ * fills in their name. Two parents of the same household share nothing our
+ * lookups can match on (different phone, different child), so the family name
+ * is the only thread, and a human confirms it.
+ */
+app.get('/api/public/family-check', publicFormRateLimit, async (req, res) => {
+  try {
+    if (supa.isEnabled()) {
+      const [remoteParents, remoteStudents, remoteGuardians] = await Promise.all([
+        supa.getAll('parents'),
+        supa.getAll('students'),
+        supa.getAll('student_guardians'),
+      ]);
+      if (remoteParents) db.set('parents', remoteParents);
+      if (remoteStudents) db.set('students', remoteStudents);
+      if (remoteGuardians) db.set('student_guardians', remoteGuardians);
+    }
+    const ownParent = findParentForOnboard({ phone: normalizePhone(req.query.phone || '') });
+    // A parent we already know is handled by the household lookup, not here.
+    if (ownParent) return res.json({ families: [] });
+    res.json(publicFamilyCandidatesPayload(familyCandidates(db, {
+      lastName: req.query.lastName,
+    })));
+  } catch (err) {
+    console.error('public family check error:', err.message);
+    res.json({ families: [] });
+  }
+});
+
 app.get('/api/public/activities/:slug/household', publicFormRateLimit, async (req, res) => {
   try {
     const { activity, storeAvailable } = await findActivityBySlugFresh(req.params.slug);
@@ -4458,74 +4966,7 @@ app.get('/api/public/activities/:slug/household', publicFormRateLimit, async (re
       return res.status(unavailable.status).json(unavailable.body);
     }
     if (!activity) return res.status(404).json({ error: 'הפעילות לא נמצאה' });
-    const phone = normalizePhone(req.query.phone || '');
-    if (!phone || phone.replace(/\D/g, '').length < 9) {
-      return res.json({ found: false, parent: null, children: [], adult_health_valid: false });
-    }
-    if (supa.isEnabled()) {
-      const [remoteParents, remoteStudents, remoteDecls] = await Promise.all([
-        supa.getAll('parents'),
-        supa.getAll('students'),
-        supa.getAll('health_declarations'),
-      ]);
-      if (remoteParents) db.set('parents', remoteParents);
-      if (remoteStudents) db.set('students', remoteStudents);
-      if (remoteDecls) db.set('health_declarations', remoteDecls);
-    }
-    const parent = findParentForOnboard({ phone });
-    if (!parent) {
-      return res.json({ found: false, parent: null, children: [], adult_health_valid: false });
-    }
-    const children = (db.get('students') || [])
-      .filter((student) => String(student.parentId) === String(parent.id) && student.isAdult !== true)
-      .map((student) => {
-        const declaration = findLatestValidDeclaration(db, { studentId: student.id });
-        const signedAt = declarationSignedAt(declaration) || student.healthSignedAt || null;
-        const healthValid = !!declaration || isHealthDeclarationValid(student.healthSignedAt);
-        return {
-          id: student.id,
-          name: String(student.name || '').trim(),
-          birthDate: student.birthDate || '',
-          health_valid: healthValid,
-          health_signed_at: signedAt,
-        };
-      })
-      .filter((child) => child.name)
-      .sort((a, b) => a.name.localeCompare(b.name, 'he'));
-
-    const adultStudent = (db.get('students') || []).find((student) => {
-      if (String(student.parentId) !== String(parent.id) || student.isAdult !== true) return false;
-      const parentName = String(parent.name || '').trim().toLowerCase();
-      const studentName = String(student.name || '').trim().toLowerCase();
-      return !parentName || studentName === parentName;
-    }) || (db.get('students') || []).find(
-      (student) => String(student.parentId) === String(parent.id) && student.isAdult === true
-    );
-    const adultDeclaration = (adultStudent
-      ? findLatestValidDeclaration(db, { studentId: adultStudent.id })
-      : null)
-      || findLatestValidDeclaration(db, {
-        parentId: parent.id,
-        climberName: parent.name,
-      });
-
-    res.json({
-      found: true,
-      parent: {
-        id: parent.id,
-        name: parent.name || '',
-        phone: parent.phone || '',
-        email: parent.email || '',
-        city: parent.city || '',
-      },
-      children,
-      adult_student_id: adultStudent?.id || null,
-      adult_health_valid: !!adultDeclaration,
-      listDefs: typeof db.getBroadcastListDefs === 'function' ? db.getBroadcastListDefs() : [],
-      subscriptions: typeof db.getParentBroadcastLists === 'function'
-        ? db.getParentBroadcastLists(parent.id)
-        : { classes: true },
-    });
+    res.json(await loadPublicHousehold(req.query.phone));
   } catch (err) {
     console.error('public activity household error:', err.message);
     res.status(500).json({ error: err.message || 'טעינת פרטי הלקוח נכשלה' });
@@ -4627,6 +5068,142 @@ app.post('/api/public/activities/:slug/register', publicFormRateLimit, async (re
   } catch (err) {
     console.error('public activity register error:', err.message);
     res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// ─── Public shop: self-serve purchase of a pass ──────────────────────────────
+
+/** Catalog edits must be visible on the public link even with a stale cache. */
+async function refreshPublicPricelist() {
+  if (!supa.isEnabled()) {
+    return { storeAvailable: !requiresDurableStore(), rows: null };
+  }
+  const rows = await supa.getAll('pricelist');
+  if (rows === null) return { storeAvailable: false, rows: null };
+  db.set('pricelist', rows);
+  return { storeAvailable: true, rows };
+}
+
+async function findShopItemBySlugFresh(slug) {
+  let item = findShopItemBySlug(db, slug);
+  const refreshed = await refreshPublicPricelist();
+  if (refreshed.rows) item = findShopItemBySlug(db, slug) || item;
+  return { item, storeAvailable: refreshed.storeAvailable };
+}
+
+app.get('/api/public/shop', publicFormRateLimit, async (_req, res) => {
+  try {
+    const refreshed = await refreshPublicPricelist();
+    if (!refreshed.storeAvailable) {
+      const unavailable = publicStoreUnavailableError();
+      return res.status(unavailable.status).json(unavailable.body);
+    }
+    res.json({ items: publicShopItems(db) });
+  } catch (err) {
+    console.error('public shop list error:', err.message);
+    res.status(500).json({ error: 'טעינת החנות נכשלה' });
+  }
+});
+
+app.get('/api/public/shop/:slug', publicFormRateLimit, async (req, res) => {
+  try {
+    const { item, storeAvailable } = await findShopItemBySlugFresh(req.params.slug);
+    if (!storeAvailable) {
+      const unavailable = publicStoreUnavailableError();
+      return res.status(unavailable.status).json(unavailable.body);
+    }
+    if (!item) return res.status(404).json({ error: 'הפריט לא נמצא או שאינו נמכר אונליין' });
+    res.json({
+      ...shopItemPayload(item),
+      form_template: resolveDefaultDeclarationTemplate(db),
+    });
+  } catch (err) {
+    console.error('public shop item error:', err.message);
+    res.status(500).json({ error: err.message || 'טעינת הפריט נכשלה' });
+  }
+});
+
+app.get('/api/public/shop/:slug/household', publicFormRateLimit, async (req, res) => {
+  try {
+    const { item, storeAvailable } = await findShopItemBySlugFresh(req.params.slug);
+    if (!storeAvailable) {
+      const unavailable = publicStoreUnavailableError();
+      return res.status(unavailable.status).json(unavailable.body);
+    }
+    if (!item) return res.status(404).json({ error: 'הפריט לא נמצא או שאינו נמכר אונליין' });
+    res.json(await loadPublicHousehold(req.query.phone));
+  } catch (err) {
+    console.error('public shop household error:', err.message);
+    res.status(500).json({ error: err.message || 'טעינת פרטי הלקוח נכשלה' });
+  }
+});
+
+app.post('/api/public/shop/:slug/purchase', publicFormRateLimit, async (req, res) => {
+  try {
+    if (!icount.isConfigured()) {
+      return res.status(503).json({ error: 'הרכישה אונליין אינה זמינה כרגע' });
+    }
+    const { item, storeAvailable } = await findShopItemBySlugFresh(req.params.slug);
+    if (!storeAvailable) {
+      const unavailable = publicStoreUnavailableError();
+      return res.status(unavailable.status).json(unavailable.body);
+    }
+    if (!item) return res.status(404).json({ error: 'הפריט לא נמצא או שאינו נמכר אונליין' });
+
+    // Sales and payments live in the same durable store as the passes they
+    // create — a purchase we cannot record is a purchase we must not charge for.
+    if (supa.isEnabled()) {
+      const [remoteSales, remotePayments] = await Promise.all([
+        supa.getAll('pos_sales'),
+        supa.getAll('payments'),
+      ]);
+      if (remoteSales) db.set('pos_sales', remoteSales);
+      if (remotePayments) db.set('payments', remotePayments);
+    }
+
+    const result = await createShopPurchase({
+      db,
+      persist: persistCore,
+      item,
+      payload: req.body || {},
+      syncCustomer: (parent) => syncParentToIcount(parent),
+      createPaymentUrl: async ({ payment, parent, amount, description }) => icount.buildPaymentUrl({
+        amount,
+        description,
+        name: parent.name,
+        lastName: parent.lastName,
+        idNumber: parent.idNumber,
+        phone: normalizePhone(parent.phone),
+        email: parent.email,
+        paymentId: payment.id,
+        ipnUrl: icount.buildIpnUrl({ paymentId: payment.id }),
+        successUrl: `${frontendPublicBase(req)}/shop/${encodeURIComponent(req.params.slug)}?paid=1`,
+      }),
+      onStudentCreated: (student, parent) => automationsService.triggerEvent('new_lead', {
+        ...student,
+        phone: parent.phone,
+        parentName: parent.name,
+      }),
+      onStudentStatusChanged: (student) => automationsService.triggerEvent('status_changed', {
+        ...student,
+        new_status: 'health_signed',
+      }),
+    });
+
+    if (!result.paymentUrl) {
+      return res.status(502).json({ error: 'יצירת קישור התשלום נכשלה' });
+    }
+    console.log(
+      `🛒 [shop] ${result.duplicate ? 'retry' : 'new'} purchase item=${item.name} sale=${result.sale.id}`
+    );
+    res.status(201).json({
+      duplicate: result.duplicate,
+      paymentUrl: result.paymentUrl,
+      total: result.sale.total,
+    });
+  } catch (err) {
+    console.error('public shop purchase error:', err.message);
+    res.status(err.status || 500).json({ error: err.message || 'הרכישה נכשלה' });
   }
 });
 
@@ -4829,6 +5406,88 @@ app.post('/api/google-calendar/sync-due', async (req, res) => {
   }
 });
 
+// ─── Google Contacts — CRM address book on the phone ─────────────────────────
+const googleContactsDeps = {
+  getParents: () => db.get('parents') || [],
+  getStudents: () => db.get('students') || [],
+};
+
+/** Queue a contacts refresh after a CRM edit that changes a name or a status. */
+function touchGoogleContacts() {
+  try {
+    googleContactsService.scheduleSync(googleContactsDeps);
+  } catch (err) {
+    console.error('Google Contacts schedule failed:', err.message);
+  }
+}
+
+app.get('/api/google-contacts/status', async (req, res) => {
+  try {
+    res.json(await googleContactsService.getStatus());
+  } catch (err) {
+    res.status(500).json({ configured: false, connected: false, error: err.message });
+  }
+});
+
+app.get('/api/google-contacts/auth-url', requireOwner, (req, res) => {
+  try {
+    res.json({ url: googleContactsService.getAuthUrl() });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/google-contacts/oauth/callback', async (req, res) => {
+  const base = googleContactsService.frontendBase();
+  try {
+    const code = req.query.code;
+    if (!code) return res.redirect(`${base}/business-settings?googleContacts=error`);
+    await googleContactsService.completeOAuth(String(code));
+    // First fill right after connecting, so the phone is useful immediately.
+    try {
+      await googleContactsService.syncContacts(googleContactsDeps);
+    } catch (err) {
+      console.error('Initial Google Contacts sync failed:', err.message);
+    }
+    res.redirect(googleContactsService.oauthCallbackRedirectUrl());
+  } catch (err) {
+    console.error('Google Contacts OAuth callback failed:', err.message);
+    res.redirect(`${base}/business-settings?googleContacts=error&msg=${encodeURIComponent(err.message)}`);
+  }
+});
+
+app.post('/api/google-contacts/disconnect', requireOwner, async (req, res) => {
+  try {
+    res.json(await googleContactsService.disconnect());
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/google-contacts/sync', requireOwner, async (req, res) => {
+  try {
+    const result = await googleContactsService.syncContacts(googleContactsDeps, {
+      force: req.body?.force === true,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Cron-friendly sync (same secret pattern as the calendar pull)
+app.post('/api/google-contacts/sync-due', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (secret && req.get('x-cron-secret') !== secret && req.query.secret !== secret) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    res.json(await googleContactsService.syncContacts(googleContactsDeps));
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ─── Attendance — Supabase-backed ────────────────────────────────────────────
 // Optional query filters: ?groupId=..&date=YYYY-MM-DD&studentId=..
 function filterAttendanceRows(rows, { groupId, date, studentId }) {
@@ -4978,7 +5637,7 @@ app.post('/api/attendance/ensure', async (req, res) => {
 
   const result = ensureAttendanceRows({
     groups: db.get('groups') || [],
-    students: db.withStudentGroupIds(db.get('students') || []),
+    students: db.withStudentRelations(db.get('students') || []),
     attendance: db.get('attendance') || [],
     activities: db.get('activities') || [],
     date,
@@ -4998,6 +5657,7 @@ app.post('/api/attendance/ensure', async (req, res) => {
     groups: result.groups,
     date: result.date,
     vacation: result.vacation,
+    notTrainingDay: result.notTrainingDay,
     vacationSync,
     rows: result.created,
   });
@@ -5020,7 +5680,7 @@ app.post('/api/attendance/ensure-today', async (req, res) => {
   await refreshActivitiesCache();
   const result = ensureAttendanceRows({
     groups: db.get('groups') || [],
-    students: db.withStudentGroupIds(db.get('students') || []),
+    students: db.withStudentRelations(db.get('students') || []),
     attendance: db.get('attendance') || [],
     activities: db.get('activities') || [],
     date: israelDateStr(),
@@ -5070,17 +5730,20 @@ app.post('/api/attendance/bulk', async (req, res) => {
         student_id: r.student_id,
         group_id: r.group_id,
         date: r.date,
-        status: r.status,
+        // שורת הכירות קיימת נשארת הכירות.
+        status: keepIntroStatus(match.status, r.status),
         marked_by: r.marked_by ?? match.marked_by ?? null,
         notes: r.notes ?? match.notes ?? '',
       });
     }
+    // שורה חדשה למתאמן שעדיין בהכירות נולדת מסומנת ככזו.
+    const student = db.getOne('students', r.student_id);
     return db.insert('attendance', {
       id: r.id || `att-${r.group_id}-${r.date}-${r.student_id}`,
       student_id: r.student_id,
       group_id: r.group_id,
       date: r.date,
-      status: r.status,
+      status: isIntroStudent(student) ? keepIntroStatus('intro_pending', r.status) : r.status,
       marked_by: r.marked_by || null,
       notes: r.notes || '',
     });
@@ -5092,7 +5755,11 @@ app.post('/api/attendance/bulk', async (req, res) => {
 app.put('/api/attendance/:id', (req, res) => {
   const { id } = req.params;
   const body = { ...req.body };
-  if (body.status) body.status = normalizeAttStatus(body.status);
+  if (body.status) {
+    // שורת הכירות נשארת הכירות גם כשמגיע סטטוס רגיל.
+    const current = db.getOne('attendance', id);
+    body.status = keepIntroStatus(current?.status, body.status);
+  }
   const updated = db.update('attendance', id, body);
   if (!updated) return res.status(404).json({ error: 'Attendance record not found' });
   res.json(updated);
@@ -5111,11 +5778,39 @@ app.get('/api/pricelist', (req, res) => {
   res.json(items);
 });
 
+/**
+ * Publishing an item to the public shop is a pricing decision made in the
+ * owner's name, so it is the one field on a product staff cannot flip. The slug
+ * is minted once and kept forever — a link already sitting in a customer's chat
+ * must not die because the item was unpublished and published again.
+ */
+function applySelfServeFields(body, current = {}, user) {
+  if (body.self_serve === undefined) return null;
+  const wanted = body.self_serve === true || body.self_serve === 'true';
+  if (wanted !== (current.self_serve === true) && user?.role !== 'owner') {
+    return { status: 403, error: 'פרסום מוצר למכירה עצמית זמין למנהל בלבד' };
+  }
+  const productType = normalizeProductType({ ...current, ...body });
+  if (wanted && !isSellableProductType(productType)) {
+    return { status: 400, error: 'אפשר למכור אונליין רק כרטיסייה או מנוי — מוצר פיזי נמכר בדלפק' };
+  }
+  if (wanted && !(Number(body.price ?? current.price) > 0)) {
+    return { status: 400, error: 'למכירה אונליין צריך מחיר גדול מאפס' };
+  }
+  body.self_serve = wanted;
+  body.public_slug = current.public_slug || body.public_slug || makeShopSlug();
+  return null;
+}
+
 // Create pricelist item
 app.post('/api/pricelist', (req, res) => {
   try {
     const body = { ...req.body };
     if (body.image !== undefined) body.image = body.image ? clampImage(body.image) : '';
+    body.categories = normalizeProductCategories(body);
+    body.category = body.categories[0];
+    const denied = applySelfServeFields(body, {}, req.crmUser);
+    if (denied) return res.status(denied.status).json({ error: denied.error });
     const record = db.insert('pricelist', body);
     res.status(201).json(enrichPricelistItem(record));
   } catch (err) {
@@ -5128,7 +5823,16 @@ app.put('/api/pricelist/:id', (req, res) => {
   try {
     const { id } = req.params;
     const body = { ...req.body };
+    const current = db.getOne('pricelist', id) || {};
     if (body.image !== undefined) body.image = body.image ? clampImage(body.image) : '';
+    // Only touch categories when the caller actually sent them — partial patches
+    // (stock, active flag) must not be re-labelled as 'שונות'.
+    if (body.categories !== undefined || body.category !== undefined) {
+      body.categories = normalizeProductCategories({ ...current, ...body });
+      body.category = body.categories[0];
+    }
+    const denied = applySelfServeFields(body, current, req.crmUser);
+    if (denied) return res.status(denied.status).json({ error: denied.error });
     const updated = db.update('pricelist', id, body);
     if (!updated) return res.status(404).json({ error: 'Pricelist item not found' });
     res.json(enrichPricelistItem(updated));
@@ -5163,6 +5867,7 @@ app.post('/api/product-categories', requireOwner, (req, res) => {
     const record = db.insert('product_categories', {
       name,
       image,
+      image_fit: req.body?.image_fit === 'contain' ? 'contain' : 'cover',
       description: String(req.body?.description || '').trim(),
       sort_order: existing.length,
       active: req.body?.active !== false,
@@ -5198,6 +5903,9 @@ app.put('/api/product-categories/:id', requireOwner, (req, res) => {
     if (req.body?.active != null) updates.active = !!req.body.active;
     if (req.body?.image !== undefined) {
       updates.image = req.body.image ? clampImage(req.body.image) : '';
+    }
+    if (req.body?.image_fit !== undefined) {
+      updates.image_fit = req.body.image_fit === 'contain' ? 'contain' : 'cover';
     }
 
     const updated = db.update('product_categories', id, updates);
@@ -5949,6 +6657,13 @@ app.post('/api/icount/webhook', async (req, res) => {
       docnum ? `docnum=${docnum}` : ''
     );
 
+    // The process that receives the notification is not necessarily the one that
+    // opened the payment link — a second instance, a restart, or a purchase made
+    // from another machine. Matching only against this process's memory silently
+    // drops the notification, and the customer is charged without getting the
+    // pass. Read the durable store first, like the refund route does.
+    await refreshPaymentTables();
+
     let payment = matchPendingPayment(payload);
 
     // Also match by existing doc id (idempotent)
@@ -5993,14 +6708,28 @@ app.post('/api/icount/webhook', async (req, res) => {
       if (payment.pos_sale_id) {
         const sale = db.getOne('pos_sales', payment.pos_sale_id);
         if (sale && sale.status !== 'paid') {
+          const storedItems = sale.items || [];
+          // Re-attach the benefit marks from our own stored sale (mapCartLines
+          // rebuilds a fixed shape), so a pass bought on a discounted link is
+          // filed with what was actually paid.
           const lines = mapCartLines(
-            (sale.items || []).map((line) => ({
+            storedItems.map((line) => ({
               ...line,
               pricelist_id: line.pricelist_id,
               quantity: line.quantity,
               unitprice: line.unitprice,
             }))
-          );
+          ).map((line, index) => {
+            const stored = storedItems[index];
+            if (!stored?.coupon_applied) return line;
+            return {
+              ...line,
+              coupon_applied: true,
+              list_price: stored.list_price,
+              coupon_label: stored.coupon_label,
+              coupon_code: stored.coupon_code,
+            };
+          });
           fulfillSalePasses({
             sale,
             lines,
@@ -6029,6 +6758,19 @@ app.post('/api/icount/webhook', async (req, res) => {
             updated_at: new Date().toISOString(),
           });
           if (paidSale) await persistCore('pos_sales', paidSale);
+
+          // The money arrived, so the reservation becomes a real redemption.
+          if (sale.coupon_id) {
+            const held = db.getOne('customer_coupons', sale.coupon_id);
+            if (held && held.status === COUPON_STATUS.RESERVED) {
+              redeemCoupon(db, sale.coupon_id, {
+                saleId: sale.id,
+                amount: sale.coupon_discount || 0,
+              });
+              await persistCore('customer_coupons', db.getOne('customer_coupons', sale.coupon_id));
+              console.log(`🎟️ [POS] coupon ${sale.coupon_code} redeemed on paid link ${sale.id}`);
+            }
+          }
         } else if (sale?.id && Object.keys(clearFields).length) {
           const patchedSale = db.update('pos_sales', sale.id, {
             ...clearFields,
@@ -6083,6 +6825,7 @@ app.post('/api/icount/webhook', async (req, res) => {
           shirtSize: payment.equipment_shirt_size || null,
           paymentId: payment.id,
           rentalDays: payment.equipment_rental_days || settings.rental_days,
+          rentalEndsAt: payment.equipment_rental_ends_at || null,
           paidAt: updated?.paid_at || new Date().toISOString(),
         });
       }
@@ -6746,6 +7489,51 @@ app.post('/api/safety/incidents', (req, res) => {
 // Level Tests history
 app.get('/api/level-tests', (req, res) => {
   res.json(db.get('level_tests'));
+});
+
+/**
+ * מה שהמדריך צריך לראות לצד כל מתאמן בגיליון היומי: איזה ציוד עוד לא
+ * נמסר, ומה מצב מבחן האבטחה. נפרד מ-/api/equipment הכבד, כדי שפתיחת
+ * הגיליון לא תמשוך את כל המועדון.
+ */
+app.get('/api/groups/:id/training-brief', async (req, res) => {
+  try {
+    const groupId = req.params.id;
+    await refreshStudentEquipmentCache();
+    const students = db
+      .withStudentRelations(db.get('students') || [])
+      .filter((s) => studentInGroup(s, groupId) && s.status !== 'archived');
+
+    const tests = db.get('level_tests') || [];
+    const refDate = req.query.date || israelDateStr();
+
+    const rows = students.map((student) => {
+      const equipment = isKidStudent(student)
+        ? ensureStudentEquipment({ db, student, persist: persistCore }).map((item) => ({
+            // המזהה נחוץ לעריכת הסטטוס ישירות מגיליון הנוכחות.
+            id: item.id,
+            item_type: item.item_type,
+            payment_status: item.payment_status,
+            fulfillment_status: item.fulfillment_status,
+            shirt_size: item.shirt_size || null,
+            shoe_size: item.shoe_size || null,
+          }))
+        : [];
+      const studentTests = tests.filter(
+        (t) => (t.studentId || t.student_id || t.climber_id) === student.id
+      );
+      return {
+        student_id: student.id,
+        equipment,
+        safety: safetyTestStatus(studentTests, refDate),
+      };
+    });
+
+    res.json({ group_id: groupId, date: refDate, rows });
+  } catch (err) {
+    console.error('training brief error:', err.message);
+    res.status(503).json({ error: err.message || 'טעינת נתוני האימון נכשלה' });
+  }
 });
 
 app.post('/api/level-tests', (req, res) => {
@@ -8046,6 +8834,146 @@ app.post('/api/pos/quote', async (req, res) => {
   }
 });
 
+/**
+ * Send a payment link over WhatsApp. Shared by the moment the link is created
+ * and by the "send again" action, so a link that failed to reach the customer
+ * does not have to be recreated (which would also re-reserve the coupon).
+ */
+async function sendPaymentLinkWhatsapp({
+  phone: rawPhone,
+  customerName = 'לקוח',
+  parentId = null,
+  paymentId,
+  description = '',
+  amount = 0,
+  shareUrl,
+}) {
+  const phone = normalizePhone(rawPhone);
+  if (!phone) {
+    return {
+      whatsappUrl: null, whatsappSent: false, via: null,
+      whatsappError: 'אין מספר טלפון לשליחה בוואטסאפ',
+    };
+  }
+
+  let whatsappSent = false;
+  let whatsappError = null;
+  let whatsappUrl = null;
+  let via = null;
+
+  const tplName = icount.getPaymentTemplateName();
+  const localTpl = (db.get('message_templates') || []).find(
+    (t) => (t.meta_name || t.name) === tplName
+  );
+  const tplApproved =
+    localTpl && (String(localTpl.status).toUpperCase() === 'APPROVED' || localTpl.active_for_send);
+  // Meta template button is fixed to the live /r/ host. Never use it from local
+  // (the payment only exists on this machine, and localhost short links fail on phones).
+  const runningLocally = icount.isLocalPublicApiBase();
+  const canUseMetaTemplate = tplApproved && !runningLocally;
+
+  // Why the reliable path was skipped — the screen has to say this, otherwise a
+  // message Meta accepted but never delivered looks like a success.
+  const templateSkippedReason = canUseMetaTemplate
+    ? null
+    : !localTpl
+      ? `לא נמצאה תבנית בשם „${tplName}” במערכת`
+      : !tplApproved
+        ? `התבנית „${tplName}” עדיין לא מאושרת במטא`
+        : 'השרת רץ מקומית, ולכן הכפתור בתבנית היה מוביל לכתובת שלא זמינה מהטלפון';
+
+  if (canUseMetaTemplate) {
+    try {
+      const waResult = await whatsappService.sendTemplateMessage(
+        phone,
+        tplName,
+        [customerName, description || 'רכישה', String(amount)],
+        { fallbackName: customerName, parentId, buttonUrlParam: paymentId }
+      );
+      whatsappSent = !!waResult?.success;
+      if (whatsappSent) via = 'template';
+      else whatsappError = waResult?.error || 'שליחת תבנית וואטסאפ נכשלה';
+    } catch (waErr) {
+      whatsappError = waErr.message || 'שליחת תבנית וואטסאפ נכשלה';
+    }
+  }
+
+  // Fallback: free-form text (only works inside 24h window)
+  if (!whatsappSent) {
+    const waMsg =
+      `שלום${customerName ? ` ${customerName}` : ''},\n` +
+      `לסיום התשלום ב-${await businessBrand()}:\n${shareUrl}\n\n` +
+      `לאחר התשלום תופק חשבונית מס קבלה אוטומטית.`;
+    try {
+      const waResult = await whatsappService.sendTextMessage(phone, waMsg);
+      whatsappSent = !!waResult?.success;
+      if (!whatsappSent) {
+        whatsappError = waResult?.error || whatsappError || 'שליחת וואטסאפ נכשלה';
+        console.error('POS payment-link WhatsApp failed:', whatsappError);
+      } else {
+        via = 'freeform';
+        whatsappError = null;
+      }
+    } catch (waErr) {
+      whatsappError = waErr.message || whatsappError || 'שליחת וואטסאפ נכשלה';
+      console.error('POS payment-link WhatsApp error:', whatsappError);
+    }
+    if (!whatsappSent) {
+      const digits = phone.startsWith('972') ? phone : phone.replace(/^0/, '972');
+      whatsappUrl = `https://wa.me/${digits}?text=${encodeURIComponent(waMsg)}`;
+    }
+  }
+
+  // Free text is accepted by Meta even when it will not be delivered — outside
+  // the 24 hour service window it is dropped silently. Say so rather than let
+  // the screen report a send that never reached anyone.
+  const deliveryWarning =
+    via === 'freeform'
+      ? `נשלח כטקסט חופשי ולא בתבנית מאושרת (${templateSkippedReason}). ` +
+        'טקסט חופשי מגיע רק אם הלקוח כתב לנו ב-24 השעות האחרונות — אחרת מטא בולעת אותו בשקט. ' +
+        'ודאו מול הלקוח, או שלחו את הקישור ידנית.'
+      : null;
+
+  console.log(
+    `📤 [POS] payment link to ${phone}: ${whatsappSent ? `sent via ${via}` : `failed — ${whatsappError}`}`
+  );
+
+  return { whatsappUrl, whatsappSent, whatsappError, via, deliveryWarning, templateSkippedReason };
+}
+
+/** Send an existing, still-unpaid payment link again. */
+app.post('/api/pos/sales/:id/send-link', async (req, res) => {
+  try {
+    const sale = db.getOne('pos_sales', req.params.id);
+    if (!sale) return res.status(404).json({ error: 'המכירה לא נמצאה' });
+    if (sale.status === 'paid') return res.status(400).json({ error: 'העסקה כבר שולמה' });
+    if (!sale.payment_url) return res.status(400).json({ error: 'לעסקה אין קישור תשלום' });
+
+    const phone = req.body?.phone || sale.customer_phone;
+    if (!phone) return res.status(400).json({ error: 'אין מספר טלפון ללקוח' });
+
+    const shortUrl = sale.payment_id ? icount.buildPaymentRedirectUrl(sale.payment_id) : '';
+    const shareUrl = icount.isLocalPublicApiBase() ? sale.payment_url : shortUrl || sale.payment_url;
+    const description = (sale.items || [])
+      .map((line) => line.description || line.name)
+      .join(', ')
+      .slice(0, 180);
+
+    const result = await sendPaymentLinkWhatsapp({
+      phone,
+      customerName: sale.customer_name || 'לקוח',
+      parentId: sale.parent_id || null,
+      paymentId: sale.payment_id,
+      description,
+      amount: sale.total,
+      shareUrl,
+    });
+    res.json({ ...result, shareUrl });
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 app.post('/api/pos/payment-link', async (req, res) => {
   try {
     const {
@@ -8056,9 +8984,10 @@ app.post('/api/pos/payment-link', async (req, res) => {
       walkInPhone,
       walkInEmail,
       sendWhatsapp = false,
+      couponCode,
     } = req.body || {};
 
-    const lines = mapCartLines(cart);
+    let lines = mapCartLines(cart);
     if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
 
     const needsCustomer = lines.some((l) => requiresCustomer(l.product_type));
@@ -8071,6 +9000,23 @@ app.post('/api/pos/payment-link', async (req, res) => {
     });
     if (needsCustomer && !student?.id) {
       return res.status(400).json({ error: 'מנוי או כרטיסייה דורשים בחירת מתאמן' });
+    }
+
+    // Same server-side recompute as the counter sale, so the amount baked into
+    // the payment link is one we calculated, not one the screen sent.
+    let coupon = null;
+    let couponDiscount = 0;
+    if (couponCode) {
+      const check = checkCouponForSale(db, {
+        code: couponCode,
+        parentId: parent?.id || parentId || null,
+        studentId: student?.id || null,
+        lines,
+      });
+      if (!check.ok) return res.status(400).json({ error: check.error });
+      lines = check.lines;
+      coupon = check.coupon;
+      couponDiscount = check.discount;
     }
 
     const total = computeSaleTotal(lines);
@@ -8093,10 +9039,21 @@ app.post('/api/pos/payment-link', async (req, res) => {
       }
     }
 
-    const description = lines
-      .map((l) => `${l.name}${Number(l.quantity) > 1 ? ` (${l.quantity})` : ''}`)
-      .join(', ')
-      .slice(0, 180);
+    // The payment page shows this one line, so the benefit has to be named here
+    // — otherwise the customer sees a reduced price with no explanation. A line
+    // the coupon split is regrouped by product, so it reads as one item.
+    const quantityByName = new Map();
+    for (const line of lines) {
+      const name = line.name || 'פריט';
+      quantityByName.set(name, (quantityByName.get(name) || 0) + (Number(line.quantity) || 1));
+    }
+    const itemsLabel = [...quantityByName]
+      .map(([name, qty]) => `${name}${qty > 1 ? ` (${qty})` : ''}`)
+      .join(', ');
+    const discountNote = coupon
+      ? ` · כולל הטבה ${coupon.code}: ${coupon.label} (−₪${couponDiscount})`
+      : '';
+    const description = `${itemsLabel}${discountNote}`.slice(0, 180);
     const payment = db.insert('payments', {
       parent_id: syncedParent?.id || null,
       student_id: student?.id || null,
@@ -8126,11 +9083,22 @@ app.post('/api/pos/payment-link', async (req, res) => {
       icount_client_id: clientId,
       payment_id: payment.id,
       sold_by: req.crmUser?.email || req.crmUser?.name || null,
+      coupon_id: coupon?.id || null,
+      coupon_code: coupon?.code || null,
+      coupon_discount: couponDiscount || 0,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
 
     db.update('payments', payment.id, { pos_sale_id: sale.id });
+
+    // Held, not spent: the link may never be paid, and the daily job hands the
+    // benefit back if it is still unpaid a week from now.
+    if (coupon) {
+      reserveCoupon(db, coupon.id, { saleId: sale.id, amount: couponDiscount });
+      await persistCore('customer_coupons', db.getOne('customer_coupons', coupon.id));
+      console.log(`🎟️ [POS] coupon ${coupon.code} reserved for payment link on sale ${sale.id}`);
+    }
 
     const ipnUrl = icount.buildIpnUrl({ paymentId: payment.id });
     const payUrl = await icount.buildPaymentUrl({
@@ -8161,74 +9129,18 @@ app.post('/api/pos/payment-link', async (req, res) => {
       `💳 [POS] payment-link created sale=${sale.id} total=${total} url=${payUrl} short=${shortUrl}`
     );
 
-    let whatsappUrl = null;
-    let whatsappSent = false;
-    let whatsappError = null;
-    if (sendWhatsapp) {
-      const phone = normalizePhone(syncedParent?.phone || walkInPhone);
-      if (phone) {
-        const customerName = syncedParent?.name || walkInName || 'לקוח';
-        const amountLabel = String(total);
-        const tplName = icount.getPaymentTemplateName();
-        const localTpl = (db.get('message_templates') || []).find(
-          (t) => (t.meta_name || t.name) === tplName
-        );
-        const tplApproved =
-          localTpl &&
-          (String(localTpl.status).toUpperCase() === 'APPROVED' || localTpl.active_for_send);
-        // Meta template button is fixed to the live /r/ host. Never use it from local
-        // (the payment only exists on this machine, and localhost short links fail on phones).
-        const canUseMetaTemplate = tplApproved && !icount.isLocalPublicApiBase();
-
-        if (canUseMetaTemplate) {
-          try {
-            const waResult = await whatsappService.sendTemplateMessage(
-              phone,
-              tplName,
-              [customerName, description || 'רכישה', amountLabel],
-              {
-                fallbackName: customerName,
-                parentId: syncedParent?.id || null,
-                buttonUrlParam: payment.id,
-              }
-            );
-            whatsappSent = !!waResult?.success;
-            if (!whatsappSent) {
-              whatsappError = waResult?.error || 'שליחת תבנית וואטסאפ נכשלה';
-            }
-          } catch (waErr) {
-            whatsappError = waErr.message || 'שליחת תבנית וואטסאפ נכשלה';
-          }
-        }
-
-        // Fallback: free-form text (only works inside 24h window)
-        if (!whatsappSent) {
-          const waMsg =
-            `שלום${customerName ? ` ${customerName}` : ''},\n` +
-            `לסיום התשלום ב-${await businessBrand()}:\n${shareUrl}\n\n` +
-            `לאחר התשלום תופק חשבונית מס קבלה אוטומטית.`;
-          try {
-            const waResult = await whatsappService.sendTextMessage(phone, waMsg);
-            whatsappSent = !!waResult?.success;
-            if (!whatsappSent) {
-              whatsappError = waResult?.error || whatsappError || 'שליחת וואטסאפ נכשלה';
-              console.error('POS payment-link WhatsApp failed:', whatsappError);
-            } else {
-              whatsappError = null;
-            }
-          } catch (waErr) {
-            whatsappError = waErr.message || whatsappError || 'שליחת וואטסאפ נכשלה';
-            console.error('POS payment-link WhatsApp error:', whatsappError);
-          }
-          if (!whatsappSent) {
-            const digits = phone.startsWith('972') ? phone : phone.replace(/^0/, '972');
-            whatsappUrl = `https://wa.me/${digits}?text=${encodeURIComponent(waMsg)}`;
-          }
-        }
-      } else {
-        whatsappError = 'אין מספר טלפון לשליחה בוואטסאפ';
-      }
-    }
+    const delivery = sendWhatsapp
+      ? await sendPaymentLinkWhatsapp({
+          phone: syncedParent?.phone || walkInPhone,
+          customerName: syncedParent?.name || walkInName || 'לקוח',
+          parentId: syncedParent?.id || null,
+          paymentId: payment.id,
+          description,
+          amount: total,
+          shareUrl,
+        })
+      : { whatsappUrl: null, whatsappSent: false, whatsappError: null };
+    const { whatsappUrl, whatsappSent, whatsappError, via, deliveryWarning } = delivery;
 
     res.status(201).json({
       sale: updatedSale || { ...sale, payment_url: payUrl },
@@ -8239,6 +9151,8 @@ app.post('/api/pos/payment-link', async (req, res) => {
       whatsappUrl,
       whatsappSent,
       whatsappError,
+      whatsappVia: via,
+      deliveryWarning,
       syncWarning,
       isNewLead: !!isNewLead,
       parent: syncedParent,
@@ -8461,7 +9375,25 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
     parent.name = parentName;
   }
 
-  let student = resolveStudentForHealthForm({ studentId, parent, climberName, phone });
+  // Confirmed on the form as a child already on another parent's file. The
+  // identity is re-checked here: a posted id alone must never attach anyone to
+  // a stranger's child.
+  const linkStudentId = String(req.body?.link_student_id || req.body?.linkStudentId || '').trim();
+  let linkedStudent = null;
+  if (linkStudentId) {
+    const candidate = db.getOne('students', linkStudentId);
+    const identityHolds = candidate
+      && !!String(birthDate || '').trim()
+      && normalizedChildName(candidate.name) === normalizedChildName(climberName)
+      && String(candidate.birthDate || '').trim() === String(birthDate || '').trim();
+    if (!identityHolds) {
+      return res.status(400).json({ error: 'הפרטים לא תואמים את הילד שנבחר במערכת' });
+    }
+    linkedStudent = candidate;
+  }
+
+  let student = linkedStudent
+    || resolveStudentForHealthForm({ studentId, parent, climberName, phone });
   const signedAt = new Date().toISOString();
   const cleanClimberName = String(climberName || '').trim();
 
@@ -8498,6 +9430,23 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
 
   if (!student?.id || !parent?.id) {
     return res.status(500).json({ error: 'לא ניתן לקשר את ההצהרה ללקוח' });
+  }
+
+  // A second parent signing for a child that stays on the first parent's file.
+  if (linkedStudent && String(linkedStudent.parentId || '') !== String(parent.id)) {
+    const link = linkGuardian(db, { studentId: student.id, parentId: parent.id, source: 'form' });
+    if (link) await persistCore('student_guardians', link);
+  }
+
+  // Confirmed on the form as the same household as an existing card.
+  const familyParentId = String(req.body?.family_parent_id || req.body?.familyParentId || '').trim();
+  if (familyParentId) {
+    const familyLinks = mergeFamily(db, {
+      parentId: parent.id,
+      familyParentId,
+      extraStudentIds: [student.id],
+    });
+    for (const link of familyLinks) await persistCore('student_guardians', link);
   }
 
   // 2. Persist declaration locally
@@ -8563,7 +9512,10 @@ function findParentForOnboard({ parentId, phone, studentId }) {
   }
   const phoneKey = normalizePhone(phone);
   if (phoneKey) {
-    return parents.find((p) => normalizePhone(p.phone) === phoneKey) || null;
+    // Cards are stored in 972… form while customers type 050… — comparing the
+    // raw strings would miss the very customer we are trying to spare a second
+    // signature, so match on the same normalized phone the CRM merges cards by.
+    return parents.find((p) => parentPhonesMatch(p.phone, phoneKey)) || null;
   }
   return null;
 }
@@ -8727,6 +9679,9 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
         answers: c.answers || {},
         signature: c.signature || '',
         waiverAccepted: c.waiverAccepted === true || c.waiverAccepted === 'true',
+        // Confirmed on the form as a child already on another parent's file.
+        link_student_id: String(c.link_student_id || c.linkStudentId || '').trim() || null,
+        reuse_health: c.reuse_health === true || c.reuseHealth === true,
       };
     })
     .filter((c) => c.name);
@@ -8739,6 +9694,9 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     if (child.type !== 'adult' && !child.birthDate) {
       return res.status(400).json({ error: `חסר תאריך לידה עבור ${child.name}` });
     }
+    // A declaration already in force is not re-signed; saveCrmParticipants
+    // verifies that claim against what was on file before this request.
+    if (child.reuse_health) continue;
     if (!child.waiverAccepted || !child.signature) {
       return res.status(400).json({
         error: `חסרה חתימה או אישור וויתור עבור ${child.name}`,
@@ -8752,6 +9710,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
 
   const requiredQs = (template?.healthQuestions || []).filter((q) => q.requireYes);
   for (const child of childList) {
+    if (child.reuse_health) continue;
     for (const q of requiredQs) {
       if (!child.answers?.[q.id]) {
         return res.status(400).json({
@@ -8877,9 +9836,18 @@ app.post('/api/public/onboard/:declarationId/pdf', publicFormRateLimit, async (r
     .slice(0, 120);
   const storagePath = `${decl.parentId || 'unknown'}/${decl.studentId || 'unknown'}/${declarationId}_${Date.now()}.pdf`;
 
-  const uploaded = await supa.uploadClientDocument(storagePath, buffer, 'application/pdf');
-  if (!uploaded.ok) {
-    return res.status(500).json({ error: uploaded.error || 'שמירת הקובץ נכשלה' });
+  // Express 4 does not catch a rejected promise from a handler: without this
+  // guard a storage failure on an unauthenticated route becomes an unhandled
+  // rejection, and Node takes the whole API down with it.
+  let uploaded;
+  try {
+    uploaded = await supa.uploadClientDocument(storagePath, buffer, 'application/pdf');
+  } catch (err) {
+    console.error('public onboard pdf upload error:', err.message);
+    return res.status(500).json({ error: 'שמירת הקובץ נכשלה' });
+  }
+  if (!uploaded?.ok) {
+    return res.status(500).json({ error: uploaded?.error || 'שמירת הקובץ נכשלה' });
   }
 
   const doc = db.insert('client_documents', {
@@ -9209,7 +10177,7 @@ async function runDailyAttendanceEnsureIfDue() {
     await refreshActivitiesCache();
     const result = ensureAttendanceRows({
       groups: db.get('groups') || [],
-      students: db.withStudentGroupIds(db.get('students') || []),
+      students: db.withStudentRelations(db.get('students') || []),
       attendance: db.get('attendance') || [],
       activities: db.get('activities') || [],
       date: today,
@@ -9249,6 +10217,16 @@ initDb({ requireDurable: requiresDurableStore() }).then(() => {
       if (created) console.log(`🧠 Seeded ${created} default AI scenario(s)`);
     })
     .catch((err) => console.warn('AI scenario seed skipped:', err.message));
+  try {
+    // Seed/hydrate catalog folders, then heal products left without a category.
+    ensureProductCategories(db);
+    const catFix = backfillPricelistCategories(db);
+    if (catFix.updated > 0) {
+      console.log(`🏷️ Pricelist category backfill: ${catFix.updated} product(s)`);
+    }
+  } catch (err) {
+    console.warn('product catalog seed skipped:', err.message);
+  }
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   try {

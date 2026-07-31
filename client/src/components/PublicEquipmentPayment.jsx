@@ -10,6 +10,19 @@ const DEFAULT_LABELS = {
   chalk_bag: 'שק מגנזיום ומגנזיום',
 };
 
+/** '2026-10-01' → '1.10' */
+function shortDate(iso) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+  if (!match) return '';
+  return `${Number(match[3])}.${Number(match[2])}`;
+}
+
+function monthsLabel(units) {
+  const value = Number(units);
+  if (!Number.isFinite(value)) return '';
+  return value === 1 ? 'חודש' : `${value} חודשים`;
+}
+
 export default function PublicEquipmentPayment() {
   const { profile } = useBusinessProfile();
   const brandName = profile.display_name || 'הרפתקאות';
@@ -71,6 +84,8 @@ export default function PublicEquipmentPayment() {
   const settings = data?.settings || {};
   const prices = settings.prices || {};
   const shirtSizes = settings.shirt_sizes || [];
+  // מחיר הנעליים שהשרת מחזיר כבר מקוזז; זה ההסבר להורה למה.
+  const shoesPricing = data?.shoes_pricing || null;
   const unpaidTypes = useMemo(
     () => new Set((data?.unpaid_items || []).map((i) => i.item_type)),
     [data]
@@ -180,6 +195,22 @@ export default function PublicEquipmentPayment() {
                       </label>
                     );
                   })}
+                  {selected.includes('shoes') && shoesPricing && (
+                    <p className="eq-pay-note">
+                      השכרת נעליים ל{shoesPricing.half_label} של שנת החוגים
+                      {' '}({shortDate(shoesPricing.half_start)}–{shortDate(shoesPricing.half_end)}).
+                      {shoesPricing.prorated ? (
+                        <>
+                          {' '}מחיר מלא לחצי עונה {formatIls(shoesPricing.full_price)}, ומכיוון
+                          {shoesPricing.join_source === 'attendance'
+                            ? ` שההצטרפות לחוג הייתה ב-${shortDate(shoesPricing.join_date)}`
+                            : ' שההצטרפות באמצע העונה'}
+                          {' '}החיוב הוא על {monthsLabel(shoesPricing.remaining_units)} מתוך
+                          {' '}{shoesPricing.total_units}.
+                        </>
+                      ) : null}
+                    </p>
+                  )}
                 </div>
 
                 {selected.includes('shirt') && (
@@ -236,6 +267,9 @@ export default function PublicEquipmentPayment() {
       </main>
       <style>{`
         .eq-pay-page{
+          /* בלי זה דפדפן פותח את רשימת המידות בחלונית בהירה,
+             והאפשרויות יורשות טקסט לבן — לבן על לבן, כלומר רשימה ריקה */
+          color-scheme:dark;
           min-height:100vh;direction:rtl;padding:20px 14px 40px;
           background:radial-gradient(circle at top,#1e293b,#070b14 68%);
           color:#f8fafc;font-family:Heebo,Assistant,system-ui,sans-serif;
@@ -264,12 +298,16 @@ export default function PublicEquipmentPayment() {
         .eq-pay-item div{flex:1;display:flex;justify-content:space-between;gap:12px;align-items:center}
         .eq-pay-item strong{font-weight:800}
         .eq-pay-item span{color:#7dd3fc;font-weight:800}
+        .eq-pay-note{
+          margin:2px 2px 0;font-size:12px;line-height:1.7;color:#94a3b8;
+        }
         .eq-pay-size{margin-top:14px;display:grid;gap:8px}
         .eq-pay-size label{font-size:13px;color:#94a3b8;font-weight:700}
         .eq-pay-size select{
           width:100%;padding:12px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.12);
           background:#0b1220;color:#fff;font:inherit;font-weight:700;
         }
+        .eq-pay-size select option{background:#0b1220;color:#fff}
         .eq-pay-total{
           margin-top:16px;display:flex;justify-content:space-between;align-items:center;
           padding:12px 4px;font-size:15px;

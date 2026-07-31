@@ -41,6 +41,7 @@ const TRIGGER_FIELDS = {
 
 const COUPON_STATE_BADGE = {
   active: { label: 'פעיל', cls: 'badge badge-green' },
+  reserved: { label: 'ממתין לתשלום', cls: 'badge badge-amber' },
   redeemed: { label: 'מומש', cls: 'badge badge-blue' },
   expired: { label: 'פג תוקף', cls: 'badge badge-gray' },
   cancelled: { label: 'בוטל', cls: 'badge badge-red' },
@@ -327,16 +328,18 @@ export default function Campaigns() {
       )}
       {notice && <div className="alert alert-success" style={{ marginBottom: 12 }}>{notice}</div>}
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        <button className={`btn btn-sm ${view === 'list' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setView('list')}>
-          <Target size={14} /> הקמפיינים ({campaigns.length})
-        </button>
-        <button className={`btn btn-sm ${view === 'pending' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setView('pending')}>
-          <Clock size={14} /> ממתינים לאישור ({pending.length})
-        </button>
-        <button className={`btn btn-sm ${view === 'coupons' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setView('coupons')}>
-          <Ticket size={14} /> הטבות שהונפקו ({coupons.length})
-        </button>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div className="tab-bar tab-bar-inline">
+          <button className={`tab-pill ${view === 'list' ? 'active' : ''}`} onClick={() => setView('list')}>
+            <Target size={14} /> הקמפיינים ({campaigns.length})
+          </button>
+          <button className={`tab-pill ${view === 'pending' ? 'active' : ''}`} onClick={() => setView('pending')}>
+            <Clock size={14} /> ממתינים לאישור ({pending.length})
+          </button>
+          <button className={`tab-pill ${view === 'coupons' ? 'active' : ''}`} onClick={() => setView('coupons')}>
+            <Ticket size={14} /> הטבות שהונפקו ({coupons.length})
+          </button>
+        </div>
         <button className="btn btn-sm btn-ghost" onClick={loadAll}><RefreshCw size={14} /> רענון</button>
       </div>
 

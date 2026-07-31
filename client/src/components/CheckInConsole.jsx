@@ -244,7 +244,7 @@ export default function CheckInConsole({ students, groups }) {
                   flexWrap: 'wrap',
                   padding: '10px 12px',
                   borderRadius: 10,
-                  background: check.signed_today ? 'rgba(16,185,129,0.08)' : 'var(--bg-2)',
+                  background: check.signed_today ? 'rgba(16,185,129,0.08)' : 'var(--bg-input)',
                   border: `1px solid ${check.signed_today ? 'rgba(16,185,129,0.35)' : 'var(--border)'}`,
                 }}
               >
@@ -327,7 +327,7 @@ export default function CheckInConsole({ students, groups }) {
                     key={s.id}
                     onClick={() => handleSelect(s)}
                     style={{ padding: '12px 16px', cursor: 'pointer', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between' }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-2)'}
+                    onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-input)'}
                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                   >
                     <span style={{ fontWeight: 600 }}>{s.name}</span>
@@ -385,7 +385,7 @@ export default function CheckInConsole({ students, groups }) {
                 marginBottom: 20,
                 padding: '10px 12px',
                 borderRadius: 10,
-                background: 'var(--bg-2)',
+                background: 'var(--bg-input)',
                 border: '1px solid var(--border)',
                 textAlign: 'right',
                 fontSize: 13,

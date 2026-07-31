@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Clock, LogIn, LogOut, Coins, Plus, Trash2, Edit2,
   Save, X, UserCheck, RefreshCw, Briefcase, Award, ArrowUpRight, Search, ChevronDown, ChevronUp,
-  Upload, Download, FileText
+  Upload, Download, FileText, Users, Banknote
 } from 'lucide-react';
 import { Modal } from './UI.jsx';
 
@@ -1194,42 +1194,22 @@ export default function Employees() {
       </div>
 
       {/* ─── Tabs Navigation ──────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 1 }}>
-        <button
-          className={`btn btn-sm ${activeTab === 'permanent' ? 'btn-primary' : 'btn-ghost'}`}
-          style={{ borderBottomLeftRadius: 0, borderBottomRightRadius: 0, borderBottom: activeTab === 'permanent' ? '2px solid var(--blue)' : 'none' }}
-          onClick={() => setActiveTab('permanent')}
-        >
-          👥 עובדים קבועים
-        </button>
-        <button
-          className={`btn btn-sm ${activeTab === 'certs' ? 'btn-primary' : 'btn-ghost'}`}
-          style={{ borderBottomLeftRadius: 0, borderBottomRightRadius: 0, borderBottom: activeTab === 'certs' ? '2px solid var(--blue)' : 'none' }}
-          onClick={() => setActiveTab('certs')}
-        >
-          📜 תעודות והסמכות
-        </button>
-        <button
-          className={`btn btn-sm ${activeTab === 'wages' ? 'btn-primary' : 'btn-ghost'}`}
-          style={{ borderBottomLeftRadius: 0, borderBottomRightRadius: 0, borderBottom: activeTab === 'wages' ? '2px solid var(--blue)' : 'none' }}
-          onClick={() => setActiveTab('wages')}
-        >
-          💰 הסכמי שכר
-        </button>
-        <button
-          className={`btn btn-sm ${activeTab === 'shifts' ? 'btn-primary' : 'btn-ghost'}`}
-          style={{ borderBottomLeftRadius: 0, borderBottomRightRadius: 0, borderBottom: activeTab === 'shifts' ? '2px solid var(--blue)' : 'none' }}
-          onClick={() => setActiveTab('shifts')}
-        >
-          ⏰ שעון נוכחות ומשמרות
-        </button>
-        <button
-          className={`btn btn-sm ${activeTab === 'payroll' ? 'btn-primary' : 'btn-ghost'}`}
-          style={{ borderBottomLeftRadius: 0, borderBottomRightRadius: 0, borderBottom: activeTab === 'payroll' ? '2px solid var(--blue)' : 'none' }}
-          onClick={() => setActiveTab('payroll')}
-        >
-          💵 תשלום חודשי
-        </button>
+      <div className="tab-bar">
+        {[
+          { key: 'permanent', label: 'עובדים קבועים',        icon: Users },
+          { key: 'certs',     label: 'תעודות והסמכות',       icon: Award },
+          { key: 'wages',     label: 'הסכמי שכר',            icon: Coins },
+          { key: 'shifts',    label: 'שעון נוכחות ומשמרות',  icon: Clock },
+          { key: 'payroll',   label: 'תשלום חודשי',          icon: Banknote },
+        ].map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            className={`tab-pill ${activeTab === key ? 'active' : ''}`}
+            onClick={() => setActiveTab(key)}
+          >
+            <Icon size={14} /> {label}
+          </button>
+        ))}
       </div>
 
       {/* ─── Tab 1: Permanent Employees ────────────────────────────────────── */}

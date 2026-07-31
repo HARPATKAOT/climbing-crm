@@ -10,9 +10,12 @@ import {
   applyOfferToLines,
   selectDiscountedUnits,
   issueCoupon,
+  activeCouponsFor,
   checkCouponForSale,
   redeemCoupon,
+  reserveCoupon,
   releaseCouponsForSale,
+  releaseStaleReservations,
   expireDueCoupons,
   couponStats,
   addDaysIso,
@@ -304,6 +307,92 @@ test('a refund gives the coupon back, unless it expired meanwhile', () => {
   assert.equal(db.getOne('customer_coupons', 'cp1').status, COUPON_STATUS.ACTIVE);
   assert.equal(db.getOne('customer_coupons', 'cp1').pos_sale_id, null);
   assert.equal(db.getOne('customer_coupons', 'cp2').status, COUPON_STATUS.EXPIRED);
+});
+
+test('a payment link holds the benefit without spending it', () => {
+  const db = fakeDb({
+    customer_coupons: [
+      {
+        id: 'cp1', code: 'ABC123', parent_id: 'p1',
+        status: COUPON_STATUS.ACTIVE, expires_at: '2026-08-30',
+        offer: { type: 'percent', value: 50, units: 1 },
+      },
+    ],
+  });
+  reserveCoupon(db, 'cp1', { saleId: 'sale1', amount: 30, today: '2026-07-29' });
+  const held = db.getOne('customer_coupons', 'cp1');
+  assert.equal(held.status, COUPON_STATUS.RESERVED);
+  assert.equal(held.pos_sale_id, 'sale1');
+  assert.equal(couponState(held, '2026-07-29'), COUPON_STATUS.RESERVED);
+
+  // It must not also be spendable at the counter while the link is live.
+  const atCounter = checkCouponForSale(db, {
+    code: 'ABC123', parentId: 'p1', lines: [entry()], today: '2026-07-29',
+  });
+  assert.equal(atCounter.ok, false);
+  assert.match(atCounter.error, /שמורה/);
+});
+
+test('a reservation survives the coupon expiring while the link waits', () => {
+  const db = fakeDb({
+    customer_coupons: [
+      { id: 'cp1', parent_id: 'p1', status: COUPON_STATUS.RESERVED, expires_at: '2026-07-01', pos_sale_id: 'sale1' },
+    ],
+  });
+  // The customer was already quoted the discounted price, so it is still honoured.
+  assert.equal(couponState(db.getOne('customer_coupons', 'cp1'), '2026-07-29'), COUPON_STATUS.RESERVED);
+  redeemCoupon(db, 'cp1', { saleId: 'sale1', amount: 30 });
+  assert.equal(db.getOne('customer_coupons', 'cp1').status, COUPON_STATUS.REDEEMED);
+});
+
+test('a link that was never paid gives the benefit back after the hold window', () => {
+  const db = fakeDb({
+    customer_coupons: [
+      { id: 'stale', parent_id: 'p1', status: COUPON_STATUS.RESERVED, reserved_on: '2026-07-01', expires_at: '2026-12-01', pos_sale_id: 'sale-old' },
+      { id: 'fresh', parent_id: 'p1', status: COUPON_STATUS.RESERVED, reserved_on: '2026-07-27', expires_at: '2026-12-01', pos_sale_id: 'sale-new' },
+      { id: 'paid', parent_id: 'p1', status: COUPON_STATUS.RESERVED, reserved_on: '2026-07-01', expires_at: '2026-12-01', pos_sale_id: 'sale-paid' },
+      { id: 'lapsed', parent_id: 'p1', status: COUPON_STATUS.RESERVED, reserved_on: '2026-07-01', expires_at: '2026-07-10', pos_sale_id: 'sale-x' },
+    ],
+    pos_sales: [
+      { id: 'sale-old', status: 'pending_payment' },
+      { id: 'sale-new', status: 'pending_payment' },
+      { id: 'sale-paid', status: 'paid' },
+      { id: 'sale-x', status: 'pending_payment' },
+    ],
+  });
+
+  const released = releaseStaleReservations(db, '2026-07-29');
+  assert.deepEqual(released.map((c) => c.id).sort(), ['lapsed', 'stale']);
+  assert.equal(db.getOne('customer_coupons', 'stale').status, COUPON_STATUS.ACTIVE);
+  assert.equal(db.getOne('customer_coupons', 'stale').pos_sale_id, null);
+  // Still inside the window — leave it held.
+  assert.equal(db.getOne('customer_coupons', 'fresh').status, COUPON_STATUS.RESERVED);
+  // The sale got paid; the payment hook settles it, not this sweep.
+  assert.equal(db.getOne('customer_coupons', 'paid').status, COUPON_STATUS.RESERVED);
+  // Released, but its own validity had already run out.
+  assert.equal(db.getOne('customer_coupons', 'lapsed').status, COUPON_STATUS.EXPIRED);
+});
+
+test('cancelling an unpaid link releases the reservation too', () => {
+  const db = fakeDb({
+    customer_coupons: [
+      { id: 'cp1', parent_id: 'p1', status: COUPON_STATUS.RESERVED, expires_at: '2026-12-01', pos_sale_id: 'sale1' },
+    ],
+  });
+  releaseCouponsForSale(db, 'sale1', '2026-07-29');
+  assert.equal(db.getOne('customer_coupons', 'cp1').status, COUPON_STATUS.ACTIVE);
+  assert.equal(db.getOne('customer_coupons', 'cp1').pos_sale_id, null);
+});
+
+test('a reserved coupon is not offered at the register', () => {
+  const db = fakeDb({
+    customer_coupons: [
+      { id: 'cp1', parent_id: 'p1', status: COUPON_STATUS.RESERVED, expires_at: '2026-12-01' },
+      { id: 'cp2', parent_id: 'p1', status: COUPON_STATUS.ACTIVE, expires_at: '2026-12-01' },
+    ],
+  });
+  const offered = activeCouponsFor(db, { parentId: 'p1' }, '2026-07-29');
+  assert.deepEqual(offered.map((c) => c.id), ['cp2']);
 });
 
 test('due coupons expire once and stay expired', () => {

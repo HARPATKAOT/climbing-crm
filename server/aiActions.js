@@ -14,7 +14,8 @@
  */
 
 import { israelDateStr } from './attendanceUtils.js';
-import { namesMatch } from './activityInterest.js';
+import { addInterest, insertRegistration, namesMatch } from './activityInterest.js';
+import { activeRegistrations, remainingCapacity } from './activityRegistration.js';
 
 export const SUGGESTIONS_COLLECTION = 'ai_suggestions';
 export const TASKS_COLLECTION = 'crm_tasks';
@@ -727,11 +728,102 @@ export async function analyzeConversation({
   return { created, skipped, reason: created.length ? 'ok' : 'nothing_actionable' };
 }
 
-/** ביצוע בפועל. הרחבה לסוגי פעולה נוספים מתווספת כאן ובלבד ש-ACTION_TYPES מתעדכן. */
+/**
+ * שיבוץ ורישום לאירוע, ברגע האישור.
+ *
+ * התפוסה נבדקת *כאן* ולא רק כשההצעה נוצרה: בין הצעה לאישור עוברים דקות,
+ * ובינתיים דף ההרשמה הציבורי יכול לסגור את האירוע. אישור שמכניס משתתף
+ * מעבר לתקרה הוא בדיוק סוג התקלה שהשער הזה קיים כדי למנוע.
+ */
+async function applyActivityAction({ db, persist, suggestion, actor = '' }) {
+  const args = suggestion.args || {};
+  const activity = (db.get('activities') || []).find((row) => String(row.id) === String(args.activity_id));
+  if (!activity) throw Object.assign(new Error('האירוע לא נמצא'), { status: 404 });
+
+  const participant = {
+    student_id: args.student_id || null,
+    participant_type: args.participant_type === 'adult' ? 'adult' : 'child',
+    name: args.participant_name,
+    notes: args.notes || '',
+  };
+
+  if (suggestion.type === 'add_activity_interest') {
+    return addInterest({
+      db,
+      persist,
+      activityId: activity.id,
+      input: {
+        name: participant.name,
+        phone: '',
+        email: '',
+        parent_id: args.parent_id || null,
+        student_id: participant.student_id,
+        participant_type: participant.participant_type,
+        notes: [participant.notes, `שובץ על ידי הסוכן${actor ? ` (${actor})` : ''}`]
+          .filter(Boolean).join(' · '),
+      },
+    });
+  }
+
+  const parent = (db.get('parents') || []).find((row) => String(row.id) === String(args.parent_id));
+  if (!parent) throw Object.assign(new Error('הלקוח לא נמצא'), { status: 404 });
+
+  const left = remainingCapacity(activity, activeRegistrations(db, activity.id));
+  if (left !== null && left < 1) throw badRequest('אין מקומות פנויים באירוע');
+
+  return insertRegistration({
+    db,
+    persist,
+    activity,
+    parent,
+    participant,
+    paymentStatus: args.payment_status || undefined,
+    note: `נרשם על ידי הסוכן${actor ? ` (${actor})` : ''}`,
+  });
+}
+
+/**
+ * ביצוע בפועל.
+ *
+ * `ACTION_TYPES` הוא רשימת ההיתר של *ניתוח שיחה* (וגם סכימת הפלט שלו), ולכן
+ * הוא נשאר `create_task` בלבד. סוכן השיחה מציע גם עדכון משימה והערה לכרטיס,
+ * ולכן רשימת הביצוע כאן רחבה ממנו — מה שלא מוכר בשני המקומות פשוט נזרק.
+ */
+export const APPLIABLE_ACTION_TYPES = [
+  'create_task',
+  'update_task',
+  'add_customer_note',
+  'add_activity_interest',
+  'register_to_activity',
+];
+
 async function applyAction({ db, persist, suggestion, actor = '' }) {
-  if (suggestion.type !== 'create_task') {
+  if (!APPLIABLE_ACTION_TYPES.includes(suggestion.type)) {
     throw badRequest(`סוג פעולה לא נתמך: ${suggestion.type}`);
   }
+
+  if (suggestion.type === 'add_activity_interest' || suggestion.type === 'register_to_activity') {
+    return applyActivityAction({ db, persist, suggestion, actor });
+  }
+
+  if (suggestion.type === 'update_task') {
+    const args = suggestion.args || {};
+    return updateTask({ db, persist, id: args.task_id, patch: args.patch || {}, actor });
+  }
+
+  if (suggestion.type === 'add_customer_note') {
+    const args = suggestion.args || {};
+    const parent = (db.get('parents') || []).find((row) => String(row.id) === String(args.parent_id));
+    if (!parent) throw Object.assign(new Error('הלקוח לא נמצא'), { status: 404 });
+    const stamp = israelDateStr();
+    const line = `[${stamp}] ${clean(args.note)}`;
+    const updated = db.update('parents', parent.id, {
+      notes: parent.notes ? `${parent.notes}\n${line}` : line,
+    });
+    await requireDurable(persist, 'parents', updated);
+    return updated;
+  }
+
   const args = suggestion.args || {};
   const task = db.insert(TASKS_COLLECTION, {
     title: args.title,
@@ -758,15 +850,18 @@ export async function approveSuggestion({ db, persist, id, actor = '' } = {}) {
     throw badRequest('ההצעה כבר טופלה');
   }
 
-  const task = await applyAction({ db, persist, suggestion, actor });
+  const applied = await applyAction({ db, persist, suggestion, actor });
+  // רק `create_task` מייצר משימה חדשה; שאר הפעולות מחזירות את הרשומה שעודכנה,
+  // ולכן קישור אליה כ-`applied_task_id` היה מצביע על הדבר הלא נכון.
+  const task = suggestion.type === 'create_task' ? applied : null;
   const updated = db.update(SUGGESTIONS_COLLECTION, suggestion.id, {
     status: SUGGESTION_APPROVED,
     reviewed_at: new Date().toISOString(),
     reviewed_by: actor || 'crm',
-    applied_task_id: task.id,
+    applied_task_id: task?.id || null,
   });
   await requireDurable(persist, SUGGESTIONS_COLLECTION, updated);
-  return { suggestion: updated, task };
+  return { suggestion: updated, task, applied };
 }
 
 export async function rejectSuggestion({ db, persist, id, actor = '', note = '' } = {}) {

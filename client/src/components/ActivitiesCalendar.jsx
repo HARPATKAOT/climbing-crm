@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Plus, ChevronLeft, ChevronRight, X, Save, Trash2, Link2, Unlink,
   RefreshCw, Loader2, CalendarDays, CalendarRange, Layers, List,
-  CheckCircle, AlertCircle, Clock3, Check, Pencil, Undo2,
+  CheckCircle, AlertCircle, Clock3, Check, Pencil, Undo2, Users,
 } from 'lucide-react';
 import ActivityPageDesigner from './ActivityPageDesigner.jsx';
 import ActivityRegistrationPanel from './ActivityRegistrationPanel.jsx';
@@ -29,6 +29,16 @@ const TEMPLATE_CATEGORIES = [
 
 const normalizeTemplateCategory = (value) => (
   TEMPLATE_CATEGORIES.some((c) => c.id === value) ? value : 'wall'
+);
+
+/**
+ * באירוע שבו כל משתתף משלם בנפרד אין „דמי הזמנה” מהמזמין, ולכן
+ * payment_status של האירוע נשאר unpaid לנצח. מסמנים מצב כזה בנפרד.
+ */
+const isPaidPerParticipant = (activity) => (
+  (activity?.registration_mode || (
+    activity?.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
+  )) === 'paid_per_participant'
 );
 
 /** סוגים שמוצגים יחד בתגית הסינון „פעילויות” */
@@ -840,8 +850,7 @@ function RegularActivityModal({
 }) {
   const activityId = isEdit && !isTemplateEdit ? initial?.id : null;
   const multiDay = !!(form.date && form.end_date && form.end_date > form.date);
-  const paidPerParticipant = form.registration_mode === 'paid_per_participant'
-    || (!form.registration_mode && form.collect_registration_payment);
+  const paidPerParticipant = isPaidPerParticipant(form);
   const includesVat = normalizePriceIncludesVat(form.price_includes_vat);
   const priceVat = vatBreakdown(form.price, includesVat);
   const isOps = normalizeTemplateCategory(form.category) === 'ops';
@@ -858,7 +867,10 @@ function RegularActivityModal({
             <div className="activity-modal-title-row">
               <div className="activity-modal-title">{title}</div>
               {isEdit && !isTemplateEdit && !isOps && (
-                <PaymentStatusBadge status={form.payment_status} />
+                <PaymentStatusBadge
+                  status={form.payment_status}
+                  perParticipant={paidPerParticipant}
+                />
               )}
             </div>
             {(isOps || isTemplateEdit) && (
@@ -1739,18 +1751,22 @@ function ActivityFormModal({
   );
 }
 
-function PaymentStatusBadge({ status }) {
+function PaymentStatusBadge({ status, perParticipant = false }) {
   const normalized =
-    status === 'paid' || status === 'partial' || status === 'refunded'
-      ? status
-      : 'unpaid';
-  const config = normalized === 'paid'
-    ? { Icon: CheckCircle, label: 'שולם' }
-    : normalized === 'partial'
-      ? { Icon: Clock3, label: 'שולם חלקית' }
-      : normalized === 'refunded'
-        ? { Icon: Undo2, label: 'זוכה' }
-        : { Icon: AlertCircle, label: 'לא שולם' };
+    perParticipant && status !== 'paid' && status !== 'partial' && status !== 'refunded'
+      ? 'per-participant'
+      : status === 'paid' || status === 'partial' || status === 'refunded'
+        ? status
+        : 'unpaid';
+  const config = normalized === 'per-participant'
+    ? { Icon: Users, label: 'לפי משתתף' }
+    : normalized === 'paid'
+      ? { Icon: CheckCircle, label: 'שולם' }
+      : normalized === 'partial'
+        ? { Icon: Clock3, label: 'שולם חלקית' }
+        : normalized === 'refunded'
+          ? { Icon: Undo2, label: 'זוכה' }
+          : { Icon: AlertCircle, label: 'לא שולם' };
   const { Icon, label } = config;
 
   return (
@@ -1761,18 +1777,22 @@ function PaymentStatusBadge({ status }) {
   );
 }
 
-function PaymentStatusIcon({ status, size = 12 }) {
+function PaymentStatusIcon({ status, size = 12, perParticipant = false }) {
   const normalized =
-    status === 'paid' || status === 'partial' || status === 'refunded'
-      ? status
-      : 'unpaid';
-  const config = normalized === 'paid'
-    ? { Icon: CheckCircle, label: 'שולם', color: '#34D399' }
-    : normalized === 'partial'
-      ? { Icon: Clock3, label: 'שולם חלקית', color: '#FBBF24' }
-      : normalized === 'refunded'
-        ? { Icon: Undo2, label: 'זוכה', color: '#94A3B8' }
-        : { Icon: AlertCircle, label: 'טרם שולם', color: '#FB7185' };
+    perParticipant && status !== 'paid' && status !== 'partial' && status !== 'refunded'
+      ? 'per-participant'
+      : status === 'paid' || status === 'partial' || status === 'refunded'
+        ? status
+        : 'unpaid';
+  const config = normalized === 'per-participant'
+    ? { Icon: Users, label: 'לפי משתתף', color: '#7DD3FC' }
+    : normalized === 'paid'
+      ? { Icon: CheckCircle, label: 'שולם', color: '#34D399' }
+      : normalized === 'partial'
+        ? { Icon: Clock3, label: 'שולם חלקית', color: '#FBBF24' }
+        : normalized === 'refunded'
+          ? { Icon: Undo2, label: 'זוכה', color: '#94A3B8' }
+          : { Icon: AlertCircle, label: 'טרם שולם', color: '#FB7185' };
   const { Icon, label, color } = config;
 
   return (
@@ -1839,7 +1859,10 @@ function EventChip({ activity, onClick, draggable = true }) {
         lineHeight: 1.3,
       }}
     >
-      <PaymentStatusIcon status={activity.payment_status} />
+      <PaymentStatusIcon
+        status={activity.payment_status}
+        perParticipant={isPaidPerParticipant(activity)}
+      />
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {timeLabel ? `${timeLabel} · ` : ''}{activity.name}
       </span>
@@ -2017,7 +2040,13 @@ function WeekTimedEvent({
             </span>
           )}
           <span style={{ display: 'flex', alignItems: 'flex-start', gap: 3, minWidth: 0 }}>
-            {!isOverlay && <PaymentStatusIcon status={event.payment_status} size={11} />}
+            {!isOverlay && (
+              <PaymentStatusIcon
+                status={event.payment_status}
+                size={11}
+                perParticipant={isPaidPerParticipant(event)}
+              />
+            )}
             <span
               style={{
                 overflow: 'hidden',
@@ -2036,7 +2065,13 @@ function WeekTimedEvent({
         </>
       ) : (
         <span style={{ display: 'flex', alignItems: 'center', gap: 3, minWidth: 0 }}>
-          {!isOverlay && <PaymentStatusIcon status={event.payment_status} size={11} />}
+          {!isOverlay && (
+              <PaymentStatusIcon
+                status={event.payment_status}
+                size={11}
+                perParticipant={isPaidPerParticipant(event)}
+              />
+            )}
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {startLabel ? `${startLabel} ` : ''}{name}
           </span>
@@ -3605,44 +3640,27 @@ export default function ActivitiesCalendar({ isOwner = false }) {
         </div>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-          <div style={{
-            display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden',
-          }}>
+          <div className="tab-bar tab-bar-inline">
             <button
               type="button"
+              className={`tab-pill ${viewMode === 'month' ? 'active' : ''}`}
               onClick={() => setViewMode('month')}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-                padding: '7px 12px', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 700,
-                background: viewMode === 'month' ? 'rgba(56,189,248,0.18)' : 'transparent',
-                color: viewMode === 'month' ? '#7DD3FC' : 'var(--text-3)',
-              }}
             >
               <CalendarDays size={14} /> חודש
             </button>
             <button
               type="button"
+              className={`tab-pill ${viewMode === 'week' ? 'active' : ''}`}
               onClick={() => setViewMode('week')}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-                padding: '7px 12px', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 700,
-                background: viewMode === 'week' ? 'rgba(56,189,248,0.18)' : 'transparent',
-                color: viewMode === 'week' ? '#7DD3FC' : 'var(--text-3)',
-              }}
             >
               <CalendarRange size={14} /> שבוע
             </button>
             <button
               type="button"
+              className={`tab-pill ${viewMode === 'list' ? 'active' : ''}`}
               onClick={() => {
                 setViewMode('list');
                 if (typeFilter === 'all') setTypeFilter('training_vacation');
-              }}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-                padding: '7px 12px', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 700,
-                background: viewMode === 'list' ? 'rgba(244,114,182,0.18)' : 'transparent',
-                color: viewMode === 'list' ? '#F9A8D4' : 'var(--text-3)',
               }}
             >
               <List size={14} /> רשימה

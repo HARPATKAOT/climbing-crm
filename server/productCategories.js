@@ -48,6 +48,37 @@ export function ensureProductCategories(db) {
   return [...rows].sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0));
 }
 
+/**
+ * A product must always carry at least one category label, otherwise it becomes
+ * unreachable in the catalog UI (which only lists items inside an open category).
+ * Falls back to the legacy single `category` field, then to 'שונות'.
+ */
+export function normalizeProductCategories(item = {}) {
+  const raw = Array.isArray(item.categories)
+    ? item.categories
+    : item.categories
+      ? [item.categories]
+      : [];
+  const cleaned = [...new Set(raw.map((c) => String(c || '').trim()).filter(Boolean))];
+  if (cleaned.length) return cleaned;
+  const legacy = String(item.category || '').trim();
+  return [legacy || 'שונות'];
+}
+
+/** One-time heal for rows saved before categories were enforced. */
+export function backfillPricelistCategories(db) {
+  const items = db.get('pricelist') || [];
+  let updated = 0;
+  for (const item of items) {
+    const next = normalizeProductCategories(item);
+    const current = Array.isArray(item.categories) ? item.categories : [];
+    if (current.length === next.length && current.every((c, i) => c === next[i])) continue;
+    db.update('pricelist', item.id, { categories: next, category: next[0] });
+    updated += 1;
+  }
+  return { updated };
+}
+
 /** When a category is renamed, retarget product category labels. */
 export function renameCategoryOnProducts(db, oldName, newName) {
   if (!oldName || !newName || oldName === newName) return 0;

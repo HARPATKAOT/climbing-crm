@@ -349,11 +349,11 @@ export default function AiAssistant() {
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+      <div className="tab-bar">
         {TABS.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
-            className={`btn btn-sm ${tab === key ? 'btn-primary' : 'btn-ghost'}`}
+            className={`tab-pill ${tab === key ? 'active' : ''}`}
             onClick={() => setTab(key)}
           >
             <Icon size={14} /> {label}
@@ -448,7 +448,8 @@ export default function AiAssistant() {
               return (
                 <div key={row.id} className="daily-work-row" style={{ alignItems: 'flex-start' }}>
                   <div className="daily-work-row-copy">
-                    <strong>{row.args?.title}</strong>
+                    {/* הצעה מהסוכן נושאת `label` (גם לעדכון משימה ולהערה, שאין להם args.title). */}
+                    <strong>{row.label || row.args?.title}</strong>
                     <span>
                       {[row.parent_name, row.student_name].filter(Boolean).join(' · ')}
                       {row.parent_phone ? ` · ${row.parent_phone}` : ''}

@@ -701,16 +701,16 @@ export default function HealthDeclarations({ parents, students, canManageTemplat
           <div className="section-title">הצהרות בריאות וטפסים</div>
           <div className="section-sub">עריכת הטקסט שנשלח ללקוחות · מעקב חתימות · הורדת PDF</div>
         </div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <div className="tab-bar tab-bar-inline">
           {canManageTemplates && (
-            <button className={`btn btn-sm ${view === 'templates' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setView('templates'); setSubmitted(false); }}>
+            <button className={`tab-pill ${view === 'templates' ? 'active' : ''}`} onClick={() => { setView('templates'); setSubmitted(false); }}>
               <Link2 size={15} /> עריכת הצהרה שנשלחת
             </button>
           )}
-          <button className={`btn btn-sm ${view === 'list' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setView('list'); setSubmitted(false); }}>
+          <button className={`tab-pill ${view === 'list' ? 'active' : ''}`} onClick={() => { setView('list'); setSubmitted(false); }}>
             <ClipboardCheck size={15} /> הצהרות חתומות
           </button>
-          <button className={`btn btn-sm ${view === 'new' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setView('new'); setSubmitted(false); }}>
+          <button className={`tab-pill ${view === 'new' ? 'active' : ''}`} onClick={() => { setView('new'); setSubmitted(false); }}>
             <FileText size={15} /> מילוי ידני
           </button>
         </div>

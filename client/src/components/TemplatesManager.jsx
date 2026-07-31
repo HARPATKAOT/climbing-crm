@@ -2,9 +2,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   RefreshCw, Plus, Send, Trash2, MousePointerClick, ExternalLink, Phone,
   ArrowUp, ArrowDown, Archive, ArchiveRestore, Pencil, X, Save,
-  Wrench, Megaphone, KeyRound, Search, FilterX, FileText, Info,
+  Wrench, Megaphone, KeyRound, Search, FilterX, FileText, Info, AlertTriangle,
 } from 'lucide-react';
 import { TEMPLATE_VAR_FIELDS, TEMPLATE_VAR_FIELD_MAP, normalizeTemplateVariables } from './templateVariables.js';
+import { SUGGESTED_TEMPLATE_TAGS, templateTagStyle } from './templateTags.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 
 const EVENT_SYSTEM_META_NAMES = new Set([
@@ -68,6 +69,55 @@ function StatusBadge({ status }) {
   );
 }
 
+/**
+ * A button that leaves our system takes the customer somewhere we cannot see —
+ * an old external form, a stale short link — and whatever they fill in there
+ * never reaches a customer file. Meta freezes the URL on approval, so this can
+ * only be fixed by editing the button at Meta or submitting a new template.
+ */
+function externalButtonHost(template) {
+  for (const button of template?.buttons || []) {
+    if (String(button?.type || '').toUpperCase() !== 'URL') continue;
+    const url = String(button.url || '');
+    if (!/^https?:\/\//i.test(url)) continue;
+    try {
+      const { hostname } = new URL(url);
+      const ours = hostname.endsWith('kirboaz.co.il')
+        || hostname.endsWith('onrender.com')
+        || hostname.endsWith('vercel.app')
+        || hostname === 'localhost';
+      if (!ours) return hostname;
+    } catch {
+      return url.slice(0, 40);
+    }
+  }
+  return '';
+}
+
+function ExternalLinkWarning({ template }) {
+  const host = externalButtonHost(template);
+  if (!host) return null;
+  return (
+    <div
+      style={{
+        fontSize: 11,
+        color: '#FCA5A5',
+        marginTop: 4,
+        display: 'flex',
+        gap: 5,
+        alignItems: 'flex-start',
+        lineHeight: 1.45,
+        maxWidth: 320,
+      }}
+    >
+      <AlertTriangle size={11} style={{ marginTop: 2, flexShrink: 0 }} />
+      <span>
+        הכפתור מוביל ל־{host} — מחוץ למערכת. מה שימולא שם לא ייכנס לתיק הלקוח.
+      </span>
+    </div>
+  );
+}
+
 function SystemBadge({ template }) {
   const meta = String(template?.meta_name || template?.name || '');
   const id = String(template?.id || '');
@@ -111,9 +161,49 @@ const BUTTON_TYPES = [
 
 const BUTTON_TYPE_LABELS = Object.fromEntries(BUTTON_TYPES.map((t) => [t.value, t.label]));
 
+/**
+ * The template's purpose, as a coloured chip. Suggested labels keep the same
+ * few colours across the CRM; free text is allowed for anything else.
+ */
+function TagField({ value, onChange }) {
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input
+          className="input input-sm"
+          style={{ maxWidth: 190 }}
+          placeholder="תגית לתצוגה (למשל: הצהרת בריאות)"
+          value={value}
+          maxLength={24}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        {templateTagStyle(value) && <span style={templateTagStyle(value)}>{value}</span>}
+        {value && (
+          <button type="button" className="btn btn-ghost btn-xs" onClick={() => onChange('')}>
+            ניקוי
+          </button>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6 }}>
+        {SUGGESTED_TEMPLATE_TAGS.filter((tag) => tag !== value).map((tag) => (
+          <button
+            key={tag}
+            type="button"
+            onClick={() => onChange(tag)}
+            style={{ ...templateTagStyle(tag), opacity: 0.65, cursor: 'pointer' }}
+          >
+            {tag}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const EMPTY_DRAFT = {
   name: '',
   usage: '',
+  tag: '',
   meta_name: '',
   language: 'he',
   category: 'UTILITY',
@@ -597,6 +687,7 @@ export default function TemplatesManager() {
     setEditForm({
       name: t.name || '',
       usage: t.usage || '',
+      tag: t.tag || '',
       meta_name: t.meta_name || '',
       language: t.language || 'he',
       category: t.category || 'UTILITY',
@@ -626,12 +717,14 @@ export default function TemplatesManager() {
         ? {
           name: editForm.name,
           usage: editForm.usage,
+          tag: editForm.tag || '',
           variable_fields: editVarMeta,
           body_examples: editVarMeta.map((v) => v.example || 'דוגמה'),
         }
         : {
           name: editForm.name,
           usage: editForm.usage,
+          tag: editForm.tag || '',
           meta_name: editForm.meta_name,
           language: editForm.language,
           category: editForm.category,
@@ -745,10 +838,14 @@ export default function TemplatesManager() {
         <React.Fragment key={t.id}>
           <tr style={isEditing ? { background: 'rgba(56,189,248,0.06)' } : undefined}>
             <td>
-              <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
+              <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                {templateTagStyle(t.tag) && (
+                  <span style={templateTagStyle(t.tag)}>{t.tag}</span>
+                )}
                 <span>{t.name}</span>
                 <SystemBadge template={t} />
               </div>
+              <ExternalLinkWarning template={t} />
               <div style={{ fontSize: 11, color: 'var(--text-3)', maxWidth: 320, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.body}</div>
               {t.usage && (
                 <div
@@ -818,7 +915,7 @@ export default function TemplatesManager() {
           </tr>
           {isEditing && editForm && (
             <tr>
-              <td colSpan={5} style={{ background: 'var(--bg-2)', padding: 14 }}>
+              <td colSpan={5} style={{ background: 'var(--bg-input)', padding: 14 }}>
                 <div className="template-builder-layout">
                 <div style={{ display: 'grid', gap: 10, minWidth: 0 }}>
                   <div style={{ fontSize: 12, fontWeight: 600 }}>
@@ -831,6 +928,12 @@ export default function TemplatesManager() {
                     placeholder="שם לתצוגה"
                     value={editForm.name}
                     onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                  />
+                  {/* Purpose chip — internal, and the first thing staff see in
+                      the conversation picker. Meta never sees it either. */}
+                  <TagField
+                    value={editForm.tag || ''}
+                    onChange={(tag) => setEditForm({ ...editForm, tag })}
                   />
                   {/* Internal note — Meta never sees it, so it stays editable after approval. */}
                   <textarea
@@ -946,17 +1049,17 @@ export default function TemplatesManager() {
         </button>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, borderBottom: '1px solid var(--border)', paddingBottom: 10, flexWrap: 'wrap' }}>
+      <div className="tab-bar">
         <button
           type="button"
-          className={`btn btn-sm ${!showCreateForm ? 'btn-primary' : 'btn-ghost'}`}
+          className={`tab-pill ${!showCreateForm ? 'active' : ''}`}
           onClick={() => setShowCreateForm(false)}
         >
           <FileText size={14} /> תבניות קיימות
         </button>
         <button
           type="button"
-          className={`btn btn-sm ${showCreateForm ? 'btn-primary' : 'btn-ghost'}`}
+          className={`tab-pill ${showCreateForm ? 'active' : ''}`}
           onClick={() => setShowCreateForm(true)}
         >
           <Plus size={14} /> יצירת תבנית חדשה
@@ -973,6 +1076,7 @@ export default function TemplatesManager() {
         <div className="template-builder-layout">
           <form onSubmit={createDraft} style={{ display: 'grid', gap: 8, minWidth: 0 }}>
             <input className="input input-sm" placeholder="שם לתצוגה" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} required />
+            <TagField value={draft.tag || ''} onChange={(tag) => setDraft({ ...draft, tag })} />
             <textarea className="input input-sm" rows={2} placeholder="מתי משתמשים בתבנית? (הערה פנימית לצוות — לא נשלח ללקוח)" value={draft.usage} onChange={(e) => setDraft({ ...draft, usage: e.target.value })} />
             <input className="input input-sm" placeholder="שם ב-Meta (אנגלית/קו תחתון)" value={draft.meta_name} onChange={(e) => setDraft({ ...draft, meta_name: e.target.value })} />
             <div style={{ display: 'flex', gap: 8 }}>
@@ -1020,7 +1124,7 @@ export default function TemplatesManager() {
               </div>
 
               {varMeta.length > 0 && (
-                <div style={{ display: 'grid', gap: 8, padding: 10, background: 'var(--bg-2)', borderRadius: 8, border: '1px solid var(--border)' }}>
+                <div style={{ display: 'grid', gap: 8, padding: 10, background: 'var(--bg-input)', borderRadius: 8, border: '1px solid var(--border)' }}>
                   <div style={{ fontSize: 12, fontWeight: 600 }}>מיפוי משתנים</div>
                   {varMeta.map((v, idx) => (
                     <div key={idx} style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: 8, alignItems: 'center' }}>
@@ -1076,7 +1180,7 @@ export default function TemplatesManager() {
               </div>
 
               {draft.buttons.map((btn, index) => (
-                <div key={index} className="card card-p" style={{ padding: 10, display: 'grid', gap: 8, background: 'var(--bg-2)' }}>
+                <div key={index} className="card card-p" style={{ padding: 10, display: 'grid', gap: 8, background: 'var(--bg-input)' }}>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <select
                       className="input input-sm"

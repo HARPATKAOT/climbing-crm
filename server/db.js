@@ -2,8 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { israelDateStr } from './attendanceUtils.js';
 import { supa, CORE_TABLES, OPERATIONAL_TABLES } from './supa.js';
+import { enrichStudentsWithGuardians } from './studentGuardians.js';
 import {
-  enrichStudentWithGroupIds,
   enrichStudentsWithGroupIds,
   enrollmentId,
   studentGroupIds,
@@ -147,6 +147,19 @@ function syncRemove(table, id) {
       console.error(`syncRemove(${table}) error:`, e?.message || e)
     );
   }
+}
+
+/**
+ * Delete durably before touching the local cache. The durable store is the one
+ * that holds the foreign keys, so a row the database refuses to drop must stay
+ * in db.json too — otherwise it vanishes from the UI and returns on the next
+ * boot hydration.
+ * @returns {Promise<{ok: boolean, error?: string}>}
+ */
+export async function removeCore(table, id) {
+  if (!CORE_TABLES.includes(table)) return { ok: true };
+  const result = await supa.remove(table, id);
+  return result && result.ok === false ? result : { ok: true };
 }
 
 // Mock data to seed the database if it doesn't exist
@@ -838,6 +851,22 @@ export const db = {
     return true;
   },
 
+  /** Delete that only reports success once the durable store agreed. */
+  deleteDurable: async (table, id) => {
+    if (!(readDb()[table] || []).some((item) => item.id === id)) {
+      return { ok: false, notFound: true };
+    }
+    const durable = await removeCore(table, id);
+    if (!durable.ok) return durable;
+    const data = readDb();
+    const index = (data[table] || []).findIndex((item) => item.id === id);
+    if (index !== -1) {
+      data[table].splice(index, 1);
+      writeDb(data);
+    }
+    return { ok: true };
+  },
+
   upsertParentByPhone: (name, phone, email, extras = {}) => {
     const data = readDb();
     const cleanPhone = normalizeParentPhone(phone);
@@ -1344,29 +1373,33 @@ export const db = {
     return db.getParentBroadcastLists(parentId);
   },
 
-  deleteStudent: (id) => {
+  deleteStudent: async (id) => {
+    const student = (readDb().students || []).find(s => s.id === id);
+    if (!student) return { ok: false, notFound: true };
+
+    const durable = await removeCore('students', id);
+    if (!durable.ok) return durable;
+
     const data = readDb();
     if (!data.students) data.students = [];
     const index = data.students.findIndex(s => s.id === id);
-    if (index === -1) return false;
-    
-    const student = data.students[index];
-    data.students.splice(index, 1);
-    syncRemove('students', id);
-    
-    // Check if parent has other children
+    if (index !== -1) data.students.splice(index, 1);
+
+    // Delete the parent card too once no children are left on it.
+    let parentError = null;
     const otherChildren = data.students.filter(s => s.parentId === student.parentId);
-    if (otherChildren.length === 0) {
-      // Delete parent if they have no other children
-      const parentIdx = data.parents.findIndex(p => p.id === student.parentId);
-      if (parentIdx !== -1) {
-        data.parents.splice(parentIdx, 1);
-        syncRemove('parents', student.parentId);
+    if (student.parentId && otherChildren.length === 0) {
+      const parentDurable = await removeCore('parents', student.parentId);
+      if (parentDurable.ok) {
+        const parentIdx = (data.parents || []).findIndex(p => p.id === student.parentId);
+        if (parentIdx !== -1) data.parents.splice(parentIdx, 1);
+      } else {
+        parentError = parentDurable.error;
       }
     }
-    
+
     writeDb(data);
-    return true;
+    return { ok: true, parentError };
   },
 
   clockIn: (employeeId, activityType, notes) => {
@@ -1665,15 +1698,23 @@ export const db = {
     return newTest;
   },
 
-  /** Enrich students with groupIds from the enrollments table. */
-  withStudentGroupIds(students) {
+  /**
+   * Attach a student's many-to-many relations — `groupIds` from `enrollments`,
+   * `guardianIds` from `student_guardians` — so every screen sees the same
+   * picture without asking for them separately.
+   */
+  withStudentRelations(students) {
     const enrollments = db.get('enrollments') || [];
-    return enrichStudentsWithGroupIds(students || [], enrollments);
+    const guardians = db.get('student_guardians') || [];
+    return enrichStudentsWithGuardians(
+      enrichStudentsWithGroupIds(students || [], enrollments),
+      guardians
+    );
   },
 
-  withStudentGroupId(student) {
+  withStudentRelation(student) {
     if (!student) return student;
-    return enrichStudentWithGroupIds(student, db.get('enrollments') || []);
+    return db.withStudentRelations([student])[0];
   },
 
   /** Ensure enrollment rows exist for every students.group_id (local + durable). */
@@ -1760,15 +1801,15 @@ export const db = {
       groupId: primary,
       groupIds: wanted,
     });
-    return db.withStudentGroupId(updated);
+    return db.withStudentRelation(updated);
   },
 
   addStudentToGroup(studentId, groupId) {
     const gid = String(groupId || '');
-    if (!gid) return db.withStudentGroupId(db.getOne('students', studentId));
-    const current = studentGroupIds(db.withStudentGroupId(db.getOne('students', studentId)));
+    if (!gid) return db.withStudentRelation(db.getOne('students', studentId));
+    const current = studentGroupIds(db.withStudentRelation(db.getOne('students', studentId)));
     if (current.includes(gid)) {
-      return db.withStudentGroupId(db.getOne('students', studentId));
+      return db.withStudentRelation(db.getOne('students', studentId));
     }
     return db.setStudentGroups(studentId, [...current, gid], {
       primaryGroupId: current[0] || gid,
@@ -1777,7 +1818,7 @@ export const db = {
 
   removeStudentFromGroup(studentId, groupId) {
     const gid = String(groupId || '');
-    const current = studentGroupIds(db.withStudentGroupId(db.getOne('students', studentId)));
+    const current = studentGroupIds(db.withStudentRelation(db.getOne('students', studentId)));
     if (!gid) {
       return db.setStudentGroups(studentId, []);
     }

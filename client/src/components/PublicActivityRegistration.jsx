@@ -1,8 +1,19 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { CheckCircle, Loader2, Plus, Trash2 } from 'lucide-react';
 import { useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
+import {
+  EventShell,
+  EventStyles,
+  Field,
+  KnownChildNote,
+  KnownChildPrompt,
+  KnownFamilyNote,
+  KnownFamilyPrompt,
+  SignaturePad,
+} from './publicFormKit.jsx';
+import { checkKnownChild, checkKnownFamily, linkFieldsFor } from '../utils/childCheck.js';
 
 const emptyParticipant = (questions = [], extras = {}) => ({
   key: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
@@ -30,80 +41,6 @@ function formatDate(iso) {
   });
 }
 
-function SignaturePad({ value, onChange }) {
-  const canvasRef = useRef(null);
-  const drawing = useRef(false);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ratio = window.devicePixelRatio || 1;
-    const width = canvas.clientWidth;
-    canvas.width = width * ratio;
-    canvas.height = 150 * ratio;
-    const context = canvas.getContext('2d');
-    context.scale(ratio, ratio);
-    context.lineWidth = 2;
-    context.lineCap = 'round';
-    context.strokeStyle = '#f8fafc';
-    if (value) {
-      const image = new Image();
-      image.onload = () => context.drawImage(image, 0, 0, width, 150);
-      image.src = value;
-    }
-  }, []);
-
-  const point = (event) => {
-    const rect = canvasRef.current.getBoundingClientRect();
-    const touch = event.touches?.[0] || event;
-    return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
-  };
-  const start = (event) => {
-    event.preventDefault();
-    drawing.current = true;
-    const position = point(event);
-    const context = canvasRef.current.getContext('2d');
-    context.beginPath();
-    context.moveTo(position.x, position.y);
-  };
-  const move = (event) => {
-    if (!drawing.current) return;
-    event.preventDefault();
-    const position = point(event);
-    const context = canvasRef.current.getContext('2d');
-    context.lineTo(position.x, position.y);
-    context.stroke();
-  };
-  const stop = () => {
-    if (!drawing.current) return;
-    drawing.current = false;
-    onChange(canvasRef.current.toDataURL('image/png'));
-  };
-  const clear = () => {
-    const canvas = canvasRef.current;
-    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
-    onChange('');
-  };
-
-  return (
-    <div>
-      <canvas
-        ref={canvasRef}
-        className="event-signature"
-        onMouseDown={start}
-        onMouseMove={move}
-        onMouseUp={stop}
-        onMouseLeave={stop}
-        onTouchStart={start}
-        onTouchMove={move}
-        onTouchEnd={stop}
-        aria-label="אזור חתימה"
-      />
-      <button type="button" className="event-link-button" onClick={clear}>ניקוי חתימה</button>
-    </div>
-  );
-}
-
 export default function PublicActivityRegistration() {
   const { profile } = useBusinessProfile();
   const brandName = profile.display_name || 'הרפתקאות';
@@ -126,6 +63,11 @@ export default function PublicActivityRegistration() {
   const [listDefs, setListDefs] = useState([]);
   const [subscriptions, setSubscriptions] = useState({});
   const [selectedChildIds, setSelectedChildIds] = useState([]);
+  // participant key -> { match, student_id, guardian_first_name, health_valid, linked }
+  const [knownChildren, setKnownChildren] = useState({});
+  // Families on file under the same surname, and the one chosen ('' = new family).
+  const [families, setFamilies] = useState([]);
+  const [familyParentId, setFamilyParentId] = useState(null);
   const [idempotencyKey] = useState(
     () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`
   );
@@ -184,14 +126,23 @@ export default function PublicActivityRegistration() {
         reuse_health: !!child.health_valid,
         health_valid: !!child.health_valid,
       })));
-    const newChildren = participants.filter(
-      (participant) => participant.type !== 'adult'
-        && !String(participant.key || '').startsWith('existing-')
-        && participant.key !== 'adult-self'
-        && participant.name.trim()
-    );
+    const newChildren = participants
+      .filter(
+        (participant) => participant.type !== 'adult'
+          && !String(participant.key || '').startsWith('existing-')
+          && participant.key !== 'adult-self'
+          && participant.name.trim()
+      )
+      // A child confirmed as already on another parent's file joins that file
+      // instead of becoming a second copy, and keeps its valid declaration.
+      .map((participant) => {
+        const known = knownChildren[participant.key];
+        return known?.linked
+          ? { ...participant, ...linkFieldsFor(known), health_valid: !!known.health_valid }
+          : participant;
+      });
     return [...fromExisting, ...newChildren];
-  }, [isAdultSelf, parent.name, household, selectedChildIds, participants, questions]);
+  }, [isAdultSelf, parent.name, household, selectedChildIds, participants, questions, knownChildren]);
 
   const participantsNeedingHealth = useMemo(
     () => allParticipants.filter((participant) => !participant.reuse_health),
@@ -209,6 +160,15 @@ export default function PublicActivityRegistration() {
   const step1Title = isAdultSelf
     ? 'פרטים אישיים'
     : (paidMode ? 'פרטי הורה או משלם' : 'פרטי הורה של משתתף בפעילות');
+
+  /** Editing a child's name or birth date makes the previous answer moot. */
+  const forgetKnownChild = (key) => {
+    setKnownChildren((current) => {
+      if (!current[key]) return current;
+      const { [key]: _dropped, ...rest } = current;
+      return rest;
+    });
+  };
 
   const updateParticipant = (key, patch) => {
     setParticipants((current) => current.map((participant) =>
@@ -268,11 +228,19 @@ export default function PublicActivityRegistration() {
         setError('יש למלא שם, טלפון ודואר אלקטרוני');
         return;
       }
+      let found = null;
       try {
-        await lookupHousehold();
+        found = await lookupHousehold();
       } catch (lookupError) {
         setError(lookupError.message);
         return;
+      }
+      // A parent we have never seen may still belong to a family we know.
+      if (!found?.found && familyParentId === null) {
+        const known = await checkKnownFamily({ parentName: parent.name, phone: parent.phone });
+        setFamilies(known.families);
+        if (known.families.length) return;
+        setFamilyParentId('');
       }
       if (isAdultSelf) {
         setHealthIndex(0);
@@ -297,6 +265,25 @@ export default function PublicActivityRegistration() {
       )) {
         setError('יש למלא שם ותאריך לידה לכל ילד חדש');
         return;
+      }
+      // Each newly typed child may already be on the other parent's file. Ask
+      // about all of them at once, before anything is written.
+      const unanswered = allParticipants.filter(
+        (participant) => !participant.id
+          && participant.type === 'child'
+          && !knownChildren[participant.key]
+      );
+      if (unanswered.length) {
+        const checked = await Promise.all(unanswered.map(async (participant) => {
+          const match = await checkKnownChild({
+            name: participant.name,
+            birthDate: participant.birthDate,
+            phone: parent.phone,
+          });
+          return [participant.key, { ...match, linked: match.match ? null : false }];
+        }));
+        setKnownChildren((current) => ({ ...current, ...Object.fromEntries(checked) }));
+        if (checked.some(([, match]) => match.match)) return;
       }
       setHealthIndex(0);
       setStep(participantsNeedingHealth.length ? 3 : 4);
@@ -338,7 +325,7 @@ export default function PublicActivityRegistration() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           idempotency_key: idempotencyKey,
-          parent,
+          parent: { ...parent, family_parent_id: familyParentId || null },
           subscriptions,
           participants: payloadParticipants,
         }),
@@ -448,6 +435,12 @@ export default function PublicActivityRegistration() {
             <Field label="טלפון" type="tel" value={parent.phone} onChange={(phone) => setParent({ ...parent, phone })} />
             <Field label="דואר אלקטרוני" type="email" value={parent.email} onChange={(email) => setParent({ ...parent, email })} />
             <Field label="עיר" value={parent.city} onChange={(city) => setParent({ ...parent, city })} />
+            <KnownFamilyPrompt
+              families={families}
+              chosenId={familyParentId}
+              onChoose={setFamilyParentId}
+            />
+            <KnownFamilyNote families={families} chosenId={familyParentId} />
 
             <h2 style={{ marginTop: 28 }}>רשימות דיוור</h2>
             <p className="event-hint">אפשר לסמן רשימות שמעניינות אתכם — חוגים, טיולים, אירועים ועוד.</p>
@@ -528,8 +521,35 @@ export default function PublicActivityRegistration() {
                     </button>
                   )}
                 </div>
-                <Field label="שם מלא" value={participant.name} onChange={(name) => updateParticipant(participant.key, { name })} />
-                <Field label="תאריך לידה" type="date" value={participant.birthDate} onChange={(birthDate) => updateParticipant(participant.key, { birthDate })} />
+                <Field
+                  label="שם מלא"
+                  value={participant.name}
+                  onChange={(name) => {
+                    updateParticipant(participant.key, { name });
+                    forgetKnownChild(participant.key);
+                  }}
+                />
+                <Field
+                  label="תאריך לידה"
+                  type="date"
+                  value={participant.birthDate}
+                  onChange={(birthDate) => {
+                    updateParticipant(participant.key, { birthDate });
+                    forgetKnownChild(participant.key);
+                  }}
+                />
+                <KnownChildPrompt
+                  childName={participant.name}
+                  match={knownChildren[participant.key]}
+                  onAnswer={(linked) => setKnownChildren((current) => ({
+                    ...current,
+                    [participant.key]: { ...current[participant.key], linked },
+                  }))}
+                />
+                <KnownChildNote
+                  childName={participant.name}
+                  match={knownChildren[participant.key]}
+                />
               </div>
             ))}
             <button
@@ -626,6 +646,10 @@ export default function PublicActivityRegistration() {
               if (step === 3 && healthIndex > 0) setHealthIndex((index) => index - 1);
               else if (step === 4 && participantsNeedingHealth.length) setStep(3);
               else if (step === 4 && isAdultSelf) setStep(1);
+              // Everyone already had a valid declaration: step 3 was skipped on
+              // the way in and must be skipped on the way back too, or the
+              // customer lands on a blank screen.
+              else if (step === 4) setStep(2);
               else setStep((current) => current - 1);
               setError('');
             }}>
@@ -644,39 +668,4 @@ export default function PublicActivityRegistration() {
       <EventStyles />
     </div>
   );
-}
-
-function Field({ label, value, onChange, type = 'text' }) {
-  return (
-    <label className="event-field">
-      <span>{label}</span>
-      <input type={type} value={value} onChange={(event) => onChange(event.target.value)} />
-    </label>
-  );
-}
-
-function EventShell({ children }) {
-  return (
-    <div className="event-page">
-      <main className="event-card event-centered">{children}</main>
-      <EventStyles />
-    </div>
-  );
-}
-
-function EventStyles() {
-  return <style>{`
-    .event-page{min-height:100vh;direction:rtl;background:radial-gradient(circle at top,#1e293b,#070b14 65%);padding:20px 12px;color:#f8fafc;font-family:Heebo,Assistant,system-ui,sans-serif}
-    .event-card{width:min(620px,100%);margin:auto;background:rgba(15,23,42,.94);border:1px solid rgba(255,255,255,.12);border-radius:22px;padding:0 0 24px;overflow:hidden;box-shadow:0 22px 70px rgba(0,0,0,.45)}
-    .event-centered{text-align:center;margin-top:12vh;padding:24px}.event-cover{width:100%;height:210px;background:#0b1220}.event-cover img{width:100%;height:100%;object-fit:cover;object-position:center center;display:block}
-    .event-hero{padding:22px 24px 0}.event-brand{color:#fb923c;font-weight:900;letter-spacing:.12em;font-size:12px}.event-brand-logo{display:flex;justify-content:flex-start;margin:0 0 6px}.event-brand-logo img{height:36px;width:auto;max-width:160px;object-fit:contain}.event-card h1{margin:8px 0;font-size:28px}.event-card h2{font-size:20px;margin:20px 0 14px;padding:0 24px}.event-card section{padding:0 24px}.event-meta{display:flex;flex-direction:column;gap:4px;margin:6px 0 0;color:#94a3b8;font-size:14px}
-    .event-body{margin:12px 0 0;color:#cbd5e1;line-height:1.55;font-size:15px;white-space:pre-wrap}.event-price-chip{display:inline-flex;margin-top:14px;padding:7px 12px;border-radius:999px;background:rgba(249,115,22,.16);color:#fdba74;font-weight:800;font-size:13px}
-    .event-progress-label{margin-top:18px;font-size:12px;color:#94a3b8;font-weight:700}.event-progress{height:6px;border-radius:8px;margin-top:8px;font-size:0}
-    .event-field{display:flex;flex-direction:column;gap:6px;margin:12px 0;color:#cbd5e1;font-size:14px}.event-field input{padding:12px 14px;border-radius:11px;border:1px solid rgba(255,255,255,.15);background:#0b1220;color:#fff;font:inherit}
-    .event-check,.event-question{display:flex;gap:10px;align-items:flex-start;padding:10px 0;color:#e2e8f0}.event-check input,.event-question input{margin-top:4px;min-width:18px;min-height:18px}.event-adult-toggle{margin:0 0 8px;padding:12px;border-radius:12px;background:rgba(255,255,255,.06)}.event-existing-child{padding:12px;border-radius:12px;background:rgba(0,0,0,.16);margin:8px 0}.participant-card{padding:14px;margin:12px 0;border:1px solid rgba(255,255,255,.1);border-radius:14px;background:rgba(0,0,0,.16)}.participant-title{display:flex;justify-content:space-between}.event-icon-button,.event-link-button{border:0;background:none;color:#fca5a5;cursor:pointer}
-    .event-hint{color:#94a3b8;font-size:13px;line-height:1.45;margin:0 0 12px}.event-lists{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
-    .event-waiver{white-space:pre-wrap;max-height:200px;overflow:auto;padding:14px;border-radius:12px;background:#0b1220;color:#cbd5e1;line-height:1.55;font-size:13px}.event-signature{width:100%;height:150px;background:#111827;border:1px solid rgba(255,255,255,.2);border-radius:12px;touch-action:none}.event-label{color:#cbd5e1;margin-bottom:7px}
-    .event-summary{display:grid;gap:10px}.event-summary>div{display:flex;justify-content:space-between;padding:12px;border-radius:10px;background:#0b1220}.event-total{color:#fdba74;font-size:18px}.event-free-note{color:#6ee7b7}.event-error{margin:14px 24px 0;padding:11px;border-radius:10px;background:rgba(239,68,68,.14);color:#fca5a5}
-    .event-actions{display:flex;gap:10px;margin:22px 24px 0}.event-primary,.event-secondary{display:flex;align-items:center;justify-content:center;gap:7px;border:0;border-radius:11px;padding:12px 18px;font:inherit;font-weight:800;cursor:pointer}.event-primary{background:#f97316;color:#fff;flex:1}.event-secondary{background:rgba(255,255,255,.09);color:#e2e8f0}.event-primary:disabled{opacity:.6}.spin{animation:event-spin .8s linear infinite}@keyframes event-spin{to{transform:rotate(360deg)}}@media(max-width:520px){.event-hero,.event-card section,.event-actions{padding-left:15px;padding-right:15px}.event-card h2{padding-left:15px;padding-right:15px}.event-error{margin-left:15px;margin-right:15px}.event-cover{height:170px}.event-card h1{font-size:24px}}
-  `}</style>;
 }

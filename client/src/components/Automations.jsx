@@ -143,7 +143,7 @@ function AutomationModal({ automation, onSave, onClose }) {
             </div>
 
             {isScheduled && (
-              <div style={{ fontSize: 12, color: 'var(--text-2)', background: 'var(--bg-2)', padding: '10px 12px', borderRadius: 8, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 12, color: 'var(--text-2)', background: 'var(--bg-input)', padding: '10px 12px', borderRadius: 8, lineHeight: 1.5 }}>
                 {triggerEvent === 'intro_reminder_day_of'
                   ? 'נשלח אוטומטית בבוקר למתאמנים עם סטטוס אימון הכירות שקבוצתם מתאמנת היום. כולל שעה, מדריך והוראות הגעה.'
                   : 'נשלח אוטומטית בבוקר למי שסומן אתמול בנוכחות כהגיע, וסטטוס שלו עדיין אימון הכירות — לבירור איך היה ולעניין בהרשמה.'}

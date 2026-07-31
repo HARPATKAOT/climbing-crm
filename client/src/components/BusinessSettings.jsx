@@ -1,9 +1,31 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Loader2, Save, Upload, Building2 } from 'lucide-react';
+import { Loader2, Save, Upload, Building2, Plug } from 'lucide-react';
 import {
   DEFAULT_BUSINESS_PROFILE,
   useBusinessProfile,
 } from '../BusinessProfileContext.jsx';
+import Integrations from './Integrations.jsx';
+
+function SettingsTabs({ tab, setTab }) {
+  return (
+    <div className="tab-bar" style={{ marginBottom: 16 }}>
+      {[
+        { key: 'profile', label: 'פרטי עסק', icon: Building2 },
+        { key: 'integrations', label: 'חיבורים', icon: Plug },
+      ].map(({ key, label, icon: Icon }) => (
+        <button
+          key={key}
+          type="button"
+          className={`tab-pill ${tab === key ? 'active' : ''}`}
+          onClick={() => setTab(key)}
+        >
+          <Icon size={15} />
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -23,6 +45,10 @@ export default function BusinessSettings() {
   const [imageBusy, setImageBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
+  // Land on the connections tab when Google bounces back from OAuth.
+  const [tab, setTab] = useState(() =>
+    new URLSearchParams(window.location.search).has('googleContacts') ? 'integrations' : 'profile'
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -103,8 +129,19 @@ export default function BusinessSettings() {
     );
   }
 
+  if (tab === 'integrations') {
+    return (
+      <div className="business-settings">
+        <SettingsTabs tab={tab} setTab={setTab} />
+        <Integrations />
+      </div>
+    );
+  }
+
   return (
     <form className="business-settings" onSubmit={save}>
+      <SettingsTabs tab={tab} setTab={setTab} />
+
       <div className="business-settings-header">
         <div>
           <div className="business-settings-title">
@@ -227,6 +264,7 @@ export default function BusinessSettings() {
             />
           </label>
         </section>
+
       </div>
 
       {error && <div className="business-settings-alert is-error">{error}</div>}

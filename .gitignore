@@ -18,3 +18,9 @@ db.json
 _archive/
 # Wix site snapshot: tens of MB of images, backed up outside git
 archive/
+# Local agent settings, and the worktrees it checks out under here
+.claude/
+# Throwaway harnesses for rendering one screen without a login
+client/harness*.html
+client/vite.harness*.config.js
+client/src/harness*.jsx

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  CheckCircle2, AlertTriangle, Plus, X, ShieldAlert, Check, Pencil, Trash2, History
+  CheckCircle2, AlertTriangle, Plus, X, ShieldAlert, Check, Pencil, Trash2, History, ListChecks
 } from 'lucide-react';
 import { CheckIcon } from './safetyCheckIcons.jsx';
 
@@ -370,7 +370,7 @@ function CheckDetailModal({ check, logs, employees, onSign, onEdit, onClose }) {
             <div style={{
               padding: '10px 12px',
               borderRadius: 10,
-              background: 'var(--bg-2)',
+              background: 'var(--bg-input)',
               border: '1px solid var(--border)',
               fontSize: 13,
               color: 'var(--text-2)',
@@ -392,7 +392,7 @@ function CheckDetailModal({ check, logs, employees, onSign, onEdit, onClose }) {
                   flex: '1 1 150px',
                   padding: '10px 12px',
                   borderRadius: 10,
-                  background: 'var(--bg-2)',
+                  background: 'var(--bg-input)',
                   border: '1px solid var(--border)',
                 }}
               >
@@ -718,25 +718,20 @@ export default function Safety() {
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 6, marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 1, flexWrap: 'wrap' }}>
+      <div className="tab-bar">
         {[
-          { key: 'today', label: `בדיקות להיום (${dueToday.length})` },
-          { key: 'types', label: `כל הבדיקות (${types.length})` },
-          { key: 'history', label: `היסטוריה (${logs.length})` },
-          { key: 'incidents', label: `פנקס אירועים (${incidents.length})` },
-        ].map((tab) => (
+          { key: 'today', label: `בדיקות להיום (${dueToday.length})`, icon: CheckCircle2 },
+          { key: 'types', label: `כל הבדיקות (${types.length})`, icon: ListChecks },
+          { key: 'history', label: `היסטוריה (${logs.length})`, icon: History },
+          { key: 'incidents', label: `פנקס אירועים (${incidents.length})`, icon: ShieldAlert },
+        ].map(({ key, label, icon: Icon }) => (
           <button
-            key={tab.key}
+            key={key}
             type="button"
-            className={`btn btn-sm ${activeTab === tab.key ? 'btn-primary' : 'btn-ghost'}`}
-            style={{
-              borderBottomLeftRadius: 0,
-              borderBottomRightRadius: 0,
-              borderBottom: activeTab === tab.key ? '2px solid var(--blue)' : 'none',
-            }}
-            onClick={() => setActiveTab(tab.key)}
+            className={`tab-pill ${activeTab === key ? 'active' : ''}`}
+            onClick={() => setActiveTab(key)}
           >
-            {tab.label}
+            <Icon size={14} /> {label}
           </button>
         ))}
       </div>

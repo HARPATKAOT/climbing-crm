@@ -2,6 +2,7 @@ import {
   declarationSignedAt,
   isHealthDeclarationValid,
 } from './healthValidity.js';
+import { linkGuardian, mergeFamily } from './studentGuardians.js';
 
 export const STANDARD_WAIVER_TEXT = `אני מצהיר/ה כי אני מודע/ת לסיכונים הכרוכים בפעילות המתקיימת ב"קיר בועז", אני פוטר/ת את "קיר בועז" ו/או מי מטעמו מכל אחריות לפגיעה אם תקרה למשתתף אותו אני רושם לפעילות וזאת אלא אם יוכח כי הינה תוצאה של רשלנות המקום.
 
@@ -183,7 +184,31 @@ export async function saveCrmParticipants({
     const participantType = input.type === 'adult' ? 'adult' : 'child';
     const name = clean(input.name);
     let student = null;
-    if (input.id) {
+    // The form was told this child already exists on another family's file and
+    // the person filling it confirmed they are a second parent. Re-check the
+    // identity here: a client could otherwise post any student id and attach
+    // itself to a stranger's child.
+    const linkStudentId = clean(input.link_student_id || input.linkStudentId);
+    let linkedFromOtherFamily = false;
+    if (linkStudentId) {
+      const candidate = (db.get('students') || []).find(
+        (item) => String(item.id) === linkStudentId
+      );
+      const birthDate = clean(input.birthDate);
+      const identityHolds = candidate
+        && !!birthDate
+        && normalizedName(candidate.name) === normalizedName(name)
+        && String(candidate.birthDate || '').trim() === birthDate;
+      if (!identityHolds) {
+        throw Object.assign(
+          new Error(`הפרטים של ${name} לא תואמים את הילד שנבחר במערכת`),
+          { status: 400 }
+        );
+      }
+      student = candidate;
+      linkedFromOtherFamily = String(candidate.parentId || '') !== String(parent.id);
+    }
+    if (!student && input.id) {
       student = (db.get('students') || []).find(
         (item) => String(item.id) === String(input.id) && item.parentId === parent.id
       );
@@ -198,10 +223,16 @@ export async function saveCrmParticipants({
       });
     }
     const previousStatus = student?.status;
+    // Read before the patch below stamps "signed now" on the record: a reuse
+    // claim may only lean on a signature that already existed when the form was
+    // opened, otherwise anyone could skip the declaration by typing a new name
+    // and asking to reuse it.
+    const priorHealthSignedAt = student?.healthSignedAt || null;
     const childPhone = clean(input.childPhone || input.phone);
     const patch = {
       name,
-      parentId: parent.id,
+      // A second parent joins the child's file; they do not take it over.
+      parentId: linkedFromOtherFamily ? student.parentId : parent.id,
       isAdult: participantType === 'adult',
       birthDate: clean(input.birthDate) || student?.birthDate || '',
       gender: clean(input.gender) || student?.gender || '',
@@ -232,6 +263,11 @@ export async function saveCrmParticipants({
     }
     await requireDurable(persist, 'students', student);
 
+    if (linkedFromOtherFamily) {
+      const link = linkGuardian(db, { studentId: student.id, parentId: parent.id, source });
+      if (link) await requireDurable(persist, 'student_guardians', link);
+    }
+
     let declaration = null;
     if (wantsReuse(input)) {
       declaration = findLatestValidDeclaration(db, {
@@ -239,14 +275,14 @@ export async function saveCrmParticipants({
         parentId: parent.id,
         climberName: name,
       });
-      if (!declaration && student?.healthSignedAt && isHealthDeclarationValid(student.healthSignedAt)) {
+      if (!declaration && priorHealthSignedAt && isHealthDeclarationValid(priorHealthSignedAt)) {
         // Older records may only have the student flag — still allow register without new signature.
         declaration = {
           id: null,
           reused_from_student: true,
           studentId: student.id,
           parentId: parent.id,
-          signedDate: String(student.healthSignedAt).slice(0, 10),
+          signedDate: String(priorHealthSignedAt).slice(0, 10),
         };
       }
       if (!declaration) {
@@ -293,5 +329,19 @@ export async function saveCrmParticipants({
     });
   }
 
-  return { parent, participants: savedParticipants, declarations, template };
+  // "We are the same family as this card" — confirmed on the form, so both
+  // parents end up on one file with every child listed once.
+  const familyParentId = clean(parentInput?.family_parent_id || parentInput?.familyParentId);
+  const familyLinks = familyParentId
+    ? mergeFamily(db, {
+        parentId: parent.id,
+        familyParentId,
+        extraStudentIds: savedParticipants.map((item) => item.student?.id).filter(Boolean),
+      })
+    : [];
+  for (const link of familyLinks) {
+    await requireDurable(persist, 'student_guardians', link);
+  }
+
+  return { parent, participants: savedParticipants, declarations, template, familyLinks };
 }

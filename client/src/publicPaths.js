@@ -6,6 +6,7 @@ export const PUBLIC_PATH_PREFIXES = [
   '/event',
   '/event-host',
   '/equipment',
+  '/shop',
   '/privacy',
 ];
 

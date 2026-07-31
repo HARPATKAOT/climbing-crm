@@ -10,8 +10,14 @@ import {
   Bot,
   PowerOff,
   Sparkles,
+  Archive,
+  ArchiveRestore,
+  ExternalLink,
+  Pencil,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { normalizeTemplateVariables, buildPrefillValues } from './templateVariables.js';
+import { SUGGESTED_TEMPLATE_TAGS, templateTagStyle } from './templateTags.js';
 import { isAwaitingHandling, threadIsBehindCard } from './communicationQueue.js';
 
 const CHANNEL_LABELS = {
@@ -19,6 +25,8 @@ const CHANNEL_LABELS = {
   instagram: 'אינסטגרם',
   messenger: 'מסנג׳ר',
 };
+
+const SERVER_DOWN_MESSAGE = 'השרת לא זמין כרגע. ההודעה לא נשלחה — נסו שוב בעוד רגע';
 
 const CHANNEL_COLORS = {
   whatsapp: 'rgba(37,211,102,0.14)',
@@ -167,6 +175,7 @@ function messageMatchesThread(message, thread, parentPhone) {
 }
 
 export default function ConversationPanel({ parent, student, fillHeight = false, onHandled }) {
+  const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -180,6 +189,14 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   const [savedReplies, setSavedReplies] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState('');
   const [templateVars, setTemplateVars] = useState([]);
+  const [showArchivedTemplates, setShowArchivedTemplates] = useState(false);
+  const [editingTemplateId, setEditingTemplateId] = useState('');
+  const [templateTagDraft, setTemplateTagDraft] = useState('');
+  const [templateUsageDraft, setTemplateUsageDraft] = useState('');
+  const [templateBusyId, setTemplateBusyId] = useState('');
+  const [templateError, setTemplateError] = useState('');
+  // The last template fetch failed — different from "Meta approved nothing".
+  const [templatesUnavailable, setTemplatesUnavailable] = useState(false);
   const [selectedSaved, setSelectedSaved] = useState('');
   const [imagePreview, setImagePreview] = useState(null);
   const [imageBase64, setImageBase64] = useState('');
@@ -191,6 +208,15 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   const messagesRef = useRef(null);
   const fileRef = useRef(null);
   const wasBlockedRef = useRef(false);
+  // The nudge out of the template tab belongs to opening a customer. Once staff
+  // pick that tab themselves, no background poll may pull them out of it.
+  const modeSyncedRef = useRef(false);
+  // Whether the messages pane was parked at the bottom before the last render.
+  const atBottomRef = useRef(true);
+  const scrolledThreadRef = useRef('parent');
+  // Half-written reply in the composer. `load` runs from a stale closure on the
+  // poll, so this has to be a ref rather than the state it mirrors.
+  const composingRef = useRef(false);
   const userPickedThreadRef = useRef(false);
   // The 15s poll keeps an old `load` closure — read the live thread id from a ref
   // so a refresh never drags the user back to the parent thread.
@@ -201,6 +227,38 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     setActiveThreadId(threadId);
   };
 
+  const refreshTemplates = async () => {
+    const res = await fetch('/api/message-templates?approved=1&archived=1');
+    const rows = res.ok ? await res.json().catch(() => null) : null;
+    setTemplatesUnavailable(!Array.isArray(rows));
+    if (Array.isArray(rows)) setTemplates(rows);
+  };
+
+  /**
+   * The label and the archive flag are internal fields — Meta never sees them,
+   * so they stay editable after approval and can be fixed from here instead of
+   * making staff leave the conversation to tidy a list they are looking at.
+   */
+  const patchTemplate = async (tpl, patch) => {
+    setTemplateBusyId(tpl.id);
+    setTemplateError('');
+    try {
+      const res = await fetch(`/api/message-templates/${encodeURIComponent(tpl.id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'עדכון התבנית נכשל');
+      await refreshTemplates();
+      setEditingTemplateId('');
+    } catch (err) {
+      setTemplateError(err.message);
+    } finally {
+      setTemplateBusyId('');
+    }
+  };
+
   const load = async ({ quiet = false } = {}) => {
     if (!parent?.id) return;
     if (!quiet) setLoading(true);
@@ -208,15 +266,22 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     try {
       const [convRes, tplRes, srRes] = await Promise.all([
         fetch(`/api/conversations/${parent.id}`),
-        fetch('/api/message-templates?approved=1'),
+        // Archived ones come along so the picker can offer them behind a
+        // toggle instead of a second round trip.
+        fetch('/api/message-templates?approved=1&archived=1'),
         fetch('/api/saved-replies'),
       ]);
 
       // Templates / saved replies first — don't lose them if conversation load fails
-      const tpls = tplRes.ok ? await tplRes.json() : [];
-      setTemplates(Array.isArray(tpls) ? tpls : []);
-      const srs = srRes.ok ? await srRes.json() : [];
-      setSavedReplies(Array.isArray(srs) ? srs : []);
+      const tpls = tplRes.ok ? await tplRes.json().catch(() => null) : null;
+      // A round trip that failed must not empty the picker. The 15s poll runs
+      // while the API restarts, and overwriting the list with [] made that read
+      // as "Meta approved nothing" — sending staff to press a sync button that
+      // fixes nothing, on a list that was fine a second earlier.
+      setTemplatesUnavailable(!Array.isArray(tpls));
+      if (Array.isArray(tpls)) setTemplates(tpls);
+      const srs = srRes.ok ? await srRes.json().catch(() => null) : null;
+      if (Array.isArray(srs)) setSavedReplies(srs);
 
       const conv = await convRes.json().catch(() => ({}));
       if (!convRes.ok) throw new Error(conv.error || 'טעינת שיחה נכשלה');
@@ -242,11 +307,17 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
         ? !!activeThread?.window?.open
         : !!conv.windows?.[nextChannel]?.open;
       if (openNow) {
-        setMode((prev) => (prev === 'template' ? 'text' : prev));
+        // Only when the customer is first opened, and never over a reply that is
+        // already being written. The 15s poll used to run this too, so the
+        // template tab snapped back to text every quarter minute.
+        if (!modeSyncedRef.current && !composingRef.current) {
+          setMode((prev) => (prev === 'template' ? 'text' : prev));
+        }
         wasBlockedRef.current = false;
       } else {
         wasBlockedRef.current = true;
       }
+      modeSyncedRef.current = true;
     } catch (err) {
       setError(err.message);
     } finally {
@@ -256,6 +327,8 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
 
   useEffect(() => {
     userPickedThreadRef.current = false;
+    modeSyncedRef.current = false;
+    atBottomRef.current = true;
     pickThread('parent');
     load();
     // Reload when a newer inbound lands on the parent card (waiting-queue poll).
@@ -266,6 +339,21 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     parent?.last_inbound_instagram,
     parent?.last_inbound_messenger,
   ]);
+
+  // A different customer starts with an empty composer — never carrying over the
+  // draft, template or image that was aimed at the previous one.
+  useEffect(() => {
+    setSelectedTemplate('');
+    setTemplateVars([]);
+    setReplyText('');
+    setImageBase64('');
+    setImagePreview(null);
+    composingRef.current = false;
+  }, [parent?.id]);
+
+  useEffect(() => {
+    composingRef.current = !!selectedTemplate || !!replyText.trim() || !!imageBase64;
+  }, [selectedTemplate, replyText, imageBase64]);
 
   useEffect(() => {
     if (!parent?.id) return undefined;
@@ -278,7 +366,14 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
 
   useEffect(() => {
     const el = messagesRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    // Scrolling up means reading history — a poll that lands a new message must
+    // not yank the pane back down mid-read. Switching thread always jumps.
+    if (atBottomRef.current || activeThreadId !== scrolledThreadRef.current) {
+      el.scrollTop = el.scrollHeight;
+      atBottomRef.current = true;
+    }
+    scrolledThreadRef.current = activeThreadId;
   }, [data?.messages?.length, activeThreadId]);
 
   useEffect(() => {
@@ -360,8 +455,11 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
       } else if (mode === 'template') {
         if (!selectedTemplate) throw new Error('בחרו תבנית');
         const tpl = templates.find((t) => t.id === selectedTemplate || t.meta_name === selectedTemplate);
-        body.templateName = tpl?.meta_name || tpl?.name || selectedTemplate;
-        body.language = tpl?.language || 'he';
+        // Without the row all we hold is our internal id, and Meta would reject
+        // it as an unknown template name. Say what actually happened instead.
+        if (!tpl) throw new Error('רשימת התבניות לא נטענה. רעננו את המסך ובחרו תבנית שוב');
+        body.templateName = tpl.meta_name || tpl.name;
+        body.language = tpl.language || 'he';
         body.variables = templateVars.filter((v) => v != null && String(v).length);
       } else if (mode === 'saved') {
         if (!selectedSaved) throw new Error('בחרו הודעה שמורה');
@@ -378,8 +476,13 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error || 'שליחה נכשלה');
+      // An API that is down (or restarting) answers with an empty body, and a
+      // bare res.json() then surfaces a raw browser string that tells staff
+      // nothing about whether the message went out.
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.error || (json ? 'שליחה נכשלה' : SERVER_DOWN_MESSAGE));
+      }
       setReplyText('');
       setImageBase64('');
       setImagePreview(null);
@@ -488,6 +591,16 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   const templateStudent = activeThread?.studentId
     ? (data?.students || []).find((s) => String(s.id) === String(activeThread.studentId)) || student
     : student;
+  const mainTemplates = templates.filter((t) => !t.archived);
+  const archivedTemplates = templates.filter((t) => !!t.archived);
+  const pickTemplate = {
+    rows: showArchivedTemplates ? [...mainTemplates, ...archivedTemplates] : mainTemplates,
+    select: (tpl) => {
+      setSelectedTemplate(tpl.id);
+      const normalized = normalizeTemplateVariables(tpl?.variables, tpl?.body);
+      setTemplateVars(buildPrefillValues(normalized, parent, templateStudent));
+    },
+  };
 
   return (
     <div
@@ -679,6 +792,13 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: fillHeight ? 0 : 160, maxHeight: fillHeight ? undefined : 360 }}>
           <div
             ref={messagesRef}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              // Measured while the user scrolls, not after the new message is in
+              // the DOM — by then scrollHeight already grew and every reader
+              // would look like they had scrolled away.
+              atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+            }}
             style={{
               flex: 1,
               overflowY: 'auto',
@@ -808,26 +928,203 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
                     טוען תבניות מאושרות...
                   </div>
                 ) : templates.length === 0 ? (
-                  <div style={{ fontSize: 11, color: '#FBBF24', lineHeight: 1.45 }}>
-                    אין תבניות מאושרות במערכת.
-                    עברו למסך הדיוור, לשונית תבניות, לחצו על סנכרון, ואז רעננו כאן.
-                  </div>
+                  templatesUnavailable ? (
+                    <div style={{ fontSize: 11, color: '#FCA5A5', lineHeight: 1.45 }}>
+                      טעינת התבניות נכשלה — השרת לא ענה. הרשימה תחזור לבד תוך כמה שניות,
+                      או רעננו את המסך.
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 11, color: '#FBBF24', lineHeight: 1.45 }}>
+                      אין תבניות מאושרות במערכת.
+                      עברו למסך הדיוור, לשונית תבניות, לחצו על סנכרון, ואז רעננו כאן.
+                    </div>
+                  )
                 ) : (
-                  <select
-                    className="input input-sm"
-                    value={selectedTemplate}
-                    onChange={(e) => {
-                      setSelectedTemplate(e.target.value);
-                      const tpl = templates.find((t) => t.id === e.target.value || t.meta_name === e.target.value);
-                      const normalized = normalizeTemplateVariables(tpl?.variables, tpl?.body);
-                      setTemplateVars(buildPrefillValues(normalized, parent, templateStudent));
-                    }}
-                  >
-                    <option value="">בחרו תבנית מאושרת...</option>
-                    {templates.map((t) => (
-                      <option key={t.id} value={t.id}>{t.name || t.meta_name} ({t.language || 'he'})</option>
-                    ))}
-                  </select>
+                  <>
+                    {/* A list rather than a <select>: the purpose chip is what
+                        staff scan for, and an option element cannot carry it.
+                        The label and the archive flag are internal, so they can
+                        be fixed right here instead of from the templates screen. */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
+                      {pickTemplate.rows.map((t) => {
+                        const active = String(selectedTemplate) === String(t.id);
+                        const chip = templateTagStyle(t.tag);
+                        const editing = editingTemplateId === t.id;
+                        const busy = templateBusyId === t.id;
+                        return (
+                          <div key={t.id}>
+                            <div style={{ display: 'flex', alignItems: 'stretch', gap: 4 }}>
+                              <button
+                                type="button"
+                                onClick={() => pickTemplate.select(t)}
+                                style={{
+                                  flex: 1,
+                                  minWidth: 0,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 8,
+                                  textAlign: 'right',
+                                  padding: '7px 9px',
+                                  borderRadius: 10,
+                                  cursor: 'pointer',
+                                  border: active
+                                    ? '1px solid rgba(56,189,248,0.65)'
+                                    : '1px solid var(--border)',
+                                  background: active ? 'rgba(56,189,248,0.14)' : 'rgba(255,255,255,0.03)',
+                                  color: 'var(--text-1)',
+                                  fontSize: 12,
+                                  fontWeight: active ? 700 : 500,
+                                }}
+                              >
+                                {chip && <span style={chip}>{t.tag}</span>}
+                                {/* The Meta name (`coustumer_details`) means nothing
+                                    to whoever is writing to a customer. A label
+                                    they chose replaces it; the name is only shown
+                                    when there is no label to show instead. */}
+                                <span style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                  {!chip && (
+                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      {t.name || t.meta_name}
+                                    </span>
+                                  )}
+                                  {t.usage && (
+                                    <span style={{
+                                      fontSize: 11,
+                                      fontWeight: 400,
+                                      color: 'var(--text-3)',
+                                      lineHeight: 1.35,
+                                      display: '-webkit-box',
+                                      WebkitLineClamp: 2,
+                                      WebkitBoxOrient: 'vertical',
+                                      overflow: 'hidden',
+                                    }}>
+                                      {t.usage}
+                                    </span>
+                                  )}
+                                </span>
+                                {t.archived && (
+                                  <span style={{ fontSize: 10, color: 'var(--text-3)', marginInlineStart: 'auto' }}>
+                                    ארכיון
+                                  </span>
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-icon btn-xs"
+                                title="פרטי התבנית המלאים — טקסט, כפתורים וסטטוס אישור"
+                                onClick={() => navigate('/broadcasts', { state: { broadcastTab: 'templates' } })}
+                              >
+                                <ExternalLink size={12} />
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-icon btn-xs"
+                                title="עריכת תווית / ארכיון"
+                                disabled={busy}
+                                onClick={() => {
+                                  setTemplateError('');
+                                  setEditingTemplateId(editing ? '' : t.id);
+                                  setTemplateTagDraft(t.tag || '');
+                                  setTemplateUsageDraft(t.usage || '');
+                                }}
+                              >
+                                <Pencil size={12} />
+                              </button>
+                            </div>
+                            {editing && (
+                              <div style={{
+                                margin: '4px 0 6px',
+                                padding: 8,
+                                borderRadius: 10,
+                                border: '1px solid var(--border)',
+                                background: 'rgba(0,0,0,0.2)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 6,
+                              }}>
+                                <input
+                                  className="input input-sm"
+                                  placeholder="תווית (למשל: הצהרת בריאות)"
+                                  value={templateTagDraft}
+                                  maxLength={24}
+                                  onChange={(e) => setTemplateTagDraft(e.target.value)}
+                                />
+                                <textarea
+                                  className="input input-sm"
+                                  rows={2}
+                                  placeholder="למה התבנית משמשת? (הערה פנימית לצוות — לא נשלחת ללקוח)"
+                                  value={templateUsageDraft}
+                                  onChange={(e) => setTemplateUsageDraft(e.target.value)}
+                                />
+                                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                                  {SUGGESTED_TEMPLATE_TAGS.map((tag) => (
+                                    <button
+                                      key={tag}
+                                      type="button"
+                                      onClick={() => setTemplateTagDraft(tag)}
+                                      style={{
+                                        ...templateTagStyle(tag),
+                                        opacity: templateTagDraft === tag ? 1 : 0.6,
+                                        cursor: 'pointer',
+                                      }}
+                                    >
+                                      {tag}
+                                    </button>
+                                  ))}
+                                </div>
+                                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                  <button
+                                    type="button"
+                                    className="btn btn-primary btn-xs"
+                                    disabled={busy}
+                                    onClick={() => patchTemplate(t, {
+                                      tag: templateTagDraft,
+                                      usage: templateUsageDraft,
+                                    })}
+                                  >
+                                    {busy ? 'שומר...' : 'שמירה'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-xs"
+                                    disabled={busy}
+                                    onClick={() => patchTemplate(t, { archived: !t.archived })}
+                                  >
+                                    {t.archived ? <ArchiveRestore size={12} /> : <Archive size={12} />}
+                                    {t.archived ? 'שחזור מהארכיון' : 'העברה לארכיון'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-xs"
+                                    disabled={busy}
+                                    onClick={() => setEditingTemplateId('')}
+                                  >
+                                    ביטול
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {templateError && (
+                      <div style={{ fontSize: 11, color: '#FCA5A5', lineHeight: 1.45 }}>{templateError}</div>
+                    )}
+                    {archivedTemplates.length > 0 && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        style={{ alignSelf: 'flex-start' }}
+                        onClick={() => setShowArchivedTemplates((v) => !v)}
+                      >
+                        <Archive size={12} />
+                        {showArchivedTemplates
+                          ? 'הסתרת הארכיון'
+                          : `הצגת ארכיון (${archivedTemplates.length})`}
+                      </button>
+                    )}
+                  </>
                 )}
                 {selectedTemplate && (() => {
                   const tpl = templates.find((t) => t.id === selectedTemplate || t.meta_name === selectedTemplate);

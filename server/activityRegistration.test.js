@@ -58,6 +58,18 @@ test('openUnpaidActivities filters past and paid', () => {
   assert.deepEqual(rows.map((r) => r.id), ['1']);
 });
 
+test('openUnpaidActivities skips events paid per participant', () => {
+  const db = {
+    get: () => [
+      { id: '1', date: '2099-01-01', payment_status: 'unpaid', status: 'open', registration_mode: 'host_pays' },
+      { id: '2', date: '2099-01-02', payment_status: 'unpaid', status: 'open', registration_mode: 'paid_per_participant' },
+      { id: '3', date: '2099-01-03', payment_status: 'unpaid', status: 'open', collect_registration_payment: true },
+    ],
+  };
+  const rows = openUnpaidActivities(db, { fromDate: '2026-07-25' });
+  assert.deepEqual(rows.map((r) => r.id), ['1']);
+});
+
 test('publicRegistrationPayload exposes collect_payment', () => {
   const payload = publicRegistrationPayload(
     {

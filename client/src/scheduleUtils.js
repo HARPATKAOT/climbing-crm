@@ -98,6 +98,15 @@ export const ATT_STATUS = [
     icon: 'candle',
   },
   {
+    key: 'intro_pending',
+    label: 'הכירות · ממתין למילוי',
+    shortLabel: 'ממתין',
+    color: '#818CF8',
+    bg: 'rgba(99, 102, 241, 0.14)',
+    border: 'rgba(129, 140, 248, 0.4)',
+    icon: 'hourglass',
+  },
+  {
     key: 'intro_attended',
     label: 'הכירות ✓',
     shortLabel: 'הכירות ✓',
@@ -130,6 +139,27 @@ export const ATT_FUTURE = {
 /** Statuses trainers can mark on a regular (non-intro) kid. */
 export const ATT_MARK_KEYS = ['attended', 'absent', 'makeup', 'holiday'];
 
+/**
+ * מה שהמדריך מסמן בגיליון היומי. „ממתין למילוי” הוא חלק מהשורה כדי
+ * שאפשר יהיה לחזור בו מסימון, ו„יום חג” איננו כאן בכוונה: הוא נקבע
+ * אוטומטית מהיומן, המדריך ממילא לא באולם באותו יום, ומשמעותו נקראת
+ * מתיק המתאמן — אימון שלא פוספס ואין מה להשלים.
+ */
+export const ATT_SHEET_MARK_KEYS = ['pending', 'attended', 'absent', 'makeup'];
+
+/**
+ * מה שאפשר לסמן על שורת אימון הכירות. בכוונה בלי „הגיע”/„לא הגיע”
+ * הרגילים — שורה שהיא הכירות נשארת הכירות, וקיזוז דמי הנעליים נשען
+ * על כך שהסימון הזה לא ידרוס אותה בטעות.
+ */
+export const ATT_INTRO_MARK_KEYS = ['intro_pending', 'intro_attended', 'intro_absent'];
+
+export const ATT_INTRO_KEYS = new Set(['intro_pending', 'intro_attended', 'intro_absent']);
+
+export function isAttIntro(status) {
+  return ATT_INTRO_KEYS.has(normalizeAttStatus(status));
+}
+
 export const ATT_PRESENT_KEYS = new Set([
   'attended',
   'present',
@@ -159,7 +189,8 @@ export function isAttAbsent(status) {
 }
 
 export function isAttPending(status) {
-  return normalizeAttStatus(status) === 'pending';
+  const key = normalizeAttStatus(status);
+  return key === 'pending' || key === 'intro_pending';
 }
 
 export function attStatusMeta(status) {

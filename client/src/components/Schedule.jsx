@@ -1,22 +1,27 @@
-import React, { useState, useEffect, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight, Package, Footprints, Shirt, Sparkles, ExternalLink, FolderOpen, AlertTriangle } from 'lucide-react';
+import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight, Package, Sparkles, ExternalLink, AlertTriangle, UserCheck, List, ShieldCheck, ShieldAlert, Maximize2, Minimize2 } from "lucide-react";
 import { DAYS_FULL } from '../mockData.js';
 import {
   getGroupDays,
   localDateStr,
   dateToWeekday,
   ATT_STATUS,
-  ATT_MARK_KEYS,
+  ATT_SHEET_MARK_KEYS,
+  ATT_INTRO_MARK_KEYS,
   consecutiveAbsences,
   normalizeAttStatus,
+  isAttIntro,
   isAttPresent,
   isAttPending,
   isAttAbsent,
   attStatusMeta,
 } from '../scheduleUtils.js';
 import { StatusPill } from './AttendanceList.jsx';
+import StudentFileButton from './StudentFileButton.jsx';
 import {
+  EQUIPMENT_ICONS,
+  EQUIPMENT_ICON_COLORS,
   EQUIPMENT_LABELS,
   applyEquipmentTone,
   equipmentItemTone,
@@ -25,18 +30,16 @@ import {
   equipmentToneLabel,
 } from './equipmentUtils.js';
 import { studentInGroup, studentGroupIds } from '../utils/studentGroups.js';
+import { studentDisplayName } from '../utils/studentNames.js';
 
 // Pulled in only when a trainee file is actually opened from the schedule.
 const StudentFilePanel = lazy(() => import('./StudentFilePanel.jsx'));
 
-const EQUIPMENT_ICONS = {
-  shoes: Footprints,
-  shirt: Shirt,
-  chalk_bag: Sparkles,
-};
-
 /** Matrix columns (RTL: after kid name, right→left): chalk, shoes, shirt */
 const EQUIPMENT_MATRIX_COLS = ['chalk_bag', 'shoes', 'shirt'];
+
+/** מידות נעלי טיפוס שהמועדון מחזיק. */
+const SHOE_SIZES = Array.from({ length: 48 - 33 + 1 }, (_, i) => String(33 + i));
 
 const EQUIPMENT_LEGEND_TONES = [
   { tone: 'unpaid', label: 'ממתין לתשלום' },
@@ -99,6 +102,666 @@ const DUR_OPTIONS = [
 ];
 
 /** Consecutive-absence warning, amber for one meeting and red from two on. */
+/** אימון הכירות — כדי שהמדריך יראה את זה לפני שהוא מסמן. */
+function IntroPill() {
+  return (
+    <span
+      title="אימון הכירות — הסימון נשמר על השורה ולא ישתנה עם סטטוס הילד"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '2px 8px',
+        borderRadius: 999,
+        background: 'rgba(99,102,241,0.16)',
+        border: '1px solid rgba(129,140,248,0.5)',
+        color: '#A5B4FC',
+        fontSize: 10,
+        fontWeight: 800,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <Sparkles size={10} strokeWidth={2.5} />
+      אימון הכירות
+    </span>
+  );
+}
+
+
+/**
+ * מה שהמדריך צריך למסור היום. נעליים הילדים לוקחים בעצמם, ולכן הן
+ * מוצגות רק כדי לומר „מהבית — לא צריך לחפש”.
+ */
+/**
+ * ארבעה מצבים בלבד בגיליון הנוכחות, צבע אחד לכל משמעות. זה מכוון
+ * להיות פחות מדויק מסטטוס הציוד המלא: המדריך צריך לדעת רק אם יש לו
+ * פעולה לעשות, והפירוט המלא נמצא בחלון העריכה ובטאב הציוד.
+ */
+const SHEET_TONE = {
+  give: { color: '#FBBF24', bg: 'rgba(251,191,36,0.18)', border: 'AA', label: 'לתת עכשיו' },
+  ready: { color: '#4ADE80', bg: 'rgba(74,222,128,0.16)', border: '55', label: 'תקין' },
+  blocked: { color: '#FB7185', bg: 'rgba(251,113,133,0.16)', border: '55', label: 'ממתין לתשלום' },
+  // אפור מלא ולא דהוי: „אין מה לעשות” הוא סטטוס, לא היעדר סטטוס.
+  na: { color: '#94A3B8', bg: 'rgba(148,163,184,0.20)', border: '77', label: 'לא רלוונטי' },
+};
+
+const SHEET_TONE_ORDER = ['give', 'blocked', 'ready', 'na'];
+
+function equipmentSheetTone(item) {
+  if (!item) return 'na';
+  // נגזר מ-equipmentItemTone כדי שיהיה מקור אמת אחד — שם כבר מנורמל
+  // „לא מעוניינים” על נעליים ל„ממתין לתשלום”.
+  const tone = equipmentItemTone(item);
+  // „מהבית” = הילד מצויד, בדיוק כמו פריט שנמסר.
+  if (tone === 'own' || tone === 'given') return 'ready';
+  // „לא מעוניינים” הוא המצב היחיד שבו אין פריט ואין מה לעשות בנידון.
+  if (tone === 'declined') return 'na';
+  if (tone === 'unpaid') return 'blocked';
+  // נעליים לא נמסרות מהמחסן — מי ששילם פשוט לוקח זוג.
+  return item.item_type === 'shoes' ? 'ready' : 'give';
+}
+
+// ─── רוחב חלונית הקבוצה ──────────────────────────────────────────────────────
+const PANEL_WIDTH_DEFAULT = 420;
+const PANEL_WIDTH_MIN = 360;
+const PANEL_WIDTH_KEY = 'crm.groupPanelWidth';
+
+function panelWidthMax() {
+  return Math.max(PANEL_WIDTH_MIN, Math.round(window.innerWidth * 0.92));
+}
+
+function clampPanelWidth(value) {
+  return Math.min(panelWidthMax(), Math.max(PANEL_WIDTH_MIN, Math.round(value)));
+}
+
+function readStoredPanelWidth() {
+  try {
+    const stored = Number(window.localStorage.getItem(PANEL_WIDTH_KEY));
+    if (Number.isFinite(stored) && stored > 0) return clampPanelWidth(stored);
+  } catch {
+    /* localStorage חסום — ברירת המחדל תספיק */
+  }
+  return PANEL_WIDTH_DEFAULT;
+}
+
+/** מקרא הצבעים של אייקוני הציוד, מעל רשימת המתאמנים. */
+function EquipmentLegend() {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 10,
+        padding: '6px 10px',
+        marginBottom: 10,
+        borderRadius: 8,
+        background: 'rgba(255,255,255,0.02)',
+        border: '1px solid var(--border)',
+        fontSize: 10,
+        color: 'var(--text-3)',
+      }}
+    >
+      <span style={{ fontWeight: 700 }}>ציוד:</span>
+      {SHEET_TONE_ORDER.map((key) => {
+        const tone = SHEET_TONE[key];
+        return (
+          <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span
+              style={{
+                width: 11,
+                height: 11,
+                borderRadius: 4,
+                background: tone.bg,
+                border: `1px solid ${tone.color}${tone.border}`,
+                flexShrink: 0,
+              }}
+            />
+            {tone.label}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function EquipmentIcons({ items = [], onEdit = null, size: box = 24 }) {
+  if (!items.length) return null;
+  const Wrapper = onEdit ? 'button' : 'span';
+  const glyph = Math.round(box * 0.5);
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: box > 28 ? 6 : 4 }}>
+      {['shoes', 'shirt', 'chalk_bag'].map((type) => {
+        const item = items.find((i) => i.item_type === type);
+        if (!item) return null;
+        const sheetTone = equipmentSheetTone(item);
+        const tone = SHEET_TONE[sheetTone];
+        const Icon = EQUIPMENT_ICONS[type] || Package;
+        const label = EQUIPMENT_LABELS[type] || type;
+        const size = type === 'shirt' ? item.shirt_size : type === 'shoes' ? item.shoe_size : null;
+        // הכיתוב המלא נשאר מדויק — הצבע מקצר, הוא לא מחליף.
+        const detail = equipmentToneLabel(equipmentItemTone(item), type);
+        const title = `${
+          sheetTone === 'give' ? `לתת ${label} עכשיו` : `${label} · ${detail}`
+        }${size ? ` · מידה ${size}` : ''}${onEdit ? ' — לחצו לעריכה' : ''}`;
+        return (
+          <Wrapper
+            key={type}
+            {...(onEdit ? { type: 'button', onClick: () => onEdit(item) } : {})}
+            title={title}
+            aria-label={title}
+            style={{
+              display: 'inline-flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 1,
+              width: box,
+              height: box,
+              padding: 0,
+              borderRadius: Math.round(box * 0.29),
+              background: tone.bg,
+              border: `1px solid ${tone.color}${tone.border}`,
+              color: tone.color,
+              cursor: onEdit ? 'pointer' : 'default',
+            }}
+          >
+            <Icon size={size ? glyph - 1 : glyph} strokeWidth={2.4} />
+            {size && (
+              <span style={{ fontSize: Math.max(7, Math.round(box * 0.29)), fontWeight: 800, lineHeight: 1 }}>
+                {size}
+              </span>
+            )}
+          </Wrapper>
+        );
+      })}
+    </span>
+  );
+}
+
+/**
+ * עריכת ציוד מתוך גיליון הנוכחות. בחירת סטטוס רק *מסמנת* אותו,
+ * והשמירה דורשת אישור נפרד — כדי שנגיעה בטעות באייקון לא תשנה נתון.
+ */
+function EquipmentQuickEdit({
+  student,
+  items = [],
+  initialItemId = '',
+  canManageBilling = false,
+  onSaved,
+  onClose,
+}) {
+  const [itemId, setItemId] = useState(initialItemId || items[0]?.id || '');
+  const [pendingTone, setPendingTone] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [shirtSizes, setShirtSizes] = useState([]);
+
+  const item = items.find((i) => i.id === itemId) || items[0] || null;
+  const currentTone = item ? equipmentItemTone(item) : null;
+  const isShoes = item?.item_type === 'shoes';
+  const isShirt = item?.item_type === 'shirt';
+  const [size, setSize] = useState(item?.shoe_size || item?.shirt_size || '');
+  const currentSize = (isShoes ? item?.shoe_size : isShirt ? item?.shirt_size : '') || '';
+  const sizeChanged = (isShoes || isShirt) && size !== currentSize;
+
+  // מידות החולצה מוגדרות בהגדרות הציוד; מידות הנעליים הן טווח המלאי.
+  useEffect(() => {
+    if (!isShirt || shirtSizes.length) return;
+    fetch('/api/equipment-settings')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => setShirtSizes(body?.shirt_sizes || []))
+      .catch(() => {});
+  }, [isShirt, shirtSizes.length]);
+
+  const pickItem = (row) => {
+    setItemId(row.id);
+    setPendingTone('');
+    setSize(row.shoe_size || row.shirt_size || '');
+    setError('');
+  };
+
+  /**
+   * נעליים לא נמסרות מהמחסן — מי ששילם פשוט לוקח זוג — והן חובה, אז
+   * „לא מעוניינים” לא מוצע עליהן כלל. רשומה ישנה שנתקעה בסטטוס הזה
+   * ניתנת לתיקון דרך שאר האפשרויות.
+   */
+  const toneOptions = EQUIPMENT_LEGEND_TONES.filter(({ tone }) => {
+    if (!isShoes) return true;
+    return tone !== 'given' && tone !== 'declined';
+  });
+
+  const save = async () => {
+    if (!item || (!pendingTone && !sizeChanged)) return;
+    setSaving(true);
+    setError('');
+    try {
+      if (sizeChanged) {
+        const res = await fetch(`/api/equipment/${encodeURIComponent(item.id)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(isShoes ? { shoe_size: size } : { shirt_size: size }),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || 'שמירת המידה נכשלה');
+        }
+      }
+      if (pendingTone) {
+        await applyEquipmentTone(item.id, pendingTone, {
+          currentItem: item,
+          allowManualPaid: canManageBilling,
+        });
+      }
+      setPendingTone('');
+      await onSaved?.();
+      onClose?.();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal slide-up" style={{ maxWidth: 420 }}>
+        <div className="modal-header">
+          <div style={{ fontWeight: 800 }}>ציוד — {student.name}</div>
+          <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {items.map((row) => {
+              const tone = equipmentItemTone(row);
+              const color = equipmentToneColor(tone);
+              const Icon = EQUIPMENT_ICONS[row.item_type] || Package;
+              const selected = row.id === item?.id;
+              return (
+                <button
+                  key={row.id}
+                  type="button"
+                  onClick={() => pickItem(row)}
+                  style={{
+                    flex: 1,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: '10px 6px',
+                    borderRadius: 10,
+                    border: selected ? `2px solid ${color}` : '1px solid var(--border)',
+                    background: selected ? equipmentToneBg(tone) : 'rgba(255,255,255,0.03)',
+                    color: 'var(--text-1)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Icon size={18} color={color} />
+                  <span style={{ fontSize: 11, fontWeight: 700 }}>
+                    {EQUIPMENT_LABELS[row.item_type] || row.item_type}
+                  </span>
+                  <span style={{ fontSize: 10, color }}>
+                    {equipmentToneLabel(tone, row.item_type)}
+                    {row.item_type === 'shirt' && row.shirt_size ? ` · ${row.shirt_size}` : ''}
+                    {row.item_type === 'shoes' && row.shoe_size ? ` · ${row.shoe_size}` : ''}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {(isShoes || isShirt) && (
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label" style={{ fontSize: 11 }}>
+                {isShoes ? 'מידת נעליים' : 'מידת חולצה'}
+              </label>
+              <select
+                className="input input-sm"
+                value={size}
+                onChange={(e) => setSize(e.target.value)}
+              >
+                <option value="">בחרו מידה</option>
+                {(isShoes ? SHOE_SIZES : shirtSizes).map((opt) => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {item && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {toneOptions.map(({ tone: opt, label }) => {
+                const optColor = equipmentToneColor(opt);
+                const isCurrent = opt === currentTone;
+                const isPicked = opt === pendingTone;
+                // סימון „שולם” ידני עוקף סליקה — למנהל בלבד. מ„נמסר”
+                // בחזרה ל„שולם” זה לא תשלום חדש ולכן מותר לכולם.
+                const managerOnly =
+                  opt === 'awaiting' && !canManageBilling && item?.payment_status !== 'paid';
+                return (
+                  <button
+                    key={opt}
+                    type="button"
+                    disabled={saving || isCurrent || managerOnly}
+                    title={managerOnly ? 'סימון „שולם” ידני שמור למנהל' : label}
+                    onClick={() => setPendingTone(isPicked ? '' : opt)}
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      fontSize: 13,
+                      fontWeight: 700,
+                      padding: '10px 12px',
+                      borderRadius: 10,
+                      border: isPicked ? `2px solid ${optColor}` : '1px solid var(--border)',
+                      background: isPicked ? `${optColor}28` : 'rgba(255,255,255,0.04)',
+                      color: '#f8fafc',
+                      cursor: isCurrent || managerOnly ? 'default' : 'pointer',
+                      opacity: isCurrent || managerOnly ? 0.55 : 1,
+                    }}
+                  >
+                    <span>{label}</span>
+                    <span style={{ fontSize: 11, color: optColor }}>
+                      {isCurrent ? 'נוכחי' : isPicked ? 'ייבחר' : managerOnly ? 'מנהל בלבד' : ''}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {error && (
+            <div style={{ padding: 8, borderRadius: 10, background: 'rgba(248,113,113,.12)', color: '#f87171', fontSize: 12 }}>
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={(!pendingTone && !sizeChanged) || saving}
+              onClick={save}
+            >
+              {saving ? 'שומר...' : 'אישור עריכה'}
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" disabled={saving} onClick={onClose}>
+              ביטול
+            </button>
+            {!pendingTone && !sizeChanged && (
+              <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                {isShoes ? 'בחרו סטטוס או מידה כדי לאשר' : 'בחרו סטטוס כדי לאשר'}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** היסטוריית המפגשים של הקבוצה — סיכום ליום, ולחיצה חוזרת אל הגיליון. */
+function AttendanceHistory({ byStudent = {}, members = [], onPickDate }) {
+  const byDate = {};
+  for (const rows of Object.values(byStudent)) {
+    for (const row of rows || []) {
+      if (!row?.date) continue;
+      if (!byDate[row.date]) {
+        byDate[row.date] = { date: row.date, present: 0, absent: 0, pending: 0, intro: 0, total: 0 };
+      }
+      const day = byDate[row.date];
+      day.total += 1;
+      if (isAttIntro(row.status)) day.intro += 1;
+      if (isAttPending(row.status)) day.pending += 1;
+      else if (isAttPresent(row.status)) day.present += 1;
+      else if (isAttAbsent(row.status)) day.absent += 1;
+    }
+  }
+  const days = Object.values(byDate).sort((a, b) => b.date.localeCompare(a.date));
+
+  if (!days.length) {
+    return (
+      <div className="empty-state" style={{ padding: 32 }}>
+        <div className="empty-state-title">אין נתוני נוכחות</div>
+        <div className="empty-state-sub">פריטי נוכחות נוצרים בימי האימון של הקבוצה</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+        {members.length} מתאמנים · {days.length} מפגשים
+      </div>
+      {days.map((day) => (
+        <button
+          key={day.date}
+          type="button"
+          onClick={() => onPickDate?.(day.date)}
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: 10,
+            background: 'rgba(255,255,255,0.02)',
+            borderRadius: 8,
+            border: '1px solid var(--border)',
+            cursor: 'pointer',
+            textAlign: 'right',
+          }}
+        >
+          <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-1)' }}>
+            {new Date(`${day.date}T12:00:00`).toLocaleDateString('he-IL', {
+              weekday: 'long', day: 'numeric', month: 'numeric',
+            })}
+          </div>
+          <div style={{ display: 'flex', gap: 8, fontSize: 12 }}>
+            <span style={{ color: '#34D399' }}>✓ {day.present}</span>
+            <span style={{ color: '#FCA5A5' }}>✗ {day.absent}</span>
+            {day.pending > 0 && <span style={{ color: '#60A5FA' }}>ממתין {day.pending}</span>}
+            {day.intro > 0 && <span style={{ color: '#A5B4FC' }}>הכירות {day.intro}</span>}
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const SAFETY_TONE = {
+  valid: { color: '#34D399', bg: 'rgba(52,211,153,0.14)', label: 'בטיחות בתוקף' },
+  expired: { color: '#F87171', bg: 'rgba(248,113,113,0.14)', label: 'בטיחות פג תוקף', alert: true },
+  // חסר מבחן זו לא אזהרה רכה — הילד לא אמור לטפס בלי מבחן בטיחות.
+  missing: { color: '#F87171', bg: 'rgba(248,113,113,0.16)', label: 'אין מבחן בטיחות', alert: true },
+};
+
+/**
+ * מבחן בטיחות: בתוקף — אייקון ירוק בלבד, באותו גודל של אייקוני הציוד.
+ * פג תוקף או חסר — אייקון אדום עם הערה כתובה, כי זה חוסם טיפוס ולא
+ * אמור להסתמך על כך שמישהו יזהה צבע. לחיצה פותחת רישום מבחן חדש.
+ */
+function SafetyPill({ safety, onClick, size: box = 24 }) {
+  if (!safety) return null;
+  const tone = SAFETY_TONE[safety.state] || SAFETY_TONE.missing;
+  const suffix =
+    safety.state === 'valid' && safety.expires_at
+      ? ` · עד ${new Date(`${safety.expires_at}T12:00:00`).toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' })}`
+      : '';
+  const needsTest = Boolean(tone.alert);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={`${tone.label}${suffix} — לחצו כדי לרשום מבחן חדש`}
+      aria-label={`${tone.label}${suffix}`}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 5,
+        height: box,
+        width: needsTest ? 'auto' : box,
+        padding: needsTest ? '0 10px' : 0,
+        borderRadius: needsTest ? 999 : Math.round(box * 0.29),
+        background: tone.bg,
+        border: `1px solid ${tone.color}${needsTest ? 'AA' : '55'}`,
+        color: tone.color,
+        fontSize: box > 28 ? 11 : 10,
+        fontWeight: 800,
+        whiteSpace: 'nowrap',
+        cursor: 'pointer',
+      }}
+    >
+      {needsTest
+        ? <ShieldAlert size={Math.round(box * 0.52)} strokeWidth={2.6} />
+        : <ShieldCheck size={Math.round(box * 0.56)} strokeWidth={2.5} />}
+      {needsTest && 'צריך לעבור מבדק בטיחות'}
+    </button>
+  );
+}
+
+/**
+ * רישום מבחן אבטחה מתוך הגיליון, בלי לעזוב את הנוכחות. חתימת המדריך
+ * הבוחן היא חובה — המבחן נרשם בשמו, בדיוק כמו בתיק הלקוח.
+ */
+function SafetyTestForm({ student, safety, employees = [], defaultExaminerId, onSaved, onClose }) {
+  const [examinerId, setExaminerId] = useState(defaultExaminerId || employees[0]?.id || '');
+  const [passed, setPassed] = useState(true);
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const save = async () => {
+    if (!examinerId) {
+      setError('בחרו את המדריך הבוחן');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const examiner = employees.find((e) => e.id === examinerId);
+      const res = await fetch('/api/level-tests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          studentId: student.id,
+          studentName: student.name,
+          test_type: 'security',
+          level: null,
+          route_style: null,
+          examiner: examiner?.name || null,
+          examinerId,
+          passed,
+          notes,
+          attended_ceremony: false,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || 'שמירת המבחן נכשלה');
+      }
+      onSaved?.();
+      onClose?.();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const current =
+    safety?.state === 'valid'
+      ? `תקף עד ${safety.expires_at}`
+      : safety?.state === 'expired'
+        ? `פג תוקף ב-${safety.expires_at}`
+        : 'לא נרשם מבחן';
+
+  return (
+    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal slide-up" style={{ maxWidth: 420 }}>
+        <div className="modal-header">
+          <div>
+            <div style={{ fontWeight: 800 }}>מבחן אבטחה — {student.name}</div>
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>{current}</div>
+          </div>
+          <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="form-group" style={{ margin: 0 }}>
+            <label className="form-label" style={{ fontSize: 11 }}>המדריך הבוחן</label>
+            <select
+              className="input input-sm"
+              value={examinerId}
+              onChange={(e) => setExaminerId(e.target.value)}
+            >
+              <option value="">בחרו מדריך</option>
+              {employees.map((emp) => (
+                <option key={emp.id} value={emp.id}>{emp.name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8 }}>
+            {[
+              { value: true, label: 'עבר', color: '#34D399' },
+              { value: false, label: 'לא עבר', color: '#F87171' },
+            ].map((opt) => (
+              <button
+                key={String(opt.value)}
+                type="button"
+                onClick={() => setPassed(opt.value)}
+                style={{
+                  flex: 1,
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  fontWeight: 800,
+                  fontSize: 13,
+                  cursor: 'pointer',
+                  color: opt.color,
+                  background: passed === opt.value ? `${opt.color}22` : 'rgba(255,255,255,0.03)',
+                  border: `${passed === opt.value ? 2 : 1}px solid ${opt.color}${passed === opt.value ? '' : '44'}`,
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="form-group" style={{ margin: 0 }}>
+            <label className="form-label" style={{ fontSize: 11 }}>הערות</label>
+            <textarea
+              className="input input-sm"
+              rows={2}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="לא חובה"
+            />
+          </div>
+
+          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+            מבחן תקף חצי שנה, והתוקף מתאפס לכולם ב-31 באוגוסט.
+          </div>
+
+          {error && (
+            <div style={{ padding: 8, borderRadius: 10, background: 'rgba(248,113,113,.12)', color: '#f87171', fontSize: 12 }}>
+              {error}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" className="btn btn-primary btn-sm" disabled={saving} onClick={save}>
+              {saving ? 'שומר...' : 'רישום המבחן'}
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" disabled={saving} onClick={onClose}>
+              ביטול
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AbsenceStreakPill({ streak }) {
   if (!streak) return null;
   const color = streak >= 2 ? 'var(--red)' : 'var(--amber)';
@@ -126,24 +789,8 @@ function AbsenceStreakPill({ streak }) {
   );
 }
 
-/** Explicit "open the customer file" button, next to the trainee it belongs to. */
-function StudentFileButton({ student, onOpen }) {
-  if (!onOpen) return null;
-  return (
-    <button
-      type="button"
-      className="btn btn-ghost btn-xs"
-      onClick={(e) => { e.stopPropagation(); onOpen(student.id); }}
-      title={`פתיחת תיק הלקוח של ${student.name}`}
-      style={{ border: '1px solid var(--border)', color: 'var(--blue)', gap: 4, flexShrink: 0 }}
-    >
-      <FolderOpen size={12} /> תיק לקוח
-    </button>
-  );
-}
-
 /** Trainee name as a link into their customer file; plain text when no handler. */
-function StudentNameLink({ student, onOpen, size = 13, truncate = false, showIcon = true }) {
+function StudentNameLink({ student, parent = null, onOpen, size = 13, truncate = false, showIcon = true }) {
   const nameStyle = {
     fontWeight: 700,
     fontSize: size,
@@ -151,14 +798,16 @@ function StudentNameLink({ student, onOpen, size = 13, truncate = false, showIco
       ? { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
       : {}),
   };
+  // שם המשפחה יושב על ההורה — בטופס ההרשמה נרשם שם פרטי בלבד לילד.
+  const displayName = studentDisplayName(student, parent) || student.name;
 
-  if (!onOpen) return <div style={nameStyle}>{student.name}</div>;
+  if (!onOpen) return <div style={nameStyle}>{displayName}</div>;
 
   return (
     <button
       type="button"
       onClick={(e) => { e.stopPropagation(); onOpen(student.id); }}
-      title={`פתיחת תיק המתאמן — ${student.name}`}
+      title={`פתיחת תיק המתאמן — ${displayName}`}
       style={{
         ...nameStyle,
         display: 'inline-flex',
@@ -176,8 +825,8 @@ function StudentNameLink({ student, onOpen, size = 13, truncate = false, showIco
         textAlign: 'right',
       }}
     >
-      <span style={truncate ? { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } : undefined}>
-        {student.name}
+      <span style={truncate ? { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" } : undefined}>
+        {displayName}
       </span>
       {showIcon && <ExternalLink size={11} style={{ flexShrink: 0, opacity: 0.85 }} />}
     </button>
@@ -408,7 +1057,7 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
 }
 
 // ─── Attendance Modal (Supabase-persisted via API) ────────────────────────────
-function AttendanceModal({ group, students, parents, employees, initialDate, onClose, onMarked, onOpenStudent }) {
+function AttendanceModal({ group, students, parents, employees, initialDate, onClose, onMarked, onOpenStudent, canManageBilling = false }) {
   const members = students.filter(s => studentInGroup(s, group.id) && s.status !== 'archived');
   const [date, setDate] = useState(initialDate || localDateStr());
   const [view, setView] = useState('sheet'); // 'sheet' | 'history'
@@ -419,10 +1068,13 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
   const [savedMsg, setSavedMsg] = useState('');
   const [history, setHistory] = useState([]);
   const [studentHistory, setStudentHistory] = useState({}); // studentId -> rows
+  const [hasRows, setHasRows] = useState(false);    // האם קיימות שורות בתאריך שנבחר
+  const [brief, setBrief] = useState({});           // studentId -> { equipment, safety }
+  const [safetyFor, setSafetyFor] = useState(null); // המתאמן שממלאים לו מבחן
+  const [equipmentFor, setEquipmentFor] = useState(null); // המתאמן שעורכים לו ציוד
 
   const trainer = employees?.find(e => e.id === group.trainer);
   const dayLabel = DAYS_FULL[dateToWeekday(date)] || '';
-  const pendingCount = members.filter(m => isAttPending(state[m.id])).length;
 
   const applyRows = (rows) => {
     const st = {}; const ids = {};
@@ -433,7 +1085,19 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
     });
     setState(st);
     setExistingIds(ids);
+    // ראו את ההערה ב-loadPanelAttendance: „ממתין” לבדו אינו עדות לאימון.
+    setHasRows((rows || []).some((row) => !isAttPending(row.status)));
   };
+
+  /**
+   * הקבוצה לא מתאמנת בתאריך שנבחר — גיליון לצפייה בלבד. אם בכל זאת יש
+   * שורות (אימון חד-פעמי, או שורות מלפני התיקון) מציגים אותן כרגיל.
+   */
+  const meetsOnDate = getGroupDays(group).includes(dateToWeekday(date));
+  const viewOnly = !meetsOnDate && !hasRows;
+
+  // ביום שאין בו אימון אין מה למלא, ולכן גם אין „ממתינים”.
+  const pendingCount = viewOnly ? 0 : members.filter(m => isAttPending(state[m.id])).length;
 
   // Ensure pending rows, then load marks for the selected date.
   useEffect(() => {
@@ -444,7 +1108,7 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
       try {
         await ensureAttendance({ date, groupId: group.id });
         const r = await fetch(`/api/attendance?groupId=${encodeURIComponent(group.id)}&date=${date}`);
-        const rows = r.ok ? await r.json() : [];
+          const rows = r.ok ? await r.json() : [];
         if (!cancelled) applyRows(rows);
       } catch {
         if (!cancelled) applyRows([]);
@@ -485,6 +1149,19 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
   );
   useEffect(() => { loadHistory(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [group.id]);
 
+  /** ציוד למסירה ומצב מבחן האבטחה — מה שהמדריך צריך לראות ליד השם. */
+  const loadBrief = useCallback(() => {
+    fetch(`/api/groups/${encodeURIComponent(group.id)}/training-brief?date=${date}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (!body) return;
+        setBrief(Object.fromEntries((body.rows || []).map((row) => [row.student_id, row])));
+      })
+      .catch(() => {});
+  }, [group.id, date]);
+
+  useEffect(() => { loadBrief(); }, [loadBrief]);
+
   const markStatus = async (sid, status) => {
     setSavingId(sid);
     setSavedMsg('');
@@ -509,14 +1186,17 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
     }
   };
 
+  /**
+   * שורת הכירות מזוהה קודם כל לפי השורה עצמה ולא לפי סטטוס הילד — כך
+   * שינוי סטטוס בדיעבד לא הופך אימון הכירות לאימון רגיל. סטטוס הילד
+   * נשאר גיבוי לשורות ישנות שנוצרו לפני שהסימון נשמר על השורה.
+   */
+  const isIntroRow = (s) =>
+    isAttIntro(state[s.id]) || s.status === 'intro_scheduled' || s.status === 'intro_paid';
+
   const markOptionsFor = (s) => {
-    const isIntro = s.status === 'intro_scheduled' || s.status === 'intro_paid';
-    if (isIntro) {
-      return ATT_STATUS.filter((o) =>
-        ['intro_attended', 'intro_absent', 'attended', 'absent'].includes(o.key)
-      );
-    }
-    return ATT_STATUS.filter((o) => ATT_MARK_KEYS.includes(o.key));
+    const keys = isIntroRow(s) ? ATT_INTRO_MARK_KEYS : ATT_SHEET_MARK_KEYS;
+    return ATT_STATUS.filter((o) => keys.includes(o.key));
   };
 
   return (
@@ -547,11 +1227,11 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
           <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose}><X size={18} /></button>
         </div>
 
-        <div style={{ display: 'flex', gap: 6, padding: '10px 16px 0' }}>
-          <button className={`btn btn-sm ${view === 'sheet' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setView('sheet')}>
+        <div className="tab-bar tab-bar-inline" style={{ padding: '10px 16px 0' }}>
+          <button className={`tab-pill ${view === 'sheet' ? 'active' : ''}`} onClick={() => setView('sheet')}>
             <Users size={14} /> גיליון יומי
           </button>
-          <button className={`btn btn-sm ${view === 'history' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setView('history')}>
+          <button className={`tab-pill ${view === 'history' ? 'active' : ''}`} onClick={() => setView('history')}>
             <History size={14} /> היסטוריה
           </button>
         </div>
@@ -568,13 +1248,27 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
                 <div className="empty-state-title">אין מתאמנים רשומים בחוג זה</div>
                 <div className="empty-state-sub">שבץ מתאמנים לקבוצה כדי שיווצרו פריטי נוכחות אוטומטית</div>
               </div>
+            ) : viewOnly ? (
+              <div className="empty-state" style={{ padding: 32 }}>
+                <div className="empty-state-title">
+                  הקבוצה לא מתאמנת ביום {DAYS_FULL[dateToWeekday(date)] || ''}
+                </div>
+                <div className="empty-state-sub">
+                  נוכחות נפתחת רק בימי האימון של הקבוצה
+                  {getGroupDays(group).length
+                    ? ` — ${getGroupDays(group).map((d) => DAYS_FULL[d]).filter(Boolean).join(', ')}`
+                    : ''}
+                </div>
+              </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <EquipmentLegend />
                 {members.map(s => {
                   const parent = parents.find(p => p.id === s.parentId);
                   const currentStatus = normalizeAttStatus(state[s.id] || 'pending');
                   const meta = attStatusMeta(currentStatus);
-                  const isIntro = s.status === 'intro_scheduled' || s.status === 'intro_paid';
+                  const isIntro = isIntroRow(s);
+                  const studentBrief = brief[s.id];
                   return (
                     <div key={s.id} style={{
                       display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
@@ -583,15 +1277,25 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
                       flexWrap: 'wrap',
                     }}>
                       <div style={{ minWidth: 120 }}>
-                        <StudentNameLink student={s} onOpen={onOpenStudent} />
+                        <StudentNameLink student={s} parent={parent} onOpen={onOpenStudent} />
                         <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                          {isIntro ? 'אימון הכירות · ' : ''}
                           {parent?.name ? `הורה: ${parent.name}` : ''}
                           {parent?.phone ? ` · ${parent.phone}` : ''}
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 3 }}>
-                          <StatusPill meta={meta} />
+                        {/* הסטטוס הנוכחי נקרא משורת הכפתורים שמתחת — אין צורך בתג נפרד. */}
+                        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 5 }}>
+                          {isIntro && <IntroPill />}
                           <AbsenceStreakPill streak={absenceStreakFor(s.id)} />
+                          <EquipmentIcons
+                            items={studentBrief?.equipment}
+                            size={34}
+                            onEdit={s.isAdult ? null : (item) => setEquipmentFor({ student: s, itemId: item.id })}
+                          />
+                          <SafetyPill
+                            safety={studentBrief?.safety}
+                            size={34}
+                            onClick={() => setSafetyFor(s)}
+                          />
                           {savingId === s.id && <span style={{ fontSize: 11, color: 'var(--text-3)' }}>שומר...</span>}
                         </div>
                       </div>
@@ -658,15 +1362,38 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
           <button className="btn btn-ghost" onClick={onClose}>סגור</button>
         </div>
       </div>
+
+      {safetyFor && (
+        <SafetyTestForm
+          student={safetyFor}
+          safety={brief[safetyFor.id]?.safety}
+          employees={employees || []}
+          defaultExaminerId={group.trainer || ''}
+          onSaved={loadBrief}
+          onClose={() => setSafetyFor(null)}
+        />
+      )}
+
+      {equipmentFor && (
+        <EquipmentQuickEdit
+          student={equipmentFor.student}
+          items={brief[equipmentFor.student.id]?.equipment || []}
+          initialItemId={equipmentFor.itemId}
+          canManageBilling={canManageBilling}
+          onSaved={loadBrief}
+          onClose={() => setEquipmentFor(null)}
+        />
+      )}
     </div>
   );
 }
 
 // ─── Group Detail Side Panel ──────────────────────────────────────────────────
-function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDelete, onAttendance, onAssignStudent, onRemoveStudent, initialAttDate, onOpenStudent }) {
+function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDelete, onAssignStudent, onRemoveStudent, initialAttDate, onOpenStudent, canManageBilling = false }) {
   const days = getGroupDays(group);
-  const meetsToday = days.includes(dateToWeekday(localDateStr()));
-  const [tab, setTab] = useState(meetsToday ? 'attendance' : 'members');
+  // מילוי נוכחות הוא מה שעושים בקבוצה ביום-יום, ולכן הוא נפתח ראשון.
+  const [tab, setTab] = useState('attendance');
+  const [attView, setAttView] = useState('sheet'); // 'sheet' | 'history'
   const [assignId, setAssignId] = useState('');
   const [attDate, setAttDate] = useState(initialAttDate || localDateStr());
   const [attState, setAttState] = useState({});
@@ -674,6 +1401,13 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
   const [attLoading, setAttLoading] = useState(false);
   const [attSavingId, setAttSavingId] = useState(null);
   const [attHistory, setAttHistory] = useState({}); // studentId -> rows in this group
+  const [attHasRows, setAttHasRows] = useState(false);
+  // רוחב החלונית נשמר בין פתיחות, כי זו העדפה של המשתמש ולא מצב זמני.
+  const [panelWidth, setPanelWidth] = useState(readStoredPanelWidth);
+  const [dragging, setDragging] = useState(false);
+  const [attBrief, setAttBrief] = useState({});     // studentId -> { equipment, safety }
+  const [attSafetyFor, setAttSafetyFor] = useState(null);
+  const [attEquipmentFor, setAttEquipmentFor] = useState(null);
   const [eqByStudent, setEqByStudent] = useState({});
   const [eqLoading, setEqLoading] = useState(false);
   const [eqBusyId, setEqBusyId] = useState('');
@@ -698,7 +1432,11 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
   const freeSlots = Math.max(0, group.maxSlots - members.length);
 
   const trainer = employees.find(e => e.id === group.trainer);
-  const pendingCount = members.filter(m => isAttPending(attState[m.id])).length;
+  // גיליון לצפייה בלבד ביום שהקבוצה לא מתאמנת בו — ואז אין „ממתינים”.
+  const attViewOnly = !days.includes(dateToWeekday(attDate)) && !attHasRows;
+  const pendingCount = attViewOnly
+    ? 0
+    : members.filter(m => isAttPending(attState[m.id])).length;
   const eqAwaitingCount = kidMembers.filter((m) => {
     const items = eqByStudent[m.id] || [];
     return items.some((i) => i.payment_status === 'paid' && i.fulfillment_status !== 'given');
@@ -758,10 +1496,14 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
       });
       setAttState(st);
       setAttIds(ids);
+      // רק שורה שסומנה מעידה שהיה אימון. שורות „ממתין” בתאריך שאינו יום
+      // אימון הן שאריות מלפני התיקון, ואין סיבה לפתוח בשבילן גיליון.
+      setAttHasRows((rows || []).some((row) => !isAttPending(row.status)));
     } catch {
       const st = {};
       members.forEach(m => { st[m.id] = 'pending'; });
       setAttState(st);
+      setAttHasRows(false);
     } finally {
       setAttLoading(false);
     }
@@ -783,10 +1525,49 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
     }
   };
 
+  /**
+   * גרירת הקצה השמאלי. החלונית עוגנת לימין, ולכן הרוחב הוא המרחק בין
+   * העכבר לקצה החלון.
+   */
+  const startResize = (e) => {
+    e.preventDefault();
+    setDragging(true);
+    const onMove = (ev) => setPanelWidth(clampPanelWidth(window.innerWidth - ev.clientX));
+    const onUp = () => {
+      setDragging(false);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  const wideWidth = Math.min(panelWidthMax(), 900);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PANEL_WIDTH_KEY, String(panelWidth));
+    } catch {
+      /* localStorage חסום — הרוחב פשוט לא יישמר */
+    }
+  }, [panelWidth]);
+
+  /** ציוד למסירה ומצב מבחן האבטחה, לצד כל שם בגיליון. */
+  const loadAttBrief = () => {
+    fetch(`/api/groups/${encodeURIComponent(group.id)}/training-brief?date=${attDate}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (!body) return;
+        setAttBrief(Object.fromEntries((body.rows || []).map((row) => [row.student_id, row])));
+      })
+      .catch(() => {});
+  };
+
   useEffect(() => {
     if (tab !== 'attendance') return;
     loadPanelAttendance(attDate);
     loadAttHistory();
+    loadAttBrief();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, attDate, group.id, members.length]);
 
@@ -834,13 +1615,32 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
 
   return (
     <div style={{
-      position: 'fixed', top: 0, right: 0, height: '100vh', width: 420,
+      position: 'fixed', top: 0, right: 0, height: '100vh', width: panelWidth,
       background: '#0D1117', borderLeft: '1px solid var(--border)',
       zIndex: 300, display: 'flex', flexDirection: 'column',
       boxShadow: '-4px 0 25px rgba(0,0,0,0.5)',
       animation: 'fadeIn 0.2s ease',
       overflowY: 'auto',
+      // בזמן גרירה מבטלים אנימציית רוחב כדי שהקצה ידבק לעכבר.
+      transition: dragging ? 'none' : 'width 0.15s ease',
     }}>
+      {/* ידית גרירה על הקצה השמאלי של החלונית */}
+      <div
+        onMouseDown={startResize}
+        onDoubleClick={() => setPanelWidth(PANEL_WIDTH_DEFAULT)}
+        title="גררו כדי לשנות רוחב · לחיצה כפולה מחזירה לברירת המחדל"
+        style={{
+          position: 'absolute',
+          insetBlock: 0,
+          insetInlineEnd: 'auto',
+          left: 0,
+          width: 8,
+          cursor: 'col-resize',
+          zIndex: 2,
+          background: dragging ? 'rgba(56,189,248,0.35)' : 'transparent',
+        }}
+      />
+
       {/* Header */}
       <div style={{ padding: '18px 18px 14px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -853,7 +1653,16 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
               {trainer && ` · מדריך: ${trainer.name}`}
             </div>
           </div>
-          <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose}><X size={18} /></button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+            <button
+              className="btn btn-ghost btn-icon btn-sm"
+              onClick={() => setPanelWidth((w) => (w >= wideWidth ? PANEL_WIDTH_DEFAULT : wideWidth))}
+              title={panelWidth >= wideWidth ? 'הקטנת החלונית' : 'הגדלת החלונית'}
+            >
+              {panelWidth >= wideWidth ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            </button>
+            <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose}><X size={18} /></button>
+          </div>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
@@ -864,22 +1673,20 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
               transition: 'width 0.4s ease',
             }} />
           </div>
+          {/* bdi מבודד כל מספר לעצמו. בלעדיו הדפדפן מצרף „1/12” ו„11”
+              לרצף ניטרלי אחד וההצגה יוצאת „11/1/12”. */}
           <span style={{ fontSize: 12, fontWeight: 700, color: isFull ? 'var(--red)' : 'var(--text-2)', minWidth: 90 }}>
-            {members.length}/{group.maxSlots} · {freeSlots} פנויים
+            <bdi>{members.length}/{group.maxSlots}</bdi>
+            {' · '}
+            <bdi>{freeSlots} פנויים</bdi>
           </span>
         </div>
 
+        {/* פעולות בלבד — הניווט כולו יושב בטאבים שמתחת, כדי שלא יהיו
+            שני „נוכחות” זה מעל זה. */}
+        {/* „עריכה” עבר לתוך „פרטי הקבוצה” — שם הוא בהקשר, ולא כפתור
+            נפרד שמתחרה בטאב שמציג בדיוק את אותו מידע. */}
         <div style={{ display: 'flex', gap: 6, marginTop: 12, flexWrap: 'wrap' }}>
-          <button className="btn btn-primary btn-sm" onClick={() => setTab('attendance')}>
-            <Users size={14} /> נוכחות
-            {pendingCount > 0 && tab === 'attendance' ? ` (${pendingCount})` : ''}
-          </button>
-          <button className="btn btn-ghost btn-sm" onClick={() => onAttendance(group)}>
-            גיליון מלא
-          </button>
-          <button className="btn btn-ghost btn-sm" onClick={() => onEdit(group)}>
-            <Edit2 size={14} /> עריכה
-          </button>
           {group.waParents && (
             <a href={group.waParents} target="_blank" rel="noreferrer" className="btn btn-success btn-sm">
               💬 הורים
@@ -888,24 +1695,43 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
         </div>
       </div>
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+      {/* ניווט ראשי של הקבוצה */}
+      <div
+        className="tab-bar tab-bar-inline"
+        style={{
+          padding: '10px 12px 0',
+          flexShrink: 0,
+          // מפריד את הניווט הראשי מתת-הטאבים שבתוך התוכן.
+          borderBottom: '1px solid var(--border)',
+          // שורה אחת תמיד. בחלונית צרה עדיף גלילה אופקית על שבירה,
+          // שדוחפת טאב בודד לשורה משלו.
+          flexWrap: 'nowrap',
+          overflowX: 'auto',
+          gap: 6,
+        }}
+      >
         {[
-          { key: 'attendance', label: pendingCount > 0 ? `נוכחות (${pendingCount})` : 'נוכחות' },
-          { key: 'members', label: `משתתפים (${members.length})` },
-          { key: 'equipment', label: eqAwaitingCount > 0 ? `ציוד (${eqAwaitingCount})` : 'ציוד' },
-          { key: 'info',    label: 'פרטי הקבוצה' },
-        ].map(t => (
-          <button key={t.key} onClick={() => setTab(t.key)} style={{
-            flex: 1, padding: '10px 4px', fontSize: 13, fontWeight: tab === t.key ? 700 : 400,
-            color: tab === t.key ? c.text : 'var(--text-3)',
-            background: 'none', border: 'none', cursor: 'pointer',
-            borderBottom: `2px solid ${tab === t.key ? c.text : 'transparent'}`,
-            transition: 'all 0.15s',
-          }}>
-            {t.label}
-          </button>
-        ))}
+          { key: 'attendance', label: 'נוכחות', icon: UserCheck, badge: pendingCount },
+          // בלי מונה — מספר המשתתפים כבר מופיע בבאר התפוסה שמעל.
+          { key: 'members', label: 'משתתפים', icon: Users, badge: 0 },
+          { key: 'equipment', label: 'ציוד', icon: Package, badge: eqAwaitingCount },
+          { key: 'info', label: 'פרטי הקבוצה', icon: List, badge: 0 },
+        ].map((t) => {
+          const Icon = t.icon;
+          return (
+            <button
+              key={t.key}
+              className={`tab-pill ${tab === t.key ? 'active' : ''}`}
+              onClick={() => setTab(t.key)}
+              // ריפוד צר יותר מברירת המחדל, כדי שארבעת הטאבים ייכנסו
+              // לשורה אחת גם ברוחב החלונית המינימלי.
+              style={{ padding: '7px 10px', gap: 6 }}
+            >
+              <Icon size={14} /> {t.label}
+              {t.badge > 0 ? ` (${t.badge})` : ''}
+            </button>
+          );
+        })}
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
@@ -913,6 +1739,23 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
         {/* ATTENDANCE TAB — mark from group folder (Notion-style) */}
         {tab === 'attendance' && (
           <div>
+            <div className="tab-bar tab-bar-inline" style={{ marginBottom: 12 }}>
+              <button
+                className={`tab-pill ${attView === 'sheet' ? 'active' : ''}`}
+                onClick={() => setAttView('sheet')}
+              >
+                <UserCheck size={14} /> מילוי נוכחות
+              </button>
+              <button
+                className={`tab-pill ${attView === 'history' ? 'active' : ''}`}
+                onClick={() => setAttView('history')}
+              >
+                <History size={14} /> היסטוריה
+              </button>
+            </div>
+
+            {attView === 'sheet' && (
+            <>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
               <Calendar size={14} style={{ color: 'var(--text-3)' }} />
               <input
@@ -938,31 +1781,81 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                 <div className="empty-state-title">אין מתאמנים בקבוצה</div>
                 <div className="empty-state-sub">שבץ משתתפים בטאב משתתפים — ואז ייווצרו פריטי נוכחות אוטומטית</div>
               </div>
+            ) : attViewOnly ? (
+              <div className="empty-state" style={{ padding: 32 }}>
+                <div className="empty-state-title">
+                  הקבוצה לא מתאמנת ביום {DAYS_FULL[dateToWeekday(attDate)] || ''}
+                </div>
+                <div className="empty-state-sub">
+                  נוכחות נפתחת רק בימי האימון של הקבוצה
+                  {days.length ? ` — ${days.map((d) => DAYS_FULL[d]).filter(Boolean).join(', ')}` : ''}
+                </div>
+              </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <EquipmentLegend />
                 {members.map(s => {
                   const status = normalizeAttStatus(attState[s.id] || 'pending');
                   const meta = attStatusMeta(status);
                   const streak = absenceStreakFor(s.id);
+                  const isIntro =
+                    isAttIntro(status) || s.status === 'intro_scheduled' || s.status === 'intro_paid';
+                  const studentBrief = attBrief[s.id];
+                  const safetyAlert =
+                    !!studentBrief?.safety && studentBrief.safety.state !== 'valid';
                   return (
                     <div key={s.id} style={{
                       padding: '10px 12px', borderRadius: 8,
                       background: 'rgba(255,255,255,0.02)',
                       border: `1px solid ${isAttPending(status) ? 'rgba(59,130,246,0.45)' : 'var(--border)'}`,
                     }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 8 }}>
-                        <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 5 }}>
-                          {/* No arrow here — the "תיק לקוח" button on this row already says it. */}
-                          <StudentNameLink student={s} onOpen={onOpenStudent} truncate showIcon={false} />
-                          <AbsenceStreakPill streak={streak} />
+                      {/* האייקונים יושבים בשורת השם לצד התיקייה, ומנצלים את
+                          הרוחב שהתפנה. תגיות טקסט נשארות מתחת לשם. */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                        <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+                          {/* התיקייה פותחת את התיק, ולכן היא צמודה לשם. */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
+                            <StudentFileButton student={s} onOpen={onOpenStudent} label="" size={30} />
+                            <StudentNameLink
+                              student={s}
+                              parent={parents.find(p => p.id === s.parentId)}
+                              onOpen={onOpenStudent}
+                              showIcon={false}
+                              size={14}
+                            />
+                          </div>
+                          {(isIntro || streak > 0 || safetyAlert) && (
+                            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                              {isIntro && <IntroPill />}
+                              <AbsenceStreakPill streak={streak} />
+                              {/* אזהרת בטיחות היא הערה כתובה, ולכן היא נקראת
+                                  מתחת לשם ולא בשורת האייקונים. */}
+                              {safetyAlert && (
+                                <SafetyPill
+                                  safety={studentBrief?.safety}
+                                  onClick={() => setAttSafetyFor(s)}
+                                />
+                              )}
+                            </div>
+                          )}
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                          <StatusPill meta={meta} />
-                          <StudentFileButton student={s} onOpen={onOpenStudent} />
+                          <EquipmentIcons
+                            items={studentBrief?.equipment}
+                            size={34}
+                            onEdit={s.isAdult ? null : (item) => setAttEquipmentFor({ student: s, itemId: item.id })}
+                          />
+                          {!safetyAlert && (
+                            <SafetyPill
+                              safety={studentBrief?.safety}
+                              size={34}
+                              onClick={() => setAttSafetyFor(s)}
+                            />
+                          )}
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {ATT_STATUS.filter(o => ATT_MARK_KEYS.includes(o.key)).map(opt => (
+                        {ATT_STATUS.filter(o => (isIntro ? ATT_INTRO_MARK_KEYS : ATT_SHEET_MARK_KEYS).includes(o.key)).map(opt => (
                           <button
                             key={opt.key}
                             type="button"
@@ -986,6 +1879,16 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                   );
                 })}
               </div>
+            )}
+            </>
+            )}
+
+            {attView === 'history' && (
+              <AttendanceHistory
+                byStudent={attHistory}
+                members={members}
+                onPickDate={(day) => { setAttDate(day); setAttView('sheet'); }}
+              />
             )}
           </div>
         )}
@@ -1037,7 +1940,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                         {s.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <StudentNameLink student={s} onOpen={onOpenStudent} truncate />
+                        <StudentNameLink student={s} parent={parents.find(p => p.id === s.parentId)} onOpen={onOpenStudent} truncate />
                         <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 1 }}>
                           {parent?.name}{parent?.phone ? ` · ${parent.phone}` : ''}
                         </div>
@@ -1073,7 +1976,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                         border: '1px dashed var(--border)',
                       }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <StudentNameLink student={s} onOpen={onOpenStudent} truncate />
+                          <StudentNameLink student={s} parent={parents.find(p => p.id === s.parentId)} onOpen={onOpenStudent} truncate />
                           <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 1 }}>
                             {parent?.name}{parent?.phone ? ` · ${parent.phone}` : ''}
                           </div>
@@ -1201,7 +2104,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                             gap: 2,
                           }}
                         >
-                          <Icon size={14} />
+                          <Icon size={14} color={EQUIPMENT_ICON_COLORS[type] || 'currentColor'} />
                           <span style={{ fontSize: 9, fontWeight: 700 }}>{EQUIPMENT_LABELS[type]}</span>
                         </div>
                       );
@@ -1229,7 +2132,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                         }}
                       >
                         <div style={{ minWidth: 0, paddingInlineEnd: 8 }}>
-                          <StudentNameLink student={s} onOpen={onOpenStudent} truncate />
+                          <StudentNameLink student={s} parent={parents.find(p => p.id === s.parentId)} onOpen={onOpenStudent} truncate />
                           <div style={{ fontSize: 10, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {p?.name || '—'}
                           </div>
@@ -1387,6 +2290,14 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
         {/* INFO TAB */}
         {tab === 'info' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ alignSelf: 'flex-start' }}
+              onClick={() => onEdit(group)}
+            >
+              <Edit2 size={14} /> עריכת פרטי הקבוצה
+            </button>
+
             <div className="card card-p">
               {[
                 ['ימי חוג', days.map(d => DAYS_FULL[d]).join(' + ')],
@@ -1440,6 +2351,28 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
           </div>
         )}
       </div>
+
+      {attSafetyFor && (
+        <SafetyTestForm
+          student={attSafetyFor}
+          safety={attBrief[attSafetyFor.id]?.safety}
+          employees={employees || []}
+          defaultExaminerId={group.trainer || ''}
+          onSaved={loadAttBrief}
+          onClose={() => setAttSafetyFor(null)}
+        />
+      )}
+
+      {attEquipmentFor && (
+        <EquipmentQuickEdit
+          student={attEquipmentFor.student}
+          items={attBrief[attEquipmentFor.student.id]?.equipment || []}
+          initialItemId={attEquipmentFor.itemId}
+          canManageBilling={canManageBilling}
+          onSaved={loadAttBrief}
+          onClose={() => setAttEquipmentFor(null)}
+        />
+      )}
     </div>
   );
 }
@@ -1676,6 +2609,7 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
           initialDate={attendanceDate}
           onClose={() => setAttendanceGroup(null)}
           onMarked={() => setAttendanceGroup(g => (g ? { ...g } : g))}
+          canManageBilling={canManageBilling}
           onOpenStudent={setStudentFileId}
         />
       )}
@@ -1698,10 +2632,10 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
           onClose={() => setSelectedGroup(null)}
           onEdit={openEdit}
           onDelete={handleDelete}
-          onAttendance={g => openAttendance(g, attendanceDate)}
           onAssignStudent={handleAssignStudent}
           onRemoveStudent={handleRemoveStudent}
           onOpenStudent={setStudentFileId}
+          canManageBilling={canManageBilling}
         />
       )}
 
@@ -1717,13 +2651,15 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
               : `${groups.length} קבוצות חוגים פעילות · לחץ על משבצת לפרטים`}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button className={`btn btn-sm ${viewMode === 'attendance' ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => setViewMode('attendance')}>✓ נוכחות</button>
-          <button className={`btn btn-sm ${viewMode === 'week' ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => setViewMode('week')}>🗓 שבוע</button>
-          <button className={`btn btn-sm ${viewMode === 'list' ? 'btn-primary' : 'btn-ghost'}`}
-            onClick={() => setViewMode('list')}>📋 רשימה</button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div className="tab-bar tab-bar-inline">
+            <button className={`tab-pill ${viewMode === 'attendance' ? 'active' : ''}`}
+              onClick={() => setViewMode('attendance')}><UserCheck size={14} /> נוכחות</button>
+            <button className={`tab-pill ${viewMode === 'week' ? 'active' : ''}`}
+              onClick={() => setViewMode('week')}><Calendar size={14} /> שבוע</button>
+            <button className={`tab-pill ${viewMode === 'list' ? 'active' : ''}`}
+              onClick={() => setViewMode('list')}><List size={14} /> רשימה</button>
+          </div>
           <button className="btn btn-primary btn-sm" onClick={openAdd}>
             <Plus size={14} /> קבוצה חדשה
           </button>

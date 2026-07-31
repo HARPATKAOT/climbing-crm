@@ -2,7 +2,7 @@
 import {
   ShoppingCart, Plus, Minus, Trash2, Search, User,
   Banknote, Link2, FileText, CheckCircle2, X, Percent, Tag,
-  Package, ArrowRight, Gift,
+  Package, ArrowRight, Gift, Send, Settings2,
 } from 'lucide-react';
 import {
   PRODUCT_CATEGORIES,
@@ -10,6 +10,9 @@ import {
   CATEGORY_ICONS,
   DEFAULT_CATEGORY_COLOR,
   normalizeCategories,
+  catTint,
+  imageBackground,
+  imageFitOf,
 } from './productCategories.js';
 
 const PAY_METHODS = [
@@ -42,7 +45,8 @@ function applyLineDiscount(listPrice, discountType, discountValue) {
   return roundMoney(Math.max(0, base - val));
 }
 
-export default function PosSale() {
+/** `onManageProducts` opens the catalogue tab — omitted for non-owners. */
+export default function PosSale({ onManageProducts = null }) {
   const [pricelist, setPricelist] = useState([]);
   const [students, setStudents] = useState([]);
   const [parents, setParents] = useState([]);
@@ -70,12 +74,17 @@ export default function PosSale() {
   const [lastPayUrl, setLastPayUrl] = useState('');
   const [copied, setCopied] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
   const [editingDiscountId, setEditingDiscountId] = useState(null);
   const [discountDraft, setDiscountDraft] = useState({ type: 'percent', value: '' });
   const [customerCoupons, setCustomerCoupons] = useState([]);
   const [appliedCoupon, setAppliedCoupon] = useState(null);
   const [couponError, setCouponError] = useState('');
   const [couponBusy, setCouponBusy] = useState(false);
+  const [resendingLink, setResendingLink] = useState(false);
+  const [resendMsg, setResendMsg] = useState('');
+  const [resendOk, setResendOk] = useState(false);
+  const [showContactFields, setShowContactFields] = useState(false);
   const [showCustomForm, setShowCustomForm] = useState(false);
   const [customDraft, setCustomDraft] = useState({ name: '', price: '', quantity: '1' });
 
@@ -111,19 +120,43 @@ export default function PosSale() {
         setCatalogCategories(cats.filter((c) => c.active !== false));
       }
       if (!sRes.ok || !parRes.ok) {
-        setLoadError('לא הצלחנו לטעון לקוחות — נסו לרענן');
-      } else {
-        setLoadError('');
+        throw new Error('טעינת הלקוחות נכשלה');
       }
+      setLoadError('');
+      return true;
     } catch (err) {
       console.error(err);
-      setLoadError('לא הצלחנו לטעון לקוחות — נסו לרענן');
+      setLoadError('לא הצלחנו לטעון לקוחות — מנסה שוב...');
+      return false;
     }
   }, []);
 
+  // A restarting API used to leave this screen empty until someone reloaded by
+  // hand — and an empty catalogue looks like missing products, not an outage.
+  // Retry with backoff, the same way the app shell loads its core data.
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    let cancelled = false;
+    let timer = null;
+    let attempt = 0;
+
+    const load = async () => {
+      const ok = await refresh();
+      if (cancelled || ok) return;
+      if (attempt >= 8) {
+        setLoadError('לא הצלחנו לטעון לקוחות — בדקו שהשרת פועל ונסו שוב');
+        return;
+      }
+      const delay = Math.min(1000 * 2 ** attempt, 8000);
+      attempt += 1;
+      timer = setTimeout(load, delay);
+    };
+
+    load();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [refresh, reloadKey]);
 
   const selectedStudent = students.find((s) => s.id === selectedStudentId) || null;
   const selectedParent =
@@ -153,16 +186,6 @@ export default function PosSale() {
       );
     });
   }, [pricelist, productFilter, activeCat]);
-
-  const categoryCounts = useMemo(() => {
-    const counts = {};
-    for (const item of pricelist) {
-      for (const category of item.categories || []) {
-        counts[category] = (counts[category] || 0) + 1;
-      }
-    }
-    return counts;
-  }, [pricelist]);
 
   const normalizePhoneDigits = (phone) => String(phone || '').replace(/\D/g, '');
 
@@ -247,6 +270,7 @@ export default function PosSale() {
     setWalkInName('');
     setWalkInPhone('');
     setWalkInEmail('');
+    setShowContactFields(false);
   };
 
   const pendingNewLeadName =
@@ -254,6 +278,15 @@ export default function PosSale() {
   const isPendingNewLead = Boolean(pendingNewLeadName);
   const showNewLeadBanner =
     isPendingNewLead && (customerSuggestions.length === 0 || hideSuggestions);
+
+  // One search line covers name / phone / email of an existing customer. The
+  // contact fields are only for details the sale cannot proceed without: a brand
+  // new walk-in, or a selected customer missing the channel we are sending on.
+  const hasSelectedCustomer = Boolean(selectedStudent || selectedParent);
+  const missingSendTarget =
+    hasSelectedCustomer &&
+    ((sendWhatsapp && !effectivePhone.trim()) || (sendEmail && !effectiveEmail.trim()));
+  const contactFieldsVisible = isPendingNewLead || missingSendTarget || showContactFields;
 
   const cartTotal = cart.reduce(
     (sum, line) => sum + (Number(line.unitprice) || 0) * (Number(line.quantity) || 1),
@@ -447,6 +480,42 @@ export default function PosSale() {
     setEditingDiscountId(null);
   };
 
+  /**
+   * Send an existing link again. Deliberately separate from creating one: a new
+   * link would mean a second sale, and would re-reserve the customer's benefit.
+   */
+  const resendPaymentLink = async (sale) => {
+    setResendingLink(true);
+    setResendMsg('');
+    try {
+      const res = await fetch(`/api/pos/sales/${sale.id}/send-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'השליחה נכשלה');
+      if (body.whatsappSent) {
+        setResendOk(!body.deliveryWarning);
+        setResendMsg(
+          body.deliveryWarning || 'הקישור נשלח ללקוח בוואטסאפ בתבנית מאושרת'
+        );
+      } else if (body.whatsappUrl) {
+        window.open(body.whatsappUrl, '_blank', 'noopener,noreferrer');
+        setResendOk(false);
+        setResendMsg('השליחה האוטומטית נכשלה — נפתח וואטסאפ לשליחה ידנית');
+      } else {
+        setResendOk(false);
+        setResendMsg(body.whatsappError || 'השליחה נכשלה');
+      }
+    } catch (err) {
+      setResendOk(false);
+      setResendMsg(err.message);
+    } finally {
+      setResendingLink(false);
+    }
+  };
+
   const copyPayUrl = async (url) => {
     if (!url) return;
     try {
@@ -516,6 +585,7 @@ export default function PosSale() {
     setBusy(true);
     setError('');
     setResult(null);
+    setResendMsg('');
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -564,16 +634,14 @@ export default function PosSale() {
   };
 
   const handleCheckout = async () => {
+    const couponCode = appliedCoupon?.code || undefined;
     if (paymentMethod === 'online') {
-      await runAction('/api/pos/payment-link');
+      // The link carries the discounted amount and the benefit is held aside
+      // until the payment actually lands.
+      await runAction('/api/pos/payment-link', { couponCode });
       return;
     }
-    // A coupon is only honoured on the counter sale: it is consumed the moment
-    // the sale is recorded, which a payment link cannot promise.
-    await runAction('/api/pos/sale', {
-      paymentMethod,
-      couponCode: appliedCoupon?.code || undefined,
-    });
+    await runAction('/api/pos/sale', { paymentMethod, couponCode });
   };
 
   return (
@@ -582,6 +650,17 @@ export default function PosSale() {
         <div className="card card-p" style={{ marginBottom: 16 }}>
           <div className="section-title" style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
             <ShoppingCart size={16} /> בחירת מוצרים
+            {onManageProducts && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ marginInlineStart: 'auto', fontWeight: 500 }}
+                onClick={onManageProducts}
+                title="הוספה, עריכה ומחיקה של קטגוריות ומוצרים"
+              >
+                <Settings2 size={14} /> ניהול קטגוריות
+              </button>
+            )}
           </div>
           <div style={{ position: 'relative', marginBottom: 12 }}>
             <Search size={14} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-3)' }} />
@@ -627,7 +706,7 @@ export default function PosSale() {
                 padding: 12,
                 borderRadius: 10,
                 border: '1px solid var(--border)',
-                background: 'var(--bg-2)',
+                background: 'var(--bg-input)',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 8,
@@ -673,12 +752,11 @@ export default function PosSale() {
             </div>
           )}
           {activeCat === 'הכל' && !productFilter.trim() ? (
+            // No height cap: every category has to be reachable without scrolling.
             <div style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))',
               gap: 10,
-              maxHeight: 440,
-              overflow: 'auto',
             }}>
               {catalogCategories.map((category) => {
                 const c = CATEGORY_COLORS[category.name] || DEFAULT_CATEGORY_COLOR;
@@ -691,30 +769,38 @@ export default function PosSale() {
                     className="card"
                     style={{
                       padding: 0,
-                      textAlign: 'right',
+                      textAlign: 'center',
                       cursor: 'pointer',
                       overflow: 'hidden',
-                      border: `1px solid ${c.text}33`,
-                      background: 'var(--bg-2)',
+                      border: `1px solid ${catTint(c.text, '33')}`,
+                      display: 'flex',
+                      flexDirection: 'column',
                     }}
                   >
                     <div style={{
-                      height: 82,
+                      height: 104,
+                      flexShrink: 0,
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      background: category.image
-                        ? `center/cover no-repeat url(${category.image})`
-                        : `linear-gradient(145deg, ${c.bg}, rgba(15,20,30,0.9))`,
+                      background: imageBackground(
+                        category,
+                        `linear-gradient(145deg, ${c.bg}, rgba(15,20,30,0.9))`
+                      ),
                     }}>
-                      {!category.image && <Icon size={28} color={c.text} strokeWidth={1.75} />}
+                      {!category.image && <Icon size={44} color={c.text} strokeWidth={1.6} />}
                     </div>
-                    <div style={{ padding: '9px 10px' }}>
-                      <div style={{ fontWeight: 800, fontSize: 13, color: 'var(--text-1)' }}>
+                    {/* Grows into the leftover height so names stay centred when a
+                        neighbour in the row wraps to two lines. */}
+                    <div style={{
+                      flex: 1,
+                      padding: 12,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}>
+                      <div style={{ fontWeight: 800, fontSize: 18, lineHeight: 1.3, color: 'var(--text-1)' }}>
                         {category.name}
-                      </div>
-                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 3 }}>
-                        {categoryCounts[category.name] || 0} מוצרים
                       </div>
                     </div>
                   </button>
@@ -740,7 +826,6 @@ export default function PosSale() {
                     textAlign: 'right',
                     cursor: 'pointer',
                     border: '1px solid var(--border)',
-                    background: 'var(--bg-2)',
                     overflow: 'hidden',
                   }}
                 >
@@ -748,31 +833,31 @@ export default function PosSale() {
                     <img
                       src={item.image}
                       alt=""
-                      style={{ display: 'block', width: '100%', height: 86, objectFit: 'cover' }}
+                      style={{ display: 'block', width: '100%', height: 86, objectFit: imageFitOf(item) }}
                     />
                   )}
                   <div style={{ padding: 12 }}>
-                    <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>
+                    <div style={{ fontSize: 12, color: 'var(--text-2)', marginBottom: 4 }}>
                       {productTypeLabel(item.product_type)}
                     </div>
-                    <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6, color: 'var(--text-1)' }}>
+                    <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6, color: 'var(--text-1)' }}>
                       {item.name}
                     </div>
                     <div style={{ fontWeight: 800, color: 'var(--accent, #F59E0B)' }}>
                       ₪{Number(item.price || 0).toLocaleString()}
                     </div>
                     {item.product_type === 'punch_card' && (
-                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                      <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
                         {item.visits_total || 10} כניסות
                       </div>
                     )}
                     {item.product_type === 'time_membership' && (
-                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                      <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
                         {item.duration_days || 30} ימים
                       </div>
                     )}
                     {item.track_inventory && item.stock_qty != null && (
-                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                      <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
                         מלאי: {item.stock_qty}
                       </div>
                     )}
@@ -796,7 +881,19 @@ export default function PosSale() {
             <User size={16} /> לקוח לחיוב
           </div>
           {loadError && (
-            <div className="alert alert-error" style={{ marginBottom: 10 }}>{loadError}</div>
+            <div
+              className="alert alert-error"
+              style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}
+            >
+              <span style={{ flex: 1 }}>{loadError}</span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs"
+                onClick={() => { setLoadError(''); setReloadKey((n) => n + 1); }}
+              >
+                נסו שוב
+              </button>
+            </div>
           )}
           {!loadError && (
             <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>
@@ -837,7 +934,7 @@ export default function PosSale() {
           {!(selectedStudent || selectedParent) && (
             <div className="form-group" style={{ marginBottom: 10, position: 'relative', zIndex: 70 }}>
               <label className="form-label">
-                חיפוש או שם לקוח חדש {needsCustomer ? '*' : ''}
+                לקוח — שם, טלפון או מייל {needsCustomer ? '*' : ''}
               </label>
               <div style={{ position: 'relative' }}>
                 <Search
@@ -854,7 +951,7 @@ export default function PosSale() {
                 <input
                   className="input"
                   style={{ paddingRight: 34 }}
-                  placeholder="הקלידו שם או טלפון..."
+                  placeholder="שם, טלפון או מייל — או שם של לקוח חדש..."
                   value={customerQuery}
                   onChange={(e) => {
                     const value = e.target.value;
@@ -968,26 +1065,38 @@ export default function PosSale() {
             </div>
           )}
 
-          <div className="form-grid-2" style={{ gap: 8 }}>
-            <div className="form-group">
-              <label className="form-label">טלפון {isPendingNewLead ? '*' : ''}</label>
-              <input
-                className="input input-sm"
-                value={walkInPhone}
-                onChange={(e) => setWalkInPhone(e.target.value)}
-                placeholder={selectedParent?.phone || '050...'}
-              />
+          {contactFieldsVisible ? (
+            <div className="form-grid-2" style={{ gap: 8 }}>
+              <div className="form-group">
+                <label className="form-label">טלפון {isPendingNewLead ? '*' : ''}</label>
+                <input
+                  className="input input-sm"
+                  value={walkInPhone}
+                  onChange={(e) => setWalkInPhone(e.target.value)}
+                  placeholder={selectedParent?.phone || '050...'}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">מייל לשליחת מסמך</label>
+                <input
+                  className="input input-sm"
+                  value={walkInEmail}
+                  onChange={(e) => setWalkInEmail(e.target.value)}
+                  placeholder={selectedParent?.email || 'name@email.com'}
+                />
+              </div>
             </div>
-            <div className="form-group">
-              <label className="form-label">מייל לשליחת מסמך</label>
-              <input
-                className="input input-sm"
-                value={walkInEmail}
-                onChange={(e) => setWalkInEmail(e.target.value)}
-                placeholder={selectedParent?.email || 'name@email.com'}
-              />
-            </div>
-          </div>
+          ) : (
+            (selectedStudent || selectedParent) && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs"
+                onClick={() => setShowContactFields(true)}
+              >
+                עריכת טלפון / מייל לחשבונית
+              </button>
+            )
+          )}
         </div>
 
         <div className="card card-p" style={{ marginBottom: 16, position: 'relative', zIndex: 1 }}>
@@ -1114,7 +1223,7 @@ export default function PosSale() {
                           marginTop: 8,
                           padding: 10,
                           borderRadius: 8,
-                          background: 'var(--bg-2)',
+                          background: 'var(--bg-input)',
                           border: '1px solid var(--border)',
                           display: 'flex',
                           flexDirection: 'column',
@@ -1230,7 +1339,7 @@ export default function PosSale() {
                       <button
                         type="button"
                         className="btn btn-success btn-xs"
-                        disabled={couponBusy || !cart.length || paymentMethod !== 'cash'}
+                        disabled={couponBusy || !cart.length}
                         onClick={() => applyCoupon(coupon)}
                       >
                         {couponBusy ? 'בודק...' : 'החלה'}
@@ -1247,9 +1356,10 @@ export default function PosSale() {
                   הוסיפו פריט לעגלה כדי להחיל את ההטבה
                 </div>
               )}
-              {paymentMethod !== 'cash' && (
+              {paymentMethod === 'online' && appliedCoupon && (
                 <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
-                  הטבה מתקזזת רק במכירה בדלפק. בסליקה בקישור צריך לגבות במחיר מלא.
+                  הקישור ייווצר עם הסכום אחרי ההנחה. ההטבה תישמר בצד עד שהתשלום ייקלט,
+                  ואם הקישור לא ישולם תוך שבוע היא תחזור ללקוח.
                 </div>
               )}
             </div>
@@ -1263,10 +1373,7 @@ export default function PosSale() {
                   key={m.id}
                   type="button"
                   className={`btn btn-sm ${paymentMethod === m.id ? 'btn-primary' : 'btn-ghost'}`}
-                  onClick={() => {
-                    setPaymentMethod(m.id);
-                    if (m.id !== 'cash') setAppliedCoupon(null);
-                  }}
+                  onClick={() => setPaymentMethod(m.id)}
                 >
                   <Icon size={13} /> {m.label}
                 </button>
@@ -1296,9 +1403,18 @@ export default function PosSale() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700 }}>
                 <CheckCircle2 size={14} />
                 {result?.doc?.docnum ? 'הצעת מחיר וקישור תשלום מוכנים' : 'קישור תשלום מוכן'}
-                {result?.whatsappSent ? ' · נשלח בוואטסאפ' : ''}
+                {result?.whatsappSent
+                  ? result.whatsappVia === 'template'
+                    ? ' · נשלח בתבנית מאושרת'
+                    : ' · נשלח כטקסט חופשי'
+                  : ''}
                 {result?.passes?.length ? ` · הופעלו ${result.passes.length} כרטיסים/מנויים` : ''}
               </div>
+              {result?.deliveryWarning && (
+                <div className="alert alert-warn" style={{ fontSize: 12, margin: 0 }}>
+                  {result.deliveryWarning}
+                </div>
+              )}
               <div
                 style={{
                   fontSize: 12,
@@ -1328,7 +1444,27 @@ export default function PosSale() {
                 >
                   {copied ? 'הועתק!' : 'העתק קישור'}
                 </button>
+                {result?.sale?.id && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    disabled={resendingLink}
+                    onClick={() => resendPaymentLink(result.sale)}
+                  >
+                    <Send size={13} />
+                    {resendingLink
+                      ? 'שולח...'
+                      : result?.whatsappSent
+                        ? 'שליחה חוזרת בוואטסאפ'
+                        : 'שליחה ללקוח בוואטסאפ'}
+                  </button>
+                )}
               </div>
+              {resendMsg && (
+                <div style={{ fontSize: 12, color: resendOk ? 'inherit' : '#fb7185' }}>
+                  {resendMsg}
+                </div>
+              )}
             </div>
           )}
           {result && !result.payUrl && !lastPayUrl && (
@@ -1382,7 +1518,7 @@ export default function PosSale() {
                 padding: 12,
                 borderRadius: 10,
                 border: '1px solid var(--border)',
-                background: 'var(--bg-2)',
+                background: 'var(--bg-input)',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 10,

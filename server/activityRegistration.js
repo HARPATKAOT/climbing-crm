@@ -49,18 +49,33 @@ export function normalizeTemplateCategory(value) {
   return TEMPLATE_CATEGORY_IDS.has(v) ? v : 'wall';
 }
 
+/** A registration that still holds a place on the participant list. */
+export function registrationHoldsPlace(r, now = Date.now()) {
+  return (
+    ['active', 'confirmed'].includes(String(r?.status || 'active')) ||
+    (
+      String(r?.status) === 'pending_payment' &&
+      (!r.hold_expires_at || new Date(r.hold_expires_at).getTime() > now)
+    )
+  );
+}
+
 export function activeRegistrations(db, activityId) {
   const now = Date.now();
   return (db.get('activity_registrations') || []).filter(
-    (r) =>
-      String(r.activity_id) === String(activityId) &&
-      (
-        ['active', 'confirmed'].includes(String(r.status || 'active')) ||
-        (
-          String(r.status) === 'pending_payment' &&
-          (!r.hold_expires_at || new Date(r.hold_expires_at).getTime() > now)
-        )
-      )
+    (r) => String(r.activity_id) === String(activityId) && registrationHoldsPlace(r, now)
+  );
+}
+
+/**
+ * Live registrations tied to one person or payer. Deleting them while these
+ * exist leaves a participant on the event list that no CRM card explains.
+ * @param {'student_id'|'parent_id'} field
+ */
+export function heldRegistrationsBy(db, field, id) {
+  const now = Date.now();
+  return (db.get('activity_registrations') || []).filter(
+    (r) => String(r[field] || '') === String(id) && registrationHoldsPlace(r, now)
   );
 }
 
@@ -473,11 +488,20 @@ export function groupTemplatesByCategory(templates) {
   return groups;
 }
 
+export function resolveRegistrationMode(activity) {
+  return activity?.registration_mode || (
+    activity?.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
+  );
+}
+
 export function openUnpaidActivities(db, { fromDate } = {}) {
   const today = fromDate || new Date().toISOString().slice(0, 10);
   return (db.get('activities') || [])
     .filter((a) => {
       if (a.status === 'cancelled') return false;
+      // כשכל משתתף משלם בנפרד אין דמי הזמנה לגבות מהמזמין, והאירוע יישאר
+      // „לא שולם” לנצח — לא חוב פתוח.
+      if (resolveRegistrationMode(a) === 'paid_per_participant') return false;
       const pay = normalizeHostPaymentStatus(a.payment_status);
       if (pay === 'paid' || pay === 'refunded') return false;
       if (!a.date) return false;

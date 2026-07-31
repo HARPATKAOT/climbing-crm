@@ -1,0 +1,329 @@
+/**
+ * A child can belong to two households: mum registers for a trip, dad buys the
+ * punch card. Before this existed, the second parent's form created a second
+ * copy of the child, and the pass, the declaration and the attendance ended up
+ * split across two records that nobody could see were the same kid.
+ *
+ * `students.parentId` stays exactly what it was — the primary guardian, and the
+ * field ~400 call sites already read. Extra parents live in `student_guardians`
+ * alongside it, the same way `enrollments` sits alongside `students.groupId`.
+ */
+
+/** Stable id, so linking the same pair twice is a no-op rather than a duplicate. */
+export function guardianLinkId(studentId, parentId) {
+  return `sg-${studentId}-${parentId}`;
+}
+
+export function normalizedChildName(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLocaleLowerCase('he');
+}
+
+/** Only the first name is ever shown on a public form — see findChildMatches. */
+export function guardianFirstName(parent) {
+  return String(parent?.name || '').trim().split(/\s+/)[0] || '';
+}
+
+export function guardianRows(db) {
+  return db.get('student_guardians') || [];
+}
+
+/** Every parent attached to a student: the primary one first, then the links. */
+export function guardianParentIds(db, student) {
+  const record = typeof student === 'string' ? db.getOne('students', student) : student;
+  if (!record?.id) return [];
+  const ids = [];
+  if (record.parentId) ids.push(String(record.parentId));
+  for (const row of guardianRows(db)) {
+    if (String(row.student_id) !== String(record.id)) continue;
+    const parentId = String(row.parent_id || '');
+    if (parentId && !ids.includes(parentId)) ids.push(parentId);
+  }
+  return ids;
+}
+
+export function studentGuardianIds(student, guardians = []) {
+  const ids = [];
+  if (student?.parentId) ids.push(String(student.parentId));
+  for (const row of guardians) {
+    if (String(row.student_id) !== String(student?.id)) continue;
+    const parentId = String(row.parent_id || '');
+    if (parentId && !ids.includes(parentId)) ids.push(parentId);
+  }
+  return ids;
+}
+
+/** Adds `guardianIds` next to `groupIds` so every read path carries both. */
+export function enrichStudentsWithGuardians(students = [], guardians = []) {
+  return (students || []).map((student) => ({
+    ...student,
+    guardianIds: studentGuardianIds(student, guardians),
+  }));
+}
+
+export function isChildOfParent(student, parentId) {
+  const wanted = String(parentId || '');
+  if (!wanted || !student) return false;
+  if (String(student.parentId || '') === wanted) return true;
+  return (student.guardianIds || []).some((id) => String(id) === wanted);
+}
+
+export function studentsForParent(students = [], parentId) {
+  return (students || []).filter((student) => isChildOfParent(student, parentId));
+}
+
+/** Link a parent to a child. Returns the new row, or null when already linked. */
+export function linkGuardian(db, { studentId, parentId, source = 'form' } = {}) {
+  if (!studentId || !parentId) return null;
+  const student = db.getOne('students', studentId);
+  if (!student) return null;
+  if (String(student.parentId || '') === String(parentId)) return null;
+  const id = guardianLinkId(studentId, parentId);
+  if (guardianRows(db).some((row) => String(row.id) === id)) return null;
+  return db.insert('student_guardians', {
+    id,
+    student_id: String(studentId),
+    parent_id: String(parentId),
+    source,
+    created_at: new Date().toISOString(),
+  });
+}
+
+/**
+ * Move the "primary" badge to another parent already on the file.
+ *
+ * Primary is `students.parentId` — the parent the CRM addresses by default and
+ * the one ~400 call sites read. The swap therefore rewrites that field and
+ * keeps the previous holder attached as a link, so nobody drops off the file.
+ */
+export function setPrimaryGuardian(db, { studentId, parentId } = {}) {
+  const student = db.getOne('students', studentId);
+  if (!student) return null;
+  const next = String(parentId || '');
+  const previous = String(student.parentId || '');
+  if (!next || !db.getOne('parents', next)) return null;
+  if (previous === next) return { student, added: null, removed: false, changed: false };
+  if (!guardianParentIds(db, student).includes(next)) return null;
+
+  const updated = db.update('students', studentId, { parentId: next }) || { ...student, parentId: next };
+  const removed = unlinkGuardian(db, { studentId, parentId: next });
+  const added = previous
+    ? linkGuardian(db, { studentId, parentId: previous, source: 'primary-swap' })
+    : null;
+  return { student: updated, added, removed, changed: true, previousParentId: previous };
+}
+
+export function unlinkGuardian(db, { studentId, parentId } = {}) {
+  const id = guardianLinkId(studentId, parentId);
+  if (!guardianRows(db).some((row) => String(row.id) === id)) return false;
+  return !!db.delete('student_guardians', id);
+}
+
+/**
+ * Children already on file that look like the one being registered right now.
+ *
+ * Both the name and the date of birth must match: a name alone is not evidence
+ * (two children really can share one), and a wrong guess here would hand one
+ * family's child to another. A form that does not collect a birth date
+ * therefore gets no matches rather than a risky one.
+ *
+ * `excludeParentId` drops children the person filling the form already has —
+ * those are handled by the ordinary household lookup.
+ */
+export function findChildMatches(db, { name, birthDate, excludeParentId = null } = {}) {
+  const wantedName = normalizedChildName(name);
+  const wantedBirth = String(birthDate || '').trim();
+  if (!wantedName || !wantedBirth) return [];
+
+  return (db.get('students') || [])
+    .filter((student) => {
+      if (normalizedChildName(student.name) !== wantedName) return false;
+      if (String(student.birthDate || '').trim() !== wantedBirth) return false;
+      if (!excludeParentId) return true;
+      return !isChildOfParent(
+        { ...student, guardianIds: guardianParentIds(db, student) },
+        excludeParentId
+      );
+    })
+    .map((student) => ({
+      student,
+      guardians: guardianParentIds(db, student)
+        .map((id) => db.getOne('parents', id))
+        .filter(Boolean),
+    }));
+}
+
+/**
+ * What a public form is allowed to learn: that the child is known, and the
+ * first name of the parent holding the file — enough for "אתה ההורה השני?" and
+ * nothing that identifies or reaches that household.
+ */
+export function publicChildMatchPayload(matches = [], { healthValid = false } = {}) {
+  if (!matches.length) return { match: false };
+  const first = matches[0];
+  return {
+    match: true,
+    student_id: String(first.student.id),
+    guardian_first_name: guardianFirstName(first.guardians[0]),
+    guardian_count: first.guardians.length,
+    // Lets the second parent skip a declaration the first one already signed.
+    health_valid: !!healthValid,
+    // More than one child shares this name and birth date — staff must decide,
+    // so the form offers no link at all.
+    ambiguous: matches.length > 1,
+  };
+}
+
+/** Surname as the CRM knows it: the stored field, else the last word of the name. */
+export function parentLastName(parent) {
+  const explicit = String(parent?.lastName || parent?.last_name || '').trim();
+  if (explicit) return explicit;
+  const parts = String(parent?.name || '').trim().split(/\s+/).filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 1] : '';
+}
+
+/** Children on a parent's file — their own plus any they were linked to. */
+export function childrenOfParent(db, parentId) {
+  const wanted = String(parentId || '');
+  if (!wanted) return [];
+  return (db.get('students') || []).filter((student) => {
+    if (String(student.parentId || '') === wanted) return true;
+    return guardianRows(db).some(
+      (row) => String(row.student_id) === String(student.id) && String(row.parent_id) === wanted
+    );
+  });
+}
+
+/**
+ * Families already on file under the same surname.
+ *
+ * This is the answer to "mum registered one child, dad later registers another"
+ * — nothing about the two submissions overlaps except the family name, so the
+ * only way to join them is to ask a human who recognises the household.
+ *
+ * The names come back with the answer on purpose: "אבנר כהן עם הילד ראם" is
+ * something a parent can confirm or reject at a glance, which is what makes a
+ * wrong "yes" unlikely.
+ */
+export function familyCandidates(db, { lastName, excludeParentId = null, limit = 6 } = {}) {
+  const wanted = normalizedChildName(lastName);
+  if (!wanted || wanted.length < 2) return [];
+  const exclude = String(excludeParentId || '');
+
+  const matches = (db.get('parents') || []).filter((parent) => {
+    if (exclude && String(parent.id) === exclude) return false;
+    return normalizedChildName(parentLastName(parent)) === wanted;
+  });
+
+  // Parents who already share a child are one household, not three options.
+  const households = [];
+  const seen = new Set();
+  for (const parent of matches) {
+    if (seen.has(String(parent.id))) continue;
+    const household = expandHousehold(db, parent.id);
+    for (const id of household.parentIds) seen.add(id);
+    const children = household.students.filter((child) => child.isAdult !== true);
+    // A card with no children is not a family anyone can recognise.
+    if (!children.length) continue;
+    const parents = household.parentIds
+      .map((id) => db.getOne('parents', id))
+      .filter(Boolean);
+    households.push({
+      // Merge against the parent holding the most of the household's children,
+      // so the joining parent inherits the whole family in one step.
+      parent: [...parents].sort(
+        (a, b) => childrenOfParent(db, b.id).length - childrenOfParent(db, a.id).length
+      )[0] || parent,
+      parents,
+      // Naming only the parents whose surname was searched: the rest of the
+      // household is not something the question needs to reveal.
+      namedParents: parents.filter(
+        (item) => normalizedChildName(parentLastName(item)) === wanted
+      ),
+      children,
+    });
+    if (households.length >= limit) break;
+  }
+  return households;
+}
+
+/** Everyone reachable from one parent through the children they share. */
+function expandHousehold(db, parentId) {
+  const parentIds = [String(parentId)];
+  const studentIds = new Set();
+  const students = [];
+  for (let index = 0; index < parentIds.length; index += 1) {
+    for (const child of childrenOfParent(db, parentIds[index])) {
+      if (studentIds.has(String(child.id))) continue;
+      studentIds.add(String(child.id));
+      students.push(child);
+      for (const id of guardianParentIds(db, child)) {
+        if (!parentIds.includes(String(id))) parentIds.push(String(id));
+      }
+    }
+  }
+  return { parentIds, students };
+}
+
+/** Short enough to read at a glance, specific enough to recognise. */
+function joinNames(names, limit) {
+  const shown = names.slice(0, limit);
+  const rest = names.length - shown.length;
+  return `${shown.join(' ו')}${rest > 0 ? ` ועוד ${rest}` : ''}`;
+}
+
+export function publicFamilyCandidatesPayload(candidates = []) {
+  return {
+    families: candidates.map(({ parent, namedParents = [], children }) => {
+      const parentNames = (namedParents.length ? namedParents : [parent])
+        .map((item) => String(item.name || '').trim())
+        .filter(Boolean);
+      const childNames = children
+        .map((child) => String(child.name || '').trim())
+        .filter(Boolean);
+      return {
+        parent_id: String(parent.id),
+        parent_name: joinNames(parentNames, 2),
+        children: childNames.slice(0, 3),
+        more_children: Math.max(0, childNames.length - 3),
+      };
+    }),
+  };
+}
+
+/**
+ * Join two parent cards into one household: each parent becomes a guardian of
+ * the other's children, so the file shows both parents and every child once.
+ *
+ * Deliberately reversible — a blended family can be corrected by unlinking a
+ * single parent from a single child, and each row records that a human on a
+ * public form confirmed it.
+ */
+export function mergeFamily(db, { parentId, familyParentId, extraStudentIds = [] } = {}) {
+  const joining = db.getOne('parents', parentId);
+  const existing = db.getOne('parents', familyParentId);
+  if (!joining || !existing || String(joining.id) === String(existing.id)) return [];
+
+  const theirChildren = childrenOfParent(db, existing.id);
+  const ourChildren = [
+    ...childrenOfParent(db, joining.id),
+    ...extraStudentIds.map((id) => db.getOne('students', id)).filter(Boolean),
+  ];
+
+  const links = [];
+  for (const child of theirChildren) {
+    const link = linkGuardian(db, { studentId: child.id, parentId: joining.id, source: 'family-merge' });
+    if (link) links.push(link);
+  }
+  for (const child of ourChildren) {
+    const link = linkGuardian(db, { studentId: child.id, parentId: existing.id, source: 'family-merge' });
+    if (link) links.push(link);
+  }
+  return links;
+}
+
+// No backfill and no row for the primary parent: `students.parentId` already
+// states it, and every reader here derives the full list from both. The link
+// table stays small and holds only what nothing else records.

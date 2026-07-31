@@ -384,6 +384,189 @@ function pickDefaultChannel(parent, windows) {
   return 'whatsapp';
 }
 
+// ─── Inbox: every conversation in one list ───────────────────────────────────
+//
+// getConversation() answers "show me this customer". The inbox answers the other
+// question — "who is talking to us right now" — without knowing a customer id up
+// front. It walks the whole message store once and keeps the newest message per
+// customer, so the cost is linear in messages rather than a per-customer fetch.
+
+const PREVIEW_MAX_CHARS = 90;
+
+const MEDIA_PREVIEWS = {
+  image: '📷 תמונה',
+  video: '🎥 סרטון',
+  audio: '🎤 הודעה קולית',
+  sticker: '🏷️ מדבקה',
+  document: '📎 מסמך',
+};
+
+function messagePreview(message) {
+  const text = String(message?.message || '').replace(/\s+/g, ' ').trim();
+  if (text) {
+    return text.length > PREVIEW_MAX_CHARS ? `${text.slice(0, PREVIEW_MAX_CHARS)}…` : text;
+  }
+  const type = message?.media_type || message?.message_type || 'text';
+  return MEDIA_PREVIEWS[type] || (message?.media_url ? '📎 קובץ' : '');
+}
+
+/** Last 9 digits — the same tolerance phonesMatch() uses, in a Map-friendly shape. */
+function phoneKey(phone) {
+  const digits = normalizeWaPhone(phone);
+  return digits.length >= 9 ? digits.slice(-9) : digits;
+}
+
+/** Live wiring. Tests pass their own store instead, as messageStore.js does. */
+const liveInboxStore = {
+  read: (table) => db.get(table) || [],
+};
+
+/**
+ * Phone/handle → customer card, built once per request. Without it, resolving the
+ * owner of each message would rescan the whole customer list every time.
+ */
+function buildOwnerIndex(store) {
+  const parents = store.read('parents');
+  const index = {
+    byId: new Map(),
+    byPhone: new Map(),
+    byInstagram: new Map(),
+    byMessenger: new Map(),
+    studentByPhone: new Map(),
+  };
+
+  // Duplicate cards share a phone; the richest one wins, exactly as findParentForLog does.
+  const claim = (map, key, parent) => {
+    if (!key) return;
+    const current = map.get(key);
+    if (!current || scoreParentRecord(parent) > scoreParentRecord(current)) map.set(key, parent);
+  };
+
+  for (const parent of parents) {
+    index.byId.set(parent.id, parent);
+    claim(index.byPhone, phoneKey(parent.phone), parent);
+    if (parent.instagram_id) claim(index.byInstagram, String(parent.instagram_id), parent);
+    if (parent.messenger_psid) claim(index.byMessenger, String(parent.messenger_psid), parent);
+  }
+
+  for (const student of store.read('students')) {
+    const key = phoneKey(student.phone);
+    if (!key) continue;
+    index.studentByPhone.set(key, student);
+    // A child's own phone routes to the family card, never over the parent's own number.
+    if (index.byPhone.has(key)) continue;
+    const parent = index.byId.get(student.parentId);
+    if (parent) index.byPhone.set(key, parent);
+  }
+
+  return index;
+}
+
+/** Collapse duplicate cards that share a phone onto the single row the inbox shows. */
+function canonicalParent(parent, index) {
+  if (!parent) return null;
+  const key = phoneKey(parent.phone);
+  if (!key) return parent;
+  return index.byPhone.get(key) || parent;
+}
+
+function ownerForMessage(message, index) {
+  const channel = message.channel || 'whatsapp';
+  const handle = String(message.phone || message.recipient_id || '');
+  if (channel === 'instagram') return index.byInstagram.get(handle) || null;
+  if (channel === 'messenger') return index.byMessenger.get(handle) || null;
+  const byPhone = index.byPhone.get(phoneKey(handle));
+  if (byPhone) return byPhone;
+  return message.parent_id ? index.byId.get(message.parent_id) || null : null;
+}
+
+/**
+ * One row per customer who has ever exchanged a message, newest first, with the
+ * customers still awaiting a reply pinned to the top.
+ */
+export function listConversations({ limit = 300, store = liveInboxStore } = {}) {
+  const index = buildOwnerIndex(store);
+  const seenKeys = new Set();
+  const rows = new Map();
+
+  const rowFor = (parent) => {
+    let row = rows.get(parent.id);
+    if (!row) {
+      row = { parent, last: null, lastAt: 0, unread: 0 };
+      rows.set(parent.id, row);
+    }
+    return row;
+  };
+
+  for (const item of [...store.read('messages'), ...store.read('whatsapp_logs')]) {
+    // `messages` and `whatsapp_logs` mirror each other — count each message once.
+    const key = item.meta_message_id || item.id;
+    if (key) {
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+    }
+    const parent = canonicalParent(ownerForMessage(item, index), index);
+    if (!parent) continue;
+
+    const row = rowFor(parent);
+    const at = Date.parse(item.created_at || '') || 0;
+    if (at >= row.lastAt) {
+      row.last = item;
+      row.lastAt = at;
+    }
+    if (item.direction === 'inbound') {
+      const handledAt = Date.parse(parent.communication_handled_at || '') || 0;
+      if (at > handledAt) row.unread += 1;
+    }
+  }
+
+  // A card can know about an inbound the local thread cache has not pulled back
+  // yet. Surfacing it empty beats dropping the customer out of the inbox.
+  for (const parent of store.read('parents')) {
+    if (!isAwaitingHandling(parent)) continue;
+    const canonical = canonicalParent(parent, index);
+    if (rows.has(canonical.id)) continue;
+    const row = rowFor(canonical);
+    row.lastAt = Date.parse(latestInboundAt(canonical) || '') || 0;
+  }
+
+  const conversations = [...rows.values()].map(({ parent, last, lastAt, unread }) => {
+    const studentPhoneKey = last ? phoneKey(last.phone) : '';
+    const student = studentPhoneKey && studentPhoneKey !== phoneKey(parent.phone)
+      ? index.studentByPhone.get(studentPhoneKey)
+      : null;
+    // isAwaitingHandling() is what the dashboard queue and the leads filter use.
+    // The badge follows it, so a row can never show unread yet drop out of the
+    // "awaiting" filter — a card whose last_inbound_* lags its messages included.
+    const awaiting = isAwaitingHandling(parent);
+    return {
+      parentId: parent.id,
+      name: parent.name || 'ללא שם',
+      phone: parent.phone || '',
+      status: parent.status || null,
+      channel: last?.channel || parent.channel || 'whatsapp',
+      preview: last ? messagePreview(last) : 'הודעה חדשה — פתח לטעינת השיחה',
+      direction: last?.direction || 'inbound',
+      isAi: !!last?.is_ai,
+      fromStudentName: student?.name || null,
+      lastMessageAt: lastAt ? new Date(lastAt).toISOString() : null,
+      awaiting,
+      unread: awaiting ? Math.max(unread, 1) : 0,
+    };
+  });
+
+  conversations.sort((a, b) => {
+    if (a.awaiting !== b.awaiting) return a.awaiting ? -1 : 1;
+    return (Date.parse(b.lastMessageAt || '') || 0) - (Date.parse(a.lastMessageAt || '') || 0);
+  });
+
+  return {
+    conversations: conversations.slice(0, limit),
+    total: conversations.length,
+    awaiting: conversations.filter((c) => c.awaiting).length,
+  };
+}
+
 export async function getConversation(parentId) {
   const parentRaw = findParentById(parentId);
   if (!parentRaw) return { error: 'הלקוח לא נמצא', status: 404 };

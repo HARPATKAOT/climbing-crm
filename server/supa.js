@@ -96,6 +96,7 @@ export const OPERATIONAL_TABLES = [
   'safety_check_types',
   'level_tests',
   'pricelist',
+  'product_categories',
   'broadcast_campaigns',
   'broadcast_lists',
   'broadcast_list_defs',
@@ -106,6 +107,7 @@ export const OPERATIONAL_TABLES = [
   'webhook_logs',
   'customer_passes',
   'pass_punches',
+  'student_guardians',
   'pos_sales',
   'equipment_checkouts',
   'activity_interest',
@@ -649,20 +651,29 @@ export const supa = {
     return { ok: true };
   },
 
-  // Remove a single record by id.
+  // Remove a single record by id. Reports the failure instead of swallowing it:
+  // foreign keys live only in the durable store, so a caller that assumes success
+  // drops the row locally and gets it back on the next boot hydration.
   async remove(table, id) {
-    if (!client) return;
+    if (!client) return { ok: true };
     if (OPERATIONAL_TABLES.includes(table)) {
       const { error } = await client
         .from('kv_collections')
         .delete()
         .eq('collection', table)
         .eq('id', String(id));
-      if (error) console.error(`Supabase remove(${table}) failed:`, error.message);
-      return;
+      if (error) {
+        console.error(`Supabase remove(${table}) failed:`, error.message);
+        return { ok: false, error: error.message };
+      }
+      return { ok: true };
     }
     const { error } = await client.from(table).delete().eq('id', id);
-    if (error) console.error(`Supabase remove(${table}) failed:`, error.message);
+    if (error) {
+      console.error(`Supabase remove(${table}) failed:`, error.message);
+      return { ok: false, error: error.message };
+    }
+    return { ok: true };
   },
 
   async verifyAccessToken(token) {

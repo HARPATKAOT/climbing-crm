@@ -16,6 +16,7 @@ const PrivacyPolicy              = lazy(() => import('./components/PrivacyPolicy
 const PublicActivityRegistration = lazy(() => import('./components/PublicActivityRegistration.jsx'));
 const PublicHostPayment          = lazy(() => import('./components/PublicHostPayment.jsx'));
 const PublicEquipmentPayment     = lazy(() => import('./components/PublicEquipmentPayment.jsx'));
+const PublicShop                 = lazy(() => import('./components/PublicShopPurchase.jsx'));
 const PublicSite                 = lazy(() => import('./public-site/PublicSite.jsx'));
 
 /**
@@ -65,6 +66,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/event/:slug" element={<PublicActivityRegistration />} />
             <Route path="/event-host/:token" element={<PublicHostPayment />} />
             <Route path="/equipment/:token" element={<PublicEquipmentPayment />} />
+            <Route path="/shop" element={<PublicShop />} />
+            <Route path="/shop/:slug" element={<PublicShop />} />
             <Route
               path="*"
               element={showsCrmShell() ? <AuthGate><App /></AuthGate> : <PublicSite />}

@@ -410,10 +410,18 @@ export function listLocalTemplates() {
   );
 }
 
-export function listApprovedTemplates() {
+/**
+ * Templates that may actually be sent to one customer.
+ *
+ * Archived ones are excluded by default: the picker in a conversation is for
+ * the handful of templates used daily, and a seasonal template nobody sends
+ * twice a month only makes that list harder to read. `includeArchived` lets a
+ * caller show them behind a separate "archive" view rather than losing them.
+ */
+export function listApprovedTemplates({ includeArchived = false } = {}) {
   return listLocalTemplates().filter(
     (t) =>
-      !t.archived &&
+      (includeArchived || !t.archived) &&
       (String(t.status).toUpperCase() === 'APPROVED' || t.active_for_send)
   );
 }
@@ -454,6 +462,9 @@ export function createDraftTemplate(input = {}) {
     // Staff note on when this template gets sent. Internal only — Meta never
     // sees it, so it stays editable after approval unlike the content fields.
     usage: String(input.usage || '').trim(),
+    // Short label shown as a coloured chip wherever templates are listed, so a
+    // template is recognised by what it is for before its name is read.
+    tag: normalizeTemplateTag(input.tag),
     body,
     header: input.header || '',
     footer: input.footer || '',
@@ -464,6 +475,11 @@ export function createDraftTemplate(input = {}) {
     sort_order: nextSortOrder(),
     archived: false,
   });
+}
+
+/** Internal label — Meta never sees it, so it stays editable after approval. */
+export function normalizeTemplateTag(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').slice(0, 24);
 }
 
 /** Meta freezes template content once it is submitted; only labels stay editable. */
@@ -508,6 +524,9 @@ export function updateLocalTemplate(id, updates = {}) {
   }
   if (updates.archived !== undefined) {
     patch.archived = updates.archived === true || updates.archived === 'true';
+  }
+  if (updates.tag !== undefined) {
+    patch.tag = normalizeTemplateTag(updates.tag);
   }
   if (updates.sort_order !== undefined) {
     patch.sort_order = Number(updates.sort_order) || 0;

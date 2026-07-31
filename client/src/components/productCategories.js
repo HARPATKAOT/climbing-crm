@@ -41,6 +41,36 @@ export const CATEGORY_COLORS = {
 
 export const DEFAULT_CATEGORY_COLOR = { bg: 'rgba(255,255,255,0.05)', text: 'var(--text-2)' };
 
+/**
+ * Palette colours are hex literals for the named categories but CSS variables for
+ * 'שונות' and the fallback. Appending a hex alpha suffix works only on the former —
+ * on a var() it yields a value that is invalid at computed-value time, which drops
+ * the whole property (a border declared that way renders as `0px none`).
+ */
+/** Normalized object-fit / background-size for a catalog image. */
+export function imageFitOf(record) {
+  return record?.image_fit === 'contain' ? 'contain' : 'cover';
+}
+
+/**
+ * `background` shorthand for a tile image. With 'contain' the image is not
+ * cropped, so the tile's own backdrop is layered underneath to fill the gaps.
+ */
+export function imageBackground(record, fallback) {
+  const image = record?.image;
+  if (!image) return fallback;
+  const fit = imageFitOf(record);
+  const layer = `center/${fit} no-repeat url(${image})`;
+  return fit === 'contain' && fallback ? `${layer}, ${fallback}` : layer;
+}
+
+export function catTint(color, alphaHex) {
+  const c = String(color || '');
+  if (c.startsWith('#')) return `${c}${alphaHex}`;
+  const pct = Math.round((parseInt(alphaHex, 16) / 255) * 100);
+  return `color-mix(in srgb, ${c} ${pct}%, transparent)`;
+}
+
 export const CATEGORY_ICONS = {
   קיוסק: Coffee,
   פעילויות: PartyPopper,
