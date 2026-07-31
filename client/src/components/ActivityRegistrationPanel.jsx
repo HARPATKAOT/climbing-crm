@@ -968,19 +968,9 @@ export default function ActivityRegistrationPanel({
         תשלום והרשמה
       </div>
 
-      {!showHostPayStatus ? (
-        <div className="activity-registration-field">
-          <span className="activity-registration-field-label">גביית תשלום</span>
-          <div className="activity-registration-status-row">
-            <span className="activity-registration-status-value">
-              נגבה מכל משתתף בנפרד
-            </span>
-          </div>
-          <span className="activity-registration-field-hint">
-            אין דמי הזמנה מהמזמין — מעקב התשלומים הוא ברשימת המשתתפים.
-          </span>
-        </div>
-      ) : (
+      {/* „נגבה מכל משתתף בנפרד” כבר נאמר בשדה „אופן ההרשמה והתשלום” שמתחת,
+          ולכן כאן מוצג רק סטטוס תשלום המזמין — כשיש כזה. */}
+      {showHostPayStatus && (
       <div className="activity-registration-field">
         <span className="activity-registration-field-label">סטטוס תשלום המזמין</span>
         {editingPaymentStatus && !readOnly ? (
