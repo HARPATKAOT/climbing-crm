@@ -1037,6 +1037,15 @@ input, select, textarea { font-family: var(--font); }
   background: var(--bg-card-hover);
 }
 .input::placeholder { color: var(--text-3); }
+/* color-scheme: dark מחזיק את רשימת ה-select כהה רק כל עוד לשדה אין רקע משלו.
+   ברגע ששדה נצבע (למשל בורר סוג המבחן, שמקבל את צבע הסוג) הדפדפן חוזר לחלונית
+   לבנה והאפשרויות יורשות את צבע ההדגשה של השדה — תכלת על לבן. נועלים לאפשרויות
+   רקע וטקסט משלנו כדי שהרשימה תישאר קריאה בכל שדה. */
+select option, select optgroup {
+  background: var(--bg-card);
+  color: var(--text-1);
+  font-weight: 500;
+}
 .input-sm { padding: 8px 12px; font-size: 13px; }
 .input-icon-wrap { position: relative; }
 .input-icon-wrap .input { padding-right: 40px; }

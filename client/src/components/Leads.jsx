@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, Archive, ArchiveRestore } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
@@ -9,6 +9,7 @@ import {
   downloadHealthDeclarationPdf,
 } from '../utils/healthDeclarationPdf.js';
 import { healthExpiryDate } from '../utils/healthValidity.js';
+import { safetyTestStatus } from '../utils/safetyValidity.js';
 import {
   buildLeadEntries,
   isArchivedParent,
@@ -16,6 +17,16 @@ import {
   normalizePhone,
   resolveLeadOpenTarget,
 } from '../utils/leadUtils.js';
+import {
+  CATEGORY_COLORS,
+  CATEGORY_ICONS,
+  DEFAULT_CATEGORY_COLOR,
+  PRODUCT_CATEGORIES,
+  catTint,
+  imageBackground,
+  imageFitOf,
+  normalizeCategories,
+} from './productCategories.js';
 import ConversationPanel from './ConversationPanel.jsx';
 import ConversationInbox from './ConversationInbox.jsx';
 import AttendanceList from './AttendanceList.jsx';
@@ -158,11 +169,42 @@ function calculateAge(birthDateStr) {
   return age;
 }
 
+/**
+ * חודשים שהושלמו מאז יום ההולדת האחרון — כדי לדעת אם עברה חצי שנה.
+ * שישה חודשים ומעלה נחשבים „וחצי”, בלי לעגל כלפי מעלה לשנה הבאה.
+ */
+function monthsSinceBirthday(birthDateStr) {
+  if (!birthDateStr) return null;
+  const birth = new Date(birthDateStr);
+  if (Number.isNaN(birth.getTime())) return null;
+  const today = new Date();
+  let months = (today.getFullYear() - birth.getFullYear()) * 12 + (today.getMonth() - birth.getMonth());
+  if (today.getDate() < birth.getDate()) months -= 1;
+  return months % 12;
+}
+
+/** „4” או „4 וחצי” — הגיל כפי שאומרים אותו על ילד. */
+function ageLabel(birthDateStr) {
+  const years = calculateAge(birthDateStr);
+  if (years == null) return null;
+  const months = monthsSinceBirthday(birthDateStr);
+  return months != null && months >= 6 ? `${years} וחצי` : String(years);
+}
+
 function genderLabel(gender) {
   const g = String(gender || '').trim().toLowerCase();
   if (g === 'male' || g === 'בן' || g === 'm') return 'בן';
   if (g === 'female' || g === 'בת' || g === 'f') return 'בת';
   return gender || '—';
+}
+
+/** „בן 4 וחצי” בשורה אחת; אם חסר מין או תאריך לידה מציגים את מה שיש. */
+function ageWithGenderLabel(birthDateStr, gender) {
+  const age = ageLabel(birthDateStr);
+  const g = genderLabel(gender);
+  const prefix = g === 'בן' || g === 'בת' ? g : '';
+  if (!prefix) return age ?? '—';
+  return age ? `${prefix} ${age}` : prefix;
 }
 
 function parentDisplayName(parent) {
@@ -344,7 +386,6 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
 
   const parentOnly = isParentOnlyLead(student);
   const parentArchived = isArchivedParent(parent);
-  const age = calculateAge(student.birthDate);
   const statusKeys = Object.keys(STATUSES);
   const navigate = useNavigate();
 
@@ -657,6 +698,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [billAmount, setBillAmount] = useState('');
   const [billDescription, setBillDescription] = useState('');
   const [selectedPricelistItem, setSelectedPricelistItem] = useState('');
+  // The catalogue is picked here the same way it is at the till: categories
+  // first, products inside the one you opened.
+  const [billCategory, setBillCategory] = useState('');
+  const [catalogCategories, setCatalogCategories] = useState(
+    PRODUCT_CATEGORIES.map((name) => ({ name, image: '' }))
+  );
   const [billingLoading, setBillingLoading] = useState(false);
   const [invoiceLoading, setInvoiceLoading] = useState(false);
   const [billingLink, setBillingLink] = useState('');
@@ -999,7 +1046,23 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parentOnly, student.id, parent?.id]);
 
+  // הניקוב הוא אישור הצוות בדלפק שהמתאמן יכול לטפס, ולכן הוא סגור למי
+  // שאין לו הצהרת בריאות והסרת אחריות בתוקף או מבחן אבטחה בתוקף. השרת
+  // אוכף את אותו כלל ב-punchPass; כאן זה רק כדי שהחסימה תיראה לפני
+  // הלחיצה ולא אחריה.
+  const punchSafety = safetyTestStatus(levelTestsHistory);
+  const punchBlockers = [];
+  if (!isHealthSigned) punchBlockers.push('אין הצהרת בריאות והסרת אחריות');
+  else if (healthExpired) punchBlockers.push('הצהרת הבריאות פגה');
+  if (punchSafety.state === 'missing') punchBlockers.push('אין מבחן אבטחה');
+  else if (punchSafety.state === 'expired') punchBlockers.push('מבחן האבטחה פג תוקף');
+  const punchBlockReason = punchBlockers.join(' · ');
+
   const handlePunchPass = async (passId) => {
+    if (punchBlockReason) {
+      alert(`אי אפשר לנקב: ${punchBlockReason}. יש להשלים לפני הטיפוס.`);
+      return;
+    }
     if (!window.confirm('לנקב כניסה אחת מהכרטיסייה?')) return;
     setPunchingId(passId);
     try {
@@ -1054,9 +1117,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     }
   };
 
-  // Fetch student level tests history
+  // Fetch student level tests history. Loaded for everyone, not only billing
+  // users: the punch button reads the safety test from here.
   useEffect(() => {
-    if (!canManageBilling) return;
     fetch('/api/level-tests')
       .then(res => res.ok ? res.json() : [])
       .then(data => {
@@ -1064,7 +1127,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         setLevelTestsHistory(studentTests);
       })
       .catch(err => console.error(err));
-  }, [canManageBilling, student.id]);
+  }, [student.id]);
 
   // Fetch employees for examiner picker (security / lead tests)
   useEffect(() => {
@@ -1294,10 +1357,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     }
   };
 
-  const handlePricelistSelect = (e) => {
-    const itemId = e.target.value;
+  const handlePricelistSelect = (itemId) => {
     setSelectedPricelistItem(itemId);
-    const item = pricelist.find(p => p.id === itemId);
+    const item = pricelist.find(p => String(p.id) === String(itemId));
     if (item) {
       setBillAmount(item.price);
       setBillDescription(item.name);
@@ -1306,6 +1368,49 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       setBillDescription('');
     }
   };
+
+  // Category tiles carry the images set in the catalogue, so the picker here
+  // looks like the till's. Falls back to the built-in names if the API is down.
+  useEffect(() => {
+    if (!showPaymentModal) return;
+    let cancelled = false;
+    fetch('/api/product-categories')
+      .then((res) => (res.ok ? res.json() : []))
+      .then((cats) => {
+        if (cancelled || !Array.isArray(cats) || !cats.length) return;
+        setCatalogCategories(cats.filter((c) => c.active !== false));
+      })
+      .catch(() => { /* keep the built-in list */ });
+    return () => { cancelled = true; };
+  }, [showPaymentModal]);
+
+  const billProducts = useMemo(() => (
+    (pricelist || [])
+      .filter((item) => item.active !== false)
+      .map((item) => ({
+        ...item,
+        categories: normalizeCategories(
+          Array.isArray(item.categories) ? item.categories : item.category ? [item.category] : []
+        ),
+      }))
+  ), [pricelist]);
+
+  // Only categories that actually hold a product — an empty tile is a dead end.
+  const billCategoryTiles = useMemo(() => {
+    const counts = new Map();
+    for (const item of billProducts) {
+      for (const cat of item.categories) counts.set(cat, (counts.get(cat) || 0) + 1);
+    }
+    const known = catalogCategories.filter((c) => counts.has(c.name));
+    const extra = [...counts.keys()]
+      .filter((name) => !catalogCategories.some((c) => c.name === name))
+      .map((name) => ({ name, image: '' }));
+    return [...known, ...extra].map((c) => ({ ...c, count: counts.get(c.name) || 0 }));
+  }, [billProducts, catalogCategories]);
+
+  const billCategoryProducts = useMemo(() => (
+    billCategory ? billProducts.filter((item) => item.categories.includes(billCategory)) : []
+  ), [billProducts, billCategory]);
 
   const loadStudentPayments = async () => {
     try {
@@ -2141,8 +2246,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 </div>
 
                 <div>
-                  {detailRow('גיל', age == null ? '—' : age)}
-                  {detailRow('בן / בת', genderLabel(student.gender))}
+                  {detailRow('גיל', ageWithGenderLabel(student.birthDate, student.gender))}
                   {detailRow('טלפון', student.phone || '—')}
                   {detailRow('רמה מקסימלית', student.levelGrade || '—')}
                   {detailRow(
@@ -2675,13 +2779,19 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                               <button
                                 type="button"
                                 className="btn btn-primary btn-xs"
-                                disabled={punchingId === pass.id}
+                                disabled={punchingId === pass.id || !!punchBlockReason}
+                                title={punchBlockReason || ''}
                                 onClick={() => handlePunchPass(pass.id)}
                               >
                                 {punchingId === pass.id ? 'מנקב...' : 'ניקוב'}
                               </button>
                             )}
                           </div>
+                          {isPunch && pass.status === 'active' && remaining > 0 && punchBlockReason && (
+                            <div style={{ marginTop: 4, fontSize: 11, color: 'var(--red)', fontWeight: 700 }}>
+                              אי אפשר לנקב — {punchBlockReason}
+                            </div>
+                          )}
                           <button
                             type="button"
                             className="btn btn-ghost btn-xs"
@@ -3658,13 +3768,134 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         >
           <form onSubmit={handleSendPayment}>
             <div className="form-group" style={{ marginBottom: 10 }}>
-              <label className="form-label" style={{ fontSize: 11 }}>בחר מוצר מהמחירון</label>
-              <select className="input input-sm" value={selectedPricelistItem} onChange={handlePricelistSelect}>
-                <option value="">-- מוצר מותאם אישית --</option>
-                {pricelist.map(item => (
-                  <option key={item.id} value={item.id}>{item.name} ({item.price}₪)</option>
-                ))}
-              </select>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <label className="form-label" style={{ fontSize: 11, margin: 0, flex: 1 }}>
+                  {billCategory ? `בחר מוצר · ${billCategory}` : 'בחר מוצר מהמחירון'}
+                </label>
+                {billCategory && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    onClick={() => setBillCategory('')}
+                    style={{ gap: 4 }}
+                  >
+                    <ChevronLeft size={12} /> כל הקטגוריות
+                  </button>
+                )}
+                {selectedPricelistItem && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    onClick={() => handlePricelistSelect('')}
+                  >
+                    נקה בחירה
+                  </button>
+                )}
+              </div>
+              {!billCategory ? (
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(104px, 1fr))',
+                  gap: 8,
+                  maxHeight: 320,
+                  overflow: 'auto',
+                }}>
+                  {billCategoryTiles.map((category) => {
+                    const c = CATEGORY_COLORS[category.name] || DEFAULT_CATEGORY_COLOR;
+                    const Icon = CATEGORY_ICONS[category.name] || Package;
+                    return (
+                      <button
+                        key={category.id || category.name}
+                        type="button"
+                        onClick={() => setBillCategory(category.name)}
+                        className="card"
+                        style={{
+                          padding: 0,
+                          textAlign: 'center',
+                          cursor: 'pointer',
+                          overflow: 'hidden',
+                          border: `1px solid ${catTint(c.text, '33')}`,
+                          display: 'flex',
+                          flexDirection: 'column',
+                        }}
+                      >
+                        <div style={{
+                          height: 58,
+                          flexShrink: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          background: imageBackground(
+                            category,
+                            `linear-gradient(145deg, ${c.bg}, rgba(15,20,30,0.9))`
+                          ),
+                        }}>
+                          {!category.image && <Icon size={24} color={c.text} strokeWidth={1.6} />}
+                        </div>
+                        <div style={{
+                          flex: 1,
+                          padding: '8px 6px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}>
+                          <div style={{ fontWeight: 700, fontSize: 12, lineHeight: 1.3, color: 'var(--text-1)' }}>
+                            {category.name}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                  {billCategoryTiles.length === 0 && (
+                    <div style={{ color: 'var(--text-3)', fontSize: 12, padding: 8 }}>
+                      אין מוצרים במחירון — מלאו תיאור ומחיר ידנית
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))',
+                  gap: 8,
+                  maxHeight: 320,
+                  overflow: 'auto',
+                }}>
+                  {billCategoryProducts.map((item) => {
+                    const active = String(selectedPricelistItem) === String(item.id);
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => handlePricelistSelect(item.id)}
+                        className="card"
+                        style={{
+                          padding: 0,
+                          textAlign: 'right',
+                          cursor: 'pointer',
+                          overflow: 'hidden',
+                          border: active ? '1px solid var(--blue)' : '1px solid var(--border)',
+                        }}
+                      >
+                        {item.image && (
+                          <img
+                            src={item.image}
+                            alt=""
+                            style={{ display: 'block', width: '100%', height: 58, objectFit: imageFitOf(item) }}
+                          />
+                        )}
+                        <div style={{ padding: 8 }}>
+                          <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-1)', marginBottom: 4 }}>
+                            {item.name}
+                          </div>
+                          <div style={{ fontWeight: 800, fontSize: 12, color: 'var(--accent, #F59E0B)' }}>
+                            ₪{Number(item.price || 0).toLocaleString()}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
               <div className="form-group" style={{ flex: 1 }}>

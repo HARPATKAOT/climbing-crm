@@ -152,6 +152,7 @@ import {
   declarationSignedAt,
   isHealthDeclarationValid,
 } from './healthValidity.js';
+import { passPunchBlockReason } from './passPunchEligibility.js';
 import {
   enrichPricelistItem,
   buildPassFromItem,
@@ -7719,6 +7720,18 @@ function punchPass(pass, { punchedBy, source, note }) {
   if (!isPassUsable(pass)) {
     const err = new Error('הכרטיסייה לא פעילה או שנגמרו הניקובים');
     err.status = 400;
+    throw err;
+  }
+  // הניקוב הוא אישור הצוות בדלפק שהמתאמן יכול לטפס: בלי הצהרת בריאות
+  // והסרת אחריות בתוקף ובלי מבחן אבטחה בתוקף אין אישור, ולכן אין ניקוב.
+  const blocked = passPunchBlockReason({
+    student: pass.student_id ? db.getOne('students', pass.student_id) : null,
+    declarations: db.get('health_declarations') || [],
+    tests: db.get('level_tests') || [],
+  });
+  if (blocked) {
+    const err = new Error(blocked);
+    err.status = 409;
     throw err;
   }
   const before = Number(pass.visits_remaining);

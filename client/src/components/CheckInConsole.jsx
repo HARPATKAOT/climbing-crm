@@ -174,6 +174,10 @@ export default function CheckInConsole({ students, groups }) {
             const punchData = await punchRes.json().catch(() => ({}));
             if (punchRes.ok) {
               punchNote = ` · נשארו ${punchData.pass?.visits_remaining} כניסות`;
+            } else if (punchData.error) {
+              // הרישום נשמר אבל הכרטיסייה לא נוקבה (למשל בלי הצהרה או מבחן
+              // אבטחה בתוקף) — זה חייב להיראות בדלפק, אחרת ייראה שנוקבה.
+              punchNote = ` · ⚠ ${punchData.error}`;
             }
           } else if (activeMembership) {
             punchNote = ' · מנוי בתוקף';
