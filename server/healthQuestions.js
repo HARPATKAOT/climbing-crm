@@ -17,10 +17,15 @@ export function isScreeningQuestion(question) {
   return String(question.label || '').trim().startsWith(SCREENING_PREFIX);
 }
 
-/** Confirmations default to mandatory; screening questions are never "tick to pass". */
+/**
+ * Only an explicit `requireYes` makes a confirmation mandatory — the same rule
+ * the old `filter(q => q.requireYes)` applied. Templates predating the field
+ * leave it undefined, and reading that as mandatory would demand a tick on
+ * "does the child have asthma?" before the form could be submitted.
+ */
 export function mustConfirm(question) {
   if (isScreeningQuestion(question)) return false;
-  return question?.requireYes !== false;
+  return question?.requireYes === true;
 }
 
 /**

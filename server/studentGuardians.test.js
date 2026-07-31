@@ -15,6 +15,7 @@ import {
   unlinkGuardian,
 } from './studentGuardians.js';
 import { saveCrmParticipants } from './crmWaiverService.js';
+import { declarationGap, mustConfirm } from './healthQuestions.js';
 
 function createDb(seed = {}) {
   const store = {
@@ -93,6 +94,26 @@ test('a match needs both the name and the exact date of birth', () => {
   assert.equal(findChildMatches(db, { name: 'נועם לוי', birthDate: '2016-01-01' }).length, 0);
   // A form with no birth date gets nothing rather than a risky guess.
   assert.equal(findChildMatches(db, { name: 'נועם לוי', birthDate: '' }).length, 0);
+});
+
+test('a legacy question with no requireYes stays optional', () => {
+  // The trip and birthday templates predate the field. Demanding a tick on
+  // "does the child have asthma?" would block the families it asks about.
+  const legacy = [{ id: 'q1', label: 'האם המתאמן סובל מאסתמה?' }];
+  assert.equal(mustConfirm(legacy[0]), false);
+  assert.equal(declarationGap(legacy, {}, 'נועם'), '');
+
+  // An explicit requireYes still has to be ticked.
+  const required = [{ id: 'h1', requireYes: true, label: 'אני מצהיר/ה' }];
+  assert.match(declarationGap(required, {}, 'נועם'), /יש לסמן/);
+  assert.equal(declarationGap(required, { h1: true }, 'נועם'), '');
+
+  // A screening question has to be answered either way; blank is not "no".
+  const screening = [{ id: 'm1', kind: 'screen', label: 'האם יש אסתמה?' }];
+  assert.match(declarationGap(screening, {}, 'נועם'), /יש לענות/);
+  assert.match(declarationGap(screening, { m1: null }, 'נועם'), /יש לענות/);
+  assert.equal(declarationGap(screening, { m1: false }, 'נועם'), '');
+  assert.equal(declarationGap(screening, { m1: true }, 'נועם'), '');
 });
 
 test('an ID number identifies the child even when the name was typed differently', () => {
