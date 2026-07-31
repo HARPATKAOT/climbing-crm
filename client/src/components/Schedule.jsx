@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight, Package, Sparkles, ExternalLink, AlertTriangle, UserCheck, List, ShieldCheck, ShieldAlert, Maximize2, Minimize2 } from "lucide-react";
+import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight, Package, Sparkles, ExternalLink, AlertTriangle, UserCheck, List, ShieldCheck, ShieldAlert, Maximize2, Minimize2, Clipboard, Check } from "lucide-react";
 import { DAYS_FULL } from '../mockData.js';
 import {
   getGroupDays,
@@ -833,6 +833,24 @@ function StudentNameLink({ student, parent = null, onOpen, size = 13, truncate =
   );
 }
 
+/** Assistant ids on a group, tolerant of older rows that have no list at all. */
+function normalizeAssistants(value) {
+  return Array.isArray(value) ? value.filter(id => typeof id === 'string' && id) : [];
+}
+
+/** Names of the assistants assigned to a group, skipping ids we can't resolve. */
+function assistantNamesOf(group, employees = []) {
+  return normalizeAssistants(group?.assistants)
+    .map(id => employees.find(e => e.id === id))
+    .filter(Boolean)
+    .map(e => e.name);
+}
+
+/** Employees carry `is_active`; older seeded rows only had `active`. */
+function isActiveEmployee(emp) {
+  return emp?.is_active !== false && emp?.active !== false;
+}
+
 function t2m(t) { const [h, m] = t.split(':').map(Number); return h * 60 + m; }
 function topPx(time)   { return (t2m(time) - START_MIN) * PX_PER_MIN; }
 function heightPx(dur) { return dur * PX_PER_MIN; }
@@ -850,6 +868,12 @@ function GroupBlock({ group, enrolledCount, selected, onClick }) {
     .replace(/—\s*יום\s*[א-ו]׳\s*/g, '')
     .replace(/—\s*[א-ו]׳\+[א-ו]׳\s*/g, '')
     .trim();
+
+  const assistantNames = Array.isArray(group.assistantNames) ? group.assistantNames : [];
+  const staffTitle = [
+    group.trainerName ? `מדריך: ${group.trainerName}` : 'ללא מדריך',
+    assistantNames.length ? `עוזרי מדריך: ${assistantNames.join(', ')}` : '',
+  ].filter(Boolean).join(' · ');
 
   return (
     <div onClick={onClick} style={{
@@ -878,10 +902,29 @@ function GroupBlock({ group, enrolledCount, selected, onClick }) {
         {label}
       </div>
 
-      {/* Time + trainer */}
+      {/* Time */}
       {h >= 60 && (
         <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', marginTop: 2 }}>
-          {group.time} · {group.duration}′{group.trainerName ? ` · ${group.trainerName}` : ''}
+          {group.time} · {group.duration}′
+        </div>
+      )}
+
+      {/* Who is on the mat — lead trainer first, assistants after it. A group
+          with nobody assigned says so, so an empty slot is visible at a glance. */}
+      {h >= 60 && (
+        <div title={staffTitle} style={{ fontSize: 10, marginTop: 1, display: 'flex',
+          alignItems: 'center', gap: 4, minWidth: 0 }}>
+          <Users size={9} style={{ flexShrink: 0, opacity: 0.7, color: c.text }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            color: group.trainerName ? c.text : 'rgba(255,255,255,0.35)', fontWeight: 600 }}>
+            {group.trainerName || 'ללא מדריך'}
+          </span>
+          {assistantNames.length > 0 && (
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              color: 'rgba(255,255,255,0.5)' }}>
+              +{assistantNames.join(', ')}
+            </span>
+          )}
         </div>
       )}
 
@@ -908,12 +951,14 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
   const [time,       setTime]       = useState(group?.time || '16:00');
   const [duration,   setDuration]   = useState(group?.duration || 80);
   const [trainer,    setTrainer]    = useState(group?.trainer || '');
+  const [assistants, setAssistants] = useState(() => normalizeAssistants(group?.assistants));
   const [maxSlots,   setMaxSlots]   = useState(group?.maxSlots || 12);
   const [ageCat,     setAgeCat]     = useState(group?.ageCategory || "ג'-ד'");
   const [priceWeek,  setPriceWeek]  = useState(group?.priceWeek || 280);
   const [priceTwice, setPriceTwice] = useState(group?.priceTwice || 360);
   const [waParents,  setWaParents]  = useState(group?.waParents || '');
   const [waClimbers, setWaClimbers] = useState(group?.waClimbers || '');
+  const [signupLink, setSignupLink] = useState(group?.signupLink || '');
 
   const handleDelete = () => {
     if (!group?.id || !onDelete) return;
@@ -925,25 +970,37 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
 
   // Active employees for the dropdown, but always keep the group's current
   // trainer visible even if they've since been marked inactive.
-  const trainerOptions = employees.filter(e => e.active !== false || e.id === trainer);
+  const trainerOptions = employees.filter(e => isActiveEmployee(e) || e.id === trainer);
+  // The lead trainer is never also listed as their own assistant.
+  const assistantOptions = employees.filter(e =>
+    e.id !== trainer && (isActiveEmployee(e) || assistants.includes(e.id)));
+
+  const toggleAssistant = (id) => {
+    setAssistants(prev => prev.includes(id) ? prev.filter(a => a !== id) : [...prev, id]);
+  };
 
   const handleSubmit = (e) => {
     e.preventDefault();
     const autoName = `${ageCat} — יום ${DAYS_FULL[day]} ${time}`;
+    // trainerName / assistantNames are derived from the employees list on every
+    // render — saving a copy would only persist a name that later goes stale.
+    const { trainerName: _tn, assistantNames: _an, ...base } = group || {};
     onSave({
-      ...(group || {}),
+      ...base,
       id:          group?.id || `g-${Date.now()}`,
       name:        name.trim() || autoName,
       day:         parseInt(day),
       time,
       duration:    parseInt(duration),
       trainer:     trainer,
+      assistants:  assistants.filter(id => id !== trainer),
       maxSlots:    parseInt(maxSlots),
       ageCategory: ageCat,
       priceWeek:   parseFloat(priceWeek) || 0,
       priceTwice:  parseFloat(priceTwice) || 0,
       waParents,
       waClimbers,
+      signupLink: signupLink.trim(),
     });
   };
 
@@ -996,7 +1053,13 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
             <div className="form-grid-2">
               <div className="form-group">
                 <label className="form-label">מדריך</label>
-                <select className="input select" value={trainer} onChange={e => setTrainer(e.target.value)}>
+                <select className="input select" value={trainer} onChange={e => {
+                  const next = e.target.value;
+                  setTrainer(next);
+                  // Promoting an assistant to lead trainer removes them from the
+                  // assistant list, so nobody is counted on the group twice.
+                  setAssistants(prev => prev.filter(id => id !== next));
+                }}>
                   <option value="">בחר מדריך...</option>
                   {trainerOptions.map(emp => (
                     <option key={emp.id} value={emp.id}>{emp.name}</option>
@@ -1008,6 +1071,39 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
                 <input className="input" type="number" min={1} max={30} value={maxSlots}
                   onChange={e => setMaxSlots(e.target.value)} />
               </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">עוזרי מדריך</label>
+              {assistantOptions.length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין עובדים פעילים נוספים לשיבוץ.</div>
+              ) : (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {assistantOptions.map(emp => {
+                    const on = assistants.includes(emp.id);
+                    return (
+                      <button
+                        key={emp.id}
+                        type="button"
+                        onClick={() => toggleAssistant(emp.id)}
+                        aria-pressed={on}
+                        style={{
+                          border: `1px solid ${on ? 'var(--blue)' : 'var(--border)'}`,
+                          background: on ? 'rgba(56,189,248,0.15)' : 'transparent',
+                          color: on ? 'var(--blue)' : 'var(--text-2)',
+                          borderRadius: 999,
+                          padding: '4px 10px',
+                          fontSize: 12,
+                          fontWeight: on ? 700 : 500,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {emp.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             <div className="form-grid-2">
@@ -1032,6 +1128,14 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
               <label className="form-label">לינק וואטסאפ מטפסים</label>
               <input className="input" placeholder="https://chat.whatsapp.com/..." value={waClimbers}
                 onChange={e => setWaClimbers(e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">קישור הרשמה לקבוצה</label>
+              <input className="input" placeholder="https://..." value={signupLink}
+                onChange={e => setSignupLink(e.target.value)} />
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                הקישור שנשלח להורים כדי להירשם לקבוצה. יופיע בכרטיס הקבוצה עם כפתור העתקה.
+              </div>
             </div>
           </form>
         </div>
@@ -1074,6 +1178,7 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
   const [equipmentFor, setEquipmentFor] = useState(null); // המתאמן שעורכים לו ציוד
 
   const trainer = employees?.find(e => e.id === group.trainer);
+  const assistantNames = assistantNamesOf(group, employees || []);
   const dayLabel = DAYS_FULL[dateToWeekday(date)] || '';
 
   const applyRows = (rows) => {
@@ -1215,6 +1320,7 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
             <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
               {dayLabel} · {group.time}
               {trainer ? ` · מדריך: ${trainer.name}` : group.trainerName ? ` · מדריך: ${group.trainerName}` : ''}
+              {assistantNames.length > 0 && ` · עוזרים: ${assistantNames.join(', ')}`}
               {' · '}{members.length} רשומים
               {pendingCount > 0 && (
                 <span style={{ color: '#60A5FA', marginRight: 6 }}> · {pendingCount} ממתינים למילוי</span>
@@ -1409,6 +1515,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
   const [attSavingId, setAttSavingId] = useState(null);
   const [attHistory, setAttHistory] = useState({}); // studentId -> rows in this group
   const [attHasRows, setAttHasRows] = useState(false);
+  const [signupCopied, setSignupCopied] = useState(false);
   // רוחב החלונית נשמר בין פתיחות, כי זו העדפה של המשתמש ולא מצב זמני.
   const [panelWidth, setPanelWidth] = useState(readStoredPanelWidth);
   const [dragging, setDragging] = useState(false);
@@ -1439,6 +1546,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
   const freeSlots = Math.max(0, group.maxSlots - members.length);
 
   const trainer = employees.find(e => e.id === group.trainer);
+  const assistantNames = assistantNamesOf(group, employees);
   // גיליון לצפייה בלבד ביום שהקבוצה לא מתאמנת בו — ואז אין „ממתינים”.
   const attViewOnly = !days.includes(dateToWeekday(attDate)) && !attHasRows;
   const pendingCount = attViewOnly
@@ -1665,6 +1773,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
             <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
               {days.map(d => DAYS_FULL[d]).join(' + ')} · {group.time} · {group.duration}′
               {trainer && ` · מדריך: ${trainer.name}`}
+              {assistantNames.length > 0 && ` · עוזרים: ${assistantNames.join(', ')}`}
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
@@ -1705,6 +1814,31 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
             <a href={group.waParents} target="_blank" rel="noreferrer" className="btn btn-success btn-sm">
               💬 הורים
             </a>
+          )}
+          {/* קישור ההרשמה נשלח להורים, ולכן העתקה היא הפעולה העיקרית עליו. */}
+          {group.signupLink && (
+            <>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                title={signupCopied ? 'הועתק' : 'העתקת קישור ההרשמה'}
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(group.signupLink);
+                    setSignupCopied(true);
+                    setTimeout(() => setSignupCopied(false), 1500);
+                  } catch { /* ignore */ }
+                }}
+              >
+                {signupCopied
+                  ? <><Check size={13} color="var(--green)" /> הועתק</>
+                  : <><Clipboard size={13} /> קישור הרשמה</>}
+              </button>
+              <a href={group.signupLink} target="_blank" rel="noreferrer"
+                className="btn btn-ghost btn-icon btn-sm" title="פתיחת קישור ההרשמה">
+                <ExternalLink size={13} />
+              </a>
+            </>
           )}
         </div>
       </div>
@@ -2576,9 +2710,11 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
 
   const formattedGroups = groups.map(g => {
     const trainerObj = employees.find(e => e.id === g.trainer);
+    const assistantNames = assistantNamesOf(g, employees);
     return {
       ...g,
-      trainerName: trainerObj ? trainerObj.name : ''
+      trainerName: trainerObj ? trainerObj.name : '',
+      assistantNames,
     };
   });
 

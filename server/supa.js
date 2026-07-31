@@ -243,6 +243,7 @@ const mappers = {
       time: r.time || '',
       duration: r.duration || 50,
       trainer: r.trainer || '',
+      assistants: Array.isArray(r.assistants) ? r.assistants : [],
       maxSlots: r.max_slots ?? 12,
       enrolled: 0,
       ageCategory: r.age_category || '',
@@ -250,6 +251,7 @@ const mappers = {
       priceTwice: r.price_twice != null ? Number(r.price_twice) : 0,
       waParents: r.wa_parents || '',
       waClimbers: r.wa_climbers || '',
+      signupLink: r.signup_link || '',
       notionId: r.notion_id || undefined,
     }),
     toRow: (o) => ({
@@ -263,12 +265,18 @@ const mappers = {
       // otherwise leave null to avoid FK violations on free-text trainers.
       trainer_id:
         typeof o.trainer === 'string' && /^e-/.test(o.trainer) ? o.trainer : null,
+      // Assistant instructors are a plain id list — no FK, so an employee that
+      // was archived after the fact never blocks saving the group.
+      assistants: Array.isArray(o.assistants)
+        ? o.assistants.filter((id) => typeof id === 'string' && id)
+        : [],
       max_slots: o.maxSlots ?? 12,
       age_category: o.ageCategory || '',
       price_week: numOrNull(o.priceWeek) ?? 0,
       price_twice: numOrNull(o.priceTwice) ?? 0,
       wa_parents: o.waParents || '',
       wa_climbers: o.waClimbers || '',
+      signup_link: o.signupLink || '',
       notion_id: emptyToNull(o.notionId),
     }),
   },
