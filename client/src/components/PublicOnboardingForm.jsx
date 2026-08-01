@@ -464,8 +464,14 @@ export default function PublicOnboardingForm() {
   /** Children have no stable id until they are saved — identify them by what was typed. */
   const childKey = (child) => `${String(child?.name || '').trim()}|${child?.birthDate || ''}`;
 
-  /** A child linked to an existing file with a valid declaration signs nothing. */
+  /**
+   * True when this participant already has a declaration in force and is not
+   * re-signing it. Covers both a child confirmed as belonging to another file
+   * and someone already on this file — including the parent themselves, who
+   * would otherwise be handed their own whole form again on the next visit.
+   */
   const reusesDeclaration = (child) => {
+    if (child?.onFileHealthValid && !child?.resignHealth) return true;
     const known = knownChildren[childKey(child)];
     return !!(known?.linked && known.health_valid);
   };
@@ -559,6 +565,11 @@ export default function PublicOnboardingForm() {
               registrationNotes: '',
               answers,
               answerNotes: {},
+              // Already on file with a declaration in force. The form shows
+              // that rather than asking them to fill everything in again.
+              onFileHealthValid: !!s.healthValid,
+              onFileHealthSignedAt: s.healthSignedAt || '',
+              resignHealth: false,
               waiverAccepted: false,
               signature: '',
             };
@@ -734,6 +745,12 @@ export default function PublicOnboardingForm() {
               idNumber: s.idNumber || '',
               birthDate: s.birthDate || '',
               gender: s.gender || '',
+              // The same two fields the first load sets. Without them this
+              // path — the one that runs when a returning parent types their
+              // phone — handed them their own declaration to sign again.
+              onFileHealthValid: !!s.healthValid,
+              onFileHealthSignedAt: s.healthSignedAt || '',
+              resignHealth: false,
             }));
           const merged = [...fromFile, ...typed];
           return merged.length ? merged : current;
@@ -869,6 +886,9 @@ export default function PublicOnboardingForm() {
       return;
     }
     for (const kid of kids) {
+      // A participant whose card is collapsed behind "declaration in force" was
+      // never shown these fields, so they cannot be the thing blocking the form.
+      if (reusesDeclaration(kid)) continue;
       if (!kid.birthDate) {
         setError(`חסר תאריך לידה עבור ${kid.name}`);
         return;
@@ -1043,6 +1063,9 @@ export default function PublicOnboardingForm() {
             signature: c.signature,
             waiverAccepted: !reuse,
             ...linkFieldsFor(knownChildren[childKey(c)]),
+            // Already on this file with a declaration in force: say so, or the
+            // server asks for a signature the form deliberately never showed.
+            ...(c.onFileHealthValid && !c.resignHealth ? { reuse_health: true } : {}),
           };
         });
 
@@ -1175,7 +1198,10 @@ export default function PublicOnboardingForm() {
     );
   }
 
-  const kids = namedChildren();
+  // Only those who still have to sign. Rendering from every named participant
+  // walked the signing step through people whose declaration is already in
+  // force — including the parent, handed their own form on every later visit.
+  const kids = healthChildren();
   const currentChild = kids[childHealthIndex] || kids[0];
   const currentFullIndex = currentChild
     ? children.findIndex((c) => c === currentChild || (c.name === currentChild.name && c.id === currentChild.id))
@@ -1472,12 +1498,50 @@ export default function PublicOnboardingForm() {
                   <div style={{ fontSize: 13, color: '#F97316', fontWeight: 700 }}>
                     {isAdultSelf ? 'משתתף מבוגר' : `משתתף/ת ${index + 1}`}
                   </div>
-                  {!isAdultSelf && children.length > 1 && (
+                  {!isAdultSelf && children.length > 1 && !child.onFileHealthValid && (
                     <button type="button" className="clear-btn" onClick={() => removeChild(index)}>
                       <Trash2 size={12} style={{ display: 'inline', verticalAlign: 'middle' }} /> הסר
                     </button>
                   )}
                 </div>
+
+                {/* Someone already on file with a declaration in force is shown
+                    as settled, not handed their own form again. Reopening it is
+                    one tick, because a health change is the whole reason to. */}
+                {child.onFileHealthValid && (
+                  <div style={{
+                    background: 'rgba(52,211,153,.1)', border: '1px solid rgba(52,211,153,.3)',
+                    borderRadius: 12, padding: 12, marginBottom: child.resignHealth ? 14 : 0,
+                  }}>
+                    <div style={{ fontSize: 13, color: '#6ee7b7', fontWeight: 700, marginBottom: 4 }}>
+                      ל{child.name || 'משתתף/ת זה'} יש הצהרת בריאות בתוקף
+                    </div>
+                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', lineHeight: 1.55 }}>
+                      {child.onFileHealthSignedAt
+                        ? `נחתמה ב-${String(child.onFileHealthSignedAt).slice(0, 10)}. `
+                        : ''}
+                      אין צורך למלא שוב.
+                    </div>
+                    <label
+                      className="event-check"
+                      style={{
+                        cursor: 'pointer', marginTop: 10,
+                        borderColor: child.resignHealth ? 'rgba(249,115,22,0.45)' : 'rgba(255,255,255,0.08)',
+                        background: child.resignHealth ? 'rgba(249,115,22,0.08)' : 'rgba(255,255,255,0.03)',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!!child.resignHealth}
+                        onChange={(e) => updateChild(index, { resignHealth: e.target.checked })}
+                      />
+                      <span>משהו השתנה במצב הבריאותי — למלא הצהרה מחדש</span>
+                    </label>
+                  </div>
+                )}
+
+                {(!child.onFileHealthValid || child.resignHealth) && (
+                <>
                 <div className="form-group">
                   <label>{isAdultSelf ? 'שם מלא *' : 'שם פרטי של המשתתף בחוג *'}</label>
                   <input
@@ -1582,7 +1646,7 @@ export default function PublicOnboardingForm() {
                         type="tel"
                         value={child.childPhone}
                         onChange={(e) => updateChild(index, { childPhone: e.target.value })}
-                        placeholder="לקבוצת המטפסים — לא נשלח דיוור"
+                        placeholder="בשביל יומן המטפסים ופיצ'רים מגניבים לילדים"
                       />
                     </div>
                   </>
@@ -1595,6 +1659,8 @@ export default function PublicOnboardingForm() {
                     placeholder="יום שמתאים, רוצים להירשם אחרי תאריך מסוים וכו׳"
                   />
                 </div>
+                </>
+                )}
               </div>
             ))}
             {!isAdultSelf && (

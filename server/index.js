@@ -9711,16 +9711,32 @@ app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
           idNumber: parent.idNumber || '',
         }
       : null,
-    students: students.map((s) => ({
-      id: s.id,
-      name: s.name || '',
-      birthDate: s.birthDate || '',
-      gender: s.gender || '',
-      idNumber: s.idNumber || '',
-      status: s.status || '',
-      interests: Array.isArray(s.interests) ? s.interests : [],
-      notes: s.notes || '',
-    })),
+    students: students.map((s) => {
+      // Whether this participant already has a declaration in force decides
+      // whether the form asks them for one again, so the answer travels with
+      // the card rather than being guessed from the status.
+      const declaration = findLatestValidDeclaration(db, {
+        studentId: s.id,
+        parentId: parent?.id || null,
+        climberName: s.name || '',
+      });
+      const healthValid = !!declaration
+        || (!!s.healthSignedAt && isHealthDeclarationValid(s.healthSignedAt));
+      return {
+        id: s.id,
+        name: s.name || '',
+        birthDate: s.birthDate || '',
+        gender: s.gender || '',
+        idNumber: s.idNumber || '',
+        status: s.status || '',
+        interests: Array.isArray(s.interests) ? s.interests : [],
+        notes: s.notes || '',
+        healthValid,
+        healthSignedAt: declaration
+          ? (declaration.signedDate || declaration.date || s.healthSignedAt || '')
+          : (s.healthSignedAt || ''),
+      };
+    }),
     listDefs,
     subscriptions,
     requiredListKey: REQUIRED_BROADCAST_LIST,

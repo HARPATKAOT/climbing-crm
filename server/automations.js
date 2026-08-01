@@ -65,6 +65,19 @@ export function fillMessageTemplate(message, payload = {}) {
   );
 }
 
+function templateIsApproved(metaName) {
+  const template = (db.get('message_templates') || []).find(
+    (t) => (t.meta_name || t.name) === metaName
+  );
+  return String(template?.status || '').toUpperCase() === 'APPROVED';
+}
+
+/** Same person, allowing for the spacing people actually type. */
+function sameHebrewName(a, b) {
+  const clean = (value) => String(value || '').trim().replace(/\s+/g, ' ');
+  return !!clean(a) && clean(a) === clean(b);
+}
+
 function templateVariableValues(payload, keys) {
   const map = buildPlaceholderMap(payload);
   const list = Array.isArray(keys) && keys.length ? keys : ['name'];
@@ -234,6 +247,27 @@ export const automationsService = {
 
       if (templateName && (!windowOpen || automation.action_payload?.preferTemplate)) {
         const vars = templateVariableValues(enriched, varKeys);
+        // An adult who registered themselves is both the greeting and the
+        // participant, so the stock wording said their name twice: "שלום דלק
+        // איל, קיבלנו את הפרטים ואת הצהרת הבריאות של דלק איל". Where a
+        // self-registration variant exists, it is the one that fits.
+        const selfTemplate = automation.action_payload?.templateNameSelf;
+        const registeredSelf = sameHebrewName(enriched.parentName, enriched.name);
+        // Only once Meta has approved it. Wired ahead of approval, the variant
+        // would turn every self-registration confirmation into a failed send —
+        // worse than the wording it fixes.
+        if (selfTemplate && registeredSelf && templateIsApproved(selfTemplate)) {
+          const selfVars = templateVariableValues(
+            enriched,
+            automation.action_payload?.templateVarKeysSelf || ['parentName']
+          );
+          console.log(`🤖 Sending automated WhatsApp template "${selfTemplate}" to ${phone}`);
+          await whatsappService.sendTemplateMessage(phone, selfTemplate, selfVars, {
+            parentId: parent?.id || enriched.parentId,
+            language: automation.action_payload?.language,
+          });
+          return { sent: true, via: 'template' };
+        }
         console.log(`🤖 Sending automated WhatsApp template "${templateName}" to ${phone}`);
         await whatsappService.sendTemplateMessage(phone, templateName, vars, {
           parentId: parent?.id || enriched.parentId,

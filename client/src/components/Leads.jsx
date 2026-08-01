@@ -35,7 +35,7 @@ import {
   activityDayLabel,
   saveActivityAttendance,
 } from './ActivityAttendance.jsx';
-import { isAwaitingHandling, latestInboundTime } from './communicationQueue.js';
+import { awaitingSince, isAwaitingHandling } from './communicationQueue.js';
 import { consecutiveAbsences } from '../scheduleUtils.js';
 import { studentGroupIds } from '../utils/studentGroups.js';
 import { passPurchasedText, passSubtitle } from '../utils/passes.js';
@@ -4240,7 +4240,7 @@ export default function Leads({
       ? isArchivedParent(parent)
       : filterStatus === 'all'
         || (filterStatus === 'communication'
-          ? isAwaitingHandling(parent)
+          ? isAwaitingHandling(parent, [s])
           : s.status === filterStatus);
     return matchSearch && matchStatus;
   }).map((entry) => entry.student);
@@ -4248,8 +4248,10 @@ export default function Leads({
   // Table: one row per family. Kanban stays per-student for the funnel.
   const familyRows = buildFamilyRows(filtered, parents);
   if (filterStatus === 'communication') {
+    // Newest first, counting a fresh registration as well as an inbound
+    // message — otherwise a family who just signed sorts to the bottom.
     familyRows.sort(
-      (a, b) => latestInboundTime(b.parent) - latestInboundTime(a.parent)
+      (a, b) => awaitingSince(b.parent, b.students) - awaitingSince(a.parent, a.students)
     );
   }
   const familyCountByStatus = (() => {
@@ -4257,7 +4259,7 @@ export default function Leads({
       all: buildFamilyRows(leadEntries.map((e) => e.student), parents).length,
       communication: buildFamilyRows(
         leadEntries
-          .filter(({ parent }) => isAwaitingHandling(parent))
+          .filter(({ parent, student }) => isAwaitingHandling(parent, [student]))
           .map(({ student }) => student),
         parents
       ).length,
