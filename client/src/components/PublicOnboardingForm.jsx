@@ -1570,7 +1570,10 @@ export default function PublicOnboardingForm() {
                         checked={!!child.resignHealth}
                         onChange={(e) => updateChild(index, { resignHealth: e.target.checked })}
                       />
-                      <span>משהו השתנה במצב הבריאותי — למלא הצהרה מחדש</span>
+                      {/* מנוסח כתנאי ולא כהצהרה: „משהו השתנה” נקרא כאילו כבר
+                          קבענו שכן, ומי שקורא מהר מסמן בלי לחשוב. „אם משהו
+                          השתנה” מחזיר את השאלה למי שיודע את התשובה. */}
+                      <span>אם משהו השתנה במצב הבריאותי — סמנו כאן ומלאו הצהרה מחדש</span>
                     </label>
                   </div>
                 )}
