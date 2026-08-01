@@ -31,6 +31,8 @@ export const BOT_BOUNDS_RULES = [
   'אסור: להמציא שעה, מחיר, קבוצה, אירוע, קישור או שכר.',
   'אסור: לענות בעצמך על ביטול, החזר, חשבונית, תלונה, פציעה או שכר עובדים — העבר לצוות.',
   'שיחה רגילה (ברכות, נימוס, שאלות כלליות) — ענה טבעי. אל תתחיל ב-UNSURE.',
+  'אם קיבלת «שם פרטי לפנייה» — פנה בשם הזה בהודעה הראשונה שלך בשיחה (למשל «היי דלק»). אחר כך אל תחזור על השם בכל הודעה.',
+  'אם אין «שם פרטי לפנייה» — אל תמציא שם ואל תשאל לשם באמצע שיחה.',
   'חסר נתון במערכת או שהשאלה דורשת אדם: השב בשורה הראשונה HANDOFF ואז משפט טבעי קצר (למשל שאין לך את הפרט ואתה מעביר לצוות). אל תשתמש בנוסח קבוע.',
   'הודעה חסרת משמעות לגמרי: השב בשורה הראשונה UNSURE ואז בקש הבהרה קצרה.',
 ].join('\n');
@@ -604,6 +606,11 @@ export function buildParentCardContext(parent, students = []) {
   const lines = [
     `הורה: ${parent.name || 'ללא שם'} | טלפון: ${parent.phone || ''} | סטטוס הורה: ${parent.status || '—'}`,
   ];
+  // The model was given the full name and still opened with a nameless "היי".
+  // Handing it the first name as its own labelled line is what the greeting
+  // rule in BOT_BOUNDS_RULES points at.
+  const firstName = parentFirstName(parent);
+  if (firstName) lines.push(`שם פרטי לפנייה: ${firstName}`);
   if (!students.length) {
     lines.push('אין מתאמנים מקושרים.');
   } else {

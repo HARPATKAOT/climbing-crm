@@ -5,6 +5,7 @@ import {
   gradeLettersFromAge,
   resolveAudienceFilter,
   groupMatchesGradeLetter,
+  isBareAudienceAnswer,
   ASK_GRADE_REPLY,
 } from './whatsapp.js';
 
@@ -35,6 +36,21 @@ test('grade carries from an earlier turn in the same conversation blob', () => {
   ].join('\n');
   assert.deepEqual(resolveAudienceFilter(history, []).letters, ['ג']);
   assert.deepEqual(resolveAudienceFilter('מה העלות ?', []).letters, []);
+});
+
+test('the bot asking "באיזו כיתה הילד/ה" is not itself a grade', () => {
+  // The full ask also spells out «בן 7» as an example, so only the customer's
+  // own lines are scanned for an audience — see resolveAudienceWithMemory.
+  assert.deepEqual(resolveAudienceFilter('באיזו כיתה הילד/ה?', []).letters, []);
+  assert.deepEqual(resolveAudienceFilter('כיתה ה׳', []).letters, ['ה']);
+  assert.deepEqual(resolveAudienceFilter('כיתה ה', []).letters, ['ה']);
+});
+
+test('a bare grade answer inherits the previous question', () => {
+  assert.equal(isBareAudienceAnswer('כיתה ג'), true);
+  assert.equal(isBareAudienceAnswer('בן 8'), true);
+  assert.equal(isBareAudienceAnswer('כיתה ג, יש מקום?'), false);
+  assert.equal(isBareAudienceAnswer('מתי אתם פתוחים?'), false);
 });
 
 test('ask-grade reply is ready for customers', () => {

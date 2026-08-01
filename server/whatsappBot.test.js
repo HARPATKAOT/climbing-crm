@@ -374,6 +374,18 @@ test('business identity and low-signal helpers', async () => {
   assert.equal(looksLikeLowSignalMessage('זה קיר טיפוס ?'), false);
 });
 
+test('a named card hands the model a first name to greet with', async () => {
+  const { buildParentCardContext, BOT_BOUNDS_RULES } = await import('./whatsappBot.js');
+  const named = buildParentCardContext({ name: 'דלק כהן', phone: '0500000000' }, []);
+  assert.match(named, /שם פרטי לפנייה: דלק/);
+  assert.doesNotMatch(named, /שם פרטי לפנייה: דלק כהן/);
+
+  const placeholder = buildParentCardContext({ name: 'לקוח וואטסאפ', phone: '0500000000' }, []);
+  assert.doesNotMatch(placeholder, /שם פרטי לפנייה/);
+
+  assert.match(BOT_BOUNDS_RULES, /שם פרטי לפנייה/);
+});
+
 test('schedule helpers still work', () => {
   assert.equal(isBotEnabled({ aiResponderEnabled: false }), false);
   assert.equal(

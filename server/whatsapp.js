@@ -34,6 +34,9 @@ import {
   asksAboutPrices,
   asksAboutSalary,
   asksAboutStaffHeadcount,
+  asksAboutNonClassPayment,
+  soundsLikeComplaint,
+  PRICE_HANDOFF_REPLY,
   asksAboutEquipment,
   asksAboutEnrichment,
   asksAboutTrainer,
@@ -81,6 +84,7 @@ import {
   detectUnsureHeuristic,
   detectNaturalHandoff,
   resolveUnsureReply,
+  looksLikeLowSignalMessage,
   asksAboutBusinessIdentity,
   formatBusinessIdentityReply,
   BOT_BOUNDS_RULES,
@@ -167,7 +171,11 @@ function formatGroupLine(group) {
 }
 
 function extractGradeLetter(text) {
-  const m = String(text || '').match(/כית(?:ה|ות)?\s*([א-ו])['׳']?/i);
+  // The letter must end the word: «כיתה ה׳» is a grade, «כיתה הילד/ה» is not —
+  // and the bot's own "באיזו כיתה הילד/ה?" used to read back as grade ה.
+  // \s+ (not \s*) so the ה of «כיתה» can never be backtracked into the grade
+  // slot, which is how «כיתה הילד/ה» produced grade ה.
+  const m = String(text || '').match(/כית(?:ה|ות)?\s+([א-ו])(?:['׳])?(?![א-ת])/i);
   return m?.[1] || '';
 }
 
@@ -265,7 +273,11 @@ export function resolveAudienceWithMemory(text, students = [], phone = '') {
   const direct = resolveAudienceFilter(text, students);
   if (direct.letters.length) return direct;
   if (!phone) return direct;
-  const history = getConversationHistory(phone, 10).join('\n');
+  // Only what the customer said counts. The bot's own questions mention grades
+  // ("א׳–ו׳") and would answer the question on the customer's behalf.
+  const history = getConversationHistory(phone, 10)
+    .filter((line) => line.startsWith('לקוח:'))
+    .join('\n');
   if (!history.trim()) return direct;
   // Do not re-apply the card here — that would hide a missing follow-up grade
   // with unrelated kids on the family file.
@@ -274,6 +286,26 @@ export function resolveAudienceWithMemory(text, students = [], phone = '') {
     return { ...fromHistory, source: 'history' };
   }
   return direct;
+}
+
+/**
+ * "כמה עולה חוג?" → "באיזו כיתה?" → "כיתה ג" used to answer with free slots and
+ * no price at all: the grade carried over between turns but the question did
+ * not. A bare grade/age answer therefore inherits the price question.
+ */
+export function isBareAudienceAnswer(text) {
+  const t = String(text || '').trim();
+  if (!t || t.length > 25) return false;
+  if (!extractGradeLetter(t) && extractAgeYears(t) == null) return false;
+  // Anything that carries its own question is not a plain answer.
+  return !/[?？]|מקום|פנוי|מלא|המתנה|שעה|מתי|איפה|מדריך|רישום|להירשם/.test(t);
+}
+
+function customerAskedAboutPrices(phone) {
+  if (!phone) return false;
+  return getConversationHistory(phone, 6)
+    .filter((line) => line.startsWith('לקוח:'))
+    .some((line) => asksAboutPrices(line));
 }
 
 function asksAboutAvailability(text) {
@@ -297,7 +329,7 @@ function isScheduleQuestion(text) {
 }
 
 /** Customer-facing schedule: where there is room; counts only if asked explicitly. Never includes prices. */
-function formatClassesWhatsAppReply(groups, incomingText = '', _ignoredOptions = {}) {
+function formatClassesWhatsAppReply(groups, incomingText = '', { grade: knownGrade = '' } = {}) {
   const question = typeof incomingText === 'string' ? incomingText : '';
   const students = db.get('students') || [];
   const enriched = enrichGroupsWithCapacity(groups || [], students);
@@ -348,7 +380,9 @@ function formatClassesWhatsAppReply(groups, incomingText = '', _ignoredOptions =
     return 'כן, בטח! 🧗 כרגע אין שעות מתאימות במערכת.\nכתבו את כיתת הילד/ה ונחזור אליכם 📱';
   }
 
-  const grade = extractGradeLetter(question);
+  // On a follow-up ("ויש מקום פנוי?") the grade is only in the earlier turn —
+  // without it the list looks like every group in the wall.
+  const grade = extractGradeLetter(question) || knownGrade;
   const header = grade
     ? (showCounts
       ? `כן, בטח! 🧗 לכיתה ${grade}׳ — מצב מקומות:`
@@ -500,7 +534,7 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
   const needsAudience = !audience.letters.length;
   const classesReply = needsAudience
     ? ASK_GRADE_REPLY
-    : formatClassesWhatsAppReply(exactGroups, raw);
+    : formatClassesWhatsAppReply(exactGroups, raw, { grade: audience.grade });
   const address = addressFromSettings(s);
   const hoursReply = formatOpeningHoursReply(db) || NO_OPENING_HOURS_REPLY;
   const locationReply = address
@@ -538,6 +572,12 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
   // Trainer / group size come before the schedule branch — "כמה ילדים בקבוצה"
   // reads as a schedule question otherwise.
   // Staff headcount ("כמה מדריכים בצוות") is not in the CRM — leave to the model.
+  // A complaint must never be answered with a class question — hand it to the
+  // model, whose rules send complaints to the team.
+  if (soundsLikeComplaint(raw)) {
+    return { text: '', confidence: 'low', skipMenu: true };
+  }
+
   if (asksAboutStaffHeadcount(raw) || asksAboutSalary(raw)) {
     return { text: '', confidence: 'low', skipMenu: true };
   }
@@ -561,7 +601,14 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
   }
 
   // Prices come from the CRM; anything the CRM does not price goes to staff.
-  if (asksAboutPrices(raw)) {
+  const priceIntent = asksAboutPrices(raw)
+    || (isBareAudienceAnswer(raw) && customerAskedAboutPrices(phone));
+  if (priceIntent) {
+    // Membership / punch card / birthday pricing is not in the CRM — asking
+    // which grade the child is in would only stall the customer.
+    if (asksAboutNonClassPayment(raw)) {
+      return { text: PRICE_HANDOFF_REPLY, confidence: 'high', handoff: true };
+    }
     if (!asksAboutEquipment(raw) && !asksAboutEnrichment(raw)) {
       // Never dump the whole catalog on a vague "מה העלות?" — need a grade
       // (from this turn or recent history) and matching groups.
@@ -1277,6 +1324,21 @@ export const whatsappService = {
       const fallback = resolveIdentifiedParentFallback(parent, incomingText, settings);
       return {
         text: clipReply(fallback.text, settings.aiMaxReplyChars),
+        confidence: 'low',
+        skipMenu: true,
+      };
+    }
+
+    // Noise with no model answer used to repeat the same greeting menu forever.
+    // Nonsense gets the clarify-then-handoff ladder; ordinary small talk still
+    // gets the menu.
+    if (looksLikeLowSignalMessage(incomingText)) {
+      const resolved = resolveUnsureReply(phone, settings, { incomingText });
+      return {
+        text: clipReply(resolved.text, settings.aiMaxReplyChars),
+        handoff: resolved.handoff,
+        unsure: true,
+        clarify: !!resolved.clarify,
         confidence: 'low',
         skipMenu: true,
       };

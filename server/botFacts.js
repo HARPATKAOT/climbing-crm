@@ -40,12 +40,35 @@ export function asksAboutSalary(text) {
     || /(?:מקבל|מרוויח)\s*לשעה/.test(t);
 }
 
+/**
+ * Complaints rarely use the noun «תלונה» that the handoff keyword list matches,
+ * and «להתלונן על המדריך» otherwise reads as a question about the trainer and
+ * gets answered with "באיזו כיתה?". Detected here so the message reaches the
+ * model, which is told to hand a complaint over to the team.
+ */
+export function soundsLikeComplaint(text) {
+  const t = String(text || '');
+  if (/תלונה|להתלונן|מתלונ|תתלונ/.test(t)) return true;
+  if (/לא\s*מרוצ|לא\s*מקובל|מאוכזב|מתוסכל|זה\s*לא\s*בסדר|התנהגות\s*לא|יחס\s*לא/.test(t)) return true;
+  return /(?:בעיה|תקלה|מקרה)\s*(?:עם|מול)\s*(?:המדריך|המאמן|הצוות|המזכיר)/.test(t);
+}
+
 export function asksAboutPrices(text) {
   const t = String(text || '');
   if (asksAboutSalary(t)) return false;
   // Bare «כסף» is too broad (salary, tips, etc.) — need product/class context.
   if (/מחיר|כמה עול|כמה זה עול|עלות|כמה משלמים|תעריף|מחירון|₪|שקל/.test(t)) return true;
   return /כסף/.test(t) && /חוג|קבוצ|ציוד|כית|מנוי|כרטיס|העשר|נעל|חולצ/.test(t);
+}
+
+/**
+ * Payment questions the CRM does not price: membership, punch cards, single
+ * entries, birthdays, discounts. Without this, "כמה עולה מנוי חודשי" was
+ * treated as a class question and answered with "באיזו כיתה הילד/ה?".
+ */
+export function asksAboutNonClassPayment(text) {
+  const t = String(text || '');
+  return /מנוי|כרטיסי[יה]|כרטיסייה|יום\s*הולדת|כניסה\s*(?:חד|בוד|חופשית)|כניסה\s*יחיד|הנחה|החזר|זיכוי|חשבונית|תשלום\s*חד/.test(t);
 }
 
 export function asksAboutEquipment(text) {

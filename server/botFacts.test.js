@@ -17,6 +17,8 @@ import {
   formatSignupLinkReply,
   groupSignupUrl,
   inviteLink,
+  asksAboutNonClassPayment,
+  soundsLikeComplaint,
   trainerNameForGroup,
 } from './botFacts.js';
 
@@ -259,4 +261,20 @@ test('intent detectors keep the branches apart', () => {
   assert.equal(asksAboutOpeningHours('מתי אתם פתוחים?'), true);
   assert.equal(asksAboutAssistants('מי עוזרי המדריך?'), true);
   assert.equal(asksAboutPrices('באיזה יום יש חוג?'), false);
+});
+
+test('a complaint is recognised even without the word תלונה', () => {
+  assert.equal(soundsLikeComplaint('אני רוצה להתלונן על המדריך'), true);
+  assert.equal(soundsLikeComplaint('אנחנו ממש לא מרוצים מהיחס'), true);
+  assert.equal(soundsLikeComplaint('יש בעיה עם המדריך של יום ג'), true);
+  assert.equal(soundsLikeComplaint('מי המדריך של כיתה ג?'), false);
+  assert.equal(soundsLikeComplaint('כמה עולה חוג?'), false);
+});
+
+test('membership and punch-card pricing is not a class question', () => {
+  assert.equal(asksAboutNonClassPayment('כמה עולה מנוי חודשי למבוגר?'), true);
+  assert.equal(asksAboutNonClassPayment('יש כרטisiה של 10 כניסות?'.replace('כרטisiה', 'כרטיסייה')), true);
+  assert.equal(asksAboutNonClassPayment('כמה עולה יום הולדת?'), true);
+  assert.equal(asksAboutNonClassPayment('כמה עולה חוג לכיתה ג?'), false);
+  assert.equal(asksAboutNonClassPayment('כמה עולות נעליים?'), false);
 });
