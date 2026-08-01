@@ -1,13 +1,13 @@
 /**
  * Which activity a signed declaration belongs to.
  *
- * A family can hold several: the wall for the weekly class, a birthday party,
- * an outdoor trip. They are separate documents covering separate risks, and in
- * the personal file they must not read as one repeated line — a staff member
- * looking for "did they sign for the trip" needs to see the answer, not count
- * identical rows.
+ * A family can hold several: the wall for the weekly class, a booked activity
+ * at the wall, an outdoor trip. They are separate documents covering separate
+ * risks, and in the personal file they must not read as one repeated line — a
+ * staff member looking for "did they sign for the trip" needs to see the
+ * answer, not count identical rows.
  *
- * The slug is what the public link carries (/health, /health/birthday,
+ * The slug is what the public link carries (/health, /health/event,
  * /health/trip) and what the declaration records as `templateSlug`.
  *
  * The icon is the one the leads list already uses per activity — the same mark
@@ -19,9 +19,14 @@ import { Footprints, Gift, ScrollText, FileText } from 'lucide-react';
 
 const KINDS = {
   wall: { key: 'wall', label: 'קיר טיפוס', Icon: ScrollText, badge: 'badge-amber', color: '#FCD34D' },
-  birthday: { key: 'birthday', label: 'יום הולדת', Icon: Gift, badge: 'badge-purple', color: '#C4B5FD' },
+  // היה „יום הולדת”, והוא בעצם הטופס של כל פעילות מוזמנת בקיר — יום הולדת,
+  // גיבוש חברה או קבוצת בית ספר חותמים על אותם סיכונים.
+  event: { key: 'event', label: 'פעילות בקיר', Icon: Gift, badge: 'badge-purple', color: '#C4B5FD' },
   trip: { key: 'trip', label: 'יציאה / טיול', Icon: Footprints, badge: 'badge-cyan', color: '#5EEAD4' },
 };
+
+/** הצהרות שנחתמו לפני השינוי נושאות את הכינוי הישן, וצריכות להיקרא נכון. */
+const LEGACY_KIND_SLUGS = { birthday: 'event' };
 
 /** טופס נוסף שנבנה בבית ואינו אחד הסוגים המוכרים. */
 export const GENERIC_KIND = { key: 'custom', label: 'טופס נוסף', Icon: FileText, badge: 'badge-gray', color: 'var(--text-3)' };
@@ -37,7 +42,8 @@ export function declarationKind(source) {
   const slug = typeof source === 'string'
     ? source
     : String(source?.templateSlug || source?.template_slug || '');
-  return KINDS[String(slug).trim().toLowerCase()] || DEFAULT_KIND;
+  const key = String(slug).trim().toLowerCase();
+  return KINDS[key] || KINDS[LEGACY_KIND_SLUGS[key]] || DEFAULT_KIND;
 }
 
 /**
@@ -47,9 +53,11 @@ export function declarationKind(source) {
  */
 export function templateKind(template) {
   const activity = String(template?.activityType || template?.activity_type || '').trim().toLowerCase();
-  if (KINDS[activity]) return KINDS[activity];
+  if (KINDS[activity] || KINDS[LEGACY_KIND_SLUGS[activity]]) {
+    return KINDS[activity] || KINDS[LEGACY_KIND_SLUGS[activity]];
+  }
   const slug = String(template?.slug || '').trim().toLowerCase();
-  return KINDS[slug] || GENERIC_KIND;
+  return KINDS[slug] || KINDS[LEGACY_KIND_SLUGS[slug]] || GENERIC_KIND;
 }
 
 /**

@@ -11,7 +11,9 @@ import {
 
 const ACTIVITY_TYPES = [
   { value: 'wall', label: 'קיר טיפוס' },
-  { value: 'birthday', label: 'יום הולדת' },
+  // פעילות מוזמנת בקיר — יום הולדת, גיבוש חברה או קבוצת בית ספר. סוג אחד,
+  // בדיוק כמו ביומן, כי כולם חותמים על אותם סיכונים.
+  { value: 'event', label: 'פעילות בקיר' },
   { value: 'trip', label: 'יציאה / טיול' },
   { value: 'custom', label: 'אחר' },
 ];

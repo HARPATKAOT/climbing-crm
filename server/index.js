@@ -200,6 +200,7 @@ import {
   householdMergeCandidatesPayload,
   householdSnapshot,
   linkGuardian,
+  linkHouseholdGuardians,
   mergeFamily,
   mergeHouseholds,
   normalizedChildName,
@@ -4266,6 +4267,12 @@ app.put('/api/activities/:id/registrations/:registrationId', async (req, res) =>
           waiverSignedAt: registration.created_at || new Date().toISOString(),
         });
         await persistCore('students', student);
+        for (const link of linkHouseholdGuardians(db, {
+          studentId: student.id,
+          source: 'activity_registration',
+        })) {
+          await persistCore('student_guardians', link);
+        }
         const linked = db.update('activity_registrations', registration.id, { student_id: student.id });
         await persistCore('activity_registrations', linked);
         if (registration.health_declaration_id) {
@@ -10605,10 +10612,22 @@ function listFormTemplates() {
   return db.get('form_templates') || [];
 }
 
+/**
+ * Slugs that links already carry, pointing at the template that replaced them.
+ *
+ * The birthday declaration turned out to be the declaration for any activity at
+ * the wall — a company day and a school group sign the same risks — so it was
+ * rewritten as one form. The old address keeps working: it was sent out over
+ * WhatsApp, and a link that 404s is a family that cannot register.
+ */
+const FORM_TEMPLATE_SLUG_ALIASES = { birthday: 'event' };
+
 function findFormTemplateBySlug(slug) {
   const key = slugifyFormTemplate(slug);
   if (!key) return null;
-  return listFormTemplates().find((t) => t.slug === key && t.isActive !== false) || null;
+  const templates = listFormTemplates();
+  const active = (s) => templates.find((t) => t.slug === s && t.isActive !== false) || null;
+  return active(key) || (FORM_TEMPLATE_SLUG_ALIASES[key] ? active(FORM_TEMPLATE_SLUG_ALIASES[key]) : null);
 }
 
 function findDefaultFormTemplate() {
@@ -10859,6 +10878,11 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
       created: new Date().toISOString().split('T')[0]
     });
     automationsService.triggerEvent('new_lead', { ...student, phone, parentName });
+    // Born into a family that was already merged: put the child on every parent
+    // card of the household, not only the one that filled the form.
+    for (const link of linkHouseholdGuardians(db, { studentId: student.id, source: 'form' })) {
+      await persistCore('student_guardians', link);
+    }
   }
 
   if (!student?.id || !parent?.id) {

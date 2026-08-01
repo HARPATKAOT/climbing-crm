@@ -30,16 +30,14 @@ const TYPE_COLOR = {
 };
 
 /**
- * Colours that used to mean birthday, school or company all read as one event
- * now. Google keeps the colour on events synced long before the merge, so the
- * old ones have to keep resolving — otherwise a past booking comes back as
- * "other" the next time the calendar syncs.
+ * A colour on an event that came from Google is a guess, not a fact — whoever
+ * set it was picking a colour, not classifying anything. It is used only to
+ * seed a type on first sync; anything unrecognised lands on "other" and staff
+ * set it properly. A real event is one created here, with a payer, participants
+ * and a price behind it.
  */
 const COLOR_TO_TYPE = {
   '6': 'event',
-  '11': 'event',
-  '5': 'event',
-  '10': 'event',
   '9': 'trip',
   '1': 'trip',
   '2': 'personal_training',

@@ -162,15 +162,19 @@ const ACTIVITIES = [
     ],
   },
   {
-    slug: 'birthday',
-    title: 'הצהרת בריאות ובטיחות + הסרת אחריות — יום הולדת',
-    activityPhrase: 'פעילות יום הולדת בקיר',
-    // A party is the wall's risks with a crowd of children who have never
-    // climbed before, and that is what the clause has to say.
-    riskClause: 'ידוע לי כי פעילות יום ההולדת כוללת טיפוס בקיר — פעילות אתגרית הכרוכה מטבעה בסיכון לפגיעה גופנית, לרבות נפילה, החלקה, פגיעה מציוד ופציעה — וכי חלק מהמשתתפים מגיעים ללא ניסיון קודם. הסיכון קיים גם בהקפדה מלאה על הוראות הבטיחות.',
-    riskBullet: 'יום ההולדת כולל טיפוס. זו פעילות אתגרית, וגם כשמקפידים על כללי הבטיחות אפשר להיפצע.',
+    // היה „יום הולדת”, והתברר שזה הטופס של כל פעילות מוזמנת בקיר: יום הולדת,
+    // יום גיבוש של חברה וקבוצת בית ספר חותמים על אותם סיכונים בדיוק, ממש כמו
+    // שהם סוג אחד ביומן. הכתובת הישנה (/health/birthday) ממשיכה לעבוד.
+    slug: 'event',
+    formerSlug: 'birthday',
+    title: 'הצהרת בריאות ובטיחות + הסרת אחריות — פעילות בקיר',
+    activityPhrase: 'פעילות מוזמנת בקיר',
+    // מה שמייחד פעילות מוזמנת אינו סוג האירוע אלא מי מגיע אליה: קבוצה שרובה
+    // לא טיפסה מעולם, ביום אחד, בלי הליווי המצטבר של חוג.
+    riskClause: 'ידוע לי כי הפעילות כוללת טיפוס בקיר — פעילות אתגרית הכרוכה מטבעה בסיכון לפגיעה גופנית, לרבות נפילה, החלקה, פגיעה מציוד ופציעה — וכי חלק מהמשתתפים מגיעים ללא ניסיון קודם ומשתתפים בה פעם אחת בלבד. הסיכון קיים גם בהקפדה מלאה על הוראות הבטיחות.',
+    riskBullet: 'הפעילות כוללת טיפוס. זו פעילות אתגרית, וגם כשמקפידים על כללי הבטיחות אפשר להיפצע.',
     safety: [
-      safety('s1', 'ידוע לי כי באחריות המזמין/ה לוודא ליווי מבוגר לילדים שהובאו לפעילות', { childOnly: true }),
+      safety('s1', 'ידוע לי כי באחריות מזמין/ת הפעילות לוודא ליווי מבוגר לילדים שהובאו אליה', { childOnly: true }),
       safety('s2', 'נא להימנע מריצה והשתוללות בכל מתחם הקיר, לרבות באזור הישיבה והכיבוד'),
       safety('s3', 'יש להישמע להוראות המדריכים לאורך כל הפעילות'),
       safety('s4', 'טיפוס על הקיר יתאפשר רק למשתתפים שקיבלו תדריך מסודר'),
@@ -206,6 +210,10 @@ const ACTIVITIES = [
 /** The full desired content of one template row. */
 export function declarationFor(activity) {
   return {
+    // The slug and activityType are written too: a template that was renamed
+    // has to move, not be duplicated alongside the one it replaced.
+    slug: activity.slug,
+    activityType: activity.slug,
     title: activity.title,
     waiverText: buildWaiver(activity),
     waiverSummary: buildSummary(activity),
@@ -240,6 +248,9 @@ function canonicalQuestions(questions) {
 }
 
 function printDiff(current, desired) {
+  if (current && current.slug !== desired.slug) {
+    console.log(`  ~ slug (${current.slug} → ${desired.slug}) — הכתובת הישנה תמשיך לעבוד`);
+  }
   for (const key of ['title', 'waiverText', 'waiverSummary']) {
     const before = String(current?.[key] || '');
     const after = desired[key];
@@ -281,7 +292,10 @@ async function apply({ dry = false, remote = false } = {}) {
 
   const plan = [];
   for (const activity of ACTIVITIES) {
+    // `formerSlug` is how a renamed template is found the first time, so it is
+    // updated in place instead of leaving the old one behind as a second form.
     const current = rows.find((t) => t.slug === activity.slug)
+      || (activity.formerSlug ? rows.find((t) => t.slug === activity.formerSlug) : null)
       || (activity.slug === 'wall' ? rows.find((t) => t.isDefault) : null);
     const desired = DECLARATIONS[activity.slug];
     console.log(`\n=== ${activity.slug} — ${desired.title}`);
