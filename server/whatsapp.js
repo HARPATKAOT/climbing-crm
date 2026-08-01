@@ -1,4 +1,5 @@
 import { db, persistCore, syncBotFlagFromRemote } from './db.js';
+import { linkHouseholdGuardians } from './studentGuardians.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { buildTemplateParameters } from './channels/templates.js';
 import {
@@ -801,6 +802,9 @@ async function ensureStudentForParent(parent, nameHint = '') {
     source: 'whatsapp',
   });
   await persistCore('students', created);
+  for (const link of linkHouseholdGuardians(db, { studentId: created.id, source: 'whatsapp' })) {
+    await persistCore('student_guardians', link);
+  }
   return created;
 }
 
@@ -983,6 +987,11 @@ export async function notifyStaffOfPlacement({
     }
   }
   return { sent };
+}
+
+/** Tool mode: the durable setting, or the server-side switch for a staged rollout. */
+export function botToolsEnabled(settings = {}) {
+  return !!settings.aiToolsEnabled || process.env.BOT_TOOLS_ENABLED === 'true';
 }
 
 async function callGeminiReply(
@@ -1434,7 +1443,7 @@ export const whatsappService = {
     // needs, instead of the keyword layer below guessing the intent. The hard
     // handoff above still runs first, and a failed turn falls through to the
     // old path — so switching this off is always safe.
-    const toolsEnabled = settings.aiToolsEnabled || process.env.BOT_TOOLS_ENABLED === 'true';
+    const toolsEnabled = botToolsEnabled(settings);
     if (toolsEnabled && hasModel) {
       const historyLimit = Math.max(2, Math.min(20, Number(settings.aiHistoryCount) || 8));
       const turn = await runCustomerToolTurn({
@@ -1809,8 +1818,13 @@ export const whatsappService = {
       return { parent, student, isNew, replied: true, reply: gate.reply, reason: 'handoff' };
     }
 
+    // With tools on, the model runs the conversation and the health declaration
+    // collects the names — the scripted lead capture would only talk over it.
+    const toolsRunTheConversation = botToolsEnabled(settings);
+
     // Active intake — schedule / waitlist questions may interrupt to answer first
-    const intakeActive = !!(getIntake(parent)?.step && getIntake(parent).step !== 'done');
+    const intakeActive = !toolsRunTheConversation
+      && !!(getIntake(parent)?.step && getIntake(parent).step !== 'done');
     if (wantsWaitlist(text)) {
       const waitlist = await handleWaitlistRequest(normalizedPhone, parent, students, text);
       await whatsappService.sendBotReply(normalizedPhone, waitlist.reply, { isSimulator });
@@ -1837,7 +1851,9 @@ export const whatsappService = {
     }
 
     // Start intake for new/incomplete leads (after menu 1 or missing details)
-    if (shouldStartLeadCapture(settings, parent, students, text, { isNew }) && !isScheduleQuestion(text)) {
+    if (!toolsRunTheConversation
+      && shouldStartLeadCapture(settings, parent, students, text, { isNew })
+      && !isScheduleQuestion(text)) {
       const choice = normalizeMenuChoice(text);
       // If they just picked classes, acknowledge briefly then start intake
       if (choice === '1') {

@@ -110,6 +110,11 @@ test('WhatsApp bolds with one asterisk, so Markdown is converted', () => {
   assert.equal(whatsappifyMarkdown('* יום ראשון 20:10'), '• יום ראשון 20:10');
   // Real bold has no space after the asterisk and must survive.
   assert.equal(whatsappifyMarkdown('*מחירים*'), '*מחירים*');
+  // A Markdown link is unusable in WhatsApp — the address must stand alone.
+  assert.equal(
+    whatsappifyMarkdown('[קישור להרשמה](https://example.com/a?b=1)'),
+    'קישור להרשמה:\nhttps://example.com/a?b=1'
+  );
 });
 
 test('history rows become model/user turns', () => {
