@@ -192,6 +192,7 @@ import {
   aggregatePosSales,
 } from './posUtils.js';
 import {
+  chooseRecipientParent,
   familyCandidates,
   findChildMatches,
   guardianParentIds,
@@ -275,6 +276,7 @@ import {
 import { calculateDashboardStats } from './dashboardStats.js';
 import { applyBusinessBrand, resetPlaygroundConversation } from './whatsappBot.js';
 import { waitForMessages, currentVersion } from './liveUpdates.js';
+import { shouldMarkIntroPaid } from './introStatus.js';
 import { countEnrolled } from './groupCapacity.js';
 import { enrichStudentsWithGroupIds, studentInGroup } from './studentGroups.js';
 import {
@@ -9945,6 +9947,18 @@ app.post('/api/pos/sale', async (req, res) => {
       updated_at: new Date().toISOString(),
     });
 
+    // Paying for an intro training is the moment the funnel can advance on its
+    // own — nobody has to remember to change the status afterwards.
+    if (shouldMarkIntroPaid(student, lines)) {
+      const moved = db.update('students', student.id, { status: 'intro_paid' });
+      if (moved) {
+        await persistCore('students', moved);
+        automationsService.triggerEvent('status_changed', { ...moved, new_status: 'intro_paid' });
+        touchGoogleContacts();
+        console.log(`🧗 [POS] ${moved.name || student.id} → intro_paid after paying for an intro training`);
+      }
+    }
+
     let whatsappUrl = null;
     if (sendWhatsapp) {
       const phone = normalizePhone(syncedParent?.phone || walkInPhone);
@@ -11680,7 +11694,18 @@ app.get('/api/documents/:id/download', async (req, res) => {
 });
 
 /** Resolve student + parent for lead send endpoints (supports parent-only cards). */
-function resolveLeadSendTarget(studentIdParam) {
+/**
+ * Who a link about this child is sent to.
+ *
+ * `student.parentId` is the primary parent — the file's owner — and that is the
+ * right default. But a child can have two parents on file, each with their own
+ * phone and their own conversation, and the card shows one of them at a time.
+ * When the caller names the parent it is looking at, the message follows the
+ * open tab instead of always going to the primary, so a reply lands in the
+ * thread it was asked from. A parent who is not on this child's file, or has no
+ * phone, is ignored rather than trusted.
+ */
+function resolveLeadSendTarget(studentIdParam, preferredParentId = '') {
   const rawId = String(studentIdParam || '');
   if (rawId.startsWith('parent:')) {
     const parent = (db.get('parents') || []).find((p) => p.id === rawId.slice('parent:'.length));
@@ -11693,7 +11718,11 @@ function resolveLeadSendTarget(studentIdParam) {
   }
   const student = (db.get('students') || []).find((s) => s.id === rawId);
   if (!student) return { error: 'המתאמן לא נמצא', status: 404 };
-  const parent = (db.get('parents') || []).find((p) => p.id === student.parentId);
+  const parent = chooseRecipientParent(db.get('parents') || [], {
+    guardianIds: guardianParentIds(db, student),
+    primaryParentId: student.parentId,
+    preferredParentId,
+  });
   if (!parent?.phone) return { error: 'אין מספר טלפון לשליחה', status: 400 };
   return { student, parent };
 }
@@ -11829,7 +11858,7 @@ app.post('/api/leads/:studentId/send-onboard-link', async (req, res) => {
 
 // Send health-form link via WhatsApp (from lead card)
 app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
-  const target = resolveLeadSendTarget(req.params.studentId);
+  const target = resolveLeadSendTarget(req.params.studentId, req.body?.parentId);
   if (target.error) return res.status(target.status).json({ error: target.error });
   const { student, parent } = target;
 
@@ -11870,6 +11899,9 @@ app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
       sent: !!send.sent,
       healthUrl,
       templateSlug: template?.slug || null,
+      // Which of the two parents it actually went to — the card says so rather
+      // than leaving staff to assume it followed the tab they were on.
+      sentTo: parentLabel,
       result: send.result || null,
       warning: send.sent ? undefined : send.error,
     });

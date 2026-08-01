@@ -198,6 +198,53 @@ export function findIntroFollowupCandidates(date = yesterdayIsraelDateStr()) {
   return out;
 }
 
+/** Staff numbers as the owner wrote them in the bot settings. */
+function staffPhonesFromSettings() {
+  const settings = db.getSettings ? db.getSettings() : {};
+  return String(settings?.aiStaffPhones || '')
+    .split(/[,|\n]+/)
+    .map((v) => String(v || '').trim())
+    .filter(Boolean);
+}
+
+/** When this trainee entered the status they are sitting in now. */
+function statusEnteredAt(student, status, store = db) {
+  const rows = (store.get('lead_status_history') || []).filter(
+    (r) => String(r.entity_id || '') === String(student.id) && r.to_status === status
+  );
+  const latest = rows
+    .map((r) => Date.parse(r.changed_at || r.created_at || ''))
+    .filter((t) => Number.isFinite(t))
+    .sort((a, b) => b - a)[0];
+  // No history row (a hold made before the trigger existed): fall back to the
+  // record's own timestamp rather than pretending it just happened.
+  return latest ?? Date.parse(student.updated_at || student.created_at || '') ?? null;
+}
+
+/**
+ * Trainees held as "ממתין להרשמה" for longer than `days`.
+ * @returns {{ student: object, daysWaiting: number }[]}
+ */
+export function findStalledSignups({ days = 5, today = israelDateStr(), store = db } = {}) {
+  // Everything is measured against `today`, so the count a person reads is the
+  // same one the test can assert.
+  const todayMs = Date.parse(`${today}T00:00:00`);
+  const cutoffMs = todayMs - days * 86400000;
+  return (store.get('students') || [])
+    .filter((s) => String(s.status || '') === 'pending_signup')
+    .map((student) => {
+      const enteredAt = statusEnteredAt(student, 'pending_signup', store);
+      if (!Number.isFinite(enteredAt)) return null;
+      if (enteredAt > cutoffMs) return null;
+      return {
+        student,
+        daysWaiting: Math.max(1, Math.round((todayMs - enteredAt) / 86400000)),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.daysWaiting - a.daysWaiting);
+}
+
 export const automationsService = {
   triggerEvent: async (eventName, payload) => {
     try {
@@ -399,7 +446,53 @@ export const automationsService = {
   runScheduled: async () => {
     const reminder = await automationsService.runIntroReminders();
     const followup = await automationsService.runIntroFollowups();
-    return { reminder, followup };
+    const stalled = await automationsService.runStalledSignupNotice();
+    return { reminder, followup, stalled };
+  },
+
+  /**
+   * "ממתין להרשמה" is a soft hold that ends when the מתנ״ס confirms — and that
+   * confirmation reaches us by phone, not by a webhook. A daily note to the
+   * team is what keeps a child from sitting in that state forever.
+   */
+  runStalledSignupNotice: async ({ days = 5, today = israelDateStr() } = {}) => {
+    const stalled = findStalledSignups({ days, today });
+    if (!stalled.length) return { event: 'signup_stalled', date: today, candidates: 0, sent: 0 };
+
+    const sendId = `as-signup-stalled-${today}`;
+    if (alreadySent(sendId)) {
+      return { event: 'signup_stalled', date: today, candidates: stalled.length, sent: 0, skipped: 1 };
+    }
+
+    const staffPhones = staffPhonesFromSettings();
+    if (!staffPhones.length) {
+      return { event: 'signup_stalled', date: today, candidates: stalled.length, sent: 0, reason: 'no_staff_phones' };
+    }
+
+    const lines = stalled
+      .slice(0, 15)
+      .map((row) => `• ${row.student.name || '—'} · ${row.daysWaiting} ימים`);
+    const body = [
+      '⏳ ממתינים לאישור הרשמה',
+      ...lines,
+      stalled.length > lines.length ? `ועוד ${stalled.length - lines.length}…` : '',
+      '← לבדוק מול המתנ״ס ולעדכן סטטוס',
+    ].filter(Boolean).join('\n');
+
+    let sent = 0;
+    for (const phone of staffPhones) {
+      try {
+        const result = await whatsappService.sendTextMessage(phone, body, false, {
+          source: 'staff_notify',
+          clip: false,
+        });
+        if (result?.success) sent += 1;
+      } catch (err) {
+        console.error('Stalled signup notice failed:', err.message);
+      }
+    }
+    if (sent) markSent({ id: sendId, automation_id: 'au-signup-stalled', student_id: null, date: today });
+    return { event: 'signup_stalled', date: today, candidates: stalled.length, sent };
   },
 
   ensureDefaultIntroAutomations: () => {
