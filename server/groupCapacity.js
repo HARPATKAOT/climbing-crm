@@ -6,7 +6,9 @@
 
 import { studentInGroup } from './studentGroups.js';
 
-export const CAPACITY_EXCLUDED_STATUSES = new Set(['archived', 'waitlist']);
+// 'pending_signup' is a soft hold while the customer completes registration at
+// the מתנ"ס: the group association is kept, but the seat stays open for others.
+export const CAPACITY_EXCLUDED_STATUSES = new Set(['archived', 'waitlist', 'pending_signup']);
 
 export function countsTowardCapacity(student, groupId) {
   if (!student || !groupId) return false;

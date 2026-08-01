@@ -32,6 +32,7 @@ const STATUS_RANK = [
   ['intro_paid', 'שילם - ממתין להכירות'],
   ['intro_scheduled', 'נקבע אימון הכירות'],
   ['health_signed', 'חתם הצהרה'],
+  ['pending_signup', 'ממתין להרשמה'],
   ['waitlist', 'רשימת המתנה'],
   ['lead_new', 'ליד חדש'],
   ['archived', 'ארכיון'],

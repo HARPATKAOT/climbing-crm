@@ -3,6 +3,7 @@ const ISRAEL_TIME_ZONE = 'Asia/Jerusalem';
 export const FUNNEL_STAGES = [
   'lead_new',
   'health_signed',
+  'pending_signup',
   'intro_scheduled',
   'intro_paid',
   'registered',

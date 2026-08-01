@@ -73,6 +73,8 @@ test('funnel counts one highest stage per family including parent-only leads', (
   assert.deepEqual(result.byStatus, {
     lead_new: 1,
     health_signed: 1,
+    // Soft hold while the customer finishes registering — nobody is here yet.
+    pending_signup: 0,
     intro_scheduled: 1,
     intro_paid: 0,
     registered: 1,

@@ -4,6 +4,7 @@
 export const STATUSES = {
   lead_new:         { label: 'ליד חדש', badge: 'badge-blue',   color: '#818CF8' },
   health_signed:    { label: 'חתם הצהרה', badge: 'badge-amber',  color: '#FCD34D' },
+  pending_signup:   { label: 'ממתין להרשמה', badge: 'badge-amber',  color: '#FBBF24' },
   intro_scheduled:  { label: 'נקבע אימון הכירות', badge: 'badge-cyan',  color: '#67E8F9' },
   intro_paid:       { label: 'שילם - ממתין להכירות', badge: 'badge-purple', color: '#C084FC' },
   registered:       { label: 'חוג פעיל', badge: 'badge-green',  color: '#34D399' },
