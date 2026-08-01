@@ -1,11 +1,46 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, FileStack, Loader2, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
+import {
+  ArrowRight, Cake, Clock3, Dumbbell, FileStack, FileText, Footprints,
+  GraduationCap, Handshake, Loader2, Mountain, Pencil, Plus, Search, Sparkles,
+  Trash2, TreePine, Users, Waves, X,
+} from 'lucide-react';
 
 const CATEGORY_META = {
   field: { label: 'פעילויות שטח', color: '#34D399', hint: 'טיולים, נחלים וטיפוס בטבע' },
   wall: { label: 'אירועים בקיר', color: '#FB923C', hint: 'ימי הולדת, גיבוש ואימונים' },
   ops: { label: 'תפעול', color: '#7DD3FC', hint: 'ניקיון, צוות, מסלולים ושעות פתיחה' },
 };
+
+/** Icons for starter templates (by stable id). */
+const TEMPLATE_ICON_BY_ID = {
+  tpl_field_rahaf: { Icon: Waves, color: '#60A5FA' },
+  tpl_field_black_canyon: { Icon: Footprints, color: '#34D399' },
+  tpl_field_kabra: { Icon: TreePine, color: '#A78BFA' },
+  tpl_wall_private: { Icon: Dumbbell, color: '#38BDF8' },
+  tpl_wall_birthday: { Icon: Cake, color: '#FB923C' },
+  tpl_wall_teambuilding: { Icon: Handshake, color: '#FBBF24' },
+  tpl_ops_cleaning: { Icon: Sparkles, color: '#7DD3FC' },
+  tpl_ops_team_meeting: { Icon: Users, color: '#C4B5FD' },
+  tpl_ops_route_building: { Icon: Mountain, color: '#A78BFA' },
+  tpl_ops_opening_hours: { Icon: Clock3, color: '#22D3EE' },
+};
+
+/** Fallback by activity type for custom / unknown templates. */
+const TEMPLATE_ICON_BY_TYPE = {
+  opening_hours: { Icon: Clock3, color: '#22D3EE' },
+  route_building: { Icon: Mountain, color: '#A78BFA' },
+  birthday: { Icon: Cake, color: '#FB923C' },
+  trip: { Icon: Footprints, color: '#34D399' },
+  school: { Icon: GraduationCap, color: '#34D399' },
+  company: { Icon: Handshake, color: '#FBBF24' },
+  other: { Icon: FileText, color: '#94A3B8' },
+};
+
+function iconForTemplate(tpl) {
+  return TEMPLATE_ICON_BY_ID[tpl?.id]
+    || TEMPLATE_ICON_BY_TYPE[tpl?.type]
+    || { Icon: FileText, color: '#94A3B8' };
+}
 
 // Pseudo-category: drills into the writable Google calendars instead of templates.
 const GOOGLE_CAT = '__google_calendars__';
@@ -20,6 +55,7 @@ const GOOGLE_CAT_META = {
  * Selecting a template opens a prefilled (unsaved) activity form.
  * "אירוע מותאם" opens a blank custom form.
  * Supports controlled open (e.g. from day "+" on the calendar).
+ * startInManageMode: open as template admin (toolbar «תבניות»), not create-event.
  */
 export default function ActivityTemplatesMenu({
   onApplyTemplate,
@@ -33,6 +69,7 @@ export default function ActivityTemplatesMenu({
   onOpenChange,
   onRequestOpen,
   hideTrigger = false,
+  startInManageMode = false,
 }) {
   const [internalOpen, setInternalOpen] = useState(false);
   const isControlled = controlledOpen !== undefined;
@@ -89,12 +126,12 @@ export default function ActivityTemplatesMenu({
   useEffect(() => {
     if (open) {
       setCategoryId(null);
-      setManageMode(false);
+      setManageMode(!!startInManageMode);
       setQuery('');
       // Silent refresh when templates already cached — prevents spinner/height jump.
       load({ silent: templates.length > 0 });
     }
-  }, [open]);
+  }, [open, startInManageMode]);
 
   const startCreate = (catId) => {
     setOpen(false);
@@ -186,7 +223,7 @@ export default function ActivityTemplatesMenu({
             onRequestOpen?.();
             setOpen(true);
           }}
-          title="תבניות ואירוע מותאם"
+          title="ניהול תבניות — הוספה, עריכה ומחיקה"
         >
           <FileStack size={16} strokeWidth={2.25} />
           תבניות
@@ -239,7 +276,7 @@ export default function ActivityTemplatesMenu({
                       : categoryId
                         ? (manageMode
                           ? 'הוסיפו תבנית חדשה, או ערכו / מחקו תבנית קיימת'
-                          : 'בחרו תבנית לאירוע חדש, או ערכו תבנית קיימת')
+                          : 'בחרו תבנית לאירוע חדש')
                         : (dateLabel
                           ? `לתאריך ${dateLabel} — מתבנית שמורה או אירוע ריק`
                           : 'מתבנית שמורה, או אירוע מותאם ללקוח')}
@@ -294,17 +331,6 @@ export default function ActivityTemplatesMenu({
                     </button>
                   )}
 
-                  {manageMode && (
-                    <button
-                      type="button"
-                      className="btn-ghost"
-                      onClick={() => setManageMode(false)}
-                      style={{ alignSelf: 'flex-start', marginBottom: 4 }}
-                    >
-                      ← חזרה ליצירת אירוע
-                    </button>
-                  )}
-
                   {categories.map((cat) => {
                     const meta = CATEGORY_META[cat.id] || {};
                     const count = templates.filter((t) => String(t.category || 'wall') === cat.id && t.is_active !== false).length;
@@ -336,31 +362,6 @@ export default function ActivityTemplatesMenu({
                       </button>
                     );
                   })}
-
-                  {!manageMode && onCreateTemplate && (
-                    <button
-                      type="button"
-                      onClick={() => setManageMode(true)}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 12,
-                        padding: '14px 14px', borderRadius: 12, cursor: 'pointer',
-                        border: '1px solid rgba(125,211,252,0.35)',
-                        background: 'rgba(125,211,252,0.08)',
-                        textAlign: 'right', width: '100%',
-                        color: 'var(--text-1)',
-                        marginTop: 4,
-                      }}
-                    >
-                      <Pencil size={18} style={{ color: '#7DD3FC' }} />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 800, fontSize: 14 }}>ניהול תבניות</div>
-                        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
-                          הוספה, עריכה ומחיקה של תבניות שמורות
-                        </div>
-                      </div>
-                      <ArrowRight size={16} style={{ color: 'var(--text-3)', transform: 'scaleX(-1)' }} />
-                    </button>
-                  )}
 
                   {showGoogleCat && !manageMode && (
                     <button
@@ -471,8 +472,8 @@ export default function ActivityTemplatesMenu({
                           busy={busy === tpl.id}
                           manageMode={manageMode}
                           onPick={() => (manageMode ? editTemplate(tpl) : pickTemplate(tpl))}
-                          onEdit={onEditTemplate ? (e) => editTemplate(tpl, e) : null}
-                          onRemove={(e) => remove(tpl, e)}
+                          onEdit={manageMode && onEditTemplate ? (e) => editTemplate(tpl, e) : null}
+                          onRemove={manageMode ? (e) => remove(tpl, e) : null}
                         />
                       ))}
                     </div>
@@ -492,7 +493,7 @@ export default function ActivityTemplatesMenu({
                     ← חזרה לקטגוריות
                   </button>
 
-                  {onCreateTemplate && (
+                  {manageMode && onCreateTemplate && (
                     <button
                       type="button"
                       onClick={() => startCreate(categoryId)}
@@ -525,8 +526,8 @@ export default function ActivityTemplatesMenu({
                         busy={busy === tpl.id}
                         manageMode={manageMode}
                         onPick={() => (manageMode ? editTemplate(tpl) : pickTemplate(tpl))}
-                        onEdit={onEditTemplate ? (e) => editTemplate(tpl, e) : null}
-                        onRemove={(e) => remove(tpl, e)}
+                        onEdit={manageMode && onEditTemplate ? (e) => editTemplate(tpl, e) : null}
+                        onRemove={manageMode ? (e) => remove(tpl, e) : null}
                       />
                     ))
                   )}
@@ -543,6 +544,7 @@ export default function ActivityTemplatesMenu({
 }
 
 function TemplateRow({ tpl, busy, manageMode, onPick, onEdit, onRemove }) {
+  const { Icon, color } = iconForTemplate(tpl);
   return (
     <div
       role="button"
@@ -550,7 +552,7 @@ function TemplateRow({ tpl, busy, manageMode, onPick, onEdit, onRemove }) {
       onClick={onPick}
       onKeyDown={(e) => { if (e.key === 'Enter') onPick(); }}
       style={{
-        display: 'flex', alignItems: 'center', gap: 8,
+        display: 'flex', alignItems: 'center', gap: 10,
         padding: '10px 12px', borderRadius: 10, cursor: 'pointer',
         border: manageMode ? '1px solid rgba(125,211,252,0.35)' : '1px solid var(--border)',
         background: manageMode ? 'rgba(125,211,252,0.06)' : 'rgba(255,255,255,0.02)',
@@ -567,6 +569,23 @@ function TemplateRow({ tpl, busy, manageMode, onPick, onEdit, onRemove }) {
           : 'rgba(255,255,255,0.02)';
       }}
     >
+      <div
+        aria-hidden
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: 10,
+          flexShrink: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: `${color}22`,
+          border: `1px solid ${color}44`,
+          color,
+        }}
+      >
+        <Icon size={16} strokeWidth={2.25} />
+      </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>{tpl.name}</div>
         <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
@@ -580,7 +599,7 @@ function TemplateRow({ tpl, busy, manageMode, onPick, onEdit, onRemove }) {
       </div>
       {busy ? (
         <Loader2 size={14} className="spin" />
-      ) : (
+      ) : (onEdit || onRemove) ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} onClick={(e) => e.stopPropagation()}>
           {onEdit && (
             <button
@@ -603,27 +622,29 @@ function TemplateRow({ tpl, busy, manageMode, onPick, onEdit, onRemove }) {
               {manageMode ? 'עריכה' : null}
             </button>
           )}
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={onRemove}
-            aria-label="מחיקה"
-            title="מחיקת תבנית"
-            style={{
-              color: '#F87171',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 4,
-              paddingInline: manageMode ? 8 : 6,
-              fontSize: 11,
-              fontWeight: 700,
-            }}
-          >
-            <Trash2 size={12} />
-            {manageMode ? 'מחיקה' : null}
-          </button>
+          {onRemove && (
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={onRemove}
+              aria-label="מחיקה"
+              title="מחיקת תבנית"
+              style={{
+                color: '#F87171',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                paddingInline: manageMode ? 8 : 6,
+                fontSize: 11,
+                fontWeight: 700,
+              }}
+            >
+              <Trash2 size={12} />
+              {manageMode ? 'מחיקה' : null}
+            </button>
+          )}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

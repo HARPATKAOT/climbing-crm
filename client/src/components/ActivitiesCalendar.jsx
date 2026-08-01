@@ -683,10 +683,9 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
           </div>
           <button
             type="button"
-            className="btn-primary"
+            className="btn btn-primary btn-sm"
             disabled={busy || !selectedIds.length}
             onClick={addFromPlan}
-            style={{ whiteSpace: 'nowrap' }}
           >
             {busy ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
             {assignLabel}
@@ -2771,6 +2770,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   const [dropHighlightDate, setDropHighlightDate] = useState('');
   const [scheduleBusy, setScheduleBusy] = useState(false);
   const [tplMenuOpen, setTplMenuOpen] = useState(false);
+  const [tplMenuManage, setTplMenuManage] = useState(false);
   const [createCtx, setCreateCtx] = useState(() => ({
     date: toDateStr(new Date()),
     opts: {},
@@ -3123,6 +3123,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     }
     setFormError('');
     setCreateCtx({ date: dateStr, opts });
+    setTplMenuManage(false);
     setTplMenuOpen(true);
   };
 
@@ -3845,9 +3846,14 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <ActivityTemplatesMenu
               open={tplMenuOpen}
-              onOpenChange={setTplMenuOpen}
+              onOpenChange={(next) => {
+                setTplMenuOpen(next);
+                if (!next) setTplMenuManage(false);
+              }}
+              startInManageMode={tplMenuManage}
               defaultDate={createCtx.date}
               onRequestOpen={() => {
+                setTplMenuManage(true);
                 setCreateCtx({ date: toDateStr(new Date()), opts: {} });
               }}
               onCustomEvent={(dateStr) => openBlankCreate(dateStr, createCtx.opts)}
