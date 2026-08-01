@@ -1614,49 +1614,57 @@ export default function PublicOnboardingForm() {
                   }))}
                 />
                 <KnownChildNote childName={child.name} match={knownChildren[childKey(child)]} />
+                {/* Asked of every participant, an adult included: it is how the
+                    CRM addresses them and how groups are made up, and it was
+                    only ever inside the children-only block by accident. The
+                    wording changes with who is answering; the stored value does
+                    not. */}
+                <div className="form-group">
+                  {/* Two buttons rather than a native list: the dropdown is
+                      drawn by the operating system, so its highlighted row
+                      keeps its own light colours however the page is
+                      styled. Same control as the health questions. */}
+                  <label>{isAdultSelf ? 'מין' : 'בן / בת'}</label>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    {(isAdultSelf
+                      ? [['גבר', 'male'], ['אישה', 'female']]
+                      : [['בן', 'male'], ['בת', 'female']]
+                    ).map(([text, value]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => updateChild(index, {
+                          gender: child.gender === value ? '' : value,
+                        })}
+                        style={{
+                          flex: 1, padding: '11px 0', borderRadius: 11, font: 'inherit',
+                          fontWeight: 700, fontSize: 14, cursor: 'pointer',
+                          border: child.gender === value
+                            ? '1px solid #f97316'
+                            : '1px solid rgba(255,255,255,.15)',
+                          background: child.gender === value
+                            ? 'rgba(249,115,22,.18)'
+                            : '#0b1220',
+                          color: child.gender === value ? '#fdba74' : '#e2e8f0',
+                        }}
+                      >
+                        {text}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {/* The child's own phone. An adult already gave theirs on the
+                    first step, so asking again would be asking twice. */}
                 {!isAdultSelf && (
-                  <>
-                    <div className="form-group">
-                      {/* Two buttons rather than a native list: the dropdown is
-                          drawn by the operating system, so its highlighted row
-                          keeps its own light colours however the page is
-                          styled. Same control as the health questions. */}
-                      <label>בן / בת</label>
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        {[['בן', 'male'], ['בת', 'female']].map(([text, value]) => (
-                          <button
-                            key={value}
-                            type="button"
-                            onClick={() => updateChild(index, {
-                              gender: child.gender === value ? '' : value,
-                            })}
-                            style={{
-                              flex: 1, padding: '11px 0', borderRadius: 11, font: 'inherit',
-                              fontWeight: 700, fontSize: 14, cursor: 'pointer',
-                              border: child.gender === value
-                                ? '1px solid #f97316'
-                                : '1px solid rgba(255,255,255,.15)',
-                              background: child.gender === value
-                                ? 'rgba(249,115,22,.18)'
-                                : '#0b1220',
-                              color: child.gender === value ? '#fdba74' : '#e2e8f0',
-                            }}
-                          >
-                            {text}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="form-group">
-                      <label>טלפון של הילד/ה</label>
-                      <input
-                        type="tel"
-                        value={child.childPhone}
-                        onChange={(e) => updateChild(index, { childPhone: e.target.value })}
-                        placeholder="בשביל יומן המטפסים ופיצ'רים מגניבים לילדים"
-                      />
-                    </div>
-                  </>
+                  <div className="form-group">
+                    <label>טלפון של הילד/ה</label>
+                    <input
+                      type="tel"
+                      value={child.childPhone}
+                      onChange={(e) => updateChild(index, { childPhone: e.target.value })}
+                      placeholder="בשביל יומן המטפסים ופיצ'רים מגניבים לילדים"
+                    />
+                  </div>
                 )}
                 <div className="form-group">
                   <label>הערות להרשמה</label>
