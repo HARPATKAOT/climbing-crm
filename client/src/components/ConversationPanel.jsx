@@ -376,15 +376,14 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     composingRef.current = !!selectedTemplate || !!replyText.trim() || !!imageBase64;
   }, [selectedTemplate, replyText, imageBase64]);
 
-  // Live chat: poll every few seconds while the tab is visible, and again the
-  // moment the tab comes back into view. WhatsApp pushes instantly; waiting a
-  // quarter-minute made the CRM feel stuck next to the phone.
+  // Live chat: poll while the tab is visible, and again the moment it comes
+  // back into view. Quiet loads already skip overlapping round trips.
   useEffect(() => {
     if (!parent?.id) return undefined;
     const tick = () => {
       if (document.visibilityState === 'visible') load({ quiet: true });
     };
-    const timer = setInterval(tick, 3000);
+    const timer = setInterval(tick, 1500);
     document.addEventListener('visibilitychange', tick);
     return () => {
       clearInterval(timer);
