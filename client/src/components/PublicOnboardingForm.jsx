@@ -32,6 +32,7 @@ import {
   clearanceBudgetError,
   prepareClearanceFile,
 } from '../utils/medicalClearanceFile.js';
+import GenderPicker from './GenderPicker.jsx';
 
 /**
  * `{{שם החותם}}` in a template's text becomes the name typed on the form.
@@ -1656,33 +1657,13 @@ export default function PublicOnboardingForm() {
                       keeps its own light colours however the page is
                       styled. Same control as the health questions. */}
                   <label>{isAdultSelf ? 'מין' : 'בן / בת'}</label>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    {(isAdultSelf
+                  <GenderPicker
+                    value={child.gender}
+                    onChange={(gender) => updateChild(index, { gender })}
+                    options={isAdultSelf
                       ? [['גבר', 'male'], ['אישה', 'female']]
-                      : [['בן', 'male'], ['בת', 'female']]
-                    ).map(([text, value]) => (
-                      <button
-                        key={value}
-                        type="button"
-                        onClick={() => updateChild(index, {
-                          gender: child.gender === value ? '' : value,
-                        })}
-                        style={{
-                          flex: 1, padding: '11px 0', borderRadius: 11, font: 'inherit',
-                          fontWeight: 700, fontSize: 14, cursor: 'pointer',
-                          border: child.gender === value
-                            ? '1px solid #f97316'
-                            : '1px solid rgba(255,255,255,.15)',
-                          background: child.gender === value
-                            ? 'rgba(249,115,22,.18)'
-                            : '#0b1220',
-                          color: child.gender === value ? '#fdba74' : '#e2e8f0',
-                        }}
-                      >
-                        {text}
-                      </button>
-                    ))}
-                  </div>
+                      : [['בן', 'male'], ['בת', 'female']]}
+                  />
                 </div>
                 {/* The child's own phone. An adult already gave theirs on the
                     first step, so asking again would be asking twice. */}

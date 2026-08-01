@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { CheckCircle } from 'lucide-react';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { EventStyles } from './publicFormKit.jsx';
+import GenderPicker from './GenderPicker.jsx';
 
 function ErrorBox({ message }) {
   if (!message) return null;
@@ -116,7 +117,15 @@ export default function PublicEmployeeOnboardForm() {
           {fields.map((f) => (
             <div className="form-group" key={f.key}>
               <label>{f.label}{f.required ? ' *' : ''}</label>
-              {f.type === 'select' ? (
+              {/* מין נבחר בכפתורים עם סמלים, כמו בטפסי הלקוחות. הערכים באים
+                  מקטלוג השדות („זכר” / „נקבה”) ולא מומצאים כאן. */}
+              {f.key === 'gender' && (f.options || []).length === 2 ? (
+                <GenderPicker
+                  value={answers[f.key] || ''}
+                  onChange={(value) => setAnswer(f.key, value)}
+                  options={f.options.map((opt) => [opt, opt])}
+                />
+              ) : f.type === 'select' ? (
                 <select
                   value={answers[f.key] || ''}
                   onChange={(e) => setAnswer(f.key, e.target.value)}

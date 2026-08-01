@@ -6,6 +6,7 @@ import {
   Phone, Mail, MapPin, CreditCard, User, Calendar, Cake, Landmark, Car, Lock
 } from 'lucide-react';
 import { Modal } from './UI.jsx';
+import GenderPicker from './GenderPicker.jsx';
 import {
   STAFF_ROLE_OPTIONS,
   assignableLabelsOf,
@@ -1032,9 +1033,13 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
               </div>
               <div className="form-group">
                 <label className="form-label">{fieldMeta('gender', 'מין', ['זכר', 'נקבה']).label}</label>
-                <select className="input select" value={answers.gender} onChange={e => setAnswer('gender', e.target.value)}>
-                  {fieldMeta('gender', 'מין', ['זכר', 'נקבה']).options.map(o => <option key={o} value={o}>{o}</option>)}
-                </select>
+                {/* אותה בחירה ובאותה צורה כמו בטופס הקליטה שהעובד/ת מילא/ה. */}
+                <GenderPicker
+                  value={answers.gender}
+                  clearable={false}
+                  onChange={(value) => setAnswer('gender', value)}
+                  options={fieldMeta('gender', 'מין', ['זכר', 'נקבה']).options.map((o) => [o, o])}
+                />
               </div>
               <div className="form-group">
                 <label className="form-label">סטטוס עובד</label>

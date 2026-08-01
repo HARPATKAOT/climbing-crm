@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, Archive, ArchiveRestore } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
+import GenderPicker from './GenderPicker.jsx';
 import {
   blobToBase64,
   buildHealthDeclarationPdf,
@@ -4168,11 +4169,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 <div className="form-grid-2">
                   <div className="form-group">
                     <label className="form-label">בן / בת</label>
-                    <select className="input" value={editGender} onChange={(e) => setEditGender(e.target.value)}>
-                      <option value="">— לא הוגדר —</option>
-                      <option value="male">בן</option>
-                      <option value="female">בת</option>
-                    </select>
+                    {/* אותה בחירה ובאותה צורה כמו בטופס הציבורי — הקלקה על
+                        הבחירה הנוכחית מנקה אותה, במקום „— לא הוגדר —”. */}
+                    <GenderPicker value={editGender} onChange={setEditGender} />
                   </div>
                   <div className="form-group">
                     <label className="form-label">שיוך לחוגים</label>
