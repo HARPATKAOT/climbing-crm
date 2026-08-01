@@ -376,18 +376,62 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     composingRef.current = !!selectedTemplate || !!replyText.trim() || !!imageBase64;
   }, [selectedTemplate, replyText, imageBase64]);
 
-  // Live chat: poll while the tab is visible, and again the moment it comes
-  // back into view. Quiet loads already skip overlapping round trips.
+  // Live chat: instead of re-fetching the thread on a timer, one request waits
+  // on the server until a message is actually stored and returns the moment it
+  // is. A hidden tab stops waiting, and a slow timer stays as a safety net for
+  // anything the wait misses (server restart, a dropped connection).
   useEffect(() => {
     if (!parent?.id) return undefined;
-    const tick = () => {
-      if (document.visibilityState === 'visible') load({ quiet: true });
+    let stopped = false;
+    let version = 0;
+    let controller = null;
+
+    const waitLoop = async () => {
+      while (!stopped) {
+        if (document.visibilityState !== 'visible') return;
+        controller = new AbortController();
+        try {
+          const res = await fetch('/api/updates/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ since: version }),
+            signal: controller.signal,
+          });
+          if (stopped) return;
+          if (!res.ok) {
+            await new Promise((r) => setTimeout(r, 5000));
+            continue;
+          }
+          const body = await res.json().catch(() => ({}));
+          if (Number.isFinite(body.version)) version = body.version;
+          if (body.changed && !stopped) load({ quiet: true });
+        } catch {
+          if (stopped) return;
+          // Network hiccup or an aborted wait — pause before trying again.
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+      }
     };
-    const timer = setInterval(tick, 1500);
-    document.addEventListener('visibilitychange', tick);
+
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') {
+        controller?.abort();
+        return;
+      }
+      load({ quiet: true });
+      waitLoop();
+    };
+
+    waitLoop();
+    const safety = setInterval(() => {
+      if (document.visibilityState === 'visible') load({ quiet: true });
+    }, 20000);
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
-      clearInterval(timer);
-      document.removeEventListener('visibilitychange', tick);
+      stopped = true;
+      controller?.abort();
+      clearInterval(safety);
+      document.removeEventListener('visibilitychange', onVisible);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parent?.id]);

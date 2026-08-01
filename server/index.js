@@ -273,6 +273,7 @@ import {
 } from './employeeOnboardingForm.js';
 import { calculateDashboardStats } from './dashboardStats.js';
 import { applyBusinessBrand, resetPlaygroundConversation } from './whatsappBot.js';
+import { waitForMessages, currentVersion } from './liveUpdates.js';
 import { countEnrolled } from './groupCapacity.js';
 import { enrichStudentsWithGroupIds, studentInGroup } from './studentGroups.js';
 import {
@@ -1261,6 +1262,22 @@ app.post('/api/whatsapp/settings', requireOwner, async (req, res) => {
       ),
     },
   });
+});
+
+/**
+ * Long poll for the conversation panel: the request waits until a message is
+ * actually stored, so a customer's reply appears at once instead of on the next
+ * timer tick. `since` is the version the screen last saw; a reply with
+ * `changed: false` simply means the wait timed out and the screen asks again.
+ */
+app.post('/api/updates/messages', async (req, res) => {
+  const since = Number(req.body?.since) || 0;
+  // Ahead of the server (restart) — resync immediately rather than hang.
+  if (since > currentVersion()) {
+    return res.json({ version: currentVersion(), changed: true });
+  }
+  const result = await waitForMessages({ since, timeoutMs: 25000 });
+  res.json(result);
 });
 
 // Embedded Signup public config (no secrets)

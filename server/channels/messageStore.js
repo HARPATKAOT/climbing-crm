@@ -9,6 +9,7 @@
 
 import { db, persistCore } from '../db.js';
 import { supa } from '../supa.js';
+import { noteMessagesChanged } from '../liveUpdates.js';
 
 const PENDING_FLAG = '_pending_durable';
 const RETRY_INTERVAL_MS = 30_000;
@@ -136,6 +137,9 @@ function storeLocal(message, { pending = false } = {}, store = liveStore) {
   const record = pending ? { ...message, [PENDING_FLAG]: true } : message;
   store.mergeLocal('messages', [record]);
   store.mergeLocal('whatsapp_logs', [toLogRow(record)]);
+  // Every message — inbound, outbound, bot — passes through here, so this is
+  // the one place an open conversation panel needs to hear about.
+  noteMessagesChanged();
   return record;
 }
 
