@@ -97,6 +97,28 @@ const MEDICAL_QUESTIONS = [
   { id: 'm9', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש מגבלה רפואית, אבחנה או מידע אחר שחשוב שנדע ולא נשאלנו עליו כאן?' },
 ];
 
+/**
+ * Asked only where the activity actually raises it.
+ *
+ * The nine questions above are deliberately identical everywhere — a heart
+ * condition does not care which outing it is. This one is different: fear of
+ * confined spaces means nothing on a wall and everything in a cave, and asking
+ * it of every birthday party would be noise that teaches families to click
+ * through the questionnaire.
+ *
+ * No doctor's approval attached: this is not a condition to be cleared, it is
+ * something the guide needs to know before a narrow passage, so the detail box
+ * that opens on "yes" is the whole point.
+ */
+const CAVE_QUESTION = {
+  id: 'm10',
+  kind: 'screen',
+  requireYes: false,
+  audience: 'all',
+  requiresClearance: false,
+  label: 'האם יש קלאוסטרופוביה, חרדה או קושי בחללים סגורים, צרים או חשוכים?',
+};
+
 /** The fitness declaration, which names the activity it is made about. */
 function fitnessConfirmation(activityPhrase) {
   return {
@@ -160,6 +182,8 @@ const ACTIVITIES = [
     slug: 'trip',
     title: 'הצהרת בריאות ובטיחות + הסרת אחריות — יציאה / טיול',
     activityPhrase: 'יציאה או טיול — סנפלינג, טיפוס ומערנות',
+    // The only template with a cave in it, and so the only one that asks.
+    asksAboutConfinedSpaces: true,
     // Most trips are rappelling, and the same day may add climbing or a cave.
     // One declaration covers all three because they are one outing under one
     // instructor — but each has to be named, and a cave is not a cliff: it
@@ -187,6 +211,7 @@ export function declarationFor(activity) {
     waiverSummary: buildSummary(activity),
     healthQuestions: [
       ...MEDICAL_QUESTIONS,
+      ...(activity.asksAboutConfinedSpaces ? [CAVE_QUESTION] : []),
       fitnessConfirmation(activity.activityPhrase),
       ...activity.safety,
     ],
