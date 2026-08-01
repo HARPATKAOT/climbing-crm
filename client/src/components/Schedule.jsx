@@ -106,6 +106,7 @@ const PX_PER_MIN = 1.5;
 const HOUR_H     = 60 * PX_PER_MIN;  // 90px
 const GRID_H     = (END_MIN - START_MIN) * PX_PER_MIN; // 720px
 const HOURS      = Array.from({ length: 9 }, (_, i) => 14 + i); // 14..22
+const WEEK_DAYS_PREF_KEY = 'schedule.visibleWeekDays';
 
 const AGE_CATEGORIES = ["א'-ב'", "ג'-ד'", "ה'-ו'", 'חטיבה', 'תיכון', 'בוגרים'];
 const TIME_OPTIONS = [
@@ -2962,6 +2963,16 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
   const [dayVacation,     setDayVacation]      = useState(null); // «חופשה מאימונים» covering the day
   const [viewMode,        setViewMode]         = useState('week');
   const [employees,       setEmployees]        = useState([]);
+  // אילו ימים מוצגים בלוח השבועי. null = ברירת מחדל: מסתירים ימים בלי אף חוג.
+  const [visibleDayPref,  setVisibleDayPref]   = useState(() => {
+    try {
+      const raw = localStorage.getItem(WEEK_DAYS_PREF_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      return Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  });
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Deep link from the customer card: /schedule?group=<id> opens that group.
@@ -3146,6 +3157,29 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
   const dayGroupsForAttendance = [...formattedGroups]
     .filter(g => getGroupDays(g).includes(attendanceWeekday))
     .sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+
+  // כמה חוגים יש בכל יום, וכתוצאה מזה אילו עמודות מוצגות בלוח השבועי.
+  const dayCounts = DAYS_FULL.map((_, i) => groups.filter(g => getGroupDays(g).includes(i)).length);
+  const autoVisibleDays = dayCounts.some(c => c > 0)
+    ? DAYS_FULL.map((_, i) => i).filter(i => dayCounts[i] > 0)
+    : DAYS_FULL.map((_, i) => i);
+  const visibleDays = visibleDayPref
+    ? DAYS_FULL.map((_, i) => i).filter(i => visibleDayPref.includes(i))
+    : autoVisibleDays;
+
+  const toggleDay = (day) => {
+    const next = visibleDays.includes(day)
+      ? visibleDays.filter(d => d !== day)
+      : [...visibleDays, day].sort((a, b) => a - b);
+    if (!next.length) return; // תמיד נשאר יום אחד לפחות
+    setVisibleDayPref(next);
+    try { localStorage.setItem(WEEK_DAYS_PREF_KEY, JSON.stringify(next)); } catch { /* אין אחסון מקומי */ }
+  };
+
+  const resetVisibleDays = () => {
+    setVisibleDayPref(null);
+    try { localStorage.removeItem(WEEK_DAYS_PREF_KEY); } catch { /* אין אחסון מקומי */ }
+  };
 
   // Keep the selected/attendance group in sync with the latest data so the
   // members list and enrolled counts update after assign/remove.
@@ -3356,20 +3390,55 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
       {/* ── Week View ──────────────────────────────────────────────────────── */}
       {viewMode === 'week' && (
         <div className="card" style={{ overflow: 'auto' }}>
-          <div style={{ minWidth: 760, display: 'flex', flexDirection: 'column' }}>
+          {/* בחירת ימים להצגה — ימים בלי חוגים מוסתרים מאליהם */}
+          <div style={{
+            display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
+            padding: '10px 12px', borderBottom: '1px solid var(--border)',
+          }}>
+            <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 4 }}>ימים בלוח:</span>
+            {DAYS_FULL.map((d, i) => {
+              const on = visibleDays.includes(i);
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => toggleDay(i)}
+                  title={dayCounts[i] ? `${dayCounts[i]} חוגים` : 'אין חוגים ביום זה'}
+                  style={{
+                    padding: '3px 10px', borderRadius: 999, cursor: 'pointer',
+                    fontSize: 11, fontWeight: 600,
+                    border: `1px solid ${on ? 'var(--accent, #818CF8)' : 'var(--border)'}`,
+                    background: on ? 'rgba(129,140,248,0.16)' : 'transparent',
+                    color: on ? 'var(--text-1)' : 'var(--text-3)',
+                  }}
+                >
+                  {d}
+                  {dayCounts[i] > 0 && (
+                    <span style={{ marginRight: 4, fontSize: 10, opacity: 0.7 }}>({dayCounts[i]})</span>
+                  )}
+                </button>
+              );
+            })}
+            {visibleDayPref && (
+              <button type="button" className="btn btn-ghost btn-sm" onClick={resetVisibleDays}>
+                איפוס
+              </button>
+            )}
+          </div>
+          <div style={{ minWidth: 140 + visibleDays.length * 120, display: 'flex', flexDirection: 'column' }}>
             {/* Day headers */}
             <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
               <div style={{ width: 52, flexShrink: 0, padding: '10px 6px', fontSize: 10, color: 'var(--text-3)' }}>שעה</div>
-              {DAYS_FULL.map((d, i) => {
-                const count = groups.filter(g => getGroupDays(g).includes(i)).length;
+              {visibleDays.map((i, pos) => {
+                const count = dayCounts[i];
                 return (
                   <div key={i} style={{
                     flex: 1, padding: '10px 8px',
                     fontSize: 12, fontWeight: 600, color: count ? 'var(--text-1)' : 'var(--text-3)',
                     textAlign: 'center',
-                    borderLeft: i > 0 ? '1px solid var(--border)' : 'none',
+                    borderLeft: pos > 0 ? '1px solid var(--border)' : 'none',
                   }}>
-                    {d}
+                    {DAYS_FULL[i]}
                     {count > 0 && (
                       <span style={{ marginRight: 5, fontSize: 10, color: 'var(--text-3)' }}>({count})</span>
                     )}
@@ -3393,8 +3462,8 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
                 ))}
               </div>
 
-              {/* 6 Day columns */}
-              {Array.from({ length: 6 }, (_, day) => {
+              {/* Day columns — only the days the user chose to show */}
+              {visibleDays.map((day) => {
                 const dayGroups = formattedGroups.filter(g => getGroupDays(g).includes(day));
                 return (
                   <div key={day} style={{
