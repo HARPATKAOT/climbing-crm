@@ -158,6 +158,13 @@ export const parentFromRow = (r) => ({
   idNumber: r.id_number || '',
   relation: r.relation || '',
   icount_client_id: r.icount_client_id || undefined,
+  bot_paused_until: r.bot_paused_until || null,
+  bot_pause_reason: r.bot_pause_reason || null,
+  bot_handoff_at: r.bot_handoff_at || null,
+  bot_opted_out: !!r.bot_opted_out,
+  bot_opt_out_source: r.bot_opt_out_source || null,
+  bot_intake: r.bot_intake && typeof r.bot_intake === 'object' ? r.bot_intake : null,
+  bot_outside_hours_date: r.bot_outside_hours_date || null,
 });
 
 export const parentToRow = (o) => ({
@@ -183,6 +190,13 @@ export const parentToRow = (o) => ({
   id_number: emptyToNull(o.idNumber || o.id_number),
   relation: emptyToNull(o.relation),
   icount_client_id: emptyToNull(o.icount_client_id),
+  bot_paused_until: emptyToNull(o.bot_paused_until),
+  bot_pause_reason: emptyToNull(o.bot_pause_reason),
+  bot_handoff_at: emptyToNull(o.bot_handoff_at),
+  bot_opted_out: !!o.bot_opted_out,
+  bot_opt_out_source: emptyToNull(o.bot_opt_out_source),
+  bot_intake: o.bot_intake && typeof o.bot_intake === 'object' ? o.bot_intake : null,
+  bot_outside_hours_date: emptyToNull(o.bot_outside_hours_date),
 });
 
 const mappers = {

@@ -45,7 +45,7 @@ test('applyBusinessBrand replaces legacy gym name', () => {
 });
 
 test('handoff and stop keywords match', () => {
-  assert.equal(textMatchesKeywords('אפשר לדבר עם נציג?', 'אדם,נציג,צוות'), true);
+  assert.equal(textMatchesKeywords('אפשר לדבר עם נציג?', 'אדם,נציג,תלונה'), true);
   assert.equal(textMatchesKeywords('עצור בבקשה', 'עצור,הסר,stop'), true);
   assert.equal(textMatchesKeywords('שלום', 'עצור,הסר'), false);
 });
@@ -56,6 +56,7 @@ test('normalizeMenuChoice maps numbers and titles', () => {
   assert.equal(normalizeMenuChoice('4'), '4');
   assert.equal(normalizeMenuChoice('הצהרת בריאות'), 'health');
   assert.equal(normalizeMenuChoice('לדבר עם צוות'), '3');
+  assert.equal(normalizeMenuChoice('כמה מדריכים יש לכם בצוות ?'), null);
   assert.equal(normalizeMenuChoice('אירועים וטיולים'), '4');
   assert.equal(normalizeMenuChoice('חוגים ומחירים'), '1');
   // "יש טיול בקרוב?" is an events question, not a classes one
@@ -234,10 +235,21 @@ test('decideBotGate: disabled / opted out / handoff / outside hours', () => {
   assert.ok(['outside_hours', 'reply', 'silence'].includes(outside.action));
 });
 
-test('parseAiReply detects UNSURE prefix', () => {
+test('parseAiReply detects UNSURE and HANDOFF prefixes', () => {
   const parsed = parseAiReply('UNSURE\nלא בטוח לגבי המחיר', { aiUnsureReply: 'מעביר לצוות', aiMaxReplyChars: 700 });
   assert.equal(parsed.unsure, true);
   assert.match(parsed.text, /לא בטוח|מעביר|לא הבנתי/);
+
+  const handoff = parseAiReply('HANDOFF\nוואי, אין לי את הפרט — מעביר לצוות 🙂', { aiMaxReplyChars: 700 });
+  assert.equal(handoff.handoff, true);
+  assert.equal(handoff.unsure, false);
+  assert.match(handoff.text, /אין לי את הפרט/);
+});
+
+test('staff-in-team questions do not hard-handoff via keywords', () => {
+  const settings = mergeBotSettings({ aiResponderEnabled: true });
+  assert.equal(decideBotGate(settings, { status: 'active' }, [], 'כמה מדריכים יש לכם בצוות ?').action, 'reply');
+  assert.equal(decideBotGate(settings, { status: 'active' }, [], 'רוצה נציג').action, 'handoff');
 });
 
 test('first unsure asks for clarification; second gibberish hands off', () => {

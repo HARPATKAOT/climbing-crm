@@ -32,6 +32,8 @@ import {
   asksAboutSignupLink,
   asksAboutOpeningHours,
   asksAboutPrices,
+  asksAboutSalary,
+  asksAboutStaffHeadcount,
   asksAboutEquipment,
   asksAboutEnrichment,
   asksAboutTrainer,
@@ -77,9 +79,11 @@ import {
   isStaffPhone,
   parseAiReply,
   detectUnsureHeuristic,
+  detectNaturalHandoff,
   resolveUnsureReply,
   asksAboutBusinessIdentity,
   formatBusinessIdentityReply,
+  BOT_BOUNDS_RULES,
   interactiveMenuPayload,
   studentsForParent,
   findPrimaryParent,
@@ -531,9 +535,20 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
 
   // Trainer / group size come before the schedule branch — "כמה ילדים בקבוצה"
   // reads as a schedule question otherwise.
+  // Staff headcount ("כמה מדריכים בצוות") is not in the CRM — leave to the model.
+  if (asksAboutStaffHeadcount(raw) || asksAboutSalary(raw)) {
+    return { text: '', confidence: 'low', skipMenu: true };
+  }
+
   if (asksAboutAssistants(raw) || asksAboutTrainer(raw) || asksAboutGroupSize(raw)) {
-    if (needsAudience) return { text: ASK_GRADE_REPLY, confidence: 'high' };
-    const details = formatGroupDetailsReply(db, exactGroups, raw);
+    if (needsAudience && !asksAboutGroupSize(raw)) {
+      return { text: ASK_GRADE_REPLY, confidence: 'high' };
+    }
+    // Size questions can use all matching groups or any groups with maxSlots.
+    const detailGroups = exactGroups.length
+      ? exactGroups
+      : (asksAboutGroupSize(raw) ? (db.get('groups') || []) : []);
+    const details = formatGroupDetailsReply(db, detailGroups, raw);
     if (details.text) {
       return { text: details.text, confidence: 'high', handoff: details.handoff };
     }
@@ -567,23 +582,17 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
     return { text: `${hoursReply}\n\n${locationReply}`, confidence: 'high' };
   }
 
+  // Clear signup / availability intent only — bare «קבוצה» or «ילדים» is not enough.
   const scheduleIntent =
     menuPick === '1'
     || /כית/.test(raw)
     || extractAgeYears(raw) != null
-    || text.includes('מתי')
-    || text.includes('איזה יום')
-    || text.includes('באיזה יום')
-    || text.includes('קבוצ')
-    || text.includes('שיעור')
-    || text.includes('רישום')
-    || text.includes('להירשם')
-    || text.includes('אימון')
-    || text.includes('אימונ')
     || asksAboutAvailability(raw)
     || asksAboutSpotCount(raw)
     || wantsWaitlist(raw)
-    || text.includes('חוג');
+    || /(?:איזה יום|באיזה יום|מתי יש|מתי החוג)/.test(raw)
+    || /(?:רישום|להירשם)/.test(raw)
+    || (/(?:שיעור|אימון|חוג)/.test(raw) && /(?:יש|מתי|כית|גיל|מקום|פנוי)/.test(raw));
 
   if (scheduleIntent) {
     return { text: classesReply, confidence: 'high', startIntake: menuPick === '1' };
@@ -602,13 +611,8 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
     return { text: locationReply, confidence: 'high' };
   }
 
-  // Known customer: natural greeting, never the numbered menu.
-  if (isIdentifiedParent(parent) && isLowIntentGreeting(raw)) {
-    return { text: knownParentGreeting(parent), confidence: 'high' };
-  }
-
+  // Known customer: natural chat via the model — no canned greeting list.
   if (isIdentifiedParent(parent)) {
-    // Let Gemini answer — never dump the opening menu on a known customer.
     return { text: '', confidence: 'low', skipMenu: true };
   }
 
@@ -794,24 +798,20 @@ ${systemPrompt}
 
 ${crmText}
 
-הערה חשובה: אם הלקוח כותב רק 1 / 2 / 3 / 4 זה בחירה מתפריט:
-1 = הרשמה וחוגים (ימים, שעות, מחיר הקבוצה) — רק לקבוצות הרלוונטיות לכיתה/גיל
+${BOT_BOUNDS_RULES}
+
+תפריט (רק אם הלקוח כותב מספר בודד 1–4):
+1 = הרשמה וחוגים
 2 = שעות פתיחה ומיקום
 3 = העברה לצוות אנושי
-4 = אירועים וטיולים פתוחים להרשמה
+4 = אירועים וטיולים
 
-הצהרת בריאות אינה בתפריט — רק אם ביקשו במפורש, או שהצוות שולח אותה בהרשמה.
-
-אם שאלו על חוג/מחיר/מקום בלי כיתה או גיל — שאלו קודם באיזו כיתה, ואל תשפכו את כל הקטלוג.
-
-מחירים: מותר לנקוב רק במחיר שמופיע בנתונים שלמעלה — מחיר קבוצה, מחירי ציוד או דמי העשרה.
-כל שאלת תשלום אחרת (מנוי, כרטיסייה, יום הולדת, הנחה, החזר, חשבונית) — הפנה לצוות בלי סכום.
+אם שאלו על חוג/מחיר/מקום בלי כיתה או גיל — שאלו קודם באיזו כיתה.
 
 מגבלת אורך תשובה: עד ${s.aiMaxReplyChars || 700} תווים.
-אם אינך בטוח — התחל את התשובה במילה UNSURE.
 
 הודעת לקוח: "${incomingText}"
-תשובה קצרה ומנומסת של הבוט, עם נתונים מהרשימה בלבד:`
+תשובה קצרה של הבוט:`
             }]
           }]
         })
@@ -1205,15 +1205,17 @@ export const whatsappService = {
       const geminiText = await callGeminiReply(systemPrompt, crmText, incomingText, apiKey, settings);
       if (geminiText) {
         const parsed = parseAiReply(geminiText, settings);
+        const naturalHandoff = parsed.handoff || detectNaturalHandoff(parsed.text);
+        if (naturalHandoff) {
+          return {
+            text: clipReply(parsed.text || settings.aiHandoffAckMessage, settings.aiMaxReplyChars),
+            handoff: true,
+            unsure: false,
+            confidence: 'medium',
+          };
+        }
         const unsure = parsed.unsure || detectUnsureHeuristic(parsed.text);
         if (unsure) {
-          // Never "לא הבנתי" a plain hello — greet instead.
-          if (isLowIntentGreeting(incomingText)) {
-            const greet = isIdentifiedParent(parent)
-              ? knownParentGreeting(parent)
-              : (settings.aiGreetingMenu || DEFAULT_BOT_SETTINGS.aiGreetingMenu);
-            return { text: clipReply(greet, settings.aiMaxReplyChars), confidence: 'high' };
-          }
           const resolved = resolveUnsureReply(phone, settings, { incomingText });
           return {
             text: clipReply(resolved.text, settings.aiMaxReplyChars),
@@ -1228,20 +1230,10 @@ export const whatsappService = {
     }
 
     if (quick.skipMenu && isIdentifiedParent(parent)) {
-      if (isLowIntentGreeting(incomingText)) {
-        return {
-          text: clipReply(knownParentGreeting(parent), settings.aiMaxReplyChars),
-          confidence: 'high',
-          skipMenu: true,
-        };
-      }
-      const resolved = resolveUnsureReply(phone, settings, { incomingText });
+      // Model failed — last-resort short greeting, not a phrase list engine.
       return {
-        text: clipReply(resolved.text || knownParentGreeting(parent), settings.aiMaxReplyChars),
+        text: clipReply(knownParentGreeting(parent), settings.aiMaxReplyChars),
         confidence: 'low',
-        handoff: resolved.handoff,
-        unsure: true,
-        clarify: !!resolved.clarify,
         skipMenu: true,
       };
     }
@@ -1564,7 +1556,9 @@ export const whatsappService = {
     const aiResult = await whatsappService.generateAIResponse(text, { phone: normalizedPhone, parent, students });
     if (aiResult.handoff) {
       await pauseBotForPhone(normalizedPhone, settings.aiPauseMinutesAfterHuman, { reason: 'handoff' });
-      await whatsappService.sendBotReply(normalizedPhone, aiResult.text || settings.aiHandoffAckMessage, {
+      // Prefer the model's natural wording; canned ack only when empty.
+      const handoffText = aiResult.text || settings.aiHandoffAckMessage;
+      await whatsappService.sendBotReply(normalizedPhone, handoffText, {
         isSimulator,
         source: 'bot_control',
       });
@@ -1576,7 +1570,7 @@ export const whatsappService = {
         reason: aiResult.unsure ? 'unsure' : 'handoff',
         isSimulator,
       });
-      return { parent, student, isNew, replied: true, reply: aiResult.text, reason: 'handoff' };
+      return { parent, student, isNew, replied: true, reply: handoffText, reason: 'handoff' };
     }
 
     let replyText = aiResult.text;

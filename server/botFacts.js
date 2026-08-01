@@ -34,9 +34,18 @@ export const PRICE_HANDOFF_REPLY =
 
 // ─── גילוי כוונה ─────────────────────────────────────────────────────────────
 
+export function asksAboutSalary(text) {
+  const t = String(text || '');
+  return /שכר|משכורת|תלוש|העסקה|מקבל(?:\s+\S+){0,3}\s*לשעה|כמה\s*(?:כסף\s+)?(?:הוא|היא|הם|דלק|\S+)\s*מקבל/.test(t)
+    || /(?:מקבל|מרוויח)\s*לשעה/.test(t);
+}
+
 export function asksAboutPrices(text) {
-  // «כמה עולה» / «כמה עולות» / «כמה עולים» — same question, three endings.
-  return /מחיר|כמה עול|כמה זה|עלות|כמה משלמים|תעריף|מחירון|₪|שקל|כסף/.test(String(text || ''));
+  const t = String(text || '');
+  if (asksAboutSalary(t)) return false;
+  // Bare «כסף» is too broad (salary, tips, etc.) — need product/class context.
+  if (/מחיר|כמה עול|כמה זה עול|עלות|כמה משלמים|תעריף|מחירון|₪|שקל/.test(t)) return true;
+  return /כסף/.test(t) && /חוג|קבוצ|ציוד|כית|מנוי|כרטיס|העשר|נעל|חולצ/.test(t);
 }
 
 export function asksAboutEquipment(text) {
@@ -62,9 +71,15 @@ export function asksAboutEvents(text) {
   return false;
 }
 
+/** “How many instructors work here?” — not “who is my group’s trainer”. */
+export function asksAboutStaffHeadcount(text) {
+  return /כמה\s*(?:מדריכ|מאמנ|עובד)/.test(String(text || ''));
+}
+
 export function asksAboutTrainer(text) {
   const t = String(text || '');
   if (asksAboutAssistants(t)) return false;
+  if (asksAboutStaffHeadcount(t)) return false;
   return /מדריך|מאמן|מי מלמד|מי מעביר|מי מאמן/.test(t);
 }
 
@@ -74,7 +89,7 @@ export function asksAboutAssistants(text) {
 
 export function asksAboutGroupSize(text) {
   const t = String(text || '');
-  return /כמה ילדים|כמה חניכים|כמה משתתפים|כמה בקבוצה|גודל הקבוצה|גודל קבוצה|כמה מקסימום/.test(t);
+  return /כמה ילדים|כמה חניכים|כמה משתתפים|כמה בקבוצה|גודל הקבוצה|גודל קבוצה|כמה מקסימום|מכסה|למה .{0,30}ילדים|רק\s*\d+\s*ילדים|מוגבל/.test(t);
 }
 
 export function asksAboutGroupChat(text) {
@@ -382,6 +397,23 @@ export function formatGroupDetailsReply(db, groups = [], text = '') {
       text: 'לאיזו קבוצה הכוונה? כתבו כיתה ויום, לדוגמה: כיתה ג׳ יום ג׳.',
       handoff: false,
     };
+  }
+  if (wantsSize && !wantsTrainer) {
+    const maxes = [...new Set(
+      groups.map((g) => Number(g.maxSlots) || 0).filter((n) => n > 0)
+    )].sort((a, b) => a - b);
+    if (maxes.length === 1) {
+      return {
+        text: `בקבוצות שלנו עד ${maxes[0]} מתאמנים בקבוצה — כדי לשמור על יחס טוב ואימון איכותי 🧗`,
+        handoff: false,
+      };
+    }
+    if (maxes.length > 1) {
+      return {
+        text: `בקבוצות שלנו בדרך כלל בין ${maxes[0]} ל־${maxes[maxes.length - 1]} מתאמנים, לפי סוג החוג — כדי לשמור על יחס טוב ואימון איכותי 🧗`,
+        handoff: false,
+      };
+    }
   }
   if (groups.length > 3) {
     return {

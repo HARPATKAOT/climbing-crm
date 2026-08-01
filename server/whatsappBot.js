@@ -22,14 +22,25 @@ const BRAND_NAME = DEFAULT_BUSINESS_PROFILE.display_name;
 /** Prices are allowed, invented prices are not. Stamped onto every system prompt. */
 export const PRICE_SOURCE_RULE =
   'כלל קשיח: מסור רק מחירים שמופיעים בנתוני המערכת — מחיר הקבוצה, מחירי הציוד ודמי ההעשרה. '
-  + 'כל שאלת תשלום אחרת (מנוי, כרטיסייה, יום הולדת, הנחה, החזר, חשבונית) — הפנה לצוות בלי לנקוב בסכום.';
+  + 'כל שאלת תשלום אחרת (מנוי, כרטיסייה, יום הולדת, הנחה, החזר, חשבונית, שכר) — הפנה לצוות בלי לנקוב בסכום.';
+
+/** Runtime allow/forbid — short bounds, no conversation script. */
+export const BOT_BOUNDS_RULES = [
+  '## מותר / אסור',
+  'מותר: שיחה רגילה עם הלקוח; למסור רק עובדות שמופיעות בנתונים שקיבלת.',
+  'אסור: להמציא שעה, מחיר, קבוצה, אירוע, קישור או שכר.',
+  'אסור: לענות בעצמך על ביטול, החזר, חשבונית, תלונה, פציעה או שכר עובדים — העבר לצוות.',
+  'שיחה רגילה (ברכות, נימוס, שאלות כלליות) — ענה טבעי. אל תתחיל ב-UNSURE.',
+  'חסר נתון במערכת או שהשאלה דורשת אדם: השב בשורה הראשונה HANDOFF ואז משפט טבעי קצר (למשל שאין לך את הפרט ואתה מעביר לצוות). אל תשתמש בנוסח קבוע.',
+  'הודעה חסרת משמעות לגמרי: השב בשורה הראשונה UNSURE ואז בקש הבהרה קצרה.',
+].join('\n');
 
 export const DEFAULT_BOT_SETTINGS = {
   aiOutsideHoursMessage:
     'קיבלנו את ההודעה 🙏\nאנחנו מחוץ לשעות המענה כרגע.\nנחזור אליכם בבוקר בין 9:00 ל־21:00.',
-  // Money and injury never get an automated answer, whatever the model thinks.
+  // Explicit human ask / hard topics only — bare «צוות» must not match «בצוות».
   aiHandoffKeywords:
-    'אדם,נציג,צוות,תלונה,מנהל,דחוף,לדבר עם,ביטול,לבטל,החזר,זיכוי,חשבונית,פציעה,נפצע,כאב',
+    'אדם,נציג,תלונה,מנהל,דחוף,לדבר עם,ביטול,לבטל,החזר,זיכוי,חשבונית,פציעה,נפצע,כאב',
   aiHandoffAckMessage: `מעבירים אתכם לצוות ${BRAND_NAME} 🧗\nמישהו יחזור אליכם בהקדם.`,
   aiStopKeywords: 'עצור,הסר,stop,unsubscribe,הסר אותי',
   aiOptOutMessage: 'הוסרתם מרשימת המענה האוטומטי.\nאם תרצו לחזור — כתבו «הפעל בוט».',
@@ -56,7 +67,7 @@ export const DEFAULT_BOT_SETTINGS = {
     + 'אל תמציא שעות פתיחה שלא מופיעות ביומן.\n'
     + 'אל תמציא קבוצות או אירועים שלא במערכת.\n'
     + 'אל תפרסם אירוע פרטי (יום הולדת) גם אם יש לו קישור הרשמה.\n'
-    + 'ביטול, החזר כספי, שינוי תשלום, חשבונית, תלונה או פציעה — העבר לצוות מיד.',
+    + 'ביטול, החזר כספי, שינוי תשלום, חשבונית, תלונה, פציעה או שכר — העבר לצוות.',
   aiBusinessFacts:
     'כתובת: השקד 1, תל מונד\n'
     + 'חניה: יש חניה בחזית הקיר\n'
@@ -200,6 +211,17 @@ export function textMatchesKeywords(text, keywords) {
   return list.some((kw) => kw && raw.includes(kw));
 }
 
+/** Explicit request for a human / hard topics — not «בצוות» in an info question. */
+export function wantsExplicitHumanStaff(text, settings = {}) {
+  if (normalizeMenuChoice(text) === '3') return true;
+  const t = String(text || '');
+  if (/(?:לדבר עם|רוצה(?:\s+לדבר)?(?:\s+עם)?)\s*(?:את\s*)?(?:ה)?(?:צוות|נציג|אדם)/.test(t)) {
+    return true;
+  }
+  const s = mergeBotSettings(settings);
+  return textMatchesKeywords(t, s.aiHandoffKeywords);
+}
+
 export function clipReply(text, maxChars = 700) {
   const body = String(text || '').trim();
   const limit = Number(maxChars) > 0 ? Number(maxChars) : 700;
@@ -229,7 +251,10 @@ export function normalizeMenuChoice(text) {
   if (/טיול|אירוע|קייטנ/.test(raw)) return '4';
   if (/חוג|רישום|אימון|כית/.test(raw) && !/שע|מיקום|כתובת|מחיר|עלות|כסף|שקל/.test(raw)) return '1';
   if (/שע|מיקום|כתובת|פתוח|הגע/.test(raw)) return '2';
-  if (/צוות|אדם|נציג|לדבר עם/.test(raw)) return '3';
+  // Explicit ask for a human — not «בצוות» inside an info question.
+  if (/(?:לדבר עם|רוצה(?:\s+לדבר)?(?:\s+עם)?)\s*(?:את\s*)?(?:ה)?(?:צוות|נציג|אדם)|(?:^|\s)(?:נציג|אדם)(?:\s|$|[?؟])/.test(raw)) {
+    return '3';
+  }
 
   // Interactive list / button titles
   if (/הצהרת בריאות/.test(raw)) return 'health';
@@ -560,10 +585,8 @@ export function buildAiExtraContext(settings, phone, parent, students) {
   }
   parts.push(
     '',
-    '## כללי ביטחון',
-    'אם אינך בטוח בתשובה או שההודעה לא ברורה — השב בדיוק בשורה הראשונה: UNSURE',
-    'ואז משפט קצר שמבקש הבהרה מהלקוח. אל תעביר לצוות בעצמך במשפט הזה.',
-    'אל תנחש זמנים.',
+    BOT_BOUNDS_RULES,
+    '',
     PRICE_SOURCE_RULE,
   );
   return parts.join('\n');
@@ -573,17 +596,35 @@ export function parseAiReply(rawText, settings = {}) {
   const s = mergeBotSettings(settings);
   let text = String(rawText || '').trim();
   let unsure = false;
+  let handoff = false;
+  if (/^HANDOFF\b/i.test(text)) {
+    handoff = true;
+    text = text.replace(/^HANDOFF\b[:\-\s]*/i, '').trim();
+  }
   if (/^UNSURE\b/i.test(text)) {
     unsure = true;
     text = text.replace(/^UNSURE\b[:\-\s]*/i, '').trim();
   }
   if (!text && unsure) text = s.aiClarifyReply || s.aiUnsureReply;
-  return { text: clipReply(text, s.aiMaxReplyChars), unsure };
+  if (!text && handoff) text = s.aiHandoffAckMessage;
+  return { text: clipReply(text, s.aiMaxReplyChars), unsure, handoff };
+}
+
+/** Model already wrote a natural “I don’t know — transferring” reply. */
+export function detectNaturalHandoff(text) {
+  const t = String(text || '');
+  if (/(?:לא יודע|אין לי(?:\s+את)?(?:\s+ה)?(?:מידע|פרט)|לא מופיע אצלי)/.test(t)
+    && /(?:מעביר|אעביר|לצוות|נציג)/.test(t)) {
+    return true;
+  }
+  return false;
 }
 
 export function detectUnsureHeuristic(text) {
   const t = String(text || '');
-  return /לא בטוח|אינני בטוח|לא יודע|אין לי מידע|אעביר לצוות|צריך לבדוק/.test(t);
+  // Natural handoff sentences are not “unsure clarify” — keep the model’s wording.
+  if (detectNaturalHandoff(t)) return false;
+  return /לא בטוח|אינני בטוח|אין לי מידע|צריך לבדוק/.test(t);
 }
 
 /** True when this outbound text is our “didn’t understand” ask. */
@@ -914,11 +955,12 @@ export function decideBotGate(settings, parent, students, text, { isSimulator = 
     return { action: 'silence', reason: 'rate_limited' };
   }
 
-  if (textMatchesKeywords(text, s.aiHandoffKeywords) || normalizeMenuChoice(text) === '3') {
+  if (wantsExplicitHumanStaff(text, s)) {
     return {
       action: 'handoff',
       reply: s.aiHandoffAckMessage,
       pauseMinutes: s.aiPauseMinutesAfterHuman || 120,
+      explicit: true,
     };
   }
 

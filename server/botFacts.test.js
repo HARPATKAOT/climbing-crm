@@ -252,6 +252,7 @@ test('the signup link carries the specific class as the interest', () => {
 
 test('intent detectors keep the branches apart', () => {
   assert.equal(asksAboutPrices('כמה עולה החוג?'), true);
+  assert.equal(asksAboutPrices('כמה כסף דלק מקבל לשעה?'), false);
   assert.equal(asksAboutEvents('יש טיולים קרובים?'), true);
   assert.equal(asksAboutEvents('אני במחנה של הנבחרת'), false);
   assert.equal(asksAboutEvents('יש מחנה קיץ להרשמה?'), true);
