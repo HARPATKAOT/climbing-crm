@@ -10,6 +10,7 @@ import './index.css';
 // Public forms are heavy (signature pad, PDF libs) and only needed on their
 // own routes — load them on demand so the CRM shell stays light.
 const PublicOnboardingForm       = lazy(() => import('./components/PublicOnboardingForm.jsx'));
+const PublicEmployeeOnboardForm  = lazy(() => import('./components/PublicEmployeeOnboardForm.jsx'));
 const LeadIntakeForm             = lazy(() => import('./components/LeadIntakeForm.jsx'));
 const PrivacyPolicy              = lazy(() => import('./components/PrivacyPolicy.jsx'));
 const PublicActivityRegistration = lazy(() => import('./components/PublicActivityRegistration.jsx'));
@@ -64,6 +65,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/health/:slug" element={<PublicOnboardingForm />} />
             <Route path="/onboard" element={<PublicOnboardingForm />} />
             <Route path="/onboard/:slug" element={<PublicOnboardingForm />} />
+            <Route path="/staff-onboard" element={<PublicEmployeeOnboardForm />} />
             <Route path="/join" element={<LeadIntakeForm />} />
             <Route path="/privacy" element={<PrivacyPolicy />} />
             <Route path="/event/:slug" element={<PublicActivityRegistration />} />

@@ -1,7 +1,25 @@
-import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight, Package, Sparkles, ExternalLink, AlertTriangle, UserCheck, List, ShieldCheck, ShieldAlert, Maximize2, Minimize2, Clipboard, Check } from "lucide-react";
+import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight, ChevronDown, Package, Sparkles, ExternalLink, AlertTriangle, UserCheck, List, ShieldCheck, ShieldAlert, Maximize2, Minimize2, Clipboard, Check } from "lucide-react";
 import { DAYS_FULL } from '../mockData.js';
+import {
+  SYSTEM_ROLE_KEYS, staffForRole, canFillRole, noStaffForRoleMessage,
+  fetchRoleCatalog, roleLabelOf,
+} from '../utils/staffRoles.js';
+
+/** התוויות העדכניות של „מדריך” ו„עוזר מדריך”, שניתנות לשינוי בקטלוג. */
+function useStaffRoleLabels() {
+  const [catalog, setCatalog] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchRoleCatalog().then((c) => { if (!cancelled) setCatalog(c); });
+    return () => { cancelled = true; };
+  }, []);
+  return {
+    trainer: roleLabelOf(catalog, SYSTEM_ROLE_KEYS.TRAINER),
+    assistant: roleLabelOf(catalog, SYSTEM_ROLE_KEYS.ASSISTANT),
+  };
+}
 import {
   getGroupDays,
   localDateStr,
@@ -958,8 +976,121 @@ function GroupBlock({ group, enrolledCount, selected, onClick }) {
   );
 }
 
+/**
+ * A people dropdown, single or multi choice. It replaces the native `<select>`
+ * here because the browser draws that list in the OS palette — a white panel
+ * inside a dark form — and an option list cannot be styled out of it.
+ */
+function PeoplePicker({ options, selected, onToggle, placeholder, multiple = true, clearLabel }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  // A click anywhere else closes the list — there is no backdrop to catch it,
+  // and the whole thing sits inside a modal that must stay clickable.
+  useEffect(() => {
+    if (!open) return;
+    const onDocDown = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDocDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const chosen = options.filter(o => selected.includes(o.id));
+
+  const pick = (id) => {
+    onToggle(id);
+    if (!multiple) setOpen(false);
+  };
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        className="input select"
+        onClick={() => setOpen(o => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8, textAlign: 'right',
+          cursor: 'pointer', minHeight: 42,
+        }}
+      >
+        <span style={{
+          flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          color: chosen.length ? 'var(--text-1)' : 'var(--text-3)',
+        }}>
+          {chosen.length ? chosen.map(o => o.name).join(', ') : placeholder}
+        </span>
+        <ChevronDown size={15} style={{ flexShrink: 0, color: 'var(--text-3)' }} />
+      </button>
+
+      {open && (
+        <div role="listbox" aria-multiselectable={multiple} style={{
+          position: 'absolute', top: 'calc(100% + 4px)', right: 0, left: 0,
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border)',
+          borderRadius: 'var(--radius-sm)',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+          maxHeight: 220, overflowY: 'auto', zIndex: 30, padding: 4,
+        }}>
+          {!multiple && clearLabel && (
+            <button
+              type="button"
+              role="option"
+              aria-selected={chosen.length === 0}
+              onClick={() => pick('')}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                background: 'transparent', border: 'none', borderRadius: 6,
+                padding: '7px 10px', color: 'var(--text-3)', fontSize: 13,
+                fontFamily: 'inherit', textAlign: 'right', cursor: 'pointer',
+              }}
+            >
+              <Check size={13} style={{ flexShrink: 0, opacity: 0 }} />
+              <span style={{ flex: 1 }}>{clearLabel}</span>
+            </button>
+          )}
+          {options.map(opt => {
+            const on = selected.includes(opt.id);
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                role="option"
+                aria-selected={on}
+                onClick={() => pick(opt.id)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                  background: on ? 'rgba(56,189,248,0.12)' : 'transparent',
+                  border: 'none', borderRadius: 6, padding: '7px 10px',
+                  color: on ? 'var(--blue)' : 'var(--text-1)',
+                  fontSize: 13, fontWeight: on ? 600 : 500,
+                  fontFamily: 'inherit', textAlign: 'right', cursor: 'pointer',
+                }}
+              >
+                <Check size={13} style={{ flexShrink: 0, opacity: on ? 1 : 0 }} />
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {opt.name}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Group Form Modal (Add / Edit) ────────────────────────────────────────────
 function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
+  const roleLabels = useStaffRoleLabels();
   const [name,       setName]       = useState(group?.name || '');
   const [day,        setDay]        = useState(group?.day ?? 0);
   const [time,       setTime]       = useState(group?.time || '16:00');
@@ -982,12 +1113,20 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
     onClose();
   };
 
-  // Active employees for the dropdown, but always keep the group's current
-  // trainer visible even if they've since been marked inactive.
-  const trainerOptions = employees.filter(e => isActiveEmployee(e) || e.id === trainer);
+  // Only employees marked for the role can be assigned to it, but the people
+  // already on this group stay listed — a role removed after the fact must not
+  // silently drop a trainer off a group nobody has touched.
+  const trainerOptions = staffForRole(
+    employees.filter(e => isActiveEmployee(e) || e.id === trainer),
+    roleLabels.trainer,
+    [trainer],
+  );
   // The lead trainer is never also listed as their own assistant.
-  const assistantOptions = employees.filter(e =>
-    e.id !== trainer && (isActiveEmployee(e) || assistants.includes(e.id)));
+  const assistantOptions = staffForRole(
+    employees.filter(e => e.id !== trainer && (isActiveEmployee(e) || assistants.includes(e.id))),
+    roleLabels.assistant,
+    assistants,
+  );
 
   const toggleAssistant = (id) => {
     setAssistants(prev => prev.includes(id) ? prev.filter(a => a !== id) : [...prev, id]);
@@ -1067,18 +1206,27 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
             <div className="form-grid-2">
               <div className="form-group">
                 <label className="form-label">מדריך</label>
-                <select className="input select" value={trainer} onChange={e => {
-                  const next = e.target.value;
-                  setTrainer(next);
-                  // Promoting an assistant to lead trainer removes them from the
-                  // assistant list, so nobody is counted on the group twice.
-                  setAssistants(prev => prev.filter(id => id !== next));
-                }}>
-                  <option value="">בחר מדריך...</option>
-                  {trainerOptions.map(emp => (
-                    <option key={emp.id} value={emp.id}>{emp.name}</option>
-                  ))}
-                </select>
+                <PeoplePicker
+                  multiple={false}
+                  options={trainerOptions}
+                  selected={trainer ? [trainer] : []}
+                  placeholder="בחר מדריך..."
+                  clearLabel="ללא מדריך"
+                  onToggle={(id) => {
+                    // Re-picking the current trainer clears the slot, the same
+                    // as choosing the empty row.
+                    const next = id === trainer ? '' : id;
+                    setTrainer(next);
+                    // Promoting an assistant to lead trainer removes them from
+                    // the assistant list, so nobody is counted twice.
+                    setAssistants(prev => prev.filter(a => a !== next));
+                  }}
+                />
+                {trainerOptions.length === 0 && (
+                  <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4 }}>
+                    {noStaffForRoleMessage(roleLabels.trainer)}
+                  </div>
+                )}
               </div>
               <div className="form-group">
                 <label className="form-label">מקסימום משתתפים</label>
@@ -1090,33 +1238,14 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
             <div className="form-group">
               <label className="form-label">עוזרי מדריך</label>
               {assistantOptions.length === 0 ? (
-                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין עובדים פעילים נוספים לשיבוץ.</div>
+                <div style={{ fontSize: 12, color: 'var(--amber)' }}>{noStaffForRoleMessage(roleLabels.assistant)}</div>
               ) : (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {assistantOptions.map(emp => {
-                    const on = assistants.includes(emp.id);
-                    return (
-                      <button
-                        key={emp.id}
-                        type="button"
-                        onClick={() => toggleAssistant(emp.id)}
-                        aria-pressed={on}
-                        style={{
-                          border: `1px solid ${on ? 'var(--blue)' : 'var(--border)'}`,
-                          background: on ? 'rgba(56,189,248,0.15)' : 'transparent',
-                          color: on ? 'var(--blue)' : 'var(--text-2)',
-                          borderRadius: 999,
-                          padding: '4px 10px',
-                          fontSize: 12,
-                          fontWeight: on ? 700 : 500,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {emp.name}
-                      </button>
-                    );
-                  })}
-                </div>
+                <PeoplePicker
+                  options={assistantOptions}
+                  selected={assistants}
+                  onToggle={toggleAssistant}
+                  placeholder="בחר עוזרי מדריך..."
+                />
               )}
             </div>
 
@@ -1175,6 +1304,273 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
 }
 
 // ─── Attendance Modal (Supabase-persisted via API) ────────────────────────────
+/**
+ * מצב נוכחות הצוות לקבוצה ולתאריך. משותף לגיליון שבחלונית הקבוצה ולמודאל
+ * הנוכחות — שניהם מציגים את אותו אימון, ולכן אסור שתהיה להם לוגיקה נפרדת.
+ */
+function useStaffAttendance({ group, employees, date }) {
+  const roleLabels = useStaffRoleLabels();
+  const [marks, setMarks] = useState({});      // employeeId -> { status, role, substitute_for }
+  const [saving, setSaving] = useState(null);
+  const [extra, setExtra] = useState([]);      // מחליפים שנוספו ידנית ועוד לא סומנו
+  const [message, setMessage] = useState('');
+
+  const load = useCallback(() => {
+    setExtra([]);
+    fetch(`/api/groups/${encodeURIComponent(group.id)}/staff-attendance?date=${date}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows) => {
+        setMarks(Object.fromEntries(
+          (Array.isArray(rows) ? rows : []).map((row) => [row.employee_id, {
+            status: row.status,
+            role: row.role,
+            substitute_for: row.substitute_for || null,
+          }])
+        ));
+      })
+      .catch(() => setMarks({}));
+  }, [group.id, date]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const trainer = (employees || []).find(e => e.id === group.trainer);
+  const staffOnMat = [
+    trainer,
+    ...normalizeAssistants(group.assistants).map(id => (employees || []).find(e => e.id === id)),
+  ].filter(Boolean);
+
+  const rosterIds = new Set(staffOnMat.map(e => e.id));
+
+  const substitutes = [
+    ...Object.entries(marks)
+      .filter(([id]) => !rosterIds.has(id))
+      .map(([id, mark]) => ({
+        employee: (employees || []).find(e => e.id === id),
+        role: mark.role || 'trainer',
+        substitute_for: mark.substitute_for || null,
+      })),
+    ...extra
+      .filter(x => !marks[x.id])
+      .map(x => ({
+        employee: (employees || []).find(e => e.id === x.id),
+        role: x.role,
+        substitute_for: x.substitute_for,
+      })),
+  ].filter(x => x.employee);
+
+  const shownIds = new Set([...rosterIds, ...substitutes.map(x => x.employee.id)]);
+
+  // מחליף חייב להיות מוסמך לתפקיד — אותה מגבלה שחלה על השיבוץ הקבוע.
+  const substituteOptions = (employees || []).filter(e =>
+    !shownIds.has(e.id)
+    && isActiveEmployee(e)
+    && (canFillRole(e, roleLabels.trainer) || canFillRole(e, roleLabels.assistant)));
+
+  const mark = async (employeeId, { status, role, substituteFor }) => {
+    const previous = marks[employeeId] || null;
+    setSaving(employeeId);
+    setMarks(prev => {
+      const next = { ...prev };
+      if (status) next[employeeId] = { status, role, substitute_for: substituteFor || null };
+      else delete next[employeeId];
+      return next;
+    });
+    try {
+      const res = await fetch(`/api/groups/${encodeURIComponent(group.id)}/staff-attendance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date,
+          employee_id: employeeId,
+          status: status || 'none',
+          role,
+          substitute_for: substituteFor || null,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || 'שמירת נוכחות הצוות נכשלה');
+      }
+      setMessage('עודכן ✓');
+    } catch (err) {
+      // החזרה למצב הקודם, אחרת המסך מראה נוכחות שאין לה שורה בשרת.
+      setMarks(prev => {
+        const next = { ...prev };
+        if (previous) next[employeeId] = previous;
+        else delete next[employeeId];
+        return next;
+      });
+      setMessage(err.message);
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const addSubstitute = (employeeId) => {
+    const emp = (employees || []).find(e => e.id === employeeId);
+    if (!emp) return;
+    // מי שמוסמך כמדריך ממלא את מקום המדריך; אחרת הוא נכנס כעוזר מתנדב.
+    const role = canFillRole(emp, roleLabels.trainer) ? 'trainer' : 'assistant';
+    setExtra(prev => prev.some(x => x.id === employeeId) ? prev : [...prev, {
+      id: employeeId,
+      role,
+      substitute_for: role === 'trainer' ? (group.trainer || null) : null,
+    }]);
+  };
+
+  const removeSubstitute = async (employeeId) => {
+    setExtra(prev => prev.filter(x => x.id !== employeeId));
+    if (marks[employeeId]) await mark(employeeId, { status: null, role: 'trainer' });
+  };
+
+  return {
+    staff: staffOnMat, marks, saving, message, roleLabels,
+    substitutes, substituteOptions,
+    onMark: mark, onAddSubstitute: addSubstitute, onRemoveSubstitute: removeSubstitute,
+  };
+}
+
+/**
+ * נוכחות הצוות באימון. נפתחת רק אחרי שכל המתאמנים סומנו, כדי שהמדריך יסיים
+ * קודם את מה שהוא בא לעשות. נוכחות של מדריך הופכת לשורת שכר מסוג „חוג”;
+ * עוזרי מדריך מתנדבים, ולהם נספרות רק השעות.
+ */
+function StaffAttendanceSection({
+  staff, marks, saving, onMark, pendingCount, vacation, roleLabels,
+  substitutes, substituteOptions, onAddSubstitute, onRemoveSubstitute,
+}) {
+  const [adding, setAdding] = useState('');
+
+  if (staff.length === 0 && substitutes.length === 0) return null;
+
+  if (vacation) {
+    return (
+      <div style={{
+        marginTop: 4, padding: '10px 12px', borderRadius: 8,
+        border: '1px solid rgba(251,191,36,0.35)', background: 'var(--amber-dim)',
+        color: 'var(--amber)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6,
+      }}>
+        <Calendar size={13} style={{ flexShrink: 0 }} />
+        {vacation.name || 'חופשה מאימונים'} — לא היה אימון, ואין נוכחות צוות לרשום.
+      </div>
+    );
+  }
+
+  if (pendingCount > 0) {
+    return (
+      <div style={{
+        marginTop: 4, padding: '10px 12px', borderRadius: 8,
+        border: '1px dashed var(--border)', color: 'var(--text-3)', fontSize: 12,
+        display: 'flex', alignItems: 'center', gap: 6,
+      }}>
+        <UserCheck size={13} style={{ flexShrink: 0 }} />
+        נוכחות הצוות תיפתח אחרי סימון כל המתאמנים (נותרו {pendingCount}).
+      </div>
+    );
+  }
+
+  const row = (emp, roleLabel, { substituteFor = null, onRemove = null } = {}) => {
+    const mark = marks[emp.id]?.status || null;
+    const isPresent = mark === 'present';
+    const isAbsent = mark === 'absent';
+    const role = roleLabel === roleLabels.trainer ? 'trainer' : 'assistant';
+    const btn = (label, active, color, next) => (
+      <button
+        type="button"
+        className="btn btn-xs"
+        disabled={saving === emp.id}
+        aria-pressed={active}
+        onClick={() => onMark(emp.id, { status: active ? null : next, role, substituteFor })}
+        style={{
+          background: active ? color : 'rgba(255,255,255,0.03)',
+          color: active ? '#0B1220' : 'var(--text-3)',
+          fontWeight: active ? 'bold' : 'normal',
+          border: '1px solid rgba(255,255,255,0.05)',
+        }}
+      >
+        {label}
+      </button>
+    );
+    return (
+      <div key={emp.id} style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+        padding: 10, background: '#111827', borderRadius: 8,
+        border: `1px solid ${isPresent ? 'rgba(52,211,153,0.4)' : isAbsent ? 'rgba(248,113,113,0.4)' : 'var(--border)'}`,
+      }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {emp.name}
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+            {roleLabel}
+            {substituteFor ? ` · מחליף` : ''}
+            {role === 'assistant' ? ' · התנדבות' : ''}
+            {saving === emp.id ? ' · שומר...' : ''}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
+          {btn('הגיע', isPresent, '#34D399', 'present')}
+          {btn('לא הגיע', isAbsent, '#F87171', 'absent')}
+          {onRemove && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon btn-xs"
+              onClick={onRemove}
+              aria-label={`הסרת ${emp.name}`}
+            >
+              <X size={13} />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{
+      marginTop: 4, padding: 12, borderRadius: 8,
+      border: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)',
+      display: 'flex', flexDirection: 'column', gap: 8,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <UserCheck size={14} style={{ color: 'var(--blue)' }} />
+        <span style={{ fontSize: 13, fontWeight: 800 }}>נוכחות צוות</span>
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: -4 }}>
+        מדריך שסומן כנוכח מקבל שורת שכר לאישור במסך העובדים. לעוזרי מדריך נספרות
+        השעות בלבד — התנדבות.
+      </div>
+
+      {staff.map((emp, i) => row(emp, i === 0 ? roleLabels.trainer : roleLabels.assistant))}
+
+      {substitutes.map((sub) => row(sub.employee, sub.role === 'trainer' ? roleLabels.trainer : roleLabels.assistant, {
+        substituteFor: sub.substitute_for,
+        onRemove: () => onRemoveSubstitute(sub.employee.id),
+      }))}
+
+      {substituteOptions.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <select
+            className="input input-sm"
+            value={adding}
+            onChange={(e) => {
+              const id = e.target.value;
+              setAdding('');
+              if (id) onAddSubstitute(id);
+            }}
+            style={{ flex: 1 }}
+          >
+            <option value="">הוסף מחליף שהיה באימון...</option>
+            {substituteOptions.map((opt) => (
+              <option key={opt.id} value={opt.id}>{opt.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AttendanceModal({ group, students, parents, employees, initialDate, onClose, onMarked, onOpenStudent, canManageBilling = false }) {
   const members = students.filter(s => studentInGroup(s, group.id) && s.status !== 'archived');
   const [date, setDate] = useState(initialDate || localDateStr());
@@ -1190,6 +1586,9 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
   const [brief, setBrief] = useState({});           // studentId -> { equipment, safety }
   const [safetyFor, setSafetyFor] = useState(null); // המתאמן שממלאים לו מבחן
   const [equipmentFor, setEquipmentFor] = useState(null); // המתאמן שעורכים לו ציוד
+
+  const [dayVacation, setDayVacation] = useState(null);
+  const staffAtt = useStaffAttendance({ group, employees, date });
 
   const trainer = employees?.find(e => e.id === group.trainer);
   const assistantNames = assistantNamesOf(group, employees || []);
@@ -1225,7 +1624,8 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
     setSavedMsg('');
     (async () => {
       try {
-        await ensureAttendance({ date, groupId: group.id });
+        const ensured = await ensureAttendance({ date, groupId: group.id });
+        if (!cancelled) setDayVacation(ensured?.vacation || null);
         const r = await fetch(`/api/attendance?groupId=${encodeURIComponent(group.id)}&date=${date}`);
           const rows = r.ok ? await r.json() : [];
         if (!cancelled) applyRows(rows);
@@ -1449,6 +1849,12 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
                     </div>
                   );
                 })}
+
+                <StaffAttendanceSection
+                  {...staffAtt}
+                  pendingCount={pendingCount}
+                  vacation={dayVacation}
+                />
               </div>
             )
           )}
@@ -1485,7 +1891,9 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
         </div>
 
         <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 12, color: savedMsg.includes('שגיאה') ? 'var(--red)' : 'var(--green)' }}>{savedMsg}</span>
+          <span style={{ fontSize: 12, color: savedMsg.includes('שגיאה') ? 'var(--red)' : 'var(--green)' }}>
+            {savedMsg || staffAtt.message}
+          </span>
           <button className="btn btn-ghost" onClick={onClose}>סגור</button>
         </div>
       </div>
@@ -1534,6 +1942,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
   const [panelWidth, setPanelWidth] = useState(readStoredPanelWidth);
   const [dragging, setDragging] = useState(false);
   const [attBrief, setAttBrief] = useState({});     // studentId -> { equipment, safety }
+  const [attVacation, setAttVacation] = useState(null);
   const [attSafetyFor, setAttSafetyFor] = useState(null);
   const [attEquipmentFor, setAttEquipmentFor] = useState(null);
   const [eqByStudent, setEqByStudent] = useState({});
@@ -1561,6 +1970,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
 
   const trainer = employees.find(e => e.id === group.trainer);
   const assistantNames = assistantNamesOf(group, employees);
+  const staffAtt = useStaffAttendance({ group, employees, date: attDate });
   // גיליון לצפייה בלבד ביום שהקבוצה לא מתאמנת בו — ואז אין „ממתינים”.
   const attViewOnly = !days.includes(dateToWeekday(attDate)) && !attHasRows;
   const pendingCount = attViewOnly
@@ -1614,7 +2024,8 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
   const loadPanelAttendance = async (date) => {
     setAttLoading(true);
     try {
-      await ensureAttendance({ date, groupId: group.id });
+      const ensured = await ensureAttendance({ date, groupId: group.id });
+      setAttVacation(ensured?.vacation || null);
       const r = await fetch(`/api/attendance?groupId=${encodeURIComponent(group.id)}&date=${date}`);
       const rows = r.ok ? await r.json() : [];
       const st = {}; const ids = {};
@@ -1986,18 +2397,10 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                               size={14}
                             />
                           </div>
-                          {(isIntro || streak > 0 || safetyAlert) && (
+                          {(isIntro || streak > 0) && (
                             <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
                               {isIntro && <IntroPill />}
                               <AbsenceStreakPill streak={streak} />
-                              {/* אזהרת בטיחות היא הערה כתובה, ולכן היא נקראת
-                                  מתחת לשם ולא בשורת האייקונים. */}
-                              {safetyAlert && (
-                                <SafetyPill
-                                  safety={studentBrief?.safety}
-                                  onClick={() => setAttSafetyFor(s)}
-                                />
-                              )}
                             </div>
                           )}
                         </div>
@@ -2016,6 +2419,16 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                           )}
                         </div>
                       </div>
+                      {/* אזהרת בטיחות היא הערה כתובה ורחבה. בשורת השם היא דחקה
+                          את התיקייה ואת שם המתאמן, ולכן היא שורה משל עצמה. */}
+                      {safetyAlert && (
+                        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8 }}>
+                          <SafetyPill
+                            safety={studentBrief?.safety}
+                            onClick={() => setAttSafetyFor(s)}
+                          />
+                        </div>
+                      )}
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         {ATT_STATUS.filter(o => (isIntro ? ATT_INTRO_MARK_KEYS : ATT_SHEET_MARK_KEYS).includes(o.key)).map(opt => (
                           <button
@@ -2040,6 +2453,12 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
                     </div>
                   );
                 })}
+
+                <StaffAttendanceSection
+                  {...staffAtt}
+                  pendingCount={pendingCount}
+                  vacation={attVacation}
+                />
               </div>
             )}
             </>

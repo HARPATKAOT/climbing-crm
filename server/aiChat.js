@@ -442,7 +442,20 @@ export const READ_TOOLS = {
 
 // ─── הצהרות הכלים למודל ──────────────────────────────────────────────────────
 
-export function toolDeclarations() {
+/**
+ * @param {{ only?: string[], includeActions?: boolean }} [options]
+ *   `only` limits the model to a subset of tools — a channel that must not be
+ *   able to ask everything (WhatsApp) declares less than the CRM screen does.
+ */
+export function toolDeclarations({ only = null, includeActions = true } = {}) {
+  const allowed = only ? new Set(only) : null;
+  return rawToolDeclarations().filter((tool) => {
+    if (!includeActions && CHAT_ACTION_TYPES.includes(tool.name)) return false;
+    return !allowed || allowed.has(tool.name);
+  });
+}
+
+function rawToolDeclarations() {
   return [
     {
       name: 'search_customers',
@@ -935,13 +948,24 @@ export async function runChatTurn({
   callModel = callGeminiChat,
   apiKey,
   maxSteps = MAX_TOOL_STEPS,
+  // A caller may narrow the agent: fewer read tools, no write tools, and extra
+  // rules for its channel. The CRM screen passes none of these and gets it all.
+  readTools = READ_TOOLS,
+  allowActions = true,
+  extraRules = '',
 } = {}) {
   const question = clean(messages[messages.length - 1]?.content);
   const contents = historyToContents(messages);
   if (!contents.length) throw badRequest('אין הודעה לשלוח');
 
-  const systemInstruction = buildSystemPrompt({ today, brandName, actor, page });
-  const declarations = toolDeclarations();
+  const systemInstruction = [
+    buildSystemPrompt({ today, brandName, actor, page }),
+    extraRules ? `\n${extraRules}` : '',
+  ].filter(Boolean).join('\n');
+  const declarations = toolDeclarations({
+    only: Object.keys(readTools).concat(allowActions ? CHAT_ACTION_TYPES : []),
+    includeActions: allowActions,
+  });
 
   const proposals = [];
   const toolsUsed = [];
@@ -978,10 +1002,10 @@ export async function runChatTurn({
       const args = call.args && typeof call.args === 'object' ? call.args : {};
       toolsUsed.push(name);
 
-      if (READ_TOOLS[name]) {
+      if (readTools[name]) {
         let result;
         try {
-          result = READ_TOOLS[name](db, { ...args, today });
+          result = readTools[name](db, { ...args, today });
         } catch (err) {
           result = { error: err.message };
         }
@@ -989,8 +1013,12 @@ export async function runChatTurn({
         continue;
       }
 
-      if (!CHAT_ACTION_TYPES.includes(name)) {
-        responseParts.push({ functionResponse: { name, response: { error: 'כלי לא קיים' } } });
+      // A tool the channel was not given is refused here too, not only left out
+      // of the declarations — a model can still name a tool it was never shown.
+      if (!allowActions || !CHAT_ACTION_TYPES.includes(name)) {
+        responseParts.push({
+          functionResponse: { name, response: { error: 'הכלי הזה לא זמין בערוץ הזה' } },
+        });
         continue;
       }
 

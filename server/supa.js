@@ -90,6 +90,7 @@ export const OPERATIONAL_TABLES = [
   'whatsapp_logs',
   'wage_agreements',
   'work_assignments',
+  'staff_attendance',
   'shift_hours',
   'safety_inspections',
   'safety_incidents',
@@ -310,6 +311,8 @@ mappers.activities = columnMapper([
   'host_payment_token', 'host_payment_id', 'host_paid_at',
   'form_template_id', 'form_template_slug',
   'price_includes_vat',
+  // Staff scheduling on the event: which role may be assigned and how it is paid.
+  'staff_role', 'staff_pay_mode', 'staff_flat_amount',
   'created_at', 'updated_at',
 ]);
 mappers.attendance = columnMapper([
@@ -344,6 +347,7 @@ mappers.activity_templates = columnMapper([
   'price_includes_vat',
   'registration_page_title', 'registration_page_body',
   'theme', 'sort_order', 'is_active',
+  'staff_role', 'staff_pay_mode', 'staff_flat_amount',
   'created_at', 'updated_at',
 ]);
 

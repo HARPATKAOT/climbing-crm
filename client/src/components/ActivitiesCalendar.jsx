@@ -8,6 +8,10 @@ import ActivityPageDesigner from './ActivityPageDesigner.jsx';
 import ActivityRegistrationPanel from './ActivityRegistrationPanel.jsx';
 import ActivityTemplatesMenu from './ActivityTemplatesMenu.jsx';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
+import {
+  staffForRole, noStaffForRoleMessage, fetchRoleCatalog, activityRoleLabels,
+} from '../utils/staffRoles.js';
+import { PAYABLE_ROLES, rateForRole, amountForWorkRow, WORK_TYPE_ROLES } from '../utils/wageRates.js';
 
 export const ACTIVITY_TYPES = [
   { id: 'birthday', label: 'יום הולדת', color: '#FB923C', bg: 'rgba(251,146,60,0.18)' },
@@ -94,20 +98,14 @@ const WORK_TYPE_OPTIONS = [
 
 const DEFAULT_WAGE = { counter_rate: 45, class_rate: 70, private_rate: 90, route_rate: 60 };
 
-function rateForWorkType(agreement, workType) {
-  if (workType === 'class_shift') return Number(agreement?.class_rate) || 0;
-  if (workType === 'private_shift') return Number(agreement?.private_rate) || 0;
-  if (workType === 'route_building_shift') return Number(agreement?.route_rate) || 0;
-  return Number(agreement?.counter_rate) || 0;
+/** התעריף השעתי המוערך לשורה — לפי התפקיד שלה, דרך הסכם השכר של העובד. */
+function rateForRow(agreement, row) {
+  const rate = rateForRole(agreement, row?.role || WORK_TYPE_ROLES[row?.work_type]);
+  return rate ? rate.amount : 0;
 }
 
 function payAmountForAssignment(row, agreement) {
-  if ((row.pay_mode || 'hourly') === 'flat') {
-    const n = Number(row.flat_amount);
-    return Number.isFinite(n) && n >= 0 ? Math.round(n) : 0;
-  }
-  const hrs = Number(row.hours) || 0;
-  return Math.round(hrs * rateForWorkType(agreement, row.work_type));
+  return amountForWorkRow(row, agreement);
 }
 
 const SOURCE_LABELS = {
@@ -384,9 +382,10 @@ function hoursFromTimes(startHm, endHm) {
  * ולראות שעות ועלות משוערות לפי שעות האירוע והסכם השכר, והשורות עצמן נוצרות
  * ברגע שהאירוע נשמר. אחרי השמירה זו אותה רשימה, עם עריכה מלאה של כל שורה.
  */
-function WorkAssignmentsBlock({ activityId, draft = null }) {
+function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, onStaffPayChange = null, draft = null }) {
   const [employees, setEmployees] = useState([]);
   const [wages, setWages] = useState([]);
+  const [roleCatalog, setRoleCatalog] = useState(null);
   const [rows, setRows] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -425,6 +424,12 @@ function WorkAssignmentsBlock({ activityId, draft = null }) {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetchRoleCatalog().then((c) => { if (!cancelled) setRoleCatalog(c); });
+    return () => { cancelled = true; };
+  }, []);
+
   const empName = (id) => employees.find((e) => e.id === id)?.name || 'עובד';
   const agreementFor = (employeeId) => wages.find((w) => w.employee_id === employeeId) || DEFAULT_WAGE;
 
@@ -436,11 +441,13 @@ function WorkAssignmentsBlock({ activityId, draft = null }) {
       id: `draft-${employeeId}`,
       employee_id: employeeId,
       work_type: draft.activityType === 'route_building' ? 'route_building_shift' : 'counter_shift',
+      // ההערכה משקפת את הגדרת התשלום של האירוע — תפקיד או סכום גלובלי.
+      role: staffPay?.role || null,
       start_time: draft.startTime || '09:00',
       end_time: draft.endTime || '17:00',
       hours: hoursFromTimes(draft.startTime || '09:00', draft.endTime || '17:00') ?? 2,
-      pay_mode: 'hourly',
-      flat_amount: '',
+      pay_mode: staffPay?.mode === 'flat' ? 'flat' : 'hourly',
+      flat_amount: staffPay?.mode === 'flat' ? (staffPay?.flatAmount ?? '') : '',
     }))
     : [];
 
@@ -530,7 +537,15 @@ function WorkAssignmentsBlock({ activityId, draft = null }) {
   };
 
   const shownRows = draftMode ? draftRows : rows;
-  const available = employees.filter((e) => !shownRows.some((r) => r.employee_id === e.id));
+  // התפקיד שהוגדר על האירוע קובע את מי מותר לשבץ; אם לא הוגדר, נופלים למיפוי
+  // התפקידים לסוג הפעילות שמוגדר בקטלוג (יום הולדת — מדריך ועוזר, טיול —
+  // מדריך סנפלינג, וכן הלאה).
+  const requiredRoles = staffPay?.role
+    ? [staffPay.role]
+    : activityRoleLabels(roleCatalog, activityType);
+  const unassigned = employees.filter((e) => !shownRows.some((r) => r.employee_id === e.id));
+  const available = staffForRole(unassigned, requiredRoles);
+  const blockedByRole = requiredRoles && unassigned.length > 0 && available.length === 0;
   const assignLabel = selectedIds.length > 1 ? 'שבץ עובדים' : 'שבץ עובד';
 
   return (
@@ -548,10 +563,60 @@ function WorkAssignmentsBlock({ activityId, draft = null }) {
         עובדים במשמרת
       </div>
 
+      {onStaffPayChange && (
+        <div style={{ display: 'grid', gridTemplateColumns: staffPay?.mode === 'flat' ? '1fr 1fr 1fr' : '1fr 1fr', gap: 8 }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+            תפקיד לשיבוץ
+            <select
+              className="input"
+              value={staffPay?.role || ''}
+              onChange={(e) => onStaffPayChange({ staff_role: e.target.value })}
+              style={{ fontSize: 12, padding: '4px 6px' }}
+            >
+              <option value="">לפי סוג האירוע</option>
+              {PAYABLE_ROLES.map(({ role }) => (
+                <option key={role} value={role}>{role}</option>
+              ))}
+            </select>
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+            תשלום לעובדים
+            <select
+              className="input"
+              value={staffPay?.mode === 'flat' ? 'flat' : 'rate'}
+              onChange={(e) => onStaffPayChange({ staff_pay_mode: e.target.value })}
+              style={{ fontSize: 12, padding: '4px 6px' }}
+            >
+              <option value="rate">לפי התעריף האישי</option>
+              <option value="flat">גלובלי לאירוע</option>
+            </select>
+          </label>
+          {staffPay?.mode === 'flat' && (
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+              סכום לעובד (₪)
+              <input
+                className="input"
+                type="number"
+                min="0"
+                value={staffPay?.flatAmount ?? ''}
+                onChange={(e) => onStaffPayChange({ staff_flat_amount: e.target.value })}
+                style={{ fontSize: 12, padding: '4px 6px' }}
+              />
+            </label>
+          )}
+        </div>
+      )}
+
       {draftMode && (
         <div style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-3)' }}>
           אפשר לבחור עובדים כבר עכשיו. השעות והעלות כאן הן הערכה לפי שעות האירוע,
           והשיבוץ עצמו ייווצר עם שמירת האירוע — אז אפשר יהיה לשנות שעות ותשלום לכל אחד.
+        </div>
+      )}
+
+      {blockedByRole && (
+        <div style={{ fontSize: 12, color: 'var(--amber)' }}>
+          {noStaffForRoleMessage(requiredRoles)}
         </div>
       )}
 
@@ -624,7 +689,7 @@ function WorkAssignmentsBlock({ activityId, draft = null }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {draftRows.map((row) => {
             const agreement = agreementFor(row.employee_id);
-            const rate = rateForWorkType(agreement, row.work_type);
+            const rate = rateForRow(agreement, row);
             const amount = payAmountForAssignment(row, agreement);
             return (
               <div
@@ -645,7 +710,8 @@ function WorkAssignmentsBlock({ activityId, draft = null }) {
                     {empName(row.employee_id)}
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                    {row.start_time}–{row.end_time} · {row.hours} שעות · ₪{rate} לשעה · הערכה ₪{amount}
+                    {row.start_time}–{row.end_time} · {row.hours} שעות ·{' '}
+                    {row.pay_mode === 'flat' ? 'גלובלי' : `₪${rate} לשעה`} · הערכה ₪{amount}
                   </div>
                 </div>
                 <button
@@ -666,7 +732,7 @@ function WorkAssignmentsBlock({ activityId, draft = null }) {
           {rows.map((row) => {
             const agreement = agreementFor(row.employee_id);
             const payMode = row.pay_mode === 'flat' ? 'flat' : 'hourly';
-            const rate = rateForWorkType(agreement, row.work_type);
+            const rate = rateForRow(agreement, row);
             const amount = payAmountForAssignment(row, agreement);
             return (
               <div
@@ -711,15 +777,19 @@ function WorkAssignmentsBlock({ activityId, draft = null }) {
                       תעריף
                       <select
                         className="input"
-                        value={row.work_type || 'counter_shift'}
-                        onChange={(e) => patchLocal(row.id, { work_type: e.target.value })}
+                        value={row.role || WORK_TYPE_ROLES[row.work_type] || ''}
+                        onChange={(e) => patchLocal(row.id, { role: e.target.value })}
                         style={{ fontSize: 12, padding: '4px 6px' }}
                       >
-                        {WORK_TYPE_OPTIONS.map((o) => (
-                          <option key={o.id} value={o.id}>
-                            {o.label} — ₪{rateForWorkType(agreement, o.id)}/שעה
-                          </option>
-                        ))}
+                        <option value="">ללא תפקיד</option>
+                        {PAYABLE_ROLES.map(({ role }) => {
+                          const r = rateForRole(agreement, role);
+                          return (
+                            <option key={role} value={role}>
+                              {r ? `${role} — ₪${r.amount}${r.mode === 'daily' ? '/יום' : '/שעה'}` : role}
+                            </option>
+                          );
+                        })}
                       </select>
                     </label>
                   ) : (
@@ -776,12 +846,13 @@ function WorkAssignmentsBlock({ activityId, draft = null }) {
                       סוג תפקיד
                       <select
                         className="input"
-                        value={row.work_type || 'counter_shift'}
-                        onChange={(e) => patchLocal(row.id, { work_type: e.target.value })}
+                        value={row.role || WORK_TYPE_ROLES[row.work_type] || ''}
+                        onChange={(e) => patchLocal(row.id, { role: e.target.value })}
                         style={{ fontSize: 12, padding: '4px 6px' }}
                       >
-                        {WORK_TYPE_OPTIONS.map((o) => (
-                          <option key={o.id} value={o.id}>{o.label}</option>
+                        <option value="">ללא תפקיד</option>
+                        {PAYABLE_ROLES.map(({ role }) => (
+                          <option key={role} value={role}>{role}</option>
                         ))}
                       </select>
                     </label>
@@ -1174,6 +1245,13 @@ function RegularActivityModal({
             {!isTemplateEdit && (isEdit || !readOnly) && (
               <WorkAssignmentsBlock
                 activityId={isEdit ? initial.id : null}
+                activityType={form.type}
+                staffPay={{
+                  role: form.staff_role || '',
+                  mode: form.staff_pay_mode === 'flat' ? 'flat' : 'rate',
+                  flatAmount: form.staff_flat_amount,
+                }}
+                onStaffPayChange={readOnly ? null : (patch) => setForm((prev) => ({ ...prev, ...patch }))}
                 draft={isEdit ? null : {
                   employeeIds: form._pending_employee_ids || [],
                   setEmployeeIds: (ids) => setForm((prev) => ({ ...prev, _pending_employee_ids: ids })),
@@ -1283,6 +1361,9 @@ function ActivityFormModal({
         : (initial?.theme && typeof initial.theme === 'object' ? initial.theme : {})
     ),
     category: normalizeTemplateCategory(initial?.category),
+    staff_role: initial?.staff_role || '',
+    staff_pay_mode: initial?.staff_pay_mode === 'flat' ? 'flat' : 'rate',
+    staff_flat_amount: initial?.staff_flat_amount ?? '',
   }));
   const [localError, setLocalError] = useState('');
   const isEdit = !!initial?.id && !isTemplateEdit;
@@ -1332,6 +1413,9 @@ function ActivityFormModal({
         start_time: form.all_day ? null : (form.start_time || null),
         end_time: form.all_day ? null : (form.end_time || null),
         all_day: !!form.all_day,
+        staff_role: form.staff_role || null,
+        staff_pay_mode: form.staff_pay_mode === 'flat' ? 'flat' : null,
+        staff_flat_amount: form.staff_pay_mode === 'flat' ? (Number(form.staff_flat_amount) || 0) : null,
         registration_enabled: !!form.registration_enabled,
         collect_registration_payment: !!form.collect_registration_payment,
         registration_mode: form.registration_mode || (
@@ -1365,6 +1449,9 @@ function ActivityFormModal({
     onSave({
       ...form,
       end_date: endDateNorm || null,
+      staff_role: form.staff_role || null,
+      staff_pay_mode: form.staff_pay_mode === 'flat' ? 'flat' : null,
+      staff_flat_amount: form.staff_pay_mode === 'flat' ? (Number(form.staff_flat_amount) || 0) : null,
       name: String(form.name).trim(),
       price: form.price === '' ? 0 : Number(form.price),
       price_includes_vat: !!form.price_includes_vat,
@@ -1677,6 +1764,13 @@ function ActivityFormModal({
           {!isOverlay && (isEdit || !readOnly) && (
             <WorkAssignmentsBlock
               activityId={isEdit ? initial.id : null}
+              activityType={form.type}
+              staffPay={{
+                role: form.staff_role || '',
+                mode: form.staff_pay_mode === 'flat' ? 'flat' : 'rate',
+                flatAmount: form.staff_flat_amount,
+              }}
+              onStaffPayChange={readOnly ? null : (patch) => setForm((prev) => ({ ...prev, ...patch }))}
               draft={isEdit ? null : {
                 employeeIds: form._pending_employee_ids || [],
                 setEmployeeIds: (ids) => setForm((prev) => ({ ...prev, _pending_employee_ids: ids })),

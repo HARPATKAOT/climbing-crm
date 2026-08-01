@@ -14,7 +14,7 @@ import {
 } from './aiActions.js';
 import { israelClockParts, isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 import { DEFAULT_BUSINESS_PROFILE, getBusinessProfile } from './businessProfile.js';
-import { runChatTurn } from './aiChat.js';
+import { READ_TOOLS, runChatTurn } from './aiChat.js';
 import { EQUIPMENT_ITEM_LABELS as EQUIPMENT_LABELS } from './equipmentService.js';
 import {
   NO_EVENTS_REPLY,
@@ -78,6 +78,34 @@ import {
 export { israelClockParts, isBotEnabled, shouldAiAutoReply };
 
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v25.0';
+
+/**
+ * What a staff number may ask over WhatsApp: who a customer is, when a trainee
+ * started, what the classes are. Deliberately narrower than the CRM screen —
+ * takings, payment rows and the business snapshot stay behind a login, because
+ * a phone number is the only thing guarding this channel and phones get lost.
+ */
+const STAFF_CHAT_TOOLS = {
+  search_customers: READ_TOOLS.search_customers,
+  get_customer: (database, args) => omitMoney(READ_TOOLS.get_customer(database, args)),
+  get_student_attendance: READ_TOOLS.get_student_attendance,
+  list_groups: READ_TOOLS.list_groups,
+};
+
+const STAFF_CHAT_RULES = [
+  '## הערוץ הזה',
+  'אתה עונה בוואטסאפ, לא במסך ה-CRM. ענה קצר — משפט או שניים, בלי טבלאות.',
+  'אין לך גישה לנתונים כספיים: הכנסות, תשלומים, חובות, מחזור או דוחות.',
+  'על כל שאלה כספית ענה שהיא זמינה רק במסך ה-CRM, ואל תנחש מספרים.',
+  'אינך יכול לשנות דבר מכאן — פעולות נעשות במסך.',
+].join('\n');
+
+/** The customer card without its money — the rest of the card is what staff need. */
+function omitMoney(card) {
+  if (!card || typeof card !== 'object' || card.error) return card;
+  const { payments, ...rest } = card;
+  return rest;
+}
 
 function formatWaPhone(phone) {
   return normalizeWaPhone(phone);
@@ -1008,9 +1036,9 @@ export const whatsappService = {
   },
 
   /**
-   * A staff question answered by the CRM agent. Write tools stay staged for
-   * approval inside `runChatTurn` — WhatsApp never becomes a way to change data
-   * without someone confirming it on the screen.
+   * A staff question answered by the CRM agent, over a deliberately narrow set
+   * of read tools (`STAFF_CHAT_TOOLS`). Write tools are off entirely here:
+   * WhatsApp never becomes a way to change data.
    */
   async runStaffChat(phone, text) {
     const messages = getChatHistoryMessages(phone, 6);
@@ -1025,6 +1053,9 @@ export const whatsappService = {
         messages,
         actor: `whatsapp:${phone}`,
         brandName: profile?.display_name || DEFAULT_BUSINESS_PROFILE.display_name,
+        readTools: STAFF_CHAT_TOOLS,
+        allowActions: false,
+        extraRules: STAFF_CHAT_RULES,
       });
       if (result.reply) return clipReply(result.reply, 1500);
       return 'לא הצלחתי לענות על זה כרגע 🙏 נסו לנסח מחדש או לבדוק במסך העוזר החכם.';

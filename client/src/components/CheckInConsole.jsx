@@ -1,7 +1,158 @@
 import React, { useState, useEffect } from 'react';
-import { Search, LogIn, CheckCircle2, ShieldAlert, ShieldCheck, Flame, RefreshCw, QrCode } from 'lucide-react';
+import { Search, LogIn, LogOut, Clock, CheckCircle2, ShieldAlert, ShieldCheck, Flame, RefreshCw, QrCode } from 'lucide-react';
 import { CheckIcon } from './safetyCheckIcons.jsx';
 import { isHealthDeclarationValid } from '../utils/healthValidity.js';
+import { SYSTEM_ROLE_KEYS, canFillRole, fetchRoleCatalog, roleLabelOf } from '../utils/staffRoles.js';
+
+/**
+ * משמרת קיר מהמסוף: מי שפותח את הקיר פותח כאן משמרת, ומי שסוגר — סוגר.
+ * הסגירה יוצרת שורת שכר של מפעיל קיר לפי השעות בפועל, מעוגל לחצי שעה למעלה.
+ */
+function WallShiftPanel({ employees }) {
+  const [openShifts, setOpenShifts] = useState([]);
+  const [pickedId, setPickedId] = useState('');
+  // מי בפועל סוגר כל משמרת פתוחה — ברירת המחדל היא בעל המשמרת עצמו, אבל
+  // מדריך אחר יכול לסגור בשמו (למשל אם הוא כבר הלך).
+  const [closerByShift, setCloserByShift] = useState({});
+  const [operatorLabel, setOperatorLabel] = useState(roleLabelOf(null, SYSTEM_ROLE_KEYS.WALL_OPERATOR));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchRoleCatalog().then((c) => {
+      if (!cancelled) setOperatorLabel(roleLabelOf(c, SYSTEM_ROLE_KEYS.WALL_OPERATOR));
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  const load = async () => {
+    try {
+      const rows = await fetch('/api/wall-shift/open').then((r) => (r.ok ? r.json() : []));
+      setOpenShifts(Array.isArray(rows) ? rows : []);
+    } catch { setOpenShifts([]); }
+  };
+  useEffect(() => { load(); }, []);
+
+  // רק מי שסומן בתפקיד מפעיל הקיר יכול לפתוח משמרת קיר.
+  const operators = employees.filter((e) =>
+    e.is_active !== false && canFillRole(e, operatorLabel));
+  const openIds = new Set(openShifts.map((s) => s.employee_id));
+  const canOpen = operators.filter((e) => !openIds.has(e.id));
+  const activeEmployees = employees.filter((e) => e.is_active !== false);
+  const nameOf = (id) => employees.find((e) => e.id === id)?.name || 'עובד';
+
+  const call = async (path, body, okMsg) => {
+    setBusy(true);
+    setMsg('');
+    try {
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const responseBody = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(responseBody.error || 'הפעולה נכשלה');
+      setMsg(okMsg);
+      setPickedId('');
+      await load();
+    } catch (err) {
+      setMsg(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const hhmm = (iso) => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 24 }}>
+      <div className="section-title" style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Clock size={18} />
+        משמרת קיר
+        {openShifts.length > 0 && <span className="badge badge-green">{openShifts.length} במשמרת</span>}
+      </div>
+      <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {openShifts.map((shift) => {
+          const closerId = closerByShift[shift.id] ?? shift.employee_id;
+          return (
+            <div key={shift.id} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+              flexWrap: 'wrap',
+              padding: '10px 12px', borderRadius: 10,
+              background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.35)',
+            }}>
+              <div>
+                <div style={{ fontWeight: 700 }}>{nameOf(shift.employee_id)}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>פתח את המשמרת ב-{hhmm(shift.clock_in)}</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <select
+                  className="input select input-sm"
+                  style={{ height: 34, fontSize: 12 }}
+                  value={closerId}
+                  onChange={(e) => setCloserByShift((prev) => ({ ...prev, [shift.id]: e.target.value }))}
+                  title="מי סוגר את המשמרת?"
+                >
+                  {activeEmployees.map((emp) => (
+                    <option key={emp.id} value={emp.id}>
+                      {emp.id === shift.employee_id ? emp.name : `${emp.name} (סוגר במקום ${nameOf(shift.employee_id)})`}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={busy}
+                  onClick={() => call(
+                    '/api/wall-shift/close',
+                    { employee_id: shift.employee_id, closed_by: closerId },
+                    `המשמרת של ${nameOf(shift.employee_id)} נסגרה ונרשמה לשכר`
+                  )}
+                >
+                  <LogOut size={14} /> סגירת משמרת
+                </button>
+              </div>
+            </div>
+          );
+        })}
+
+        {canOpen.length > 0 && (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <select
+              className="input select"
+              style={{ flex: 1, height: 40 }}
+              value={pickedId}
+              onChange={(e) => setPickedId(e.target.value)}
+            >
+              <option value="">מי פותח משמרת?</option>
+              {canOpen.map((emp) => (
+                <option key={emp.id} value={emp.id}>{emp.name}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={busy || !pickedId}
+              onClick={() => call('/api/wall-shift/open', { employee_id: pickedId }, `נפתחה משמרת ל${nameOf(pickedId)}`)}
+            >
+              <LogIn size={14} /> פתיחת משמרת
+            </button>
+          </div>
+        )}
+        {operators.length === 0 && (
+          <div style={{ fontSize: 12, color: 'var(--amber)' }}>
+            אין עובד שסומן כ"{operatorLabel}" — סמנו את התפקיד בכרטיס העובד.
+          </div>
+        )}
+        {msg && <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{msg}</div>}
+      </div>
+    </div>
+  );
+}
 
 function pickBestPunchCard(passes) {
   const usable = (passes || []).filter(
@@ -220,6 +371,8 @@ export default function CheckInConsole({ students, groups }) {
           <CheckCircle2 size={24} /> {successMsg}
         </div>
       )}
+
+      <WallShiftPanel employees={employees} />
 
       {dueSafety.length > 0 && (
         <div className="card" style={{ marginBottom: 24 }}>

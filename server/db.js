@@ -1404,6 +1404,21 @@ export const db = {
     return { ok: true, parentError };
   },
 
+  // הגדרות קטנות שנשמרות מקומית ב-db.json (מפתח -> ערך). העותק העמיד חי
+  // ב-app_settings של Supabase; כאן רק המראה המקומית שקוראים ממנה בסינכרון.
+  getAppSettingLocal: (key) => {
+    const data = readDb();
+    return data.app_settings_local?.[key];
+  },
+
+  setAppSettingLocal: (key, value) => {
+    const data = readDb();
+    if (!data.app_settings_local) data.app_settings_local = {};
+    data.app_settings_local[key] = value;
+    writeDb(data);
+    return value;
+  },
+
   clockIn: (employeeId, activityType, notes) => {
     const data = readDb();
     if (!data.shift_hours) data.shift_hours = [];
@@ -1435,19 +1450,25 @@ export const db = {
     return newShift;
   },
 
-  clockOut: (employeeId, notes) => {
+  // closedByEmployeeId: מי בפועל ביצע את הסגירה, כשזה שונה ממי שפתח את
+  // המשמרת (למשל מדריך שממשיך על הקיר סוגר בשם מי שכבר הלך). השעות עדיין
+  // משולמות לבעל המשמרת — זה רק תיעוד מי אישר את הסגירה.
+  clockOut: (employeeId, notes, closedByEmployeeId) => {
     const data = readDb();
     if (!data.shift_hours) data.shift_hours = [];
-    
+
     const openShift = data.shift_hours.find(s => s.employee_id === employeeId && s.status === 'open');
     if (!openShift) return null;
-    
+
     openShift.status = 'closed';
     openShift.clock_out = new Date().toISOString();
+    if (closedByEmployeeId) {
+      openShift.closed_by_employee_id = closedByEmployeeId;
+    }
     if (notes) {
       openShift.notes = (openShift.notes ? openShift.notes + ' | ' : '') + notes;
     }
-    
+
     writeDb(data);
     syncUpsert('shift_hours', openShift);
     return openShift;

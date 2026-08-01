@@ -2,10 +2,11 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Clock, LogIn, LogOut, Coins, Plus, Trash2, Edit2,
   Save, X, UserCheck, RefreshCw, Briefcase, Award, ArrowUpRight, Search, ChevronDown, ChevronUp,
-  Upload, Download, FileText, Users, Banknote
+  Upload, Download, FileText, Users, Banknote, Link2, Copy, Settings2, MessageCircle, Check,
+  Phone, Mail, MapPin, CreditCard, User, Calendar, Cake, Landmark, Car, Lock
 } from 'lucide-react';
 import { Modal } from './UI.jsx';
-import { STAFF_ROLE_OPTIONS, ASSIGNABLE_ROLES } from '../utils/staffRoles.js';
+import { STAFF_ROLE_OPTIONS, ASSIGNABLE_ROLES, invalidateRoleCatalog } from '../utils/staffRoles.js';
 import {
   PAYABLE_ROLES,
   ratesOf,
@@ -14,8 +15,20 @@ import {
   amountForWorkRow,
   roundHoursHalfUp,
   summarizeWork,
+  summarizeByRole,
   WORK_TYPE_ROLES,
 } from '../utils/wageRates.js';
+
+/** סוגי הפעילות שאפשר למפות להם תפקידים — תואם ל-ACTIVITY_TYPES ביומן. */
+const CATALOG_ACTIVITY_TYPES = [
+  { id: 'birthday', label: 'יום הולדת' },
+  { id: 'trip', label: 'טיול' },
+  { id: 'school', label: 'בית ספר' },
+  { id: 'company', label: 'פעילות חברה' },
+  { id: 'route_building', label: 'בניית מסלולים' },
+  { id: 'opening_hours', label: 'שעות פתיחה' },
+  { id: 'other', label: 'אחר' },
+];
 
 const STATUS_OPTIONS = ['עובד פעיל', 'מנהל', 'עובד זמני', 'מדריך צעיר', 'מועמד', 'ארכיון', 'סנפלינג'];
 const PAYMENT_OPTIONS = ['תלוש', 'חשבונית'];
@@ -156,7 +169,9 @@ function ClassAttendanceSummary({ employeeId, month, paidHoursThisMonth }) {
   return (
     <div className="card card-p">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-        <div style={{ fontSize: 12, fontWeight: 700 }}>⏱️ שעות וחיסורים בחוגים</div>
+        <div style={{ fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Clock size={14} style={{ color: 'var(--text-3)' }} /> שעות וחיסורים בחוגים
+        </div>
         <div style={{ display: 'flex', gap: 4 }}>
           {[['month', 'החודש'], ['all', 'מאז ומתמיד']].map(([key, label]) => (
             <button
@@ -203,6 +218,138 @@ function ClassAttendanceSummary({ employeeId, month, paidHoursThisMonth }) {
   );
 }
 
+/**
+ * שכר החודש בתיק העובד: פירוט לפי תפקיד שהעובד באמת עבד בו, ימי עבודה,
+ * נסיעות וסך הכל. התעריפים מוצגים לצד השורות — אין טעם להראות תעריף לתפקיד
+ * שהעובד לא מסומן בו ולא עבד בו.
+ */
+function MonthlyPayCard({ employee, agreement, rows, month, onEditWage }) {
+  const monthRows = useMemo(() => {
+    const { from, to } = monthBounds(month);
+    return (rows || []).filter((r) => r.date >= from && r.date <= to);
+  }, [rows, month]);
+
+  const byRole = useMemo(() => summarizeByRole(monthRows, agreement), [monthRows, agreement]);
+  const totals = useMemo(() => summarizeWork(monthRows, agreement), [monthRows, agreement]);
+  const travel = travelPerDay(agreement);
+  const monthLabel = new Date(`${month}-01T12:00:00`).toLocaleDateString('he-IL', { month: 'long', year: 'numeric' });
+
+  // תעריף לתפקיד מוצג רק לתפקידים שהעובד מסומן בהם — השאר אינו רלוונטי לו.
+  const myRoles = Array.isArray(employee?.certifications) ? employee.certifications : [];
+  const myRates = ratesOf(agreement).filter((r) => myRoles.includes(r.role));
+  const missingRates = myRoles.filter((role) => !ratesOf(agreement).some((r) => r.role === role));
+
+  const line = (label, value, opts = {}) => (
+    <div style={{
+      display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+      fontSize: opts.big ? 14 : 12,
+      fontWeight: opts.big ? 800 : 500,
+      paddingTop: opts.divider ? 8 : 0,
+      marginTop: opts.divider ? 4 : 0,
+      borderTop: opts.divider ? '1px solid var(--border)' : 'none',
+    }}>
+      <span style={{ color: opts.big ? 'var(--text-1)' : 'var(--text-3)' }}>{label}</span>
+      <span style={{ color: opts.green ? 'var(--green)' : 'var(--text-1)' }}>{value}</span>
+    </div>
+  );
+
+  return (
+    <div className="card card-p">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Banknote size={14} style={{ color: 'var(--text-3)' }} /> שכר {monthLabel}
+        </div>
+        <button type="button" className="btn btn-ghost btn-xs" onClick={onEditWage}>
+          <Edit2 size={11} /> תעריפים
+        </button>
+      </div>
+
+      {monthRows.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין שורות עבודה בחודש הזה.</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {byRole.map((entry) => {
+            const rate = entry.flat ? null : rateForRole(agreement, entry.role);
+            const detail = entry.flat
+              ? (entry.count === 1 ? 'אירוע אחד' : `${entry.count} אירועים`)
+              : rate?.mode === 'daily'
+                ? `${entry.count === 1 ? 'יום אחד' : `${entry.count} ימים`} × ₪${rate.amount}`
+                : `${entry.hours} ש׳${rate ? ` × ₪${rate.amount}` : ''}`;
+            return (
+              <div key={entry.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 12 }}>
+                <span>
+                  {entry.label}
+                  <span style={{ color: 'var(--text-3)', fontSize: 11 }}> · {detail}</span>
+                </span>
+                <span style={{ color: entry.amount > 0 ? 'var(--green)' : 'var(--text-3)', fontWeight: 600 }}>
+                  ₪{entry.amount.toLocaleString()}
+                </span>
+              </div>
+            );
+          })}
+
+          {line(
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Car size={13} style={{ flexShrink: 0 }} />
+              נסיעות · {totals.days === 1 ? 'יום עבודה אחד' : `${totals.days} ימי עבודה`}{travel ? ` × ₪${travel}` : ''}
+            </span>,
+            travel ? `₪${totals.travel.toLocaleString()}` : 'לא הוגדר',
+            { divider: true, green: !!travel }
+          )}
+          {line('סה״כ לתשלום', `₪${totals.total.toLocaleString()}`, { divider: true, big: true, green: true })}
+        </div>
+      )}
+
+      {myRates.length > 0 && (
+        <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+          <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>התעריפים שלו</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {myRates.map((r) => (
+              <span key={r.role} className="badge badge-gray" style={{ fontSize: 10 }}>
+                {r.role} ₪{r.amount}{r.mode === 'daily' ? '/יום' : '/ש׳'}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {missingRates.length > 0 && (
+        <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 8 }}>
+          בלי תעריף אישי: {missingRates.join(', ')} — יקבל תשלום רק מאירוע שהוגדר גלובלי.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * תאריך בפורמט יום/חודש/שנה. הערך נשמר כ-ISO (1986-04-10) ובעברית נקרא הפוך,
+ * ולכן ההצגה עטופה ב-span עם כיוון LTR מבודד — בלי זה הדפדפן מסדר מחדש את
+ * המספרים סביב הלוכסנים והיום קופץ לימין.
+ */
+/** שורת פרט בתיק העובד: אייקון קו אחיד (lucide) ואחריו תווית וערך. */
+function DetailRow({ icon: Icon, label, children }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+      <Icon size={14} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <strong>{label}:</strong> {children}
+      </span>
+    </div>
+  );
+}
+
+function DateDMY({ value, fallback = '—' }) {
+  if (!value) return fallback;
+  const [y, m, d] = String(value).slice(0, 10).split('-');
+  if (!y || !m || !d) return String(value);
+  return (
+    <span style={{ direction: 'ltr', unicodeBidi: 'isolate', display: 'inline-block' }}>
+      {d}/{m}/{y}
+    </span>
+  );
+}
+
 function calculateAge(birthDateStr) {
   if (!birthDateStr) return '';
   const birth = new Date(birthDateStr);
@@ -240,15 +387,35 @@ function readFileAsBase64(file) {
 function EmployeeDocField({ label, savedDoc, pendingFile, onPick, onClearPending, onRemoveSaved, onDownload, busy }) {
   const inputRef = useRef(null);
   const displayName = pendingFile?.name || savedDoc?.fileName || '';
+  // גרירת קובץ לתוך המסגרת. dragCounter ולא דגל בוליאני, כי dragleave נורה גם
+  // כשעוברים בין אלמנטים פנימיים והמסגרת הייתה מהבהבת.
+  const [dragDepth, setDragDepth] = useState(0);
+  const dragging = dragDepth > 0;
+
+  const acceptDropped = (event) => {
+    event.preventDefault();
+    setDragDepth(0);
+    if (busy) return;
+    const file = event.dataTransfer?.files?.[0];
+    if (file) onPick(file);
+  };
 
   return (
     <div className="form-group" style={{ marginBottom: 0 }}>
       <label className="form-label">{label}</label>
-      <div style={{
-        display: 'flex', flexDirection: 'column', gap: 8,
-        padding: 10, borderRadius: 10, border: '1px solid var(--border)',
-        background: 'rgba(255,255,255,0.02)',
-      }}>
+      <div
+        onDragEnter={(e) => { e.preventDefault(); setDragDepth((d) => d + 1); }}
+        onDragOver={(e) => e.preventDefault()}
+        onDragLeave={() => setDragDepth((d) => Math.max(0, d - 1))}
+        onDrop={acceptDropped}
+        style={{
+          display: 'flex', flexDirection: 'column', gap: 8,
+          padding: 10, borderRadius: 10,
+          border: `1px ${dragging ? 'dashed' : 'solid'} ${dragging ? 'var(--blue)' : 'var(--border)'}`,
+          background: dragging ? 'rgba(56,189,248,0.10)' : 'rgba(255,255,255,0.02)',
+          transition: 'background 0.12s, border-color 0.12s',
+        }}
+      >
         {displayName ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
             <FileText size={14} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
@@ -258,7 +425,9 @@ function EmployeeDocField({ label, savedDoc, pendingFile, onPick, onClearPending
             </span>
           </div>
         ) : (
-          <div style={{ fontSize: 12, color: 'var(--text-3)' }}>לא הועלה קובץ</div>
+          <div style={{ fontSize: 12, color: dragging ? 'var(--blue)' : 'var(--text-3)' }}>
+            {dragging ? 'שחררו כאן את הקובץ' : 'לא הועלה קובץ — גררו לכאן או העלו'}
+          </div>
         )}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           <input
@@ -296,26 +465,293 @@ function EmployeeDocField({ label, savedDoc, pendingFile, onPick, onClearPending
   );
 }
 
+/**
+ * עריכת קטלוג התפקידים. שבעת תפקידי המערכת נעולים — השיבוץ והשכר מזהים
+ * אותם לפי השם; השאר ניתנים לשינוי שם ולמחיקה, והשינוי מתפשט לעובדים,
+ * להסכמי השכר ולאירועים.
+ */
+function RoleCatalogModal({ catalog, onCatalogChange, onRoleRenamed, onRoleDeleted, onClose }) {
+  const [view, setView] = useState('roles'); // 'roles' | 'activities'
+  const [renaming, setRenaming] = useState(null); // { from, value }
+  const [newRole, setNewRole] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  const call = async (path, body) => {
+    setBusy(true);
+    setMsg('');
+    try {
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'הפעולה נכשלה');
+      // המטמון המשותף התיישן — בלעדיו מסכים אחרים יציגו עדיין את השם הישן.
+      invalidateRoleCatalog();
+      onCatalogChange(data);
+      return true;
+    } catch (err) {
+      setMsg(err.message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const systemRoles = catalog?.system || [];
+  const extraRoles = catalog?.extra || [];
+
+  const renameRow = (label, isSystem) => (
+    <div key={label} style={{
+      display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+      padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)',
+      background: isSystem ? 'rgba(255,255,255,0.02)' : 'transparent',
+    }}>
+      {renaming?.from === label ? (
+        <>
+          <input
+            className="input input-sm"
+            autoFocus
+            value={renaming.value}
+            onChange={(e) => setRenaming({ from: label, value: e.target.value })}
+            style={{ flex: 1 }}
+          />
+          <button
+            type="button"
+            className="btn btn-primary btn-xs"
+            disabled={busy || !renaming.value.trim() || renaming.value.trim() === label}
+            onClick={async () => {
+              const to = renaming.value.trim();
+              if (await call('/api/staff-roles/rename', { from: label, to })) {
+                onRoleRenamed?.(label, to);
+                setRenaming(null);
+              }
+            }}
+          >
+            שמור
+          </button>
+          <button type="button" className="btn btn-ghost btn-xs" onClick={() => setRenaming(null)}>ביטול</button>
+        </>
+      ) : (
+        <>
+          <span style={{ fontSize: 13, flex: 1 }}>{label}</span>
+          {isSystem && (
+            <span style={{ fontSize: 10, color: 'var(--text-3)' }} title="השיבוץ והשכר מזהים אותו פנימית, אז אפשר לשנות שם אבל לא למחוק">
+              תפקיד מערכת
+            </span>
+          )}
+          <button type="button" className="btn btn-ghost btn-icon btn-xs" disabled={busy}
+            onClick={() => setRenaming({ from: label, value: label })} title="שינוי שם">
+            <Edit2 size={12} />
+          </button>
+          {!isSystem && (
+            <button type="button" className="btn btn-ghost btn-icon btn-xs" disabled={busy}
+              onClick={async () => {
+                if (!window.confirm(`למחוק את "${label}" מכל העובדים ומהסכמי השכר?`)) return;
+                if (await call('/api/staff-roles/delete', { role: label })) onRoleDeleted?.(label);
+              }}
+              title="מחיקה">
+              <Trash2 size={12} />
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+
+  const toggleActivityRole = async (type, key, on) => {
+    const current = catalog?.activityRoles?.[type] || [];
+    const next = on ? [...new Set([...current, key])] : current.filter((k) => k !== key);
+    await call('/api/staff-roles/activity-roles', { activity_type: type, role_keys: next });
+  };
+
+  return (
+    <div className="modal-backdrop" style={{ zIndex: 400 }} onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal slide-up" style={{ maxWidth: 520 }}>
+        <div className="modal-header">
+          <div className="modal-title">ניהול תפקידים</div>
+          <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose}><X size={18} /></button>
+        </div>
+
+        <div className="tab-bar tab-bar-inline" style={{ padding: '10px 16px 0' }}>
+          <button type="button" className={`tab-pill ${view === 'roles' ? 'active' : ''}`} onClick={() => setView('roles')}>
+            רשימת התפקידים
+          </button>
+          <button type="button" className={`tab-pill ${view === 'activities' ? 'active' : ''}`} onClick={() => setView('activities')}>
+            מי מתאים לכל פעילות
+          </button>
+        </div>
+
+        <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {view === 'roles' ? (
+            <>
+              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                שינוי שם או מחיקה מתעדכנים אצל כל העובדים ובהסכמי השכר.
+                תפקידי מערכת ניתנים לשינוי שם אבל לא למחיקה — השיבוץ והתמחור תלויים בהם.
+              </div>
+
+              {systemRoles.map((r) => renameRow(r.label, true))}
+              {extraRoles.map((label) => renameRow(label, false))}
+
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <input
+                  className="input input-sm"
+                  placeholder="תפקיד חדש..."
+                  value={newRole}
+                  onChange={(e) => setNewRole(e.target.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (newRole.trim() && await call('/api/staff-roles', { name: newRole.trim() })) setNewRole('');
+                    }
+                  }}
+                />
+                <button type="button" className="btn btn-ghost btn-sm" disabled={busy || !newRole.trim()}
+                  onClick={async () => {
+                    if (await call('/api/staff-roles', { name: newRole.trim() })) setNewRole('');
+                  }}>
+                  <Plus size={14} /> הוסף
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                סמנו אילו תפקידים מתאימים לכל סוג פעילות. רק הם יוצעו לשיבוץ,
+                וכל אחד מקבל את התעריף שלו לתפקיד הזה.
+              </div>
+
+              {CATALOG_ACTIVITY_TYPES.map((type) => {
+                const selected = catalog?.activityRoles?.[type.id] || [];
+                return (
+                  <div key={type.id} style={{
+                    padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)',
+                  }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>{type.label}</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {systemRoles.map((role) => {
+                        const on = selected.includes(role.key);
+                        return (
+                          <button
+                            key={role.key}
+                            type="button"
+                            disabled={busy}
+                            onClick={() => toggleActivityRole(type.id, role.key, !on)}
+                            style={{
+                              padding: '4px 10px', borderRadius: 20, fontSize: 12, cursor: 'pointer',
+                              border: 'none',
+                              outline: `1px solid ${on ? '#A5B4FC55' : 'var(--border)'}`,
+                              background: on ? 'rgba(99,102,241,0.2)' : 'rgba(255,255,255,0.04)',
+                              color: on ? '#A5B4FC' : 'var(--text-3)',
+                              fontWeight: on ? 700 : 500,
+                            }}
+                          >
+                            {role.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {selected.length === 0 && (
+                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
+                        אין הגבלה — כל עובד פעיל ניתן לשיבוץ.
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {msg && <div style={{ fontSize: 12, color: 'var(--red)' }}>{msg}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Modal: Employee Form (Add/Edit) ──────────────────────────────────────────
-function EmployeeFormModal({ employee, employees, onSave, onClose }) {
+function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'details', onSave, onClose }) {
   const isEdit = !!employee;
-  const [name, setName]               = useState(employee?.name || '');
-  const [phone, setPhone]             = useState(employee?.phone || '');
-  const [email, setEmail]             = useState(employee?.email || '');
-  const [residence, setResidence]     = useState(employee?.address || '');
-  const [gender, setGender]           = useState(employee?.gender || 'זכר');
-  const [birthDate, setBirthDate]     = useState(employee?.birthDate || '');
-  const [idNumber, setIdNumber]       = useState(employee?.idNumber || '');
+  // מי שנכנס דרך „תעריפים” רוצה את מסך השכר, לא את הפרטים האישיים.
+  const [tab, setTab] = useState(initialTab); // 'details' | 'roles'
+  // One answers object, keyed exactly like the public onboarding form's field
+  // catalog — the same source of truth for label/type/options, so a field
+  // renamed there reads the same way here without a second edit.
+  const [answers, setAnswers] = useState(() => ({
+    name: employee?.name || '',
+    phone: employee?.phone || '',
+    email: employee?.email || '',
+    address: employee?.address || '',
+    gender: employee?.gender || 'זכר',
+    birthDate: employee?.birthDate || '',
+    idNumber: employee?.idNumber || '',
+    paymentMethod: employee?.payment_method === 'invoice' ? 'חשבונית' : 'תלוש',
+    bankAccount: employee?.bank_account_details || '',
+    pensionCompany: employee?.pensionCompany || '',
+    notes: employee?.notes || '',
+  }));
+  const setAnswer = (key, value) => setAnswers((prev) => ({ ...prev, [key]: value }));
+  // Staff/active status has no equivalent on the public form — a new hire
+  // cannot activate themselves — so it stays outside the shared catalog.
   const [status, setStatus]           = useState(employee?.is_active ? 'עובד פעיל' : 'ארכיון');
-  const [paymentMethod, setPayMethod] = useState(employee?.payment_method === 'invoice' ? 'חשבונית' : 'תלוש');
-  const [notes, setNotes]             = useState(employee?.notes || '');
-  const [bankAccount, setBankAccount] = useState(employee?.bank_account_details || '');
-  const [pensionCompany, setPensionC] = useState(employee?.pensionCompany || '');
   const [documents, setDocuments]     = useState(employee?.documents || {});
   const [pendingFiles, setPendingFiles] = useState({});
   const [certifications, setCertifications] = useState(employee?.certifications || []);
   const [customCert, setCustomCert]   = useState('');
-  const certOptions = useMemo(() => collectCertificationOptions(employees), [employees]);
+  // קטלוג התפקידים מגיע מהשרת; תפקידי מערכת נעולים, השאר ניתנים לעריכה.
+  const [roleCatalog, setRoleCatalog] = useState(null);
+  const [showCatalog, setShowCatalog] = useState(false);
+  useEffect(() => {
+    fetch('/api/staff-roles')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => { if (body) setRoleCatalog(body); })
+      .catch(() => {});
+  }, []);
+
+  // Same catalog the public onboarding form uses. A field's label/options
+  // here fall back to a fixed default until it loads (or if the fetch fails)
+  // so the form never shows a blank label.
+  const [fieldCatalog, setFieldCatalog] = useState(null);
+  useEffect(() => {
+    fetch('/api/employees/onboard-fields')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => { if (Array.isArray(body)) setFieldCatalog(body); })
+      .catch(() => {});
+  }, []);
+  const fieldMeta = (key, fallbackLabel, fallbackOptions) => {
+    const found = fieldCatalog?.find((f) => f.key === key);
+    return { label: found?.label || fallbackLabel, options: found?.options || fallbackOptions };
+  };
+  const certOptions = useMemo(() => {
+    const fromEmployees = collectCertificationOptions(employees);
+    if (!roleCatalog) return fromEmployees;
+    // תפקידי המערכת מגיעים כ-{key,label}; לעובד נשמרת התווית.
+    const systemLabels = (roleCatalog.system || []).map((r) => r.label);
+    const seen = new Set([...systemLabels, ...roleCatalog.extra]);
+    return [
+      ...systemLabels,
+      ...roleCatalog.extra,
+      ...fromEmployees.filter((c) => !seen.has(c)),
+    ];
+  }, [employees, roleCatalog]);
+
+  // הסכם שכר: תעריף לכל תפקיד מסומן. נשמר יחד עם שמירת העובד.
+  const [wageRates, setWageRates] = useState(() => {
+    const map = {};
+    for (const r of ratesOf(wage)) map[r.role] = { mode: r.mode, amount: String(r.amount) };
+    return map;
+  });
+  const [travel, setTravel] = useState(String(wage?.travel_per_day || '') || '');
+  const defaultModeFor = (role) =>
+    PAYABLE_ROLES.find((r) => r.role === role)?.defaultMode || 'hourly';
+  const patchWageRate = (role, patch) => {
+    setWageRates((prev) => ({
+      ...prev,
+      [role]: { mode: defaultModeFor(role), amount: '', ...(prev[role] || {}), ...patch },
+    }));
+  };
   // בלי אף תפקיד מהרשימה הזו העובד נעלם מכל מסכי השיבוץ, ולכן זו אזהרה ולא הערה.
   const noAssignableRole = !certifications.some((c) => ASSIGNABLE_ROLES.includes(c));
   const [saving, setSaving]           = useState(false);
@@ -333,24 +769,24 @@ function EmployeeFormModal({ employee, employees, onSave, onClose }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!name.trim() || !phone.trim() || saving) return;
+    if (!(answers.name || '').trim() || !(answers.phone || '').trim() || saving) return;
     setSaving(true);
     setSaveError('');
     try {
       await onSave({
         ...(employee || {}),
-        name: name.trim(),
-        phone: phone.trim(),
-        email: email.trim(),
-        address: residence.trim(),
-        gender,
-        birthDate,
-        idNumber: idNumber.trim(),
+        name: answers.name.trim(),
+        phone: answers.phone.trim(),
+        email: (answers.email || '').trim(),
+        address: (answers.address || '').trim(),
+        gender: answers.gender || '',
+        birthDate: answers.birthDate || '',
+        idNumber: (answers.idNumber || '').trim(),
         is_active: status !== 'ארכיון',
-        payment_method: paymentMethod === 'חשבונית' ? 'invoice' : 'slip',
-        notes: notes.trim(),
-        bank_account_details: bankAccount.trim(),
-        pensionCompany: pensionCompany.trim(),
+        payment_method: answers.paymentMethod === 'חשבונית' ? 'invoice' : 'slip',
+        notes: (answers.notes || '').trim(),
+        bank_account_details: (answers.bankAccount || '').trim(),
+        pensionCompany: (answers.pensionCompany || '').trim(),
         documents,
         contractSigned: hasEmployeeDoc({ documents }, 'contract') || !!pendingFiles.contract,
         policeClearance: hasEmployeeDoc({ documents }, 'police') || !!pendingFiles.police,
@@ -359,6 +795,18 @@ function EmployeeFormModal({ employee, employees, onSave, onClose }) {
         hasForm101: hasEmployeeDoc({ documents }, 'form101') || !!pendingFiles.form101,
         certifications,
         _pendingFiles: pendingFiles,
+        // רק תפקידים שמסומנים כרגע נשמרים בהסכם — תפקיד שהוסר מוריד את התעריף שלו.
+        _wage: {
+          rates: certifications
+            .map((role) => ({ role, ...(wageRates[role] || {}) }))
+            .filter((r) => r.amount !== '' && Number(r.amount) > 0)
+            .map((r) => ({
+              role: r.role,
+              mode: r.mode || defaultModeFor(r.role),
+              amount: parseFloat(r.amount) || 0,
+            })),
+          travel_per_day: parseFloat(travel) || 0,
+        },
       });
       onClose();
     } catch (err) {
@@ -372,49 +820,61 @@ function EmployeeFormModal({ employee, employees, onSave, onClose }) {
     <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && !saving && onClose()}>
       <div className="modal slide-up" style={{ maxWidth: 680 }}>
         <div className="modal-header">
-          <div className="modal-title">{isEdit ? '✏️ עריכת פרטי עובד' : '➕ הוספת עובד חדש'}</div>
+          <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {isEdit ? <Edit2 size={16} /> : <Plus size={16} />}
+            {isEdit ? 'עריכת פרטי עובד' : 'הוספת עובד חדש'}
+          </div>
           <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} disabled={saving}><X size={18} /></button>
+        </div>
+        <div className="tab-bar tab-bar-inline" style={{ padding: '10px 16px 0' }}>
+          <button type="button" className={`tab-pill ${tab === 'details' ? 'active' : ''}`} onClick={() => setTab('details')}>
+            פרטי העובד
+          </button>
+          <button type="button" className={`tab-pill ${tab === 'roles' ? 'active' : ''}`} onClick={() => setTab('roles')}>
+            <Award size={14} /> תפקידים ושכר
+          </button>
         </div>
         <div className="modal-body">
           <form id="employee-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            
+
+            {/* שני הטאבים חיים באותו טופס; הסתרה ולא הסרה, כדי ששמירה אחת תיקח את שניהם. */}
+            <div style={{ display: tab === 'details' ? 'flex' : 'none', flexDirection: 'column', gap: 14 }}>
             <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6 }}>פרטים אישיים</div>
             <div className="form-grid-2">
               <div className="form-group">
-                <label className="form-label">שם מלא *</label>
-                <input className="input" required value={name} onChange={e => setName(e.target.value)} />
+                <label className="form-label">{fieldMeta('name', 'שם מלא').label} *</label>
+                <input className="input" required value={answers.name} onChange={e => setAnswer('name', e.target.value)} />
               </div>
               <div className="form-group">
-                <label className="form-label">מספר תעודת זהות</label>
-                <input className="input" value={idNumber} onChange={e => setIdNumber(e.target.value)} />
-              </div>
-            </div>
-
-            <div className="form-grid-3">
-              <div className="form-group">
-                <label className="form-label">טלפון *</label>
-                <input className="input" required value={phone} onChange={e => setPhone(e.target.value)} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">אימייל</label>
-                <input className="input" type="email" value={email} onChange={e => setEmail(e.target.value)} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">מגורים</label>
-                <input className="input" value={residence} onChange={e => setResidence(e.target.value)} />
+                <label className="form-label">{fieldMeta('idNumber', 'מספר תעודת זהות').label}</label>
+                <input className="input" value={answers.idNumber} onChange={e => setAnswer('idNumber', e.target.value)} />
               </div>
             </div>
 
             <div className="form-grid-3">
               <div className="form-group">
-                <label className="form-label">תאריך לידה</label>
-                <input className="input" type="date" value={birthDate} onChange={e => setBirthDate(e.target.value)} />
+                <label className="form-label">{fieldMeta('phone', 'טלפון').label} *</label>
+                <input className="input" required value={answers.phone} onChange={e => setAnswer('phone', e.target.value)} />
               </div>
               <div className="form-group">
-                <label className="form-label">מין</label>
-                <select className="input select" value={gender} onChange={e => setGender(e.target.value)}>
-                  <option value="זכר">זכר</option>
-                  <option value="נקבה">נקבה</option>
+                <label className="form-label">{fieldMeta('email', 'אימייל').label}</label>
+                <input className="input" type="email" value={answers.email} onChange={e => setAnswer('email', e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">{fieldMeta('address', 'מגורים').label}</label>
+                <input className="input" value={answers.address} onChange={e => setAnswer('address', e.target.value)} />
+              </div>
+            </div>
+
+            <div className="form-grid-3">
+              <div className="form-group">
+                <label className="form-label">{fieldMeta('birthDate', 'תאריך לידה').label}</label>
+                <input className="input" type="date" value={answers.birthDate} onChange={e => setAnswer('birthDate', e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">{fieldMeta('gender', 'מין', ['זכר', 'נקבה']).label}</label>
+                <select className="input select" value={answers.gender} onChange={e => setAnswer('gender', e.target.value)}>
+                  {fieldMeta('gender', 'מין', ['זכר', 'נקבה']).options.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </div>
               <div className="form-group">
@@ -428,18 +888,18 @@ function EmployeeFormModal({ employee, employees, onSave, onClose }) {
             <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>פיננסים ותנאי העסקה</div>
             <div className="form-grid-3">
               <div className="form-group">
-                <label className="form-label">מקבל תשלום ב..</label>
-                <select className="input select" value={paymentMethod} onChange={e => setPayMethod(e.target.value)}>
-                  {PAYMENT_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                <label className="form-label">{fieldMeta('paymentMethod', 'מקבל תשלום ב..', PAYMENT_OPTIONS).label}</label>
+                <select className="input select" value={answers.paymentMethod} onChange={e => setAnswer('paymentMethod', e.target.value)}>
+                  {fieldMeta('paymentMethod', 'מקבל תשלום ב..', PAYMENT_OPTIONS).options.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </div>
               <div className="form-group">
-                <label className="form-label">מספר חשבון בנק</label>
-                <input className="input" value={bankAccount} onChange={e => setBankAccount(e.target.value)} placeholder="בנק, סניף, חשבון" />
+                <label className="form-label">{fieldMeta('bankAccount', 'מספר חשבון בנק').label}</label>
+                <input className="input" value={answers.bankAccount} onChange={e => setAnswer('bankAccount', e.target.value)} placeholder="בנק, סניף, חשבון" />
               </div>
               <div className="form-group">
-                <label className="form-label">חברת פנסיה</label>
-                <input className="input" value={pensionCompany} onChange={e => setPensionC(e.target.value)} />
+                <label className="form-label">{fieldMeta('pensionCompany', 'חברת פנסיה').label}</label>
+                <input className="input" value={answers.pensionCompany} onChange={e => setAnswer('pensionCompany', e.target.value)} />
               </div>
             </div>
 
@@ -486,7 +946,19 @@ function EmployeeFormModal({ employee, employees, onSave, onClose }) {
               ))}
             </div>
 
-            <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>תפקידים והסמכות</div>
+            <div className="form-group">
+              <label className="form-label">{fieldMeta('notes', 'הערות כלליות').label}</label>
+              <textarea className="input textarea" rows={2} value={answers.notes} onChange={e => setAnswer('notes', e.target.value)} />
+            </div>
+            </div>
+
+            <div style={{ display: tab === 'roles' ? 'flex' : 'none', flexDirection: 'column', gap: 14 }}>
+            <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>תפקידים והסמכות</span>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowCatalog(true)}>
+                <Edit2 size={12} /> ניהול רשימת התפקידים
+              </button>
+            </div>
             <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: -6 }}>
               אפשר לשבץ את העובד רק לתפקידים שסומנו כאן.
             </div>
@@ -570,9 +1042,65 @@ function EmployeeFormModal({ employee, employees, onSave, onClose }) {
               </button>
             </div>
 
-            <div className="form-group">
-              <label className="form-label">הערות כלליות</label>
-              <textarea className="input textarea" rows={2} value={notes} onChange={e => setNotes(e.target.value)} />
+            <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>הסכם שכר</div>
+            {certifications.length === 0 ? (
+              <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                סמנו לעובד תפקידים למעלה — לכל תפקיד מסומן תיפתח כאן שורת תעריף.
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: -8 }}>
+                  תעריף לכל תפקיד מסומן. השאירו ריק תפקיד בהתנדבות. השעות מעוגלות
+                  לחצי שעה כלפי מעלה — חוג של 50 דקות משולם כשעה.
+                </div>
+                {certifications.map((role) => {
+                  const row = wageRates[role] || { mode: defaultModeFor(role), amount: '' };
+                  return (
+                    <div key={role} style={{ display: 'grid', gridTemplateColumns: '1fr 110px 110px', gap: 8, alignItems: 'center' }}>
+                      <div style={{ fontSize: 13 }}>{role}</div>
+                      <select
+                        className="input input-sm"
+                        value={row.mode || defaultModeFor(role)}
+                        onChange={(e) => patchWageRate(role, { mode: e.target.value })}
+                      >
+                        <option value="hourly">לשעה</option>
+                        <option value="daily">ליום</option>
+                      </select>
+                      <input
+                        className="input input-sm"
+                        type="number"
+                        min={0}
+                        placeholder="₪"
+                        value={row.amount}
+                        onChange={(e) => patchWageRate(role, { amount: e.target.value })}
+                      />
+                    </div>
+                  );
+                })}
+                {/* אותה רשת כמו שורות התעריף שמעל — עמודת האמצע קבועה, כי
+                    נסיעות תמיד משולמות ליום ואין מה לבחור בהן. */}
+                <div style={{
+                  display: 'grid', gridTemplateColumns: '1fr 110px 110px', gap: 8,
+                  alignItems: 'center', borderTop: '1px solid var(--border)', paddingTop: 10,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                    <Car size={13} style={{ color: 'var(--text-3)', flexShrink: 0 }} /> נסיעות
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>ליום עבודה</div>
+                  <input
+                    className="input input-sm"
+                    type="number"
+                    min={0}
+                    placeholder="₪"
+                    value={travel}
+                    onChange={e => setTravel(e.target.value)}
+                  />
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: -6 }}>
+                  משולם פעם אחת לכל יום שהעובד עבד בו, גם אם היו בו כמה משמרות.
+                </div>
+              </>
+            )}
             </div>
 
             {saveError && (
@@ -588,6 +1116,28 @@ function EmployeeFormModal({ employee, employees, onSave, onClose }) {
           </button>
         </div>
       </div>
+
+      {showCatalog && (
+        <RoleCatalogModal
+          catalog={roleCatalog}
+          onCatalogChange={setRoleCatalog}
+          // הטופס הפתוח מחזיק עותק מקומי של התפקידים — מיישרים אותו עם השינוי,
+          // אחרת שמירה תחזיר את השם הישן לעובד הזה.
+          onRoleRenamed={(from, to) => {
+            setCertifications((prev) => prev.map((c) => (c === from ? to : c)));
+            setWageRates((prev) => {
+              if (!prev[from]) return prev;
+              const next = { ...prev, [to]: prev[from] };
+              delete next[from];
+              return next;
+            });
+          }}
+          onRoleDeleted={(role) => {
+            setCertifications((prev) => prev.filter((c) => c !== role));
+          }}
+          onClose={() => setShowCatalog(false)}
+        />
+      )}
     </div>
   );
 }
@@ -643,7 +1193,10 @@ function WageFormModal({ wage, employees, onSave, onClose }) {
     <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal slide-up" style={{ maxWidth: 560 }}>
         <div className="modal-header">
-          <div className="modal-title">{wage ? '✏️ עריכת הסכם שכר' : '➕ יצירת הסכם שכר חדש'}</div>
+          <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {wage ? <Edit2 size={16} /> : <Plus size={16} />}
+            {wage ? 'עריכת הסכם שכר' : 'יצירת הסכם שכר חדש'}
+          </div>
           <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose}><X size={18} /></button>
         </div>
         <div className="modal-body">
@@ -688,13 +1241,26 @@ function WageFormModal({ wage, employees, onSave, onClose }) {
               </div>
             ))}
 
-            <div className="form-group">
-              <label className="form-label">נסיעות ליום עבודה (₪)</label>
-              <input className="input" type="number" min={0} value={travel}
-                onChange={e => setTravel(e.target.value)} />
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
-                משולם פעם אחת לכל יום שהעובד עבד בו, גם אם היו בו כמה משמרות.
+            {/* אותה רשת כמו שורות התעריף שמעל, כדי שהעמודות יתיישרו. */}
+            <div style={{
+              display: 'grid', gridTemplateColumns: '1fr 110px 110px', gap: 8,
+              alignItems: 'center', borderTop: '1px solid var(--border)', paddingTop: 10,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                <Car size={13} style={{ color: 'var(--text-3)', flexShrink: 0 }} /> נסיעות
               </div>
+              <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>ליום עבודה</div>
+              <input
+                className="input input-sm"
+                type="number"
+                min={0}
+                placeholder="₪"
+                value={travel}
+                onChange={e => setTravel(e.target.value)}
+              />
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: -6 }}>
+              משולם פעם אחת לכל יום שהעובד עבד בו, גם אם היו בו כמה משמרות.
             </div>
 
           </form>
@@ -710,6 +1276,183 @@ function WageFormModal({ wage, employees, onSave, onClose }) {
   );
 }
 
+// ─── Modal: Employee Onboarding Form Field Editor ─────────────────────────────
+function EmployeeOnboardFieldsModal({ onClose }) {
+  const [fields, setFields] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    fetch('/api/settings/employee-onboard-fields')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setFields(Array.isArray(data) ? data : []))
+      .catch(() => setFields([]));
+  }, []);
+
+  const patchField = (key, patch) => {
+    setFields((prev) => prev.map((f) => (f.key === key ? { ...f, ...patch } : f)));
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch('/api/settings/employee-onboard-fields', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fields: fields.map((f) => ({ key: f.key, enabled: f.enabled, required: f.required })),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'שמירה נכשלה');
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && !saving && onClose()}>
+      <div className="modal slide-up" style={{ maxWidth: 480 }}>
+        <div className="modal-header">
+          <div className="modal-title">עריכת שדות טופס קליטת עובד</div>
+          <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} disabled={saving}><X size={18} /></button>
+        </div>
+        <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>
+            שם וטלפון תמיד מוצגים וחובה — הם היחידים שמזהים את העובד/ת בטופס.
+          </div>
+          {!fields && <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען...</div>}
+          {fields && fields.map((f) => (
+            <div key={f.key} style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)',
+              opacity: f.locked ? 0.6 : 1,
+            }}>
+              <span style={{ fontSize: 13 }}>{f.label}</span>
+              <div style={{ display: 'flex', gap: 14, fontSize: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: f.locked ? 'default' : 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={f.enabled}
+                    disabled={f.locked}
+                    onChange={(e) => patchField(f.key, {
+                      enabled: e.target.checked,
+                      required: e.target.checked ? f.required : false,
+                    })}
+                  />
+                  מוצג
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: (f.locked || !f.enabled) ? 'default' : 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={f.required}
+                    disabled={f.locked || !f.enabled}
+                    onChange={(e) => patchField(f.key, { required: e.target.checked })}
+                  />
+                  חובה
+                </label>
+              </div>
+            </div>
+          ))}
+          {error && <div style={{ fontSize: 12, color: 'var(--red)' }}>{error}</div>}
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose} disabled={saving}>ביטול</button>
+          <button className="btn btn-primary" disabled={saving || !fields} onClick={save}>
+            <Save size={15} /> {saving ? 'שומר...' : 'שמירה'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Tab: Employee Onboarding Link ─────────────────────────────────────────────
+// One static link for every new hire (like /onboard for members) — lives in
+// its own tab so it doesn't compete for space with the employee table.
+function EmployeeOnboardingLinkPanel() {
+  const [copied, setCopied] = useState(false);
+  const [showFieldsModal, setShowFieldsModal] = useState(false);
+  const [savingReply, setSavingReply] = useState(false);
+  const [replyMsg, setReplyMsg] = useState('');
+  const link = `${window.location.origin}/staff-onboard`;
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      window.prompt('העתיקו את הקישור:', link);
+    }
+  };
+
+  // Name is the marker: a second click updates the same saved reply instead
+  // of piling up duplicates in the "הודעות שמורות" list.
+  const REPLY_NAME = 'קישור לקליטת עובד חדש';
+  const createOrUpdateSavedReply = async () => {
+    setSavingReply(true);
+    setReplyMsg('');
+    try {
+      const listRes = await fetch('/api/saved-replies');
+      const list = listRes.ok ? await listRes.json() : [];
+      const existing = Array.isArray(list) ? list.find((r) => r.name === REPLY_NAME) : null;
+      const body = `היי! מוזמנ/ת למלא פרטים לקליטה כעובד/ת חדש/ה כאן:\n${link}`;
+      const res = await fetch(
+        existing ? `/api/saved-replies/${existing.id}` : '/api/saved-replies',
+        {
+          method: existing ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: REPLY_NAME, body }),
+        }
+      );
+      if (!res.ok) throw new Error();
+      setReplyMsg(existing ? 'ההודעה השמורה עודכנה' : 'ההודעה השמורה נוצרה — זמינה תחת "הודעות שמורות"');
+    } catch {
+      setReplyMsg('שמירת ההודעה נכשלה — נסו שוב');
+    } finally {
+      setSavingReply(false);
+      setTimeout(() => setReplyMsg(''), 5000);
+    }
+  };
+
+  return (
+    <div className="card card-p" style={{ maxWidth: 640, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+        <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+          שלחו לעובד/ת חדש/ה למילוי פרטים עצמאי — הרשומה נוצרת כלא-פעילה עד לאישור צוות.
+        </div>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowFieldsModal(true)}>
+          <Settings2 size={13} /> עריכת שדות הטופס
+        </button>
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input
+          className="input input-sm"
+          readOnly
+          value={link}
+          style={{ flex: '1 1 260px', fontFamily: 'monospace' }}
+          onFocus={(e) => e.target.select()}
+        />
+        <button type="button" className="btn btn-ghost btn-sm" onClick={copyLink}>
+          <Copy size={13} /> {copied ? 'הועתק!' : 'העתקה'}
+        </button>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={savingReply} onClick={createOrUpdateSavedReply}>
+          <MessageCircle size={13} /> {savingReply ? 'שומר...' : 'הודעה שמורה עם הקישור'}
+        </button>
+      </div>
+      {replyMsg && <div style={{ fontSize: 12, color: 'var(--text-3)' }}>{replyMsg}</div>}
+      {showFieldsModal && (
+        <EmployeeOnboardFieldsModal onClose={() => setShowFieldsModal(false)} />
+      )}
+    </div>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function Employees() {
   const [employees, setEmployees] = useState([]);
@@ -719,6 +1462,7 @@ export default function Employees() {
   const [activities, setActivities] = useState([]);
   const [groups, setGroups] = useState([]);
   const [payrollMonth, setPayrollMonth] = useState(() => currentYearMonth());
+  const [employeeFormTab, setEmployeeFormTab] = useState('details');
   const [payrollBusy, setPayrollBusy] = useState(false);
   const [newManualRow, setNewManualRow] = useState({
     employee_id: '',
@@ -894,7 +1638,7 @@ export default function Employees() {
   }, [employees, empSearch, empFilterActive, empSortConfig, employeeShiftStats]);
 
   const handleSaveEmployee = async (data) => {
-    const { _pendingFiles = {}, ...payload } = data;
+    const { _pendingFiles = {}, _wage = null, ...payload } = data;
     const isEdit = employees.some(e => e.id === payload.id);
     const previousDocs = isEdit
       ? (employees.find((e) => e.id === payload.id)?.documents || {})
@@ -947,6 +1691,18 @@ export default function Employees() {
         throw new Error(errBody.error || 'העלאת הקובץ נכשלה');
       }
       saved = (await upRes.json()).employee || saved;
+    }
+
+    // הסכם השכר נשמר יחד עם העובד — עובד חדש מקבל אותו מיד אחרי שנוצר לו id.
+    if (_wage) {
+      const wageRes = await fetch('/api/wages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ..._wage, employee_id: saved.id }),
+      });
+      if (!wageRes.ok) {
+        throw new Error('העובד נשמר, אבל שמירת הסכם השכר נכשלה — נסו שוב');
+      }
     }
 
     await refreshData();
@@ -1139,6 +1895,8 @@ export default function Employees() {
         <EmployeeFormModal
           employee={editingEmployee}
           employees={employees}
+          wage={wages.find((w) => w.employee_id === editingEmployee?.id) || null}
+          initialTab={employeeFormTab}
           onSave={handleSaveEmployee}
           onClose={() => { setShowEmployeeForm(false); setEditingEmployee(null); }}
         />
@@ -1179,7 +1937,20 @@ export default function Employees() {
                 </div>
               </div>
             </div>
-            <button className="btn btn-ghost btn-icon btn-sm" onClick={() => setSelectedEmployee(null)}><X size={16} /></button>
+            {/* עריכה בראש הכרטיס — הכפתור התחתון דרש גלילה דרך כל הפרטים. */}
+            <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => {
+                  setEditingEmployee(selectedEmployee);
+                  setEmployeeFormTab('details');
+                  setShowEmployeeForm(true);
+                }}
+              >
+                <Edit2 size={13} /> עריכה
+              </button>
+              <button className="btn btn-ghost btn-icon btn-sm" onClick={() => setSelectedEmployee(null)}><X size={16} /></button>
+            </div>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14, flex: 1, overflowY: 'auto' }}>
@@ -1187,28 +1958,36 @@ export default function Employees() {
             <div className="card card-p">
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>פרטי התקשרות</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
-                <div>📞 <strong>טלפון:</strong> {selectedEmployee.phone}</div>
-                {selectedEmployee.email && <div>✉️ <strong>אימייל:</strong> {selectedEmployee.email}</div>}
-                {selectedEmployee.address && <div>📍 <strong>מגורים:</strong> {selectedEmployee.address}</div>}
+                <DetailRow icon={Phone} label="טלפון">{selectedEmployee.phone}</DetailRow>
+                {selectedEmployee.email && (
+                  <DetailRow icon={Mail} label="אימייל">{selectedEmployee.email}</DetailRow>
+                )}
+                {selectedEmployee.address && (
+                  <DetailRow icon={MapPin} label="מגורים">{selectedEmployee.address}</DetailRow>
+                )}
               </div>
             </div>
 
             <div className="card card-p">
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>פרטים אישיים</div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 13 }}>
-                <div>🪪 <strong>ת.ז:</strong> {selectedEmployee.idNumber || '—'}</div>
-                <div>👤 <strong>מין:</strong> {selectedEmployee.gender || 'זכר'}</div>
-                <div>📅 <strong>תאריך לידה:</strong> {selectedEmployee.birthDate || '—'}</div>
-                <div>👶 <strong>גיל:</strong> {calculateAge(selectedEmployee.birthDate) || '—'}</div>
+                <DetailRow icon={CreditCard} label="ת.ז">{selectedEmployee.idNumber || '—'}</DetailRow>
+                <DetailRow icon={User} label="מין">{selectedEmployee.gender || 'זכר'}</DetailRow>
+                <DetailRow icon={Calendar} label="תאריך לידה">
+                  <DateDMY value={selectedEmployee.birthDate} />
+                </DetailRow>
+                <DetailRow icon={Cake} label="גיל">{calculateAge(selectedEmployee.birthDate) || '—'}</DetailRow>
               </div>
             </div>
 
             <div className="card card-p">
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>פרטי בנק</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
-                <div>🏦 <strong>חשבון בנק:</strong> {selectedEmployee.bank_account_details || 'טרם עודכן'}</div>
+                <DetailRow icon={Banknote} label="חשבון בנק">
+                  {selectedEmployee.bank_account_details || 'טרם עודכן'}
+                </DetailRow>
                 {selectedEmployee.pensionCompany && (
-                  <div>🏛 <strong>חברת פנסיה:</strong> {selectedEmployee.pensionCompany}</div>
+                  <DetailRow icon={Landmark} label="חברת פנסיה">{selectedEmployee.pensionCompany}</DetailRow>
                 )}
               </div>
             </div>
@@ -1221,7 +2000,27 @@ export default function Employees() {
                   const present = hasEmployeeDoc(selectedEmployee, field.key);
                   return (
                     <div key={field.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-                      <span>{present ? '✓' : '—'} {field.label}</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {/* וי בעיגול ירוק למה שהושלם, ועיגול ריק למה שחסר — כדי
+                            שהעין תתפוס את הסטטוס לפני שהיא קוראת את השם. */}
+                        {present ? (
+                          <span style={{
+                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                            width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
+                            background: 'rgba(52,211,153,0.15)',
+                            border: '1px solid rgba(52,211,153,0.5)',
+                            color: 'var(--green)',
+                          }}>
+                            <Check size={11} strokeWidth={3} />
+                          </span>
+                        ) : (
+                          <span style={{
+                            display: 'inline-block', width: 18, height: 18, borderRadius: '50%',
+                            flexShrink: 0, border: '1px dashed var(--border-hover)',
+                          }} />
+                        )}
+                        <span style={{ color: present ? 'var(--text-1)' : 'var(--text-3)' }}>{field.label}</span>
+                      </span>
                       {doc?.storagePath && (
                         <button
                           type="button"
@@ -1266,35 +2065,22 @@ export default function Employees() {
               paidHoursThisMonth={employeeShiftStats[selectedEmployee.id]?.hours}
             />
 
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>💰 הסכם שכר פעיל</div>
-              {(() => {
-                const w = wages.find(wg => wg.employee_id === selectedEmployee.id);
-                return w ? (
-                  <div className="card card-p" style={{ background: 'rgba(255,255,255,0.01)', padding: 12 }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: 12 }}>
-                      {ratesOf(w).map((r) => (
-                        <div key={r.role}>
-                          {r.role}: <span style={{ color: 'var(--green)' }}>
-                            ₪{r.amount}{r.mode === 'daily' ? '/יום' : '/ש׳'}
-                          </span>
-                        </div>
-                      ))}
-                      {travelPerDay(w) > 0 && (
-                        <div>🚗 נסיעות: <span style={{ color: 'var(--green)' }}>₪{travelPerDay(w)}/יום</span></div>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 12, color: 'var(--text-3)', fontStyle: 'italic' }}>לא הוגדר הסכם שכר לעובד זה</div>
-                );
-              })()}
-            </div>
+            <MonthlyPayCard
+              employee={selectedEmployee}
+              agreement={wages.find(wg => wg.employee_id === selectedEmployee.id) || null}
+              rows={workAssignments.filter((a) => a.employee_id === selectedEmployee.id)}
+              month={payrollMonth}
+              onEditWage={() => {
+                setEditingEmployee(selectedEmployee);
+                setEmployeeFormTab('roles');
+                setShowEmployeeForm(true);
+              }}
+            />
           </div>
 
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, display: 'flex', gap: 10, marginTop: 10 }}>
-            <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setEditingEmployee(selectedEmployee); setShowEmployeeForm(true); }}>
-              ✏️ ערוך פרטים
+            <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setEditingEmployee(selectedEmployee); setEmployeeFormTab('details'); setShowEmployeeForm(true); }}>
+              <Edit2 size={13} /> ערוך פרטים
             </button>
           </div>
         </div>
@@ -1334,7 +2120,9 @@ export default function Employees() {
                 display: 'flex', justifyContent: 'space-between', fontSize: 13,
                 borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 4,
               }}>
-                <span>🚗 נסיעות ליום עבודה:</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <Car size={13} style={{ color: 'var(--text-3)' }} /> נסיעות ליום עבודה:
+                </span>
                 <strong style={{ color: travelPerDay(selectedWage) ? 'var(--green)' : 'var(--text-3)' }}>
                   {travelPerDay(selectedWage) ? `₪${travelPerDay(selectedWage)}` : 'לא הוגדר'}
                 </strong>
@@ -1344,7 +2132,7 @@ export default function Employees() {
 
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, display: 'flex', gap: 10 }}>
             <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setEditingWage(selectedWage); setShowWageForm(true); }}>
-              ✏️ ערוך הסכם
+              <Edit2 size={13} /> ערוך הסכם
             </button>
           </div>
         </div>
@@ -1379,7 +2167,7 @@ export default function Employees() {
           <button className="btn btn-ghost btn-sm" onClick={() => { setEditingWage(null); setShowWageForm(true); }}>
             <Plus size={14} /> הסכם שכר חדש
           </button>
-          <button className="btn btn-primary btn-sm" onClick={() => { setEditingEmployee(null); setShowEmployeeForm(true); }}>
+          <button className="btn btn-primary btn-sm" onClick={() => { setEditingEmployee(null); setEmployeeFormTab('details'); setShowEmployeeForm(true); }}>
             <Plus size={14} /> עובד חדש
           </button>
         </div>
@@ -1393,6 +2181,7 @@ export default function Employees() {
           { key: 'wages',     label: 'הסכמי שכר',            icon: Coins },
           { key: 'shifts',    label: 'שעון נוכחות ומשמרות',  icon: Clock },
           { key: 'payroll',   label: 'תשלום חודשי',          icon: Banknote },
+          { key: 'onboard-link', label: 'קישור קליטה',       icon: Link2 },
         ].map(({ key, label, icon: Icon }) => (
           <button
             key={key}
@@ -1403,6 +2192,9 @@ export default function Employees() {
           </button>
         ))}
       </div>
+
+      {/* ─── Tab: Onboarding link ───────────────────────────────────────────── */}
+      {activeTab === 'onboard-link' && <EmployeeOnboardingLinkPanel />}
 
       {/* ─── Tab 1: Permanent Employees ────────────────────────────────────── */}
       {activeTab === 'permanent' && (
@@ -1462,7 +2254,7 @@ export default function Employees() {
                         <td style={{ color: 'var(--text-3)' }}>{emp.phone}</td>
                         <td onClick={e => e.stopPropagation()}>
                           <div style={{ display: 'flex', gap: 6 }}>
-                            <button className="btn btn-ghost btn-icon btn-xs" onClick={() => { setEditingEmployee(emp); setShowEmployeeForm(true); }}>
+                            <button className="btn btn-ghost btn-icon btn-xs" onClick={() => { setEditingEmployee(emp); setEmployeeFormTab('details'); setShowEmployeeForm(true); }}>
                               <Edit2 size={12} />
                             </button>
                           </div>
@@ -1496,9 +2288,9 @@ export default function Employees() {
                     <td style={{ fontSize: 13, color: 'var(--text-3)' }}>{emp.phone || '—'}</td>
                     <td>
                       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                        {hasEmployeeDoc(emp, 'contract') && <span className="badge badge-green" style={{ fontSize: 9 }}>חוזה ✓</span>}
-                        {hasEmployeeDoc(emp, 'police') && <span className="badge badge-green" style={{ fontSize: 9 }}>משטרה ✓</span>}
-                        {hasEmployeeDoc(emp, 'form101') && <span className="badge badge-green" style={{ fontSize: 9 }}>101 ✓</span>}
+                        {hasEmployeeDoc(emp, 'contract') && <span className="badge badge-green" style={{ fontSize: 9 }}>חוזה</span>}
+                        {hasEmployeeDoc(emp, 'police') && <span className="badge badge-green" style={{ fontSize: 9 }}>משטרה</span>}
+                        {hasEmployeeDoc(emp, 'form101') && <span className="badge badge-green" style={{ fontSize: 9 }}>101</span>}
                         {hasEmployeeDoc(emp, 'idPhoto') && <span className="badge badge-blue" style={{ fontSize: 9 }}>צילום ת.ז</span>}
                         {hasEmployeeDoc(emp, 'certificates') && <span className="badge badge-blue" style={{ fontSize: 9 }}>תעודות</span>}
                         {!EMPLOYEE_DOC_FIELDS.some((f) => hasEmployeeDoc(emp, f.key)) && (

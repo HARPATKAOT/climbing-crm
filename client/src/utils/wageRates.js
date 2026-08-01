@@ -1,0 +1,145 @@
+/**
+ * תעריפי שכר לפי תפקיד.
+ *
+ * עד כאן היו ארבעה תעריפים קבועים בהסכם (דלפק/חוג/פרטי/בנייה), ולא היה איפה
+ * לרשום „יום טיול סנפלינג”. עכשיו ההסכם מחזיק רשימה פתוחה: שורה לכל תפקיד,
+ * עם אופן תשלום וסכום. התפקידים הם אותם תפקידים שמסמנים בכרטיס העובד, כך
+ * שמי שאפשר לשבץ לתפקיד הוא גם מי שיש לו תעריף עליו.
+ *
+ * עותק מראה של server/wageRates.js — כל שינוי חייב להיעשות בשני הקבצים,
+ * אחרת המסך יראה סכום אחד והשכר שיישמר יהיה אחר.
+ */
+
+export const PAY_MODES = ['hourly', 'daily', 'flat'];
+
+/** התפקידים שאפשר להגדיר להם תעריף, עם אופן התשלום הרגיל לכל אחד. */
+export const PAYABLE_ROLES = [
+  { role: 'מדריך', defaultMode: 'hourly' },
+  { role: 'עוזר מדריך', defaultMode: 'hourly' },
+  { role: 'מפעיל קיר', defaultMode: 'hourly' },
+  { role: 'מדריך סנפלינג', defaultMode: 'daily' },
+  { role: 'מדריך שיעור פרטי', defaultMode: 'hourly' },
+  { role: 'בונה מסלולים רמה 1', defaultMode: 'hourly' },
+  { role: 'בונה מסלולים רמה 2', defaultMode: 'hourly' },
+];
+
+/** ההסכמים הישנים החזיקו ארבעה שדות. אלה התפקידים שהם הפכו להיות. */
+const LEGACY_RATE_FIELDS = [
+  { field: 'class_rate', role: 'מדריך', mode: 'hourly' },
+  { field: 'counter_rate', role: 'מפעיל קיר', mode: 'hourly' },
+  { field: 'private_rate', role: 'מדריך שיעור פרטי', mode: 'hourly' },
+  { field: 'route_rate', role: 'בונה מסלולים רמה 1', mode: 'hourly' },
+];
+
+/** סוגי העבודה הישנים ממופים לתפקידים, כדי ששורות ותיקות ימשיכו להיות מתומחרות. */
+export const WORK_TYPE_ROLES = {
+  class_shift: 'מדריך',
+  counter_shift: 'מפעיל קיר',
+  private_shift: 'מדריך שיעור פרטי',
+  route_building_shift: 'בונה מסלולים רמה 1',
+};
+
+const num = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+};
+
+/**
+ * שעות מעוגלות לחצי השעה הקרובה כלפי מעלה: חוג של 50 דקות משולם כשעה,
+ * ושל 80 דקות כשעה וחצי. עיגול כלפי מטה היה גוזל מהעובד זמן שהוא עבד.
+ */
+export function roundHoursHalfUp(hours) {
+  const n = Number(hours);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.ceil(n * 2) / 2;
+}
+
+/** רשימת התעריפים של ההסכם, כולל המרה של הסכמים ישנים שאין בהם רשימה. */
+export function ratesOf(agreement) {
+  if (Array.isArray(agreement?.rates) && agreement.rates.length > 0) {
+    return agreement.rates
+      .filter((r) => r && r.role)
+      .map((r) => ({
+        role: String(r.role),
+        mode: PAY_MODES.includes(r.mode) ? r.mode : 'hourly',
+        amount: num(r.amount),
+      }));
+  }
+  return LEGACY_RATE_FIELDS
+    .filter(({ field }) => agreement?.[field] !== undefined && agreement?.[field] !== null)
+    .map(({ field, role, mode }) => ({ role, mode, amount: num(agreement[field]) }));
+}
+
+/** התעריף של העובד לתפקיד מסוים, או null אם לא הוגדר לו. */
+export function rateForRole(agreement, role) {
+  if (!role) return null;
+  return ratesOf(agreement).find((r) => r.role === role) || null;
+}
+
+export function travelPerDay(agreement) {
+  return num(agreement?.travel_per_day);
+}
+
+/**
+ * הסכום לשורת עבודה אחת.
+ * - `flat`: הסכום שנקבע על השורה (אירוע בתשלום גלובלי), בלי קשר לשעות.
+ * - `daily`: תעריף היום של התפקיד — יום טיול משולם כיום, לא לפי שעות.
+ * - `hourly`: שעות מעוגלות כפול התעריף.
+ */
+export function amountForWorkRow(row, agreement) {
+  if (row?.pay_mode === 'flat') return Math.round(num(row.flat_amount));
+
+  const role = row?.role || WORK_TYPE_ROLES[row?.work_type] || null;
+  const rate = rateForRole(agreement, role);
+  if (!rate) return 0;
+  if (rate.mode === 'daily') return Math.round(rate.amount);
+  return Math.round(roundHoursHalfUp(row?.hours) * rate.amount);
+}
+
+/**
+ * ימי עבודה = ימים שיש בהם לפחות שורת עבודה אחת. תשלום הנסיעות הוא ליום,
+ * ולכן שתי משמרות באותו יום אינן שתי נסיעות.
+ */
+export function workDaysOf(rows) {
+  return new Set((rows || []).map((r) => r?.date).filter(Boolean)).size;
+}
+
+/**
+ * פירוט לפי תפקיד: כמה שעות וכמה כסף נצברו בכל תפקיד בפועל. שורות בתשלום
+ * גלובלי מופרדות, כי אין להן תעריף שעתי שאפשר להציג לידן.
+ */
+export function summarizeByRole(rows, agreement) {
+  const map = new Map();
+  for (const row of rows || []) {
+    const role = row?.role || WORK_TYPE_ROLES[row?.work_type] || 'ללא תפקיד';
+    const flat = row?.pay_mode === 'flat';
+    const key = flat ? `${role} · גלובלי` : role;
+    const entry = map.get(key) || { label: key, role, flat, hours: 0, amount: 0, count: 0 };
+    entry.hours += roundHoursHalfUp(row?.hours);
+    entry.amount += amountForWorkRow(row, agreement);
+    entry.count += 1;
+    map.set(key, entry);
+  }
+  return [...map.values()]
+    .map((e) => ({ ...e, hours: Math.round(e.hours * 100) / 100, amount: Math.round(e.amount) }))
+    .sort((a, b) => b.amount - a.amount);
+}
+
+/** סיכום חודשי אחד: שעות, שכר עבודה, ימי עבודה ונסיעות. */
+export function summarizeWork(rows, agreement) {
+  let hours = 0;
+  let pay = 0;
+  for (const row of rows || []) {
+    hours += roundHoursHalfUp(row?.hours);
+    pay += amountForWorkRow(row, agreement);
+  }
+  const days = workDaysOf(rows);
+  const travel = days * travelPerDay(agreement);
+  return {
+    hours: Math.round(hours * 100) / 100,
+    pay: Math.round(pay),
+    days,
+    travel: Math.round(travel),
+    total: Math.round(pay + travel),
+  };
+}

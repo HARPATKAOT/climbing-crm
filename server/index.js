@@ -15,6 +15,16 @@ import {
 import { whatsappConnectService } from './whatsappConnect.js';
 import { automationsService, runScheduledAutomationsIfDue } from './automations.js';
 import {
+  loadAgendaSettings,
+  saveAgendaSettings,
+  buildDailyDigest,
+  buildWeeklyDigest,
+  sendDailyDigest,
+  sendWeeklyDigest,
+  runAgendaDigestsIfDue,
+  addDays as addAgendaDays,
+} from './agendaDigest.js';
+import {
   OFFER_TYPES,
   OFFER_TYPE_LABELS,
   offerSummary,
@@ -226,6 +236,7 @@ import {
   publicBase as eventPublicBase,
 } from './eventWhatsappTemplates.js';
 import { ensureOnboardingLinkTemplate } from './onboardingWhatsappTemplate.js';
+import { ensureAgendaDigestTemplate } from './agendaDigestTemplate.js';
 import {
   ensureProductCategories,
   renameCategoryOnProducts,
@@ -239,6 +250,13 @@ import {
   saveBusinessProfile,
   safeBusinessProfile,
 } from './businessProfile.js';
+import {
+  getEmployeeOnboardConfig,
+  saveEmployeeOnboardConfig,
+  mergeFieldDefs,
+  publicFieldDefs,
+  buildEmployeeFromSubmission,
+} from './employeeOnboardingForm.js';
 import { calculateDashboardStats } from './dashboardStats.js';
 import { applyBusinessBrand, resetPlaygroundConversation } from './whatsappBot.js';
 import { countEnrolled } from './groupCapacity.js';
@@ -254,10 +272,21 @@ import {
   activityDateRange,
   planVacationAttendanceUpdates,
   planVacationAttendanceReverts,
+  findTrainingVacation,
   VACATION_ACTIVITY_TYPE,
   VACATION_ATT_STATUS,
   VACATION_MARKER,
 } from './attendanceUtils.js';
+import {
+  PAY_MODES,
+  ratesOf,
+  travelPerDay,
+  rateForRole,
+  amountForWorkRow,
+  roundHoursHalfUp,
+  summarizeWork,
+  WORK_TYPE_ROLES,
+} from './wageRates.js';
 import {
   getConversation,
   listConversations,
@@ -762,6 +791,52 @@ app.post('/api/leads', async (req, res) => {
     parent: result.parent,
     students: result.students,
   });
+});
+
+// ─── Employee onboarding link (public) ────────────────────────────────────
+app.get('/api/public/employee-onboard-fields', publicFormRateLimit, async (_req, res) => {
+  try {
+    const config = await getEmployeeOnboardConfig();
+    res.json({ fields: publicFieldDefs(config) });
+  } catch (error) {
+    console.error('employee-onboard-fields load error:', error.message);
+    res.json({ fields: publicFieldDefs(await getEmployeeOnboardConfig()) });
+  }
+});
+
+app.post('/api/public/employee-onboard', publicFormRateLimit, async (req, res) => {
+  try {
+    const config = await getEmployeeOnboardConfig();
+    const { employee, error } = buildEmployeeFromSubmission(req.body?.answers, config);
+    if (error) return res.status(400).json({ error });
+    const created = db.insert('employees', employee);
+    const durable = await persistCore('employees', created);
+    if (!durable.ok) {
+      console.error('employee onboarding durable write failed:', durable.error);
+    }
+    res.status(201).json({ success: true });
+  } catch (error) {
+    console.error('employee onboarding submit error:', error.message);
+    res.status(500).json({ error: 'שמירת הפרטים נכשלה — נסו שוב' });
+  }
+});
+
+// Admin editor for which fields the onboarding form asks for
+app.get('/api/settings/employee-onboard-fields', requireOwner, async (_req, res) => {
+  try {
+    res.json(mergeFieldDefs(await getEmployeeOnboardConfig({ fresh: true })));
+  } catch (error) {
+    res.status(503).json({ error: error.message || 'טעינת הגדרות הטופס נכשלה' });
+  }
+});
+
+app.put('/api/settings/employee-onboard-fields', requireOwner, async (req, res) => {
+  try {
+    const config = await saveEmployeeOnboardConfig(req.body?.fields);
+    res.json(mergeFieldDefs(config));
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'שמירת הגדרות הטופס נכשלה' });
+  }
 });
 
 // Public lead intake form (source=form, phone de-dupe)
@@ -1290,6 +1365,7 @@ app.get('/api/message-templates', (req, res) => {
       persist: persistCore,
     });
     ensureOnboardingLinkTemplate({ db, persist: persistCore });
+    ensureAgendaDigestTemplate({ db, persist: persistCore });
   } catch (err) {
     console.warn('event whatsapp templates ensure on list skipped:', err.message);
   }
@@ -2073,6 +2149,76 @@ app.delete('/api/automations/:id', (req, res) => {
   const deleted = db.delete('automations', id);
   if (!deleted) return res.status(404).json({ error: 'Automation not found' });
   res.json({ success: true });
+});
+
+// Agenda digests — tomorrow's schedule each evening, the week each Saturday
+app.get('/api/agenda-digest/settings', async (req, res) => {
+  try {
+    res.json(await loadAgendaSettings());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/agenda-digest/settings', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const patch = {};
+    for (const key of [
+      'dailyEnabled', 'weeklyEnabled', 'channel', 'phone', 'email',
+      'dailyTime', 'weeklyDay', 'weeklyTime', 'includeGoogle', 'templateName',
+    ]) {
+      if (body[key] !== undefined) patch[key] = body[key];
+    }
+    res.json(await saveAgendaSettings(patch));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Preview the exact text without sending it anywhere
+app.get('/api/agenda-digest/preview', async (req, res) => {
+  try {
+    const settings = await loadAgendaSettings();
+    const kind = req.query.kind === 'weekly' ? 'weekly' : 'daily';
+    const start = String(req.query.date || '').slice(0, 10)
+      || addAgendaDays(israelDateStr(), 1);
+    const digest = kind === 'weekly'
+      ? await buildWeeklyDigest(start, settings)
+      : await buildDailyDigest(start, settings);
+    res.json({ kind, ...digest, events: digest.items.length });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/agenda-digest/send-now', async (req, res) => {
+  try {
+    const kind = req.body?.kind === 'weekly' ? 'weekly' : 'daily';
+    const start = String(req.body?.date || '').slice(0, 10)
+      || addAgendaDays(israelDateStr(), 1);
+    // A manual send must not tick the "already sent tonight" marker.
+    const result = kind === 'weekly'
+      ? await sendWeeklyDigest(start, { record: false })
+      : await sendDailyDigest(start, { record: false });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Cron / external scheduler: run whichever digest this evening still owes
+app.post('/api/agenda-digest/run-due', async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (secret && req.get('x-cron-secret') !== secret && req.query.secret !== secret) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const result = await runAgendaDigestsIfDue();
+    res.json({ ok: true, ...(result || { skipped: true }) });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 // Cron / external scheduler: intro reminders (today) + followups (yesterday)
@@ -3254,6 +3400,13 @@ function normalizeActivityPayload(body = {}) {
         ? body.registration_theme
         : (body.theme && typeof body.theme === 'object' ? body.theme : {})
     ),
+    // שיבוץ ותשלום צוות: איזה תפקיד מותר לשבץ לאירוע, ואיך משולם —
+    // לפי התעריף האישי (null) או סכום גלובלי שנקבע כאן.
+    staff_role: body.staff_role || null,
+    staff_pay_mode: body.staff_pay_mode === 'flat' ? 'flat' : null,
+    staff_flat_amount: body.staff_pay_mode === 'flat'
+      ? Math.max(0, Number(body.staff_flat_amount) || 0)
+      : null,
   };
 }
 
@@ -7034,6 +7187,313 @@ app.post('/api/shifts/approve', (req, res) => {
   res.json({ success: approved });
 });
 
+// ─── משמרת קיר מהמסוף ────────────────────────────────────────────────────────
+// פתיחה וסגירה של משמרת מפעיל קיר ממסוף הכניסה. הסגירה יוצרת שורת עבודה
+// בתפקיד „מפעיל קיר” עם השעות בפועל — זו השורה שמסך השכר סוכם.
+
+app.get('/api/wall-shift/open', (req, res) => {
+  const open = (db.get('shift_hours') || []).filter((s) => s.status === 'open');
+  res.json(open.map((s) => ({
+    id: s.id,
+    employee_id: s.employee_id,
+    clock_in: s.clock_in,
+    activity_type: s.activity_type,
+  })));
+});
+
+app.post('/api/wall-shift/open', (req, res) => {
+  const { employee_id: employeeId } = req.body || {};
+  if (!employeeId) return res.status(400).json({ error: 'employee_id is required' });
+  const emp = (db.get('employees') || []).find((e) => e.id === employeeId);
+  if (!emp) return res.status(404).json({ error: 'העובד לא נמצא' });
+  const shift = db.clockIn(employeeId, 'counter_shift', 'משמרת קיר — מסוף כניסה');
+  res.status(201).json({ shift });
+});
+
+app.post('/api/wall-shift/close', async (req, res) => {
+  const { employee_id: employeeId, closed_by: closedById } = req.body || {};
+  if (!employeeId) return res.status(400).json({ error: 'employee_id is required' });
+
+  // מי שסוגר לא חייב להיות מי שפתח — מדריך אחר יכול לסגור בשם מי שכבר הלך.
+  // אם לא צוין סוגר, מניחים שהעובד סוגר לעצמו.
+  let closerNote = '';
+  if (closedById && closedById !== employeeId) {
+    const closer = (db.get('employees') || []).find((e) => e.id === closedById);
+    if (!closer) return res.status(404).json({ error: 'העובד הסוגר לא נמצא' });
+    closerNote = `נסגר ע"י ${closer.name}`;
+  }
+
+  const shift = db.clockOut(employeeId, closerNote, closedById || null);
+  if (!shift) return res.status(404).json({ error: 'אין משמרת פתוחה לעובד הזה' });
+
+  // שורת השכר נגזרת מהשעון: מהכניסה עד היציאה, מעוגל לחצי שעה כלפי מעלה.
+  // השעות תמיד משולמות לבעל המשמרת — מי שסגר הוא רק פרט מתועד, לא מקבל השכר.
+  const cin = israelLocalParts(shift.clock_in);
+  const cout = israelLocalParts(shift.clock_out);
+  let row = null;
+  if (cin && cout) {
+    const minutes = (new Date(shift.clock_out) - new Date(shift.clock_in)) / 60000;
+    row = db.insert('work_assignments', {
+      employee_id: employeeId,
+      activity_id: null,
+      group_id: null,
+      date: cin.date,
+      work_type: 'counter_shift',
+      role: await systemRoleLabel(SYSTEM_ROLE_KEYS.WALL_OPERATOR),
+      start_time: cin.hm,
+      end_time: cout.hm,
+      hours: roundHoursHalfUp(minutes / 60),
+      pay_mode: 'hourly',
+      flat_amount: null,
+      source: 'wall_shift',
+      shift_id: shift.id,
+      approved: false,
+      notes: closerNote,
+    });
+  }
+  res.json({ shift, row });
+});
+
+// ─── קטלוג התפקידים וההסמכות ─────────────────────────────
+// לתפקידי המערכת יש מפתח יציב (`trainer`, `wall_operator`...) שהקוד מזהה
+// לפיו, ותווית שהמשתמש רשאי לשנות. שינוי תווית מתפשט לכל מקום שהשם שמור בו,
+// והמפתח נשאר — כך אפשר לקרוא ל„מדריך” בשם אחר בלי לשבור שיבוץ או תמחור.
+const SYSTEM_ROLE_KEYS = {
+  TRAINER: 'trainer',
+  ASSISTANT: 'assistant',
+  WALL_OPERATOR: 'wall_operator',
+  RAPPEL: 'rappel',
+  PRIVATE: 'private',
+  ROUTE_L1: 'route_l1',
+  ROUTE_L2: 'route_l2',
+};
+
+const DEFAULT_SYSTEM_ROLES = [
+  { key: SYSTEM_ROLE_KEYS.TRAINER, label: 'מדריך' },
+  { key: SYSTEM_ROLE_KEYS.ASSISTANT, label: 'עוזר מדריך' },
+  { key: SYSTEM_ROLE_KEYS.WALL_OPERATOR, label: 'מפעיל קיר' },
+  { key: SYSTEM_ROLE_KEYS.RAPPEL, label: 'מדריך סנפלינג' },
+  { key: SYSTEM_ROLE_KEYS.PRIVATE, label: 'מדריך שיעור פרטי' },
+  { key: SYSTEM_ROLE_KEYS.ROUTE_L1, label: 'בונה מסלולים רמה 1' },
+  { key: SYSTEM_ROLE_KEYS.ROUTE_L2, label: 'בונה מסלולים רמה 2' },
+];
+const DEFAULT_EXTRA_ROLES = ['מנהל פארק חבלים', 'מדריך טיפוס ספורטיבי', 'מאמן אתלטיקה', 'מורה דרך'];
+
+/** אילו תפקידים מתאימים לכל סוג פעילות ביומן. ברירת מחדל שאפשר לשנות. */
+const DEFAULT_ACTIVITY_ROLES = {
+  birthday: [SYSTEM_ROLE_KEYS.TRAINER, SYSTEM_ROLE_KEYS.ASSISTANT],
+  school: [SYSTEM_ROLE_KEYS.TRAINER, SYSTEM_ROLE_KEYS.ASSISTANT],
+  company: [SYSTEM_ROLE_KEYS.TRAINER, SYSTEM_ROLE_KEYS.ASSISTANT],
+  trip: [SYSTEM_ROLE_KEYS.RAPPEL],
+  opening_hours: [SYSTEM_ROLE_KEYS.WALL_OPERATOR],
+  route_building: [SYSTEM_ROLE_KEYS.ROUTE_L1, SYSTEM_ROLE_KEYS.ROUTE_L2],
+  other: [],
+};
+
+const ROLE_CATALOG_KEY = 'staff_role_catalog';
+
+function blankCatalog() {
+  return {
+    system: DEFAULT_SYSTEM_ROLES.map((r) => ({ ...r })),
+    extra: [...DEFAULT_EXTRA_ROLES],
+    activityRoles: { ...DEFAULT_ACTIVITY_ROLES },
+  };
+}
+
+/** משלים שדות חסרים, כדי שקטלוג שנשמר בגרסה קודמת ימשיך לעבוד. */
+function normalizeCatalog(raw) {
+  const base = blankCatalog();
+  if (!raw || typeof raw !== 'object') return base;
+
+  // גרסה ישנה החזיקה רק `extra`; תפקידי המערכת היו קבועים בקוד.
+  const system = Array.isArray(raw.system) && raw.system.every((r) => r && r.key)
+    ? DEFAULT_SYSTEM_ROLES.map((def) => {
+      const found = raw.system.find((r) => r.key === def.key);
+      return { key: def.key, label: String(found?.label || def.label) };
+    })
+    : base.system;
+
+  return {
+    system,
+    extra: Array.isArray(raw.extra) ? raw.extra.map(String).filter(Boolean) : base.extra,
+    activityRoles: (raw.activityRoles && typeof raw.activityRoles === 'object')
+      ? { ...base.activityRoles, ...raw.activityRoles }
+      : base.activityRoles,
+  };
+}
+
+async function readRoleCatalog() {
+  const local = db.getAppSettingLocal?.(ROLE_CATALOG_KEY);
+  if (local) return normalizeCatalog(local);
+  try {
+    const remote = await supa.getAppSetting(ROLE_CATALOG_KEY);
+    if (remote) {
+      const normalized = normalizeCatalog(remote);
+      db.setAppSettingLocal?.(ROLE_CATALOG_KEY, normalized);
+      return normalized;
+    }
+  } catch { /* אין עותק עמיד — ממשיכים לברירת המחדל */ }
+  return blankCatalog();
+}
+
+async function writeRoleCatalog(catalog) {
+  const value = normalizeCatalog(catalog);
+  db.setAppSettingLocal?.(ROLE_CATALOG_KEY, value);
+  try { await supa.setAppSetting(ROLE_CATALOG_KEY, value); } catch { /* נשמר מקומית */ }
+  return value;
+}
+
+/**
+ * התווית הנוכחית של תפקיד מערכת. הקוד שכותב שורות עבודה חייב לעבור דרך כאן —
+ * אחרת שינוי שם היה יוצר שורות עם השם הישן לצד נתונים שכבר הומרו.
+ */
+async function systemRoleLabel(key) {
+  const catalog = await readRoleCatalog();
+  const found = catalog.system.find((r) => r.key === key);
+  return found?.label || DEFAULT_SYSTEM_ROLES.find((r) => r.key === key)?.label || '';
+}
+
+/**
+ * התוויות של התפקידים שמתאימים לסוג פעילות. מוחזרות תוויות ולא מפתחות, כי זה
+ * מה ששמור על העובדים ועל שורות העבודה.
+ */
+async function rolesForActivityType(activityType) {
+  const catalog = await readRoleCatalog();
+  const keys = catalog.activityRoles?.[activityType];
+  if (!Array.isArray(keys) || keys.length === 0) return [];
+  return keys
+    .map((key) => catalog.system.find((r) => r.key === key)?.label
+      || (catalog.extra.includes(key) ? key : null))
+    .filter(Boolean);
+}
+
+function allCatalogLabels(catalog) {
+  return [...catalog.system.map((r) => r.label), ...catalog.extra];
+}
+
+/** מחליף שם תפקיד בכל מקום שהוא שמור בו. מחזיר כמה רשומות עודכנו. */
+function propagateRoleRename(from, to) {
+  let touched = 0;
+  for (const emp of db.get('employees') || []) {
+    const certs = Array.isArray(emp.certifications) ? emp.certifications : [];
+    if (!certs.includes(from)) continue;
+    db.update('employees', emp.id, {
+      certifications: certs.map((c) => (c === from ? to : c)),
+    });
+    touched += 1;
+  }
+  for (const wage of db.get('wage_agreements') || []) {
+    const rates = Array.isArray(wage.rates) ? wage.rates : [];
+    if (!rates.some((r) => r.role === from)) continue;
+    db.update('wage_agreements', wage.id, {
+      rates: rates.map((r) => (r.role === from ? { ...r, role: to } : r)),
+    });
+    touched += 1;
+  }
+  for (const act of db.get('activities') || []) {
+    if (act.staff_role !== from) continue;
+    db.update('activities', act.id, { staff_role: to });
+    touched += 1;
+  }
+  for (const row of db.get('work_assignments') || []) {
+    if (row.role !== from) continue;
+    db.update('work_assignments', row.id, { role: to });
+    touched += 1;
+  }
+  return touched;
+}
+
+app.get('/api/staff-roles', async (req, res) => {
+  const catalog = await readRoleCatalog();
+  // התוויות המחושבות נשלחות לצד הלקוח כדי שלא יצטרך לתרגם מפתחות בעצמו.
+  const labelsByType = {};
+  for (const type of Object.keys(catalog.activityRoles || {})) {
+    labelsByType[type] = await rolesForActivityType(type);
+  }
+  res.json({ ...catalog, activityRoleLabels: labelsByType });
+});
+
+app.post('/api/staff-roles', async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'שם התפקיד חסר' });
+  const catalog = await readRoleCatalog();
+  if (allCatalogLabels(catalog).includes(name)) {
+    return res.status(409).json({ error: 'התפקיד כבר קיים' });
+  }
+  catalog.extra.push(name);
+  res.status(201).json(await writeRoleCatalog(catalog));
+});
+
+app.post('/api/staff-roles/rename', async (req, res) => {
+  const from = String(req.body?.from || '').trim();
+  const to = String(req.body?.to || '').trim();
+  if (!from || !to) return res.status(400).json({ error: 'חסר שם ישן או חדש' });
+
+  const catalog = await readRoleCatalog();
+  if (from !== to && allCatalogLabels(catalog).includes(to)) {
+    return res.status(409).json({ error: 'השם החדש כבר קיים' });
+  }
+
+  // תפקיד מערכת: המפתח נשאר, רק התווית משתנה.
+  const systemRole = catalog.system.find((r) => r.label === from);
+  if (systemRole) {
+    systemRole.label = to;
+  } else {
+    const idx = catalog.extra.indexOf(from);
+    if (idx === -1) return res.status(404).json({ error: 'התפקיד לא נמצא' });
+    catalog.extra[idx] = to;
+  }
+
+  const saved = await writeRoleCatalog(catalog);
+  const touched = propagateRoleRename(from, to);
+  res.json({ ...saved, touched });
+});
+
+app.post('/api/staff-roles/delete', async (req, res) => {
+  const role = String(req.body?.role || '').trim();
+  if (!role) return res.status(400).json({ error: 'שם התפקיד חסר' });
+
+  const catalog = await readRoleCatalog();
+  if (catalog.system.some((r) => r.label === role)) {
+    return res.status(400).json({
+      error: 'זה תפקיד מערכת — אפשר לשנות לו שם, אבל לא למחוק אותו',
+    });
+  }
+  catalog.extra = catalog.extra.filter((r) => r !== role);
+  const saved = await writeRoleCatalog(catalog);
+
+  // מסירים מהעובדים ומההסכמים; שורות עבודה היסטוריות שומרות את השם.
+  let touched = 0;
+  for (const emp of db.get('employees') || []) {
+    const certs = Array.isArray(emp.certifications) ? emp.certifications : [];
+    if (!certs.includes(role)) continue;
+    db.update('employees', emp.id, { certifications: certs.filter((c) => c !== role) });
+    touched += 1;
+  }
+  for (const wage of db.get('wage_agreements') || []) {
+    const rates = Array.isArray(wage.rates) ? wage.rates : [];
+    if (!rates.some((r) => r.role === role)) continue;
+    db.update('wage_agreements', wage.id, { rates: rates.filter((r) => r.role !== role) });
+    touched += 1;
+  }
+  res.json({ ...saved, touched });
+});
+
+/** אילו תפקידים אפשר לשבץ לסוג פעילות. */
+app.post('/api/staff-roles/activity-roles', async (req, res) => {
+  const { activity_type: activityType, role_keys: roleKeys } = req.body || {};
+  if (!activityType) return res.status(400).json({ error: 'activity_type is required' });
+  if (!Array.isArray(roleKeys)) return res.status(400).json({ error: 'role_keys must be an array' });
+
+  const catalog = await readRoleCatalog();
+  const known = new Set([...catalog.system.map((r) => r.key), ...catalog.extra]);
+  catalog.activityRoles = {
+    ...catalog.activityRoles,
+    [activityType]: roleKeys.filter((k) => known.has(k)),
+  };
+  res.json(await writeRoleCatalog(catalog));
+});
+
 // Employees list management
 // Prefer the durable Supabase roster (38 real trainers, ids like "e-7") so the
 // trainer dropdown and group.trainer_id references resolve correctly. Falls
@@ -7046,11 +7506,29 @@ app.get('/api/trainers', (req, res) => {
       id: employee.id,
       name: employee.name || '',
       role: employee.role || 'trainer',
+      // The schedule screen only offers an employee for a slot they are marked
+      // for, so the roles list has to travel with the name — without it every
+      // dropdown there is empty but for people already assigned.
+      certifications: Array.isArray(employee.certifications) ? employee.certifications : [],
     })));
 });
 
 app.get('/api/employees', (req, res) => {
   res.json(db.get('employees'));
+});
+
+// Same field catalog the public onboarding form renders from (label/type/
+// options per field) — the internal edit form reads it too, so a label or
+// option list only ever needs to change in one place. Unlike the
+// enabled/required *config* (owner-only, /api/settings/...), this is plain
+// metadata: any signed-in team member editing an employee needs it.
+app.get('/api/employees/onboard-fields', async (_req, res) => {
+  try {
+    res.json(mergeFieldDefs(await getEmployeeOnboardConfig()));
+  } catch (error) {
+    console.error('employees/onboard-fields load error:', error.message);
+    res.json(mergeFieldDefs(await getEmployeeOnboardConfig()));
+  }
 });
 
 app.post('/api/employees', (req, res) => {
@@ -7199,30 +7677,62 @@ app.get('/api/employees/:id/documents/:docType/download', async (req, res) => {
 });
 
 // Wage agreements management
+
+/**
+ * ההסכמים הישנים מוגשים עם רשימת תעריפים מלאה, כדי שהמסך לא יצטרך להכיר את
+ * ארבעת השדות הקבועים שהיו פעם. השדות עצמם נשארים על השורה — הם עוד נקראים
+ * במקומות ותיקים, ומחיקתם הייתה משנה נתוני שכר בלי שביקשו.
+ */
+function wageWithRates(agreement) {
+  return {
+    ...agreement,
+    rates: ratesOf(agreement),
+    travel_per_day: travelPerDay(agreement),
+  };
+}
+
+function normalizeWageBody(body = {}) {
+  const next = { ...body };
+  if (Array.isArray(body.rates)) {
+    next.rates = body.rates
+      .filter((r) => r && r.role)
+      .map((r) => ({
+        role: String(r.role),
+        mode: PAY_MODES.includes(r.mode) ? r.mode : 'hourly',
+        amount: Math.max(0, Number(r.amount) || 0),
+      }));
+  }
+  if (body.travel_per_day !== undefined) {
+    next.travel_per_day = Math.max(0, Number(body.travel_per_day) || 0);
+  }
+  return next;
+}
+
 app.get('/api/wages', (req, res) => {
-  res.json(db.get('wage_agreements'));
+  res.json((db.get('wage_agreements') || []).map(wageWithRates));
 });
 
 app.post('/api/wages', (req, res) => {
   const { employee_id } = req.body || {};
   if (!employee_id) return res.status(400).json({ error: 'employee_id is required' });
+  const body = normalizeWageBody(req.body);
 
   // One agreement per employee: reuse the existing row instead of creating a duplicate.
   const existing = (db.get('wage_agreements') || []).find((w) => w.employee_id === employee_id);
   if (existing) {
-    const updated = db.update('wage_agreements', existing.id, { ...req.body, id: existing.id });
-    return res.json(updated);
+    const updated = db.update('wage_agreements', existing.id, { ...body, id: existing.id });
+    return res.json(wageWithRates(updated));
   }
 
-  const created = db.insert('wage_agreements', req.body);
-  res.status(201).json(created);
+  const created = db.insert('wage_agreements', body);
+  res.status(201).json(wageWithRates(created));
 });
 
 app.put('/api/wages/:id', (req, res) => {
   const { id } = req.params;
-  const updated = db.update('wage_agreements', id, req.body);
+  const updated = db.update('wage_agreements', id, normalizeWageBody(req.body));
   if (!updated) return res.status(404).json({ error: 'Wage agreement not found' });
-  res.json(updated);
+  res.json(wageWithRates(updated));
 });
 
 // ─── Work assignments (pay segments per employee) ────────────────────────────
@@ -7356,8 +7866,16 @@ function normalizeWorkAssignment(body = {}, { existing = null } = {}) {
   return {
     employee_id: body.employee_id || existing?.employee_id || null,
     activity_id: body.activity_id !== undefined ? (body.activity_id || null) : (existing?.activity_id ?? null),
+    // A class shift hangs off a group rather than a calendar activity. Keeping
+    // the group here is what lets staff attendance find its own row again.
+    group_id: body.group_id !== undefined ? (body.group_id || null) : (existing?.group_id ?? null),
     date: body.date || existing?.date || null,
     work_type: workType,
+    // התפקיד הוא מה שקובע את התעריף. `work_type` נשאר לשורות ותיקות ולמסכים
+    // שעוד מדברים בשפה הישנה, אבל התמחור עובר דרך התפקיד.
+    role: body.role !== undefined
+      ? (body.role || null)
+      : (existing?.role ?? WORK_TYPE_ROLES[workType] ?? null),
     start_time: startTime,
     end_time: endTime,
     hours,
@@ -7382,8 +7900,8 @@ app.get('/api/work-assignments', (req, res) => {
   res.json(rows);
 });
 
-app.post('/api/work-assignments/from-activity', (req, res) => {
-  const { activity_id, employee_ids } = req.body || {};
+app.post('/api/work-assignments/from-activity', async (req, res) => {
+  const { activity_id, employee_ids, employee_roles: employeeRoles } = req.body || {};
   if (!activity_id) return res.status(400).json({ error: 'activity_id is required' });
   const activity = db.getOne('activities', activity_id);
   if (!activity) return res.status(404).json({ error: 'Activity not found' });
@@ -7398,6 +7916,14 @@ app.post('/api/work-assignments/from-activity', (req, res) => {
   const eventStart = activity.start_time || '09:00';
   const eventEnd = activity.end_time || '17:00';
   const eventHours = hoursBetweenHm(eventStart, eventEnd) || 2;
+  // האירוע עצמו קובע את התפקיד ואת אופן התשלום: „לפי תעריף” מושך את התעריף
+  // האישי של כל עובד לתפקיד הזה, ו„גלובלי” משלם סכום קבוע שהוגדר על האירוע.
+  // כשלסוג הפעילות מתאימים כמה תפקידים, כל עובד יכול לשבת בתפקיד אחר —
+  // `employee_roles` נושא את הבחירה, ובלי זה נופלים לתפקיד הראשון שמתאים.
+  const allowedRoles = await rolesForActivityType(activity.type);
+  const defaultRole = activity.staff_role || allowedRoles[0] || WORK_TYPE_ROLES[workType] || null;
+  const flatPay = activity.staff_pay_mode === 'flat';
+  const flatAmount = flatPay ? (Number(activity.staff_flat_amount) || 0) : null;
   const existing = (db.get('work_assignments') || []).filter((r) => r.activity_id === activity_id);
   const created = [];
 
@@ -7409,11 +7935,12 @@ app.post('/api/work-assignments/from-activity', (req, res) => {
       activity_id,
       date: activity.date,
       work_type: workType,
+      role: (employeeRoles && employeeRoles[employeeId]) || defaultRole,
       start_time: suggestion?.start_time || eventStart,
       end_time: suggestion?.end_time || eventEnd,
       hours: suggestion?.hours || eventHours,
-      pay_mode: 'hourly',
-      flat_amount: null,
+      pay_mode: flatPay ? 'flat' : 'hourly',
+      flat_amount: flatAmount,
       source: suggestion ? suggestion.source : 'calendar',
       shift_id: suggestion?.shift_id || null,
       approved: false,
@@ -7423,6 +7950,182 @@ app.post('/api/work-assignments/from-activity', (req, res) => {
   }
 
   res.status(201).json({ created, existing_count: existing.length });
+});
+
+/**
+ * נוכחות הצוות באימון של קבוצה.
+ *
+ * הנוכחות עצמה חיה ב-`staff_attendance` — גם היעדרות היא עובדה שרוצים לספור,
+ * ושורת שכר לא יכולה לייצג אותה. נוכחות של מדריך מייצרת בנוסף שורת עבודה
+ * (`work_assignments`) מסוג „חוג”, שממנה מחושב השכר. עוזרי מדריך מתנדבים:
+ * השעות נספרות להם, שורת שכר לא נוצרת.
+ *
+ * המפתח הטבעי הוא קבוצה+תאריך+עובד, ולכן סימון חוזר מעדכן ולא מכפיל.
+ */
+const STAFF_ATTENDANCE_SOURCE = 'class_attendance';
+const STAFF_ROLES = ['trainer', 'assistant'];
+/** התפקידים שמשולם עליהם. עוזר מדריך אינו כאן — זו התנדבות. */
+const PAID_STAFF_ROLES = ['trainer'];
+/** התפקיד בחוג בשפת הסכם השכר, שממנו נגזר התעריף. */
+/** התפקיד בחוג נקרא מהקטלוג, כדי ששינוי שם ישתקף מיד גם בשורות חדשות. */
+const STAFF_ROLE_KEY_FOR = {
+  trainer: SYSTEM_ROLE_KEYS.TRAINER,
+  assistant: SYSTEM_ROLE_KEYS.ASSISTANT,
+};
+
+function staffAttendanceRows({ groupId = null, date = null, employeeId = null } = {}) {
+  return (db.get('staff_attendance') || []).filter((r) =>
+    (!groupId || r.group_id === groupId)
+    && (!date || r.date === date)
+    && (!employeeId || r.employee_id === employeeId));
+}
+
+/** שעות האימון מתוך הגדרת הקבוצה — ברירת מחדל שאפשר לתקן במסך השכר. */
+function groupShiftTimes(group) {
+  const start = group?.time || '16:00';
+  const startMin = parseHmToMinutes(start);
+  const duration = Number(group?.duration) || 50;
+  // חוג של 50 דקות משולם כשעה — העיגול הוא לחצי השעה הקרובה כלפי מעלה.
+  const hours = roundHoursHalfUp(duration / 60);
+  if (startMin == null) return { start_time: start, end_time: null, hours };
+  const endMin = startMin + duration;
+  const end = `${String(Math.floor(endMin / 60) % 24).padStart(2, '0')}:${String(endMin % 60).padStart(2, '0')}`;
+  return { start_time: start, end_time: end, hours };
+}
+
+function classPayRowFor(groupId, date, employeeId) {
+  return (db.get('work_assignments') || []).find((r) =>
+    r.source === STAFF_ATTENDANCE_SOURCE
+    && r.group_id === groupId
+    && r.date === date
+    && r.employee_id === employeeId) || null;
+}
+
+/** שורת השכר נגזרת מהנוכחות, ולכן היא נוצרת ונמחקת יחד איתה. */
+function syncClassPayRow({ group, date, employeeId, paid, times, roleTitle }) {
+  const existing = classPayRowFor(group.id, date, employeeId);
+  if (!paid) {
+    if (existing) db.delete('work_assignments', existing.id);
+    return null;
+  }
+  if (existing) return existing;
+  const suggestion = suggestHoursFromClock(employeeId, date, times.start_time, times.end_time);
+  return db.insert('work_assignments', {
+    employee_id: employeeId,
+    activity_id: null,
+    group_id: group.id,
+    date,
+    work_type: 'class_shift',
+    role: roleTitle || 'מדריך',
+    start_time: suggestion?.start_time || times.start_time,
+    end_time: suggestion?.end_time || times.end_time,
+    // שעות החוג הן מה שמשולם. שעון נוכחות ארוך יותר אינו הופך חוג לשתי שעות.
+    hours: times.hours,
+    pay_mode: 'hourly',
+    flat_amount: null,
+    source: STAFF_ATTENDANCE_SOURCE,
+    shift_id: suggestion?.shift_id || null,
+    approved: false,
+    notes: '',
+  });
+}
+
+app.get('/api/groups/:id/staff-attendance', (req, res) => {
+  const { date } = req.query;
+  res.json(staffAttendanceRows({ groupId: req.params.id, date: date || null }));
+});
+
+app.post('/api/groups/:id/staff-attendance', async (req, res) => {
+  const groupId = req.params.id;
+  const {
+    date,
+    employee_id: employeeId,
+    status,
+    role,
+    substitute_for: substituteFor,
+  } = req.body || {};
+  if (!date) return res.status(400).json({ error: 'date is required' });
+  if (!employeeId) return res.status(400).json({ error: 'employee_id is required' });
+
+  const group = db.getOne('groups', groupId);
+  if (!group) return res.status(404).json({ error: 'Group not found' });
+
+  // ביום חופשה מאימונים לא היה אימון, ולכן אין למי לרשום שעות. בלי החסימה הזו
+  // סימון המתאמנים כ„יום חג” היה פותח את רשימת הצוות ומזמין תשלום על כלום.
+  const vacation = findTrainingVacation(db.get('activities') || [], date);
+  if (vacation) {
+    return res.status(409).json({
+      error: 'אין נוכחות צוות ביום חופשה מאימונים',
+      vacation: { id: vacation.id, name: vacation.name || '' },
+    });
+  }
+
+  const existing = staffAttendanceRows({ groupId, date })
+    .find((r) => r.employee_id === employeeId) || null;
+
+  // סטטוס שאינו „נוכח”/„נעדר” מנקה את הסימון לגמרי — חזרה למצב „טרם סומן”.
+  if (status !== 'present' && status !== 'absent') {
+    if (existing) db.delete('staff_attendance', existing.id);
+    syncClassPayRow({ group, date, employeeId, paid: false });
+    return res.json({ status: null, removed: !!existing });
+  }
+
+  const staffRole = STAFF_ROLES.includes(role) ? role : 'trainer';
+  const times = groupShiftTimes(group);
+  const payRow = syncClassPayRow({
+    group,
+    date,
+    employeeId,
+    paid: status === 'present' && PAID_STAFF_ROLES.includes(staffRole),
+    times,
+    roleTitle: await systemRoleLabel(STAFF_ROLE_KEY_FOR[staffRole]),
+  });
+
+  const fields = {
+    group_id: groupId,
+    date,
+    employee_id: employeeId,
+    role: staffRole,
+    status,
+    substitute_for: substituteFor || null,
+    // גם מתנדב צובר שעות — הן פשוט לא הופכות לכסף.
+    hours: status === 'present' ? (payRow?.hours ?? times.hours) : 0,
+  };
+  const row = existing
+    ? db.update('staff_attendance', existing.id, fields)
+    : db.insert('staff_attendance', fields);
+
+  res.status(existing ? 200 : 201).json({ status, row, paid: !!payRow });
+});
+
+/**
+ * סיכום לתיק העובד: כמה שעות עבד וכמה פעמים נעדר, מופרד לפי תפקיד כדי
+ * שהתנדבות כעוזר מדריך לא תיראה כמו שעות בתשלום.
+ */
+app.get('/api/employees/:id/attendance-summary', (req, res) => {
+  const { from, to } = req.query;
+  const rows = staffAttendanceRows({ employeeId: req.params.id })
+    .filter((r) => (!from || r.date >= from) && (!to || r.date <= to));
+
+  const blank = () => ({ present: 0, absent: 0, hours: 0 });
+  const summary = { total: blank(), trainer: blank(), assistant: blank() };
+
+  for (const row of rows) {
+    const bucket = summary[row.role] || summary.trainer;
+    const target = row.status === 'absent' ? 'absent' : 'present';
+    bucket[target] += 1;
+    summary.total[target] += 1;
+    if (row.status !== 'absent') {
+      const hrs = Number(row.hours) || 0;
+      bucket.hours += hrs;
+      summary.total.hours += hrs;
+    }
+  }
+  for (const key of Object.keys(summary)) {
+    summary[key].hours = Math.round(summary[key].hours * 100) / 100;
+  }
+
+  res.json({ from: from || null, to: to || null, ...summary, rows });
 });
 
 app.post('/api/work-assignments/approve', (req, res) => {
@@ -10577,6 +11280,10 @@ app.listen(PORT, () => {
   // Intro class reminder + day-after followup (from 08:00 Asia/Jerusalem)
   setTimeout(() => { runScheduledAutomationsIfDue(8); }, 45_000);
   setInterval(() => { runScheduledAutomationsIfDue(8); }, 15 * 60 * 1000);
+
+  // Evening agenda digests — tomorrow's plan daily, the coming week on Saturday
+  setTimeout(() => { runAgendaDigestsIfDue(); }, 70_000);
+  setInterval(() => { runAgendaDigestsIfDue(); }, 10 * 60 * 1000);
 
   // Campaigns + coupon expiry (from 10:00 Asia/Jerusalem, after the morning jobs)
   setTimeout(() => { runCampaignsIfDue(10); }, 90_000);

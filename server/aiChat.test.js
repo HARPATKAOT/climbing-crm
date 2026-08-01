@@ -678,3 +678,51 @@ test('הפרומפט אומר במפורש שכלי כתיבה לא מבצע', (
   assert.match(prompt, new RegExp(TODAY));
   assert.match(prompt, /ממתינה לאישור/);
 });
+
+test('ערוץ מוגבל: רק הכלים שהוא קיבל מוצהרים, ובלי כלי כתיבה', () => {
+  const declared = toolDeclarations({
+    only: ['search_customers', 'get_student_attendance'],
+    includeActions: false,
+  }).map((row) => row.name);
+  assert.deepEqual(declared.sort(), ['get_student_attendance', 'search_customers']);
+});
+
+test('ערוץ מוגבל מסרב לכלי שלא ניתן לו, גם אם המודל נקב בשמו', async () => {
+  const db = makeDb();
+  const callModel = scriptedModel([
+    modelCall('business_snapshot', {}),
+    modelText('אין לי גישה לנתונים כספיים כאן.'),
+  ]);
+  const result = await runChatTurn({
+    db,
+    persist: okPersist,
+    messages: [{ role: 'user', content: 'כמה כסף הכנסנו החודש?' }],
+    today: TODAY,
+    callModel,
+    readTools: { search_customers: READ_TOOLS.search_customers },
+    allowActions: false,
+  });
+
+  assert.equal(result.proposals.length, 0);
+  const refusal = callModel.seen.at(-1).at(-1).parts[0].functionResponse.response;
+  assert.match(refusal.error, /לא זמין בערוץ הזה/);
+  assert.equal(result.reply, 'אין לי גישה לנתונים כספיים כאן.');
+});
+
+test('ערוץ מוגבל לא מבצע כלי כתיבה גם כשהמודל מבקש', async () => {
+  const db = makeDb();
+  const result = await runChatTurn({
+    db,
+    persist: okPersist,
+    messages: [{ role: 'user', content: 'תפתח משימה' }],
+    today: TODAY,
+    callModel: scriptedModel([
+      modelCall('create_task', { title: 'משהו', parent_id: 'p1' }),
+      modelText('לא ניתן מכאן.'),
+    ]),
+    readTools: { search_customers: READ_TOOLS.search_customers },
+    allowActions: false,
+  });
+  assert.equal(result.proposals.length, 0);
+  assert.equal(db.get(SUGGESTIONS_COLLECTION).length, 0);
+});
