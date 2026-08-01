@@ -2703,17 +2703,18 @@ function OverlaySidebar({
               const isWall = cal.id === wallCalendarId || cal.isWallCalendar;
               const checked = isWall || selected.has(cal.id);
               const color = cal.backgroundColor || '#94A3B8';
-              // מוצג לבדו: אף יומן אחר לא מסומן מלבדו (היומן המסונכרן תמיד גלוי)
-              const isSolo = isWall
-                ? selected.size === 0
-                : selected.size === 1 && selected.has(cal.id);
+              // מוצג לבדו: אף יומן אחר לא מסומן מלבדו
+              const isSolo = !isWall && selected.size === 1 && selected.has(cal.id);
               let status = '';
-              if (isWall) status = 'מסונכרן';
+              if (isWall) status = 'הלוח עצמו · תמיד מוצג';
               else if (cal.primary) status = 'ראשי';
 
               return (
                 <label
                   key={cal.id}
+                  title={isWall
+                    ? 'זה היומן שהמערכת מסנכרנת אליו — האירועים שלו הם הלוח, ואי אפשר להסתיר אותו'
+                    : undefined}
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
@@ -2763,29 +2764,32 @@ function OverlaySidebar({
                       {status}
                     </span>
                   )}
-                  <button
-                    type="button"
-                    title={isSolo ? 'הצג את כל היומנים' : 'הצג רק את היומן הזה'}
-                    aria-label={isSolo ? 'הצג את כל היומנים' : 'הצג רק את היומן הזה'}
-                    disabled={saving}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      if (saving) return;
-                      if (isSolo) onShowAll();
-                      else onSolo(isWall ? null : cal.id);
-                    }}
-                    style={{
-                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                      width: 20, height: 20, padding: 0, flexShrink: 0,
-                      borderRadius: 6, border: '1px solid transparent',
-                      background: isSolo ? `${color}30` : 'transparent',
-                      color: isSolo ? color : 'var(--text-3)',
-                      cursor: saving ? 'default' : 'pointer',
-                    }}
-                  >
-                    {isSolo ? <EyeOff size={12} /> : <Eye size={12} />}
-                  </button>
+                  {/* היומן המסונכרן הוא הלוח עצמו — אין מה לבודד או להסתיר בו */}
+                  {!isWall && (
+                    <button
+                      type="button"
+                      title={isSolo ? 'הצג את כל היומנים' : 'הצג רק את היומן הזה'}
+                      aria-label={isSolo ? 'הצג את כל היומנים' : 'הצג רק את היומן הזה'}
+                      disabled={saving}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (saving) return;
+                        if (isSolo) onShowAll();
+                        else onSolo(cal.id);
+                      }}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                        width: 20, height: 20, padding: 0, flexShrink: 0,
+                        borderRadius: 6, border: '1px solid transparent',
+                        background: isSolo ? `${color}30` : 'transparent',
+                        color: isSolo ? color : 'var(--text-3)',
+                        cursor: saving ? 'default' : 'pointer',
+                      }}
+                    >
+                      {isSolo ? <EyeOff size={12} /> : <Eye size={12} />}
+                    </button>
+                  )}
                 </label>
               );
             })}
