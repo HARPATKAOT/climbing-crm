@@ -17,6 +17,9 @@ import {
   DEFAULT_ACTIVITY_TYPES, activityTypes, activityTypeMeta, useActivityTypes,
   fetchActivityTypes, invalidateActivityTypes,
 } from '../utils/activityTypes.js';
+import {
+  EVENT_KINDS, activityEventKind, eventKindLabel, isEventType,
+} from '../utils/eventKinds.js';
 
 /** ברירת המחדל בלבד. הרשימה החיה מגיעה מהשרת דרך `activityTypes()`. */
 export const ACTIVITY_TYPES = DEFAULT_ACTIVITY_TYPES;
@@ -55,8 +58,8 @@ const isPaidPerParticipant = (activity) => (
   )) === 'paid_per_participant'
 );
 
-/** סוגים שמוצגים יחד בתגית הסינון „פעילויות” */
-const ACTIVITIES_GROUP_TYPES = ['birthday', 'school', 'company'];
+/** סוגים שמוצגים יחד בתגית הסינון „פעילויות” — כולל הסוגים שקדמו לאיחוד. */
+const ACTIVITIES_GROUP_TYPES = ['event', 'personal_training', 'birthday', 'school', 'company'];
 
 /** תגיות סינון ביומן (מקובצות) — בטופס האירוע עדיין בוחרים סוג מדויק.
     נבנות מהרשימה החיה, כך שסוג חדש מקבל תגית סינון משלו מיד. */
@@ -333,7 +336,7 @@ function emptyForm(dateStr = '', opts = {}) {
       end_time = '12:00';
     }
   }
-  const type = opts.type || 'birthday';
+  const type = opts.type || 'event';
   const allDayDefault = type === 'training_vacation'
     ? true
     : (opts.all_day != null ? !!opts.all_day : false);
@@ -1136,6 +1139,33 @@ function RegularActivityModal({
                       onCreated={(id) => id && set('type', id)}
                     />
                   </div>
+                  {/* איזה אירוע בדיוק. תגית בלבד — היא לא משנה שיבוץ, תפקידים
+                      או שכר, ולכן היא כאן ולא כסוג נפרד ביומן. */}
+                  {isEventType(form.type) && (
+                    <div style={{ marginTop: 10 }}>
+                      <div className="activity-settings-label">סוג האירוע (תגית)</div>
+                      <div className="activity-type-options">
+                        {EVENT_KINDS.map((kind) => {
+                          const chosen = activityEventKind(form) === kind.id;
+                          return (
+                            <button
+                              key={kind.id}
+                              type="button"
+                              disabled={readOnly}
+                              onClick={() => set('event_kind', chosen ? '' : kind.id)}
+                              className={chosen ? 'is-active' : ''}
+                              style={{
+                                '--activity-type-color': '#FB923C',
+                                '--activity-type-background': 'rgba(251,146,60,0.18)',
+                              }}
+                            >
+                              {kind.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
               <div className="activity-settings-grid">
@@ -1511,7 +1541,7 @@ function ActivityFormModal({
         _editing_template: true,
         _template_id: initial._template_id,
         name: String(form.name).trim(),
-        type: form.type || 'birthday',
+        type: form.type || 'event',
         category: normalizeTemplateCategory(form.category),
         location: form.location || '',
         price: form.price === '' ? 0 : Number(form.price),
@@ -3259,7 +3289,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     if (Date.now() < skipClickUntilRef.current) return;
     if (viewMode === 'list' || typeFilter === 'training_vacation') {
       let createType = 'training_vacation';
-      if (typeFilter === 'activities') createType = 'birthday';
+      if (typeFilter === 'activities') createType = 'event';
       else if (typeFilter !== 'all' && typeFilter !== 'training_vacation') createType = typeFilter;
       setFormError('');
       setModal(emptyForm(dateStr, {
@@ -3309,7 +3339,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     setModal({
       ...base,
       name: tpl.name || '',
-      type: tpl.type || 'birthday',
+      type: tpl.type || 'event',
       date: dateStr,
       end_date: tpl.end_date ? String(tpl.end_date).slice(0, 10) : '',
       start_time: keepSlotTime
@@ -3345,7 +3375,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     setModal({
       ...emptyForm(toDateStr(new Date())),
       name: tpl.name || '',
-      type: tpl.type || 'birthday',
+      type: tpl.type || 'event',
       category: normalizeTemplateCategory(tpl.category),
       start_time: tpl.start_time ? String(tpl.start_time).slice(0, 5) : '10:00',
       end_time: tpl.end_time ? String(tpl.end_time).slice(0, 5) : '12:00',
@@ -3373,7 +3403,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   const openCreateTemplate = (categoryId = 'wall') => {
     setFormError('');
     const category = normalizeTemplateCategory(categoryId);
-    const defaultType = category === 'ops' ? 'other' : 'birthday';
+    const defaultType = category === 'ops' ? 'other' : 'event';
     setModal({
       ...emptyForm(toDateStr(new Date())),
       name: '',
@@ -4293,6 +4323,17 @@ export default function ActivitiesCalendar({ isOwner = false }) {
                     }}>
                       {item.name || 'ללא שם'}
                     </span>
+                    {/* כל האירועים חולקים צבע אחד, אז התגית היא מה שמבדיל בין
+                        יום הולדת לקבוצת בית ספר במבט על הרשימה. */}
+                    {isEventType(item.type) && eventKindLabel(activityEventKind(item)) && (
+                      <span style={{
+                        flexShrink: 0, fontSize: 10, fontWeight: 700, padding: '2px 7px',
+                        borderRadius: 999, color: meta.color, background: meta.bg,
+                        border: `1px solid ${meta.color}44`,
+                      }}>
+                        {eventKindLabel(activityEventKind(item))}
+                      </span>
+                    )}
                   </div>
                   <div style={{
                     fontSize: 12, color: 'var(--text-3)', overflow: 'hidden',

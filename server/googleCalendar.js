@@ -20,24 +20,29 @@ const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const CAL_API = 'https://www.googleapis.com/calendar/v3';
 
 const TYPE_COLOR = {
-  birthday: '6', // orange
+  event: '6', // orange
   trip: '9', // blue
-  school: '2', // green
-  company: '5', // yellow
+  personal_training: '2', // green
   route_building: '3', // purple
   opening_hours: '7', // cyan
   training_vacation: '4', // flamingo / pink
   other: '8', // gray
 };
 
+/**
+ * Colours that used to mean birthday, school or company all read as one event
+ * now. Google keeps the colour on events synced long before the merge, so the
+ * old ones have to keep resolving — otherwise a past booking comes back as
+ * "other" the next time the calendar syncs.
+ */
 const COLOR_TO_TYPE = {
-  '6': 'birthday',
-  '11': 'birthday',
+  '6': 'event',
+  '11': 'event',
+  '5': 'event',
+  '10': 'event',
   '9': 'trip',
   '1': 'trip',
-  '2': 'school',
-  '10': 'school',
-  '5': 'company',
+  '2': 'personal_training',
   '7': 'opening_hours',
   '8': 'other',
   '3': 'route_building',

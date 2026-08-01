@@ -14,8 +14,16 @@ import {
   israelDateStr,
   isTrainingVacationDate,
 } from './attendanceUtils.js';
+import { isEventType } from './eventKinds.js';
 
-const WALL_EVENT_TYPES = new Set(['birthday', 'school', 'company']);
+/**
+ * `isEventType` covers the merged `event` and the three types that preceded it,
+ * so a Friday booked before the merge still reads as a day the wall was open.
+ * A personal training is one instructor and one climber, but the wall is in use
+ * and someone has to have checked it — so it counts too.
+ */
+const WALL_EVENT_TYPES = new Set(['personal_training']);
+const isWallEventType = (type) => isEventType(type) || WALL_EVENT_TYPES.has(String(type || '').toLowerCase());
 
 /** 0 = Sunday … 6 = Saturday, from a YYYY-MM-DD civil date. */
 export function weekdayFromDateStr(dateStr) {
@@ -57,7 +65,7 @@ export function hasWallEventOn(activities, dateStr) {
     if (!activityCoversDate(a, dateStr)) return false;
     if (a.type === 'opening_hours' || a.type === 'training_vacation') return false;
     if (a.type === 'trip' || a.type === 'route_building') return false;
-    if (WALL_EVENT_TYPES.has(a.type)) return true;
+    if (isWallEventType(a.type)) return true;
     return String(a.category || '').toLowerCase() === 'wall';
   });
 }

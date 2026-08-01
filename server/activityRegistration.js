@@ -121,19 +121,21 @@ export function normalizeActivityTheme(raw) {
 }
 
 /** Lead source key for a new parent registering via a public activity page. */
-export function leadSourceFromActivityType(type) {
-  switch (String(type || '').toLowerCase()) {
-    case 'birthday':
-      return 'activity_birthday';
-    case 'trip':
-      return 'activity_trip';
-    case 'school':
-      return 'activity_school';
-    case 'company':
-      return 'activity_company';
-    default:
-      return 'activity_registration';
+/**
+ * The lead source keeps the finer grain the calendar gave up: an event is one
+ * type to staff and to pay, but "came from a school group" and "came from a
+ * birthday" are different answers to where business comes from, and that is
+ * what this feeds. The kind is read first, falling back to the legacy type.
+ */
+export function leadSourceFromActivityType(type, eventKind = '') {
+  const kind = String(eventKind || '').toLowerCase();
+  const key = String(type || '').toLowerCase();
+  if (key === 'event' || ['birthday', 'school', 'company'].includes(key)) {
+    const resolved = kind || (key === 'event' ? '' : key);
+    return resolved ? `activity_${resolved}` : 'activity_event';
   }
+  if (key === 'trip') return 'activity_trip';
+  return 'activity_registration';
 }
 
 export function publicRegistrationPayload(activity, registrations) {

@@ -142,7 +142,7 @@ export async function registerActivityGroup({
       : null;
     const orderId = makeId('aro');
     const template = resolveDefaultDeclarationTemplate(db);
-    const leadSource = leadSourceFromActivityType(activity.type);
+    const leadSource = leadSourceFromActivityType(activity.type, activity.event_kind);
     const crm = await saveCrmParticipants({
       db,
       persist,

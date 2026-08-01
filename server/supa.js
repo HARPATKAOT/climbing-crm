@@ -335,6 +335,10 @@ mappers.activities = columnMapper([
   'price_includes_vat',
   // Staff scheduling on the event: which role may be assigned and how it is paid.
   'staff_role', 'staff_pay_mode', 'staff_flat_amount',
+  // Which kind of event this is — birthday, company, school. A birthday and a
+  // school group are one thing to staff and to pay, so they share the `event`
+  // type; this is the label that tells them apart on the board.
+  'event_kind',
   'created_at', 'updated_at',
 ]);
 mappers.attendance = columnMapper([
@@ -362,7 +366,7 @@ mappers.student_equipment = columnMapper([
   'created_at', 'updated_at',
 ]);
 mappers.activity_templates = columnMapper([
-  'id', 'name', 'type', 'category', 'location', 'price', 'max_participants', 'description', 'notes',
+  'id', 'name', 'type', 'event_kind', 'category', 'location', 'price', 'max_participants', 'description', 'notes',
   'start_time', 'end_time', 'all_day',
   'registration_enabled', 'collect_registration_payment',
   'registration_mode',

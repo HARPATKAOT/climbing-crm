@@ -292,7 +292,7 @@ export async function convertInterestToRegistration({
     : null;
   if (!parent && row.phone) {
     parent = db.upsertParentByPhone(row.name, row.phone, row.email, {
-      source: leadSourceFromActivityType(activity.type),
+      source: leadSourceFromActivityType(activity.type, activity.event_kind),
     });
     await requireDurable(persist, 'parents', parent);
   }

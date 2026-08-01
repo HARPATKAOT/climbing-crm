@@ -171,6 +171,7 @@ import {
   needsMedicalClearance,
   questionsForSigner,
 } from './healthQuestions.js';
+import { EVENT_KINDS, normalizeActivityType } from './eventKinds.js';
 import { createOtpService } from './otpService.js';
 import {
   declarationSignedAt,
@@ -3672,9 +3673,12 @@ function normalizeActivityEndDate(date, endDate) {
 }
 
 function normalizeActivityPayload(body = {}) {
-  const type = ['birthday', 'trip', 'school', 'company', 'route_building', 'opening_hours', 'training_vacation', 'other'].includes(body.type)
-    ? body.type
-    : (body.type || 'other');
+  // סוג שנשלח בשמו הישן (יום הולדת / בית ספר / חברה) נשמר כ„אירוע” עם התגית
+  // המתאימה, כך שגם לקוח שלא עודכן וגם סנכרון ותיק נוחתים במקום אחד.
+  const { type, eventKind } = normalizeActivityType(
+    body.type || 'other',
+    body.event_kind ?? body.eventKind
+  );
   const hostName = body.host_name || body.contact_name || '';
   const hostPhone = body.host_phone || body.contact_phone || '';
   const hostParentId = body.host_parent_id || body.hostParentId || null;
@@ -3687,6 +3691,7 @@ function normalizeActivityPayload(body = {}) {
   return {
     name: String(body.name || '').trim(),
     type,
+    event_kind: eventKind,
     category,
     status: body.status || 'open',
     date,
@@ -7628,9 +7633,10 @@ const DEFAULT_EXTRA_ROLES = ['מנהל פארק חבלים', 'מדריך טיפ�
 
 /** אילו תפקידים מתאימים לכל סוג פעילות ביומן. ברירת מחדל שאפשר לשנות. */
 const DEFAULT_ACTIVITY_ROLES = {
-  birthday: [SYSTEM_ROLE_KEYS.TRAINER, SYSTEM_ROLE_KEYS.ASSISTANT],
-  school: [SYSTEM_ROLE_KEYS.TRAINER, SYSTEM_ROLE_KEYS.ASSISTANT],
-  company: [SYSTEM_ROLE_KEYS.TRAINER, SYSTEM_ROLE_KEYS.ASSISTANT],
+  // יום הולדת, בית ספר ופעילות חברה החזיקו בדיוק את אותה שורה. עכשיו הם סוג
+  // אחד, והתגית מבדילה ביניהם בלי לפצל את השיבוץ והשכר.
+  event: [SYSTEM_ROLE_KEYS.TRAINER, SYSTEM_ROLE_KEYS.ASSISTANT],
+  personal_training: [SYSTEM_ROLE_KEYS.TRAINER],
   trip: [SYSTEM_ROLE_KEYS.RAPPEL],
   opening_hours: [SYSTEM_ROLE_KEYS.WALL_OPERATOR],
   route_building: [SYSTEM_ROLE_KEYS.ROUTE],
@@ -7646,10 +7652,10 @@ const DEFAULT_ACTIVITY_ROLES = {
  * להם שם וצבע, אבל מחיקה הייתה מכבה יכולת בלי שיישאר לה מסך.
  */
 const DEFAULT_ACTIVITY_TYPES = [
-  { id: 'birthday', label: 'יום הולדת', color: '#FB923C', bg: 'rgba(251,146,60,0.18)' },
+  // „אירוע” אחד במקום שלושה. איזה אירוע בדיוק נשמר בתגית (`event_kind`).
+  { id: 'event', label: 'אירוע', color: '#FB923C', bg: 'rgba(251,146,60,0.18)' },
   { id: 'trip', label: 'טיול', color: '#60A5FA', bg: 'rgba(96,165,250,0.18)' },
-  { id: 'school', label: 'בית ספר', color: '#34D399', bg: 'rgba(52,211,153,0.18)' },
-  { id: 'company', label: 'פעילות חברה', color: '#FBBF24', bg: 'rgba(251,191,36,0.18)' },
+  { id: 'personal_training', label: 'אימון אישי', color: '#34D399', bg: 'rgba(52,211,153,0.18)' },
   { id: 'route_building', label: 'בניית מסלולים', color: '#A78BFA', bg: 'rgba(167,139,250,0.18)' },
   { id: 'opening_hours', label: 'שעות פתיחה', color: '#22D3EE', bg: 'rgba(34,211,238,0.16)', locked: true },
   { id: 'training_vacation', label: 'חופשה מאימונים', color: '#F472B6', bg: 'rgba(244,114,182,0.18)', locked: true },
