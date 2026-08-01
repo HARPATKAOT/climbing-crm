@@ -734,6 +734,13 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [customerPasses, setCustomerPasses] = useState([]);
   const [guardians, setGuardians] = useState([]);
   const [settingPrimary, setSettingPrimary] = useState(false);
+  const [unlinkingGuardian, setUnlinkingGuardian] = useState(false);
+  const [showSplitFamily, setShowSplitFamily] = useState(false);
+  const [splitHousehold, setSplitHousehold] = useState(null);
+  const [splitAssignments, setSplitAssignments] = useState({});
+  const [splitLoading, setSplitLoading] = useState(false);
+  const [splitSaving, setSplitSaving] = useState(false);
+  const [splitError, setSplitError] = useState('');
   const [passesLoading, setPassesLoading] = useState(false);
   const [punchingId, setPunchingId] = useState(null);
   const [passPunches, setPassPunches] = useState({});
@@ -863,6 +870,109 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       alert(err.message);
     } finally {
       setSettingPrimary(false);
+    }
+  };
+
+  /**
+   * Undo a bad family merge for this child only. The parent's own card stays;
+   * only the link between this child and the open (non-primary) parent goes.
+   */
+  const handleUnlinkGuardian = async () => {
+    if (!student?.id || !parent?.id || unlinkingGuardian) return;
+    const active = guardians.find((g) => String(g.id) === String(parent.id));
+    if (!active) return;
+    if (active.primary) {
+      alert('אי אפשר להסיר את ההורה הראשי. קבעו קודם הורה אחר כראשי, ואז הסירו את השיוך.');
+      return;
+    }
+    const parentLabel = parent.name || 'ההורה';
+    const childLabel = student.name || 'המתאמן';
+    if (!window.confirm(
+      `להסיר את השיוך של ${parentLabel} מ${childLabel}?\n\nכרטיס ההורה יישאר במערכת. רק הקישור לילד הזה יבוטל.`
+    )) {
+      return;
+    }
+    setUnlinkingGuardian(true);
+    try {
+      const response = await fetch(
+        `/api/students/${encodeURIComponent(student.id)}/guardians/${encodeURIComponent(parent.id)}`,
+        { method: 'DELETE' }
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.error || 'הסרת השיוך נכשלה');
+      }
+      const primary = guardians.find((g) => g.primary);
+      if (primary?.id) setActiveParentId(primary.id);
+      await refreshGuardians();
+      refreshData?.();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setUnlinkingGuardian(false);
+    }
+  };
+
+  /** Load the whole household so staff can re-assign every child in one step. */
+  const openSplitFamily = async () => {
+    const anchorId = parent?.id || primaryParent?.id;
+    if (!anchorId) return;
+    setShowSplitFamily(true);
+    setSplitLoading(true);
+    setSplitError('');
+    setSplitHousehold(null);
+    setSplitAssignments({});
+    try {
+      const response = await fetch(`/api/parents/${encodeURIComponent(anchorId)}/household`);
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'טעינת משק הבית נכשלה');
+      const parentsList = Array.isArray(body.parents) ? body.parents : [];
+      const childrenList = Array.isArray(body.children) ? body.children : [];
+      setSplitHousehold({ parents: parentsList, children: childrenList });
+      const initial = {};
+      childrenList.forEach((child) => {
+        initial[child.id] = child.parentId || '';
+      });
+      setSplitAssignments(initial);
+    } catch (err) {
+      setSplitError(err.message);
+    } finally {
+      setSplitLoading(false);
+    }
+  };
+
+  const handleSplitFamily = async () => {
+    const anchorId = parent?.id || primaryParent?.id;
+    if (!anchorId || !splitHousehold || splitSaving) return;
+    const missing = splitHousehold.children.filter((child) => !splitAssignments[child.id]);
+    if (missing.length) {
+      setSplitError(`יש לבחור הורה עבור: ${missing.map((c) => c.name).join(', ')}`);
+      return;
+    }
+    setSplitSaving(true);
+    setSplitError('');
+    try {
+      const response = await fetch(`/api/parents/${encodeURIComponent(anchorId)}/split-family`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assignments: splitHousehold.children.map((child) => ({
+            studentId: child.id,
+            parentId: splitAssignments[child.id],
+          })),
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'פיצול המשפחה נכשל');
+      setShowSplitFamily(false);
+      const keptParentId = splitAssignments[student.id];
+      if (keptParentId) setActiveParentId(keptParentId);
+      await refreshGuardians();
+      refreshData?.();
+    } catch (err) {
+      setSplitError(err.message);
+    } finally {
+      setSplitSaving(false);
     }
   };
 
@@ -1747,6 +1857,108 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
 
   return (
     <>
+      {showSplitFamily && (
+        <Modal
+          title="פיצול משפחה"
+          onClose={() => !splitSaving && setShowSplitFamily(false)}
+          footer={(
+            <>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={splitSaving}
+                onClick={() => setShowSplitFamily(false)}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={splitSaving || splitLoading || !splitHousehold?.children?.length}
+                onClick={handleSplitFamily}
+              >
+                {splitSaving ? 'שומר...' : 'שמור פיצול'}
+              </button>
+            </>
+          )}
+        >
+          <p style={{ margin: '0 0 14px', fontSize: 13, lineHeight: 1.5, color: 'var(--text-2)' }}>
+            בחרו לאיזה הורה שייך כל ילד. הילדים לא נמחקים — רק השיוך מתעדכן.
+          </p>
+          {splitLoading && <div style={{ fontSize: 13, color: 'var(--text-2)' }}>טוען...</div>}
+          {splitError && (
+            <div style={{
+              marginBottom: 12,
+              padding: '10px 12px',
+              borderRadius: 10,
+              background: 'rgba(248,113,113,0.12)',
+              color: '#fca5a5',
+              fontSize: 13,
+            }}>
+              {splitError}
+            </div>
+          )}
+          {!splitLoading && splitHousehold && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {splitHousehold.children.map((child) => (
+                <div
+                  key={child.id}
+                  style={{
+                    padding: 12,
+                    borderRadius: 12,
+                    border: '1px solid var(--border)',
+                    background: 'rgba(255,255,255,0.03)',
+                  }}
+                >
+                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>
+                    {child.name || 'ילד'}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {splitHousehold.parents
+                      .filter((p) => (child.guardianIds || []).includes(String(p.id)))
+                      .map((p) => {
+                      const selected = String(splitAssignments[child.id] || '') === String(p.id);
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => setSplitAssignments((prev) => ({
+                            ...prev,
+                            [child.id]: p.id,
+                          }))}
+                          style={{
+                            flex: '1 1 140px',
+                            padding: '10px 12px',
+                            borderRadius: 10,
+                            font: 'inherit',
+                            fontWeight: 700,
+                            fontSize: 13,
+                            cursor: 'pointer',
+                            border: selected
+                              ? '1px solid rgba(56,189,248,0.7)'
+                              : '1px solid var(--border)',
+                            background: selected
+                              ? 'rgba(56,189,248,0.18)'
+                              : 'rgba(255,255,255,0.03)',
+                            color: 'var(--text-1)',
+                          }}
+                        >
+                          {p.name || 'הורה'}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              {!splitHousehold.children.length && (
+                <div style={{ fontSize: 13, color: 'var(--text-2)' }}>
+                  אין ילדים במשק הבית לפיצול.
+                </div>
+              )}
+            </div>
+          )}
+        </Modal>
+      )}
       <div
         onClick={onClose}
         style={{
@@ -1884,17 +2096,39 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     </button>
                   );
                 })}
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  style={{ border: '1px solid var(--border)' }}
+                  disabled={settingPrimary || unlinkingGuardian || splitLoading}
+                  title="בחרו איזה ילד הולך עם איזה הורה — בלי למחוק אף אחד"
+                  onClick={openSplitFamily}
+                >
+                  פיצול משפחה
+                </button>
                 {guardians.some((g) => String(g.id) === String(parent?.id) && !g.primary) && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-xs"
-                    style={{ border: '1px solid var(--border)' }}
-                    disabled={settingPrimary}
-                    title="ההורה הראשי הוא זה שאליו המערכת פונה כברירת מחדל"
-                    onClick={handleMakePrimary}
-                  >
-                    {settingPrimary ? 'מעדכן...' : 'קבע כהורה ראשי'}
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      style={{ border: '1px solid var(--border)' }}
+                      disabled={settingPrimary || unlinkingGuardian}
+                      title="ההורה הראשי הוא זה שאליו המערכת פונה כברירת מחדל"
+                      onClick={handleMakePrimary}
+                    >
+                      {settingPrimary ? 'מעדכן...' : 'קבע כהורה ראשי'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      style={{ border: '1px solid rgba(248,113,113,0.45)', color: '#fca5a5' }}
+                      disabled={settingPrimary || unlinkingGuardian}
+                      title="מבטל רק את הקישור לילד הזה — כרטיס ההורה נשאר"
+                      onClick={handleUnlinkGuardian}
+                    >
+                      {unlinkingGuardian ? 'מסיר...' : 'הסר שיוך'}
+                    </button>
+                  </>
                 )}
               </div>
             )}

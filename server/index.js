@@ -194,6 +194,7 @@ import {
   familyCandidates,
   findChildMatches,
   guardianParentIds,
+  householdSnapshot,
   linkGuardian,
   mergeFamily,
   normalizedChildName,
@@ -201,6 +202,7 @@ import {
   publicChildMatchPayload,
   publicFamilyCandidatesPayload,
   setPrimaryGuardian,
+  splitFamily,
   unlinkGuardian,
 } from './studentGuardians.js';
 import {
@@ -1162,6 +1164,7 @@ app.post('/api/whatsapp/settings', requireOwner, async (req, res) => {
     'aiForbiddenTopics',
     'aiBusinessFacts',
     'aiEscalateWhenUnsure',
+    'aiClarifyReply',
     'aiUnsureReply',
     'aiLeadCaptureEnabled',
     'aiInteractiveMenuEnabled',
@@ -2720,6 +2723,73 @@ app.delete('/api/students/:id/guardians/:parentId', async (req, res) => {
     await supa.remove('student_guardians', `sg-${student.id}-${req.params.parentId}`);
   }
   res.json({ removed });
+});
+
+/** Household around a parent — for the desk "split family" dialog. */
+app.get('/api/parents/:id/household', (req, res) => {
+  const snapshot = householdSnapshot(db, req.params.id);
+  if (!snapshot) return res.status(404).json({ error: 'הלקוח לא נמצא' });
+  res.json(snapshot);
+});
+
+/**
+ * Undo a bad family merge: each child is assigned to exactly one parent.
+ * Children and parent cards stay; only primary + guardian links change.
+ */
+app.post('/api/parents/:id/split-family', async (req, res) => {
+  const anchorId = String(req.params.id || '');
+  const snapshot = householdSnapshot(db, anchorId);
+  if (!snapshot) return res.status(404).json({ error: 'הלקוח לא נמצא' });
+
+  const assignments = Array.isArray(req.body?.assignments) ? req.body.assignments : [];
+  if (!assignments.length) {
+    return res.status(400).json({ error: 'יש לשייך כל ילד להורה' });
+  }
+
+  const householdParentIds = new Set(snapshot.parents.map((p) => String(p.id)));
+  const householdChildIds = new Set(snapshot.children.map((c) => String(c.id)));
+  const seenChildren = new Set();
+
+  for (const row of assignments) {
+    const studentId = String(row?.studentId || '');
+    const parentId = String(row?.parentId || '');
+    if (!householdChildIds.has(studentId)) {
+      return res.status(400).json({ error: 'אחד הילדים לא שייך למשק הבית הזה' });
+    }
+    if (!householdParentIds.has(parentId)) {
+      return res.status(400).json({ error: 'אחד ההורים לא שייך למשק הבית הזה' });
+    }
+    if (seenChildren.has(studentId)) {
+      return res.status(400).json({ error: 'כל ילד יכול להיות משויך להורה אחד בלבד' });
+    }
+    seenChildren.add(studentId);
+  }
+
+  for (const child of snapshot.children) {
+    if (!seenChildren.has(String(child.id))) {
+      return res.status(400).json({ error: `חסר שיוך עבור ${child.name || 'ילד'}` });
+    }
+  }
+
+  const result = splitFamily(db, { assignments });
+  if (!result.ok) {
+    return res.status(400).json({ error: result.error || 'פיצול המשפחה נכשל' });
+  }
+
+  for (const change of result.changes) {
+    await persistCore('students', change.student);
+    if (supa.isEnabled()) {
+      for (const link of change.removed) {
+        await supa.remove('student_guardians', link.id);
+      }
+    }
+  }
+
+  res.json({
+    ok: true,
+    household: householdSnapshot(db, anchorId),
+    changed: result.changes.length,
+  });
 });
 
 // Update student/lead details (supports multi-group via groupIds / addGroupId / removeGroupId)

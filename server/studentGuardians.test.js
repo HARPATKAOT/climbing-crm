@@ -5,12 +5,14 @@ import {
   familyCandidates,
   findChildMatches,
   guardianParentIds,
+  householdSnapshot,
   isChildOfParent,
   linkGuardian,
   mergeFamily,
   parentLastName,
   publicChildMatchPayload,
   publicFamilyCandidatesPayload,
+  splitFamily,
   studentsForParent,
   unlinkGuardian,
 } from './studentGuardians.js';
@@ -391,6 +393,43 @@ test('merging is idempotent and refuses to merge a card with itself', () => {
   assert.equal(second.length, 0, 'nothing new the second time');
   assert.equal(mergeFamily(db, { parentId: 'p-avner', familyParentId: 'p-avner' }).length, 0);
   assert.ok(first.length >= 0);
+});
+
+test('splitting a merged household gives each child exactly one parent', () => {
+  const db = createDb();
+  db.store.parents.push({ id: 'p-mum', name: 'רותם לוי', phone: '0539998888' });
+  db.store.students.push({ id: 's-shaked', name: 'שקד לוי', parentId: 'p-mum', birthDate: '2017-06-06' });
+  mergeFamily(db, { parentId: 'p-mum', familyParentId: 'p-avner' });
+
+  assert.equal(guardianParentIds(db, 's-noam').length, 2);
+  assert.equal(guardianParentIds(db, 's-shaked').length, 2);
+
+  const snap = householdSnapshot(db, 'p-avner');
+  assert.equal(snap.parents.length, 2);
+  assert.equal(snap.children.length, 2);
+
+  const result = splitFamily(db, {
+    assignments: [
+      { studentId: 's-noam', parentId: 'p-avner' },
+      { studentId: 's-shaked', parentId: 'p-mum' },
+    ],
+  });
+  assert.equal(result.ok, true);
+  assert.equal(db.getOne('students', 's-noam').parentId, 'p-avner');
+  assert.equal(db.getOne('students', 's-shaked').parentId, 'p-mum');
+  assert.deepEqual(guardianParentIds(db, 's-noam'), ['p-avner']);
+  assert.deepEqual(guardianParentIds(db, 's-shaked'), ['p-mum']);
+  assert.equal(db.store.student_guardians.length, 0);
+  assert.equal(db.store.students.length, 2, 'children are not deleted');
+});
+
+test('split refuses a parent who is not on the child file', () => {
+  const db = createDb();
+  db.store.parents.push({ id: 'p-stranger', name: 'זר כהן', phone: '0500000000' });
+  const result = splitFamily(db, {
+    assignments: [{ studentId: 's-noam', parentId: 'p-stranger' }],
+  });
+  assert.equal(result.ok, false);
 });
 
 test('without a link the old behaviour stands: a new child for the new parent', async () => {

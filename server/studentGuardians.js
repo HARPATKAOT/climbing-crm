@@ -285,7 +285,7 @@ export function familyCandidates(db, { lastName, excludeParentId = null, limit =
 }
 
 /** Everyone reachable from one parent through the children they share. */
-function expandHousehold(db, parentId) {
+export function expandHousehold(db, parentId) {
   const parentIds = [String(parentId)];
   const studentIds = new Set();
   const students = [];
@@ -300,6 +300,31 @@ function expandHousehold(db, parentId) {
     }
   }
   return { parentIds, students };
+}
+
+/**
+ * Parents + children of one household — what the desk shows when splitting a
+ * bad merge. Adult self-registrations stay out: they are not "kids to assign".
+ */
+export function householdSnapshot(db, parentId) {
+  if (!db.getOne('parents', parentId)) return null;
+  const household = expandHousehold(db, parentId);
+  const parents = household.parentIds
+    .map((id) => db.getOne('parents', id))
+    .filter(Boolean)
+    .map((parent) => ({
+      id: String(parent.id),
+      name: parent.name || '',
+    }));
+  const children = household.students
+    .filter((student) => student.isAdult !== true)
+    .map((student) => ({
+      id: String(student.id),
+      name: student.name || '',
+      parentId: String(student.parentId || ''),
+      guardianIds: guardianParentIds(db, student),
+    }));
+  return { parents, children };
 }
 
 /** Short enough to read at a glance, specific enough to recognise. */
@@ -326,6 +351,49 @@ export function publicFamilyCandidatesPayload(candidates = []) {
       };
     }),
   };
+}
+
+/**
+ * Undo a family merge by giving every child exactly one parent.
+ *
+ * Each assignment sets that parent as primary and drops every other guardian
+ * link for the child. Parent cards and the children themselves are untouched.
+ */
+export function splitFamily(db, { assignments = [] } = {}) {
+  const changes = [];
+  for (const row of assignments) {
+    const studentId = String(row?.studentId || '').trim();
+    const parentId = String(row?.parentId || '').trim();
+    const student = db.getOne('students', studentId);
+    if (!student || !parentId) {
+      return { ok: false, error: 'חסר ילד או הורה בשיוך' };
+    }
+    if (!db.getOne('parents', parentId)) {
+      return { ok: false, error: 'כרטיס ההורה לא נמצא' };
+    }
+    if (!guardianParentIds(db, student).includes(parentId)) {
+      return { ok: false, error: `לא ניתן לשייך את ${student.name || 'הילד'} להורה שאינו מקושר אליו` };
+    }
+
+    const previousPrimary = String(student.parentId || '');
+    const updated = previousPrimary === parentId
+      ? student
+      : (db.update('students', studentId, { parentId }) || { ...student, parentId });
+
+    const removed = [];
+    for (const link of [...guardianRows(db)]) {
+      if (String(link.student_id) !== studentId) continue;
+      if (db.delete('student_guardians', link.id)) removed.push(link);
+    }
+
+    changes.push({
+      student: updated,
+      previousPrimary,
+      parentId,
+      removed,
+    });
+  }
+  return { ok: true, changes };
 }
 
 /**

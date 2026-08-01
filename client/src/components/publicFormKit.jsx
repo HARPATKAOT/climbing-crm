@@ -143,6 +143,13 @@ export function KnownChildPrompt({ childName, match, onAnswer }) {
   );
 }
 
+function familyDisplayLabel(family) {
+  const kids = family.children?.length
+    ? ` — ${family.children.join(', ')}${family.more_children ? ` ועוד ${family.more_children}` : ''}`
+    : '';
+  return `${family.parent_name || ''}${kids}`;
+}
+
 /**
  * "Are you this family?" — asked when a parent we do not know shares a surname
  * with a card that has children. Naming the parent and their children is what
@@ -176,10 +183,7 @@ export function KnownFamilyPrompt({ families = [], chosenId, onChoose }) {
             textAlign: 'right',
             fontWeight: 600,
           }}>
-            <strong>{families[0].parent_name}</strong>
-            {families[0].children?.length
-              ? ` — ${families[0].children.join(', ')}${families[0].more_children ? ` ועוד ${families[0].more_children}` : ''}`
-              : ''}
+            {familyDisplayLabel(families[0])}
           </div>
         ) : (
           families.map((family) => (
@@ -196,10 +200,7 @@ export function KnownFamilyPrompt({ families = [], chosenId, onChoose }) {
               }}
               onClick={() => onChoose(family.parent_id)}
             >
-              <strong>{family.parent_name}</strong>
-              {family.children?.length
-                ? ` — ${family.children.join(', ')}${family.more_children ? ` ועוד ${family.more_children}` : ''}`
-                : ''}
+              {familyDisplayLabel(family)}
             </button>
           ))
         )}
