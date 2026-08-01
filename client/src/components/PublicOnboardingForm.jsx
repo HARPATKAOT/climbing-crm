@@ -13,9 +13,9 @@ import {
   KnownChildPrompt,
   KnownFamilyNote,
   KnownFamilyPrompt,
-  needsFamilyAnswer,
+  useFamilyMatch,
 } from './publicFormKit.jsx';
-import { checkKnownChild, checkKnownFamily, linkFieldsFor } from '../utils/childCheck.js';
+import { checkKnownChild, linkFieldsFor } from '../utils/childCheck.js';
 import { joinParentName, splitParentName } from '../utils/parentName.js';
 import {
   blankAnswers,
@@ -429,12 +429,16 @@ export default function PublicOnboardingForm() {
 
   // participant key -> { match, student_id, guardian_first_name, health_valid, linked }
   const [knownChildren, setKnownChildren] = useState({});
-  // Families on file under the same surname, and the one chosen ('' = new family).
-  const [families, setFamilies] = useState([]);
-  const [familyParentId, setFamilyParentId] = useState(null);
   const [prefilledParentId, setPrefilledParentId] = useState('');
   // Set once the typed phone turns out to be on a file already: { name, children }.
   const [knownFile, setKnownFile] = useState(null);
+  // Surname match: asked live as soon as last name (+ phone) look like a known family.
+  const {
+    families,
+    familyParentId,
+    setFamilyParentId,
+    waitingForFamily,
+  } = useFamilyMatch(parent.lastName, parent.phone, { skip: !!prefilledParentId });
   // Which participant has already been told their ID looks wrong, so the
   // warning is a warning and not a wall.
   const [idWarnedFor, setIdWarnedFor] = useState('');
@@ -787,15 +791,10 @@ export default function PublicOnboardingForm() {
     // and could add a child who is on their file already.
     const own = await lookupOwnFile(parent.phone, parent.idNumber);
 
-    // A parent we have never seen may still belong to a family we know — only
-    // they can tell us, and only before a second file is opened. Someone whose
-    // own file we just found is not that case.
-    if (!own && !prefilledParentId && familyParentId === null) {
-      const known = await checkKnownFamily({ lastName: parent.lastName, phone: parent.phone });
-      setFamilies(known.families);
-      if (known.families.length) return;
-      setFamilyParentId('');
-    }
+    // Surname match is asked live while they type. If the answer is still open,
+    // stay on this step — Continue is hidden in that case anyway.
+    if (!own && !prefilledParentId && waitingForFamily) return;
+
     // The phone must answer a one-time code before the form goes on. A number
     // that was already verified in this session (and not edited since) is not
     // asked twice.
@@ -1461,7 +1460,7 @@ export default function PublicOnboardingForm() {
                 onResend={sendOtpCode}
                 onEditPhone={() => setOtp((o) => ({ ...o, stage: 'idle', code: '', error: '' }))}
               />
-            ) : needsFamilyAnswer(families, familyParentId) ? null : (
+            ) : waitingForFamily ? null : (
               <button
                 type="button"
                 className="event-primary"

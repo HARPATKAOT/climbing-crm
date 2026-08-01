@@ -11,10 +11,10 @@ import {
   KnownChildPrompt,
   KnownFamilyNote,
   KnownFamilyPrompt,
-  needsFamilyAnswer,
+  useFamilyMatch,
   SignaturePad,
 } from './publicFormKit.jsx';
-import { checkKnownChild, checkKnownFamily, linkFieldsFor } from '../utils/childCheck.js';
+import { checkKnownChild, linkFieldsFor } from '../utils/childCheck.js';
 import { joinParentName } from '../utils/parentName.js';
 
 const emptyParticipant = (questions = [], extras = {}) => ({
@@ -70,9 +70,12 @@ export default function PublicActivityRegistration() {
   const [selectedChildIds, setSelectedChildIds] = useState([]);
   // participant key -> { match, student_id, guardian_first_name, health_valid, linked }
   const [knownChildren, setKnownChildren] = useState({});
-  // Families on file under the same surname, and the one chosen ('' = new family).
-  const [families, setFamilies] = useState([]);
-  const [familyParentId, setFamilyParentId] = useState(null);
+  const {
+    families,
+    familyParentId,
+    setFamilyParentId,
+    waitingForFamily,
+  } = useFamilyMatch(parent.lastName, parent.phone);
   const [idempotencyKey] = useState(
     () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`
   );
@@ -240,13 +243,8 @@ export default function PublicActivityRegistration() {
         setError(lookupError.message);
         return;
       }
-      // A parent we have never seen may still belong to a family we know.
-      if (!found?.found && familyParentId === null) {
-        const known = await checkKnownFamily({ lastName: parent.lastName, phone: parent.phone });
-        setFamilies(known.families);
-        if (known.families.length) return;
-        setFamilyParentId('');
-      }
+      // Surname match is asked live while they type. Stay here until they answer.
+      if (!found?.found && waitingForFamily) return;
       if (isAdultSelf) {
         setHealthIndex(0);
         setStep(household?.adult_health_valid ? 4 : 3);
@@ -671,7 +669,7 @@ export default function PublicActivityRegistration() {
             </button>
           )}
           {step < 4 ? (
-            needsFamilyAnswer(families, familyParentId) && step === 1 ? null : (
+            waitingForFamily && step === 1 ? null : (
               <button type="button" className="event-primary" onClick={next}>המשך</button>
             )
           ) : (

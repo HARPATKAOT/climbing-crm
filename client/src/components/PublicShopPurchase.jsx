@@ -19,10 +19,10 @@ import {
   KnownChildPrompt,
   KnownFamilyNote,
   KnownFamilyPrompt,
-  needsFamilyAnswer,
+  useFamilyMatch,
   SignaturePad,
 } from './publicFormKit.jsx';
-import { checkKnownChild, checkKnownFamily, linkFieldsFor } from '../utils/childCheck.js';
+import { checkKnownChild, linkFieldsFor } from '../utils/childCheck.js';
 import { joinParentName } from '../utils/parentName.js';
 
 const NEW_HOLDER = '__new__';
@@ -120,9 +120,12 @@ function ShopPurchase({ slug }) {
   const [declaration, setDeclaration] = useState({ answers: {}, waiverAccepted: false, signature: '' });
   // { student_id, guardian_first_name, health_valid, linked } once the buyer answers.
   const [knownChild, setKnownChild] = useState(null);
-  // Families on file under the same surname, and the one the buyer picked ('' = new family).
-  const [families, setFamilies] = useState([]);
-  const [familyParentId, setFamilyParentId] = useState(null);
+  const {
+    families,
+    familyParentId,
+    setFamilyParentId,
+    waitingForFamily,
+  } = useFamilyMatch(buyer.lastName, buyer.phone);
   const [idempotencyKey] = useState(
     () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`
   );
@@ -220,14 +223,8 @@ function ShopPurchase({ slug }) {
         setError(lookupError.message);
         return;
       }
-      // A payer we have never seen may still be the second parent of a family
-      // we know. Only they can tell, so ask before opening a new file.
-      if (!found?.found && familyParentId === null) {
-        const known = await checkKnownFamily({ lastName: buyer.lastName, phone: buyer.phone });
-        setFamilies(known.families);
-        if (known.families.length) return;
-        setFamilyParentId('');
-      }
+      // Surname match is asked live while they type. Stay here until they answer.
+      if (!found?.found && waitingForFamily) return;
       if (forSelf) {
         setStep(found?.adult_health_valid ? 4 : 3);
         return;
@@ -475,7 +472,7 @@ function ShopPurchase({ slug }) {
         <footer className="event-actions">
           {step > 1 && <button type="button" className="event-secondary" onClick={back}>חזרה</button>}
           {step < 4 ? (
-            needsFamilyAnswer(families, familyParentId) && step === 1 ? null : (
+            waitingForFamily && step === 1 ? null : (
               <button type="button" className="event-primary" onClick={next}>המשך</button>
             )
           ) : (

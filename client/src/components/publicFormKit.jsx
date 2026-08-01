@@ -3,7 +3,8 @@
  * purchase). One copy of the styles so the pages a customer sees in sequence —
  * an event link today, a punch-card link tomorrow — stay the same product.
  */
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { checkKnownFamily } from '../utils/childCheck.js';
 
 export function SignaturePad({ value, onChange }) {
   const canvasRef = useRef(null);
@@ -236,6 +237,66 @@ export function KnownFamilyPrompt({ families = [], chosenId, onChoose }) {
 /** True while a surname match is on screen and the parent has not answered yet. */
 export function needsFamilyAnswer(families = [], chosenId) {
   return families.length > 0 && (chosenId === undefined || chosenId === null);
+}
+
+/**
+ * Watches surname + phone and asks "is this your family?" as soon as a match
+ * appears — so Continue is replaced by the question without an extra click.
+ */
+export function useFamilyMatch(lastName, phone, { skip = false } = {}) {
+  const [families, setFamilies] = useState([]);
+  const [familyParentId, setFamilyParentIdState] = useState(null);
+  const [pending, setPending] = useState(false);
+  const answeredForKey = useRef(null);
+
+  const checkKey = `${String(lastName || '').trim()}|${String(phone || '').replace(/\D/g, '')}`;
+
+  const setFamilyParentId = (id) => {
+    answeredForKey.current = checkKey;
+    setFamilyParentIdState(id);
+  };
+
+  useEffect(() => {
+    if (skip) {
+      setFamilies([]);
+      setPending(false);
+      return undefined;
+    }
+    const trimmed = String(lastName || '').trim();
+    if (trimmed.length < 2) {
+      setFamilies([]);
+      setFamilyParentIdState(null);
+      answeredForKey.current = null;
+      setPending(false);
+      return undefined;
+    }
+    let cancelled = false;
+    const key = `${trimmed}|${String(phone || '').replace(/\D/g, '')}`;
+    setPending(true);
+    const timer = setTimeout(async () => {
+      const known = await checkKnownFamily({ lastName: trimmed, phone });
+      if (cancelled) return;
+      setFamilies(known.families);
+      if (!known.families.length) {
+        setFamilyParentIdState('');
+      } else if (answeredForKey.current !== key) {
+        setFamilyParentIdState(null);
+      }
+      setPending(false);
+    }, 450);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [lastName, phone, skip]);
+
+  return {
+    families,
+    familyParentId,
+    setFamilyParentId,
+    familyCheckPending: pending,
+    waitingForFamily: pending || needsFamilyAnswer(families, familyParentId),
+  };
 }
 
 /** Confirmation line shown once a family was joined or declined. */
