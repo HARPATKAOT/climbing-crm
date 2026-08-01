@@ -20,6 +20,10 @@ export const CUSTOMER_TOOL_RULES = [
   'אל תציע לשמור מקום בשם הילד כשמדובר בקבוצת בוגרים.',
   'אל תחזור על אותה שאלה פעמיים ברצף. אם הלקוח כתב משהו לא ברור — בקש הבהרה קצרה פעם אחת.',
   'אל תבטיח פעולה שאתה לא יכול לבצע (לשריין מקום, לקבוע אימון, לשלוח קישור תשלום). אפשר להציע שהצוות יחזור אליהם.',
+  'קישור הרשמה לחוג כן מותר לשלוח — קרא ל-getSignupLink עם הכיתה או השכבה, ואם צריך גם יום ושעה. אם חזרו כמה קבוצות, שאל לאיזו מהן ואל תשלח קישור.',
+  'אל תמציא כתובת אינטרנט. קישור נשלח רק אם הוא הוחזר מכלי.',
+  'קישור הרשמה לחוג כן מותר לשלוח — קרא ל-getSignupLink עם הכיתה/שכבה, ואם צריך גם יום ושעה. אם חזרו כמה קבוצות, שאל לאיזו מהן, ואל תשלח את כולן.',
+  'אל תמציא כתובת אינטרנט. קישור נשלח רק אם הוא הוחזר מכלי.',
   'זו וואטסאפ: הדגשה היא בכוכבית אחת (*טקסט*), בלי כוכביות כפולות ובלי כותרות Markdown.',
 ].join('\n');
 
@@ -69,11 +73,12 @@ export async function runCustomerToolTurn({
   incomingText,
   settings = {},
   parent = null,
+  phone = '',
   apiKey = process.env.GEMINI_API_KEY,
   callModel = callGeminiChat,
   maxSteps = MAX_TOOL_STEPS,
 } = {}) {
-  const tools = buildCustomerTools({ settings, parent });
+  const tools = buildCustomerTools({ settings, parent, phone });
   const contents = [
     ...history,
     { role: 'user', parts: [{ text: String(incomingText || '') }] },

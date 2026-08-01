@@ -123,7 +123,14 @@ test('history rows become model/user turns', () => {
 
 test('the tools offered to the model are read-only facts', () => {
   const names = CUSTOMER_TOOL_DECLARATIONS.map((d) => d.name).sort();
-  assert.deepEqual(names, ['getEvents', 'getFamilyCard', 'getOpeningHours', 'getPrices', 'listClasses']);
+  assert.deepEqual(names, [
+    'getEvents',
+    'getFamilyCard',
+    'getOpeningHours',
+    'getPrices',
+    'getSignupLink',
+    'listClasses',
+  ]);
   // Nothing that writes, sends or charges may be in this list.
   assert.equal(names.some((n) => /send|create|update|delete|pay|register/i.test(n)), false);
   assert.match(CUSTOMER_TOOL_RULES, /HANDOFF/);

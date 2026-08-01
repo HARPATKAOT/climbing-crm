@@ -16,6 +16,7 @@ import {
   formatOpeningHoursReply,
   formatPublicEventsReply,
   trainerNameForGroup,
+  groupSignupUrl,
 } from './botFacts.js';
 
 const DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
@@ -67,6 +68,21 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
     parameters: { type: 'object', properties: {} },
   },
   {
+    name: 'getSignupLink',
+    description:
+      'קישור ההרשמה של קבוצה מסוימת. חובה לציין כיתה או שכבה, ורצוי גם יום ושעה. '
+      + 'אם יותר מקבוצה אחת מתאימה — יש לשאול את הלקוח לאיזו, ולא לשלוח קישור.',
+    parameters: {
+      type: 'object',
+      properties: {
+        grade: { type: 'string', description: 'אות כיתה: א ב ג ד ה או ו' },
+        band: { type: 'string', description: 'שכבה שאינה כיתה: בוגרים / תיכון / חטיבה' },
+        day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת' },
+        time: { type: 'string', description: 'שעת הקבוצה, למשל 15:30' },
+      },
+    },
+  },
+  {
     name: 'getFamilyCard',
     description:
       'מה שיש במערכת על הלקוח הזה: שם, והילדים הרשומים עם השכבה שלהם. '
@@ -114,7 +130,7 @@ function selectGroups({ grade = '', band = '', day = null } = {}) {
  * Every tool returns plain data. Formatting is the model's job — what must not
  * be the model's job is the number itself.
  */
-export function buildCustomerTools({ settings = {}, parent = null } = {}) {
+export function buildCustomerTools({ settings = {}, parent = null, phone = '' } = {}) {
   return {
     listClasses: async ({ grade, band, day } = {}) => {
       const groups = selectGroups({ grade, band, day });
@@ -156,6 +172,53 @@ export function buildCustomerTools({ settings = {}, parent = null } = {}) {
     getEvents: async () => {
       const text = formatPublicEventsReply(db);
       return text ? { אירועים: text } : { אירועים: '', הערה: 'אין אירועים פתוחים להרשמה' };
+    },
+
+    getSignupLink: async ({ grade, band, day, time } = {}) => {
+      // A link belongs to one group. Without a class or band the model would be
+      // choosing a group on the customer's behalf.
+      if (!String(grade || '').trim() && !String(band || '').trim()) {
+        return {
+          קישורים: [],
+          הערה: 'חסר לאיזו כיתה או שכבה — יש לשאול את הלקוח לפני שליחת קישור',
+        };
+      }
+      let groups = selectGroups({ grade, band, day });
+      const wantedTime = String(time || '').trim();
+      if (wantedTime) {
+        const exact = groups.filter((g) => String(g.time || '').trim() === wantedTime);
+        if (exact.length) groups = exact;
+      }
+      if (!groups.length) {
+        return { קישורים: [], הערה: 'אין קבוצה מתאימה במערכת — יש להעביר לצוות' };
+      }
+      // More than one match means the customer has not chosen yet. Returning the
+      // candidates without links makes the bot ask instead of guessing.
+      if (groups.length > 1) {
+        return {
+          קישורים: [],
+          קבוצות_אפשריות: groups.map((g) => ({
+            שכבה: g.ageCategory || '',
+            יום: DAY_NAMES[Number(g.day)] || String(g.day ?? ''),
+            שעה: g.time || '',
+          })),
+          הערה: 'יותר מקבוצה אחת מתאימה — יש לשאול לאיזו קבוצה, ורק אז לשלוח קישור',
+        };
+      }
+      const group = groups[0];
+      const week = group.signupLinkWeek || '';
+      const twice = group.signupLinkTwice || '';
+      return {
+        קישורים: [{
+          שכבה: group.ageCategory || '',
+          יום: DAY_NAMES[Number(group.day)] || String(group.day ?? ''),
+          שעה: group.time || '',
+          קישור_פעם_בשבוע: week,
+          קישור_פעמיים_בשבוע: twice,
+          // No group-specific link on file: the general intake form still works.
+          קישור_כללי: week || twice ? '' : groupSignupUrl(group, { phone }),
+        }],
+      };
     },
 
     getFamilyCard: async () => {

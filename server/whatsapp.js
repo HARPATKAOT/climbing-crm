@@ -1398,6 +1398,7 @@ export const whatsappService = {
         incomingText,
         settings,
         parent,
+        phone,
         apiKey,
       });
       if (turn.text) {
