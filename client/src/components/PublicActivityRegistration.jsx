@@ -11,6 +11,7 @@ import {
   KnownChildPrompt,
   KnownFamilyNote,
   KnownFamilyPrompt,
+  needsFamilyAnswer,
   SignaturePad,
 } from './publicFormKit.jsx';
 import { checkKnownChild, checkKnownFamily, linkFieldsFor } from '../utils/childCheck.js';
@@ -670,7 +671,9 @@ export default function PublicActivityRegistration() {
             </button>
           )}
           {step < 4 ? (
-            <button type="button" className="event-primary" onClick={next}>המשך</button>
+            needsFamilyAnswer(families, familyParentId) && step === 1 ? null : (
+              <button type="button" className="event-primary" onClick={next}>המשך</button>
+            )
           ) : (
             <button type="button" className="event-primary" disabled={submitting} onClick={submit}>
               {submitting ? 'שומר...' : paidMode ? `מעבר לתשלום ₪${total}` : 'אישור הרשמה'}

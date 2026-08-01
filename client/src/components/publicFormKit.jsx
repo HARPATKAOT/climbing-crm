@@ -148,10 +148,11 @@ export function KnownChildPrompt({ childName, match, onAnswer }) {
  * makes the answer reliable: a family recognises itself at a glance.
  */
 export function KnownFamilyPrompt({ families = [], chosenId, onChoose }) {
-  if (!families.length || chosenId !== undefined && chosenId !== null) return null;
+  if (!families.length || (chosenId !== undefined && chosenId !== null)) return null;
+  const single = families.length === 1;
   return (
     <div style={{
-      margin: '12px 0',
+      margin: '12px 0 28px',
       padding: 14,
       borderRadius: 14,
       border: '1px solid rgba(56,189,248,.55)',
@@ -160,48 +161,96 @@ export function KnownFamilyPrompt({ families = [], chosenId, onChoose }) {
       lineHeight: 1.5,
     }}>
       <p style={{ margin: '0 0 10px' }}>
-        {families.length === 1
+        {single
           ? 'יש אצלנו כבר תיק משפחה שנראה כמו שלכם. אתם אותה משפחה?'
           : 'יש אצלנו כמה תיקי משפחה בשם הזה. אחד מהם שלכם?'}
       </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {families.map((family) => (
-          <button
-            key={family.parent_id}
-            type="button"
-            style={{
-              ...promptButton,
-              background: 'rgba(255,255,255,.10)',
-              color: '#e2e8f0',
-              textAlign: 'right',
-              fontWeight: 600,
-            }}
-            onClick={() => onChoose(family.parent_id)}
-          >
-            <strong>{family.parent_name}</strong>
-            {family.children.length
-              ? ` — ${family.children.join(', ')}${family.more_children ? ` ועוד ${family.more_children}` : ''}`
+        {single ? (
+          <div style={{
+            padding: '11px 16px',
+            borderRadius: 11,
+            background: 'rgba(255,255,255,.10)',
+            color: '#e2e8f0',
+            textAlign: 'right',
+            fontWeight: 600,
+          }}>
+            <strong>{families[0].parent_name}</strong>
+            {families[0].children?.length
+              ? ` — ${families[0].children.join(', ')}${families[0].more_children ? ` ועוד ${families[0].more_children}` : ''}`
               : ''}
+          </div>
+        ) : (
+          families.map((family) => (
+            <button
+              key={family.parent_id}
+              type="button"
+              style={{
+                ...promptButton,
+                background: 'rgba(34,197,94,.22)',
+                color: '#bbf7d0',
+                textAlign: 'right',
+                fontWeight: 600,
+                border: '1px solid rgba(34,197,94,.45)',
+              }}
+              onClick={() => onChoose(family.parent_id)}
+            >
+              <strong>{family.parent_name}</strong>
+              {family.children?.length
+                ? ` — ${family.children.join(', ')}${family.more_children ? ` ועוד ${family.more_children}` : ''}`
+                : ''}
+            </button>
+          ))
+        )}
+        {single ? (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+            <button
+              type="button"
+              style={{ ...promptButton, background: '#16a34a', color: '#fff', flex: '1 1 160px' }}
+              onClick={() => onChoose(families[0].parent_id)}
+            >
+              כן, אנחנו אותה משפחה
+            </button>
+            <button
+              type="button"
+              style={{ ...promptButton, background: '#dc2626', color: '#fff', flex: '1 1 160px' }}
+              onClick={() => onChoose('')}
+            >
+              לא, זה לא אנחנו
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            style={{ ...promptButton, background: '#dc2626', color: '#fff' }}
+            onClick={() => onChoose('')}
+          >
+            לא, זה לא אנחנו
           </button>
-        ))}
-        <button
-          type="button"
-          style={{ ...promptButton, background: '#f97316', color: '#fff' }}
-          onClick={() => onChoose('')}
-        >
-          לא, אנחנו משפחה חדשה
-        </button>
+        )}
       </div>
     </div>
   );
 }
 
-/** Confirmation line shown once a family was joined. */
+/** True while a surname match is on screen and the parent has not answered yet. */
+export function needsFamilyAnswer(families = [], chosenId) {
+  return families.length > 0 && (chosenId === undefined || chosenId === null);
+}
+
+/** Confirmation line shown once a family was joined or declined. */
 export function KnownFamilyNote({ families = [], chosenId }) {
+  if (chosenId === '') {
+    return (
+      <p style={{ margin: '10px 0 18px', fontSize: 13, lineHeight: 1.45, color: '#fca5a5' }}>
+        נפתח תיק משפחה חדש.
+      </p>
+    );
+  }
   const chosen = families.find((family) => family.parent_id === chosenId);
   if (!chosen) return null;
   return (
-    <p style={{ margin: '10px 0 0', fontSize: 13, lineHeight: 1.45, color: '#6ee7b7' }}>
+    <p style={{ margin: '10px 0 18px', fontSize: 13, lineHeight: 1.45, color: '#6ee7b7' }}>
       נצרף אתכם לתיק המשפחה הקיים — ההורים והילדים יופיעו יחד באותו מקום.
     </p>
   );

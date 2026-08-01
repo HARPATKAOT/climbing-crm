@@ -19,6 +19,7 @@ import {
   KnownChildPrompt,
   KnownFamilyNote,
   KnownFamilyPrompt,
+  needsFamilyAnswer,
   SignaturePad,
 } from './publicFormKit.jsx';
 import { checkKnownChild, checkKnownFamily, linkFieldsFor } from '../utils/childCheck.js';
@@ -474,7 +475,9 @@ function ShopPurchase({ slug }) {
         <footer className="event-actions">
           {step > 1 && <button type="button" className="event-secondary" onClick={back}>חזרה</button>}
           {step < 4 ? (
-            <button type="button" className="event-primary" onClick={next}>המשך</button>
+            needsFamilyAnswer(families, familyParentId) && step === 1 ? null : (
+              <button type="button" className="event-primary" onClick={next}>המשך</button>
+            )
           ) : (
             <button type="button" className="event-primary" disabled={submitting} onClick={submit}>
               {submitting ? 'מעביר לתשלום...' : `מעבר לתשלום ${formatIls(item.price)}`}

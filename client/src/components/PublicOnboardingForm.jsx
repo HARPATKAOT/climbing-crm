@@ -13,6 +13,7 @@ import {
   KnownChildPrompt,
   KnownFamilyNote,
   KnownFamilyPrompt,
+  needsFamilyAnswer,
 } from './publicFormKit.jsx';
 import { checkKnownChild, checkKnownFamily, linkFieldsFor } from '../utils/childCheck.js';
 import { joinParentName, splitParentName } from '../utils/parentName.js';
@@ -1460,10 +1461,11 @@ export default function PublicOnboardingForm() {
                 onResend={sendOtpCode}
                 onEditPhone={() => setOtp((o) => ({ ...o, stage: 'idle', code: '', error: '' }))}
               />
-            ) : (
+            ) : needsFamilyAnswer(families, familyParentId) ? null : (
               <button
                 type="button"
                 className="event-primary"
+                style={{ marginTop: 8 }}
                 onClick={goNextFromParent}
                 disabled={otp.sending}
               >
