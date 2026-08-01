@@ -15,6 +15,7 @@ import {
 import { rateForRole, amountForWorkRow, workTypeRole } from '../utils/wageRates.js';
 import {
   DEFAULT_ACTIVITY_TYPES, activityTypes, activityTypeMeta, useActivityTypes,
+  fetchActivityTypes, invalidateActivityTypes,
 } from '../utils/activityTypes.js';
 
 /** ברירת המחדל בלבד. הרשימה החיה מגיעה מהשרת דרך `activityTypes()`. */
@@ -918,6 +919,89 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
   );
 }
 
+/**
+ * הוספת סוג פעילות בלי לצאת מהטופס. הסוג נוצר בקטלוג המשותף ונבחר מיד
+ * לאירוע; צבע ושינויים נוספים נעשים במסך ניהול התפקידים וסוגי הפעילות.
+ */
+function NewActivityTypeChip({ disabled = false, onCreated }) {
+  const [open, setOpen] = useState(false);
+  const [label, setLabel] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const create = async () => {
+    const name = label.trim();
+    if (!name || busy) return;
+    setBusy(true);
+    setErr('');
+    try {
+      const res = await fetch('/api/activity-types', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: name }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'ההוספה נכשלה');
+      // המטמון המשותף התיישן — בלעדיו הסוג החדש לא יופיע ביומן עצמו.
+      invalidateActivityTypes();
+      await fetchActivityTypes();
+      setOpen(false);
+      setLabel('');
+      onCreated?.(data.created?.id);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+        style={{
+          padding: '6px 12px',
+          borderRadius: 999,
+          border: '1px dashed var(--border)',
+          background: 'transparent',
+          color: 'var(--text-3)',
+          fontSize: 12,
+          fontWeight: 700,
+          cursor: disabled ? 'default' : 'pointer',
+        }}
+      >
+        + סוג חדש
+      </button>
+    );
+  }
+
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      <input
+        className="input"
+        autoFocus
+        placeholder="שם הסוג"
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); create(); }
+          if (e.key === 'Escape') { setOpen(false); setErr(''); }
+        }}
+        style={{ width: 130, fontSize: 12, padding: '4px 8px' }}
+      />
+      <button type="button" className="btn btn-ghost btn-icon btn-sm" disabled={busy || !label.trim()} onClick={create}>
+        <Check size={14} />
+      </button>
+      <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => { setOpen(false); setErr(''); }}>
+        <X size={14} />
+      </button>
+      {err && <span style={{ fontSize: 11, color: '#FCA5A5' }}>{err}</span>}
+    </span>
+  );
+}
+
 function RegularActivityModal({
   form,
   set,
@@ -1047,6 +1131,10 @@ function RegularActivityModal({
                         </button>
                       );
                     })}
+                    <NewActivityTypeChip
+                      disabled={readOnly}
+                      onCreated={(id) => id && set('type', id)}
+                    />
                   </div>
                 </div>
               )}
@@ -1628,6 +1716,10 @@ function ActivityFormModal({
                     </button>
                   );
                 })}
+                <NewActivityTypeChip
+                  disabled={readOnly}
+                  onCreated={(id) => id && set('type', id)}
+                />
               </div>
             </div>
           )}
