@@ -1,0 +1,614 @@
+{
+  "fetchedAt": "2026-08-01",
+  "source": "Notion — \"עובדים\" (4d576ada-9f25-4263-846a-d4b4a75762b6) + \"הסכמי שכר\" (303aa52d-5a6e-8056-ab1c-f0aa39242fdb)",
+  "note": "צילום מצב של העובדים שסטטוס שלהם בנושן אינו ארכיון/מועמד. סוגי השכר בנושן: הדרכת חוגים→מדריך, הפעלת קיר→מפעיל קיר, בניית מסלולים→בונה מסלולים רמה 1, נסיעות→תשלום נסיעות ליום. 'אירועים' הושמט — לאף עובד לא הוזן בו סכום.",
+  "employees": [
+    {
+      "notionUrl": "https://app.notion.com/0c9e34bedb9447a0ba16f1b38f2993ff",
+      "name": "עומר גזית",
+      "status": "עובד פעיל",
+      "phone": "+972542445979",
+      "email": "gazitomer90@gmail.com",
+      "address": "גמלא 32 בת חפר",
+      "gender": "זכר",
+      "birthDate": "2009-08-06",
+      "idNumber": "218553162",
+      "paymentMethod": "תלוש",
+      "bankAccount": "אמיתי גזית\nבנק לאומי - 10 \n סניף - 706\nמספר חשבון - 1084886",
+      "mobility": false,
+      "notionCerts": [],
+      "notionClass": "מדריך נוער",
+      "notionNotes": "",
+      "rates": [],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": [
+        "form101",
+        "idPhoto"
+      ]
+    },
+    {
+      "notionUrl": "https://app.notion.com/16f5bfe554014e64bd6f7b191a81c6c8",
+      "name": "בר שניר",
+      "status": "עובד פעיל",
+      "phone": "0558865430",
+      "email": "barsnir5@gmail.com",
+      "address": "המייסדים 42 אבן יהודה",
+      "gender": "נקבה",
+      "birthDate": "2005-04-18",
+      "idNumber": "326453701",
+      "paymentMethod": "תלוש",
+      "bankAccount": "12-653-139049",
+      "mobility": true,
+      "notionCerts": [
+        "מדריך טיפוס ספורטיבי"
+      ],
+      "notionClass": "",
+      "notionNotes": "",
+      "rates": [
+        {
+          "role": "מדריך",
+          "mode": "hourly",
+          "amount": 80
+        },
+        {
+          "role": "מפעיל קיר",
+          "mode": "hourly",
+          "amount": 40
+        },
+        {
+          "role": "בונה מסלולים רמה 1",
+          "mode": "hourly",
+          "amount": 50
+        }
+      ],
+      "travelPerDay": 12,
+      "pensionCompany": "אלשולר שחם - פנסיה מקיפה",
+      "pensionNumber": "",
+      "notionFiles": [
+        "form101",
+        "certificates",
+        "contract"
+      ]
+    },
+    {
+      "notionUrl": "https://app.notion.com/1716eac2bffd42508d448f9c3d3c2c94",
+      "name": "עומר בזר",
+      "status": "עובד פעיל",
+      "phone": "+972539304898",
+      "email": "omerbazar1@gmail.com",
+      "address": "צופית 24 עין שריד",
+      "gender": "זכר",
+      "birthDate": "2009-09-17",
+      "idNumber": "218560142",
+      "paymentMethod": "תלוש",
+      "bankAccount": "שם בעל החשבון - עומר בזר\nמספר בנק  - 10\nמספר סניף  -998\nמספר חשבון -  2728350",
+      "mobility": false,
+      "notionCerts": [],
+      "notionClass": "מדריך נוער",
+      "notionNotes": "",
+      "rates": [],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": [
+        "form101"
+      ]
+    },
+    {
+      "notionUrl": "https://app.notion.com/30faa52d5a6e8122beb3e4c20dcbb7ad",
+      "name": "חגי כץ",
+      "status": "עובד פעיל",
+      "phone": "+972547484394",
+      "email": "Hagaikatz123@gmail.com",
+      "address": "ש״י עגנון 30 הוד השרון",
+      "gender": "זכר",
+      "birthDate": "2000-06-17",
+      "idNumber": "318557477",
+      "paymentMethod": "תלוש",
+      "bankAccount": "בנק - הבינלאומי\nסניף - 135\nחשבון - 063334",
+      "mobility": true,
+      "notionCerts": [],
+      "notionClass": "",
+      "notionNotes": "",
+      "rates": [
+        {
+          "role": "מדריך",
+          "mode": "hourly",
+          "amount": 75
+        },
+        {
+          "role": "מפעיל קיר",
+          "mode": "hourly",
+          "amount": 40
+        },
+        {
+          "role": "בונה מסלולים רמה 1",
+          "mode": "hourly",
+          "amount": 50
+        }
+      ],
+      "travelPerDay": 31,
+      "pensionCompany": "הראל",
+      "pensionNumber": "",
+      "notionFiles": [
+        "form101",
+        "idPhoto",
+        "police",
+        "contract"
+      ]
+    },
+    {
+      "notionUrl": "https://app.notion.com/310aa52d5a6e8157bcd9eea243354b0f",
+      "name": "ליהוא צורי",
+      "status": "עובד פעיל",
+      "phone": "+972523894491",
+      "email": "Leehu.tsuri@gmail.com",
+      "address": "מושב משמרת",
+      "gender": "זכר",
+      "birthDate": "2004-03-25",
+      "idNumber": "324185842",
+      "paymentMethod": "חשבונית",
+      "bankAccount": "29565691",
+      "mobility": true,
+      "notionCerts": [],
+      "notionClass": "",
+      "notionNotes": "מנהל סושיאל",
+      "rates": [],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": []
+    },
+    {
+      "notionUrl": "https://app.notion.com/317aa52d5a6e816ca7b2db22c25ea7b3",
+      "name": "עידן פרלמן",
+      "status": "עובד פעיל",
+      "phone": "0545401166",
+      "email": "Idan0761@gmail.com",
+      "address": "הר סיני רעננה",
+      "gender": "זכר",
+      "birthDate": "2000-08-12",
+      "idNumber": "322594607",
+      "paymentMethod": "חשבונית",
+      "bankAccount": "בנק הפועלים-12 \nסניף 610\nמספר חשבון 006748",
+      "mobility": true,
+      "notionCerts": [
+        "מפעיל קיר",
+        "מדריך טיפוס ספורטיבי"
+      ],
+      "notionClass": "",
+      "notionNotes": "",
+      "rates": [
+        {
+          "role": "מדריך",
+          "mode": "hourly",
+          "amount": 90
+        },
+        {
+          "role": "מפעיל קיר",
+          "mode": "hourly",
+          "amount": 52
+        },
+        {
+          "role": "בונה מסלולים רמה 1",
+          "mode": "hourly",
+          "amount": 65
+        }
+      ],
+      "travelPerDay": 26,
+      "pensionCompany": "מיטב דש - פנסיה מקיפה",
+      "pensionNumber": "",
+      "notionFiles": [
+        "idPhoto",
+        "certificates",
+        "police",
+        "contract"
+      ]
+    },
+    {
+      "notionUrl": "https://app.notion.com/391aa52d5a6e811089cfeb94bfa616a6",
+      "name": "רז מרק",
+      "status": "עובד פעיל",
+      "phone": "+972504767601",
+      "email": "razmark175@gmail.com",
+      "address": "האהבה 19 תל מונד",
+      "gender": "זכר",
+      "birthDate": "2006-06-02",
+      "idNumber": "215756578",
+      "paymentMethod": "תלוש",
+      "bankAccount": "38322135 סניף 998 בנק  10 מספר חשבון",
+      "mobility": false,
+      "notionCerts": [],
+      "notionClass": "",
+      "notionNotes": "",
+      "rates": [
+        {
+          "role": "בונה מסלולים רמה 1",
+          "mode": "hourly",
+          "amount": 50
+        }
+      ],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": [
+        "form101",
+        "idPhoto"
+      ]
+    },
+    {
+      "notionUrl": "https://app.notion.com/6d896ba060054118aa6286495c6e8b90",
+      "name": "אוריאן קריאף",
+      "status": "עובד פעיל",
+      "phone": "0542066592",
+      "email": "oryankr10@gmail.com",
+      "address": "אבן יהודה",
+      "gender": "זכר",
+      "birthDate": "1992-12-01",
+      "idNumber": "308272517",
+      "paymentMethod": "תלוש",
+      "bankAccount": "מס בנק: 20 מזרחי טפחות\nמס סניף:669\nמס חשבון:264118",
+      "mobility": false,
+      "notionCerts": [
+        "מפעיל קיר"
+      ],
+      "notionClass": "",
+      "notionNotes": "",
+      "rates": [
+        {
+          "role": "מדריך",
+          "mode": "hourly",
+          "amount": 95
+        },
+        {
+          "role": "מפעיל קיר",
+          "mode": "hourly",
+          "amount": 40
+        },
+        {
+          "role": "בונה מסלולים רמה 1",
+          "mode": "hourly",
+          "amount": 65
+        }
+      ],
+      "travelPerDay": 12,
+      "pensionCompany": "מיטב דש - פנסיה מקיפה",
+      "pensionNumber": "",
+      "notionFiles": [
+        "form101",
+        "idPhoto",
+        "certificates"
+      ]
+    },
+    {
+      "notionUrl": "https://app.notion.com/8b8f8af6b17543e5ac8c6a3d667c9412",
+      "name": "מאיה סטרובינסקי",
+      "status": "עובד פעיל",
+      "phone": "+972504584040",
+      "email": "mayast2010@gmail.com",
+      "address": "תל מונד העפרוני 17",
+      "gender": "נקבה",
+      "birthDate": "2010-05-05",
+      "idNumber": "219213303",
+      "paymentMethod": "תלוש",
+      "bankAccount": "מאיה סטורובינסקי \nמספר בנק:10\nסניף:835\nמספר חשבון:005273/63",
+      "mobility": false,
+      "notionCerts": [],
+      "notionClass": "מדריך נוער",
+      "notionNotes": "",
+      "rates": [],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": [
+        "form101"
+      ]
+    },
+    {
+      "notionUrl": "https://app.notion.com/a27bc969aec54872a4eb5056e04c0b55",
+      "name": "שני שינברג באדר",
+      "status": "עובד פעיל",
+      "phone": "+972548927050",
+      "email": "shani.schonberg.b@gmail.com",
+      "address": "תל מונד, היסמין 47",
+      "gender": "נקבה",
+      "birthDate": "2010-03-07",
+      "idNumber": "329753933",
+      "paymentMethod": "תלוש",
+      "bankAccount": "תום שינברג ו/או יערה באדר\nבנק הפועלים 12\nסניף 661\nמספר חשבון 492877",
+      "mobility": false,
+      "notionCerts": [],
+      "notionClass": "מדריך נוער",
+      "notionNotes": "",
+      "rates": [],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": [
+        "form101"
+      ]
+    },
+    {
+      "notionUrl": "https://app.notion.com/ac139769f6ae445493bd12ad43ff8b11",
+      "name": "אלמה ורדימון",
+      "status": "עובד פעיל",
+      "phone": "+972515577066",
+      "email": "vardimon.alma@gmail.com",
+      "address": "ההדס 31",
+      "gender": "נקבה",
+      "birthDate": "2009-07-23",
+      "idNumber": "218527257",
+      "paymentMethod": "תלוש",
+      "bankAccount": "שם בעל החשבון - דנאור ומעיינה ורדימון\nמספר בנק  -10\nמספר סניף  -678\nמספר חשבון -08249474",
+      "mobility": false,
+      "notionCerts": [],
+      "notionClass": "מדריך נוער",
+      "notionNotes": "",
+      "rates": [],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": [
+        "form101"
+      ]
+    },
+    {
+      "notionUrl": "https://app.notion.com/adc35454e7764bb09f07ebaee3b01532",
+      "name": "ליאן ון לואן",
+      "status": "עובד פעיל",
+      "phone": "+972542989334",
+      "email": "zelvanleeuwen@gmail.com",
+      "address": "שנהב 16, אבן יהודה",
+      "gender": "נקבה",
+      "birthDate": "2008-12-13",
+      "idNumber": "217774066",
+      "paymentMethod": "תלוש",
+      "bankAccount": "גיא ון לואן\nבנק לאומי -10\nסניף - 835\nחשבון - 4242753",
+      "mobility": false,
+      "notionCerts": [],
+      "notionClass": "מדריך נוער",
+      "notionNotes": "",
+      "rates": [],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": [
+        "form101",
+        "idPhoto"
+      ]
+    },
+    {
+      "notionUrl": "https://app.notion.com/ecb05d7895624255933a04c6885adfca",
+      "name": "אילי אברמוביץ",
+      "status": "עובד פעיל",
+      "phone": "+972528820697",
+      "email": "ilayabramovich8@gmail.com",
+      "address": "מצדה 22 תל מונד",
+      "gender": "זכר",
+      "birthDate": "2008-06-29",
+      "idNumber": "331973248",
+      "paymentMethod": "תלוש",
+      "bankAccount": "שם בעל החשבון - אילי אברמוביץ\nמספר בנק  - 10\nמספר סניף  - 601\nמספר חשבון - 11085140",
+      "mobility": false,
+      "notionCerts": [
+        "בונה מסלולים רמה 1"
+      ],
+      "notionClass": "",
+      "notionNotes": "",
+      "rates": [
+        {
+          "role": "מדריך",
+          "mode": "hourly",
+          "amount": 60
+        },
+        {
+          "role": "מפעיל קיר",
+          "mode": "hourly",
+          "amount": 40
+        },
+        {
+          "role": "בונה מסלולים רמה 1",
+          "mode": "hourly",
+          "amount": 50
+        }
+      ],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": [
+        "form101",
+        "idPhoto",
+        "certificates"
+      ]
+    },
+    {
+      "notionUrl": "https://app.notion.com/b7f3450a6763446fb9302d605da22e34",
+      "name": "יפתח גרנות",
+      "status": "עובד זמני",
+      "phone": "",
+      "email": "",
+      "address": "",
+      "gender": "זכר",
+      "birthDate": "",
+      "idNumber": "",
+      "paymentMethod": "",
+      "bankAccount": "",
+      "mobility": false,
+      "notionCerts": [],
+      "notionClass": "",
+      "notionNotes": "",
+      "rates": [],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": []
+    },
+    {
+      "notionUrl": "https://app.notion.com/34faa52d5a6e81a0b9ebcaddd00d5d2a",
+      "name": "איתם קרמר",
+      "status": "סנפלינג",
+      "phone": "",
+      "email": "eitamkrem@gmail.com",
+      "address": "גולן 102, בת חפר",
+      "gender": "זכר",
+      "birthDate": "1997-07-12",
+      "idNumber": "318458585",
+      "paymentMethod": "תלוש",
+      "bankAccount": "01596263",
+      "mobility": true,
+      "notionCerts": [
+        "מדריך סנפלינג"
+      ],
+      "notionClass": "",
+      "notionNotes": "",
+      "rates": [],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": [
+        "idPhoto",
+        "certificates"
+      ]
+    },
+    {
+      "notionUrl": "https://app.notion.com/35daa52d5a6e801f9392ccb70e5ed2f4",
+      "name": "תומר מור חיים",
+      "status": "סנפלינג",
+      "phone": "",
+      "email": "",
+      "address": "",
+      "gender": "",
+      "birthDate": "",
+      "idNumber": "",
+      "paymentMethod": "",
+      "bankAccount": "",
+      "mobility": false,
+      "notionCerts": [],
+      "notionClass": "",
+      "notionNotes": "",
+      "rates": [],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": []
+    },
+    {
+      "notionUrl": "https://app.notion.com/35daa52d5a6e806aa5d7f7ab9c883650",
+      "name": "אביאל שמש",
+      "status": "סנפלינג",
+      "phone": "",
+      "email": "",
+      "address": "",
+      "gender": "",
+      "birthDate": "",
+      "idNumber": "",
+      "paymentMethod": "",
+      "bankAccount": "",
+      "mobility": false,
+      "notionCerts": [],
+      "notionClass": "",
+      "notionNotes": "",
+      "rates": [],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": []
+    },
+    {
+      "notionUrl": "https://app.notion.com/7c5a29943d9a48208b8da755a4bf96dd",
+      "name": "בר שמש",
+      "status": "סנפלינג",
+      "phone": "0558838518",
+      "email": "Shemesh399@gmail.com",
+      "address": "גבעת אולגה",
+      "gender": "זכר",
+      "birthDate": "1999-12-27",
+      "idNumber": "206004194",
+      "paymentMethod": "",
+      "bankAccount": "בנק מסד -46\n סניף-501 \nמספר חשבון-372806",
+      "mobility": false,
+      "notionCerts": [],
+      "notionClass": "",
+      "notionNotes": "",
+      "rates": [],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": [
+        "form101"
+      ]
+    },
+    {
+      "notionUrl": "https://app.notion.com/333aa52d5a6e803e8a3ceb8b4c6fa8c0",
+      "name": "יונתן ברזילי",
+      "status": "עובד פעיל",
+      "phone": "",
+      "email": "",
+      "address": "",
+      "gender": "זכר",
+      "birthDate": "2011-03-05",
+      "idNumber": "220424105",
+      "paymentMethod": "",
+      "bankAccount": "",
+      "mobility": false,
+      "notionCerts": [],
+      "notionClass": "מדריך נוער",
+      "notionNotes": "",
+      "rates": [],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": []
+    },
+    {
+      "notionUrl": "https://app.notion.com/2af7a253dcb7454b922c27f541ea9f05",
+      "name": "דלק איל",
+      "status": "מנהל",
+      "phone": "0508862878",
+      "email": "dalakeyal@gmail.com",
+      "address": "תנובות",
+      "gender": "זכר",
+      "birthDate": "1986-04-10",
+      "idNumber": "032702656",
+      "paymentMethod": "",
+      "bankAccount": "",
+      "mobility": false,
+      "notionCerts": [
+        "מדריך סנפלינג",
+        "מפעיל קיר",
+        "מדריך טיפוס ספורטיבי",
+        "מורה דרך",
+        "בונה מסלולים רמה 1",
+        "בונה מסלולים רמה 2"
+      ],
+      "notionClass": "מדריך בוגר",
+      "notionNotes": "",
+      "rates": [
+        {
+          "role": "מדריך",
+          "mode": "hourly",
+          "amount": 80
+        },
+        {
+          "role": "מפעיל קיר",
+          "mode": "hourly",
+          "amount": 40
+        },
+        {
+          "role": "בונה מסלולים רמה 1",
+          "mode": "hourly",
+          "amount": 50
+        }
+      ],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": [
+        "idPhoto",
+        "certificates"
+      ]
+    }
+  ]
+}
