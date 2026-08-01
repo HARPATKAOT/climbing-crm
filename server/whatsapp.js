@@ -191,6 +191,10 @@ export function extractAgeYears(text) {
 export function gradeLettersFromAge(age) {
   const n = Number(age);
   if (!Number.isFinite(n)) return [];
+  // Below first grade there is no band to guess. A toddler on the family card
+  // used to resolve to כיתה א׳, so "יש לכם חוג לילדים?" was answered with the
+  // first-grade schedule instead of asking which grade.
+  if (n < 6) return [];
   if (n <= 7) return ['א', 'ב'];
   if (n <= 9) return ['ג', 'ד'];
   if (n <= 12) return ['ה', 'ו'];
@@ -572,6 +576,17 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
   // Trainer / group size come before the schedule branch — "כמה ילדים בקבוצה"
   // reads as a schedule question otherwise.
   // Staff headcount ("כמה מדריכים בצוות") is not in the CRM — leave to the model.
+  // An age with no matching band would otherwise loop: the bot asks for a grade
+  // or age, the parent repeats the age, and nothing moves.
+  const statedAge = extractAgeYears(raw);
+  if (statedAge != null && statedAge < 6) {
+    return {
+      text: 'לגיל הזה אין לי קבוצה מתאימה במערכת 🙏\nמעביר לצוות שיבדוק מה מתאים.',
+      confidence: 'high',
+      handoff: true,
+    };
+  }
+
   // A complaint must never be answered with a class question — hand it to the
   // model, whose rules send complaints to the team.
   if (soundsLikeComplaint(raw)) {

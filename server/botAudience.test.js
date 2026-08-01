@@ -46,6 +46,15 @@ test('the bot asking "באיזו כיתה הילד/ה" is not itself a grade', (
   assert.deepEqual(resolveAudienceFilter('כיתה ה', []).letters, ['ה']);
 });
 
+test('a toddler on the family card resolves to no grade at all', () => {
+  assert.deepEqual(gradeLettersFromAge(1), []);
+  assert.deepEqual(gradeLettersFromAge(5), []);
+  assert.deepEqual(gradeLettersFromAge(6), ['א', 'ב']);
+  // A baby's birth date on the card must not answer "יש לכם חוג לילדים?"
+  const babyCard = [{ name: 'שקד', birthDate: new Date(Date.now() - 640 * 864e5).toISOString().slice(0, 10) }];
+  assert.deepEqual(resolveAudienceFilter('יש לכם חוג לילדים?', babyCard).letters, []);
+});
+
 test('a bare grade answer inherits the previous question', () => {
   assert.equal(isBareAudienceAnswer('כיתה ג'), true);
   assert.equal(isBareAudienceAnswer('בן 8'), true);
