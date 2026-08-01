@@ -807,10 +807,12 @@ export default function PublicOnboardingForm() {
 
   const proceedToStep2 = () => {
     if (isAdultSelf) {
+      // Same person on both steps — carry the ID already typed, like the name.
       setChildren([{
         ...emptyChild(questions),
         ...(children[0] || {}),
         name: parentFullName(),
+        idNumber: parent.idNumber.trim() || children[0]?.idNumber || '',
         type: 'adult',
       }]);
     }
@@ -1447,7 +1449,11 @@ export default function PublicOnboardingForm() {
               chosenId={familyParentId}
               onChoose={setFamilyParentId}
             />
-            <KnownFamilyNote families={families} chosenId={familyParentId} />
+            <KnownFamilyNote
+              families={families}
+              chosenId={familyParentId}
+              onCancel={() => setFamilyParentId(null)}
+            />
 
             {error && <ErrorBox message={error} />}
 

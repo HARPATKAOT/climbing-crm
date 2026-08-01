@@ -372,7 +372,11 @@ function ShopPurchase({ slug }) {
               chosenId={familyParentId}
               onChoose={setFamilyParentId}
             />
-            <KnownFamilyNote families={families} chosenId={familyParentId} />
+            <KnownFamilyNote
+              families={families}
+              chosenId={familyParentId}
+              onCancel={() => setFamilyParentId(null)}
+            />
           </section>
         )}
 

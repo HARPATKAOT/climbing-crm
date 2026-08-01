@@ -452,7 +452,11 @@ export default function PublicActivityRegistration() {
               chosenId={familyParentId}
               onChoose={setFamilyParentId}
             />
-            <KnownFamilyNote families={families} chosenId={familyParentId} />
+            <KnownFamilyNote
+              families={families}
+              chosenId={familyParentId}
+              onCancel={() => setFamilyParentId(null)}
+            />
 
             <h2 style={{ marginTop: 28 }}>רשימות דיוור</h2>
             <p className="event-hint">אפשר לסמן רשימות שמעניינות אתכם — חוגים, טיולים, אירועים ועוד.</p>

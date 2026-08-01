@@ -252,7 +252,11 @@ export function useFamilyMatch(lastName, phone, { skip = false } = {}) {
   const checkKey = `${String(lastName || '').trim()}|${String(phone || '').replace(/\D/g, '')}`;
 
   const setFamilyParentId = (id) => {
-    answeredForKey.current = checkKey;
+    if (id === null || id === undefined) {
+      answeredForKey.current = null;
+    } else {
+      answeredForKey.current = checkKey;
+    }
     setFamilyParentIdState(id);
   };
 
@@ -300,20 +304,44 @@ export function useFamilyMatch(lastName, phone, { skip = false } = {}) {
 }
 
 /** Confirmation line shown once a family was joined or declined. */
-export function KnownFamilyNote({ families = [], chosenId }) {
+export function KnownFamilyNote({ families = [], chosenId, onCancel }) {
   if (chosenId === '') {
     return (
-      <p style={{ margin: '10px 0 18px', fontSize: 13, lineHeight: 1.45, color: '#fca5a5' }}>
-        נפתח תיק משפחה חדש.
-      </p>
+      <div style={{ margin: '10px 0 18px' }}>
+        <p style={{ margin: '0 0 8px', fontSize: 13, lineHeight: 1.45, color: '#fca5a5' }}>
+          נפתח תיק משפחה חדש.
+        </p>
+        {onCancel ? (
+          <button
+            type="button"
+            className="event-link-button"
+            style={{ color: '#94a3b8', fontSize: 13, fontWeight: 700, padding: 0 }}
+            onClick={onCancel}
+          >
+            שינוי בחירה
+          </button>
+        ) : null}
+      </div>
     );
   }
   const chosen = families.find((family) => family.parent_id === chosenId);
   if (!chosen) return null;
   return (
-    <p style={{ margin: '10px 0 18px', fontSize: 13, lineHeight: 1.45, color: '#6ee7b7' }}>
-      נצרף אתכם לתיק המשפחה הקיים — ההורים והילדים יופיעו יחד באותו מקום.
-    </p>
+    <div style={{ margin: '10px 0 18px' }}>
+      <p style={{ margin: '0 0 8px', fontSize: 13, lineHeight: 1.45, color: '#6ee7b7' }}>
+        נצרף אתכם למשפחה של {chosen.parent_name} — ההורים והילדים יופיעו יחד באותו מקום.
+      </p>
+      {onCancel ? (
+        <button
+          type="button"
+          className="event-link-button"
+          style={{ color: '#fca5a5', fontSize: 13, fontWeight: 700, padding: 0 }}
+          onClick={onCancel}
+        >
+          ביטול שיוך
+        </button>
+      ) : null}
+    </div>
   );
 }
 
