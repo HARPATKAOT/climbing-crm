@@ -104,8 +104,26 @@ export function knownParentGreeting(parent) {
 
 export function isLowIntentGreeting(text) {
   const t = String(text || '').trim();
-  if (!t || t.length > 40) return false;
-  return /^(?:מה\s*קורה|מה\s*נשמע|היי+|הי+|שלום|בוקר\s*טוב|ערב\s*טוב|צהריים\s*טובים|hey|hi|hello)[\s!?.]*$/i.test(t);
+  if (!t || t.length > 50) return false;
+  if (!/(?:היי+|הי+|שלום|\bhey\b|\bhi\b|\bhello\b|מה\s*קורה|מה\s*נשמע|בוקר\s*טוב|ערב\s*טוב|צהריים\s*טובים)/i.test(t)) {
+    return false;
+  }
+  // After stripping greetings + punctuation, nothing of substance may remain.
+  // Allows "היי, מה קורה ?" / "שלום מה נשמע".
+  const leftover = t
+    .replace(/מה\s*קורה/gi, ' ')
+    .replace(/מה\s*נשמע/gi, ' ')
+    .replace(/בוקר\s*טוב/gi, ' ')
+    .replace(/ערב\s*טוב/gi, ' ')
+    .replace(/צהריים\s*טובים/gi, ' ')
+    .replace(/\bhello\b/gi, ' ')
+    .replace(/\bhey\b/gi, ' ')
+    .replace(/\bhi\b/gi, ' ')
+    .replace(/שלום/gi, ' ')
+    .replace(/היי+/gi, ' ')
+    .replace(/הי+/gi, ' ')
+    .replace(/[\s,!?.׃…]+/g, '');
+  return leftover.length === 0;
 }
 
 const BRANDED_TEXT_KEYS = [

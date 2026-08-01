@@ -1207,6 +1207,13 @@ export const whatsappService = {
         const parsed = parseAiReply(geminiText, settings);
         const unsure = parsed.unsure || detectUnsureHeuristic(parsed.text);
         if (unsure) {
+          // Never "לא הבנתי" a plain hello — greet instead.
+          if (isLowIntentGreeting(incomingText)) {
+            const greet = isIdentifiedParent(parent)
+              ? knownParentGreeting(parent)
+              : (settings.aiGreetingMenu || DEFAULT_BOT_SETTINGS.aiGreetingMenu);
+            return { text: clipReply(greet, settings.aiMaxReplyChars), confidence: 'high' };
+          }
           const resolved = resolveUnsureReply(phone, settings, { incomingText });
           return {
             text: clipReply(resolved.text, settings.aiMaxReplyChars),
@@ -1221,6 +1228,13 @@ export const whatsappService = {
     }
 
     if (quick.skipMenu && isIdentifiedParent(parent)) {
+      if (isLowIntentGreeting(incomingText)) {
+        return {
+          text: clipReply(knownParentGreeting(parent), settings.aiMaxReplyChars),
+          confidence: 'high',
+          skipMenu: true,
+        };
+      }
       const resolved = resolveUnsureReply(phone, settings, { incomingText });
       return {
         text: clipReply(resolved.text || knownParentGreeting(parent), settings.aiMaxReplyChars),
