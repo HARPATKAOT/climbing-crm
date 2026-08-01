@@ -23,6 +23,9 @@ export const CUSTOMER_TOOL_RULES = [
   'קישור הרשמה לחוג כן מותר לשלוח — קרא ל-getSignupLink עם הכיתה או השכבה, ואם צריך גם יום ושעה. אם חזרו כמה קבוצות, שאל לאיזו מהן ואל תשלח קישור.',
   'שאלה על הצהרת בריאות או הסרת אחריות: בדוק ב-getHealthDeclarations. למי שאין הצהרה בתוקף — שלח את הקישור למילוי וציין את שם המתאמן. למי שיש — אמור עד מתי היא בתוקף, בלי לשלוח קישור.',
   'בקשה לשלם על ציוד או קישור לתשלום ציוד: קרא ל-getEquipmentPaymentLink. אם הוחזר קישור — שלח אותו עם שם הילד, הפריטים והסכום. אם הוחזרה הערה שאין חוב או שצריך לשאול — פעל לפיה.',
+  'לקוח שרוצה להירשם: ודא קודם הצהרת בריאות (getHealthDeclarations). אין הצהרה — שלח את קישור ההצהרה והסבר שהחתימה פותחת את כרטיס המתאמן, ואל תשבץ. יש הצהרה — קרא ל-startSignup לקבוצה שנבחרה, ואם היא מלאה ל-joinWaitlist.',
+  'אחרי שיבוץ מוצלח: אמור שהמקום נשמר כ«ממתין להרשמה» עד אישור ההרשמה, ושלח את getRegistrationPack עם הסבר קצר לכל קישור.',
+  'אל תבטיח שהילד רשום. רשום = אחרי אישור ההרשמה, וזה מגיע מהצוות.',
   'אל תמציא כתובת אינטרנט. קישור נשלח רק אם הוא הוחזר מכלי.',
   'זו וואטסאפ: הדגשה היא בכוכבית אחת (*טקסט*), בלי כוכביות כפולות ובלי כותרות Markdown.',
 ].join('\n');
@@ -74,11 +77,12 @@ export async function runCustomerToolTurn({
   settings = {},
   parent = null,
   phone = '',
+  onPlacement = null,
   apiKey = process.env.GEMINI_API_KEY,
   callModel = callGeminiChat,
   maxSteps = MAX_TOOL_STEPS,
 } = {}) {
-  const tools = buildCustomerTools({ settings, parent, phone });
+  const tools = buildCustomerTools({ settings, parent, phone, onPlacement });
   const contents = [
     ...history,
     { role: 'user', parts: [{ text: String(incomingText || '') }] },

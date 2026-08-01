@@ -935,6 +935,56 @@ export async function notifyStaffOfHandoff({
   return { sent };
 }
 
+/**
+ * The bot placed a trainee. The team is told at once — a soft hold is easy to
+ * undo, but only if somebody knows it happened.
+ */
+export async function notifyStaffOfPlacement({
+  settings,
+  parent,
+  phone,
+  student,
+  group,
+  kind = 'pending_signup',
+  isSimulator = false,
+} = {}) {
+  if (isSimulator) return { sent: 0, skipped: true, reason: 'simulator' };
+  const s = mergeBotSettings(settings);
+  const staffPhones = String(s.aiStaffPhones || '')
+    .split(/[,|\n]+/)
+    .map((v) => String(v || '').trim())
+    .filter(Boolean);
+  if (!staffPhones.length) return { sent: 0, skipped: true, reason: 'no_staff_phones' };
+
+  const customerPhone = normalizeWaPhone(phone) || phone;
+  const dayLabel = DAY_NAMES[Number(group?.day)] || String(group?.day ?? '');
+  const body = [
+    '🧗 שיבוץ מהבוט',
+    `מתאמן: ${student?.name || '—'}`,
+    `הורה: ${parent?.name || '—'} · ${customerPhone || '—'}`,
+    `קבוצה: ${group?.ageCategory || ''} · יום ${dayLabel} ${group?.time || ''}`.trim(),
+    kind === 'waitlist' ? 'סטטוס: רשימת המתנה' : 'סטטוס: ממתין להרשמה (לא תופס מקום)',
+    '← לבדוק מול המתנ״ס ולעדכן כשמתקבל אישור',
+  ].filter(Boolean).join('\n');
+
+  let sent = 0;
+  for (const raw of staffPhones) {
+    const staffPhone = normalizeWaPhone(raw) || raw;
+    if (!staffPhone) continue;
+    if (customerPhone && phonesMatch(staffPhone, customerPhone)) continue;
+    try {
+      const result = await whatsappService.sendTextMessage(staffPhone, body, false, {
+        source: 'staff_notify',
+        clip: false,
+      });
+      if (result?.success) sent += 1;
+    } catch (err) {
+      console.error('Staff placement notify failed:', err.message);
+    }
+  }
+  return { sent };
+}
+
 async function callGeminiReply(
   systemPrompt,
   crmText,
@@ -1399,6 +1449,17 @@ export const whatsappService = {
         settings,
         parent,
         phone,
+        // A placement the bot makes is reversible, but only if the team hears
+        // about it the moment it happens.
+        onPlacement: ({ student, group, kind }) => notifyStaffOfPlacement({
+          settings,
+          parent,
+          phone,
+          student,
+          group,
+          kind,
+          isSimulator: !!context.isSimulator,
+        }),
         apiKey,
       });
       if (turn.text) {
@@ -1807,7 +1868,7 @@ export const whatsappService = {
     }
 
     // Interactive greeting for brand-new leads with low-intent first message
-    const aiResult = await whatsappService.generateAIResponse(text, { phone: normalizedPhone, parent, students });
+    const aiResult = await whatsappService.generateAIResponse(text, { phone: normalizedPhone, parent, students, isSimulator });
     if (aiResult.handoff) {
       await pauseBotForPhone(normalizedPhone, settings.aiPauseMinutesAfterHuman, { reason: 'handoff' });
       // Prefer the model's natural wording; canned ack only when empty.

@@ -121,7 +121,7 @@ test('history rows become model/user turns', () => {
   assert.deepEqual(contents.map((c) => c.role), ['user', 'model']);
 });
 
-test('the tools offered to the model are facts and links, never sends or charges', () => {
+test('the tools offered to the model are facts, links and placements — never sends or charges', () => {
   const names = CUSTOMER_TOOL_DECLARATIONS.map((d) => d.name).sort();
   assert.deepEqual(names, [
     'getEquipmentPaymentLink',
@@ -130,9 +130,18 @@ test('the tools offered to the model are facts and links, never sends or charges
     'getHealthDeclarations',
     'getOpeningHours',
     'getPrices',
+    'getRegistrationPack',
     'getSignupLink',
+    'joinWaitlist',
     'listClasses',
+    'startSignup',
   ]);
+  // The two writing tools must name the child they act on, so the bot can never
+  // place "somebody" from the card.
+  for (const name of ['startSignup', 'joinWaitlist']) {
+    const decl = CUSTOMER_TOOL_DECLARATIONS.find((d) => d.name === name);
+    assert.deepEqual(decl.parameters.required, ['childName']);
+  }
   // A tool may hand over a link, but never message anyone, remove data or take
   // money — those stay with the team.
   assert.equal(names.some((n) => /send|delete|remove|charge|refund|cancel/i.test(n)), false);

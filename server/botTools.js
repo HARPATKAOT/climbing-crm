@@ -119,6 +119,57 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
     },
   },
   {
+    name: 'startSignup',
+    description:
+      'משבץ מתאמן שכבר חתם הצהרת בריאות לקבוצה, כשיבוץ רך בסטטוס «ממתין להרשמה» '
+      + 'עד שמתקבל אישור ההרשמה. השיבוץ אינו תופס מקום בקבוצה. חובה שם ילד וקבוצה '
+      + 'מדויקת. בלי הצהרה חתומה אי אפשר לשבץ.',
+    parameters: {
+      type: 'object',
+      properties: {
+        childName: { type: 'string', description: 'שם הילד כפי שמופיע בכרטיס' },
+        grade: { type: 'string', description: 'אות כיתה: א ב ג ד ה או ו' },
+        band: { type: 'string', description: 'שכבה שאינה כיתה: בוגרים / תיכון / חטיבה' },
+        day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת' },
+        time: { type: 'string', description: 'שעת הקבוצה, למשל 15:30' },
+      },
+      required: ['childName'],
+    },
+  },
+  {
+    name: 'joinWaitlist',
+    description:
+      'משבץ מתאמן שכבר חתם הצהרה לרשימת ההמתנה של קבוצה מלאה. אותם כללים כמו '
+      + 'בשיבוץ רגיל: שם ילד וקבוצה מדויקת.',
+    parameters: {
+      type: 'object',
+      properties: {
+        childName: { type: 'string', description: 'שם הילד כפי שמופיע בכרטיס' },
+        grade: { type: 'string', description: 'אות כיתה: א ב ג ד ה או ו' },
+        band: { type: 'string', description: 'שכבה שאינה כיתה' },
+        day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת' },
+        time: { type: 'string', description: 'שעת הקבוצה' },
+      },
+      required: ['childName'],
+    },
+  },
+  {
+    name: 'getRegistrationPack',
+    description:
+      'שלושת הקישורים להשלמת הרשמה בסדר הנכון — הצהרת בריאות, הרשמה לקבוצה, '
+      + 'ותשלום ציוד — עם סימון מה כבר הושלם.',
+    parameters: {
+      type: 'object',
+      properties: {
+        childName: { type: 'string', description: 'שם הילד' },
+        grade: { type: 'string', description: 'אות כיתה לקישור ההרשמה' },
+        band: { type: 'string', description: 'שכבה לקישור ההרשמה' },
+        day: { type: 'integer', description: 'יום בשבוע של הקבוצה' },
+        time: { type: 'string', description: 'שעת הקבוצה' },
+      },
+    },
+  },
+  {
     name: 'getFamilyCard',
     description:
       'מה שיש במערכת על הלקוח הזה: שם, והילדים הרשומים עם השכבה שלהם. '
@@ -162,12 +213,86 @@ function selectGroups({ grade = '', band = '', day = null } = {}) {
   return groups;
 }
 
+function describeGroup(group) {
+  const day = DAY_NAMES[Number(group?.day)] || String(group?.day ?? '');
+  return `${group?.ageCategory || ''} · יום ${day} ${group?.time || ''}`.trim();
+}
+
+/** Exactly one group, or a note saying what the customer still has to choose. */
+function pickSingleGroup({ grade, band, day, time } = {}) {
+  if (!String(grade || '').trim() && !String(band || '').trim()) {
+    return { error: 'חסר לאיזו כיתה או שכבה — יש לשאול את הלקוח' };
+  }
+  let groups = selectGroups({ grade, band, day });
+  const wantedTime = String(time || '').trim();
+  if (wantedTime) {
+    const exact = groups.filter((g) => String(g.time || '').trim() === wantedTime);
+    if (exact.length) groups = exact;
+  }
+  if (!groups.length) return { error: 'אין קבוצה מתאימה במערכת — יש להעביר לצוות' };
+  if (groups.length > 1) {
+    return {
+      error: 'יותר מקבוצה אחת מתאימה — יש לשאול לאיזו',
+      קבוצות_אפשריות: groups.map((g) => ({
+        שכבה: g.ageCategory || '',
+        יום: DAY_NAMES[Number(g.day)] || String(g.day ?? ''),
+        שעה: g.time || '',
+      })),
+    };
+  }
+  return { group: groups[0] };
+}
+
+/**
+ * A trainee record is created by signing the health declaration, never by the
+ * bot — so any placement needs an existing child who already has one. Without a
+ * declaration the answer is the form, not a placement.
+ */
+function requireDeclaredChild(parent, childName) {
+  const kids = parent ? studentsForParent(parent) : [];
+  if (!kids.length) {
+    return {
+      error: 'אין מתאמן בכרטיס — יש לשלוח קודם את קישור הצהרת הבריאות, החתימה היא שיוצרת את המתאמן',
+      צריך_הצהרה: true,
+    };
+  }
+  const named = String(childName || '').trim();
+  const matches = named
+    ? kids.filter((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
+    : kids;
+  if (!matches.length) return { error: `אין בכרטיס מתאמן בשם ${named} — יש לשאול את הלקוח` };
+  if (matches.length > 1) {
+    return {
+      error: 'יש כמה ילדים מתאימים — יש לשאול על מי מדובר',
+      ילדים: matches.map((s) => s.name || ''),
+    };
+  }
+  const student = matches[0];
+  if (!findLatestValidDeclaration(db, { studentId: student.id })) {
+    return {
+      error: `ל${student.name || 'מתאמן'} אין הצהרת בריאות בתוקף — קודם חותמים, ורק אז משבצים`,
+      צריך_הצהרה: true,
+    };
+  }
+  return { student };
+}
+
 /**
  * Every tool returns plain data. Formatting is the model's job — what must not
  * be the model's job is the number itself.
+ *
+ * `onPlacement` lets the caller tell the team what the bot just did; the tools
+ * themselves never send a message.
  */
-export function buildCustomerTools({ settings = {}, parent = null, phone = '' } = {}) {
-  return {
+export function buildCustomerTools({
+  settings = {},
+  parent = null,
+  phone = '',
+  onPlacement = null,
+} = {}) {
+  // Named so one tool can build on another — the registration pack reuses the
+  // equipment link instead of repeating the lookup.
+  const tools = {
     listClasses: async ({ grade, band, day } = {}) => {
       const groups = selectGroups({ grade, band, day });
       if (!groups.length) {
@@ -344,6 +469,106 @@ export function buildCustomerTools({ settings = {}, parent = null, phone = '' } 
       };
     },
 
+    startSignup: async ({ childName, grade, band, day, time } = {}) => {
+      const child = requireDeclaredChild(parent, childName);
+      if (child.error) return child;
+      const picked = pickSingleGroup({ grade, band, day, time });
+      if (picked.error) return picked;
+
+      const { student } = child;
+      const { group } = picked;
+      const row = db.update('students', student.id, {
+        status: 'pending_signup',
+        groupId: group.id,
+      });
+      if (!row) return { error: 'השיבוץ נכשל — יש להעביר לצוות' };
+      await persistCore('students', row);
+      try {
+        await onPlacement?.({ student: row, group, kind: 'pending_signup' });
+      } catch (err) {
+        console.error('placement notice failed:', err.message);
+      }
+
+      return {
+        שובץ: student.name || '',
+        קבוצה: describeGroup(group),
+        סטטוס: 'ממתין להרשמה',
+        הערה: 'המקום נשמר ואינו תופס מקום בקבוצה. יש לומר ללקוח שההרשמה נסגרת '
+          + 'רק אחרי אישור, ולשלוח את קישורי ההרשמה והציוד.',
+      };
+    },
+
+    joinWaitlist: async ({ childName, grade, band, day, time } = {}) => {
+      const child = requireDeclaredChild(parent, childName);
+      if (child.error) return child;
+      const picked = pickSingleGroup({ grade, band, day, time });
+      if (picked.error) return picked;
+
+      const { student } = child;
+      const { group } = picked;
+      const row = db.update('students', student.id, {
+        status: 'waitlist',
+        groupId: group.id,
+      });
+      if (!row) return { error: 'השיבוץ להמתנה נכשל — יש להעביר לצוות' };
+      await persistCore('students', row);
+      try {
+        await onPlacement?.({ student: row, group, kind: 'waitlist' });
+      } catch (err) {
+        console.error('placement notice failed:', err.message);
+      }
+
+      return {
+        שובץ: student.name || '',
+        קבוצה: describeGroup(group),
+        סטטוס: 'רשימת המתנה',
+        הערה: 'נעדכן את הלקוח כשיתפנה מקום.',
+      };
+    },
+
+    getRegistrationPack: async ({ childName, grade, band, day, time } = {}) => {
+      const kids = parent ? studentsForParent(parent) : [];
+      const named = String(childName || '').trim();
+      const student = named
+        ? kids.find((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
+        : (kids.length === 1 ? kids[0] : null);
+      const declaration = student
+        ? findLatestValidDeclaration(db, { studentId: student.id })
+        : null;
+
+      const pack = {
+        שלב_1_הצהרת_בריאות: declaration
+          ? { מצב: 'נחתמה' }
+          : {
+            מצב: 'חסרה',
+            קישור: healthFormUrl(phone),
+            הסבר: 'זה השלב הראשון — החתימה היא שפותחת את כרטיס המתאמן',
+          },
+      };
+
+      const picked = pickSingleGroup({ grade, band, day, time });
+      pack.שלב_2_הרשמה_לקבוצה = picked.error
+        ? { מצב: 'צריך לבחור קבוצה', הערה: picked.error, ...(picked.קבוצות_אפשריות ? { קבוצות_אפשריות: picked.קבוצות_אפשריות } : {}) }
+        : {
+          קישור: picked.group.signupLinkWeek
+            || picked.group.signupLinkTwice
+            || groupSignupUrl(picked.group, { phone }),
+          הסבר: 'ההרשמה עצמה נעשית בטופס הזה, והאישור מגיע אחרי כמה ימים',
+        };
+
+      const equipment = await tools.getEquipmentPaymentLink({ childName });
+      pack.שלב_3_תשלום_ציוד = equipment.קישור
+        ? {
+          קישור: equipment.קישור,
+          סכום: equipment.סכום,
+          פריטים: equipment.פריטים,
+          הסבר: 'אפשר לשלם מראש, ולקבל את הציוד באימון הראשון',
+        }
+        : { מצב: 'אין חוב ציוד', הערה: equipment.הערה || '' };
+
+      return pack;
+    },
+
     getFamilyCard: async () => {
       if (!parent) return { כרטיס: null, הערה: 'אין כרטיס לקוח' };
       const kids = studentsForParent(parent).map((s) => ({
@@ -354,4 +579,6 @@ export function buildCustomerTools({ settings = {}, parent = null, phone = '' } 
       return { שם_הלקוח: parent.name || '', ילדים: kids };
     },
   };
+
+  return tools;
 }
