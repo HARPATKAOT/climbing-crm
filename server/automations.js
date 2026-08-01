@@ -10,8 +10,22 @@ import {
 } from './attendanceUtils.js';
 import { studentGroupIds } from './studentGroups.js';
 
-export const DEFAULT_ARRIVAL =
-  'רחוב האורגים 12, אשדוד. יש חניה בחזית.';
+/**
+ * Where to come. Read from the business facts the owner edits, because a
+ * hard-coded address survives a move: reminder messages were still sending
+ * parents to the wall's previous address in another city.
+ */
+export function arrivalText(settings = null) {
+  const s = settings || (db.getSettings ? db.getSettings() : {});
+  const line = String(s?.aiBusinessFacts || '')
+    .split('\n')
+    .find((l) => /^\s*כתובת\s*:/.test(l));
+  const address = line ? line.replace(/^\s*כתובת\s*:\s*/, '').trim() : '';
+  return address ? `${address}. יש חניה בחזית.` : 'נשלח לכם את הכתובת המדויקת בהודעה נפרדת.';
+}
+
+/** Kept for callers that still read a constant; prefer `arrivalText()`. */
+export const DEFAULT_ARRIVAL = 'יש חניה בחזית הקיר.';
 
 export const INTRO_STATUSES = new Set(['intro_scheduled', 'intro_paid']);
 
@@ -53,7 +67,7 @@ function buildPlaceholderMap(payload = {}) {
     parentName: resolveParentName(payload),
     time: payload.time || '',
     trainer: payload.trainerName || payload.trainer || '',
-    arrival: payload.arrival || DEFAULT_ARRIVAL,
+    arrival: payload.arrival || arrivalText(),
     group: payload.groupName || '',
   };
 }
@@ -132,7 +146,7 @@ export function buildIntroClassPayload(student, group, extras = {}) {
     groupName: group?.name || '',
     time: group?.time || '',
     trainerName: trainerNameForGroup(group),
-    arrival: extras.arrival || DEFAULT_ARRIVAL,
+    arrival: extras.arrival || arrivalText(),
     date: extras.date || null,
     new_status: student?.status,
     status: student?.status,
@@ -276,7 +290,7 @@ export const automationsService = {
         ...payload,
         phone,
         parentName: resolveParentName(payload),
-        arrival: payload.arrival || automation.action_payload?.arrivalText || DEFAULT_ARRIVAL,
+        arrival: payload.arrival || automation.action_payload?.arrivalText || arrivalText(),
       };
 
       const parents = db.get('parents') || [];
@@ -514,7 +528,7 @@ export const automationsService = {
           templateName: null,
           preferTemplate: false,
           templateVarKeys: ['name', 'time', 'trainer', 'arrival'],
-          arrivalText: DEFAULT_ARRIVAL,
+          arrivalText: null,
         },
         is_active: true,
       },
