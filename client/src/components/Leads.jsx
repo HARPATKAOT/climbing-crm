@@ -35,7 +35,7 @@ import {
   activityDayLabel,
   saveActivityAttendance,
 } from './ActivityAttendance.jsx';
-import { isAwaitingHandling, latestInboundTime } from './communicationQueue.js';
+import { awaitingSince, isAwaitingHandling } from './communicationQueue.js';
 import { consecutiveAbsences } from '../scheduleUtils.js';
 import { studentGroupIds } from '../utils/studentGroups.js';
 import { passPurchasedText, passSubtitle } from '../utils/passes.js';
@@ -2353,7 +2353,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               onToggle={toggleFolder}
             >
               {(() => {
-                const isHealthDoc = (doc) => doc.isVirtual || doc.type === 'health_waiver_pdf' || !!doc.declarationId;
+                // A doctor's approval hangs off the same declaration but is not
+                // the declaration: counting it as one would hide the fact that
+                // the signed form itself is still missing.
+                const isClearanceDoc = (doc) => doc.type === 'medical_clearance';
+                const isHealthDoc = (doc) => !isClearanceDoc(doc)
+                  && (doc.isVirtual || doc.type === 'health_waiver_pdf' || !!doc.declarationId);
                 const combinedDocuments = [...clientDocuments];
                 const hasStoredHealthDoc = combinedDocuments.some(isHealthDoc);
                 if (
@@ -2576,6 +2581,11 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                 >
                                   <div style={{ minWidth: 0 }}>
                                     <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)' }}>
+                                      {isClearanceDoc(doc) && (
+                                        <span className="badge badge-amber" style={{ fontSize: 10, marginLeft: 6 }}>
+                                          אישור רופא
+                                        </span>
+                                      )}
                                       {doc.fileName || 'הצהרת בריאות חתומה'}
                                     </div>
                                     <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
@@ -4230,7 +4240,7 @@ export default function Leads({
       ? isArchivedParent(parent)
       : filterStatus === 'all'
         || (filterStatus === 'communication'
-          ? isAwaitingHandling(parent)
+          ? isAwaitingHandling(parent, [s])
           : s.status === filterStatus);
     return matchSearch && matchStatus;
   }).map((entry) => entry.student);
@@ -4238,8 +4248,10 @@ export default function Leads({
   // Table: one row per family. Kanban stays per-student for the funnel.
   const familyRows = buildFamilyRows(filtered, parents);
   if (filterStatus === 'communication') {
+    // Newest first, counting a fresh registration as well as an inbound
+    // message — otherwise a family who just signed sorts to the bottom.
     familyRows.sort(
-      (a, b) => latestInboundTime(b.parent) - latestInboundTime(a.parent)
+      (a, b) => awaitingSince(b.parent, b.students) - awaitingSince(a.parent, a.students)
     );
   }
   const familyCountByStatus = (() => {
@@ -4247,7 +4259,7 @@ export default function Leads({
       all: buildFamilyRows(leadEntries.map((e) => e.student), parents).length,
       communication: buildFamilyRows(
         leadEntries
-          .filter(({ parent }) => isAwaitingHandling(parent))
+          .filter(({ parent, student }) => isAwaitingHandling(parent, [student]))
           .map(({ student }) => student),
         parents
       ).length,

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, CheckCircle, Download, PenTool, Plus, Trash2 } from 'lucide-react';
-import { useSearchParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import {
   blobToBase64,
   buildHealthDeclarationPdf,
@@ -18,40 +18,57 @@ import { checkKnownChild, checkKnownFamily, linkFieldsFor } from '../utils/child
 import { joinParentName, splitParentName } from '../utils/parentName.js';
 import {
   blankAnswers,
+  clearanceTriggers,
   hasPositiveScreening,
   isScreeningQuestion,
+  needsMedicalClearance,
   questionLabel,
+  questionsForSigner,
   unansweredQuestions,
 } from '../utils/healthQuestions.js';
+import {
+  ACCEPTED_TYPES,
+  clearanceBudgetError,
+  prepareClearanceFile,
+} from '../utils/medicalClearanceFile.js';
 
 /**
- * What the waiver actually means, in the words someone would use out loud.
- *
- * This is the layer people read; `buildFallbackWaiver` below is the layer they
- * can open. Informed consent needs the signer to understand what they agreed
- * to, and a wall of legal text is read by nobody.
+ * `{{שם החותם}}` in a template's text becomes the name typed on the form.
+ * Left unwritten, the template reads exactly as it did before.
  */
-function buildFallbackWaiverSummary(legalName) {
-  return `• טיפוס הוא פעילות אתגרית, וגם כשמקפידים על כל הוראות הבטיחות קיים סיכון להיפצע.
-• אם נגרמת פציעה במסגרת הסיכון הרגיל של הפעילות, זה הסיכון שאני לוקח/ת על עצמי.
-• "${legalName}" יישא באחריות אם ייגרם נזק מרשלנות של המקום.
-• מילאתי את הצהרת הבריאות במלואה, ואין מגבלה רפואית שלא סיפרתי עליה.
-• אני מתחייב/ת למלא את הוראות הבטיחות שסימנתי, ולדווח מיד על כל פציעה או תחושה לא טובה.
-• הצוות רשאי להפסיק את ההשתתפות אם היא מסכנת את המשתתף/ת או אחרים.
-• זהו חוזה מחייב, לא טופס — חתימה עליו מחייבת אתכם לכל האמור בו.`;
+function withSignerName(text, signerName = '') {
+  const signer = String(signerName || '').trim();
+  return String(text || '').replace(/\{\{\s*(שם החותם|signer)\s*\}\}/g, signer);
 }
 
 /**
- * The liability release only. The safety rules are not repeated here — they are
+ * The binding text — the one layer there is. Naming the signer inside it is
+ * deliberate: "I take the risk" read by someone scrolling is a sentence about
+ * nobody, and with their own name in it, it is the clause they cannot later
+ * say they did not notice. The safety rules are not repeated here — they are
  * the ticked items on the previous step, where each one is acknowledged
  * separately, which is both better evidence and one list instead of two.
  */
 function buildFallbackWaiver(legalName) {
-  return `אני מצהיר/ה כי אני מודע/ת לסיכונים הכרוכים בפעילות המתקיימת ב"${legalName}", אני פוטר/ת את "${legalName}" ו/או מי מטעמו מכל אחריות לפגיעה אם תקרה למשתתף אותו אני רושם לפעילות וזאת אלא אם יוכח כי הינה תוצאה של רשלנות המקום.
+  return `כתב הצהרה, ויתור והסרת אחריות
 
-אני הח"מ מתחייב/ת בזאת למלא את כל הוראות הבטיחות שסימנתי בשלב הקודם.
+1. אני החתום/ה מטה, {{שם החותם}}, מצהיר/ה כי קראתי מסמך זה במלואו, הבנתי את תוכנו, וכי אני חותם/ת עליו מרצוני החופשי ומתוך הבנה שמדובר בחוזה מחייב לכל דבר ועניין.
 
-אני מאשר/ת כי מסמך זה הוא חוזה מחייב לכל דבר ועניין, כי קראתי אותו והבנתי את תוכנו, וכי אני חותם/ת עליו מרצוני החופשי.`;
+2. ידוע לי כי טיפוס ספורטיבי, על כל צורותיו, הוא פעילות אתגרית הכרוכה מטבעה בסיכון לפגיעה גופנית — לרבות נפילה, החלקה, פגיעה מציוד, מאמץ יתר ופציעה — וכי סיכון זה קיים גם בהקפדה מלאה על הוראות הבטיחות.
+
+3. אני מצהיר/ה כי מסרתי בהצהרת הבריאות מידע מלא, נכון ומעודכן ביחס אליי או ביחס למשתתף/ת שעליו/ה אני חותם/ת, וכי לא ידועה לי מגבלה רפואית שלא פורטה בה. אני מתחייב/ת לעדכן את הצוות בכל שינוי במצב הבריאותי.
+
+4. בחינת התאמת הפעילות למצב הבריאותי היא באחריותי בלבד, ובמקרה הצורך לאחר היוועצות ברופא. "${legalName}" אינו גורם רפואי ואינו בוחן כשירות רפואית להשתתפות.
+
+5. אני, {{שם החותם}}, נוטל/ת על עצמי את הסיכון הרגיל הכרוך בפעילות, ומוותר/ת על כל טענה, דרישה או תביעה כלפי "${legalName}", בעליו, מנהליו, עובדיו ומי מטעמו, בגין נזק גוף או רכוש שייגרם במסגרת אותו סיכון.
+
+6. הוויתור שבסעיף 5 לא יחול, ואחריות המקום תעמוד בעינה, אך ורק במקרים בהם תוכח מעל לכל ספק רשלנות של המקום.
+
+7. אני מתחייב/ת לפעול לפי כל הוראות הבטיחות שסימנתי בשלב הקודם ולפי הוראות הצוות, ולדווח לצוות באופן מיידי על כל מפגע, תקלה, פציעה או תחושה גופנית חריגה.
+
+8. ידוע לי כי הצוות רשאי להפסיק את ההשתתפות בכל עת, אם לדעתו היא מסכנת את המשתתף/ת או אחרים.
+
+9. חתימת הורה או אפוטרופוס על מסמך זה מחייבת גם את המשתתף/ת הקטין/ה שעליו/ה נחתם, ומהווה הסכמה להשתתפותו/ה בפעילות.`;
 }
 
 function buildFallbackQuestions(legalName) {
@@ -61,7 +78,9 @@ function buildFallbackQuestions(legalName) {
       requireYes: true,
       label: `אני החתום/ה מטה מצהיר/ה בזאת שאני או האדם אותו אני רושם לחוג הטיפוס בריא/ה וכשיר/ה פיזית, נפשית וקוגניטיבית להשתתף בפעילות המתקיימת ב"${legalName}". אני מבין כי הפעילות עלולה להיות מסוכנת ולא ידוע לי על מגבלות שעלולות למנוע מהמשתתף פעילות בטוחה ובריאה.`,
     },
-    { id: 's1', requireYes: true, label: 'אין להשאיר ילד עד גיל 11 ללא ליווי מבוגר שלא במסגרת חוג מסודר' },
+    // A rule about a child left unaccompanied has nobody to apply to when an
+    // adult signs for themselves.
+    { id: 's1', requireYes: true, audience: 'child', label: 'אין להשאיר ילד עד גיל 11 ללא ליווי מבוגר שלא במסגרת חוג מסודר' },
     { id: 's2', requireYes: true, label: 'נא להימנע מריצה והשתוללות בכל מתחם הקיר' },
     { id: 's3', requireYes: true, label: 'יש להישמע להוראות המדריכים' },
     { id: 's4', requireYes: true, label: 'טיפוס על הקיר יתאפשר רק לאלו שקיבלו תדריך מסודר' },
@@ -107,6 +126,177 @@ function ageFromBirthDate(value) {
   return age;
 }
 
+/**
+ * Attaching the doctor's approval, shown only when an answer asked for one.
+ *
+ * The file never leaves the browser until the form is submitted: it travels in
+ * the same request as the declaration, so a saved signature and a missing
+ * approval cannot exist as two separate outcomes.
+ */
+function MedicalClearanceField({ triggers, value, onChange, onError }) {
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef(null);
+
+  const pick = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setBusy(true);
+    try {
+      onChange(await prepareClearanceFile(file));
+      onError('');
+    } catch (err) {
+      onChange(null);
+      onError(err.message || 'צירוף הקובץ נכשל');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{
+      background: 'rgba(249,115,22,.1)', border: '1px solid rgba(249,115,22,.35)',
+      borderRadius: 12, padding: 14, marginTop: 10,
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: '#fdba74', marginBottom: 6 }}>
+        נדרש אישור רופא להשתתפות בפעילות ספורטיבית
+      </div>
+      <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)', lineHeight: 1.6, marginBottom: 10 }}>
+        {triggers.length === 1
+          ? `לפי התשובה על „${questionLabel(triggers[0])}” — `
+          : 'לפי התשובות שסימנתם — '}
+        ההשתתפות מותנית באישור רופא בכתב. צלמו את האישור או צרפו קובץ PDF.
+        בלי האישור לא ניתן להשלים את ההרשמה.
+      </div>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={ACCEPTED_TYPES}
+        onChange={pick}
+        style={{ display: 'none' }}
+      />
+      <button
+        type="button"
+        onClick={() => inputRef.current?.click()}
+        disabled={busy}
+        style={{
+          width: '100%', padding: '11px 12px', borderRadius: 11, font: 'inherit',
+          fontSize: 13, fontWeight: 700, cursor: busy ? 'default' : 'pointer',
+          border: '1px solid rgba(255,255,255,.2)', background: 'rgba(255,255,255,.07)',
+          color: '#e2e8f0',
+        }}
+      >
+        {busy ? 'מעבד את הקובץ…' : (value ? 'החלפת הקובץ' : 'צילום או צירוף אישור רופא')}
+      </button>
+      {value && (
+        <div style={{
+          marginTop: 10, display: 'flex', alignItems: 'center', gap: 8,
+          fontSize: 12, color: '#86efac',
+        }}>
+          <CheckCircle size={14} />
+          <span style={{ flex: 1, wordBreak: 'break-all' }}>
+            {value.fileName} ({Math.max(1, Math.round(value.bytes / 1024))} KB)
+          </span>
+          <button
+            type="button"
+            onClick={() => onChange(null)}
+            style={{
+              background: 'none', border: 'none', color: '#fca5a5', font: 'inherit',
+              fontSize: 12, cursor: 'pointer', textDecoration: 'underline',
+            }}
+          >
+            הסרה
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The code screen, shown in place of the continue button on step 1.
+ *
+ * There is no way past it. A declaration signed from an unverified phone is
+ * exactly the document this feature exists to prevent, so a failed send offers
+ * a correction or a retry — never a way through.
+ */
+function PhoneCodeGate({ otp, phone, onCodeChange, onVerify, onResend, onEditPhone }) {
+  const waitSeconds = Math.max(0, Math.ceil((otp.cooldownUntil - Date.now()) / 1000));
+  return (
+    <div style={{
+      background: 'rgba(249,115,22,.1)', border: '1px solid rgba(249,115,22,.35)',
+      borderRadius: 12, padding: 14,
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: '#fdba74', marginBottom: 6 }}>
+        אימות מספר הטלפון
+      </div>
+      <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.72)', lineHeight: 1.6, marginBottom: 12 }}>
+        {otp.sendFailed
+          ? <>לא הצלחנו לשלוח קוד למספר <strong>{phone}</strong>. בדקו שהמספר נכון ושיש בו וואטסאפ, ונסו שוב. בלי אימות אי אפשר להמשיך.</>
+          : <>שלחנו קוד בן 6 ספרות בוואטסאפ למספר <strong>{phone}</strong>. הזינו אותו כדי להמשיך — כך ההצהרה נרשמת על שם מי שבאמת מחזיק בטלפון.</>}
+        {otp.devCode ? ` (סביבת פיתוח: ${otp.devCode})` : ''}
+      </div>
+
+      {!otp.sendFailed && (
+        <input
+          value={otp.code}
+          onChange={(e) => onCodeChange(e.target.value.replace(/\D/g, '').slice(0, 6))}
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          placeholder="------"
+          style={{
+            width: '100%', textAlign: 'center', letterSpacing: 8, fontSize: 22,
+            fontWeight: 800, padding: '12px 8px', borderRadius: 11,
+            border: '1px solid rgba(255,255,255,.2)', background: '#0b1220',
+            color: '#e2e8f0', font: 'inherit', direction: 'ltr',
+          }}
+        />
+      )}
+      {otp.error && (
+        <div style={{ fontSize: 12, color: '#fca5a5', marginTop: 8 }}>{otp.error}</div>
+      )}
+
+      {!otp.sendFailed && (
+        <button
+          type="button"
+          className="event-primary"
+          style={{ marginTop: 12 }}
+          disabled={otp.verifying || otp.code.length < 6}
+          onClick={onVerify}
+        >
+          {otp.verifying ? 'מאמת…' : 'אישור והמשך'}
+        </button>
+      )}
+
+      <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          onClick={onResend}
+          disabled={otp.sending || waitSeconds > 0}
+          style={{
+            background: 'none', border: 'none', font: 'inherit', fontSize: 12,
+            color: waitSeconds > 0 ? 'rgba(255,255,255,.4)' : '#fdba74',
+            cursor: waitSeconds > 0 ? 'default' : 'pointer', textDecoration: 'underline',
+            padding: 0,
+          }}
+        >
+          {waitSeconds > 0 ? `שליחה חוזרת בעוד ${waitSeconds}` : 'שליחת קוד חדש'}
+        </button>
+        <button
+          type="button"
+          onClick={onEditPhone}
+          style={{
+            background: 'none', border: 'none', font: 'inherit', fontSize: 12,
+            color: '#94a3b8', cursor: 'pointer', textDecoration: 'underline', padding: 0,
+          }}
+        >
+          תיקון מספר הטלפון
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const emptyChild = (questions = []) => {
   const answers = blankAnswers(questions);
   return {
@@ -118,6 +308,8 @@ const emptyChild = (questions = []) => {
     childPhone: '',
     registrationNotes: '',
     answers,
+    // Free-text detail per screening question answered "yes", keyed by q.id.
+    answerNotes: {},
     waiverAccepted: false,
     signature: '',
   };
@@ -130,9 +322,11 @@ export default function PublicOnboardingForm() {
   const brandName = profile.display_name || 'הרפתקאות';
   const brandLogo = profile.logo_url || '/logo.png';
   const fallbackWaiver = useMemo(() => buildFallbackWaiver(legalName), [legalName]);
-  const fallbackWaiverSummary = useMemo(() => buildFallbackWaiverSummary(legalName), [legalName]);
   const fallbackQuestions = useMemo(() => buildFallbackQuestions(legalName), [legalName]);
   const [searchParams] = useSearchParams();
+  // A link to one particular declaration (/health/<slug>). Without one the
+  // default template arrives with the onboarding context below.
+  const { slug: routeSlug } = useParams();
   const [loading, setLoading] = useState(true);
   const [step, setStep] = useState(1);
   const [childHealthIndex, setChildHealthIndex] = useState(0);
@@ -165,13 +359,73 @@ export default function PublicOnboardingForm() {
   const canvasRef = useRef(null);
   const [isDrawing, setIsDrawing] = useState(false);
 
-  const questions = (template?.healthQuestions?.length
+  const allQuestions = (template?.healthQuestions?.length
     ? template.healthQuestions
     : fallbackQuestions);
-  const waiverText = template?.waiverText || fallbackWaiver;
-  const waiverSummary = template?.waiverSummary || fallbackWaiverSummary;
-  // The full legal text opens on demand; nothing is signed from inside it.
-  const [showFullWaiver, setShowFullWaiver] = useState(false);
+  // Clauses addressed to a parent drop out when the signer is the participant.
+  const questions = questionsForSigner(allQuestions, { isAdultSelf });
+  // The signer's own name goes into the summary they read, and into a template
+  // written with {{שם החותם}} — the same person either way.
+  const signerName = joinParentName(parent.name, parent.lastName);
+  const waiverText = withSignerName(template?.waiverText || fallbackWaiver, signerName);
+  // Phone verification. The token is what the submit sends; `verifiedPhone`
+  // remembers which number earned it, so editing the phone re-triggers the
+  // code. `sendFailed` opens the continue-without gate — a delivery problem on
+  // our side must not lock a family out of registering.
+  const [otp, setOtp] = useState({
+    stage: 'idle', token: '', verifiedPhone: '', code: '',
+    sending: false, verifying: false, error: '', cooldownUntil: 0,
+    sendFailed: false, devCode: '',
+  });
+  // Re-rendered every second while the code screen is up, so the resend
+  // button's countdown moves.
+  const [, setOtpTick] = useState(0);
+  useEffect(() => {
+    if (otp.stage !== 'code') return undefined;
+    const id = setInterval(() => setOtpTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [otp.stage]);
+
+  // The acceptance box opens only after the binding text was scrolled through.
+  // A tick on a contract nobody scrolled past is exactly the signature that
+  // does not hold up later.
+  const [waiverRead, setWaiverRead] = useState(false);
+  const waiverBoxRef = useRef(null);
+  const waiverScrollGate = useRef({ top: 0, time: 0 });
+
+  /**
+   * Downward scrolling inside the waiver box is capped to reading pace —
+   * a flick that would jump to the bottom is walked there instead. Scrolling
+   * back up is free. The cap only slows the box, it never blocks it, so the
+   * bottom is always reachable.
+   */
+  const handleWaiverScroll = (e) => {
+    const el = e.currentTarget;
+    const gate = waiverScrollGate.current;
+    const now = performance.now();
+    const elapsed = gate.time ? now - gate.time : 0;
+    // ~0.6px per ms ≈ a screenful of legal text in a couple of seconds.
+    const allowed = gate.top + Math.max(20, elapsed * 0.6);
+    if (el.scrollTop > allowed) el.scrollTop = allowed;
+    gate.top = el.scrollTop;
+    gate.time = now;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 8) setWaiverRead(true);
+  };
+
+  // Each participant reads for themselves: entering the waiver screen resets
+  // the gate. A short text that fits without scrolling counts as read once it
+  // is on screen.
+  useEffect(() => {
+    if (healthSubStep !== 2) return;
+    setWaiverRead(false);
+    waiverScrollGate.current = { top: 0, time: 0 };
+    const id = requestAnimationFrame(() => {
+      const el = waiverBoxRef.current;
+      if (el && el.scrollHeight <= el.clientHeight + 8) setWaiverRead(true);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [healthSubStep, childHealthIndex]);
+
   // participant key -> { match, student_id, guardian_first_name, health_valid, linked }
   const [knownChildren, setKnownChildren] = useState({});
   // Families on file under the same surname, and the one chosen ('' = new family).
@@ -210,8 +464,14 @@ export default function PublicOnboardingForm() {
   /** Children have no stable id until they are saved — identify them by what was typed. */
   const childKey = (child) => `${String(child?.name || '').trim()}|${child?.birthDate || ''}`;
 
-  /** A child linked to an existing file with a valid declaration signs nothing. */
+  /**
+   * True when this participant already has a declaration in force and is not
+   * re-signing it. Covers both a child confirmed as belonging to another file
+   * and someone already on this file — including the parent themselves, who
+   * would otherwise be handed their own whole form again on the next visit.
+   */
   const reusesDeclaration = (child) => {
+    if (child?.onFileHealthValid && !child?.resignHealth) return true;
     const known = knownChildren[childKey(child)];
     return !!(known?.linked && known.health_valid);
   };
@@ -304,6 +564,12 @@ export default function PublicOnboardingForm() {
               childPhone: '',
               registrationNotes: '',
               answers,
+              answerNotes: {},
+              // Already on file with a declaration in force. The form shows
+              // that rather than asking them to fill everything in again.
+              onFileHealthValid: !!s.healthValid,
+              onFileHealthSignedAt: s.healthSignedAt || '',
+              resignHealth: false,
               waiverAccepted: false,
               signature: '',
             };
@@ -329,6 +595,28 @@ export default function PublicOnboardingForm() {
     load();
     return () => { cancelled = true; };
   }, [searchParams, fallbackQuestions]);
+
+  /**
+   * A link that names a declaration (/health/<slug>, or ?template=) overrides
+   * the default template loaded above. A slug we do not know simply leaves the
+   * default in place — a wrong link must never leave the family with no form.
+   */
+  useEffect(() => {
+    const slug = routeSlug || searchParams.get('template') || '';
+    if (!slug || slug === 'default') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/public/form-templates/${encodeURIComponent(slug)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled && data && data.id) setTemplate(data);
+      } catch {
+        // keep the default template
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [routeSlug, searchParams]);
 
   const initCanvas = () => {
     setTimeout(() => {
@@ -457,6 +745,12 @@ export default function PublicOnboardingForm() {
               idNumber: s.idNumber || '',
               birthDate: s.birthDate || '',
               gender: s.gender || '',
+              // The same two fields the first load sets. Without them this
+              // path — the one that runs when a returning parent types their
+              // phone — handed them their own declaration to sign again.
+              onFileHealthValid: !!s.healthValid,
+              onFileHealthSignedAt: s.healthSignedAt || '',
+              resignHealth: false,
             }));
           const merged = [...fromFile, ...typed];
           return merged.length ? merged : current;
@@ -501,6 +795,17 @@ export default function PublicOnboardingForm() {
       if (known.families.length) return;
       setFamilyParentId('');
     }
+    // The phone must answer a one-time code before the form goes on. A number
+    // that was already verified in this session (and not edited since) is not
+    // asked twice.
+    if (otp.token && otp.verifiedPhone === parent.phone.trim()) {
+      proceedToStep2();
+      return;
+    }
+    await sendOtpCode();
+  };
+
+  const proceedToStep2 = () => {
     if (isAdultSelf) {
       setChildren([{
         ...emptyChild(questions),
@@ -512,6 +817,67 @@ export default function PublicOnboardingForm() {
     setStep(2);
   };
 
+  const sendOtpCode = async () => {
+    setOtp((o) => ({ ...o, sending: true, error: '' }));
+    try {
+      const res = await fetch('/api/public/otp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: parent.phone.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setOtp((o) => ({
+          ...o,
+          sending: false,
+          stage: 'code',
+          sendFailed: true,
+          error: data.error || 'שליחת הקוד נכשלה',
+        }));
+        return;
+      }
+      setOtp((o) => ({
+        ...o,
+        sending: false,
+        stage: 'code',
+        sendFailed: false,
+        code: '',
+        error: '',
+        devCode: data.devCode || '',
+        cooldownUntil: Date.now() + 45000,
+      }));
+    } catch {
+      setOtp((o) => ({ ...o, sending: false, stage: 'code', sendFailed: true, error: 'שגיאת רשת בשליחת הקוד' }));
+    }
+  };
+
+  const verifyOtpCode = async () => {
+    setOtp((o) => ({ ...o, verifying: true, error: '' }));
+    try {
+      const res = await fetch('/api/public/otp/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: parent.phone.trim(), code: otp.code }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.token) {
+        setOtp((o) => ({ ...o, verifying: false, error: data.error || 'האימות נכשל' }));
+        return;
+      }
+      setOtp((o) => ({
+        ...o,
+        verifying: false,
+        stage: 'idle',
+        token: data.token,
+        verifiedPhone: parent.phone.trim(),
+        error: '',
+      }));
+      proceedToStep2();
+    } catch {
+      setOtp((o) => ({ ...o, verifying: false, error: 'שגיאת רשת — נסו שוב' }));
+    }
+  };
+
   const goNextFromChildren = async () => {
     setError('');
     const kids = namedChildren();
@@ -520,9 +886,21 @@ export default function PublicOnboardingForm() {
       return;
     }
     for (const kid of kids) {
-      if (!isAdultSelf && !kid.birthDate) {
+      // A participant whose card is collapsed behind "declaration in force" was
+      // never shown these fields, so they cannot be the thing blocking the form.
+      if (reusesDeclaration(kid)) continue;
+      if (!kid.birthDate) {
         setError(`חסר תאריך לידה עבור ${kid.name}`);
         return;
+      }
+      // Signing for yourself is a legal act a minor cannot perform, so the
+      // birth date decides it — not the box that was ticked.
+      if (isAdultSelf) {
+        const age = ageFromBirthDate(kid.birthDate);
+        if (age !== null && age < 18) {
+          setError('מתחת לגיל 18 אי אפשר למלא עבור עצמך — יש להסיר את הסימון „אני מעל גיל 18” ולמלא כהורה או אפוטרופוס');
+          return;
+        }
       }
       if (!String(kid.idNumber || '').trim()) {
         setError(`חסרה תעודת זהות עבור ${kid.name}`);
@@ -585,9 +963,28 @@ export default function PublicOnboardingForm() {
         );
         return;
       }
-      // A condition nobody described is a condition the instructor cannot act on.
-      if (hasPositiveScreening(questions, answers) && !String(children[fullIndex]?.healthNotes || '').trim()) {
-        setError('סימנת „כן” על שאלה רפואית — יש לפרט בשדה ההערות');
+      // A condition nobody described is a condition the instructor cannot act
+      // on — and each "yes" needs its own words, in the box under the question.
+      const notes = children[fullIndex]?.answerNotes || {};
+      const undetailed = questions.find((q) => isScreeningQuestion(q)
+        && answers[q.id] === true
+        && !String(notes[q.id] || '').trim());
+      if (undetailed) {
+        setError(`סימנתם „כן” על „${questionLabel(undetailed)}” — יש לפרט בשדה שמתחת לשאלה`);
+        return;
+      }
+      // Where a doctor has already limited the activity, the wall is not the
+      // one to decide it is safe. The approval is required before the
+      // signature, not chased afterwards.
+      if (needsMedicalClearance(questions, answers) && !children[fullIndex]?.medicalClearance) {
+        setError('לפי התשובות נדרש אישור רופא להשתתפות בפעילות ספורטיבית — יש לצרף אותו כדי להמשיך');
+        return;
+      }
+      // Said here rather than after the signature: the fix is to attach a
+      // different file, and the last screen is the worst place to learn that.
+      const overBudget = clearanceBudgetError(children);
+      if (overBudget) {
+        setError(overBudget);
         return;
       }
       setHealthSubStep(2);
@@ -626,10 +1023,29 @@ export default function PublicOnboardingForm() {
     setIsSubmitting(true);
     setError('');
     try {
+      // Only clauses this signer was actually shown are recorded. A parent-only
+      // clause left over in state from before the "for myself" box was ticked
+      // must not reach the signed PDF as something they agreed to.
+      const asked = new Set(questions.map((q) => q.id));
       const kids = (childrenSnapshot || children)
         .filter((c) => c.name.trim())
         .map((c) => {
           const reuse = reusesDeclaration(c);
+          const answers = Object.fromEntries(
+            Object.entries(c.answers || {}).filter(([id]) => asked.has(id))
+          );
+          // Everything downstream — the declaration record, the PDF, the
+          // student's file — reads one healthNotes string, so the per-question
+          // details are composed into lines that keep saying which question
+          // each one answered.
+          const healthNotes = questions
+            .filter((q) => isScreeningQuestion(q) && answers[q.id] === true)
+            .map((q) => {
+              const note = String(c.answerNotes?.[q.id] || '').trim();
+              return note ? `${questionLabel(q)} — ${note}` : '';
+            })
+            .filter(Boolean)
+            .join('\n') || (c.healthNotes || '').trim();
           return {
             id: c.id,
             name: childFullName(c),
@@ -639,11 +1055,17 @@ export default function PublicOnboardingForm() {
             gender: c.gender,
             childPhone: c.childPhone,
             registrationNotes: c.registrationNotes,
-            answers: c.answers || {},
-            healthNotes: (c.healthNotes || '').trim(),
+            answers,
+            healthNotes,
+            // Travels with the declaration so the two are saved or refused
+            // together — never a signature on file with the approval missing.
+            medicalClearance: c.medicalClearance || null,
             signature: c.signature,
             waiverAccepted: !reuse,
             ...linkFieldsFor(knownChildren[childKey(c)]),
+            // Already on this file with a declaration in force: say so, or the
+            // server asks for a signature the form deliberately never showed.
+            ...(c.onFileHealthValid && !c.resignHealth ? { reuse_health: true } : {}),
           };
         });
 
@@ -667,11 +1089,19 @@ export default function PublicOnboardingForm() {
           subscriptions: { ...subscriptions, [requiredListKey]: true },
           templateSlug: template?.slug || 'wall',
           templateId: template?.id || null,
+          phoneVerification: otp.token ? { token: otp.token } : null,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.error || 'שגיאה בשמירת הטופס');
+        // The verification lapsed while the form was being filled. Send them
+        // back to the one screen that can fix it, rather than leaving a signed
+        // form stuck against an error it cannot clear.
+        if (res.status === 403) {
+          setOtp((o) => ({ ...o, token: '', verifiedPhone: '', code: '', stage: 'idle' }));
+          setStep(1);
+        }
         return;
       }
 
@@ -690,6 +1120,11 @@ export default function PublicOnboardingForm() {
         templateSlug: template?.slug || 'wall',
         title: template?.title || 'הצהרת בריאות ובטיחות + הסרת אחריות',
         brandName,
+        // Stamped into the PDF: this signature came from a phone that answered
+        // a one-time code, or it did not — either way the document says which.
+        phoneVerification: otp.token
+          ? { verified: true, phone: parent.phone.trim(), at: new Date().toISOString() }
+          : { verified: false },
       }));
       setSavedDeclarations(decls);
       setIsSuccess(true);
@@ -763,7 +1198,10 @@ export default function PublicOnboardingForm() {
     );
   }
 
-  const kids = namedChildren();
+  // Only those who still have to sign. Rendering from every named participant
+  // walked the signing step through people whose declaration is already in
+  // force — including the parent, handed their own form on every later visit.
+  const kids = healthChildren();
   const currentChild = kids[childHealthIndex] || kids[0];
   const currentFullIndex = currentChild
     ? children.findIndex((c) => c === currentChild || (c.name === currentChild.name && c.id === currentChild.id))
@@ -800,8 +1238,8 @@ export default function PublicOnboardingForm() {
           </div>
           <h2>מילוי פרטים והרשמה</h2>
           <p>
-            {step === 1 && 'פרטי הורה ורשימות עדכונים'}
-            {step === 2 && 'פרטי המשתתפים בחוג'}
+            {step === 1 && (isAdultSelf ? 'הפרטים שלי ורשימות עדכונים' : 'פרטי הורה ורשימות עדכונים')}
+            {step === 2 && (isAdultSelf ? 'הפרטים שלי כמשתתף' : 'פרטי המשתתפים בחוג')}
             {step === 3 && `הצהרה וחתימה: ${currentChild?.name || ''}`}
           </p>
           {/* Same progress strip as the event and shop pages. */}
@@ -818,7 +1256,29 @@ export default function PublicOnboardingForm() {
 
         {step === 1 && (
           <div className="fade-in">
-            <div className="section-title">פרטי הורה / איש קשר</div>
+            {/* First question on the form, because the answer decides what the
+                rest of it is asking for: a parent filling in for children, or
+                an adult filling in for themselves. Asked later, the parent
+                section reads as if it were about someone else. */}
+            <label
+              className="event-check"
+              style={{
+                cursor: 'pointer',
+                marginBottom: 18,
+                borderColor: isAdultSelf ? 'rgba(249,115,22,0.45)' : 'rgba(255,255,255,0.08)',
+                background: isAdultSelf ? 'rgba(249,115,22,0.08)' : 'rgba(255,255,255,0.03)',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={isAdultSelf}
+                onChange={(e) => setAdultSelfMode(e.target.checked)}
+              />
+              <span>אני מעל גיל 18 ואני ממלא/ת עבור עצמי</span>
+            </label>
+            <div className="section-title">
+              {isAdultSelf ? 'הפרטים שלי' : 'פרטי הורה / איש קשר'}
+            </div>
             {/* First name and surname are separate on purpose: the surname is
                 what recognises a second parent of a household we already know,
                 and it also reaches the invoice. Guessing it from the last word
@@ -882,6 +1342,9 @@ export default function PublicOnboardingForm() {
                   placeholder="9 ספרות"
                 />
               </div>
+              {/* Only a question when there is someone else on the form. An
+                  adult signing for themselves has no relation to state. */}
+              {!isAdultSelf && (
               <div className="form-group">
                 {/* Buttons for the same reason as בן / בת below: a native list
                     paints its own highlight and ignores the page. */}
@@ -913,6 +1376,7 @@ export default function PublicOnboardingForm() {
                     ))}
                 </div>
               </div>
+              )}
             </div>
             {knownFile && (
               <div style={{
@@ -986,34 +1450,39 @@ export default function PublicOnboardingForm() {
             <KnownFamilyNote families={families} chosenId={familyParentId} />
 
             {error && <ErrorBox message={error} />}
-            <button type="button" className="event-primary" onClick={goNextFromParent}>
-              המשך לפרטי משתתפים <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} />
-            </button>
+
+            {otp.stage === 'code' ? (
+              <PhoneCodeGate
+                otp={otp}
+                phone={parent.phone.trim()}
+                onCodeChange={(code) => setOtp((o) => ({ ...o, code, error: '' }))}
+                onVerify={verifyOtpCode}
+                onResend={sendOtpCode}
+                onEditPhone={() => setOtp((o) => ({ ...o, stage: 'idle', code: '', error: '' }))}
+              />
+            ) : (
+              <button
+                type="button"
+                className="event-primary"
+                onClick={goNextFromParent}
+                disabled={otp.sending}
+              >
+                {otp.sending
+                  ? 'שולח קוד אימות בוואטסאפ…'
+                  : <>המשך לפרטי משתתפים <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} /></>}
+              </button>
+            )}
           </div>
         )}
 
         {step === 2 && (
           <div className="fade-in">
-            <div className="section-title">פרטי המשתתפים בחוג</div>
+            <div className="section-title">
+              {isAdultSelf ? 'הפרטים שלי כמשתתף' : 'פרטי המשתתפים בחוג'}
+            </div>
             <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.55)', margin: '0 0 14px' }}>
               השיבוץ לקבוצה יבוצע על ידי הצוות בהמשך.
             </p>
-            <label
-              className="event-check"
-              style={{
-                cursor: 'pointer',
-                marginBottom: 14,
-                borderColor: isAdultSelf ? 'rgba(249,115,22,0.45)' : 'rgba(255,255,255,0.08)',
-                background: isAdultSelf ? 'rgba(249,115,22,0.08)' : 'rgba(255,255,255,0.03)',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={isAdultSelf}
-                onChange={(e) => setAdultSelfMode(e.target.checked)}
-              />
-              <span>אני נרשם/ת לעצמי כמבוגר</span>
-            </label>
             {children.map((child, index) => (
               <div
                 key={child.id || index}
@@ -1029,12 +1498,50 @@ export default function PublicOnboardingForm() {
                   <div style={{ fontSize: 13, color: '#F97316', fontWeight: 700 }}>
                     {isAdultSelf ? 'משתתף מבוגר' : `משתתף/ת ${index + 1}`}
                   </div>
-                  {!isAdultSelf && children.length > 1 && (
+                  {!isAdultSelf && children.length > 1 && !child.onFileHealthValid && (
                     <button type="button" className="clear-btn" onClick={() => removeChild(index)}>
                       <Trash2 size={12} style={{ display: 'inline', verticalAlign: 'middle' }} /> הסר
                     </button>
                   )}
                 </div>
+
+                {/* Someone already on file with a declaration in force is shown
+                    as settled, not handed their own form again. Reopening it is
+                    one tick, because a health change is the whole reason to. */}
+                {child.onFileHealthValid && (
+                  <div style={{
+                    background: 'rgba(52,211,153,.1)', border: '1px solid rgba(52,211,153,.3)',
+                    borderRadius: 12, padding: 12, marginBottom: child.resignHealth ? 14 : 0,
+                  }}>
+                    <div style={{ fontSize: 13, color: '#6ee7b7', fontWeight: 700, marginBottom: 4 }}>
+                      ל{child.name || 'משתתף/ת זה'} יש הצהרת בריאות בתוקף
+                    </div>
+                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', lineHeight: 1.55 }}>
+                      {child.onFileHealthSignedAt
+                        ? `נחתמה ב-${String(child.onFileHealthSignedAt).slice(0, 10)}. `
+                        : ''}
+                      אין צורך למלא שוב.
+                    </div>
+                    <label
+                      className="event-check"
+                      style={{
+                        cursor: 'pointer', marginTop: 10,
+                        borderColor: child.resignHealth ? 'rgba(249,115,22,0.45)' : 'rgba(255,255,255,0.08)',
+                        background: child.resignHealth ? 'rgba(249,115,22,0.08)' : 'rgba(255,255,255,0.03)',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!!child.resignHealth}
+                        onChange={(e) => updateChild(index, { resignHealth: e.target.checked })}
+                      />
+                      <span>משהו השתנה במצב הבריאותי — למלא הצהרה מחדש</span>
+                    </label>
+                  </div>
+                )}
+
+                {(!child.onFileHealthValid || child.resignHealth) && (
+                <>
                 <div className="form-group">
                   <label>{isAdultSelf ? 'שם מלא *' : 'שם פרטי של המשתתף בחוג *'}</label>
                   <input
@@ -1062,7 +1569,10 @@ export default function PublicOnboardingForm() {
                   />
                 </div>
                 <div className="form-group">
-                  <label>{isAdultSelf ? 'תאריך לידה' : 'תאריך לידה *'}</label>
+                  {/* Required for an adult too now: it is the birth date, not
+                      the tick box, that decides whether this person may sign
+                      for themselves at all. */}
+                  <label>תאריך לידה *</label>
                   <input
                     type="date"
                     value={child.birthDate}
@@ -1073,10 +1583,20 @@ export default function PublicOnboardingForm() {
                         as an age and invisible as a date. */}
                     {ageFromBirthDate(child.birthDate) !== null
                       ? `גיל: ${ageFromBirthDate(child.birthDate)}`
-                      : (isAdultSelf
-                        ? 'אופציונלי למבוגר.'
-                        : 'לבחירת שנה — לחצו על השנה עצמה בחלון שנפתח.')}
+                      : 'לבחירת שנה — לחצו על השנה עצמה בחלון שנפתח.'}
                   </div>
+                  {isAdultSelf
+                    && ageFromBirthDate(child.birthDate) !== null
+                    && ageFromBirthDate(child.birthDate) < 18 && (
+                    <div style={{
+                      background: 'rgba(248,113,113,.12)', border: '1px solid rgba(248,113,113,.35)',
+                      borderRadius: 10, padding: 10, marginTop: 8,
+                      fontSize: 12, lineHeight: 1.5, color: '#fca5a5',
+                    }}>
+                      מתחת לגיל 18 חובה שהורה או אפוטרופוס ימלא ויחתום.
+                      חזרו לשלב הקודם והסירו את הסימון „אני מעל גיל 18”.
+                    </div>
+                  )}
                 </div>
                 <KnownChildPrompt
                   childName={child.name}
@@ -1126,7 +1646,7 @@ export default function PublicOnboardingForm() {
                         type="tel"
                         value={child.childPhone}
                         onChange={(e) => updateChild(index, { childPhone: e.target.value })}
-                        placeholder="לקבוצת המטפסים — לא נשלח דיוור"
+                        placeholder="בשביל יומן המטפסים ופיצ'רים מגניבים לילדים"
                       />
                     </div>
                   </>
@@ -1139,6 +1659,8 @@ export default function PublicOnboardingForm() {
                     placeholder="יום שמתאים, רוצים להירשם אחרי תאריך מסוים וכו׳"
                   />
                 </div>
+                </>
+                )}
               </div>
             ))}
             {!isAdultSelf && (
@@ -1213,19 +1735,41 @@ export default function PublicOnboardingForm() {
                                   </button>
                                 ))}
                               </div>
+                              {/* The detail opens under the question it answers,
+                                  so what is typed is tied to what was asked —
+                                  one shared box at the bottom collected three
+                                  conditions as one unattributed paragraph. */}
+                              {answers[q.id] === true && (
+                                <div className="form-group" style={{ marginTop: 10, marginBottom: 0 }}>
+                                  <label>פרטו בבקשה *</label>
+                                  <textarea
+                                    rows={2}
+                                    value={children[currentFullIndex]?.answerNotes?.[q.id] || ''}
+                                    onChange={(e) => updateChild(currentFullIndex, (child) => ({
+                                      answerNotes: { ...(child.answerNotes || {}), [q.id]: e.target.value },
+                                    }))}
+                                    placeholder="מה המצב, ממתי, והאם נקבעה הגבלה"
+                                    style={{ resize: 'vertical' }}
+                                  />
+                                </div>
+                              )}
                             </div>
                           ))}
                           {hasPositiveScreening(questions, answers) && (
-                            <div className="form-group" style={{ marginTop: 4 }}>
-                              <label>פרטו בבקשה *</label>
-                              <textarea
-                                rows={3}
-                                value={children[currentFullIndex]?.healthNotes || ''}
-                                onChange={(e) => updateChild(currentFullIndex, { healthNotes: e.target.value })}
-                                placeholder="מה המצב, תרופות קבועות, ומה שחשוב שהמדריך ידע"
-                                style={{ resize: 'vertical' }}
-                              />
-                            </div>
+                            <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', marginTop: 4, lineHeight: 1.5 }}>
+                              {/* The detail is a declaration by the signer, not a
+                                  briefing we undertake to act on. */}
+                              הפירוט נמסר על אחריות החותם/ת. האחריות להתאמת הפעילות למצב הרפואי,
+                              ולהיוועצות ברופא לפני ההשתתפות, היא של החותם/ת בלבד.
+                            </p>
+                          )}
+                          {needsMedicalClearance(questions, answers) && (
+                            <MedicalClearanceField
+                              triggers={clearanceTriggers(questions, answers)}
+                              value={children[currentFullIndex]?.medicalClearance || null}
+                              onChange={(file) => updateChild(currentFullIndex, { medicalClearance: file })}
+                              onError={setError}
+                            />
                           )}
                         </>
                       )}
@@ -1233,7 +1777,8 @@ export default function PublicOnboardingForm() {
                         הצהרה ובטיחות — {currentChild.name}
                       </div>
                       <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
-                        יש לסמן את כל הסעיפים לאישור.
+                        יש לסמן את כל הסעיפים לאחר שקראתם אותם.
+                        {!isAdultSelf && ' אנא הסבירו לילדכם את כללי הבטיחות.'}
                       </p>
                       {confirmations.map((q) => (
                         <label key={q.id} className="event-check" style={{ marginBottom: 10 }}>
@@ -1258,81 +1803,40 @@ export default function PublicOnboardingForm() {
             {healthSubStep === 2 && (
               <>
                 <div className="section-title">הסרת אחריות — {currentChild.name}</div>
-                {/* Two layers: what it means, and what it says. The summary is
-                    what people actually read, so it is the one on the page; the
-                    legal text is one tap away and is what gets signed. */}
+                {/* One text, the binding one, with the signer's own name inside
+                    it. A summary layer above it repeated the same clauses and
+                    made the page say everything twice. */}
                 <div style={{
                   background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.1)',
                   borderRadius: 12, padding: 14, marginBottom: 16,
                 }}>
-                  <div style={{ fontSize: 12, color: '#fb923c', fontWeight: 800, marginBottom: 8 }}>
-                    מה זה בעצם?
-                  </div>
-                  <div style={{
-                    fontSize: 13, lineHeight: 1.75, color: 'rgba(255,255,255,0.85)',
-                    whiteSpace: 'pre-wrap',
-                  }}>
-                    {waiverSummary}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowFullWaiver(true)}
-                    style={{
-                      marginTop: 12, width: '100%', background: 'rgba(255,255,255,.08)',
-                      border: '1px solid rgba(255,255,255,.15)', borderRadius: 10,
-                      color: '#e2e8f0', padding: '10px 12px', font: 'inherit', fontSize: 13,
-                      fontWeight: 700, cursor: 'pointer',
-                    }}
-                  >
-                    קראו את כתב הוויתור המלא
-                  </button>
-                </div>
-                {showFullWaiver && (
                   <div
-                    onClick={() => setShowFullWaiver(false)}
+                    ref={waiverBoxRef}
+                    onScroll={handleWaiverScroll}
                     style={{
-                      position: 'fixed', inset: 0, background: 'rgba(2,6,15,.82)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      padding: 16, zIndex: 60,
+                      fontSize: 13, lineHeight: 1.75, color: 'rgba(255,255,255,0.85)',
+                      whiteSpace: 'pre-wrap', maxHeight: 300, overflowY: 'auto',
+                      background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.08)',
+                      borderRadius: 10, padding: 12,
                     }}
                   >
-                    <div
-                      onClick={(e) => e.stopPropagation()}
-                      style={{
-                        background: '#0f172a', border: '1px solid rgba(255,255,255,.15)',
-                        borderRadius: 16, padding: 18, width: 'min(620px,100%)',
-                        maxHeight: '80vh', display: 'flex', flexDirection: 'column',
-                      }}
-                    >
-                      <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}>כתב ויתור מלא</div>
-                      <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>
-                        זהו הנוסח המחייב. הסימון נעשה במסך שמאחור.
-                      </div>
-                      <div style={{
-                        overflowY: 'auto', fontSize: 13, lineHeight: 1.75,
-                        color: 'rgba(255,255,255,0.85)', whiteSpace: 'pre-wrap',
-                      }}>
-                        {waiverText}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setShowFullWaiver(false)}
-                        className="event-primary"
-                        style={{ marginTop: 14 }}
-                      >
-                        סגירה
-                      </button>
-                    </div>
+                    {waiverText}
                   </div>
-                )}
-                <label className="event-check">
+                </div>
+                <label className="event-check" style={{ opacity: waiverRead ? 1 : 0.55 }}>
                   <input
                     type="checkbox"
+                    disabled={!waiverRead}
                     checked={!!children[currentFullIndex]?.waiverAccepted}
                     onChange={(e) => updateChild(currentFullIndex, { waiverAccepted: e.target.checked })}
                   />
                   <span>קראתי ואני מאשר/ת את הסרת האחריות והוראות הבטיחות</span>
                 </label>
+                {!waiverRead && (
+                  <p style={{ fontSize: 12, color: '#FCD34D', margin: '6px 2px 0' }}>
+                    גללו את הנוסח המחייב עד סופו — רק אז אפשר לסמן את האישור.
+                  </p>
+                )}
 
                 <div className="section-title" style={{ marginTop: 20 }}>חתימה על הצהרת בריאות ובטיחות</div>
                 <div className="canvas-container">

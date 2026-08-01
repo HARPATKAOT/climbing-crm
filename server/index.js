@@ -147,7 +147,12 @@ import {
   findLatestValidDeclaration,
   saveCrmParticipants,
 } from './crmWaiverService.js';
-import { declarationGap } from './healthQuestions.js';
+import {
+  declarationGap,
+  needsMedicalClearance,
+  questionsForSigner,
+} from './healthQuestions.js';
+import { createOtpService } from './otpService.js';
 import {
   declarationSignedAt,
   isHealthDeclarationValid,
@@ -328,6 +333,25 @@ app.use(express.json({
 }));
 // iCount payment-page IPN often posts as form-urlencoded
 app.use(express.urlencoded({ extended: true }));
+
+/**
+ * A body over the limit, or malformed JSON, otherwise leaves the parser as an
+ * HTML error page. Every public form reads `res.json()` and falls back to a
+ * blank object, so the family was shown "שגיאה בשמירת הטופס" with no hint that
+ * the attachment was the problem. Answering in JSON makes the cause reach them.
+ */
+app.use((err, _req, res, next) => {
+  if (!err || !err.status) return next(err);
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({
+      error: 'הקבצים המצורפים גדולים מדי לשליחה. צלמו את האישור בטלפון במקום לצרף קובץ סרוק',
+    });
+  }
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'הבקשה לא התקבלה כראוי — נסו לשלוח שוב' });
+  }
+  return next(err);
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. CRM GENERAL ENDPOINTS (Database Synced)
@@ -9687,16 +9711,32 @@ app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
           idNumber: parent.idNumber || '',
         }
       : null,
-    students: students.map((s) => ({
-      id: s.id,
-      name: s.name || '',
-      birthDate: s.birthDate || '',
-      gender: s.gender || '',
-      idNumber: s.idNumber || '',
-      status: s.status || '',
-      interests: Array.isArray(s.interests) ? s.interests : [],
-      notes: s.notes || '',
-    })),
+    students: students.map((s) => {
+      // Whether this participant already has a declaration in force decides
+      // whether the form asks them for one again, so the answer travels with
+      // the card rather than being guessed from the status.
+      const declaration = findLatestValidDeclaration(db, {
+        studentId: s.id,
+        parentId: parent?.id || null,
+        climberName: s.name || '',
+      });
+      const healthValid = !!declaration
+        || (!!s.healthSignedAt && isHealthDeclarationValid(s.healthSignedAt));
+      return {
+        id: s.id,
+        name: s.name || '',
+        birthDate: s.birthDate || '',
+        gender: s.gender || '',
+        idNumber: s.idNumber || '',
+        status: s.status || '',
+        interests: Array.isArray(s.interests) ? s.interests : [],
+        notes: s.notes || '',
+        healthValid,
+        healthSignedAt: declaration
+          ? (declaration.signedDate || declaration.date || s.healthSignedAt || '')
+          : (s.healthSignedAt || ''),
+      };
+    }),
     listDefs,
     subscriptions,
     requiredListKey: REQUIRED_BROADCAST_LIST,
@@ -9712,6 +9752,95 @@ app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
       : null,
   });
 });
+
+// ── Phone verification for the public form ───────────────────────────────────
+// A code over WhatsApp proves the person filling the form holds the phone they
+// typed. The declaration then carries "verified", which is what turns the
+// drawn signature into evidence about a particular person.
+
+const otpService = createOtpService();
+const OTP_TEMPLATE_NAME = 'phone_verification_code';
+
+app.post('/api/public/otp/send', publicFormRateLimit, async (req, res) => {
+  const phone = normPhone(req.body?.phone);
+  if (!phone || phone.length < 11) {
+    return res.status(400).json({ error: 'מספר הטלפון לא תקין' });
+  }
+  const issued = otpService.issueCode(phone);
+  if (issued.error) return res.status(429).json({ error: issued.error });
+  try {
+    const result = await whatsappService.sendTemplateMessage(
+      phone,
+      OTP_TEMPLATE_NAME,
+      [issued.code],
+      { buttonUrlParams: [issued.code] }
+    );
+    if (result && result.error) {
+      console.error('otp send failed:', JSON.stringify(result.error).slice(0, 300));
+      return res.status(502).json({ error: 'שליחת הקוד בוואטסאפ נכשלה — בדקו את המספר ונסו שוב' });
+    }
+    // Local development without Meta credentials: the code cannot arrive on a
+    // phone, so hand it back for testing. Never in production.
+    const dev = result?.mock ? { devCode: issued.code } : {};
+    res.json({ ok: true, ...dev });
+  } catch (err) {
+    console.error('otp send error:', err.message);
+    res.status(502).json({ error: 'שליחת הקוד בוואטסאפ נכשלה — נסו שוב' });
+  }
+});
+
+app.post('/api/public/otp/verify', publicFormRateLimit, (req, res) => {
+  const phone = normPhone(req.body?.phone);
+  const code = String(req.body?.code || '').trim();
+  if (!phone || !code) return res.status(400).json({ error: 'חסר קוד או מספר טלפון' });
+  const outcome = otpService.verifyCode(phone, code);
+  if (outcome.error) return res.status(400).json({ error: outcome.error });
+  res.json({ ok: true, token: outcome.token });
+});
+
+/**
+ * A doctor's approval reaches storage as a PDF and nothing else — the personal
+ * file bucket accepts no other type. A photograph is wrapped into a PDF by the
+ * form before it is sent, so what arrives here is already one.
+ */
+const CLEARANCE_MIME_EXTENSIONS = {
+  'application/pdf': 'pdf',
+};
+// Above what the form allows through, so a legitimate submission is never
+// refused here — this is the backstop for a caller that is not the form.
+const MAX_CLEARANCE_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Turns what the form sent into something storable, or says why it is not.
+ *
+ * Nothing here trusts the browser: the form downsizes photos before sending,
+ * but the size and the type are re-checked because this route is public and the
+ * next caller may not be the form at all.
+ */
+function decodeClearanceUpload(payload) {
+  const mimeType = String(payload?.mimeType || '').toLowerCase();
+  const extension = CLEARANCE_MIME_EXTENSIONS[mimeType];
+  if (!extension) return { error: 'אישור הרופא חייב להיות תמונה או קובץ PDF' };
+
+  const raw = String(payload?.base64 || '');
+  const body = raw.includes(',') ? raw.split(',')[1] : raw;
+  if (!body) return { error: 'אישור הרופא לא הגיע' };
+
+  let buffer;
+  try {
+    buffer = Buffer.from(body, 'base64');
+  } catch {
+    return { error: 'אישור הרופא אינו קובץ תקין' };
+  }
+  if (!buffer.length) return { error: 'אישור הרופא אינו קובץ תקין' };
+  if (buffer.length > MAX_CLEARANCE_BYTES) return { error: 'אישור הרופא גדול מדי' };
+
+  const fileName = String(payload?.fileName || `medical-clearance.${extension}`)
+    .replace(/[^\w֐-׿.\-]+/g, '_')
+    .slice(0, 120);
+
+  return { buffer, mimeType, extension, fileName };
+}
 
 // Public full onboarding submit (details + lists + health per child)
 app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
@@ -9743,6 +9872,23 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     return res.status(400).json({ error: 'נדרש מקום מגורים' });
   }
 
+  // Checked before anything else is read or written. A declaration signed from
+  // a phone that never answered a code is the document this gate exists to
+  // prevent, and enforcing it only in the form leaves the route open to anyone
+  // who skips the form — including the file uploads further down.
+  const otpToken = String(req.body?.phoneVerification?.token || '').trim();
+  if (!otpToken || !otpService.checkToken(otpToken, normPhone(phone))) {
+    return res.status(403).json({
+      error: 'אימות הטלפון פג או לא בוצע — חזרו לתחילת הטופס ובקשו קוד חדש',
+    });
+  }
+  const phoneVerification = {
+    verified: true,
+    method: 'whatsapp_code',
+    phone: normPhone(phone),
+    at: new Date().toISOString(),
+  };
+
   const childList = (Array.isArray(children) ? children : [])
     .map((c) => {
       const name = String(c.name || '').trim();
@@ -9762,6 +9908,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
         registrationNotes: String(c.registrationNotes || c.notes || '').trim(),
         answers: c.answers || {},
         healthNotes: String(c.healthNotes || '').trim(),
+        medicalClearance: c.medicalClearance || null,
         signature: c.signature || '',
         waiverAccepted: c.waiverAccepted === true || c.waiverAccepted === 'true',
         // Confirmed on the form as a child already on another parent's file.
@@ -9795,8 +9942,49 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
 
   for (const child of childList) {
     if (child.reuse_health) continue;
-    const gap = declarationGap(template?.healthQuestions || [], child.answers, child.name);
+    const asked = questionsForSigner(template?.healthQuestions || [], {
+      isAdultSelf: child.type === 'adult',
+    });
+    const gap = declarationGap(asked, child.answers, child.name);
     if (gap) return res.status(400).json({ error: gap });
+    // A doctor already limited this person's physical activity. The wall does
+    // not overrule that on a tick box, so the written approval is a condition
+    // of filing the declaration at all — checked here and not only in the form,
+    // which is the half of this a caller can skip.
+    if (needsMedicalClearance(asked, child.answers) && !child.medicalClearance) {
+      return res.status(400).json({
+        error: `נדרש אישור רופא להשתתפות בפעילות ספורטיבית עבור ${child.name}`,
+      });
+    }
+  }
+
+  // Uploaded before anything is written: a signed declaration on file with the
+  // approval missing is the one outcome this whole feature exists to prevent.
+  // An orphan file in storage, if the save then fails, costs nothing.
+  const clearanceUploads = [];
+  for (const child of childList) {
+    if (!child.medicalClearance) continue;
+    const prepared = decodeClearanceUpload(child.medicalClearance);
+    if (prepared.error) {
+      return res.status(400).json({ error: `${prepared.error} (${child.name})` });
+    }
+    const storagePath = `medical-clearance/${Date.now()}_${crypto.randomUUID()}.${prepared.extension}`;
+    let uploaded;
+    try {
+      uploaded = await supa.uploadClientDocument(storagePath, prepared.buffer, prepared.mimeType);
+    } catch (err) {
+      console.error('medical clearance upload error:', err.message);
+      return res.status(503).json({ error: 'שמירת אישור הרופא נכשלה — נסו שוב' });
+    }
+    if (!uploaded?.ok) {
+      return res.status(503).json({ error: uploaded?.error || 'שמירת אישור הרופא נכשלה — נסו שוב' });
+    }
+    clearanceUploads.push({
+      name: child.name,
+      storagePath,
+      fileName: prepared.fileName,
+      mimeType: prepared.mimeType,
+    });
   }
 
   let crmResult;
@@ -9816,6 +10004,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
       },
       participants: childList,
       template: template || resolveDeclarationTemplate(db, { templateId, templateSlug }),
+      phoneVerification,
       source: parentBody.source || 'form',
       onStudentCreated: (student, savedParent) => automationsService.triggerEvent('new_lead', {
         ...student,
@@ -9833,6 +10022,30 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   const parent = crmResult.parent;
   const declarations = crmResult.declarations;
   const savedStudents = crmResult.participants.map((participant) => participant.student);
+
+  // The uploaded approvals become documents in the personal file, alongside the
+  // signed declaration PDF, so the office sees why this registration was let
+  // through and can open the approval itself.
+  const clearanceDocuments = [];
+  for (const upload of clearanceUploads) {
+    const index = childList.findIndex((child) => child.name === upload.name);
+    const student = index >= 0 ? savedStudents[index] : null;
+    const declaration = declarations.find((d) => d.studentId === student?.id) || null;
+    const doc = db.insert('client_documents', {
+      parentId: parent?.id || null,
+      studentId: student?.id || null,
+      declarationId: declaration?.id || null,
+      type: 'medical_clearance',
+      fileName: upload.fileName,
+      storagePath: upload.storagePath,
+      mimeType: upload.mimeType,
+    });
+    const durableDoc = await persistCore('client_documents', doc);
+    if (durableDoc?.ok === false) {
+      console.error('medical clearance document persist failed:', durableDoc.error);
+    }
+    clearanceDocuments.push(doc);
+  }
 
   for (let index = 0; index < savedStudents.length; index += 1) {
     const student = savedStudents[index];
@@ -9886,12 +10099,19 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   // there is no nightly sweep behind it, so these families never reached the
   // address book at all.
   touchGoogleContacts();
+
+  // Spent only now, with the registration actually filed. Spending it up front
+  // meant a submission refused for a missing birth date burned the
+  // verification, and the correction came back "אימות הטלפון פג".
+  otpService.consumeToken(otpToken, normPhone(phone));
+
   res.status(201).json({
     success: true,
     parent,
     students: savedStudents,
     declarations,
     subscriptions: savedLists,
+    medicalClearances: clearanceDocuments,
   });
 });
 

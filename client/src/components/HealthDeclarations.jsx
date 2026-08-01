@@ -1,6 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { CheckCircle2, AlertCircle, FileText, Send, ClipboardCheck, Shield, Link2, Copy, Trash2, Plus, Download } from 'lucide-react';
 import { downloadHealthDeclarationPdf } from '../utils/healthDeclarationPdf.js';
+import {
+  isChildOnlyQuestion,
+  isScreeningQuestion,
+  questionLabel,
+  requiresClearance,
+} from '../utils/healthQuestions.js';
 
 const ACTIVITY_TYPES = [
   { value: 'wall', label: 'קיר טיפוס' },
@@ -24,15 +30,19 @@ const EMPTY_TEMPLATE = {
  * One line per question. A line starting with "?" is a medical screening
  * question — answered כן/לא, and a "yes" never blocks the form. Everything else
  * is a confirmation the signer must tick.
+ *
+ * A line starting with "@" is addressed to a parent only: it disappears when an
+ * adult fills the form in for themselves, so nobody confirms a rule about
+ * leaving a child unaccompanied when there is no child.
  */
 function questionsToText(questions) {
   if (!Array.isArray(questions) || !questions.length) return EMPTY_TEMPLATE.healthQuestionsText;
   return questions
     .map((q) => {
-      const label = String(q.label || q.question || '').trim();
+      const label = questionLabel(q);
       if (!label) return '';
-      const screening = q.kind === 'screen' || label.startsWith('?');
-      return screening && !label.startsWith('?') ? `?${label}` : label;
+      const marks = `${isScreeningQuestion(q) ? '?' : ''}${isChildOnlyQuestion(q) ? '@' : ''}${requiresClearance(q) ? '!' : ''}`;
+      return `${marks}${label}`;
     })
     .filter(Boolean)
     .join('\n');
@@ -44,15 +54,18 @@ function textToQuestions(text) {
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line, i) => {
-      const screening = line.startsWith('?');
-      const label = screening ? line.slice(1).trim() : line;
+      const screening = isScreeningQuestion({ label: line });
+      const childOnly = isChildOnlyQuestion({ label: line });
+      const clearance = requiresClearance({ label: line });
+      const label = questionLabel({ label: line });
       // `requireYes` used to be dropped here, which quietly turned every
       // mandatory clause optional the first time a template was saved from
       // this screen. A confirmation is mandatory; a screening question is not,
       // because there "yes" is an answer rather than a signature.
+      const audience = childOnly ? 'child' : 'all';
       return screening
-        ? { id: `q${i + 1}`, label, kind: 'screen', requireYes: false }
-        : { id: `q${i + 1}`, label, kind: 'confirm', requireYes: true };
+        ? { id: `q${i + 1}`, label, kind: 'screen', audience, requiresClearance: clearance, requireYes: false }
+        : { id: `q${i + 1}`, label, kind: 'confirm', audience, requiresClearance: false, requireYes: true };
     })
     .filter((q) => q.label);
 }
@@ -275,7 +288,7 @@ function FormTemplatesPanel() {
             />
           </div>
           <div className="form-group">
-            <label className="form-label">שאלות רפואיות (שורה לכל שאלה)</label>
+            <label className="form-label">שאלות רפואיות וסעיפי בטיחות (שורה לכל סעיף)</label>
             <textarea
               className="textarea"
               rows={4}
@@ -283,6 +296,13 @@ function FormTemplatesPanel() {
               onChange={(e) => setForm((f) => ({ ...f, healthQuestionsText: e.target.value }))}
               style={{ resize: 'vertical', fontFamily: 'inherit' }}
             />
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6, lineHeight: 1.6 }}>
+              שורה שמתחילה ב־<strong>?</strong> היא שאלה רפואית (כן/לא), ותשובת „כן” לעולם לא חוסמת את הטופס.
+              שורה שמתחילה ב־<strong>@</strong> מוצגת רק כשהורה ממלא עבור ילד, ונעלמת כשמבוגר ממלא עבור עצמו.
+              שורה שמתחילה ב־<strong>?!</strong> היא שאלה רפואית שבתשובת „כן” עליה חובה לצרף אישור רופא
+              להשתתפות בפעילות ספורטיבית — בלעדיו הטופס לא נשלח, והאישור נשמר בתיק הלקוח.
+              כל שורה אחרת היא סעיף לאישור שחובה לסמן.
+            </div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button type="submit" className="btn btn-primary" disabled={saving}>
