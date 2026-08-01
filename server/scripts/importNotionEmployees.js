@@ -43,7 +43,7 @@ function normId(raw) {
 const normName = (raw) => String(raw || '').replace(/\s+/g, ' ').trim();
 
 /** סוג שכר ב-Notion → התפקיד שהתעריף שלו במערכת. */
-const ROLE_OF_STATUS = { סנפלינג: 'מדריך סנפלינג' };
+const ROLE_OF_STATUS = { סנפלינג: 'הדרכת סנפלינג' };
 
 /**
  * התפקידים של העובד. מלבד ההסמכות שסומנו ב-Notion, כל תפקיד שיש לו תעריף

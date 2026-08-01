@@ -6,9 +6,17 @@ import {
   Phone, Mail, MapPin, CreditCard, User, Calendar, Cake, Landmark, Car, Lock
 } from 'lucide-react';
 import { Modal } from './UI.jsx';
-import { STAFF_ROLE_OPTIONS, ASSIGNABLE_ROLES, invalidateRoleCatalog } from '../utils/staffRoles.js';
 import {
-  PAYABLE_ROLES,
+  STAFF_ROLE_OPTIONS,
+  assignableLabelsOf,
+  payableRolesOf,
+  useRoleCatalog,
+  invalidateRoleCatalog,
+} from '../utils/staffRoles.js';
+import {
+  activityTypes, fetchActivityTypes, invalidateActivityTypes,
+} from '../utils/activityTypes.js';
+import {
   ratesOf,
   rateForRole,
   travelPerDay,
@@ -19,24 +27,13 @@ import {
   WORK_TYPE_ROLES,
 } from '../utils/wageRates.js';
 
-/** סוגי הפעילות שאפשר למפות להם תפקידים — תואם ל-ACTIVITY_TYPES ביומן. */
-const CATALOG_ACTIVITY_TYPES = [
-  { id: 'birthday', label: 'יום הולדת' },
-  { id: 'trip', label: 'טיול' },
-  { id: 'school', label: 'בית ספר' },
-  { id: 'company', label: 'פעילות חברה' },
-  { id: 'route_building', label: 'בניית מסלולים' },
-  { id: 'opening_hours', label: 'שעות פתיחה' },
-  { id: 'other', label: 'אחר' },
-];
-
 const STATUS_OPTIONS = ['עובד פעיל', 'מנהל', 'עובד זמני', 'מדריך צעיר', 'מועמד', 'ארכיון', 'סנפלינג'];
 const PAYMENT_OPTIONS = ['תלוש', 'חשבונית'];
 const WORK_TYPE_OPTIONS = [
   { id: 'counter_shift', label: 'דלפק' },
   { id: 'class_shift', label: 'חוג' },
   { id: 'private_shift', label: 'פרטי' },
-  { id: 'route_building_shift', label: 'בניית מסלולים' },
+  { id: 'route_building_shift', label: 'בונה מסלולים' },
 ];
 
 function monthBounds(ym) {
@@ -85,24 +82,21 @@ function hoursFromTimes(startHm, endHm) {
 function workTypeLabel(workType) {
   return WORK_TYPE_OPTIONS.find((o) => o.id === workType)?.label || workType || 'דלפק';
 }
-// התפקידים והסמכות הם רשימה אחת. השיבוץ בקבוצות, במשמרות ובאירועים מסתמך
-// עליה, ולכן היא חיה ב-utils/staffRoles.js ומשותפת לכל המסכים.
-const CERTIFICATION_OPTIONS = STAFF_ROLE_OPTIONS;
+// התפקידים והסמכות הם רשימה אחת, והקטלוג מהשרת הוא המקור שלה. הרשימה הקבועה
+// כאן היא רק גיבוי לרגעים שהקטלוג עוד לא נטען — אחרת תפקיד שנמחק בניהול
+// התפקידים היה ממשיך להופיע בכרטיס העובד.
+const FALLBACK_CERT_OPTIONS = STAFF_ROLE_OPTIONS;
 
 // הסמכה שהוזנה ידנית לעובד כלשהו הופכת לאופציה קבועה לכל שאר העובדים.
-function collectCertificationOptions(employees) {
-  const seen = new Set(CERTIFICATION_OPTIONS);
-  const extra = [];
+function certsInUse(employees) {
+  const seen = new Set();
   (employees || []).forEach((emp) => {
     (emp?.certifications || []).forEach((cert) => {
       const value = String(cert || '').trim();
-      if (!value || seen.has(value)) return;
-      seen.add(value);
-      extra.push(value);
+      if (value) seen.add(value);
     });
   });
-  extra.sort((a, b) => a.localeCompare(b, 'he'));
-  return [...CERTIFICATION_OPTIONS, ...extra];
+  return [...seen].sort((a, b) => a.localeCompare(b, 'he'));
 }
 
 const EMPLOYEE_DOC_FIELDS = [
@@ -471,11 +465,47 @@ function EmployeeDocField({ label, savedDoc, pendingFile, onPick, onClearPending
  * להסכמי השכר ולאירועים.
  */
 function RoleCatalogModal({ catalog, onCatalogChange, onRoleRenamed, onRoleDeleted, onClose }) {
-  const [view, setView] = useState('roles'); // 'roles' | 'activities'
+  const [view, setView] = useState('roles'); // 'roles' | 'activities' | 'types'
   const [renaming, setRenaming] = useState(null); // { from, value }
   const [newRole, setNewRole] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+
+  // סוגי הפעילות מגיעים מהשרת עם `in_use` — כמה פעילויות תלויות בכל סוג.
+  const [types, setTypes] = useState(activityTypes());
+  const [typeDraft, setTypeDraft] = useState({ label: '', color: '#60A5FA' });
+  const [typeRename, setTypeRename] = useState(null); // { id, value }
+
+  const loadTypes = async () => {
+    const res = await fetch('/api/activity-types').catch(() => null);
+    const list = res?.ok ? await res.json() : null;
+    if (Array.isArray(list) && list.length > 0) setTypes(list);
+  };
+  useEffect(() => { loadTypes(); }, []);
+
+  /** קריאה שמשנה סוג פעילות, ומרעננת גם את המטמון שהיומן קורא ממנו. */
+  const typeCall = async (path, method, body) => {
+    setBusy(true);
+    setMsg('');
+    try {
+      const res = await fetch(path, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'הפעולה נכשלה');
+      invalidateActivityTypes();
+      await fetchActivityTypes();
+      await loadTypes();
+      return true;
+    } catch (err) {
+      setMsg(err.message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const call = async (path, body) => {
     setBusy(true);
@@ -582,6 +612,9 @@ function RoleCatalogModal({ catalog, onCatalogChange, onRoleRenamed, onRoleDelet
           <button type="button" className={`tab-pill ${view === 'activities' ? 'active' : ''}`} onClick={() => setView('activities')}>
             מי מתאים לכל פעילות
           </button>
+          <button type="button" className={`tab-pill ${view === 'types' ? 'active' : ''}`} onClick={() => setView('types')}>
+            סוגי פעילות
+          </button>
         </div>
 
         <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -616,14 +649,14 @@ function RoleCatalogModal({ catalog, onCatalogChange, onRoleRenamed, onRoleDelet
                 </button>
               </div>
             </>
-          ) : (
+          ) : view === 'activities' ? (
             <>
               <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
                 סמנו אילו תפקידים מתאימים לכל סוג פעילות. רק הם יוצעו לשיבוץ,
                 וכל אחד מקבל את התעריף שלו לתפקיד הזה.
               </div>
 
-              {CATALOG_ACTIVITY_TYPES.map((type) => {
+              {types.map((type) => {
                 const selected = catalog?.activityRoles?.[type.id] || [];
                 return (
                   <div key={type.id} style={{
@@ -661,6 +694,120 @@ function RoleCatalogModal({ catalog, onCatalogChange, onRoleRenamed, onRoleDelet
                   </div>
                 );
               })}
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                אלה הסוגים שאפשר לבחור לאירוע ביומן. הצבע הוא מה שיסמן אותם שם.
+                סוג שיש לו פעילויות לא נמחק — קודם מעבירים אותן לסוג אחר.
+              </div>
+
+              {types.map((type) => (
+                <div key={type.id} style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)',
+                }}>
+                  <input
+                    type="color"
+                    value={type.color}
+                    disabled={busy}
+                    onChange={(e) => typeCall(`/api/activity-types/${type.id}`, 'PUT', { color: e.target.value })}
+                    style={{
+                      width: 26, height: 26, padding: 0, borderRadius: 6, flexShrink: 0,
+                      border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer',
+                    }}
+                    title="צבע ביומן"
+                  />
+                  {typeRename?.id === type.id ? (
+                    <>
+                      <input
+                        className="input input-sm"
+                        autoFocus
+                        value={typeRename.value}
+                        onChange={(e) => setTypeRename({ id: type.id, value: e.target.value })}
+                        onKeyDown={async (e) => {
+                          if (e.key !== 'Enter') return;
+                          e.preventDefault();
+                          const label = typeRename.value.trim();
+                          if (label && await typeCall(`/api/activity-types/${type.id}`, 'PUT', { label })) {
+                            setTypeRename(null);
+                          }
+                        }}
+                      />
+                      <button className="btn btn-ghost btn-icon btn-sm" disabled={busy}
+                        onClick={async () => {
+                          const label = typeRename.value.trim();
+                          if (label && await typeCall(`/api/activity-types/${type.id}`, 'PUT', { label })) {
+                            setTypeRename(null);
+                          }
+                        }}>
+                        <Save size={14} />
+                      </button>
+                      <button className="btn btn-ghost btn-icon btn-sm" onClick={() => setTypeRename(null)}>
+                        <X size={14} />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ flex: 1, fontSize: 13 }}>{type.label}</div>
+                      {type.in_use > 0 && (
+                        <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{type.in_use} פעילויות</span>
+                      )}
+                      <button className="btn btn-ghost btn-icon btn-sm" title="שינוי שם" disabled={busy}
+                        onClick={() => setTypeRename({ id: type.id, value: type.label })}>
+                        <Edit2 size={14} />
+                      </button>
+                      {type.locked ? (
+                        <span title="סוג שהמערכת מסתמכת עליו — אפשר לשנות שם וצבע בלבד"
+                          style={{ display: 'inline-flex', padding: 6 }}>
+                          <Lock size={13} style={{ color: 'var(--text-3)' }} />
+                        </span>
+                      ) : (
+                        <button className="btn btn-ghost btn-icon btn-sm" title="מחיקה"
+                          disabled={busy || type.in_use > 0}
+                          style={{ color: type.in_use > 0 ? 'var(--text-3)' : '#F87171' }}
+                          onClick={() => typeCall(`/api/activity-types/${type.id}`, 'DELETE')}>
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              ))}
+
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <input
+                  type="color"
+                  value={typeDraft.color}
+                  onChange={(e) => setTypeDraft((p) => ({ ...p, color: e.target.value }))}
+                  style={{
+                    width: 34, height: 34, padding: 0, borderRadius: 8, flexShrink: 0,
+                    border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer',
+                  }}
+                  title="צבע הסוג החדש"
+                />
+                <input
+                  className="input input-sm"
+                  placeholder="סוג פעילות חדש..."
+                  value={typeDraft.label}
+                  onChange={(e) => setTypeDraft((p) => ({ ...p, label: e.target.value }))}
+                  onKeyDown={async (e) => {
+                    if (e.key !== 'Enter') return;
+                    e.preventDefault();
+                    if (typeDraft.label.trim() && await typeCall('/api/activity-types', 'POST', typeDraft)) {
+                      setTypeDraft({ label: '', color: '#60A5FA' });
+                    }
+                  }}
+                />
+                <button type="button" className="btn btn-ghost btn-sm" disabled={busy || !typeDraft.label.trim()}
+                  onClick={async () => {
+                    if (await typeCall('/api/activity-types', 'POST', typeDraft)) {
+                      setTypeDraft({ label: '', color: '#60A5FA' });
+                    }
+                  }}>
+                  <Plus size={14} /> הוסף
+                </button>
+              </div>
             </>
           )}
 
@@ -725,15 +872,19 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
     return { label: found?.label || fallbackLabel, options: found?.options || fallbackOptions };
   };
   const certOptions = useMemo(() => {
-    const fromEmployees = collectCertificationOptions(employees);
-    if (!roleCatalog) return fromEmployees;
+    const inUse = certsInUse(employees);
+    if (!roleCatalog) {
+      const known = new Set(FALLBACK_CERT_OPTIONS);
+      return [...FALLBACK_CERT_OPTIONS, ...inUse.filter((c) => !known.has(c))];
+    }
     // תפקידי המערכת מגיעים כ-{key,label}; לעובד נשמרת התווית.
     const systemLabels = (roleCatalog.system || []).map((r) => r.label);
     const seen = new Set([...systemLabels, ...roleCatalog.extra]);
+    // הסמכה שכבר שמורה על עובד נשארת ברשימה גם בלי קטלוג, כדי שלא תיעלם ממנו.
     return [
       ...systemLabels,
       ...roleCatalog.extra,
-      ...fromEmployees.filter((c) => !seen.has(c)),
+      ...inUse.filter((c) => !seen.has(c)),
     ];
   }, [employees, roleCatalog]);
 
@@ -744,8 +895,9 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
     return map;
   });
   const [travel, setTravel] = useState(String(wage?.travel_per_day || '') || '');
+  const payableRoles = useMemo(() => payableRolesOf(roleCatalog), [roleCatalog]);
   const defaultModeFor = (role) =>
-    PAYABLE_ROLES.find((r) => r.role === role)?.defaultMode || 'hourly';
+    payableRoles.find((r) => r.role === role)?.defaultMode || 'hourly';
   const patchWageRate = (role, patch) => {
     setWageRates((prev) => ({
       ...prev,
@@ -753,7 +905,8 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
     }));
   };
   // בלי אף תפקיד מהרשימה הזו העובד נעלם מכל מסכי השיבוץ, ולכן זו אזהרה ולא הערה.
-  const noAssignableRole = !certifications.some((c) => ASSIGNABLE_ROLES.includes(c));
+  const assignableLabels = useMemo(() => assignableLabelsOf(roleCatalog), [roleCatalog]);
+  const noAssignableRole = !certifications.some((c) => assignableLabels.includes(c));
   const [saving, setSaving]           = useState(false);
   const [saveError, setSaveError]     = useState('');
 
@@ -822,7 +975,13 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
         <div className="modal-header">
           <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {isEdit ? <Edit2 size={16} /> : <Plus size={16} />}
+            {/* השם בכותרת — בעריכה צריך לדעת על מי מסתכלים בלי לגלול לשדה השם. */}
             {isEdit ? 'עריכת פרטי עובד' : 'הוספת עובד חדש'}
+            {isEdit && answers.name?.trim() && (
+              <span style={{ color: 'var(--text-3)', fontWeight: 400 }}>
+                · {answers.name.trim()}
+              </span>
+            )}
           </div>
           <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} disabled={saving}><X size={18} /></button>
         </div>
@@ -1147,18 +1306,21 @@ const PAY_MODE_LABELS = { hourly: '₪ לשעה', daily: '₪ ליום', flat: '
 
 function WageFormModal({ wage, employees, onSave, onClose }) {
   const [employeeId, setEmployeeId] = useState(wage?.employee_id || employees[0]?.id || '');
-  // תעריף לכל תפקיד. הסכם ישן מגיע מהשרת כשהוא כבר מומר לרשימה.
-  const [rates, setRates] = useState(() => {
+  // שורה לכל תפקיד שקיים היום בקטלוג — תפקיד שנמחק לא מקבל שורת תעריף.
+  const catalog = useRoleCatalog();
+  const [rates, setRates] = useState([]);
+  useEffect(() => {
     const existing = ratesOf(wage);
-    return PAYABLE_ROLES.map(({ role, defaultMode }) => {
+    setRates(payableRolesOf(catalog).map(({ role, defaultMode }) => {
       const found = existing.find((r) => r.role === role);
       return {
         role,
         mode: found?.mode || defaultMode,
         amount: found ? String(found.amount) : '',
       };
-    });
-  });
+    }));
+    // מזהה ההסכם ולא האובייקט — כדי שרינדור מחדש לא ימחק סכום שהוקלד ועוד לא נשמר.
+  }, [catalog, wage?.id]);
   const [travel, setTravel] = useState(String(wage?.travel_per_day ?? ''));
   const [saving, setSaving] = useState(false);
 
@@ -1455,6 +1617,13 @@ function EmployeeOnboardingLinkPanel() {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function Employees() {
+  // התפקידים שהמסך מציג נגזרים מהקטלוג, כדי שמחיקה או שינוי שם יופיעו כאן מיד.
+  // הקטלוג נטען פעם אחת; עריכה מהחלון שמכאן מחליפה אותו בלי לטעון מחדש.
+  const fetchedCatalog = useRoleCatalog();
+  const [catalogEdit, setCatalogEdit] = useState(null);
+  const roleCatalog = catalogEdit || fetchedCatalog;
+  const [showCatalog, setShowCatalog] = useState(false);
+  const payableRoles = useMemo(() => payableRolesOf(roleCatalog), [roleCatalog]);
   const [employees, setEmployees] = useState([]);
   const [wages, setWages]         = useState([]);
   const [shifts, setShifts]       = useState([]);
@@ -1543,7 +1712,7 @@ export default function Employees() {
 
   // ברירת מחדל לעובד בלי הסכם — כדי שהמסך יראה סכום ולא ריק.
   const defaultAgreement = {
-    rates: PAYABLE_ROLES.map(({ role, defaultMode }) => ({
+    rates: payableRoles.map(({ role, defaultMode }) => ({
       role, mode: defaultMode, amount: defaultMode === 'daily' ? 500 : 45,
     })),
     travel_per_day: 0,
@@ -1577,7 +1746,7 @@ export default function Employees() {
         const diffMs = new Date(s.clock_out) - new Date(s.clock_in);
         const hrs = roundHoursHalfUp(diffMs / (1000 * 60 * 60));
         totalHours += hrs;
-        const rate = rateForRole(agreement, WORK_TYPE_ROLES[s.activity_type] || 'מפעיל קיר');
+        const rate = rateForRole(agreement, WORK_TYPE_ROLES[s.activity_type] || 'הפעלת קיר');
         totalPay += hrs * (rate?.amount || 0);
       });
 
@@ -2191,7 +2360,24 @@ export default function Employees() {
             <Icon size={14} /> {label}
           </button>
         ))}
+        {/* הגדרה כלל-מערכתית ולא לשונית תוכן — לכן היא נפתחת כחלון מכאן,
+            במקום לחייב לפתוח כרטיס של עובד אקראי כדי להגיע אליה. */}
+        <button className="tab-pill" onClick={() => setShowCatalog(true)}>
+          <Settings2 size={14} /> תפקידים וסוגי פעילות
+        </button>
       </div>
+
+      {showCatalog && (
+        <RoleCatalogModal
+          catalog={roleCatalog}
+          onCatalogChange={setCatalogEdit}
+          // אין כאן טופס פתוח לעדכן; מרעננים את הנתונים כדי שהשמות החדשים
+          // יופיעו בטבלאות מיד.
+          onRoleRenamed={() => refreshData()}
+          onRoleDeleted={() => refreshData()}
+          onClose={() => setShowCatalog(false)}
+        />
+      )}
 
       {/* ─── Tab: Onboarding link ───────────────────────────────────────────── */}
       {activeTab === 'onboard-link' && <EmployeeOnboardingLinkPanel />}
@@ -2423,7 +2609,7 @@ export default function Employees() {
                             <option value="counter_shift">משמרת דלפק (שעתי)</option>
                             <option value="class_shift">הדרכת חוג (שעתי)</option>
                             <option value="private_shift">שיעור פרטי (שעתי)</option>
-                            <option value="route_building_shift">בניית מסלולים (שעתי)</option>
+                            <option value="route_building_shift">בונה מסלולים (שעתי)</option>
                           </select>
                         </div>
                       )}
@@ -2469,7 +2655,7 @@ export default function Employees() {
                       let actLabel = 'דלפק';
                       if (s.activity_type === 'class_shift') actLabel = 'חוג';
                       else if (s.activity_type === 'private_shift') actLabel = 'פרטי';
-                      else if (s.activity_type === 'route_building_shift') actLabel = 'בניית מסלולים';
+                      else if (s.activity_type === 'route_building_shift') actLabel = 'בונה מסלולים';
 
                       return (
                         <tr key={s.id}>
@@ -2713,7 +2899,7 @@ export default function Employees() {
                             style={{ minWidth: 130 }}
                           >
                             <option value="">ללא תפקיד</option>
-                            {PAYABLE_ROLES.map(({ role }) => {
+                            {payableRoles.map(({ role }) => {
                               const r = rateForRole(agreement, role);
                               return (
                                 <option key={role} value={role}>
@@ -2771,7 +2957,16 @@ export default function Employees() {
                             <>₪{rate}</>
                           )}
                         </td>
-                        <td style={{ fontWeight: 700, color: 'var(--green)' }}>₪{amount}</td>
+                        {/* מנעול = היום נסגר והסכום נחתם. שינוי תעריף מהיום
+                            והלאה לא ייגע בו; רק עריכה של השורה עצמה. */}
+                        <td style={{ fontWeight: 700, color: 'var(--green)' }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                            ₪{amount}
+                            {row.pay_locked_at && (
+                              <Lock size={11} style={{ color: 'var(--text-3)' }} title="השכר נחתם בסגירת היום" />
+                            )}
+                          </span>
+                        </td>
                         <td>
                           <span className={`badge ${row.approved ? 'badge-green' : 'badge-gray'}`}>
                             {row.approved ? 'מאושר' : 'ממתין'}

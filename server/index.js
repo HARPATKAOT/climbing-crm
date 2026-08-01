@@ -7543,7 +7543,7 @@ app.post('/api/wall-shift/close', async (req, res) => {
   let row = null;
   if (cin && cout) {
     const minutes = (new Date(shift.clock_out) - new Date(shift.clock_in)) / 60000;
-    row = db.insert('work_assignments', {
+    row = db.insert('work_assignments', withFrozenPay({
       employee_id: employeeId,
       activity_id: null,
       group_id: null,
@@ -7559,7 +7559,7 @@ app.post('/api/wall-shift/close', async (req, res) => {
       shift_id: shift.id,
       approved: false,
       notes: closerNote,
-    });
+    }));
   }
   res.json({ shift, row });
 });
@@ -7574,18 +7574,33 @@ const SYSTEM_ROLE_KEYS = {
   WALL_OPERATOR: 'wall_operator',
   RAPPEL: 'rappel',
   PRIVATE: 'private',
-  ROUTE_L1: 'route_l1',
-  ROUTE_L2: 'route_l2',
+  ROUTE: 'route_l1',
 };
 
+// התוויות מנוסחות כמשימה ולא כתואר: מה העובד עושה במשמרת, לא איך קוראים לו.
 const DEFAULT_SYSTEM_ROLES = [
-  { key: SYSTEM_ROLE_KEYS.TRAINER, label: 'מדריך' },
+  { key: SYSTEM_ROLE_KEYS.TRAINER, label: 'הדרכת חוג' },
   { key: SYSTEM_ROLE_KEYS.ASSISTANT, label: 'עוזר מדריך' },
-  { key: SYSTEM_ROLE_KEYS.WALL_OPERATOR, label: 'מפעיל קיר' },
-  { key: SYSTEM_ROLE_KEYS.RAPPEL, label: 'מדריך סנפלינג' },
-  { key: SYSTEM_ROLE_KEYS.PRIVATE, label: 'מדריך שיעור פרטי' },
-  { key: SYSTEM_ROLE_KEYS.ROUTE_L1, label: 'בונה מסלולים רמה 1' },
-  { key: SYSTEM_ROLE_KEYS.ROUTE_L2, label: 'בונה מסלולים רמה 2' },
+  { key: SYSTEM_ROLE_KEYS.WALL_OPERATOR, label: 'הפעלת קיר' },
+  { key: SYSTEM_ROLE_KEYS.RAPPEL, label: 'הדרכת סנפלינג' },
+  { key: SYSTEM_ROLE_KEYS.PRIVATE, label: 'שיעור פרטי' },
+  { key: SYSTEM_ROLE_KEYS.ROUTE, label: 'בונה מסלולים' },
+];
+
+/**
+ * התוויות הישנות, לפני שהתפקידים נוסחו כמשימות. שתי רמות בניית המסלולים
+ * התאחדו לאחת — לא היה הבדל בתמחור ובשיבוץ ביניהן. הרשימה נדרשת כדי להחליף
+ * את השם בכל מקום שהוא כבר שמור בו; בלעדיה עובד שסומן „מדריך” לא היה נמצא
+ * כשהיומן מחפש מי מתאים ל„הדרכת חוג”.
+ */
+const LEGACY_ROLE_LABELS = [
+  { from: 'מדריך', to: 'הדרכת חוג' },
+  { from: 'מפעיל קיר', to: 'הפעלת קיר' },
+  { from: 'מדריך סנפלינג', to: 'הדרכת סנפלינג' },
+  { from: 'מדריך שיעור פרטי', to: 'שיעור פרטי' },
+  { from: 'בונה מסלולים רמה 1', to: 'בונה מסלולים' },
+  { from: 'בונה מסלולים רמה 2', to: 'בונה מסלולים' },
+  { from: 'בניית מסלולים', to: 'בונה מסלולים' },
 ];
 const DEFAULT_EXTRA_ROLES = ['מנהל פארק חבלים', 'מדריך טיפוס ספורטיבי', 'מאמן אתלטיקה', 'מורה דרך'];
 
@@ -7596,11 +7611,31 @@ const DEFAULT_ACTIVITY_ROLES = {
   company: [SYSTEM_ROLE_KEYS.TRAINER, SYSTEM_ROLE_KEYS.ASSISTANT],
   trip: [SYSTEM_ROLE_KEYS.RAPPEL],
   opening_hours: [SYSTEM_ROLE_KEYS.WALL_OPERATOR],
-  route_building: [SYSTEM_ROLE_KEYS.ROUTE_L1, SYSTEM_ROLE_KEYS.ROUTE_L2],
+  route_building: [SYSTEM_ROLE_KEYS.ROUTE],
   other: [],
 };
 
+/**
+ * סוגי הפעילות ביומן.
+ *
+ * הרשימה היא נתון ולא קוד, כדי שאפשר יהיה להוסיף מחר סוג חדש בלי גרסה. לשני
+ * סוגים יש התנהגות מיוחדת שכתובה בקוד (`opening_hours` פותח יום קיר,
+ * `training_vacation` מבטל אימונים), ולכן הם מסומנים `locked` — אפשר לשנות
+ * להם שם וצבע, אבל מחיקה הייתה מכבה יכולת בלי שיישאר לה מסך.
+ */
+const DEFAULT_ACTIVITY_TYPES = [
+  { id: 'birthday', label: 'יום הולדת', color: '#FB923C', bg: 'rgba(251,146,60,0.18)' },
+  { id: 'trip', label: 'טיול', color: '#60A5FA', bg: 'rgba(96,165,250,0.18)' },
+  { id: 'school', label: 'בית ספר', color: '#34D399', bg: 'rgba(52,211,153,0.18)' },
+  { id: 'company', label: 'פעילות חברה', color: '#FBBF24', bg: 'rgba(251,191,36,0.18)' },
+  { id: 'route_building', label: 'בניית מסלולים', color: '#A78BFA', bg: 'rgba(167,139,250,0.18)' },
+  { id: 'opening_hours', label: 'שעות פתיחה', color: '#22D3EE', bg: 'rgba(34,211,238,0.16)', locked: true },
+  { id: 'training_vacation', label: 'חופשה מאימונים', color: '#F472B6', bg: 'rgba(244,114,182,0.18)', locked: true },
+  { id: 'other', label: 'אחר', color: '#94A3B8', bg: 'rgba(148,163,184,0.16)', locked: true },
+];
+
 const ROLE_CATALOG_KEY = 'staff_role_catalog';
+const ACTIVITY_TYPE_CATALOG_KEY = 'activity_type_catalog';
 
 function blankCatalog() {
   return {
@@ -7616,20 +7651,30 @@ function normalizeCatalog(raw) {
   if (!raw || typeof raw !== 'object') return base;
 
   // גרסה ישנה החזיקה רק `extra`; תפקידי המערכת היו קבועים בקוד.
+  // תווית שנשמרה בניסוח הישן מוחלפת בחדש; תווית שהמשתמש שינה בעצמו נשארת.
   const system = Array.isArray(raw.system) && raw.system.every((r) => r && r.key)
     ? DEFAULT_SYSTEM_ROLES.map((def) => {
       const found = raw.system.find((r) => r.key === def.key);
-      return { key: def.key, label: String(found?.label || def.label) };
+      const saved = String(found?.label || def.label);
+      const renamed = LEGACY_ROLE_LABELS.find((l) => l.from === saved);
+      return { key: def.key, label: renamed ? renamed.to : saved };
     })
     : base.system;
 
-  return {
-    system,
-    extra: Array.isArray(raw.extra) ? raw.extra.map(String).filter(Boolean) : base.extra,
-    activityRoles: (raw.activityRoles && typeof raw.activityRoles === 'object')
-      ? { ...base.activityRoles, ...raw.activityRoles }
-      : base.activityRoles,
-  };
+  const knownKeys = new Set(system.map((r) => r.key));
+  const extra = Array.isArray(raw.extra) ? raw.extra.map(String).filter(Boolean) : base.extra;
+  const rawActivityRoles = (raw.activityRoles && typeof raw.activityRoles === 'object')
+    ? { ...base.activityRoles, ...raw.activityRoles }
+    : base.activityRoles;
+  // מפתח של תפקיד שכבר לא קיים (route_l2) נשמט, בלי לרוקן את הסוג.
+  const activityRoles = {};
+  for (const [type, keys] of Object.entries(rawActivityRoles)) {
+    const kept = (Array.isArray(keys) ? keys : [])
+      .filter((k) => knownKeys.has(k) || extra.includes(k));
+    activityRoles[type] = [...new Set(kept)];
+  }
+
+  return { system, extra, activityRoles };
 }
 
 async function readRoleCatalog() {
@@ -7681,23 +7726,35 @@ function allCatalogLabels(catalog) {
   return [...catalog.system.map((r) => r.label), ...catalog.extra];
 }
 
-/** מחליף שם תפקיד בכל מקום שהוא שמור בו. מחזיר כמה רשומות עודכנו. */
+/**
+ * מחליף שם תפקיד בכל מקום שהוא שמור בו. מחזיר כמה רשומות עודכנו.
+ * כפילויות נמחקות: אם השם החדש כבר קיים אצל אותו עובד (איחוד שני תפקידים
+ * לאחד), הוא לא יופיע פעמיים.
+ */
 function propagateRoleRename(from, to) {
   let touched = 0;
   for (const emp of db.get('employees') || []) {
     const certs = Array.isArray(emp.certifications) ? emp.certifications : [];
     if (!certs.includes(from)) continue;
     db.update('employees', emp.id, {
-      certifications: certs.map((c) => (c === from ? to : c)),
+      certifications: [...new Set(certs.map((c) => (c === from ? to : c)))],
     });
     touched += 1;
   }
   for (const wage of db.get('wage_agreements') || []) {
     const rates = Array.isArray(wage.rates) ? wage.rates : [];
     if (!rates.some((r) => r.role === from)) continue;
-    db.update('wage_agreements', wage.id, {
-      rates: rates.map((r) => (r.role === from ? { ...r, role: to } : r)),
-    });
+    const merged = [];
+    for (const rate of rates) {
+      const role = rate.role === from ? to : rate.role;
+      // בין שני תעריפים לאותו תפקיד נשמר זה שיש בו סכום.
+      const existing = merged.find((r) => r.role === role);
+      if (!existing) merged.push({ ...rate, role });
+      else if (!Number(existing.amount) && Number(rate.amount)) {
+        Object.assign(existing, { ...rate, role });
+      }
+    }
+    db.update('wage_agreements', wage.id, { rates: merged });
     touched += 1;
   }
   for (const act of db.get('activities') || []) {
@@ -7710,6 +7767,159 @@ function propagateRoleRename(from, to) {
     db.update('work_assignments', row.id, { role: to });
     touched += 1;
   }
+  return touched;
+}
+
+// ─── קטלוג סוגי הפעילות ──────────────────────────────────────────────────────
+
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+
+/** רקע שקוף לצבע — כך מספיק לבחור צבע אחד וגם הכרטיס ביומן מקבל גוון. */
+function bgForColor(color) {
+  const hex = HEX_COLOR.test(color) ? color : '#94A3B8';
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  return `rgba(${r},${g},${b},0.18)`;
+}
+
+/** מזהה יציב לסוג חדש. השם עשוי להשתנות, המזהה נשאר על הפעילויות. */
+function activityTypeId(label) {
+  const slug = String(label).trim().toLowerCase()
+    .replace(/[^a-z0-9֐-׿]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return `t_${slug || 'type'}_${Date.now().toString(36)}`;
+}
+
+function normalizeActivityTypes(raw) {
+  const base = DEFAULT_ACTIVITY_TYPES.map((t) => ({ ...t }));
+  if (!Array.isArray(raw) || raw.length === 0) return base;
+
+  const byId = new Map();
+  for (const item of raw) {
+    const id = String(item?.id || '').trim();
+    if (!id || byId.has(id)) continue;
+    const fallback = base.find((t) => t.id === id);
+    const color = HEX_COLOR.test(item?.color) ? item.color : (fallback?.color || '#94A3B8');
+    byId.set(id, {
+      id,
+      label: String(item?.label || fallback?.label || id),
+      color,
+      bg: typeof item?.bg === 'string' && item.bg ? item.bg : bgForColor(color),
+      // ההגנה על סוג מערכת חיה בקוד ולא במה שנשמר, כדי שעריכה ידנית של
+      // ההגדרה לא תוכל להפוך סוג נעול לנמחק.
+      locked: !!fallback?.locked,
+    });
+  }
+  // סוג מערכת שנמחק מהנתון השמור חוזר — הקוד עדיין מסתמך עליו.
+  for (const t of base) if (t.locked && !byId.has(t.id)) byId.set(t.id, t);
+  return [...byId.values()];
+}
+
+async function readActivityTypes() {
+  const local = db.getAppSettingLocal?.(ACTIVITY_TYPE_CATALOG_KEY);
+  if (local) return normalizeActivityTypes(local);
+  try {
+    const remote = await supa.getAppSetting(ACTIVITY_TYPE_CATALOG_KEY);
+    if (remote) {
+      const normalized = normalizeActivityTypes(remote);
+      db.setAppSettingLocal?.(ACTIVITY_TYPE_CATALOG_KEY, normalized);
+      return normalized;
+    }
+  } catch { /* אין עותק עמיד — ממשיכים לברירת המחדל */ }
+  return normalizeActivityTypes(null);
+}
+
+async function writeActivityTypes(list) {
+  const value = normalizeActivityTypes(list);
+  db.setAppSettingLocal?.(ACTIVITY_TYPE_CATALOG_KEY, value);
+  try { await supa.setAppSetting(ACTIVITY_TYPE_CATALOG_KEY, value); } catch { /* נשמר מקומית */ }
+  return value;
+}
+
+/** כמה פעילויות משתמשות בסוג — מה שקובע אם מותר למחוק אותו. */
+function activitiesUsingType(typeId) {
+  return (db.get('activities') || []).filter((a) => a.type === typeId).length;
+}
+
+app.get('/api/activity-types', async (req, res) => {
+  const types = await readActivityTypes();
+  res.json(types.map((t) => ({ ...t, in_use: activitiesUsingType(t.id) })));
+});
+
+app.post('/api/activity-types', async (req, res) => {
+  const label = String(req.body?.label || '').trim();
+  if (!label) return res.status(400).json({ error: 'שם הסוג חסר' });
+  const types = await readActivityTypes();
+  if (types.some((t) => t.label === label)) {
+    return res.status(409).json({ error: 'כבר קיים סוג בשם הזה' });
+  }
+  const color = HEX_COLOR.test(req.body?.color) ? req.body.color : '#94A3B8';
+  const created = { id: activityTypeId(label), label, color, bg: bgForColor(color), locked: false };
+  const saved = await writeActivityTypes([...types, created]);
+  res.status(201).json({ types: saved, created });
+});
+
+app.put('/api/activity-types/:id', async (req, res) => {
+  const { id } = req.params;
+  const types = await readActivityTypes();
+  const found = types.find((t) => t.id === id);
+  if (!found) return res.status(404).json({ error: 'הסוג לא נמצא' });
+
+  const label = req.body?.label !== undefined ? String(req.body.label).trim() : found.label;
+  if (!label) return res.status(400).json({ error: 'שם הסוג חסר' });
+  if (types.some((t) => t.id !== id && t.label === label)) {
+    return res.status(409).json({ error: 'כבר קיים סוג בשם הזה' });
+  }
+  const color = HEX_COLOR.test(req.body?.color) ? req.body.color : found.color;
+  const next = types.map((t) => (t.id === id ? { ...t, label, color, bg: bgForColor(color) } : t));
+  res.json(await writeActivityTypes(next));
+});
+
+app.delete('/api/activity-types/:id', async (req, res) => {
+  const { id } = req.params;
+  const types = await readActivityTypes();
+  const found = types.find((t) => t.id === id);
+  if (!found) return res.status(404).json({ error: 'הסוג לא נמצא' });
+  if (found.locked) {
+    return res.status(400).json({ error: 'זה סוג שהמערכת מסתמכת עליו — אפשר לשנות לו שם וצבע, אבל לא למחוק' });
+  }
+  const used = activitiesUsingType(id);
+  if (used > 0) {
+    return res.status(409).json({
+      error: `יש ${used} פעילויות מהסוג הזה. העבירו אותן לסוג אחר לפני המחיקה.`,
+      in_use: used,
+    });
+  }
+  const saved = await writeActivityTypes(types.filter((t) => t.id !== id));
+  // המיפוי לתפקידים מתלווה לסוג — אין טעם להשאיר שורה יתומה.
+  const catalog = await readRoleCatalog();
+  if (catalog.activityRoles?.[id]) {
+    delete catalog.activityRoles[id];
+    await writeRoleCatalog(catalog);
+  }
+  res.json(saved);
+});
+
+/**
+ * המרה חד-פעמית לניסוח המשימות. רצה בעלייה של השרת ושותקת כשאין מה להמיר,
+ * כי אחרי ההמרה הראשונה אף רשומה כבר לא מחזיקה את השמות הישנים.
+ */
+async function migrateLegacyRoleLabels() {
+  const catalog = await readRoleCatalog();
+  const current = new Set(catalog.system.map((r) => r.label));
+  let touched = 0;
+  for (const { from, to } of LEGACY_ROLE_LABELS) {
+    // שם ישן שהמשתמש בחר להשאיר כתווית פעילה אינו „ישן” — לא נוגעים בו.
+    if (current.has(from)) continue;
+    touched += propagateRoleRename(from, to);
+  }
+  // כותבים רק אם ההמרה באמת שינתה משהו. כתיבה בכל עלייה הייתה דורסת שם
+  // שהמשתמש בחר בעצמו במקרה שהקריאה מהאחסון העמיד נכשלה והוחזרה ברירת מחדל.
+  const stored = db.getAppSettingLocal?.(ROLE_CATALOG_KEY);
+  const storedDiffers = stored && JSON.stringify(stored) !== JSON.stringify(catalog);
+  if (touched > 0 || storedDiffers) {
+    await writeRoleCatalog(catalog);
+  }
+  if (touched > 0) console.log(`🧗 שמות תפקידים הומרו לניסוח משימה ב-${touched} רשומות`);
   return touched;
 }
 
@@ -8159,6 +8369,69 @@ function normalizeFlatAmount(value, payMode, existing = null) {
   return Math.round(n * 100) / 100;
 }
 
+/**
+ * חתימת השכר על שורת עבודה.
+ *
+ * הסכום נשמר על השורה עצמה ולא מחושב מחדש בכל צפייה, כי התעריפים ושמות
+ * התפקידים משתנים עם הזמן — ומשכורת של חודש שעבר חייבת להישאר מה שסוכם אז.
+ * החתימה מתרעננת בכל כתיבה של השורה, עד שהיא ננעלת בסוף היום.
+ */
+function payFieldsForWorkRow(row) {
+  const agreement = (db.get('wage_agreements') || [])
+    .find((w) => w.employee_id === row.employee_id) || null;
+  const role = row.role || WORK_TYPE_ROLES[row.work_type] || null;
+  const rate = rateForRole(agreement, role);
+  // בלי pay_frozen_at על העותק — אחרת החישוב היה מחזיר את הסכום הישן.
+  const amount = amountForWorkRow({ ...row, pay_frozen_at: null }, agreement);
+  return {
+    pay_amount: amount,
+    pay_rate: rate ? rate.amount : null,
+    pay_rate_mode: rate ? rate.mode : (row.pay_mode === 'flat' ? 'flat' : null),
+    pay_frozen_at: new Date().toISOString(),
+  };
+}
+
+/** שורה חדשה נכתבת כבר עם השכר החתום עליה. */
+function withFrozenPay(fields) {
+  return { ...fields, ...payFieldsForWorkRow(fields) };
+}
+
+/**
+ * נעילת יום: כל שורה מיום שהסתיים מתומחרת מחדש לפי מה שידוע עכשיו ואז ננעלת.
+ * הריצה חוזרת כל שעה, כך שיום נסגר מעצמו גם בלי שאף אחד נכנס למערכת.
+ */
+function sealPastWorkDays() {
+  const today = israelLocalParts(new Date())?.date || new Date().toISOString().slice(0, 10);
+  const withAgreement = new Set((db.get('wage_agreements') || []).map((w) => w.employee_id));
+  let sealed = 0;
+  let released = 0;
+  for (const row of db.get('work_assignments') || []) {
+    if (!row.date || row.date >= today) continue;
+    if (row.pay_locked_at) {
+      // שורה שננעלה על ₪0 בלי תעריף — הנעילה הייתה מקבעת טעות. משחררים אותה
+      // כדי שתיתפס שוב ברגע שיהיה לתפקיד שלה תעריף.
+      if (row.pay_mode !== 'flat' && !Number(row.pay_amount)) {
+        db.update('work_assignments', row.id, { pay_locked_at: null, pay_frozen_at: null });
+        released += 1;
+      }
+      continue;
+    }
+    // בלי הסכם שכר אין לפי מה לתמחר. נעילה כאן הייתה מקבעת ₪0 לנצח, ולכן
+    // השורה ממתינה — ברגע שייכתב הסכם לעובד היא תיתפס בסבב הבא.
+    if (row.pay_mode !== 'flat' && !withAgreement.has(row.employee_id)) continue;
+    // שורה בלי תפקיד היא נתון חסר ולא התנדבות. נעילה שלה הייתה מקבעת ₪0.
+    if (row.pay_mode !== 'flat' && !(row.role || WORK_TYPE_ROLES[row.work_type])) continue;
+    const pay = payFieldsForWorkRow(row);
+    // ₪0 בשורה שעתית פירושו שאין עדיין תעריף לתפקיד — לא נועלים אפס.
+    if (row.pay_mode !== 'flat' && !pay.pay_amount) continue;
+    db.update('work_assignments', row.id, { ...pay, pay_locked_at: new Date().toISOString() });
+    sealed += 1;
+  }
+  if (sealed > 0) console.log(`💰 ננעלו ${sealed} שורות שכר מימים שהסתיימו`);
+  if (released > 0) console.log(`🔓 שוחררו ${released} שורות שננעלו בלי תעריף`);
+  return sealed;
+}
+
 function normalizeWorkAssignment(body = {}, { existing = null } = {}) {
   const workType = WORK_TYPES.includes(body.work_type)
     ? body.work_type
@@ -8240,7 +8513,7 @@ app.post('/api/work-assignments/from-activity', async (req, res) => {
   for (const employeeId of ids) {
     if (existing.some((r) => r.employee_id === employeeId)) continue;
     const suggestion = suggestHoursFromClock(employeeId, activity.date, eventStart, eventEnd);
-    const row = db.insert('work_assignments', {
+    const row = db.insert('work_assignments', withFrozenPay({
       employee_id: employeeId,
       activity_id,
       date: activity.date,
@@ -8255,7 +8528,7 @@ app.post('/api/work-assignments/from-activity', async (req, res) => {
       shift_id: suggestion?.shift_id || null,
       approved: false,
       notes: '',
-    });
+    }));
     created.push(row);
   }
 
@@ -8320,13 +8593,13 @@ function syncClassPayRow({ group, date, employeeId, paid, times, roleTitle }) {
   }
   if (existing) return existing;
   const suggestion = suggestHoursFromClock(employeeId, date, times.start_time, times.end_time);
-  return db.insert('work_assignments', {
+  return db.insert('work_assignments', withFrozenPay({
     employee_id: employeeId,
     activity_id: null,
     group_id: group.id,
     date,
     work_type: 'class_shift',
-    role: roleTitle || 'מדריך',
+    role: roleTitle || 'הדרכת חוג',
     start_time: suggestion?.start_time || times.start_time,
     end_time: suggestion?.end_time || times.end_time,
     // שעות החוג הן מה שמשולם. שעון נוכחות ארוך יותר אינו הופך חוג לשתי שעות.
@@ -8337,7 +8610,7 @@ function syncClassPayRow({ group, date, employeeId, paid, times, roleTitle }) {
     shift_id: suggestion?.shift_id || null,
     approved: false,
     notes: '',
-  });
+  }));
 }
 
 app.get('/api/groups/:id/staff-attendance', (req, res) => {
@@ -8454,7 +8727,7 @@ app.post('/api/work-assignments', (req, res) => {
   const normalized = normalizeWorkAssignment(req.body || {});
   if (!normalized.employee_id) return res.status(400).json({ error: 'employee_id is required' });
   if (!normalized.date) return res.status(400).json({ error: 'date is required' });
-  const created = db.insert('work_assignments', normalized);
+  const created = db.insert('work_assignments', withFrozenPay(normalized));
   res.status(201).json(created);
 });
 
@@ -8463,7 +8736,9 @@ app.put('/api/work-assignments/:id', (req, res) => {
   const existing = db.getOne('work_assignments', id);
   if (!existing) return res.status(404).json({ error: 'Work assignment not found' });
   const normalized = normalizeWorkAssignment(req.body || {}, { existing });
-  const updated = db.update('work_assignments', id, normalized);
+  // עריכה ידנית של השורה מתמחרת אותה מחדש — גם אם היום שלה כבר ננעל. שינוי
+  // תעריף או שם תפקיד לעומת זאת לא עובר כאן, ולכן לא נוגע בשורות ישנות.
+  const updated = db.update('work_assignments', id, withFrozenPay({ ...existing, ...normalized }));
   res.json(updated);
 });
 
@@ -11557,6 +11832,18 @@ app.listen(PORT, () => {
   } catch (err) {
     console.error('ensureDefaultIntroAutomations failed:', err.message);
   }
+
+  migrateLegacyRoleLabels().catch((err) =>
+    console.error('migrateLegacyRoleLabels failed:', err.message)
+  );
+
+  // נעילת ימים שהסתיימו. פעם בשעה ולא פעם ביום, כדי שיום ייסגר גם אם השרת
+  // הופעל מחדש בדיוק בשעה שבה הריצה הייתה אמורה לקרות.
+  const sealSafely = () => {
+    try { sealPastWorkDays(); } catch (err) { console.error('sealPastWorkDays failed:', err.message); }
+  };
+  sealSafely();
+  setInterval(sealSafely, 60 * 60 * 1000);
 
   // Conversation mirror is derived from the durable `messages` table.
   try {

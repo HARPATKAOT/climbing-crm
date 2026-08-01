@@ -13,17 +13,12 @@ import {
   staffForRole, noStaffForRoleMessage, fetchRoleCatalog, activityRoleLabels, payableRolesOf,
 } from '../utils/staffRoles.js';
 import { rateForRole, amountForWorkRow, WORK_TYPE_ROLES } from '../utils/wageRates.js';
+import {
+  DEFAULT_ACTIVITY_TYPES, activityTypes, activityTypeMeta, useActivityTypes,
+} from '../utils/activityTypes.js';
 
-export const ACTIVITY_TYPES = [
-  { id: 'birthday', label: 'יום הולדת', color: '#FB923C', bg: 'rgba(251,146,60,0.18)' },
-  { id: 'trip', label: 'טיול', color: '#60A5FA', bg: 'rgba(96,165,250,0.18)' },
-  { id: 'school', label: 'בית ספר', color: '#34D399', bg: 'rgba(52,211,153,0.18)' },
-  { id: 'company', label: 'פעילות חברה', color: '#FBBF24', bg: 'rgba(251,191,36,0.18)' },
-  { id: 'route_building', label: 'בניית מסלולים', color: '#A78BFA', bg: 'rgba(167,139,250,0.18)' },
-  { id: 'opening_hours', label: 'שעות פתיחה', color: '#22D3EE', bg: 'rgba(34,211,238,0.16)' },
-  { id: 'training_vacation', label: 'חופשה מאימונים', color: '#F472B6', bg: 'rgba(244,114,182,0.18)' },
-  { id: 'other', label: 'אחר', color: '#94A3B8', bg: 'rgba(148,163,184,0.16)' },
-];
+/** ברירת המחדל בלבד. הרשימה החיה מגיעה מהשרת דרך `activityTypes()`. */
+export const ACTIVITY_TYPES = DEFAULT_ACTIVITY_TYPES;
 
 /** חיבור גוגל שנשמר אצלנו אבל בוטל/פג אצל גוגל */
 function googleAuthNeedsReconnect(error) {
@@ -62,24 +57,27 @@ const isPaidPerParticipant = (activity) => (
 /** סוגים שמוצגים יחד בתגית הסינון „פעילויות” */
 const ACTIVITIES_GROUP_TYPES = ['birthday', 'school', 'company'];
 
-/** תגיות סינון ביומן (מקובצות) — בטופס האירוע עדיין בוחרים סוג מדויק */
-const FILTER_CHIPS = [
-  {
-    id: 'activities',
-    label: 'פעילויות',
-    color: '#FB923C',
-    bg: 'rgba(251,146,60,0.18)',
-    match: ACTIVITIES_GROUP_TYPES,
-  },
-  ...ACTIVITY_TYPES
-    .filter((t) => !ACTIVITIES_GROUP_TYPES.includes(t.id))
-    .map((t) => ({ id: t.id, label: t.label, color: t.color, bg: t.bg, match: [t.id] })),
-];
+/** תגיות סינון ביומן (מקובצות) — בטופס האירוע עדיין בוחרים סוג מדויק.
+    נבנות מהרשימה החיה, כך שסוג חדש מקבל תגית סינון משלו מיד. */
+function filterChips() {
+  return [
+    {
+      id: 'activities',
+      label: 'פעילויות',
+      color: '#FB923C',
+      bg: 'rgba(251,146,60,0.18)',
+      match: ACTIVITIES_GROUP_TYPES,
+    },
+    ...activityTypes()
+      .filter((t) => !ACTIVITIES_GROUP_TYPES.includes(t.id))
+      .map((t) => ({ id: t.id, label: t.label, color: t.color, bg: t.bg, match: [t.id] })),
+  ];
+}
 
 const LIST_EMPTY_COPY = {
   activities: { empty: 'אין עדיין פעילויות', add: 'הוספת פעילות' },
   trip: { empty: 'אין עדיין טיולים', add: 'הוספת טיול' },
-  route_building: { empty: 'אין עדיין בניית מסלולים', add: 'הוספת בניית מסלולים' },
+  route_building: { empty: 'אין עדיין בונה מסלולים', add: 'הוספת בונה מסלולים' },
   opening_hours: { empty: 'אין עדיין שעות פתיחה', add: 'הוספת שעות פתיחה' },
   training_vacation: { empty: 'אין עדיין חופשות מאימונים', add: 'הוספת חופשה מאימונים' },
   other: { empty: 'אין עדיין אירועים', add: 'הוספת אירוע' },
@@ -92,7 +90,7 @@ function listCopyForFilter(typeFilter) {
 
 function matchTypesForFilter(typeFilter) {
   if (!typeFilter || typeFilter === 'all') return null;
-  const chip = FILTER_CHIPS.find((c) => c.id === typeFilter);
+  const chip = filterChips().find((c) => c.id === typeFilter);
   if (chip) return chip.match;
   return [typeFilter];
 }
@@ -107,7 +105,7 @@ const WORK_TYPE_OPTIONS = [
   { id: 'counter_shift', label: 'דלפק' },
   { id: 'class_shift', label: 'חוג' },
   { id: 'private_shift', label: 'פרטי' },
-  { id: 'route_building_shift', label: 'בניית מסלולים' },
+  { id: 'route_building_shift', label: 'בונה מסלולים' },
 ];
 
 const DEFAULT_WAGE = { counter_rate: 45, class_rate: 70, private_rate: 90, route_rate: 60 };
@@ -128,7 +126,7 @@ const SOURCE_LABELS = {
   manual: 'ידני',
 };
 
-const TYPE_MAP = Object.fromEntries(ACTIVITY_TYPES.map((t) => [t.id, t]));
+
 
 const HEB_DAYS = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
 const HEB_MONTHS = [
@@ -943,8 +941,8 @@ function RegularActivityModal({
   const priceVat = vatBreakdown(form.price, includesVat);
   const isOps = normalizeTemplateCategory(form.category) === 'ops';
   const typeOptions = isOps
-    ? ACTIVITY_TYPES.filter((t) => ['opening_hours', 'route_building', 'other'].includes(t.id))
-    : ACTIVITY_TYPES;
+    ? activityTypes().filter((t) => ['opening_hours', 'route_building', 'other'].includes(t.id))
+    : activityTypes();
 
   return (
     <div className="activity-modal-backdrop" onClick={onClose}>
@@ -1602,7 +1600,7 @@ function ActivityFormModal({
             <div>
               <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6 }}>סוג</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {ACTIVITY_TYPES.map((t) => {
+                {activityTypes().map((t) => {
                   const active = form.type === t.id;
                   return (
                     <button
@@ -1926,7 +1924,7 @@ function PaymentStatusIcon({ status, size = 12, perParticipant = false }) {
 }
 
 function EventChip({ activity, onClick, draggable = true }) {
-  const meta = TYPE_MAP[activity.type] || TYPE_MAP.other;
+  const meta = activityTypeMeta(activity.type);
   const timeLabel = activity.all_day
     ? 'יום שלם'
     : (activity.start_time ? String(activity.start_time).slice(0, 5) : '');
@@ -2058,7 +2056,7 @@ function WeekTimedEvent({
   onOpen,
 }) {
   const isOverlay = !!event.overlay;
-  const meta = !isOverlay ? (TYPE_MAP[event.type] || TYPE_MAP.other) : null;
+  const meta = !isOverlay ? activityTypeMeta(event.type) : null;
   const color = isOverlay ? (event.color || '#94A3B8') : meta.color;
   const bg = isOverlay ? `${color}22` : meta.bg;
   const editable = canEditEvent(event);
@@ -2796,6 +2794,8 @@ function OverlaySidebar({
 }
 
 export default function ActivitiesCalendar({ isOwner = false }) {
+  // סוגי הפעילות נמשכים כאן פעם אחת; כל מה שמתחת קורא אותם דרך activityTypes().
+  useActivityTypes();
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState('month'); // month | week | list
@@ -3870,8 +3870,8 @@ export default function ActivitiesCalendar({ isOwner = false }) {
             <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--text-1)' }}>
               {typeFilter === 'all' || typeFilter === 'training_vacation'
                 ? 'חופשות מאימונים'
-                : (FILTER_CHIPS.find((c) => c.id === typeFilter)?.label
-                  || TYPE_MAP[typeFilter]?.label
+                : (filterChips().find((c) => c.id === typeFilter)?.label
+                  || activityTypes().find((t) => t.id === typeFilter)?.label
                   || 'רשימת אירועים')}
               <span style={{ marginInlineStart: 8, fontSize: 13, fontWeight: 600, color: 'var(--text-3)' }}>
                 ({listItems.length})
@@ -3957,7 +3957,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           >
             הכל
           </button>
-          {FILTER_CHIPS.map((t) => {
+          {filterChips().map((t) => {
             const active = typeFilter === t.id;
             const dimmed = typeFilter !== 'all' && !active;
             return (
@@ -4155,7 +4155,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
             </div>
           ) : (
             listItems.map((item) => {
-              const meta = TYPE_MAP[item.type] || TYPE_MAP.other;
+              const meta = activityTypeMeta(item.type);
               return (
                 <div
                   key={item.id}

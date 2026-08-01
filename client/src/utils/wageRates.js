@@ -14,29 +14,38 @@ export const PAY_MODES = ['hourly', 'daily', 'flat'];
 
 /** התפקידים שאפשר להגדיר להם תעריף, עם אופן התשלום הרגיל לכל אחד. */
 export const PAYABLE_ROLES = [
-  { role: 'מדריך', defaultMode: 'hourly' },
+  { role: 'הדרכת חוג', defaultMode: 'hourly' },
   { role: 'עוזר מדריך', defaultMode: 'hourly' },
-  { role: 'מפעיל קיר', defaultMode: 'hourly' },
-  { role: 'מדריך סנפלינג', defaultMode: 'daily' },
-  { role: 'מדריך שיעור פרטי', defaultMode: 'hourly' },
-  { role: 'בונה מסלולים רמה 1', defaultMode: 'hourly' },
-  { role: 'בונה מסלולים רמה 2', defaultMode: 'hourly' },
+  { role: 'הפעלת קיר', defaultMode: 'hourly' },
+  { role: 'הדרכת סנפלינג', defaultMode: 'daily' },
+  { role: 'שיעור פרטי', defaultMode: 'hourly' },
+  { role: 'בונה מסלולים', defaultMode: 'hourly' },
 ];
+
+/** אופן התשלום הרגיל לפי מפתח התפקיד — עובד גם אחרי שהתווית שונתה. */
+export const PAYABLE_ROLE_MODES = {
+  trainer: 'hourly',
+  assistant: 'hourly',
+  wall_operator: 'hourly',
+  rappel: 'daily',
+  private: 'hourly',
+  route_l1: 'hourly',
+};
 
 /** ההסכמים הישנים החזיקו ארבעה שדות. אלה התפקידים שהם הפכו להיות. */
 const LEGACY_RATE_FIELDS = [
-  { field: 'class_rate', role: 'מדריך', mode: 'hourly' },
-  { field: 'counter_rate', role: 'מפעיל קיר', mode: 'hourly' },
-  { field: 'private_rate', role: 'מדריך שיעור פרטי', mode: 'hourly' },
-  { field: 'route_rate', role: 'בונה מסלולים רמה 1', mode: 'hourly' },
+  { field: 'class_rate', role: 'הדרכת חוג', mode: 'hourly' },
+  { field: 'counter_rate', role: 'הפעלת קיר', mode: 'hourly' },
+  { field: 'private_rate', role: 'שיעור פרטי', mode: 'hourly' },
+  { field: 'route_rate', role: 'בונה מסלולים', mode: 'hourly' },
 ];
 
 /** סוגי העבודה הישנים ממופים לתפקידים, כדי ששורות ותיקות ימשיכו להיות מתומחרות. */
 export const WORK_TYPE_ROLES = {
-  class_shift: 'מדריך',
-  counter_shift: 'מפעיל קיר',
-  private_shift: 'מדריך שיעור פרטי',
-  route_building_shift: 'בונה מסלולים רמה 1',
+  class_shift: 'הדרכת חוג',
+  counter_shift: 'הפעלת קיר',
+  private_shift: 'שיעור פרטי',
+  route_building_shift: 'בונה מסלולים',
 };
 
 const num = (value) => {
@@ -81,12 +90,27 @@ export function travelPerDay(agreement) {
 }
 
 /**
+ * הסכום שנחתם על השורה, או null אם היא עוד לא תומחרה.
+ *
+ * שורה חתומה היא האמת על מה שהעובד השתכר באותו יום — העלאת תעריף, שינוי שם
+ * תפקיד או מחיקתו לא נוגעים בה. רק עריכה מפורשת של השורה מתמחרת אותה מחדש.
+ */
+export function frozenAmountOf(row) {
+  if (!row?.pay_frozen_at) return null;
+  const n = Number(row?.pay_amount);
+  return Number.isFinite(n) ? Math.round(n) : null;
+}
+
+/**
  * הסכום לשורת עבודה אחת.
+ * - שורה חתומה: הסכום השמור עליה, בלי חישוב מחדש.
  * - `flat`: הסכום שנקבע על השורה (אירוע בתשלום גלובלי), בלי קשר לשעות.
  * - `daily`: תעריף היום של התפקיד — יום טיול משולם כיום, לא לפי שעות.
  * - `hourly`: שעות מעוגלות כפול התעריף.
  */
 export function amountForWorkRow(row, agreement) {
+  const frozen = frozenAmountOf(row);
+  if (frozen !== null) return frozen;
   if (row?.pay_mode === 'flat') return Math.round(num(row.flat_amount));
 
   const role = row?.role || WORK_TYPE_ROLES[row?.work_type] || null;

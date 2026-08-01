@@ -10,7 +10,8 @@
  * (`useRoleCatalog`) ולהשתמש בתווית העדכנית.
  */
 
-import { PAYABLE_ROLES } from './wageRates.js';
+import { useEffect, useState } from 'react';
+import { PAYABLE_ROLES, PAYABLE_ROLE_MODES } from './wageRates.js';
 
 export const SYSTEM_ROLE_KEYS = {
   TRAINER: 'trainer',
@@ -18,19 +19,17 @@ export const SYSTEM_ROLE_KEYS = {
   WALL_OPERATOR: 'wall_operator',
   RAPPEL: 'rappel',
   PRIVATE: 'private',
-  ROUTE_L1: 'route_l1',
-  ROUTE_L2: 'route_l2',
+  ROUTE: 'route_l1',
 };
 
 /** ברירת המחדל של התוויות — חייבת להתאים ל-DEFAULT_SYSTEM_ROLES בשרת. */
 export const DEFAULT_ROLE_LABELS = {
-  [SYSTEM_ROLE_KEYS.TRAINER]: 'מדריך',
+  [SYSTEM_ROLE_KEYS.TRAINER]: 'הדרכת חוג',
   [SYSTEM_ROLE_KEYS.ASSISTANT]: 'עוזר מדריך',
-  [SYSTEM_ROLE_KEYS.WALL_OPERATOR]: 'מפעיל קיר',
-  [SYSTEM_ROLE_KEYS.RAPPEL]: 'מדריך סנפלינג',
-  [SYSTEM_ROLE_KEYS.PRIVATE]: 'מדריך שיעור פרטי',
-  [SYSTEM_ROLE_KEYS.ROUTE_L1]: 'בונה מסלולים רמה 1',
-  [SYSTEM_ROLE_KEYS.ROUTE_L2]: 'בונה מסלולים רמה 2',
+  [SYSTEM_ROLE_KEYS.WALL_OPERATOR]: 'הפעלת קיר',
+  [SYSTEM_ROLE_KEYS.RAPPEL]: 'הדרכת סנפלינג',
+  [SYSTEM_ROLE_KEYS.PRIVATE]: 'שיעור פרטי',
+  [SYSTEM_ROLE_KEYS.ROUTE]: 'בונה מסלולים',
 };
 
 /** תאימות לאחור לקוד שעוד קורא ROLE.TRAINER וכדומה. */
@@ -40,8 +39,7 @@ export const ROLE = {
   WALL_OPERATOR: DEFAULT_ROLE_LABELS[SYSTEM_ROLE_KEYS.WALL_OPERATOR],
   RAPPEL: DEFAULT_ROLE_LABELS[SYSTEM_ROLE_KEYS.RAPPEL],
   PRIVATE: DEFAULT_ROLE_LABELS[SYSTEM_ROLE_KEYS.PRIVATE],
-  ROUTE_L1: DEFAULT_ROLE_LABELS[SYSTEM_ROLE_KEYS.ROUTE_L1],
-  ROUTE_L2: DEFAULT_ROLE_LABELS[SYSTEM_ROLE_KEYS.ROUTE_L2],
+  ROUTE: DEFAULT_ROLE_LABELS[SYSTEM_ROLE_KEYS.ROUTE],
 };
 
 /** התפקידים שהשיבוץ מסתמך עליהם — מוצגים ראשונים בכרטיס העובד. */
@@ -106,6 +104,40 @@ export function invalidateRoleCatalog() {
   catalogPromise = null;
 }
 
+/**
+ * הקטלוג העדכני, לשימוש במסך. עד שהוא נטען מוחזר `null` — מי שקורא צריך
+ * ליפול לברירת המחדל, ולא להציג רשימה ריקה.
+ */
+export function useRoleCatalog() {
+  const [catalog, setCatalog] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchRoleCatalog().then((c) => { if (!cancelled && c) setCatalog(c); });
+    return () => { cancelled = true; };
+  }, []);
+  return catalog;
+}
+
+/** תוויות התפקידים שאפשר לשבץ לפיהם — תפקידי המערכת בשמם העדכני. */
+export function assignableLabelsOf(catalog) {
+  const system = catalog?.system;
+  if (!Array.isArray(system) || system.length === 0) return ASSIGNABLE_ROLES;
+  return system.map((r) => r.label).filter(Boolean);
+}
+
+/**
+ * התפקידים שיש להם תעריף בהסכם, בשמם העדכני. שינוי שם של תפקיד חייב להשתקף
+ * גם כאן, אחרת ההסכם היה מציג שורה בשם ישן שאף שורת עבודה כבר לא נושאת.
+ */
+export function payableRolesOf(catalog) {
+  const system = catalog?.system;
+  if (!Array.isArray(system) || system.length === 0) return PAYABLE_ROLES;
+  return system.map((r) => ({
+    role: r.label,
+    defaultMode: PAYABLE_ROLE_MODES[r.key] || 'hourly',
+  }));
+}
+
 export function fetchRoleCatalog() {
   if (catalogCache) return Promise.resolve(catalogCache);
   if (!catalogPromise) {
@@ -130,28 +162,4 @@ export function roleLabelOf(catalog, key) {
 export function activityRoleLabels(catalog, activityType) {
   const labels = catalog?.activityRoleLabels?.[activityType];
   return Array.isArray(labels) && labels.length > 0 ? labels : null;
-}
-
-/** אופן התשלום הרגיל לפי מפתח התפקיד — עובד גם אחרי שהתווית שונתה. */
-const PAYABLE_ROLE_MODES = {
-  [SYSTEM_ROLE_KEYS.TRAINER]: 'hourly',
-  [SYSTEM_ROLE_KEYS.ASSISTANT]: 'hourly',
-  [SYSTEM_ROLE_KEYS.WALL_OPERATOR]: 'hourly',
-  [SYSTEM_ROLE_KEYS.RAPPEL]: 'daily',
-  [SYSTEM_ROLE_KEYS.PRIVATE]: 'hourly',
-  [SYSTEM_ROLE_KEYS.ROUTE_L1]: 'hourly',
-  [SYSTEM_ROLE_KEYS.ROUTE_L2]: 'hourly',
-};
-
-/**
- * התפקידים שיש להם תעריף בהסכם, בשמם העדכני. שינוי שם של תפקיד חייב להשתקף
- * גם כאן, אחרת ההסכם היה מציג שורה בשם ישן שאף שורת עבודה כבר לא נושאת.
- */
-export function payableRolesOf(catalog) {
-  const system = catalog?.system;
-  if (!Array.isArray(system) || system.length === 0) return PAYABLE_ROLES;
-  return system.map((r) => ({
-    role: r.label,
-    defaultMode: PAYABLE_ROLE_MODES[r.key] || 'hourly',
-  }));
 }
