@@ -1147,7 +1147,16 @@ export const whatsappService = {
         student_id: options.studentId || null,
       });
 
-      return { success: true, message: logMessage, messageId: result.messageId || null };
+      // `mock` travels with the result: a caller that needs to know whether the
+      // message actually left the building — the phone-verification route hands
+      // the code back on screen when it did not — cannot tell otherwise, and
+      // silently behaved as if every send had succeeded.
+      return {
+        success: true,
+        mock: !!result.mock,
+        message: logMessage,
+        messageId: result.messageId || null,
+      };
     } catch (error) {
       recordMessage({
         phone: formatWaPhone(phone) || phone,
