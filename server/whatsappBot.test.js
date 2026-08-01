@@ -67,7 +67,8 @@ test('known parent greeting uses first name only', async () => {
   assert.equal(isIdentifiedParent({ name: 'דלק איל' }), true);
   assert.equal(isIdentifiedParent({ name: 'לקוח וואטסאפ' }), false);
   assert.equal(parentFirstName({ name: 'דלק איל' }), 'דלק');
-  assert.match(knownParentGreeting({ name: 'דלק איל' }), /היי דלק/);
+  assert.match(knownParentGreeting({ name: 'דלק איל' }), /בסדר גמור/);
+  assert.match(knownParentGreeting({ name: 'דלק איל' }), /מה נשמע דלק/);
   assert.doesNotMatch(knownParentGreeting({ name: 'דלק איל' }), /איל/);
   assert.equal(isLowIntentGreeting('מה קורה ?'), true);
   assert.equal(isLowIntentGreeting('היי, מה קורה ?'), true);

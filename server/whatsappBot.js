@@ -98,8 +98,8 @@ export function parentFirstName(parent) {
 export function knownParentGreeting(parent) {
   const first = parentFirstName(parent);
   return first
-    ? `היי ${first}, מה נשמע? 😊\nבמה אפשר לעזור?`
-    : 'היי, מה נשמע? 😊\nבמה אפשר לעזור?';
+    ? `בסדר גמור 🙂\nמה נשמע ${first}?`
+    : 'בסדר גמור 🙂\nמה נשמע?';
 }
 
 export function isLowIntentGreeting(text) {
