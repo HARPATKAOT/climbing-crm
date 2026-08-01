@@ -10710,7 +10710,7 @@ app.post('/api/public/otp/send', publicFormRateLimit, async (req, res) => {
       phone,
       OTP_TEMPLATE_NAME,
       [issued.code],
-      { buttonUrlParams: [issued.code] }
+      { buttonUrlParams: [issued.code], source: 'otp' }
     );
     if (result && result.error) {
       console.error('otp send failed:', JSON.stringify(result.error).slice(0, 300));

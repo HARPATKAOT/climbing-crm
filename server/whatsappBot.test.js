@@ -94,6 +94,19 @@ test('human outbound logs are detected for staff-thread deferral', () => {
   assert.equal(isHumanOutboundLog({ direction: 'outbound', is_ai: false, source: 'phone' }), true);
   assert.equal(isHumanOutboundLog({ direction: 'outbound', is_ai: true, source: 'ai' }), false);
   assert.equal(isHumanOutboundLog({ direction: 'outbound', is_ai: false, source: 'bot_control' }), false);
+  assert.equal(isHumanOutboundLog({ direction: 'outbound', is_ai: false, source: 'otp' }), false);
+  assert.equal(isHumanOutboundLog({
+    direction: 'outbound',
+    is_ai: false,
+    source: 'crm',
+    template_name: 'phone_verification_code',
+  }), false);
+  assert.equal(isHumanOutboundLog({
+    direction: 'outbound',
+    is_ai: false,
+    source: 'crm',
+    message: '‏*041663*‏ הוא קוד האימות שלך. מטעמי אבטחה, אין לשתף את הקוד הזה.',
+  }), false);
   assert.equal(isHumanOutboundLog({ direction: 'inbound', is_ai: false, source: 'customer' }), false);
 });
 

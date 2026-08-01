@@ -291,9 +291,21 @@ export function isHumanOutboundLog(log) {
   if (!log || log.direction !== 'outbound') return false;
   if (log.is_ai) return false;
   const source = String(log.source || '');
-  if (source === 'ai' || source === 'bot_control' || source === 'staff_chat' || source === 'staff_notify') {
+  // Automated system traffic — never treat as "staff took the thread".
+  if (
+    source === 'ai'
+    || source === 'bot_control'
+    || source === 'staff_chat'
+    || source === 'staff_notify'
+    || source === 'otp'
+    || source === 'system'
+    || source === 'automation'
+  ) {
     return false;
   }
+  const template = String(log.template_name || log.template_id || '');
+  if (template === 'phone_verification_code') return false;
+  if (/קוד האימות שלך/.test(String(log.message || ''))) return false;
   // crm / phone / empty source on a non-AI outbound = staff
   return true;
 }

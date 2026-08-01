@@ -1117,7 +1117,7 @@ export const whatsappService = {
         message: logMessage,
         status: result.mock ? 'sent' : 'delivered',
         template_id: templateName,
-        source: 'crm',
+        source: options.source || 'crm',
         meta_message_id: result.messageId || null,
         parent_id: options.parentId || null,
         student_id: options.studentId || null,
@@ -1132,7 +1132,7 @@ export const whatsappService = {
         message: `[נכשל בשליחת תבנית: ${templateName}]`,
         status: 'failed',
         template_id: templateName,
-        source: 'crm',
+        source: options.source || 'crm',
         parent_id: options.parentId || null,
         student_id: options.studentId || null,
       });
@@ -1408,7 +1408,9 @@ export const whatsappService = {
     // 4. Welcome template + automations only while the bot is enabled
     if (isBotEnabled(settings) && isNew) {
       try {
-        await whatsappService.sendTemplateMessage(normalizedPhone, 't1', [parent.name || '']);
+        await whatsappService.sendTemplateMessage(normalizedPhone, 't1', [parent.name || ''], {
+          source: 'automation',
+        });
       } catch (err) {
         console.error('Failed to send WhatsApp welcome t1:', err.message);
       }
