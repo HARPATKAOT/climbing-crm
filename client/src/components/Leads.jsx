@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, Archive, ArchiveRestore, ScrollText, Footprints } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, Archive, ArchiveRestore } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
 import {
@@ -9,7 +9,13 @@ import {
   downloadHealthDeclarationPdf,
 } from '../utils/healthDeclarationPdf.js';
 import { healthExpiryDate, isHealthDeclarationValid } from '../utils/healthValidity.js';
-import { DEFAULT_KIND, declarationKind } from '../utils/declarationKinds.js';
+import {
+  DECLARATION_KINDS,
+  DEFAULT_KIND,
+  declarationKind,
+  templateKind,
+  templateShortLabel,
+} from '../utils/declarationKinds.js';
 import { studentDeclarationStatus } from '../utils/declarationStatus.js';
 import { safetyTestStatus } from '../utils/safetyValidity.js';
 import {
@@ -282,8 +288,9 @@ const TEST_TYPE_COLORS = {
  */
 function DeclarationIcons({ status }) {
   const marks = [
-    { key: 'wall', Icon: ScrollText, label: 'הצהרת בריאות' },
-    { key: 'trip', Icon: Footprints, label: 'הצהרה לטיולים' },
+    // האייקון מגיע מקטלוג סוגי ההצהרות, כדי שאותו סימן ישמש כאן ובתיק הלקוח.
+    { key: 'wall', Icon: DECLARATION_KINDS.wall.Icon, label: 'הצהרת בריאות' },
+    { key: 'trip', Icon: DECLARATION_KINDS.trip.Icon, label: 'הצהרה לטיולים' },
   ];
   return (
     <>
@@ -639,6 +646,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         body: JSON.stringify({
           origin: window.location.origin,
           templateSlug: selectedTemplate?.slug || selectedFormSlug || undefined,
+          // The parent whose tab is open, not the file's primary parent: the
+          // message belongs in the conversation staff are actually in.
+          parentId: parent?.id || undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -649,6 +659,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       return {
         sent: !!data.sent,
         link,
+        sentTo: data.sentTo || parent.name || '',
         warning: data.sent ? undefined : (data.warning || data.error || 'השליחה האוטומטית נכשלה'),
       };
     } catch {
@@ -670,7 +681,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       const result = await sendHealthFormForStudent(student.id, student.name);
       setHealthSendLink(result.link || healthShareUrl);
       if (result.sent) {
-        setHealthSendMsg('נשלח קישור להצהרת בריאות בוואטסאפ');
+        setHealthSendMsg(result.sentTo
+          ? `נשלח קישור להצהרת בריאות בוואטסאפ ל${result.sentTo}`
+          : 'נשלח קישור להצהרת בריאות בוואטסאפ');
       } else {
         setHealthSendMsg(
           result.warning
@@ -1334,7 +1347,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         const sendResult = await sendHealthFormForStudent(newId, name);
         const pendingHealthLink = sendResult.link || '';
         const pendingHealthMsg = sendResult.sent
-          ? 'נשלח קישור להצהרת בריאות בוואטסאפ להורה'
+          ? `נשלח קישור להצהרת בריאות בוואטסאפ ל${sendResult.sentTo || 'הורה'}`
           : (sendResult.warning
             || 'השליחה האוטומטית נכשלה — העתיקו את הקישור או שלחו מוואטסאפ אישי');
         if (pendingHealthLink) {
@@ -2839,21 +2852,40 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                             )}
                           </div>
                         </div>
+                        {/* בורר סוג ההצהרה. הכותרות המלאות פותחות כולן באותן
+                            מילים, ולכן הרשימה הנפתחת הציגה שלוש שורות כמעט
+                            זהות שנחתכו בקצה. כפתור לכל סוג, עם האייקון שלו
+                            מהרשימה, אומר במבט מה נשלח. */}
                         {formTemplates.length > 0 && (
                           <div className="form-group" style={{ marginBottom: 10 }}>
-                            <label className="form-label" style={{ fontSize: 11 }}>סוג טופס / פעילות</label>
-                            <select
-                              className="select"
-                              value={selectedFormSlug}
-                              onChange={(e) => setSelectedFormSlug(e.target.value)}
-                              style={{ fontSize: 13 }}
-                            >
-                              {formTemplates.map((t) => (
-                                <option key={t.id} value={t.slug}>
-                                  {t.title}{t.isDefault ? ' (ברירת מחדל)' : ''}
-                                </option>
-                              ))}
-                            </select>
+                            <label className="form-label" style={{ fontSize: 11 }}>סוג ההצהרה שתישלח</label>
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              {formTemplates.map((t) => {
+                                const kind = templateKind(t);
+                                const KindIcon = kind.Icon;
+                                const active = t.slug === selectedFormSlug;
+                                return (
+                                  <button
+                                    key={t.id}
+                                    type="button"
+                                    title={t.title}
+                                    onClick={() => setSelectedFormSlug(t.slug)}
+                                    style={{
+                                      display: 'inline-flex', alignItems: 'center', gap: 5,
+                                      padding: '5px 10px', borderRadius: 999, cursor: 'pointer',
+                                      fontSize: 12, fontWeight: active ? 700 : 600,
+                                      lineHeight: 1.2,
+                                      color: active ? kind.color : 'var(--text-2)',
+                                      background: active ? 'rgba(255,255,255,0.07)' : 'transparent',
+                                      border: `1px solid ${active ? kind.color : 'var(--border)'}`,
+                                    }}
+                                  >
+                                    <KindIcon size={13} style={{ flexShrink: 0 }} />
+                                    {templateShortLabel(t)}
+                                  </button>
+                                );
+                              })}
+                            </div>
                           </div>
                         )}
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -3002,7 +3034,14 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                           Several rows here are otherwise the
                                           same sentence repeated. */}
                                       {kind && !clearanceRow && (
-                                        <span className={`badge ${kind.badge}`} style={{ fontSize: 10, flexShrink: 0 }}>
+                                        <span
+                                          className={`badge ${kind.badge}`}
+                                          style={{
+                                            fontSize: 10, flexShrink: 0,
+                                            display: 'inline-flex', alignItems: 'center', gap: 4,
+                                          }}
+                                        >
+                                          <kind.Icon size={11} style={{ flexShrink: 0 }} />
                                           {kind.label}
                                         </span>
                                       )}

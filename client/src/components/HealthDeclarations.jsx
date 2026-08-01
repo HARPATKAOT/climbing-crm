@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { CheckCircle2, AlertCircle, FileText, Send, ClipboardCheck, Shield, Link2, Copy, Trash2, Plus, Download } from 'lucide-react';
 import { downloadHealthDeclarationPdf } from '../utils/healthDeclarationPdf.js';
+import { templateKind } from '../utils/declarationKinds.js';
 import {
   isChildOnlyQuestion,
   isScreeningQuestion,
@@ -350,7 +351,17 @@ function FormTemplatesPanel() {
                     {t.isDefault && <span className="badge badge-green" style={{ marginRight: 8 }}>ברירת מחדל</span>}
                   </td>
                   <td style={{ color: 'var(--text-2)' }}>
-                    {ACTIVITY_TYPES.find((a) => a.value === t.activityType)?.label || t.activityType}
+                    {(() => {
+                      // אותו אייקון שמופיע בתיק הלקוח וברשימת הלידים.
+                      const kind = templateKind(t);
+                      const label = ACTIVITY_TYPES.find((a) => a.value === t.activityType)?.label || t.activityType;
+                      return (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <kind.Icon size={13} style={{ color: kind.color, flexShrink: 0 }} />
+                          {label}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td dir="ltr" style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'left' }}>
                     /health{t.isDefault ? '' : `/${t.slug}`}
