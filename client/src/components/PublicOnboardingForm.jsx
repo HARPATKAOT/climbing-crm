@@ -216,12 +216,11 @@ function MedicalClearanceField({ triggers, value, onChange, onError }) {
 /**
  * The code screen, shown in place of the continue button on step 1.
  *
- * Verification is a gate, not a wall: if the message could not be sent at all,
- * the form offers to go on unverified rather than losing the registration. The
- * declaration records which of the two happened, so an unverified form is
- * visibly weaker evidence instead of silently equal.
+ * There is no way past it. A declaration signed from an unverified phone is
+ * exactly the document this feature exists to prevent, so a failed send offers
+ * a correction or a retry — never a way through.
  */
-function PhoneCodeGate({ otp, phone, onCodeChange, onVerify, onResend, onEditPhone, onSkip }) {
+function PhoneCodeGate({ otp, phone, onCodeChange, onVerify, onResend, onEditPhone }) {
   const waitSeconds = Math.max(0, Math.ceil((otp.cooldownUntil - Date.now()) / 1000));
   return (
     <div style={{
@@ -233,7 +232,7 @@ function PhoneCodeGate({ otp, phone, onCodeChange, onVerify, onResend, onEditPho
       </div>
       <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.72)', lineHeight: 1.6, marginBottom: 12 }}>
         {otp.sendFailed
-          ? 'לא הצלחנו לשלוח קוד למספר הזה. בדקו שהמספר נכון, או המשיכו בלי אימות והצוות ייצור קשר.'
+          ? <>לא הצלחנו לשלוח קוד למספר <strong>{phone}</strong>. בדקו שהמספר נכון ושיש בו וואטסאפ, ונסו שוב. בלי אימות אי אפשר להמשיך.</>
           : <>שלחנו קוד בן 6 ספרות בוואטסאפ למספר <strong>{phone}</strong>. הזינו אותו כדי להמשיך — כך ההצהרה נרשמת על שם מי שבאמת מחזיק בטלפון.</>}
         {otp.devCode ? ` (סביבת פיתוח: ${otp.devCode})` : ''}
       </div>
@@ -293,18 +292,6 @@ function PhoneCodeGate({ otp, phone, onCodeChange, onVerify, onResend, onEditPho
         >
           תיקון מספר הטלפון
         </button>
-        {otp.sendFailed && (
-          <button
-            type="button"
-            onClick={onSkip}
-            style={{
-              background: 'none', border: 'none', font: 'inherit', fontSize: 12,
-              color: '#94a3b8', cursor: 'pointer', textDecoration: 'underline', padding: 0,
-            }}
-          >
-            המשך בלי אימות
-          </button>
-        )}
       </div>
     </div>
   );
@@ -1085,6 +1072,13 @@ export default function PublicOnboardingForm() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.error || 'שגיאה בשמירת הטופס');
+        // The verification lapsed while the form was being filled. Send them
+        // back to the one screen that can fix it, rather than leaving a signed
+        // form stuck against an error it cannot clear.
+        if (res.status === 403) {
+          setOtp((o) => ({ ...o, token: '', verifiedPhone: '', code: '', stage: 'idle' }));
+          setStep(1);
+        }
         return;
       }
 
@@ -1439,7 +1433,6 @@ export default function PublicOnboardingForm() {
                 onVerify={verifyOtpCode}
                 onResend={sendOtpCode}
                 onEditPhone={() => setOtp((o) => ({ ...o, stage: 'idle', code: '', error: '' }))}
-                onSkip={() => { setOtp((o) => ({ ...o, stage: 'idle', error: '' })); proceedToStep2(); }}
               />
             ) : (
               <button

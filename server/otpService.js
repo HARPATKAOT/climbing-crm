@@ -16,7 +16,11 @@
 import crypto from 'crypto';
 
 const CODE_TTL_MS = 5 * 60 * 1000;
-const TOKEN_TTL_MS = 30 * 60 * 1000;
+// The token is earned on step 1 and spent at submit, with the whole form in
+// between — health questions per child, a doctor's approval to photograph, a
+// signature. Nothing is filed without it, so a token that lapses mid-form
+// fails the family after they have already signed. Hours, not minutes.
+const TOKEN_TTL_MS = 3 * 60 * 60 * 1000;
 const RESEND_COOLDOWN_MS = 45 * 1000;
 const MAX_SENDS_PER_WINDOW = 4;
 const SEND_WINDOW_MS = 15 * 60 * 1000;

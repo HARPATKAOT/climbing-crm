@@ -9856,6 +9856,23 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     return res.status(400).json({ error: 'נדרש מקום מגורים' });
   }
 
+  // Checked before anything else is read or written. A declaration signed from
+  // a phone that never answered a code is the document this gate exists to
+  // prevent, and enforcing it only in the form leaves the route open to anyone
+  // who skips the form — including the file uploads further down.
+  const otpToken = String(req.body?.phoneVerification?.token || '').trim();
+  if (!otpToken || !otpService.consumeToken(otpToken, normPhone(phone))) {
+    return res.status(403).json({
+      error: 'אימות הטלפון פג או לא בוצע — חזרו לתחילת הטופס ובקשו קוד חדש',
+    });
+  }
+  const phoneVerification = {
+    verified: true,
+    method: 'whatsapp_code',
+    phone: normPhone(phone),
+    at: new Date().toISOString(),
+  };
+
   const childList = (Array.isArray(children) ? children : [])
     .map((c) => {
       const name = String(c.name || '').trim();
@@ -9953,15 +9970,6 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
       mimeType: prepared.mimeType,
     });
   }
-
-  // The token proves a code sent to this phone was typed back during this
-  // session. Verified or not, the submission goes through — but the
-  // declaration records which it was, because that is the difference between
-  // "someone typed a number" and "the number answered".
-  const otpToken = String(req.body?.phoneVerification?.token || '').trim();
-  const phoneVerification = otpToken && otpService.consumeToken(otpToken, normPhone(phone))
-    ? { verified: true, method: 'whatsapp_code', phone: normPhone(phone), at: new Date().toISOString() }
-    : { verified: false };
 
   let crmResult;
   try {
