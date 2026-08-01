@@ -113,6 +113,67 @@ export function knownParentGreeting(parent) {
     : 'בסדר גמור 🙂\nמה נשמע?';
 }
 
+/**
+ * When the model is down, never spam the same greeting on a real message.
+ * Greeting template only for low-intent hellos; otherwise ask to rephrase.
+ */
+export function resolveIdentifiedParentFallback(parent, incomingText, settings = {}) {
+  if (isLowIntentGreeting(incomingText)) {
+    return { text: knownParentGreeting(parent), skipMenu: true };
+  }
+  const clarify = String(settings?.aiClarifyReply || DEFAULT_BOT_SETTINGS.aiClarifyReply || '').trim();
+  return {
+    text: clarify || 'לא הצלחתי לענות על זה רגע 🙏\nאפשר לנסח שוב, או לכתוב 3 לשיחה עם הצוות.',
+    skipMenu: true,
+  };
+}
+
+/** Pull visible answer text from a Gemini generateContent payload. */
+export function extractGeminiResponseText(data) {
+  const parts = data?.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts) || !parts.length) return '';
+  const visible = parts
+    .filter((part) => part && typeof part.text === 'string' && !part.thought)
+    .map((part) => part.text.trim())
+    .filter(Boolean);
+  if (visible.length) return visible.join('\n').trim();
+  return parts
+    .map((part) => String(part?.text || '').trim())
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+/**
+ * Build multi-turn contents for Gemini. History may already include the
+ * current inbound message (recorded before the bot answers).
+ */
+export function buildGeminiChatContents(history = [], incomingText = '') {
+  const contents = [];
+  for (const message of history || []) {
+    const role = (message?.role === 'assistant' || message?.role === 'model') ? 'model' : 'user';
+    const text = String(message?.content || '').trim();
+    if (!text) continue;
+    if (contents.length && contents[contents.length - 1].role === role) {
+      contents[contents.length - 1].parts[0].text += `\n${text}`;
+    } else {
+      contents.push({ role, parts: [{ text }] });
+    }
+  }
+  const incoming = String(incomingText || '').trim();
+  if (incoming) {
+    const last = contents[contents.length - 1];
+    if (!(last?.role === 'user' && last.parts[0].text === incoming)) {
+      if (last?.role === 'user') last.parts[0].text += `\n${incoming}`;
+      else contents.push({ role: 'user', parts: [{ text: incoming }] });
+    }
+  }
+  if (contents.length && contents[0].role !== 'user') {
+    contents.unshift({ role: 'user', parts: [{ text: '.' }] });
+  }
+  return contents;
+}
+
 export function isLowIntentGreeting(text) {
   const t = String(text || '').trim();
   if (!t || t.length > 50) return false;

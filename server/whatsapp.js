@@ -88,8 +88,10 @@ import {
   studentsForParent,
   findPrimaryParent,
   isIdentifiedParent,
-  knownParentGreeting,
   isLowIntentGreeting,
+  resolveIdentifiedParentFallback,
+  extractGeminiResponseText,
+  buildGeminiChatContents,
   DEFAULT_BOT_SETTINGS,
 } from './whatsappBot.js';
 import {
@@ -770,63 +772,85 @@ export async function notifyStaffOfHandoff({
   return { sent };
 }
 
-async function callGeminiReply(systemPrompt, crmText, incomingText, apiKey, settings = {}) {
+async function callGeminiReply(
+  systemPrompt,
+  crmText,
+  incomingText,
+  apiKey,
+  settings = {},
+  { history = [] } = {},
+) {
   const s = mergeBotSettings(settings);
   const brand = s.brandName || 'הרפתקאות';
-  const healthUrl = (s.aiBusinessFacts || '').match(/https?:\/\/\S+health\S*/i)?.[0]
-    || 'https://app.kirboaz.co.il/health';
   // ראה ההערה ב-aiActions.js: גרסאות נעוצות נסגרות בלי התראה ושורפות בקשות.
   const models = [
     process.env.GEMINI_MODEL || 'gemini-flash-latest',
     'gemini-3.6-flash',
     'gemini-3.5-flash',
   ];
+  const systemInstruction = [
+    `שם העסק הרשמי: ${brand}`,
+    'הזכר את העסק רק בשם הרשמי הזה. אל תשתמש בשם ישן אם הוא שונה מהשם הרשמי.',
+    '',
+    systemPrompt,
+    '',
+    crmText,
+    '',
+    BOT_BOUNDS_RULES,
+    '',
+    'תפריט (רק אם הלקוח כותב מספר בודד 1–4):',
+    '1 = הרשמה וחוגים',
+    '2 = שעות פתיחה ומיקום',
+    '3 = העברה לצוות אנושי',
+    '4 = אירועים וטיולים',
+    '',
+    'אם שאלו על חוג/מחיר/מקום בלי כיתה או גיל — שאלו קודם באיזו כיתה.',
+    `מגבלת אורך תשובה: עד ${s.aiMaxReplyChars || 700} תווים.`,
+    'ענה לפי היסטוריית השיחה כשיש אחת — אל תחזור על ברכת פתיחה אם כבר בירכת.',
+  ].join('\n');
+  const contents = buildGeminiChatContents(history, incomingText);
+  if (!contents.length) return null;
+
   let lastError = '';
   for (const model of models) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [{
-              text: `שם העסק הרשמי: ${brand}
-הזכר את העסק רק בשם הרשמי הזה. אל תשתמש בשם ישן אם הוא שונה מהשם הרשמי.
-
-${systemPrompt}
-
-${crmText}
-
-${BOT_BOUNDS_RULES}
-
-תפריט (רק אם הלקוח כותב מספר בודד 1–4):
-1 = הרשמה וחוגים
-2 = שעות פתיחה ומיקום
-3 = העברה לצוות אנושי
-4 = אירועים וטיולים
-
-אם שאלו על חוג/מחיר/מקום בלי כיתה או גיל — שאלו קודם באיזו כיתה.
-
-מגבלת אורך תשובה: עד ${s.aiMaxReplyChars || 700} תווים.
-
-הודעת לקוח: "${incomingText}"
-תשובה קצרה של הבוט:`
-            }]
-          }]
-        })
-      });
-      if (!response.ok) {
-        const errBody = await response.text().catch(() => '');
-        lastError = `${model}: HTTP ${response.status} ${errBody.slice(0, 160)}`;
-        continue;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemInstruction }] },
+            contents,
+            generationConfig: { temperature: 0.7 },
+          }),
+        });
+        if (response.status === 503 || response.status === 429) {
+          lastError = `${model}: HTTP ${response.status}`;
+          if (attempt === 0) {
+            await sleep(400);
+            continue;
+          }
+          if (response.status === 429) {
+            console.error('Gemini API call failed, falling back to heuristics:', lastError);
+            return null;
+          }
+          break;
+        }
+        if (!response.ok) {
+          const errBody = await response.text().catch(() => '');
+          lastError = `${model}: HTTP ${response.status} ${errBody.slice(0, 160)}`;
+          break;
+        }
+        const data = await response.json();
+        const responseText = extractGeminiResponseText(data);
+        if (responseText) return responseText;
+        lastError = `${model}: empty candidates`;
+        break;
+      } catch (err) {
+        lastError = `${model}: ${err.message}`;
+        break;
       }
-      const data = await response.json();
-      const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (responseText?.trim()) return responseText.trim();
-      lastError = `${model}: empty candidates`;
-    } catch (err) {
-      lastError = `${model}: ${err.message}`;
     }
   }
   if (lastError) console.error('Gemini API call failed, falling back to heuristics:', lastError);
@@ -1202,7 +1226,16 @@ export const whatsappService = {
     const crmText = learnedBlock ? `${crm.text}\n\n${learnedBlock}` : crm.text;
 
     if (hasModel) {
-      const geminiText = await callGeminiReply(systemPrompt, crmText, incomingText, apiKey, settings);
+      const historyLimit = Math.max(2, Math.min(20, Number(settings.aiHistoryCount) || 8));
+      const history = phone ? getChatHistoryMessages(phone, historyLimit) : [];
+      const geminiText = await callGeminiReply(
+        systemPrompt,
+        crmText,
+        incomingText,
+        apiKey,
+        settings,
+        { history },
+      );
       if (geminiText) {
         const parsed = parseAiReply(geminiText, settings);
         const naturalHandoff = parsed.handoff || detectNaturalHandoff(parsed.text);
@@ -1227,12 +1260,14 @@ export const whatsappService = {
         }
         return { text: parsed.text, confidence: 'medium', unsure: false };
       }
+    } else {
+      console.error('Gemini API key missing — bot falling back without model');
     }
 
     if (quick.skipMenu && isIdentifiedParent(parent)) {
-      // Model failed — last-resort short greeting, not a phrase list engine.
+      const fallback = resolveIdentifiedParentFallback(parent, incomingText, settings);
       return {
-        text: clipReply(knownParentGreeting(parent), settings.aiMaxReplyChars),
+        text: clipReply(fallback.text, settings.aiMaxReplyChars),
         confidence: 'low',
         skipMenu: true,
       };

@@ -64,7 +64,15 @@ test('normalizeMenuChoice maps numbers and titles', () => {
 });
 
 test('known parent greeting uses first name only', async () => {
-  const { isIdentifiedParent, parentFirstName, knownParentGreeting, isLowIntentGreeting } = await import('./whatsappBot.js');
+  const {
+    isIdentifiedParent,
+    parentFirstName,
+    knownParentGreeting,
+    isLowIntentGreeting,
+    resolveIdentifiedParentFallback,
+    extractGeminiResponseText,
+    buildGeminiChatContents,
+  } = await import('./whatsappBot.js');
   assert.equal(isIdentifiedParent({ name: 'דלק איל' }), true);
   assert.equal(isIdentifiedParent({ name: 'לקוח וואטסאפ' }), false);
   assert.equal(parentFirstName({ name: 'דלק איל' }), 'דלק');
@@ -76,6 +84,38 @@ test('known parent greeting uses first name only', async () => {
   assert.equal(isLowIntentGreeting('היי מה נשמע'), true);
   assert.equal(isLowIntentGreeting('שלום!'), true);
   assert.equal(isLowIntentGreeting('יש מקום בחוג?'), false);
+
+  const greetFallback = resolveIdentifiedParentFallback(
+    { name: 'דלק איל' },
+    'היי מה נשמע',
+  );
+  assert.match(greetFallback.text, /מה נשמע דלק/);
+
+  const chatFallback = resolveIdentifiedParentFallback(
+    { name: 'דלק איל' },
+    'אתה עונה ממש כמו בוט אמיתי',
+  );
+  assert.doesNotMatch(chatFallback.text, /מה נשמע דלק/);
+  assert.match(chatFallback.text, /לא הבנתי|לנסח|צוות/);
+
+  assert.equal(
+    extractGeminiResponseText({
+      candidates: [{ content: { parts: [{ thought: true, text: 'thinking' }, { text: ' תשובה ' }] } }],
+    }),
+    'תשובה',
+  );
+
+  const contents = buildGeminiChatContents(
+    [
+      { role: 'user', content: 'היי' },
+      { role: 'assistant', content: 'בסדר גמור מה נשמע דלק?' },
+      { role: 'user', content: 'אתה עונה כמו בוט' },
+    ],
+    'אתה עונה כמו בוט',
+  );
+  assert.equal(contents.length, 3);
+  assert.equal(contents[0].role, 'user');
+  assert.equal(contents[2].parts[0].text, 'אתה עונה כמו בוט');
 });
 
 test('money and injury words reach a human', () => {

@@ -1111,12 +1111,14 @@ app.get('/api/whatsapp/settings', async (req, res) => {
     verifyToken,
     ...safe
   } = branded;
+  const geminiKey = String(process.env.GEMINI_API_KEY || '').trim();
   res.json({
     ...safe,
     hasAccessToken: !!(metaWaAccessToken && !metaWaAccessToken.includes('YOUR_')),
     hasInstagramAccessToken: !!(metaIgAccessToken && !metaIgAccessToken.includes('YOUR_')),
     hasMessengerAccessToken: !!(metaPageAccessToken && String(metaPageAccessToken).length > 10),
     verifyTokenConfigured: !!verifyToken,
+    geminiConfigured: !!(geminiKey && !geminiKey.includes('YOUR_')),
     credentialsManagedByServer: !!(
       process.env.META_WA_PHONE_NUMBER_ID &&
       process.env.META_WA_ACCESS_TOKEN
