@@ -1171,6 +1171,7 @@ app.post('/api/whatsapp/settings', requireOwner, async (req, res) => {
     'aiEscalateWhenUnsure',
     'aiClarifyReply',
     'aiUnsureReply',
+    'aiToolsEnabled',
     'aiLeadCaptureEnabled',
     'aiInteractiveMenuEnabled',
     'aiGreetingMenu',
@@ -1210,6 +1211,9 @@ app.post('/api/whatsapp/settings', requireOwner, async (req, res) => {
   }
   if (payload.aiLeadCaptureEnabled !== undefined) {
     payload.aiLeadCaptureEnabled = !!payload.aiLeadCaptureEnabled;
+  }
+  if (payload.aiToolsEnabled !== undefined) {
+    payload.aiToolsEnabled = !!payload.aiToolsEnabled;
   }
   if (payload.aiInteractiveMenuEnabled !== undefined) {
     payload.aiInteractiveMenuEnabled = !!payload.aiInteractiveMenuEnabled;
