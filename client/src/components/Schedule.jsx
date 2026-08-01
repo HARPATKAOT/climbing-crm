@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight, ChevronDown, Package, Sparkles, ExternalLink, AlertTriangle, UserCheck, List, ShieldCheck, ShieldAlert, Maximize2, Minimize2, Clipboard, Check } from "lucide-react";
+import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight, ChevronDown, Package, Sparkles, ExternalLink, AlertTriangle, UserCheck, List, ShieldCheck, ShieldAlert, Maximize2, Minimize2, Clipboard, Check, SlidersHorizontal } from "lucide-react";
 import { DAYS_FULL } from '../mockData.js';
 import {
   SYSTEM_ROLE_KEYS, staffForRole, canFillRole, noStaffForRoleMessage,
@@ -2963,6 +2963,8 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
   const [dayVacation,     setDayVacation]      = useState(null); // «חופשה מאימונים» covering the day
   const [viewMode,        setViewMode]         = useState('week');
   const [employees,       setEmployees]        = useState([]);
+  const [daysMenuOpen,    setDaysMenuOpen]     = useState(false);
+  const daysMenuRef = useRef(null);
   // אילו ימים מוצגים בלוח השבועי. null = ברירת מחדל: מסתירים ימים בלי אף חוג.
   const [visibleDayPref,  setVisibleDayPref]   = useState(() => {
     try {
@@ -2991,6 +2993,16 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
     next.delete('group');
     setSearchParams(next, { replace: true });
   }, [searchParams, groups, setSearchParams]);
+
+  // לחיצה מחוץ לתפריט הימים סוגרת אותו, כמו כל תפריט אחר במסך.
+  useEffect(() => {
+    if (!daysMenuOpen) return undefined;
+    const onDown = (e) => {
+      if (daysMenuRef.current && !daysMenuRef.current.contains(e.target)) setDaysMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [daysMenuOpen]);
 
   // Fetch employees list dynamically for trainers dropdown
   useEffect(() => {
@@ -3269,6 +3281,64 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
             <button className={`tab-pill ${viewMode === 'list' ? 'active' : ''}`}
               onClick={() => setViewMode('list')}><List size={14} /> רשימה</button>
           </div>
+          {viewMode === 'week' && (
+            <div ref={daysMenuRef} style={{ position: 'relative' }}>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setDaysMenuOpen((v) => !v)}
+                title="בחר אילו ימים יופיעו בלוח"
+              >
+                <SlidersHorizontal size={14} /> ימים
+              </button>
+              {daysMenuOpen && (
+                <div style={{
+                  position: 'absolute', top: 'calc(100% + 6px)', insetInlineEnd: 0, zIndex: 40,
+                  minWidth: 210, padding: 10, borderRadius: 10,
+                  background: 'var(--bg-2, #161a2b)', border: '1px solid var(--border)',
+                  boxShadow: '0 10px 30px rgba(0,0,0,0.45)',
+                }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>
+                    ימים בלוח
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {DAYS_FULL.map((d, i) => {
+                      const on = visibleDays.includes(i);
+                      return (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => toggleDay(i)}
+                          title={dayCounts[i] ? `${dayCounts[i]} חוגים` : 'אין חוגים ביום זה'}
+                          style={{
+                            padding: '3px 10px', borderRadius: 999, cursor: 'pointer',
+                            fontSize: 11, fontWeight: 600,
+                            border: `1px solid ${on ? 'var(--accent, #818CF8)' : 'var(--border)'}`,
+                            background: on ? 'rgba(129,140,248,0.16)' : 'transparent',
+                            color: on ? 'var(--text-1)' : 'var(--text-3)',
+                          }}
+                        >
+                          {d}
+                          {dayCounts[i] > 0 && (
+                            <span style={{ marginRight: 4, fontSize: 10, opacity: 0.7 }}>({dayCounts[i]})</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {visibleDayPref && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      style={{ marginTop: 8 }}
+                      onClick={resetVisibleDays}
+                    >
+                      איפוס
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           <button className="btn btn-primary btn-sm" onClick={openAdd}>
             <Plus size={14} /> קבוצה חדשה
           </button>
@@ -3390,41 +3460,6 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
       {/* ── Week View ──────────────────────────────────────────────────────── */}
       {viewMode === 'week' && (
         <div className="card" style={{ overflow: 'auto' }}>
-          {/* בחירת ימים להצגה — ימים בלי חוגים מוסתרים מאליהם */}
-          <div style={{
-            display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
-            padding: '10px 12px', borderBottom: '1px solid var(--border)',
-          }}>
-            <span style={{ fontSize: 11, color: 'var(--text-3)', marginLeft: 4 }}>ימים בלוח:</span>
-            {DAYS_FULL.map((d, i) => {
-              const on = visibleDays.includes(i);
-              return (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => toggleDay(i)}
-                  title={dayCounts[i] ? `${dayCounts[i]} חוגים` : 'אין חוגים ביום זה'}
-                  style={{
-                    padding: '3px 10px', borderRadius: 999, cursor: 'pointer',
-                    fontSize: 11, fontWeight: 600,
-                    border: `1px solid ${on ? 'var(--accent, #818CF8)' : 'var(--border)'}`,
-                    background: on ? 'rgba(129,140,248,0.16)' : 'transparent',
-                    color: on ? 'var(--text-1)' : 'var(--text-3)',
-                  }}
-                >
-                  {d}
-                  {dayCounts[i] > 0 && (
-                    <span style={{ marginRight: 4, fontSize: 10, opacity: 0.7 }}>({dayCounts[i]})</span>
-                  )}
-                </button>
-              );
-            })}
-            {visibleDayPref && (
-              <button type="button" className="btn btn-ghost btn-sm" onClick={resetVisibleDays}>
-                איפוס
-              </button>
-            )}
-          </div>
           <div style={{ minWidth: 140 + visibleDays.length * 120, display: 'flex', flexDirection: 'column' }}>
             {/* Day headers */}
             <div style={{ display: 'flex', borderBottom: '1px solid var(--border)' }}>
