@@ -152,7 +152,7 @@ export default function BusinessSettings() {
             השם והלוגו יופיעו בדפים שפונים ללקוחות
           </div>
         </div>
-        <button type="submit" className="btn-primary" disabled={saving || imageBusy}>
+        <button type="submit" className="btn btn-primary" disabled={saving || imageBusy}>
           {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
           שמירה
         </button>
@@ -179,7 +179,7 @@ export default function BusinessSettings() {
               />
               <button
                 type="button"
-                className="btn-ghost"
+                className="btn btn-ghost"
                 onClick={() => fileRef.current?.click()}
                 disabled={imageBusy || saving}
               >
@@ -188,7 +188,7 @@ export default function BusinessSettings() {
               </button>
               <button
                 type="button"
-                className="btn-ghost"
+                className="btn btn-ghost"
                 onClick={() => set('logo_url', '/logo.png')}
                 disabled={imageBusy || saving}
               >

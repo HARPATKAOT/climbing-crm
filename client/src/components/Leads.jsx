@@ -449,7 +449,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     setEditBirthDate(student.birthDate || '');
     setEditStudentPhone(student.phone || '');
     setEditGender(student.gender || '');
-    setEditNotes(student.notes || '');
+    setEditNotes(isParentOnlyLead(student) ? (parent?.notes || '') : (student.notes || ''));
     setEditSegment(student.segment || '');
     setEditNextFollowup(student.nextFollowup || '');
     setEditGroupIds(studentGroupIds(student));
@@ -1399,7 +1399,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             email: editEmail,
             city: editCity,
             source: editSource,
-            notes: parentOnly ? editNotes : undefined,
+            notes: editNotes,
             status: parentOnly ? student.status : undefined,
           })
         });
@@ -2009,7 +2009,11 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 <button
                   type="button"
                   className="btn btn-ghost btn-xs"
-                  onClick={() => { setEditFocus('parent'); setIsEditing(true); }}
+                  onClick={() => {
+                    setEditFocus('parent');
+                    setEditNotes(parent?.notes || '');
+                    setIsEditing(true);
+                  }}
                   title="עריכת פרטי הורה"
                   style={{ border: '1px solid var(--border)', gap: 4 }}
                 >
@@ -2461,7 +2465,11 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     <button
                       type="button"
                       className="btn btn-ghost btn-xs"
-                      onClick={() => { setEditFocus('student'); setIsEditing(true); }}
+                      onClick={() => {
+                        setEditFocus('student');
+                        setEditNotes(student.notes || '');
+                        setIsEditing(true);
+                      }}
                       style={{ borderRadius: 999, border: '1px solid var(--border)', gap: 4 }}
                     >
                       <Edit2 size={11} /> ערוך
@@ -3932,7 +3940,13 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             </div>
             <div className="form-group">
               <label className="form-label">הערות מעקב</label>
-              <textarea className="input" style={{ minHeight: 80 }} value={editNotes} onChange={e => setEditNotes(e.target.value)} />
+              <textarea
+                className="input"
+                style={{ minHeight: 80 }}
+                placeholder="הערות פנימיות לצוות"
+                value={editNotes}
+                onChange={e => setEditNotes(e.target.value)}
+              />
             </div>
             <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 8 }}>
               {guardians.length > 1 && (
@@ -3985,7 +3999,13 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               <>
                 <div className="form-group">
                   <label className="form-label">הערות מעקב</label>
-                  <textarea className="input" style={{ minHeight: 80 }} value={editNotes} onChange={e => setEditNotes(e.target.value)} />
+                  <textarea
+                    className="input"
+                    style={{ minHeight: 80 }}
+                    placeholder="הערות פנימיות לצוות"
+                    value={editNotes}
+                    onChange={e => setEditNotes(e.target.value)}
+                  />
                 </div>
                 <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
                   <button

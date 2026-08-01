@@ -10,6 +10,12 @@ import {
   activeEnrollmentGroupIds,
 } from './studentGroups.js';
 import { DEFAULT_BUSINESS_PROFILE } from './businessProfile.js';
+import {
+  isDailySafetyCheck,
+  isDailySafetyOverdue,
+  isWallOpenForSafety,
+  lastOperatingDayOnOrBefore,
+} from './wallOperatingDay.js';
 
 const DB_FILE = path.join(process.cwd(), 'db.json');
 const BRAND_NAME = DEFAULT_BUSINESS_PROFILE.display_name;
@@ -552,6 +558,14 @@ export async function initDb({ requireDurable = false } = {}) {
       console.error('Student phone backfill failed:', phoneErr.message);
     }
     try {
+      const notesHeal = db.stripChannelMessageDumpsFromNotes();
+      if (notesHeal.updated > 0) {
+        console.log(`🧹 Stripped channel message dumps from notes: ${notesHeal.updated} row(s)`);
+      }
+    } catch (notesErr) {
+      console.error('Notes channel-dump heal failed:', notesErr.message);
+    }
+    try {
       const enrollBackfill = db.backfillEnrollmentsFromGroupId();
       if (enrollBackfill.created > 0) {
         console.log(`📚 Enrollment backfill from group_id: ${enrollBackfill.created} row(s)`);
@@ -1011,6 +1025,42 @@ export const db = {
     return { updated };
   },
 
+  /**
+   * One-time heal: strip auto-dumped channel messages from staff notes.
+   * Conversations live in the chat panel — notes are for hand-written follow-up only.
+   */
+  stripChannelMessageDumpsFromNotes: () => {
+    const dumpLineRe = /^(הודעה(?:\s+נוספת)?\s+מ(?:וואטסאפ|מסנג׳ר|מסנג'ר|אינסטגרם)\s*:)/;
+    let updated = 0;
+
+    const cleanNotes = (raw) => {
+      const text = String(raw || '');
+      if (!text) return { next: text, changed: false };
+      const lines = text.split(/\r?\n/);
+      const kept = lines.filter((line) => !dumpLineRe.test(line.trim()));
+      if (kept.length === lines.length) return { next: text, changed: false };
+      return { next: kept.join('\n').trim(), changed: true };
+    };
+
+    const data = readDb();
+    for (const parent of data.parents || []) {
+      const { next, changed } = cleanNotes(parent.notes);
+      if (!changed) continue;
+      parent.notes = next;
+      syncUpsert('parents', parent);
+      updated += 1;
+    }
+    for (const student of data.students || []) {
+      const { next, changed } = cleanNotes(student.notes);
+      if (!changed) continue;
+      student.notes = next;
+      syncUpsert('students', student);
+      updated += 1;
+    }
+    if (updated) writeDb(data);
+    return { updated };
+  },
+
   createLeadFromWhatsApp: async (phone, text) => {
     const dataBefore = readDb();
 
@@ -1030,11 +1080,11 @@ export const db = {
       const data = readDb();
       const existingStudent = data.students.find((s) => s.parentId === parent.id);
       if (existingStudent) {
-        if (existingStudent.status === 'archived') existingStudent.status = 'lead_new';
-        existingStudent.notes = (existingStudent.notes ? `${existingStudent.notes}\n` : '')
-          + `הודעה נוספת מוואטסאפ: "${text}"`;
-        writeDb(data);
-        await persistLeadPair(parent, existingStudent);
+        if (existingStudent.status === 'archived') {
+          existingStudent.status = 'lead_new';
+          writeDb(data);
+          await persistLeadPair(parent, existingStudent);
+        }
         return {
           parent,
           student: existingStudent,
@@ -1069,18 +1119,17 @@ export const db = {
     const parent = db.upsertParentByPhone('לקוח וואטסאפ', phone, '', {
       source: 'whatsapp',
       channel: 'whatsapp',
-      notes: `הודעה מוואטסאפ: "${text}"`,
       status: 'lead_new',
     });
 
     const data = readDb();
     const existingStudent = data.students.find((s) => s.parentId === parent.id);
     if (existingStudent) {
-      if (existingStudent.status === 'archived') existingStudent.status = 'lead_new';
-      existingStudent.notes = (existingStudent.notes ? `${existingStudent.notes}\n` : '')
-        + `הודעה נוספת מוואטסאפ: "${text}"`;
-      writeDb(data);
-      await persistLeadPair(parent, existingStudent);
+      if (existingStudent.status === 'archived') {
+        existingStudent.status = 'lead_new';
+        writeDb(data);
+        await persistLeadPair(parent, existingStudent);
+      }
       return { parent, student: existingStudent, isNew: false, matchedVia: 'parent_phone' };
     }
 
@@ -1136,22 +1185,28 @@ export const db = {
 
     const existingStudent = data.students.find((s) => s.parentId === parent.id);
     if (existingStudent) {
-      if (existingStudent.status === 'archived') existingStudent.status = 'lead_new';
+      let dirty = false;
+      if (existingStudent.status === 'archived') {
+        existingStudent.status = 'lead_new';
+        dirty = true;
+      }
       if (!existingStudent.source || existingStudent.source === 'unknown') {
         existingStudent.source = 'instagram';
+        dirty = true;
       }
-      existingStudent.notes = (existingStudent.notes ? `${existingStudent.notes}\n` : '')
-        + `הודעה נוספת מאינסטגרם: "${text}"`;
-      writeDb(data);
-      await persistLeadPair(parent, existingStudent);
+      if (dirty) {
+        writeDb(data);
+        await persistLeadPair(parent, existingStudent);
+      }
       return { parent, student: existingStudent, isNew: false };
     }
 
-    parent.status = parent.status === 'archived' ? 'lead_new' : (parent.status || 'lead_new');
-    parent.notes = (parent.notes ? `${parent.notes}\n` : '')
-      + `הודעה מאינסטגרם: "${text}"`;
-    writeDb(data);
-    await persistCore('parents', parent);
+    const nextStatus = parent.status === 'archived' ? 'lead_new' : (parent.status || 'lead_new');
+    if (parent.status !== nextStatus) {
+      parent.status = nextStatus;
+      writeDb(data);
+      await persistCore('parents', parent);
+    }
     return { parent, student: null, isNew: !hadParent };
   },
 
@@ -1604,37 +1659,91 @@ export const db = {
     return db.update('safety_check_types', id, { active: false });
   },
 
+  /**
+   * Annotate a check type with due / overdue / wall-open fields for a date.
+   * Daily checks follow operating days; other frequencies keep calendar intervals.
+   */
+  annotateSafetyCheckStatus: (type, {
+    dateStr = israelDateStr(),
+    logs = null,
+    activities = null,
+    shifts = null,
+  } = {}) => {
+    const allLogs = logs || db.get('safety_inspections') || [];
+    const cal = activities || db.get('activities') || [];
+    const shiftRows = shifts || db.get('shift_hours') || [];
+    const typeLogs = allLogs
+      .filter((l) => l.check_type_id === type.id || (!l.check_type_id && l.title === type.name))
+      .sort((a, b) => String(b.performed_at || b.date || '').localeCompare(String(a.performed_at || a.date || '')));
+    const last = typeLogs[0] || null;
+    const lastDate = last?.date || null;
+    const interval = Number(type.interval_days) > 0
+      ? Number(type.interval_days)
+      : (FREQ_INTERVAL_DAYS[type.frequency] || 1);
+    const signedToday = typeLogs.some((l) => l.date === dateStr);
+    const todayLog = typeLogs.find((l) => l.date === dateStr) || null;
+    const daysSince = daysBetweenDateStr(lastDate, dateStr);
+    const daily = isDailySafetyCheck(type);
+    const wallOpenToday = isWallOpenForSafety(dateStr, cal, shiftRows);
+    const lastOpenDay = lastOperatingDayOnOrBefore(dateStr, cal, { shifts: shiftRows });
+
+    let isDue;
+    let isOverdue;
+    let nextDue;
+    if (daily) {
+      isDue = wallOpenToday && !signedToday;
+      isOverdue = isDailySafetyOverdue(lastDate, dateStr, cal, shiftRows);
+      if (signedToday) {
+        nextDue = null;
+      } else if (wallOpenToday) {
+        nextDue = dateStr;
+      } else {
+        nextDue = isOverdue ? lastOpenDay : null;
+      }
+    } else {
+      nextDue = lastDate ? addDaysToDateStr(lastDate, interval) : dateStr;
+      isDue = !lastDate || daysSince >= interval;
+      isOverdue = isDue && !signedToday;
+    }
+
+    return {
+      ...type,
+      last_performed: lastDate,
+      last_performed_at: last?.performed_at || null,
+      last_tester_name: last?.tester_name || null,
+      next_due: nextDue,
+      days_since: Number.isFinite(daysSince) ? daysSince : null,
+      is_due: isDue,
+      is_overdue: isOverdue,
+      signed_today: signedToday,
+      today_log: todayLog,
+      wall_open_today: wallOpenToday,
+      last_operating_day: lastOpenDay,
+      skipped_closed: daily && !wallOpenToday,
+    };
+  },
+
   getSafetyDueToday: (dateStr = israelDateStr()) => {
     const types = db.getSafetyCheckTypes({ includeInactive: false });
     const logs = db.get('safety_inspections') || [];
+    const activities = db.get('activities') || [];
+    const shifts = db.get('shift_hours') || [];
 
-    return types.map((type) => {
-      const typeLogs = logs
-        .filter((l) => l.check_type_id === type.id || (!l.check_type_id && l.title === type.name))
-        .sort((a, b) => String(b.performed_at || b.date || '').localeCompare(String(a.performed_at || a.date || '')));
-      const last = typeLogs[0] || null;
-      const lastDate = last?.date || null;
-      const interval = Number(type.interval_days) > 0
-        ? Number(type.interval_days)
-        : (FREQ_INTERVAL_DAYS[type.frequency] || 1);
-      const nextDue = lastDate ? addDaysToDateStr(lastDate, interval) : dateStr;
-      const signedToday = typeLogs.some((l) => l.date === dateStr);
-      const todayLog = typeLogs.find((l) => l.date === dateStr) || null;
-      const daysSince = daysBetweenDateStr(lastDate, dateStr);
-      const isDue = !lastDate || daysSince >= interval;
+    return types
+      .map((type) => db.annotateSafetyCheckStatus(type, { dateStr, logs, activities, shifts }))
+      .filter((row) => {
+        if (row.signed_today) return true;
+        if (isDailySafetyCheck(row) && row.skipped_closed) return false;
+        return row.is_due;
+      });
+  },
 
-      return {
-        ...type,
-        last_performed: lastDate,
-        last_performed_at: last?.performed_at || null,
-        last_tester_name: last?.tester_name || null,
-        next_due: nextDue,
-        days_since: Number.isFinite(daysSince) ? daysSince : null,
-        is_due: isDue,
-        signed_today: signedToday,
-        today_log: todayLog,
-      };
-    }).filter((row) => row.is_due || row.signed_today);
+  getSafetyCheckTypesWithStatus: ({ includeInactive = false, dateStr = israelDateStr() } = {}) => {
+    const types = db.getSafetyCheckTypes({ includeInactive });
+    const logs = db.get('safety_inspections') || [];
+    const activities = db.get('activities') || [];
+    const shifts = db.get('shift_hours') || [];
+    return types.map((type) => db.annotateSafetyCheckStatus(type, { dateStr, logs, activities, shifts }));
   },
 
   insertSafetyIncident: (incident) => {

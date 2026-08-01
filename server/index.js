@@ -7443,7 +7443,8 @@ app.post('/api/wall-shift/open', (req, res) => {
   const emp = (db.get('employees') || []).find((e) => e.id === employeeId);
   if (!emp) return res.status(404).json({ error: 'העובד לא נמצא' });
   const shift = db.clockIn(employeeId, 'counter_shift', 'משמרת קיר — מסוף כניסה');
-  res.status(201).json({ shift });
+  const dueSafety = (db.getSafetyDueToday() || []).filter((c) => c.is_due && !c.signed_today);
+  res.status(201).json({ shift, due_safety: dueSafety });
 });
 
 app.post('/api/wall-shift/close', async (req, res) => {
@@ -8403,6 +8404,10 @@ app.delete('/api/work-assignments/:id', (req, res) => {
 // Safety check types, inspections & incidents
 app.get('/api/safety/check-types', (req, res) => {
   const includeInactive = req.query.includeInactive === '1' || req.query.includeInactive === 'true';
+  const withStatus = req.query.withStatus !== '0' && req.query.withStatus !== 'false';
+  if (withStatus) {
+    return res.json(db.getSafetyCheckTypesWithStatus({ includeInactive }));
+  }
   res.json(db.getSafetyCheckTypes({ includeInactive }));
 });
 

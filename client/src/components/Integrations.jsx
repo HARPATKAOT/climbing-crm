@@ -176,18 +176,18 @@ function GoogleCalendarCard() {
       {!data?.configured ? (
         <span style={{ color: 'var(--text-3)', fontSize: 13 }}>חסרים מפתחות גוגל בשרת</span>
       ) : data?.connected && !alert ? (
-        <button type="button" className="btn-ghost" onClick={sync} disabled={!!busy}>
+        <button type="button" className="btn btn-ghost" onClick={sync} disabled={!!busy}>
           {busy === 'sync' ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
           סנכרון עכשיו
         </button>
       ) : (
         <>
-          <button type="button" className="btn-primary" onClick={connect} disabled={!!busy}>
+          <button type="button" className="btn btn-primary" onClick={connect} disabled={!!busy}>
             {busy === 'connect' ? <Loader2 size={14} className="spin" /> : <Link2 size={14} />}
             {data?.connected ? 'חיבור מחדש' : 'חיבור לחשבון גוגל'}
           </button>
           {data?.connected && (
-            <button type="button" className="btn-ghost" onClick={sync} disabled={!!busy}>
+            <button type="button" className="btn btn-ghost" onClick={sync} disabled={!!busy}>
               {busy === 'sync' ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
               סנכרון עכשיו
             </button>
@@ -292,18 +292,18 @@ function GoogleContactsCard() {
       ) : (
         <>
           {(!data?.connected || alert) && (
-            <button type="button" className="btn-primary" onClick={connect} disabled={!!busy}>
+            <button type="button" className="btn btn-primary" onClick={connect} disabled={!!busy}>
               {busy === 'connect' ? <Loader2 size={14} className="spin" /> : <Link2 size={14} />}
               {data?.connected ? 'חיבור מחדש' : 'חיבור לחשבון גוגל'}
             </button>
           )}
           {data?.connected && (
             <>
-              <button type="button" className="btn-ghost" onClick={sync} disabled={!!busy}>
+              <button type="button" className="btn btn-ghost" onClick={sync} disabled={!!busy}>
                 {busy === 'sync' ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
                 סנכרון עכשיו
               </button>
-              <button type="button" className="btn-ghost" onClick={disconnect} disabled={!!busy}>
+              <button type="button" className="btn btn-ghost" onClick={disconnect} disabled={!!busy}>
                 {busy === 'disconnect' ? <Loader2 size={14} className="spin" /> : <Unlink size={14} />}
                 ניתוק
               </button>
@@ -337,7 +337,7 @@ function WhatsappCard() {
           : []
       }
     >
-      <a className="btn-ghost" href="/broadcasts">
+      <a className="btn btn-ghost" href="/broadcasts">
         <MessageCircle size={14} />
         פתיחת מסך הדיוור
       </a>
@@ -360,7 +360,7 @@ function IcountCard() {
       description="קופה, קישורי סליקה וחשבוניות. מוגדר במשתני השרת ולא מהמסך."
       alert={!data?.ok && data?.message ? data.message : null}
     >
-      <button type="button" className="btn-ghost" onClick={reload}>
+      <button type="button" className="btn btn-ghost" onClick={reload}>
         <RefreshCw size={14} />
         בדיקה מחדש
       </button>

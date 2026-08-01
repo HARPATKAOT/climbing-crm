@@ -937,14 +937,11 @@ export async function handleMessengerIncoming({ psid, text, messageId, name } = 
       channel: 'messenger',
       marketing_opt_in: true,
       status: 'lead_new',
-      notes: text ? `הודעה ממסנג׳ר: "${text}"` : '',
+      notes: '',
     });
     await persistCore('parents', parent);
-  } else if (text) {
-    parent = db.update('parents', parent.id, {
-      notes: (parent.notes ? `${parent.notes}\n` : '') + `הודעה ממסנג׳ר: "${text}"`,
-      status: parent.status === 'archived' ? 'lead_new' : (parent.status || 'lead_new'),
-    });
+  } else if (parent.status === 'archived') {
+    parent = db.update('parents', parent.id, { status: 'lead_new' });
     if (parent) await persistCore('parents', parent);
   }
   await markInboundForParent(parent, 'messenger');

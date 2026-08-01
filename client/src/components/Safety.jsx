@@ -338,8 +338,13 @@ function AddIncidentModal({ employees, onSave, onClose }) {
 function CheckDetailModal({ check, logs, employees, onSign, onEdit, onClose }) {
   const interval = Number(check.interval_days) || FREQ_DAYS[check.frequency] || 1;
   const last = logs[0] || null;
-  const nextDue = last?.date ? addDays(last.date, interval) : todayIso();
-  const isOverdue = !last?.date || nextDue <= todayIso();
+  const nextDue = Object.prototype.hasOwnProperty.call(check, 'next_due')
+    ? check.next_due
+    : (last?.date ? addDays(last.date, interval) : todayIso());
+  const isOverdue = typeof check.is_overdue === 'boolean'
+    ? check.is_overdue
+    : (!last?.date || String(nextDue || '') <= todayIso());
+  const isDaily = check.frequency === 'יומי' || Number(check.interval_days) === 1;
 
   return (
     <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
@@ -360,10 +365,15 @@ function CheckDetailModal({ check, logs, employees, onSign, onEdit, onClose }) {
         <div className="modal-body">
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
             <span className="badge badge-blue">{check.frequency}</span>
-            <span className="badge badge-gray">כל {interval} ימים</span>
+            {isDaily
+              ? <span className="badge badge-gray">בימי פעילות הקיר</span>
+              : <span className="badge badge-gray">כל {interval} ימים</span>}
             {isOverdue
               ? <span className="badge badge-red">ממתין לביצוע</span>
               : <span className="badge badge-green">בתוקף</span>}
+            {check.skipped_closed && (
+              <span className="badge badge-gray">היום הקיר סגור</span>
+            )}
           </div>
 
           {check.description && (
@@ -614,6 +624,22 @@ export default function Safety() {
   );
 
   const statusBadge = (type) => {
+    // Prefer server-computed status (daily checks use operating days, not calendar days).
+    if (type.is_overdue === true || (type.is_due && !type.signed_today)) {
+      return (
+        <span className="badge badge-red" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <AlertTriangle size={10} /> פג תוקף
+        </span>
+      );
+    }
+    if (type.is_overdue === false || type.signed_today) {
+      return (
+        <span className="badge badge-green" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <Check size={10} /> תקין
+        </span>
+      );
+    }
+    // Fallback if status fields are missing (older responses).
     const last = lastByType[type.id] || lastByType[type.name];
     const lastDate = last?.date;
     const interval = Number(type.interval_days) || FREQ_DAYS[type.frequency] || 1;
@@ -827,14 +853,16 @@ export default function Safety() {
                     <tr key={t.id}>
                       <td>{checkNameCell(t)}</td>
                       <td><span className="badge badge-blue">{t.frequency}</span></td>
-                      <td>{t.interval_days}</td>
+                      <td>{t.frequency === 'יומי' ? 'בימי פעילות' : t.interval_days}</td>
                       <td style={{ fontSize: 12, color: 'var(--text-2)', maxWidth: 240 }}>
                         {t.description || '—'}
                       </td>
                       <td style={{ fontSize: 12, color: 'var(--text-3)' }}>
-                        {last?.date
-                          ? `${last.date}${last.tester_name ? ` · ${last.tester_name}` : ''}`
-                          : 'אף פעם'}
+                        {t.last_performed
+                          ? `${t.last_performed}${t.last_tester_name ? ` · ${t.last_tester_name}` : ''}`
+                          : (last?.date
+                            ? `${last.date}${last.tester_name ? ` · ${last.tester_name}` : ''}`
+                            : 'אף פעם')}
                       </td>
                       <td>{statusBadge(t)}</td>
                       <td>

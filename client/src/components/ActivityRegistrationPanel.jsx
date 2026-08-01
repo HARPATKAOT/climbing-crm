@@ -856,10 +856,10 @@ export default function ActivityRegistrationPanel({
             {!readOnly && (
               <button
                 type="button"
-                className="btn-ghost"
+                className="btn btn-ghost btn-sm"
                 onClick={clearCustomer}
                 aria-label="הסרת מזמין"
-                style={{ flexShrink: 0, gap: 4 }}
+                style={{ flexShrink: 0 }}
               >
                 <X size={14} />
                 החלפה
@@ -1020,10 +1020,10 @@ export default function ActivityRegistrationPanel({
       {activityId && !readOnly && (form.payment_status || 'unpaid') === 'paid' && isHostPays && (
         <button
           type="button"
-          className="btn-ghost"
+          className="btn btn-ghost btn-sm"
           onClick={refundHostPayment}
           disabled={busy === 'host-refund'}
-          style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          style={{ alignSelf: 'flex-start' }}
         >
           {busy === 'host-refund' ? <Loader2 size={14} className="spin" /> : <Undo2 size={14} />}
           זיכוי דמי הזמנה

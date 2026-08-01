@@ -824,7 +824,7 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
                     </div>
                     <button
                       type="button"
-                      className="btn-ghost btn-icon btn-xs"
+                      className="btn btn-ghost btn-icon btn-xs"
                       title="שמור"
                       disabled={busy}
                       onClick={() => saveRow(row)}
@@ -833,7 +833,7 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
                     </button>
                     <button
                       type="button"
-                      className="btn-ghost btn-icon btn-xs"
+                      className="btn btn-ghost btn-icon btn-xs"
                       title="מחק"
                       disabled={busy}
                       onClick={() => deleteRow(row.id)}
@@ -1829,7 +1829,7 @@ function ActivityFormModal({
             {isEdit && !readOnly && onDelete && (
               <button
                 type="button"
-                className="btn-ghost"
+                className="btn btn-ghost"
                 onClick={() => onDelete(initial)}
                 disabled={saving}
                 style={{ color: '#F87171', borderColor: 'rgba(248,113,113,0.35)' }}
@@ -1839,21 +1839,21 @@ function ActivityFormModal({
             )}
           </div>
           <div style={{ display: 'flex', gap: 8, marginInlineStart: 'auto' }}>
-            <button type="button" className="btn-ghost" onClick={onClose} disabled={saving}>
+            <button type="button" className="btn btn-ghost" onClick={onClose} disabled={saving}>
               {readOnly ? 'סגור' : 'ביטול'}
             </button>
             {!readOnly && (
               <>
                 <button
                   type="button"
-                  className="btn-ghost"
+                  className="btn btn-ghost"
                   disabled={saving}
                   onClick={(event) => submit(event, { closeAfter: false })}
                 >
                   {saving ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
                   החל
                 </button>
-                <button type="submit" className="btn-primary" disabled={saving}>
+                <button type="submit" className="btn btn-primary" disabled={saving}>
                   {saving ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
                   שמור וצא
                 </button>
@@ -3791,11 +3791,10 @@ export default function ActivitiesCalendar({ isOwner = false }) {
               </button>
               <button
                 type="button"
-                className="btn-ghost"
+                className="btn btn-ghost btn-sm"
                 onClick={() => setCursor(viewMode === 'month'
                   ? new Date(new Date().getFullYear(), new Date().getMonth(), 1)
                   : new Date())}
-                style={{ fontSize: 12 }}
               >
                 היום
               </button>
@@ -3932,10 +3931,9 @@ export default function ActivitiesCalendar({ isOwner = false }) {
               {isOwner && (
                 <button
                   type="button"
-                  className="btn-ghost"
+                  className="btn btn-primary btn-sm"
                   onClick={connectGoogle}
                   disabled={googleBusy}
-                  style={{ fontSize: 12, color: '#7DD3FC', borderColor: 'rgba(56,189,248,0.4)' }}
                 >
                   {googleBusy ? <Loader2 size={13} className="spin" /> : <Link2 size={13} />}
                   חיבור מחדש
@@ -3950,10 +3948,9 @@ export default function ActivitiesCalendar({ isOwner = false }) {
               </span>
               <button
                 type="button"
-                className="btn-ghost"
+                className="btn btn-ghost btn-sm"
                 onClick={syncNow}
                 disabled={googleBusy}
-                style={{ fontSize: 12 }}
               >
                 {googleBusy ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
                 סנכרון עכשיו
@@ -3961,10 +3958,9 @@ export default function ActivitiesCalendar({ isOwner = false }) {
               {isOwner && (
                 <button
                   type="button"
-                  className="btn-ghost"
+                  className="btn btn-ghost btn-sm"
                   onClick={disconnectGoogle}
                   disabled={googleBusy}
-                  style={{ fontSize: 12 }}
                 >
                   <Unlink size={13} /> ניתוק
                 </button>
@@ -3981,10 +3977,9 @@ export default function ActivitiesCalendar({ isOwner = false }) {
               {isOwner && (
                 <button
                   type="button"
-                  className="btn-ghost"
+                  className="btn btn-primary btn-sm"
                   onClick={connectGoogle}
                   disabled={googleBusy}
-                  style={{ fontSize: 12, color: '#7DD3FC', borderColor: 'rgba(56,189,248,0.4)' }}
                 >
                   {googleBusy ? <Loader2 size={13} className="spin" /> : <Link2 size={13} />}
                   חיבור לגוגל

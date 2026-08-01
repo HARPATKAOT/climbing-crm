@@ -397,7 +397,7 @@ export default function ActivityTemplatesMenu({
                 <>
                   <button
                     type="button"
-                    className="btn-ghost"
+                    className="btn btn-ghost btn-sm"
                     onClick={() => { setCategoryId(null); setQuery(''); }}
                     style={{ alignSelf: 'flex-start', marginBottom: 4 }}
                   >
@@ -486,7 +486,7 @@ export default function ActivityTemplatesMenu({
                 <>
                   <button
                     type="button"
-                    className="btn-ghost"
+                    className="btn btn-ghost btn-sm"
                     onClick={() => { setCategoryId(null); setQuery(''); }}
                     style={{ alignSelf: 'flex-start', marginBottom: 4 }}
                   >

@@ -8,7 +8,7 @@ import { SYSTEM_ROLE_KEYS, canFillRole, fetchRoleCatalog, roleLabelOf } from '..
  * משמרת קיר מהמסוף: מי שפותח את הקיר פותח כאן משמרת, ומי שסוגר — סוגר.
  * הסגירה יוצרת שורת שכר של מפעיל קיר לפי השעות בפועל, מעוגל לחצי שעה למעלה.
  */
-function WallShiftPanel({ employees }) {
+function WallShiftPanel({ employees, onShiftOpened }) {
   const [openShifts, setOpenShifts] = useState([]);
   const [pickedId, setPickedId] = useState('');
   // מי בפועל סוגר כל משמרת פתוחה — ברירת המחדל היא בעל המשמרת עצמו, אבל
@@ -17,6 +17,7 @@ function WallShiftPanel({ employees }) {
   const [operatorLabel, setOperatorLabel] = useState(roleLabelOf(null, SYSTEM_ROLE_KEYS.WALL_OPERATOR));
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  const [safetyNudge, setSafetyNudge] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -45,6 +46,7 @@ function WallShiftPanel({ employees }) {
   const call = async (path, body, okMsg) => {
     setBusy(true);
     setMsg('');
+    setSafetyNudge('');
     try {
       const res = await fetch(path, {
         method: 'POST',
@@ -55,6 +57,18 @@ function WallShiftPanel({ employees }) {
       if (!res.ok) throw new Error(responseBody.error || 'הפעולה נכשלה');
       setMsg(okMsg);
       setPickedId('');
+      if (path.includes('/wall-shift/open')) {
+        const pending = (responseBody.due_safety || []).filter((c) => c.is_due && !c.signed_today);
+        if (pending.length > 0) {
+          const names = pending.map((c) => c.name).filter(Boolean).join(', ');
+          setSafetyNudge(
+            pending.length === 1
+              ? `יש בדיקת בטיחות שממתינה: ${names}`
+              : `יש ${pending.length} בדיקות בטיחות שממתינות: ${names}`
+          );
+        }
+        if (typeof onShiftOpened === 'function') onShiftOpened(responseBody);
+      }
       await load();
     } catch (err) {
       setMsg(err.message);
@@ -149,6 +163,23 @@ function WallShiftPanel({ employees }) {
           </div>
         )}
         {msg && <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{msg}</div>}
+        {safetyNudge && (
+          <div style={{
+            fontSize: 13,
+            fontWeight: 600,
+            color: '#FBBF24',
+            padding: '8px 10px',
+            borderRadius: 8,
+            background: 'rgba(251,191,36,0.12)',
+            border: '1px solid rgba(251,191,36,0.35)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}>
+            <ShieldAlert size={16} />
+            {safetyNudge}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -372,7 +403,7 @@ export default function CheckInConsole({ students, groups }) {
         </div>
       )}
 
-      <WallShiftPanel employees={employees} />
+      <WallShiftPanel employees={employees} onShiftOpened={() => refreshSafety()} />
 
       {dueSafety.length > 0 && (
         <div className="card" style={{ marginBottom: 24 }}>

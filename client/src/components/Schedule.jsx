@@ -893,25 +893,6 @@ function GroupBlock({ group, enrolledCount, selected, onClick }) {
     assistantNames.length ? `עוזרי מדריך: ${assistantNames.join(', ')}` : '',
   ].filter(Boolean).join(' · ');
 
-  // Under ~90px the four rows do not fit and the text collides with the
-  // capacity bar, so the staff shares the time row there.
-  const compactStaff = h < 90;
-  const staffLine = (
-    <>
-      <Users size={9} style={{ flexShrink: 0, opacity: 0.7, color: c.text }} />
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        color: group.trainerName ? c.text : 'rgba(255,255,255,0.35)', fontWeight: 600 }}>
-        {group.trainerName || 'ללא מדריך'}
-      </span>
-      {assistantNames.length > 0 && (
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          color: 'rgba(255,255,255,0.5)' }}>
-          +{assistantNames.join(', ')}
-        </span>
-      )}
-    </>
-  );
-
   return (
     <div onClick={onClick} style={{
       position: 'absolute',
@@ -922,7 +903,7 @@ function GroupBlock({ group, enrolledCount, selected, onClick }) {
       background: c.bg,
       border: `1.5px solid ${selected ? c.text : c.border}`,
       borderRadius: 7,
-      padding: '5px 7px',
+      padding: '4px 7px',
       cursor: 'pointer',
       overflow: 'hidden',
       boxShadow: selected ? `0 0 0 2px ${c.text}44, 0 4px 16px ${c.bg}` : '0 1px 4px rgba(0,0,0,0.2)',
@@ -934,35 +915,41 @@ function GroupBlock({ group, enrolledCount, selected, onClick }) {
     }}>
       {/* Name */}
       <div style={{ fontSize: Math.min(12, h > 65 ? 12 : 10), fontWeight: 700, color: c.text,
-        lineHeight: 1.25, overflow: 'hidden', display: '-webkit-box', flexShrink: 0,
-        WebkitLineClamp: compactStaff ? 1 : 2, WebkitBoxOrient: 'vertical' }}>
+        lineHeight: 1.2, overflow: 'hidden', display: '-webkit-box', flexShrink: 0,
+        WebkitLineClamp: 1, WebkitBoxOrient: 'vertical' }}>
         {label}
       </div>
 
-      {/* Time. A 50′ block is only 75px tall — there is no room for a fourth
-          row there, so the staff joins this line instead of getting its own. */}
-      {h >= 60 && (
-        <div title={compactStaff ? staffTitle : undefined}
-          style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', marginTop: 2,
-            flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
-          <span style={{ flexShrink: 0 }}>{group.time} · {group.duration}′</span>
-          {compactStaff && staffLine}
+      {/* Trainer, then assistants on the next line when assigned. */}
+      {h >= 55 && (
+        <div title={staffTitle} style={{ marginTop: 1, flexShrink: 0, minWidth: 0 }}>
+          <div style={{ fontSize: 10, display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+            <Users size={9} style={{ flexShrink: 0, opacity: 0.7, color: c.text }} />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              color: group.trainerName ? c.text : 'rgba(255,255,255,0.35)', fontWeight: 600 }}>
+              {group.trainerName || 'ללא מדריך'}
+            </span>
+          </div>
+          {assistantNames.length > 0 && (
+            <div style={{ fontSize: 10, display: 'flex', alignItems: 'center', gap: 4,
+              minWidth: 0, marginTop: 1 }}>
+              <UserPlus size={9} style={{ flexShrink: 0, opacity: 0.55, color: c.text }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                color: 'rgba(255,255,255,0.55)' }}>
+                {assistantNames.join(', ')}
+              </span>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Who is on the mat — lead trainer first, assistants after it. A group
-          with nobody assigned says so, so an empty slot is visible at a glance. */}
-      {h >= 60 && !compactStaff && (
-        <div title={staffTitle} style={{ fontSize: 10, marginTop: 1, flexShrink: 0,
-          display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
-          {staffLine}
-        </div>
-      )}
-
-      {/* Capacity bar */}
+      {/* Time + capacity share the bottom row so staff keeps its own lines. */}
       {h >= 55 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 'auto',
-          paddingTop: 3, flexShrink: 0 }}>
+          paddingTop: 2, flexShrink: 0 }}>
+          <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.45)', flexShrink: 0 }}>
+            {group.time} · {group.duration}′
+          </span>
           <div style={{ flex: 1, height: 2.5, borderRadius: 2, background: 'rgba(255,255,255,0.1)' }}>
             <div style={{ width: `${Math.min(pct,100)}%`, height: '100%', borderRadius: 2,
               background: full ? '#EF4444' : c.text }} />
