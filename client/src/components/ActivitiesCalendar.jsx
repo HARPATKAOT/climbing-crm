@@ -3,15 +3,16 @@ import {
   Plus, ChevronLeft, ChevronRight, X, Save, Trash2, Link2, Unlink,
   RefreshCw, Loader2, CalendarDays, CalendarRange, Layers, List,
   CheckCircle, AlertCircle, Clock3, Check, Pencil, Undo2, Users,
+  Eye, EyeOff,
 } from 'lucide-react';
 import ActivityPageDesigner from './ActivityPageDesigner.jsx';
 import ActivityRegistrationPanel from './ActivityRegistrationPanel.jsx';
 import ActivityTemplatesMenu from './ActivityTemplatesMenu.jsx';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
 import {
-  staffForRole, noStaffForRoleMessage, fetchRoleCatalog, activityRoleLabels,
+  staffForRole, noStaffForRoleMessage, fetchRoleCatalog, activityRoleLabels, payableRolesOf,
 } from '../utils/staffRoles.js';
-import { PAYABLE_ROLES, rateForRole, amountForWorkRow, WORK_TYPE_ROLES } from '../utils/wageRates.js';
+import { rateForRole, amountForWorkRow, WORK_TYPE_ROLES } from '../utils/wageRates.js';
 
 export const ACTIVITY_TYPES = [
   { id: 'birthday', label: 'יום הולדת', color: '#FB923C', bg: 'rgba(251,146,60,0.18)' },
@@ -443,6 +444,9 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
     return () => { cancelled = true; };
   }, []);
 
+  // התפקידים לבחירה נגזרים מהקטלוג, כך ששינוי שם או מחיקה מופיעים כאן מיד.
+  const payableRoles = useMemo(() => payableRolesOf(roleCatalog), [roleCatalog]);
+
   const empName = (id) => employees.find((e) => e.id === id)?.name || 'עובד';
   const agreementFor = (employeeId) => wages.find((w) => w.employee_id === employeeId) || DEFAULT_WAGE;
 
@@ -587,7 +591,7 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
               style={{ fontSize: 12, padding: '4px 6px' }}
             >
               <option value="">לפי סוג האירוע</option>
-              {PAYABLE_ROLES.map(({ role }) => (
+              {payableRoles.map(({ role }) => (
                 <option key={role} value={role}>{role}</option>
               ))}
             </select>
@@ -794,7 +798,7 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
                         style={{ fontSize: 12, padding: '4px 6px' }}
                       >
                         <option value="">ללא תפקיד</option>
-                        {PAYABLE_ROLES.map(({ role }) => {
+                        {payableRoles.map(({ role }) => {
                           const r = rateForRole(agreement, role);
                           return (
                             <option key={role} value={role}>
@@ -863,7 +867,7 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
                         style={{ fontSize: 12, padding: '4px 6px' }}
                       >
                         <option value="">ללא תפקיד</option>
-                        {PAYABLE_ROLES.map(({ role }) => (
+                        {payableRoles.map(({ role }) => (
                           <option key={role} value={role}>{role}</option>
                         ))}
                       </select>
@@ -2625,8 +2629,14 @@ function OverlaySidebar({
   loading,
   authBroken,
   onToggle,
+  onSolo,
+  onShowAll,
 }) {
   const selected = new Set(selectedIds || []);
+  const togglableIds = (calendars || [])
+    .filter((c) => !(c.id === wallCalendarId || c.isWallCalendar))
+    .map((c) => c.id);
+  const allShown = togglableIds.length > 0 && togglableIds.every((id) => selected.has(id));
 
   return (
     <aside style={{
@@ -2653,8 +2663,19 @@ function OverlaySidebar({
           יומנים להצגה
         </div>
         <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.35 }}>
-          סמן כדי לראות בלוח. אפשר לערוך יומנים עם הרשאת כתיבה.
+          סמן כדי לראות בלוח. בעין שליד כל יומן — הצגה שלו בלבד.
         </div>
+        {!loading && !authBroken && (calendars || []).length > 1 && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={onShowAll}
+            disabled={saving || allShown}
+            style={{ marginInlineStart: 'auto' }}
+          >
+            <Eye size={13} /> הצג את כל היומנים
+          </button>
+        )}
       </div>
 
       <div style={{ padding: '0 12px 12px' }}>
@@ -2681,6 +2702,10 @@ function OverlaySidebar({
               const isWall = cal.id === wallCalendarId || cal.isWallCalendar;
               const checked = isWall || selected.has(cal.id);
               const color = cal.backgroundColor || '#94A3B8';
+              // מוצג לבדו: אף יומן אחר לא מסומן מלבדו (היומן המסונכרן תמיד גלוי)
+              const isSolo = isWall
+                ? selected.size === 0
+                : selected.size === 1 && selected.has(cal.id);
               let status = '';
               if (isWall) status = 'מסונכרן';
               else if (cal.primary) status = 'ראשי';
@@ -2737,6 +2762,29 @@ function OverlaySidebar({
                       {status}
                     </span>
                   )}
+                  <button
+                    type="button"
+                    title={isSolo ? 'הצג את כל היומנים' : 'הצג רק את היומן הזה'}
+                    aria-label={isSolo ? 'הצג את כל היומנים' : 'הצג רק את היומן הזה'}
+                    disabled={saving}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (saving) return;
+                      if (isSolo) onShowAll();
+                      else onSolo(isWall ? null : cal.id);
+                    }}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                      width: 20, height: 20, padding: 0, flexShrink: 0,
+                      borderRadius: 6, border: '1px solid transparent',
+                      background: isSolo ? `${color}30` : 'transparent',
+                      color: isSolo ? color : 'var(--text-3)',
+                      cursor: saving ? 'default' : 'pointer',
+                    }}
+                  >
+                    {isSolo ? <EyeOff size={12} /> : <Eye size={12} />}
+                  </button>
                 </label>
               );
             })}
@@ -2761,6 +2809,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   const [formError, setFormError] = useState('');
   const [googleStatus, setGoogleStatus] = useState(null);
   const [googleBusy, setGoogleBusy] = useState(false);
+  const [googleMenuOpen, setGoogleMenuOpen] = useState(false);
   const [banner, setBanner] = useState('');
   const [overlayEvents, setOverlayEvents] = useState([]);
   const [overlayCalendars, setOverlayCalendars] = useState([]);
@@ -3699,16 +3748,8 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     }
   };
 
-  const toggleOverlayCalendar = async (calendarId) => {
-    if (overlaySaving) return;
-    const wallId = googleStatus?.calendarId;
-    if (calendarId === wallId) return;
-
+  const saveOverlaySelection = async (next) => {
     const prev = overlaySelectedIds;
-    const next = prev.includes(calendarId)
-      ? prev.filter((id) => id !== calendarId)
-      : [...prev, calendarId];
-
     setOverlaySelectedIds(next);
     setOverlaySaving(true);
     try {
@@ -3726,6 +3767,31 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     } finally {
       setOverlaySaving(false);
     }
+  };
+
+  const toggleOverlayCalendar = async (calendarId) => {
+    if (overlaySaving) return;
+    const wallId = googleStatus?.calendarId;
+    if (calendarId === wallId) return;
+
+    const prev = overlaySelectedIds;
+    await saveOverlaySelection(prev.includes(calendarId)
+      ? prev.filter((id) => id !== calendarId)
+      : [...prev, calendarId]);
+  };
+
+  /** הצג רק את היומן הזה. null = רק היומן המסונכרן (שתמיד גלוי) */
+  const soloOverlayCalendar = async (calendarId) => {
+    if (overlaySaving) return;
+    await saveOverlaySelection(calendarId ? [calendarId] : []);
+  };
+
+  const showAllOverlayCalendars = async () => {
+    if (overlaySaving) return;
+    const wallId = googleStatus?.calendarId;
+    await saveOverlaySelection(overlayCalendars
+      .filter((c) => c.id !== wallId && !c.isWallCalendar)
+      .map((c) => c.id));
   };
 
   const weekTitle = (() => {
@@ -3941,31 +4007,79 @@ export default function ActivitiesCalendar({ isOwner = false }) {
               )}
             </>
           ) : googleStatus?.connected ? (
-            <>
-              <span style={{ color: '#34D399' }}>
-                מחובר לגוגל
-                {googleStatus.calendarName ? ` · ${googleStatus.calendarName}` : ''}
-              </span>
+            /* מצב תקין — מוצנע לכפתור אחד; הפרטים והפעולות נפתחים בלחיצה */
+            <div style={{ position: 'relative' }}>
               <button
                 type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={syncNow}
-                disabled={googleBusy}
+                className="icon-btn"
+                onClick={() => setGoogleMenuOpen((v) => !v)}
+                title={`מחובר ליומן גוגל${googleStatus.calendarName ? ` · ${googleStatus.calendarName}` : ''}`}
+                aria-label="חיבור יומן גוגל"
+                style={{ position: 'relative' }}
               >
-                {googleBusy ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
-                סנכרון עכשיו
+                {googleBusy
+                  ? <Loader2 size={15} className="spin" />
+                  : <RefreshCw size={15} />}
+                <span style={{
+                  position: 'absolute', insetInlineEnd: 3, top: 3,
+                  width: 7, height: 7, borderRadius: '50%',
+                  background: '#34D399',
+                  boxShadow: '0 0 0 2px var(--bg-card)',
+                }} />
               </button>
-              {isOwner && (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  onClick={disconnectGoogle}
-                  disabled={googleBusy}
-                >
-                  <Unlink size={13} /> ניתוק
-                </button>
+
+              {googleMenuOpen && (
+                <>
+                  <div
+                    onClick={() => setGoogleMenuOpen(false)}
+                    style={{ position: 'fixed', inset: 0, zIndex: 40 }}
+                  />
+                  <div style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 6px)',
+                    insetInlineEnd: 0,
+                    zIndex: 41,
+                    minWidth: 220,
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 12,
+                    boxShadow: '0 12px 32px rgba(0,0,0,0.45)',
+                    padding: 8,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                  }}>
+                    <div style={{
+                      fontSize: 11, color: '#34D399', padding: '4px 8px 6px', lineHeight: 1.4,
+                    }}>
+                      מחובר ליומן גוגל
+                      {googleStatus.calendarName ? ` · ${googleStatus.calendarName}` : ''}
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => { setGoogleMenuOpen(false); syncNow(); }}
+                      disabled={googleBusy}
+                      style={{ justifyContent: 'flex-start' }}
+                    >
+                      {googleBusy ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />}
+                      סנכרון עכשיו
+                    </button>
+                    {isOwner && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => { setGoogleMenuOpen(false); disconnectGoogle(); }}
+                        disabled={googleBusy}
+                        style={{ justifyContent: 'flex-start' }}
+                      >
+                        <Unlink size={13} /> ניתוק
+                      </button>
+                    )}
+                  </div>
+                </>
               )}
-            </>
+            </div>
           ) : googleStatus?.configured === false ? (
             <span style={{ color: '#FBBF24', maxWidth: 420, lineHeight: 1.4 }}>
               הסנכרון לגוגל עדיין לא מוגדר בשרת.
@@ -4267,6 +4381,8 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           loading={overlayListLoading}
           authBroken={googleAuthNeedsReconnect(googleStatus?.error)}
           onToggle={toggleOverlayCalendar}
+          onSolo={soloOverlayCalendar}
+          onShowAll={showAllOverlayCalendars}
         />
       )}
 
