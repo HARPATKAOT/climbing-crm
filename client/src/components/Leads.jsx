@@ -2096,16 +2096,6 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     </button>
                   );
                 })}
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-xs"
-                  style={{ border: '1px solid var(--border)' }}
-                  disabled={settingPrimary || unlinkingGuardian || splitLoading}
-                  title="בחרו איזה ילד הולך עם איזה הורה — בלי למחוק אף אחד"
-                  onClick={openSplitFamily}
-                >
-                  פיצול משפחה
-                </button>
                 {guardians.some((g) => String(g.id) === String(parent?.id) && !g.primary) && (
                   <>
                     <button
@@ -3945,6 +3935,21 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               <textarea className="input" style={{ minHeight: 80 }} value={editNotes} onChange={e => setEditNotes(e.target.value)} />
             </div>
             <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {guardians.length > 1 && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs w-full"
+                  style={{ justifyContent: 'center', gap: 6, border: '1px solid var(--border)' }}
+                  disabled={splitLoading}
+                  title="בחרו איזה ילד הולך עם איזה הורה — בלי למחוק אף אחד"
+                  onClick={() => {
+                    setIsEditing(false);
+                    openSplitFamily();
+                  }}
+                >
+                  <Users size={12} /> פיצול משפחה
+                </button>
+              )}
               <button
                 type="button"
                 className="btn btn-ghost btn-xs w-full"
