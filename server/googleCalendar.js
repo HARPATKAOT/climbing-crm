@@ -51,6 +51,20 @@ function clientConfigured() {
   return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 }
 
+/**
+ * Background pull/push must not run on a local API that shares the live
+ * Supabase row — that was overwriting fresh OAuth tokens every few minutes.
+ * Override with GOOGLE_BACKGROUND_SYNC=1 (force on) or =0 (force off).
+ */
+export function backgroundSyncEnabled() {
+  const flag = String(process.env.GOOGLE_BACKGROUND_SYNC || '').trim().toLowerCase();
+  if (['0', 'false', 'off', 'no'].includes(flag)) return false;
+  if (['1', 'true', 'on', 'yes'].includes(flag)) return true;
+  const redirect = String(process.env.GOOGLE_REDIRECT_URI || redirectUri());
+  if (/localhost|127\.0\.0\.1/i.test(redirect)) return false;
+  return process.env.NODE_ENV === 'production';
+}
+
 function connectionMode() {
   if (clientConfigured()) return 'oauth';
   return null;
@@ -81,15 +95,17 @@ function frontendBase() {
   );
 }
 
-async function loadSettings() {
-  if (memorySettings) return memorySettings;
+async function loadSettings({ force = false } = {}) {
+  // Always re-read before mutating: a local server + the live API share one
+  // app_settings row. Stale in-memory tokens were overwriting fresh OAuth reconnects.
+  if (!force && memorySettings) return memorySettings;
   const remote = await supa.getAppSetting(SETTINGS_KEY);
   memorySettings = remote && typeof remote === 'object' ? { ...remote } : {};
   return memorySettings;
 }
 
 async function saveSettings(patch) {
-  const current = await loadSettings();
+  const current = await loadSettings({ force: true });
   memorySettings = { ...current, ...patch, updated_at: new Date().toISOString() };
   await supa.setAppSetting(SETTINGS_KEY, memorySettings);
   return memorySettings;
@@ -141,12 +157,13 @@ async function exchangeCode(code) {
   return data;
 }
 
-async function refreshAccessToken(settings) {
+async function refreshAccessToken(settings, { retried = false } = {}) {
   if (!settings?.refreshToken) throw new Error('אין חיבור לגוגל');
+  const triedToken = settings.refreshToken;
   const body = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID,
     client_secret: process.env.GOOGLE_CLIENT_SECRET,
-    refresh_token: settings.refreshToken,
+    refresh_token: triedToken,
     grant_type: 'refresh_token',
   });
   const res = await fetch(TOKEN_URL, {
@@ -157,7 +174,15 @@ async function refreshAccessToken(settings) {
   const data = await res.json();
   if (!res.ok) {
     const msg = data.error_description || data.error || 'רענון מפתח נכשל';
+    // Another process may have just reconnected — pick up its token once.
+    if (!retried) {
+      const fresh = await loadSettings({ force: true });
+      if (fresh.refreshToken && fresh.refreshToken !== triedToken) {
+        return refreshAccessToken(fresh, { retried: true });
+      }
+    }
     // Persist so status/UI can show «דורש טיפול» without waiting for a full sync.
+    // saveSettings re-reads remote first so we never write an older refreshToken back.
     try {
       await saveSettings({ lastError: msg });
     } catch {
@@ -166,15 +191,18 @@ async function refreshAccessToken(settings) {
     throw new Error(msg);
   }
   const expiresAt = Date.now() + (data.expires_in || 3600) * 1000 - 60_000;
-  return saveSettings({
+  const patch = {
     accessToken: data.access_token,
     accessTokenExpiresAt: expiresAt,
     lastError: null,
-  });
+  };
+  // Google sometimes rotates the refresh token — persist the new one.
+  if (data.refresh_token) patch.refreshToken = data.refresh_token;
+  return saveSettings(patch);
 }
 
 async function getAccessToken() {
-  let settings = await loadSettings();
+  let settings = await loadSettings({ force: true });
   if (!settings.refreshToken) throw new Error('אין חיבור לגוגל');
   if (
     settings.accessToken &&
@@ -523,7 +551,7 @@ function stripCrmMetaFromDescription(desc) {
 }
 
 export async function getStatus() {
-  const settings = await loadSettings();
+  const settings = await loadSettings({ force: true });
   return {
     configured: clientConfigured(),
     connected: isConnected(settings),
@@ -910,21 +938,18 @@ export async function completeOAuth(code) {
   if (!clientConfigured()) throw new Error('חסרים מפתחות גוגל בשרת');
   const tokens = await exchangeCode(code);
   if (!tokens.refresh_token) {
-    // May happen if previously authorized without prompt=consent; still try with access token
-    console.warn('Google OAuth: no refresh_token in response');
+    // Never keep a previous refresh token — it may already be revoked.
+    throw new Error('לא התקבל מפתח רענון מגוגל. נסו להתחבר שוב');
   }
   const expiresAt = Date.now() + (tokens.expires_in || 3600) * 1000 - 60_000;
   let settings = await saveSettings({
-    refreshToken: tokens.refresh_token || (await loadSettings()).refreshToken || '',
+    refreshToken: tokens.refresh_token,
     accessToken: tokens.access_token,
     accessTokenExpiresAt: expiresAt,
     connectedAt: new Date().toISOString(),
     lastError: null,
   });
-
-  if (!settings.refreshToken) {
-    throw new Error('לא התקבל מפתח רענון מגוגל. נסו להתחבר שוב');
-  }
+  console.log('Google Calendar OAuth connected at', settings.connectedAt);
 
   // Fetch user email
   try {
@@ -1169,6 +1194,7 @@ export function oauthCallbackRedirectUrl(result) {
 
 export const googleCalendarService = {
   clientConfigured,
+  backgroundSyncEnabled,
   getAuthUrl,
   getStatus,
   completeOAuth,

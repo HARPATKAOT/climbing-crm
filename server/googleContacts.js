@@ -79,15 +79,15 @@ function redirectUri() {
   );
 }
 
-async function loadSettings() {
-  if (memorySettings) return memorySettings;
+async function loadSettings({ force = false } = {}) {
+  if (!force && memorySettings) return memorySettings;
   const remote = await supa.getAppSetting(SETTINGS_KEY);
   memorySettings = remote && typeof remote === 'object' ? { ...remote } : {};
   return memorySettings;
 }
 
 async function saveSettings(patch) {
-  const current = await loadSettings();
+  const current = await loadSettings({ force: true });
   memorySettings = { ...current, ...patch, updated_at: new Date().toISOString() };
   await supa.setAppSetting(SETTINGS_KEY, memorySettings);
   return memorySettings;
@@ -162,7 +162,7 @@ async function refreshAccessToken(settings) {
 }
 
 async function getAccessToken() {
-  let settings = await loadSettings();
+  let settings = await loadSettings({ force: true });
   if (!settings.refreshToken) throw new Error('אין חיבור לאנשי הקשר בגוגל');
   if (
     settings.accessToken &&
@@ -615,6 +615,19 @@ const DEBOUNCE_MS = Number(process.env.GOOGLE_CONTACTS_DEBOUNCE_MS || 45_000);
  */
 export function scheduleSync(deps) {
   if (!clientConfigured()) return;
+  // Same shared-settings guard as calendar: local process must not rewrite live tokens.
+  const flag = String(process.env.GOOGLE_BACKGROUND_SYNC || '').trim().toLowerCase();
+  if (['0', 'false', 'off', 'no'].includes(flag)) return;
+  if (!['1', 'true', 'on', 'yes'].includes(flag)) {
+    const redirect = String(
+      process.env.GOOGLE_CONTACTS_REDIRECT_URI ||
+      process.env.GOOGLE_REDIRECT_URI ||
+      ''
+    );
+    if (/localhost|127\.0\.0\.1/i.test(redirect) || process.env.NODE_ENV !== 'production') {
+      return;
+    }
+  }
   if (pendingTimer) return;
   pendingTimer = setTimeout(async () => {
     pendingTimer = null;

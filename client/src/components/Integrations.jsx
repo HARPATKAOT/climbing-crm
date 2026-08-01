@@ -243,7 +243,7 @@ function expiryHint(status) {
   const err = String(status?.error || '');
   if (!err) return null;
   if (/invalid_grant|expired|revoked|unauthorized/i.test(err)) {
-    return 'החיבור פג או בוטל בגוגל. יש להתחבר מחדש. אם מסך ההסכמה בגוגל קלאוד במצב Testing, זה יקרה כל 7 ימים עד שיפורסם לפרודקשן.';
+    return 'החיבור פג או בוטל בגוגל. יש להתחבר מחדש. אם מסך ההסכמה היה במצב בדיקה בזמן החיבור הקודם — המפתח פג אחרי 7 ימים גם אחרי מעבר למצב חי, וצריך חיבור מחדש פעם אחת.';
   }
   return err;
 }

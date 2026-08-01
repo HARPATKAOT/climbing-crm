@@ -11571,9 +11571,11 @@ app.listen(PORT, () => {
   // AI assistant sweep over conversations that went quiet (from 03:00 Asia/Jerusalem)
   setInterval(() => { runNightlySweepIfDue(3); }, 15 * 60 * 1000);
 
-  // Google Calendar pull every 10 minutes (backup for missed webhooks)
+  // Google Calendar pull every 10 minutes (backup for missed webhooks).
+  // Skipped on local/dev so a laptop API cannot thrash the live OAuth tokens.
   const runGooglePullIfConnected = async () => {
     try {
+      if (!googleCalendarService.backgroundSyncEnabled()) return;
       const status = await googleCalendarService.getStatus();
       if (!status.connected) return;
       const result = await applyGooglePull(db);
@@ -11586,8 +11588,12 @@ app.listen(PORT, () => {
       console.error('Periodic Google Calendar sync failed:', err.message);
     }
   };
-  setTimeout(() => { runGooglePullIfConnected(); }, 60_000);
-  setInterval(() => { runGooglePullIfConnected(); }, 10 * 60 * 1000);
+  if (googleCalendarService.backgroundSyncEnabled()) {
+    setTimeout(() => { runGooglePullIfConnected(); }, 60_000);
+    setInterval(() => { runGooglePullIfConnected(); }, 10 * 60 * 1000);
+  } else {
+    console.log('📅 Google Calendar background sync disabled on this process (local/dev)');
+  }
 
   // Meta WhatsApp template statuses (PENDING → APPROVED/REJECTED)
   const runTemplateSyncIfConfigured = async () => {
