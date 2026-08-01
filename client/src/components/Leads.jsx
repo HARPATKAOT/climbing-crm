@@ -18,6 +18,7 @@ import {
   normalizePhone,
   resolveLeadOpenTarget,
 } from '../utils/leadUtils.js';
+import { buildFamilyRows } from '../utils/leadHouseholds.js';
 import {
   CATEGORY_COLORS,
   CATEGORY_ICONS,
@@ -254,66 +255,6 @@ function buildShareHealthLink(studentId, phone, healthPath = '/health') {
   }
   const qs = params.toString();
   return `${publicShareOrigin()}${healthPath}${qs ? `?${qs}` : ''}`;
-}
-
-/** Group lead rows by parent (and merge same-phone duplicate parent cards). */
-function buildFamilyRows(students, parents) {
-  const parentById = new Map((parents || []).map((p) => [p.id, p]));
-  const groups = new Map();
-
-  for (const student of students || []) {
-    const parent = parentById.get(student.parentId) || null;
-    const phoneKey = normPhone(parent?.phone) || '';
-    const groupKey = phoneKey
-      ? `phone:${phoneKey}`
-      : (parent?.id ? `parent:${parent.id}` : `student:${student.id}`);
-
-    let row = groups.get(groupKey);
-    if (!row) {
-      row = {
-        key: groupKey,
-        parent,
-        students: [],
-      };
-      groups.set(groupKey, row);
-    } else if (!row.parent && parent) {
-      row.parent = parent;
-    } else if (parent && row.parent && scoreParentForDisplay(parent) > scoreParentForDisplay(row.parent)) {
-      row.parent = parent;
-    }
-    row.students.push(student);
-  }
-
-  return [...groups.values()].map((row) => {
-    const sorted = [...row.students].sort((a, b) => {
-      const adultDiff = Number(!!b.isAdult) - Number(!!a.isAdult);
-      if (adultDiff) return adultDiff;
-      const da = a.created_at || a.created || '';
-      const db = b.created_at || b.created || '';
-      return String(da).localeCompare(String(db));
-    });
-    const statuses = [...new Set(sorted.map((s) => s.status).filter(Boolean))];
-    const created = sorted.map((s) => s.created || (s.created_at ? String(s.created_at).split('T')[0] : '')).filter(Boolean).sort()[0] || '';
-    return {
-      ...row,
-      students: sorted,
-      primaryStudent: sorted.find((s) => !isParentOnlyLead(s) && !s.isAdult)
-        || sorted.find((s) => !isParentOnlyLead(s))
-        || sorted[0],
-      statuses,
-      created,
-    };
-  });
-}
-
-function scoreParentForDisplay(parent) {
-  if (!parent) return 0;
-  let score = 0;
-  if (parent.name && parent.name !== 'לקוח וואטסאפ' && parent.name !== 'ליד מאינסטגרם') score += 4;
-  if (parent.email) score += 2;
-  if (parent.city) score += 1;
-  if (String(parent.phone || '').startsWith('972')) score += 1;
-  return score;
 }
 
 const sourceLabel = (m) => {
@@ -4542,34 +4483,39 @@ export default function Leads({
   }).map((entry) => entry.student);
 
   // Table: one row per family. Kanban stays per-student for the funnel.
-  const familyRows = buildFamilyRows(filtered, parents);
+  const familyRows = buildFamilyRows(filtered, parents, students);
   if (filterStatus === 'communication') {
     // Newest first, counting a fresh registration as well as an inbound
     // message — otherwise a family who just signed sorts to the bottom.
-    familyRows.sort(
-      (a, b) => awaitingSince(b.parent, b.students) - awaitingSince(a.parent, a.students)
+    // Either parent's message counts: the row stands for the whole household.
+    const rowAwaitingSince = (row) => Math.max(
+      ...(row.parents?.length ? row.parents : [row.parent])
+        .map((parent) => awaitingSince(parent, row.students))
     );
+    familyRows.sort((a, b) => rowAwaitingSince(b) - rowAwaitingSince(a));
   }
   const familyCountByStatus = (() => {
     const map = {
-      all: buildFamilyRows(leadEntries.map((e) => e.student), parents).length,
+      all: buildFamilyRows(leadEntries.map((e) => e.student), parents, students).length,
       communication: buildFamilyRows(
         leadEntries
           .filter(({ parent, student }) => isAwaitingHandling(parent, [student]))
           .map(({ student }) => student),
-        parents
+        parents,
+        students
       ).length,
     };
     for (const key of Object.keys(STATUSES)) {
       if (key === 'archived') continue;
       const matching = leadEntries.filter((e) => e.student.status === key).map((e) => e.student);
-      map[key] = buildFamilyRows(matching, parents).length;
+      map[key] = buildFamilyRows(matching, parents, students).length;
     }
     map.archived = buildFamilyRows(
       buildLeadEntries(students, parents, { includeArchived: true })
         .filter(({ parent }) => isArchivedParent(parent))
         .map((e) => e.student),
-      parents
+      parents,
+      students
     ).length;
     return map;
   })();
@@ -4994,6 +4940,10 @@ export default function Leads({
                 const groupsInFamily = [...new Set(
                   family.students.flatMap((s) => studentGroupIds(s))
                 )].map((gid) => groups.find((g) => g.id === gid)).filter(Boolean);
+                // The second parent of the household — same customer, one row.
+                const otherParents = (family.parents || [])
+                  .filter((p) => String(p.id) !== String(parent?.id));
+                const awaiting = [parent, ...otherParents].some((p) => p && isAwaitingHandling(p));
 
                 return (
                   <tr
@@ -5003,7 +4953,12 @@ export default function Leads({
                   >
                     <td style={{ fontWeight: 700 }}>
                       {parent?.name || '—'}
-                      {isAwaitingHandling(parent) && (
+                      {otherParents.length > 0 && (
+                        <div style={{ marginTop: 2, fontWeight: 500, fontSize: 11, color: 'var(--text-3)' }}>
+                          {otherParents.map((p) => p.name).filter(Boolean).join(' · ')}
+                        </div>
+                      )}
+                      {awaiting && (
                         <div style={{ marginTop: 4 }}>
                           <span className="badge badge-amber" style={{ fontSize: 10 }}>ממתין לטיפול</span>
                         </div>
@@ -5054,6 +5009,12 @@ export default function Leads({
                     </td>
                     <td style={{ direction: 'ltr', unicodeBidi: 'plaintext', color: isIg && !parent?.phone ? '#ff80bf' : 'var(--text-2)' }}>
                       {isIg && !parent?.phone ? `📸 IG (${parent?.instagram_id || 'DM'})` : parent?.phone}
+                      {otherParents
+                        .map((p) => p.phone)
+                        .filter((phone) => phone && normPhone(phone) !== normPhone(parent?.phone))
+                        .map((phone) => (
+                          <div key={phone} style={{ fontSize: 11, color: 'var(--text-3)' }}>{phone}</div>
+                        ))}
                     </td>
                     <td>
                       {groupsInFamily.length === 0
