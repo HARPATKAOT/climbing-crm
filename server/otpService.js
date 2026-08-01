@@ -21,6 +21,32 @@ const CODE_TTL_MS = 5 * 60 * 1000;
 // signature. Nothing is filed without it, so a token that lapses mid-form
 // fails the family after they have already signed. Hours, not minutes.
 const TOKEN_TTL_MS = 3 * 60 * 60 * 1000;
+
+/**
+ * Tokens are signed rather than stored.
+ *
+ * They used to be rows in a Map, which meant a deploy in the middle of
+ * someone's registration threw their verification away — and deploys happen
+ * during the working day. A signed token carries its own phone and expiry, so
+ * it survives a restart, and it cannot be forged without the key.
+ *
+ * The key is derived from a secret the server already holds, so this needs no
+ * new configuration to be stable across restarts and instances. The domain
+ * string keeps it from being the same key material as anything else.
+ */
+// Module level, so every service in one process shares it: without a secret to
+// derive from, tokens should die with the process, not with each instance.
+const FALLBACK_TOKEN_KEY = crypto.randomBytes(32);
+
+function tokenKey(secret) {
+  const source = secret
+    || process.env.OTP_TOKEN_SECRET
+    || process.env.SUPABASE_SERVICE_ROLE_KEY
+    || process.env.META_WA_ACCESS_TOKEN
+    || '';
+  if (!source) return FALLBACK_TOKEN_KEY;
+  return crypto.createHmac('sha256', 'crm.otp.submission-token.v1').update(source).digest();
+}
 const RESEND_COOLDOWN_MS = 45 * 1000;
 const MAX_SENDS_PER_WINDOW = 4;
 const SEND_WINDOW_MS = 15 * 60 * 1000;
@@ -30,10 +56,15 @@ function hashCode(phone, code) {
   return crypto.createHash('sha256').update(`${phone}:${code}`).digest('hex');
 }
 
-/** Both stores keyed by the normalized phone — the caller normalizes. */
-export function createOtpService({ now = () => Date.now() } = {}) {
+/** Codes are keyed by the normalized phone — the caller normalizes. */
+export function createOtpService({ now = () => Date.now(), secret = '' } = {}) {
   const codes = new Map(); // phone -> { hash, expiresAt, attempts, sends: [ts], lastSentAt }
-  const tokens = new Map(); // token -> { phone, expiresAt }
+  const key = tokenKey(secret);
+  // Best-effort replay guard. A restart empties it and a token becomes
+  // reusable until it expires — a duplicate registration by the same verified
+  // person, which staff can see, and far better than the alternative of
+  // throwing away the verification of everyone mid-form.
+  const spent = new Set();
 
   function sweep() {
     const t = now();
@@ -42,9 +73,37 @@ export function createOtpService({ now = () => Date.now() } = {}) {
         codes.delete(phone);
       }
     }
-    for (const [token, entry] of tokens) {
-      if (entry.expiresAt < t) tokens.delete(token);
+  }
+
+  function signToken(phone, expiresAt) {
+    const body = `${phone}.${expiresAt}`;
+    const mac = crypto.createHmac('sha256', key).update(body).digest('base64url');
+    return `${Buffer.from(body).toString('base64url')}.${mac}`;
+  }
+
+  /** Valid, unexpired, and for this phone — without spending it. */
+  function readToken(token, phone) {
+    const raw = String(token || '');
+    const [encoded, mac] = raw.split('.');
+    if (!encoded || !mac) return null;
+    let body;
+    try {
+      body = Buffer.from(encoded, 'base64url').toString();
+    } catch {
+      return null;
     }
+    const expected = crypto.createHmac('sha256', key).update(body).digest('base64url');
+    const macBuf = Buffer.from(mac);
+    const expectedBuf = Buffer.from(expected);
+    if (macBuf.length !== expectedBuf.length) return null;
+    if (!crypto.timingSafeEqual(macBuf, expectedBuf)) return null;
+
+    const separator = body.lastIndexOf('.');
+    const tokenPhone = body.slice(0, separator);
+    const expiresAt = Number(body.slice(separator + 1));
+    if (!expiresAt || expiresAt < now()) return null;
+    if (tokenPhone !== phone) return null;
+    return { phone: tokenPhone, expiresAt };
   }
 
   return {
@@ -91,21 +150,28 @@ export function createOtpService({ now = () => Date.now() } = {}) {
       }
       // Spent: the same code must not verify a second submission.
       entry.hash = null;
-      const token = crypto.randomUUID() + crypto.randomBytes(8).toString('hex');
-      tokens.set(token, { phone, expiresAt: t + TOKEN_TTL_MS });
-      return { token };
+      return { token: signToken(phone, t + TOKEN_TTL_MS) };
     },
 
     /**
-     * Redeems a token at submit time. Single-use, and bound to the phone the
-     * form is being submitted with — a token for one number says nothing about
-     * another.
+     * Is this submission allowed to proceed? Asked at the top of the route,
+     * before any work is done, and it does not spend the token — a submission
+     * refused later for a missing birth date has to be fixable by sending it
+     * again, not by verifying the phone from scratch.
+     */
+    checkToken(token, phone) {
+      if (!readToken(token, phone)) return false;
+      return !spent.has(String(token || ''));
+    },
+
+    /**
+     * Spends the token, once the submission it authorised has actually been
+     * filed. Bound to the phone the form was submitted with — a token for one
+     * number says nothing about another.
      */
     consumeToken(token, phone) {
-      sweep();
-      const entry = tokens.get(String(token || ''));
-      if (!entry || entry.expiresAt < now() || entry.phone !== phone) return false;
-      tokens.delete(String(token || ''));
+      if (!this.checkToken(token, phone)) return false;
+      spent.add(String(token || ''));
       return true;
     },
   };

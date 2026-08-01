@@ -20,6 +20,38 @@ test('a code round-trips into a single-use token', () => {
   assert.equal(svc.consumeToken(token, PHONE), false, 'token is spent on first use');
 });
 
+test('checking a token does not spend it', () => {
+  const { svc } = serviceAt();
+  const { token } = svc.verifyCode(PHONE, svc.issueCode(PHONE).code);
+  // A submission refused for a missing birth date must be fixable by sending
+  // it again, not by verifying the phone from scratch.
+  assert.equal(svc.checkToken(token, PHONE), true);
+  assert.equal(svc.checkToken(token, PHONE), true);
+  assert.equal(svc.consumeToken(token, PHONE), true);
+  assert.equal(svc.checkToken(token, PHONE), false, 'spent once the form is filed');
+});
+
+test('a token survives a restart of the service', () => {
+  // A deploy in the middle of someone's registration used to throw their
+  // verification away. Derived from a secret the server already holds, the key
+  // is the same on the other side of a restart, so the token still reads.
+  const secret = 'stable-secret-for-this-test';
+  const before = createOtpService({ secret });
+  const { token } = before.verifyCode(PHONE, before.issueCode(PHONE).code);
+  const afterRestart = createOtpService({ secret });
+  assert.equal(afterRestart.checkToken(token, PHONE), true);
+  assert.equal(afterRestart.checkToken(token, '972500000001'), false);
+  assert.equal(createOtpService({ secret: 'other' }).checkToken(token, PHONE), false);
+});
+
+test('a tampered token is refused', () => {
+  const { svc } = serviceAt();
+  const { token } = svc.verifyCode(PHONE, svc.issueCode(PHONE).code);
+  assert.equal(svc.checkToken(`${token}x`, PHONE), false);
+  assert.equal(svc.checkToken(token.replace(/.$/, 'A'), PHONE), false);
+  assert.equal(svc.checkToken('forged', PHONE), false);
+});
+
 test('a token is bound to its phone', () => {
   const { svc } = serviceAt();
   const { code } = svc.issueCode(PHONE);

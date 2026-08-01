@@ -9861,7 +9861,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   // prevent, and enforcing it only in the form leaves the route open to anyone
   // who skips the form — including the file uploads further down.
   const otpToken = String(req.body?.phoneVerification?.token || '').trim();
-  if (!otpToken || !otpService.consumeToken(otpToken, normPhone(phone))) {
+  if (!otpToken || !otpService.checkToken(otpToken, normPhone(phone))) {
     return res.status(403).json({
       error: 'אימות הטלפון פג או לא בוצע — חזרו לתחילת הטופס ובקשו קוד חדש',
     });
@@ -10083,6 +10083,12 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   // there is no nightly sweep behind it, so these families never reached the
   // address book at all.
   touchGoogleContacts();
+
+  // Spent only now, with the registration actually filed. Spending it up front
+  // meant a submission refused for a missing birth date burned the
+  // verification, and the correction came back "אימות הטלפון פג".
+  otpService.consumeToken(otpToken, normPhone(phone));
+
   res.status(201).json({
     success: true,
     parent,
