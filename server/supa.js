@@ -774,6 +774,18 @@ export const supa = {
     return { ok: true, blob: data };
   },
 
+  async removeClientDocument(storagePath) {
+    if (!client || !storagePath) return { ok: true };
+    const { error } = await client.storage
+      .from('client-documents')
+      .remove([storagePath]);
+    if (error) {
+      console.error('Supabase storage remove failed:', error.message);
+      return { ok: false, error: error.message };
+    }
+    return { ok: true };
+  },
+
   async uploadEmployeeDocument(storagePath, buffer, mimeType = 'application/pdf') {
     if (!client) return { ok: false, error: 'Supabase not configured' };
     const { error } = await client.storage

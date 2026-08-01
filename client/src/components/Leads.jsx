@@ -411,6 +411,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [clientDocuments, setClientDocuments] = useState([]);
   const [docsLoading, setDocsLoading] = useState(false);
+  const [deletingDocId, setDeletingDocId] = useState('');
   const [openFolder, setOpenFolder] = useState(null);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showAddChild, setShowAddChild] = useState(false);
@@ -2772,6 +2773,47 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   }
                 };
 
+                // Deleting a signed declaration takes the declaration itself with
+                // it, not just the file: leaving the record behind keeps the card
+                // marked as signed, and the file is rebuilt from it a moment later.
+                const handleDeleteDoc = async (doc) => {
+                  const healthRow = isHealthDoc(doc);
+                  const declId = doc.declarationId || doc.virtualData?.id || healthDecl?.id || '';
+                  const what = healthRow ? 'את הצהרת הבריאות' : 'את המסמך';
+                  const extra = healthRow ? '\nהמתאמן יסומן שוב כמי שטרם חתם.' : '';
+                  if (!window.confirm(`למחוק ${what} מהתיק? הפעולה אינה הפיכה.${extra}`)) return;
+                  setDeletingDocId(doc.id);
+                  setHealthSendMsg('');
+                  try {
+                    const url = healthRow
+                      ? `/api/students/${encodeURIComponent(student.id)}/health-declaration${declId ? `?declarationId=${encodeURIComponent(declId)}` : ''}`
+                      : `/api/documents/${encodeURIComponent(doc.id)}`;
+                    const res = await fetch(url, { method: 'DELETE' });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(data.error || 'delete failed');
+                    if (healthRow) {
+                      if (declId) pdfBackfillRef.current.delete(declId);
+                      setStudentDeclarations((prev) => prev.filter((d) => d.id !== declId));
+                      setHealthDecl((prev) => (!declId || prev?.id === declId ? null : prev));
+                      if (onUpdateStudent) {
+                        onUpdateStudent(student.id, {
+                          healthSignedAt: null,
+                          waiverSignedAt: null,
+                          status: data.student?.status || student.status,
+                        });
+                      }
+                    }
+                    const docsRes = await fetch(`/api/students/${encodeURIComponent(student.id)}/documents`);
+                    setClientDocuments(docsRes.ok ? await docsRes.json() : []);
+                    setHealthSendMsg(healthRow ? 'הצהרת הבריאות נמחקה מהתיק' : 'המסמך נמחק מהתיק');
+                  } catch (err) {
+                    console.error(err);
+                    setHealthSendMsg(err.message === 'delete failed' ? 'מחיקת המסמך נכשלה' : (err.message || 'מחיקת המסמך נכשלה'));
+                  } finally {
+                    setDeletingDocId('');
+                  }
+                };
+
                 return (
                   <>
                     {showUnsignedControls && (
@@ -2904,7 +2946,25 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         {(showUnsignedControls || healthSendMsg) && (
                           <div style={{ borderTop: '1px solid var(--border)', marginBottom: 12 }} />
                         )}
-                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)', marginBottom: 8 }}>מסמכים בתיק</div>
+                        {/* One send button for the whole file — it used to repeat
+                            on every row, which is what made the list look busy. */}
+                        <div style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          gap: 8, marginBottom: 8,
+                        }}>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)' }}>מסמכים בתיק</div>
+                          {!showUnsignedControls && hasHealthDoc && (
+                            <button
+                              type="button"
+                              className="btn btn-success btn-xs"
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}
+                              disabled={sendingHealth || !parent?.phone}
+                              onClick={handleSendHealthForm}
+                            >
+                              <Send size={12} /> {sendingHealth ? 'שולח...' : 'שלח בוואטסאפ'}
+                            </button>
+                          )}
+                        </div>
                         {docsLoading && !hasHealthDoc ? (
                           <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען...</div>
                         ) : combinedDocuments.length === 0 ? (
@@ -2915,60 +2975,73 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                             {combinedDocuments.map((doc) => {
                               const healthRow = isHealthDoc(doc);
+                              const clearanceRow = isClearanceDoc(doc);
                               const kind = kindForDoc(doc);
+                              const busy = deletingDocId === doc.id;
+                              // The stored file name is a long English string with
+                              // the child's name inside it, and it wrapped over
+                              // three lines. It moves to the tooltip; the row says
+                              // what the document is.
+                              const title = clearanceRow ? 'אישור רופא' : 'הצהרת בריאות חתומה';
+                              const stamp = doc.created_at ? new Date(doc.created_at) : null;
                               return (
                                 <div
                                   key={doc.id}
                                   style={{
                                     display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-                                    padding: '6px 8px', borderRadius: 8, border: '1px solid var(--border)',
-                                    background: 'rgba(255,255,255,0.03)',
+                                    padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)',
+                                    background: 'rgba(255,255,255,0.03)', opacity: busy ? 0.5 : 1,
                                   }}
                                 >
-                                  <div style={{ minWidth: 0 }}>
-                                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)' }}>
-                                      {isClearanceDoc(doc) && (
-                                        <span className="badge badge-amber" style={{ fontSize: 10, marginLeft: 6 }}>
-                                          אישור רופא
-                                        </span>
-                                      )}
+                                  <div style={{ minWidth: 0, flex: 1 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                       {/* Which activity this declaration covers.
                                           Several rows here are otherwise the
                                           same sentence repeated. */}
-                                      {kind && !isClearanceDoc(doc) && (
-                                        <span className={`badge ${kind.badge}`} style={{ fontSize: 10, marginLeft: 6 }}>
+                                      {kind && !clearanceRow && (
+                                        <span className={`badge ${kind.badge}`} style={{ fontSize: 10, flexShrink: 0 }}>
                                           {kind.label}
                                         </span>
                                       )}
-                                      {doc.fileName || 'הצהרת בריאות חתומה'}
+                                      <span
+                                        title={doc.fileName || title}
+                                        style={{
+                                          fontSize: 12, fontWeight: 600, color: 'var(--text-1)',
+                                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                                        }}
+                                      >
+                                        {title}
+                                      </span>
+                                      {healthRow && healthExpired && (
+                                        <span className="badge badge-amber" style={{ fontSize: 10, flexShrink: 0 }}>פג תוקף</span>
+                                      )}
                                     </div>
-                                    <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
-                                      {doc.created_at ? new Date(doc.created_at).toLocaleString('he-IL') : ''}
+                                    <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>
+                                      {stamp
+                                        ? `${stamp.toLocaleDateString('he-IL')} · ${stamp.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`
+                                        : ''}
                                     </div>
                                   </div>
-                                  <div style={{ display: 'flex', gap: 4, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                                    {healthRow && healthExpired && (
-                                      <span className="badge badge-amber" style={{ fontSize: 10, alignSelf: 'center' }}>פג תוקף</span>
-                                    )}
-                                    {healthRow && !healthExpired && (
-                                      <button
-                                        type="button"
-                                        className="btn btn-success btn-xs"
-                                        style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                                        disabled={sendingHealth || !parent?.phone}
-                                        onClick={handleSendHealthForm}
-                                      >
-                                        <Send size={12} /> {sendingHealth ? 'שולח...' : 'שלח בוואטסאפ'}
-                                      </button>
-                                    )}
+                                  <div style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center' }}>
                                     <button
                                       type="button"
                                       className="btn btn-primary btn-xs"
                                       style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                                      disabled={downloadingPdf || (doc.isVirtual && !(doc.virtualData || healthDecl))}
+                                      title="הורדת הקובץ"
+                                      disabled={busy || downloadingPdf || (doc.isVirtual && !(doc.virtualData || healthDecl))}
                                       onClick={() => handleDownloadDoc(doc)}
                                     >
                                       <Download size={12} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-xs"
+                                      style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--red, #F87171)' }}
+                                      title={healthRow ? 'מחיקת הצהרת הבריאות מהתיק' : 'מחיקת המסמך מהתיק'}
+                                      disabled={busy || !!deletingDocId}
+                                      onClick={() => handleDeleteDoc(doc)}
+                                    >
+                                      <Trash2 size={12} />
                                     </button>
                                   </div>
                                 </div>

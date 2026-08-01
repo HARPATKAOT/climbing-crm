@@ -11489,6 +11489,89 @@ app.get('/api/students/:id/documents', (req, res) => {
   res.json(docs);
 });
 
+/** Drop a stored file and its row — durable store first, then the local cache. */
+async function removeClientDocumentRecord(doc) {
+  if (doc.storagePath) await supa.removeClientDocument(doc.storagePath);
+  const result = await db.deleteDurable('client_documents', doc.id);
+  if (result.notFound) {
+    const remote = await supa.remove('client_documents', doc.id);
+    return remote?.ok === false ? remote : { ok: true };
+  }
+  return result;
+}
+
+// Staff: remove a single file from the personal file (a doctor's approval, a
+// scan). The signed declaration goes through the route below instead.
+app.delete('/api/documents/:id', async (req, res) => {
+  const doc = (db.get('client_documents') || []).find((d) => d.id === req.params.id);
+  if (!doc) return res.status(404).json({ error: 'מסמך לא נמצא' });
+  const removed = await removeClientDocumentRecord(doc);
+  if (!removed.ok) {
+    return res.status(409).json({ error: removed.error || 'מחיקת המסמך נכשלה' });
+  }
+  res.json({ success: true });
+});
+
+// Staff: remove a health declaration from the file — the record, the PDFs saved
+// under it, and the signed marks on the student. Deleting only the file is not
+// enough: the card would still read "signed", and the client re-uploads the same
+// PDF for a declaration that has no file.
+app.delete('/api/students/:id/health-declaration', async (req, res) => {
+  const studentId = String(req.params.id || '');
+  const student = (db.get('students') || []).find((s) => s.id === studentId);
+  if (!student) return res.status(404).json({ error: 'המתאמן לא נמצא' });
+
+  const declarationId = String(req.query.declarationId || req.body?.declarationId || '').trim();
+  const declarations = db.get('health_declarations') || [];
+  const target = declarationId ? declarations.find((d) => d.id === declarationId) : null;
+  // Once this declaration is gone, is any other one left on the child? If not,
+  // files that were saved without a declaration id belong to it too.
+  const otherDeclarations = declarations.filter(
+    (d) => d.studentId === studentId && d.id !== declarationId
+  );
+
+  const docs = (db.get('client_documents') || []).filter((d) => {
+    // A doctor's approval stands on its own and is deleted from its own row.
+    if (d.type === 'medical_clearance') return false;
+    if (declarationId && d.declarationId === declarationId) return true;
+    if (d.declarationId) return false;
+    return otherDeclarations.length === 0
+      && d.studentId === studentId
+      && d.type === 'health_waiver_pdf';
+  });
+
+  for (const doc of docs) {
+    const removed = await removeClientDocumentRecord(doc);
+    if (!removed.ok) {
+      return res.status(409).json({ error: removed.error || 'מחיקת הקובץ נכשלה' });
+    }
+  }
+
+  if (declarationId) {
+    const removed = target
+      ? await db.deleteDurable('health_declarations', declarationId)
+      : await supa.remove('health_declarations', declarationId);
+    if (removed?.ok === false) {
+      return res.status(409).json({ error: removed.error || 'מחיקת ההצהרה נכשלה' });
+    }
+  }
+
+  const stillSigned = (db.get('health_declarations') || []).some(
+    (d) => d.studentId === studentId && (d.signed || d.status === 'approved' || d.waiverAccepted)
+  );
+  let updated = student;
+  if (!stillSigned) {
+    updated = db.update('students', studentId, {
+      healthSignedAt: null,
+      waiverSignedAt: null,
+      status: student.status === 'health_signed' ? 'lead_new' : student.status,
+    }) || student;
+    await persistCore('students', updated);
+  }
+
+  res.json({ success: true, student: updated, removedDocuments: docs.length });
+});
+
 app.get('/api/students/:id/activity-registrations', async (req, res) => {
   try {
     const studentId = String(req.params.id || '').trim();
