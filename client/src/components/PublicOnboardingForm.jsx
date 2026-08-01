@@ -1512,6 +1512,34 @@ export default function PublicOnboardingForm() {
                   )}
                 </div>
 
+                {/* The other half of the same answer: someone who is already on
+                    the file and has nothing in force looked exactly like a
+                    participant typed in from scratch, so the one card the parent
+                    actually has to fill in was the one card saying nothing.
+                    Only for participants that came from the file — `id` — since
+                    an empty new card obviously has no declaration yet. */}
+                {child.id && !child.onFileHealthValid && (
+                  <div style={{
+                    background: 'rgba(249,115,22,.1)', border: '1px solid rgba(249,115,22,.35)',
+                    borderRadius: 12, padding: 12, marginBottom: 14,
+                  }}>
+                    {/* Named as the task rather than as a status, because at
+                        this point the parent is looking at a card that is
+                        already filled in and needs to be told what is still
+                        being asked of them. */}
+                    <div style={{ fontSize: 14, color: '#fdba74', fontWeight: 700, marginBottom: 4 }}>
+                      השלמה של הצהרת בריאות עבור {child.name || 'משתתף/ת זה'}
+                    </div>
+                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', lineHeight: 1.55 }}>
+                      הפרטים כבר קיימים במערכת — חסרה רק הצהרת הבריאות.
+                      {' '}
+                      {child.onFileHealthSignedAt
+                        ? `ההצהרה מ-${String(child.onFileHealthSignedAt).slice(0, 10)} כבר אינה בתוקף, יש לחתום עליה כאן מחדש.`
+                        : 'בדקו שהפרטים נכונים והמשיכו לחתימה על ההצהרה.'}
+                    </div>
+                  </div>
+                )}
+
                 {/* Someone already on file with a declaration in force is shown
                     as settled, not handed their own form again. Reopening it is
                     one tick, because a health change is the whole reason to. */}
