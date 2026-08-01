@@ -2629,6 +2629,7 @@ function OverlaySidebar({
   onToggle,
   onSolo,
   onShowAll,
+  onHideAll,
 }) {
   const selected = new Set(selectedIds || []);
   const togglableIds = (calendars || [])
@@ -2667,11 +2668,13 @@ function OverlaySidebar({
           <button
             type="button"
             className="btn btn-ghost btn-sm"
-            onClick={onShowAll}
-            disabled={saving || allShown}
+            onClick={allShown ? onHideAll : onShowAll}
+            disabled={saving}
             style={{ marginInlineStart: 'auto' }}
           >
-            <Eye size={13} /> הצג את כל היומנים
+            {allShown
+              ? <><EyeOff size={13} /> הסתר את כל היומנים</>
+              : <><Eye size={13} /> הצג את כל היומנים</>}
           </button>
         )}
       </div>
@@ -3786,6 +3789,12 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     await saveOverlaySelection(calendarId ? [calendarId] : []);
   };
 
+  /** הסתר הכל — נשאר רק היומן המסונכרן, שהוא הלוח עצמו */
+  const hideAllOverlayCalendars = async () => {
+    if (overlaySaving) return;
+    await saveOverlaySelection([]);
+  };
+
   const showAllOverlayCalendars = async () => {
     if (overlaySaving) return;
     const wallId = googleStatus?.calendarId;
@@ -4383,6 +4392,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           onToggle={toggleOverlayCalendar}
           onSolo={soloOverlayCalendar}
           onShowAll={showAllOverlayCalendars}
+          onHideAll={hideAllOverlayCalendars}
         />
       )}
 
