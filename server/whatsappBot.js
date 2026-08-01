@@ -1,4 +1,10 @@
 import { db, persistCore } from './db.js';
+import {
+  linkHouseholdGuardians,
+  enrichStudentsWithGuardians,
+  guardianRows,
+  isChildOfParent,
+} from './studentGuardians.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { israelClockParts, isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 import { recordMessage } from './channels/messageStore.js';
@@ -360,9 +366,16 @@ export function findPrimaryParent(phone) {
   })[0];
 }
 
+/**
+ * Every child this parent is a guardian of — not only the ones filed under
+ * their own card. Two parents of one household keep separate cards, and a
+ * customer asking about their child does not care which card the child sits on.
+ */
 export function studentsForParent(parent) {
   if (!parent?.id) return [];
-  return (db.get('students') || []).filter((s) => s.parentId === parent.id);
+  const students = db.get('students') || [];
+  const enriched = enrichStudentsWithGuardians(students, guardianRows(db));
+  return enriched.filter((student) => isChildOfParent(student, parent.id));
 }
 
 export function classifyAudience(parent, students = []) {
@@ -929,6 +942,9 @@ export async function advanceLeadCapture(phone, parent, incomingText, helpers = 
           source: 'whatsapp',
         });
         await persistCore('students', created);
+        for (const link of linkHouseholdGuardians(db, { studentId: created.id, source: 'whatsapp' })) {
+          await persistCore('student_guardians', link);
+        }
       }
     }
     return { reply: 'מעולה. באיזו כיתה הילד/ה? (לדוגמה: ג׳)', done: false };
