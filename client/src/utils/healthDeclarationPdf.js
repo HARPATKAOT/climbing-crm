@@ -216,6 +216,15 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, questionKinds 
             ? `<img src="${signature}" alt="חתימה" />`
             : '<div class="muted">לא נמצאה תמונת חתימה שמורה</div>'}
         </div>
+        ${/* What the signature is worth as evidence: a drawn line plus a phone
+             that answered a one-time code is a different document from a drawn
+             line alone, and the page should say which one this is. */
+          decl.phoneVerification?.verified
+            ? `<div class="field" style="margin-top:8px"><div class="label">אימות זהות החותם</div><div class="value">אומת בקוד חד־פעמי שנשלח בוואטסאפ למספר ${escapeHtml(decl.phoneVerification.phone || phone)}${
+              decl.phoneVerification.at
+                ? ` · ${escapeHtml(new Date(decl.phoneVerification.at).toLocaleString('he-IL'))}`
+                : ''}</div></div>`
+            : '<div class="field" style="margin-top:8px"><div class="label">אימות זהות החותם</div><div class="value">לא בוצע אימות טלפון</div></div>'}
       </div>
 
       <div class="footer">

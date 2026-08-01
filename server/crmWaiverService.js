@@ -150,6 +150,7 @@ export async function saveCrmParticipants({
   template: templateInput,
   activityId = null,
   orderId = null,
+  phoneVerification = null,
   source = 'form',
   onStudentCreated,
   onStudentStatusChanged,
@@ -212,6 +213,10 @@ export async function saveCrmParticipants({
     title: template.title,
     waiverText: template.waiverText,
     healthQuestions: template.healthQuestions,
+    // Whether the phone on the form answered a one-time code before signing.
+    // Lives in the snapshot because it is part of what the signature meant at
+    // the time, exactly like the text that was signed.
+    ...(phoneVerification ? { phoneVerification } : {}),
   };
 
   for (const input of participants) {

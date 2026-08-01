@@ -213,6 +213,103 @@ function MedicalClearanceField({ triggers, value, onChange, onError }) {
   );
 }
 
+/**
+ * The code screen, shown in place of the continue button on step 1.
+ *
+ * Verification is a gate, not a wall: if the message could not be sent at all,
+ * the form offers to go on unverified rather than losing the registration. The
+ * declaration records which of the two happened, so an unverified form is
+ * visibly weaker evidence instead of silently equal.
+ */
+function PhoneCodeGate({ otp, phone, onCodeChange, onVerify, onResend, onEditPhone, onSkip }) {
+  const waitSeconds = Math.max(0, Math.ceil((otp.cooldownUntil - Date.now()) / 1000));
+  return (
+    <div style={{
+      background: 'rgba(249,115,22,.1)', border: '1px solid rgba(249,115,22,.35)',
+      borderRadius: 12, padding: 14,
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: '#fdba74', marginBottom: 6 }}>
+        אימות מספר הטלפון
+      </div>
+      <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.72)', lineHeight: 1.6, marginBottom: 12 }}>
+        {otp.sendFailed
+          ? 'לא הצלחנו לשלוח קוד למספר הזה. בדקו שהמספר נכון, או המשיכו בלי אימות והצוות ייצור קשר.'
+          : <>שלחנו קוד בן 6 ספרות בוואטסאפ למספר <strong>{phone}</strong>. הזינו אותו כדי להמשיך — כך ההצהרה נרשמת על שם מי שבאמת מחזיק בטלפון.</>}
+        {otp.devCode ? ` (סביבת פיתוח: ${otp.devCode})` : ''}
+      </div>
+
+      {!otp.sendFailed && (
+        <input
+          value={otp.code}
+          onChange={(e) => onCodeChange(e.target.value.replace(/\D/g, '').slice(0, 6))}
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          placeholder="------"
+          style={{
+            width: '100%', textAlign: 'center', letterSpacing: 8, fontSize: 22,
+            fontWeight: 800, padding: '12px 8px', borderRadius: 11,
+            border: '1px solid rgba(255,255,255,.2)', background: '#0b1220',
+            color: '#e2e8f0', font: 'inherit', direction: 'ltr',
+          }}
+        />
+      )}
+      {otp.error && (
+        <div style={{ fontSize: 12, color: '#fca5a5', marginTop: 8 }}>{otp.error}</div>
+      )}
+
+      {!otp.sendFailed && (
+        <button
+          type="button"
+          className="event-primary"
+          style={{ marginTop: 12 }}
+          disabled={otp.verifying || otp.code.length < 6}
+          onClick={onVerify}
+        >
+          {otp.verifying ? 'מאמת…' : 'אישור והמשך'}
+        </button>
+      )}
+
+      <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          onClick={onResend}
+          disabled={otp.sending || waitSeconds > 0}
+          style={{
+            background: 'none', border: 'none', font: 'inherit', fontSize: 12,
+            color: waitSeconds > 0 ? 'rgba(255,255,255,.4)' : '#fdba74',
+            cursor: waitSeconds > 0 ? 'default' : 'pointer', textDecoration: 'underline',
+            padding: 0,
+          }}
+        >
+          {waitSeconds > 0 ? `שליחה חוזרת בעוד ${waitSeconds}` : 'שליחת קוד חדש'}
+        </button>
+        <button
+          type="button"
+          onClick={onEditPhone}
+          style={{
+            background: 'none', border: 'none', font: 'inherit', fontSize: 12,
+            color: '#94a3b8', cursor: 'pointer', textDecoration: 'underline', padding: 0,
+          }}
+        >
+          תיקון מספר הטלפון
+        </button>
+        {otp.sendFailed && (
+          <button
+            type="button"
+            onClick={onSkip}
+            style={{
+              background: 'none', border: 'none', font: 'inherit', fontSize: 12,
+              color: '#94a3b8', cursor: 'pointer', textDecoration: 'underline', padding: 0,
+            }}
+          >
+            המשך בלי אימות
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const emptyChild = (questions = []) => {
   const answers = blankAnswers(questions);
   return {
@@ -284,6 +381,24 @@ export default function PublicOnboardingForm() {
   // written with {{שם החותם}} — the same person either way.
   const signerName = joinParentName(parent.name, parent.lastName);
   const waiverText = withSignerName(template?.waiverText || fallbackWaiver, signerName);
+  // Phone verification. The token is what the submit sends; `verifiedPhone`
+  // remembers which number earned it, so editing the phone re-triggers the
+  // code. `sendFailed` opens the continue-without gate — a delivery problem on
+  // our side must not lock a family out of registering.
+  const [otp, setOtp] = useState({
+    stage: 'idle', token: '', verifiedPhone: '', code: '',
+    sending: false, verifying: false, error: '', cooldownUntil: 0,
+    sendFailed: false, devCode: '',
+  });
+  // Re-rendered every second while the code screen is up, so the resend
+  // button's countdown moves.
+  const [, setOtpTick] = useState(0);
+  useEffect(() => {
+    if (otp.stage !== 'code') return undefined;
+    const id = setInterval(() => setOtpTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [otp.stage]);
+
   // The acceptance box opens only after the binding text was scrolled through.
   // A tick on a contract nobody scrolled past is exactly the signature that
   // does not hold up later.
@@ -676,6 +791,17 @@ export default function PublicOnboardingForm() {
       if (known.families.length) return;
       setFamilyParentId('');
     }
+    // The phone must answer a one-time code before the form goes on. A number
+    // that was already verified in this session (and not edited since) is not
+    // asked twice.
+    if (otp.token && otp.verifiedPhone === parent.phone.trim()) {
+      proceedToStep2();
+      return;
+    }
+    await sendOtpCode();
+  };
+
+  const proceedToStep2 = () => {
     if (isAdultSelf) {
       setChildren([{
         ...emptyChild(questions),
@@ -685,6 +811,67 @@ export default function PublicOnboardingForm() {
       }]);
     }
     setStep(2);
+  };
+
+  const sendOtpCode = async () => {
+    setOtp((o) => ({ ...o, sending: true, error: '' }));
+    try {
+      const res = await fetch('/api/public/otp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: parent.phone.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setOtp((o) => ({
+          ...o,
+          sending: false,
+          stage: 'code',
+          sendFailed: true,
+          error: data.error || 'שליחת הקוד נכשלה',
+        }));
+        return;
+      }
+      setOtp((o) => ({
+        ...o,
+        sending: false,
+        stage: 'code',
+        sendFailed: false,
+        code: '',
+        error: '',
+        devCode: data.devCode || '',
+        cooldownUntil: Date.now() + 45000,
+      }));
+    } catch {
+      setOtp((o) => ({ ...o, sending: false, stage: 'code', sendFailed: true, error: 'שגיאת רשת בשליחת הקוד' }));
+    }
+  };
+
+  const verifyOtpCode = async () => {
+    setOtp((o) => ({ ...o, verifying: true, error: '' }));
+    try {
+      const res = await fetch('/api/public/otp/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: parent.phone.trim(), code: otp.code }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.token) {
+        setOtp((o) => ({ ...o, verifying: false, error: data.error || 'האימות נכשל' }));
+        return;
+      }
+      setOtp((o) => ({
+        ...o,
+        verifying: false,
+        stage: 'idle',
+        token: data.token,
+        verifiedPhone: parent.phone.trim(),
+        error: '',
+      }));
+      proceedToStep2();
+    } catch {
+      setOtp((o) => ({ ...o, verifying: false, error: 'שגיאת רשת — נסו שוב' }));
+    }
   };
 
   const goNextFromChildren = async () => {
@@ -892,6 +1079,7 @@ export default function PublicOnboardingForm() {
           subscriptions: { ...subscriptions, [requiredListKey]: true },
           templateSlug: template?.slug || 'wall',
           templateId: template?.id || null,
+          phoneVerification: otp.token ? { token: otp.token } : null,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -915,6 +1103,11 @@ export default function PublicOnboardingForm() {
         templateSlug: template?.slug || 'wall',
         title: template?.title || 'הצהרת בריאות ובטיחות + הסרת אחריות',
         brandName,
+        // Stamped into the PDF: this signature came from a phone that answered
+        // a one-time code, or it did not — either way the document says which.
+        phoneVerification: otp.token
+          ? { verified: true, phone: parent.phone.trim(), at: new Date().toISOString() }
+          : { verified: false },
       }));
       setSavedDeclarations(decls);
       setIsSuccess(true);
@@ -1237,9 +1430,29 @@ export default function PublicOnboardingForm() {
             <KnownFamilyNote families={families} chosenId={familyParentId} />
 
             {error && <ErrorBox message={error} />}
-            <button type="button" className="event-primary" onClick={goNextFromParent}>
-              המשך לפרטי משתתפים <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} />
-            </button>
+
+            {otp.stage === 'code' ? (
+              <PhoneCodeGate
+                otp={otp}
+                phone={parent.phone.trim()}
+                onCodeChange={(code) => setOtp((o) => ({ ...o, code, error: '' }))}
+                onVerify={verifyOtpCode}
+                onResend={sendOtpCode}
+                onEditPhone={() => setOtp((o) => ({ ...o, stage: 'idle', code: '', error: '' }))}
+                onSkip={() => { setOtp((o) => ({ ...o, stage: 'idle', error: '' })); proceedToStep2(); }}
+              />
+            ) : (
+              <button
+                type="button"
+                className="event-primary"
+                onClick={goNextFromParent}
+                disabled={otp.sending}
+              >
+                {otp.sending
+                  ? 'שולח קוד אימות בוואטסאפ…'
+                  : <>המשך לפרטי משתתפים <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} /></>}
+              </button>
+            )}
           </div>
         )}
 

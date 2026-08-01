@@ -152,6 +152,7 @@ import {
   needsMedicalClearance,
   questionsForSigner,
 } from './healthQuestions.js';
+import { createOtpService } from './otpService.js';
 import {
   declarationSignedAt,
   isHealthDeclarationValid,
@@ -9736,6 +9737,51 @@ app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
   });
 });
 
+// ── Phone verification for the public form ───────────────────────────────────
+// A code over WhatsApp proves the person filling the form holds the phone they
+// typed. The declaration then carries "verified", which is what turns the
+// drawn signature into evidence about a particular person.
+
+const otpService = createOtpService();
+const OTP_TEMPLATE_NAME = 'phone_verification_code';
+
+app.post('/api/public/otp/send', publicFormRateLimit, async (req, res) => {
+  const phone = normPhone(req.body?.phone);
+  if (!phone || phone.length < 11) {
+    return res.status(400).json({ error: 'מספר הטלפון לא תקין' });
+  }
+  const issued = otpService.issueCode(phone);
+  if (issued.error) return res.status(429).json({ error: issued.error });
+  try {
+    const result = await whatsappService.sendTemplateMessage(
+      phone,
+      OTP_TEMPLATE_NAME,
+      [issued.code],
+      { buttonUrlParams: [issued.code] }
+    );
+    if (result && result.error) {
+      console.error('otp send failed:', JSON.stringify(result.error).slice(0, 300));
+      return res.status(502).json({ error: 'שליחת הקוד בוואטסאפ נכשלה — בדקו את המספר ונסו שוב' });
+    }
+    // Local development without Meta credentials: the code cannot arrive on a
+    // phone, so hand it back for testing. Never in production.
+    const dev = result?.mock ? { devCode: issued.code } : {};
+    res.json({ ok: true, ...dev });
+  } catch (err) {
+    console.error('otp send error:', err.message);
+    res.status(502).json({ error: 'שליחת הקוד בוואטסאפ נכשלה — נסו שוב' });
+  }
+});
+
+app.post('/api/public/otp/verify', publicFormRateLimit, (req, res) => {
+  const phone = normPhone(req.body?.phone);
+  const code = String(req.body?.code || '').trim();
+  if (!phone || !code) return res.status(400).json({ error: 'חסר קוד או מספר טלפון' });
+  const outcome = otpService.verifyCode(phone, code);
+  if (outcome.error) return res.status(400).json({ error: outcome.error });
+  res.json({ ok: true, token: outcome.token });
+});
+
 /**
  * A doctor's approval reaches storage as a PDF and nothing else — the personal
  * file bucket accepts no other type. A photograph is wrapped into a PDF by the
@@ -9908,6 +9954,15 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     });
   }
 
+  // The token proves a code sent to this phone was typed back during this
+  // session. Verified or not, the submission goes through — but the
+  // declaration records which it was, because that is the difference between
+  // "someone typed a number" and "the number answered".
+  const otpToken = String(req.body?.phoneVerification?.token || '').trim();
+  const phoneVerification = otpToken && otpService.consumeToken(otpToken, normPhone(phone))
+    ? { verified: true, method: 'whatsapp_code', phone: normPhone(phone), at: new Date().toISOString() }
+    : { verified: false };
+
   let crmResult;
   try {
     crmResult = await saveCrmParticipants({
@@ -9925,6 +9980,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
       },
       participants: childList,
       template: template || resolveDeclarationTemplate(db, { templateId, templateSlug }),
+      phoneVerification,
       source: parentBody.source || 'form',
       onStudentCreated: (student, savedParent) => automationsService.triggerEvent('new_lead', {
         ...student,
