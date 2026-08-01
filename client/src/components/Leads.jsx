@@ -717,7 +717,6 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [customerPasses, setCustomerPasses] = useState([]);
   const [guardians, setGuardians] = useState([]);
   const [settingPrimary, setSettingPrimary] = useState(false);
-  const [unlinkingGuardian, setUnlinkingGuardian] = useState(false);
   const [showSplitFamily, setShowSplitFamily] = useState(false);
   const [splitHousehold, setSplitHousehold] = useState(null);
   const [splitAssignments, setSplitAssignments] = useState({});
@@ -860,46 +859,6 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       alert(err.message);
     } finally {
       setSettingPrimary(false);
-    }
-  };
-
-  /**
-   * Undo a bad family merge for this child only. The parent's own card stays;
-   * only the link between this child and the open (non-primary) parent goes.
-   */
-  const handleUnlinkGuardian = async () => {
-    if (!student?.id || !parent?.id || unlinkingGuardian) return;
-    const active = guardians.find((g) => String(g.id) === String(parent.id));
-    if (!active) return;
-    if (active.primary) {
-      alert('אי אפשר להסיר את ההורה הראשי. קבעו קודם הורה אחר כראשי, ואז הסירו את השיוך.');
-      return;
-    }
-    const parentLabel = parent.name || 'ההורה';
-    const childLabel = student.name || 'המתאמן';
-    if (!window.confirm(
-      `להסיר את השיוך של ${parentLabel} מ${childLabel}?\n\nכרטיס ההורה יישאר במערכת. רק הקישור לילד הזה יבוטל.`
-    )) {
-      return;
-    }
-    setUnlinkingGuardian(true);
-    try {
-      const response = await fetch(
-        `/api/students/${encodeURIComponent(student.id)}/guardians/${encodeURIComponent(parent.id)}`,
-        { method: 'DELETE' }
-      );
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(body.error || 'הסרת השיוך נכשלה');
-      }
-      const primary = guardians.find((g) => g.primary);
-      if (primary?.id) setActiveParentId(primary.id);
-      await refreshGuardians();
-      refreshData?.();
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setUnlinkingGuardian(false);
     }
   };
 
@@ -2255,29 +2214,19 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     </button>
                   );
                 })}
+                {/* Taking a parent off a child is a family decision, so it lives
+                    in one place only: "פיצול משפחה" under עריכה. */}
                 {guardians.some((g) => String(g.id) === String(parent?.id) && !g.primary) && (
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-xs"
-                      style={{ border: '1px solid var(--border)' }}
-                      disabled={settingPrimary || unlinkingGuardian}
-                      title="ההורה הראשי הוא זה שאליו המערכת פונה כברירת מחדל"
-                      onClick={handleMakePrimary}
-                    >
-                      {settingPrimary ? 'מעדכן...' : 'קבע כהורה ראשי'}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-xs"
-                      style={{ border: '1px solid rgba(248,113,113,0.45)', color: '#fca5a5' }}
-                      disabled={settingPrimary || unlinkingGuardian}
-                      title="מבטל רק את הקישור לילד הזה — כרטיס ההורה נשאר"
-                      onClick={handleUnlinkGuardian}
-                    >
-                      {unlinkingGuardian ? 'מסיר...' : 'הסר שיוך'}
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    style={{ border: '1px solid var(--border)' }}
+                    disabled={settingPrimary}
+                    title="ההורה הראשי הוא זה שאליו המערכת פונה כברירת מחדל"
+                    onClick={handleMakePrimary}
+                  >
+                    {settingPrimary ? 'מעדכן...' : 'קבע כהורה ראשי'}
+                  </button>
                 )}
               </div>
             )}
