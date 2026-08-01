@@ -9,6 +9,7 @@ import {
   MessageCircle,
   Receipt,
   AlertTriangle,
+  Bot,
 } from 'lucide-react';
 
 /**
@@ -345,6 +346,59 @@ function WhatsappCard() {
   );
 }
 
+/**
+ * A missing key on the live server turns every bot conversation into the
+ * fallback script, and nothing on screen said so until now. The live check is
+ * a button and not automatic, because each press spends a real model call.
+ */
+function BotEngineCard() {
+  const { data, loading } = useStatus('/api/ai/status');
+  const [test, setTest] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const runTest = async () => {
+    setBusy(true);
+    try {
+      const res = await fetch('/api/ai/status?test=1');
+      setTest(await res.json().catch(() => ({ ok: false, error: 'הבדיקה נכשלה' })));
+    } catch (err) {
+      setTest({ ok: false, error: err.message || 'הבדיקה נכשלה' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (loading) return <LoadingCard title="מנוע השיחה של הבוט" icon={Bot} />;
+
+  const configured = !!data?.configured;
+  const state = !configured ? 'off' : test ? (test.ok ? 'ok' : 'error') : 'warn';
+  const stateLabel = !configured
+    ? 'לא מוגדר'
+    : test
+      ? (test.ok ? 'עונה' : 'תקלה')
+      : 'מוגדר — לא נבדק';
+
+  return (
+    <IntegrationCard
+      icon={Bot}
+      title="מנוע השיחה של הבוט"
+      state={state}
+      stateLabel={stateLabel}
+      description="המנוע שמנסח את תשובות הבוט בוואטסאפ. בלי מפתח פעיל בשרת הבוט נופל לתשובות גיבוי קבועות."
+      alert={!configured ? 'אין מפתח מודל בשרת — הבוט עונה רק מהגיבוי' : (test && !test.ok ? test.error : null)}
+      rows={[
+        ['דגם מועדף', data?.preferredModel || '—'],
+        ...(test?.ok ? [['ענה בפועל', test.model], ['נבדק', formatDateTime(test.testedAt)]] : []),
+      ]}
+    >
+      <button type="button" className="btn btn-ghost" onClick={runTest} disabled={busy}>
+        {busy ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+        בדיקת חיבור
+      </button>
+    </IntegrationCard>
+  );
+}
+
 function IcountCard() {
   const { data, loading, reload } = useStatus('/api/icount/status');
   if (loading) return <LoadingCard title="iCount" icon={Receipt} />;
@@ -389,6 +443,7 @@ export default function Integrations() {
       <GoogleContactsCard />
       <GoogleCalendarCard />
       <WhatsappCard />
+      <BotEngineCard />
       <IcountCard />
     </div>
   );

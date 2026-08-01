@@ -204,6 +204,7 @@
 ## מסמכים חשובים
 
 - `docs/FEATURE-DETAILS.md` — פירוט מלא של כל פיצ׳ר + תיקונים היסטוריים
+- `docs/BOT-STATUS.md` — מצב בוט הוואטסאפ: מה עובד, מה תוקן, פערים ואיך לבדוק
 - `README.md` — הפעלה מקומית ובדיקות
 - `SUPABASE-SETUP.md` — כניסה, הרשאות, אבטחת טבלאות
 - `META-WHATSAPP-SETUP.md` — מעבר ל-WhatsApp של Meta

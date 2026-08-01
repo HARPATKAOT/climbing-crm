@@ -1260,6 +1260,44 @@ app.get('/api/whatsapp/connect-config', (req, res) => {
   res.json(whatsappConnectService.getConnectConfig());
 });
 
+// Conversation engine status for the connections tab.
+// A plain read only reports whether a key is present; ?test=1 spends a real
+// call on the model, so it stays behind the owner guard.
+app.get('/api/ai/status', async (req, res) => {
+  const key = String(process.env.GEMINI_API_KEY || '').trim();
+  const configured = !!(key && !key.includes('YOUR_'));
+  const preferredModel = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+  if (req.query.test !== '1') {
+    return res.json({ configured, preferredModel });
+  }
+  if (!configured) {
+    return res.json({ configured, preferredModel, tested: true, ok: false, error: 'לא הוגדר מפתח מודל בשרת' });
+  }
+  const models = [preferredModel, 'gemini-3.6-flash', 'gemini-3.5-flash'];
+  let lastError = '';
+  for (const model of models) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: 'ענה במילה אחת: תקין' }] }],
+          generationConfig: { temperature: 0 },
+        }),
+      });
+      if (response.ok) {
+        return res.json({ configured, preferredModel, tested: true, ok: true, model, testedAt: new Date().toISOString() });
+      }
+      const body = await response.text().catch(() => '');
+      lastError = `${model}: HTTP ${response.status} ${body.slice(0, 160)}`;
+    } catch (err) {
+      lastError = `${model}: ${err.message}`;
+    }
+  }
+  res.json({ configured, preferredModel, tested: true, ok: false, error: lastError });
+});
+
 // Connection status for settings UI
 app.get('/api/whatsapp/status', async (req, res) => {
   try {

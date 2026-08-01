@@ -268,7 +268,10 @@ const mappers = {
       priceTwice: r.price_twice != null ? Number(r.price_twice) : 0,
       waParents: r.wa_parents || '',
       waClimbers: r.wa_climbers || '',
-      signupLink: r.signup_link || '',
+      // Prefer the frequency-specific links; fall back to the legacy single
+      // signup_link so older rows still show a once/week copy button.
+      signupLinkWeek: r.signup_link_week || r.signup_link || '',
+      signupLinkTwice: r.signup_link_twice || '',
       notionId: r.notion_id || undefined,
     }),
     toRow: (o) => ({
@@ -293,7 +296,10 @@ const mappers = {
       price_twice: numOrNull(o.priceTwice) ?? 0,
       wa_parents: o.waParents || '',
       wa_climbers: o.waClimbers || '',
-      signup_link: o.signupLink || '',
+      signup_link_week: o.signupLinkWeek || '',
+      signup_link_twice: o.signupLinkTwice || '',
+      // Keep the legacy column in sync with once/week for any old readers.
+      signup_link: o.signupLinkWeek || '',
       notion_id: emptyToNull(o.notionId),
     }),
   },

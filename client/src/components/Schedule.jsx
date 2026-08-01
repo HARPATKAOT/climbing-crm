@@ -1090,7 +1090,10 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
   const [priceTwice, setPriceTwice] = useState(group?.priceTwice || 360);
   const [waParents,  setWaParents]  = useState(group?.waParents || '');
   const [waClimbers, setWaClimbers] = useState(group?.waClimbers || '');
-  const [signupLink, setSignupLink] = useState(group?.signupLink || '');
+  const [signupLinkWeek, setSignupLinkWeek] = useState(
+    group?.signupLinkWeek || group?.signupLink || '',
+  );
+  const [signupLinkTwice, setSignupLinkTwice] = useState(group?.signupLinkTwice || '');
 
   const handleDelete = () => {
     if (!group?.id || !onDelete) return;
@@ -1140,7 +1143,8 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
       priceTwice:  parseFloat(priceTwice) || 0,
       waParents,
       waClimbers,
-      signupLink: signupLink.trim(),
+      signupLinkWeek: signupLinkWeek.trim(),
+      signupLinkTwice: signupLinkTwice.trim(),
     });
   };
 
@@ -1241,12 +1245,21 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
                 <label className="form-label">מחיר פעם/שבוע (₪)</label>
                 <input className="input" type="number" min={0} value={priceWeek}
                   onChange={e => setPriceWeek(e.target.value)} />
+                <label className="form-label" style={{ marginTop: 10 }}>קישור הרשמה · פעם בשבוע</label>
+                <input className="input" placeholder="https://..." value={signupLinkWeek}
+                  onChange={e => setSignupLinkWeek(e.target.value)} />
               </div>
               <div className="form-group">
                 <label className="form-label">מחיר פעמיים/שבוע (₪)</label>
                 <input className="input" type="number" min={0} value={priceTwice}
                   onChange={e => setPriceTwice(e.target.value)} />
+                <label className="form-label" style={{ marginTop: 10 }}>קישור הרשמה · פעמיים בשבוע</label>
+                <input className="input" placeholder="https://..." value={signupLinkTwice}
+                  onChange={e => setSignupLinkTwice(e.target.value)} />
               </div>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: -4, marginBottom: 8 }}>
+              הקישורים שנשלחים להורים לפי תדירות. יופיעו בכרטיס הקבוצה עם כפתור העתקה.
             </div>
 
             <div className="form-group">
@@ -1258,14 +1271,6 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
               <label className="form-label">לינק וואטסאפ מטפסים</label>
               <input className="input" placeholder="https://chat.whatsapp.com/..." value={waClimbers}
                 onChange={e => setWaClimbers(e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">קישור הרשמה לקבוצה</label>
-              <input className="input" placeholder="https://..." value={signupLink}
-                onChange={e => setSignupLink(e.target.value)} />
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
-                הקישור שנשלח להורים כדי להירשם לקבוצה. יופיע בכרטיס הקבוצה עם כפתור העתקה.
-              </div>
             </div>
           </form>
         </div>
@@ -1924,7 +1929,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
   const [attSavingId, setAttSavingId] = useState(null);
   const [attHistory, setAttHistory] = useState({}); // studentId -> rows in this group
   const [attHasRows, setAttHasRows] = useState(false);
-  const [signupCopied, setSignupCopied] = useState(false);
+  const [signupCopiedKey, setSignupCopiedKey] = useState('');
   // רוחב החלונית נשמר בין פתיחות, כי זו העדפה של המשתמש ולא מצב זמני.
   const [panelWidth, setPanelWidth] = useState(readStoredPanelWidth);
   const [dragging, setDragging] = useState(false);
@@ -2227,31 +2232,34 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
               💬 הורים
             </a>
           )}
-          {/* קישור ההרשמה נשלח להורים, ולכן העתקה היא הפעולה העיקרית עליו. */}
-          {group.signupLink && (
-            <>
+          {/* קישורי ההרשמה נשלחים להורים לפי תדירות — העתקה היא הפעולה העיקרית. */}
+          {[
+            { key: 'week', label: 'הרשמה · פעם', url: group.signupLinkWeek || group.signupLink },
+            { key: 'twice', label: 'הרשמה · פעמיים', url: group.signupLinkTwice },
+          ].filter((item) => item.url).map((item) => (
+            <span key={item.key} style={{ display: 'inline-flex', gap: 4 }}>
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
-                title={signupCopied ? 'הועתק' : 'העתקת קישור ההרשמה'}
+                title={signupCopiedKey === item.key ? 'הועתק' : `העתקת ${item.label}`}
                 onClick={async () => {
                   try {
-                    await navigator.clipboard.writeText(group.signupLink);
-                    setSignupCopied(true);
-                    setTimeout(() => setSignupCopied(false), 1500);
+                    await navigator.clipboard.writeText(item.url);
+                    setSignupCopiedKey(item.key);
+                    setTimeout(() => setSignupCopiedKey((prev) => (prev === item.key ? '' : prev)), 1500);
                   } catch { /* ignore */ }
                 }}
               >
-                {signupCopied
+                {signupCopiedKey === item.key
                   ? <><Check size={13} color="var(--green)" /> הועתק</>
-                  : <><Clipboard size={13} /> קישור הרשמה</>}
+                  : <><Clipboard size={13} /> {item.label}</>}
               </button>
-              <a href={group.signupLink} target="_blank" rel="noreferrer"
-                className="btn btn-ghost btn-icon btn-sm" title="פתיחת קישור ההרשמה">
+              <a href={item.url} target="_blank" rel="noreferrer"
+                className="btn btn-ghost btn-icon btn-sm" title={`פתיחת ${item.label}`}>
                 <ExternalLink size={13} />
               </a>
-            </>
-          )}
+            </span>
+          ))}
         </div>
       </div>
 
