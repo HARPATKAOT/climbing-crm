@@ -10,6 +10,8 @@
  * (`useRoleCatalog`) ולהשתמש בתווית העדכנית.
  */
 
+import { PAYABLE_ROLES } from './wageRates.js';
+
 export const SYSTEM_ROLE_KEYS = {
   TRAINER: 'trainer',
   ASSISTANT: 'assistant',
@@ -128,4 +130,28 @@ export function roleLabelOf(catalog, key) {
 export function activityRoleLabels(catalog, activityType) {
   const labels = catalog?.activityRoleLabels?.[activityType];
   return Array.isArray(labels) && labels.length > 0 ? labels : null;
+}
+
+/** אופן התשלום הרגיל לפי מפתח התפקיד — עובד גם אחרי שהתווית שונתה. */
+const PAYABLE_ROLE_MODES = {
+  [SYSTEM_ROLE_KEYS.TRAINER]: 'hourly',
+  [SYSTEM_ROLE_KEYS.ASSISTANT]: 'hourly',
+  [SYSTEM_ROLE_KEYS.WALL_OPERATOR]: 'hourly',
+  [SYSTEM_ROLE_KEYS.RAPPEL]: 'daily',
+  [SYSTEM_ROLE_KEYS.PRIVATE]: 'hourly',
+  [SYSTEM_ROLE_KEYS.ROUTE_L1]: 'hourly',
+  [SYSTEM_ROLE_KEYS.ROUTE_L2]: 'hourly',
+};
+
+/**
+ * התפקידים שיש להם תעריף בהסכם, בשמם העדכני. שינוי שם של תפקיד חייב להשתקף
+ * גם כאן, אחרת ההסכם היה מציג שורה בשם ישן שאף שורת עבודה כבר לא נושאת.
+ */
+export function payableRolesOf(catalog) {
+  const system = catalog?.system;
+  if (!Array.isArray(system) || system.length === 0) return PAYABLE_ROLES;
+  return system.map((r) => ({
+    role: r.label,
+    defaultMode: PAYABLE_ROLE_MODES[r.key] || 'hourly',
+  }));
 }
