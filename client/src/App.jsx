@@ -123,6 +123,13 @@ export default function App() {
   };
 
   useEffect(() => {
+    const section =
+      PAGE_TITLES[page]?.title
+      || NAV.find((item) => item.key === page)?.label;
+    document.title = section ? `${brandName} - ${section}` : brandName;
+  }, [page, brandName]);
+
+  useEffect(() => {
     if (isPublicPath(location.pathname)) return;
     // Old bookmark: products lived at /pricelist — now a tab inside cash
     if (location.pathname === '/pricelist') {
