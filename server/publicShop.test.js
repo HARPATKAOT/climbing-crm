@@ -8,6 +8,16 @@ import {
   shopItemPayload,
 } from './publicShop.js';
 
+/**
+ * Health declarations do not expire a year after signing — they expire
+ * together, at the end of July in even years. A fixture dated by hand is
+ * therefore in force until a cycle rolls over and then silently is not, which
+ * is what happened to this file on 1.8.2026. Derived from today, it stays
+ * true: a declaration signed now is always in force, and one from 2020 is
+ * always past.
+ */
+const IN_FORCE_SIGNED_DATE = new Date().toISOString().slice(0, 10);
+
 const punchCard = {
   id: 'pl-1',
   name: 'כרטיסייה 10 כניסות',
@@ -156,15 +166,15 @@ test('a declaration still in force is reused instead of re-signed', async () => 
       name: 'יהלי',
       parentId: 'p1',
       birthDate: '2015-04-01',
-      healthSignedAt: '2026-01-15T10:00:00.000Z',
+      healthSignedAt: `${IN_FORCE_SIGNED_DATE}T10:00:00.000Z`,
     }],
     health_declarations: [{
       id: 'hd1',
       studentId: 's1',
       parentId: 'p1',
       climberName: 'יהלי',
-      signedDate: '2026-01-15',
-      date: '2026-01-15',
+      signedDate: IN_FORCE_SIGNED_DATE,
+      date: IN_FORCE_SIGNED_DATE,
     }],
   });
   const result = await purchase(db, {
