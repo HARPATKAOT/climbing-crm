@@ -8,7 +8,8 @@ import {
   buildHealthDeclarationPdf,
   downloadHealthDeclarationPdf,
 } from '../utils/healthDeclarationPdf.js';
-import { healthExpiryDate } from '../utils/healthValidity.js';
+import { healthExpiryDate, isHealthDeclarationValid } from '../utils/healthValidity.js';
+import { DEFAULT_KIND, declarationKind } from '../utils/declarationKinds.js';
 import { safetyTestStatus } from '../utils/safetyValidity.js';
 import {
   buildLeadEntries,
@@ -427,6 +428,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
 
   // Health declaration + waiver status for this student
   const [healthDecl, setHealthDecl] = useState(null);
+  // All of this student's declarations, one per activity they signed for.
+  const [studentDeclarations, setStudentDeclarations] = useState([]);
   const [sendingHealth, setSendingHealth] = useState(false);
   const [healthSendMsg, setHealthSendMsg] = useState('');
   const [healthSendLink, setHealthSendLink] = useState('');
@@ -523,7 +526,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         const phoneKey = normPhone(parent?.phone);
         const studentName = String(student.name || '').trim();
         const studentFirst = studentName.split(/\s+/)[0] || '';
-        const match = (decls || []).find(d => {
+        const matchesStudent = (d) => {
           if (d.studentId && d.studentId === student.id) return true;
           const climber = String(d.climberName || d.studentName || '').trim();
           const climberFirst = climber.split(/\s+/)[0] || '';
@@ -532,7 +535,14 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
           }
           if (climber && climber === studentName) return true;
           return false;
-        });
+        };
+        const match = (decls || []).find(matchesStudent);
+        // Every declaration this student holds, newest first. A family can have
+        // one per activity — the wall, a birthday, a trip — and the file has to
+        // show which of them are signed, not just that something is.
+        const mine = (decls || []).filter(matchesStudent);
+        mine.sort((a, b) => String(b.signedDate || b.date || '').localeCompare(String(a.signedDate || a.date || '')));
+        setStudentDeclarations(mine);
         setHealthDecl(match || null);
         // Keep list/card in sync when declaration exists but student cache is stale
         if (match && onUpdateStudent && !student.healthSignedAt) {
@@ -1764,11 +1774,20 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     }
   };
 
+  // Which activities this student has signed for, beyond the everyday wall
+  // form — a trip or a birthday is the thing staff actually look for here.
+  const signedKinds = Array.from(new Map(
+    studentDeclarations
+      .filter((d) => isHealthDeclarationValid(d.signedDate || d.date))
+      .map((d) => [declarationKind(d).key, declarationKind(d)])
+  ).values());
+  const extraKinds = signedKinds.filter((k) => k.key !== DEFAULT_KIND.key);
   const healthSummary = !isHealthSigned
     ? 'חסר'
     : healthExpired
       ? `פג תוקף · ${healthExpiry.toLocaleDateString('he-IL')}`
-      : `חתום${healthExpiry ? ` · בתוקף עד ${healthExpiry.toLocaleDateString('he-IL')}` : ''}`;
+      : `חתום${healthExpiry ? ` · בתוקף עד ${healthExpiry.toLocaleDateString('he-IL')}` : ''}${
+        extraKinds.length ? ` · ${extraKinds.map((k) => k.label).join(', ')}` : ''}`;
   const studentGroups = groups.filter((g) => studentGroupIds(student).includes(String(g.id)));
   const groupSummary = studentGroups.length === 0
     ? 'לא משויך'
@@ -2591,6 +2610,15 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 const isClearanceDoc = (doc) => doc.type === 'medical_clearance';
                 const isHealthDoc = (doc) => !isClearanceDoc(doc)
                   && (doc.isVirtual || doc.type === 'health_waiver_pdf' || !!doc.declarationId);
+                // Which activity a row belongs to. A stored document knows only
+                // its declaration id, so the activity is read off the
+                // declaration it hangs from.
+                const kindForDoc = (doc) => {
+                  const decl = doc.virtualData
+                    || studentDeclarations.find((d) => d.id === doc.declarationId)
+                    || null;
+                  return decl ? declarationKind(decl) : null;
+                };
                 const combinedDocuments = [...clientDocuments];
                 const hasStoredHealthDoc = combinedDocuments.some(isHealthDoc);
                 if (
@@ -2802,6 +2830,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                             {combinedDocuments.map((doc) => {
                               const healthRow = isHealthDoc(doc);
+                              const kind = kindForDoc(doc);
                               return (
                                 <div
                                   key={doc.id}
@@ -2816,6 +2845,14 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                       {isClearanceDoc(doc) && (
                                         <span className="badge badge-amber" style={{ fontSize: 10, marginLeft: 6 }}>
                                           אישור רופא
+                                        </span>
+                                      )}
+                                      {/* Which activity this declaration covers.
+                                          Several rows here are otherwise the
+                                          same sentence repeated. */}
+                                      {kind && !isClearanceDoc(doc) && (
+                                        <span className={`badge ${kind.badge}`} style={{ fontSize: 10, marginLeft: 6 }}>
+                                          {kind.label}
                                         </span>
                                       )}
                                       {doc.fileName || 'הצהרת בריאות חתומה'}

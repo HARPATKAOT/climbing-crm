@@ -2283,17 +2283,22 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
           // בלי מונה — מספר המשתתפים כבר מופיע בבאר התפוסה שמעל.
           { key: 'members', label: 'משתתפים', icon: Users, badge: 0 },
           { key: 'equipment', label: 'ציוד', icon: Package, badge: eqAwaitingCount },
-          { key: 'info', label: 'פרטי הקבוצה', icon: List, badge: 0 },
+          // עיפרון במקום רשימה — לחיצה פותחת את טופס העריכה (בלי כפתור נפרד).
+          { key: 'info', label: 'פרטי הקבוצה', icon: Edit2, badge: 0 },
         ].map((t) => {
           const Icon = t.icon;
           return (
             <button
               key={t.key}
               className={`tab-pill ${tab === t.key ? 'active' : ''}`}
-              onClick={() => setTab(t.key)}
+              onClick={() => {
+                setTab(t.key);
+                if (t.key === 'info') onEdit(group);
+              }}
               // ריפוד צר יותר מברירת המחדל, כדי שארבעת הטאבים ייכנסו
               // לשורה אחת גם ברוחב החלונית המינימלי.
               style={{ padding: '7px 10px', gap: 6 }}
+              title={t.key === 'info' ? 'עריכת פרטי הקבוצה' : undefined}
             >
               <Icon size={14} /> {t.label}
               {t.badge > 0 ? ` (${t.badge})` : ''}
@@ -2866,14 +2871,6 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
         {/* INFO TAB */}
         {tab === 'info' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <button
-              className="btn btn-ghost btn-sm"
-              style={{ alignSelf: 'flex-start' }}
-              onClick={() => onEdit(group)}
-            >
-              <Edit2 size={14} /> עריכת פרטי הקבוצה
-            </button>
-
             <div className="card card-p">
               {[
                 ['ימי חוג', days.map(d => DAYS_FULL[d]).join(' + ')],
