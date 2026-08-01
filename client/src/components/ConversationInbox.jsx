@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MessageCircle, Search, RefreshCw, ChevronRight } from 'lucide-react';
 import ConversationPanel from './ConversationPanel.jsx';
+import { useLiveMessages } from '../hooks/useLiveMessages.js';
 
 // WhatsApp-style inbox: every conversation in one list, newest first, with the
 // customers still awaiting a reply pinned to the top. Selecting a row mounts the
 // existing ConversationPanel — the chat itself is not reimplemented here.
 
-const REFRESH_MS = 5_000;
+// Safety refresh only — the live wait is what normally brings new messages in.
+const REFRESH_MS = 30_000;
 const NARROW_BREAKPOINT = 900;
 const NARROW_QUERY = `(max-width: ${NARROW_BREAKPOINT - 1}px)`;
 
@@ -188,16 +190,11 @@ export default function ConversationInbox({ parents = [], onHandled }) {
 
   useEffect(() => {
     load();
-    const tick = () => {
-      if (document.visibilityState === 'visible') load({ quiet: true });
-    };
-    const timer = setInterval(tick, REFRESH_MS);
-    document.addEventListener('visibilitychange', tick);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener('visibilitychange', tick);
-    };
   }, [load]);
+
+  // The queue used to re-read every conversation every few seconds. It now
+  // waits for the next stored message, so a new enquiry appears at once.
+  useLiveMessages(() => load({ quiet: true }), { safetyMs: REFRESH_MS });
 
   const selectConversation = (parentId) => {
     selectedIdRef.current = parentId;
