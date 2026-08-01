@@ -10,6 +10,9 @@ import { db } from './db.js';
 import { enrichGroupsWithCapacity } from './groupCapacity.js';
 import { groupMatchesGradeLetter } from './groupBands.js';
 import { studentsForParent } from './whatsappBot.js';
+import { findLatestValidDeclaration } from './crmWaiverService.js';
+import { healthExpiryDate, declarationSignedAt } from './healthValidity.js';
+import { appPublicBase } from './publicLinks.js';
 import {
   loadEquipmentPrices,
   enrichmentFeeFromSettings,
@@ -20,6 +23,13 @@ import {
 } from './botFacts.js';
 
 const DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
+
+/** The public health form, with the phone prefilled so the card is found. */
+function healthFormUrl(phone = '') {
+  const digits = String(phone || '').replace(/\D/g, '');
+  const qs = digits ? `?phone=${encodeURIComponent(digits)}` : '';
+  return `${appPublicBase()}/health${qs}`;
+}
 
 /** Non-grade bands as they are written in the group's age category. */
 const BAND_PATTERNS = {
@@ -81,6 +91,13 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         time: { type: 'string', description: 'שעת הקבוצה, למשל 15:30' },
       },
     },
+  },
+  {
+    name: 'getHealthDeclarations',
+    description:
+      'האם למתאמנים של הלקוח הזה יש הצהרת בריאות והסרת אחריות בתוקף, עד מתי היא '
+      + 'בתוקף, וקישור למילוי. מי שאין לו הצהרה בתוקף צריך לקבל את הקישור.',
+    parameters: { type: 'object', properties: {} },
   },
   {
     name: 'getFamilyCard',
@@ -218,6 +235,31 @@ export function buildCustomerTools({ settings = {}, parent = null, phone = '' } 
           // No group-specific link on file: the general intake form still works.
           קישור_כללי: week || twice ? '' : groupSignupUrl(group, { phone }),
         }],
+      };
+    },
+
+    getHealthDeclarations: async () => {
+      const link = healthFormUrl(phone);
+      if (!parent) return { מתאמנים: [], קישור_למילוי: link, הערה: 'אין כרטיס לקוח' };
+      const kids = studentsForParent(parent);
+      if (!kids.length) {
+        return { מתאמנים: [], קישור_למילוי: link, הערה: 'אין מתאמנים בכרטיס' };
+      }
+      const rows = kids.map((student) => {
+        const declaration = findLatestValidDeclaration(db, { studentId: student.id });
+        const expiry = declaration ? healthExpiryDate(declarationSignedAt(declaration)) : null;
+        return {
+          שם: student.name || '',
+          הצהרה_בתוקף: !!declaration,
+          בתוקף_עד: expiry ? expiry.toLocaleDateString('he-IL') : '',
+        };
+      });
+      return {
+        מתאמנים: rows,
+        קישור_למילוי: link,
+        הערה: rows.every((r) => r.הצהרה_בתוקף)
+          ? 'לכולם יש הצהרה בתוקף — אין צורך לשלוח קישור'
+          : 'יש מתאמן בלי הצהרה בתוקף — יש לשלוח לו את הקישור',
       };
     },
 

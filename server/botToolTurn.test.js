@@ -126,6 +126,7 @@ test('the tools offered to the model are read-only facts', () => {
   assert.deepEqual(names, [
     'getEvents',
     'getFamilyCard',
+    'getHealthDeclarations',
     'getOpeningHours',
     'getPrices',
     'getSignupLink',
