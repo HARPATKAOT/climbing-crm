@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, Archive, ArchiveRestore } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, Archive, ArchiveRestore, ScrollText, Footprints } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
 import {
@@ -10,6 +10,7 @@ import {
 } from '../utils/healthDeclarationPdf.js';
 import { healthExpiryDate, isHealthDeclarationValid } from '../utils/healthValidity.js';
 import { DEFAULT_KIND, declarationKind } from '../utils/declarationKinds.js';
+import { studentDeclarationStatus } from '../utils/declarationStatus.js';
 import { safetyTestStatus } from '../utils/safetyValidity.js';
 import {
   buildLeadEntries,
@@ -273,6 +274,37 @@ const TEST_TYPE_COLORS = {
 };
 
 /** Collapsible folder row for lead detail panel */
+/**
+ * Declaration state for one climber, as two icons: the scroll is the health
+ * declaration for the wall, the footprints are the outdoor-trip one. Green
+ * means a valid signature is on file, amber means it is missing or expired —
+ * the row is scanned, not read, so the colour has to carry the answer.
+ */
+function DeclarationIcons({ status }) {
+  const marks = [
+    { key: 'wall', Icon: ScrollText, label: 'הצהרת בריאות' },
+    { key: 'trip', Icon: Footprints, label: 'הצהרה לטיולים' },
+  ];
+  return (
+    <>
+      {marks.map(({ key, Icon, label }) => {
+        const state = status?.[key];
+        const ok = !!state?.signed && !state?.expired;
+        const title = !state?.signed
+          ? `${label}: לא נחתמה`
+          : state.expired ? `${label}: פג תוקף` : `${label}: חתומה`;
+        return (
+          // The tooltip hangs off a span: a `title` attribute on an <svg> is
+          // not what browsers show on hover.
+          <span key={key} title={title} aria-label={title} style={{ display: 'inline-flex' }}>
+            <Icon size={13} style={{ color: ok ? 'var(--green)' : 'var(--amber)', opacity: ok ? 1 : 0.75 }} />
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
 function FolderRow({ id, title, icon: Icon, summary, open, onToggle, children, summaryColor, accent = 'var(--blue)' }) {
   return (
     <div
@@ -4368,6 +4400,16 @@ export default function Leads({
   const [dragOverStatus, setDragOverStatus] = useState(null);
   const [markingHandledId, setMarkingHandledId] = useState(null);
   const [handlingError, setHandlingError] = useState('');
+  // The whole declaration feed, so the table can mark each climber without
+  // opening their file. One fetch for the list, not one per row.
+  const [declarations, setDeclarations] = useState([]);
+
+  useEffect(() => {
+    fetch('/api/health-declarations')
+      .then(res => res.ok ? res.json() : [])
+      .then(list => setDeclarations(Array.isArray(list) ? list : []))
+      .catch(() => setDeclarations([]));
+  }, []);
 
   // Open a customer file from deep links (e.g. activity registration list).
   useEffect(() => {
@@ -4972,6 +5014,7 @@ export default function Leads({
                           {namedChildren.map((child) => {
                             const st = STATUSES[child.status];
                             const statusColor = st?.color;
+                            const declStatus = studentDeclarationStatus(declarations, child, parent?.phone);
                             return (
                               <button
                                 key={child.id}
@@ -4996,11 +5039,14 @@ export default function Leads({
                                     מבוגר
                                   </span>
                                 )}
-                                {!child.isAdult && namedChildren.length > 1 && (
+                                {/* The signed-declaration status is the icons now, so the
+                                    text label would only repeat them. */}
+                                {!child.isAdult && namedChildren.length > 1 && child.status !== 'health_signed' && (
                                   <span style={{ color: statusColor || 'var(--text-3)', fontWeight: 500, fontSize: 10 }}>
                                     {st?.label || ''}
                                   </span>
                                 )}
+                                <DeclarationIcons status={declStatus} />
                               </button>
                             );
                           })}
