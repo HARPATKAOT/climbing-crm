@@ -193,7 +193,7 @@ function groupsMatchingLetters(groups, letters) {
 
 /**
  * Resolve which class bands the customer is asking about — from explicit grade,
- * stated age, or kids already on the card.
+ * stated age, kids already on the card, or (when phone is set) recent messages.
  */
 export function resolveAudienceFilter(text, students = []) {
   const grade = extractGradeLetter(text);
@@ -221,6 +221,25 @@ export function resolveAudienceFilter(text, students = []) {
   if (unique.length) return { letters: unique, source: 'card', grade: unique[0], age: null };
 
   return { letters: [], source: null, grade: '', age: null };
+}
+
+/**
+ * Same as resolveAudienceFilter, but if this turn has no grade/age, reuse the
+ * one from recent turns ("כיתה ג׳?" then "מה העלות?").
+ */
+export function resolveAudienceWithMemory(text, students = [], phone = '') {
+  const direct = resolveAudienceFilter(text, students);
+  if (direct.letters.length) return direct;
+  if (!phone) return direct;
+  const history = getConversationHistory(phone, 10).join('\n');
+  if (!history.trim()) return direct;
+  // Do not re-apply the card here — that would hide a missing follow-up grade
+  // with unrelated kids on the family file.
+  const fromHistory = resolveAudienceFilter(history, []);
+  if (fromHistory.letters.length) {
+    return { ...fromHistory, source: 'history' };
+  }
+  return direct;
 }
 
 function asksAboutAvailability(text) {
@@ -389,6 +408,7 @@ ${equipmentText}
 
 ### כללים לתשובה לפי נתונים
 - אם שאלו על כיתה/גיל — הצג רק קבוצות רלוונטיות מהרשימה.
+- אם בהודעה קודמת בשיחה כבר צוינה כיתה או גיל, וההודעה הנוכחית ממשיכה (מחיר, מקום, יום) — המשך עם אותה כיתה. אל תציג את כל הקטלוג.
 - כברירת מחדל ציין רק איפה יש מקום (בלי מספרים). דוגמה: «15:30 · יש מקום».
 - פתח תשובות על חוגים ב־«כן, בטח!» והצג כל יום/שעה בשורה נפרדת.
 - מספר מקומות פנויים — רק אם הלקוח שאל במפורש כמה מקומות / תפוסה.
@@ -408,9 +428,9 @@ ${extra}`,
   };
 }
 
-function findGroupsForText(text, students = []) {
+function findGroupsForText(text, students = [], phone = '') {
   const groups = db.get('groups') || [];
-  const filter = resolveAudienceFilter(text, students);
+  const filter = resolveAudienceWithMemory(text, students, phone);
   if (filter.letters.length) {
     const matched = groupsMatchingLetters(groups, filter.letters);
     if (matched.length) return matched;
@@ -435,8 +455,8 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
   const healthUrl = (s.aiBusinessFacts || '').match(/https?:\/\/\S+health\S*/i)?.[0]
     || 'https://app.kirboaz.co.il/health';
   const healthReply = `היי! ✍️\nהנה קישור להצהרת הבריאות:\n${healthUrl}\n\nאחרי החתימה המערכת מתעדכנת אוטומטית 🧗`;
-  const audience = resolveAudienceFilter(raw, students);
-  const matchedGroups = findGroupsForText(raw, students);
+  const audience = resolveAudienceWithMemory(raw, students, phone);
+  const matchedGroups = findGroupsForText(raw, students, phone);
   // A named weekday narrows "כיתה ה׳" down to the one class they mean.
   const dayHint = extractPreferredDayIndex(raw);
   const sameDay = dayHint == null
@@ -492,8 +512,12 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
 
   // Prices come from the CRM; anything the CRM does not price goes to staff.
   if (asksAboutPrices(raw)) {
-    if (needsAudience && !asksAboutEquipment(raw) && !asksAboutEnrichment(raw)) {
-      return { text: ASK_GRADE_REPLY, confidence: 'high' };
+    if (!asksAboutEquipment(raw) && !asksAboutEnrichment(raw)) {
+      // Never dump the whole catalog on a vague "מה העלות?" — need a grade
+      // (from this turn or recent history) and matching groups.
+      if (!audience.letters.length || !exactGroups.length) {
+        return { text: ASK_GRADE_REPLY, confidence: 'high' };
+      }
     }
     const priceReply = buildPriceReply({
       groups: exactGroups,

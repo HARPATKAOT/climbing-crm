@@ -21,6 +21,16 @@ test('resolveAudienceFilter prefers explicit grade then age', () => {
   assert.deepEqual(resolveAudienceFilter('יש מקום בחוג?').letters, []);
 });
 
+test('grade carries from an earlier turn in the same conversation blob', () => {
+  const history = [
+    'לקוח: האם יש לכם חוגים לילד בכיתה ג׳ ?',
+    'בוט: כן, בטח! לכיתה ג׳ יש מקום ביום א׳',
+    'לקוח: מה העלות ?',
+  ].join('\n');
+  assert.deepEqual(resolveAudienceFilter(history, []).letters, ['ג']);
+  assert.deepEqual(resolveAudienceFilter('מה העלות ?', []).letters, []);
+});
+
 test('ask-grade reply is ready for customers', () => {
   assert.match(ASK_GRADE_REPLY, /כיתה/);
   assert.match(ASK_GRADE_REPLY, /בן 7/);
