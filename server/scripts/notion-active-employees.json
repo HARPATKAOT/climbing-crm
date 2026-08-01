@@ -1,7 +1,7 @@
 {
   "fetchedAt": "2026-08-01",
   "source": "Notion — \"עובדים\" (4d576ada-9f25-4263-846a-d4b4a75762b6) + \"הסכמי שכר\" (303aa52d-5a6e-8056-ab1c-f0aa39242fdb)",
-  "note": "צילום מצב של העובדים שסטטוס שלהם בנושן אינו ארכיון/מועמד. סוגי השכר בנושן: הדרכת חוגים→מדריך, הפעלת קיר→מפעיל קיר, בניית מסלולים→בונה מסלולים רמה 1, נסיעות→תשלום נסיעות ליום. 'אירועים' הושמט — לאף עובד לא הוזן בו סכום.",
+  "note": "צילום מצב של העובדים שאינם ארכיון/מועמד בנושן, כולל ארבעה שלא הוגדר להם סטטוס כלל. סוגי השכר בנושן: הדרכת חוגים→מדריך, הפעלת קיר→מפעיל קיר, בניית מסלולים→בונה מסלולים רמה 1, נסיעות→תשלום נסיעות ליום. 'אירועים' הושמט — לאף עובד לא הוזן בו סכום.",
   "employees": [
     {
       "notionUrl": "https://app.notion.com/0c9e34bedb9447a0ba16f1b38f2993ff",
@@ -609,6 +609,99 @@
         "idPhoto",
         "certificates"
       ]
+    },
+    {
+      "notionUrl": "https://app.notion.com/393aa52d5a6e81a2996fc36a1cd6d021",
+      "name": "ארבל כידן",
+      "status": "ללא סטטוס",
+      "phone": "+972538083338",
+      "email": "arbel.kidan@gmail.com",
+      "address": "פלג 19 תל מונד",
+      "gender": "נקבה",
+      "birthDate": "2024-09-11",
+      "idNumber": "335959235",
+      "paymentMethod": "תלוש",
+      "bankAccount": "",
+      "mobility": false,
+      "notionCerts": [],
+      "notionClass": "מדריך נוער",
+      "notionNotes": "",
+      "rates": [],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": []
+    },
+    {
+      "notionUrl": "https://app.notion.com/39baa52d5a6e81d887d3fc8079ffe390",
+      "name": "תום נחמיאס",
+      "status": "ללא סטטוס",
+      "phone": "+972559811225",
+      "email": "tomnachmias100@gmail.com",
+      "address": "ההדס 664 בורגתה",
+      "gender": "זכר",
+      "birthDate": "2012-09-18",
+      "idNumber": "337058374",
+      "paymentMethod": "",
+      "bankAccount": "",
+      "mobility": false,
+      "notionCerts": [],
+      "notionClass": "מדריך נוער",
+      "notionNotes": "",
+      "rates": [],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": []
+    },
+    {
+      "notionUrl": "https://app.notion.com/39caa52d5a6e8162af9edb8803606011",
+      "name": "ענבל חביב",
+      "status": "ללא סטטוס",
+      "phone": "+972507270817",
+      "email": "haviva34@gmail.com",
+      "address": "בני ציון",
+      "gender": "נקבה",
+      "birthDate": "1995-07-30",
+      "idNumber": "313349292",
+      "paymentMethod": "חשבונית",
+      "bankAccount": "12-717-607550",
+      "mobility": false,
+      "notionCerts": [
+        "מדריך סנפלינג"
+      ],
+      "notionClass": "",
+      "notionNotes": "אשלח לך את התעודה בוואצאפ או במייל",
+      "rates": [],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": []
+    },
+    {
+      "notionUrl": "https://app.notion.com/39caa52d5a6e81f4beaed454c31c9c9c",
+      "name": "מעוז קורייש",
+      "status": "ללא סטטוס",
+      "phone": "+972522822752",
+      "email": "",
+      "address": "קצרין",
+      "gender": "זכר",
+      "birthDate": "",
+      "idNumber": "",
+      "paymentMethod": "תלוש",
+      "bankAccount": "",
+      "mobility": true,
+      "notionCerts": [
+        "מדריך סנפלינג",
+        "מנהל פארק חבלים"
+      ],
+      "notionClass": "",
+      "notionNotes": "",
+      "rates": [],
+      "travelPerDay": 0,
+      "pensionCompany": "",
+      "pensionNumber": "",
+      "notionFiles": []
     }
   ]
 }
