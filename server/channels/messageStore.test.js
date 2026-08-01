@@ -5,6 +5,7 @@ import {
   toLogRow,
   findStoredMessage,
   isMissingParentError,
+  isDuplicateMetaIdError,
   recordMessageDurable,
   flushPendingMessages,
   countPendingMessages,
@@ -12,6 +13,9 @@ import {
   setMessageStatusByMetaId,
   applyMessageEditByMetaId,
   applyMessageRevokeByMetaId,
+  claimInboundMetaId,
+  releaseInboundMetaId,
+  clearInboundMetaClaims,
 } from './messageStore.js';
 
 /** In-memory stand-in for the local cache + durable store. */
@@ -115,6 +119,42 @@ test('a repeated webhook delivery stores one row only', async () => {
   assert.equal(second.duplicate, true);
   assert.equal(store.tables.messages.length, 1);
   assert.equal(store.persisted.length, 1);
+});
+
+test('concurrent claim blocks a second handler for the same Meta id', () => {
+  clearInboundMetaClaims();
+  assert.equal(claimInboundMetaId('wamid.race'), true);
+  assert.equal(claimInboundMetaId('wamid.race'), false);
+  releaseInboundMetaId('wamid.race');
+  assert.equal(claimInboundMetaId('wamid.race'), true);
+  clearInboundMetaClaims();
+});
+
+test('unique-constraint failure on Meta id is treated as a duplicate', async () => {
+  const store = createStore({
+    persist: async () => ({
+      ok: false,
+      error: 'duplicate key value violates unique constraint "messages_meta_message_id_uidx"',
+    }),
+  });
+  const result = await recordMessageDurable({
+    phone: '972508862878',
+    direction: 'inbound',
+    message: 'שלום',
+    meta_message_id: 'wamid.uniq',
+  }, store);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.duplicate, true);
+  assert.equal(countPendingMessages(store), 0);
+});
+
+test('isDuplicateMetaIdError recognizes Postgres unique errors', () => {
+  assert.equal(
+    isDuplicateMetaIdError('duplicate key value violates unique constraint "messages_meta_message_id_uidx"'),
+    true
+  );
+  assert.equal(isDuplicateMetaIdError('network down'), false);
 });
 
 test('a failed durable write reports failure so the queue does not move', async () => {

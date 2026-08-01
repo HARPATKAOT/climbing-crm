@@ -1,7 +1,13 @@
 import { db, persistCore, syncBotFlagFromRemote } from './db.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { buildTemplateParameters } from './channels/templates.js';
-import { recordMessage, recordMessageDurable, findMessageByMetaId } from './channels/messageStore.js';
+import {
+  recordMessage,
+  recordMessageDurable,
+  findMessageByMetaId,
+  claimInboundMetaId,
+  releaseInboundMetaId,
+} from './channels/messageStore.js';
 import { automationsService } from './automations.js';
 import { israelDateStr, israelHour } from './attendanceUtils.js';
 import {
@@ -177,12 +183,31 @@ export function gradeLettersFromAge(age) {
 export const ASK_GRADE_REPLY =
   'בשמחה! 🙂\nבאיזו כיתה הילד/ה? (א׳–ו׳)\nאו גיל — למשל «בן 7» — ואציע רק את מה שרלוונטי.';
 
-function groupMatchesGradeLetter(group, letter) {
-  // Prefer ageCategory; ignore "יום ג׳" in names so weekday letters don't match grades.
-  const category = String(group.ageCategory || '');
-  const name = String(group.name || '').replace(/יום\s*[א-ו]['׳']?/g, ' ');
-  const re = new RegExp(`(^|[^א-ת])${letter}['׳']?(?:\\s*[-–]\\s*[א-ו]['׳']?)?(?=[^א-ת]|$)`);
-  return re.test(category) || re.test(name);
+function stripWeekdayMarkers(text) {
+  return String(text || '')
+    .replace(/יום\s*[א-ו]['׳']?/g, ' ')
+    // "ב׳+ה׳" means Mon+Thu — not grade ב׳.
+    .replace(/[א-ו]['׳']?\s*\+\s*[א-ו]['׳']?/g, ' ');
+}
+
+/**
+ * True when the group's age band includes this Israeli grade letter (א–ו).
+ * Prefer ageCategory (source of truth). Name is only a fallback when category is empty,
+ * and weekday markers are stripped so "ב׳+ה׳" never counts as כיתה ב׳.
+ */
+export function groupMatchesGradeLetter(group, letter) {
+  if (!letter) return false;
+  const category = String(group?.ageCategory || '').trim();
+  if (category) return gradeBandIncludesLetter(category, letter);
+  return gradeBandIncludesLetter(stripWeekdayMarkers(group?.name || ''), letter);
+}
+
+/** Grade token in a band like א'-ב' — not the ב inside בוגרת / בוגרים. */
+function gradeBandIncludesLetter(text, letter) {
+  const t = String(text || '').replace(/׳/g, "'");
+  const asStart = new RegExp(`(?:^|[^א-ת])${letter}'?(?=\\s*[-–]|\\s*$|[^א-ת])`);
+  const afterDash = new RegExp(`[-–]\\s*${letter}'?(?=\\s*$|[^א-ת])`);
+  return asStart.test(t) || afterDash.test(t);
 }
 
 function groupsMatchingLetters(groups, letters) {
@@ -1251,11 +1276,25 @@ export const whatsappService = {
 
   // Process incoming messages (webhook entrypoint / simulator)
   handleIncomingMessage: async (phone, text, isSimulator = false, meta = {}) => {
+    const metaMessageId = meta.messageId || null;
+    // Claim before any await — Meta often delivers the same webhook twice in parallel.
+    if (!claimInboundMetaId(metaMessageId)) {
+      const normalizedEarly = formatWaPhone(phone) || phone;
+      return {
+        parent: findPrimaryParent(normalizedEarly),
+        student: null,
+        isNew: false,
+        replied: false,
+        skippedReason: 'duplicate',
+      };
+    }
+
+    try {
     if (!isSimulator) await syncBotFlagFromRemote();
     const normalizedPhone = formatWaPhone(phone) || phone;
 
     // Already handled this exact Meta message (webhook retry) — never process twice.
-    const seen = findMessageByMetaId(meta.messageId);
+    const seen = findMessageByMetaId(metaMessageId);
     if (seen?.durable) {
       return {
         parent: findPrimaryParent(normalizedPhone),
@@ -1291,7 +1330,7 @@ export const whatsappService = {
       message: text,
       status: 'received',
       source: 'customer',
-      meta_message_id: meta.messageId || null,
+      meta_message_id: metaMessageId,
       message_type: meta.type || 'text',
       parent_id: parent?.id || null,
       student_id: matchedVia === 'child_phone' ? (student?.id || null) : null,
@@ -1529,6 +1568,9 @@ export const whatsappService = {
 
     await whatsappService.sendBotReply(normalizedPhone, replyText, { isSimulator });
     return { parent, student, isNew, replied: true, reply: replyText };
+    } finally {
+      releaseInboundMetaId(metaMessageId);
+    }
   },
 
   // Messages sent from WhatsApp Business app (Coexistence echoes)

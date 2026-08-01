@@ -13,7 +13,31 @@ import { supa } from '../supa.js';
 const PENDING_FLAG = '_pending_durable';
 const RETRY_INTERVAL_MS = 30_000;
 
+/** In-process lock so two webhook deliveries of the same Meta id cannot both reply. */
+const inboundInflight = new Set();
+
 let retryTimer = null;
+
+/**
+ * Claim an inbound Meta message id before any await.
+ * Returns false when another handler is already processing the same id.
+ * Messages without a Meta id cannot be deduped this way — always allowed.
+ */
+export function claimInboundMetaId(metaMessageId) {
+  if (!metaMessageId) return true;
+  if (inboundInflight.has(metaMessageId)) return false;
+  inboundInflight.add(metaMessageId);
+  return true;
+}
+
+export function releaseInboundMetaId(metaMessageId) {
+  if (metaMessageId) inboundInflight.delete(metaMessageId);
+}
+
+/** Test helper — clear leftover claims between cases. */
+export function clearInboundMetaClaims() {
+  inboundInflight.clear();
+}
 
 /** Live wiring. Tests pass their own store instead. */
 const liveStore = {
@@ -80,6 +104,11 @@ export function toLogRow(message) {
 /** A write rejected because the customer card it points at is gone. */
 export function isMissingParentError(error) {
   return /foreign key|messages_parent_id_fkey/i.test(String(error || ''));
+}
+
+/** Unique index on meta_message_id rejected a second durable insert. */
+export function isDuplicateMetaIdError(error) {
+  return /messages_meta_message_id|duplicate key|unique constraint/i.test(String(error || ''));
 }
 
 /**
@@ -221,6 +250,15 @@ export async function recordMessageDurable(input = {}, store = liveStore) {
 
   const result = await persistMessage(target, store);
   if (!result.ok) {
+    // Another process already stored this Meta id — treat as handled, do not reply again.
+    if (message.meta_message_id && isDuplicateMetaIdError(result.error)) {
+      const winner = findMessageByMetaId(message.meta_message_id, store);
+      return {
+        ok: true,
+        duplicate: true,
+        message: winner?.message || target,
+      };
+    }
     console.error('inbound message durable write failed:', result.error);
     return {
       ok: false,

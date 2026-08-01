@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extractAgeYears, gradeLettersFromAge, resolveAudienceFilter, ASK_GRADE_REPLY } from './whatsapp.js';
+import {
+  extractAgeYears,
+  gradeLettersFromAge,
+  resolveAudienceFilter,
+  groupMatchesGradeLetter,
+  ASK_GRADE_REPLY,
+} from './whatsapp.js';
 
 test('extractAgeYears reads בן/בת/גיל', () => {
   assert.equal(extractAgeYears('לילד בן 7 כמה עולה'), 7);
@@ -34,4 +40,38 @@ test('grade carries from an earlier turn in the same conversation blob', () => {
 test('ask-grade reply is ready for customers', () => {
   assert.match(ASK_GRADE_REPLY, /כיתה/);
   assert.match(ASK_GRADE_REPLY, /בן 7/);
+});
+
+test('כיתה ב matches א׳-ב׳ only — not Thursday ב׳+ה׳ names or בוגרת', () => {
+  assert.equal(
+    groupMatchesGradeLetter({ ageCategory: "א'-ב'", name: "הורים וילדים — יום ג׳ 17:10" }, 'ב'),
+    true
+  );
+  assert.equal(
+    groupMatchesGradeLetter({ ageCategory: "ה'-ו'", name: "מתקדמים ה'-ו' — ב׳+ה׳ 15:30" }, 'ב'),
+    false
+  );
+  assert.equal(
+    groupMatchesGradeLetter({ ageCategory: 'חטיבה', name: 'נבחרת צעירה — ב׳+ה׳ 17:00' }, 'ב'),
+    false
+  );
+  assert.equal(
+    groupMatchesGradeLetter({ ageCategory: 'תיכון', name: 'נבחרת בוגרת — ב׳+ה׳ 19:10' }, 'ב'),
+    false
+  );
+  assert.equal(
+    groupMatchesGradeLetter({ ageCategory: 'בוגרים', name: "בוגרים — יום א׳ 20:10" }, 'ב'),
+    false
+  );
+});
+
+test('name fallback still strips weekday pairs when ageCategory is empty', () => {
+  assert.equal(
+    groupMatchesGradeLetter({ ageCategory: '', name: "כיתות א'-ב' — יום ג׳" }, 'ב'),
+    true
+  );
+  assert.equal(
+    groupMatchesGradeLetter({ ageCategory: '', name: 'נבחרת בוגרת — ב׳+ה׳ 19:10' }, 'ב'),
+    false
+  );
 });
