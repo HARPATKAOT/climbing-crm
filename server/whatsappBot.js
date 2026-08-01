@@ -81,6 +81,9 @@ export const DEFAULT_BOT_SETTINGS = {
   // First unclear turn — ask to rephrase. Second unclear turn uses aiUnsureReply + handoff.
   aiClarifyReply: 'לא הבנתי 🙏\nיכולים להסביר קצת יותר? במה אפשר לעזור?',
   aiUnsureReply: 'רגע — כדי לא לטעות אני מעביר את זה לצוות 🙏\nמישהו יחזור אליכם עם תשובה מדויקת.',
+  // Model-with-tools instead of the keyword layer. Off until it has been
+  // watched on real conversations; the old path stays as the fallback.
+  aiToolsEnabled: false,
   aiLeadCaptureEnabled: true,
   aiInteractiveMenuEnabled: true,
   // Health declaration is sent by staff when registering — not an opening-menu item.

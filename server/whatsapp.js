@@ -103,6 +103,8 @@ import {
   formatLearnedRepliesForPrompt,
   proposeFromHandoffStaffReply,
 } from './botLearning.js';
+import { runCustomerToolTurn, historyToContents } from './botToolTurn.js';
+import { groupMatchesGradeLetter } from './groupBands.js';
 
 export { israelClockParts, isBotEnabled, shouldAiAutoReply };
 
@@ -204,32 +206,8 @@ export function gradeLettersFromAge(age) {
 export const ASK_GRADE_REPLY =
   'בשמחה! 🙂\nבאיזו כיתה הילד/ה? (א׳–ו׳)\nאו גיל — למשל «בן 7» — ואציע רק את מה שרלוונטי.';
 
-function stripWeekdayMarkers(text) {
-  return String(text || '')
-    .replace(/יום\s*[א-ו]['׳']?/g, ' ')
-    // "ב׳+ה׳" means Mon+Thu — not grade ב׳.
-    .replace(/[א-ו]['׳']?\s*\+\s*[א-ו]['׳']?/g, ' ');
-}
-
-/**
- * True when the group's age band includes this Israeli grade letter (א–ו).
- * Prefer ageCategory (source of truth). Name is only a fallback when category is empty,
- * and weekday markers are stripped so "ב׳+ה׳" never counts as כיתה ב׳.
- */
-export function groupMatchesGradeLetter(group, letter) {
-  if (!letter) return false;
-  const category = String(group?.ageCategory || '').trim();
-  if (category) return gradeBandIncludesLetter(category, letter);
-  return gradeBandIncludesLetter(stripWeekdayMarkers(group?.name || ''), letter);
-}
-
-/** Grade token in a band like א'-ב' — not the ב inside בוגרת / בוגרים. */
-function gradeBandIncludesLetter(text, letter) {
-  const t = String(text || '').replace(/׳/g, "'");
-  const asStart = new RegExp(`(?:^|[^א-ת])${letter}'?(?=\\s*[-–]|\\s*$|[^א-ת])`);
-  const afterDash = new RegExp(`[-–]\\s*${letter}'?(?=\\s*$|[^א-ת])`);
-  return asStart.test(t) || afterDash.test(t);
-}
+// Moved to its own module so the model's tools can match grades too.
+export { groupMatchesGradeLetter } from './groupBands.js';
 
 /**
  * Not every class question is about a primary-school child: the wall also runs
@@ -1402,6 +1380,37 @@ export const whatsappService = {
     if (quick.handoff) {
       return { text: quick.text, handoff: true, confidence: 'high' };
     }
+    // Tool mode: the model reads the message and asks the CRM for the facts it
+    // needs, instead of the keyword layer below guessing the intent. The hard
+    // handoff above still runs first, and a failed turn falls through to the
+    // old path — so switching this off is always safe.
+    const toolsEnabled = settings.aiToolsEnabled || process.env.BOT_TOOLS_ENABLED === 'true';
+    if (toolsEnabled && hasModel) {
+      const historyLimit = Math.max(2, Math.min(20, Number(settings.aiHistoryCount) || 8));
+      const turn = await runCustomerToolTurn({
+        systemInstruction: [
+          settings.aiSystemPrompt,
+          buildParentCardContext(parent, students),
+          settings.aiBusinessFacts ? `עובדות העסק:\n${settings.aiBusinessFacts}` : '',
+          settings.aiForbiddenTopics ? `אסור:\n${settings.aiForbiddenTopics}` : '',
+        ].filter(Boolean).join('\n\n'),
+        history: historyToContents(phone ? getChatHistoryMessages(phone, historyLimit) : []),
+        incomingText,
+        settings,
+        parent,
+        apiKey,
+      });
+      if (turn.text) {
+        return {
+          text: clipReply(turn.text, settings.aiMaxReplyChars),
+          handoff: turn.handoff,
+          confidence: 'medium',
+          toolsUsed: turn.toolsUsed,
+        };
+      }
+      console.error(`bot tool turn produced nothing (${turn.reason}) — falling back`);
+    }
+
     // A canned answer is a fair trade for an autonomous reply, but a human who
     // asked for a draft wants the model to actually read the question.
     const skipCanned = !!context.preferModel && hasModel;
