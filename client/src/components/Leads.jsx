@@ -5033,6 +5033,9 @@ export default function Leads({
                                 onClick={() => setSelectedStudentId(child.id)}
                                 title={st?.label || child.status}
                               >
+                                {/* First in the chip, so in RTL the icons sit on the leading
+                                    edge and line up down the column however long the names are. */}
+                                <DeclarationIcons status={declStatus} />
                                 {child.name}
                                 {child.isAdult && (
                                   <span style={{ color: 'var(--text-3)', fontWeight: 500, fontSize: 10 }}>
@@ -5046,7 +5049,6 @@ export default function Leads({
                                     {st?.label || ''}
                                   </span>
                                 )}
-                                <DeclarationIcons status={declStatus} />
                               </button>
                             );
                           })}
