@@ -299,7 +299,8 @@ import {
   amountForWorkRow,
   roundHoursHalfUp,
   summarizeWork,
-  WORK_TYPE_ROLES,
+  workTypeRole,
+  applyRoleLabels,
 } from './wageRates.js';
 import {
   getConversation,
@@ -7681,23 +7682,35 @@ function normalizeCatalog(raw) {
   return { system, extra, activityRoles };
 }
 
+/**
+ * מחזיר את הקטלוג, ומעדכן תוך כדי את התוויות שהתמחור נשען עליהן. בלי זה,
+ * שורה ותיקה בלי תפקיד רשום הייתה מתומחרת לפי שם שכבר שונה — כלומר ₪0.
+ */
 async function readRoleCatalog() {
   const local = db.getAppSettingLocal?.(ROLE_CATALOG_KEY);
-  if (local) return normalizeCatalog(local);
+  if (local) {
+    const normalized = normalizeCatalog(local);
+    applyRoleLabels(normalized.system);
+    return normalized;
+  }
   try {
     const remote = await supa.getAppSetting(ROLE_CATALOG_KEY);
     if (remote) {
       const normalized = normalizeCatalog(remote);
       db.setAppSettingLocal?.(ROLE_CATALOG_KEY, normalized);
+      applyRoleLabels(normalized.system);
       return normalized;
     }
   } catch { /* אין עותק עמיד — ממשיכים לברירת המחדל */ }
-  return blankCatalog();
+  const blank = blankCatalog();
+  applyRoleLabels(blank.system);
+  return blank;
 }
 
 async function writeRoleCatalog(catalog) {
   const value = normalizeCatalog(catalog);
   db.setAppSettingLocal?.(ROLE_CATALOG_KEY, value);
+  applyRoleLabels(value.system);
   try { await supa.setAppSetting(ROLE_CATALOG_KEY, value); } catch { /* נשמר מקומית */ }
   return value;
 }
@@ -8383,7 +8396,7 @@ function normalizeFlatAmount(value, payMode, existing = null) {
 function payFieldsForWorkRow(row) {
   const agreement = (db.get('wage_agreements') || [])
     .find((w) => w.employee_id === row.employee_id) || null;
-  const role = row.role || WORK_TYPE_ROLES[row.work_type] || null;
+  const role = row.role || workTypeRole(row.work_type) || null;
   const rate = rateForRole(agreement, role);
   // בלי pay_frozen_at על העותק — אחרת החישוב היה מחזיר את הסכום הישן.
   const amount = amountForWorkRow({ ...row, pay_frozen_at: null }, agreement);
@@ -8424,7 +8437,7 @@ function sealPastWorkDays() {
     // השורה ממתינה — ברגע שייכתב הסכם לעובד היא תיתפס בסבב הבא.
     if (row.pay_mode !== 'flat' && !withAgreement.has(row.employee_id)) continue;
     // שורה בלי תפקיד היא נתון חסר ולא התנדבות. נעילה שלה הייתה מקבעת ₪0.
-    if (row.pay_mode !== 'flat' && !(row.role || WORK_TYPE_ROLES[row.work_type])) continue;
+    if (row.pay_mode !== 'flat' && !(row.role || workTypeRole(row.work_type))) continue;
     const pay = payFieldsForWorkRow(row);
     // ₪0 בשורה שעתית פירושו שאין עדיין תעריף לתפקיד — לא נועלים אפס.
     if (row.pay_mode !== 'flat' && !pay.pay_amount) continue;
@@ -8462,7 +8475,7 @@ function normalizeWorkAssignment(body = {}, { existing = null } = {}) {
     // שעוד מדברים בשפה הישנה, אבל התמחור עובר דרך התפקיד.
     role: body.role !== undefined
       ? (body.role || null)
-      : (existing?.role ?? WORK_TYPE_ROLES[workType] ?? null),
+      : (existing?.role ?? workTypeRole(workType) ?? null),
     start_time: startTime,
     end_time: endTime,
     hours,
@@ -8508,7 +8521,7 @@ app.post('/api/work-assignments/from-activity', async (req, res) => {
   // כשלסוג הפעילות מתאימים כמה תפקידים, כל עובד יכול לשבת בתפקיד אחר —
   // `employee_roles` נושא את הבחירה, ובלי זה נופלים לתפקיד הראשון שמתאים.
   const allowedRoles = await rolesForActivityType(activity.type);
-  const defaultRole = activity.staff_role || allowedRoles[0] || WORK_TYPE_ROLES[workType] || null;
+  const defaultRole = activity.staff_role || allowedRoles[0] || workTypeRole(workType) || null;
   const flatPay = activity.staff_pay_mode === 'flat';
   const flatAmount = flatPay ? (Number(activity.staff_flat_amount) || 0) : null;
   const existing = (db.get('work_assignments') || []).filter((r) => r.activity_id === activity_id);
@@ -11846,7 +11859,8 @@ app.listen(PORT, () => {
   const sealSafely = () => {
     try { sealPastWorkDays(); } catch (err) { console.error('sealPastWorkDays failed:', err.message); }
   };
-  sealSafely();
+  // אחרי טעינת הקטלוג ולא לפניה — התמחור נשען על התוויות שהיא מביאה.
+  readRoleCatalog().then(sealSafely).catch(sealSafely);
   setInterval(sealSafely, 60 * 60 * 1000);
 
   // Conversation mirror is derived from the durable `messages` table.

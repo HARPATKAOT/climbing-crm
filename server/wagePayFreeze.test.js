@@ -2,9 +2,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   amountForWorkRow,
+  applyRoleLabels,
   frozenAmountOf,
   summarizeWork,
   summarizeByRole,
+  workTypeRole,
 } from './wageRates.js';
 
 const agreement = {
@@ -51,6 +53,22 @@ describe('חתימת שכר על שורת עבודה', () => {
     const row = { role: 'מדריך חוג', hours: 1, pay_frozen_at: '2026-07-01T00:00:00.000Z' };
     assert.equal(frozenAmountOf(row), null);
     assert.equal(amountForWorkRow(row, agreement), 60);
+  });
+
+  it('שורה ותיקה בלי תפקיד רשום מתומחרת לפי השם העדכני של התפקיד', () => {
+    // הקטלוג אומר שתפקיד ה-trainer נקרא היום „מדריך חוג”.
+    applyRoleLabels([
+      { key: 'trainer', label: 'מדריך חוג' },
+      { key: 'wall_operator', label: 'הפעלת קיר' },
+    ]);
+    assert.equal(workTypeRole('class_shift'), 'מדריך חוג');
+    const row = { work_type: 'class_shift', hours: 2, pay_mode: 'hourly' };
+    assert.equal(amountForWorkRow(row, agreement), 120);
+
+    // שינוי שם נוסף — אותה שורה ממשיכה להיות מתומחרת, בלי לגעת בה.
+    applyRoleLabels([{ key: 'trainer', label: 'אימון קבוצה' }]);
+    const renamed = { rates: [{ role: 'אימון קבוצה', mode: 'hourly', amount: 55 }] };
+    assert.equal(amountForWorkRow(row, renamed), 110);
   });
 
   it('הסיכום החודשי סוכם סכומים חתומים ולא מחשב אותם מחדש', () => {

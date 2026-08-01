@@ -24,7 +24,7 @@ import {
   roundHoursHalfUp,
   summarizeWork,
   summarizeByRole,
-  WORK_TYPE_ROLES,
+  workTypeRole,
 } from '../utils/wageRates.js';
 
 const STATUS_OPTIONS = ['עובד פעיל', 'מנהל', 'עובד זמני', 'מדריך צעיר', 'מועמד', 'ארכיון', 'סנפלינג'];
@@ -52,7 +52,7 @@ function currentYearMonth() {
 
 /** התעריף המוצג ליד שורה — לפי התפקיד שלה, ואם אין תפקיד לפי סוג העבודה. */
 function rateForRow(agreement, row) {
-  const rate = rateForRole(agreement, row?.role || WORK_TYPE_ROLES[row?.work_type]);
+  const rate = rateForRole(agreement, row?.role || workTypeRole(row?.work_type));
   return rate ? rate.amount : 0;
 }
 
@@ -1746,7 +1746,7 @@ export default function Employees() {
         const diffMs = new Date(s.clock_out) - new Date(s.clock_in);
         const hrs = roundHoursHalfUp(diffMs / (1000 * 60 * 60));
         totalHours += hrs;
-        const rate = rateForRole(agreement, WORK_TYPE_ROLES[s.activity_type] || 'הפעלת קיר');
+        const rate = rateForRole(agreement, workTypeRole(s.activity_type) || 'הפעלת קיר');
         totalPay += hrs * (rate?.amount || 0);
       });
 
@@ -2894,7 +2894,7 @@ export default function Employees() {
                           {/* התפקיד הוא מה שקובע את התעריף, ולכן הוא מה שבוחרים כאן. */}
                           <select
                             className="input input-sm"
-                            value={row.role || WORK_TYPE_ROLES[row.work_type] || ''}
+                            value={row.role || workTypeRole(row.work_type) || ''}
                             onChange={(e) => patchAssignmentLocal(row.id, { role: e.target.value })}
                             style={{ minWidth: 130 }}
                           >

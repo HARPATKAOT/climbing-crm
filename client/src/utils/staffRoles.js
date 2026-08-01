@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { PAYABLE_ROLES, PAYABLE_ROLE_MODES } from './wageRates.js';
+import { PAYABLE_ROLES, PAYABLE_ROLE_MODES, applyRoleLabels } from './wageRates.js';
 
 export const SYSTEM_ROLE_KEYS = {
   TRAINER: 'trainer',
@@ -145,6 +145,8 @@ export function fetchRoleCatalog() {
       .then((r) => (r.ok ? r.json() : null))
       .then((body) => {
         catalogCache = body || null;
+        // התמחור של שורות ותיקות נשען על התוויות האלה, ולכן הן מתעדכנות כאן.
+        if (catalogCache?.system) applyRoleLabels(catalogCache.system);
         return catalogCache;
       })
       .catch(() => null)

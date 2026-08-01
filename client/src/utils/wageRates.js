@@ -40,13 +40,43 @@ const LEGACY_RATE_FIELDS = [
   { field: 'route_rate', role: 'בונה מסלולים', mode: 'hourly' },
 ];
 
-/** סוגי העבודה הישנים ממופים לתפקידים, כדי ששורות ותיקות ימשיכו להיות מתומחרות. */
+/**
+ * סוגי העבודה הישנים ממופים לתפקידים, כדי ששורות ותיקות ימשיכו להיות מתומחרות.
+ *
+ * המיפוי הוא למפתח התפקיד ולא לשם, כי השם ניתן לשינוי: אחרי שינוי שם, טבלה
+ * קבועה הייתה מפנה שורה ותיקה לתפקיד שכבר לא קיים והיא הייתה מתומחרת ב-₪0.
+ */
+export const WORK_TYPE_ROLE_KEYS = {
+  class_shift: 'trainer',
+  counter_shift: 'wall_operator',
+  private_shift: 'private',
+  route_building_shift: 'route_l1',
+};
+
+/** התוויות שבקוד — ברירת מחדל עד שהקטלוג נטען. */
 export const WORK_TYPE_ROLES = {
   class_shift: 'הדרכת חוג',
   counter_shift: 'הפעלת קיר',
   private_shift: 'שיעור פרטי',
   route_building_shift: 'בונה מסלולים',
 };
+
+let liveWorkTypeRoles = null;
+
+/** מעדכן את התוויות מתוך תפקידי המערכת בקטלוג. נקרא בכל טעינה של הקטלוג. */
+export function applyRoleLabels(system) {
+  if (!Array.isArray(system) || system.length === 0) return;
+  const byKey = Object.fromEntries(system.filter((r) => r && r.key).map((r) => [r.key, r.label]));
+  liveWorkTypeRoles = Object.fromEntries(
+    Object.entries(WORK_TYPE_ROLE_KEYS).map(([type, key]) => [type, byKey[key] || WORK_TYPE_ROLES[type]])
+  );
+}
+
+/** התפקיד שסוג עבודה מתומחר לפיו, בשמו העדכני. */
+export function workTypeRole(workType) {
+  if (!workType) return null;
+  return (liveWorkTypeRoles || WORK_TYPE_ROLES)[workType] || null;
+}
 
 const num = (value) => {
   const n = Number(value);
@@ -113,7 +143,7 @@ export function amountForWorkRow(row, agreement) {
   if (frozen !== null) return frozen;
   if (row?.pay_mode === 'flat') return Math.round(num(row.flat_amount));
 
-  const role = row?.role || WORK_TYPE_ROLES[row?.work_type] || null;
+  const role = row?.role || workTypeRole(row?.work_type) || null;
   const rate = rateForRole(agreement, role);
   if (!rate) return 0;
   if (rate.mode === 'daily') return Math.round(rate.amount);
@@ -135,7 +165,7 @@ export function workDaysOf(rows) {
 export function summarizeByRole(rows, agreement) {
   const map = new Map();
   for (const row of rows || []) {
-    const role = row?.role || WORK_TYPE_ROLES[row?.work_type] || 'ללא תפקיד';
+    const role = row?.role || workTypeRole(row?.work_type) || 'ללא תפקיד';
     const flat = row?.pay_mode === 'flat';
     const key = flat ? `${role} · גלובלי` : role;
     const entry = map.get(key) || { label: key, role, flat, hours: 0, amount: 0, count: 0 };

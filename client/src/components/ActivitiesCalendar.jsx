@@ -12,7 +12,7 @@ import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat
 import {
   staffForRole, noStaffForRoleMessage, fetchRoleCatalog, activityRoleLabels, payableRolesOf,
 } from '../utils/staffRoles.js';
-import { rateForRole, amountForWorkRow, WORK_TYPE_ROLES } from '../utils/wageRates.js';
+import { rateForRole, amountForWorkRow, workTypeRole } from '../utils/wageRates.js';
 import {
   DEFAULT_ACTIVITY_TYPES, activityTypes, activityTypeMeta, useActivityTypes,
 } from '../utils/activityTypes.js';
@@ -112,7 +112,7 @@ const DEFAULT_WAGE = { counter_rate: 45, class_rate: 70, private_rate: 90, route
 
 /** התעריף השעתי המוערך לשורה — לפי התפקיד שלה, דרך הסכם השכר של העובד. */
 function rateForRow(agreement, row) {
-  const rate = rateForRole(agreement, row?.role || WORK_TYPE_ROLES[row?.work_type]);
+  const rate = rateForRole(agreement, row?.role || workTypeRole(row?.work_type));
   return rate ? rate.amount : 0;
 }
 
@@ -791,7 +791,7 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
                       תעריף
                       <select
                         className="input"
-                        value={row.role || WORK_TYPE_ROLES[row.work_type] || ''}
+                        value={row.role || workTypeRole(row.work_type) || ''}
                         onChange={(e) => patchLocal(row.id, { role: e.target.value })}
                         style={{ fontSize: 12, padding: '4px 6px' }}
                       >
@@ -860,7 +860,7 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
                       סוג תפקיד
                       <select
                         className="input"
-                        value={row.role || WORK_TYPE_ROLES[row.work_type] || ''}
+                        value={row.role || workTypeRole(row.work_type) || ''}
                         onChange={(e) => patchLocal(row.id, { role: e.target.value })}
                         style={{ fontSize: 12, padding: '4px 6px' }}
                       >
