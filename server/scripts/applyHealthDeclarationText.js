@@ -68,7 +68,12 @@ const HEALTH_QUESTIONS = [
   { id: 'm5', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם עברתם ניתוח, אשפוז או פציעה משמעותית בשנה האחרונה?' },
   { id: 'm6', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש נטילת תרופות קבועות?' },
   { id: 'm7', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש אלרגיה שהצוות צריך להכיר (מזון, תרופות, עקיצות)?' },
-  { id: 'm8', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם רופא הגביל פעילות גופנית בשנה האחרונה, או שיש מגבלה רפואית אחרת שלא נזכרה כאן?' },
+  // Split in two. Asked together, the catch-all inherited the doctor's-approval
+  // requirement that belongs only to the first half, so someone wanting to
+  // mention a small thing nobody asked about was blocked until they produced a
+  // certificate — and the safest answer became saying nothing.
+  { id: 'm8', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם רופא הגביל פעילות גופנית בשנה האחרונה?' },
+  { id: 'm9', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש מגבלה רפואית, אבחנה או מידע אחר שחשוב שנדע ולא נשאלנו עליו כאן?' },
   {
     id: 'h1',
     kind: 'confirm',
