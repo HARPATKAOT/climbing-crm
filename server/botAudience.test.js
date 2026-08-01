@@ -6,6 +6,7 @@ import {
   resolveAudienceFilter,
   groupMatchesGradeLetter,
   isBareAudienceAnswer,
+  askWhichChildReply,
   ASK_GRADE_REPLY,
 } from './whatsapp.js';
 
@@ -53,6 +54,30 @@ test('a toddler on the family card resolves to no grade at all', () => {
   // A baby's birth date on the card must not answer "יש לכם חוג לילדים?"
   const babyCard = [{ name: 'שקד', birthDate: new Date(Date.now() - 640 * 864e5).toISOString().slice(0, 10) }];
   assert.deepEqual(resolveAudienceFilter('יש לכם חוג לילדים?', babyCard).letters, []);
+});
+
+test('naming a child on the card answers for that child only', () => {
+  const kids = [
+    { name: 'שקד איל', birthDate: '2024-10-15' },
+    { name: 'עומרי איל', ageCategory: "ג'-ד'" },
+  ];
+  assert.deepEqual(resolveAudienceFilter('בשביל עומרי', kids).letters, ['ג', 'ד']);
+  // The toddler has no band, and that is not the same as "no child named".
+  const baby = resolveAudienceFilter('בשביל שקד', kids);
+  assert.equal(baby.source, 'child');
+  assert.deepEqual(baby.letters, []);
+  // A name that is not on the card is not a child answer.
+  assert.equal(resolveAudienceFilter('בשביל יונתן', kids).source !== 'child', true);
+});
+
+test('with kids on the card the bot asks which child, not which grade', () => {
+  assert.match(askWhichChildReply([{ name: 'שקד איל' }]), /בשביל שקד/);
+  const two = askWhichChildReply([{ name: 'שקד איל' }, { name: 'עומרי איל' }]);
+  assert.match(two, /שקד/);
+  assert.match(two, /עומרי/);
+  assert.equal(askWhichChildReply([]), '');
+  // Placeholder children created when the name is unknown are not offered back.
+  assert.equal(askWhichChildReply([{ name: 'ילד/ה של לקוח וואטסאפ' }]), '');
 });
 
 test('a bare grade answer inherits the previous question', () => {

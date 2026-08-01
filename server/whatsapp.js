@@ -231,6 +231,83 @@ function gradeBandIncludesLetter(text, letter) {
   return asStart.test(t) || afterDash.test(t);
 }
 
+/**
+ * Not every class question is about a primary-school child: the wall also runs
+ * חטיבה / תיכון / בוגרים groups, and "יש לכם חוגים למבוגרים?" was answered with
+ * "באיזו כיתה הילד/ה?".
+ */
+export function ageBandFromText(text) {
+  const t = String(text || '');
+  if (/מבוגר|לעצמי|בשבילי|בשביל עצמי|הורים\s*שרוצים|אני\s*רוצה\s*להתאמן/.test(t)) return 'בוגרים';
+  if (/תיכון|נוער/.test(t)) return 'תיכון';
+  if (/חטיב/.test(t)) return 'חטיבה';
+  return '';
+}
+
+/** Groups whose age category is that non-grade band. */
+export function groupsForAgeBand(groups, band) {
+  if (!band) return [];
+  const wanted = band === 'תיכון' ? /תיכון|חטיב/ : new RegExp(band);
+  return (groups || []).filter((g) => wanted.test(String(g.ageCategory || '')));
+}
+
+/** Grade band for one child on the card — from their class, grade or birth date. */
+export function gradeLettersForStudent(student) {
+  if (!student) return [];
+  // Categories are written «ג'-ד'»; the apostrophe is what separates a grade
+  // letter from an ordinary letter inside a word like «בוגרים».
+  const band = String(student.ageCategory || '').match(/[א-ו](?=['׳])/g) || [];
+  if (band.length) return [...new Set(band)];
+  const letter = extractGradeLetter(`כיתה ${student.grade || ''}`);
+  if (letter) return [letter];
+  const birth = Date.parse(student.birthDate || student.birth_date || '');
+  if (!Number.isFinite(birth)) return [];
+  const years = Math.floor((Date.now() - birth) / (365.25 * 24 * 60 * 60 * 1000));
+  return gradeLettersFromAge(years);
+}
+
+/**
+ * Cards carry placeholder children ("ילד/ה של לקוח וואטסאפ") created when the
+ * name is still unknown. Offering that back to the parent reads as broken.
+ */
+function isRealChildName(name) {
+  const n = String(name || '').trim();
+  if (n.length < 2) return false;
+  if (/^ילד(?:ה)?\b|^ילד\/ה|לקוח\s*וואטסאפ|^מתאמן\b|^בן\b|^בת\b/.test(n)) return false;
+  return true;
+}
+
+/** The child a parent named in this message, if it is one of theirs. */
+export function matchStudentByName(text, students = []) {
+  const t = String(text || '');
+  if (!t.trim()) return null;
+  for (const student of Array.isArray(students) ? students : []) {
+    if (!isRealChildName(student?.name)) continue;
+    const first = String(student?.name || '').trim().split(/\s+/)[0];
+    if (first.length < 2) continue;
+    // Hebrew has no \b, so guard the edges with non-letters instead.
+    if (new RegExp(`(?:^|[^א-ת])${first}(?:[^א-ת]|$)`).test(t)) return student;
+  }
+  return null;
+}
+
+/**
+ * With children already on the card, "יש לכם חוג לילדים?" should not silently
+ * pick one — ask which of them it is about.
+ */
+export function askWhichChildReply(students = []) {
+  const names = (Array.isArray(students) ? students : [])
+    .filter((s) => isRealChildName(s?.name))
+    .map((s) => String(s?.name || '').trim().split(/\s+/)[0])
+    .filter((n) => n.length >= 2);
+  const unique = [...new Set(names)].slice(0, 4);
+  if (!unique.length) return '';
+  if (unique.length === 1) {
+    return `בשמחה! 🙂\nזה בשביל ${unique[0]} או בשביל ילד/ה אחר/ת?`;
+  }
+  return `בשמחה! 🙂\nבשביל מי מהילדים? ${unique.join(' / ')}\nאו כתבו «ילד אחר» ונמשיך משם.`;
+}
+
 function groupsMatchingLetters(groups, letters) {
   const list = Array.isArray(letters) ? letters.filter(Boolean) : [];
   if (!list.length) return [];
@@ -241,7 +318,7 @@ function groupsMatchingLetters(groups, letters) {
  * Resolve which class bands the customer is asking about — from explicit grade,
  * stated age, kids already on the card, or (when phone is set) recent messages.
  */
-export function resolveAudienceFilter(text, students = []) {
+export function resolveAudienceFilter(text, students = [], { namedChildOnly = false } = {}) {
   const grade = extractGradeLetter(text);
   if (grade) return { letters: [grade], source: 'grade', grade, age: null };
 
@@ -250,6 +327,18 @@ export function resolveAudienceFilter(text, students = []) {
     const letters = gradeLettersFromAge(age);
     if (letters.length) return { letters, source: 'age', grade: '', age };
   }
+
+  // "בשביל שקד" — the parent named a child on the card, so that child's band is
+  // the answer and the other kids are irrelevant.
+  const named = matchStudentByName(text, students);
+  if (named) {
+    const letters = gradeLettersForStudent(named);
+    if (letters.length) {
+      return { letters, source: 'child', grade: letters[0], age: null, student: named };
+    }
+    return { letters: [], source: 'child', grade: '', age: null, student: named };
+  }
+  if (namedChildOnly) return { letters: [], source: null, grade: '', age: null };
 
   const kids = Array.isArray(students) ? students : [];
   const fromKids = [];
@@ -284,8 +373,9 @@ export function resolveAudienceWithMemory(text, students = [], phone = '') {
     .join('\n');
   if (!history.trim()) return direct;
   // Do not re-apply the card here — that would hide a missing follow-up grade
-  // with unrelated kids on the family file.
-  const fromHistory = resolveAudienceFilter(history, []);
+  // with unrelated kids on the family file. A child the parent named by hand is
+  // a deliberate answer, so that one does carry over.
+  const fromHistory = resolveAudienceFilter(history, students, { namedChildOnly: true });
   if (fromHistory.letters.length) {
     return { ...fromHistory, source: 'history' };
   }
@@ -401,7 +491,11 @@ function formatClassesWhatsAppReply(groups, incomingText = '', { grade: knownGra
   } else if (!anyOpen) {
     reply += '\n\nאפשר לכתוב «רשימת המתנה» ונשבץ אתכם.';
   } else {
-    reply += '\n\nרוצים שנשמור מקום או שנחזור אליכם?\nכתבו שם הילד ומספר טלפון 📱';
+    // An adult asking for themselves has no "שם הילד" to give.
+    const adultBand = (visible || []).every((g) => /בוגר/.test(String(g.ageCategory || '')));
+    reply += adultBand
+      ? '\n\nרוצים שנשמור מקום או שנחזור אליכם?\nכתבו שם ומספר טלפון 📱'
+      : '\n\nרוצים שנשמור מקום או שנחזור אליכם?\nכתבו שם הילד ומספר טלפון 📱';
   }
   return reply;
 }
@@ -536,8 +630,11 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
     : matchedGroups.filter((g) => Number(g.day) === dayHint);
   const exactGroups = sameDay.length ? sameDay : matchedGroups;
   const needsAudience = !audience.letters.length;
+  // With kids on the card, asking "באיזו כיתה?" ignores what we already know —
+  // ask which of their children instead.
+  const askAudience = (students.length && askWhichChildReply(students)) || ASK_GRADE_REPLY;
   const classesReply = needsAudience
-    ? ASK_GRADE_REPLY
+    ? askAudience
     : formatClassesWhatsAppReply(exactGroups, raw, { grade: audience.grade });
   const address = addressFromSettings(s);
   const hoursReply = formatOpeningHoursReply(db) || NO_OPENING_HOURS_REPLY;
@@ -566,7 +663,7 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
   }
 
   if (asksAboutSignupLink(raw)) {
-    if (needsAudience) return { text: ASK_GRADE_REPLY, confidence: 'high' };
+    if (needsAudience) return { text: askAudience, confidence: 'high' };
     return {
       text: formatSignupLinkReply(exactGroups, { phone }),
       confidence: 'high',
@@ -576,6 +673,32 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
   // Trainer / group size come before the schedule branch — "כמה ילדים בקבוצה"
   // reads as a schedule question otherwise.
   // Staff headcount ("כמה מדריכים בצוות") is not in the CRM — leave to the model.
+  // Teen / adult groups exist and have no grade letter — never ask such a
+  // customer which grade their child is in.
+  const askedBand = ageBandFromText(raw);
+  if (askedBand && isScheduleQuestion(raw)) {
+    const bandGroups = groupsForAgeBand(db.get('groups') || [], askedBand);
+    if (bandGroups.length) {
+      return { text: formatClassesWhatsAppReply(bandGroups, raw), confidence: 'high' };
+    }
+    return {
+      text: 'אין לי קבוצה מתאימה לגיל הזה במערכת 🙏\nמעביר לצוות שיבדוק מה מתאים.',
+      confidence: 'high',
+      handoff: true,
+    };
+  }
+
+  // The parent named a child who has no class band on file (too young, or no
+  // grade recorded) — the team can say what fits better than a guess.
+  if (audience.source === 'child' && !audience.letters.length) {
+    const childName = String(audience.student?.name || '').trim().split(/\s+/)[0];
+    return {
+      text: `אין לי קבוצה מתאימה ל${childName ? childName : 'ילד/ה'} במערכת 🙏\nמעביר לצוות שיבדוק מה מתאים.`,
+      confidence: 'high',
+      handoff: true,
+    };
+  }
+
   // An age with no matching band would otherwise loop: the bot asks for a grade
   // or age, the parent repeats the age, and nothing moves.
   const statedAge = extractAgeYears(raw);
@@ -599,7 +722,7 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
 
   if (asksAboutAssistants(raw) || asksAboutTrainer(raw) || asksAboutGroupSize(raw)) {
     if (needsAudience && !asksAboutGroupSize(raw)) {
-      return { text: ASK_GRADE_REPLY, confidence: 'high' };
+      return { text: askAudience, confidence: 'high' };
     }
     // Size questions can use all matching groups or any groups with maxSlots.
     const detailGroups = exactGroups.length
@@ -628,7 +751,7 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
       // Never dump the whole catalog on a vague "מה העלות?" — need a grade
       // (from this turn or recent history) and matching groups.
       if (!audience.letters.length || !exactGroups.length) {
-        return { text: ASK_GRADE_REPLY, confidence: 'high' };
+        return { text: askAudience, confidence: 'high' };
       }
     }
     const priceReply = buildPriceReply({
