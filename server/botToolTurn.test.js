@@ -121,9 +121,10 @@ test('history rows become model/user turns', () => {
   assert.deepEqual(contents.map((c) => c.role), ['user', 'model']);
 });
 
-test('the tools offered to the model are read-only facts', () => {
+test('the tools offered to the model are facts and links, never sends or charges', () => {
   const names = CUSTOMER_TOOL_DECLARATIONS.map((d) => d.name).sort();
   assert.deepEqual(names, [
+    'getEquipmentPaymentLink',
     'getEvents',
     'getFamilyCard',
     'getHealthDeclarations',
@@ -132,7 +133,8 @@ test('the tools offered to the model are read-only facts', () => {
     'getSignupLink',
     'listClasses',
   ]);
-  // Nothing that writes, sends or charges may be in this list.
-  assert.equal(names.some((n) => /send|create|update|delete|pay|register/i.test(n)), false);
+  // A tool may hand over a link, but never message anyone, remove data or take
+  // money — those stay with the team.
+  assert.equal(names.some((n) => /send|delete|remove|charge|refund|cancel/i.test(n)), false);
   assert.match(CUSTOMER_TOOL_RULES, /HANDOFF/);
 });

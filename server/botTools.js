@@ -13,6 +13,13 @@ import { studentsForParent } from './whatsappBot.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { healthExpiryDate, declarationSignedAt } from './healthValidity.js';
 import { appPublicBase } from './publicLinks.js';
+import { persistCore } from './db.js';
+import {
+  newCheckoutToken,
+  unpaidEquipmentItems,
+  describeEquipmentItems,
+  computeEquipmentTotal,
+} from './equipmentService.js';
 import {
   loadEquipmentPrices,
   enrichmentFeeFromSettings,
@@ -98,6 +105,18 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
       'האם למתאמנים של הלקוח הזה יש הצהרת בריאות והסרת אחריות בתוקף, עד מתי היא '
       + 'בתוקף, וקישור למילוי. מי שאין לו הצהרה בתוקף צריך לקבל את הקישור.',
     parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'getEquipmentPaymentLink',
+    description:
+      'ציוד האימונים שטרם שולם עבור ילד של הלקוח הזה, הסכום, וקישור תשלום. '
+      + 'אם יש כמה ילדים — יש לציין שם, או לשאול את הלקוח לפני הקריאה.',
+    parameters: {
+      type: 'object',
+      properties: {
+        childName: { type: 'string', description: 'שם הילד כפי שמופיע בכרטיס' },
+      },
+    },
   },
   {
     name: 'getFamilyCard',
@@ -260,6 +279,68 @@ export function buildCustomerTools({ settings = {}, parent = null, phone = '' } 
         הערה: rows.every((r) => r.הצהרה_בתוקף)
           ? 'לכולם יש הצהרה בתוקף — אין צורך לשלוח קישור'
           : 'יש מתאמן בלי הצהרה בתוקף — יש לשלוח לו את הקישור',
+      };
+    },
+
+    getEquipmentPaymentLink: async ({ childName } = {}) => {
+      if (!parent) return { קישור: '', הערה: 'אין כרטיס לקוח — יש להעביר לצוות' };
+      const kids = studentsForParent(parent);
+      if (!kids.length) return { קישור: '', הערה: 'אין מתאמנים בכרטיס — יש להעביר לצוות' };
+
+      const named = String(childName || '').trim();
+      const matches = named
+        ? kids.filter((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
+        : kids;
+      if (!matches.length) {
+        return { קישור: '', הערה: `אין בכרטיס מתאמן בשם ${named} — יש לשאול את הלקוח` };
+      }
+      if (matches.length > 1) {
+        return {
+          קישור: '',
+          ילדים: matches.map((s) => s.name || ''),
+          הערה: 'יש כמה ילדים — יש לשאול על מי מהם מדובר',
+        };
+      }
+
+      const student = matches[0];
+      const rows = (db.get('student_equipment') || []).filter(
+        (r) => String(r.student_id || r.studentId || '') === String(student.id)
+      );
+      const unpaid = unpaidEquipmentItems(rows);
+      if (!unpaid.length) {
+        return { קישור: '', הערה: `אין ציוד שטרם שולם עבור ${student.name || ''}` };
+      }
+
+      // Reuse a live link rather than minting a token on every question.
+      const now = Date.now();
+      const existing = (db.get('equipment_checkouts') || []).find(
+        (c) => String(c.student_id || '') === String(student.id)
+          && (!c.expires_at || new Date(c.expires_at).getTime() > now)
+      );
+      let token = existing?.id || '';
+      if (!token) {
+        token = newCheckoutToken();
+        const expires = new Date();
+        expires.setDate(expires.getDate() + 30);
+        const created = db.insert('equipment_checkouts', {
+          id: token,
+          student_id: student.id,
+          parent_id: parent.id,
+          expires_at: expires.toISOString(),
+          created_by: 'bot',
+          created_at: new Date().toISOString(),
+        });
+        if (!created?.id) return { קישור: '', הערה: 'יצירת קישור נכשלה — יש להעביר לצוות' };
+        await persistCore('equipment_checkouts', created);
+      }
+
+      const itemTypes = unpaid.map((r) => r.item_type || r.itemType).filter(Boolean);
+      const shirtSize = unpaid.find((r) => (r.item_type || r.itemType) === 'shirt')?.shirt_size || null;
+      return {
+        מתאמן: student.name || '',
+        פריטים: describeEquipmentItems(itemTypes, shirtSize),
+        סכום: computeEquipmentTotal(await loadEquipmentPrices(), itemTypes),
+        קישור: `${appPublicBase()}/equipment/${encodeURIComponent(token)}`,
       };
     },
 
