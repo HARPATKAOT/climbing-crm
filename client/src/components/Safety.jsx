@@ -161,7 +161,7 @@ function SignCheckModal({ check, employees, onSave, onClose }) {
         <div className="modal-footer">
           <button type="button" className="btn btn-ghost" onClick={onClose}>ביטול</button>
           <button form="sign-check-form" type="submit" className="btn btn-primary" disabled={saving}>
-            {saving ? 'שומר...' : 'אשר ביצוע'}
+            {saving ? 'שומר...' : 'חתום'}
           </button>
         </div>
       </div>
@@ -462,7 +462,7 @@ function CheckDetailModal({ check, logs, employees, onSign, onEdit, onClose }) {
             <Pencil size={14} /> עריכת הגדרות
           </button>
           <button type="button" className="btn btn-primary" onClick={() => onSign(check)}>
-            אשר ביצוע
+            חתום
           </button>
         </div>
       </div>
@@ -809,7 +809,7 @@ export default function Safety() {
                             </span>
                           ) : (
                             <button type="button" className="btn btn-primary btn-xs" onClick={() => openSign(c)}>
-                              אשר ביצוע
+                              חתום
                             </button>
                           )}
                           <button
@@ -865,10 +865,16 @@ export default function Safety() {
                             : 'אף פעם')}
                       </td>
                       <td>{statusBadge(t)}</td>
-                      <td>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                          <button type="button" className="btn btn-primary btn-xs" onClick={() => openSign(t)}>
-                            אשר
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'nowrap' }}>
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-xs"
+                            style={{ whiteSpace: 'nowrap' }}
+                            title="חתימה שהבדיקה בוצעה"
+                            onClick={() => openSign(t)}
+                          >
+                            חתום
                           </button>
                           <button
                             type="button"
@@ -881,11 +887,17 @@ export default function Safety() {
                           <button
                             type="button"
                             className="btn btn-ghost btn-xs"
+                            title="עריכת הבדיקה"
                             onClick={() => { setEditingType(t); setShowTypeForm(true); }}
                           >
                             <Pencil size={12} />
                           </button>
-                          <button type="button" className="btn btn-ghost btn-xs" onClick={() => handleDeleteType(t)}>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs"
+                            title="מחיקת הבדיקה"
+                            onClick={() => handleDeleteType(t)}
+                          >
                             <Trash2 size={12} />
                           </button>
                         </div>
