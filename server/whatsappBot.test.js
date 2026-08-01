@@ -14,6 +14,7 @@ import {
   mergeBotSettings,
   applyBusinessBrand,
   isStaffPhone,
+  isHumanOutboundLog,
 } from './whatsappBot.js';
 import { isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 
@@ -83,6 +84,15 @@ test('only a listed staff number gets the CRM agent', () => {
   assert.equal(isStaffPhone(settings, '972544444444'), false);
   assert.equal(isStaffPhone({ aiStaffPhones: '' }, '972501234567'), false);
 });
+
+test('human outbound logs are detected for staff-thread deferral', () => {
+  assert.equal(isHumanOutboundLog({ direction: 'outbound', is_ai: false, source: 'crm' }), true);
+  assert.equal(isHumanOutboundLog({ direction: 'outbound', is_ai: false, source: 'phone' }), true);
+  assert.equal(isHumanOutboundLog({ direction: 'outbound', is_ai: true, source: 'ai' }), false);
+  assert.equal(isHumanOutboundLog({ direction: 'outbound', is_ai: false, source: 'bot_control' }), false);
+  assert.equal(isHumanOutboundLog({ direction: 'inbound', is_ai: false, source: 'customer' }), false);
+});
+
 
 test('audience modes', () => {
   const leadParent = { status: 'lead_new' };

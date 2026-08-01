@@ -53,7 +53,13 @@ export function asksAboutOpeningHours(text) {
 }
 
 export function asksAboutEvents(text) {
-  return /טיול|אירוע|קייטנ|יום כיף|סדנ|מחנה/.test(String(text || ''));
+  const t = String(text || '');
+  if (/טיול|אירוע|קייטנ|יום כיף|סדנ/.test(t)) return true;
+  // "מחנה" alone is too broad — e.g. "אני במחנה של הנבחרת" is not a signup ask.
+  if (/מחנה/.test(t) && /הרשמ|נפתח|מתי\s+ה|יש\s+מחנה|רוצה|פרטים|עלות|מחיר|קיץ/.test(t)) {
+    return true;
+  }
+  return false;
 }
 
 export function asksAboutTrainer(text) {

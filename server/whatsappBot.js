@@ -283,6 +283,38 @@ export function isOptedOut(parent) {
   return !!parent?.bot_opted_out;
 }
 
+/** Outbound that came from a person (CRM / phone), not from the customer bot. */
+export function isHumanOutboundLog(log) {
+  if (!log || log.direction !== 'outbound') return false;
+  if (log.is_ai) return false;
+  const source = String(log.source || '');
+  if (source === 'ai' || source === 'bot_control' || source === 'staff_chat' || source === 'staff_notify') {
+    return false;
+  }
+  // crm / phone / empty source on a non-AI outbound = staff
+  return true;
+}
+
+/**
+ * If staff already wrote to this customer, the next inbound belongs to that
+ * human thread — the bot must not jump in (even if the timed pause was lost
+ * after a server restart).
+ */
+export function shouldDeferToHumanStaff(phone) {
+  const normalized = normalizeWaPhone(phone) || phone;
+  if (!normalized) return false;
+  const logs = (db.get('whatsapp_logs') || [])
+    .filter((l) => (l.channel || 'whatsapp') === 'whatsapp'
+      && phonesMatch(l.phone || l.to || l.from, normalized))
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+  for (const log of logs) {
+    if (log.direction === 'inbound') continue;
+    if (log.direction === 'outbound') return isHumanOutboundLog(log);
+  }
+  return false;
+}
+
 /**
  * What the bot will do for this customer right now, in a shape the CRM can
  * render. `until` is the authority on a pause — `minutesLeft` is a snapshot
@@ -733,6 +765,12 @@ export function decideBotGate(settings, parent, students, text, { isSimulator = 
 
   if (isBotPaused(parent) && !isSimulator) {
     return { action: 'silence', reason: 'paused' };
+  }
+
+  // Staff already owns this thread (last outbound was human). Timed pause can
+  // vanish on restart; the message log is the durable signal.
+  if (!isSimulator && s.aiPauseOnHumanReply !== false && shouldDeferToHumanStaff(parent?.phone || '')) {
+    return { action: 'silence', reason: 'human_thread' };
   }
 
   // Live traffic only: shouldAiAutoReply is false both when the bot is off and
