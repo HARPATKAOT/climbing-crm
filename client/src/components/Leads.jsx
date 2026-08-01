@@ -412,6 +412,10 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [clientDocuments, setClientDocuments] = useState([]);
   const [docsLoading, setDocsLoading] = useState(false);
   const [deletingDocId, setDeletingDocId] = useState('');
+  // A file leaves the client's personal file for good, so the row is only armed
+  // once the word is typed out by hand.
+  const [pendingDocDelete, setPendingDocDelete] = useState(null);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [openFolder, setOpenFolder] = useState(null);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showAddChild, setShowAddChild] = useState(false);
@@ -2779,9 +2783,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 const handleDeleteDoc = async (doc) => {
                   const healthRow = isHealthDoc(doc);
                   const declId = doc.declarationId || doc.virtualData?.id || healthDecl?.id || '';
-                  const what = healthRow ? 'את הצהרת הבריאות' : 'את המסמך';
-                  const extra = healthRow ? '\nהמתאמן יסומן שוב כמי שטרם חתם.' : '';
-                  if (!window.confirm(`למחוק ${what} מהתיק? הפעולה אינה הפיכה.${extra}`)) return;
+                  setPendingDocDelete(null);
+                  setDeleteConfirmText('');
                   setDeletingDocId(doc.id);
                   setHealthSendMsg('');
                   try {
@@ -3039,7 +3042,10 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                       style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--red, #F87171)' }}
                                       title={healthRow ? 'מחיקת הצהרת הבריאות מהתיק' : 'מחיקת המסמך מהתיק'}
                                       disabled={busy || !!deletingDocId}
-                                      onClick={() => handleDeleteDoc(doc)}
+                                      onClick={() => {
+                                        setDeleteConfirmText('');
+                                        setPendingDocDelete({ doc, healthRow });
+                                      }}
                                     >
                                       <Trash2 size={12} />
                                     </button>
@@ -3049,6 +3055,70 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                             })}
                           </div>
                         )}
+                      </div>
+                    )}
+
+                    {pendingDocDelete && (
+                      <div
+                        className="modal-backdrop"
+                        style={{ zIndex: 400 }}
+                        onClick={(e) => e.target === e.currentTarget && setPendingDocDelete(null)}
+                      >
+                        <div className="modal slide-up" style={{ maxWidth: 420 }}>
+                          <div className="modal-header">
+                            <div className="modal-title">
+                              {pendingDocDelete.healthRow ? 'מחיקת הצהרת בריאות' : 'מחיקת מסמך'}
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-icon btn-sm"
+                              onClick={() => setPendingDocDelete(null)}
+                            >
+                              <X size={18} />
+                            </button>
+                          </div>
+                          <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                            <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}>
+                              {pendingDocDelete.healthRow
+                                ? `הצהרת הבריאות של ${student.name || 'המתאמן'} תימחק מהתיק יחד עם הקבצים ששמורים תחתיה, והמתאמן יסומן שוב כמי שטרם חתם.`
+                                : 'המסמך יימחק מהתיק ולא ניתן יהיה לשחזר אותו.'}
+                            </div>
+                            <div className="form-group" style={{ marginBottom: 0 }}>
+                              <label className="form-label" style={{ fontSize: 12 }}>
+                                כדי לאשר, הקלידו <strong>מחק</strong>
+                              </label>
+                              <input
+                                className="input"
+                                autoFocus
+                                value={deleteConfirmText}
+                                placeholder="מחק"
+                                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && deleteConfirmText.trim() === 'מחק') {
+                                    handleDeleteDoc(pendingDocDelete.doc);
+                                  }
+                                }}
+                              />
+                            </div>
+                          </div>
+                          <div className="modal-footer" style={{ gap: 8 }}>
+                            <button
+                              type="button"
+                              className="btn btn-danger btn-sm"
+                              disabled={deleteConfirmText.trim() !== 'מחק' || !!deletingDocId}
+                              onClick={() => handleDeleteDoc(pendingDocDelete.doc)}
+                            >
+                              <Trash2 size={14} /> מחיקה
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => setPendingDocDelete(null)}
+                            >
+                              ביטול
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     )}
                   </>
