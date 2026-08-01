@@ -296,9 +296,12 @@ function mergeThread(parent) {
   });
 
   const byKey = new Map();
-  for (const item of [...logs, ...msgs]) {
-    const key = item.meta_message_id || item.id;
-    if (!byKey.has(key)) byKey.set(key, item);
+  // Local mirror first, then durable rows overwrite — messages is source of truth.
+  for (const item of logs) {
+    byKey.set(item.meta_message_id || item.id, item);
+  }
+  for (const item of msgs) {
+    byKey.set(item.meta_message_id || item.id, item);
   }
   return [...byKey.values()].sort(
     (a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0)
@@ -903,6 +906,19 @@ export async function replyToParent(parentId, payload = {}) {
       }
     } catch (err) {
       console.error('pause bot after CRM reply failed:', err.message);
+    }
+    try {
+      const { proposeFromHandoffStaffReply } = await import('../botLearning.js');
+      await proposeFromHandoffStaffReply({
+        db,
+        persist: persistCore,
+        phone: target.phone,
+        parent,
+        staffText: text.trim(),
+        createdBy: 'handoff_mine',
+      });
+    } catch (err) {
+      console.error('Handoff learning propose failed:', err.message);
     }
   }
   return result;

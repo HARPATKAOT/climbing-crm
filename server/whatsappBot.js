@@ -67,12 +67,44 @@ export const DEFAULT_BOT_SETTINGS = {
   aiUnsureReply: 'רגע — כדי לא לטעות אני מעביר את זה לצוות 🙏\nמישהו יחזור אליכם עם תשובה מדויקת.',
   aiLeadCaptureEnabled: true,
   aiInteractiveMenuEnabled: true,
+  // Health declaration is sent by staff when registering — not an opening-menu item.
   aiGreetingMenu:
-    `היי! אני הבוט של ${BRAND_NAME} 🧗\n\nבמה אפשר לעזור?\n1️⃣ הצהרת בריאות ✍️\n2️⃣ חוגים, מחירים ורישום 🤸\n3️⃣ שעות פתיחה ומיקום 🗺️\n4️⃣ לדבר עם צוות 👤\n5️⃣ אירועים וטיולים 🎒\n\nכתבו מספר או שאלה קצרה 😊`,
+    `היי! אני הבוט של ${BRAND_NAME} 🧗\n\nבמה אפשר לעזור?\n1️⃣ חוגים, מחירים ורישום 🤸\n2️⃣ שעות פתיחה ומיקום 🗺️\n3️⃣ לדבר עם צוות 👤\n4️⃣ אירועים וטיולים 🎒\n\nכתבו מספר או שאלה קצרה 😊`,
   aiReactivateKeywords: 'הפעל בוט,הפעל,activate',
-  // מספרי צוות שמקבלים את סוכן ה-CRM במקום בוט הלקוחות. ריק = אין אף אחד.
+  // מספרי צוות שמקבלים התראת העברה + סוכן CRM. ריק = אין התראות.
   aiStaffPhones: '',
 };
+
+/** Placeholder names mean the card exists but we still do not know who is writing. */
+export function isIdentifiedParent(parent) {
+  const name = String(parent?.name || '').trim();
+  if (!name || name.length < 2) return false;
+  // Avoid \\b — it does not treat Hebrew letters as word characters.
+  if (/^לקוח\s*וואטסאפ/i.test(name)) return false;
+  if (/^לקוח$/i.test(name)) return false;
+  if (/^(?:client|whatsapp\s*customer)\b/i.test(name)) return false;
+  return true;
+}
+
+/** First name only — never greet with the family name. */
+export function parentFirstName(parent) {
+  const name = String(parent?.name || '').trim();
+  if (!name || !isIdentifiedParent(parent)) return '';
+  return name.split(/\s+/)[0];
+}
+
+export function knownParentGreeting(parent) {
+  const first = parentFirstName(parent);
+  return first
+    ? `היי ${first}, מה נשמע? 😊\nבמה אפשר לעזור?`
+    : 'היי, מה נשמע? 😊\nבמה אפשר לעזור?';
+}
+
+export function isLowIntentGreeting(text) {
+  const t = String(text || '').trim();
+  if (!t || t.length > 40) return false;
+  return /^(?:מה\s*קורה|מה\s*נשמע|היי+|הי+|שלום|בוקר\s*טוב|ערב\s*טוב|צהריים\s*טובים|hey|hi|hello)[\s!?.]*$/i.test(t);
+}
 
 const BRANDED_TEXT_KEYS = [
   'aiSystemPrompt',
@@ -119,6 +151,14 @@ export async function loadBrandedBotSettings() {
   if (!prompt.includes('רק מחירים שמופיעים בנתוני המערכת')) {
     branded.aiSystemPrompt = prompt ? `${prompt}\n\n${priceRule}` : priceRule;
   }
+  // Drop the retired health-declaration row from menus saved before this change.
+  const menu = String(branded.aiGreetingMenu || '');
+  if (/1️⃣\s*הצהרת\s*בריאות|1\s*[).:]\s*הצהרת\s*בריאות/.test(menu)) {
+    branded.aiGreetingMenu = String(DEFAULT_BOT_SETTINGS.aiGreetingMenu).replace(
+      new RegExp(String(BRAND_NAME).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'),
+      brand
+    );
+  }
   return branded;
 }
 
@@ -152,25 +192,30 @@ export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, n));
 }
 
+/**
+ * Menu (no health declaration):
+ * 1 = classes · 2 = hours/location · 3 = staff · 4 = events
+ * `health` is keyword-only (not a menu number).
+ */
 export function normalizeMenuChoice(text) {
   const raw = String(text || '').trim();
   const lower = raw.toLowerCase();
-  if (/^[1-5]$/.test(raw)) return raw;
-  const numbered = lower.match(/^(?:אופציה|אפשרות|מספר)?\s*([1-5])\b/);
+  if (/^[1-4]$/.test(raw)) return raw;
+  const numbered = lower.match(/^(?:אופציה|אפשרות|מספר)?\s*([1-4])\b/);
   if (numbered) return numbered[1];
 
-  if (/הצהר|בריאות|טופס|חתמ/.test(raw)) return '1';
-  if (/טיול|אירוע|קייטנ/.test(raw)) return '5';
-  if (/חוג|רישום|אימון|כית/.test(raw) && !/שע|מיקום|כתובת|מחיר|עלות|כסף|שקל/.test(raw)) return '2';
-  if (/שע|מיקום|כתובת|פתוח|הגע/.test(raw)) return '3';
-  if (/צוות|אדם|נציג|לדבר עם/.test(raw)) return '4';
+  if (/הצהר|בריאות|טופס|חתמ/.test(raw)) return 'health';
+  if (/טיול|אירוע|קייטנ/.test(raw)) return '4';
+  if (/חוג|רישום|אימון|כית/.test(raw) && !/שע|מיקום|כתובת|מחיר|עלות|כסף|שקל/.test(raw)) return '1';
+  if (/שע|מיקום|כתובת|פתוח|הגע/.test(raw)) return '2';
+  if (/צוות|אדם|נציג|לדבר עם/.test(raw)) return '3';
 
   // Interactive list / button titles
-  if (/הצהרת בריאות/.test(raw)) return '1';
-  if (/חוגים ורישום|חוגים ומחירים|חוגים/.test(raw)) return '2';
-  if (/שעות ומיקום|שעות פתיחה ומיקום/.test(raw)) return '3';
-  if (/לדבר עם צוות|עם צוות/.test(raw)) return '4';
-  if (/אירועים וטיולים/.test(raw)) return '5';
+  if (/הצהרת בריאות/.test(raw)) return 'health';
+  if (/חוגים ורישום|חוגים ומחירים|חוגים/.test(raw)) return '1';
+  if (/שעות ומיקום|שעות פתיחה ומיקום/.test(raw)) return '2';
+  if (/לדבר עם צוות|עם צוות/.test(raw)) return '3';
+  if (/אירועים וטיולים/.test(raw)) return '4';
   return null;
 }
 
@@ -453,7 +498,7 @@ export function buildAiExtraContext(settings, phone, parent, students) {
     '## כללי ביטחון',
     'אם אינך בטוח בתשובה — השב בדיוק בשורה הראשונה: UNSURE',
     'ואז משפט קצר ללקוח. אל תנחש זמנים.',
-    'אסור לציין מחירים או סכומים — על מחיר הפנה לצוות.'
+    PRICE_SOURCE_RULE,
   );
   return parts.join('\n');
 }
@@ -515,36 +560,93 @@ export function shouldStartLeadCapture(settings, parent, students, incomingText,
   if (!s.aiLeadCaptureEnabled) return false;
   if (getIntake(parent)?.step && getIntake(parent).step !== 'done') return false;
   const choice = normalizeMenuChoice(incomingText);
-  if (choice === '2') return true;
+  if (choice === '1') return true;
   const raw = String(incomingText || '');
   if (/רישום|להירשם|רוצה להצטרף|תיאום אימון/.test(raw)) return true;
+  // Unknown writer: collect name before anything else (including the menu).
+  if (!isIdentifiedParent(parent) && (isNew || isLowIntentGreeting(raw))) return true;
   return false;
 }
 
 export async function advanceLeadCapture(phone, parent, incomingText, helpers = {}) {
   const text = String(incomingText || '').trim();
-  const intake = { ...(getIntake(parent) || {}) };
-  const step = intake.step || 'parent_name';
-
-  if (step === 'parent_name') {
-    if (!intake.asked) {
-      await setIntake(phone, { step: 'parent_name', asked: true });
-      return { reply: 'מעולה! איך קוראים להורה שפונה? (שם מלא)', done: false, started: true };
+  let intake = { ...(getIntake(parent) || {}) };
+  // Migrate the old single full-name step if a conversation was mid-flow.
+  if (intake.step === 'parent_name') {
+    intake = { ...intake, step: isIdentifiedParent(parent) ? 'interest' : 'parent_first_name', asked: false };
+  }
+  // Known parent who picked classes — skip straight to the child.
+  if (!intake.step || intake.step === 'parent_first_name') {
+    if (isIdentifiedParent(parent) && normalizeMenuChoice(text) === '1') {
+      intake = { step: 'child_name', asked: false, parentName: parent.name };
     }
-    if (text.length < 2) return { reply: 'רשמו בבקשה את שם ההורה.', done: false };
-    intake.parentName = text;
-    intake.step = 'child_name';
+  }
+  const step = intake.step || 'parent_first_name';
+
+  if (step === 'parent_first_name') {
+    if (!intake.asked) {
+      await setIntake(phone, { step: 'parent_first_name', asked: true });
+      return { reply: 'שמחים שפניתם! 🙂\nמה השם הפרטי שלך?', done: false, started: true };
+    }
+    if (text.length < 2) return { reply: 'רשמו בבקשה את השם הפרטי.', done: false };
+    intake.parentFirstName = text.split(/\s+/)[0];
+    intake.step = 'parent_last_name';
     intake.asked = true;
     await setIntake(phone, intake);
     const matches = parentsForPhone(phone);
     for (const m of matches) {
-      const row = db.update('parents', m.id, { name: text });
+      const row = db.update('parents', m.id, { name: intake.parentFirstName });
       if (row) await persistCore('parents', row);
     }
-    return { reply: 'תודה! ומה שם הילד/ה?', done: false };
+    return { reply: 'תודה! ומה שם המשפחה?', done: false };
+  }
+
+  if (step === 'parent_last_name') {
+    if (text.length < 2) return { reply: 'רשמו בבקשה את שם המשפחה.', done: false };
+    intake.parentLastName = text.split(/\s+/)[0];
+    const fullName = [intake.parentFirstName, intake.parentLastName].filter(Boolean).join(' ');
+    intake.parentName = fullName;
+    intake.step = 'interest';
+    intake.asked = true;
+    await setIntake(phone, intake);
+    const matches = parentsForPhone(phone);
+    for (const m of matches) {
+      const row = db.update('parents', m.id, { name: fullName, lastName: intake.parentLastName });
+      if (row) await persistCore('parents', row);
+    }
+    return { reply: 'מעולה. במה אתם מתעניינים? (חוגים, שעות, אירועים או משהו אחר)', done: false };
+  }
+
+  if (step === 'interest') {
+    if (!intake.asked) {
+      await setIntake(phone, { ...intake, step: 'interest', asked: true });
+      return { reply: 'במה אתם מתעניינים? (חוגים, שעות, אירועים או משהו אחר)', done: false };
+    }
+    intake.interest = text || '';
+    const choice = normalizeMenuChoice(text);
+    // Classes interest → continue gathering the child / grade.
+    if (choice === '1' || /חוג|רישום|אימון|כית/.test(text)) {
+      intake.step = 'child_name';
+      intake.asked = true;
+      await setIntake(phone, intake);
+      return { reply: 'מעולה! ומה שם הילד/ה?', done: false };
+    }
+    intake.step = 'done';
+    await setIntake(phone, intake);
+    const s = mergeBotSettings(helpers.settings || {});
+    const menu = s.aiGreetingMenu || DEFAULT_BOT_SETTINGS.aiGreetingMenu;
+    return {
+      reply: `תודה${intake.parentFirstName ? ` ${intake.parentFirstName}` : ''}!\n\n${menu}`,
+      done: true,
+      intake,
+    };
   }
 
   if (step === 'child_name') {
+    if (!intake.asked) {
+      await setIntake(phone, { ...intake, step: 'child_name', asked: true });
+      return { reply: 'מעולה! ומה שם הילד/ה?', done: false };
+    }
     if (text.length < 2) return { reply: 'רשמו בבקשה את שם הילד/ה.', done: false };
     intake.childName = text;
     intake.step = 'grade';
@@ -593,7 +695,7 @@ export async function advanceLeadCapture(phone, parent, incomingText, helpers = 
       waitlistNote = (await helpers.assignWaitlistIfFull(phone, parent, intake)) || '';
     }
     let reply = classesHint
-      ? `${summary}\n\n${classesHint}\n\nרוצים שנקבע אימון היכרות? אפשר גם לכתוב 4 לדבר עם צוות.`
+      ? `${summary}\n\n${classesHint}\n\nרוצים שנקבע אימון היכרות? אפשר גם לכתוב 3 לדבר עם צוות.`
       : `${summary}\n\nצוות יחזור אליכם לתיאום אימון היכרות 🧗`;
     if (waitlistNote) {
       reply = `${summary}\n\n${waitlistNote}`;
@@ -657,7 +759,7 @@ export function decideBotGate(settings, parent, students, text, { isSimulator = 
     return { action: 'silence', reason: 'rate_limited' };
   }
 
-  if (textMatchesKeywords(text, s.aiHandoffKeywords) || normalizeMenuChoice(text) === '4') {
+  if (textMatchesKeywords(text, s.aiHandoffKeywords) || normalizeMenuChoice(text) === '3') {
     return {
       action: 'handoff',
       reply: s.aiHandoffAckMessage,
@@ -687,11 +789,10 @@ export function interactiveMenuPayload(settings) {
           {
             title: 'תפריט',
             rows: [
-              { id: 'menu_1', title: 'הצהרת בריאות', description: 'קישור לחתימה' },
-              { id: 'menu_2', title: 'חוגים ורישום', description: 'זמנים, מקומות ומחיר' },
-              { id: 'menu_3', title: 'שעות ומיקום', description: 'כתובת ושעות פתיחה' },
-              { id: 'menu_4', title: 'לדבר עם צוות', description: 'העברה לנציג' },
-              { id: 'menu_5', title: 'אירועים וטיולים', description: 'מה קרוב וקישור הרשמה' },
+              { id: 'menu_1', title: 'חוגים ורישום', description: 'זמנים, מקומות ומחיר' },
+              { id: 'menu_2', title: 'שעות ומיקום', description: 'כתובת ושעות פתיחה' },
+              { id: 'menu_3', title: 'לדבר עם צוות', description: 'העברה לנציג' },
+              { id: 'menu_4', title: 'אירועים וטיולים', description: 'מה קרוב וקישור הרשמה' },
             ],
           },
         ],

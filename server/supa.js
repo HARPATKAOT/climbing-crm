@@ -117,6 +117,8 @@ export const OPERATIONAL_TABLES = [
   'crm_tasks',
   'ai_scenarios',
   'ai_assistant_settings',
+  'bot_reply_feedback',
+  'bot_learned_replies',
   'campaigns',
   'campaign_sends',
   'campaign_runs',
@@ -459,6 +461,7 @@ mappers.form_templates = {
 mappers.messages = columnMapper([
   'id', 'parent_id', 'student_id', 'channel', 'direction', 'message', 'media_url', 'media_type',
   'template_name', 'status', 'source', 'is_ai', 'meta_message_id', 'phone', 'recipient_id',
+  'edited_at', 'deleted_at',
   'created_at', 'updated_at',
 ]);
 mappers.message_templates = columnMapper([

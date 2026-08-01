@@ -247,7 +247,7 @@ const SEED_DATA = {
     aiUnsureReply: 'רגע — כדי לא לטעות אני מעביר את זה לצוות 🙏\nמישהו יחזור אליכם עם תשובה מדויקת.',
     aiLeadCaptureEnabled: true,
     aiInteractiveMenuEnabled: true,
-    aiGreetingMenu: `היי! אני הבוט של ${BRAND_NAME} 🧗\n\nבמה אפשר לעזור?\n1️⃣ הצהרת בריאות ✍️\n2️⃣ חוגים ורישום 🤸\n3️⃣ שעות ומיקום 🗺️\n4️⃣ לדבר עם צוות 👤\n\nכתבו מספר או שאלה קצרה 😊`,
+    aiGreetingMenu: `היי! אני הבוט של ${BRAND_NAME} 🧗\n\nבמה אפשר לעזור?\n1️⃣ חוגים, מחירים ורישום 🤸\n2️⃣ שעות פתיחה ומיקום 🗺️\n3️⃣ לדבר עם צוות 👤\n4️⃣ אירועים וטיולים 🎒\n\nכתבו מספר או שאלה קצרה 😊`,
     aiReactivateKeywords: 'הפעל בוט,הפעל,activate',
   },
   whatsapp_logs: [],

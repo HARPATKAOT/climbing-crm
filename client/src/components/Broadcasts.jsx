@@ -7,6 +7,7 @@ import { EMPTY_FILTERS } from './segmentFilters.js';
 import TemplatesManager, { TemplatePreview } from './TemplatesManager.jsx';
 import SavedRepliesManager from './SavedRepliesManager.jsx';
 import BotSettingsPanel from './BotSettingsPanel.jsx';
+import BotLearningPanel from './BotLearningPanel.jsx';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 
 // Only downloaded when the campaigns tab is opened.
@@ -551,8 +552,8 @@ export default function Broadcasts({ parents, students, groups = [] }) {
           message: text,
         }),
       });
+      const data = await response.json().catch(() => ({}));
       if (response.ok) {
-        const data = await response.json();
         const reply = data.reply
           || (data.skippedReason ? `הבוט לא ענה (${data.skippedReason})` : '')
           || 'הבוט סירב לענות או החזיר תשובה ריקה.';
@@ -566,12 +567,15 @@ export default function Broadcasts({ parents, students, groups = [] }) {
           },
         ]);
       } else {
+        const detail = typeof data.error === 'string' && data.error.trim()
+          ? data.error.trim()
+          : 'שגיאה בתקשורת עם מנוע המענה';
         setWorkbenchMessages((prev) => [
           ...prev,
           {
             id: `e-${Date.now()}`,
             role: 'bot',
-            text: 'שגיאה בתקשורת עם מנוע המענה',
+            text: detail,
             at: new Date().toISOString(),
           },
         ]);
@@ -1278,6 +1282,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
             </div>
           </div>
         </div>
+        <BotLearningPanel />
         </div>
       )}
     </div>

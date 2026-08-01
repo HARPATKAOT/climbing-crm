@@ -46,14 +46,26 @@ test('handoff and stop keywords match', () => {
 });
 
 test('normalizeMenuChoice maps numbers and titles', () => {
-  assert.equal(normalizeMenuChoice('2'), '2');
+  assert.equal(normalizeMenuChoice('1'), '1');
+  assert.equal(normalizeMenuChoice('3'), '3');
   assert.equal(normalizeMenuChoice('4'), '4');
-  assert.equal(normalizeMenuChoice('5'), '5');
-  assert.equal(normalizeMenuChoice('הצהרת בריאות'), '1');
-  assert.equal(normalizeMenuChoice('לדבר עם צוות'), '4');
-  assert.equal(normalizeMenuChoice('אירועים וטיולים'), '5');
+  assert.equal(normalizeMenuChoice('הצהרת בריאות'), 'health');
+  assert.equal(normalizeMenuChoice('לדבר עם צוות'), '3');
+  assert.equal(normalizeMenuChoice('אירועים וטיולים'), '4');
+  assert.equal(normalizeMenuChoice('חוגים ומחירים'), '1');
   // "יש טיול בקרוב?" is an events question, not a classes one
-  assert.equal(normalizeMenuChoice('יש טיול בקרוב?'), '5');
+  assert.equal(normalizeMenuChoice('יש טיול בקרוב?'), '4');
+});
+
+test('known parent greeting uses first name only', async () => {
+  const { isIdentifiedParent, parentFirstName, knownParentGreeting, isLowIntentGreeting } = await import('./whatsappBot.js');
+  assert.equal(isIdentifiedParent({ name: 'דלק איל' }), true);
+  assert.equal(isIdentifiedParent({ name: 'לקוח וואטסאפ' }), false);
+  assert.equal(parentFirstName({ name: 'דלק איל' }), 'דלק');
+  assert.match(knownParentGreeting({ name: 'דלק איל' }), /היי דלק/);
+  assert.doesNotMatch(knownParentGreeting({ name: 'דלק איל' }), /איל/);
+  assert.equal(isLowIntentGreeting('מה קורה ?'), true);
+  assert.equal(isLowIntentGreeting('יש מקום בחוג?'), false);
 });
 
 test('money and injury words reach a human', () => {
@@ -158,7 +170,7 @@ test('decideBotGate: disabled / opted out / handoff / outside hours', () => {
   );
   assert.equal(decideBotGate(base, { bot_opted_out: true }, [], 'שלום').action, 'silence');
   assert.equal(decideBotGate(base, {}, [], 'רוצה נציג').action, 'handoff');
-  assert.equal(decideBotGate(base, {}, [], '4').action, 'handoff');
+  assert.equal(decideBotGate(base, {}, [], '3').action, 'handoff');
   assert.equal(decideBotGate(base, {}, [], 'עצור').action, 'opt_out');
 
   const outside = decideBotGate(

@@ -272,7 +272,8 @@ export default function BotSettingsPanel({
             onChange={(e) => patch('aiStaffPhones', e.target.value)}
           />
           <div className="text-muted" style={{ fontSize: 10, marginTop: 4 }}>
-            המספרים האלה מקבלים תשובות מנתוני ה-CRM, כולל פרטי לקוחות. פעולות כתיבה עדיין ממתינות לאישור במסך העוזר.
+            המספרים האלה מקבלים התראה כשהבוט מעביר שיחה לצוות, וגם תשובות מנתוני המערכת.
+            פעולות כתיבה עדיין ממתינות לאישור במסך העוזר.
           </div>
         </div>
       </Section>

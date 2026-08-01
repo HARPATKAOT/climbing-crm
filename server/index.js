@@ -110,6 +110,15 @@ import {
 } from './aiActions.js';
 import { runChatTurn } from './aiChat.js';
 import {
+  approveFeedback,
+  feedbackStats,
+  listFeedback,
+  listLearned,
+  recordFeedback,
+  rejectFeedback,
+  setLearnedActive,
+} from './botLearning.js';
+import {
   INTEREST_COLLECTION,
   addInterest,
   closeInterestForRegistrations,
@@ -302,6 +311,8 @@ import {
   startPendingMessageRetry,
   flushPendingMessages,
   countPendingMessages,
+  applyMessageEditByMetaId,
+  applyMessageRevokeByMetaId,
 } from './channels/messageStore.js';
 import { canSendFreeform } from './channels/sessionWindow.js';
 import {
@@ -1831,6 +1842,57 @@ async function processInstagramEntry(body) {
   }
 }
 
+/** Meta webhook timestamp → ISO (seconds or milliseconds). */
+function metaTimestampToIso(timestamp) {
+  if (timestamp == null || timestamp === '') return new Date().toISOString();
+  const n = Number(timestamp);
+  if (!Number.isFinite(n)) return new Date().toISOString();
+  return new Date(n > 1e12 ? n : n * 1000).toISOString();
+}
+
+/**
+ * Coexistence edit / revoke (customer messages field or business phone echoes).
+ * Updates the original stored row; returns true when the event was consumed.
+ */
+function applyWhatsAppEditOrRevoke(message = {}) {
+  if (message.type === 'edit') {
+    const originalId = message.edit?.original_message_id;
+    if (!originalId) {
+      console.warn('WhatsApp edit webhook missing original_message_id');
+      return true;
+    }
+    const inner = message.edit?.message || {};
+    const text = whatsappConnectService.extractMessageText(inner);
+    const updated = applyMessageEditByMetaId(originalId, {
+      text,
+      at: metaTimestampToIso(message.timestamp),
+    });
+    console.log(
+      updated
+        ? `✏️ WhatsApp edit applied to ${originalId}`
+        : `✏️ WhatsApp edit for unknown message ${originalId}`
+    );
+    return true;
+  }
+  if (message.type === 'revoke') {
+    const originalId = message.revoke?.original_message_id;
+    if (!originalId) {
+      console.warn('WhatsApp revoke webhook missing original_message_id');
+      return true;
+    }
+    const updated = applyMessageRevokeByMetaId(originalId, {
+      at: metaTimestampToIso(message.timestamp),
+    });
+    console.log(
+      updated
+        ? `🗑️ WhatsApp revoke applied to ${originalId}`
+        : `🗑️ WhatsApp revoke for unknown message ${originalId}`
+    );
+    return true;
+  }
+  return false;
+}
+
 async function processWhatsAppWebhookChange(change = {}) {
   const field = change.field;
   const value = change.value || {};
@@ -1845,10 +1907,11 @@ async function processWhatsAppWebhookChange(change = {}) {
     }
   }
 
-  // Inbound customer messages (live)
+  // Inbound customer messages (live) — edit/revoke update the original row.
   if (field === 'messages') {
     for (const message of value.messages || []) {
       if (message.history_context) continue; // history sync handled separately
+      if (applyWhatsAppEditOrRevoke(message)) continue;
       const phone = message.from;
       const text = whatsappConnectService.extractMessageText(message);
       if (!phone) continue;
@@ -1873,6 +1936,7 @@ async function processWhatsAppWebhookChange(change = {}) {
   // Outbound echoes from WhatsApp Business app (Coexistence)
   if (field === 'smb_message_echoes') {
     for (const echo of value.message_echoes || []) {
+      if (applyWhatsAppEditOrRevoke(echo)) continue;
       const phone = echo.to;
       const text = whatsappConnectService.extractMessageText(echo);
       console.log(`📱 Phone echo to ${phone}: "${text}"`);
@@ -2028,7 +2092,9 @@ app.post('/api/whatsapp/webhook', verifyMetaWebhookSignature, async (req, res) =
   res.sendStatus(200);
 });
 
-// Local Webhook Simulator Trigger (POST)
+// AI sandbox (owner-only). Always uses a fixed test phone — never sends to Meta.
+const PLAYGROUND_PHONE = '0599111000';
+
 function developmentOnly(req, res, next) {
   if (process.env.NODE_ENV === 'production') {
     return res.status(404).json({ error: 'Not found' });
@@ -2036,18 +2102,24 @@ function developmentOnly(req, res, next) {
   return next();
 }
 
-app.post('/api/whatsapp/simulate-incoming', developmentOnly, async (req, res) => {
-  const { phone, message } = req.body;
-  console.log(`📱 [Simulator] Incoming text from ${phone}: "${message}"`);
-  
-  const result = await whatsappService.handleIncomingMessage(phone, message, true);
-  res.json({ success: true, ...result });
+app.post('/api/whatsapp/simulate-incoming', requireOwner, async (req, res) => {
+  const message = String(req.body?.message || '').trim();
+  if (!message) {
+    return res.status(400).json({ error: 'חסרה הודעה לבדיקה' });
+  }
+  console.log(`📱 [Sandbox] Incoming text from ${PLAYGROUND_PHONE}: "${message}"`);
+  try {
+    const result = await whatsappService.handleIncomingMessage(PLAYGROUND_PHONE, message, true);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('sandbox simulate-incoming failed:', err.message);
+    res.status(500).json({ error: err.message || 'מנוע המענה נכשל' });
+  }
 });
 
-app.post('/api/whatsapp/playground-reset', developmentOnly, async (req, res) => {
-  const phone = String(req.body?.phone || '0599111000').trim();
+app.post('/api/whatsapp/playground-reset', requireOwner, async (req, res) => {
   try {
-    const result = await resetPlaygroundConversation(phone);
+    const result = await resetPlaygroundConversation(PLAYGROUND_PHONE);
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('playground-reset failed:', err.message);
@@ -2349,6 +2421,98 @@ app.post('/api/ai/suggestions/:id/reject', async (req, res) => {
   } catch (err) {
     if (!err.status) console.error('reject suggestion error:', err.message);
     res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// ─── Bot learning (rate replies → approve into prompt examples) ───────────────
+app.get('/api/bot-learning/feedback', (req, res) => {
+  try {
+    const status = req.query.status || '';
+    res.json({
+      items: listFeedback(db, status ? { status } : {}),
+      stats: feedbackStats(db, { days: 7 }),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/bot-learning/feedback', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const result = await recordFeedback({
+      db,
+      persist: persistCore,
+      messageId: body.messageId || body.message_id,
+      parentId: body.parentId || body.parent_id || null,
+      phone: body.phone || '',
+      rating: body.rating,
+      note: body.note || '',
+      alternative: body.alternative || '',
+      replyExcerpt: body.replyExcerpt || body.reply_excerpt || '',
+      inboundExcerpt: body.inboundExcerpt || body.inbound_excerpt || '',
+      createdBy: req.crmUser?.email || '',
+    });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json({ success: true, feedback: result.row });
+  } catch (err) {
+    console.error('bot feedback error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/bot-learning/feedback/:id/approve', async (req, res) => {
+  try {
+    const result = await approveFeedback({
+      db,
+      persist: persistCore,
+      id: req.params.id,
+      actor: req.crmUser?.email || '',
+      editedAlternative: req.body?.alternative,
+    });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json({ success: true, feedback: result.row, learned: result.learned });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/bot-learning/feedback/:id/reject', async (req, res) => {
+  try {
+    const result = await rejectFeedback({
+      db,
+      persist: persistCore,
+      id: req.params.id,
+      actor: req.crmUser?.email || '',
+    });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json({ success: true, feedback: result.row });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/bot-learning/learned', (req, res) => {
+  try {
+    const activeOnly = req.query.all !== '1';
+    res.json({ items: listLearned(db, { activeOnly }) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/bot-learning/learned/:id/active', async (req, res) => {
+  try {
+    const result = await setLearnedActive({
+      db,
+      persist: persistCore,
+      id: req.params.id,
+      active: req.body?.active !== false,
+    });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json({ success: true, learned: result.row });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

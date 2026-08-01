@@ -6,7 +6,7 @@ import ConversationPanel from './ConversationPanel.jsx';
 // customers still awaiting a reply pinned to the top. Selecting a row mounts the
 // existing ConversationPanel — the chat itself is not reimplemented here.
 
-const REFRESH_MS = 15_000;
+const REFRESH_MS = 5_000;
 const NARROW_BREAKPOINT = 900;
 const NARROW_QUERY = `(max-width: ${NARROW_BREAKPOINT - 1}px)`;
 
@@ -153,7 +153,7 @@ export default function ConversationInbox({ parents = [], onHandled }) {
   const [isNarrow, setIsNarrow] = useState(
     () => typeof window !== 'undefined' && window.matchMedia(NARROW_QUERY).matches
   );
-  // The 15s poll keeps an old closure — read the live selection from a ref.
+  // The list poll keeps an old closure — read the live selection from a ref.
   const selectedIdRef = useRef(null);
 
   useEffect(() => {
@@ -188,8 +188,15 @@ export default function ConversationInbox({ parents = [], onHandled }) {
 
   useEffect(() => {
     load();
-    const timer = setInterval(() => load({ quiet: true }), REFRESH_MS);
-    return () => clearInterval(timer);
+    const tick = () => {
+      if (document.visibilityState === 'visible') load({ quiet: true });
+    };
+    const timer = setInterval(tick, REFRESH_MS);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', tick);
+    };
   }, [load]);
 
   const selectConversation = (parentId) => {

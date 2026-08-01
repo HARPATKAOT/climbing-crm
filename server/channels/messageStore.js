@@ -48,6 +48,8 @@ export function normalizeMessage(input = {}) {
     meta_message_id: input.meta_message_id || null,
     phone: input.phone || input.recipient_id || '',
     recipient_id: input.recipient_id || null,
+    edited_at: input.edited_at || null,
+    deleted_at: input.deleted_at || null,
     created_at: input.created_at || new Date().toISOString(),
   };
 }
@@ -69,6 +71,8 @@ export function toLogRow(message) {
     media_url: message.media_url || null,
     parent_id: message.parent_id || null,
     student_id: message.student_id || null,
+    edited_at: message.edited_at || null,
+    deleted_at: message.deleted_at || null,
     created_at: message.created_at,
   };
 }
@@ -238,6 +242,75 @@ export function setMessageStatusByMetaId(metaMessageId, status, store = liveStor
   if (stored) store.update('messages', stored.id, { status });
   const log = store.read('whatsapp_logs').find((l) => l.meta_message_id === metaMessageId);
   if (log) store.update('whatsapp_logs', log.id, { status });
+}
+
+/**
+ * Apply a WhatsApp edit (coexistence / customer) onto the original row.
+ * Looks up by Meta id of the original message, not the edit event id.
+ */
+export function applyMessageEditByMetaId(originalMetaId, { text, at } = {}, store = liveStore) {
+  if (!originalMetaId) return null;
+  const found = findMessageByMetaId(originalMetaId, store);
+  if (!found?.message) return null;
+
+  const editedAt = at || new Date().toISOString();
+  const patch = {
+    message: text != null ? String(text) : found.message.message,
+    edited_at: editedAt,
+    updated_at: editedAt,
+  };
+  // A deleted message that is later edited (rare) should still show as deleted.
+  const updated = store.update('messages', found.message.id, patch)
+    || { ...found.message, ...patch };
+  const log = store.read('whatsapp_logs').find((l) => l.id === found.message.id
+    || l.meta_message_id === originalMetaId);
+  if (log) {
+    store.update('whatsapp_logs', log.id, {
+      message: patch.message,
+      edited_at: editedAt,
+    });
+  }
+
+  if (store.isDurableStoreEnabled()) {
+    persistMessage(updated, store).catch((err) =>
+      console.error('message edit durable write failed:', err.message)
+    );
+  }
+  return updated;
+}
+
+/**
+ * Apply a WhatsApp revoke (delete for everyone) onto the original row.
+ * The row stays so the conversation panel can show "הודעה זו נמחקה".
+ */
+export function applyMessageRevokeByMetaId(originalMetaId, { at } = {}, store = liveStore) {
+  if (!originalMetaId) return null;
+  const found = findMessageByMetaId(originalMetaId, store);
+  if (!found?.message) return null;
+
+  const deletedAt = at || new Date().toISOString();
+  const patch = {
+    status: 'deleted',
+    deleted_at: deletedAt,
+    updated_at: deletedAt,
+  };
+  const updated = store.update('messages', found.message.id, patch)
+    || { ...found.message, ...patch };
+  const log = store.read('whatsapp_logs').find((l) => l.id === found.message.id
+    || l.meta_message_id === originalMetaId);
+  if (log) {
+    store.update('whatsapp_logs', log.id, {
+      status: 'deleted',
+      deleted_at: deletedAt,
+    });
+  }
+
+  if (store.isDurableStoreEnabled()) {
+    persistMessage(updated, store).catch((err) =>
+      console.error('message revoke durable write failed:', err.message)
+    );
+  }
+  return updated;
 }
 
 /** Rebuild the local `whatsapp_logs` mirror from durable messages (boot time). */

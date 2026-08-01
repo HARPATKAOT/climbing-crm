@@ -22,7 +22,7 @@ const SHORT_DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'שבת
 
 export const NO_OPENING_HOURS_REPLY =
   'שעות הפתיחה של הימים הקרובים עדיין לא עודכנו ביומן 🙏\n'
-  + 'כתבו 4 והצוות ימסור לכם שעות מדויקות.';
+  + 'כתבו 3 והצוות ימסור לכם שעות מדויקות.';
 
 export const NO_EVENTS_REPLY =
   'אין כרגע אירועים או טיולים פתוחים להרשמה 🙏\n'
@@ -235,7 +235,7 @@ export function buildPriceReply({ groups = [], equipmentPrices = null, enrichmen
 
   if (!blocks.length) return { text: PRICE_HANDOFF_REPLY, handoff: true };
   return {
-    text: `${blocks.join('\n\n')}\n\nלכל שאלה אחרת על תשלום — כתבו 4 והצוות יענה.`,
+    text: `${blocks.join('\n\n')}\n\nלכל שאלה אחרת על תשלום — כתבו 3 והצוות יענה.`,
     handoff: false,
   };
 }

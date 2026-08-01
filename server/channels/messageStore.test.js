@@ -10,6 +10,8 @@ import {
   countPendingMessages,
   rebuildLogMirrorFromMessages,
   setMessageStatusByMetaId,
+  applyMessageEditByMetaId,
+  applyMessageRevokeByMetaId,
 } from './messageStore.js';
 
 /** In-memory stand-in for the local cache + durable store. */
@@ -240,4 +242,54 @@ test('a delivery receipt updates both the durable row and the mirror', async () 
   setMessageStatusByMetaId('wamid.sent', 'read', store);
   assert.equal(store.tables.messages[0].status, 'read');
   assert.equal(store.tables.whatsapp_logs[0].status, 'read');
+});
+
+test('an edit updates the original body and marks edited_at', async () => {
+  const store = createStore();
+  await recordMessageDurable({
+    phone: '972508862878',
+    direction: 'outbound',
+    message: 'טקסט ישן',
+    meta_message_id: 'wamid.orig',
+  }, store);
+
+  const edited = applyMessageEditByMetaId('wamid.orig', {
+    text: 'טקסט מתוקן',
+    at: '2026-08-01T11:00:00.000Z',
+  }, store);
+
+  assert.ok(edited);
+  assert.equal(store.tables.messages[0].message, 'טקסט מתוקן');
+  assert.equal(store.tables.messages[0].edited_at, '2026-08-01T11:00:00.000Z');
+  assert.equal(store.tables.whatsapp_logs[0].message, 'טקסט מתוקן');
+  assert.equal(store.tables.whatsapp_logs[0].edited_at, '2026-08-01T11:00:00.000Z');
+  // Edit event id must not create a second row.
+  assert.equal(store.tables.messages.length, 1);
+});
+
+test('a revoke marks the original row deleted without removing it', async () => {
+  const store = createStore();
+  await recordMessageDurable({
+    phone: '972508862878',
+    direction: 'outbound',
+    message: 'למחוק',
+    meta_message_id: 'wamid.del',
+  }, store);
+
+  const revoked = applyMessageRevokeByMetaId('wamid.del', {
+    at: '2026-08-01T11:05:00.000Z',
+  }, store);
+
+  assert.ok(revoked);
+  assert.equal(store.tables.messages[0].status, 'deleted');
+  assert.equal(store.tables.messages[0].deleted_at, '2026-08-01T11:05:00.000Z');
+  assert.equal(store.tables.messages[0].message, 'למחוק');
+  assert.equal(store.tables.whatsapp_logs[0].status, 'deleted');
+  assert.equal(store.tables.messages.length, 1);
+});
+
+test('edit and revoke on an unknown meta id are no-ops', () => {
+  const store = createStore();
+  assert.equal(applyMessageEditByMetaId('wamid.missing', { text: 'x' }, store), null);
+  assert.equal(applyMessageRevokeByMetaId('wamid.missing', {}, store), null);
 });

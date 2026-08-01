@@ -14,6 +14,8 @@ import {
   ArchiveRestore,
   ExternalLink,
   Pencil,
+  ThumbsUp,
+  ThumbsDown,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { normalizeTemplateVariables, buildPrefillValues } from './templateVariables.js';
@@ -180,6 +182,11 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [markingHandled, setMarkingHandled] = useState(false);
+  const [feedbackBusy, setFeedbackBusy] = useState('');
+  const [feedbackFor, setFeedbackFor] = useState(null);
+  const [feedbackAlt, setFeedbackAlt] = useState('');
+  const [feedbackNote, setFeedbackNote] = useState('');
+  const [feedbackDone, setFeedbackDone] = useState({});
   const [error, setError] = useState('');
   const [replyText, setReplyText] = useState('');
   const [channel, setChannel] = useState('whatsapp');
@@ -203,7 +210,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   const [botBusy, setBotBusy] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [draftInfo, setDraftInfo] = useState(null);
-  // Ticks the pause countdown between the 15s conversation polls.
+  // Ticks the pause countdown between the conversation polls.
   const [clockTick, setClockTick] = useState(Date.now());
   const messagesRef = useRef(null);
   const fileRef = useRef(null);
@@ -218,9 +225,11 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   // poll, so this has to be a ref rather than the state it mirrors.
   const composingRef = useRef(false);
   const userPickedThreadRef = useRef(false);
-  // The 15s poll keeps an old `load` closure — read the live thread id from a ref
+  // Quiet polls keep an old `load` closure — read the live thread id from a ref
   // so a refresh never drags the user back to the parent thread.
   const activeThreadIdRef = useRef('parent');
+  // Skip overlapping quiet polls when a round trip is slower than the interval.
+  const loadInFlightRef = useRef(false);
 
   const pickThread = (threadId) => {
     activeThreadIdRef.current = threadId;
@@ -261,27 +270,38 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
 
   const load = async ({ quiet = false } = {}) => {
     if (!parent?.id) return;
+    // A slow round trip must not stack quiet polls on top of itself.
+    if (quiet && loadInFlightRef.current) return;
+    loadInFlightRef.current = true;
     if (!quiet) setLoading(true);
     setError('');
     try {
-      const [convRes, tplRes, srRes] = await Promise.all([
-        fetch(`/api/conversations/${parent.id}`),
-        // Archived ones come along so the picker can offer them behind a
-        // toggle instead of a second round trip.
-        fetch('/api/message-templates?approved=1&archived=1'),
-        fetch('/api/saved-replies'),
-      ]);
+      // Quiet polls only refresh the thread — templates and saved replies barely
+      // change, and re-fetching them every few seconds delayed new messages.
+      let convRes;
+      if (quiet) {
+        convRes = await fetch(`/api/conversations/${parent.id}`);
+      } else {
+        const [cRes, tplRes, srRes] = await Promise.all([
+          fetch(`/api/conversations/${parent.id}`),
+          // Archived ones come along so the picker can offer them behind a
+          // toggle instead of a second round trip.
+          fetch('/api/message-templates?approved=1&archived=1'),
+          fetch('/api/saved-replies'),
+        ]);
+        convRes = cRes;
 
-      // Templates / saved replies first — don't lose them if conversation load fails
-      const tpls = tplRes.ok ? await tplRes.json().catch(() => null) : null;
-      // A round trip that failed must not empty the picker. The 15s poll runs
-      // while the API restarts, and overwriting the list with [] made that read
-      // as "Meta approved nothing" — sending staff to press a sync button that
-      // fixes nothing, on a list that was fine a second earlier.
-      setTemplatesUnavailable(!Array.isArray(tpls));
-      if (Array.isArray(tpls)) setTemplates(tpls);
-      const srs = srRes.ok ? await srRes.json().catch(() => null) : null;
-      if (Array.isArray(srs)) setSavedReplies(srs);
+        // Templates / saved replies first — don't lose them if conversation load fails
+        const tpls = tplRes.ok ? await tplRes.json().catch(() => null) : null;
+        // A round trip that failed must not empty the picker. Background polls
+        // run while the API restarts, and overwriting the list with [] made that
+        // read as "Meta approved nothing" — sending staff to press a sync button
+        // that fixes nothing, on a list that was fine a second earlier.
+        setTemplatesUnavailable(!Array.isArray(tpls));
+        if (Array.isArray(tpls)) setTemplates(tpls);
+        const srs = srRes.ok ? await srRes.json().catch(() => null) : null;
+        if (Array.isArray(srs)) setSavedReplies(srs);
+      }
 
       const conv = await convRes.json().catch(() => ({}));
       if (!convRes.ok) throw new Error(conv.error || 'טעינת שיחה נכשלה');
@@ -308,8 +328,8 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
         : !!conv.windows?.[nextChannel]?.open;
       if (openNow) {
         // Only when the customer is first opened, and never over a reply that is
-        // already being written. The 15s poll used to run this too, so the
-        // template tab snapped back to text every quarter minute.
+        // already being written. Background polls used to run this too, so the
+        // template tab snapped back to text every few seconds.
         if (!modeSyncedRef.current && !composingRef.current) {
           setMode((prev) => (prev === 'template' ? 'text' : prev));
         }
@@ -321,6 +341,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     } catch (err) {
       setError(err.message);
     } finally {
+      loadInFlightRef.current = false;
       if (!quiet) setLoading(false);
     }
   };
@@ -355,12 +376,20 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     composingRef.current = !!selectedTemplate || !!replyText.trim() || !!imageBase64;
   }, [selectedTemplate, replyText, imageBase64]);
 
+  // Live chat: poll every few seconds while the tab is visible, and again the
+  // moment the tab comes back into view. WhatsApp pushes instantly; waiting a
+  // quarter-minute made the CRM feel stuck next to the phone.
   useEffect(() => {
     if (!parent?.id) return undefined;
-    const timer = setInterval(() => {
+    const tick = () => {
       if (document.visibilityState === 'visible') load({ quiet: true });
-    }, 15000);
-    return () => clearInterval(timer);
+    };
+    const timer = setInterval(tick, 3000);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', tick);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parent?.id]);
 
@@ -421,6 +450,53 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     if (!available[channel]) {
       const next = ['whatsapp', 'instagram', 'messenger'].find((ch) => available[ch]) || 'whatsapp';
       setChannel(next);
+    }
+  };
+
+  const findInboundBefore = (index) => {
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (messages[i]?.direction === 'inbound') {
+        return messages[i].body || messages[i].message || messages[i].text || '';
+      }
+    }
+    return '';
+  };
+
+  const submitBotFeedback = async (message, rating, index) => {
+    if (!message?.id || feedbackBusy) return;
+    if (rating === 'down' && feedbackFor !== message.id) {
+      setFeedbackFor(message.id);
+      setFeedbackAlt('');
+      setFeedbackNote('');
+      return;
+    }
+    setFeedbackBusy(message.id);
+    setError('');
+    try {
+      const res = await fetch('/api/bot-learning/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messageId: message.id,
+          parentId: parent?.id || null,
+          phone: message.phone || activeThread?.phone || parent?.phone || '',
+          rating,
+          note: feedbackNote,
+          alternative: rating === 'down' ? feedbackAlt : '',
+          replyExcerpt: message.body || message.message || message.text || '',
+          inboundExcerpt: findInboundBefore(index),
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) throw new Error(json?.error || 'שמירת המשוב נכשלה');
+      setFeedbackDone((prev) => ({ ...prev, [message.id]: rating }));
+      setFeedbackFor(null);
+      setFeedbackAlt('');
+      setFeedbackNote('');
+    } catch (err) {
+      setError(err.message || 'שמירת המשוב נכשלה');
+    } finally {
+      setFeedbackBusy('');
     }
   };
 
@@ -842,16 +918,81 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
                       {m.template_id || m.template_name ? ' · תבנית' : ''}
                       {m.is_ai ? ' · בוט' : ''}
                     </div>
-                    {(m.media_url || m.message_type === 'image') && (
+                    {(m.media_url || m.message_type === 'image') && !m.deleted_at && m.status !== 'deleted' && (
                       <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 4 }}>📷 תמונה / מדיה</div>
                     )}
-                    <div style={{ color: 'var(--text-1)', whiteSpace: 'pre-wrap' }}>
-                      {m.body || m.message || m.text || '(ללא תוכן)'}
-                    </div>
+                    {m.deleted_at || m.status === 'deleted' ? (
+                      <div style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>
+                        הודעה זו נמחקה
+                      </div>
+                    ) : (
+                      <div style={{ color: 'var(--text-1)', whiteSpace: 'pre-wrap' }}>
+                        {m.body || m.message || m.text || '(ללא תוכן)'}
+                      </div>
+                    )}
                     <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4 }}>
                       {m.created_at ? new Date(m.created_at).toLocaleString('he-IL') : ''}
-                      {m.status ? ` · ${m.status}` : ''}
+                      {m.status && m.status !== 'deleted' ? ` · ${m.status}` : ''}
+                      {m.edited_at && !(m.deleted_at || m.status === 'deleted') ? ' · נערכה' : ''}
                     </div>
+                    {m.is_ai && m.id && !(m.deleted_at || m.status === 'deleted') && (
+                      <div style={{ marginTop: 6 }}>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                          <button
+                            type="button"
+                            className="btn btn-xs btn-ghost"
+                            title="תשובה טובה"
+                            disabled={!!feedbackBusy || !!feedbackDone[m.id]}
+                            onClick={() => submitBotFeedback(m, 'up', i)}
+                            style={{ padding: '2px 6px', color: feedbackDone[m.id] === 'up' ? '#22c55e' : undefined }}
+                          >
+                            <ThumbsUp size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-xs btn-ghost"
+                            title="תשובה לא טובה"
+                            disabled={!!feedbackBusy || !!feedbackDone[m.id]}
+                            onClick={() => submitBotFeedback(m, 'down', i)}
+                            style={{ padding: '2px 6px', color: feedbackDone[m.id] === 'down' ? '#ef4444' : undefined }}
+                          >
+                            <ThumbsDown size={12} />
+                          </button>
+                          {feedbackDone[m.id] && (
+                            <span style={{ fontSize: 10, color: 'var(--text-3)' }}>נשמר</span>
+                          )}
+                        </div>
+                        {feedbackFor === m.id && (
+                          <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <textarea
+                              className="input textarea"
+                              rows={2}
+                              style={{ fontSize: 11 }}
+                              placeholder="מה היה נכון לענות במקום?"
+                              value={feedbackAlt}
+                              onChange={(e) => setFeedbackAlt(e.target.value)}
+                            />
+                            <div style={{ display: 'flex', gap: 6 }}>
+                              <button
+                                type="button"
+                                className="btn btn-xs btn-primary"
+                                disabled={!feedbackAlt.trim() || feedbackBusy === m.id}
+                                onClick={() => submitBotFeedback(m, 'down', i)}
+                              >
+                                שמור חלופה
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-xs btn-ghost"
+                                onClick={() => setFeedbackFor(null)}
+                              >
+                                ביטול
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })
