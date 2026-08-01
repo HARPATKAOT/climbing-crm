@@ -568,8 +568,47 @@ export function isClarifyReplyText(text, settings = {}) {
 }
 
 /**
+ * Gibberish / keyboard mash — not a real question.
+ * Used so we only escalate after clarify when the follow-up is still noise.
+ */
+export function looksLikeLowSignalMessage(text) {
+  const t = String(text || '').trim();
+  if (!t) return true;
+  const compact = t.replace(/[\s\p{P}\p{S}0-9]+/gu, '');
+  if (compact.length <= 2) return true;
+  if (/^[a-zA-Z]+$/.test(compact) && compact.length <= 12) return true;
+  // Real Hebrew intent / business words → not noise.
+  if (/(?:מה|מי|איך|למה|כמה|מתי|איפה|האם|יש|רוצה|צריך|אפשר|קיר|טיפוס|חוג|כית|מחיר|שעה|רישום|מקום|פתוח|כתובת|חניה|אירוע|יום|ילד|ילדה|\bבן\b|\bבת\b|שלום|היי|תודה)/.test(t)) {
+    return false;
+  }
+  if (/[?？]/.test(t)) return false;
+  // Short single token with no intent words (e.g. לחנלח / vhh).
+  if (!/\s/.test(t) && compact.length <= 8) return true;
+  return false;
+}
+
+/** “Is this a climbing wall?” / “what is this place?” */
+export function asksAboutBusinessIdentity(text) {
+  const t = String(text || '');
+  if (/קיר\s*טיפוס|טיפוס\s*קיר/.test(t)) return true;
+  if (/(?:מה\s*זה(?:\s*המקום)?|איזה\s*מקום|מי\s*אתם|מה\s*אתם|זה\s*הקיר|אתם\s*(?:קיר|טיפוס)|זה\s*קיר)/.test(t)) {
+    return true;
+  }
+  return /climbing\s*wall|bouldering/i.test(t);
+}
+
+export function formatBusinessIdentityReply(settings = {}) {
+  const s = mergeBotSettings(settings);
+  const brand = s.brandName || DEFAULT_BUSINESS_PROFILE.display_name;
+  return (
+    `כן! 🙂 אנחנו קיר הטיפוס ${brand}.\n`
+    + 'יש חוגים לילדים, אימונים ואירועים על הקיר.\n'
+    + 'במה אפשר לעזור?'
+  );
+}
+
+/**
  * Last bot turn (before the current inbound already in the log) asked for clarification.
- * Second unclear message → hand off.
  */
 export function recentlyAskedClarify(phone, settings = {}, historyLimit = 8) {
   if (!phone) return false;
@@ -581,10 +620,11 @@ export function recentlyAskedClarify(phone, settings = {}, historyLimit = 8) {
 }
 
 /**
- * Unsure once → ask to rephrase (stay in the chat).
- * Unsure again right after that → hand off to staff.
+ * Unsure once → ask to rephrase.
+ * Unsure again only hands off when the new message is still gibberish.
+ * A real follow-up question stays in the chat (ask again / let heuristics answer).
  */
-export function resolveUnsureReply(phone, settings = {}) {
+export function resolveUnsureReply(phone, settings = {}, { incomingText = '' } = {}) {
   const s = mergeBotSettings(settings);
   const clarifyText = s.aiClarifyReply
     || 'לא הבנתי 🙏\nיכולים להסביר קצת יותר? במה אפשר לעזור?';
@@ -593,7 +633,7 @@ export function resolveUnsureReply(phone, settings = {}) {
   if (!s.aiEscalateWhenUnsure) {
     return { text: clarifyText, handoff: false, unsure: true, clarify: true };
   }
-  if (recentlyAskedClarify(phone, s)) {
+  if (recentlyAskedClarify(phone, s) && looksLikeLowSignalMessage(incomingText)) {
     return { text: handoffText, handoff: true, unsure: true, clarify: false };
   }
   return { text: clarifyText, handoff: false, unsure: true, clarify: true };

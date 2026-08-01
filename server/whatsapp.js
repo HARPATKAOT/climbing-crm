@@ -78,6 +78,8 @@ import {
   parseAiReply,
   detectUnsureHeuristic,
   resolveUnsureReply,
+  asksAboutBusinessIdentity,
+  formatBusinessIdentityReply,
   interactiveMenuPayload,
   studentsForParent,
   findPrimaryParent,
@@ -502,6 +504,11 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
 
   if (menuPick === '3') {
     return { text: s.aiHandoffAckMessage, confidence: 'high', handoff: true };
+  }
+
+  // “Is this a climbing wall?” — never escalate; answer from brand facts.
+  if (asksAboutBusinessIdentity(raw)) {
+    return { text: formatBusinessIdentityReply(s), confidence: 'high' };
   }
 
   // Health is never on the opening menu — only if they asked for it.
@@ -1200,7 +1207,7 @@ export const whatsappService = {
         const parsed = parseAiReply(geminiText, settings);
         const unsure = parsed.unsure || detectUnsureHeuristic(parsed.text);
         if (unsure) {
-          const resolved = resolveUnsureReply(phone, settings);
+          const resolved = resolveUnsureReply(phone, settings, { incomingText });
           return {
             text: clipReply(resolved.text, settings.aiMaxReplyChars),
             handoff: resolved.handoff,
@@ -1214,7 +1221,7 @@ export const whatsappService = {
     }
 
     if (quick.skipMenu && isIdentifiedParent(parent)) {
-      const resolved = resolveUnsureReply(phone, settings);
+      const resolved = resolveUnsureReply(phone, settings, { incomingText });
       return {
         text: clipReply(resolved.text || knownParentGreeting(parent), settings.aiMaxReplyChars),
         confidence: 'low',

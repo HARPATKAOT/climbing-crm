@@ -223,7 +223,7 @@ test('parseAiReply detects UNSURE prefix', () => {
   assert.match(parsed.text, /לא בטוח|מעביר|לא הבנתי/);
 });
 
-test('first unsure asks for clarification; second hands off', () => {
+test('first unsure asks for clarification; second gibberish hands off', () => {
   const phone = '972500000099';
   const clarify = 'לא הבנתי 🙏\nיכולים להסביר?';
   const handoff = 'מעביר לצוות עכשיו';
@@ -246,7 +246,7 @@ test('first unsure asks for clarification; second hands off', () => {
     },
   ]);
 
-  const first = resolveUnsureReply(phone, settings);
+  const first = resolveUnsureReply(phone, settings, { incomingText: 'vhh' });
   assert.equal(first.handoff, false);
   assert.equal(first.clarify, true);
   assert.match(first.text, /לא הבנתי/);
@@ -274,9 +274,14 @@ test('first unsure asks for clarification; second hands off', () => {
   ]);
 
   assert.equal(recentlyAskedClarify(phone, settings), true);
-  const second = resolveUnsureReply(phone, settings);
+  const second = resolveUnsureReply(phone, settings, { incomingText: 'asdf' });
   assert.equal(second.handoff, true);
   assert.equal(second.text, handoff);
+
+  // A real question after clarify must NOT escalate just because the model was unsure.
+  const realQ = resolveUnsureReply(phone, settings, { incomingText: 'זה קיר טיפוס ?' });
+  assert.equal(realQ.handoff, false);
+  assert.equal(realQ.clarify, true);
 
   db.set('whatsapp_logs', previous);
 });
@@ -284,6 +289,20 @@ test('first unsure asks for clarification; second hands off', () => {
 test('isClarifyReplyText recognizes the default ask', () => {
   assert.equal(isClarifyReplyText('לא הבנתי 🙏\nיכולים להסביר?'), true);
   assert.equal(isClarifyReplyText('כן, יש מקום ביום ג׳'), false);
+});
+
+test('business identity and low-signal helpers', async () => {
+  const {
+    asksAboutBusinessIdentity,
+    formatBusinessIdentityReply,
+    looksLikeLowSignalMessage,
+  } = await import('./whatsappBot.js');
+  assert.equal(asksAboutBusinessIdentity('זה קיר טיפוס ?'), true);
+  assert.equal(asksAboutBusinessIdentity('יש מקום בכיתה ב׳?'), false);
+  assert.match(formatBusinessIdentityReply({ brandName: 'קיר בועז' }), /קיר הטיפוס קיר בועז/);
+  assert.equal(looksLikeLowSignalMessage('לחנלח'), true);
+  assert.equal(looksLikeLowSignalMessage('vhh'), true);
+  assert.equal(looksLikeLowSignalMessage('זה קיר טיפוס ?'), false);
 });
 
 test('schedule helpers still work', () => {
