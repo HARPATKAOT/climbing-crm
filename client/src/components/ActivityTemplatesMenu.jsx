@@ -4,7 +4,7 @@ import { ArrowRight, FileStack, Loader2, Pencil, Plus, Search, Trash2, X } from 
 const CATEGORY_META = {
   field: { label: 'פעילויות שטח', color: '#34D399', hint: 'טיולים, נחלים וטיפוס בטבע' },
   wall: { label: 'אירועים בקיר', color: '#FB923C', hint: 'ימי הולדת, גיבוש ואימונים' },
-  ops: { label: 'תפעול', color: '#7DD3FC', hint: 'יום ניקיון, ישיבת צוות ובניית מסלולים' },
+  ops: { label: 'תפעול', color: '#7DD3FC', hint: 'ניקיון, צוות, מסלולים ושעות פתיחה' },
 };
 
 // Pseudo-category: drills into the writable Google calendars instead of templates.
@@ -24,6 +24,7 @@ const GOOGLE_CAT_META = {
 export default function ActivityTemplatesMenu({
   onApplyTemplate,
   onEditTemplate,
+  onCreateTemplate,
   onCustomEvent,
   onExternalEvent,
   externalCalendars = [],
@@ -47,6 +48,7 @@ export default function ActivityTemplatesMenu({
     { id: 'ops', label: 'תפעול' },
   ]);
   const [categoryId, setCategoryId] = useState(null); // null = pick category
+  const [manageMode, setManageMode] = useState(false);
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState('');
   const [msg, setMsg] = useState('');
@@ -87,11 +89,17 @@ export default function ActivityTemplatesMenu({
   useEffect(() => {
     if (open) {
       setCategoryId(null);
+      setManageMode(false);
       setQuery('');
       // Silent refresh when templates already cached — prevents spinner/height jump.
       load({ silent: templates.length > 0 });
     }
   }, [open]);
+
+  const startCreate = (catId) => {
+    setOpen(false);
+    onCreateTemplate?.(catId || categoryId || 'wall');
+  };
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -149,7 +157,7 @@ export default function ActivityTemplatesMenu({
   };
 
   const editTemplate = (tpl, e) => {
-    e.stopPropagation();
+    e?.stopPropagation?.();
     setOpen(false);
     onEditTemplate?.(tpl);
   };
@@ -217,18 +225,24 @@ export default function ActivityTemplatesMenu({
                 <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-1)' }}>
                   {inGoogleCat
                     ? GOOGLE_CAT_META.label
-                    : categoryId
-                      ? (CATEGORY_META[categoryId]?.label || categories.find((c) => c.id === categoryId)?.label || 'תבניות')
-                      : 'אירוע חדש'}
+                    : manageMode && !categoryId
+                      ? 'ניהול תבניות'
+                      : categoryId
+                        ? (CATEGORY_META[categoryId]?.label || categories.find((c) => c.id === categoryId)?.label || 'תבניות')
+                        : 'אירוע חדש'}
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
                   {inGoogleCat
                     ? 'בחרו יומן — האירוע ייווצר ישירות בגוגל'
-                    : categoryId
-                      ? 'בחרו תבנית לאירוע חדש, או ערכו תבנית קיימת'
-                      : (dateLabel
-                        ? `לתאריך ${dateLabel} — מתבנית שמורה או אירוע ריק`
-                        : 'מתבנית שמורה, או אירוע מותאם ללקוח')}
+                    : manageMode && !categoryId
+                      ? 'בחרו קטגוריה כדי להוסיף, לערוך או למחוק תבנית'
+                      : categoryId
+                        ? (manageMode
+                          ? 'הוסיפו תבנית חדשה, או ערכו / מחקו תבנית קיימת'
+                          : 'בחרו תבנית לאירוע חדש, או ערכו תבנית קיימת')
+                        : (dateLabel
+                          ? `לתאריך ${dateLabel} — מתבנית שמורה או אירוע ריק`
+                          : 'מתבנית שמורה, או אירוע מותאם ללקוח')}
                 </div>
               </div>
               <button type="button" className="icon-btn" onClick={() => setOpen(false)} aria-label="סגור">
@@ -257,26 +271,39 @@ export default function ActivityTemplatesMenu({
             <div style={{ flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
               {!categoryId && !query.trim() && (
                 <>
-                  <button
-                    type="button"
-                    onClick={startCustom}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 12,
-                      padding: '14px 14px', borderRadius: 12, cursor: 'pointer',
-                      border: '1px dashed var(--border)',
-                      background: 'rgba(255,255,255,0.02)',
-                      textAlign: 'right', width: '100%',
-                      color: 'var(--text-1)',
-                    }}
-                  >
-                    <Plus size={18} style={{ color: '#7DD3FC' }} />
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 800, fontSize: 14 }}>אירוע בלי תבנית</div>
-                      <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
-                        טופס ריק — מחיר, טקסט וקישור הרשמה חופשיים
+                  {!manageMode && (
+                    <button
+                      type="button"
+                      onClick={startCustom}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 12,
+                        padding: '14px 14px', borderRadius: 12, cursor: 'pointer',
+                        border: '1px dashed var(--border)',
+                        background: 'rgba(255,255,255,0.02)',
+                        textAlign: 'right', width: '100%',
+                        color: 'var(--text-1)',
+                      }}
+                    >
+                      <Plus size={18} style={{ color: '#7DD3FC' }} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 800, fontSize: 14 }}>אירוע בלי תבנית</div>
+                        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
+                          טופס ריק — מחיר, טקסט וקישור הרשמה חופשיים
+                        </div>
                       </div>
-                    </div>
-                  </button>
+                    </button>
+                  )}
+
+                  {manageMode && (
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      onClick={() => setManageMode(false)}
+                      style={{ alignSelf: 'flex-start', marginBottom: 4 }}
+                    >
+                      ← חזרה ליצירת אירוע
+                    </button>
+                  )}
 
                   {categories.map((cat) => {
                     const meta = CATEGORY_META[cat.id] || {};
@@ -310,7 +337,32 @@ export default function ActivityTemplatesMenu({
                     );
                   })}
 
-                  {showGoogleCat && (
+                  {!manageMode && onCreateTemplate && (
+                    <button
+                      type="button"
+                      onClick={() => setManageMode(true)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 12,
+                        padding: '14px 14px', borderRadius: 12, cursor: 'pointer',
+                        border: '1px solid rgba(125,211,252,0.35)',
+                        background: 'rgba(125,211,252,0.08)',
+                        textAlign: 'right', width: '100%',
+                        color: 'var(--text-1)',
+                        marginTop: 4,
+                      }}
+                    >
+                      <Pencil size={18} style={{ color: '#7DD3FC' }} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 800, fontSize: 14 }}>ניהול תבניות</div>
+                        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
+                          הוספה, עריכה ומחיקה של תבניות שמורות
+                        </div>
+                      </div>
+                      <ArrowRight size={16} style={{ color: 'var(--text-3)', transform: 'scaleX(-1)' }} />
+                    </button>
+                  )}
+
+                  {showGoogleCat && !manageMode && (
                     <button
                       type="button"
                       onClick={() => { setCategoryId(GOOGLE_CAT); setQuery(''); }}
@@ -417,7 +469,8 @@ export default function ActivityTemplatesMenu({
                           key={tpl.id}
                           tpl={tpl}
                           busy={busy === tpl.id}
-                          onPick={() => pickTemplate(tpl)}
+                          manageMode={manageMode}
+                          onPick={() => (manageMode ? editTemplate(tpl) : pickTemplate(tpl))}
                           onEdit={onEditTemplate ? (e) => editTemplate(tpl, e) : null}
                           onRemove={(e) => remove(tpl, e)}
                         />
@@ -438,6 +491,28 @@ export default function ActivityTemplatesMenu({
                   >
                     ← חזרה לקטגוריות
                   </button>
+
+                  {onCreateTemplate && (
+                    <button
+                      type="button"
+                      onClick={() => startCreate(categoryId)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 10,
+                        padding: '12px 14px', borderRadius: 10, cursor: 'pointer',
+                        border: '1px dashed rgba(125,211,252,0.5)',
+                        background: 'rgba(125,211,252,0.08)',
+                        textAlign: 'right', width: '100%',
+                        color: 'var(--text-1)',
+                        marginBottom: 6,
+                      }}
+                    >
+                      <Plus size={16} style={{ color: '#7DD3FC' }} />
+                      <div style={{ flex: 1, fontWeight: 800, fontSize: 13 }}>
+                        תבנית חדשה בקטגוריה זו
+                      </div>
+                    </button>
+                  )}
+
                   {filtered.length === 0 ? (
                     <div style={{ padding: 16, fontSize: 13, color: 'var(--text-3)' }}>
                       אין תבניות בקטגוריה זו
@@ -448,7 +523,8 @@ export default function ActivityTemplatesMenu({
                         key={tpl.id}
                         tpl={tpl}
                         busy={busy === tpl.id}
-                        onPick={() => pickTemplate(tpl)}
+                        manageMode={manageMode}
+                        onPick={() => (manageMode ? editTemplate(tpl) : pickTemplate(tpl))}
                         onEdit={onEditTemplate ? (e) => editTemplate(tpl, e) : null}
                         onRemove={(e) => remove(tpl, e)}
                       />
@@ -466,7 +542,7 @@ export default function ActivityTemplatesMenu({
   );
 }
 
-function TemplateRow({ tpl, busy, onPick, onEdit, onRemove }) {
+function TemplateRow({ tpl, busy, manageMode, onPick, onEdit, onRemove }) {
   return (
     <div
       role="button"
@@ -476,17 +552,28 @@ function TemplateRow({ tpl, busy, onPick, onEdit, onRemove }) {
       style={{
         display: 'flex', alignItems: 'center', gap: 8,
         padding: '10px 12px', borderRadius: 10, cursor: 'pointer',
-        border: '1px solid var(--border)',
-        background: 'rgba(255,255,255,0.02)',
+        border: manageMode ? '1px solid rgba(125,211,252,0.35)' : '1px solid var(--border)',
+        background: manageMode ? 'rgba(125,211,252,0.06)' : 'rgba(255,255,255,0.02)',
         marginBottom: 6,
       }}
-      onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = manageMode
+          ? 'rgba(125,211,252,0.12)'
+          : 'rgba(255,255,255,0.05)';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = manageMode
+          ? 'rgba(125,211,252,0.06)'
+          : 'rgba(255,255,255,0.02)';
+      }}
     >
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>{tpl.name}</div>
         <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
-          {tpl.price ? `₪${Math.round(Number(tpl.price))}` : 'ללא מחיר קבוע'}
+          {tpl.type === 'opening_hours'
+            ? 'שעות פתיחה'
+            : (tpl.price ? `₪${Math.round(Number(tpl.price))}` : 'ללא מחיר קבוע')}
+          {tpl.start_time && tpl.end_time ? ` · ${String(tpl.start_time).slice(0, 5)}–${String(tpl.end_time).slice(0, 5)}` : ''}
           {tpl.max_participants ? ` · עד ${tpl.max_participants}` : ''}
           {tpl.location ? ` · ${tpl.location}` : ''}
         </div>
@@ -494,7 +581,7 @@ function TemplateRow({ tpl, busy, onPick, onEdit, onRemove }) {
       {busy ? (
         <Loader2 size={14} className="spin" />
       ) : (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 2 }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} onClick={(e) => e.stopPropagation()}>
           {onEdit && (
             <button
               type="button"
@@ -502,9 +589,18 @@ function TemplateRow({ tpl, busy, onPick, onEdit, onRemove }) {
               onClick={onEdit}
               aria-label="עריכה"
               title="עריכת תבנית"
-              style={{ color: '#7DD3FC' }}
+              style={{
+                color: '#7DD3FC',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                paddingInline: manageMode ? 8 : 6,
+                fontSize: 11,
+                fontWeight: 700,
+              }}
             >
               <Pencil size={12} />
+              {manageMode ? 'עריכה' : null}
             </button>
           )}
           <button
@@ -513,9 +609,18 @@ function TemplateRow({ tpl, busy, onPick, onEdit, onRemove }) {
             onClick={onRemove}
             aria-label="מחיקה"
             title="מחיקת תבנית"
-            style={{ color: '#F87171' }}
+            style={{
+              color: '#F87171',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              paddingInline: manageMode ? 8 : 6,
+              fontSize: 11,
+              fontWeight: 700,
+            }}
           >
             <Trash2 size={12} />
+            {manageMode ? 'מחיקה' : null}
           </button>
         </div>
       )}

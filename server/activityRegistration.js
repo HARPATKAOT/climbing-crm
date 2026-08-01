@@ -448,6 +448,24 @@ export const STARTER_ACTIVITY_TEMPLATES = [
     start_time: '08:00',
     end_time: '14:00',
   },
+  {
+    id: 'tpl_ops_opening_hours',
+    category: 'ops',
+    sort_order: 40,
+    name: 'שעות פתיחה',
+    type: 'opening_hours',
+    price: 0,
+    max_participants: null,
+    location: 'בקיר',
+    description: 'שעות פתיחה לקהל — מופיע באתר ובתשובות הבוט.',
+    registration_enabled: false,
+    collect_registration_payment: false,
+    registration_page_title: '',
+    registration_page_body: '',
+    theme: { accent: '#22D3EE' },
+    start_time: '16:00',
+    end_time: '22:00',
+  },
 ];
 
 /**

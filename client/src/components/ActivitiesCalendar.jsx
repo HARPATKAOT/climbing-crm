@@ -24,6 +24,19 @@ export const ACTIVITY_TYPES = [
   { id: 'other', label: 'אחר', color: '#94A3B8', bg: 'rgba(148,163,184,0.16)' },
 ];
 
+/** חיבור גוגל שנשמר אצלנו אבל בוטל/פג אצל גוגל */
+function googleAuthNeedsReconnect(error) {
+  return /invalid_grant|expired|revoked|unauthorized|אין חיבור לגוגל/i.test(String(error || ''));
+}
+
+function googleAuthHint(error) {
+  if (!error) return null;
+  if (googleAuthNeedsReconnect(error)) {
+    return 'החיבור לגוגל פג או בוטל. יש להתחבר מחדש כדי לראות את היומנים.';
+  }
+  return String(error);
+}
+
 /** קטגוריות תבניות אירוע — חייב להתאים לרשימה בצד השרת */
 const TEMPLATE_CATEGORIES = [
   { id: 'wall', label: 'אירועים בקיר', color: '#FB923C', bg: 'rgba(251,146,60,0.18)' },
@@ -920,11 +933,15 @@ function RegularActivityModal({
   title,
 }) {
   const activityId = isEdit && !isTemplateEdit ? initial?.id : null;
+  const isTemplateCreate = isTemplateEdit && !initial?._template_id;
   const multiDay = !!(form.date && form.end_date && form.end_date > form.date);
   const paidPerParticipant = isPaidPerParticipant(form);
   const includesVat = normalizePriceIncludesVat(form.price_includes_vat);
   const priceVat = vatBreakdown(form.price, includesVat);
   const isOps = normalizeTemplateCategory(form.category) === 'ops';
+  const typeOptions = isOps
+    ? ACTIVITY_TYPES.filter((t) => ['opening_hours', 'route_building', 'other'].includes(t.id))
+    : ACTIVITY_TYPES;
 
   return (
     <div className="activity-modal-backdrop" onClick={onClose}>
@@ -946,9 +963,11 @@ function RegularActivityModal({
             </div>
             {(isOps || isTemplateEdit) && (
               <div className="activity-modal-subtitle">
-                {isOps
-                  ? 'פעילות תפעולית פנימית — בלי מחיר ובלי דף הרשמה'
-                  : 'עריכת התבנית — השינויים יישמרו ברשימת התבניות'}
+                {isTemplateEdit
+                  ? (isTemplateCreate
+                    ? 'הגדרת תבנית חדשה — תישמר ברשימת התבניות לשימוש חוזר'
+                    : 'עריכת התבנית — השינויים יישמרו ברשימת התבניות')
+                  : 'פעילות תפעולית פנימית — בלי מחיר ובלי דף הרשמה'}
               </div>
             )}
           </div>
@@ -999,11 +1018,11 @@ function RegularActivityModal({
                   </div>
                 </div>
               )}
-              {!isOps && (
+              {(isTemplateEdit || !isOps) && (
                 <div>
                   <div className="activity-settings-label">סוג האירוע</div>
                   <div className="activity-type-options">
-                    {ACTIVITY_TYPES.map((type) => {
+                    {typeOptions.map((type) => {
                       const active = form.type === type.id;
                       return (
                         <button
@@ -1333,7 +1352,8 @@ function ActivityFormModal({
   // New external event: overlay form with no Google event behind it yet.
   const isOverlayNew = isOverlay && !initial?.google_event_id;
   const readOnly = !!initial?.read_only;
-  const isTemplateEdit = !!initial?._editing_template && !!initial?._template_id;
+  const isTemplateEdit = !!initial?._editing_template;
+  const isTemplateCreate = isTemplateEdit && !initial?._template_id;
   const [form, setForm] = useState(() => ({
     ...emptyForm(),
     ...initial,
@@ -1462,13 +1482,15 @@ function ActivityFormModal({
 
   const title = readOnly
     ? 'צפייה באירוע'
-    : isTemplateEdit
-      ? 'עריכת תבנית'
-      : isOverlayNew
-        ? 'אירוע חדש ביומן חיצוני'
-        : isOverlay
-          ? 'עריכת אירוע מיומן חיצוני'
-          : (isEdit ? 'עריכת אירוע' : 'אירוע חדש');
+    : isTemplateCreate
+      ? 'תבנית חדשה'
+      : isTemplateEdit
+        ? 'עריכת תבנית'
+        : isOverlayNew
+          ? 'אירוע חדש ביומן חיצוני'
+          : isOverlay
+            ? 'עריכת אירוע מיומן חיצוני'
+            : (isEdit ? 'עריכת אירוע' : 'אירוע חדש');
 
   if (!isOverlay) {
     return (
@@ -2602,6 +2624,7 @@ function OverlaySidebar({
   wallCalendarId,
   saving,
   loading,
+  authBroken,
   onToggle,
 }) {
   const selected = new Set(selectedIds || []);
@@ -2639,6 +2662,10 @@ function OverlaySidebar({
         {loading ? (
           <div style={{ textAlign: 'center', color: 'var(--text-3)', padding: 12, fontSize: 12 }}>
             <Loader2 size={16} className="spin" style={{ display: 'inline' }} /> טוען...
+          </div>
+        ) : authBroken ? (
+          <div style={{ color: '#FBBF24', fontSize: 12, textAlign: 'center', padding: 8, lineHeight: 1.45 }}>
+            החיבור לגוגל פג. התחברו מחדש כדי לטעון את רשימת היומנים.
           </div>
         ) : (calendars || []).length === 0 ? (
           <div style={{ color: 'var(--text-3)', fontSize: 12, textAlign: 'center', padding: 8 }}>
@@ -2850,7 +2877,12 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   const loadGoogleStatus = useCallback(async () => {
     try {
       const res = await fetch('/api/google-calendar/status');
-      if (res.ok) setGoogleStatus(await res.json());
+      if (res.ok) {
+        const status = await res.json();
+        setGoogleStatus(status);
+        const hint = googleAuthHint(status?.error);
+        if (hint) setBanner(hint);
+      }
     } catch {
       setGoogleStatus(null);
     }
@@ -2862,10 +2894,23 @@ export default function ActivitiesCalendar({ isOwner = false }) {
       setOverlaySelectedIds([]);
       return;
     }
+    if (googleAuthNeedsReconnect(googleStatus?.error)) {
+      setOverlayCalendars([]);
+      return;
+    }
     setOverlayListLoading(true);
     try {
       const res = await fetch('/api/google-calendar/calendars');
-      const data = res.ok ? await res.json() : {};
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const hint = googleAuthHint(data.error);
+        if (hint) {
+          setBanner(hint);
+          await loadGoogleStatus();
+        }
+        setOverlayCalendars([]);
+        return;
+      }
       setOverlayCalendars(Array.isArray(data.calendars) ? data.calendars : []);
       setOverlaySelectedIds(Array.isArray(data.overlayCalendarIds) ? data.overlayCalendarIds : []);
     } catch {
@@ -2873,7 +2918,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     } finally {
       setOverlayListLoading(false);
     }
-  }, [googleStatus?.connected]);
+  }, [googleStatus?.connected, googleStatus?.error, loadGoogleStatus]);
 
   useEffect(() => {
     loadActivities();
@@ -2893,7 +2938,8 @@ export default function ActivitiesCalendar({ isOwner = false }) {
       loadActivities();
       window.history.replaceState({}, '', '/activities');
     } else if (g === 'error') {
-      setBanner(params.get('msg') || 'חיבור לגוגל נכשל');
+      const raw = params.get('msg') || '';
+      setBanner(googleAuthHint(raw) || raw || 'חיבור לגוגל נכשל');
       window.history.replaceState({}, '', '/activities');
     }
   }, [loadActivities, loadGoogleStatus]);
@@ -3174,6 +3220,34 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     });
     setBanner(`עריכת תבנית: ${tpl.name}`);
   };
+
+  const openCreateTemplate = (categoryId = 'wall') => {
+    setFormError('');
+    const category = normalizeTemplateCategory(categoryId);
+    const defaultType = category === 'ops' ? 'other' : 'birthday';
+    setModal({
+      ...emptyForm(toDateStr(new Date())),
+      name: '',
+      type: defaultType,
+      category,
+      start_time: defaultType === 'opening_hours' ? '16:00' : '10:00',
+      end_time: defaultType === 'opening_hours' ? '22:00' : '12:00',
+      location: category === 'ops' || category === 'wall' ? 'בקיר' : '',
+      price: '',
+      max_participants: '',
+      description: '',
+      notes: '',
+      registration_enabled: false,
+      collect_registration_payment: false,
+      registration_mode: 'paid_per_participant',
+      price_includes_vat: false,
+      registration_page_title: '',
+      registration_page_body: '',
+      registration_theme: {},
+      _editing_template: true,
+    });
+    setBanner('תבנית חדשה — מלאו ושמרו');
+  };
   const openEdit = (activity) => {
     if (Date.now() < skipClickUntilRef.current) return;
     setFormError('');
@@ -3407,24 +3481,30 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     setFormError('');
     const closeAfter = payload.closeAfter !== false;
     try {
-      if (payload._editing_template && payload._template_id) {
+      if (payload._editing_template) {
         const {
           closeAfter: _closeAfter,
           _editing_template: _et,
           _template_id: templateId,
           ...body
         } = payload;
-        const res = await fetch(`/api/activity-templates/${encodeURIComponent(templateId)}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
+        const isCreate = !templateId;
+        const res = await fetch(
+          isCreate
+            ? '/api/activity-templates'
+            : `/api/activity-templates/${encodeURIComponent(templateId)}`,
+          {
+            method: isCreate ? 'POST' : 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          },
+        );
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           throw new Error(data.error || `שמירת תבנית נכשלה (${res.status})`);
         }
         setModal(null);
-        setBanner('התבנית נשמרה');
+        setBanner(isCreate ? 'התבנית נוצרה' : 'התבנית נשמרה');
         return;
       }
 
@@ -3611,7 +3691,8 @@ export default function ActivitiesCalendar({ isOwner = false }) {
         `סנכרון הושלם: נשלחו לגוגל ${data.pushed || 0}, נוספו ${data.created || 0}, עודכנו ${data.updated || 0}, נמחקו ${data.deleted || 0}`
       );
     } catch (err) {
-      setBanner(err.message || 'סנכרון נכשל');
+      setBanner(googleAuthHint(err.message) || err.message || 'סנכרון נכשל');
+      await loadGoogleStatus();
     } finally {
       setGoogleBusy(false);
     }
@@ -3772,6 +3853,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
               onCustomEvent={(dateStr) => openBlankCreate(dateStr, createCtx.opts)}
               onApplyTemplate={(tpl, dateStr) => openFromTemplate(tpl, dateStr, createCtx.opts)}
               onEditTemplate={openEditTemplate}
+              onCreateTemplate={openCreateTemplate}
               externalCalendars={writableOverlayCalendars}
               onExternalEvent={(calendarId, dateStr) => openExternalCreate(calendarId, dateStr, createCtx.opts)}
             />
@@ -3836,7 +3918,25 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center',
           fontSize: 12, color: 'var(--text-3)',
         }}>
-          {googleStatus?.connected ? (
+          {googleStatus?.connected && googleAuthNeedsReconnect(googleStatus.error) ? (
+            <>
+              <span style={{ color: '#FBBF24' }}>
+                החיבור לגוגל פג — דורש חיבור מחדש
+              </span>
+              {isOwner && (
+                <button
+                  type="button"
+                  className="btn-ghost"
+                  onClick={connectGoogle}
+                  disabled={googleBusy}
+                  style={{ fontSize: 12, color: '#7DD3FC', borderColor: 'rgba(56,189,248,0.4)' }}
+                >
+                  {googleBusy ? <Loader2 size={13} className="spin" /> : <Link2 size={13} />}
+                  חיבור מחדש
+                </button>
+              )}
+            </>
+          ) : googleStatus?.connected ? (
             <>
               <span style={{ color: '#34D399' }}>
                 מחובר לגוגל
@@ -4164,6 +4264,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           wallCalendarId={googleStatus?.calendarId}
           saving={overlaySaving}
           loading={overlayListLoading}
+          authBroken={googleAuthNeedsReconnect(googleStatus?.error)}
           onToggle={toggleOverlayCalendar}
         />
       )}
@@ -4172,7 +4273,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
         <ActivityFormModal
           key={
             modal._editing_template
-              ? `tpl-${modal._template_id}`
+              ? `tpl-${modal._template_id || 'new'}`
               : modal.overlay
                 ? `overlay-${modal.id || `new-${modal.calendar_id}`}`
                 : (modal.id || 'new-activity')

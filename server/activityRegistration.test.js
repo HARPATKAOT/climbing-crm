@@ -124,7 +124,7 @@ test('starter templates cover all categories', () => {
   assert.ok(cats.has('field'));
   assert.ok(cats.has('wall'));
   assert.ok(cats.has('ops'));
-  assert.ok(STARTER_ACTIVITY_TEMPLATES.length >= 9);
+  assert.ok(STARTER_ACTIVITY_TEMPLATES.length >= 10);
 });
 
 test('ensureSeedActivityTemplates is idempotent', () => {
@@ -147,5 +147,13 @@ test('ensureSeedActivityTemplates is idempotent', () => {
   assert.equal(grouped.length, 3);
   assert.ok(grouped.find((g) => g.id === 'field').templates.length >= 3);
   assert.ok(grouped.find((g) => g.id === 'wall').templates.length >= 3);
-  assert.ok(grouped.find((g) => g.id === 'ops').templates.length >= 3);
+  assert.ok(grouped.find((g) => g.id === 'ops').templates.length >= 4);
+});
+
+test('starter templates include opening hours', () => {
+  const opening = STARTER_ACTIVITY_TEMPLATES.find((t) => t.id === 'tpl_ops_opening_hours');
+  assert.ok(opening);
+  assert.equal(opening.type, 'opening_hours');
+  assert.equal(opening.category, 'ops');
+  assert.equal(opening.name, 'שעות פתיחה');
 });
