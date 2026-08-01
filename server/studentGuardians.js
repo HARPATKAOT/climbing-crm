@@ -44,6 +44,30 @@ export function guardianParentIds(db, student) {
   return ids;
 }
 
+/**
+ * Which parent a link about this child is sent to.
+ *
+ * The primary guardian is the default and stays the fallback. But the customer
+ * card shows one parent at a time — mum and dad each have their own phone and
+ * their own conversation — and when the caller names the parent it is looking
+ * at, the message follows that tab instead of always going to the primary. A
+ * parent who is not on this child's file, or has no phone to receive it, never
+ * wins the choice.
+ */
+export function chooseRecipientParent(parents = [], {
+  guardianIds = [],
+  primaryParentId = '',
+  preferredParentId = '',
+} = {}) {
+  const wanted = String(preferredParentId || '');
+  const allowed = (guardianIds || []).map((id) => String(id));
+  if (wanted && allowed.includes(wanted)) {
+    const preferred = parents.find((p) => String(p?.id) === wanted && p?.phone);
+    if (preferred) return preferred;
+  }
+  return parents.find((p) => String(p?.id) === String(primaryParentId || '')) || null;
+}
+
 export function studentGuardianIds(student, guardians = []) {
   const ids = [];
   if (student?.parentId) ids.push(String(student.parentId));
@@ -113,6 +137,31 @@ export function setPrimaryGuardian(db, { studentId, parentId } = {}) {
     ? linkGuardian(db, { studentId, parentId: previous, source: 'primary-swap' })
     : null;
   return { student: updated, added, removed, changed: true, previousParentId: previous };
+}
+
+/**
+ * A child added to one parent card belongs to the whole household.
+ *
+ * Two parents become one family by sharing children — every parent is linked to
+ * every child at the moment of the merge. A child registered *after* that merge
+ * knows only the parent whose form created it, so the other parents' cards
+ * never showed them: the family looked like it had lost a kid. Linking the
+ * household at creation keeps the file whole, and a wrong link is undone the
+ * usual way — "פיצול משפחה".
+ *
+ * Parents whose card was since deleted are skipped, so a stale link from an old
+ * merge does not resurrect them.
+ */
+export function linkHouseholdGuardians(db, { studentId, source = 'household' } = {}) {
+  const student = db.getOne('students', studentId);
+  if (!student?.parentId) return [];
+  const links = [];
+  for (const parentId of expandHousehold(db, student.parentId).parentIds) {
+    if (!db.getOne('parents', parentId)) continue;
+    const link = linkGuardian(db, { studentId: student.id, parentId, source });
+    if (link) links.push(link);
+  }
+  return links;
 }
 
 export function unlinkGuardian(db, { studentId, parentId } = {}) {
