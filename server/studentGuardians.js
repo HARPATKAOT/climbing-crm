@@ -427,6 +427,129 @@ export function mergeFamily(db, { parentId, familyParentId, extraStudentIds = []
   return links;
 }
 
+/** Digits that identify a phone, whether it was typed 05… or 9725… */
+function phoneDigits(value) {
+  return String(value || '').replace(/\D/g, '').replace(/^972/, '').replace(/^0/, '');
+}
+
+/**
+ * Households the desk may merge this one into, matched on a parent's name or
+ * phone or on a child's name — the three things a person at the counter knows.
+ *
+ * Whole households, deduped: two parents who already share a child are one
+ * candidate, and the children come back with the answer so the desk confirms a
+ * family it recognises rather than a name that merely repeats.
+ */
+export function householdMergeCandidates(db, { parentId, query = '', limit = 8 } = {}) {
+  const anchor = db.getOne('parents', parentId);
+  if (!anchor) return [];
+  const wantedName = normalizedChildName(query);
+  const wantedPhone = phoneDigits(query);
+  if (wantedName.length < 2 && wantedPhone.length < 3) return [];
+
+  const matchesParent = (parent) => {
+    if (wantedPhone.length >= 3 && phoneDigits(parent.phone).includes(wantedPhone)) return true;
+    if (wantedName.length < 2) return false;
+    return normalizedChildName(parent.name).includes(wantedName)
+      || normalizedChildName(parentLastName(parent)).includes(wantedName);
+  };
+
+  // Our own household is never a candidate: merging it with itself is a no-op.
+  const seen = new Set(expandHousehold(db, anchor.id).parentIds.map(String));
+  const households = [];
+
+  for (const parent of db.get('parents') || []) {
+    if (parent?.id == null || seen.has(String(parent.id))) continue;
+    const household = expandHousehold(db, parent.id);
+    for (const id of household.parentIds) seen.add(String(id));
+    const parents = household.parentIds
+      .map((id) => db.getOne('parents', id))
+      .filter(Boolean);
+    // An archived card is off the working lists; it is not a merge target.
+    if (parents.every((item) => String(item.status || '') === 'archived')) continue;
+    const children = household.students.filter((child) => child.isAdult !== true);
+    const hit = parents.some(matchesParent)
+      || (wantedName.length >= 2
+        && children.some((child) => normalizedChildName(child.name).includes(wantedName)));
+    if (!hit) continue;
+
+    households.push({
+      // Either card merges the same family; naming the one holding most of the
+      // children keeps the answer recognisable.
+      parent: [...parents].sort(
+        (a, b) => childrenOfParent(db, b.id).length - childrenOfParent(db, a.id).length
+      )[0] || parent,
+      parents,
+      children,
+    });
+    if (households.length >= limit) break;
+  }
+  return households;
+}
+
+export function householdMergeCandidatesPayload(candidates = []) {
+  return {
+    families: candidates.map(({ parent, parents, children }) => ({
+      parent_id: String(parent.id),
+      parent_name: parent.name || '',
+      phone: parent.phone || '',
+      parents: parents.map((item) => item.name || '').filter(Boolean),
+      children: children.map((child) => child.name || '').filter(Boolean),
+    })),
+  };
+}
+
+/**
+ * Join two households the desk recognises as one family — the mirror image of
+ * splitFamily. Every parent becomes a guardian of every child, so the leads
+ * table shows one row with both parents and all the children on it.
+ *
+ * Whole households merge, not only the two cards that were picked: a parent who
+ * shares a child with either of them is already part of that family, and
+ * leaving them out would tear the row in two again on the next read.
+ *
+ * Nothing is deleted or overwritten — each child keeps its primary parent — so
+ * the split dialog can undo this in full.
+ */
+export function mergeHouseholds(db, { parentId, otherParentId } = {}) {
+  const ours = db.getOne('parents', parentId);
+  const theirs = db.getOne('parents', otherParentId);
+  if (!ours) return { ok: false, error: 'כרטיס הלקוח לא נמצא' };
+  if (!theirs) return { ok: false, error: 'כרטיס הלקוח למיזוג לא נמצא' };
+  if (String(ours.id) === String(theirs.id)) {
+    return { ok: false, error: 'אי אפשר למזג לקוח עם עצמו' };
+  }
+
+  const here = expandHousehold(db, ours.id);
+  const there = expandHousehold(db, theirs.id);
+  if (here.parentIds.includes(String(theirs.id))) {
+    return { ok: false, error: 'שני הלקוחות כבר באותה משפחה' };
+  }
+
+  const parentIds = [...new Set([...here.parentIds, ...there.parentIds].map(String))];
+  const childIds = new Set();
+  const children = [];
+  for (const child of [...here.students, ...there.students]) {
+    if (child.isAdult === true || childIds.has(String(child.id))) continue;
+    childIds.add(String(child.id));
+    children.push(child);
+  }
+  // With no child on either side there is nothing that ties the cards together:
+  // the household is derived from shared children, so the merge would not hold.
+  if (!children.length) {
+    return { ok: false, error: 'אין ילדים באף אחד מהכרטיסים — אין מה לאחד' };
+  }
+
+  const links = [];
+  for (const child of children) {
+    for (const id of parentIds) {
+      const link = linkGuardian(db, { studentId: child.id, parentId: id, source: 'staff-merge' });
+      if (link) links.push(link);
+    }
+  }
+  return { ok: true, links, parentIds, childIds: [...childIds] };
+}
+
 // No backfill and no row for the primary parent: `students.parentId` already
 // states it, and every reader here derives the full list from both. The link
 // table stays small and holds only what nothing else records.

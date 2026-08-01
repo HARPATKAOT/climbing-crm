@@ -194,9 +194,12 @@ import {
   familyCandidates,
   findChildMatches,
   guardianParentIds,
+  householdMergeCandidates,
+  householdMergeCandidatesPayload,
   householdSnapshot,
   linkGuardian,
   mergeFamily,
+  mergeHouseholds,
   normalizedChildName,
   normalizedIdNumber,
   publicChildMatchPayload,
@@ -2829,6 +2832,38 @@ app.post('/api/parents/:id/split-family', async (req, res) => {
     ok: true,
     household: householdSnapshot(db, anchorId),
     changed: result.changes.length,
+  });
+});
+
+/** Families the desk can join this one to — for the "merge families" dialog. */
+app.get('/api/parents/:id/merge-candidates', (req, res) => {
+  if (!db.getOne('parents', req.params.id)) {
+    return res.status(404).json({ error: 'הלקוח לא נמצא' });
+  }
+  res.json(householdMergeCandidatesPayload(householdMergeCandidates(db, {
+    parentId: req.params.id,
+    query: String(req.query.q || ''),
+  })));
+});
+
+/**
+ * Two cards that are really one family: every parent joins every child.
+ * Nothing is deleted — split-family undoes this in full.
+ */
+app.post('/api/parents/:id/merge-family', async (req, res) => {
+  const result = mergeHouseholds(db, {
+    parentId: req.params.id,
+    otherParentId: String(req.body?.otherParentId || ''),
+  });
+  if (!result.ok) {
+    return res.status(400).json({ error: result.error || 'מיזוג המשפחות נכשל' });
+  }
+  for (const link of result.links) await persistCore('student_guardians', link);
+
+  res.json({
+    ok: true,
+    linked: result.links.length,
+    household: householdSnapshot(db, req.params.id),
   });
 });
 

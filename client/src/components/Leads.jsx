@@ -724,6 +724,13 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [splitLoading, setSplitLoading] = useState(false);
   const [splitSaving, setSplitSaving] = useState(false);
   const [splitError, setSplitError] = useState('');
+  const [showMergeFamily, setShowMergeFamily] = useState(false);
+  const [mergeQuery, setMergeQuery] = useState('');
+  const [mergeResults, setMergeResults] = useState([]);
+  const [mergeSearching, setMergeSearching] = useState(false);
+  const [mergeSearched, setMergeSearched] = useState(false);
+  const [mergeSavingId, setMergeSavingId] = useState('');
+  const [mergeError, setMergeError] = useState('');
   const [passesLoading, setPassesLoading] = useState(false);
   const [punchingId, setPunchingId] = useState(null);
   const [passPunches, setPassPunches] = useState({});
@@ -956,6 +963,80 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       setSplitError(err.message);
     } finally {
       setSplitSaving(false);
+    }
+  };
+
+  const householdAnchorId = parent?.id || primaryParent?.id || '';
+
+  const openMergeFamily = () => {
+    setShowMergeFamily(true);
+    setMergeQuery('');
+    setMergeResults([]);
+    setMergeSearched(false);
+    setMergeError('');
+  };
+
+  /** Search as the desk types — by parent name, phone, or a child's name. */
+  useEffect(() => {
+    if (!showMergeFamily || !householdAnchorId) return undefined;
+    const query = mergeQuery.trim();
+    if (query.length < 2) {
+      setMergeResults([]);
+      setMergeSearched(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setMergeSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const response = await fetch(
+          `/api/parents/${encodeURIComponent(householdAnchorId)}/merge-candidates?q=${encodeURIComponent(query)}`
+        );
+        const body = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!response.ok) throw new Error(body.error || 'החיפוש נכשל');
+        setMergeResults(Array.isArray(body.families) ? body.families : []);
+        setMergeError('');
+      } catch (err) {
+        if (!cancelled) {
+          setMergeResults([]);
+          setMergeError(err.message);
+        }
+      } finally {
+        if (!cancelled) {
+          setMergeSearching(false);
+          setMergeSearched(true);
+        }
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [showMergeFamily, mergeQuery, householdAnchorId]);
+
+  /** Join the two households into one customer row — undone by "פיצול משפחה". */
+  const handleMergeFamily = async (family) => {
+    if (!householdAnchorId || mergeSavingId) return;
+    const childList = family.children.length ? ` (${family.children.join(', ')})` : '';
+    if (!confirm(`לאחד את המשפחה של ${family.parent_name}${childList} עם ${parentDisplayName(parent) || 'הלקוח הזה'}? כל ההורים יופיעו על כל הילדים. אפשר לבטל אחר כך בפיצול משפחה.`)) return;
+    setMergeSavingId(family.parent_id);
+    setMergeError('');
+    try {
+      const response = await fetch(`/api/parents/${encodeURIComponent(householdAnchorId)}/merge-family`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ otherParentId: family.parent_id }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'מיזוג המשפחות נכשל');
+      setShowMergeFamily(false);
+      await refreshGuardians();
+      refreshData?.();
+    } catch (err) {
+      setMergeError(err.message);
+    } finally {
+      setMergeSavingId('');
     }
   };
 
@@ -1849,6 +1930,88 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
 
   return (
     <>
+      {showMergeFamily && (
+        <Modal
+          title="איחוד משפחות"
+          onClose={() => !mergeSavingId && setShowMergeFamily(false)}
+          footer={(
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={!!mergeSavingId}
+              onClick={() => setShowMergeFamily(false)}
+            >
+              סגור
+            </button>
+          )}
+        >
+          <p style={{ margin: '0 0 12px', fontSize: 13, lineHeight: 1.5, color: 'var(--text-2)' }}>
+            חפשו את הכרטיס השני של אותה משפחה. אחרי האיחוד כל ההורים יופיעו על כל הילדים,
+            והמשפחה תופיע כשורה אחת. שום כרטיס וילד לא נמחק.
+          </p>
+          <div className="input-icon-wrap" style={{ marginBottom: 12 }}>
+            <Search className="input-icon" size={16} />
+            <input
+              className="input"
+              autoFocus
+              style={{ paddingRight: 36 }}
+              placeholder="שם הורה, טלפון או שם ילד..."
+              value={mergeQuery}
+              onChange={(e) => setMergeQuery(e.target.value)}
+            />
+          </div>
+          {mergeError && (
+            <div style={{
+              marginBottom: 12,
+              padding: '10px 12px',
+              borderRadius: 10,
+              background: 'rgba(248,113,113,0.12)',
+              color: '#fca5a5',
+              fontSize: 13,
+            }}>
+              {mergeError}
+            </div>
+          )}
+          {mergeSearching && <div style={{ fontSize: 13, color: 'var(--text-2)' }}>מחפש...</div>}
+          {!mergeSearching && mergeSearched && !mergeResults.length && (
+            <div style={{ fontSize: 13, color: 'var(--text-2)' }}>לא נמצאה משפחה מתאימה.</div>
+          )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {mergeResults.map((family) => (
+              <div
+                key={family.parent_id}
+                style={{
+                  padding: 12,
+                  borderRadius: 12,
+                  border: '1px solid var(--border)',
+                  background: 'rgba(255,255,255,0.03)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>
+                    {family.parents.join(' · ') || family.parent_name || 'לקוח'}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 3 }}>
+                    {family.phone || 'ללא טלפון'}
+                    {family.children.length ? ` · ${family.children.join(', ')}` : ' · ללא ילדים'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-xs"
+                  disabled={!!mergeSavingId}
+                  onClick={() => handleMergeFamily(family)}
+                >
+                  {mergeSavingId === family.parent_id ? 'מאחד...' : 'אחד'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </Modal>
+      )}
       {showSplitFamily && (
         <Modal
           title="פיצול משפחה"
@@ -3972,6 +4135,20 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   }}
                 >
                   <Users size={12} /> פיצול משפחה
+                </button>
+              )}
+              {!!householdAnchorId && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs w-full"
+                  style={{ justifyContent: 'center', gap: 6, border: '1px solid var(--border)' }}
+                  title="שני כרטיסים של אותה משפחה — אחדו אותם לשורה אחת עם כל הילדים"
+                  onClick={() => {
+                    setIsEditing(false);
+                    openMergeFamily();
+                  }}
+                >
+                  <Users size={12} /> איחוד משפחות
                 </button>
               )}
               <button

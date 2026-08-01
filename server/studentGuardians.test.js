@@ -5,10 +5,13 @@ import {
   familyCandidates,
   findChildMatches,
   guardianParentIds,
+  householdMergeCandidates,
+  householdMergeCandidatesPayload,
   householdSnapshot,
   isChildOfParent,
   linkGuardian,
   mergeFamily,
+  mergeHouseholds,
   parentLastName,
   publicChildMatchPayload,
   publicFamilyCandidatesPayload,
@@ -393,6 +396,118 @@ test('merging is idempotent and refuses to merge a card with itself', () => {
   assert.equal(second.length, 0, 'nothing new the second time');
   assert.equal(mergeFamily(db, { parentId: 'p-avner', familyParentId: 'p-avner' }).length, 0);
   assert.ok(first.length >= 0);
+});
+
+/** Two unrelated cards the desk knows are one family: p-avner+נועם, p-dan+יעל. */
+function twoHouseholds() {
+  const db = createDb();
+  db.store.parents.push({ id: 'p-dan', name: 'דן כהן', phone: '0547778888' });
+  db.store.students.push({ id: 's-yael', name: 'יעל כהן', parentId: 'p-dan', birthDate: '2016-01-01' });
+  return db;
+}
+
+test('merging two households puts every parent on every child', () => {
+  const db = twoHouseholds();
+  const result = mergeHouseholds(db, { parentId: 'p-avner', otherParentId: 'p-dan' });
+  assert.equal(result.ok, true);
+
+  assert.deepEqual(guardianParentIds(db, 's-noam').sort(), ['p-avner', 'p-dan']);
+  assert.deepEqual(guardianParentIds(db, 's-yael').sort(), ['p-avner', 'p-dan']);
+  // Primary stays put, so nobody's default addressee changes under them.
+  assert.equal(db.getOne('students', 's-noam').parentId, 'p-avner');
+  assert.equal(db.getOne('students', 's-yael').parentId, 'p-dan');
+
+  const snap = householdSnapshot(db, 'p-dan');
+  assert.equal(snap.parents.length, 2);
+  assert.equal(snap.children.length, 2);
+});
+
+test('merging pulls in the whole household, not only the two chosen cards', () => {
+  const db = twoHouseholds();
+  db.store.parents.push({ id: 'p-mum', name: 'רותם לוי', phone: '0539998888' });
+  db.store.students.push({ id: 's-shaked', name: 'שקד לוי', parentId: 'p-mum' });
+  mergeFamily(db, { parentId: 'p-mum', familyParentId: 'p-avner' });
+
+  assert.equal(mergeHouseholds(db, { parentId: 'p-dan', otherParentId: 'p-avner' }).ok, true);
+  for (const childId of ['s-noam', 's-shaked', 's-yael']) {
+    assert.deepEqual(
+      guardianParentIds(db, childId).sort(),
+      ['p-avner', 'p-dan', 'p-mum'],
+      `${childId} carries the whole household`
+    );
+  }
+});
+
+test('a merge undoes cleanly through split-family', () => {
+  const db = twoHouseholds();
+  mergeHouseholds(db, { parentId: 'p-avner', otherParentId: 'p-dan' });
+  const result = splitFamily(db, {
+    assignments: [
+      { studentId: 's-noam', parentId: 'p-avner' },
+      { studentId: 's-yael', parentId: 'p-dan' },
+    ],
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(guardianParentIds(db, 's-noam'), ['p-avner']);
+  assert.deepEqual(guardianParentIds(db, 's-yael'), ['p-dan']);
+  assert.equal(db.store.student_guardians.length, 0);
+});
+
+test('merge refuses itself, a household it is already in, and childless cards', () => {
+  const db = twoHouseholds();
+  assert.equal(mergeHouseholds(db, { parentId: 'p-avner', otherParentId: 'p-avner' }).ok, false);
+  assert.equal(mergeHouseholds(db, { parentId: 'p-avner', otherParentId: 'p-ghost' }).ok, false);
+
+  mergeHouseholds(db, { parentId: 'p-avner', otherParentId: 'p-dan' });
+  const again = mergeHouseholds(db, { parentId: 'p-dan', otherParentId: 'p-avner' });
+  assert.equal(again.ok, false, 'already one family');
+
+  db.store.parents.push({ id: 'p-lonely', name: 'ליד בודד', phone: '0501111111' });
+  db.store.parents.push({ id: 'p-lonely2', name: 'ליד שני', phone: '0502222222' });
+  assert.equal(mergeHouseholds(db, { parentId: 'p-lonely', otherParentId: 'p-lonely2' }).ok, false);
+});
+
+test('a parent-only lead merged into a family inherits its children', () => {
+  const db = createDb();
+  db.store.parents.push({ id: 'p-lonely', name: 'ליד בודד', phone: '0501111111' });
+  assert.equal(mergeHouseholds(db, { parentId: 'p-lonely', otherParentId: 'p-avner' }).ok, true);
+  assert.deepEqual(guardianParentIds(db, 's-noam').sort(), ['p-avner', 'p-lonely']);
+});
+
+test('merge candidates match a parent name, a phone or a child name', () => {
+  const db = twoHouseholds();
+  const ids = (query) => householdMergeCandidates(db, { parentId: 'p-avner', query })
+    .map((row) => row.parent.id);
+
+  assert.deepEqual(ids('כהן'), ['p-dan'], 'by surname');
+  assert.deepEqual(ids('יעל'), ['p-dan'], 'by a child on the card');
+  assert.deepEqual(ids('0547778888'), ['p-dan'], 'by phone');
+  assert.deepEqual(ids('547778888'), ['p-dan'], 'phone typed without the leading zero');
+  assert.deepEqual(ids('אבנר'), [], 'our own household is never a candidate');
+  assert.deepEqual(ids('לוי'), [], 'nothing else on file under our surname');
+  assert.deepEqual(ids('א'), [], 'one letter is not a search');
+
+  const payload = householdMergeCandidatesPayload(householdMergeCandidates(db, {
+    parentId: 'p-avner',
+    query: 'כהן',
+  }));
+  assert.deepEqual(payload.families[0].children, ['יעל כהן']);
+});
+
+test('merge candidates list one household once and skip archived cards', () => {
+  const db = twoHouseholds();
+  db.store.parents.push({ id: 'p-dad2', name: 'שרה כהן', phone: '0541112222' });
+  linkGuardian(db, { studentId: 's-yael', parentId: 'p-dad2' });
+  const found = householdMergeCandidates(db, { parentId: 'p-avner', query: 'כהן' });
+  assert.equal(found.length, 1, 'both parents of one family are one candidate');
+  assert.equal(found[0].parents.length, 2);
+
+  db.store.parents.push({ id: 'p-old', name: 'ותיק כהן', phone: '0500000000', status: 'archived' });
+  db.store.students.push({ id: 's-old', name: 'ילד כהן', parentId: 'p-old' });
+  assert.deepEqual(
+    householdMergeCandidates(db, { parentId: 'p-avner', query: 'ותיק' }).map((r) => r.parent.id),
+    []
+  );
 });
 
 test('splitting a merged household gives each child exactly one parent', () => {
