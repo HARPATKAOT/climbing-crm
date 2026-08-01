@@ -209,6 +209,12 @@ export default function PublicEquipmentPayment() {
                           {' '}{shoesPricing.total_units}.
                         </>
                       ) : null}
+                      {' '}ביטול השכרה באמצע התקופה כרוך בדמי ביטול בסך 30 ₪.
+                    </p>
+                  )}
+                  {selected.includes('shoes') && !shoesPricing && (
+                    <p className="eq-pay-note">
+                      ביטול השכרת נעליים באמצע התקופה כרוך בדמי ביטול בסך 30 ₪.
                     </p>
                   )}
                 </div>

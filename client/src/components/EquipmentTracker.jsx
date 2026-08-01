@@ -160,6 +160,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState('');
   const [linkMsg, setLinkMsg] = useState('');
+  const [lastPaymentLink, setLastPaymentLink] = useState('');
   // הפריט שבחירת הסטטוס שלו פתוחה כרגע — אחד בכל רגע, כמו בתיק הלקוח.
   const [openItemId, setOpenItemId] = useState('');
   // ההגדרות הן טאב לעצמן. filter נשאר על הטאב האחרון של הרשימה,
@@ -226,6 +227,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
   const sendLink = async (studentId) => {
     setBusyId(`link-${studentId}`);
     setLinkMsg('');
+    setLastPaymentLink('');
     try {
       const res = await fetch(`/api/students/${encodeURIComponent(studentId)}/equipment/payment-link`, {
         method: 'POST',
@@ -235,6 +237,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || 'יצירת הקישור נכשלה');
       if (body.pageUrl) {
+        setLastPaymentLink(body.pageUrl);
         try {
           await navigator.clipboard.writeText(body.pageUrl);
         } catch {
@@ -269,7 +272,6 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
       shoes: String(settings?.prices?.shoes ?? ''),
       shirt: String(settings?.prices?.shirt ?? ''),
       chalk_bag: String(settings?.prices?.chalk_bag ?? ''),
-      rental_days: String(settings?.rental_days ?? ''),
       shirt_sizes: (settings?.shirt_sizes || []).join(', '),
       price_includes_vat: settings?.price_includes_vat !== false,
       season_start: monthDayToDisplay(settings?.season_start) || '01/09',
@@ -299,10 +301,6 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
         .map((s) => s.trim())
         .filter(Boolean);
       if (!sizes.length) throw new Error('יש להזין לפחות מידת חולצה אחת');
-      const rentalDays = Number(draft.rental_days);
-      if (!Number.isFinite(rentalDays) || rentalDays < 1) {
-        throw new Error('משך ההשכרה חייב להיות מספר ימים חיובי');
-      }
       const prices = {};
       for (const key of ['shoes', 'shirt', 'chalk_bag']) {
         const value = Number(draft[key]);
@@ -324,7 +322,8 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
         body: JSON.stringify({
           prices,
           shirt_sizes: sizes,
-          rental_days: rentalDays,
+          // נשמר בשקט כגיבוי לשרת; תאריכי העונה הם המקור העיקרי.
+          rental_days: settings?.rental_days,
           price_includes_vat: draft.price_includes_vat !== false,
           ...season,
         }),
@@ -432,7 +431,6 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
               { key: 'shoes', label: 'נעליים — חצי עונת חוגים (₪)' },
               { key: 'shirt', label: 'חולצת חוג (₪)' },
               { key: 'chalk_bag', label: 'שק מגנזיום (₪)' },
-              { key: 'rental_days', label: 'גיבוי: ימי השכרה' },
             ].map((f) => (
               <div key={f.key} className="form-group" style={{ margin: 0 }}>
                 <label className="form-label" style={{ fontSize: 11 }}>{f.label}</label>
@@ -445,6 +443,36 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
                 />
               </div>
             ))}
+          </div>
+
+          <div
+            style={{
+              borderTop: '1px solid var(--border)',
+              paddingTop: 12,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+            }}
+          >
+            <div style={{ fontWeight: 800, fontSize: 13 }}>קישור לתשלום ציוד</div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.6 }}>
+              לכל ילד נוצר קישור אישי. ברשימה לחצו על „קישור תשלום” — הכתובת תופיע כאן ותועתק.
+              ביטול השכרת נעליים באמצע התקופה כרוך בדמי ביטול של 30 ₪ (מוצג גם בדף התשלום להורים).
+            </div>
+            {lastPaymentLink ? (
+              <a
+                href={lastPaymentLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ fontSize: 12, wordBreak: 'break-all', color: 'var(--accent)', fontWeight: 700 }}
+              >
+                {lastPaymentLink}
+              </a>
+            ) : (
+              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                עדיין לא נוצר קישור במסך הזה — צרו אחד מהרשימה.
+              </div>
+            )}
           </div>
 
           <div
@@ -524,6 +552,18 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
       {linkMsg && (
         <div style={{ padding: 10, borderRadius: 10, background: 'rgba(52,211,153,.12)', color: '#34d399', fontSize: 13 }}>
           {linkMsg}
+          {lastPaymentLink && (
+            <div style={{ marginTop: 6 }}>
+              <a
+                href={lastPaymentLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: 'var(--accent)', wordBreak: 'break-all', fontWeight: 700 }}
+              >
+                {lastPaymentLink}
+              </a>
+            </div>
+          )}
         </div>
       )}
 
