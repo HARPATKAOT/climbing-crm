@@ -10,7 +10,6 @@ import { isPublicPath } from '../publicPaths.js';
 const PublicActivityRegistration = lazy(() => import('./PublicActivityRegistration.jsx'));
 const PublicHostPayment          = lazy(() => import('./PublicHostPayment.jsx'));
 const PublicEquipmentPayment     = lazy(() => import('./PublicEquipmentPayment.jsx'));
-const PublicHealthForm           = lazy(() => import('./PublicHealthForm.jsx'));
 const PublicOnboardingForm       = lazy(() => import('./PublicOnboardingForm.jsx'));
 const LeadIntakeForm             = lazy(() => import('./LeadIntakeForm.jsx'));
 const PrivacyPolicy              = lazy(() => import('./PrivacyPolicy.jsx'));
@@ -309,8 +308,8 @@ export default function AuthGate({ children }) {
     const path = location.pathname;
     const publicFallback = <div style={{ padding: 40, textAlign: 'center', fontFamily: 'sans-serif' }}>טוען...</div>;
     let publicPage = null;
-    if (path === '/health' || path.startsWith('/health/')) publicPage = <PublicHealthForm />;
-    else if (path === '/onboard') publicPage = <PublicOnboardingForm />;
+    if (path === '/health' || path.startsWith('/health/')) publicPage = <PublicOnboardingForm />;
+    else if (path === '/onboard' || path.startsWith('/onboard/')) publicPage = <PublicOnboardingForm />;
     else if (path === '/join') publicPage = <LeadIntakeForm />;
     else if (path === '/privacy') publicPage = <PrivacyPolicy />;
     else if (path.startsWith('/event/')) publicPage = <PublicActivityRegistration />;

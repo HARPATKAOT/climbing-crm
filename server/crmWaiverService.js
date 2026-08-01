@@ -3,7 +3,7 @@ import {
   isHealthDeclarationValid,
 } from './healthValidity.js';
 import { linkGuardian, mergeFamily, normalizedIdNumber } from './studentGuardians.js';
-import { declarationGap } from './healthQuestions.js';
+import { declarationGap, questionsForSigner } from './healthQuestions.js';
 
 // The safety rules are not repeated here: they are the items ticked one by one
 // on the declaration step, which is both better evidence and one list instead
@@ -117,7 +117,14 @@ export function validateParticipantDeclarations(participants, template) {
     }
     // Confirmations must be ticked; screening questions must be answered
     // either way, so a condition nobody was asked about is never filed as "no".
-    const gap = declarationGap(questions, participant.answers, name);
+    // Parent-only clauses are excluded for an adult signing for themselves —
+    // the form does not show them, so demanding them here would reject a
+    // submission that is in fact complete.
+    const gap = declarationGap(
+      questionsForSigner(questions, { isAdultSelf: participant.type === 'adult' }),
+      participant.answers,
+      name
+    );
     if (gap) throw Object.assign(new Error(gap), { status: 400 });
   }
 }

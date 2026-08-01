@@ -147,7 +147,11 @@ import {
   findLatestValidDeclaration,
   saveCrmParticipants,
 } from './crmWaiverService.js';
-import { declarationGap } from './healthQuestions.js';
+import {
+  declarationGap,
+  needsMedicalClearance,
+  questionsForSigner,
+} from './healthQuestions.js';
 import {
   declarationSignedAt,
   isHealthDeclarationValid,
@@ -328,6 +332,25 @@ app.use(express.json({
 }));
 // iCount payment-page IPN often posts as form-urlencoded
 app.use(express.urlencoded({ extended: true }));
+
+/**
+ * A body over the limit, or malformed JSON, otherwise leaves the parser as an
+ * HTML error page. Every public form reads `res.json()` and falls back to a
+ * blank object, so the family was shown "שגיאה בשמירת הטופס" with no hint that
+ * the attachment was the problem. Answering in JSON makes the cause reach them.
+ */
+app.use((err, _req, res, next) => {
+  if (!err || !err.status) return next(err);
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({
+      error: 'הקבצים המצורפים גדולים מדי לשליחה. צלמו את האישור בטלפון במקום לצרף קובץ סרוק',
+    });
+  }
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'הבקשה לא התקבלה כראוי — נסו לשלוח שוב' });
+  }
+  return next(err);
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. CRM GENERAL ENDPOINTS (Database Synced)
@@ -9713,6 +9736,50 @@ app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
   });
 });
 
+/**
+ * A doctor's approval reaches storage as a PDF and nothing else — the personal
+ * file bucket accepts no other type. A photograph is wrapped into a PDF by the
+ * form before it is sent, so what arrives here is already one.
+ */
+const CLEARANCE_MIME_EXTENSIONS = {
+  'application/pdf': 'pdf',
+};
+// Above what the form allows through, so a legitimate submission is never
+// refused here — this is the backstop for a caller that is not the form.
+const MAX_CLEARANCE_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Turns what the form sent into something storable, or says why it is not.
+ *
+ * Nothing here trusts the browser: the form downsizes photos before sending,
+ * but the size and the type are re-checked because this route is public and the
+ * next caller may not be the form at all.
+ */
+function decodeClearanceUpload(payload) {
+  const mimeType = String(payload?.mimeType || '').toLowerCase();
+  const extension = CLEARANCE_MIME_EXTENSIONS[mimeType];
+  if (!extension) return { error: 'אישור הרופא חייב להיות תמונה או קובץ PDF' };
+
+  const raw = String(payload?.base64 || '');
+  const body = raw.includes(',') ? raw.split(',')[1] : raw;
+  if (!body) return { error: 'אישור הרופא לא הגיע' };
+
+  let buffer;
+  try {
+    buffer = Buffer.from(body, 'base64');
+  } catch {
+    return { error: 'אישור הרופא אינו קובץ תקין' };
+  }
+  if (!buffer.length) return { error: 'אישור הרופא אינו קובץ תקין' };
+  if (buffer.length > MAX_CLEARANCE_BYTES) return { error: 'אישור הרופא גדול מדי' };
+
+  const fileName = String(payload?.fileName || `medical-clearance.${extension}`)
+    .replace(/[^\w֐-׿.\-]+/g, '_')
+    .slice(0, 120);
+
+  return { buffer, mimeType, extension, fileName };
+}
+
 // Public full onboarding submit (details + lists + health per child)
 app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   const {
@@ -9762,6 +9829,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
         registrationNotes: String(c.registrationNotes || c.notes || '').trim(),
         answers: c.answers || {},
         healthNotes: String(c.healthNotes || '').trim(),
+        medicalClearance: c.medicalClearance || null,
         signature: c.signature || '',
         waiverAccepted: c.waiverAccepted === true || c.waiverAccepted === 'true',
         // Confirmed on the form as a child already on another parent's file.
@@ -9795,8 +9863,49 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
 
   for (const child of childList) {
     if (child.reuse_health) continue;
-    const gap = declarationGap(template?.healthQuestions || [], child.answers, child.name);
+    const asked = questionsForSigner(template?.healthQuestions || [], {
+      isAdultSelf: child.type === 'adult',
+    });
+    const gap = declarationGap(asked, child.answers, child.name);
     if (gap) return res.status(400).json({ error: gap });
+    // A doctor already limited this person's physical activity. The wall does
+    // not overrule that on a tick box, so the written approval is a condition
+    // of filing the declaration at all — checked here and not only in the form,
+    // which is the half of this a caller can skip.
+    if (needsMedicalClearance(asked, child.answers) && !child.medicalClearance) {
+      return res.status(400).json({
+        error: `נדרש אישור רופא להשתתפות בפעילות ספורטיבית עבור ${child.name}`,
+      });
+    }
+  }
+
+  // Uploaded before anything is written: a signed declaration on file with the
+  // approval missing is the one outcome this whole feature exists to prevent.
+  // An orphan file in storage, if the save then fails, costs nothing.
+  const clearanceUploads = [];
+  for (const child of childList) {
+    if (!child.medicalClearance) continue;
+    const prepared = decodeClearanceUpload(child.medicalClearance);
+    if (prepared.error) {
+      return res.status(400).json({ error: `${prepared.error} (${child.name})` });
+    }
+    const storagePath = `medical-clearance/${Date.now()}_${crypto.randomUUID()}.${prepared.extension}`;
+    let uploaded;
+    try {
+      uploaded = await supa.uploadClientDocument(storagePath, prepared.buffer, prepared.mimeType);
+    } catch (err) {
+      console.error('medical clearance upload error:', err.message);
+      return res.status(503).json({ error: 'שמירת אישור הרופא נכשלה — נסו שוב' });
+    }
+    if (!uploaded?.ok) {
+      return res.status(503).json({ error: uploaded?.error || 'שמירת אישור הרופא נכשלה — נסו שוב' });
+    }
+    clearanceUploads.push({
+      name: child.name,
+      storagePath,
+      fileName: prepared.fileName,
+      mimeType: prepared.mimeType,
+    });
   }
 
   let crmResult;
@@ -9833,6 +9942,30 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   const parent = crmResult.parent;
   const declarations = crmResult.declarations;
   const savedStudents = crmResult.participants.map((participant) => participant.student);
+
+  // The uploaded approvals become documents in the personal file, alongside the
+  // signed declaration PDF, so the office sees why this registration was let
+  // through and can open the approval itself.
+  const clearanceDocuments = [];
+  for (const upload of clearanceUploads) {
+    const index = childList.findIndex((child) => child.name === upload.name);
+    const student = index >= 0 ? savedStudents[index] : null;
+    const declaration = declarations.find((d) => d.studentId === student?.id) || null;
+    const doc = db.insert('client_documents', {
+      parentId: parent?.id || null,
+      studentId: student?.id || null,
+      declarationId: declaration?.id || null,
+      type: 'medical_clearance',
+      fileName: upload.fileName,
+      storagePath: upload.storagePath,
+      mimeType: upload.mimeType,
+    });
+    const durableDoc = await persistCore('client_documents', doc);
+    if (durableDoc?.ok === false) {
+      console.error('medical clearance document persist failed:', durableDoc.error);
+    }
+    clearanceDocuments.push(doc);
+  }
 
   for (let index = 0; index < savedStudents.length; index += 1) {
     const student = savedStudents[index];
@@ -9892,6 +10025,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     students: savedStudents,
     declarations,
     subscriptions: savedLists,
+    medicalClearances: clearanceDocuments,
   });
 });
 

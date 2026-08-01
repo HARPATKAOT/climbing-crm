@@ -2353,7 +2353,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               onToggle={toggleFolder}
             >
               {(() => {
-                const isHealthDoc = (doc) => doc.isVirtual || doc.type === 'health_waiver_pdf' || !!doc.declarationId;
+                // A doctor's approval hangs off the same declaration but is not
+                // the declaration: counting it as one would hide the fact that
+                // the signed form itself is still missing.
+                const isClearanceDoc = (doc) => doc.type === 'medical_clearance';
+                const isHealthDoc = (doc) => !isClearanceDoc(doc)
+                  && (doc.isVirtual || doc.type === 'health_waiver_pdf' || !!doc.declarationId);
                 const combinedDocuments = [...clientDocuments];
                 const hasStoredHealthDoc = combinedDocuments.some(isHealthDoc);
                 if (
@@ -2576,6 +2581,11 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                 >
                                   <div style={{ minWidth: 0 }}>
                                     <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-1)' }}>
+                                      {isClearanceDoc(doc) && (
+                                        <span className="badge badge-amber" style={{ fontSize: 10, marginLeft: 6 }}>
+                                          אישור רופא
+                                        </span>
+                                      )}
                                       {doc.fileName || 'הצהרת בריאות חתומה'}
                                     </div>
                                     <div style={{ fontSize: 10, color: 'var(--text-3)' }}>

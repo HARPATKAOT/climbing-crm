@@ -14,20 +14,95 @@
 
 export const SCREENING_PREFIX = '?';
 
+/**
+ * Some clauses only exist because a parent is signing for a child — "a child
+ * under 11 is not left without an adult". Shown to an adult signing for
+ * themselves they are not merely noise: they are a declaration about a child
+ * who is not there, ticked by someone it does not apply to.
+ *
+ * A clause written with a leading "@" is addressed to a parent only.
+ */
+export const CHILD_ONLY_PREFIX = '@';
+
+/**
+ * A screening question where "yes" means a doctor has already had a say —
+ * a limitation on physical activity, a recent operation. There the wall is not
+ * the one to decide whether climbing is safe, so the form asks for the doctor's
+ * written approval instead of taking the answer on trust.
+ *
+ * Written in the template as "!" together with the "?" that makes it a
+ * screening question: "?!האם רופא הגביל פעילות גופנית…".
+ */
+export const CLEARANCE_PREFIX = '!';
+
+/** Strips the leading markers and reports which were present. */
+function parseMarkers(rawLabel) {
+  let label = String(rawLabel || '').trim();
+  let screening = false;
+  let childOnly = false;
+  let clearance = false;
+  // Any order, so "?!", "!?" and "?@" all read the same.
+  for (;;) {
+    if (label.startsWith(SCREENING_PREFIX)) {
+      screening = true;
+      label = label.slice(SCREENING_PREFIX.length).trim();
+    } else if (label.startsWith(CHILD_ONLY_PREFIX)) {
+      childOnly = true;
+      label = label.slice(CHILD_ONLY_PREFIX.length).trim();
+    } else if (label.startsWith(CLEARANCE_PREFIX)) {
+      clearance = true;
+      label = label.slice(CLEARANCE_PREFIX.length).trim();
+    } else break;
+  }
+  return { label, screening, childOnly, clearance };
+}
+
 /** A screening question is written in the template with a leading "?". */
 export function isScreeningQuestion(question) {
   if (!question) return false;
   if (question.kind) return question.kind === 'screen';
-  return String(question.label || '').trim().startsWith(SCREENING_PREFIX);
+  return parseMarkers(question.label).screening;
 }
 
-/** The label without the marker that classified it. */
+/** True for a clause that only makes sense when signing for someone else. */
+export function isChildOnlyQuestion(question) {
+  if (!question) return false;
+  if (question.audience) return question.audience === 'child';
+  return parseMarkers(question.label).childOnly;
+}
+
+/** True when a "yes" here has to be backed by a doctor's written approval. */
+export function requiresClearance(question) {
+  if (!question) return false;
+  if (typeof question.requiresClearance === 'boolean') return question.requiresClearance;
+  return parseMarkers(question.label).clearance;
+}
+
+/** The questions answered "yes" that a doctor's approval has to cover. */
+export function clearanceTriggers(questions = [], answers = {}) {
+  return (questions || []).filter((q) => requiresClearance(q) && answers?.[q.id] === true);
+}
+
+/** True when this participant may not sign without a doctor's approval attached. */
+export function needsMedicalClearance(questions = [], answers = {}) {
+  return clearanceTriggers(questions, answers).length > 0;
+}
+
+/**
+ * The questions that actually apply to this signer.
+ *
+ * Everything downstream — what is rendered, what counts as unanswered, and what
+ * is written into the signed PDF — runs off this one list, so a clause that is
+ * not shown can never end up recorded as agreed to.
+ */
+export function questionsForSigner(questions = [], { isAdultSelf = false } = {}) {
+  if (!isAdultSelf) return questions || [];
+  return (questions || []).filter((q) => !isChildOnlyQuestion(q));
+}
+
+/** The label without the markers that classified it. */
 export function questionLabel(question) {
-  const raw = String(question?.label || '').trim();
-  if (!question?.kind && raw.startsWith(SCREENING_PREFIX)) {
-    return raw.slice(SCREENING_PREFIX.length).trim();
-  }
-  return raw;
+  return parseMarkers(question?.label).label;
 }
 
 /**

@@ -9,7 +9,6 @@ import './index.css';
 
 // Public forms are heavy (signature pad, PDF libs) and only needed on their
 // own routes — load them on demand so the CRM shell stays light.
-const PublicHealthForm           = lazy(() => import('./components/PublicHealthForm.jsx'));
 const PublicOnboardingForm       = lazy(() => import('./components/PublicOnboardingForm.jsx'));
 const LeadIntakeForm             = lazy(() => import('./components/LeadIntakeForm.jsx'));
 const PrivacyPolicy              = lazy(() => import('./components/PrivacyPolicy.jsx'));
@@ -58,9 +57,13 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <BusinessProfileProvider>
         <Suspense fallback={<div style={{ padding: 40, textAlign: 'center', fontFamily: 'sans-serif' }}>טוען...</div>}>
           <Routes>
-            <Route path="/health" element={<PublicHealthForm />} />
-            <Route path="/health/:slug" element={<PublicHealthForm />} />
+            {/* /health is the link that went out to customers and sits inside
+                WhatsApp templates, so it keeps working — but it now opens the
+                one current form. The older declaration-only page is gone. */}
+            <Route path="/health" element={<PublicOnboardingForm />} />
+            <Route path="/health/:slug" element={<PublicOnboardingForm />} />
             <Route path="/onboard" element={<PublicOnboardingForm />} />
+            <Route path="/onboard/:slug" element={<PublicOnboardingForm />} />
             <Route path="/join" element={<LeadIntakeForm />} />
             <Route path="/privacy" element={<PrivacyPolicy />} />
             <Route path="/event/:slug" element={<PublicActivityRegistration />} />
