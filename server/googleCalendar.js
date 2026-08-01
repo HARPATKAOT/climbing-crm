@@ -156,12 +156,20 @@ async function refreshAccessToken(settings) {
   });
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.error_description || data.error || 'רענון מפתח נכשל');
+    const msg = data.error_description || data.error || 'רענון מפתח נכשל';
+    // Persist so status/UI can show «דורש טיפול» without waiting for a full sync.
+    try {
+      await saveSettings({ lastError: msg });
+    } catch {
+      /* ignore */
+    }
+    throw new Error(msg);
   }
   const expiresAt = Date.now() + (data.expires_in || 3600) * 1000 - 60_000;
   return saveSettings({
     accessToken: data.access_token,
     accessTokenExpiresAt: expiresAt,
+    lastError: null,
   });
 }
 
