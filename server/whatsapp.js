@@ -77,6 +77,7 @@ import {
   isStaffPhone,
   parseAiReply,
   detectUnsureHeuristic,
+  resolveUnsureReply,
   interactiveMenuPayload,
   studentsForParent,
   findPrimaryParent,
@@ -1198,23 +1199,28 @@ export const whatsappService = {
       if (geminiText) {
         const parsed = parseAiReply(geminiText, settings);
         const unsure = parsed.unsure || detectUnsureHeuristic(parsed.text);
-        if (unsure && settings.aiEscalateWhenUnsure) {
+        if (unsure) {
+          const resolved = resolveUnsureReply(phone, settings);
           return {
-            text: parsed.text || settings.aiUnsureReply,
-            handoff: true,
+            text: clipReply(resolved.text, settings.aiMaxReplyChars),
+            handoff: resolved.handoff,
             unsure: true,
+            clarify: !!resolved.clarify,
             confidence: 'low',
           };
         }
-        return { text: parsed.text, confidence: 'medium', unsure };
+        return { text: parsed.text, confidence: 'medium', unsure: false };
       }
     }
 
     if (quick.skipMenu && isIdentifiedParent(parent)) {
+      const resolved = resolveUnsureReply(phone, settings);
       return {
-        text: clipReply(settings.aiUnsureReply || knownParentGreeting(parent), settings.aiMaxReplyChars),
+        text: clipReply(resolved.text || knownParentGreeting(parent), settings.aiMaxReplyChars),
         confidence: 'low',
-        handoff: !!settings.aiEscalateWhenUnsure,
+        handoff: resolved.handoff,
+        unsure: true,
+        clarify: !!resolved.clarify,
         skipMenu: true,
       };
     }

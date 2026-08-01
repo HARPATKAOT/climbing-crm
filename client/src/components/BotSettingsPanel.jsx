@@ -361,10 +361,21 @@ export default function BotSettingsPanel({
             onChange={(e) => patch('aiEscalateWhenUnsure', e.target.checked)}
             style={{ width: 18, height: 18 }}
           />
-          העברה לצוות כשהבינה לא בטוחה
+          אחרי בקשת הבהרה — העברה לצוות אם עדיין לא ברור
         </label>
         <div className="form-group">
-          <label className="form-label" style={{ fontSize: 11 }}>הודעה כשלא בטוחים</label>
+          <label className="form-label" style={{ fontSize: 11 }}>הודעה כשלא מבינים (בקשת הבהרה)</label>
+          <textarea
+            className="input textarea"
+            rows={2}
+            style={{ fontSize: 12 }}
+            value={settings.aiClarifyReply || ''}
+            onChange={(e) => patch('aiClarifyReply', e.target.value)}
+            placeholder="לא הבנתי 🙏 יכולים להסביר קצת יותר?"
+          />
+        </div>
+        <div className="form-group">
+          <label className="form-label" style={{ fontSize: 11 }}>הודעה בהעברה לצוות אחרי הבהרה שנכשלה</label>
           <textarea
             className="input textarea"
             rows={2}

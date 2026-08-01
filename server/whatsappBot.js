@@ -64,6 +64,8 @@ export const DEFAULT_BOT_SETTINGS = {
     + 'דמי העשרה: 110 ₪\n'
     + 'הצהרת בריאות: https://app.kirboaz.co.il/health',
   aiEscalateWhenUnsure: true,
+  // First unclear turn — ask to rephrase. Second unclear turn uses aiUnsureReply + handoff.
+  aiClarifyReply: 'לא הבנתי 🙏\nיכולים להסביר קצת יותר? במה אפשר לעזור?',
   aiUnsureReply: 'רגע — כדי לא לטעות אני מעביר את זה לצוות 🙏\nמישהו יחזור אליכם עם תשובה מדויקת.',
   aiLeadCaptureEnabled: true,
   aiInteractiveMenuEnabled: true,
@@ -114,6 +116,7 @@ const BRANDED_TEXT_KEYS = [
   'aiBusinessFacts',
   'aiKnowledgeBase',
   'aiUnsureReply',
+  'aiClarifyReply',
   'aiOptOutMessage',
   'aiForbiddenTopics',
 ];
@@ -528,8 +531,9 @@ export function buildAiExtraContext(settings, phone, parent, students) {
   parts.push(
     '',
     '## כללי ביטחון',
-    'אם אינך בטוח בתשובה — השב בדיוק בשורה הראשונה: UNSURE',
-    'ואז משפט קצר ללקוח. אל תנחש זמנים.',
+    'אם אינך בטוח בתשובה או שההודעה לא ברורה — השב בדיוק בשורה הראשונה: UNSURE',
+    'ואז משפט קצר שמבקש הבהרה מהלקוח. אל תעביר לצוות בעצמך במשפט הזה.',
+    'אל תנחש זמנים.',
     PRICE_SOURCE_RULE,
   );
   return parts.join('\n');
@@ -543,13 +547,56 @@ export function parseAiReply(rawText, settings = {}) {
     unsure = true;
     text = text.replace(/^UNSURE\b[:\-\s]*/i, '').trim();
   }
-  if (!text && unsure) text = s.aiUnsureReply;
+  if (!text && unsure) text = s.aiClarifyReply || s.aiUnsureReply;
   return { text: clipReply(text, s.aiMaxReplyChars), unsure };
 }
 
 export function detectUnsureHeuristic(text) {
   const t = String(text || '');
   return /לא בטוח|אינני בטוח|לא יודע|אין לי מידע|אעביר לצוות|צריך לבדוק/.test(t);
+}
+
+/** True when this outbound text is our “didn’t understand” ask. */
+export function isClarifyReplyText(text, settings = {}) {
+  const t = String(text || '');
+  if (/לא\s*הבנתי/.test(t)) return true;
+  const s = mergeBotSettings(settings);
+  const clarify = String(s.aiClarifyReply || '').trim();
+  if (!clarify) return false;
+  const needle = clarify.split(/\n/)[0].trim().slice(0, 24);
+  return needle.length >= 4 && t.includes(needle);
+}
+
+/**
+ * Last bot turn (before the current inbound already in the log) asked for clarification.
+ * Second unclear message → hand off.
+ */
+export function recentlyAskedClarify(phone, settings = {}, historyLimit = 8) {
+  if (!phone) return false;
+  const history = getConversationHistory(phone, historyLimit);
+  let i = history.length - 1;
+  while (i >= 0 && history[i].startsWith('לקוח:')) i -= 1;
+  if (i < 0 || !history[i].startsWith('בוט:')) return false;
+  return isClarifyReplyText(history[i].slice('בוט:'.length).trim(), settings);
+}
+
+/**
+ * Unsure once → ask to rephrase (stay in the chat).
+ * Unsure again right after that → hand off to staff.
+ */
+export function resolveUnsureReply(phone, settings = {}) {
+  const s = mergeBotSettings(settings);
+  const clarifyText = s.aiClarifyReply
+    || 'לא הבנתי 🙏\nיכולים להסביר קצת יותר? במה אפשר לעזור?';
+  const handoffText = s.aiUnsureReply || s.aiHandoffAckMessage;
+
+  if (!s.aiEscalateWhenUnsure) {
+    return { text: clarifyText, handoff: false, unsure: true, clarify: true };
+  }
+  if (recentlyAskedClarify(phone, s)) {
+    return { text: handoffText, handoff: true, unsure: true, clarify: false };
+  }
+  return { text: clarifyText, handoff: false, unsure: true, clarify: true };
 }
 
 /** Lead intake state machine */

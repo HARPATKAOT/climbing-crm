@@ -10,6 +10,9 @@ import {
   describeBotState,
   decideBotGate,
   parseAiReply,
+  resolveUnsureReply,
+  recentlyAskedClarify,
+  isClarifyReplyText,
   classifyAudience,
   mergeBotSettings,
   applyBusinessBrand,
@@ -17,6 +20,7 @@ import {
   isHumanOutboundLog,
 } from './whatsappBot.js';
 import { isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
+import { db } from './db.js';
 
 test('clipReply truncates long text', () => {
   const long = 'א'.repeat(50);
@@ -216,7 +220,70 @@ test('decideBotGate: disabled / opted out / handoff / outside hours', () => {
 test('parseAiReply detects UNSURE prefix', () => {
   const parsed = parseAiReply('UNSURE\nלא בטוח לגבי המחיר', { aiUnsureReply: 'מעביר לצוות', aiMaxReplyChars: 700 });
   assert.equal(parsed.unsure, true);
-  assert.match(parsed.text, /לא בטוח|מעביר/);
+  assert.match(parsed.text, /לא בטוח|מעביר|לא הבנתי/);
+});
+
+test('first unsure asks for clarification; second hands off', () => {
+  const phone = '972500000099';
+  const clarify = 'לא הבנתי 🙏\nיכולים להסביר?';
+  const handoff = 'מעביר לצוות עכשיו';
+  const settings = {
+    aiEscalateWhenUnsure: true,
+    aiClarifyReply: clarify,
+    aiUnsureReply: handoff,
+  };
+
+  const previous = (db.get('whatsapp_logs') || []).filter((l) => l.phone !== phone);
+  db.set('whatsapp_logs', [
+    ...previous,
+    {
+      id: 't-in-1',
+      phone,
+      channel: 'whatsapp',
+      direction: 'inbound',
+      message: 'vhh',
+      created_at: '2026-08-01T10:00:00.000Z',
+    },
+  ]);
+
+  const first = resolveUnsureReply(phone, settings);
+  assert.equal(first.handoff, false);
+  assert.equal(first.clarify, true);
+  assert.match(first.text, /לא הבנתי/);
+
+  db.set('whatsapp_logs', [
+    ...previous,
+    {
+      id: 't-bot-1',
+      phone,
+      channel: 'whatsapp',
+      direction: 'outbound',
+      message: clarify,
+      is_ai: true,
+      source: 'ai',
+      created_at: '2026-08-01T10:00:01.000Z',
+    },
+    {
+      id: 't-in-2',
+      phone,
+      channel: 'whatsapp',
+      direction: 'inbound',
+      message: 'asdf',
+      created_at: '2026-08-01T10:00:30.000Z',
+    },
+  ]);
+
+  assert.equal(recentlyAskedClarify(phone, settings), true);
+  const second = resolveUnsureReply(phone, settings);
+  assert.equal(second.handoff, true);
+  assert.equal(second.text, handoff);
+
+  db.set('whatsapp_logs', previous);
+});
+
+test('isClarifyReplyText recognizes the default ask', () => {
+  assert.equal(isClarifyReplyText('לא הבנתי 🙏\nיכולים להסביר?'), true);
+  assert.equal(isClarifyReplyText('כן, יש מקום ביום ג׳'), false);
 });
 
 test('schedule helpers still work', () => {
