@@ -50,13 +50,19 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
     name: 'listClasses',
     description:
       'קבוצות החוגים במערכת ומצב המקומות בהן. יש לציין כיתה (א׳–ו׳) או שכבה '
-      + '(בוגרים / תיכון / חטיבה). בלי אחד מהם מוחזרות כל הקבוצות.',
+      + '(בוגרים / תיכון / חטיבה). בלי אחד מהם מוחזרות כל הקבוצות. '
+      + 'קבוצות מתקדמים (נבחרת) אינן מוחזרות אלא אם מבקשים אותן ב-level, '
+      + 'כי הן לא מתאימות למי שרק מתחיל.',
     parameters: {
       type: 'object',
       properties: {
         grade: { type: 'string', description: 'אות כיתה אחת: א ב ג ד ה או ו' },
         band: { type: 'string', description: 'שכבה שאינה כיתה: בוגרים / תיכון / חטיבה' },
         day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת, אם הלקוח ציין יום' },
+        level: {
+          type: 'string',
+          description: 'רק אם הלקוח שאל במפורש על נבחרת או על קבוצת מתקדמים: "מתקדמים"',
+        },
       },
     },
   },
@@ -190,13 +196,28 @@ function openGroupsPayload(groups) {
       מצב: g.isFull ? 'מלאה' : 'יש מקום',
       מקומות_פנויים: Number(g.freeSlots) || 0,
       מדריך: trainerNameForGroup(db, g) || '',
+      רמה: g.skillLevel || 'כל הרמות',
       מחיר_פעם_בשבוע: Number(g.priceWeek) || 0,
       מחיר_פעמיים_בשבוע: Number(g.priceTwice) || 0,
     }));
 }
 
-function selectGroups({ grade = '', band = '', day = null } = {}) {
+/**
+ * A squad is not an answer to "what classes do you have". It trains twice a
+ * week, it is for climbers who already climb, and offering it to a parent
+ * asking for the first time sends them to a group they cannot join. So an
+ * advanced group is left out unless the caller asked for one by name.
+ */
+function isAdvancedGroup(group) {
+  return String(group?.skillLevel || '').trim() === 'מתקדמים';
+}
+
+function selectGroups({ grade = '', band = '', day = null, level = '' } = {}) {
   let groups = db.get('groups') || [];
+  const wantedLevel = String(level || '').trim();
+  groups = wantedLevel
+    ? groups.filter((g) => String(g.skillLevel || '') === wantedLevel)
+    : groups.filter((g) => !isAdvancedGroup(g));
   const letter = String(grade || '').trim().slice(0, 1);
   if (letter) {
     groups = groups.filter((g) => groupMatchesGradeLetter(g, letter));
@@ -293,8 +314,8 @@ export function buildCustomerTools({
   // Named so one tool can build on another — the registration pack reuses the
   // equipment link instead of repeating the lookup.
   const tools = {
-    listClasses: async ({ grade, band, day } = {}) => {
-      const groups = selectGroups({ grade, band, day });
+    listClasses: async ({ grade, band, day, level } = {}) => {
+      const groups = selectGroups({ grade, band, day, level });
       if (!groups.length) {
         // An empty result used to order a handoff, so a parent asking about a
         // toddler was passed to the team instead of hearing the obvious: the

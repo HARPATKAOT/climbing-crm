@@ -264,6 +264,8 @@ const mappers = {
       maxSlots: r.max_slots ?? 12,
       enrolled: 0,
       ageCategory: r.age_category || '',
+      // Empty means a regular class open to anyone — see the migration.
+      skillLevel: r.skill_level || '',
       priceWeek: r.price_week != null ? Number(r.price_week) : 0,
       priceTwice: r.price_twice != null ? Number(r.price_twice) : 0,
       waParents: r.wa_parents || '',
@@ -281,10 +283,14 @@ const mappers = {
       time: o.time || '',
       duration: o.duration || 50,
       trainer: o.trainer || '',
-      // trainer_id has an FK to employees; only set it for known e-* ids,
-      // otherwise leave null to avoid FK violations on free-text trainers.
-      trainer_id:
-        typeof o.trainer === 'string' && /^e-/.test(o.trainer) ? o.trainer : null,
+      // trainer_id has a foreign key to the `employees` table — which is empty,
+      // because employees are stored in `kv_collections` like the rest of the
+      // operational data. So the id could never resolve, and the /^e-/ guess it
+      // used to make matched eleven groups whose trainer ids (e-27, e-7 …) are
+      // Notion leftovers with no employee behind them: every save of those
+      // groups failed on the foreign key and never reached the database. The
+      // trainer the app reads is the `trainer` field beside this one.
+      trainer_id: null,
       // Assistant instructors are a plain id list — no FK, so an employee that
       // was archived after the fact never blocks saving the group.
       assistants: Array.isArray(o.assistants)
@@ -292,6 +298,7 @@ const mappers = {
         : [],
       max_slots: o.maxSlots ?? 12,
       age_category: o.ageCategory || '',
+      skill_level: emptyToNull(o.skillLevel),
       price_week: numOrNull(o.priceWeek) ?? 0,
       price_twice: numOrNull(o.priceTwice) ?? 0,
       wa_parents: o.waParents || '',

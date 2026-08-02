@@ -115,6 +115,15 @@ const WEEK_DAYS_PREF_KEY = 'schedule.visibleWeekDays';
 // field, because the bot matches a band by looking for its word inside the
 // category: "חטיבה + תיכון" answers a question about either one.
 const AGE_CATEGORIES = ["א'-ב'", "ג'-ד'", "ה'-ו'", 'חטיבה', 'חטיבה + תיכון', 'תיכון', 'בוגרים'];
+
+// Empty is the default and means a regular class: the bot offers it to anyone.
+// Only "מתקדמים" changes what the bot does — it keeps a squad out of the answer
+// a first-time caller gets. Values match `groups.skill_level` in the database.
+const SKILL_LEVELS = [
+  { value: '', label: 'כל הרמות (ברירת מחדל)' },
+  { value: 'מתחילים', label: 'מתחילים' },
+  { value: 'מתקדמים', label: 'מתקדמים / נבחרת' },
+];
 const TIME_OPTIONS = [
   '14:00','15:00','15:30','16:00','16:30',
   '17:00','17:10','17:30','18:00','18:10',
@@ -1072,6 +1081,7 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
   const [assistants, setAssistants] = useState(() => normalizeAssistants(group?.assistants));
   const [maxSlots,   setMaxSlots]   = useState(group?.maxSlots || 12);
   const [ageCat,     setAgeCat]     = useState(group?.ageCategory || "ג'-ד'");
+  const [skillLevel, setSkillLevel] = useState(group?.skillLevel || '');
   const [priceWeek,  setPriceWeek]  = useState(group?.priceWeek || 280);
   const [priceTwice, setPriceTwice] = useState(group?.priceTwice || 360);
   const [waParents,  setWaParents]  = useState(group?.waParents || '');
@@ -1125,6 +1135,7 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
       assistants:  assistants.filter(id => id !== trainer),
       maxSlots:    parseInt(maxSlots),
       ageCategory: ageCat,
+      skillLevel,
       priceWeek:   parseFloat(priceWeek) || 0,
       priceTwice:  parseFloat(priceTwice) || 0,
       waParents,
@@ -1177,6 +1188,18 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
                 <AppSelect className="input select" value={ageCat} onChange={e => setAgeCat(e.target.value)}>
                   {AGE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                 </AppSelect>
+              </div>
+            </div>
+
+            <div className="form-grid-2">
+              <div className="form-group">
+                <label className="form-label">רמה</label>
+                <AppSelect className="input select" value={skillLevel} onChange={e => setSkillLevel(e.target.value)}>
+                  {SKILL_LEVELS.map(l => <option key={l.value} value={l.value}>{l.label}</option>)}
+                </AppSelect>
+                <div className="form-hint">
+                  קבוצה למתקדמים לא מוצעת ללקוח חדש ששואל על חוגים.
+                </div>
               </div>
             </div>
 
