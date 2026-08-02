@@ -214,6 +214,17 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
   },
 ];
 
+/**
+ * The free-text note the staff wrote on the group card. Only included when it
+ * has something in it — an empty key in every row would read to the model like
+ * "there is nothing to say about this group", which is not the same as "nobody
+ * wrote anything yet".
+ */
+function groupInfoFields(group) {
+  const info = String(group?.info || '').trim();
+  return info ? { מידע: info } : {};
+}
+
 function openGroupsPayload(groups) {
   const students = db.get('students') || [];
   return enrichGroupsWithCapacity(groups, students)
@@ -229,6 +240,7 @@ function openGroupsPayload(groups) {
       רמה: g.skillLevel || 'מתחילים',
       מחיר_פעם_בשבוע: Number(g.priceWeek) || 0,
       מחיר_פעמיים_בשבוע: Number(g.priceTwice) || 0,
+      ...groupInfoFields(g),
     }));
 }
 
@@ -316,6 +328,9 @@ function pickSingleGroup({ grade, band, day, time } = {}) {
         יום: DAY_NAMES[Number(g.day)] || String(g.day ?? ''),
         שעה: g.time || '',
         רמה: g.skillLevel || 'מתחילים',
+        // The difference between two groups at the same hour is often only in
+        // what the staff wrote here, so it goes with the question "which one".
+        ...groupInfoFields(g),
       })),
     };
   }
@@ -479,6 +494,7 @@ export function buildCustomerTools({
             יום: DAY_NAMES[Number(g.day)] || String(g.day ?? ''),
             שעה: g.time || '',
             רמה: g.skillLevel || 'מתחילים',
+            ...groupInfoFields(g),
           })),
           הערה: 'יותר מקבוצה אחת מתאימה — יש לשאול לאיזו קבוצה, ורק אז לשלוח קישור',
         };

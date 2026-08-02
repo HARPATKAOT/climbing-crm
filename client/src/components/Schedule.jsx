@@ -1089,6 +1089,8 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
     group?.signupLinkWeek || group?.signupLink || '',
   );
   const [signupLinkTwice, setSignupLinkTwice] = useState(group?.signupLinkTwice || '');
+  const [info,       setInfo]       = useState(group?.info || '');
+  const [infoOpen,   setInfoOpen]   = useState(!!(group?.info || '').trim());
 
   const handleDelete = () => {
     if (!group?.id || !onDelete) return;
@@ -1141,6 +1143,7 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
       waClimbers,
       signupLinkWeek: signupLinkWeek.trim(),
       signupLinkTwice: signupLinkTwice.trim(),
+      info: info.trim(),
     });
   };
 
@@ -1279,6 +1282,43 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
               <label className="form-label">לינק וואטסאפ מטפסים</label>
               <input className="input" placeholder="https://chat.whatsapp.com/..." value={waClimbers}
                 onChange={e => setWaClimbers(e.target.value)} />
+            </div>
+
+            {/* Free text for the bot. Collapsed by default so it does not add a
+                block to a form most edits never touch — but a group that already
+                has something written opens with it visible, so nobody edits the
+                group without seeing what the bot is telling customers. */}
+            <div className="form-group" style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ justifyContent: 'space-between', width: '100%', padding: '4px 0' }}
+                onClick={() => setInfoOpen(o => !o)}
+              >
+                <span>
+                  מידע על הקבוצה
+                  <span style={{ color: 'var(--text-3)', fontWeight: 400, marginRight: 6 }}>
+                    {info.trim() ? 'מולא' : 'ריק'}
+                  </span>
+                </span>
+                <ChevronDown size={15} style={{ transform: infoOpen ? 'rotate(180deg)' : 'none' }} />
+              </button>
+              {infoOpen && (
+                <>
+                  <textarea
+                    className="input"
+                    rows={4}
+                    style={{ marginTop: 8 }}
+                    value={info}
+                    onChange={e => setInfo(e.target.value)}
+                    placeholder="למי הקבוצה מתאימה, מה מביאים לאימון, במה היא שונה..."
+                  />
+                  <div className="form-hint">
+                    מה שכתוב כאן נמסר לבוט כשהוא מדבר על הקבוצה הזו. ריק = הוא עונה
+                    רק לפי שאר השדות.
+                  </div>
+                </>
+              )}
             </div>
           </form>
         </div>

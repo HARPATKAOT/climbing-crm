@@ -276,6 +276,8 @@ const mappers = {
       // signup_link so older rows still show a once/week copy button.
       signupLinkWeek: r.signup_link_week || r.signup_link || '',
       signupLinkTwice: r.signup_link_twice || '',
+      // Free text about this group that only the staff know — the bot reads it.
+      info: r.info || '',
       notionId: r.notion_id || undefined,
     }),
     toRow: (o) => ({
@@ -309,6 +311,7 @@ const mappers = {
       signup_link_twice: o.signupLinkTwice || '',
       // Keep the legacy column in sync with once/week for any old readers.
       signup_link: o.signupLinkWeek || '',
+      info: o.info || '',
       notion_id: emptyToNull(o.notionId),
     }),
   },
@@ -467,7 +470,16 @@ mappers.form_templates = {
     id: r.id,
     slug: r.slug || '',
     title: r.title || '',
-    activityType: r.activity_type || 'wall',
+    // A declaration can serve several activity types (a birthday and a company
+    // day sign the same thing), so the list is the truth. `activityType` stays
+    // as its first entry: rows written before the column existed have only
+    // that, and readers that expect one value keep working.
+    activityTypes: Array.isArray(r.activity_types) && r.activity_types.length
+      ? r.activity_types.map(String)
+      : (r.activity_type ? [String(r.activity_type)] : []),
+    activityType: r.activity_type
+      || (Array.isArray(r.activity_types) ? r.activity_types[0] : '')
+      || 'wall',
     waiverText: r.waiver_text || '',
     waiverSummary: r.waiver_summary || '',
     healthQuestions: Array.isArray(r.health_questions) ? r.health_questions : [],
