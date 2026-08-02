@@ -153,6 +153,21 @@ test('human outbound logs are detected for staff-thread deferral', () => {
     message: '‏*041663*‏ הוא קוד האימות שלך. מטעמי אבטחה, אין לשתף את הקוד הזה.',
   }), false);
   assert.equal(isHumanOutboundLog({ direction: 'inbound', is_ai: false, source: 'customer' }), false);
+  // An automation's confirmation went out under the CRM's name and silenced the
+  // bot on the customer's next message. Both the tag and the template name have
+  // to keep that from happening.
+  assert.equal(isHumanOutboundLog({
+    direction: 'outbound',
+    is_ai: false,
+    source: 'automation',
+    template_name: 'anything_v1',
+  }), false);
+  assert.equal(isHumanOutboundLog({
+    direction: 'outbound',
+    is_ai: false,
+    source: 'crm',
+    template_name: 'onboarding_completed_v1',
+  }), false);
 });
 
 

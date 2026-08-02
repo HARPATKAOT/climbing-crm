@@ -137,6 +137,18 @@ export function describeBotBlocks(bot, now = Date.now()) {
       action: 'resume',
       actionLabel: 'החזרת הבוט ללקוח',
     });
+  } else if (bot.status === 'staff_thread') {
+    // No pause row behind this one — the bot stands down because the last
+    // outbound was written by a person. It used to show up as "בוט פעיל",
+    // which read as "the bot will answer" while it answered nothing.
+    blocks.push({
+      kind: 'customer',
+      label: 'ממתין · הצוות בשיחה',
+      reason: 'ההודעה האחרונה ללקוח נשלחה בידי אדם, ולכן הבוט לא נכנס לשיחה. '
+        + 'הוא יחזור לענות מעצמו כשהוא ישלח את ההודעה הבאה — או עכשיו, בלחיצה.',
+      action: 'resume',
+      actionLabel: 'החזרת הבוט לשיחה',
+    });
   } else if (bot.status === 'paused') {
     // The pause can lapse between polls — an expired one is not a block.
     const left = formatPauseLeft(bot.until, now);

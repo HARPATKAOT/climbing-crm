@@ -459,9 +459,14 @@ export function isHumanOutboundLog(log) {
  * human thread — the bot must not jump in (even if the timed pause was lost
  * after a server restart).
  */
-export function shouldDeferToHumanStaff(phone) {
+export function shouldDeferToHumanStaff(phone, { resumedAt = null } = {}) {
   const normalized = normalizeWaPhone(phone) || phone;
   if (!normalized) return false;
+  // "Bring the bot back" had nothing to clear: the signal is the message log,
+  // not a flag, so the button cleared a pause that was not there and the next
+  // message was blocked by the same staff row. Anything before the resume no
+  // longer counts.
+  const resumedTs = resumedAt ? new Date(resumedAt).getTime() : 0;
   const logs = (db.get('whatsapp_logs') || [])
     .filter((l) => (l.channel || 'whatsapp') === 'whatsapp'
       && phonesMatch(l.phone || l.to || l.from, normalized))
@@ -469,7 +474,9 @@ export function shouldDeferToHumanStaff(phone) {
 
   for (const log of logs) {
     if (log.direction === 'inbound') continue;
-    if (log.direction === 'outbound') return isHumanOutboundLog(log);
+    if (log.direction !== 'outbound') continue;
+    if (resumedTs && new Date(log.created_at || 0).getTime() <= resumedTs) return false;
+    return isHumanOutboundLog(log);
   }
   return false;
 }
@@ -480,7 +487,8 @@ export function shouldDeferToHumanStaff(phone) {
  * that goes stale the moment it leaves the server.
  */
 export function describeBotState(parent, settings = {}, now = new Date()) {
-  const globallyOff = !isBotEnabled(mergeBotSettings(settings));
+  const s = mergeBotSettings(settings);
+  const globallyOff = !isBotEnabled(s);
 
   if (isOptedOut(parent)) {
     return {
@@ -503,6 +511,21 @@ export function describeBotState(parent, settings = {}, now = new Date()) {
       until,
       minutesLeft: Math.max(1, Math.ceil(msLeft / 60000)),
       reason: parent?.bot_pause_reason || (parent?.bot_handoff_at ? 'handoff' : 'human_reply'),
+      globallyOff,
+    };
+  }
+
+  // The gate stands down whenever the last outbound came from a person, with no
+  // pause row behind it — so the card said "בוט פעיל" while the bot was in fact
+  // silent. A state nobody can see is a state nobody can fix: the badge has to
+  // report what the gate will actually do on the next message.
+  if (s.aiPauseOnHumanReply !== false && shouldDeferToHumanStaff(parent?.phone || '', { resumedAt: parent?.bot_resumed_at })) {
+    return {
+      status: 'staff_thread',
+      source: 'staff',
+      until: null,
+      minutesLeft: null,
+      reason: 'human_thread',
       globallyOff,
     };
   }
@@ -546,6 +569,8 @@ export async function clearBotPause(phone) {
     bot_paused_until: null,
     bot_pause_reason: null,
     bot_handoff_at: null,
+    // Also releases the staff-thread stand-down, which has no row to clear.
+    bot_resumed_at: new Date().toISOString(),
   });
 }
 
@@ -1072,7 +1097,7 @@ export function decideBotGate(settings, parent, students, text, { isSimulator = 
 
   // Staff already owns this thread (last outbound was human). Timed pause can
   // vanish on restart; the message log is the durable signal.
-  if (!isSimulator && s.aiPauseOnHumanReply !== false && shouldDeferToHumanStaff(parent?.phone || '')) {
+  if (!isSimulator && s.aiPauseOnHumanReply !== false && shouldDeferToHumanStaff(parent?.phone || '', { resumedAt: parent?.bot_resumed_at })) {
     return { action: 'silence', reason: 'human_thread' };
   }
 
