@@ -116,6 +116,33 @@ function ageOf(birthDate) {
   return (Date.now() - b.getTime()) / (365.25 * 24 * 3600 * 1000);
 }
 
+/**
+ * Same person under different name entries: exact match, or one side is just
+ * the other's first word — Notion has both "סמדר" (a parent registered as a
+ * climber under her own first name) and "סמדר איל" for the same person, and
+ * an exact-string match alone let that slip through as a new duplicate.
+ */
+function namesMatchLoosely(a, b) {
+  const na = normalizedChildName(a);
+  const nb = normalizedChildName(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const wordsA = na.split(' ');
+  const wordsB = nb.split(' ');
+  return (wordsA.length === 1 && wordsB[0] === na) || (wordsB.length === 1 && wordsA[0] === nb);
+}
+
+/** Same date, either side missing, or same year within ~3 months — Notion's second date field for the same person is sometimes just wrong by a few weeks. */
+function birthDatesCompatible(a, b) {
+  if (!a || !b) return true;
+  if (a === b) return true;
+  const da = new Date(a);
+  const db_ = new Date(b);
+  if (Number.isNaN(da.getTime()) || Number.isNaN(db_.getTime())) return true;
+  const days = Math.abs(da.getTime() - db_.getTime()) / (24 * 3600 * 1000);
+  return days <= 100;
+}
+
 // ─── Rollback ───────────────────────────────────────────────────────────────
 
 const CREATED = [
@@ -214,8 +241,8 @@ async function run() {
     for (const row of rows) {
       if (isJunkChildName(row.child_name)) { junkRows.push(row); continue; }
       const dup = childRows.find((r) =>
-        normalizedChildName(r.child_name) === normalizedChildName(row.child_name) &&
-        (!r.birth_date || !row.birth_date || dateOnly(r.birth_date) === dateOnly(row.birth_date))
+        namesMatchLoosely(r.child_name, row.child_name) &&
+        birthDatesCompatible(dateOnly(r.birth_date), dateOnly(row.birth_date))
       );
       if (dup) {
         // משאירים את השורה עם הסטטוס הגבוה, ממזגים פרטים חסרים
@@ -332,14 +359,27 @@ async function run() {
       let student = db.getOne('students', stableId) || allStudents.find((s) => s.id === stableId);
 
       if (!student) {
-        // התאמה למתאמן קיים: שם + תאריך לידה (שם בלבד לא מספיק)
-        const matches = allStudents.filter((s) =>
+        // התאמה למתאמן קיים: קודם שם מדויק + תאריך לידה תואם/חסר, בכל המערכת.
+        const exact = allStudents.filter((s) =>
           normalizedChildName(s.name) === normalizedChildName(childName) &&
           (!birthDate || !s.birthDate || dateOnly(s.birthDate) === birthDate)
         );
-        if (matches.length === 1) student = matches[0];
-        else if (matches.length > 1) {
+        if (exact.length === 1) student = exact[0];
+        else if (exact.length > 1) {
           report.studentsAmbiguous.push(`${childName} — נוצר חדש כי יש כמה התאמות קיימות`);
+        } else {
+          // בלי התאמה מדויקת: שם פרטי מול שם מלא (הורה שרשם את עצמו כמטפס
+          // בשם פרטי, למשל) — מוגבל לאותה משפחה כדי לא לייצר התאמות שווא
+          // בין משפחות שונות עם ילד באותו שם פרטי.
+          const familyMatches = allStudents.filter((s) =>
+            s.parentId === parent.id &&
+            namesMatchLoosely(s.name, childName) &&
+            birthDatesCompatible(dateOnly(s.birthDate), birthDate)
+          );
+          if (familyMatches.length === 1) student = familyMatches[0];
+          else if (familyMatches.length > 1) {
+            report.studentsAmbiguous.push(`${childName} — נוצר חדש כי יש כמה התאמות קיימות באותה משפחה`);
+          }
         }
       }
 
