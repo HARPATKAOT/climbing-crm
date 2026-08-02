@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { israelDateStr } from './attendanceUtils.js';
 import { supa, CORE_TABLES, OPERATIONAL_TABLES } from './supa.js';
-import { enrichStudentsWithGuardians } from './studentGuardians.js';
+import { enrichStudentsWithGuardians, linkHouseholdGuardians } from './studentGuardians.js';
 import {
   enrichStudentsWithGroupIds,
   enrollmentId,
@@ -141,6 +141,19 @@ async function persistLeadPair(parent, student) {
     }
   }
   return { ok: true };
+}
+
+/**
+ * Attach a newly created child to the rest of their household — the parents a
+ * merge already put on the family's other children. Without it the child shows
+ * up only on the card that created them.
+ */
+async function persistHouseholdLinks(student, source = 'household') {
+  if (!student?.id) return;
+  for (const link of linkHouseholdGuardians(db, { studentId: student.id, source })) {
+    const result = await persistCore('student_guardians', link);
+    if (!result.ok) console.error('persistHouseholdLinks failed:', result.error);
+  }
 }
 
 /** Await durable write for CRM-core tables (use on public form submit). */
@@ -754,6 +767,88 @@ function absorbDuplicateParentsInto(data, canonical, duplicates) {
   return absorbedIds;
 }
 
+const CLIMBING_LEVELS = [
+  '5A', '5B', '5C',
+  '6A', '6B', '6C',
+  '7A', '7B', '7C',
+  '8A', '8B', '8C',
+];
+
+function climbingLevelRank(level) {
+  const i = CLIMBING_LEVELS.indexOf(level);
+  return i === -1 ? -1 : i;
+}
+
+function normalizeLevelTestFields(test, data) {
+  let testType = test.test_type || 'level';
+  if (testType === 'top_rope') testType = 'top-rope';
+  // Legacy LevelTests page sent route_type without test_type
+  if (!test.test_type && test.route_type) testType = 'level';
+
+  const isLevelTest = testType === 'level' || testType === 'top-rope';
+  const routeStyleRaw = test.route_style || test.route_type || 'top-rope';
+  const routeStyle = isLevelTest
+    ? (routeStyleRaw === 'top_rope' ? 'top-rope' : routeStyleRaw)
+    : null;
+
+  const level = isLevelTest ? (test.level || test.grade || '5A') : null;
+  const passed = test.passed ?? (test.status ? test.status === 'passed' : true);
+  const studentId = test.studentId || test.climber_id || null;
+
+  let studentName = test.studentName || null;
+  if (!studentName && studentId) {
+    studentName = data.students?.find((s) => s.id === studentId)?.name || null;
+  }
+
+  const ceremony = test.attended_ceremony ?? test.ceremony ?? false;
+
+  return {
+    studentId,
+    studentName: studentName || 'מתאמן',
+    climber_id: studentId,
+    grade: level,
+    level,
+    test_type: testType === 'top-rope' ? 'level' : testType,
+    route_style: routeStyle,
+    route_type: routeStyle,
+    examiner: test.examiner ?? null,
+    examinerId: test.examinerId ?? null,
+    date: test.date || new Date().toISOString().split('T')[0],
+    notes: test.notes || '',
+    passed,
+    status: test.status || (passed ? 'passed' : 'failed'),
+    attended_ceremony: ceremony,
+    ceremony,
+  };
+}
+
+/** Highest passed level-test grade for a student → students.levelGrade */
+function syncStudentLevelGrade(data, studentId) {
+  if (!studentId) return;
+  const studentIndex = (data.students || []).findIndex((s) => s.id === studentId);
+  if (studentIndex === -1) return;
+
+  let best = null;
+  let bestRank = -1;
+  for (const t of data.level_tests || []) {
+    if (t.studentId !== studentId && t.climber_id !== studentId) continue;
+    if (!t.passed && t.status !== 'passed') continue;
+    const type = t.test_type || 'level';
+    if (type !== 'level' && type !== 'top-rope' && type !== 'top_rope') continue;
+    const grade = t.level || t.grade;
+    const rank = climbingLevelRank(grade);
+    if (rank > bestRank) {
+      bestRank = rank;
+      best = grade;
+    }
+  }
+
+  if (data.students[studentIndex].levelGrade !== best) {
+    data.students[studentIndex].levelGrade = best;
+    syncUpsert('students', data.students[studentIndex]);
+  }
+}
+
 export const db = {
   get: (table) => {
     const data = readDb();
@@ -1280,6 +1375,7 @@ export const db = {
         });
         createdStudents.push(student);
         await persistLeadPair(parent, student);
+        await persistHouseholdLinks(student, source);
       }
     }
     return { parent, students: createdStudents, isNew: createdStudents.length > 0 };
@@ -1312,6 +1408,7 @@ export const db = {
       created: new Date().toISOString().split('T')[0],
     });
     await persistLeadPair(parent, student);
+    await persistHouseholdLinks(student, source);
     return { parent, student };
   },
 
@@ -1773,64 +1870,54 @@ export const db = {
     const data = readDb();
     if (!data.level_tests) data.level_tests = [];
 
-    // Accept both Leads shape and LevelTests page shape
-    let testType = test.test_type || 'level';
-    if (testType === 'top_rope') testType = 'top-rope';
-    // Legacy LevelTests page sent route_type without test_type
-    if (!test.test_type && test.route_type) testType = 'level';
-
-    const isLevelTest = testType === 'level' || testType === 'top-rope';
-    const needsExaminer = testType === 'security' || testType === 'lead';
-
-    const routeStyleRaw = test.route_style || test.route_type || 'top-rope';
-    const routeStyle = isLevelTest
-      ? (routeStyleRaw === 'top_rope' ? 'top-rope' : routeStyleRaw)
-      : null;
-
-    const level = isLevelTest ? (test.level || test.grade || '5A') : null;
-    const passed = test.passed ?? (test.status ? test.status === 'passed' : true);
-    const studentId = test.studentId || test.climber_id || null;
-
-    let studentName = test.studentName || null;
-    if (!studentName && studentId) {
-      studentName = data.students?.find(s => s.id === studentId)?.name || null;
-    }
-
     const newTest = {
       id: `lt${Date.now()}`,
-      studentId,
-      studentName: studentName || 'מתאמן',
-      // Aliases kept for LevelTests page UI that still reads climber_id/grade/status
-      climber_id: studentId,
-      grade: level,
-      level,
-      test_type: testType === 'top-rope' ? 'level' : testType,
-      route_style: routeStyle,
-      route_type: routeStyle,
-      examiner: needsExaminer ? (test.examiner ?? null) : null,
-      examinerId: needsExaminer ? (test.examinerId ?? null) : null,
-      date: test.date || new Date().toISOString().split('T')[0],
-      notes: test.notes || '',
-      passed,
-      status: test.status || (passed ? 'passed' : 'failed'),
-      attended_ceremony: test.attended_ceremony ?? test.ceremony ?? false,
-      ceremony: test.attended_ceremony ?? test.ceremony ?? false
+      ...normalizeLevelTestFields(test, data),
     };
-    
+
     data.level_tests.unshift(newTest);
-    
-    // If a level test passed, update student level grade
-    if (isLevelTest && newTest.studentId && newTest.passed && newTest.level) {
-      const studentIndex = data.students.findIndex(s => s.id === newTest.studentId);
-      if (studentIndex !== -1) {
-        data.students[studentIndex].levelGrade = newTest.level;
-        syncUpsert('students', data.students[studentIndex]);
-      }
-    }
-    
+    syncStudentLevelGrade(data, newTest.studentId);
     writeDb(data);
     syncUpsert('level_tests', newTest);
     return newTest;
+  },
+
+  updateLevelTest: (id, updates) => {
+    const data = readDb();
+    if (!data.level_tests) return null;
+    const index = data.level_tests.findIndex((t) => t.id === id);
+    if (index === -1) return null;
+
+    const prev = data.level_tests[index];
+    const merged = normalizeLevelTestFields({ ...prev, ...updates }, data);
+    const updated = {
+      ...prev,
+      ...merged,
+      id: prev.id,
+      updated_at: new Date().toISOString(),
+    };
+    data.level_tests[index] = updated;
+
+    const studentIds = new Set(
+      [prev.studentId, updated.studentId].filter(Boolean)
+    );
+    for (const studentId of studentIds) syncStudentLevelGrade(data, studentId);
+
+    writeDb(data);
+    syncUpsert('level_tests', updated);
+    return updated;
+  },
+
+  deleteLevelTest: (id) => {
+    const data = readDb();
+    if (!data.level_tests) return false;
+    const index = data.level_tests.findIndex((t) => t.id === id);
+    if (index === -1) return false;
+    const [removed] = data.level_tests.splice(index, 1);
+    if (removed?.studentId) syncStudentLevelGrade(data, removed.studentId);
+    writeDb(data);
+    syncRemove('level_tests', id);
+    return true;
   },
 
   /**

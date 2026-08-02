@@ -53,7 +53,7 @@ const TEAM_RULES = [
   { methods: ['GET', 'POST'], pattern: /^\/cash-register(\/|$)/ },
   { methods: ['GET'], pattern: /^\/icount\/status$/ },
   { methods: ['GET', 'POST', 'PUT', 'DELETE'], pattern: /^\/safety(\/|$)/ },
-  { methods: ['GET', 'POST'], pattern: /^\/level-tests(\/|$)/ },
+  { methods: ['GET', 'POST', 'PUT', 'DELETE'], pattern: /^\/level-tests(\/|$)/ },
   { methods: ['GET', 'PUT'], pattern: /^\/equipment(\/|$)/ },
   { methods: ['POST'], pattern: /^\/equipment\/[^/]+\/(reset-rental|mark-given|mark-pending)$/ },
   { methods: ['GET'], pattern: /^\/equipment-settings$/ },

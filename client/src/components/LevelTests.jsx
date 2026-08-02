@@ -1,39 +1,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Award, Trophy, ChevronDown, ChevronUp, Star, Medal, Users } from 'lucide-react';
+import { Plus, Award, Trophy, ChevronDown, ChevronUp, Medal, Edit2, Trash2 } from 'lucide-react';
 import { Modal } from './UI.jsx';
+import { LEVELS, LEVEL_COLOR, LEVEL_POINTS, ROUTE_STYLE, routeStyleMeta } from '../utils/levelGrades.js';
+import {
+  TEST_KINDS,
+  TEST_TYPE_COLORS,
+  testKindMeta,
+} from '../utils/levelTestKinds.js';
 
-const LEVELS = ['5A','5B','5C','6A','6B','6C','7A','7B','7C','8A'];
-
-const LEVEL_COLOR = {
-  '5A': '#67E8F9', '5B': '#67E8F9', '5C': '#67E8F9',
-  '6A': '#34D399', '6B': '#34D399', '6C': '#34D399',
-  '7A': '#FCD34D', '7B': '#FCD34D', '7C': '#FCD34D',
-  '8A': '#F87171',
-};
-
-const LEVEL_POINTS = {
-  '5A': 1, '5B': 2, '5C': 3,
-  '6A': 4, '6B': 5, '6C': 6,
-  '7A': 7, '7B': 8, '7C': 9,
-  '8A': 10
-};
-
-const ROUTE_TYPES = [
-  { key: 'top-rope', label: 'טופ רופ', emoji: '🔗' },
-  { key: 'lead',     label: 'הובלה',   emoji: '🧗' },
-];
-
-const TEST_KINDS = [
-  { key: 'level',    label: 'מבחן רמה' },
-  { key: 'security', label: 'מבחן אבטחה' },
-  { key: 'lead',     label: 'מבחן הובלה' },
-];
-
-const TEST_TYPE_COLORS = {
-  level:    { accent: '#38BDF8', bg: 'rgba(56,189,248,0.10)', border: 'rgba(56,189,248,0.28)' },
-  security: { accent: '#FBBF24', bg: 'rgba(251,191,36,0.10)', border: 'rgba(251,191,36,0.28)' },
-  lead:     { accent: '#34D399', bg: 'rgba(52,211,153,0.10)', border: 'rgba(52,211,153,0.28)' },
-};
+const ROUTE_TYPES = Object.values(ROUTE_STYLE);
 
 function normalizeTest(t) {
   const studentId = t.studentId || t.climber_id || null;
@@ -58,16 +33,21 @@ function normalizeTest(t) {
   };
 }
 
-function AddTestModal({ students, groups, employees, onAdd, onClose }) {
-  const [studentId, setStudentId]     = useState('');
-  const [testType, setTestType]       = useState('level');
-  const [level, setLevel]             = useState('5A');
-  const [routeStyle, setRouteStyle]   = useState('top-rope');
-  const [examinerId, setExaminerId]   = useState(employees[0]?.id || '');
-  const [date, setDate]               = useState(new Date().toISOString().split('T')[0]);
-  const [status, setStatus]           = useState('passed');
-  const [ceremony, setCeremony]       = useState(false);
-  const [notes, setNotes]             = useState('');
+function TestFormModal({ students, groups, employees, initial, onSave, onClose }) {
+  const [studentId, setStudentId]     = useState(initial?.studentId || initial?.climber_id || '');
+  const [testType, setTestType]       = useState(initial?.test_type || 'level');
+  const [level, setLevel]             = useState(initial?.level || initial?.grade || '5A');
+  const [routeStyle, setRouteStyle]   = useState(initial?.route_style || initial?.route_type || 'top-rope');
+  const [examinerId, setExaminerId]   = useState(
+    initial?.examinerId
+      || employees.find((e) => e.name === initial?.examiner)?.id
+      || employees[0]?.id
+      || ''
+  );
+  const [date, setDate]               = useState(initial?.date || new Date().toISOString().split('T')[0]);
+  const [status, setStatus]           = useState(initial?.status || (initial?.passed === false ? 'failed' : 'passed'));
+  const [ceremony, setCeremony]       = useState(!!(initial?.ceremony ?? initial?.attended_ceremony));
+  const [notes, setNotes]             = useState(initial?.notes || '');
 
   useEffect(() => {
     if (!examinerId && employees[0]?.id) setExaminerId(employees[0].id);
@@ -76,16 +56,13 @@ function AddTestModal({ students, groups, employees, onAdd, onClose }) {
   const handleSubmit = e => {
     e.preventDefault();
     if (!studentId) return;
-    const needsExaminer = testType === 'security' || testType === 'lead';
-    if (needsExaminer && !examinerId) {
+    if (!examinerId) {
       alert('נא לבחור את המדריך הבוחן');
       return;
     }
     const student = students.find(s => s.id === studentId);
-    const examinerName = needsExaminer
-      ? (employees.find(emp => emp.id === examinerId)?.name || null)
-      : null;
-    onAdd({
+    const examinerName = employees.find(emp => emp.id === examinerId)?.name || null;
+    onSave({
       studentId,
       studentName: student?.name,
       climber_id: studentId,
@@ -94,7 +71,7 @@ function AddTestModal({ students, groups, employees, onAdd, onClose }) {
       grade: testType === 'level' ? level : null,
       route_style: testType === 'level' ? routeStyle : null,
       examiner: examinerName,
-      examinerId: needsExaminer ? examinerId : null,
+      examinerId,
       date,
       status,
       passed: status === 'passed',
@@ -102,18 +79,18 @@ function AddTestModal({ students, groups, employees, onAdd, onClose }) {
       attended_ceremony: testType === 'level' ? ceremony : false,
       notes: notes.trim()
     });
-    onClose();
   };
 
   const registeredStudents = students.filter(s => s.status === 'registered');
+  const isEdit = !!initial?.id;
 
   return (
-    <Modal title="שמירת מבחן חדש" onClose={onClose}
+    <Modal title={isEdit ? 'עריכת מבחן' : 'שמירת מבחן חדש'} onClose={onClose}
       footer={
         <>
           <button className="btn btn-ghost" onClick={onClose}>ביטול</button>
           <button form="add-test-form" type="submit" className="btn btn-primary">
-            <Award size={16} /> שמור מבחן
+            <Award size={16} /> {isEdit ? 'שמור שינויים' : 'שמור מבחן'}
           </button>
         </>
       }
@@ -136,21 +113,32 @@ function AddTestModal({ students, groups, employees, onAdd, onClose }) {
 
         <div className="form-group">
           <label className="form-label">סוג מבחן *</label>
-          <select
-            className="input select"
-            value={testType}
-            onChange={e => setTestType(e.target.value)}
-            style={{
-              fontWeight: 700,
-              color: TEST_TYPE_COLORS[testType]?.accent,
-              borderColor: TEST_TYPE_COLORS[testType]?.border,
-              background: TEST_TYPE_COLORS[testType]?.bg,
-            }}
-          >
-            {TEST_KINDS.map(k => (
-              <option key={k.key} value={k.key}>{k.label}</option>
-            ))}
-          </select>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {TEST_KINDS.map((k) => {
+              const active = testType === k.key;
+              const Icon = k.Icon;
+              return (
+                <button
+                  key={k.key}
+                  type="button"
+                  className={`btn btn-sm ${active ? 'btn-primary' : 'btn-ghost'}`}
+                  onClick={() => setTestType(k.key)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontWeight: 800,
+                    ...(active
+                      ? { background: k.bg, color: k.accent, borderColor: k.border }
+                      : { color: k.accent }),
+                  }}
+                >
+                  <Icon size={15} strokeWidth={2.3} />
+                  {k.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {testType === 'level' && (
@@ -173,27 +161,35 @@ function AddTestModal({ students, groups, employees, onAdd, onClose }) {
               {ROUTE_TYPES.map(rt => (
                 <button key={rt.key} type="button"
                   className={`btn btn-sm ${routeStyle === rt.key ? 'btn-primary' : 'btn-ghost'}`}
-                  style={{ marginLeft: 6, marginBottom: 6 }}
+                  style={{
+                    marginLeft: 6,
+                    marginBottom: 6,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    ...(routeStyle === rt.key
+                      ? { background: `${rt.color}22`, color: rt.color, borderColor: rt.color, fontWeight: 800 }
+                      : { color: rt.color }),
+                  }}
                   onClick={() => setRouteStyle(rt.key)}>
-                  {rt.emoji} {rt.label}
+                  <rt.Icon size={14} strokeWidth={2.4} />
+                  {rt.label}
                 </button>
               ))}
             </div>
           </div>
         )}
 
-        {(testType === 'security' || testType === 'lead') && (
-          <div className="form-group">
-            <label className="form-label">בוחן *</label>
-            <select className="input select" required value={examinerId} onChange={e => setExaminerId(e.target.value)}>
-              <option value="">בחר בוחן...</option>
-              {employees.length === 0 && <option value="" disabled>אין עובדים במערכת</option>}
-              {employees.map(emp => (
-                <option key={emp.id} value={emp.id}>{emp.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
+        <div className="form-group">
+          <label className="form-label">בוחן *</label>
+          <select className="input select" required value={examinerId} onChange={e => setExaminerId(e.target.value)}>
+            <option value="">בחר בוחן...</option>
+            {employees.length === 0 && <option value="" disabled>אין עובדים במערכת</option>}
+            {employees.map(emp => (
+              <option key={emp.id} value={emp.id}>{emp.name}</option>
+            ))}
+          </select>
+        </div>
 
         <div className="form-grid-2">
           <div className="form-group">
@@ -215,7 +211,7 @@ function AddTestModal({ students, groups, employees, onAdd, onClose }) {
             <label className="form-label" style={{ display: 'flex', gap: 10, alignItems: 'center', cursor: 'pointer' }}>
               <input type="checkbox" checked={ceremony} onChange={e => setCeremony(e.target.checked)}
                 style={{ width: 16, height: 16 }} />
-              השתתף בטקס הענקת תגים (ceremony)
+              השתתף בטקס הענקת תגים
             </label>
           </div>
         )}
@@ -230,7 +226,7 @@ function AddTestModal({ students, groups, employees, onAdd, onClose }) {
   );
 }
 
-function StudentLevelCard({ student, tests, groups }) {
+function StudentLevelCard({ student, tests, groups, onEdit, onDelete }) {
   const [expanded, setExpanded] = useState(false);
   const myTests = tests
     .filter(t => (t.climber_id || t.studentId) === student.id)
@@ -276,40 +272,74 @@ function StudentLevelCard({ student, tests, groups }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {myTests.map(t => {
               const asLevel = t.test_type === 'level' || t.test_type === 'top-rope' || t.test_type === 'top_rope';
-              const asSecurity = t.test_type === 'security';
-              const asLeadCert = t.test_type === 'lead';
-              const typeKey = asSecurity ? 'security' : asLeadCert ? 'lead' : 'level';
-              const typeColor = TEST_TYPE_COLORS[typeKey];
-              const rt = ROUTE_TYPES.find(r => r.key === t.route_style || r.key === t.route_type);
+              const kind = testKindMeta(t.test_type);
+              const KindIcon = kind.Icon;
+              const typeColor = TEST_TYPE_COLORS[kind.key];
+              const gradeAccent = asLevel && t.grade ? LEVEL_COLOR[t.grade] : null;
+              const accent = gradeAccent || typeColor.accent;
+              const bg = gradeAccent ? `${gradeAccent}14` : typeColor.bg;
+              const border = gradeAccent ? `${gradeAccent}44` : typeColor.border;
+              const route = asLevel ? routeStyleMeta(t.route_style || t.route_type) : null;
               const statusColor = t.status === 'passed' ? 'var(--green)' : t.status === 'failed' ? 'var(--red)' : 'var(--amber)';
               const statusLabel = t.status === 'passed' ? '✓ עבר' : t.status === 'failed' ? '✗ לא עבר' : '⏳ ממתין';
-              let title = 'מבחן';
-              if (asLevel) title = `רמה ${t.grade || t.level || ''}${rt ? ` · ${rt.label}` : ''}`.trim();
-              else if (asSecurity) title = 'מבחן אבטחה';
-              else if (asLeadCert) title = 'מבחן הובלה';
-              const showExaminer = (asSecurity || asLeadCert) && t.examiner;
               return (
                 <div key={t.id} style={{
                   display: 'flex', gap: 12, alignItems: 'center',
                   padding: '8px 12px', borderRadius: 8,
-                  background: typeColor.bg,
-                  border: `1px solid ${typeColor.border}`,
-                  borderRight: `3px solid ${typeColor.accent}`,
+                  background: bg,
+                  border: `1px solid ${border}`,
+                  borderRight: `3px solid ${accent}`,
                 }}>
                   <div style={{
-                    fontSize: 16, fontWeight: 800,
-                    color: asLevel && t.grade ? LEVEL_COLOR[t.grade] : typeColor.accent,
-                    minWidth: 36, textAlign: 'center',
-                  }}>{asLevel ? (t.grade || '?') : asSecurity ? 'אב' : 'הו'}</div>
+                    width: 36, height: 36, borderRadius: 10, flexShrink: 0,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: accent, background: typeColor.bg, border: `1px solid ${typeColor.border}`,
+                    fontSize: asLevel ? 13 : 14, fontWeight: 900,
+                  }}>
+                    {asLevel ? (t.grade || '?') : <KindIcon size={18} strokeWidth={2.2} />}
+                  </div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: typeColor.accent }}>
-                      {title} {t.ceremony && '🏆'}
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>
+                      {asLevel && (
+                        <>
+                          <span style={{ color: accent, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                            <KindIcon size={13} strokeWidth={2.3} />
+                            רמה {t.grade || t.level || ''}
+                          </span>
+                          {route && (
+                            <span style={{
+                              color: route.color,
+                              marginInlineStart: 6,
+                              fontWeight: 800,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}>
+                              <route.Icon size={13} strokeWidth={2.4} />
+                              {route.label}
+                            </span>
+                          )}
+                        </>
+                      )}
+                      {!asLevel && (
+                        <span style={{ color: accent, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                          <KindIcon size={14} strokeWidth={2.3} />
+                          {kind.label}
+                        </span>
+                      )}
+                      {t.ceremony ? ' 🏆' : ''}
                     </div>
-                    {showExaminer && <div style={{ fontSize: 11, color: 'var(--text-3)' }}>בוחן: {t.examiner}</div>}
+                    <div style={{ fontSize: 11, color: 'var(--text-3)' }}>בוחן: {t.examiner || '—'}</div>
                     <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{t.date}</div>
                     {t.notes && <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 3 }}>{t.notes}</div>}
                   </div>
                   <span style={{ fontSize: 12, fontWeight: 700, color: statusColor }}>{statusLabel}</span>
+                  <button type="button" className="btn btn-ghost btn-icon btn-xs" title="עריכה" onClick={(e) => { e.stopPropagation(); onEdit?.(t); }}>
+                    <Edit2 size={13} />
+                  </button>
+                  <button type="button" className="btn btn-ghost btn-icon btn-xs" title="מחיקה" style={{ color: 'var(--red)' }} onClick={(e) => { e.stopPropagation(); onDelete?.(t); }}>
+                    <Trash2 size={13} />
+                  </button>
                 </div>
               );
             })}
@@ -323,9 +353,10 @@ function StudentLevelCard({ student, tests, groups }) {
 export default function LevelTests({ students, groups }) {
   const [tests, setTests]               = useState([]);
   const [employees, setEmployees]       = useState([]);
-  const [showAdd, setShowAdd]           = useState(false);
+  const [formTest, setFormTest]         = useState(null); // null | {} (new) | test (edit)
   const [filterLevel, setFilterLevel]   = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
+  const [filterKind, setFilterKind]     = useState('all');
   const [activeTab, setActiveTab]       = useState('tests'); // tests | leaderboard
 
   const refreshTests = async () => {
@@ -345,42 +376,70 @@ export default function LevelTests({ students, groups }) {
       .catch(err => console.error(err));
   }, []);
 
-  const handleAdd = async (data) => {
+  const handleSave = async (data) => {
     try {
-      const response = await fetch('/api/level-tests', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-      });
+      const isEdit = !!formTest?.id;
+      const response = await fetch(
+        isEdit ? `/api/level-tests/${formTest.id}` : '/api/level-tests',
+        {
+          method: isEdit ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        }
+      );
       if (response.ok) {
+        setFormTest(null);
         refreshTests();
+      } else {
+        const body = await response.json().catch(() => ({}));
+        alert(body.error || 'שמירת המבחן נכשלה');
       }
     } catch (err) {
       console.error(err);
+      alert('שמירת המבחן נכשלה');
+    }
+  };
+
+  const handleDelete = async (test) => {
+    if (!window.confirm('למחוק את המבחן? הפעולה אינה הפיכה.')) return;
+    try {
+      const response = await fetch(`/api/level-tests/${test.id}`, { method: 'DELETE' });
+      if (response.ok) {
+        refreshTests();
+      } else {
+        const body = await response.json().catch(() => ({}));
+        alert(body.error || 'מחיקת המבחן נכשלה');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('מחיקת המבחן נכשלה');
     }
   };
 
   const passed  = tests.filter(t => t.status === 'passed').length;
   const trophies = tests.filter(t => t.ceremony && t.status === 'passed').length;
 
-  const filteredTests = tests.filter(t => {
-    const matchLevel  = filterLevel === 'all'  || t.grade === filterLevel;
-    const matchStatus = filterStatus === 'all' || t.status === filterStatus;
-    return matchLevel && matchStatus;
-  });
+  const filteredTests = useMemo(() => {
+    return tests
+      .filter(t => {
+        const kind = t.test_type === 'top-rope' || t.test_type === 'top_rope' ? 'level' : (t.test_type || 'level');
+        const matchKind   = filterKind === 'all' || kind === filterKind;
+        const matchLevel  = filterLevel === 'all' || t.grade === filterLevel;
+        const matchStatus = filterStatus === 'all' || t.status === filterStatus;
+        return matchKind && matchLevel && matchStatus;
+      })
+      .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  }, [tests, filterKind, filterLevel, filterStatus]);
 
   const studentsWithTests = students.filter(s => tests.some(t => (t.climber_id || t.studentId) === s.id));
 
-  // 🏆 Leaderboard calculations
   const leaderboard = useMemo(() => {
-    // 1. Find competitive groups (e.g. group name contains 'נבחרת', 'עלית', 'ליגה')
     const teamGroupIds = new Set(
       groups
         .filter(g => g.name.includes('נבחרת') || g.name.includes('עלית') || g.name.includes('ליגה') || g.name.includes('נבחרת צעירה'))
         .map(g => g.id)
     );
 
-    // 2. Map every student in competitive groups to their max passed grade
     const board = students
       .filter(s => s.status === 'registered' && teamGroupIds.has(s.groupId))
       .map(s => {
@@ -414,23 +473,22 @@ export default function LevelTests({ students, groups }) {
         };
       });
 
-    // 3. Sort by grade points descending
     return board.sort((a, b) => b.maxPoints - a.maxPoints);
   }, [students, groups, tests]);
 
   return (
     <div className="fade-in">
-      {showAdd && (
-        <AddTestModal
+      {formTest !== null && (
+        <TestFormModal
           students={students}
           groups={groups}
           employees={employees}
-          onAdd={handleAdd}
-          onClose={() => setShowAdd(false)}
+          initial={formTest.id ? formTest : null}
+          onSave={handleSave}
+          onClose={() => setFormTest(null)}
         />
       )}
 
-      {/* Stats */}
       <div className="stats-grid" style={{ marginBottom: 24 }}>
         <div className="card stat-card" style={{ '--stat-color': '#6366F1' }}>
           <div className="stat-label">סה"כ מבחנים מבוצעים</div>
@@ -448,7 +506,6 @@ export default function LevelTests({ students, groups }) {
         </div>
       </div>
 
-      {/* Header */}
       <div className="section-header" style={{ marginBottom: 20 }}>
         <div>
           <div className="section-title">מבחנים ונבחרת</div>
@@ -463,17 +520,44 @@ export default function LevelTests({ students, groups }) {
               <Trophy size={15} /> לוח הנבחרת
             </button>
           </div>
-          <button className="btn btn-primary btn-sm" onClick={() => setShowAdd(true)}>
+          <button className="btn btn-primary btn-sm" onClick={() => setFormTest({})}>
             <Plus size={15} /> שמירת מבחן חדש
           </button>
         </div>
       </div>
 
-      {/* TAB 1: TESTS PROFILE AND HISTORY */}
       {activeTab === 'tests' && (
         <>
-          {/* Filters */}
           <div style={{ display: 'flex', gap: 16, marginBottom: 20, flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>סוג מבחן</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <button className={`btn btn-xs ${filterKind === 'all' ? 'btn-primary' : 'btn-ghost'}`}
+                  onClick={() => setFilterKind('all')}>הכל</button>
+                {TEST_KINDS.map((k) => {
+                  const Icon = k.Icon;
+                  const active = filterKind === k.key;
+                  return (
+                    <button
+                      key={k.key}
+                      className={`btn btn-xs ${active ? 'btn-primary' : 'btn-ghost'}`}
+                      onClick={() => setFilterKind(k.key)}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 5,
+                        ...(active
+                          ? { background: k.bg, color: k.accent, borderColor: k.border, fontWeight: 800 }
+                          : { color: k.accent }),
+                      }}
+                    >
+                      <Icon size={13} strokeWidth={2.3} />
+                      {k.shortLabel}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <div>
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>סינון לפי רמה</div>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -506,7 +590,6 @@ export default function LevelTests({ students, groups }) {
             </div>
           </div>
 
-          {/* Tests Table */}
           <div style={{ marginBottom: 28 }}>
             <div className="card">
               <div className="table-wrap">
@@ -521,43 +604,68 @@ export default function LevelTests({ students, groups }) {
                       <th>תאריך</th>
                       <th>תוצאה</th>
                       <th>הערות</th>
+                      <th style={{ width: 80 }}></th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredTests.length === 0 && (
-                      <tr><td colSpan={8} style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>אין מבחנים מותאמים לסינון</td></tr>
+                      <tr><td colSpan={9} style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>אין מבחנים מותאמים לסינון</td></tr>
                     )}
-                    {filteredTests.sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))).slice(0, 100).map(t => {
+                    {filteredTests.slice(0, 100).map(t => {
                       const student = students.find(s => s.id === (t.climber_id || t.studentId));
                       const group   = groups.find(g => g.id === student?.groupId);
-                      const rt      = ROUTE_TYPES.find(r => r.key === t.route_style || r.key === t.route_type);
                       const asLevel = t.test_type === 'level' || t.test_type === 'top-rope' || t.test_type === 'top_rope';
-                      const typeKey = t.test_type === 'security' ? 'security' : t.test_type === 'lead' ? 'lead' : 'level';
-                      const typeColor = TEST_TYPE_COLORS[typeKey];
-                      const kindLabel = asLevel ? 'מבחן רמה' : t.test_type === 'security' ? 'מבחן אבטחה' : t.test_type === 'lead' ? 'מבחן הובלה' : 'מבחן';
-                      const details = asLevel
-                        ? `${t.grade || '—'}${rt ? ` · ${rt.label}` : ''}`
-                        : '—';
+                      const route = asLevel ? routeStyleMeta(t.route_style || t.route_type) : null;
+                      const kind = testKindMeta(t.test_type);
+                      const KindIcon = kind.Icon;
+                      const typeColor = TEST_TYPE_COLORS[kind.key];
+                      const gradeAccent = asLevel && t.grade ? LEVEL_COLOR[t.grade] : null;
                       const statusColor = t.status === 'passed' ? 'badge-green' : t.status === 'failed' ? 'badge-red' : 'badge-amber';
                       const statusLabel = t.status === 'passed' ? '✓ עבר' : t.status === 'failed' ? '✗ נכשל' : '⏳ ממתין';
-                      const examiner = (t.test_type === 'security' || t.test_type === 'lead') ? (t.examiner || '—') : '—';
+                      const rowBg = gradeAccent ? `${gradeAccent}10` : typeColor.bg;
                       return (
-                        <tr key={t.id} style={{ background: typeColor.bg }}>
+                        <tr key={t.id} style={{ background: rowBg }}>
                           <td style={{ fontWeight: 700 }}>{student?.name || t.studentName || t.climber_id || '—'}</td>
                           <td style={{ fontSize: 12, color: 'var(--text-3)' }}>{group?.name?.split(' ')[0] || '—'}</td>
-                          <td style={{ fontSize: 13, fontWeight: 700, color: typeColor.accent }}>{kindLabel}</td>
+                          <td style={{ fontSize: 13, fontWeight: 700, color: typeColor.accent }}>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                              <KindIcon size={15} strokeWidth={2.3} />
+                              {kind.label}
+                            </span>
+                          </td>
                           <td>
                             {asLevel ? (
-                              <span style={{
-                                fontWeight: 900, fontSize: 14,
-                                color: LEVEL_COLOR[t.grade] || 'var(--text-2)',
-                              }}>{details}</span>
-                            ) : details}
+                              <span style={{ fontWeight: 900, fontSize: 14, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                <span style={{ color: LEVEL_COLOR[t.grade] || 'var(--text-2)' }}>{t.grade || '—'}</span>
+                                {route && (
+                                  <span style={{
+                                    color: route.color,
+                                    fontWeight: 800,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 4,
+                                  }}>
+                                    <route.Icon size={13} strokeWidth={2.4} />
+                                    {route.label}
+                                  </span>
+                                )}
+                              </span>
+                            ) : '—'}
                           </td>
-                          <td style={{ fontSize: 12, color: 'var(--text-3)' }}>{examiner}</td>
+                          <td style={{ fontSize: 12, color: 'var(--text-3)' }}>{t.examiner || '—'}</td>
                           <td style={{ fontSize: 12, color: 'var(--text-3)' }}>{t.date}</td>
                           <td><span className={`badge ${statusColor}`}>{statusLabel}</span></td>
                           <td style={{ fontSize: 12, color: 'var(--text-3)', maxWidth: 160 }}>{t.notes || '—'}</td>
+                          <td>
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              <button type="button" className="btn btn-ghost btn-icon btn-xs" title="עריכה" onClick={() => setFormTest(t)}>
+                                <Edit2 size={13} />
+                              </button>
+                              <button type="button" className="btn btn-ghost btn-icon btn-xs" title="מחיקה" style={{ color: 'var(--red)' }} onClick={() => handleDelete(t)}>
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </td>
                         </tr>
                       );
                     })}
@@ -567,7 +675,6 @@ export default function LevelTests({ students, groups }) {
             </div>
           </div>
 
-          {/* Per-Student Progress Profiles */}
           {studentsWithTests.length > 0 && (
             <>
               <div className="section-header" style={{ marginBottom: 12 }}>
@@ -576,12 +683,12 @@ export default function LevelTests({ students, groups }) {
               <div className="grid-2" style={{ gap: 12, alignItems: 'flex-start' }}>
                 <div>
                   {studentsWithTests.slice(0, Math.ceil(studentsWithTests.length / 2)).map(s => (
-                    <StudentLevelCard key={s.id} student={s} tests={tests} groups={groups} />
+                    <StudentLevelCard key={s.id} student={s} tests={tests} groups={groups} onEdit={setFormTest} onDelete={handleDelete} />
                   ))}
                 </div>
                 <div>
                   {studentsWithTests.slice(Math.ceil(studentsWithTests.length / 2)).map(s => (
-                    <StudentLevelCard key={s.id} student={s} tests={tests} groups={groups} />
+                    <StudentLevelCard key={s.id} student={s} tests={tests} groups={groups} onEdit={setFormTest} onDelete={handleDelete} />
                   ))}
                 </div>
               </div>
@@ -590,7 +697,6 @@ export default function LevelTests({ students, groups }) {
         </>
       )}
 
-      {/* TAB 2: COMPETITIVE TEAM LEADERBOARD */}
       {activeTab === 'leaderboard' && (
         <div className="card">
           <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>

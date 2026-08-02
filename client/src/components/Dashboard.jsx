@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Users, TrendingUp, ShieldCheck, Coins, AlertCircle, BarChart3, PieChart, CalendarDays } from 'lucide-react';
 import { STATUSES } from '../mockData.js';
 import { ActivityFeed, StatCard } from './UI.jsx';
+import { LEVEL_COLOR } from '../utils/levelGrades.js';
 
 const todayStr = new Date().toLocaleDateString('he-IL', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
@@ -32,7 +33,7 @@ export default function Dashboard({ students, groups, onNavigate }) {
   }, [students, groups]);
 
   const gradeDistribution = useMemo(() => {
-    const grades = ['5A', '5B', '5C', '6A', '6B', '6C', '7A', '7B', '7C', '8A'];
+    const grades = ['5A', '5B', '5C', '6A', '6B', '6C', '7A', '7B', '7C', '8A', '8B', '8C'];
     const dist = {};
     grades.forEach(g => dist[g] = 0);
     students.forEach(s => {
@@ -234,11 +235,11 @@ export default function Dashboard({ students, groups, onNavigate }) {
                 <div style={{ 
                   width: 14, 
                   height: `${Math.max((gd.count / maxGradeCount) * 120, 4)}px`, 
-                  background: 'linear-gradient(180deg, #34D399 0%, #10B981 100%)', 
+                  background: LEVEL_COLOR[gd.grade] || '#10B981',
                   borderRadius: '4px 4px 0 0',
                   transition: 'height 0.5s ease'
                 }} />
-                <span style={{ fontSize: 10, fontWeight: 700 }}>{gd.grade}</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: LEVEL_COLOR[gd.grade] || undefined }}>{gd.grade}</span>
               </div>
             ))}
           </div>

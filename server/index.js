@@ -8967,6 +8967,18 @@ app.post('/api/level-tests', (req, res) => {
   res.status(201).json(record);
 });
 
+app.put('/api/level-tests/:id', (req, res) => {
+  const updated = db.updateLevelTest(req.params.id, req.body || {});
+  if (!updated) return res.status(404).json({ error: 'מבחן לא נמצא' });
+  res.json(updated);
+});
+
+app.delete('/api/level-tests/:id', (req, res) => {
+  const ok = db.deleteLevelTest(req.params.id);
+  if (!ok) return res.status(404).json({ error: 'מבחן לא נמצא' });
+  res.json({ ok: true });
+});
+
 // Cash Register endpoints
 app.get('/api/cash-register', (req, res) => {
   res.json(db.get('cash_register_shifts'));
@@ -11103,7 +11115,7 @@ app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
   }
   subscriptions[REQUIRED_BROADCAST_LIST] = true;
 
-  // The same template the "already signed" answers below were judged against,
+  // The same template the "already signed" answers above were judged against,
   // so the form and its verdicts can never be about two different documents.
   const template = contextTemplate || findFormTemplateBySlug('wall');
 

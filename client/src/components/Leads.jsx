@@ -3,6 +3,12 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, Archive, ArchiveRestore } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
+import {
+  TEST_KINDS,
+  TEST_TYPE_COLORS,
+  testKindMeta,
+} from '../utils/levelTestKinds.js';
+import { LEVELS, levelColor, routeStyleMeta, ROUTE_STYLE } from '../utils/levelGrades.js';
 import GenderPicker, { GenderMark, genderKind } from './GenderPicker.jsx';
 import {
   blobToBase64,
@@ -273,12 +279,6 @@ const sourceLabel = (m) => {
   return 'יוצא';
 };
 
-// Distinct colors per test kind (level / security / lead)
-const TEST_TYPE_COLORS = {
-  level:    { accent: '#38BDF8', bg: 'rgba(56,189,248,0.10)', border: 'rgba(56,189,248,0.28)' },
-  security: { accent: '#FBBF24', bg: 'rgba(251,191,36,0.10)', border: 'rgba(251,191,36,0.28)' },
-  lead:     { accent: '#34D399', bg: 'rgba(52,211,153,0.10)', border: 'rgba(52,211,153,0.28)' },
-};
 
 /** Collapsible folder row for lead detail panel */
 /**
@@ -1764,45 +1764,101 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     }
   };
 
-  const handleAddTest = async (e) => {
+  const resetTestForm = () => {
+    setTestLevel('5A');
+    setTestType('level');
+    setTestRouteStyle('top-rope');
+    setTestNotes('');
+    setTestPassed(true);
+    setTestDate(new Date().toISOString().split('T')[0]);
+    setEditingTestId(null);
+    setShowTestForm(false);
+    if (employees[0]?.id) setTestExaminerId(employees[0].id);
+  };
+
+  const openNewTestForm = () => {
+    resetTestForm();
+    setShowTestForm(true);
+  };
+
+  const openEditTestForm = (test) => {
+    const type = test.test_type === 'top-rope' || test.test_type === 'top_rope' ? 'level' : (test.test_type || 'level');
+    setEditingTestId(test.id);
+    setTestType(type);
+    setTestLevel(test.level || test.grade || '5A');
+    setTestRouteStyle(test.route_style || test.route_type || 'top-rope');
+    setTestPassed(!!(test.passed ?? test.status === 'passed'));
+    setTestDate(test.date || new Date().toISOString().split('T')[0]);
+    setTestNotes(test.notes || '');
+    setTestExaminerId(test.examinerId || employees.find((e) => e.name === test.examiner)?.id || employees[0]?.id || '');
+    setShowTestForm(true);
+  };
+
+  const handleSaveTest = async (e) => {
     e.preventDefault();
-    const needsExaminer = testType === 'security' || testType === 'lead';
-    if (needsExaminer && !testExaminerId) {
+    if (!testExaminerId) {
       alert('נא לבחור את המדריך הבוחן');
       return;
     }
-    const examinerName = needsExaminer
-      ? (employees.find(emp => emp.id === testExaminerId)?.name || null)
-      : null;
+    const examinerName = employees.find((emp) => emp.id === testExaminerId)?.name || null;
+    const payload = {
+      studentId: student.id,
+      studentName: student.name,
+      level: testType === 'level' ? testLevel : null,
+      test_type: testType,
+      route_style: testType === 'level' ? testRouteStyle : null,
+      examiner: examinerName,
+      examinerId: testExaminerId,
+      date: testDate,
+      passed: testPassed,
+      notes: testNotes,
+      attended_ceremony: false,
+    };
     setTestLoading(true);
     try {
-      const response = await fetch('/api/level-tests', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          studentId: student.id,
-          studentName: student.name,
-          level: testType === 'level' ? testLevel : null,
-          test_type: testType,
-          route_style: testType === 'level' ? testRouteStyle : null,
-          examiner: examinerName,
-          examinerId: needsExaminer ? testExaminerId : null,
-          passed: testPassed,
-          notes: testNotes,
-          attended_ceremony: false
-        })
-      });
+      const response = await fetch(
+        editingTestId ? `/api/level-tests/${editingTestId}` : '/api/level-tests',
+        {
+          method: editingTestId ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }
+      );
       if (response.ok) {
-        const newTest = await response.json();
-        setLevelTestsHistory(prev => [newTest, ...prev]);
-        setTestNotes('');
-        setShowTestForm(false);
+        const saved = await response.json();
+        setLevelTestsHistory((prev) => {
+          if (editingTestId) return prev.map((t) => (t.id === editingTestId ? saved : t));
+          return [saved, ...prev];
+        });
+        resetTestForm();
         refreshData();
+      } else {
+        const body = await response.json().catch(() => ({}));
+        alert(body.error || 'שמירת המבחן נכשלה');
       }
     } catch (err) {
       console.error(err);
+      alert('שמירת המבחן נכשלה');
     } finally {
       setTestLoading(false);
+    }
+  };
+
+  const handleDeleteTest = async (test) => {
+    if (!window.confirm('למחוק את המבחן? הפעולה אינה הפיכה.')) return;
+    try {
+      const response = await fetch(`/api/level-tests/${test.id}`, { method: 'DELETE' });
+      if (response.ok) {
+        setLevelTestsHistory((prev) => prev.filter((t) => t.id !== test.id));
+        if (editingTestId === test.id) resetTestForm();
+        refreshData();
+      } else {
+        const body = await response.json().catch(() => ({}));
+        alert(body.error || 'מחיקת המבחן נכשלה');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('מחיקת המבחן נכשלה');
     }
   };
 
@@ -1896,6 +1952,20 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     : `${studentPayments.length} רשומות`;
   // Same client for every row here, so the first one that carries a link wins.
   const icountClientLink = studentPayments.find((p) => p.icount_client_app_url)?.icount_client_app_url || '';
+  const sortedLevelTests = useMemo(
+    () =>
+      [...levelTestsHistory].sort((a, b) =>
+        String(b.date || '').localeCompare(String(a.date || ''))
+      ),
+    [levelTestsHistory]
+  );
+  const filteredLevelTests = useMemo(() => {
+    if (testKindFilter === 'all') return sortedLevelTests;
+    return sortedLevelTests.filter((t) => {
+      const type = t.test_type === 'top-rope' || t.test_type === 'top_rope' ? 'level' : (t.test_type || 'level');
+      return type === testKindFilter;
+    });
+  }, [sortedLevelTests, testKindFilter]);
   const testsSummary = levelTestsHistory.length === 0
     ? 'אין מבחנים'
     : `${levelTestsHistory.length} מבחנים`;
@@ -3909,54 +3979,89 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 onToggle={toggleFolder}
               >
                 {showTestForm ? (
-                  <form onSubmit={handleAddTest} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
+                  <form onSubmit={handleSaveTest} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)', marginBottom: 8 }}>
+                      {editingTestId ? 'עריכת מבחן' : 'מבחן חדש'}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                      {TEST_KINDS.map((k) => {
+                        const active = testType === k.key;
+                        const Icon = k.Icon;
+                        return (
+                          <button
+                            key={k.key}
+                            type="button"
+                            className={`btn btn-xs ${active ? 'btn-primary' : 'btn-ghost'}`}
+                            onClick={() => setTestType(k.key)}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              fontWeight: 800,
+                              ...(active
+                                ? { background: k.bg, color: k.accent, borderColor: k.border }
+                                : { color: k.accent }),
+                            }}
+                          >
+                            <Icon size={13} strokeWidth={2.3} />
+                            {k.shortLabel}
+                          </button>
+                        );
+                      })}
+                    </div>
                     <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                      <select
-                        className="input input-sm"
-                        style={{
-                          flex: 1, minWidth: 110, fontWeight: 700,
-                          color: TEST_TYPE_COLORS[testType]?.accent,
-                          borderColor: TEST_TYPE_COLORS[testType]?.border,
-                          background: TEST_TYPE_COLORS[testType]?.bg,
-                        }}
-                        value={testType}
-                        onChange={e => setTestType(e.target.value)}
-                      >
-                        <option value="level">מבחן רמה</option>
-                        <option value="security">מבחן אבטחה</option>
-                        <option value="lead">מבחן הובלה</option>
-                      </select>
                       {testType === 'level' && (
                         <>
-                          <select className="input input-sm" style={{ flex: 1, minWidth: 80 }} value={testLevel} onChange={e => setTestLevel(e.target.value)}>
-                            {['5A','5B','5C','6A','6B','6C','7A','7B','7C','8A'].map(lvl => (
+                          <select
+                            className="input input-sm"
+                            style={{
+                              flex: 1, minWidth: 80, fontWeight: 800,
+                              color: levelColor(testLevel) || undefined,
+                            }}
+                            value={testLevel}
+                            onChange={e => setTestLevel(e.target.value)}
+                          >
+                            {LEVELS.map(lvl => (
                               <option key={lvl} value={lvl}>רמה {lvl}</option>
                             ))}
                           </select>
-                          <select className="input input-sm" style={{ flex: 1, minWidth: 90 }} value={testRouteStyle} onChange={e => setTestRouteStyle(e.target.value)}>
-                            <option value="top-rope">טופ רופ</option>
-                            <option value="lead">הובלה</option>
+                          <select
+                            className="input input-sm"
+                            style={{
+                              flex: 1, minWidth: 110, fontWeight: 700,
+                              color: ROUTE_STYLE[testRouteStyle]?.color,
+                            }}
+                            value={testRouteStyle}
+                            onChange={e => setTestRouteStyle(e.target.value)}
+                          >
+                            <option value="top-rope">{ROUTE_STYLE['top-rope'].label}</option>
+                            <option value="lead">{ROUTE_STYLE.lead.label}</option>
                           </select>
                         </>
                       )}
-                      {(testType === 'security' || testType === 'lead') && (
-                        <select
-                          className="input input-sm"
-                          style={{ flex: 1.5, minWidth: 120 }}
-                          required
-                          value={testExaminerId}
-                          onChange={e => setTestExaminerId(e.target.value)}
-                        >
-                          <option value="">בחר בוחן...</option>
-                          {employees.map(emp => (
-                            <option key={emp.id} value={emp.id}>{emp.name}</option>
-                          ))}
-                        </select>
-                      )}
+                      <select
+                        className="input input-sm"
+                        style={{ flex: 1.5, minWidth: 120 }}
+                        required
+                        value={testExaminerId}
+                        onChange={e => setTestExaminerId(e.target.value)}
+                      >
+                        <option value="">בחר בוחן...</option>
+                        {employees.map(emp => (
+                          <option key={emp.id} value={emp.id}>{emp.name}</option>
+                        ))}
+                      </select>
                       <select className="input input-sm" style={{ width: 72 }} value={testPassed ? 'yes' : 'no'} onChange={e => setTestPassed(e.target.value === 'yes')}>
                         <option value="yes">עבר</option>
                         <option value="no">נכשל</option>
                       </select>
+                      <input
+                        className="input input-sm"
+                        type="date"
+                        style={{ width: 132 }}
+                        value={testDate}
+                        onChange={e => setTestDate(e.target.value)}
+                      />
                     </div>
                     <div style={{ display: 'flex', gap: 6 }}>
                       <input
@@ -3966,47 +4071,191 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         value={testNotes}
                         onChange={e => setTestNotes(e.target.value)}
                       />
-                      <button type="submit" disabled={testLoading} className="btn btn-primary btn-sm">רשום</button>
-                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowTestForm(false)}>ביטול</button>
+                      <button type="submit" disabled={testLoading} className="btn btn-primary btn-sm">
+                        {editingTestId ? 'שמור' : 'רשום'}
+                      </button>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={resetTestForm}>ביטול</button>
                     </div>
                   </form>
-                ) : (
-                  <button className="btn btn-ghost btn-sm w-full" style={{ marginBottom: 10, justifyContent: 'center', gap: 8 }} onClick={() => setShowTestForm(true)}>
-                    <Plus size={13} /> שמירת מבחן חדש
+                ) : null}
+
+                <div style={{
+                  display: 'flex',
+                  gap: 4,
+                  marginBottom: 8,
+                  flexWrap: 'nowrap',
+                  alignItems: 'center',
+                  overflowX: 'auto',
+                }}>
+                  {!showTestForm && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-icon btn-xs"
+                      title="מבחן חדש"
+                      onClick={openNewTestForm}
+                      style={{ flexShrink: 0 }}
+                    >
+                      <Plus size={15} strokeWidth={2.5} />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className={`btn btn-xs ${testKindFilter === 'all' ? 'btn-primary' : 'btn-ghost'}`}
+                    onClick={() => setTestKindFilter('all')}
+                    style={{ flexShrink: 0, minWidth: 36, paddingInline: 8 }}
+                  >
+                    הכל
                   </button>
-                )}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 150, overflowY: 'auto', overscrollBehavior: 'contain' }}>
+                  {TEST_KINDS.map((k) => {
+                    const Icon = k.Icon;
+                    const active = testKindFilter === k.key;
+                    return (
+                      <button
+                        key={k.key}
+                        type="button"
+                        className={`btn btn-xs ${active ? 'btn-primary' : 'btn-ghost'}`}
+                        title={k.label}
+                        onClick={() => setTestKindFilter(k.key)}
+                        style={{
+                          flexShrink: 0,
+                          height: 28,
+                          paddingInline: 7,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          ...(active
+                            ? { background: k.bg, color: k.accent, borderColor: k.border }
+                            : { color: k.accent }),
+                        }}
+                      >
+                        <Icon size={13} strokeWidth={2.3} />
+                        {k.shortLabel}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 280, overflowY: 'auto', overscrollBehavior: 'contain' }}>
                   {levelTestsHistory.length === 0 ? (
                     <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>לא נמצאו מבחנים מדווחים</div>
+                  ) : filteredLevelTests.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>אין מבחנים בסינון שנבחר</div>
                   ) : (
-                    levelTestsHistory.map(test => {
-                      const asLevel = test.test_type === 'level' || test.test_type === 'top-rope';
-                      const asSecurity = test.test_type === 'security';
-                      const asLeadCert = test.test_type === 'lead';
-                      const typeKey = asSecurity ? 'security' : asLeadCert ? 'lead' : 'level';
-                      const typeColor = TEST_TYPE_COLORS[typeKey];
-                      const routeStyle = test.route_style || (test.test_type === 'top-rope' ? 'top-rope' : null);
-                      const routeLabel = routeStyle === 'lead' ? 'הובלה' : routeStyle === 'top-rope' ? 'טופ רופ' : null;
-                      let title = 'מבחן';
-                      if (asLevel) title = `רמה ${test.level || ''}${routeLabel ? ` · ${routeLabel}` : ''}`.trim();
-                      else if (asSecurity) title = 'מבחן אבטחה';
-                      else if (asLeadCert) title = 'מבחן הובלה';
-                      const showExaminer = (asSecurity || asLeadCert) && !!test.examiner;
+                    filteredLevelTests.map(test => {
+                      const asLevel = test.test_type === 'level' || test.test_type === 'top-rope' || test.test_type === 'top_rope';
+                      const kind = testKindMeta(test.test_type);
+                      const KindIcon = kind.Icon;
+                      const grade = test.level || test.grade;
+                      const gradeAccent = asLevel ? levelColor(grade) : null;
+                      const typeColor = TEST_TYPE_COLORS[kind.key];
+                      const accent = typeColor.accent;
+                      const route = asLevel
+                        ? routeStyleMeta(test.route_style || (test.test_type === 'top-rope' ? 'top-rope' : null))
+                        : null;
+                      const passed = !!(test.passed ?? test.status === 'passed');
+                      const dateShort = String(test.date || '').slice(5); // MM-DD
                       return (
                         <div key={test.id} style={{
-                          display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12,
-                          padding: '8px 10px', borderRadius: 8,
-                          background: typeColor.bg, border: `1px solid ${typeColor.border}`,
-                          borderRight: `3px solid ${typeColor.accent}`,
+                          display: 'flex', alignItems: 'center', gap: 6, fontSize: 11,
+                          padding: '5px 7px', borderRadius: 7,
+                          background: typeColor.bg,
+                          border: `1px solid ${typeColor.border}`,
+                          borderRight: `3px solid ${accent}`,
                         }}>
-                          <div>
-                            <strong style={{ color: typeColor.accent }}>{title}</strong>
-                            {showExaminer && <div style={{ color: 'var(--text-3)', fontSize: 10 }}>בוחן: {test.examiner}</div>}
-                          </div>
-                          <div style={{ textAlign: 'left' }}>
-                            <span className={`badge ${test.passed ? 'badge-success' : 'badge-danger'}`}>{test.passed ? 'עבר' : 'נכשל'}</span>
-                            <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>{test.date}</div>
-                          </div>
+                          {/* 1. סוג מבחן */}
+                          <span
+                            title={kind.label}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 3,
+                              flexShrink: 0,
+                              color: accent,
+                              fontWeight: 800,
+                              fontSize: 11,
+                            }}
+                          >
+                            <KindIcon size={13} strokeWidth={2.3} />
+                            {kind.shortLabel}
+                          </span>
+
+                          {/* 2. רמה (רק במבחן רמה) */}
+                          {asLevel && grade && (
+                            <span style={{
+                              flexShrink: 0,
+                              fontWeight: 900,
+                              fontSize: 12,
+                              color: gradeAccent || 'var(--text-2)',
+                              minWidth: 22,
+                              textAlign: 'center',
+                            }}>
+                              {grade}
+                            </span>
+                          )}
+
+                          {/* 3. הובלה / טופ רופ */}
+                          {route && (
+                            <span
+                              title={route.label}
+                              style={{
+                                color: route.color,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 3,
+                                flexShrink: 0,
+                                fontWeight: 700,
+                              }}
+                            >
+                              <route.Icon size={12} strokeWidth={2.4} />
+                              {route.label}
+                            </span>
+                          )}
+
+                          {/* 4. בוחן */}
+                          <span style={{
+                            color: 'var(--text-3)',
+                            minWidth: 0,
+                            flex: 1,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }} title={test.examiner || ''}>
+                            {test.examiner || '—'}
+                          </span>
+
+                          <span style={{
+                            fontSize: 10,
+                            fontWeight: 700,
+                            color: passed ? 'var(--green)' : 'var(--red)',
+                            flexShrink: 0,
+                          }}>
+                            {passed ? 'עבר' : 'נכשל'}
+                          </span>
+
+                          <span style={{ fontSize: 10, color: 'var(--text-3)', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+                            {dateShort || '—'}
+                          </span>
+
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-icon btn-xs"
+                            title="עריכה"
+                            style={{ width: 24, height: 24, flexShrink: 0 }}
+                            onClick={() => openEditTestForm(test)}
+                          >
+                            <Edit2 size={11} />
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-icon btn-xs"
+                            title="מחיקה"
+                            style={{ width: 24, height: 24, color: 'var(--red)', flexShrink: 0 }}
+                            onClick={() => handleDeleteTest(test)}
+                          >
+                            <Trash2 size={11} />
+                          </button>
                         </div>
                       );
                     })
