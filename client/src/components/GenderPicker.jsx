@@ -30,6 +30,31 @@ export function FemaleIcon({ size = 16 }) {
   );
 }
 
+/** Normalize stored gender values from forms / employees / legacy rows. */
+export function genderKind(gender) {
+  const g = String(gender || '').trim().toLowerCase();
+  if (['male', 'm', 'בן', 'זכר', 'גבר', 'boy'].includes(g)) return 'male';
+  if (['female', 'f', 'בת', 'נקבה', 'אישה', 'girl'].includes(g)) return 'female';
+  return null;
+}
+
+/** Compact icon for trainee chips — nothing when gender is unknown. */
+export function GenderMark({ gender, size = 12, style }) {
+  const kind = genderKind(gender);
+  if (!kind) return null;
+  const Icon = kind === 'male' ? MaleIcon : FemaleIcon;
+  const label = kind === 'male' ? 'בן' : 'בת';
+  return (
+    <span
+      title={label}
+      aria-label={label}
+      style={{ display: 'inline-flex', lineHeight: 0, flexShrink: 0, ...style }}
+    >
+      <Icon size={size} />
+    </span>
+  );
+}
+
 /**
  * @param {object}   props
  * @param {string}   props.value      what is stored now

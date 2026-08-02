@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, Archive, ArchiveRestore } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
-import GenderPicker from './GenderPicker.jsx';
+import GenderPicker, { GenderMark, genderKind } from './GenderPicker.jsx';
 import {
   blobToBase64,
   buildHealthDeclarationPdf,
@@ -202,9 +202,9 @@ function ageLabel(birthDateStr) {
 }
 
 function genderLabel(gender) {
-  const g = String(gender || '').trim().toLowerCase();
-  if (g === 'male' || g === 'בן' || g === 'm') return 'בן';
-  if (g === 'female' || g === 'בת' || g === 'f') return 'בת';
+  const kind = genderKind(gender);
+  if (kind === 'male') return 'בן';
+  if (kind === 'female') return 'בת';
   return gender || '—';
 }
 
@@ -2498,13 +2498,20 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     || isChildOfParent(sib, parent?.id))
                   .map((sib) => {
                   const active = !parentOnly && sib.id === student.id;
+                  const gLabel = genderLabel(sib.gender);
                   return (
                     <button
                       key={sib.id}
                       type="button"
                       onClick={() => onSelectSibling?.(sib.id)}
-                      title="החלפת תיק מתאמן — השיחה מימין לא משתנה"
+                      title={[
+                        'החלפת תיק מתאמן — השיחה מימין לא משתנה',
+                        gLabel !== '—' ? gLabel : null,
+                      ].filter(Boolean).join(' · ')}
                       style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 5,
                         border: active
                           ? '1px solid rgba(249, 115, 22, 0.65)'
                           : '1px solid var(--border)',
@@ -2524,8 +2531,11 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         whiteSpace: 'nowrap',
                       }}
                     >
-                      {sib.name}
-                      {sib.isAdult ? ' · מבוגר' : ''}
+                      <GenderMark gender={sib.gender} size={12} />
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {sib.name}
+                        {sib.isAdult ? ' · מבוגר' : ''}
+                      </span>
                     </button>
                   );
                 })}
@@ -5374,6 +5384,7 @@ export default function Leads({
                                 {/* First in the chip, so in RTL the icons sit on the leading
                                     edge and line up down the column however long the names are. */}
                                 <DeclarationIcons status={declStatus} />
+                                <GenderMark gender={child.gender} size={11} />
                                 {child.name}
                                 {child.isAdult && (
                                   <span style={{ color: 'var(--text-3)', fontWeight: 500, fontSize: 10 }}>
