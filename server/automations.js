@@ -9,6 +9,7 @@ import {
   israelHour,
 } from './attendanceUtils.js';
 import { studentGroupIds } from './studentGroups.js';
+import { alertRecipients } from './staffAlerts.js';
 
 /**
  * Where to come. Read from the business facts the owner edits, because a
@@ -213,13 +214,7 @@ export function findIntroFollowupCandidates(date = yesterdayIsraelDateStr()) {
 }
 
 /** Staff numbers as the owner wrote them in the bot settings. */
-function staffPhonesFromSettings() {
-  const settings = db.getSettings ? db.getSettings() : {};
-  return String(settings?.aiStaffPhones || '')
-    .split(/[,|\n]+/)
-    .map((v) => String(v || '').trim())
-    .filter(Boolean);
-}
+
 
 /** When this trainee entered the status they are sitting in now. */
 function statusEnteredAt(student, status, store = db) {
@@ -478,7 +473,7 @@ export const automationsService = {
       return { event: 'signup_stalled', date: today, candidates: stalled.length, sent: 0, skipped: 1 };
     }
 
-    const staffPhones = staffPhonesFromSettings();
+    const { phones: staffPhones } = alertRecipients(db, 'signup_stalled', db.getSettings ? db.getSettings() : {});
     if (!staffPhones.length) {
       return { event: 'signup_stalled', date: today, candidates: stalled.length, sent: 0, reason: 'no_staff_phones' };
     }

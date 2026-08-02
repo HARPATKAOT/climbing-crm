@@ -105,6 +105,7 @@ import {
   proposeFromHandoffStaffReply,
 } from './botLearning.js';
 import { runCustomerToolTurn, historyToContents } from './botToolTurn.js';
+import { alertRecipients } from './staffAlerts.js';
 import { groupMatchesGradeLetter } from './groupBands.js';
 
 export { israelClockParts, isBotEnabled, shouldAiAutoReply };
@@ -903,10 +904,7 @@ export async function notifyStaffOfHandoff({
 } = {}) {
   if (isSimulator) return { sent: 0, skipped: true, reason: 'simulator' };
   const s = mergeBotSettings(settings);
-  const staffPhones = String(s.aiStaffPhones || '')
-    .split(/[,|\n]+/)
-    .map((v) => String(v || '').trim())
-    .filter(Boolean);
+  const { phones: staffPhones } = alertRecipients(db, 'handoff', s);
   if (!staffPhones.length) return { sent: 0, skipped: true, reason: 'no_staff_phones' };
 
   const customerPhone = normalizeWaPhone(phone) || phone;
@@ -954,10 +952,7 @@ export async function notifyStaffOfPlacement({
 } = {}) {
   if (isSimulator) return { sent: 0, skipped: true, reason: 'simulator' };
   const s = mergeBotSettings(settings);
-  const staffPhones = String(s.aiStaffPhones || '')
-    .split(/[,|\n]+/)
-    .map((v) => String(v || '').trim())
-    .filter(Boolean);
+  const { phones: staffPhones } = alertRecipients(db, 'placement', s);
   if (!staffPhones.length) return { sent: 0, skipped: true, reason: 'no_staff_phones' };
 
   const customerPhone = normalizeWaPhone(phone) || phone;

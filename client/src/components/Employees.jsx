@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { Modal } from './UI.jsx';
 import GenderPicker from './GenderPicker.jsx';
+import { STAFF_ALERT_KINDS } from '../utils/staffAlerts.js';
 import {
   STAFF_ROLE_OPTIONS,
   assignableLabelsOf,
@@ -847,6 +848,7 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
   const [documents, setDocuments]     = useState(employee?.documents || {});
   const [pendingFiles, setPendingFiles] = useState({});
   const [certifications, setCertifications] = useState(employee?.certifications || []);
+  const [alerts, setAlerts] = useState(Array.isArray(employee?.alerts) ? employee.alerts : []);
   const [customCert, setCustomCert]   = useState('');
   // קטלוג התפקידים מגיע מהשרת; תפקידי מערכת נעולים, השאר ניתנים לעריכה.
   const [roleCatalog, setRoleCatalog] = useState(null);
@@ -948,6 +950,7 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
         hasIdPhoto: hasEmployeeDoc({ documents }, 'idPhoto') || !!pendingFiles.idPhoto,
         hasForm101: hasEmployeeDoc({ documents }, 'form101') || !!pendingFiles.form101,
         certifications,
+        alerts,
         _pendingFiles: pendingFiles,
         // רק תפקידים שמסומנים כרגע נשמרים בהסכם — תפקיד שהוסר מוריד את התעריף שלו.
         _wage: {
@@ -1204,6 +1207,40 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
               >
                 <Plus size={15} /> הוסף
               </button>
+            </div>
+
+            <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>התראות בוואטסאפ</div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: -8 }}>
+              הודעות פנימיות מהמערכת למספר של העובד. אף אחד לא מסומן — ההתראות
+              נשלחות למספרים שבהגדרות הבוט.
+            </div>
+            {!answers.phone?.trim() && alerts.length > 0 && (
+              <div style={{ fontSize: 12, color: '#FBBF24' }}>
+                אין טלפון לעובד הזה, ולכן ההתראות שסומנו לא יישלחו.
+              </div>
+            )}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {STAFF_ALERT_KINDS.map((alert) => (
+                <label
+                  key={alert.key}
+                  style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, cursor: 'pointer' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={alerts.includes(alert.key)}
+                    onChange={(e) => setAlerts((prev) => (
+                      e.target.checked
+                        ? [...new Set([...prev, alert.key])]
+                        : prev.filter((k) => k !== alert.key)
+                    ))}
+                    style={{ marginTop: 2 }}
+                  />
+                  <span>
+                    <span style={{ fontWeight: 700 }}>{alert.label}</span>
+                    <span style={{ color: 'var(--text-3)' }}> — {alert.hint}</span>
+                  </span>
+                </label>
+              ))}
             </div>
 
             <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>הסכם שכר</div>
