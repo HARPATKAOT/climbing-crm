@@ -1,5 +1,6 @@
 /** Paths that must work without staff login (registered outside AuthGate in main.jsx). */
 export const PUBLIC_PATH_PREFIXES = [
+  '/register',
   '/health',
   '/join',
   '/onboard',

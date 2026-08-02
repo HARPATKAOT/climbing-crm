@@ -48,7 +48,13 @@ test('a tampered token is refused', () => {
   const { svc } = serviceAt();
   const { token } = svc.verifyCode(PHONE, svc.issueCode(PHONE).code);
   assert.equal(svc.checkToken(`${token}x`, PHONE), false);
-  assert.equal(svc.checkToken(token.replace(/.$/, 'A'), PHONE), false);
+  // Flip the last character to something it is not. Replacing it with a fixed
+  // letter left the token untouched whenever it already ended in that letter —
+  // about one run in seven hundred, which is a red suite for no reason.
+  const last = token.slice(-1);
+  const flipped = `${token.slice(0, -1)}${last === 'A' ? 'B' : 'A'}`;
+  assert.notEqual(flipped, token);
+  assert.equal(svc.checkToken(flipped, PHONE), false);
   assert.equal(svc.checkToken('forged', PHONE), false);
 });
 

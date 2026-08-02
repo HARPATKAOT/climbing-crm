@@ -261,7 +261,7 @@ function publicShareOrigin() {
   return PUBLIC_APP_FALLBACK;
 }
 
-function buildShareHealthLink(studentId, phone, healthPath = '/health') {
+function buildShareHealthLink(studentId, phone, healthPath = '/register') {
   const params = new URLSearchParams();
   if (studentId && !String(studentId).startsWith('parent:')) {
     params.set('studentId', studentId);
@@ -600,8 +600,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     || formTemplates.find(t => t.isDefault)
     || formTemplates[0];
   const healthPath = selectedTemplate && !selectedTemplate.isDefault
-    ? `/health/${selectedTemplate.slug}`
-    : '/health';
+    ? `/register/${selectedTemplate.slug}`
+    : '/register';
   // WhatsApp-shareable public links (never localhost)
   const healthShareUrl = buildShareHealthLink(student.id, parent?.phone, healthPath);
   // Signed if status says so, declaration exists, or durable timestamp was saved on the student

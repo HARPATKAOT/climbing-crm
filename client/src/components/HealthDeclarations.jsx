@@ -28,7 +28,7 @@ const CUSTOM_ACTIVITY_TYPE = { value: 'custom', label: 'ללא שיוך — קי
 const EMPTY_TEMPLATE = {
   title: '',
   slug: '',
-  activityType: 'wall',
+  activityTypes: ['wall'],
   waiverText: '',
   waiverSummary: '',
   healthQuestionsText: 'האם המתאמן סובל מאסתמה, קוצר נשימה או מחלת ריאות?\nהאם המתאמן סובל מבעיות לב, לחץ דם, או סחרחורות/התעלפויות?\nהאם יש בעיה אורתופדית (גב, פרקים, שברים) המגבילה פעילות מאומצת?',
@@ -118,7 +118,7 @@ function FormTemplatesPanel() {
     setForm({
       title: t.title || '',
       slug: t.slug || '',
-      activityType: t.activityType || 'wall',
+      activityTypes: t.activityTypes || (t.activityType ? [t.activityType] : []),
       waiverText: t.waiverText || '',
       waiverSummary: t.waiverSummary || '',
       healthQuestionsText: questionsToText(t.healthQuestions),
@@ -128,10 +128,13 @@ function FormTemplatesPanel() {
     setMsg('');
   };
 
+  // /register is the address the form goes out under now — it collects details,
+  // health answers and a signature, so /health named a third of it. The old
+  // addresses still resolve, so links already sent keep working.
   const publicUrl = (slug, isDefault) => {
     const base = window.location.origin;
-    if (isDefault || !slug || slug === 'wall') return `${base}/health`;
-    return `${base}/health/${slug}`;
+    if (isDefault || !slug || slug === 'wall') return `${base}/register`;
+    return `${base}/register/${slug}`;
   };
 
   const copyLink = async (t) => {
@@ -151,7 +154,7 @@ function FormTemplatesPanel() {
     const payload = {
       title: form.title.trim(),
       slug: form.slug.trim().toLowerCase(),
-      activityType: form.activityType,
+      activityTypes: form.activityTypes || [],
       waiverText: form.waiverText,
       waiverSummary: form.waiverSummary,
       healthQuestions: textToQuestions(form.healthQuestionsText),
@@ -214,7 +217,7 @@ function FormTemplatesPanel() {
 
       {!editing && templates.length > 0 && (
         <div className="alert alert-success" style={{ marginBottom: 14 }}>
-          לחצו <strong>ערוך</strong> על ההצהרה הרצויה כדי לשנות את הטקסט שנשלח ללקוחות. תבנית ברירת המחדל נפתחת ב־/health.
+          לחצו <strong>ערוך</strong> על ההצהרה הרצויה כדי לשנות את הטקסט שנשלח ללקוחות. תבנית ברירת המחדל נפתחת ב־/register.
         </div>
       )}
 
@@ -256,21 +259,58 @@ function FormTemplatesPanel() {
           </div>
           <div className="form-grid-2">
             <div className="form-group">
-              <label className="form-label">סוג פעילות</label>
-              <AppSelect
-                className="select"
-                value={form.activityType}
-                onChange={(e) => setForm((f) => ({ ...f, activityType: e.target.value }))}
-              >
-                {activityTypeOptions.map((a) => (
-                  <option key={a.value} value={a.value}>{a.label}</option>
-                ))}
-              </AppSelect>
+              <label className="form-label">סוגי פעילות שההצהרה הזאת משרתת</label>
+              {/* הצהרה אחת יכולה לשרת כמה סוגים; סוג שייך להצהרה אחת בלבד, ולכן
+                  סימון סוג שתפוס מעביר אותו לכאן — וכתוב למי הוא שייך עכשיו. */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {activityTypeOptions
+                  .filter((a) => a.value !== 'custom')
+                  .map((a) => {
+                    const chosen = (form.activityTypes || []).includes(a.value);
+                    const ownerElsewhere = templates.find((t) => (
+                      t.id !== (editing === 'new' ? null : editing?.id)
+                      && (t.activityTypes || (t.activityType ? [t.activityType] : [])).includes(a.value)
+                    ));
+                    return (
+                      <button
+                        key={a.value}
+                        type="button"
+                        onClick={() => setForm((f) => {
+                          const list = f.activityTypes || [];
+                          return {
+                            ...f,
+                            activityTypes: chosen
+                              ? list.filter((v) => v !== a.value)
+                              : [...list, a.value],
+                          };
+                        })}
+                        title={!chosen && ownerElsewhere ? `כרגע שייך ל„${ownerElsewhere.title}” — סימון כאן יעביר אותו` : ''}
+                        style={{
+                          padding: '7px 11px', borderRadius: 999, font: 'inherit', fontSize: 12,
+                          fontWeight: 700, cursor: 'pointer',
+                          border: chosen ? '1px solid #f97316' : '1px solid var(--border)',
+                          background: chosen ? 'rgba(249,115,22,.18)' : 'transparent',
+                          color: chosen ? '#fdba74' : 'var(--text-2)',
+                        }}
+                      >
+                        {a.label}
+                        {!chosen && ownerElsewhere && (
+                          <span style={{ opacity: 0.6, fontWeight: 500 }}> · תפוס</span>
+                        )}
+                      </button>
+                    );
+                  })}
+              </div>
+              {!(form.activityTypes || []).length && (
+                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
+                  ללא שיוך — מגיעים להצהרה הזאת רק בקישור ישיר.
+                </div>
+              )}
             </div>
             <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 10, justifyContent: 'flex-end', paddingBottom: 4 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
                 <input type="checkbox" checked={form.isDefault} onChange={(e) => setForm((f) => ({ ...f, isDefault: e.target.checked }))} />
-                תבנית ברירת מחדל (נפתחת ב־/health)
+                תבנית ברירת מחדל (נפתחת ב־/register)
               </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
                 <input type="checkbox" checked={form.isActive} onChange={(e) => setForm((f) => ({ ...f, isActive: e.target.checked }))} />
@@ -372,7 +412,10 @@ function FormTemplatesPanel() {
                     {(() => {
                       // אותו אייקון שמופיע בתיק הלקוח וברשימת הלידים.
                       const kind = templateKind(t);
-                      const label = activityTypeOptions.find((a) => a.value === t.activityType)?.label || t.activityType;
+                      const types = t.activityTypes || (t.activityType ? [t.activityType] : []);
+                      const label = types
+                        .map((v) => activityTypeOptions.find((a) => a.value === v)?.label || v)
+                        .join(' · ') || 'ללא שיוך';
                       return (
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                           <kind.Icon size={13} style={{ color: kind.color, flexShrink: 0 }} />
@@ -382,7 +425,7 @@ function FormTemplatesPanel() {
                     })()}
                   </td>
                   <td dir="ltr" style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'left' }}>
-                    /health{t.isDefault ? '' : `/${t.slug}`}
+                    /register{t.isDefault ? '' : `/${t.slug}`}
                   </td>
                   <td>
                     <span className={`badge ${t.isActive !== false ? 'badge-green' : 'badge-red'}`}>

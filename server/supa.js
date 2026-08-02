@@ -492,7 +492,12 @@ mappers.form_templates = {
     id: o.id,
     slug: (o.slug || '').trim().toLowerCase(),
     title: o.title || '',
-    activity_type: o.activityType || o.activity_type || 'wall',
+    activity_types: Array.isArray(o.activityTypes)
+      ? o.activityTypes.map(String)
+      : (Array.isArray(o.activity_types) ? o.activity_types.map(String) : []),
+    // Kept in step with the first entry so an older reader still finds a value.
+    activity_type: (Array.isArray(o.activityTypes) ? o.activityTypes[0] : '')
+      || o.activityType || o.activity_type || 'wall',
     waiver_text: o.waiverText || o.waiver_text || '',
     waiver_summary: o.waiverSummary || o.waiver_summary || '',
     health_questions: Array.isArray(o.healthQuestions)

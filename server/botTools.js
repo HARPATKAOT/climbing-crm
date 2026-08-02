@@ -35,7 +35,7 @@ const DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
 function healthFormUrl(phone = '') {
   const digits = String(phone || '').replace(/\D/g, '');
   const qs = digits ? `?phone=${encodeURIComponent(digits)}` : '';
-  return `${appPublicBase()}/health${qs}`;
+  return `${appPublicBase()}/register${qs}`;
 }
 
 /** Non-grade bands as they are written in the group's age category. */

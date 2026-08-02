@@ -21,6 +21,16 @@ import { isEventType } from './eventKinds.js';
  *
  * `templates` היא רשימת ההצהרות הפעילות.
  */
+/** סוגי הפעילות שהצהרה מסוימת משרתת, בכל צורת אחסון. */
+export function templateActivityTypes(template) {
+  const list = Array.isArray(template?.activityTypes)
+    ? template.activityTypes
+    : (Array.isArray(template?.activity_types) ? template.activity_types : null);
+  if (list && list.length) return list.map((t) => String(t || '').trim().toLowerCase()).filter(Boolean);
+  const single = String(template?.activityType || template?.activity_type || '').trim().toLowerCase();
+  return single ? [single] : [];
+}
+
 export function defaultSlugForType(type, templates = []) {
   const key = String(type || '').trim().toLowerCase();
   if (!key) return '';
@@ -28,7 +38,7 @@ export function defaultSlugForType(type, templates = []) {
   const wanted = isEventType(key) ? 'event' : key;
   const match = (templates || []).find((t) => {
     if (t?.isActive === false) return false;
-    return String(t?.activityType || t?.activity_type || '').trim().toLowerCase() === wanted;
+    return templateActivityTypes(t).includes(wanted);
   });
   return String(match?.slug || '').trim().toLowerCase();
 }

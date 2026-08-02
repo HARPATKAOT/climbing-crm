@@ -308,7 +308,7 @@ export default function AuthGate({ children }) {
     const path = location.pathname;
     const publicFallback = <div style={{ padding: 40, textAlign: 'center', fontFamily: 'sans-serif' }}>טוען...</div>;
     let publicPage = null;
-    if (path === '/health' || path.startsWith('/health/')) publicPage = <PublicOnboardingForm />;
+    if (['/register', '/health'].some((p) => path === p || path.startsWith(`${p}/`))) publicPage = <PublicOnboardingForm />;
     else if (path === '/onboard' || path.startsWith('/onboard/')) publicPage = <PublicOnboardingForm />;
     else if (path === '/join') publicPage = <LeadIntakeForm />;
     else if (path === '/privacy') publicPage = <PrivacyPolicy />;

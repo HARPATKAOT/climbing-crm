@@ -58,9 +58,13 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <BusinessProfileProvider>
         <Suspense fallback={<div style={{ padding: 40, textAlign: 'center', fontFamily: 'sans-serif' }}>טוען...</div>}>
           <Routes>
-            {/* /health is the link that went out to customers and sits inside
-                WhatsApp templates, so it keeps working — but it now opens the
-                one current form. The older declaration-only page is gone. */}
+            {/* One form, three addresses. /register is its name — it collects
+                details, health answers and a signature, so calling it /health
+                described a third of it. /health and /onboard are the addresses
+                already sitting in WhatsApp templates and in messages families
+                have; they keep working and always will. */}
+            <Route path="/register" element={<PublicOnboardingForm />} />
+            <Route path="/register/:slug" element={<PublicOnboardingForm />} />
             <Route path="/health" element={<PublicOnboardingForm />} />
             <Route path="/health/:slug" element={<PublicOnboardingForm />} />
             <Route path="/onboard" element={<PublicOnboardingForm />} />

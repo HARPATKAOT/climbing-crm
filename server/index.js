@@ -168,11 +168,15 @@ import {
 } from './crmWaiverService.js';
 import {
   declarationGap,
+  isChildOnlyQuestion,
+  isScreeningQuestion,
   needsMedicalClearance,
+  questionLabel,
   questionsForSigner,
+  requiresClearance,
 } from './healthQuestions.js';
 import { EVENT_KINDS, normalizeActivityType } from './eventKinds.js';
-import { declarationTemplateForActivity } from './activityDeclaration.js';
+import { declarationTemplateForActivity, templateActivityTypes } from './activityDeclaration.js';
 import { createOtpService } from './otpService.js';
 import {
   declarationSignedAt,
@@ -10704,29 +10708,77 @@ function clearOtherDefaultTemplates(keepId) {
   }
 }
 
+/**
+ * אילו סוגי פעילות ההצהרה הזאת משרתת.
+ *
+ * הצהרה אחת יכולה לשרת כמה סוגים — יום הולדת ויום גיבוש חותמים על אותו מסמך —
+ * אבל סוג פעילות שייך להצהרה אחת בלבד, אחרת אין תשובה לשאלה „על מה חותמים
+ * בטיול”. האכיפה של הצד השני נעשית בשמירה, ב-`claimActivityTypes`.
+ */
+function normalizeTemplateActivityTypes(body, existing = null) {
+  const raw = Array.isArray(body?.activityTypes) ? body.activityTypes
+    : Array.isArray(body?.activity_types) ? body.activity_types
+      : (body?.activityType || body?.activity_type)
+        ? [body.activityType || body.activity_type]
+        : null;
+  const list = raw || templateActivityTypes(existing || {});
+  const seen = new Set();
+  return list
+    .map((t) => String(t || '').trim().toLowerCase())
+    .filter((t) => t && t !== 'custom' && !seen.has(t) && seen.add(t));
+}
+
+/**
+ * מוציא את הסוגים שנבחרו מכל הצהרה אחרת, כדי שסוג פעילות יישאר מקושר להצהרה
+ * אחת. שקט ובכוונה: מי שסימן „טיול” כאן התכוון להעביר אותו לכאן.
+ */
+function claimActivityTypes(keepId, types) {
+  const claimed = new Set(types || []);
+  if (!claimed.size) return;
+  for (const t of listFormTemplates()) {
+    if (t.id === keepId) continue;
+    const had = templateActivityTypes(t);
+    const kept = had.filter((type) => !claimed.has(type));
+    if (kept.length !== had.length) {
+      db.update('form_templates', t.id, {
+        activityTypes: kept,
+        activityType: kept[0] || 'custom',
+      });
+    }
+  }
+}
+
 function normalizeFormTemplatePayload(body, existing = null) {
   const slug = slugifyFormTemplate(body.slug || existing?.slug || body.title || `form-${Date.now()}`);
   if (!slug) return { error: 'חסר מזהה קישור (slug)' };
   const healthQuestions = Array.isArray(body.healthQuestions)
     ? body.healthQuestions
     : (Array.isArray(body.health_questions) ? body.health_questions : (existing?.healthQuestions || DEFAULT_HEALTH_QUESTIONS));
+  const activityTypes = normalizeTemplateActivityTypes(body, existing);
   return {
     slug,
     title: (body.title ?? existing?.title ?? '').trim() || 'הצהרת בריאות',
-    activityType: body.activityType || body.activity_type || existing?.activityType || 'wall',
+    activityTypes,
+    // Kept in step with the first entry, for anything still reading one value.
+    activityType: activityTypes[0] || 'wall',
     waiverText: body.waiverText ?? body.waiver_text ?? existing?.waiverText ?? '',
     // The plain-language layer shown in front of the legal text.
     waiverSummary: body.waiverSummary ?? body.waiver_summary ?? existing?.waiverSummary ?? '',
     // `kind` and `requireYes` used to be dropped here, so saving a template
     // from the CRM screen turned every mandatory clause into an optional one
-    // and every screening question into a tick box.
+    // and every screening question into a tick box. `audience` and
+    // `requiresClearance` were being dropped the same way, which quietly
+    // deleted the parent-only clauses and the doctor's-approval rule the first
+    // time anyone edited a declaration — the wording survived, the rules did not.
     healthQuestions: healthQuestions.map((q, i) => {
       const rawLabel = String(q.label || q.text || '').trim();
-      const screening = q.kind === 'screen' || rawLabel.startsWith('?');
+      const screening = isScreeningQuestion({ ...q, label: rawLabel });
       return {
         id: q.id || `q${i + 1}`,
-        label: screening && rawLabel.startsWith('?') ? rawLabel.slice(1).trim() : rawLabel,
+        label: questionLabel({ ...q, label: rawLabel }),
         kind: screening ? 'screen' : 'confirm',
+        audience: isChildOnlyQuestion({ ...q, label: rawLabel }) ? 'child' : 'all',
+        requiresClearance: screening && requiresClearance({ ...q, label: rawLabel }),
         requireYes: !screening,
       };
     }).filter((q) => q.label),
@@ -10753,6 +10805,7 @@ app.post('/api/form-templates', (req, res) => {
     ...normalized,
   });
   if (record.isDefault) clearOtherDefaultTemplates(record.id);
+  claimActivityTypes(record.id, normalized.activityTypes);
   res.status(201).json(record);
 });
 
@@ -10766,6 +10819,7 @@ app.put('/api/form-templates/:id', (req, res) => {
   if (duplicate) return res.status(400).json({ error: 'קיים כבר טופס עם אותו מזהה קישור' });
 
   if (normalized.isDefault) clearOtherDefaultTemplates(existing.id);
+  claimActivityTypes(existing.id, normalized.activityTypes);
   const updated = db.update('form_templates', existing.id, normalized);
   res.json(updated);
 });
@@ -11886,7 +11940,7 @@ function resolvePublicAppOrigin(requestedOrigin) {
 }
 
 function buildShareableHealthUrl(origin, { pathSlug = '', studentId = '', phone = '' } = {}) {
-  const base = `${String(origin).replace(/\/$/, '')}/health${pathSlug || ''}`;
+  const base = `${String(origin).replace(/\/$/, '')}/register${pathSlug || ''}`;
   const params = new URLSearchParams();
   // Prefer studentId alone — long phone digits at the end break WhatsApp link detection.
   if (studentId && !String(studentId).startsWith('parent:')) {
