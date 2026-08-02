@@ -110,7 +110,11 @@ const GRID_H     = (END_MIN - START_MIN) * PX_PER_MIN; // 720px
 const HOURS      = Array.from({ length: 9 }, (_, i) => 14 + i); // 14..22
 const WEEK_DAYS_PREF_KEY = 'schedule.visibleWeekDays';
 
-const AGE_CATEGORIES = ["א'-ב'", "ג'-ד'", "ה'-ו'", 'חטיבה', 'תיכון', 'בוגרים'];
+// A group can span two bands — the Sunday and Wednesday sessions take middle
+// school and high school together. Written as one category rather than a second
+// field, because the bot matches a band by looking for its word inside the
+// category: "חטיבה + תיכון" answers a question about either one.
+const AGE_CATEGORIES = ["א'-ב'", "ג'-ד'", "ה'-ו'", 'חטיבה', 'חטיבה + תיכון', 'תיכון', 'בוגרים'];
 const TIME_OPTIONS = [
   '14:00','15:00','15:30','16:00','16:30',
   '17:00','17:10','17:30','18:00','18:10',
