@@ -5,9 +5,10 @@ import {
   remainingCapacity,
 } from './activityRegistration.js';
 import {
-  resolveDefaultDeclarationTemplate,
+  resolveDeclarationTemplate,
   saveCrmParticipants,
 } from './crmWaiverService.js';
+import { declarationTemplateForActivity } from './activityDeclaration.js';
 import { chargeAmount, normalizePriceIncludesVat } from './vat.js';
 
 const activityLocks = new Map();
@@ -141,7 +142,9 @@ export async function registerActivityGroup({
       ? new Date(Date.now() + HOLD_MINUTES * 60 * 1000).toISOString()
       : null;
     const orderId = makeId('aro');
-    const template = resolveDefaultDeclarationTemplate(db);
+    // What the participants are actually signing is decided by the event, not
+    // by whichever declaration happens to be the default one.
+    const template = declarationTemplateForActivity(db, activity, resolveDeclarationTemplate);
     const leadSource = leadSourceFromActivityType(activity.type, activity.event_kind);
     const crm = await saveCrmParticipants({
       db,

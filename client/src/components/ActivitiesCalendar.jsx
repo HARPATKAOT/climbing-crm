@@ -1198,6 +1198,31 @@ function RegularActivityModal({
                     </div>
                   </label>
                 )}
+                {/* על מה חותמים כשנרשמים לאירוע הזה. „לפי סוג הפעילות” הוא
+                    ברירת המחדל ונכון כמעט תמיד — טיול מחתים על הצהרת הטיול —
+                    ומי שצריך משהו אחר בוחר במפורש. */}
+                {!isOps && (
+                  <label>
+                    <span className="activity-settings-label">הצהרת בריאות</span>
+                    <select
+                      className="input"
+                      value={form.form_template_slug && form.form_template_slug !== 'wall' ? form.form_template_slug : ''}
+                      onChange={(event) => setForm((prev) => ({
+                        ...prev,
+                        form_template_slug: event.target.value,
+                        // בחירה מפורשת מחליפה גם את המזהה, אחרת תבנית ישנה
+                        // שנשמרה לפי id הייתה גוברת על מה שנבחר עכשיו.
+                        form_template_id: null,
+                      }))}
+                      disabled={readOnly}
+                    >
+                      <option value="">לפי סוג הפעילות</option>
+                      {declarationTemplates.map((t) => (
+                        <option key={t.slug} value={t.slug}>{t.title || t.slug}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
               </div>
             </section>
             )}
@@ -1505,6 +1530,20 @@ function ActivityFormModal({
     staff_flat_amount: initial?.staff_flat_amount ?? '',
   }));
   const [localError, setLocalError] = useState('');
+  // The declarations staff can point an event at. Fetched rather than hardcoded
+  // so a new one added in the health screen appears here without a deploy.
+  const [declarationTemplates, setDeclarationTemplates] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/form-templates')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list) => {
+        if (cancelled || !Array.isArray(list)) return;
+        setDeclarationTemplates(list.filter((t) => t.isActive !== false));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   const isEdit = !!initial?.id && !isTemplateEdit;
   const showError = localError || error || '';
   const multiDay = !!(form.date && form.end_date && form.end_date > form.date);

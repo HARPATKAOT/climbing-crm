@@ -172,6 +172,7 @@ import {
   questionsForSigner,
 } from './healthQuestions.js';
 import { EVENT_KINDS, normalizeActivityType } from './eventKinds.js';
+import { declarationTemplateForActivity } from './activityDeclaration.js';
 import { createOtpService } from './otpService.js';
 import {
   declarationSignedAt,
@@ -5343,7 +5344,9 @@ app.get('/api/public/activities/:slug', publicFormRateLimit, async (req, res) =>
       if (remoteRegs) db.set('activity_registrations', remoteRegs);
     }
     const regs = activeRegistrations(db, activity.id);
-    const template = resolveDefaultDeclarationTemplate(db);
+    // The declaration the event itself calls for — a trip asks the trip
+    // questions. This used to be the default template whatever the event was.
+    const template = declarationTemplateForActivity(db, activity, resolveDeclarationTemplate);
     res.json({
       ...publicRegistrationPayload(activity, regs),
       form_template: template,
