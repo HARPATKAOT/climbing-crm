@@ -139,6 +139,22 @@ export async function markCommunicationHandled(parentId, at = new Date().toISOSt
   return { success: true, handledAt: at, parents: updatedParents };
 }
 
+/** Clear the whole awaiting queue at once — every card that still shows "ממתין לטיפול". */
+export async function markAllCommunicationsHandled(at = new Date().toISOString()) {
+  const updatedParents = [];
+  for (const parent of db.get('parents') || []) {
+    if (!isAwaitingHandling(parent)) continue;
+    const updated = db.update('parents', parent.id, { communication_handled_at: at });
+    if (!updated) continue;
+    updatedParents.push(updated);
+    const durable = await persistCore('parents', updated);
+    if (durable?.ok === false) {
+      console.error('markAllCommunicationsHandled persistence failed:', durable.error);
+    }
+  }
+  return { success: true, handledAt: at, parents: updatedParents, count: updatedParents.length };
+}
+
 export function updateMessageStatusByMetaId(metaMessageId, status) {
   setMessageStatusByMetaId(metaMessageId, status);
 }

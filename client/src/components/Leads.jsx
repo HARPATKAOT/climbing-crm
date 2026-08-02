@@ -4706,6 +4706,7 @@ export default function Leads({
   const [viewMode, setViewMode] = useState('table');
   const [dragOverStatus, setDragOverStatus] = useState(null);
   const [markingHandledId, setMarkingHandledId] = useState(null);
+  const [markingAllHandled, setMarkingAllHandled] = useState(false);
   const [handlingError, setHandlingError] = useState('');
   // The whole declaration feed, so the table can mark each climber without
   // opening their file. One fetch for the list, not one per row.
@@ -4900,6 +4901,26 @@ export default function Leads({
       setHandlingError(error.message || 'סימון הלקוח כטופל נכשל');
     } finally {
       setMarkingHandledId(null);
+    }
+  };
+
+  const handleMarkAllHandled = async () => {
+    if (markingAllHandled) return;
+    if (!window.confirm(`לסמן את כל ${familyCountByStatus.communication} הממתינים כ"לקוח טופל"? מי שיכתוב שוב יחזור לרשימה.`)) return;
+    setMarkingAllHandled(true);
+    setHandlingError('');
+    try {
+      const response = await fetch('/api/conversations/handled-all', { method: 'POST' });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'סימון כל הלקוחות כטופלו נכשל');
+      }
+      applyHandledParents(result.parents || [], result.handledAt);
+    } catch (error) {
+      console.error(error);
+      setHandlingError(error.message || 'סימון כל הלקוחות כטופלו נכשל');
+    } finally {
+      setMarkingAllHandled(false);
     }
   };
 
@@ -5179,6 +5200,16 @@ export default function Leads({
             style={{ gap: 6 }}
           >
             <Archive size={13} /> ארכיון ({familyCountByStatus.archived})
+          </button>
+        )}
+        {filterStatus === 'communication' && familyCountByStatus.communication > 0 && (
+          <button
+            className="btn btn-sm btn-success"
+            style={{ marginInlineStart: 'auto', gap: 6 }}
+            disabled={markingAllHandled}
+            onClick={handleMarkAllHandled}
+          >
+            <Check size={13} /> {markingAllHandled ? 'מסמן את כולם...' : 'סמן את כולם כטופלו'}
           </button>
         )}
       </div>
