@@ -79,20 +79,26 @@ test('the benefit note spells out what was paid against the list price', () => {
 });
 
 test('pickBestPunchCard prefers sooner expiry', () => {
+  // Both cards must still be valid for "sooner" to mean anything. Written as
+  // fixed dates, the nearer one eventually falls into the past and the test
+  // starts asserting that an expired card should be picked — which is what it
+  // began doing on 2026-08-02. Offsets from today keep the question the one
+  // the test set out to ask.
+  const inDays = (days) => new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
   const best = pickBestPunchCard([
     {
       id: 'a',
       pass_type: 'punch_card',
       status: 'active',
       visits_remaining: 5,
-      valid_until: '2027-12-01',
+      valid_until: inDays(500),
     },
     {
       id: 'b',
       pass_type: 'punch_card',
       status: 'active',
       visits_remaining: 8,
-      valid_until: '2026-08-01',
+      valid_until: inDays(30),
     },
   ]);
   assert.equal(best.id, 'b');

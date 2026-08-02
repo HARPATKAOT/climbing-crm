@@ -314,6 +314,7 @@ import {
   updateMessageStatusByMetaId,
   handleMessengerIncoming,
   markCommunicationHandled,
+  markAllCommunicationsHandled,
   setBotState,
   draftReply,
 } from './channels/conversations.js';
@@ -600,10 +601,29 @@ app.put('/api/settings/business-profile', requireOwner, async (req, res) => {
   }
 });
 
+/**
+ * A ceiling on the public forms, and deliberately a high one.
+ *
+ * The key is `req.ip`, and with `trust proxy: 1` that is the address of the
+ * nearest proxy — not the family's. The app is served through a rewrite, so in
+ * production the bucket is effectively shared by everyone filling a form at the
+ * same time. One completed registration costs 8 requests (context, code, code
+ * check, family check, child check, submit, template, PDF), so a limit of 20
+ * meant the second family anywhere in the country met "too many requests" and
+ * could not register for a quarter of an hour.
+ *
+ * What actually stops abuse is not this counter. The expensive action — sending
+ * a WhatsApp code — is capped per phone number in `otpService` at four in
+ * fifteen minutes, and nothing is filed at all without a code that came back.
+ * This is left as a backstop against a script hammering the reads, at a level
+ * no real family can reach.
+ */
 const publicRequestWindows = new Map();
+const PUBLIC_RATE_WINDOW_MS = 15 * 60 * 1000;
+const PUBLIC_RATE_MAX = 400;
+
 function publicFormRateLimit(req, res, next) {
   const now = Date.now();
-  const windowMs = 15 * 60 * 1000;
   const key = req.ip || req.socket.remoteAddress || 'unknown';
   const current = publicRequestWindows.get(key);
   if (!current || current.resetAt <= now) {
@@ -612,11 +632,11 @@ function publicFormRateLimit(req, res, next) {
         if (value.resetAt <= now) publicRequestWindows.delete(storedKey);
       }
     }
-    publicRequestWindows.set(key, { count: 1, resetAt: now + windowMs });
+    publicRequestWindows.set(key, { count: 1, resetAt: now + PUBLIC_RATE_WINDOW_MS });
     return next();
   }
   current.count += 1;
-  if (current.count > 20) {
+  if (current.count > PUBLIC_RATE_MAX) {
     res.set('Retry-After', String(Math.ceil((current.resetAt - now) / 1000)));
     return res.status(429).json({ error: 'יותר מדי בקשות. אפשר לנסות שוב בעוד כמה דקות' });
   }
@@ -1406,6 +1426,15 @@ app.post('/api/conversations/:parentId/reply', async (req, res) => {
   } catch (err) {
     console.error('Error in /reply:', err);
     res.status(500).json({ success: false, error: err.message || 'שגיאת שרת פנימית' });
+  }
+});
+
+// One segment only, so it can never be read as a customer id by the routes below.
+app.post('/api/conversations/handled-all', async (req, res) => {
+  try {
+    res.json(await markAllCommunicationsHandled());
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
