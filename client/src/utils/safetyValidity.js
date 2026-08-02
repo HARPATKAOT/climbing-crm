@@ -9,6 +9,14 @@ export const SAFETY_TEST_TYPE = 'security';
 const SAFETY_VALID_MONTHS = 6;
 const SAFETY_RESET_MONTH_DAY = [8, 31];
 
+/** צבעים ותוויות לתצוגת מבחן בטיחות (נוכחות + תיק לקוח) */
+export const SAFETY_TONE = {
+  valid: { color: '#34D399', bg: 'rgba(52,211,153,0.14)', label: 'בטיחות בתוקף' },
+  expired: { color: '#F87171', bg: 'rgba(248,113,113,0.14)', label: 'בטיחות פג תוקף', alert: true },
+  // חסר מבחן זו לא אזהרה רכה — הילד לא אמור לטפס בלי מבחן בטיחות.
+  missing: { color: '#F87171', bg: 'rgba(248,113,113,0.16)', label: 'אין מבחן בטיחות', alert: true },
+};
+
 function utcDay(year, month, day) {
   return new Date(Date.UTC(year, month - 1, day));
 }

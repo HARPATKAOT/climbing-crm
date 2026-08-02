@@ -33,6 +33,25 @@ export function levelRank(grade) {
   return i === -1 ? -1 : i;
 }
 
+/** הרמה הגבוהה ביותר ממבחני רמה שעברו */
+export function highestPassedLevel(tests = []) {
+  let best = null;
+  let bestRank = -1;
+  for (const t of Array.isArray(tests) ? tests : []) {
+    const type = t.test_type || t.testType || 'level';
+    if (type !== 'level' && type !== 'top-rope' && type !== 'top_rope') continue;
+    const passed = t.passed === true || t.status === 'passed' || t.status === 'עבר';
+    if (!passed) continue;
+    const grade = t.level || t.grade;
+    const rank = levelRank(grade);
+    if (rank > bestRank) {
+      bestRank = rank;
+      best = grade;
+    }
+  }
+  return best;
+}
+
 /** סגנון מסלול במבחן רמה — צבע נפרד מצבעי הרמות (5–8) */
 export const ROUTE_STYLE = {
   'top-rope': { key: 'top-rope', label: 'טופ רופ', Icon: Anchor,   color: '#38BDF8' },

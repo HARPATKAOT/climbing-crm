@@ -3,7 +3,7 @@ import {
   Plus, ChevronLeft, ChevronRight, X, Save, Trash2, Link2, Unlink,
   RefreshCw, Loader2, CalendarDays, CalendarRange, Layers, List,
   CheckCircle, AlertCircle, Clock3, Check, Pencil, Undo2, Users,
-  Eye, EyeOff,
+  Eye, EyeOff, Copy, SlidersHorizontal,
 } from 'lucide-react';
 import ActivityPageDesigner from './ActivityPageDesigner.jsx';
 import ActivityRegistrationPanel from './ActivityRegistrationPanel.jsx';
@@ -18,8 +18,13 @@ import {
   fetchActivityTypes, invalidateActivityTypes,
 } from '../utils/activityTypes.js';
 import {
-  EVENT_KINDS, activityEventKind, eventKindLabel, isEventType,
+  EVENT_TYPE, EVENT_KINDS, activityEventKind, eventKindLabel, isEventType,
 } from '../utils/eventKinds.js';
+import { activityIcon, activityTypeIcon } from '../utils/activityIcons.js';
+import {
+  CALENDAR_DISPLAY_FIELDS, loadDisplayFields, saveDisplayFields,
+  setSelectedDisplayFields, setActivityStaffNames, activityDisplayLines,
+} from '../utils/calendarDisplayFields.js';
 
 /** ברירת המחדל בלבד. הרשימה החיה מגיעה מהשרת דרך `activityTypes()`. */
 export const ACTIVITY_TYPES = DEFAULT_ACTIVITY_TYPES;
@@ -1014,11 +1019,13 @@ function RegularActivityModal({
   isTemplateEdit,
   initial,
   onDelete,
+  onDuplicate,
   onClose,
   saving,
   showError,
   submit,
   title,
+  declarationTemplates = [],
 }) {
   const activityId = isEdit && !isTemplateEdit ? initial?.id : null;
   const isTemplateCreate = isTemplateEdit && !initial?._template_id;
@@ -1112,6 +1119,7 @@ function RegularActivityModal({
                   <div className="activity-type-options">
                     {typeOptions.map((type) => {
                       const active = form.type === type.id;
+                      const TypeOptionIcon = activityTypeIcon(type.id);
                       return (
                         <button
                           key={type.id}
@@ -1128,8 +1136,12 @@ function RegularActivityModal({
                           style={{
                             '--activity-type-color': type.color,
                             '--activity-type-background': type.bg,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 5,
                           }}
                         >
+                          <TypeOptionIcon size={13} strokeWidth={2.4} aria-hidden="true" />
                           {type.label}
                         </button>
                       );
@@ -1147,6 +1159,7 @@ function RegularActivityModal({
                       <div className="activity-type-options">
                         {EVENT_KINDS.map((kind) => {
                           const chosen = activityEventKind(form) === kind.id;
+                          const KindIcon = activityIcon({ type: EVENT_TYPE, event_kind: kind.id });
                           return (
                             <button
                               key={kind.id}
@@ -1157,8 +1170,12 @@ function RegularActivityModal({
                               style={{
                                 '--activity-type-color': '#FB923C',
                                 '--activity-type-background': 'rgba(251,146,60,0.18)',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 5,
                               }}
                             >
+                              <KindIcon size={13} strokeWidth={2.4} aria-hidden="true" />
                               {kind.label}
                             </button>
                           );
@@ -1443,6 +1460,17 @@ function RegularActivityModal({
                 <Trash2 size={14} /> מחיקה
               </button>
             )}
+            {isEdit && !isTemplateEdit && !readOnly && onDuplicate && (
+              <button
+                type="button"
+                className="btn activity-modal-btn activity-modal-btn--ghost"
+                onClick={() => onDuplicate(form)}
+                disabled={saving}
+                title="פותח אירוע חדש עם אותם הפרטים. ההרשמות והשיבוץ לא מועתקים."
+              >
+                <Copy size={14} /> שכפול
+              </button>
+            )}
           </div>
           <div className="activity-modal-footer-actions">
             <button
@@ -1487,6 +1515,7 @@ function ActivityFormModal({
   initial,
   onSave,
   onDelete,
+  onDuplicate,
   onClose,
   saving,
   error,
@@ -1661,11 +1690,13 @@ function ActivityFormModal({
         isTemplateEdit={isTemplateEdit}
         initial={initial}
         onDelete={onDelete}
+        onDuplicate={onDuplicate}
         onClose={onClose}
         saving={saving}
         showError={showError}
         submit={submit}
         title={title}
+        declarationTemplates={declarationTemplates}
       />
     );
   }
@@ -1759,6 +1790,7 @@ function ActivityFormModal({
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {activityTypes().map((t) => {
                   const active = form.type === t.id;
+                  const QuickTypeIcon = activityTypeIcon(t.id);
                   return (
                     <button
                       key={t.id}
@@ -1771,6 +1803,9 @@ function ActivityFormModal({
                         }
                       }}
                       style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 5,
                         padding: '6px 12px',
                         borderRadius: 999,
                         border: `1px solid ${active ? t.color : 'var(--border)'}`,
@@ -1781,6 +1816,7 @@ function ActivityFormModal({
                         cursor: 'pointer',
                       }}
                     >
+                      <QuickTypeIcon size={13} strokeWidth={2.4} aria-hidden="true" />
                       {t.label}
                     </button>
                   );
@@ -2086,6 +2122,8 @@ function PaymentStatusIcon({ status, size = 12, perParticipant = false }) {
 
 function EventChip({ activity, onClick, draggable = true }) {
   const meta = activityTypeMeta(activity.type);
+  const TypeIcon = activityIcon(activity);
+  const extraLines = activityDisplayLines(activity);
   const timeLabel = activity.all_day
     ? 'יום שלם'
     : (activity.start_time ? String(activity.start_time).slice(0, 5) : '');
@@ -2113,11 +2151,12 @@ function EventChip({ activity, onClick, draggable = true }) {
         if (shouldSkipChipClick()) return;
         onClick(activity);
       }}
-      title={activity.name}
+      title={extraLines.length ? `${activity.name}\n${extraLines.join('\n')}` : activity.name}
       style={{
         display: 'flex',
-        alignItems: 'center',
-        gap: 4,
+        flexDirection: 'column',
+        alignItems: 'stretch',
+        gap: 1,
         width: '100%',
         maxWidth: '100%',
         boxSizing: 'border-box',
@@ -2137,13 +2176,31 @@ function EventChip({ activity, onClick, draggable = true }) {
         lineHeight: 1.3,
       }}
     >
-      <PaymentStatusIcon
-        status={activity.payment_status}
-        perParticipant={isPaidPerParticipant(activity)}
-      />
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {timeLabel ? `${timeLabel} · ` : ''}{activity.name}
+      <span style={{ display: 'flex', alignItems: 'center', gap: 3, minWidth: 0 }}>
+        <TypeIcon size={12} strokeWidth={2.4} style={{ flexShrink: 0 }} aria-hidden="true" />
+        <PaymentStatusIcon
+          status={activity.payment_status}
+          perParticipant={isPaidPerParticipant(activity)}
+        />
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {timeLabel ? `${timeLabel} · ` : ''}{activity.name}
+        </span>
       </span>
+      {extraLines.map((line) => (
+        <span
+          key={line}
+          style={{
+            fontSize: 10,
+            fontWeight: 600,
+            opacity: 0.85,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {line}
+        </span>
+      ))}
     </button>
   );
 }
@@ -2218,6 +2275,9 @@ function WeekTimedEvent({
 }) {
   const isOverlay = !!event.overlay;
   const meta = !isOverlay ? activityTypeMeta(event.type) : null;
+  // אירוע מיומן חיצוני אין לו סוג אצלנו, אז גם לא אייקון.
+  const TypeIcon = isOverlay ? null : activityIcon(event);
+  const extraLines = isOverlay ? [] : activityDisplayLines(event);
   const color = isOverlay ? (event.color || '#94A3B8') : meta.color;
   const bg = isOverlay ? `${color}22` : meta.bg;
   const editable = canEditEvent(event);
@@ -2238,14 +2298,17 @@ function WeekTimedEvent({
   // מספיק גבוה כדי להציג שעה בשורה נפרדת ושם שנשבר לכמה שורות
   const stacked = blockHeight >= 34;
   const timeRowHeight = stacked && startLabel ? 13 : 0;
+  // הפרטים הנוספים נכנסים רק לבלוק שיש בו מקום, אחרת הם היו דוחקים את השם.
+  const shownExtraLines = stacked && blockHeight >= 52 ? extraLines.slice(0, 2) : [];
+  const extraRowHeight = shownExtraLines.length * 12;
   const nameLines = Math.max(
     1,
-    Math.min(4, Math.floor((blockHeight - 8 - timeRowHeight) / nameLineHeight))
+    Math.min(4, Math.floor((blockHeight - 8 - timeRowHeight - extraRowHeight) / nameLineHeight))
   );
   const titleBase = `${name}${startLabel ? ` · ${startLabel}–${endLabel}` : ''}`;
   const title = multiDayLocked
     ? `${titleBase} — אירוע רב־יומי — יש לערוך דרך הטופס`
-    : titleBase;
+    : `${titleBase}${extraLines.length ? `\n${extraLines.join('\n')}` : ''}`;
 
   return (
     <div
@@ -2318,6 +2381,9 @@ function WeekTimedEvent({
             </span>
           )}
           <span style={{ display: 'flex', alignItems: 'flex-start', gap: 3, minWidth: 0 }}>
+            {TypeIcon && (
+              <TypeIcon size={11} strokeWidth={2.4} style={{ flexShrink: 0 }} aria-hidden="true" />
+            )}
             {!isOverlay && (
               <PaymentStatusIcon
                 status={event.payment_status}
@@ -2340,9 +2406,29 @@ function WeekTimedEvent({
               {name}
             </span>
           </span>
+          {shownExtraLines.map((line) => (
+            <span
+              key={line}
+              style={{
+                fontSize: 9,
+                fontWeight: 600,
+                opacity: 0.85,
+                lineHeight: '12px',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                flexShrink: 0,
+              }}
+            >
+              {line}
+            </span>
+          ))}
         </>
       ) : (
         <span style={{ display: 'flex', alignItems: 'center', gap: 3, minWidth: 0 }}>
+          {TypeIcon && (
+            <TypeIcon size={11} strokeWidth={2.4} style={{ flexShrink: 0 }} aria-hidden="true" />
+          )}
           {!isOverlay && (
               <PaymentStatusIcon
                 status={event.payment_status}
@@ -2997,6 +3083,21 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   const undoBusyRef = useRef(false);
   const visibleRangeRef = useRef({ from: '', to: '' });
 
+  // אילו פרטים נוספים לצייר על האירועים. נשמר בדפדפן — העדפת תצוגה אישית.
+  const [displayFields, setDisplayFields] = useState(loadDisplayFields);
+  const [displayMenuOpen, setDisplayMenuOpen] = useState(false);
+  // עולה בכל פעם שהשמות המשובצים הגיעו, כדי שהצ'יפים ייצבעו מחדש איתם.
+  const [staffNamesVersion, setStaffNamesVersion] = useState(0);
+  setSelectedDisplayFields(displayFields);
+
+  const toggleDisplayField = (id) => {
+    setDisplayFields((prev) => {
+      const next = prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id];
+      saveDisplayFields(next);
+      return next;
+    });
+  };
+
   const pushUndo = useCallback((entry) => {
     if (!entry) return;
     undoStackRef.current = [...undoStackRef.current.slice(-29), entry];
@@ -3280,6 +3381,43 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     loadOverlayEvents(visibleRange.from, visibleRange.to);
   }, [visibleRange.from, visibleRange.to, loadOverlayEvents]);
 
+  /**
+   * שמות המשובצים לכל אירוע בטווח שמוצג. נמשך רק כשבאמת ביקשו לראות מדריך,
+   * כי זו שאילתה נוספת בכל מעבר חודש — ובקריאה אחת לכל הטווח, לא אחת לאירוע.
+   */
+  useEffect(() => {
+    if (!displayFields.includes('staff') || !visibleRange.from) {
+      setActivityStaffNames(new Map());
+      setStaffNamesVersion((v) => v + 1);
+      return undefined;
+    }
+    let cancelled = false;
+    const qs = `from=${visibleRange.from}&to=${visibleRange.to}`;
+    Promise.all([
+      fetch(`/api/work-assignments?${qs}`).then((r) => (r.ok ? r.json() : [])),
+      fetch('/api/employees').then((r) => (r.ok ? r.json() : [])),
+    ])
+      .then(([rows, employees]) => {
+        if (cancelled) return;
+        const nameById = new Map(
+          (Array.isArray(employees) ? employees : []).map((e) => [e.id, e.name || ''])
+        );
+        const map = new Map();
+        for (const row of Array.isArray(rows) ? rows : []) {
+          if (!row?.activity_id) continue;
+          const name = nameById.get(row.employee_id);
+          if (!name) continue;
+          const list = map.get(row.activity_id) || [];
+          if (!list.includes(name)) list.push(name);
+          map.set(row.activity_id, list);
+        }
+        setActivityStaffNames(map);
+        setStaffNamesVersion((v) => v + 1);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [displayFields, visibleRange.from, visibleRange.to]);
+
   const monthLabel = `${HEB_MONTHS[cursor.getMonth()]} ${cursor.getFullYear()}`;
 
   const monthCells = useMemo(() => {
@@ -3475,6 +3613,30 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     const rest = { ...canonical };
     delete rest.occurrenceDate;
     setModal(rest);
+  };
+
+  /**
+   * שכפול: טופס יצירה חדש עם אותם הפרטים, במקום למלא הכול שוב.
+   *
+   * מה שלא עובר הוא כל מה ששייך לרשומה עצמה ולא לתוכן שלה — המזהה, הקישור
+   * ליומן גוגל, קישור ההרשמה, מצב התשלום. ההרשמות והשיבוץ של העובדים יושבים
+   * בטבלאות נפרדות ולכן גם הם לא מועתקים; העותק נפתח כאירוע חדש שעוד לא נשמר,
+   * כך שאפשר לשנות תאריך או שם לפני השמירה.
+   */
+  const openDuplicate = (activity) => {
+    if (!activity) return;
+    setFormError('');
+    const copy = { ...activity };
+    for (const key of [
+      'id', 'created_at', 'updated_at',
+      'google_event_id', 'google_etag', 'synced_at',
+      'registration_slug', 'participant_registration_slug', 'payment_link',
+      'host_payment_token', 'host_payment_id', 'host_paid_at',
+      'occurrenceDate', '_editing_template', '_template_id',
+    ]) delete copy[key];
+    copy.payment_status = 'unpaid';
+    copy.name = activity.name ? `${activity.name} — עותק` : '';
+    setModal(copy);
   };
 
   const openOverlayEdit = (event) => {
@@ -3977,7 +4139,11 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   })();
 
   return (
-    <div style={{
+    <div
+      /* השמות המשובצים יושבים במודול ולא ב-props; הערך הזה הוא מה שמסמן ל-React
+         שהעץ צריך להיצבע מחדש כשהם מגיעים. */
+      data-staff-names={staffNamesVersion}
+      style={{
       display: 'flex',
       flexDirection: 'column',
       gap: 14,
@@ -3986,7 +4152,8 @@ export default function ActivitiesCalendar({ isOwner = false }) {
       minWidth: 0,
       overflowX: 'hidden',
       boxSizing: 'border-box',
-    }}>
+      }}
+    >
       {banner && (
         <div style={{
           padding: '10px 14px',
@@ -4134,6 +4301,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           {filterChips().map((t) => {
             const active = typeFilter === t.id;
             const dimmed = typeFilter !== 'all' && !active;
+            const ChipIcon = activityTypeIcon(t.id);
             return (
               <button
                 key={t.id}
@@ -4150,13 +4318,75 @@ export default function ActivitiesCalendar({ isOwner = false }) {
                   transition: 'opacity 0.12s ease',
                 }}
               >
-                <span style={{
-                  width: 8, height: 8, borderRadius: '50%', background: t.color, flexShrink: 0,
-                }} />
+                <ChipIcon size={13} strokeWidth={2.4} style={{ flexShrink: 0 }} aria-hidden="true" />
                 {t.label}
               </button>
             );
           })}
+
+          {/* בחירת פרטים להצגה. היום רק המדריך — הרשימה בנויה לגדול. */}
+          <div style={{ position: 'relative' }}>
+            <button
+              type="button"
+              onClick={() => setDisplayMenuOpen((v) => !v)}
+              title="אילו פרטים להציג על האירועים"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700,
+                cursor: 'pointer',
+                border: `1px solid ${displayFields.length ? '#38BDF8' : 'var(--border)'}`,
+                background: displayFields.length ? 'rgba(56,189,248,0.15)' : 'transparent',
+                color: displayFields.length ? '#7DD3FC' : 'var(--text-3)',
+              }}
+            >
+              <SlidersHorizontal size={13} strokeWidth={2.4} aria-hidden="true" />
+              תצוגה
+              {displayFields.length > 0 && ` · ${displayFields.length}`}
+            </button>
+            {displayMenuOpen && (
+              <>
+                <div
+                  onClick={() => setDisplayMenuOpen(false)}
+                  style={{ position: 'fixed', inset: 0, zIndex: 40 }}
+                />
+                <div style={{
+                  position: 'absolute', top: 'calc(100% + 6px)', insetInlineStart: 0,
+                  zIndex: 41, minWidth: 220, padding: 10, borderRadius: 12,
+                  background: 'var(--bg-card)', border: '1px solid var(--border)',
+                  boxShadow: '0 14px 40px rgba(0,0,0,0.45)',
+                }}>
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>
+                    להציג על האירוע
+                  </div>
+                  {CALENDAR_DISPLAY_FIELDS.map((field) => (
+                    <label
+                      key={field.id}
+                      style={{
+                        display: 'flex', alignItems: 'flex-start', gap: 8,
+                        padding: '6px 4px', cursor: 'pointer', fontSize: 12,
+                        color: 'var(--text-2)',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={displayFields.includes(field.id)}
+                        onChange={() => toggleDisplayField(field.id)}
+                        style={{ marginTop: 2 }}
+                      />
+                      <span>
+                        <span style={{ fontWeight: 700 }}>{field.label}</span>
+                        {field.hint && (
+                          <span style={{ display: 'block', fontSize: 11, color: 'var(--text-3)' }}>
+                            {field.hint}
+                          </span>
+                        )}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         <div style={{
@@ -4330,6 +4560,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           ) : (
             listItems.map((item) => {
               const meta = activityTypeMeta(item.type);
+              const RowIcon = activityIcon(item);
               return (
                 <div
                   key={item.id}
@@ -4353,9 +4584,12 @@ export default function ActivitiesCalendar({ isOwner = false }) {
                     {formatListDateRange(item)}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                    <span style={{
-                      width: 8, height: 8, borderRadius: '50%', background: meta.color, flexShrink: 0,
-                    }} />
+                    <RowIcon
+                      size={15}
+                      strokeWidth={2.2}
+                      style={{ color: meta.color, flexShrink: 0 }}
+                      aria-hidden="true"
+                    />
                     <span style={{
                       fontWeight: 700, color: 'var(--text-1)', overflow: 'hidden',
                       textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -4381,6 +4615,15 @@ export default function ActivitiesCalendar({ isOwner = false }) {
                     {item.notes || item.description || '—'}
                   </div>
                   <div style={{ display: 'flex', gap: 6 }} onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title="שכפול — אירוע חדש עם אותם הפרטים"
+                      aria-label="שכפול"
+                      onClick={() => openDuplicate(item)}
+                    >
+                      <Copy size={14} />
+                    </button>
                     <button
                       type="button"
                       className="icon-btn"
@@ -4584,6 +4827,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           initial={modal}
           onSave={handleSave}
           onDelete={handleDelete}
+          onDuplicate={openDuplicate}
           onClose={() => { setModal(null); setFormError(''); }}
           saving={saving}
           error={formError}
