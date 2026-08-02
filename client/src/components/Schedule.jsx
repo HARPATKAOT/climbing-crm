@@ -6,6 +6,7 @@ import {
   SYSTEM_ROLE_KEYS, staffForRole, canFillRole, noStaffForRoleMessage,
   fetchRoleCatalog, roleLabelOf,
 } from '../utils/staffRoles.js';
+import AppSelect from './AppSelect.jsx';
 
 /** התוויות העדכניות של „מדריך” ו„עוזר מדריך”, שניתנות לשינוי בקטלוג. */
 function useStaffRoleLabels() {
@@ -49,6 +50,7 @@ import {
 } from './equipmentUtils.js';
 import { studentInGroup, studentGroupIds } from '../utils/studentGroups.js';
 import { studentDisplayName } from '../utils/studentNames.js';
+import { SAFETY_TONE } from '../utils/safetyValidity.js';
 
 // Pulled in only when a trainee file is actually opened from the schedule.
 const StudentFilePanel = lazy(() => import('./StudentFilePanel.jsx'));
@@ -434,7 +436,7 @@ function EquipmentQuickEdit({
               <label className="form-label" style={{ fontSize: 11 }}>
                 {isShoes ? 'מידת נעליים' : 'מידת חולצה'}
               </label>
-              <select
+              <AppSelect
                 className="input input-sm"
                 value={size}
                 onChange={(e) => setSize(e.target.value)}
@@ -443,7 +445,7 @@ function EquipmentQuickEdit({
                 {(isShoes ? SHOE_SIZES : shirtSizes).map((opt) => (
                   <option key={opt} value={opt}>{opt}</option>
                 ))}
-              </select>
+              </AppSelect>
             </div>
           )}
 
@@ -587,13 +589,6 @@ function AttendanceHistory({ byStudent = {}, members = [], onPickDate }) {
   );
 }
 
-const SAFETY_TONE = {
-  valid: { color: '#34D399', bg: 'rgba(52,211,153,0.14)', label: 'בטיחות בתוקף' },
-  expired: { color: '#F87171', bg: 'rgba(248,113,113,0.14)', label: 'בטיחות פג תוקף', alert: true },
-  // חסר מבחן זו לא אזהרה רכה — הילד לא אמור לטפס בלי מבחן בטיחות.
-  missing: { color: '#F87171', bg: 'rgba(248,113,113,0.16)', label: 'אין מבחן בטיחות', alert: true },
-};
-
 /**
  * מבחן בטיחות: בתוקף — אייקון ירוק בלבד, באותו גודל של אייקוני הציוד.
  * פג תוקף או חסר — אייקון אדום עם הערה כתובה, כי זה חוסם טיפוס ולא
@@ -708,7 +703,7 @@ function SafetyTestForm({ student, safety, employees = [], defaultExaminerId, on
         <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div className="form-group" style={{ margin: 0 }}>
             <label className="form-label" style={{ fontSize: 11 }}>המדריך הבוחן</label>
-            <select
+            <AppSelect
               className="input input-sm"
               value={examinerId}
               onChange={(e) => setExaminerId(e.target.value)}
@@ -717,7 +712,7 @@ function SafetyTestForm({ student, safety, employees = [], defaultExaminerId, on
               {employees.map((emp) => (
                 <option key={emp.id} value={emp.id}>{emp.name}</option>
               ))}
-            </select>
+            </AppSelect>
           </div>
 
           <div style={{ display: 'flex', gap: 8 }}>
@@ -965,7 +960,7 @@ function GroupBlock({ group, enrolledCount, selected, onClick }) {
 }
 
 /**
- * A people dropdown, single or multi choice. It replaces the native `<select>`
+ * A people dropdown, single or multi choice. It replaces the native `<AppSelect>`
  * here because the browser draws that list in the OS palette — a white panel
  * inside a dark form — and an option list cannot be styled out of it.
  */
@@ -1000,49 +995,42 @@ function PeoplePicker({ options, selected, onToggle, placeholder, multiple = tru
     <div ref={wrapRef} style={{ position: 'relative' }}>
       <button
         type="button"
-        className="input select"
+        className="app-select-trigger input select"
         onClick={() => setOpen(o => !o)}
         aria-haspopup="listbox"
         aria-expanded={open}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 8, textAlign: 'right',
-          cursor: 'pointer', minHeight: 42,
-        }}
       >
-        <span style={{
-          flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          color: chosen.length ? 'var(--text-1)' : 'var(--text-3)',
-        }}>
+        <span className={`app-select-value${chosen.length ? '' : ' is-placeholder'}`}>
           {chosen.length ? chosen.map(o => o.name).join(', ') : placeholder}
         </span>
-        <ChevronDown size={15} style={{ flexShrink: 0, color: 'var(--text-3)' }} />
+        <ChevronDown size={15} className={`app-select-chevron${open ? ' is-open' : ''}`} />
       </button>
 
       {open && (
-        <div role="listbox" aria-multiselectable={multiple} style={{
-          position: 'absolute', top: 'calc(100% + 4px)', right: 0, left: 0,
-          background: 'var(--bg-card)',
-          border: '1px solid var(--border)',
-          borderRadius: 'var(--radius-sm)',
-          boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
-          maxHeight: 220, overflowY: 'auto', zIndex: 30, padding: 4,
-        }}>
+        <div
+          role="listbox"
+          aria-multiselectable={multiple}
+          className="app-select-menu"
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 4px)',
+            right: 0,
+            left: 0,
+            width: 'auto',
+            maxHeight: 220,
+            zIndex: 30,
+          }}
+        >
           {!multiple && clearLabel && (
             <button
               type="button"
               role="option"
               aria-selected={chosen.length === 0}
+              className={`app-select-option${chosen.length === 0 ? ' is-active' : ''}`}
               onClick={() => pick('')}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-                background: 'transparent', border: 'none', borderRadius: 6,
-                padding: '7px 10px', color: 'var(--text-3)', fontSize: 13,
-                fontFamily: 'inherit', textAlign: 'right', cursor: 'pointer',
-              }}
             >
-              <Check size={13} style={{ flexShrink: 0, opacity: 0 }} />
-              <span style={{ flex: 1 }}>{clearLabel}</span>
+              <Check size={13} className="app-select-check" />
+              <span>{clearLabel}</span>
             </button>
           )}
           {options.map(opt => {
@@ -1053,18 +1041,11 @@ function PeoplePicker({ options, selected, onToggle, placeholder, multiple = tru
                 type="button"
                 role="option"
                 aria-selected={on}
+                className={`app-select-option${on ? ' is-active' : ''}`}
                 onClick={() => pick(opt.id)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-                  background: on ? 'rgba(56,189,248,0.12)' : 'transparent',
-                  border: 'none', borderRadius: 6, padding: '7px 10px',
-                  color: on ? 'var(--blue)' : 'var(--text-1)',
-                  fontSize: 13, fontWeight: on ? 600 : 500,
-                  fontFamily: 'inherit', textAlign: 'right', cursor: 'pointer',
-                }}
               >
-                <Check size={13} style={{ flexShrink: 0, opacity: on ? 1 : 0 }} />
-                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <Check size={13} className="app-select-check" />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {opt.name}
                 </span>
               </button>
@@ -1168,30 +1149,30 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
             <div className="form-grid-2">
               <div className="form-group">
                 <label className="form-label">יום בשבוע *</label>
-                <select className="input select" value={day} onChange={e => setDay(e.target.value)}>
+                <AppSelect className="input select" value={day} onChange={e => setDay(e.target.value)}>
                   {DAYS_FULL.map((d, i) => <option key={i} value={i}>{d}</option>)}
-                </select>
+                </AppSelect>
               </div>
               <div className="form-group">
                 <label className="form-label">שעת התחלה *</label>
-                <select className="input select" value={time} onChange={e => setTime(e.target.value)}>
+                <AppSelect className="input select" value={time} onChange={e => setTime(e.target.value)}>
                   {TIME_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
+                </AppSelect>
               </div>
             </div>
 
             <div className="form-grid-2">
               <div className="form-group">
                 <label className="form-label">משך אימון</label>
-                <select className="input select" value={duration} onChange={e => setDuration(e.target.value)}>
+                <AppSelect className="input select" value={duration} onChange={e => setDuration(e.target.value)}>
                   {DUR_OPTIONS.map(d => <option key={d.val} value={d.val}>{d.label}</option>)}
-                </select>
+                </AppSelect>
               </div>
               <div className="form-group">
                 <label className="form-label">קטגוריית גיל</label>
-                <select className="input select" value={ageCat} onChange={e => setAgeCat(e.target.value)}>
+                <AppSelect className="input select" value={ageCat} onChange={e => setAgeCat(e.target.value)}>
                   {AGE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
+                </AppSelect>
               </div>
             </div>
 
@@ -1543,7 +1524,7 @@ function StaffAttendanceSection({
 
       {substituteOptions.length > 0 && (
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <select
+          <AppSelect
             className="input input-sm"
             value={adding}
             onChange={(e) => {
@@ -1557,7 +1538,7 @@ function StaffAttendanceSection({
             {substituteOptions.map((opt) => (
               <option key={opt.id} value={opt.id}>{opt.name}</option>
             ))}
-          </select>
+          </AppSelect>
         </div>
       )}
     </div>
@@ -2482,14 +2463,14 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
             <div className="card card-p" style={{ marginBottom: 14, background: '#111827' }}>
               <div style={{ fontSize: 12, fontWeight: 'bold', marginBottom: 8 }}>שיבוץ מתאמן לקבוצה</div>
               <div style={{ display: 'flex', gap: 6 }}>
-                <select className="input input-sm" style={{ flex: 1 }} value={assignId}
+                <AppSelect className="input input-sm" style={{ flex: 1 }} value={assignId}
                   onChange={e => setAssignId(e.target.value)}>
                   <option value="">בחר מתאמן...</option>
                   {assignable.map(s => {
                     const p = parents.find(pp => pp.id === s.parentId);
                     return <option key={s.id} value={s.id}>{s.name}{p?.name ? ` — ${p.name}` : ''}</option>;
                   })}
-                </select>
+                </AppSelect>
                 <button className="btn btn-primary btn-sm" onClick={handleAssign} disabled={!assignId || isFull}>
                   <UserPlus size={13} /> שבץ
                 </button>

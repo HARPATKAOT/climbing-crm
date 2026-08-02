@@ -7,6 +7,7 @@ import {
   TEST_TYPE_COLORS,
   testKindMeta,
 } from '../utils/levelTestKinds.js';
+import AppSelect from './AppSelect.jsx';
 
 const ROUTE_TYPES = Object.values(ROUTE_STYLE);
 
@@ -98,7 +99,7 @@ function TestFormModal({ students, groups, employees, initial, onSave, onClose }
       <form id="add-test-form" onSubmit={handleSubmit} className="form-grid">
         <div className="form-group">
           <label className="form-label">מתאמן *</label>
-          <select className="input select" required value={studentId} onChange={e => setStudentId(e.target.value)}>
+          <AppSelect className="input select" required value={studentId} onChange={e => setStudentId(e.target.value)}>
             <option value="">בחר מתאמן...</option>
             {registeredStudents.map(s => {
               const grp = groups.find(g => g.id === s.groupId);
@@ -108,7 +109,7 @@ function TestFormModal({ students, groups, employees, initial, onSave, onClose }
                 </option>
               );
             })}
-          </select>
+          </AppSelect>
         </div>
 
         <div className="form-group">
@@ -182,13 +183,13 @@ function TestFormModal({ students, groups, employees, initial, onSave, onClose }
 
         <div className="form-group">
           <label className="form-label">בוחן *</label>
-          <select className="input select" required value={examinerId} onChange={e => setExaminerId(e.target.value)}>
+          <AppSelect className="input select" required value={examinerId} onChange={e => setExaminerId(e.target.value)}>
             <option value="">בחר בוחן...</option>
             {employees.length === 0 && <option value="" disabled>אין עובדים במערכת</option>}
             {employees.map(emp => (
               <option key={emp.id} value={emp.id}>{emp.name}</option>
             ))}
-          </select>
+          </AppSelect>
         </div>
 
         <div className="form-grid-2">
@@ -198,11 +199,11 @@ function TestFormModal({ students, groups, employees, initial, onSave, onClose }
           </div>
           <div className="form-group">
             <label className="form-label">תוצאה</label>
-            <select className="input select" value={status} onChange={e => setStatus(e.target.value)}>
+            <AppSelect className="input select" value={status} onChange={e => setStatus(e.target.value)}>
               <option value="passed">עבר ✓</option>
               <option value="pending">ממתין לתוצאה</option>
               <option value="failed">לא עבר ✗</option>
-            </select>
+            </AppSelect>
           </div>
         </div>
 

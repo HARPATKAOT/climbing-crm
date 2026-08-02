@@ -3,6 +3,7 @@ import { CheckCircle, CreditCard, Loader2 } from 'lucide-react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
+import AppSelect from './AppSelect.jsx';
 
 const DEFAULT_LABELS = {
   shoes: 'נעלי טיפוס',
@@ -222,7 +223,7 @@ export default function PublicEquipmentPayment() {
                 {selected.includes('shirt') && (
                   <div className="eq-pay-size">
                     <label htmlFor="shirt-size">מידת חולצה</label>
-                    <select
+                    <AppSelect
                       id="shirt-size"
                       value={shirtSize}
                       disabled={!!paymentUrl}
@@ -232,7 +233,7 @@ export default function PublicEquipmentPayment() {
                       {shirtSizes.map((size) => (
                         <option key={size} value={size}>{size}</option>
                       ))}
-                    </select>
+                    </AppSelect>
                   </div>
                 )}
 

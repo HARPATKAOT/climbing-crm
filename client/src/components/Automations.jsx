@@ -3,6 +3,7 @@ import {
   Plus, Trash2, Edit2, Play, Save, X, ToggleLeft, ToggleRight,
   CalendarClock, Eye, Send,
 } from 'lucide-react';
+import AppSelect from './AppSelect.jsx';
 
 const TRIGGER_EVENTS = [
   { value: 'new_lead', label: 'ליד חדש נוצר במערכת' },
@@ -129,18 +130,18 @@ function AutomationModal({ automation, onSave, onClose }) {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
               <div className="form-group">
                 <label className="form-label">טריגר (מתי מופעל?)</label>
-                <select className="input select" value={triggerEvent} onChange={(e) => handleTriggerChange(e.target.value)}>
+                <AppSelect className="input select" value={triggerEvent} onChange={(e) => handleTriggerChange(e.target.value)}>
                   {TRIGGER_EVENTS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </select>
+                </AppSelect>
               </div>
 
               {triggerEvent === 'status_changed' && (
                 <div className="form-group">
                   <label className="form-label">לאיזה סטטוס?</label>
-                  <select className="input select" value={triggerCondition} onChange={(e) => setTriggerCondition(e.target.value)}>
+                  <AppSelect className="input select" value={triggerCondition} onChange={(e) => setTriggerCondition(e.target.value)}>
                     <option value="">(כל עדכון סטטוס)</option>
                     {STATUS_CONDITIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-                  </select>
+                  </AppSelect>
                 </div>
               )}
             </div>
@@ -155,16 +156,16 @@ function AutomationModal({ automation, onSave, onClose }) {
 
             <div className="form-group" style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
               <label className="form-label">פעולה לביצוע</label>
-              <select className="input select" value={actionType} onChange={(e) => setActionType(e.target.value)}>
+              <AppSelect className="input select" value={actionType} onChange={(e) => setActionType(e.target.value)}>
                 {ACTION_TYPES.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
-              </select>
+              </AppSelect>
             </div>
 
             {actionType === 'send_whatsapp' && (
               <>
                 <div className="form-group">
                   <label className="form-label">תבנית מאושרת (חובה כשהחלון סגור)</label>
-                  <select
+                  <AppSelect
                     className="input select"
                     value={templateName}
                     onChange={(e) => setTemplateName(e.target.value)}
@@ -175,7 +176,7 @@ function AutomationModal({ automation, onSave, onClose }) {
                         {t.name || t.meta_name}
                       </option>
                     ))}
-                  </select>
+                  </AppSelect>
                   <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 8, fontSize: 12 }}>
                     <input type="checkbox" checked={preferTemplate} onChange={(e) => setPreferTemplate(e.target.checked)} />
                     העדף תבנית גם כשהחלון פתוח
@@ -422,13 +423,13 @@ function AgendaDigestModal({ initial, kind, onSaved, onClose }) {
             {!isDaily && (
               <div className="form-group" style={{ margin: 0 }}>
                 <label className="form-label">יום שליחה</label>
-                <select
+                <AppSelect
                   className="input select"
                   value={settings.weeklyDay ?? 6}
                   onChange={(e) => save({ weeklyDay: Number(e.target.value) })}
                 >
                   {WEEKDAYS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
-                </select>
+                </AppSelect>
               </div>
             )}
             <div className="form-group" style={{ margin: 0 }}>
@@ -446,7 +447,7 @@ function AgendaDigestModal({ initial, kind, onSaved, onClose }) {
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14, display: 'grid', gap: 10, gridTemplateColumns: '1fr 1fr' }}>
             <div className="form-group" style={{ margin: 0 }}>
               <label className="form-label">לאן לשלוח</label>
-              <select
+              <AppSelect
                 className="input select"
                 value={settings.channel || 'whatsapp'}
                 onChange={(e) => save({ channel: e.target.value })}
@@ -454,7 +455,7 @@ function AgendaDigestModal({ initial, kind, onSaved, onClose }) {
                 <option value="whatsapp">וואטסאפ</option>
                 <option value="email">אימייל</option>
                 <option value="both">גם וגם</option>
-              </select>
+              </AppSelect>
             </div>
             {usesWhatsapp && (
               <div className="form-group" style={{ margin: 0 }}>
@@ -498,7 +499,7 @@ function AgendaDigestModal({ initial, kind, onSaved, onClose }) {
           {usesWhatsapp && (
             <div className="form-group" style={{ margin: 0 }}>
               <label className="form-label">תבנית מאושרת (כשהחלון סגור)</label>
-              <select
+              <AppSelect
                 className="input select"
                 value={settings.templateName || ''}
                 onChange={(e) => save({ templateName: e.target.value })}
@@ -507,7 +508,7 @@ function AgendaDigestModal({ initial, kind, onSaved, onClose }) {
                 {approvedTemplates.map((t) => (
                   <option key={t.id} value={t.meta_name || t.name}>{t.name || t.meta_name}</option>
                 ))}
-              </select>
+              </AppSelect>
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4, lineHeight: 1.5 }}>
                 וואטסאפ מרשה טקסט חופשי רק 24 שעות אחרי שכתבת לבוט. בלי תבנית עם משתנה
                 אחד, תזכורת בערב שקט לא תישלח. בתבנית הרשימה נדחסת לשורה עם מפרידי “|”.

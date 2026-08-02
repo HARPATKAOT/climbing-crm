@@ -11,6 +11,7 @@ import {
   templateDraftFromMessage,
   templateBodyProblem,
 } from './campaignTemplates.js';
+import AppSelect from './AppSelect.jsx';
 
 /**
  * Automatic campaigns: rules that decide who hears from us and hands them a
@@ -715,7 +716,7 @@ function CampaignEditor({
       <SectionTitle>מי נכנס לקמפיין</SectionTitle>
       <div className="form-group">
         <label className="form-label">הטריגר</label>
-        <select
+        <AppSelect
           className="input"
           value={draft.trigger_type}
           onChange={(e) => {
@@ -726,7 +727,7 @@ function CampaignEditor({
           {meta.triggers.map((t) => (
             <option key={t.key} value={t.key}>{t.label}</option>
           ))}
-        </select>
+        </AppSelect>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
         {fields.map((field) => (
@@ -747,11 +748,11 @@ function CampaignEditor({
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
         <div className="form-group">
           <label className="form-label">סוג</label>
-          <select className="input" value={offerType} onChange={(e) => setOffer({ type: e.target.value })}>
+          <AppSelect className="input" value={offerType} onChange={(e) => setOffer({ type: e.target.value })}>
             {meta.offerTypes.map((t) => (
               <option key={t.key} value={t.key}>{t.label}</option>
             ))}
-          </select>
+          </AppSelect>
         </div>
         {(offerType === 'percent' || offerType === 'amount') && (
           <div className="form-group">
@@ -784,12 +785,12 @@ function CampaignEditor({
 
       <div className="form-group">
         <label className="form-label">על מה ההטבה חלה</label>
-        <select className="input" value={draft.offer?.appliesTo || 'all'}
+        <AppSelect className="input" value={draft.offer?.appliesTo || 'all'}
           onChange={(e) => setOffer({ appliesTo: e.target.value })}>
           <option value="all">כל העגלה</option>
           <option value="items">מוצרים נבחרים</option>
           <option value="product_type">סוג מוצר</option>
-        </select>
+        </AppSelect>
       </div>
 
       {draft.offer?.appliesTo === 'items' && (
@@ -821,12 +822,12 @@ function CampaignEditor({
       {draft.offer?.appliesTo === 'product_type' && (
         <div className="form-group">
           <label className="form-label">סוג המוצר</label>
-          <select className="input" value={draft.offer?.productType || 'product'}
+          <AppSelect className="input" value={draft.offer?.productType || 'product'}
             onChange={(e) => setOffer({ productType: e.target.value })}>
             <option value="product">מוצר או כניסה</option>
             <option value="punch_card">כרטיסייה</option>
             <option value="time_membership">מנוי</option>
-          </select>
+          </AppSelect>
         </div>
       )}
 
@@ -867,10 +868,10 @@ function CampaignEditor({
       <SectionTitle>איך זה רץ</SectionTitle>
       <div className="form-group">
         <label className="form-label">מצב הרצה</label>
-        <select className="input" value={draft.mode} onChange={(e) => set({ mode: e.target.value })}>
+        <AppSelect className="input" value={draft.mode} onChange={(e) => set({ mode: e.target.value })}>
           <option value="approval">אישור צוות — מכין רשימה, לא שולח לבד</option>
           <option value="auto">אוטומטי מלא — שולח בלי התערבות</option>
-        </select>
+        </AppSelect>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10 }}>
         <div className="form-group">
@@ -960,7 +961,7 @@ function TemplatePicker({ templates, message, setMessage, campaignName, creating
   return (
     <div className="form-group">
       <label className="form-label">תבנית מאושרת במטא</label>
-      <select
+      <AppSelect
         className="input"
         value={message.templateName || ''}
         onChange={(e) => pickTemplate(e.target.value)}
@@ -974,7 +975,7 @@ function TemplatePicker({ templates, message, setMessage, campaignName, creating
             </option>
           );
         })}
-      </select>
+      </AppSelect>
 
       {selected && selected.status !== 'APPROVED' && (
         <div className="alert alert-warn" style={{ marginTop: 8, fontSize: 12 }}>
@@ -1000,7 +1001,7 @@ function TemplatePicker({ templates, message, setMessage, campaignName, creating
                   <span style={{ fontFamily: 'monospace', fontSize: 12, minWidth: 46 }}>
                     {`{{${slot}}}`}
                   </span>
-                  <select
+                  <AppSelect
                     className="input input-sm"
                     style={{ flex: 1 }}
                     value={keys[index] || ''}
@@ -1010,7 +1011,7 @@ function TemplatePicker({ templates, message, setMessage, campaignName, creating
                     {MESSAGE_VARS.map((v) => (
                       <option key={v.key} value={v.key}>{v.label}</option>
                     ))}
-                  </select>
+                  </AppSelect>
                 </div>
               ))}
               {unmapped && (

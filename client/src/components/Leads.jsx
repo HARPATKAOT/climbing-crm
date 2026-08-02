@@ -9,7 +9,7 @@ import {
   testKindMeta,
 } from '../utils/levelTestKinds.js';
 import { LEVELS, levelColor, routeStyleMeta, ROUTE_STYLE, highestPassedLevel } from '../utils/levelGrades.js';
-import GenderPicker, { GenderMark, genderKind } from './GenderPicker.jsx';
+import GenderPicker, { AdultMark, GenderMark, genderKind } from './GenderPicker.jsx';
 import {
   blobToBase64,
   buildHealthDeclarationPdf,
@@ -71,6 +71,7 @@ import {
   formatRentalRange,
 } from './equipmentUtils.js';
 import AppSelect from './AppSelect.jsx';
+import { joinParentName, splitParentName } from '../utils/parentName.js';
 
 const COUPON_STATE_BADGE = {
   active: { label: 'בתוקף', cls: 'badge badge-green' },
@@ -159,20 +160,8 @@ export const phoneTailMatch = (a, b) => {
 };
 
 function parentNameParts(parent) {
-  const fullName = String(parent?.name || '').trim();
-  const storedLastName = String(parent?.lastName || '').trim();
-  if (storedLastName) {
-    const suffix = ` ${storedLastName}`;
-    return {
-      firstName: fullName.endsWith(suffix)
-        ? fullName.slice(0, -suffix.length).trim()
-        : fullName,
-      lastName: storedLastName,
-    };
-  }
-  const parts = fullName.split(/\s+/).filter(Boolean);
-  if (parts.length < 2) return { firstName: fullName, lastName: '' };
-  return { firstName: parts.slice(0, -1).join(' '), lastName: parts.at(-1) };
+  const parts = splitParentName(parent || {});
+  return { firstName: parts.first, lastName: parts.lastName };
 }
 
 function calculateAge(birthDateStr) {
@@ -230,6 +219,15 @@ function parentDisplayName(parent) {
   return [parts.firstName, parts.lastName].filter(Boolean).join(' ') || parent.name || 'ללא שם';
 }
 
+/** Adults first, then children — fixed order that does not follow who is open. */
+function compareTraineeChips(a, b) {
+  const adultDiff = (a?.isAdult ? 0 : 1) - (b?.isAdult ? 0 : 1);
+  if (adultDiff) return adultDiff;
+  const nameDiff = String(a?.name || '').localeCompare(String(b?.name || ''), 'he');
+  if (nameDiff) return nameDiff;
+  return String(a?.id || '').localeCompare(String(b?.id || ''));
+}
+
 /** Count consecutive absences from the newest marked class (skip pending/holiday). */
 /** WhatsApp copy for health declaration — always addressed to the parent. */
 function buildHealthWhatsAppText(parentName, studentName, link) {
@@ -283,34 +281,72 @@ const sourceLabel = (m) => {
 
 /** Collapsible folder row for lead detail panel */
 /**
- * Declaration state for one climber, as two icons: the scroll is the health
- * declaration for the wall, the footprints are the outdoor-trip one. Green
- * means a valid signature is on file, amber means it is missing or expired —
- * the row is scanned, not read, so the colour has to carry the answer.
+ * Declaration state for one climber, as icons: the scroll is the wall form,
+ * footprints the outdoor trip, gift a booked activity. Green means a valid
+ * signature is on file, amber means it is missing or expired — the row is
+ * scanned, not read, so the colour has to carry the answer.
+ *
+ * `validOnly` keeps just the green marks (the customer-file name row). The
+ * leads table still wants the amber gaps so a missing signature stands out.
  */
-function DeclarationIcons({ status }) {
+function DeclarationIcons({ status, validOnly = false, size = 13, onClick }) {
   const marks = [
     // האייקון מגיע מקטלוג סוגי ההצהרות, כדי שאותו סימן ישמש כאן ובתיק הלקוח.
     { key: 'wall', Icon: DECLARATION_KINDS.wall.Icon, label: 'הצהרת בריאות' },
+    { key: 'event', Icon: DECLARATION_KINDS.event.Icon, label: 'הצהרה לפעילות בקיר' },
     { key: 'trip', Icon: DECLARATION_KINDS.trip.Icon, label: 'הצהרה לטיולים' },
   ];
+  const validMarks = marks.filter(({ key }) => {
+    const state = status?.[key];
+    return !!state?.signed && !state?.expired;
+  });
+  // Name-row mode: green icons for every valid signature; if none, one amber
+  // scroll so a missing wall form still reads at a glance.
+  const shown = validOnly
+    ? (validMarks.length ? validMarks : marks.filter(({ key }) => key === 'wall'))
+    : marks.filter(({ key }) => {
+      const state = status?.[key];
+      // Wall always shows (missing is the amber signal). Extra activities only
+      // appear once there is something to say about them.
+      return key === 'wall' || !!state?.signed;
+    });
+  if (!shown.length) return null;
+  const Wrap = onClick ? 'button' : 'span';
   return (
-    <>
-      {marks.map(({ key, Icon, label }) => {
+    <Wrap
+      {...(onClick
+        ? { type: 'button', onClick, title: 'פתיחת תיקיית הצהרות' }
+        : {})}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        ...(onClick
+          ? {
+              background: 'transparent',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+            }
+          : {}),
+      }}
+    >
+      {shown.map(({ key, Icon, label }) => {
         const state = status?.[key];
         const ok = !!state?.signed && !state?.expired;
         const title = !state?.signed
           ? `${label}: לא נחתמה`
-          : state.expired ? `${label}: פג תוקף` : `${label}: חתומה`;
+          : state.expired ? `${label}: פג תוקף` : `${label}: בתוקף`;
         return (
           // The tooltip hangs off a span: a `title` attribute on an <svg> is
           // not what browsers show on hover.
           <span key={key} title={title} aria-label={title} style={{ display: 'inline-flex' }}>
-            <Icon size={13} style={{ color: ok ? 'var(--green)' : 'var(--amber)', opacity: ok ? 1 : 0.75 }} />
+            <Icon size={size} style={{ color: ok ? 'var(--green)' : 'var(--amber)', opacity: ok ? 1 : 0.75 }} />
           </span>
         );
       })}
-    </>
+    </Wrap>
   );
 }
 
@@ -390,6 +426,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [savingFollowup, setSavingFollowup] = useState(false);
   
   // Edit Form Fields (student)
+  const [editStudentName, setEditStudentName] = useState(student.name || '');
   const [editBirthDate, setEditBirthDate] = useState(student.birthDate || '');
   const [editStudentPhone, setEditStudentPhone] = useState(student.phone || '');
   const [editGender, setEditGender] = useState(student.gender || '');
@@ -407,6 +444,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [editCity, setEditCity] = useState(parent?.city || '');
   const [editSource, setEditSource] = useState(parent?.source || student.source || 'unknown');
   const [editFocus, setEditFocus] = useState('student'); // student | parent
+  const [editError, setEditError] = useState('');
 
   // Health declaration + waiver status for this student
   const [healthDecl, setHealthDecl] = useState(null);
@@ -436,6 +474,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [removeChildError, setRemoveChildError] = useState('');
 
   useEffect(() => {
+    setEditStudentName(student.name || '');
     setEditBirthDate(student.birthDate || '');
     setEditStudentPhone(student.phone || '');
     setEditGender(student.gender || '');
@@ -453,6 +492,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     setEditSource(parent?.source || student.source || 'unknown');
     setIsEditing(false);
     setEditFocus('student');
+    setEditError('');
     setEditingGroup(false);
     setEditingFollowup(false);
     setOpenFolder(null);
@@ -1411,12 +1451,19 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
 
   const handleUpdateDetails = async () => {
     setSavingEdit(true);
+    setEditError('');
     try {
       if (!parentOnly && editFocus !== 'parent') {
+        const trimmedStudentName = editStudentName.trim();
+        if (!trimmedStudentName) {
+          setEditError('יש למלא שם למתאמן');
+          return;
+        }
         const sRes = await fetch(`/api/students/${student.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            name: trimmedStudentName,
             birthDate: editBirthDate,
             phone: editStudentPhone.trim(),
             gender: editGender || null,
@@ -1427,19 +1474,28 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             source: editSource
           })
         });
-        if (sRes.ok) {
-          const updated = await sRes.json();
-          onUpdateStudent(student.id, updated);
+        const sBody = await sRes.json().catch(() => ({}));
+        if (!sRes.ok) {
+          setEditError(sBody.error || 'שמירת פרטי המתאמן נכשלה');
+          return;
         }
+        onUpdateStudent?.(student.id, sBody);
       }
 
       if (parent?.id && editFocus !== 'student') {
-        await fetch(`/api/parents/${parent.id}`, {
+        const first = editParentName.trim();
+        const last = editParentLastName.trim();
+        if (!first && !last) {
+          setEditError('יש למלא שם להורה');
+          return;
+        }
+        const pRes = await fetch(`/api/parents/${parent.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            name: [editParentName.trim(), editParentLastName.trim()].filter(Boolean).join(' '),
-            lastName: editParentLastName.trim(),
+            // Keep a readable full name next to the separate surname field.
+            name: joinParentName(first, last),
+            lastName: last,
             idNumber: editParentIdNumber.trim(),
             phone: editPhone,
             email: editEmail,
@@ -1449,12 +1505,19 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             status: parentOnly ? student.status : undefined,
           })
         });
+        const pBody = await pRes.json().catch(() => ({}));
+        if (!pRes.ok) {
+          setEditError(pBody.error || 'שמירת פרטי ההורה נכשלה');
+          return;
+        }
+        onUpdateParent?.(parent.id, pBody);
       }
 
       setIsEditing(false);
-      if (refreshData) refreshData();
+      if (refreshData) await refreshData();
     } catch (err) {
       console.error('Failed to update details:', err);
+      setEditError('לא ניתן להתחבר לשרת');
     } finally {
       setSavingEdit(false);
     }
@@ -2217,8 +2280,16 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   type="button"
                   className="btn btn-ghost btn-xs"
                   onClick={() => {
+                    const nextParentName = parentNameParts(parent);
                     setEditFocus('parent');
+                    setEditParentName(nextParentName.firstName);
+                    setEditParentLastName(nextParentName.lastName);
+                    setEditParentIdNumber(parent?.idNumber || '');
+                    setEditPhone(parent?.phone || '');
+                    setEditEmail(parent?.email || '');
+                    setEditCity(parent?.city || '');
                     setEditNotes(parent?.notes || '');
+                    setEditError('');
                     setIsEditing(true);
                   }}
                   title="עריכת פרטי הורה"
@@ -2562,14 +2633,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               </div>
             )}
 
-            {/* Child tabs — of the parent whose tab is open, so a second parent
-                sees their own children rather than the whole other household.
-                The child being viewed always stays in the strip. */}
+            {/* Household trainee chips — adults first, then children by name.
+                Order stays put when someone else is selected or a parent tab changes. */}
             <div style={{ marginBottom: 12 }}>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                {siblings
-                  .filter((sib) => String(sib.id) === String(student.id)
-                    || isChildOfParent(sib, parent?.id))
+                {[...siblings]
+                  .sort(compareTraineeChips)
                   .map((sib) => {
                   const active = !parentOnly && sib.id === student.id;
                   const gLabel = genderLabel(sib.gender);
@@ -2581,6 +2650,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                       title={[
                         'החלפת תיק מתאמן — השיחה מימין לא משתנה',
                         gLabel !== '—' ? gLabel : null,
+                        sib.isAdult ? 'מבוגר' : null,
                       ].filter(Boolean).join(' · ')}
                       style={{
                         display: 'inline-flex',
@@ -2606,9 +2676,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                       }}
                     >
                       <GenderMark gender={sib.gender} size={12} />
+                      {sib.isAdult && <AdultMark size={12} />}
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {sib.name}
-                        {sib.isAdult ? ' · מבוגר' : ''}
                       </span>
                     </button>
                   );
@@ -2664,24 +2734,37 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               return (
               <div style={{ marginBottom: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
-                    {student.name}
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                    {/* מימין לשם ב־RTL: האייקונים לפני הטקסט ב־DOM */}
+                    <DeclarationIcons
+                      status={studentDeclarationStatus(studentDeclarations, student, parent?.phone)}
+                      validOnly
+                      size={15}
+                      onClick={() => toggleFolder('health')}
+                    />
+                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
+                      {student.name}
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <StatusBadge status={student.status} />
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-xs"
-                      onClick={() => {
-                        setEditFocus('student');
-                        setEditNotes(student.notes || '');
-                        setIsEditing(true);
-                      }}
-                      style={{ borderRadius: 999, border: '1px solid var(--border)', gap: 4 }}
-                    >
-                      <Edit2 size={11} /> ערוך
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    onClick={() => {
+                      setEditFocus('student');
+                      setEditStudentName(student.name || '');
+                      setEditBirthDate(student.birthDate || '');
+                      setEditStudentPhone(student.phone || '');
+                      setEditGender(student.gender || '');
+                      setEditNotes(student.notes || '');
+                      setEditNextFollowup(student.nextFollowup || '');
+                      setEditGroupIds(studentGroupIds(student));
+                      setEditError('');
+                      setIsEditing(true);
+                    }}
+                    style={{ borderRadius: 999, border: '1px solid var(--border)', gap: 4, flexShrink: 0 }}
+                  >
+                    <Edit2 size={11} /> ערוך
+                  </button>
                 </div>
 
                 <div>
@@ -4472,9 +4555,21 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
           }
         >
           <div className="form-grid">
+            {editError && (
+              <div className="alert alert-warn" style={{ marginBottom: 4 }}>{editError}</div>
+            )}
             {(editFocus === 'student' && !parentOnly) && (
               <>
                 <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', marginBottom: 4 }}>פרטי המתאמן</div>
+                <div className="form-group">
+                  <label className="form-label">שם</label>
+                  <input
+                    className="input"
+                    autoFocus
+                    value={editStudentName}
+                    onChange={(e) => setEditStudentName(e.target.value)}
+                  />
+                </div>
                 <div className="form-grid-2">
                   <div className="form-group">
                     <label className="form-label">תאריך לידה</label>
@@ -4539,7 +4634,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             <div className="form-grid-2">
               <div className="form-group">
                 <label className="form-label">שם פרטי</label>
-                <input className="input" value={editParentName} onChange={e => setEditParentName(e.target.value)} />
+                <input
+                  className="input"
+                  autoFocus={editFocus === 'parent' || parentOnly}
+                  value={editParentName}
+                  onChange={(e) => setEditParentName(e.target.value)}
+                />
               </div>
               <div className="form-group">
                 <label className="form-label">שם משפחה</label>
@@ -5263,12 +5363,15 @@ export default function Leads({
   const selectedParent = selectedStudent ? parents.find((p) => String(p.id) === String(selectedStudent.parentId)) : null;
   const selectedGroup = selectedStudent?.groupId ? groups.find(g => g.id === selectedStudent.groupId) : null;
   const selectedSiblings = selectedParent
-    ? students.filter((s) => {
-        // A second parent sees the same child, once — not a copy of their own.
+    ? students
+      .filter((s) => {
+        // Whole household once — same strip whether mum or dad is the open tab.
         if (isChildOfParent(s, selectedParent.id)) return true;
         const otherParent = parents.find((p) => p.id === s.parentId);
         return phoneTailMatch(otherParent?.phone, selectedParent.phone);
       })
+      .slice()
+      .sort(compareTraineeChips)
     : [];
 
   const handleAdd = async ({ parentName, lastName, idNumber, phone, email, city, source, children }) => {
@@ -5666,10 +5769,10 @@ export default function Leads({
                     onClick={() => primary && setSelectedStudentId(primary.id)}
                   >
                     <td style={{ fontWeight: 700 }}>
-                      {parent?.name || '—'}
+                      {parentDisplayName(parent) || '—'}
                       {otherParents.length > 0 && (
                         <div style={{ marginTop: 2, fontWeight: 500, fontSize: 11, color: 'var(--text-3)' }}>
-                          {otherParents.map((p) => p.name).filter(Boolean).join(' · ')}
+                          {otherParents.map((p) => parentDisplayName(p)).filter(Boolean).join(' · ')}
                         </div>
                       )}
                       {awaiting && (
@@ -5709,12 +5812,8 @@ export default function Leads({
                                     edge and line up down the column however long the names are. */}
                                 <DeclarationIcons status={declStatus} />
                                 <GenderMark gender={child.gender} size={11} />
+                                {child.isAdult && <AdultMark size={11} />}
                                 {child.name}
-                                {child.isAdult && (
-                                  <span style={{ color: 'var(--text-3)', fontWeight: 500, fontSize: 10 }}>
-                                    מבוגר
-                                  </span>
-                                )}
                                 {/* The signed-declaration status is the icons now, so the
                                     text label would only repeat them. */}
                                 {!child.isAdult && namedChildren.length > 1 && child.status !== 'health_signed' && (

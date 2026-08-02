@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { Modal, StatCard } from './UI.jsx';
+import AppSelect from './AppSelect.jsx';
 
 const TABS = [
   { key: 'queue', label: 'תור ההצעות', icon: ListChecks },
@@ -112,10 +113,10 @@ function ScenarioModal({ scenario, onSave, onClose }) {
         <div className="form-grid-2">
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label" style={{ fontSize: 11 }}>דחיפות ברירת מחדל</label>
-            <select className="input input-sm" value={priority} onChange={(e) => setPriority(e.target.value)}>
+            <AppSelect className="input input-sm" value={priority} onChange={(e) => setPriority(e.target.value)}>
               <option value="normal">רגילה</option>
               <option value="high">גבוהה</option>
-            </select>
+            </AppSelect>
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label" style={{ fontSize: 11 }}>ימים ליעד</label>
@@ -381,7 +382,7 @@ export default function AiAssistant() {
               לפני שמדליקים ניתוח אוטומטי.
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-              <select
+              <AppSelect
                 className="input input-sm"
                 style={{ maxWidth: 280 }}
                 value={analyzePhone}
@@ -393,7 +394,7 @@ export default function AiAssistant() {
                     {parent.name || 'ללא שם'} · {parent.phone}
                   </option>
                 ))}
-              </select>
+              </AppSelect>
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
@@ -423,7 +424,7 @@ export default function AiAssistant() {
                 {filter.label}
               </button>
             ))}
-            <select
+            <AppSelect
               className="input input-sm"
               style={{ maxWidth: 220, marginInlineStart: 'auto' }}
               value={scenarioFilter}
@@ -433,7 +434,7 @@ export default function AiAssistant() {
               {scenarios.map((scenario) => (
                 <option key={scenario.id} value={scenario.id}>{scenario.name}</option>
               ))}
-            </select>
+            </AppSelect>
           </div>
 
           {!suggestions.length && (

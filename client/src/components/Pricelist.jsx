@@ -13,6 +13,7 @@ import {
   catTint,
   imageBackground,
 } from './productCategories.js';
+import AppSelect from './AppSelect.jsx';
 
 const NOTION_PRICELIST = [
   { id: 'pr-1a', name: 'כניסה לקיר', price: 50, description: 'כניסה בודדת לקיר הטיפוס ללא הגבלת זמן', notes: '', durationH: null, participants: '', categories: ['כניסה'], ages: ['ללא הגבלה'], active: true, image: '' },
@@ -188,11 +189,11 @@ function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory }) 
         </div>
         <div className="form-group">
           <label className="form-label">סוג פריט</label>
-          <select className="input select" value={productType} onChange={(e) => setProductType(e.target.value)}>
+          <AppSelect className="input select" value={productType} onChange={(e) => setProductType(e.target.value)}>
             <option value="product">מוצר / ציוד / חד־פעמי</option>
             <option value="punch_card">כרטיסייה (כניסות)</option>
             <option value="time_membership">מנוי לפי זמן</option>
-          </select>
+          </AppSelect>
         </div>
         <div className="form-group">
           <label className="form-label">מחיר (₪)</label>

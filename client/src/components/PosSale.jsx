@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ShoppingCart, Plus, Minus, Trash2, Search, User,
   Banknote, Link2, FileText, CheckCircle2, X, Percent, Tag,
@@ -14,6 +14,7 @@ import {
   imageBackground,
   imageFitOf,
 } from './productCategories.js';
+import AppSelect from './AppSelect.jsx';
 
 const PAY_METHODS = [
   { id: 'cash', label: 'מזומן', icon: Banknote },
@@ -1039,7 +1040,7 @@ export default function PosSale({ onManageProducts = null }) {
           {selectedParent && !selectedStudent && childrenOfSelectedParent.length > 0 && (
             <div className="form-group" style={{ marginBottom: 12 }}>
               <label className="form-label">בחירת מתאמן מהמשפחה</label>
-              <select
+              <AppSelect
                 className="input select"
                 value=""
                 onChange={(e) => {
@@ -1061,7 +1062,7 @@ export default function PosSale({ onManageProducts = null }) {
                 {childrenOfSelectedParent.map((s) => (
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
-              </select>
+              </AppSelect>
             </div>
           )}
 

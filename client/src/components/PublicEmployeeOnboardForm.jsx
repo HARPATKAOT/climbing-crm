@@ -3,6 +3,7 @@ import { CheckCircle } from 'lucide-react';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { EventStyles } from './publicFormKit.jsx';
 import GenderPicker from './GenderPicker.jsx';
+import AppSelect from './AppSelect.jsx';
 
 function ErrorBox({ message }) {
   if (!message) return null;
@@ -126,7 +127,7 @@ export default function PublicEmployeeOnboardForm() {
                   options={f.options.map((opt) => [opt, opt])}
                 />
               ) : f.type === 'select' ? (
-                <select
+                <AppSelect
                   value={answers[f.key] || ''}
                   onChange={(e) => setAnswer(f.key, e.target.value)}
                 >
@@ -134,7 +135,7 @@ export default function PublicEmployeeOnboardForm() {
                   {(f.options || []).map((opt) => (
                     <option key={opt} value={opt}>{opt}</option>
                   ))}
-                </select>
+                </AppSelect>
               ) : f.type === 'textarea' ? (
                 <textarea
                   rows={3}

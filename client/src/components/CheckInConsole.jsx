@@ -3,6 +3,7 @@ import { Search, LogIn, LogOut, Clock, CheckCircle2, ShieldAlert, ShieldCheck, F
 import { CheckIcon } from './safetyCheckIcons.jsx';
 import { isHealthDeclarationValid } from '../utils/healthValidity.js';
 import { SYSTEM_ROLE_KEYS, canFillRole, fetchRoleCatalog, roleLabelOf } from '../utils/staffRoles.js';
+import AppSelect from './AppSelect.jsx';
 
 /**
  * משמרת קיר מהמסוף: מי שפותח את הקיר פותח כאן משמרת, ומי שסוגר — סוגר.
@@ -104,7 +105,7 @@ function WallShiftPanel({ employees, onShiftOpened }) {
                 <div style={{ fontSize: 12, color: 'var(--text-3)' }}>פתח את המשמרת ב-{hhmm(shift.clock_in)}</div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <select
+                <AppSelect
                   className="input select input-sm"
                   style={{ height: 34, fontSize: 12 }}
                   value={closerId}
@@ -116,7 +117,7 @@ function WallShiftPanel({ employees, onShiftOpened }) {
                       {emp.id === shift.employee_id ? emp.name : `${emp.name} (סוגר במקום ${nameOf(shift.employee_id)})`}
                     </option>
                   ))}
-                </select>
+                </AppSelect>
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
@@ -136,7 +137,7 @@ function WallShiftPanel({ employees, onShiftOpened }) {
 
         {canOpen.length > 0 && (
           <div style={{ display: 'flex', gap: 8 }}>
-            <select
+            <AppSelect
               className="input select"
               style={{ flex: 1, height: 40 }}
               value={pickedId}
@@ -146,7 +147,7 @@ function WallShiftPanel({ employees, onShiftOpened }) {
               {canOpen.map((emp) => (
                 <option key={emp.id} value={emp.id}>{emp.name}</option>
               ))}
-            </select>
+            </AppSelect>
             <button
               type="button"
               className="btn btn-primary btn-sm"
@@ -450,7 +451,7 @@ export default function CheckInConsole({ students, groups }) {
                   </span>
                 ) : (
                   <>
-                    <select
+                    <AppSelect
                       className="input select"
                       style={{ maxWidth: 180, height: 36 }}
                       value={signerByCheck[check.id] || employees[0]?.id || ''}
@@ -460,7 +461,7 @@ export default function CheckInConsole({ students, groups }) {
                       {employees.map((emp) => (
                         <option key={emp.id} value={emp.id}>{emp.name}</option>
                       ))}
-                    </select>
+                    </AppSelect>
                     <button
                       type="button"
                       className="btn btn-primary btn-sm"

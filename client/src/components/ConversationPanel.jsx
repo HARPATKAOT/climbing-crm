@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   Bot,
   PowerOff,
+  ChevronDown,
   Sparkles,
   Archive,
   ArchiveRestore,
@@ -96,7 +97,16 @@ export function formatPauseLeft(until, now = Date.now()) {
 const PAUSE_REASONS = {
   handoff: 'אחרי שהלקוח ביקש לדבר עם אדם',
   human_reply: 'אחרי שענית ללקוח',
+  manual: 'ידנית על ידי הצוות',
 };
+
+/** Timed mute choices on the bot badge menu. */
+const BOT_PAUSE_OPTIONS = [
+  { minutes: 10, label: 'השתקה ל־10 דקות' },
+  { minutes: 60, label: 'השתקה לשעה' },
+  { minutes: 60 * 4, label: 'השתקה ל־4 שעות' },
+  { minutes: 60 * 24, label: 'השתקה ליום' },
+];
 
 /**
  * Every reason the bot is silent for this customer, worst first. Each one
@@ -134,7 +144,9 @@ export function describeBotBlocks(bot, now = Date.now()) {
       blocks.push({
         kind: 'customer',
         label: `מושתק · עוד ${left}`,
-        reason: `הבוט הושתק אוטומטית ${PAUSE_REASONS[bot.reason] || 'אחרי טיפול אנושי'}, ויחזור לענות בעוד ${left}.`,
+        reason: bot.reason === 'manual'
+        ? `הבוט הושתק ידנית ללקוח הזה, ויחזור לענות בעוד ${left}.`
+        : `הבוט הושתק אוטומטית ${PAUSE_REASONS[bot.reason] || 'אחרי טיפול אנושי'}, ויחזור לענות בעוד ${left}.`,
         action: 'resume',
         actionLabel: 'החזרת הבוט עכשיו',
       });
@@ -152,12 +164,16 @@ export function describeBotBadge(bot, now = Date.now()) {
       icon: Bot,
       label: 'בוט פעיל',
       tone: 'active',
-      action: 'mute',
-      actionLabel: 'כיבוי קבוע של הבוט ללקוח זה',
+      action: null,
+      actionLabel: 'ניהול הבוט ללקוח זה',
       blocks,
+      canResume: false,
+      canPause: true,
+      canMutePermanent: true,
     };
   }
   const [first] = blocks;
+  const customerBlock = blocks.find((b) => b.kind === 'customer');
   return {
     icon: PowerOff,
     // Two blocks at once ("כבוי במערכת" + "מושתק ללקוח") — say so, don't pick one.
@@ -166,8 +182,11 @@ export function describeBotBadge(bot, now = Date.now()) {
       : `בוט ${first.label}`,
     tone: first.kind === 'global' ? 'off' : 'paused',
     action: first.action,
-    actionLabel: first.actionLabel,
+    actionLabel: 'ניהול הבוט ללקוח זה',
     blocks,
+    canResume: !!customerBlock,
+    canPause: true,
+    canMutePermanent: bot.status !== 'opted_out',
   };
 }
 
@@ -226,10 +245,12 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   const [imagePreview, setImagePreview] = useState(null);
   const [imageBase64, setImageBase64] = useState('');
   const [botBusy, setBotBusy] = useState(false);
+  const [botMenuOpen, setBotMenuOpen] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [draftInfo, setDraftInfo] = useState(null);
   // Ticks the pause countdown between the conversation polls.
   const [clockTick, setClockTick] = useState(Date.now());
+  const botMenuRef = useRef(null);
   const messagesRef = useRef(null);
   const fileRef = useRef(null);
   const wasBlockedRef = useRef(false);
@@ -387,8 +408,27 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     setReplyText('');
     setImageBase64('');
     setImagePreview(null);
+    setBotMenuOpen(false);
     composingRef.current = false;
   }, [parent?.id]);
+
+  useEffect(() => {
+    if (!botMenuOpen) return undefined;
+    const onPointerDown = (event) => {
+      if (botMenuRef.current && !botMenuRef.current.contains(event.target)) {
+        setBotMenuOpen(false);
+      }
+    };
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setBotMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [botMenuOpen]);
 
   useEffect(() => {
     composingRef.current = !!selectedTemplate || !!replyText.trim() || !!imageBase64;
@@ -576,7 +616,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     }
   };
 
-  const handleBotToggle = async (action) => {
+  const handleBotToggle = async (action, minutes) => {
     if (!parent?.id || !action || botBusy) return;
     // The master switch is not a per-customer setting — make that explicit
     // before one conversation turns the bot back on for everybody.
@@ -589,6 +629,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
       return;
     }
     setBotBusy(true);
+    setBotMenuOpen(false);
     setError('');
     try {
       if (action === 'enable-global') {
@@ -602,10 +643,12 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
         await load({ quiet: true });
         return;
       }
+      const body = { action };
+      if (action === 'pause') body.minutes = minutes;
       const res = await fetch(`/api/conversations/${parent.id}/bot`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify(body),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.success) throw new Error(json.error || 'עדכון מצב הבוט נכשל');
@@ -718,26 +761,89 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
             <WindowBadge windows={data?.windows} channel={channel} />
           )}
           {botBadge && (
-            <button
-              type="button"
-              onClick={() => handleBotToggle(botBadge.action)}
-              disabled={botBusy}
-              title={botBadge.actionLabel}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                fontSize: 10,
-                padding: '3px 7px',
-                borderRadius: 6,
-                cursor: botBusy ? 'default' : 'pointer',
-                border: '1px solid var(--border)',
-                ...BOT_TONES[botBadge.tone],
-              }}
-            >
-              <botBadge.icon size={11} />
-              {botBusy ? 'מעדכן...' : botBadge.label}
-            </button>
+            <div ref={botMenuRef} style={{ position: 'relative' }}>
+              <button
+                type="button"
+                onClick={() => setBotMenuOpen((open) => !open)}
+                disabled={botBusy}
+                title={botBadge.actionLabel}
+                aria-haspopup="menu"
+                aria-expanded={botMenuOpen}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  fontSize: 10,
+                  padding: '3px 7px',
+                  borderRadius: 6,
+                  cursor: botBusy ? 'default' : 'pointer',
+                  border: '1px solid var(--border)',
+                  ...BOT_TONES[botBadge.tone],
+                }}
+              >
+                <botBadge.icon size={11} />
+                {botBusy ? 'מעדכן...' : botBadge.label}
+                <ChevronDown size={11} style={{ transform: botMenuOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+              </button>
+              {botMenuOpen && (
+                <div
+                  role="menu"
+                  style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 4px)',
+                    left: 0,
+                    zIndex: 40,
+                    minWidth: 180,
+                    padding: 6,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 2,
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+                  }}
+                >
+                  {botBadge.canResume && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="btn btn-ghost btn-xs"
+                      style={{ justifyContent: 'flex-start', width: '100%' }}
+                      disabled={botBusy}
+                      onClick={() => handleBotToggle('resume')}
+                    >
+                      הפעלת הבוט
+                    </button>
+                  )}
+                  {botBadge.canPause && BOT_PAUSE_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.minutes}
+                      type="button"
+                      role="menuitem"
+                      className="btn btn-ghost btn-xs"
+                      style={{ justifyContent: 'flex-start', width: '100%' }}
+                      disabled={botBusy}
+                      onClick={() => handleBotToggle('pause', opt.minutes)}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                  {botBadge.canMutePermanent && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="btn btn-ghost btn-xs"
+                      style={{ justifyContent: 'flex-start', width: '100%', color: '#F87171' }}
+                      disabled={botBusy}
+                      onClick={() => handleBotToggle('mute')}
+                    >
+                      כיבוי קבוע
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           )}
           <button
             type="button"

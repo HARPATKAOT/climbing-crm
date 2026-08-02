@@ -653,16 +653,26 @@ export async function getConversation(parentId) {
 
 /**
  * Manual override of the auto-reply bot for one customer.
- * `mute` is permanent until someone resumes it; `resume` also drops the
- * automatic pause that a human reply leaves behind.
+ * `mute` is permanent until someone resumes it; `pause` is timed;
+ * `resume` clears both the opt-out and any timed pause.
  */
-export async function setBotState(parentId, action) {
+export async function setBotState(parentId, action, { minutes } = {}) {
   const parent = findParentById(parentId);
   if (!parent) return { success: false, error: 'הלקוח לא נמצא', status: 404 };
   if (!parent.phone) return { success: false, error: 'ללקוח אין מספר טלפון', status: 400 };
 
   if (action === 'mute') {
     await optOutPhone(parent.phone, true, { source: 'crm' });
+  } else if (action === 'pause') {
+    const mins = Number(minutes);
+    if (!Number.isFinite(mins) || mins < 1 || mins > 60 * 24 * 30) {
+      return { success: false, error: 'משך השתקה לא תקין', status: 400 };
+    }
+    // A timed mute replaces a permanent opt-out for this customer.
+    if (parent.bot_opted_out) {
+      await optOutPhone(parent.phone, false);
+    }
+    await pauseBotForPhone(parent.phone, mins, { reason: 'manual' });
   } else if (action === 'resume') {
     await optOutPhone(parent.phone, false);
     await clearBotPause(parent.phone);

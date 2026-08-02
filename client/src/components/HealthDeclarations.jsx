@@ -9,6 +9,7 @@ import {
   requiresClearance,
 } from '../utils/healthQuestions.js';
 import { useActivityTypes } from '../utils/activityTypes.js';
+import AppSelect from './AppSelect.jsx';
 
 /**
  * „סוג הפעילות” על ההצהרה הוא מה שקובע איזו הצהרה נחתמת בהרשמה לאירוע ביומן:
@@ -256,7 +257,7 @@ function FormTemplatesPanel() {
           <div className="form-grid-2">
             <div className="form-group">
               <label className="form-label">סוג פעילות</label>
-              <select
+              <AppSelect
                 className="select"
                 value={form.activityType}
                 onChange={(e) => setForm((f) => ({ ...f, activityType: e.target.value }))}
@@ -264,7 +265,7 @@ function FormTemplatesPanel() {
                 {activityTypeOptions.map((a) => (
                   <option key={a.value} value={a.value}>{a.label}</option>
                 ))}
-              </select>
+              </AppSelect>
             </div>
             <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 10, justifyContent: 'flex-end', paddingBottom: 4 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>

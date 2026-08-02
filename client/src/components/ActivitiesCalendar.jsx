@@ -25,6 +25,7 @@ import {
   CALENDAR_DISPLAY_FIELDS, loadDisplayFields, saveDisplayFields,
   setSelectedDisplayFields, setActivityStaffNames, activityDisplayLines,
 } from '../utils/calendarDisplayFields.js';
+import AppSelect from './AppSelect.jsx';
 
 /** ברירת המחדל בלבד. הרשימה החיה מגיעה מהשרת דרך `activityTypes()`. */
 export const ACTIVITY_TYPES = DEFAULT_ACTIVITY_TYPES;
@@ -591,7 +592,7 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
         <div style={{ display: 'grid', gridTemplateColumns: staffPay?.mode === 'flat' ? '1fr 1fr 1fr' : '1fr 1fr', gap: 8 }}>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
             תפקיד לשיבוץ
-            <select
+            <AppSelect
               className="input"
               value={staffPay?.role || ''}
               onChange={(e) => onStaffPayChange({ staff_role: e.target.value })}
@@ -601,11 +602,11 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
               {payableRoles.map(({ role }) => (
                 <option key={role} value={role}>{role}</option>
               ))}
-            </select>
+            </AppSelect>
           </label>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
             תשלום לעובדים
-            <select
+            <AppSelect
               className="input"
               value={staffPay?.mode === 'flat' ? 'flat' : 'rate'}
               onChange={(e) => onStaffPayChange({ staff_pay_mode: e.target.value })}
@@ -613,7 +614,7 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
             >
               <option value="rate">לפי התעריף האישי</option>
               <option value="flat">גלובלי לאירוע</option>
-            </select>
+            </AppSelect>
           </label>
           {staffPay?.mode === 'flat' && (
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
@@ -785,7 +786,7 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
                   </div>
                   <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
                     אופן תשלום
-                    <select
+                    <AppSelect
                       className="input"
                       value={payMode}
                       onChange={(e) => patchLocal(row.id, { pay_mode: e.target.value })}
@@ -793,12 +794,12 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
                     >
                       <option value="hourly">שעתי</option>
                       <option value="flat">גלובלי</option>
-                    </select>
+                    </AppSelect>
                   </label>
                   {payMode === 'hourly' ? (
                     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
                       תעריף
-                      <select
+                      <AppSelect
                         className="input"
                         value={row.role || workTypeRole(row.work_type) || ''}
                         onChange={(e) => patchLocal(row.id, { role: e.target.value })}
@@ -813,7 +814,7 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
                             </option>
                           );
                         })}
-                      </select>
+                      </AppSelect>
                     </label>
                   ) : (
                     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
@@ -867,7 +868,7 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
                   ) : (
                     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
                       סוג תפקיד
-                      <select
+                      <AppSelect
                         className="input"
                         value={row.role || workTypeRole(row.work_type) || ''}
                         onChange={(e) => patchLocal(row.id, { role: e.target.value })}
@@ -877,7 +878,7 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
                         {payableRoles.map(({ role }) => (
                           <option key={role} value={role}>{role}</option>
                         ))}
-                      </select>
+                      </AppSelect>
                     </label>
                   )}
                   <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
@@ -1189,7 +1190,7 @@ function RegularActivityModal({
                 {!isTemplateEdit && !isOps && (
                   <label>
                     <span className="activity-settings-label">מצב האירוע</span>
-                    <select
+                    <AppSelect
                       className="input"
                       value={form.status || 'open'}
                       onChange={(event) => set('status', event.target.value)}
@@ -1198,7 +1199,7 @@ function RegularActivityModal({
                       <option value="open">פעיל</option>
                       <option value="completed">הסתיים</option>
                       <option value="cancelled">בוטל</option>
-                    </select>
+                    </AppSelect>
                   </label>
                 )}
                 {!isOps && (
@@ -1221,7 +1222,7 @@ function RegularActivityModal({
                 {!isOps && (
                   <label>
                     <span className="activity-settings-label">הצהרת בריאות</span>
-                    <select
+                    <AppSelect
                       className="input"
                       value={form.form_template_slug && form.form_template_slug !== 'wall' ? form.form_template_slug : ''}
                       onChange={(event) => setForm((prev) => ({
@@ -1237,7 +1238,7 @@ function RegularActivityModal({
                       {declarationTemplates.map((t) => (
                         <option key={t.slug} value={t.slug}>{t.title || t.slug}</option>
                       ))}
-                    </select>
+                    </AppSelect>
                   </label>
                 )}
               </div>
@@ -1362,7 +1363,7 @@ function RegularActivityModal({
                     </label>
                     <label>
                       <span className="activity-settings-label">חישוב מע״מ</span>
-                      <select
+                      <AppSelect
                         className="input"
                         value={includesVat ? 'incl' : 'excl'}
                         onChange={(event) => set('price_includes_vat', event.target.value === 'incl')}
@@ -1370,7 +1371,7 @@ function RegularActivityModal({
                       >
                         <option value="excl">לא כולל מע״מ</option>
                         <option value="incl">כולל מע״מ</option>
-                      </select>
+                      </AppSelect>
                     </label>
                     <label>
                       <span className="activity-settings-label">מכסת משתתפים</span>
@@ -1772,7 +1773,7 @@ function ActivityFormModal({
           {isOverlayNew && externalCalendars.length > 0 && (
             <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-3)' }}>
               יומן יעד
-              <select
+              <AppSelect
                 className="input"
                 value={form.calendar_id || ''}
                 onChange={(e) => set('calendar_id', e.target.value)}
@@ -1780,7 +1781,7 @@ function ActivityFormModal({
                 {externalCalendars.map((cal) => (
                   <option key={cal.id} value={cal.id}>{cal.name}</option>
                 ))}
-              </select>
+              </AppSelect>
             </label>
           )}
 

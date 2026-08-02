@@ -3,6 +3,7 @@ import { Users, Save } from 'lucide-react';
 import { STATUSES } from '../mockData.js';
 import { getGroupDays } from '../scheduleUtils.js';
 import { EMPTY_FILTERS } from './segmentFilters.js';
+import AppSelect from './AppSelect.jsx';
 
 const DAY_OPTIONS = [
   { value: 0, label: 'א׳' },
@@ -147,7 +148,7 @@ export default function SegmentBuilder({
           {loadingPreview ? 'מחשב קהל...' : `${preview.count} נמענים`}
         </strong>
         {savedSegments.length > 0 && (
-          <select
+          <AppSelect
             className="input input-sm"
             style={{ maxWidth: 220 }}
             defaultValue=""
@@ -160,7 +161,7 @@ export default function SegmentBuilder({
             {savedSegments.map((s) => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
-          </select>
+          </AppSelect>
         )}
       </div>
 
@@ -175,15 +176,15 @@ export default function SegmentBuilder({
         </label>
         <label style={{ fontSize: 12 }}>
           רשום לחוג
-          <select className="input input-sm" value={f.registered} onChange={(e) => set({ registered: e.target.value })}>
+          <AppSelect className="input input-sm" value={f.registered} onChange={(e) => set({ registered: e.target.value })}>
             <option value="any">הכל</option>
             <option value="yes">רשומים</option>
             <option value="no">לא רשומים</option>
-          </select>
+          </AppSelect>
         </label>
         <label style={{ fontSize: 12 }}>
           רשימת תפוצה
-          <select
+          <AppSelect
             className="input input-sm"
             value={f.listKey || ''}
             onChange={(e) => set({ listKey: e.target.value || '' })}
@@ -194,7 +195,7 @@ export default function SegmentBuilder({
             {lists.map((l) => (
               <option key={l.key} value={l.key}>{l.label}</option>
             ))}
-          </select>
+          </AppSelect>
           {Array.isArray(f.groupIds) && f.groupIds.length > 0 && (
             <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
               בוטלה זמנית — מסננים לפי קבוצה

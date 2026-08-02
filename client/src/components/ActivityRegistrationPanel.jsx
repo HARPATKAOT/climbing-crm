@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
 import { AttendanceDayBar, AttendanceToggle, useActivityAttendance } from './ActivityAttendance.jsx';
+import AppSelect from './AppSelect.jsx';
 
 function leadOpenTarget(registration) {
   if (registration?.student_id) return String(registration.student_id);
@@ -975,7 +976,7 @@ export default function ActivityRegistrationPanel({
         <span className="activity-registration-field-label">סטטוס תשלום המזמין</span>
         {editingPaymentStatus && !readOnly ? (
           <div className="activity-registration-status-row">
-            <select
+            <AppSelect
               className="input"
               value={form.payment_status || 'unpaid'}
               onChange={(e) => {
@@ -988,7 +989,7 @@ export default function ActivityRegistrationPanel({
               <option value="paid">{payLabel.paid}</option>
               <option value="partial">{payLabel.partial}</option>
               <option value="refunded">{payLabel.refunded}</option>
-            </select>
+            </AppSelect>
             <button
               type="button"
               className="btn btn-ghost btn-sm"
@@ -1076,7 +1077,7 @@ export default function ActivityRegistrationPanel({
 
       <label className="activity-registration-field">
         <span className="activity-registration-field-label">אופן ההרשמה והתשלום</span>
-        <select
+        <AppSelect
           className="input"
           value={form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')}
           onChange={(e) => setMany({
@@ -1087,7 +1088,7 @@ export default function ActivityRegistrationPanel({
         >
           <option value="paid_per_participant">הרשמה בתשלום לכל משתתף</option>
           <option value="host_pays">המזמין משלם על כל האירוע</option>
-        </select>
+        </AppSelect>
         <span className="activity-registration-field-hint">
           {(form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')) === 'host_pays'
             ? 'המזמין מקבל קישור תשלום פרטי. המשתתפים נרשמים בחינם עם הצהרה וחתימה.'
@@ -1366,7 +1367,7 @@ export default function ActivityRegistrationPanel({
                         placeholder="שם משתתף"
                         disabled={!!rowBusy}
                       />
-                      <select
+                      <AppSelect
                         className="input"
                         value={editDraft.participant_type}
                         onChange={(e) => setEditDraft((prev) => ({ ...prev, participant_type: e.target.value }))}
@@ -1374,7 +1375,7 @@ export default function ActivityRegistrationPanel({
                       >
                         <option value="child">ילד</option>
                         <option value="adult">מבוגר</option>
-                      </select>
+                      </AppSelect>
                       <div className="registration-participant-edit-actions">
                         <button
                           type="button"
@@ -1584,14 +1585,14 @@ export default function ActivityRegistrationPanel({
                 onChange={(e) => setInterestDraft((prev) => ({ ...prev, phone: e.target.value }))}
                 autoComplete="off"
               />
-              <select
+              <AppSelect
                 className="input"
                 value={interestDraft.participant_type}
                 onChange={(e) => setInterestDraft((prev) => ({ ...prev, participant_type: e.target.value }))}
               >
                 <option value="child">ילד</option>
                 <option value="adult">מבוגר</option>
-              </select>
+              </AppSelect>
               <input
                 className="input registration-interest-notes"
                 placeholder="הערה (למשל: מחכה לתשובה מההורה)"
@@ -1657,7 +1658,7 @@ export default function ActivityRegistrationPanel({
 
                     {convertingId === row.id && !readOnly ? (
                       <span className="registration-interest-convert">
-                        <select
+                        <AppSelect
                           className="input"
                           value={convertStatus}
                           onChange={(e) => setConvertStatus(e.target.value)}
@@ -1666,7 +1667,7 @@ export default function ActivityRegistrationPanel({
                           <option value="paid">שולם</option>
                           <option value="pending">ממתין לתשלום</option>
                           <option value="not_required">ללא תשלום</option>
-                        </select>
+                        </AppSelect>
                         <button
                           type="button"
                           className="btn btn-sm btn-primary"

@@ -895,7 +895,7 @@ app.post('/api/public/leads', publicFormRateLimit, async (req, res) => {
 });
 
 // Update parent details (name, phone, email, city, source, notes)
-app.put('/api/parents/:id', (req, res) => {
+app.put('/api/parents/:id', async (req, res) => {
   const { id } = req.params;
   const allowed = [
     'name',
@@ -936,6 +936,12 @@ app.put('/api/parents/:id', (req, res) => {
           nextFollowup: updates.nextFollowup,
         }
       );
+      // Wait for the durable store — a refresh right after save would otherwise
+      // pull the pre-merge card and look like the edit never happened.
+      const durable = await persistCore('parents', merged);
+      if (durable?.ok === false) {
+        return res.status(503).json({ error: durable.error || 'העדכון לא נשמר' });
+      }
       touchGoogleContacts();
       return res.json(merged);
     }
@@ -943,6 +949,10 @@ app.put('/api/parents/:id', (req, res) => {
 
   const updated = db.update('parents', id, updates);
   if (!updated) return res.status(404).json({ error: 'Parent not found' });
+  const durable = await persistCore('parents', updated);
+  if (durable?.ok === false) {
+    return res.status(503).json({ error: durable.error || 'העדכון לא נשמר' });
+  }
   touchGoogleContacts();
   res.json(updated);
 });
@@ -1451,7 +1461,9 @@ app.post('/api/conversations/:parentId/handled', async (req, res) => {
 
 app.post('/api/conversations/:parentId/bot', async (req, res) => {
   try {
-    const result = await setBotState(req.params.parentId, req.body?.action);
+    const result = await setBotState(req.params.parentId, req.body?.action, {
+      minutes: req.body?.minutes,
+    });
     if (!result.success) return res.status(result.status || 400).json(result);
     res.json(result);
   } catch (err) {
@@ -2924,7 +2936,7 @@ app.post('/api/parents/:id/merge-family', async (req, res) => {
 });
 
 // Update student/lead details (supports multi-group via groupIds / addGroupId / removeGroupId)
-app.put('/api/students/:id', (req, res) => {
+app.put('/api/students/:id', async (req, res) => {
   const { id } = req.params;
   const body = req.body || {};
   const {
@@ -2987,6 +2999,11 @@ app.put('/api/students/:id', (req, res) => {
   }
 
   if (!updated) updated = db.withStudentRelation(db.getOne('students', id));
+  // Same race as parent edit: refresh right after save must see the new fields.
+  const durable = await persistCore('students', updated);
+  if (durable?.ok === false) {
+    return res.status(503).json({ error: durable.error || 'העדכון לא נשמר' });
+  }
   touchGoogleContacts();
   res.json(updated);
 });

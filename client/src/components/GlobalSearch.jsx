@@ -26,7 +26,9 @@ export default function GlobalSearch({ students = [], parents = [], onOpen }) {
     if (!trimmed) return [];
     const normalized = normalizePhone(trimmed);
     const seen = new Set();
-    return buildLeadEntries(students, parents)
+    // A global search should find every customer, archived included — it's the
+    // one place staff can reach someone who isn't on any working list anymore.
+    return buildLeadEntries(students, parents, { includeArchived: true })
       .filter((entry) => {
         const haystack = searchableText(entry);
         return haystack.includes(trimmed) || (normalized && haystack.includes(normalized));

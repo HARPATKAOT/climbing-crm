@@ -1018,7 +1018,7 @@ input, select, textarea { font-family: var(--font); }
   color: var(--text-1);
   font-size: 14px;
   font-family: var(--font);
-  transition: all var(--t-fast);
+  transition: border-color var(--t-fast), box-shadow var(--t-fast), background var(--t-fast);
   width: 100%;
 }
 .input[type="number"] {
@@ -1030,21 +1030,154 @@ input, select, textarea { font-family: var(--font); }
   -webkit-appearance: none;
   margin: 0;
 }
-.input:focus, .select:focus, .textarea:focus {
+.input:focus, .select:focus, .textarea:focus,
+.app-select-trigger:focus, .app-select-trigger:focus-visible {
   outline: none;
-  border-color: var(--blue);
-  box-shadow: 0 0 0 3px var(--border-focus);
+  border-color: rgba(56, 189, 248, 0.55);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.16);
   background: var(--bg-card-hover);
 }
 .input::placeholder { color: var(--text-3); }
-/* color-scheme: dark מחזיק את רשימת ה-select כהה רק כל עוד לשדה אין רקע משלו.
-   ברגע ששדה נצבע (למשל בורר סוג המבחן, שמקבל את צבע הסוג) הדפדפן חוזר לחלונית
-   לבנה והאפשרויות יורשות את צבע ההדגשה של השדה — תכלת על לבן. נועלים לאפשרויות
-   רקע וטקסט משלנו כדי שהרשימה תישאר קריאה בכל שדה. */
+/* גיבוי ל-select מקורי (טפסים ישנים / multiple) */
+select.input, select.select {
+  color-scheme: dark;
+  appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237a8199' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat;
+  background-position: left 12px center;
+  padding-left: 36px;
+}
 select option, select optgroup {
   background: var(--bg-card);
   color: var(--text-1);
   font-weight: 500;
+}
+
+/* === AppSelect — תפריט נפתח בסגנון המערכת === */
+.app-select-wrap {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+.app-select-native {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+.app-select-trigger {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  text-align: right;
+  cursor: pointer;
+  min-height: 38px;
+  width: 100%;
+}
+.app-select-trigger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.app-select-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+}
+.app-select-value.is-placeholder {
+  color: var(--text-3);
+  font-weight: 500;
+}
+.app-select-chevron {
+  flex-shrink: 0;
+  color: var(--text-3);
+  transition: transform var(--t-fast);
+}
+.app-select-chevron.is-open {
+  transform: rotate(180deg);
+  color: var(--blue);
+}
+.app-select-menu {
+  position: fixed;
+  z-index: 8000;
+  background: var(--bg-card);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(56, 189, 248, 0.06);
+  padding: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  animation: app-select-in 140ms var(--t-fast);
+}
+@keyframes app-select-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.app-select-group {
+  padding: 8px 10px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+  text-transform: uppercase;
+}
+.app-select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  text-align: right;
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.app-select-option:hover:not(:disabled),
+.app-select-option:focus-visible:not(:disabled) {
+  background: rgba(56, 189, 248, 0.12);
+  color: #fff;
+  outline: none;
+}
+.app-select-option.is-active {
+  background: linear-gradient(120deg, rgba(56, 189, 248, 0.18), rgba(167, 139, 250, 0.14));
+  color: var(--blue);
+  font-weight: 700;
+}
+.app-select-option:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.app-select-check {
+  flex-shrink: 0;
+  opacity: 0;
+  color: var(--blue);
+}
+.app-select-option.is-active .app-select-check {
+  opacity: 1;
+}
+.app-select-empty {
+  padding: 12px 10px;
+  font-size: 12px;
+  color: var(--text-3);
+  text-align: center;
+}
+.app-select-wrap .input-sm,
+.app-select-trigger.input-sm {
+  min-height: 34px;
+  padding: 6px 12px;
+  font-size: 13px;
 }
 .input-sm { padding: 8px 12px; font-size: 13px; }
 .input-icon-wrap { position: relative; }
@@ -2493,6 +2626,9 @@ select option, select optgroup {
 }
 
 .activity-type-options button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: 999px;

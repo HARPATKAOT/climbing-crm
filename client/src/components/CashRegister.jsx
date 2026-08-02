@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, Fragment } from 'reac
 import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X, Printer, ShoppingCart, Package, Calculator, History, BarChart3 } from 'lucide-react';
 import PosSale from './PosSale.jsx';
 import Pricelist from './Pricelist.jsx';
+import AppSelect from './AppSelect.jsx';
 
 function docAmount(doc) {
   const n = Number(doc?.totalwithvat ?? doc?.total ?? doc?.sum ?? 0);
@@ -583,20 +584,20 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
               <div className="form-grid-2">
                 <div className="form-group">
                   <label className="form-label">משמרת</label>
-                  <select className="input select" value={shiftType} onChange={(e) => setShiftType(e.target.value)}>
+                  <AppSelect className="input select" value={shiftType} onChange={(e) => setShiftType(e.target.value)}>
                     {['בוקר', 'צהריים', 'ערב', 'לילה'].map((s) => (
                       <option key={s} value={s}>{s}</option>
                     ))}
-                  </select>
+                  </AppSelect>
                 </div>
                 <div className="form-group">
                   <label className="form-label">שם העובד</label>
                   {isOwner && employees.length > 0 ? (
-                    <select className="input select" value={employee} onChange={(e) => setEmployee(e.target.value)}>
+                    <AppSelect className="input select" value={employee} onChange={(e) => setEmployee(e.target.value)}>
                       {employees.map((emp) => (
                         <option key={emp.id} value={emp.name}>{emp.name}</option>
                       ))}
-                    </select>
+                    </AppSelect>
                   ) : (
                     <input
                       className="input"
@@ -738,7 +739,7 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
                 </label>
                 <label className="form-group">
                   <span className="form-label">סטטוס</span>
-                  <select
+                  <AppSelect
                     className="input select input-sm"
                     value={historyStatus}
                     onChange={(e) => setHistoryStatus(e.target.value)}
@@ -749,11 +750,11 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
                     <option value="refunded">זוכה</option>
                     <option value="cancelled">בוטל</option>
                     <option value="quoted">הצעה</option>
-                  </select>
+                  </AppSelect>
                 </label>
                 <label className="form-group">
                   <span className="form-label">אופן תשלום</span>
-                  <select
+                  <AppSelect
                     className="input select input-sm"
                     value={historyPaymentMethod}
                     onChange={(e) => setHistoryPaymentMethod(e.target.value)}
@@ -763,7 +764,7 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
                     <option value="online">סליקה בקישור</option>
                     <option value="emv">אשראי במסוף</option>
                     <option value="quote">הצעת מחיר</option>
-                  </select>
+                  </AppSelect>
                 </label>
                 <label className="form-group">
                   <span className="form-label">מתאריך</span>
@@ -785,7 +786,7 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
                 </label>
                 <label className="form-group">
                   <span className="form-label">מיון</span>
-                  <select
+                  <AppSelect
                     className="input select input-sm"
                     value={historySort}
                     onChange={(e) => setHistorySort(e.target.value)}
@@ -795,7 +796,7 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
                     <option value="amount-high">סכום: גבוה לנמוך</option>
                     <option value="amount-low">סכום: נמוך לגבוה</option>
                     <option value="customer">שם לקוח</option>
-                  </select>
+                  </AppSelect>
                 </label>
               </div>
               <div className="pos-history-filters-meta">

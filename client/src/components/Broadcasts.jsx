@@ -9,6 +9,7 @@ import SavedRepliesManager from './SavedRepliesManager.jsx';
 import BotSettingsPanel from './BotSettingsPanel.jsx';
 import BotLearningPanel from './BotLearningPanel.jsx';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
+import AppSelect from './AppSelect.jsx';
 
 // Only downloaded when the campaigns tab is opened.
 const Campaigns = lazy(() => import('./Campaigns.jsx'));
@@ -816,7 +817,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                       setEditingLists(next);
                     }}
                   />
-                  <select
+                  <AppSelect
                     className="input input-sm"
                     style={{ minWidth: 90 }}
                     value={list.color || 'var(--blue)'}
@@ -829,7 +830,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
                     {LIST_COLORS.map((c) => (
                       <option key={c.value} value={c.value}>{c.label}</option>
                     ))}
-                  </select>
+                  </AppSelect>
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm btn-icon"

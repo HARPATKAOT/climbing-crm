@@ -16,6 +16,7 @@ import {
   formatRentalRange,
 } from './equipmentUtils.js';
 import StudentFileButton from './StudentFileButton.jsx';
+import AppSelect from './AppSelect.jsx';
 
 // תאריכי העונה נשמרים כ-'MM-DD' ומוצגים למנהל כ'יום/חודש'.
 const SEASON_FIELDS = [
@@ -372,7 +373,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
           ))}
         </div>
         {!onSettingsTab && (
-          <select
+          <AppSelect
             className="input input-sm"
             value={groupId}
             onChange={(e) => setGroupId(e.target.value)}
@@ -382,7 +383,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
             {groups.map((g) => (
               <option key={g.id} value={g.id}>{g.name}</option>
             ))}
-          </select>
+          </AppSelect>
         )}
       </div>
 

@@ -10,6 +10,12 @@
 
 import React from 'react';
 
+/** צבעים קבועים לצ׳יפים ולסימון — כחול לבן, ורוד לבת. */
+export const GENDER_COLORS = {
+  male: '#38BDF8',
+  female: '#F472B6',
+};
+
 export function MaleIcon({ size = 16 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -30,6 +36,16 @@ export function FemaleIcon({ size = 16 }) {
   );
 }
 
+/** Silhouette of a grown-up — stands in for the word „מבוגר” on tight chips. */
+export function AdultIcon({ size = 16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="7" r="3.5" />
+      <path d="M5.5 20.5v-1.2A5.3 5.3 0 0 1 10.8 14h2.4a5.3 5.3 0 0 1 5.3 5.3v1.2" />
+    </svg>
+  );
+}
+
 /** Normalize stored gender values from forms / employees / legacy rows. */
 export function genderKind(gender) {
   const g = String(gender || '').trim().toLowerCase();
@@ -44,13 +60,27 @@ export function GenderMark({ gender, size = 12, style }) {
   if (!kind) return null;
   const Icon = kind === 'male' ? MaleIcon : FemaleIcon;
   const label = kind === 'male' ? 'בן' : 'בת';
+  const color = GENDER_COLORS[kind];
   return (
     <span
       title={label}
       aria-label={label}
-      style={{ display: 'inline-flex', lineHeight: 0, flexShrink: 0, ...style }}
+      style={{ display: 'inline-flex', lineHeight: 0, flexShrink: 0, color, ...style }}
     >
       <Icon size={size} />
+    </span>
+  );
+}
+
+/** Compact stand-in for the „מבוגר” label — children carry no mark. */
+export function AdultMark({ size = 12, style }) {
+  return (
+    <span
+      title="מבוגר"
+      aria-label="מבוגר"
+      style={{ display: 'inline-flex', lineHeight: 0, flexShrink: 0, color: 'var(--text-3)', ...style }}
+    >
+      <AdultIcon size={size} />
     </span>
   );
 }
@@ -74,7 +104,9 @@ export default function GenderPicker({
     <div style={{ display: 'flex', gap: 8 }}>
       {options.map(([label, optionValue], index) => {
         const active = value === optionValue;
-        const Icon = index === 0 ? MaleIcon : FemaleIcon;
+        const kind = index === 0 ? 'male' : 'female';
+        const Icon = kind === 'male' ? MaleIcon : FemaleIcon;
+        const tint = GENDER_COLORS[kind];
         return (
           <button
             key={optionValue}
@@ -87,13 +119,15 @@ export default function GenderPicker({
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
               padding: '11px 0', borderRadius: 11, font: 'inherit',
               fontWeight: 700, fontSize: 14, cursor: disabled ? 'default' : 'pointer',
-              border: active ? '1px solid #f97316' : '1px solid rgba(255,255,255,.15)',
-              background: active ? 'rgba(249,115,22,.18)' : '#0b1220',
-              color: active ? '#fdba74' : '#e2e8f0',
+              border: active ? `1px solid ${tint}` : '1px solid rgba(255,255,255,.15)',
+              background: active ? `${tint}22` : '#0b1220',
+              color: active ? tint : '#e2e8f0',
               opacity: disabled ? 0.6 : 1,
             }}
           >
-            <Icon size={16} />
+            <span style={{ display: 'inline-flex', color: tint }}>
+              <Icon size={16} />
+            </span>
             {label}
           </button>
         );

@@ -7,6 +7,7 @@ import {
 import { TEMPLATE_VAR_FIELDS, TEMPLATE_VAR_FIELD_MAP, normalizeTemplateVariables } from './templateVariables.js';
 import { SUGGESTED_TEMPLATE_TAGS, templateTagStyle } from './templateTags.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
+import AppSelect from './AppSelect.jsx';
 
 const EVENT_SYSTEM_META_NAMES = new Set([
   'event_host_payment_v4',
@@ -952,14 +953,14 @@ export default function TemplatesManager() {
                         onChange={(e) => setEditForm({ ...editForm, meta_name: e.target.value })}
                       />
                       <div style={{ display: 'flex', gap: 8 }}>
-                        <select className="input input-sm" value={editForm.language} onChange={(e) => setEditForm({ ...editForm, language: e.target.value })}>
+                        <AppSelect className="input input-sm" value={editForm.language} onChange={(e) => setEditForm({ ...editForm, language: e.target.value })}>
                           <option value="he">עברית (he)</option>
                           <option value="he_IL">עברית (he_IL)</option>
                           <option value="en_US">אנגלית</option>
-                        </select>
-                        <select className="input input-sm" value={editForm.category} onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}>
+                        </AppSelect>
+                        <AppSelect className="input input-sm" value={editForm.category} onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}>
                           {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-                        </select>
+                        </AppSelect>
                       </div>
                       <input
                         className="input input-sm"
@@ -991,7 +992,7 @@ export default function TemplatesManager() {
                       {editVarMeta.map((v, idx) => (
                         <div key={idx} style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: 8, alignItems: 'center' }}>
                           <code style={{ fontSize: 12, color: 'var(--blue)' }}>{`{{${idx + 1}}}`}</code>
-                          <select
+                          <AppSelect
                             className="input input-sm"
                             value={v.field || 'custom'}
                             onChange={(e) => {
@@ -1006,7 +1007,7 @@ export default function TemplatesManager() {
                             {TEMPLATE_VAR_FIELDS.map((f) => (
                               <option key={f.id} value={f.id}>{f.label}</option>
                             ))}
-                          </select>
+                          </AppSelect>
                           <input
                             className="input input-sm"
                             placeholder="דוגמה"
@@ -1080,14 +1081,14 @@ export default function TemplatesManager() {
             <textarea className="input input-sm" rows={2} placeholder="מתי משתמשים בתבנית? (הערה פנימית לצוות — לא נשלח ללקוח)" value={draft.usage} onChange={(e) => setDraft({ ...draft, usage: e.target.value })} />
             <input className="input input-sm" placeholder="שם ב-Meta (אנגלית/קו תחתון)" value={draft.meta_name} onChange={(e) => setDraft({ ...draft, meta_name: e.target.value })} />
             <div style={{ display: 'flex', gap: 8 }}>
-              <select className="input input-sm" value={draft.language} onChange={(e) => setDraft({ ...draft, language: e.target.value })}>
+              <AppSelect className="input input-sm" value={draft.language} onChange={(e) => setDraft({ ...draft, language: e.target.value })}>
                 <option value="he">עברית (he)</option>
                 <option value="he_IL">עברית (he_IL)</option>
                 <option value="en_US">אנגלית</option>
-              </select>
-              <select className="input input-sm" value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
+              </AppSelect>
+              <AppSelect className="input input-sm" value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
                 {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-              </select>
+              </AppSelect>
             </div>
             <input className="input input-sm" placeholder="כותרת (אופציונלי)" value={draft.header} onChange={(e) => setDraft({ ...draft, header: e.target.value })} />
 
@@ -1129,7 +1130,7 @@ export default function TemplatesManager() {
                   {varMeta.map((v, idx) => (
                     <div key={idx} style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: 8, alignItems: 'center' }}>
                       <code style={{ fontSize: 12, color: 'var(--blue)' }}>{`{{${idx + 1}}}`}</code>
-                      <select
+                      <AppSelect
                         className="input input-sm"
                         value={v.field || 'custom'}
                         onChange={(e) => updateVarField(idx, e.target.value)}
@@ -1137,7 +1138,7 @@ export default function TemplatesManager() {
                         {TEMPLATE_VAR_FIELDS.map((f) => (
                           <option key={f.id} value={f.id}>{f.label}</option>
                         ))}
-                      </select>
+                      </AppSelect>
                       <input
                         className="input input-sm"
                         placeholder="דוגמה לאישור מטא"
@@ -1182,7 +1183,7 @@ export default function TemplatesManager() {
               {draft.buttons.map((btn, index) => (
                 <div key={index} className="card card-p" style={{ padding: 10, display: 'grid', gap: 8, background: 'var(--bg-input)' }}>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <select
+                    <AppSelect
                       className="input input-sm"
                       style={{ width: 140 }}
                       value={btn.type}
@@ -1199,7 +1200,7 @@ export default function TemplatesManager() {
                       ).map((t) => (
                         <option key={t.value} value={t.value}>{t.label}</option>
                       ))}
-                    </select>
+                    </AppSelect>
                     <input
                       className="input input-sm"
                       style={{ flex: 1 }}
@@ -1254,20 +1255,20 @@ export default function TemplatesManager() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <select className="input input-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+        <AppSelect className="input input-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
           <option value="ALL">כל הסטטוסים</option>
           {Object.entries(STATUS_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-        </select>
-        <select className="input input-sm" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+        </AppSelect>
+        <AppSelect className="input input-sm" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
           <option value="ALL">כל הקטגוריות</option>
           {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-        </select>
-        <select className="input input-sm" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+        </AppSelect>
+        <AppSelect className="input input-sm" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
           <option value="custom">מיון: סדר ידני</option>
           <option value="name">מיון: שם</option>
           <option value="status">מיון: סטטוס</option>
           <option value="category">מיון: קטגוריה</option>
-        </select>
+        </AppSelect>
         {filtersActive && (
           <button type="button" className="btn btn-xs btn-ghost" onClick={resetFilters}>
             <FilterX size={12} /> נקה סינון

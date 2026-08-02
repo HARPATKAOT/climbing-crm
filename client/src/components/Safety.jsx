@@ -3,6 +3,7 @@ import {
   CheckCircle2, AlertTriangle, Plus, X, ShieldAlert, Check, Pencil, Trash2, History, ListChecks
 } from 'lucide-react';
 import { CheckIcon } from './safetyCheckIcons.jsx';
+import AppSelect from './AppSelect.jsx';
 
 const HEB_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 const FREQUENCIES = ['יומי', 'שבועי', 'דו שבועי', 'חודשי', 'דו חודשי', 'חצי שנתי', 'שנתי'];
@@ -117,12 +118,12 @@ function SignCheckModal({ check, employees, onSave, onClose }) {
           <form id="sign-check-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div className="form-group">
               <label className="form-label">שם הבודק *</label>
-              <select className="input select" value={testerId} onChange={(e) => setTesterId(e.target.value)} required>
+              <AppSelect className="input select" value={testerId} onChange={(e) => setTesterId(e.target.value)} required>
                 <option value="">בחר עובד...</option>
                 {employees.map((emp) => (
                   <option key={emp.id} value={emp.id}>{emp.name}</option>
                 ))}
-              </select>
+              </AppSelect>
             </div>
 
             <div className="form-group">
@@ -214,7 +215,7 @@ function CheckTypeModal({ initial, onSave, onClose }) {
             <div className="form-grid-2">
               <div className="form-group">
                 <label className="form-label">תדירות *</label>
-                <select
+                <AppSelect
                   className="input select"
                   value={frequency}
                   onChange={(e) => {
@@ -224,7 +225,7 @@ function CheckTypeModal({ initial, onSave, onClose }) {
                   }}
                 >
                   {FREQUENCIES.map((f) => <option key={f} value={f}>{f}</option>)}
-                </select>
+                </AppSelect>
               </div>
               <div className="form-group">
                 <label className="form-label">ימים בין בדיקות *</label>
@@ -294,13 +295,13 @@ function AddIncidentModal({ employees, onSave, onClose }) {
               </div>
               <div className="form-group">
                 <label className="form-label">ציוד בשימוש *</label>
-                <select className="input select" value={gearUsed} onChange={(e) => setGearUsed(e.target.value)}>
+                <AppSelect className="input select" value={gearUsed} onChange={(e) => setGearUsed(e.target.value)}>
                   <option value="autobelay">אבטחה אוטומטית</option>
                   <option value="toprope">טופ רופ</option>
                   <option value="lead">חבל הובלה</option>
                   <option value="boulder">בולדרינג</option>
                   <option value="other">אחר</option>
-                </select>
+                </AppSelect>
               </div>
             </div>
             <div className="form-group">
@@ -318,9 +319,9 @@ function AddIncidentModal({ employees, onSave, onClose }) {
               </div>
               <div className="form-group">
                 <label className="form-label">מדריך מדווח *</label>
-                <select className="input select" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}>
+                <AppSelect className="input select" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}>
                   {employees.map((emp) => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
-                </select>
+                </AppSelect>
               </div>
             </div>
           </form>
@@ -928,7 +929,7 @@ export default function Safety() {
       {activeTab === 'history' && (
         <div className="card">
           <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
-            <select
+            <AppSelect
               className="input select"
               style={{ maxWidth: 280 }}
               value={historyFilter}
@@ -936,7 +937,7 @@ export default function Safety() {
             >
               <option value="">כל הבדיקות</option>
               {types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
+            </AppSelect>
           </div>
           <div className="table-wrap">
             <table className="crm-table">

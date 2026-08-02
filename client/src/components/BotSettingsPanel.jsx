@@ -1,3 +1,4 @@
+import AppSelect from './AppSelect.jsx';
 const DAY_OPTIONS = [
   { value: 0, label: 'א׳' },
   { value: 1, label: 'ב׳' },
@@ -190,7 +191,7 @@ export default function BotSettingsPanel({
       <Section title="קהל יעד ואיסוף ליד">
         <div className="form-group">
           <label className="form-label" style={{ fontSize: 11 }}>למי הבוט עונה</label>
-          <select
+          <AppSelect
             className="input input-sm"
             value={settings.aiAudienceMode || 'all'}
             onChange={(e) => patch('aiAudienceMode', e.target.value)}
@@ -198,7 +199,7 @@ export default function BotSettingsPanel({
             <option value="all">כולם</option>
             <option value="leads_only">לידים בלבד</option>
             <option value="customers_only">לקוחות פעילים בלבד</option>
-          </select>
+          </AppSelect>
         </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
           <input

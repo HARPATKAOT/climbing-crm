@@ -75,7 +75,7 @@ const report = {
   duplicateChildrenCollapsed: [], notionArchivedRows: 0,
   parentOnlyRows: 0,
   levelTests: { level: 0, lead: 0, leadNoResult: 0, skippedNotTaken: 0, noResult: [], unresolved: [] },
-  securityTests: { imported: 0, withExaminer: 0, unresolved: [] },
+  securityTests: { imported: 0, withExaminer: 0, forcedPassed: 0, unresolved: [] },
   activities: [], registrations: { imported: 0, nameOnly: 0, skippedByStatus: {} },
 };
 
@@ -466,14 +466,17 @@ async function run() {
   }
 
   // ── מבחני אבטוח ──
+  // הנחיית הבעלים: בפועל תמיד נרשם מתאמן במסד רק אחרי שעבר בפועל את המבחן —
+  // תיבת ה"עבר" בנושן לא עודכנה באופן אמין, ולכן כל מבחן מיובא נכנס כ"עבר".
+  // אפשרות לסמן מבחן עתידי כ"נכשל" נשארת פתוחה במסך עצמו.
   for (const t of securityTests) {
     const student = resolveStudent(t.climberPageId, t.title);
     if (!student) {
       report.securityTests.unresolved.push(`${t.title || '(ללא שם)'} (${dateOnly(t.test_date) || dateOnly(t.createdTime)})`);
       continue;
     }
-    const passed = yes(t.passed);
     if (t.examinerName) report.securityTests.withExaminer += 1;
+    if (!yes(t.passed)) report.securityTests.forcedPassed += 1;
     report.securityTests.imported += 1;
     testsToWrite.push({
       id: `lts_${t.pageId}`,
@@ -489,8 +492,8 @@ async function run() {
       examinerId: null,
       date: dateOnly(t.test_date) || dateOnly(t.createdTime),
       notes: 'יובא מ-Notion',
-      passed,
-      status: passed ? 'passed' : 'failed',
+      passed: true,
+      status: 'passed',
       attended_ceremony: false,
       ceremony: false,
     });
@@ -630,7 +633,7 @@ async function run() {
   console.log(`   דולגו "לא עשה"/"בהמתנה": ${lt.skippedNotTaken}, בלי תוצאה: ${lt.noResult.length}, בלי מטפס מזוהה: ${lt.unresolved.length}`);
   if (lt.unresolved.length) console.log(fmtList(lt.unresolved));
   const st = report.securityTests;
-  console.log(`\n── מבחני אבטוח ── יובאו: ${st.imported} (עם בוחן: ${st.withExaminer}), בלי נבחן מזוהה: ${st.unresolved.length}`);
+  console.log(`\n── מבחני אבטוח ── יובאו: ${st.imported} (עם בוחן: ${st.withExaminer}), נכפו כ"עבר" (Notion סימן אחרת): ${st.forcedPassed}, בלי נבחן מזוהה: ${st.unresolved.length}`);
   if (st.unresolved.length) console.log(fmtList(st.unresolved));
   console.log(`   עדכוני רמה למתאמנים: ${levelGradeUpdates}`);
   console.log(`\n── פעילויות ארכיון ── ${report.activities.length}`);
