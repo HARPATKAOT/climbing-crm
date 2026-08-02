@@ -1029,6 +1029,44 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
               </div>
             </div>
 
+            {/* Next to the phone they are sent to — these are a contact
+                preference, not a term of employment. */}
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">התראות בוואטסאפ</label>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>
+                הודעות פנימיות מהמערכת לטלפון שלמעלה. אף אחד לא מסומן — ההתראות
+                נשלחות למספרים שבהגדרות הבוט.
+              </div>
+              {!answers.phone?.trim() && alerts.length > 0 && (
+                <div style={{ fontSize: 12, color: '#FBBF24', marginBottom: 6 }}>
+                  אין טלפון לעובד הזה, ולכן ההתראות שסומנו לא יישלחו.
+                </div>
+              )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {STAFF_ALERT_KINDS.map((alert) => (
+                  <label
+                    key={alert.key}
+                    style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, cursor: 'pointer' }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={alerts.includes(alert.key)}
+                      onChange={(e) => setAlerts((prev) => (
+                        e.target.checked
+                          ? [...new Set([...prev, alert.key])]
+                          : prev.filter((k) => k !== alert.key)
+                      ))}
+                      style={{ marginTop: 2 }}
+                    />
+                    <span>
+                      <span style={{ fontWeight: 700 }}>{alert.label}</span>
+                      <span style={{ color: 'var(--text-3)' }}> — {alert.hint}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
             <div className="form-grid-3">
               <div className="form-group">
                 <label className="form-label">{fieldMeta('birthDate', 'תאריך לידה').label}</label>
@@ -1207,40 +1245,6 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
               >
                 <Plus size={15} /> הוסף
               </button>
-            </div>
-
-            <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>התראות בוואטסאפ</div>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: -8 }}>
-              הודעות פנימיות מהמערכת למספר של העובד. אף אחד לא מסומן — ההתראות
-              נשלחות למספרים שבהגדרות הבוט.
-            </div>
-            {!answers.phone?.trim() && alerts.length > 0 && (
-              <div style={{ fontSize: 12, color: '#FBBF24' }}>
-                אין טלפון לעובד הזה, ולכן ההתראות שסומנו לא יישלחו.
-              </div>
-            )}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {STAFF_ALERT_KINDS.map((alert) => (
-                <label
-                  key={alert.key}
-                  style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, cursor: 'pointer' }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={alerts.includes(alert.key)}
-                    onChange={(e) => setAlerts((prev) => (
-                      e.target.checked
-                        ? [...new Set([...prev, alert.key])]
-                        : prev.filter((k) => k !== alert.key)
-                    ))}
-                    style={{ marginTop: 2 }}
-                  />
-                  <span>
-                    <span style={{ fontWeight: 700 }}>{alert.label}</span>
-                    <span style={{ color: 'var(--text-3)' }}> — {alert.hint}</span>
-                  </span>
-                </label>
-              ))}
             </div>
 
             <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>הסכם שכר</div>
@@ -2280,7 +2284,7 @@ export default function Employees() {
                   className="btn btn-ghost btn-sm"
                   onClick={() => {
                     setEditingEmployee(selectedEmployee);
-                    setEmployeeFormTab('roles');
+                    setEmployeeFormTab('details');
                     setShowEmployeeForm(true);
                   }}
                 >
