@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, Archive, ArchiveRestore } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, Archive, ArchiveRestore, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
 import {
@@ -8,7 +8,7 @@ import {
   TEST_TYPE_COLORS,
   testKindMeta,
 } from '../utils/levelTestKinds.js';
-import { LEVELS, levelColor, routeStyleMeta, ROUTE_STYLE } from '../utils/levelGrades.js';
+import { LEVELS, levelColor, routeStyleMeta, ROUTE_STYLE, highestPassedLevel } from '../utils/levelGrades.js';
 import GenderPicker, { GenderMark, genderKind } from './GenderPicker.jsx';
 import {
   blobToBase64,
@@ -24,7 +24,7 @@ import {
   templateShortLabel,
 } from '../utils/declarationKinds.js';
 import { studentDeclarationStatus } from '../utils/declarationStatus.js';
-import { safetyTestStatus } from '../utils/safetyValidity.js';
+import { safetyTestStatus, SAFETY_TONE } from '../utils/safetyValidity.js';
 import {
   buildLeadEntries,
   isArchivedParent,
@@ -70,6 +70,7 @@ import {
   equipmentToneTransition,
   formatRentalRange,
 } from './equipmentUtils.js';
+import AppSelect from './AppSelect.jsx';
 
 const COUPON_STATE_BADGE = {
   active: { label: 'בתוקף', cls: 'badge badge-green' },
@@ -2686,7 +2687,69 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 <div>
                   {detailRow('גיל', ageWithGenderLabel(student.birthDate, student.gender))}
                   {detailRow('טלפון', student.phone || '—')}
-                  {detailRow('רמה מקסימלית', student.levelGrade || '—')}
+                  {(() => {
+                    const topLevel = highestPassedLevel(levelTestsHistory) || student.levelGrade || null;
+                    const gradeTint = topLevel ? levelColor(topLevel) : null;
+                    return detailRow(
+                      'מבחן רמה',
+                      topLevel ? (
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 5,
+                          color: gradeTint || 'var(--text-1)',
+                          fontWeight: 900,
+                        }}>
+                          <Award size={13} strokeWidth={2.4} />
+                          {topLevel}
+                        </span>
+                      ) : '—',
+                      topLevel ? { color: gradeTint || undefined } : {}
+                    );
+                  })()}
+                  {(() => {
+                    const safety = punchSafety || safetyTestStatus(levelTestsHistory);
+                    const tone = SAFETY_TONE[safety.state] || SAFETY_TONE.missing;
+                    let expiryText = '';
+                    if (safety.state === 'valid' && safety.expires_at) {
+                      const day = safety.expires_at instanceof Date
+                        ? safety.expires_at
+                        : new Date(`${String(safety.expires_at).slice(0, 10)}T12:00:00`);
+                      if (!Number.isNaN(day.getTime())) {
+                        expiryText = ` עד ${day.toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' })}`;
+                      }
+                    }
+                    const label = safety.state === 'valid'
+                      ? `בתוקף${expiryText}`
+                      : tone.label;
+                    const SafetyIcon = tone.alert ? ShieldAlert : ShieldCheck;
+                    return detailRow(
+                      'מבחן בטיחות',
+                      <button
+                        type="button"
+                        onClick={() => toggleFolder('tests')}
+                        title="פתיחת תיקיית מבחנים"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 5,
+                          height: 24,
+                          padding: '0 8px',
+                          borderRadius: 999,
+                          background: tone.bg,
+                          border: `1px solid ${tone.color}${tone.alert ? 'AA' : '55'}`,
+                          color: tone.color,
+                          fontSize: 11,
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                          fontFamily: 'inherit',
+                        }}
+                      >
+                        <SafetyIcon size={13} strokeWidth={2.5} />
+                        {label}
+                      </button>
+                    );
+                  })()}
                   {detailRow(
                     'העדרויות רצופות',
                     attendanceLoading ? '…' : streak,
@@ -3568,7 +3631,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 {showIssueCoupon ? (
                   <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
                     <CouponField label="סוג ההטבה">
-                      <select
+                      <AppSelect
                         className="input input-sm"
                         value={couponDraft.type}
                         onChange={(e) => setCouponDraft((d) => ({ ...d, type: e.target.value }))}
@@ -3577,7 +3640,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         <option value="amount">סכום הנחה בשקלים</option>
                         <option value="free_item">פריט חינם</option>
                         <option value="bogo">אחד פלוס אחד</option>
-                      </select>
+                      </AppSelect>
                     </CouponField>
 
                     {(couponDraft.type === 'percent' || couponDraft.type === 'amount') && (
@@ -3599,7 +3662,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                           : 'ההנחה תינתן על הפריט היקר ביותר בעגלה'
                       }
                     >
-                      <select
+                      <AppSelect
                         className="input input-sm"
                         value={couponDraft.pricelistId}
                         onChange={(e) => setCouponDraft((d) => ({ ...d, pricelistId: e.target.value }))}
@@ -3612,7 +3675,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                               {item.name} · ₪{item.price}
                             </option>
                           ))}
-                      </select>
+                      </AppSelect>
                     </CouponField>
 
                     {couponDraft.type !== 'amount' && (
@@ -4015,7 +4078,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                       {testType === 'level' && (
                         <>
-                          <select
+                          <AppSelect
                             className="input input-sm"
                             style={{
                               flex: 1, minWidth: 80, fontWeight: 800,
@@ -4027,8 +4090,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                             {LEVELS.map(lvl => (
                               <option key={lvl} value={lvl}>רמה {lvl}</option>
                             ))}
-                          </select>
-                          <select
+                          </AppSelect>
+                          <AppSelect
                             className="input input-sm"
                             style={{
                               flex: 1, minWidth: 110, fontWeight: 700,
@@ -4039,10 +4102,10 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                           >
                             <option value="top-rope">{ROUTE_STYLE['top-rope'].label}</option>
                             <option value="lead">{ROUTE_STYLE.lead.label}</option>
-                          </select>
+                          </AppSelect>
                         </>
                       )}
-                      <select
+                      <AppSelect
                         className="input input-sm"
                         style={{ flex: 1.5, minWidth: 120 }}
                         required
@@ -4053,11 +4116,11 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         {employees.map(emp => (
                           <option key={emp.id} value={emp.id}>{emp.name}</option>
                         ))}
-                      </select>
-                      <select className="input input-sm" style={{ width: 72 }} value={testPassed ? 'yes' : 'no'} onChange={e => setTestPassed(e.target.value === 'yes')}>
+                      </AppSelect>
+                      <AppSelect className="input input-sm" style={{ width: 72 }} value={testPassed ? 'yes' : 'no'} onChange={e => setTestPassed(e.target.value === 'yes')}>
                         <option value="yes">עבר</option>
                         <option value="no">נכשל</option>
-                      </select>
+                      </AppSelect>
                       <input
                         className="input input-sm"
                         type="date"
@@ -4910,9 +4973,9 @@ function AddLeadModal({ students, parents, onAdd, onClose }) {
         </div>
         <div className="form-group">
           <label className="form-label">מקור הליד</label>
-          <select className="input" value={source} onChange={e => setSource(e.target.value)}>
+          <AppSelect className="input" value={source} onChange={e => setSource(e.target.value)}>
             {Object.entries(LEAD_SOURCES).map(([k, v]) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
-          </select>
+          </AppSelect>
         </div>
         
         {!isAdult && (
@@ -5076,9 +5139,14 @@ export default function Leads({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // The archive tab is the only place archived customers surface.
+  // The archive tab is the only place archived customers surface — except in
+  // the waiting queue. An archived customer who writes still gets an answer
+  // from the bot, so leaving them out of the queue hides a live conversation
+  // from the team: the queue is about an unanswered message, not about status.
   const showArchived = filterStatus === 'archived';
-  const leadEntries = buildLeadEntries(students, parents, { includeArchived: showArchived });
+  const leadEntries = buildLeadEntries(students, parents, {
+    includeArchived: showArchived || filterStatus === 'communication',
+  });
 
   const filtered = leadEntries.filter(({ student: s, parent: p }) => {
     const parent = p || parents.find((x) => x.id === s.parentId);
@@ -5109,8 +5177,10 @@ export default function Leads({
   const familyCountByStatus = (() => {
     const map = {
       all: buildFamilyRows(leadEntries.map((e) => e.student), parents, students).length,
+      // Counted off its own archive-inclusive list, so the badge shows the same
+      // number whichever tab happens to be open.
       communication: buildFamilyRows(
-        leadEntries
+        buildLeadEntries(students, parents, { includeArchived: true })
           .filter(({ parent, student }) => isAwaitingHandling(parent, [student]))
           .map(({ student }) => student),
         parents,
@@ -5382,16 +5452,6 @@ export default function Leads({
           <div className="section-sub">{leadEntries.length} רשומות סה"כ</div>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <div className="input-icon-wrap">
-            <Search className="input-icon" size={16} />
-            <input
-              className="input"
-              placeholder="חיפוש לפי שם, הורה, טלפון..."
-              style={{ width: 240, paddingRight: 36 }}
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
-          </div>
           <div className="tab-bar tab-bar-inline">
             <button className={`tab-pill tab-pill-icon ${viewMode === 'table' ? 'active' : ''}`} onClick={() => setViewMode('table')} title="תצוגת טבלה">
               <List size={16} />
@@ -5556,6 +5616,18 @@ export default function Leads({
       {/* Table — one row per family */}
       {viewMode === 'table' && (
       <div className="card">
+        <div style={{ display: 'flex', gap: 10, padding: '16px 20px', borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)' }}>
+          <div className="input-icon-wrap" style={{ flex: 1, maxWidth: 300 }}>
+            <Search className="input-icon" size={16} />
+            <input
+              className="input"
+              placeholder="חיפוש לפי שם, הורה, טלפון..."
+              style={{ width: '100%', paddingRight: 36 }}
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+        </div>
         <div className="table-wrap">
           <table className="crm-table">
             <thead>
