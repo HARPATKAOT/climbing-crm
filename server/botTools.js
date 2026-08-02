@@ -51,8 +51,8 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
     description:
       'קבוצות החוגים במערכת ומצב המקומות בהן. יש לציין כיתה (א׳–ו׳) או שכבה '
       + '(בוגרים / תיכון / חטיבה). בלי אחד מהם מוחזרות כל הקבוצות. '
-      + 'קבוצות מתקדמים (נבחרת) אינן מוחזרות אלא אם מבקשים אותן ב-level, '
-      + 'כי הן לא מתאימות למי שרק מתחיל.',
+      + 'קבוצות נבחרת אינן מוחזרות אלא אם מבקשים אותן ב-level, כי הן פעמיים '
+      + 'בשבוע ומיועדות למי שכבר מתאמן. לכל קבוצה מוחזרת גם רמה.',
     parameters: {
       type: 'object',
       properties: {
@@ -61,7 +61,7 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת, אם הלקוח ציין יום' },
         level: {
           type: 'string',
-          description: 'רק אם הלקוח שאל במפורש על נבחרת או על קבוצת מתקדמים: "מתקדמים"',
+          description: 'רק אם הלקוח שאל במפורש על רמה: "מתחילים" / "מתקדמים" / "נבחרת"',
         },
       },
     },
@@ -204,12 +204,13 @@ function openGroupsPayload(groups) {
 
 /**
  * A squad is not an answer to "what classes do you have". It trains twice a
- * week, it is for climbers who already climb, and offering it to a parent
- * asking for the first time sends them to a group they cannot join. So an
- * advanced group is left out unless the caller asked for one by name.
+ * week, it is for climbers who already train, and offering it to a parent
+ * asking for the first time sends them to a group they cannot join. So it is
+ * left out unless the caller asked for it by name. מתקדמים stays in the answer
+ * — it carries its level, which is enough for the reply to say who it suits.
  */
-function isAdvancedGroup(group) {
-  return String(group?.skillLevel || '').trim() === 'מתקדמים';
+function isSquadGroup(group) {
+  return String(group?.skillLevel || '').trim() === 'נבחרת';
 }
 
 function selectGroups({ grade = '', band = '', day = null, level = '' } = {}) {
@@ -217,7 +218,7 @@ function selectGroups({ grade = '', band = '', day = null, level = '' } = {}) {
   const wantedLevel = String(level || '').trim();
   groups = wantedLevel
     ? groups.filter((g) => String(g.skillLevel || '') === wantedLevel)
-    : groups.filter((g) => !isAdvancedGroup(g));
+    : groups.filter((g) => !isSquadGroup(g));
   const letter = String(grade || '').trim().slice(0, 1);
   if (letter) {
     groups = groups.filter((g) => groupMatchesGradeLetter(g, letter));
