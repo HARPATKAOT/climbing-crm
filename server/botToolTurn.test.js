@@ -7,7 +7,7 @@ import {
   unknownUrlsInReply,
   CUSTOMER_TOOL_RULES,
 } from './botToolTurn.js';
-import { CUSTOMER_TOOL_DECLARATIONS } from './botTools.js';
+import { CUSTOMER_TOOL_DECLARATIONS, isRegisteredTrainee } from './botTools.js';
 
 /** A model stand-in: replies with whatever script the test hands it. */
 function scriptedModel(steps) {
@@ -127,6 +127,22 @@ test('history rows become model/user turns', () => {
   assert.deepEqual(contents.map((c) => c.role), ['user', 'model']);
 });
 
+test('placing, moving and unplacing is locked only once a trainee is registered', () => {
+  // The line the owner drew: registration at the מתנ״ס is the team's, and
+  // every step before it is the bot's to arrange. An earlier version also
+  // locked a booked intro lesson, which sent a perfectly ordinary signup to
+  // the team. Both startSignup and cancelSignup gate on this one predicate.
+  for (const status of ['lead_new', 'health_signed', 'pending_signup',
+    'intro_scheduled', 'intro_paid', 'past_registered', 'waitlist']) {
+    assert.equal(isRegisteredTrainee({ status }), false, status);
+  }
+  for (const status of ['registered', 'active']) {
+    assert.equal(isRegisteredTrainee({ status }), true, status);
+  }
+  assert.equal(isRegisteredTrainee({}), false);
+  assert.equal(isRegisteredTrainee(null), false);
+});
+
 test('a link the model wrote itself never reaches the customer', () => {
   // The real failure: a signup link for Wednesday's group, rewritten for
   // Sunday's, pointing at a page that does not exist.
@@ -164,11 +180,10 @@ test('the tools offered to the model are facts, links and placements — never s
     const decl = CUSTOMER_TOOL_DECLARATIONS.find((d) => d.name === name);
     assert.deepEqual(decl.parameters.required, ['childName']);
   }
-  // A tool may hand over a link and undo a soft placement the bot itself made,
-  // but never message anyone, delete data or take money — those stay with the
-  // team. cancelSignup is the one allowed reversal: it only touches a trainee
-  // still in pending_signup/waitlist, and it restores the pre-placement state
-  // rather than removing a record.
+  // A tool may hand over a link and undo a placement, but never message
+  // anyone, delete data or take money — those stay with the team. cancelSignup
+  // is the one allowed reversal: it never touches a registered trainee, and it
+  // restores the pre-placement state rather than removing a record.
   assert.equal(names.some((n) => /send|delete|remove|charge|refund/i.test(n)), false);
   assert.deepEqual(names.filter((n) => /cancel/i.test(n)), ['cancelSignup']);
   assert.match(CUSTOMER_TOOL_RULES, /HANDOFF/);

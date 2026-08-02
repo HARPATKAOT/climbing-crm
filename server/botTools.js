@@ -9,7 +9,7 @@
 import { db } from './db.js';
 import { enrichGroupsWithCapacity } from './groupCapacity.js';
 import { groupMatchesGradeLetter } from './groupBands.js';
-import { studentsForParent, isIdentifiedParent, CUSTOMER_STATUSES } from './whatsappBot.js';
+import { studentsForParent, isIdentifiedParent } from './whatsappBot.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { healthExpiryDate, declarationSignedAt } from './healthValidity.js';
 import { appPublicBase } from './publicLinks.js';
@@ -146,9 +146,9 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
   {
     name: 'cancelSignup',
     description:
-      'מבטל שיבוץ רך שהבוט עשה — מוציא מתאמן מקבוצה שהוא «ממתין להרשמה» בה או '
-      + 'מרשימת המתנה, ומחזיר אותו למצב שלפני השיבוץ. רק למי שעדיין לא רשום '
-      + 'בפועל; ביטול של מתאמן רשום נעשה מול הצוות. חובה שם ילד.',
+      'מוציא מתאמן מהקבוצה שהוא משובץ אליה ומחזיר אותו למצב שלפני השיבוץ. '
+      + 'מותר רק למי שעדיין אינו רשום לחוג בפועל — ביטול הרשמה של מתאמן רשום '
+      + 'נעשה מול הצוות. חובה שם ילד.',
     parameters: {
       type: 'object',
       properties: {
@@ -243,8 +243,21 @@ function isSquadGroup(group) {
   return String(group?.skillLevel || '').trim() === 'נבחרת';
 }
 
-/** Placements the bot made itself, and may therefore take back. */
-const UNDOABLE_PLACEMENT_STATUSES = new Set(['pending_signup', 'waitlist']);
+/**
+ * The one status the bot must not touch: a live registration at the מתנ״ס.
+ * Everything earlier in the journey — a new lead, a signed declaration, a soft
+ * placement, an intro lesson booked or paid, someone who was registered last
+ * season — is still the bot's to place, move between groups, or take back.
+ *
+ * This used to lock every "customer" status, which also caught a trainee whose
+ * intro lesson was booked: signing them up for a group is exactly the next step
+ * in that journey, and the bot was sending it to the team instead.
+ */
+const REGISTERED_STATUSES = new Set(['registered', 'active']);
+
+export function isRegisteredTrainee(student) {
+  return REGISTERED_STATUSES.has(String(student?.status || ''));
+}
 
 /**
  * `includeSquads` separates browsing from picking. A customer asking "what is
@@ -334,13 +347,13 @@ function requireDeclaredChild(parent, childName) {
     };
   }
   const student = matches[0];
-  // A placement overwrites the child's status and group. On a lead that is the
-  // point; on a child who is already a registered customer it would silently
-  // corrupt a live registration — moving groups is the team's call. Checked
-  // before the declaration so a registered child always gets this answer.
-  if (CUSTOMER_STATUSES.has(String(student.status || ''))) {
+  // A placement overwrites the child's status and group. Before registration
+  // that is the point; on a registered trainee it would silently corrupt a live
+  // registration — moving groups is the team's call. Checked before the
+  // declaration so a registered child always gets this answer.
+  if (isRegisteredTrainee(student)) {
     return {
-      error: `${student.name || 'המתאמן'} כבר רשום כלקוח פעיל — הוספה או העברה בין קבוצות נעשית מול הצוות`,
+      error: `${student.name || 'המתאמן'} כבר רשום לחוג — הוספה או העברה בין קבוצות נעשית מול הצוות`,
     };
   }
   if (!findLatestValidDeclaration(db, { studentId: student.id })) {
@@ -617,7 +630,7 @@ export function buildCustomerTools({
       const named = String(childName || '').trim();
       const matches = named
         ? kids.filter((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
-        : kids.filter((s) => UNDOABLE_PLACEMENT_STATUSES.has(String(s.status || '')));
+        : kids.filter((s) => s.groupId && !isRegisteredTrainee(s));
       if (!matches.length) {
         return { error: `אין בכרטיס מתאמן בשם ${named} — יש לשאול את הלקוח` };
       }
@@ -629,11 +642,16 @@ export function buildCustomerTools({
       }
 
       const student = matches[0];
-      const status = String(student.status || '');
-      if (!UNDOABLE_PLACEMENT_STATUSES.has(status)) {
+      if (isRegisteredTrainee(student)) {
         return {
-          error: `${student.name || 'המתאמן'} אינו בשיבוץ רך — שינוי או ביטול הרשמה נעשה מול הצוות`,
-          סטטוס_נוכחי: status,
+          error: `${student.name || 'המתאמן'} רשום לחוג — ביטול הרשמה נעשה מול הצוות`,
+          סטטוס_נוכחי: String(student.status || ''),
+        };
+      }
+      if (!student.groupId) {
+        return {
+          error: `${student.name || 'המתאמן'} לא משובץ לשום קבוצה כרגע`,
+          סטטוס_נוכחי: String(student.status || ''),
         };
       }
 
