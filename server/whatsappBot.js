@@ -413,6 +413,17 @@ export function isOptedOut(parent) {
   return !!parent?.bot_opted_out;
 }
 
+/**
+ * Templates only an automation ever sends. A staff member picking a template in
+ * the conversation panel is a real human turn and still counts as one.
+ */
+export const SYSTEM_TEMPLATE_NAMES = new Set([
+  'phone_verification_code',
+  'onboarding_completed_v1',
+  'onboarding_completed_self_v1',
+  'my_agenda_v1',
+]);
+
 /** Outbound that came from a person (CRM / phone), not from the customer bot. */
 export function isHumanOutboundLog(log) {
   if (!log || log.direction !== 'outbound') return false;
@@ -433,6 +444,12 @@ export function isHumanOutboundLog(log) {
   const template = String(log.template_name || log.template_id || '');
   if (template === 'phone_verification_code') return false;
   if (/קוד האימות שלך/.test(String(log.message || ''))) return false;
+  // An automation's own templates are the system talking. A customer filled the
+  // health form, the confirmation template went out under the CRM's name, and
+  // the bot fell silent on "מילאתי" for two hours because that row looked like
+  // a staff member taking the thread. Senders now tag themselves 'automation',
+  // and these names are the backstop for any sender that forgets to.
+  if (SYSTEM_TEMPLATE_NAMES.has(template)) return false;
   // crm / phone / empty source on a non-AI outbound = staff
   return true;
 }

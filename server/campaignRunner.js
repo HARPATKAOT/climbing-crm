@@ -37,6 +37,9 @@ export async function sendCampaignMessage({
     await whatsappService.sendTemplateMessage(phone, templateName, templateVars, {
       parentId: parent?.id || parentId,
       language,
+      // A campaign is the system talking, not a staff member — otherwise the
+      // bot treats the thread as human-owned and stops answering.
+      source: 'automation',
     });
     return { sent: true, via: 'template' };
   }

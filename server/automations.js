@@ -321,6 +321,7 @@ export const automationsService = {
           await whatsappService.sendTemplateMessage(phone, selfTemplate, selfVars, {
             parentId: parent?.id || enriched.parentId,
             language: automation.action_payload?.language,
+            source: 'automation',
           });
           return { sent: true, via: 'template' };
         }
@@ -328,6 +329,9 @@ export const automationsService = {
         await whatsappService.sendTemplateMessage(phone, templateName, vars, {
           parentId: parent?.id || enriched.parentId,
           language: automation.action_payload?.language,
+          // Without this the row is filed as staff, and the bot goes quiet for
+          // two hours because it thinks a person took over the thread.
+          source: 'automation',
         });
         return { sent: true, via: 'template' };
       }
