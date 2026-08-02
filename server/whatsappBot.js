@@ -107,6 +107,10 @@ export function isIdentifiedParent(parent) {
   // Avoid \\b — it does not treat Hebrew letters as word characters.
   if (/^לקוח\s*וואטסאפ/i.test(name)) return false;
   if (/^לקוח$/i.test(name)) return false;
+  // The other channels' placeholder cards — the same "no real name yet" state,
+  // and greeting one of them would say "היי ליד".
+  if (/^ליד\s*מאינסטגרם/i.test(name)) return false;
+  if (/^לקוח\s*מסנג/i.test(name)) return false;
   if (/^(?:client|whatsapp\s*customer)\b/i.test(name)) return false;
   return true;
 }
@@ -605,16 +609,37 @@ export function isStaffPhone(settings, phone) {
 }
 
 /** Recent turns of this conversation in the shape the CRM agent expects. */
+/**
+ * History rows older than this get a visible age tag. The model has no clock:
+ * a customer sent a photo at 08:46, said hello at 11:55, and the reply was
+ * about the photo — three hours stale — because both lines looked equally
+ * current. The tag is what lets the prompt rule "old messages are a previous
+ * conversation" actually bite.
+ */
+const HISTORY_STALE_MS = 3 * 60 * 60 * 1000;
+
+function historyAgeTag(createdAt, now = Date.now()) {
+  const at = new Date(createdAt || 0).getTime();
+  if (!at || now - at < HISTORY_STALE_MS) return '';
+  const hours = Math.round((now - at) / (60 * 60 * 1000));
+  if (hours < 24) return `[לפני ${hours} שעות] `;
+  const days = Math.round(hours / 24);
+  return `[לפני ${days === 1 ? 'יום' : `${days} ימים`}] `;
+}
+
 export function getChatHistoryMessages(phone, limit = 6) {
-  const n = Math.max(0, Math.min(20, Number(limit) || 6));
+  const n = Math.max(0, Math.min(30, Number(limit) || 6));
   const logs = db.get('whatsapp_logs') || [];
+  const now = Date.now();
   return logs
     .filter((l) => (l.channel || 'whatsapp') === 'whatsapp' && phonesMatch(l.phone || l.to || l.from, phone))
     .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0))
     .slice(-n)
     .map((l) => ({
       role: l.direction === 'inbound' ? 'user' : 'assistant',
-      content: String(l.message || '').slice(0, 1000),
+      content: String(l.message || '').trim()
+        ? `${historyAgeTag(l.created_at, now)}${String(l.message || '').slice(0, 1000)}`
+        : '',
     }))
     .filter((m) => m.content);
 }

@@ -9,7 +9,7 @@
 import { db } from './db.js';
 import { enrichGroupsWithCapacity } from './groupCapacity.js';
 import { groupMatchesGradeLetter } from './groupBands.js';
-import { studentsForParent, isIdentifiedParent } from './whatsappBot.js';
+import { studentsForParent, isIdentifiedParent, CUSTOMER_STATUSES } from './whatsappBot.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { healthExpiryDate, declarationSignedAt } from './healthValidity.js';
 import { appPublicBase } from './publicLinks.js';
@@ -211,7 +211,7 @@ function openGroupsPayload(groups) {
       מצב: g.isFull ? 'מלאה' : 'יש מקום',
       מקומות_פנויים: Number(g.freeSlots) || 0,
       מדריך: trainerNameForGroup(db, g) || '',
-      רמה: g.skillLevel || 'כל הרמות',
+      רמה: g.skillLevel || 'מתחילים',
       מחיר_פעם_בשבוע: Number(g.priceWeek) || 0,
       מחיר_פעמיים_בשבוע: Number(g.priceTwice) || 0,
     }));
@@ -228,12 +228,20 @@ function isSquadGroup(group) {
   return String(group?.skillLevel || '').trim() === 'נבחרת';
 }
 
-function selectGroups({ grade = '', band = '', day = null, level = '' } = {}) {
+/**
+ * `includeSquads` separates browsing from picking. A customer asking "what is
+ * there" must not be offered a squad — but once they name an exact group
+ * (signup, waitlist, a link), hiding squads would make "תרשמי אותו לנבחרת"
+ * impossible to fulfil.
+ */
+function selectGroups({ grade = '', band = '', day = null, level = '', includeSquads = false } = {}) {
   let groups = db.get('groups') || [];
   const wantedLevel = String(level || '').trim();
-  groups = wantedLevel
-    ? groups.filter((g) => String(g.skillLevel || '') === wantedLevel)
-    : groups.filter((g) => !isSquadGroup(g));
+  if (wantedLevel) {
+    groups = groups.filter((g) => String(g.skillLevel || '') === wantedLevel);
+  } else if (!includeSquads) {
+    groups = groups.filter((g) => !isSquadGroup(g));
+  }
   const letter = String(grade || '').trim().slice(0, 1);
   if (letter) {
     groups = groups.filter((g) => groupMatchesGradeLetter(g, letter));
@@ -260,7 +268,9 @@ function pickSingleGroup({ grade, band, day, time } = {}) {
   if (!String(grade || '').trim() && !String(band || '').trim()) {
     return { error: 'חסר לאיזו כיתה או שכבה — יש לשאול את הלקוח' };
   }
-  let groups = selectGroups({ grade, band, day });
+  // Squads included: an exact pick is deliberate, and if both a squad and a
+  // regular group match, the multiple-match answer makes the bot ask anyway.
+  let groups = selectGroups({ grade, band, day, includeSquads: true });
   const wantedTime = String(time || '').trim();
   if (wantedTime) {
     const exact = groups.filter((g) => String(g.time || '').trim() === wantedTime);
@@ -274,6 +284,7 @@ function pickSingleGroup({ grade, band, day, time } = {}) {
         שכבה: g.ageCategory || '',
         יום: DAY_NAMES[Number(g.day)] || String(g.day ?? ''),
         שעה: g.time || '',
+        רמה: g.skillLevel || 'מתחילים',
       })),
     };
   }
@@ -305,6 +316,15 @@ function requireDeclaredChild(parent, childName) {
     };
   }
   const student = matches[0];
+  // A placement overwrites the child's status and group. On a lead that is the
+  // point; on a child who is already a registered customer it would silently
+  // corrupt a live registration — moving groups is the team's call. Checked
+  // before the declaration so a registered child always gets this answer.
+  if (CUSTOMER_STATUSES.has(String(student.status || ''))) {
+    return {
+      error: `${student.name || 'המתאמן'} כבר רשום כלקוח פעיל — הוספה או העברה בין קבוצות נעשית מול הצוות`,
+    };
+  }
   if (!findLatestValidDeclaration(db, { studentId: student.id })) {
     return {
       error: `ל${student.name || 'מתאמן'} אין הצהרת בריאות בתוקף — קודם חותמים, ורק אז משבצים`,
@@ -395,7 +415,7 @@ export function buildCustomerTools({
           הערה: 'חסר לאיזו כיתה או שכבה — יש לשאול את הלקוח לפני שליחת קישור',
         };
       }
-      let groups = selectGroups({ grade, band, day });
+      let groups = selectGroups({ grade, band, day, includeSquads: true });
       const wantedTime = String(time || '').trim();
       if (wantedTime) {
         const exact = groups.filter((g) => String(g.time || '').trim() === wantedTime);
@@ -413,6 +433,7 @@ export function buildCustomerTools({
             שכבה: g.ageCategory || '',
             יום: DAY_NAMES[Number(g.day)] || String(g.day ?? ''),
             שעה: g.time || '',
+            רמה: g.skillLevel || 'מתחילים',
           })),
           הערה: 'יותר מקבוצה אחת מתאימה — יש לשאול לאיזו קבוצה, ורק אז לשלוח קישור',
         };
@@ -647,11 +668,19 @@ export function buildCustomerTools({
 
     getFamilyCard: async () => {
       if (!parent) return { כרטיס: null, הערה: 'אין כרטיס לקוח' };
-      const kids = studentsForParent(parent).map((s) => ({
-        שם: s.name || '',
-        שכבה: s.ageCategory || '',
-        תאריך_לידה: s.birthDate || s.birth_date || '',
-      }));
+      // A student record has no band of its own — שכבה used to read a field
+      // that does not exist and always came back empty. The band that means
+      // something is the one of the group the child is actually placed in.
+      const groups = db.get('groups') || [];
+      const kids = studentsForParent(parent).map((s) => {
+        const group = groups.find((g) => String(g.id) === String(s.groupId || ''));
+        return {
+          שם: s.name || '',
+          תאריך_לידה: s.birthDate || s.birth_date || '',
+          קבוצה: group ? describeGroup(group) : '',
+          סטטוס: s.status || '',
+        };
+      });
       return { שם_הלקוח: parent.name || '', ילדים: kids };
     },
   };

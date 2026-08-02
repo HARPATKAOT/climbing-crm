@@ -146,6 +146,10 @@ function formatWaPhone(phone) {
 
 const DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'שבת'];
 
+// Meta message types the model cannot see into. A caption travels as the text,
+// so an image with a caption is handled as an ordinary text message.
+const MEDIA_MESSAGE_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker']);
+
 /** Strip day/time suffixes already shown separately (e.g. "— יום א׳ 15:30"). */
 function cleanGroupTitle(group) {
   let name = String(group.name || '').trim();
@@ -1440,13 +1444,22 @@ export const whatsappService = {
     // old path — so switching this off is always safe.
     const toolsEnabled = botToolsEnabled(settings);
     if (toolsEnabled && hasModel) {
-      const historyLimit = Math.max(2, Math.min(20, Number(settings.aiHistoryCount) || 8));
+      const historyLimit = Math.max(2, Math.min(30, Number(settings.aiHistoryCount) || 8));
+      // The old path fed the model the knowledge base, the bounds rules and the
+      // approved learned examples; the tools path launched without them, so a
+      // parking question — answered plainly in the knowledge base — came back
+      // as a handoff, and the learning loop simply did not reach tools mode.
+      const learnedBlock = formatLearnedRepliesForPrompt(matchLearnedReplies(db, incomingText));
       const turn = await runCustomerToolTurn({
         systemInstruction: [
+          `שם העסק הרשמי: ${settings.brandName || 'הרפתקאות'}\nהזכר את העסק רק בשם הרשמי הזה.`,
           settings.aiSystemPrompt,
           buildParentCardContext(parent, students),
           settings.aiBusinessFacts ? `עובדות העסק:\n${settings.aiBusinessFacts}` : '',
+          settings.aiKnowledgeBase ? `בסיס ידע / שאלות נפוצות:\n${settings.aiKnowledgeBase}` : '',
           settings.aiForbiddenTopics ? `אסור:\n${settings.aiForbiddenTopics}` : '',
+          BOT_BOUNDS_RULES,
+          learnedBlock,
         ].filter(Boolean).join('\n\n'),
         history: historyToContents(phone ? getChatHistoryMessages(phone, historyLimit) : []),
         incomingText,
@@ -1495,7 +1508,7 @@ export const whatsappService = {
     const crmText = learnedBlock ? `${crm.text}\n\n${learnedBlock}` : crm.text;
 
     if (hasModel) {
-      const historyLimit = Math.max(2, Math.min(20, Number(settings.aiHistoryCount) || 8));
+      const historyLimit = Math.max(2, Math.min(30, Number(settings.aiHistoryCount) || 8));
       const history = phone ? getChatHistoryMessages(phone, historyLimit) : [];
       const geminiText = await callGeminiReply(
         systemPrompt,
@@ -1803,10 +1816,31 @@ export const whatsappService = {
     // collects the names — the scripted lead capture would only talk over it.
     const toolsRunTheConversation = botToolsEnabled(settings);
 
+    // A photo, a voice note or a document is not something the model can read.
+    // Without this the customer got silence — and hours later the model would
+    // answer the stale placeholder from history instead of the new message.
+    const mediaOnly = MEDIA_MESSAGE_TYPES.has(String(meta.type || ''))
+      && (!text || /^\[[a-z_]+\]$/i.test(String(text).trim()));
+    if (mediaOnly) {
+      const mediaReply = 'קיבלנו 🙏 מעביר לצוות שלנו שיסתכל ויחזור אליכם.';
+      await whatsappService.sendBotReply(normalizedPhone, mediaReply, { isSimulator, source: 'bot_control' });
+      await notifyStaffOfHandoff({
+        settings,
+        parent,
+        phone: normalizedPhone,
+        customerText: `[${meta.type}] הלקוח שלח קובץ מדיה`,
+        reason: 'handoff',
+        isSimulator,
+      });
+      return { parent, student, isNew, replied: true, reply: mediaReply, reason: 'media' };
+    }
+
     // Active intake — schedule / waitlist questions may interrupt to answer first
     const intakeActive = !toolsRunTheConversation
       && !!(getIntake(parent)?.step && getIntake(parent).step !== 'done');
-    if (wantsWaitlist(text)) {
+    // In tools mode joinWaitlist checks the declaration before placing anyone;
+    // the keyword shortcut checks nothing, so it must not steal the message.
+    if (!toolsRunTheConversation && wantsWaitlist(text)) {
       const waitlist = await handleWaitlistRequest(normalizedPhone, parent, students, text);
       await whatsappService.sendBotReply(normalizedPhone, waitlist.reply, { isSimulator });
       return {
@@ -1819,7 +1853,9 @@ export const whatsappService = {
       };
     }
 
-    if ((gate.action === 'intake' || intakeActive) && !isScheduleQuestion(text)) {
+    // gate.action 'intake' can arrive from a stale bot_intake step written
+    // before tools mode existed; in tools mode the model owns the conversation.
+    if (!toolsRunTheConversation && (gate.action === 'intake' || intakeActive) && !isScheduleQuestion(text)) {
       const intakeResult = await advanceLeadCapture(normalizedPhone, parent, text, {
         formatClassesForGrade,
         assignWaitlistIfFull,
