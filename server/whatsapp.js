@@ -66,6 +66,7 @@ import {
   normalizeMenuChoice,
   decideBotGate,
   pauseBotForPhone,
+  recordBotHandoff,
   optOutPhone,
   clearBotPause,
   markOutsideHoursSent,
@@ -1800,7 +1801,7 @@ export const whatsappService = {
     }
 
     if (gate.action === 'handoff') {
-      await pauseBotForPhone(normalizedPhone, gate.pauseMinutes || settings.aiPauseMinutesAfterHuman, { reason: 'handoff' });
+      await recordBotHandoff(normalizedPhone);
       await whatsappService.sendBotReply(normalizedPhone, gate.reply, { isSimulator, source: 'bot_control' });
       await notifyStaffOfHandoff({
         settings,
@@ -1881,7 +1882,7 @@ export const whatsappService = {
     // Interactive greeting for brand-new leads with low-intent first message
     const aiResult = await whatsappService.generateAIResponse(text, { phone: normalizedPhone, parent, students, isSimulator });
     if (aiResult.handoff) {
-      await pauseBotForPhone(normalizedPhone, settings.aiPauseMinutesAfterHuman, { reason: 'handoff' });
+      await recordBotHandoff(normalizedPhone);
       // Prefer the model's natural wording; canned ack only when empty.
       const handoffText = aiResult.text || settings.aiHandoffAckMessage;
       await whatsappService.sendBotReply(normalizedPhone, handoffText, {

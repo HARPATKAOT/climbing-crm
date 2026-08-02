@@ -505,6 +505,21 @@ export async function pauseBotForPhone(phone, minutes, { reason = 'human_reply' 
   return { until, updated };
 }
 
+/**
+ * A handoff used to mute the bot for two hours as well as calling the team. In
+ * practice the customer kept writing and got silence: nobody is standing by to
+ * answer within seconds, and the next question was usually one the bot could
+ * have answered on its own. So a handoff now only records that it happened —
+ * the mute that matters is the one a real staff reply triggers ('human_reply'),
+ * and that one is untouched.
+ *
+ * `bot_handoff_at` still has to be written: bot learning reads it to tell which
+ * conversations ended up with a human.
+ */
+export async function recordBotHandoff(phone) {
+  return updateParentsForPhone(phone, { bot_handoff_at: new Date().toISOString() });
+}
+
 export async function clearBotPause(phone) {
   return updateParentsForPhone(phone, {
     bot_paused_until: null,

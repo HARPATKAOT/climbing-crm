@@ -296,7 +296,21 @@ export function buildCustomerTools({
     listClasses: async ({ grade, band, day } = {}) => {
       const groups = selectGroups({ grade, band, day });
       if (!groups.length) {
-        return { קבוצות: [], הערה: 'אין קבוצה מתאימה במערכת — יש להעביר לצוות' };
+        // An empty result used to order a handoff, so a parent asking about a
+        // toddler was passed to the team instead of hearing the obvious: the
+        // wall starts at first grade, and an older sibling may well fit. The
+        // facts that answer travels with the empty result.
+        const all = db.get('groups') || [];
+        const kids = parent ? studentsForParent(parent) : [];
+        return {
+          קבוצות: [],
+          שכבות_שיש_בקיר: [...new Set(
+            all.map((g) => String(g.ageCategory || '').trim()).filter(Boolean)
+          )],
+          ילדים_בכרטיס: kids.map((s) => s.name || '').filter(Boolean),
+          הערה: 'אין קבוצה בשכבה שנשאלה. יש להסביר מאיזו שכבה מתחילים החוגים, '
+            + 'ולהציע ילד אחר מהמשפחה אם יש כזה שמתאים. להעביר לצוות רק אם הלקוח מבקש.',
+        };
       }
       return { קבוצות: openGroupsPayload(groups) };
     },
