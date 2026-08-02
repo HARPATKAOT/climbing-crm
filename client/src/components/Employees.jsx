@@ -4,7 +4,7 @@ import {
   Save, X, UserCheck, RefreshCw, Briefcase, Award, ArrowUpRight, Search, ChevronDown, ChevronUp,
   Upload, Download, FileText, Users, Banknote, Link2, Copy, Settings2, MessageCircle, Check,
   Phone, Mail, MapPin, CreditCard, User, Calendar, Cake, Landmark, Car, Lock
-} from 'lucide-react';
+, Pencil } from 'lucide-react';
 import { Modal } from './UI.jsx';
 import GenderPicker from './GenderPicker.jsx';
 import { STAFF_ALERT_KINDS } from '../utils/staffAlerts.js';
@@ -2267,6 +2267,36 @@ export default function Employees() {
                 </div>
               ) : (
                 <div style={{ fontSize: 12, color: 'var(--text-3)' }}>לא הוגדרו תפקידים</div>
+              )}
+            </div>
+
+            {/* Visible on the card, not only inside the edit form — this is
+                where anyone looks to see what an employee is signed up for. */}
+            <div className="card card-p">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 11, color: 'var(--text-3)', flex: 1 }}>התראות בוואטסאפ</span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => {
+                    setEditingEmployee(selectedEmployee);
+                    setEmployeeFormTab('roles');
+                    setShowEmployeeForm(true);
+                  }}
+                >
+                  <Pencil size={12} /> עריכה
+                </button>
+              </div>
+              {(selectedEmployee.alerts || []).length > 0 ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  {STAFF_ALERT_KINDS
+                    .filter((a) => (selectedEmployee.alerts || []).includes(a.key))
+                    .map((a) => (
+                      <span key={a.key} className="badge badge-green" style={{ fontSize: 10 }}>{a.label}</span>
+                    ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>לא מקבל התראות</div>
               )}
             </div>
 
