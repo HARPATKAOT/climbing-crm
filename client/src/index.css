@@ -714,6 +714,31 @@ input, select, textarea { font-family: var(--font); }
 }
 .tab-pill.active svg { color: #14172a; }
 
+/* Sub-tabs nested under a coloured tab bar. They stay neutral and smaller so
+   the eye reads them as a level below, not as more top-level tabs. */
+.tab-bar-sub > .tab-pill,
+.tab-bar-sub > .tab-pill:nth-child(n) {
+  --tab-accent: var(--text-3);
+  padding: 5px 11px;
+  font-size: 11.5px;
+  border-radius: 7px;
+  background: transparent;
+  border-color: var(--border);
+}
+.tab-bar-sub > .tab-pill svg { color: var(--text-3); }
+.tab-bar-sub > .tab-pill:hover {
+  background: color-mix(in srgb, var(--text-3) 12%, transparent);
+  border-color: var(--text-3);
+}
+.tab-bar-sub > .tab-pill.active,
+.tab-bar-sub > .tab-pill.active:hover {
+  color: var(--text-1);
+  background: color-mix(in srgb, var(--text-3) 20%, transparent);
+  border-color: color-mix(in srgb, var(--text-3) 55%, transparent);
+  box-shadow: none;
+}
+.tab-bar-sub > .tab-pill.active svg { color: var(--text-1); }
+
 /* Collapsible folders in the customer file — same accent language as the tabs */
 .folder-row {
   --folder-accent: var(--blue);

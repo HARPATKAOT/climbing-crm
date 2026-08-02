@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { CustomerCard, phoneTailMatch } from './Leads.jsx';
+import { CustomerCard } from './Leads.jsx';
 import { buildLeadEntries, isParentOnlyLead } from '../utils/leadUtils.js';
+import { householdStudentsForParent } from '../utils/leadHouseholds.js';
 
 /**
  * The customer file (תיק המתאמן) as a stand-alone side panel, so pages other
@@ -41,11 +42,7 @@ export default function StudentFilePanel({
   const parent = student ? parents.find((p) => String(p.id) === String(student.parentId)) : null;
   const group = student?.groupId ? groups.find((g) => g.id === student.groupId) : null;
   const siblings = parent
-    ? students.filter((s) => {
-        if (String(s.parentId) === String(parent.id)) return true;
-        const otherParent = parents.find((p) => p.id === s.parentId);
-        return phoneTailMatch(otherParent?.phone, parent.phone);
-      })
+    ? householdStudentsForParent(parent.id, students, parents)
     : [];
 
   const refreshData = async () => {

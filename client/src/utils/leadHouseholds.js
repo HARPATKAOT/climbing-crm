@@ -60,11 +60,65 @@ export function scoreParentForDisplay(parent) {
 }
 
 /**
+ * Every trainee on the same household as this parent — both parents' children,
+ * including adults on their own cards. Status filters must not hide a sibling
+ * that still belongs on the customer file.
+ */
+export function householdStudentsForParent(parentId, students, parents) {
+  const wanted = String(parentId || '');
+  if (!wanted) return [];
+  const list = students || [];
+  const household = buildHouseholdIndex(list, parents);
+  if (!household.has(wanted)) {
+    return list.filter((student) => studentGuardianIds(student).includes(wanted));
+  }
+  const root = household.find(wanted);
+  return list.filter((student) => {
+    const ids = studentGuardianIds(student);
+    return ids.some((id) => household.has(id) && household.find(id) === root);
+  });
+}
+
+function expandRowStudents(row, allStudents, parents, household, parentById) {
+  if (!allStudents?.length) return row.students;
+  const key = row.key || '';
+  let expanded = null;
+
+  if (key.startsWith('household:')) {
+    const rootId = key.slice('household:'.length);
+    expanded = allStudents.filter((student) => {
+      const ids = studentGuardianIds(student);
+      return ids.some((id) => household.has(id) && household.find(id) === rootId);
+    });
+  } else if (key.startsWith('phone:')) {
+    const phone = key.slice('phone:'.length);
+    expanded = allStudents.filter((student) => {
+      const parent = parentById.get(student.parentId);
+      return normalizePhone(parent?.phone) === phone;
+    });
+  } else if (key.startsWith('parent:')) {
+    const parentId = key.slice('parent:'.length);
+    expanded = allStudents.filter((student) => studentGuardianIds(student).includes(String(parentId)));
+  }
+
+  if (!expanded?.length) return row.students;
+  // Keep any synthetic parent-only entry that the filter brought in — it has
+  // no real student row, so the household scan would drop it.
+  const byId = new Map(expanded.map((student) => [String(student.id), student]));
+  for (const student of row.students) {
+    if (!byId.has(String(student.id))) byId.set(String(student.id), student);
+  }
+  return [...byId.values()];
+}
+
+/**
  * One row per household. `parent` is the card the row is named after, `parents`
  * is everyone on the household — the second parent is shown, not hidden, so the
  * desk can still see whose phone number it is looking at.
  *
- * `allStudents` supplies the household links; `students` is what the row shows.
+ * `students` decides which households appear (status / queue filter).
+ * `allStudents` supplies household links and fills each row with every trainee
+ * on that household — a filter must not hide a sibling from the customer file.
  */
 export function buildFamilyRows(students, parents, allStudents) {
   const parentById = new Map((parents || []).map((p) => [p.id, p]));
@@ -115,7 +169,8 @@ export function buildFamilyRows(students, parents, allStudents) {
   }
 
   return [...groups.values()].map((row) => {
-    const sorted = [...row.students].sort((a, b) => {
+    const expanded = expandRowStudents(row, allStudents, parents, household, parentById);
+    const sorted = [...expanded].sort((a, b) => {
       const adultDiff = Number(!!b.isAdult) - Number(!!a.isAdult);
       if (adultDiff) return adultDiff;
       const da = a.created_at || a.created || '';

@@ -2320,18 +2320,18 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
         {/* ATTENDANCE TAB — mark from group folder (Notion-style) */}
         {tab === 'attendance' && (
           <div>
-            <div className="tab-bar tab-bar-inline" style={{ marginBottom: 12 }}>
+            <div className="tab-bar tab-bar-inline tab-bar-sub" style={{ marginBottom: 12 }}>
               <button
                 className={`tab-pill ${attView === 'sheet' ? 'active' : ''}`}
                 onClick={() => setAttView('sheet')}
               >
-                <UserCheck size={14} /> מילוי נוכחות
+                <UserCheck size={13} /> מילוי
               </button>
               <button
                 className={`tab-pill ${attView === 'history' ? 'active' : ''}`}
                 onClick={() => setAttView('history')}
               >
-                <History size={14} /> היסטוריה
+                <History size={13} /> היסטוריה
               </button>
             </div>
 

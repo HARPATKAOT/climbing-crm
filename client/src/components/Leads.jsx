@@ -32,7 +32,7 @@ import {
   normalizePhone,
   resolveLeadOpenTarget,
 } from '../utils/leadUtils.js';
-import { buildFamilyRows } from '../utils/leadHouseholds.js';
+import { buildFamilyRows, householdStudentsForParent } from '../utils/leadHouseholds.js';
 import {
   CATEGORY_COLORS,
   CATEGORY_ICONS,
@@ -55,7 +55,7 @@ import { awaitingSince, isAwaitingHandling } from './communicationQueue.js';
 import { consecutiveAbsences } from '../scheduleUtils.js';
 import { studentGroupIds } from '../utils/studentGroups.js';
 import { passPurchasedText, passSubtitle } from '../utils/passes.js';
-import { isChildOfParent, otherGuardians } from '../utils/studentGuardians.js';
+import { otherGuardians } from '../utils/studentGuardians.js';
 import {
   EQUIPMENT_ICONS,
   EQUIPMENT_ICON_COLORS,
@@ -5363,13 +5363,7 @@ export default function Leads({
   const selectedParent = selectedStudent ? parents.find((p) => String(p.id) === String(selectedStudent.parentId)) : null;
   const selectedGroup = selectedStudent?.groupId ? groups.find(g => g.id === selectedStudent.groupId) : null;
   const selectedSiblings = selectedParent
-    ? students
-      .filter((s) => {
-        // Whole household once — same strip whether mum or dad is the open tab.
-        if (isChildOfParent(s, selectedParent.id)) return true;
-        const otherParent = parents.find((p) => p.id === s.parentId);
-        return phoneTailMatch(otherParent?.phone, selectedParent.phone);
-      })
+    ? householdStudentsForParent(selectedParent.id, students, parents)
       .slice()
       .sort(compareTraineeChips)
     : [];
