@@ -14,25 +14,36 @@
 
 import { isEventType } from './eventKinds.js';
 
-/** סוג פעילות ביומן -> ה-slug של ההצהרה שמתאימה לו. */
-export const TYPE_TO_TEMPLATE_SLUG = {
-  trip: 'trip',
-  event: 'event',
-};
+/**
+ * מי מחליט מה ברירת המחדל: **שדה „סוג הפעילות” על ההצהרה עצמה**, במסך עריכת
+ * ההצהרות. הצהרה שסומנה „יציאה / טיול” היא זו שכל טיול ביומן יחתים עליה. אין
+ * טבלה נסתרת בקוד — מי שרוצה שאירועים יחתימו על הצהרה אחרת פשוט מסמן אותה שם.
+ *
+ * `templates` היא רשימת ההצהרות הפעילות.
+ */
+export function defaultSlugForType(type, templates = []) {
+  const key = String(type || '').trim().toLowerCase();
+  if (!key) return '';
+  // סוגי האירוע שקדמו לאיחוד מתנהגים כמו „אירוע”.
+  const wanted = isEventType(key) ? 'event' : key;
+  const match = (templates || []).find((t) => {
+    if (t?.isActive === false) return false;
+    return String(t?.activityType || t?.activity_type || '').trim().toLowerCase() === wanted;
+  });
+  return String(match?.slug || '').trim().toLowerCase();
+}
 
 /**
  * ה-slug שאירוע צריך להחתים עליו, לפני שמסתכלים אם התבנית קיימת.
  * מחזיר '' כשאין העדפה — ואז נופלים להצהרת ברירת המחדל.
  */
-export function declarationSlugForActivity(activity) {
+export function declarationSlugForActivity(activity, templates = []) {
   const explicit = String(activity?.form_template_slug || activity?.formTemplateSlug || '').trim().toLowerCase();
   // 'wall' הוא מה שנשמר אוטומטית על כל אירוע מאז ומעולם, ולכן הוא לא עדות
   // לבחירה — רק בחירה שנבדלת מברירת המחדל הישנה נחשבת מפורשת.
   if (explicit && explicit !== 'wall') return explicit;
 
-  const type = String(activity?.type || '').trim().toLowerCase();
-  if (isEventType(type)) return TYPE_TO_TEMPLATE_SLUG.event;
-  return TYPE_TO_TEMPLATE_SLUG[type] || explicit || '';
+  return defaultSlugForType(activity?.type, templates) || explicit || '';
 }
 
 /**
@@ -41,6 +52,7 @@ export function declarationSlugForActivity(activity) {
  */
 export function declarationTemplateForActivity(db, activity, resolve) {
   const templateId = activity?.form_template_id || activity?.formTemplateId || null;
-  const templateSlug = declarationSlugForActivity(activity);
+  const templates = db?.get?.('form_templates') || [];
+  const templateSlug = declarationSlugForActivity(activity, templates);
   return resolve(db, { templateId, templateSlug });
 }

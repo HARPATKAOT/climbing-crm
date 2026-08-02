@@ -496,6 +496,11 @@ export default function PublicOnboardingForm() {
         const v = searchParams.get(key);
         if (v) params.set(key, v);
       });
+      // Which form this is. "Already has a declaration in force" is only an
+      // answer about a particular one — a child covered for the wall still has
+      // to sign before a trip.
+      const wantedSlug = routeSlug || searchParams.get('template') || '';
+      if (wantedSlug) params.set('templateSlug', wantedSlug);
       try {
         const res = await fetch(`/api/public/onboard-context?${params.toString()}`);
         const data = await res.json().catch(() => ({}));
@@ -726,6 +731,7 @@ export default function PublicOnboardingForm() {
     if (digits.length < 9 && idDigits.length < 5) return null;
     try {
       const params = new URLSearchParams({ phone: phone || '', idNumber: idDigits });
+      if (template?.slug) params.set('templateSlug', template.slug);
       const res = await fetch(`/api/public/onboard-context?${params.toString()}`);
       if (!res.ok) return null;
       const data = await res.json();

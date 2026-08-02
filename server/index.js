@@ -11072,6 +11072,13 @@ app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
   const studentId = String(req.query.studentId || '').trim();
   const phone = String(req.query.phone || '').trim();
   const idNumber = String(req.query.idNumber || '').trim();
+  // Which declaration the visitor is about to fill. "Already signed" is only a
+  // meaningful answer with respect to a particular form.
+  const requestedSlug = String(req.query.templateSlug || req.query.template || '').trim().toLowerCase();
+  const contextTemplate = requestedSlug
+    ? (findFormTemplateBySlug(requestedSlug) || findDefaultFormTemplate())
+    : findDefaultFormTemplate();
+  const contextTemplateSlug = String(contextTemplate?.slug || 'wall').toLowerCase();
 
   const parent = (parentId || studentId || phone || idNumber)
     ? findParentForOnboard({ parentId, phone, studentId, idNumber })
@@ -11096,7 +11103,9 @@ app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
   }
   subscriptions[REQUIRED_BROADCAST_LIST] = true;
 
-  const template = findDefaultFormTemplate() || findFormTemplateBySlug('wall');
+  // The same template the "already signed" answers below were judged against,
+  // so the form and its verdicts can never be about two different documents.
+  const template = contextTemplate || findFormTemplateBySlug('wall');
 
   res.json({
     parent: parent
@@ -11117,13 +11126,18 @@ app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
       // Whether this participant already has a declaration in force decides
       // whether the form asks them for one again, so the answer travels with
       // the card rather than being guessed from the status.
+      // Scoped to the declaration this form is about, so a child covered for
+      // the wall is still asked to sign before a trip.
       const declaration = findLatestValidDeclaration(db, {
         studentId: s.id,
         parentId: parent?.id || null,
         climberName: s.name || '',
+        templateSlug: contextTemplateSlug,
       });
       const healthValid = !!declaration
-        || (!!s.healthSignedAt && isHealthDeclarationValid(s.healthSignedAt));
+        || (contextTemplateSlug === 'wall'
+          && !!s.healthSignedAt
+          && isHealthDeclarationValid(s.healthSignedAt));
       return {
         id: s.id,
         name: s.name || '',

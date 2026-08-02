@@ -8,15 +8,21 @@ import {
   questionLabel,
   requiresClearance,
 } from '../utils/healthQuestions.js';
+import { useActivityTypes } from '../utils/activityTypes.js';
 
-const ACTIVITY_TYPES = [
-  { value: 'wall', label: 'קיר טיפוס' },
-  // פעילות מוזמנת בקיר — יום הולדת, גיבוש חברה או קבוצת בית ספר. סוג אחד,
-  // בדיוק כמו ביומן, כי כולם חותמים על אותם סיכונים.
-  { value: 'event', label: 'פעילות בקיר' },
-  { value: 'trip', label: 'יציאה / טיול' },
-  { value: 'custom', label: 'אחר' },
+/**
+ * „סוג הפעילות” על ההצהרה הוא מה שקובע איזו הצהרה נחתמת בהרשמה לאירוע ביומן:
+ * ההצהרה שסומנה „יציאה / טיול” היא זו שכל טיול יחתים עליה. לכן הרשימה כאן
+ * חייבת להיות סוגי הפעילות האמיתיים של היומן ולא רשימה משלה — אחרת אפשר לסמן
+ * סוג שאף אירוע לא נושא, וההצהרה לא תגיע לאיש.
+ *
+ * `wall` אינו סוג ביומן אלא החוג עצמו, ולכן הוא נוסף כאן בנפרד; `custom` הוא
+ * טופס שאינו קשור לשום סוג ומגיעים אליו רק בקישור ישיר.
+ */
+const BASE_ACTIVITY_TYPES = [
+  { value: 'wall', label: 'קיר טיפוס (חוג)' },
 ];
+const CUSTOM_ACTIVITY_TYPE = { value: 'custom', label: 'ללא שיוך — קישור ישיר בלבד' };
 
 const EMPTY_TEMPLATE = {
   title: '',
@@ -79,6 +85,15 @@ function FormTemplatesPanel() {
   const [form, setForm] = useState(EMPTY_TEMPLATE);
   const [msg, setMsg] = useState('');
   const [saving, setSaving] = useState(false);
+  const calendarTypes = useActivityTypes();
+  // הסוגים האמיתיים של היומן, כך שסימון כאן באמת מגיע לאירועים.
+  const activityTypeOptions = [
+    ...BASE_ACTIVITY_TYPES,
+    ...calendarTypes
+      .filter((t) => !['opening_hours', 'training_vacation'].includes(t.id))
+      .map((t) => ({ value: t.id, label: t.label })),
+    CUSTOM_ACTIVITY_TYPE,
+  ];
 
   const load = async () => {
     try {
@@ -246,7 +261,7 @@ function FormTemplatesPanel() {
                 value={form.activityType}
                 onChange={(e) => setForm((f) => ({ ...f, activityType: e.target.value }))}
               >
-                {ACTIVITY_TYPES.map((a) => (
+                {activityTypeOptions.map((a) => (
                   <option key={a.value} value={a.value}>{a.label}</option>
                 ))}
               </select>
@@ -356,7 +371,7 @@ function FormTemplatesPanel() {
                     {(() => {
                       // אותו אייקון שמופיע בתיק הלקוח וברשימת הלידים.
                       const kind = templateKind(t);
-                      const label = ACTIVITY_TYPES.find((a) => a.value === t.activityType)?.label || t.activityType;
+                      const label = activityTypeOptions.find((a) => a.value === t.activityType)?.label || t.activityType;
                       return (
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                           <kind.Icon size={13} style={{ color: kind.color, flexShrink: 0 }} />

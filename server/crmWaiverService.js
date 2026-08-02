@@ -2,7 +2,12 @@ import {
   declarationSignedAt,
   isHealthDeclarationValid,
 } from './healthValidity.js';
-import { linkGuardian, mergeFamily, normalizedIdNumber } from './studentGuardians.js';
+import {
+  linkGuardian,
+  linkHouseholdGuardians,
+  mergeFamily,
+  normalizedIdNumber,
+} from './studentGuardians.js';
 import { declarationGap, questionsForSigner } from './healthQuestions.js';
 
 // The safety rules are not repeated here: they are the items ticked one by one
@@ -65,13 +70,46 @@ export function resolveDeclarationTemplate(db, { templateId, templateSlug } = {}
   };
 }
 
+/**
+ * Slugs that name the same document. The wall-activity declaration was called
+ * `birthday` until it turned out to cover company days and school groups too,
+ * and signatures given under the old name still cover the same risks.
+ */
+const EQUIVALENT_TEMPLATE_SLUGS = { birthday: 'event' };
+
+function templateKeyOf(value) {
+  const key = String(value || '').trim().toLowerCase();
+  return EQUIVALENT_TEMPLATE_SLUGS[key] || key;
+}
+
+/**
+ * Whether a declaration covers the form being filled.
+ *
+ * Asked without a slug — the bot, a staff screen wanting to know if anything is
+ * on file — any declaration counts. Asked about a particular form, only that
+ * form's own counts: a child who signed for the wall never read the clauses
+ * about rope descent and being far from help, so treating it as cover for a
+ * trip would be filing a signature nobody gave.
+ *
+ * A declaration with no slug at all predates the split and is read as the wall
+ * form, which is what everyone signed then.
+ */
+function declarationCovers(declaration, wantedKey) {
+  if (!wantedKey) return true;
+  const have = templateKeyOf(declaration?.templateSlug) || 'wall';
+  return have === wantedKey;
+}
+
 export function findLatestValidDeclaration(db, {
   studentId = null,
   parentId = null,
   climberName = '',
+  templateSlug = '',
 } = {}) {
+  const wantedKey = templateKeyOf(templateSlug);
   const declarations = (db.get('health_declarations') || [])
     .filter((declaration) => {
+      if (!declarationCovers(declaration, wantedKey)) return false;
       if (studentId) {
         return String(declaration.studentId || '') === String(studentId);
       }
@@ -294,6 +332,7 @@ export async function saveCrmParticipants({
       patch.healthSignedAt = signedAt;
       patch.waiverSignedAt = signedAt;
     }
+    let createdNow = false;
     if (student) {
       student = db.update('students', student.id, patch) || { ...student, ...patch };
       if (previousStatus !== 'registered' && previousStatus !== 'health_signed') {
@@ -306,6 +345,7 @@ export async function saveCrmParticipants({
         source,
         created: signedDate,
       });
+      createdNow = true;
       onStudentCreated?.(student, parent);
     }
     await requireDurable(persist, 'students', student);
@@ -315,15 +355,30 @@ export async function saveCrmParticipants({
       if (link) await requireDurable(persist, 'student_guardians', link);
     }
 
+    // A child signed up by one parent after the two cards were already merged
+    // belongs to both of them — only a brand new record, so a family somebody
+    // deliberately split does not glue itself back together on the next form.
+    if (createdNow) {
+      for (const link of linkHouseholdGuardians(db, { studentId: student.id, source })) {
+        await requireDurable(persist, 'student_guardians', link);
+      }
+    }
+
     let declaration = null;
     if (wantsReuse(input)) {
+      // Scoped to the form being filled: a signature given for the wall is not
+      // cover for a trip, whose risks it never mentioned.
       declaration = findLatestValidDeclaration(db, {
         studentId: student?.id || null,
         parentId: parent.id,
         climberName: name,
+        templateSlug: template.slug,
       });
-      if (!declaration && priorHealthSignedAt && isHealthDeclarationValid(priorHealthSignedAt)) {
-        // Older records may only have the student flag — still allow register without new signature.
+      // The student flag carries no type. It predates the split, when the only
+      // form was the wall's, so it stands in for that one and nothing else —
+      // otherwise every old record would count as cover for every activity.
+      const flagCoversThisForm = templateKeyOf(template.slug) === 'wall';
+      if (!declaration && flagCoversThisForm && priorHealthSignedAt && isHealthDeclarationValid(priorHealthSignedAt)) {
         declaration = {
           id: null,
           reused_from_student: true,
