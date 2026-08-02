@@ -22,6 +22,7 @@ import { useNavigate } from 'react-router-dom';
 import { normalizeTemplateVariables, buildPrefillValues } from './templateVariables.js';
 import { SUGGESTED_TEMPLATE_TAGS, templateTagStyle } from './templateTags.js';
 import { isAwaitingHandling, threadIsBehindCard } from './communicationQueue.js';
+import AppSelect from './AppSelect.jsx';
 
 const CHANNEL_LABELS = {
   whatsapp: 'וואטסאפ',
@@ -48,23 +49,39 @@ function phonesMatchClient(a, b) {
   return na.slice(-9).length === 9 && na.slice(-9) === nb.slice(-9);
 }
 
+const WINDOW_BADGE_STYLE = {
+  fontSize: 10,
+  padding: '3px 7px',
+  borderRadius: 6,
+  border: '1px solid var(--border)',
+  whiteSpace: 'nowrap',
+};
+
+function windowTone(open) {
+  return open
+    ? { background: 'rgba(34,197,94,0.15)', color: '#4ade80' }
+    : { background: 'rgba(248,113,113,0.12)', color: '#F87171' };
+}
+
 function WindowBadge({ windows, channel }) {
   const w = windows?.[channel];
   if (!w) return null;
   return (
-    <span
-      style={{
-        fontSize: 10,
-        padding: '2px 6px',
-        borderRadius: 6,
-        background: w.open ? 'rgba(34,197,94,0.15)' : 'rgba(248,113,113,0.12)',
-        color: w.open ? '#4ade80' : '#F87171',
-        border: '1px solid var(--border)',
-      }}
-    >
+    <span style={{ ...WINDOW_BADGE_STYLE, ...windowTone(w.open) }}>
       {CHANNEL_LABELS[channel]}: {w.label}
     </span>
   );
+}
+
+function ThreadWindowBadge({ thread, channel }) {
+  if (channel === 'whatsapp' && thread?.window) {
+    return (
+      <span style={{ ...WINDOW_BADGE_STYLE, ...windowTone(!!thread.window.open) }}>
+        וואטסאפ: {thread.window.label}
+      </span>
+    );
+  }
+  return null;
 }
 
 /** "1:47 שע׳" for a long pause, "47 דק׳" for a short one. */
@@ -103,9 +120,9 @@ export function describeBotBlocks(bot, now = Date.now()) {
   if (bot.status === 'opted_out') {
     blocks.push({
       kind: 'customer',
-      label: bot.source === 'crm' ? 'מושתק ידנית' : 'מנותק — הלקוח ביקש',
+      label: bot.source === 'crm' ? 'כבוי קבוע' : 'מנותק — הלקוח ביקש',
       reason: bot.source === 'crm'
-        ? 'הבוט הושתק ידנית ללקוח הזה, ללא הגבלת זמן — עד שתחזירו אותו כאן.'
+        ? 'הבוט כבוי באופן קבוע ללקוח הזה — עד שתחזירו אותו כאן.'
         : 'הלקוח כתב מילת עצירה בוואטסאפ, ולכן הבוט לא יפנה אליו יותר.',
       action: 'resume',
       actionLabel: 'החזרת הבוט ללקוח',
@@ -136,7 +153,7 @@ export function describeBotBadge(bot, now = Date.now()) {
       label: 'בוט פעיל',
       tone: 'active',
       action: 'mute',
-      actionLabel: 'השתקת הבוט ללקוח זה',
+      actionLabel: 'כיבוי קבוע של הבוט ללקוח זה',
       blocks,
     };
   }
@@ -567,6 +584,10 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
       && !window.confirm('הדלקת הבוט תחזיר אותו לענות אוטומטית לכל הלקוחות, לא רק ללקוח הזה. להמשיך?')) {
       return;
     }
+    if (action === 'mute'
+      && !window.confirm('לכבות את הבוט באופן קבוע ללקוח הזה? הוא לא יענה אוטומטית עד שתחזירו אותו מהתג למעלה.')) {
+      return;
+    }
     setBotBusy(true);
     setError('');
     try {
@@ -690,7 +711,12 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
         <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
           <MessageCircle size={15} /> תקשורת עם הלקוח
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {channel === 'whatsapp' && activeThread?.window ? (
+            <ThreadWindowBadge thread={activeThread} channel={channel} />
+          ) : (
+            <WindowBadge windows={data?.windows} channel={channel} />
+          )}
           {botBadge && (
             <button
               type="button"
@@ -812,31 +838,15 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
           </div>
         )}
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '10px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-          {channel === 'whatsapp' && activeThread?.window ? (
-            <span
-              style={{
-                fontSize: 10,
-                padding: '2px 6px',
-                borderRadius: 6,
-                background: activeThread.window.open ? 'rgba(34,197,94,0.15)' : 'rgba(248,113,113,0.12)',
-                color: activeThread.window.open ? '#4ade80' : '#F87171',
-                border: '1px solid var(--border)',
-              }}
-            >
-              וואטסאפ: {activeThread.window.label}
-            </span>
-          ) : (
-            <WindowBadge windows={data?.windows} channel={channel} />
-          )}
-          {channel === 'whatsapp' && activeThread?.phone && (
+        {channel === 'whatsapp' && activeThread?.phone && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '8px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
             <span style={{ fontSize: 10, color: 'var(--text-3)', alignSelf: 'center' }}>
               {activeThread.role === 'student' ? 'נשלח למתאמן' : 'נשלח להורה'}
               {' · '}
               <span style={{ direction: 'ltr', unicodeBidi: 'plaintext' }}>{activeThread.phone}</span>
             </span>
-          )}
-        </div>
+          </div>
+        )}
 
         <div style={{ display: 'flex', gap: 6, padding: '8px 12px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap', flexShrink: 0 }}>
           {Object.keys(CHANNEL_LABELS).map((ch) => (
@@ -1070,7 +1080,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
                   )
                 ) : (
                   <>
-                    {/* A list rather than a <select>: the purpose chip is what
+                    {/* A list rather than a <AppSelect>: the purpose chip is what
                         staff scan for, and an option element cannot carry it.
                         The label and the archive flag are internal, so they can
                         be fixed right here instead of from the templates screen. */}
@@ -1280,7 +1290,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
             )}
 
             {mode === 'saved' && (
-              <select
+              <AppSelect
                 className="input input-sm"
                 style={{ marginBottom: 8, width: '100%' }}
                 value={selectedSaved}
@@ -1290,7 +1300,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
                 {savedReplies.map((r) => (
                   <option key={r.id} value={r.id}>{r.name}</option>
                 ))}
-              </select>
+              </AppSelect>
             )}
 
             {mode === 'image' && (
