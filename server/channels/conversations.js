@@ -41,19 +41,56 @@ function findParentsByPhone(phone) {
   return (db.get('parents') || []).filter((p) => phonesMatch(p.phone, phone));
 }
 
-function findParentForLog(log) {
-  const parents = db.get('parents') || [];
+function findParentForLog(log, index = null) {
   const channel = log.channel || 'whatsapp';
+  const handle = String(log.phone || log.recipient_id || '');
+  if (index) return ownerFromIndex(index, channel, handle);
+
+  const parents = db.get('parents') || [];
   if (channel === 'instagram') {
-    return parents.find((p) => p.instagram_id && String(p.instagram_id) === String(log.phone || log.recipient_id)) || null;
+    return parents.find((p) => p.instagram_id && String(p.instagram_id) === handle) || null;
   }
   if (channel === 'messenger') {
-    return parents.find((p) => p.messenger_psid && String(p.messenger_psid) === String(log.phone || log.recipient_id)) || null;
+    return parents.find((p) => p.messenger_psid && String(p.messenger_psid) === handle) || null;
   }
   const matches = findParentsByPhone(log.phone);
   if (!matches.length) return null;
   // Prefer the CRM card with real details over a bare WhatsApp lead duplicate.
   return [...matches].sort((a, b) => scoreParentRecord(b) - scoreParentRecord(a))[0];
+}
+
+/**
+ * Owner lookup for a whole batch of messages.
+ *
+ * Resolving one message walks every customer card; doing that per message made
+ * opening a conversation cost thousands of full scans — about six tenths of a
+ * second of pure searching for a nine-message thread, and it grew with the
+ * customer base. Built once, the same answers come back as map hits. The
+ * winner per phone is still the highest-scoring card, so the result is
+ * identical to the scan it replaces.
+ */
+function buildParentOwnerIndex() {
+  const byPhoneTail = new Map();
+  const byInstagram = new Map();
+  const byMessenger = new Map();
+  for (const parent of db.get('parents') || []) {
+    if (parent?.instagram_id) byInstagram.set(String(parent.instagram_id), parent);
+    if (parent?.messenger_psid) byMessenger.set(String(parent.messenger_psid), parent);
+    const tail = normalizeWaPhone(parent?.phone).slice(-9);
+    if (tail.length !== 9) continue;
+    const current = byPhoneTail.get(tail);
+    if (!current || scoreParentRecord(parent) > scoreParentRecord(current)) {
+      byPhoneTail.set(tail, parent);
+    }
+  }
+  return { byPhoneTail, byInstagram, byMessenger };
+}
+
+function ownerFromIndex(index, channel, handle) {
+  if (channel === 'instagram') return index.byInstagram.get(handle) || null;
+  if (channel === 'messenger') return index.byMessenger.get(handle) || null;
+  const tail = normalizeWaPhone(handle).slice(-9);
+  return tail.length === 9 ? (index.byPhoneTail.get(tail) || null) : null;
 }
 
 function scoreParentRecord(parent) {
@@ -293,6 +330,8 @@ function mergeThread(parent) {
   if (!parent) return [];
   const students = studentsForParent(parent.id);
   const familyPhones = familyWhatsappPhones(parent, students);
+  // Built once for the whole scan instead of once per stored message.
+  let ownerIndex = null;
   const logs = (db.get('whatsapp_logs') || []).filter((l) => {
     if (l.parent_id && l.parent_id === parent.id) return true;
     if (
@@ -301,7 +340,8 @@ function mergeThread(parent) {
     ) {
       return true;
     }
-    const owner = findParentForLog(l);
+    if (!ownerIndex) ownerIndex = buildParentOwnerIndex();
+    const owner = findParentForLog(l, ownerIndex);
     return owner?.id === parent.id;
   });
   const msgs = (db.get('messages') || []).filter((m) => {

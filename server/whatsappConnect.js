@@ -16,15 +16,31 @@ function maskToken(token) {
   return `${token.slice(0, 6)}…${token.slice(-4)}`;
 }
 
+/**
+ * Normalising a phone is two regex passes, which is nothing — until the
+ * conversation panel does it three million times for one screen, matching every
+ * stored message against every customer card. The same few thousand strings
+ * repeat endlessly, so they are worth remembering. Bounded so a long-running
+ * server cannot grow it without limit.
+ */
+const NORMALIZED_PHONES = new Map();
+const NORMALIZED_PHONES_MAX = 20000;
+
 export function normalizeWaPhone(phone) {
   if (!phone) return '';
-  let digits = String(phone).replace(/[^\d]/g, '');
+  const key = String(phone);
+  const cached = NORMALIZED_PHONES.get(key);
+  if (cached !== undefined) return cached;
+
+  let digits = key.replace(/[^\d]/g, '');
   if (digits.startsWith('0') && digits.length >= 9) {
     digits = `972${digits.slice(1)}`;
   }
   if (digits.startsWith('9720')) {
     digits = `972${digits.slice(4)}`;
   }
+  if (NORMALIZED_PHONES.size >= NORMALIZED_PHONES_MAX) NORMALIZED_PHONES.clear();
+  NORMALIZED_PHONES.set(key, digits);
   return digits;
 }
 
