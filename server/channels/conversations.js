@@ -216,6 +216,7 @@ function buildConversationThreads(parent, students, messages = []) {
 
   for (const student of students) {
     if (!String(student.phone || '').trim()) continue;
+    if (threads.some((t) => phonesMatch(t.phone, student.phone))) continue;
     threads.push({
       id: `student:${student.id}`,
       role: 'student',
