@@ -1028,11 +1028,23 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
                       border: '1px solid var(--border)',
                     }}
                   >
-                    <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 4 }}>
-                      {CHANNEL_LABELS[ch] || ch}
-                      {childLabel ? ` · מאת ${childLabel}` : ''}
-                      {m.template_id || m.template_name ? ' · תבנית' : ''}
-                      {m.is_ai ? ' · בוט' : ''}
+                    <div style={{
+                      fontSize: 10,
+                      color: 'var(--text-3)',
+                      marginBottom: 4,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4,
+                    }}>
+                      {/* The bot's own icon, so a glance down the thread shows
+                          who answered without reading the labels. */}
+                      {m.is_ai && <Bot size={12} style={{ color: '#4ade80', flexShrink: 0 }} />}
+                      <span>
+                        {CHANNEL_LABELS[ch] || ch}
+                        {childLabel ? ` · מאת ${childLabel}` : ''}
+                        {m.template_id || m.template_name ? ' · תבנית' : ''}
+                        {m.is_ai ? ' · בוט' : ''}
+                      </span>
                     </div>
                     {(m.media_url || m.message_type === 'image') && !m.deleted_at && m.status !== 'deleted' && (
                       <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 4 }}>📷 תמונה / מדיה</div>

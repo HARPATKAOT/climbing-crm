@@ -18,6 +18,7 @@ import {
   applyBusinessBrand,
   isStaffPhone,
   isHumanOutboundLog,
+  withBotMark,
 } from './whatsappBot.js';
 import { isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 import { db } from './db.js';
@@ -132,6 +133,17 @@ test('only a listed staff number gets the CRM agent', () => {
   assert.equal(isStaffPhone(settings, '0529876543'), true);
   assert.equal(isStaffPhone(settings, '972544444444'), false);
   assert.equal(isStaffPhone({ aiStaffPhones: '' }, '972501234567'), false);
+});
+
+test('every bot reply is marked, and the mark never stacks', () => {
+  assert.equal(withBotMark('היי דלק!'), '🤖 היי דלק!');
+  assert.equal(withBotMark('שעות:\nשני 16:30'), '🤖 שעות:\nשני 16:30');
+  // sendBotReply and the caller can both pass through the same text.
+  assert.equal(withBotMark('🤖 היי דלק!'), '🤖 היי דלק!');
+  assert.equal(withBotMark('  היי  '), '🤖 היי');
+  // Nothing to mark stays nothing, so an empty reply is still not sent.
+  assert.equal(withBotMark(''), '');
+  assert.equal(withBotMark(null), '');
 });
 
 test('human outbound logs are detected for staff-thread deferral', () => {

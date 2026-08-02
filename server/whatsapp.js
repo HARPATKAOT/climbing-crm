@@ -61,6 +61,7 @@ import {
 } from './groupCapacity.js';
 import {
   mergeBotSettings,
+  withBotMark,
   loadBrandedBotSettings,
   normalizeMenuChoice,
   decideBotGate,
@@ -149,6 +150,7 @@ const DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'שבת'];
 // Meta message types the model cannot see into. A caption travels as the text,
 // so an image with a caption is handled as an ordinary text message.
 const MEDIA_MESSAGE_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker']);
+
 
 /** Strip day/time suffixes already shown separately (e.g. "— יום א׳ 15:30"). */
 function cleanGroupTitle(group) {
@@ -603,7 +605,7 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
   const menuPick = normalizeMenuChoice(raw);
 
   const healthUrl = (s.aiBusinessFacts || '').match(/https?:\/\/\S+health\S*/i)?.[0]
-    || 'https://app.kirboaz.co.il/health';
+    || 'https://app.kirboaz.co.il/register';
   const healthReply = `היי! ✍️\nהנה קישור להצהרת הבריאות:\n${healthUrl}\n\nאחרי החתימה המערכת מתעדכנת אוטומטית 🧗`;
   const audience = resolveAudienceWithMemory(raw, students, phone);
   const matchedGroups = findGroupsForText(raw, students, phone);
@@ -1270,7 +1272,9 @@ export const whatsappService = {
     const payload = interactiveMenuPayload(settings);
     try {
       const result = await callMetaWhatsAppAPI(phone, payload);
-      const preview = mergeBotSettings(settings).aiGreetingMenu || DEFAULT_BOT_SETTINGS.aiGreetingMenu;
+      const preview = withBotMark(
+        mergeBotSettings(settings).aiGreetingMenu || DEFAULT_BOT_SETTINGS.aiGreetingMenu
+      );
       recordMessage({
         phone: formatWaPhone(phone) || phone,
         channel: 'whatsapp',
@@ -1624,19 +1628,20 @@ export const whatsappService = {
 
   async sendBotReply(phone, replyText, { isSimulator = false, source = 'ai' } = {}) {
     if (!replyText) return { success: false };
+    const text = withBotMark(replyText);
     if (isSimulator) {
       recordMessage({
         phone: formatWaPhone(phone) || phone,
         channel: 'whatsapp',
         direction: 'outbound',
-        message: replyText,
+        message: text,
         status: 'sent',
         is_ai: true,
         source,
       });
-      return { success: true, text: replyText };
+      return { success: true, text };
     }
-    return whatsappService.sendTextMessage(phone, replyText, true, { source });
+    return whatsappService.sendTextMessage(phone, text, true, { source });
   },
 
   // Process incoming messages (webhook entrypoint / simulator)
@@ -2201,7 +2206,9 @@ export const instagramService = {
     const settings = db.getSettings();
     if (shouldAiAutoReply(settings, { ignoreSchedule: isSimulator })) {
       const aiResult = await whatsappService.generateAIResponse(text);
-      const aiReply = typeof aiResult === 'string' ? aiResult : aiResult?.text;
+      // Marked once, here, so the logged copy and the sent copy are the same
+      // text — the CRM must show the customer exactly what the customer got.
+      const aiReply = withBotMark(typeof aiResult === 'string' ? aiResult : aiResult?.text);
       if (!aiReply) {
         return { parent, student, isNew, replied: false };
       }

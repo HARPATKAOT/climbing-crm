@@ -26,6 +26,20 @@ const LEGACY_BRAND_RE = /My Wall/gi;
 const BRAND_NAME = DEFAULT_BUSINESS_PROFILE.display_name;
 
 /** Prices are allowed, invented prices are not. Stamped onto every system prompt. */
+/**
+ * Every automatic reply opens with this, so a customer can tell at a glance
+ * whether they are reading a person or the bot — the same answer the bot gives
+ * when asked outright. Staff replies are never marked: they really are people.
+ */
+export const BOT_MARK = '🤖';
+
+export function withBotMark(text) {
+  const body = String(text || '').trim();
+  if (!body) return body;
+  // A reply that passes through here twice must not stack the mark.
+  return body.startsWith(BOT_MARK) ? body : `${BOT_MARK} ${body}`;
+}
+
 export const PRICE_SOURCE_RULE =
   'כלל קשיח: מסור רק מחירים שמופיעים בנתוני המערכת — מחיר הקבוצה, מחירי הציוד ודמי ההעשרה. '
   + 'כל שאלת תשלום אחרת (מנוי, כרטיסייה, יום הולדת, הנחה, החזר, חשבונית, שכר) — הפנה לצוות בלי לנקוב בסכום.';
@@ -1143,8 +1157,10 @@ export function decideBotGate(settings, parent, students, text, { isSimulator = 
 
 export function interactiveMenuPayload(settings) {
   const s = mergeBotSettings(settings);
-  const body = (s.aiGreetingMenu || DEFAULT_BOT_SETTINGS.aiGreetingMenu).split('\n').slice(0, 4).join('\n')
-    || 'היי! במה אפשר לעזור?';
+  const body = withBotMark(
+    (s.aiGreetingMenu || DEFAULT_BOT_SETTINGS.aiGreetingMenu).split('\n').slice(0, 4).join('\n')
+    || 'היי! במה אפשר לעזור?'
+  );
   return {
     type: 'interactive',
     interactive: {
