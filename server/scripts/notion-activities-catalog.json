@@ -1,0 +1,495 @@
+{
+ "fetchedAt": "2026-08-02T05:47:52.154381",
+ "rows": [
+  {
+   "url": "https://app.notion.com/02aeacddc5b34a5787661e09e3aebfe6",
+   "name": "מחנה קיץ 28-31.7",
+   "kind": "מחנה 🏕️ ",
+   "status": "התקיים",
+   "start_date": "2024-07-28",
+   "end_date": "2024-07-31",
+   "pageId": "02aeacddc5b34a5787661e09e3aebfe6",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/07047674eb334c59bfe71b462df9b9c0",
+   "name": "טיפוס בנחל עמוד",
+   "kind": "יום שטח 💪🏽",
+   "status": "בוטל ",
+   "start_date": "2024-04-19 10:00:00Z",
+   "end_date": "2024-04-20 14:00:00Z",
+   "pageId": "07047674eb334c59bfe71b462df9b9c0",
+   "siteName": "נחל עמוד"
+  },
+  {
+   "url": "https://app.notion.com/08aaa21f6f6c4f069fee2bab711f482a",
+   "name": "מחנה קיץ 5 ימים",
+   "kind": null,
+   "status": "בארגון ",
+   "start_date": "2026-08-09",
+   "end_date": "2026-08-13",
+   "pageId": "08aaa21f6f6c4f069fee2bab711f482a",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/122123886c634c358a14d6a6ddcfe366",
+   "name": "מצוק היונים עם המובילים",
+   "kind": "יום שטח 💪🏽",
+   "status": "התקיים",
+   "start_date": "2022-11-12",
+   "end_date": null,
+   "pageId": "122123886c634c358a14d6a6ddcfe366",
+   "siteName": "בית אריה"
+  },
+  {
+   "url": "https://app.notion.com/138aa52d5a6e809ebc3ecddef761aea8",
+   "name": "קורס הובלה",
+   "kind": "קורס 🧑🏽‍🏫",
+   "status": "התקיים",
+   "start_date": "2024-11-15 06:45:00Z",
+   "end_date": "2024-11-15 10:30:00Z",
+   "pageId": "138aa52d5a6e809ebc3ecddef761aea8",
+   "siteName": "קיר בועז"
+  },
+  {
+   "url": "https://app.notion.com/1695aebd48fe42c886bb1bd66f178b08",
+   "name": "יום שטח במצוק כברה",
+   "kind": "יום שטח 💪🏽",
+   "status": "התקיים",
+   "start_date": "2025-11-08",
+   "end_date": null,
+   "pageId": "1695aebd48fe42c886bb1bd66f178b08",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/1aaaa52d5a6e8002a682ca0db827eaed",
+   "name": "מחנה פסח",
+   "kind": "מחנה 🏕️ ",
+   "status": "התקיים",
+   "start_date": "2025-04-06",
+   "end_date": "2025-04-10",
+   "pageId": "1aaaa52d5a6e8002a682ca0db827eaed",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/1f0aa52d5a6e80569898fba2e3932a6d",
+   "name": "מחנה טיפוס - ד-ו",
+   "kind": "מחנה 🏕️ ",
+   "status": "התקיים",
+   "start_date": "2025-07-06",
+   "end_date": "2025-07-10",
+   "pageId": "1f0aa52d5a6e80569898fba2e3932a6d",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/1f0aa52d5a6e80b5bfaee8a55b321b65",
+   "name": "מחנות טיפוס - ד-ו",
+   "kind": "מחנה 🏕️ ",
+   "status": "התקיים",
+   "start_date": "2025-07-13",
+   "end_date": "2025-07-17",
+   "pageId": "1f0aa52d5a6e80b5bfaee8a55b321b65",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/1f0aa52d5a6e80fb96addd27ab1025d4",
+   "name": "מחנה טיפוס פסח 29-31.3",
+   "kind": "מחנה 🏕️ ",
+   "status": "התקיים",
+   "start_date": "2026-03-29",
+   "end_date": "2026-03-31",
+   "pageId": "1f0aa52d5a6e80fb96addd27ab1025d4",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/224aa52d5a6e8079a6ccc23692b44791",
+   "name": "קורס הובלה",
+   "kind": "קורס 🧑🏽‍🏫",
+   "status": "התקיים",
+   "start_date": "2025-10-21",
+   "end_date": null,
+   "pageId": "224aa52d5a6e8079a6ccc23692b44791",
+   "siteName": "קיר בועז"
+  },
+  {
+   "url": "https://app.notion.com/26eaa52d5a6e80bb832cd390717fd547",
+   "name": "יום טיפוס במצוק גיא בן הינום",
+   "kind": null,
+   "status": "בוטל ",
+   "start_date": null,
+   "end_date": null,
+   "pageId": "26eaa52d5a6e80bb832cd390717fd547",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/28eaa52d5a6e8035be67ef54f34bc095",
+   "name": "קורס הובלה",
+   "kind": "קורס 🧑🏽‍🏫",
+   "status": "התקיים",
+   "start_date": "2026-04-28",
+   "end_date": null,
+   "pageId": "28eaa52d5a6e8035be67ef54f34bc095",
+   "siteName": "קיר בועז"
+  },
+  {
+   "url": "https://app.notion.com/2acc7901d2614eb69f26b6c4ea0cd0ec",
+   "name": "קורס הובלה - חנוכה 2023",
+   "kind": "קורס 🧑🏽‍🏫",
+   "status": "התקיים",
+   "start_date": "2023-12-13",
+   "end_date": "2023-12-15",
+   "pageId": "2acc7901d2614eb69f26b6c4ea0cd0ec",
+   "siteName": "קיר בועז"
+  },
+  {
+   "url": "https://app.notion.com/31f4be6032a148388d56aae91fc5aabb",
+   "name": "קורס הובלה - פסח2023",
+   "kind": "קורס 🧑🏽‍🏫",
+   "status": "התקיים",
+   "start_date": "2023-03-29",
+   "end_date": null,
+   "pageId": "31f4be6032a148388d56aae91fc5aabb",
+   "siteName": "קיר בועז"
+  },
+  {
+   "url": "https://app.notion.com/325aa52d5a6e80f89a8bfeff64e99812",
+   "name": "מחנות טיפוס פסח 2026",
+   "kind": "מחנה 🏕️ ",
+   "status": "התקיים",
+   "start_date": "2026-03-24",
+   "end_date": "2026-03-27",
+   "pageId": "325aa52d5a6e80f89a8bfeff64e99812",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/329aa52d5a6e80c98025cf5042ba9365",
+   "name": "טיול לנחל רחף",
+   "kind": "יום שטח 💪🏽",
+   "status": "התקיים",
+   "start_date": "2026-05-07",
+   "end_date": null,
+   "pageId": "329aa52d5a6e80c98025cf5042ba9365",
+   "siteName": "רחף תחתון"
+  },
+  {
+   "url": "https://app.notion.com/356aa52d5a6e8078883dcddf90182ae3",
+   "name": "מחנות קיץ - דף הרשמה",
+   "kind": "מחנה 🏕️ ",
+   "status": "להעלות לאתר",
+   "start_date": "2026-08-31",
+   "end_date": null,
+   "pageId": "356aa52d5a6e8078883dcddf90182ae3",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/3756c153922348639054734045f24295",
+   "name": "מחנה קיץ 14-18.7",
+   "kind": "מחנה 🏕️ ",
+   "status": "התקיים",
+   "start_date": "2024-07-14",
+   "end_date": "2024-07-18",
+   "pageId": "3756c153922348639054734045f24295",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/390aa52d5a6e8084b851c819e3ecfec2",
+   "name": "מחנה קיץ נודד",
+   "kind": "מחנה 🏕️ ",
+   "status": "בארגון ",
+   "start_date": "2026-08-01",
+   "end_date": null,
+   "pageId": "390aa52d5a6e8084b851c819e3ecfec2",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/390aa52d5a6e80c3b8cac1eda8be98de",
+   "name": "נקיק שחור",
+   "kind": null,
+   "status": "התקיים",
+   "start_date": "2026-07-11",
+   "end_date": null,
+   "pageId": "390aa52d5a6e80c3b8cac1eda8be98de",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/39caa52d5a6e80bc8b53c2535b0f4d74",
+   "name": "מחנה קיץ נודד - הרשמה",
+   "kind": "מחנה 🏕️ ",
+   "status": "בארגון ",
+   "start_date": "2026-08-01",
+   "end_date": null,
+   "pageId": "39caa52d5a6e80bc8b53c2535b0f4d74",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/3a2ceb70bbbe460d8cacbbfaad137262",
+   "name": "מחנה קיץ 21-25.7",
+   "kind": "מחנה 🏕️ ",
+   "status": "התקיים",
+   "start_date": "2024-07-21",
+   "end_date": "2024-07-25",
+   "pageId": "3a2ceb70bbbe460d8cacbbfaad137262",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/3a9ffbbdebc8490c8ffbdc5e43f9978e",
+   "name": "מנוי לחודש אוגוסט",
+   "kind": "מנוי 🎫",
+   "status": "התקיים",
+   "start_date": "2022-08-31",
+   "end_date": null,
+   "pageId": "3a9ffbbdebc8490c8ffbdc5e43f9978e",
+   "siteName": "קיר בועז"
+  },
+  {
+   "url": "https://app.notion.com/41332c83c27843d9a93034edb9e4d763",
+   "name": "מחנה קיץ - 5 ימים",
+   "kind": "מחנה 🏕️ ",
+   "status": "בארגון ",
+   "start_date": "2026-07-12",
+   "end_date": "2026-07-16",
+   "pageId": "41332c83c27843d9a93034edb9e4d763",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/483cde45a4c646f28cc528972758617a",
+   "name": "מחנה קיץ 5 ימים",
+   "kind": null,
+   "status": "בארגון ",
+   "start_date": "2026-08-02",
+   "end_date": "2026-08-06",
+   "pageId": "483cde45a4c646f28cc528972758617a",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/496b262698df49dda1bbb068408d85bb",
+   "name": "מחנה קיץ מתחילים",
+   "kind": "מחנה 🏕️ ",
+   "status": "התקיים",
+   "start_date": "2022-08-07",
+   "end_date": "2022-08-11",
+   "pageId": "496b262698df49dda1bbb068408d85bb",
+   "siteName": "קיר בועז"
+  },
+  {
+   "url": "https://app.notion.com/5a2adad19c364785aca90993589a1f57",
+   "name": "מחנות קיץ",
+   "kind": "מחנה 🏕️ ",
+   "status": "התקיים",
+   "start_date": "2024-07-01",
+   "end_date": "2024-07-26",
+   "pageId": "5a2adad19c364785aca90993589a1f57",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/716013c98b6c4d9a8ebc328a21a446ee",
+   "name": "קורס מדריכי פנאי",
+   "kind": null,
+   "status": "התקיים",
+   "start_date": "2025-04-13",
+   "end_date": "2025-04-15",
+   "pageId": "716013c98b6c4d9a8ebc328a21a446ee",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/734658b8678344dbb9f229c06f1f014a",
+   "name": "קורס הובלה",
+   "kind": "קורס 🧑🏽‍🏫",
+   "status": "התקיים",
+   "start_date": "2022-08-31",
+   "end_date": null,
+   "pageId": "734658b8678344dbb9f229c06f1f014a",
+   "siteName": "קיר בועז"
+  },
+  {
+   "url": "https://app.notion.com/7463014ac5b6495f9fb7790b641950b6",
+   "name": "מחנה קייץ 2023 בוגרים",
+   "kind": null,
+   "status": "התקיים",
+   "start_date": null,
+   "end_date": null,
+   "pageId": "7463014ac5b6495f9fb7790b641950b6",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/80968f4bda8f4a828d5bf463df959659",
+   "name": "לינה וטיפוס בשטח",
+   "kind": "יום שטח 💪🏽",
+   "status": "התקיים",
+   "start_date": "2022-08-04",
+   "end_date": null,
+   "pageId": "80968f4bda8f4a828d5bf463df959659",
+   "siteName": "המחצבה בזכרון"
+  },
+  {
+   "url": "https://app.notion.com/80c74e64f4854d8caed323abd5e821f5",
+   "name": "מחנה קייץ 2023 צעירים",
+   "kind": null,
+   "status": "התקיים",
+   "start_date": null,
+   "end_date": null,
+   "pageId": "80c74e64f4854d8caed323abd5e821f5",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/8304a93cccc84d69a225ce720babebb1",
+   "name": "לינה וטיפוס במצוק המחצבה",
+   "kind": "יום שטח 💪🏽",
+   "status": "התקיים",
+   "start_date": "2024-05-31",
+   "end_date": "2024-06-01",
+   "pageId": "8304a93cccc84d69a225ce720babebb1",
+   "siteName": "המחצבה בזכרון"
+  },
+  {
+   "url": "https://app.notion.com/8f22a319b9f84b32a32146e15719bb52",
+   "name": "נחל רחף 20.5 - רביעי - יום חול",
+   "kind": "יום שטח 💪🏽",
+   "status": "התקיים",
+   "start_date": "2026-05-20",
+   "end_date": null,
+   "pageId": "8f22a319b9f84b32a32146e15719bb52",
+   "siteName": "רחף תחתון"
+  },
+  {
+   "url": "https://app.notion.com/b7013b4cc1394fecb0b4ca08204878ab",
+   "name": "מחנה קיץ מתקדמים",
+   "kind": "מחנה 🏕️ ",
+   "status": "התקיים",
+   "start_date": "2022-08-07",
+   "end_date": "2022-08-16",
+   "pageId": "b7013b4cc1394fecb0b4ca08204878ab",
+   "siteName": "קיר בועז"
+  },
+  {
+   "url": "https://app.notion.com/b85c100003fb47e6b5091eea9db1bf08",
+   "name": "טיפוס במצוק כברה",
+   "kind": "יום שטח 💪🏽",
+   "status": "התקיים",
+   "start_date": "2024-05-18 05:00:00Z",
+   "end_date": "2024-05-18 10:00:00Z",
+   "pageId": "b85c100003fb47e6b5091eea9db1bf08",
+   "siteName": "כבארה"
+  },
+  {
+   "url": "https://app.notion.com/be74586e01834214a2863af136701e62",
+   "name": "מחנה קיץ 5 ימים",
+   "kind": "מחנה 🏕️ ",
+   "status": "בארגון ",
+   "start_date": "2026-07-26",
+   "end_date": "2026-07-30",
+   "pageId": "be74586e01834214a2863af136701e62",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/bf546734342446e589c4675d01856dcc",
+   "name": "נחל תמרים",
+   "kind": null,
+   "status": "התקיים",
+   "start_date": "2023-10-03",
+   "end_date": null,
+   "pageId": "bf546734342446e589c4675d01856dcc",
+   "siteName": "תמרים"
+  },
+  {
+   "url": "https://app.notion.com/c3cc693515a34ca983d20df20ebf23c8",
+   "name": "מחנה פסח",
+   "kind": "מחנה 🏕️ ",
+   "status": "התקיים",
+   "start_date": "2024-04-14",
+   "end_date": "2024-04-17",
+   "pageId": "c3cc693515a34ca983d20df20ebf23c8",
+   "siteName": "קיר בועז"
+  },
+  {
+   "url": "https://app.notion.com/d0ac08dde126445ab7fe75fc2160ab46",
+   "name": "תחרות קיר בועז",
+   "kind": "תחרות 🏆",
+   "status": "התקיים",
+   "start_date": "2022-08-20",
+   "end_date": null,
+   "pageId": "d0ac08dde126445ab7fe75fc2160ab46",
+   "siteName": "קיר בועז"
+  },
+  {
+   "url": "https://app.notion.com/de795afd7fb34d509907b192c0686064",
+   "name": "קורס הובלה - בוגרים",
+   "kind": "קורס 🧑🏽‍🏫",
+   "status": "התקיים",
+   "start_date": "2023-12-23",
+   "end_date": "2024-01-02",
+   "pageId": "de795afd7fb34d509907b192c0686064",
+   "siteName": "קיר בועז"
+  },
+  {
+   "url": "https://app.notion.com/e5198a29fa994dd1b08242a5006be515",
+   "name": "יום טיפוס במצוק גיתה",
+   "kind": null,
+   "status": "התקיים",
+   "start_date": "2025-10-25",
+   "end_date": null,
+   "pageId": "e5198a29fa994dd1b08242a5006be515",
+   "siteName": "גיתה"
+  },
+  {
+   "url": "https://app.notion.com/eadee9bbcb894fd4a7ec247e5a657831",
+   "name": "סרט ופיצה בקיר",
+   "kind": "פעילות בקיר",
+   "status": "בוטל ",
+   "start_date": "2024-04-29 17:00:00Z",
+   "end_date": "2024-04-29 19:00:00Z",
+   "pageId": "eadee9bbcb894fd4a7ec247e5a657831",
+   "siteName": "קיר בועז"
+  },
+  {
+   "url": "https://app.notion.com/f187e579d45e4fc1a41243d0e8e2b9cd",
+   "name": "מחנה קיץ 7-11.7",
+   "kind": "מחנה 🏕️ ",
+   "status": "התקיים",
+   "start_date": "2024-07-07",
+   "end_date": "2024-07-11",
+   "pageId": "f187e579d45e4fc1a41243d0e8e2b9cd",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/f993e906d97649c9b8af28b811ae9229",
+   "name": "מחנה קיץ - 5 ימים",
+   "kind": "מחנה 🏕️ ",
+   "status": "בארגון ",
+   "start_date": "2026-07-05",
+   "end_date": "2026-07-09",
+   "pageId": "f993e906d97649c9b8af28b811ae9229",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/fb57249277b84c71ac77f7ef54ed3bee",
+   "name": "מחנה קיץ 1-6.7",
+   "kind": "מחנה 🏕️ ",
+   "status": "התקיים",
+   "start_date": "2024-07-01",
+   "end_date": "2024-07-05",
+   "pageId": "fb57249277b84c71ac77f7ef54ed3bee",
+   "siteName": null
+  },
+  {
+   "url": "https://app.notion.com/aad8978f1a874b39bb39c32381c41c75",
+   "name": "קורס הובלה",
+   "kind": "קורס 🧑🏽‍🏫",
+   "status": "התקיים",
+   "start_date": "2022-07-31",
+   "end_date": "2022-08-01",
+   "pageId": "aad8978f1a874b39bb39c32381c41c75",
+   "siteName": "קיר בועז"
+  },
+  {
+   "url": "https://app.notion.com/07e600b5f11946fd9aa300263567eabd",
+   "name": "טיפוס בנחל עמוד",
+   "kind": "יום שטח 💪🏽",
+   "status": "התקיים",
+   "start_date": "2024-04-20",
+   "end_date": null,
+   "pageId": "07e600b5f11946fd9aa300263567eabd",
+   "siteName": "נחל עמוד"
+  }
+ ]
+}

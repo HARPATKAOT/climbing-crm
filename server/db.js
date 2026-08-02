@@ -64,6 +64,7 @@ function scoreParentRecord(p) {
 
 const STUDENT_STATUS_RANK = {
   registered: 50,
+  past_registered: 45,
   health_signed: 40,
   pending_signup: 35,
   intro_paid: 30,

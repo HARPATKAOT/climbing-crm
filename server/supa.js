@@ -558,32 +558,28 @@ export const supa = {
       }
       return all;
     }
-    if (table === 'lead_status_history') {
-      const pageSize = 1000;
-      const all = [];
-      for (let from = 0; ; from += pageSize) {
-        const { data, error } = await client
-          .from(table)
-          .select('*')
-          .order('id', { ascending: true })
-          .range(from, from + pageSize - 1);
-        if (error) {
-          console.error(`Supabase getAll(${table}) failed:`, error.message);
-          return null;
-        }
-        const chunk = data || [];
-        all.push(...chunk);
-        if (chunk.length < pageSize) break;
+    // Paginate every direct table — PostgREST caps a single response at 1000
+    // rows, and parents/students grew past that with the Notion import. A
+    // single select() silently truncates, and the server would boot with only
+    // part of the customer base in memory.
+    const pageSize = 1000;
+    const all = [];
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await client
+        .from(table)
+        .select('*')
+        .order('id', { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) {
+        console.error(`Supabase getAll(${table}) failed:`, error.message);
+        return null;
       }
-      return all;
-    }
-    const { data, error } = await client.from(table).select('*');
-    if (error) {
-      console.error(`Supabase getAll(${table}) failed:`, error.message);
-      return null;
+      const chunk = data || [];
+      all.push(...chunk);
+      if (chunk.length < pageSize) break;
     }
     const m = mapperFor(table);
-    return (data || []).map(m.fromRow);
+    return all.map(m.fromRow);
   },
 
   /** Phone forms the same person may be stored under (972… / 050… / raw). */

@@ -8,6 +8,7 @@ export const STATUSES = {
   intro_scheduled:  { label: 'נקבע אימון הכירות', badge: 'badge-cyan',  color: '#67E8F9' },
   intro_paid:       { label: 'שילם - ממתין להכירות', badge: 'badge-purple', color: '#C084FC' },
   registered:       { label: 'חוג פעיל', badge: 'badge-green',  color: '#34D399' },
+  past_registered:  { label: 'היה רשום בשנה האחרונה', badge: 'badge-cyan', color: '#7DD3FC' },
   waitlist:         { label: 'רשימת המתנה', badge: 'badge-gray',   color: '#9DA5BE' },
   archived:         { label: 'ארכיון', badge: 'badge-gray',   color: '#5A6380' },
 };
