@@ -234,10 +234,12 @@ function buildHealthWhatsAppText(parentName, studentName, link) {
   const p = String(parentName || '').trim();
   const s = String(studentName || '').trim();
   // Blank line before URL helps WhatsApp detect a clickable link.
+  // Name all three parts of the form: participant details, health declaration
+  // and waiver. "A health declaration link" set the wrong expectation.
   if (s && p && s.toLowerCase() !== p.toLowerCase()) {
-    return `שלום ${p}, מצורף קישור להצהרת בריאות עבור ${s}:\n\n${link}`;
+    return `שלום ${p}, מצורף קישור למילוי פרטי המשתתף, הצהרת בריאות והסרת אחריות עבור ${s}:\n\n${link}`;
   }
-  return `שלום ${p || ''}, בבקשה מלאו את הצהרת הבריאות והסרת האחריות:\n\n${link}`;
+  return `שלום ${p || ''}, בבקשה מלאו את פרטי המשתתף, הצהרת הבריאות והסרת האחריות:\n\n${link}`;
 }
 
 function isLocalOrigin(origin) {

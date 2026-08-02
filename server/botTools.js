@@ -109,7 +109,8 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
     name: 'getHealthDeclarations',
     description:
       'האם למתאמנים של הלקוח הזה יש הצהרת בריאות והסרת אחריות בתוקף, עד מתי היא '
-      + 'בתוקף, וקישור למילוי. מי שאין לו הצהרה בתוקף צריך לקבל את הקישור.',
+      + 'בתוקף, וקישור למילוי. מי שאין לו הצהרה בתוקף צריך לקבל את הקישור. '
+      + 'הטופס עצמו כולל פרטי משתתף, הצהרת בריאות והסרת אחריות.',
     parameters: { type: 'object', properties: {} },
   },
   {
@@ -138,6 +139,20 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         band: { type: 'string', description: 'שכבה שאינה כיתה: בוגרים / תיכון / חטיבה' },
         day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת' },
         time: { type: 'string', description: 'שעת הקבוצה, למשל 15:30' },
+      },
+      required: ['childName'],
+    },
+  },
+  {
+    name: 'cancelSignup',
+    description:
+      'מבטל שיבוץ רך שהבוט עשה — מוציא מתאמן מקבוצה שהוא «ממתין להרשמה» בה או '
+      + 'מרשימת המתנה, ומחזיר אותו למצב שלפני השיבוץ. רק למי שעדיין לא רשום '
+      + 'בפועל; ביטול של מתאמן רשום נעשה מול הצוות. חובה שם ילד.',
+    parameters: {
+      type: 'object',
+      properties: {
+        childName: { type: 'string', description: 'שם הילד כפי שמופיע בכרטיס' },
       },
       required: ['childName'],
     },
@@ -227,6 +242,9 @@ function openGroupsPayload(groups) {
 function isSquadGroup(group) {
   return String(group?.skillLevel || '').trim() === 'נבחרת';
 }
+
+/** Placements the bot made itself, and may therefore take back. */
+const UNDOABLE_PLACEMENT_STATUSES = new Set(['pending_signup', 'waitlist']);
 
 /**
  * `includeSquads` separates browsing from picking. A customer asking "what is
@@ -359,14 +377,28 @@ export function buildCustomerTools({
         // facts that answer travels with the empty result.
         const all = db.get('groups') || [];
         const kids = parent ? studentsForParent(parent) : [];
+        // "Take her off that group" made the bot look here, find nothing, and
+        // answer "no group for נועה" — about a child sitting in a group. An
+        // empty search says nothing about the children on the card, so their
+        // real placement travels with the empty result.
+        const placed = kids.map((s) => {
+          const group = all.find((g) => String(g.id) === String(s.groupId || ''));
+          return {
+            שם: s.name || '',
+            קבוצה_נוכחית: group ? describeGroup(group) : 'ללא קבוצה',
+            סטטוס: s.status || '',
+          };
+        });
         return {
           קבוצות: [],
           שכבות_שיש_בקיר: [...new Set(
             all.map((g) => String(g.ageCategory || '').trim()).filter(Boolean)
           )],
-          ילדים_בכרטיס: kids.map((s) => s.name || '').filter(Boolean),
-          הערה: 'אין קבוצה בשכבה שנשאלה. יש להסביר מאיזו שכבה מתחילים החוגים, '
-            + 'ולהציע ילד אחר מהמשפחה אם יש כזה שמתאים. להעביר לצוות רק אם הלקוח מבקש.',
+          ילדים_בכרטיס: placed,
+          הערה: 'החיפוש הזה לא מצא קבוצה, וזה לא אומר שהילד לא קיים — בדוק '
+            + 'ב-ילדים_בכרטיס אם הוא כבר משובץ, וענה לפי זה. אם באמת אין קבוצה '
+            + 'בשכבה שנשאלה: הסבר מאיזו שכבה מתחילים החוגים, והצע ילד אחר '
+            + 'מהמשפחה אם מתאים. להעביר לצוות רק אם הלקוח מבקש.',
         };
       }
       return { קבוצות: openGroupsPayload(groups) };
@@ -571,6 +603,65 @@ export function buildCustomerTools({
     },
 
     /**
+     * The other half of startSignup. The bot could place a trainee and not undo
+     * it, so "take her off that group" became a handoff for a change the bot had
+     * just made itself — and the soft placement sat there until somebody on the
+     * team noticed. Undoing is only safe while the placement is still soft:
+     * a registered trainee is a live registration, and that stays the team's.
+     */
+    cancelSignup: async ({ childName } = {}) => {
+      if (!parent) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
+      const kids = studentsForParent(parent);
+      if (!kids.length) return { error: 'אין מתאמנים בכרטיס' };
+
+      const named = String(childName || '').trim();
+      const matches = named
+        ? kids.filter((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
+        : kids.filter((s) => UNDOABLE_PLACEMENT_STATUSES.has(String(s.status || '')));
+      if (!matches.length) {
+        return { error: `אין בכרטיס מתאמן בשם ${named} — יש לשאול את הלקוח` };
+      }
+      if (matches.length > 1) {
+        return {
+          error: 'יש כמה ילדים מתאימים — יש לשאול על מי מדובר',
+          ילדים: matches.map((s) => s.name || ''),
+        };
+      }
+
+      const student = matches[0];
+      const status = String(student.status || '');
+      if (!UNDOABLE_PLACEMENT_STATUSES.has(status)) {
+        return {
+          error: `${student.name || 'המתאמן'} אינו בשיבוץ רך — שינוי או ביטול הרשמה נעשה מול הצוות`,
+          סטטוס_נוכחי: status,
+        };
+      }
+
+      const groups = db.get('groups') || [];
+      const group = groups.find((g) => String(g.id) === String(student.groupId || ''));
+      const row = db.update('students', student.id, {
+        // The declaration is signed and stays signed — that is the state the
+        // child was in before the placement, not a fresh lead.
+        status: 'health_signed',
+        groupId: null,
+      });
+      if (!row) return { error: 'ביטול השיבוץ נכשל — יש להעביר לצוות' };
+      await persistCore('students', row);
+      try {
+        await onPlacement?.({ student: row, group, kind: 'cancelled' });
+      } catch (err) {
+        console.error('placement notice failed:', err.message);
+      }
+
+      return {
+        בוטל: student.name || '',
+        קבוצה_קודמת: group ? describeGroup(group) : '',
+        סטטוס: 'חתם הצהרה — ללא קבוצה',
+        הערה: 'השיבוץ הוסר. אפשר לשבץ לקבוצה אחרת בכל שלב.',
+      };
+    },
+
+    /**
      * The model already greeted her by name — the card did not. A customer who
      * writes "קוראים לי נעמה" was still filed as "לקוח וואטסאפ", because with
      * tools on nothing writes the name down. Only fills a blank or the
@@ -639,7 +730,8 @@ export function buildCustomerTools({
           : {
             מצב: 'חסרה',
             קישור: healthFormUrl(phone),
-            הסבר: 'זה השלב הראשון — החתימה היא שפותחת את כרטיס המתאמן',
+            הסבר: 'זה השלב הראשון — הטופס כולל פרטי משתתף, הצהרת בריאות '
+              + 'והסרת אחריות, והחתימה היא שפותחת את כרטיס המתאמן',
           },
       };
 

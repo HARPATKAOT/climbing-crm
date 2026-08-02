@@ -4,6 +4,7 @@ import {
   runCustomerToolTurn,
   historyToContents,
   whatsappifyMarkdown,
+  unknownUrlsInReply,
   CUSTOMER_TOOL_RULES,
 } from './botToolTurn.js';
 import { CUSTOMER_TOOL_DECLARATIONS } from './botTools.js';
@@ -126,9 +127,24 @@ test('history rows become model/user turns', () => {
   assert.deepEqual(contents.map((c) => c.role), ['user', 'model']);
 });
 
+test('a link the model wrote itself never reaches the customer', () => {
+  // The real failure: a signup link for Wednesday's group, rewritten for
+  // Sunday's, pointing at a page that does not exist.
+  const wednesday = 'https://app.kirboaz.co.il/onboard?interest=%D7%99%D7%95%D7%9D+%D7%93&phone=05';
+  const sunday = 'https://app.kirboaz.co.il/onboard?interest=%D7%99%D7%95%D7%9D+%D7%90&phone=05';
+  const allowed = new Set([wednesday]);
+
+  assert.deepEqual(unknownUrlsInReply(`הנה הקישור: ${wednesday}`, allowed), []);
+  assert.deepEqual(unknownUrlsInReply(`הנה הקישור: ${sunday}`, allowed), [sunday]);
+  // Punctuation the sentence added is not part of the address.
+  assert.deepEqual(unknownUrlsInReply(`בבקשה ${wednesday}.`, allowed), []);
+  assert.deepEqual(unknownUrlsInReply('אין כאן קישור בכלל', allowed), []);
+});
+
 test('the tools offered to the model are facts, links and placements — never sends or charges', () => {
   const names = CUSTOMER_TOOL_DECLARATIONS.map((d) => d.name).sort();
   assert.deepEqual(names, [
+    'cancelSignup',
     'getEquipmentPaymentLink',
     'getEvents',
     'getFamilyCard',
@@ -142,14 +158,18 @@ test('the tools offered to the model are facts, links and placements — never s
     'saveCustomerName',
     'startSignup',
   ]);
-  // The two writing tools must name the child they act on, so the bot can never
-  // place "somebody" from the card.
-  for (const name of ['startSignup', 'joinWaitlist']) {
+  // Every writing tool must name the child it acts on, so the bot can never
+  // place — or unplace — "somebody" from the card.
+  for (const name of ['startSignup', 'joinWaitlist', 'cancelSignup']) {
     const decl = CUSTOMER_TOOL_DECLARATIONS.find((d) => d.name === name);
     assert.deepEqual(decl.parameters.required, ['childName']);
   }
-  // A tool may hand over a link, but never message anyone, remove data or take
-  // money — those stay with the team.
-  assert.equal(names.some((n) => /send|delete|remove|charge|refund|cancel/i.test(n)), false);
+  // A tool may hand over a link and undo a soft placement the bot itself made,
+  // but never message anyone, delete data or take money — those stay with the
+  // team. cancelSignup is the one allowed reversal: it only touches a trainee
+  // still in pending_signup/waitlist, and it restores the pre-placement state
+  // rather than removing a record.
+  assert.equal(names.some((n) => /send|delete|remove|charge|refund/i.test(n)), false);
+  assert.deepEqual(names.filter((n) => /cancel/i.test(n)), ['cancelSignup']);
   assert.match(CUSTOMER_TOOL_RULES, /HANDOFF/);
 });

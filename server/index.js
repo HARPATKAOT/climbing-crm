@@ -11980,9 +11980,12 @@ app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
     const forChild = studentLabel
       && parentLabel
       && studentLabel.trim().toLowerCase() !== parentLabel.trim().toLowerCase();
+    // The form is three things — participant details, the health declaration
+    // and the waiver. Calling it "the health declaration" undersold it, and a
+    // parent who opened it found fields nobody had mentioned.
     const freeformText = forChild
-      ? `שלום ${parentLabel}, מצורף קישור להצהרת בריאות עבור ${studentLabel}:\n\n${healthUrl}`
-      : `שלום ${parentLabel}, בבקשה מלאו את הצהרת הבריאות והסרת האחריות לפני הגעתכם:\n\n${healthUrl}`;
+      ? `שלום ${parentLabel}, מצורף קישור למילוי פרטי המשתתף, הצהרת בריאות והסרת אחריות עבור ${studentLabel}:\n\n${healthUrl}`
+      : `שלום ${parentLabel}, בבקשה מלאו את פרטי המשתתף, הצהרת הבריאות והסרת האחריות לפני הגעתכם:\n\n${healthUrl}`;
     const send = await sendWhatsAppWithOptionalTemplate(parent.phone, {
       templateCandidates: [
         settings.waHealthTemplate,

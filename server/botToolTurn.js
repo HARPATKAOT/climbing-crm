@@ -24,10 +24,13 @@ export const CUSTOMER_TOOL_RULES = [
   'אל תבטיח פעולה שאתה לא יכול לבצע (לשריין מקום, לקבוע אימון, לשלוח קישור תשלום). אפשר להציע שהצוות יחזור אליהם.',
   'קישור הרשמה לחוג כן מותר לשלוח — קרא ל-getSignupLink עם הכיתה או השכבה, ואם צריך גם יום ושעה. אם חזרו כמה קבוצות, שאל לאיזו מהן ואל תשלח קישור.',
   'שאלה על הצהרת בריאות או הסרת אחריות: בדוק ב-getHealthDeclarations. למי שאין הצהרה בתוקף — שלח את הקישור למילוי וציין את שם המתאמן. למי שיש — אמור עד מתי היא בתוקף, בלי לשלוח קישור.',
+  'הטופס שבקישור הזה הוא שלושה דברים: פרטי המשתתף, הצהרת בריאות והסרת אחריות. אל תתאר אותו כ«הצהרת בריאות» בלבד — זה מטעה את מי שפותח אותו.',
   'בקשה לשלם על ציוד או קישור לתשלום ציוד: קרא ל-getEquipmentPaymentLink. אם הוחזר קישור — שלח אותו עם שם הילד, הפריטים והסכום. אם הוחזרה הערה שאין חוב או שצריך לשאול — פעל לפיה.',
   'לקוח שרוצה להירשם: ודא קודם הצהרת בריאות (getHealthDeclarations). אין הצהרה — שלח את קישור ההצהרה והסבר שהחתימה פותחת את כרטיס המתאמן, ואל תשבץ. יש הצהרה — קרא ל-startSignup לקבוצה שנבחרה, ואם היא מלאה ל-joinWaitlist.',
   'אחרי שיבוץ מוצלח: אמור שהמקום נשמר כ«ממתין להרשמה» עד אישור ההרשמה, ושלח את getRegistrationPack עם הסבר קצר לכל קישור.',
   'אל תבטיח שהילד רשום. רשום = אחרי אישור ההרשמה, וזה מגיע מהצוות.',
+  'שאלה על ילד ששמו נזכר — קרא קודם ל-getFamilyCard כדי לראות באיזו קבוצה ובאיזה סטטוס הוא. אל תסיק מ-listClasses שהילד לא קיים.',
+  'בקשה להוציא ילד מקבוצה או לבטל שיבוץ: קרא ל-cancelSignup עם שמו. אם הוחזרה שגיאה שהוא כבר רשום — זו העברה לצוות, לא ניסיון נוסף.',
   'אל תמציא כתובת אינטרנט. קישור נשלח רק אם הוא הוחזר מכלי.',
   'לקוח שמסר את שמו בשיחה («קוראים לי נעמה», «מדברת דנה») — קרא ל-saveCustomerName עם השם, ואז המשך לעניין עצמו.',
   'אל תציע קבוצת נבחרת למי שלא שאל עליה. כשקבוצה חוזרת מכלי עם רמה — מותר לציין את הרמה בתשובה.',
@@ -59,6 +62,48 @@ export function historyToContents(messages = []) {
       parts: [{ text: String(m.content || '').trim() }],
     }))
     .filter((entry) => entry.parts[0].text);
+}
+
+const URL_PATTERN = /https?:\/\/[^\s<>"')\]]+/gi;
+
+function urlsIn(value) {
+  return String(value ?? '').match(URL_PATTERN) || [];
+}
+
+/** Every address a tool actually handed back, at any depth of its result. */
+function collectUrls(value, into = new Set()) {
+  if (value == null) return into;
+  if (typeof value === 'string') {
+    for (const url of urlsIn(value)) into.add(url);
+    return into;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectUrls(item, into);
+    return into;
+  }
+  if (typeof value === 'object') {
+    for (const item of Object.values(value)) collectUrls(item, into);
+  }
+  return into;
+}
+
+/** Trailing punctuation a sentence adds to an address is not part of it. */
+function trimUrl(url) {
+  return String(url).replace(/[.,;:!?)\]]+$/, '');
+}
+
+/**
+ * The model was handed a signup link for one group, then asked about another —
+ * and wrote out the first address with the group name swapped, an address that
+ * leads nowhere. Rules alone did not hold: the shape of a real link is exactly
+ * what makes a fabricated one easy to write. So the reply may only carry
+ * addresses that a tool returned this turn, or that the prompt itself supplied.
+ */
+export function unknownUrlsInReply(text, allowed) {
+  const known = new Set([...allowed].map(trimUrl));
+  return urlsIn(text)
+    .map(trimUrl)
+    .filter((url) => !known.has(url));
 }
 
 function functionCallsOf(content) {
@@ -100,6 +145,10 @@ export async function runCustomerToolTurn({
 
   const toolsUsed = [];
   const instruction = [systemInstruction, CUSTOMER_TOOL_RULES].filter(Boolean).join('\n\n');
+  // Addresses the prompt itself carries (the health form, the site) are as good
+  // as a tool's — they were not invented by the model either.
+  const allowedUrls = collectUrls(instruction);
+  for (const entry of history) collectUrls(entry?.parts?.[0]?.text, allowedUrls);
 
   for (let step = 0; step < maxSteps; step += 1) {
     const { content, error } = await callModel({
@@ -117,13 +166,21 @@ export async function runCustomerToolTurn({
       // The older prompt taught the model to prefix UNSURE as well; either
       // marker must be stripped so a customer never reads it.
       const unsure = !handoff && /^UNSURE\b/i.test(raw);
-      return {
-        text: whatsappifyMarkdown(raw.replace(/^(?:HANDOFF|UNSURE)\s*/i, '')),
-        handoff,
-        unsure,
-        toolsUsed,
-        reason: 'ok',
-      };
+      const text = whatsappifyMarkdown(raw.replace(/^(?:HANDOFF|UNSURE)\s*/i, ''));
+
+      const invented = unknownUrlsInReply(text, allowedUrls);
+      if (invented.length) {
+        console.error(`bot invented a link, handing off: ${invented.join(' ')}`);
+        return {
+          text: 'רגע — כדי לא לשלוח קישור שגוי אני מעביר את זה לצוות 🙏\nמישהו יחזור אליכם עם הקישור הנכון.',
+          handoff: true,
+          unsure: false,
+          toolsUsed,
+          reason: 'invented_link',
+        };
+      }
+
+      return { text, handoff, unsure, toolsUsed, reason: 'ok' };
     }
 
     contents.push(content);
@@ -139,6 +196,7 @@ export async function runCustomerToolTurn({
       try {
         const result = await tool(call.args || {});
         toolsUsed.push(call.name);
+        collectUrls(result, allowedUrls);
         responseParts.push({ functionResponse: { name: call.name, response: result } });
       } catch (err) {
         responseParts.push({

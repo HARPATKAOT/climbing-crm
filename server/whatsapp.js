@@ -669,6 +669,7 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
       text: 'אין לי קבוצה מתאימה לגיל הזה במערכת 🙏\nמעביר לצוות שיבדוק מה מתאים.',
       confidence: 'high',
       handoff: true,
+      softHandoff: true,
     };
   }
 
@@ -680,6 +681,7 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
       text: `אין לי קבוצה מתאימה ל${childName ? childName : 'ילד/ה'} במערכת 🙏\nמעביר לצוות שיבדוק מה מתאים.`,
       confidence: 'high',
       handoff: true,
+      softHandoff: true,
     };
   }
 
@@ -691,6 +693,7 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
       text: 'לגיל הזה אין לי קבוצה מתאימה במערכת 🙏\nמעביר לצוות שיבדוק מה מתאים.',
       confidence: 'high',
       handoff: true,
+      softHandoff: true,
     };
   }
 
@@ -961,13 +964,18 @@ export async function notifyStaffOfPlacement({
 
   const customerPhone = normalizeWaPhone(phone) || phone;
   const dayLabel = DAY_NAMES[Number(group?.day)] || String(group?.day ?? '');
+  const cancelled = kind === 'cancelled';
   const body = [
-    '🧗 שיבוץ מהבוט',
+    cancelled ? '↩️ ביטול שיבוץ מהבוט' : '🧗 שיבוץ מהבוט',
     `מתאמן: ${student?.name || '—'}`,
     `הורה: ${parent?.name || '—'} · ${customerPhone || '—'}`,
-    `קבוצה: ${group?.ageCategory || ''} · יום ${dayLabel} ${group?.time || ''}`.trim(),
-    kind === 'waitlist' ? 'סטטוס: רשימת המתנה' : 'סטטוס: ממתין להרשמה (לא תופס מקום)',
-    '← לבדוק מול המתנ״ס ולעדכן כשמתקבל אישור',
+    `${cancelled ? 'הוסר מקבוצה' : 'קבוצה'}: ${group?.ageCategory || ''} · יום ${dayLabel} ${group?.time || ''}`.trim(),
+    cancelled
+      ? 'סטטוס: חתם הצהרה — ללא קבוצה'
+      : (kind === 'waitlist' ? 'סטטוס: רשימת המתנה' : 'סטטוס: ממתין להרשמה (לא תופס מקום)'),
+    cancelled
+      ? '← הלקוח ביקש לבטל. אם כבר נמסר למתנ״ס — לעדכן שם'
+      : '← לבדוק מול המתנ״ס ולעדכן כשמתקבל אישור',
   ].filter(Boolean).join('\n');
 
   let sent = 0;
@@ -1434,15 +1442,21 @@ export const whatsappService = {
     const apiKey = process.env.GEMINI_API_KEY;
     const hasModel = !!apiKey && apiKey !== 'YOUR_GEMINI_API_KEY_HERE';
 
+    const toolsEnabled = botToolsEnabled(settings);
     const quick = await buildHeuristicReply(incomingText, settings, { phone, students, parent });
-    if (quick.handoff) {
+    // A `softHandoff` is the keyword layer guessing "I found no group for this
+    // child" — the very guess the tools replace, and it is answering the wrong
+    // question when the customer asked to *remove* a child from a group. It
+    // used to run first and end the turn, so the model never saw the message.
+    // Real hard topics (money, injury, "let me talk to a person") are stopped
+    // by decideBotGate long before this, and the ones raised here — an explicit
+    // menu pick 3, non-class pricing — are not soft and still short-circuit.
+    if (quick.handoff && !(toolsEnabled && hasModel && quick.softHandoff)) {
       return { text: quick.text, handoff: true, confidence: 'high' };
     }
     // Tool mode: the model reads the message and asks the CRM for the facts it
-    // needs, instead of the keyword layer below guessing the intent. The hard
-    // handoff above still runs first, and a failed turn falls through to the
-    // old path — so switching this off is always safe.
-    const toolsEnabled = botToolsEnabled(settings);
+    // needs, instead of the keyword layer below guessing the intent. A failed
+    // turn falls through to the old path — so switching this off is safe.
     if (toolsEnabled && hasModel) {
       const historyLimit = Math.max(2, Math.min(30, Number(settings.aiHistoryCount) || 8));
       // The old path fed the model the knowledge base, the bounds rules and the
