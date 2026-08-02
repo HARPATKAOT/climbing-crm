@@ -723,8 +723,11 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [testExaminerId, setTestExaminerId] = useState('');
   const [testNotes, setTestNotes] = useState('');
   const [testPassed, setTestPassed] = useState(true);
+  const [testDate, setTestDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [testLoading, setTestLoading] = useState(false);
   const [showTestForm, setShowTestForm] = useState(false);
+  const [editingTestId, setEditingTestId] = useState(null);
+  const [testKindFilter, setTestKindFilter] = useState('all');
   const [levelTestsHistory, setLevelTestsHistory] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [attendanceHistory, setAttendanceHistory] = useState([]);
