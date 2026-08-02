@@ -9,7 +9,6 @@ import {
   claimInboundMetaId,
   releaseInboundMetaId,
 } from './channels/messageStore.js';
-import { automationsService } from './automations.js';
 import { israelDateStr, israelHour } from './attendanceUtils.js';
 import {
   HISTORY_MESSAGES,
@@ -1731,28 +1730,14 @@ export const whatsappService = {
         .catch((err) => console.error('AI suggestion analysis failed:', err.message));
     }
 
-    // 4. Welcome template + automations only while the bot is enabled
-    if (isBotEnabled(settings) && isNew) {
-      try {
-        await whatsappService.sendTemplateMessage(normalizedPhone, 't1', [parent.name || ''], {
-          source: 'automation',
-        });
-      } catch (err) {
-        console.error('Failed to send WhatsApp welcome t1:', err.message);
-      }
-      try {
-        automationsService.triggerEvent('new_lead', student || {
-          id: parent.id,
-          parentId: parent.id,
-          phone: normalizedPhone,
-          parentName: parent.name,
-          status: parent.status || 'lead_new',
-          source: 'whatsapp',
-        });
-      } catch (err) {
-        console.error('Failed to trigger new_lead automation:', err.message);
-      }
-    }
+    // A first-time writer used to get two machine messages before the bot even
+    // read their question: a template literally named 't1' — a placeholder that
+    // never existed in Meta, so it failed every time and left a "failed" row in
+    // the conversation — and then the onboarding confirmation, which announces
+    // "we received your details and your health declaration" to somebody who
+    // has filled in nothing. That automation belongs to the intake form, and
+    // the form fires it. Somebody saying hello on WhatsApp gets the bot's own
+    // greeting, which is the whole point of the bot.
 
     if (!text) {
       return { parent, student, isNew, replied: false, skippedReason: 'empty' };

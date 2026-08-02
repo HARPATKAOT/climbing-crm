@@ -9,7 +9,7 @@
 import { db } from './db.js';
 import { enrichGroupsWithCapacity } from './groupCapacity.js';
 import { groupMatchesGradeLetter } from './groupBands.js';
-import { studentsForParent } from './whatsappBot.js';
+import { studentsForParent, isIdentifiedParent } from './whatsappBot.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { healthExpiryDate, declarationSignedAt } from './healthValidity.js';
 import { appPublicBase } from './publicLinks.js';
@@ -140,6 +140,21 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         time: { type: 'string', description: 'שעת הקבוצה, למשל 15:30' },
       },
       required: ['childName'],
+    },
+  },
+  {
+    name: 'saveCustomerName',
+    description:
+      'שומר בכרטיס את שם הלקוח כשהוא מוסר אותו בשיחה ("קוראים לי נעמה"). '
+      + 'להשתמש פעם אחת, מיד כשנמסר שם, ורק בשם של הכותב עצמו — לא בשם של ילד. '
+      + 'לא לשאול לשם רק כדי לשמור אותו.',
+    parameters: {
+      type: 'object',
+      properties: {
+        firstName: { type: 'string', description: 'שם פרטי כפי שהלקוח מסר' },
+        lastName: { type: 'string', description: 'שם משפחה, אם נמסר' },
+      },
+      required: ['firstName'],
     },
   },
   {
@@ -532,6 +547,31 @@ export function buildCustomerTools({
         הערה: 'המקום נשמר ואינו תופס מקום בקבוצה. יש לומר ללקוח שההרשמה נסגרת '
           + 'רק אחרי אישור, ולשלוח את קישורי ההרשמה והציוד.',
       };
+    },
+
+    /**
+     * The model already greeted her by name — the card did not. A customer who
+     * writes "קוראים לי נעמה" was still filed as "לקוח וואטסאפ", because with
+     * tools on nothing writes the name down. Only fills a blank or the
+     * placeholder: a name the team typed is never overwritten by the bot.
+     */
+    saveCustomerName: async ({ firstName, lastName } = {}) => {
+      const first = String(firstName || '').trim();
+      if (!first) return { error: 'חסר שם פרטי' };
+      if (!parent?.id) return { error: 'אין כרטיס לקוח לשמור אליו' };
+      if (isIdentifiedParent(parent)) {
+        return { נשמר: false, סיבה: 'בכרטיס כבר יש שם', שם_קיים: parent.name };
+      }
+      const last = String(lastName || '').trim();
+      const fullName = [first, last].filter(Boolean).join(' ');
+      const updated = db.update('parents', parent.id, {
+        name: fullName,
+        ...(last ? { lastName: last } : {}),
+      });
+      if (!updated) return { error: 'שמירת השם נכשלה' };
+      await persistCore('parents', updated);
+      parent = updated;
+      return { נשמר: true, שם: fullName };
     },
 
     joinWaitlist: async ({ childName, grade, band, day, time } = {}) => {

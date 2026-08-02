@@ -139,6 +139,7 @@ test('the tools offered to the model are facts, links and placements — never s
     'getSignupLink',
     'joinWaitlist',
     'listClasses',
+    'saveCustomerName',
     'startSignup',
   ]);
   // The two writing tools must name the child they act on, so the bot can never
