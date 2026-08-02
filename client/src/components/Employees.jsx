@@ -4,7 +4,7 @@ import {
   Save, X, UserCheck, RefreshCw, Briefcase, Award, ArrowUpRight, Search, ChevronDown, ChevronUp,
   Upload, Download, FileText, Users, Banknote, Link2, Copy, Settings2, MessageCircle, Check,
   Phone, Mail, MapPin, CreditCard, User, Calendar, Cake, Landmark, Car, Lock
-, Pencil } from 'lucide-react';
+, Pencil , Bell } from 'lucide-react';
 import { Modal } from './UI.jsx';
 import GenderPicker from './GenderPicker.jsx';
 import { STAFF_ALERT_KINDS } from '../utils/staffAlerts.js';
@@ -28,6 +28,7 @@ import {
   summarizeByRole,
   workTypeRole,
 } from '../utils/wageRates.js';
+import AppSelect from './AppSelect.jsx';
 
 const STATUS_OPTIONS = ['עובד פעיל', 'מנהל', 'עובד זמני', 'מדריך צעיר', 'מועמד', 'ארכיון', 'סנפלינג'];
 const PAYMENT_OPTIONS = ['תלוש', 'חשבונית'];
@@ -996,6 +997,12 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
           <button type="button" className={`tab-pill ${tab === 'roles' ? 'active' : ''}`} onClick={() => setTab('roles')}>
             <Award size={14} /> תפקידים ושכר
           </button>
+          <button type="button" className={`tab-pill ${tab === 'alerts' ? 'active' : ''}`} onClick={() => setTab('alerts')}>
+            <Bell size={14} /> התראות
+            {alerts.length > 0 && (
+              <span className="badge badge-green" style={{ fontSize: 10, marginRight: 4 }}>{alerts.length}</span>
+            )}
+          </button>
         </div>
         <div className="modal-body">
           <form id="employee-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1029,43 +1036,6 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
               </div>
             </div>
 
-            {/* Next to the phone they are sent to — these are a contact
-                preference, not a term of employment. */}
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">התראות בוואטסאפ</label>
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>
-                הודעות פנימיות מהמערכת לטלפון שלמעלה. אף אחד לא מסומן — ההתראות
-                נשלחות למספרים שבהגדרות הבוט.
-              </div>
-              {!answers.phone?.trim() && alerts.length > 0 && (
-                <div style={{ fontSize: 12, color: '#FBBF24', marginBottom: 6 }}>
-                  אין טלפון לעובד הזה, ולכן ההתראות שסומנו לא יישלחו.
-                </div>
-              )}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {STAFF_ALERT_KINDS.map((alert) => (
-                  <label
-                    key={alert.key}
-                    style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, cursor: 'pointer' }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={alerts.includes(alert.key)}
-                      onChange={(e) => setAlerts((prev) => (
-                        e.target.checked
-                          ? [...new Set([...prev, alert.key])]
-                          : prev.filter((k) => k !== alert.key)
-                      ))}
-                      style={{ marginTop: 2 }}
-                    />
-                    <span>
-                      <span style={{ fontWeight: 700 }}>{alert.label}</span>
-                      <span style={{ color: 'var(--text-3)' }}> — {alert.hint}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
 
             <div className="form-grid-3">
               <div className="form-group">
@@ -1084,9 +1054,9 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
               </div>
               <div className="form-group">
                 <label className="form-label">סטטוס עובד</label>
-                <select className="input select" value={status} onChange={e => setStatus(e.target.value)}>
+                <AppSelect className="input select" value={status} onChange={e => setStatus(e.target.value)}>
                   {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
+                </AppSelect>
               </div>
             </div>
 
@@ -1094,9 +1064,9 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
             <div className="form-grid-3">
               <div className="form-group">
                 <label className="form-label">{fieldMeta('paymentMethod', 'מקבל תשלום ב..', PAYMENT_OPTIONS).label}</label>
-                <select className="input select" value={answers.paymentMethod} onChange={e => setAnswer('paymentMethod', e.target.value)}>
+                <AppSelect className="input select" value={answers.paymentMethod} onChange={e => setAnswer('paymentMethod', e.target.value)}>
                   {fieldMeta('paymentMethod', 'מקבל תשלום ב..', PAYMENT_OPTIONS).options.map(o => <option key={o} value={o}>{o}</option>)}
-                </select>
+                </AppSelect>
               </div>
               <div className="form-group">
                 <label className="form-label">{fieldMeta('bankAccount', 'מספר חשבון בנק').label}</label>
@@ -1263,14 +1233,14 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
                   return (
                     <div key={role} style={{ display: 'grid', gridTemplateColumns: '1fr 110px 110px', gap: 8, alignItems: 'center' }}>
                       <div style={{ fontSize: 13 }}>{role}</div>
-                      <select
+                      <AppSelect
                         className="input input-sm"
                         value={row.mode || defaultModeFor(role)}
                         onChange={(e) => patchWageRate(role, { mode: e.target.value })}
                       >
                         <option value="hourly">לשעה</option>
                         <option value="daily">ליום</option>
-                      </select>
+                      </AppSelect>
                       <input
                         className="input input-sm"
                         type="number"
@@ -1306,6 +1276,43 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
                 </div>
               </>
             )}
+            </div>
+
+            {/* Its own tab: an alert list is a standing preference, not a
+                detail buried under someone's address. */}
+            <div style={{ display: tab === 'alerts' ? 'flex' : 'none', flexDirection: 'column', gap: 14 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>
+                הודעות פנימיות מהמערכת לטלפון שלמעלה. אף אחד לא מסומן — ההתראות
+                נשלחות למספרים שבהגדרות הבוט.
+              </div>
+              {!answers.phone?.trim() && alerts.length > 0 && (
+                <div style={{ fontSize: 12, color: '#FBBF24', marginBottom: 6 }}>
+                  אין טלפון לעובד הזה, ולכן ההתראות שסומנו לא יישלחו.
+                </div>
+              )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {STAFF_ALERT_KINDS.map((alert) => (
+                  <label
+                    key={alert.key}
+                    style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, cursor: 'pointer' }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={alerts.includes(alert.key)}
+                      onChange={(e) => setAlerts((prev) => (
+                        e.target.checked
+                          ? [...new Set([...prev, alert.key])]
+                          : prev.filter((k) => k !== alert.key)
+                      ))}
+                      style={{ marginTop: 2 }}
+                    />
+                    <span>
+                      <span style={{ fontWeight: 700 }}>{alert.label}</span>
+                      <span style={{ color: 'var(--text-3)' }}> — {alert.hint}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
             </div>
 
             {saveError && (
@@ -1412,9 +1419,9 @@ function WageFormModal({ wage, employees, onSave, onClose }) {
 
             <div className="form-group">
               <label className="form-label">משוייך לעובד *</label>
-              <select className="input select" value={employeeId} disabled={!!wage} onChange={e => setEmployeeId(e.target.value)}>
+              <AppSelect className="input select" value={employeeId} disabled={!!wage} onChange={e => setEmployeeId(e.target.value)}>
                 {employees.map(emp => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
-              </select>
+              </AppSelect>
             </div>
 
             <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6 }}>
@@ -1430,14 +1437,14 @@ function WageFormModal({ wage, employees, onSave, onClose }) {
                 display: 'grid', gridTemplateColumns: '1fr 110px 110px', gap: 8, alignItems: 'center',
               }}>
                 <div style={{ fontSize: 13 }}>{rate.role}</div>
-                <select
+                <AppSelect
                   className="input input-sm"
                   value={rate.mode}
                   onChange={(e) => patchRate(rate.role, { mode: e.target.value })}
                 >
                   <option value="hourly">לשעה</option>
                   <option value="daily">ליום</option>
-                </select>
+                </AppSelect>
                 <input
                   className="input input-sm"
                   type="number"
@@ -2284,7 +2291,7 @@ export default function Employees() {
                   className="btn btn-ghost btn-sm"
                   onClick={() => {
                     setEditingEmployee(selectedEmployee);
-                    setEmployeeFormTab('details');
+                    setEmployeeFormTab('alerts');
                     setShowEmployeeForm(true);
                   }}
                 >
@@ -2472,11 +2479,11 @@ export default function Employees() {
                 onChange={e => setEmpSearch(e.target.value)}
               />
             </div>
-            <select className="input input-sm" style={{ width: 150 }} value={empFilterActive} onChange={e => setEmpFilterActive(e.target.value)}>
+            <AppSelect className="input input-sm" style={{ width: 150 }} value={empFilterActive} onChange={e => setEmpFilterActive(e.target.value)}>
               <option value="all">הכל</option>
               <option value="active">פעילים בלבד</option>
               <option value="inactive">לא פעילים</option>
-            </select>
+            </AppSelect>
           </div>
           <div className="table-wrap">
             <table className="crm-table">
@@ -2679,14 +2686,14 @@ export default function Employees() {
                       ) : (
                         <div className="form-group" style={{ marginTop: 12 }}>
                           <label className="form-label" style={{ fontSize: 10 }}>בחר סוג פעילות</label>
-                          <select className="input select btn-xs" style={{ paddingBlock: 4 }}
+                          <AppSelect className="input select btn-xs" style={{ paddingBlock: 4 }}
                             value={clockActivity[emp.id] || 'counter_shift'}
                             onChange={e => setClockActivity(prev => ({ ...prev, [emp.id]: e.target.value }))}>
                             <option value="counter_shift">משמרת דלפק (שעתי)</option>
                             <option value="class_shift">הדרכת חוג (שעתי)</option>
                             <option value="private_shift">שיעור פרטי (שעתי)</option>
                             <option value="route_building_shift">בונה מסלולים (שעתי)</option>
-                          </select>
+                          </AppSelect>
                         </div>
                       )}
                     </div>
@@ -2815,7 +2822,7 @@ export default function Employees() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8, alignItems: 'end' }}>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
                 עובד
-                <select
+                <AppSelect
                   className="input input-sm"
                   value={newManualRow.employee_id}
                   onChange={(e) => setNewManualRow((p) => ({ ...p, employee_id: e.target.value }))}
@@ -2824,7 +2831,7 @@ export default function Employees() {
                   {employees.filter((e) => e.is_active !== false).map((e) => (
                     <option key={e.id} value={e.id}>{e.name}</option>
                   ))}
-                </select>
+                </AppSelect>
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
                 תאריך
@@ -2837,7 +2844,7 @@ export default function Employees() {
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
                 אופן תשלום
-                <select
+                <AppSelect
                   className="input input-sm"
                   value={newManualRow.pay_mode || 'hourly'}
                   onChange={(e) => setNewManualRow((p) => ({
@@ -2848,11 +2855,11 @@ export default function Employees() {
                 >
                   <option value="hourly">שעתי</option>
                   <option value="flat">גלובלי</option>
-                </select>
+                </AppSelect>
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
                 סוג
-                <select
+                <AppSelect
                   className="input input-sm"
                   value={newManualRow.work_type}
                   onChange={(e) => setNewManualRow((p) => ({ ...p, work_type: e.target.value }))}
@@ -2860,7 +2867,7 @@ export default function Employees() {
                   {WORK_TYPE_OPTIONS.map((o) => (
                     <option key={o.id} value={o.id}>{o.label}</option>
                   ))}
-                </select>
+                </AppSelect>
               </label>
               {(newManualRow.pay_mode || 'hourly') === 'flat' ? (
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
@@ -2956,7 +2963,7 @@ export default function Employees() {
                           {activityName(row.activity_id) || groupName(row.group_id) || '—'}
                         </td>
                         <td>
-                          <select
+                          <AppSelect
                             className="input input-sm"
                             value={payMode}
                             onChange={(e) => patchAssignmentLocal(row.id, { pay_mode: e.target.value })}
@@ -2964,11 +2971,11 @@ export default function Employees() {
                           >
                             <option value="hourly">שעתי</option>
                             <option value="flat">גלובלי</option>
-                          </select>
+                          </AppSelect>
                         </td>
                         <td>
                           {/* התפקיד הוא מה שקובע את התעריף, ולכן הוא מה שבוחרים כאן. */}
-                          <select
+                          <AppSelect
                             className="input input-sm"
                             value={row.role || workTypeRole(row.work_type) || ''}
                             onChange={(e) => patchAssignmentLocal(row.id, { role: e.target.value })}
@@ -2985,7 +2992,7 @@ export default function Employees() {
                                 </option>
                               );
                             })}
-                          </select>
+                          </AppSelect>
                         </td>
                         <td>
                           <input
