@@ -474,6 +474,14 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [addChildError, setAddChildError] = useState('');
   const [removingChildId, setRemovingChildId] = useState('');
   const [removeChildError, setRemoveChildError] = useState('');
+  // A second phone on the file that is not a trainee: the other parent, a
+  // grandparent, a nanny. Adding one must never create a trainee record.
+  const [showAddContact, setShowAddContact] = useState(false);
+  const [contactName, setContactName] = useState('');
+  const [contactPhone, setContactPhone] = useState('');
+  const [contactStudentIds, setContactStudentIds] = useState([]);
+  const [addingContact, setAddingContact] = useState(false);
+  const [addContactError, setAddContactError] = useState('');
 
   useEffect(() => {
     setEditStudentName(student.name || '');
@@ -1420,6 +1428,52 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     }
   };
 
+  /** Trainees this contact can be attached to — the whole household, ticked by default. */
+  const contactCandidates = (siblings || []).filter((sib) => !isParentOnlyLead(sib));
+
+  const openAddContact = () => {
+    setAddContactError('');
+    setContactName('');
+    setContactPhone('');
+    setContactStudentIds(contactCandidates.map((sib) => String(sib.id)));
+    setShowAddContact(true);
+  };
+
+  const handleAddContact = async (e) => {
+    e.preventDefault();
+    const name = contactName.trim();
+    const phone = contactPhone.trim();
+    if (!name || !phone || addingContact) return;
+    if (!contactStudentIds.length) {
+      setAddContactError('בחרו לפחות מתאמן אחד לשיוך');
+      return;
+    }
+    setAddingContact(true);
+    setAddContactError('');
+    try {
+      // One request for the whole household: two parallel ones would race into
+      // two parent cards for the same phone.
+      const res = await fetch(`/api/students/${encodeURIComponent(contactStudentIds[0])}/guardians`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, phone, studentIds: contactStudentIds }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAddContactError(data.error || 'הוספת איש הקשר נכשלה');
+        return;
+      }
+      setShowAddContact(false);
+      await refreshGuardians();
+      if (refreshData) await refreshData();
+    } catch (err) {
+      console.error(err);
+      setAddContactError('לא ניתן להתחבר לשרת');
+    } finally {
+      setAddingContact(false);
+    }
+  };
+
   const handleRemoveChild = async (sib) => {
     if (removingChildId) return;
     const lastChild = siblings.length <= 1;
@@ -2352,10 +2406,11 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               </div>
             )}
             {/* Parent tabs — the same idea as the child tabs below: one child,
-                two parents, each with their own details, lists and conversation. */}
-            {guardians.length > 1 && (
+                two parents, each with their own details, lists and conversation.
+                The row stays even for a single parent, to carry "הוסף איש קשר". */}
+            {(guardians.length > 1 || (!parentOnly && contactCandidates.length > 0)) && (
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
-                {guardians.map((guardian) => {
+                {guardians.length > 1 && guardians.map((guardian) => {
                   const active = String(guardian.id) === String(parent?.id);
                   return (
                     <button
@@ -2392,6 +2447,17 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     onClick={handleMakePrimary}
                   >
                     {settingPrimary ? 'מעדכן...' : 'קבע כהורה ראשי'}
+                  </button>
+                )}
+                {!parentOnly && contactCandidates.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    style={{ borderRadius: 999, border: '1px dashed var(--border)', gap: 4 }}
+                    title="הורה שני, סבתא או מטפלת — איש קשר בתיק, בלי לפתוח כרטיס מתאמן"
+                    onClick={openAddContact}
+                  >
+                    <Plus size={12} /> הוסף איש קשר
                   </button>
                 )}
               </div>
@@ -2635,82 +2701,92 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               </div>
             )}
 
-            {/* Household trainee chips — adults first, then children by name.
+            {/* Household trainee chips — one row for the adults, one for the children.
                 Order stays put when someone else is selected or a parent tab changes. */}
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                {[...siblings]
-                  .sort(compareTraineeChips)
-                  .map((sib) => {
-                  const active = !parentOnly && sib.id === student.id;
-                  const gLabel = genderLabel(sib.gender);
-                  return (
-                    <button
-                      key={sib.id}
-                      type="button"
-                      onClick={() => onSelectSibling?.(sib.id)}
-                      title={[
-                        'החלפת תיק מתאמן — השיחה מימין לא משתנה',
-                        gLabel !== '—' ? gLabel : null,
-                        sib.isAdult ? 'מבוגר' : null,
-                      ].filter(Boolean).join(' · ')}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 5,
-                        border: active
-                          ? '1px solid rgba(249, 115, 22, 0.65)'
-                          : '1px solid var(--border)',
-                        background: active
-                          ? 'rgba(249, 115, 22, 0.18)'
-                          : 'rgba(255,255,255,0.04)',
-                        color: active ? 'var(--text-1)' : 'var(--text-2)',
-                        borderRadius: 999,
-                        padding: '4px 10px',
-                        fontSize: 12,
-                        fontWeight: active ? 700 : 600,
-                        cursor: 'pointer',
-                        lineHeight: 1.3,
-                        maxWidth: '100%',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      <GenderMark gender={sib.gender} size={12} />
-                      {sib.isAdult && <AdultMark size={12} />}
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {sib.name}
-                      </span>
-                    </button>
-                  );
-                })}
-                {parent?.id && (
+            {(() => {
+              const ordered = [...siblings].sort(compareTraineeChips);
+              const adultChips = ordered.filter((sib) => sib.isAdult);
+              const childChips = ordered.filter((sib) => !sib.isAdult);
+              const renderChip = (sib) => {
+                const active = !parentOnly && sib.id === student.id;
+                const gLabel = genderLabel(sib.gender);
+                return (
                   <button
+                    key={sib.id}
                     type="button"
-                    className={`btn btn-xs ${parentOnly ? 'btn-primary' : 'btn-ghost'}`}
-                    onClick={() => {
-                      setAddChildError('');
-                      setNewChildName('');
-                      setSendHealthOnAdd(true);
-                      setShowAddChild(true);
-                    }}
+                    onClick={() => onSelectSibling?.(sib.id)}
+                    title={[
+                      'החלפת תיק מתאמן — השיחה מימין לא משתנה',
+                      gLabel !== '—' ? gLabel : null,
+                      sib.isAdult ? 'מבוגר' : null,
+                    ].filter(Boolean).join(' · ')}
                     style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      border: active
+                        ? '1px solid rgba(249, 115, 22, 0.65)'
+                        : '1px solid var(--border)',
+                      background: active
+                        ? 'rgba(249, 115, 22, 0.18)'
+                        : 'rgba(255,255,255,0.04)',
+                      color: active ? 'var(--text-1)' : 'var(--text-2)',
                       borderRadius: 999,
-                      border: parentOnly ? undefined : '1px dashed var(--border)',
-                      gap: 4,
+                      padding: '4px 10px',
+                      fontSize: 12,
+                      fontWeight: active ? 700 : 600,
+                      cursor: 'pointer',
+                      lineHeight: 1.3,
+                      maxWidth: '100%',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
                     }}
                   >
-                    <Plus size={12} /> הוסף ילד / מתאמן
+                    <GenderMark gender={sib.gender} size={12} />
+                    {sib.isAdult && <AdultMark size={12} />}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {sib.name}
+                    </span>
                   </button>
-                )}
-              </div>
-              {parentOnly && (
-                <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 8 }}>
-                  אין מתאמן רשום עדיין
+                );
+              };
+              const rowStyle = { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' };
+              return (
+                <div style={{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {adultChips.length > 0 && (
+                    <div style={rowStyle}>{adultChips.map(renderChip)}</div>
+                  )}
+                  <div style={rowStyle}>
+                    {childChips.map(renderChip)}
+                    {parent?.id && (
+                      <button
+                        type="button"
+                        className={`btn btn-xs ${parentOnly ? 'btn-primary' : 'btn-ghost'}`}
+                        onClick={() => {
+                          setAddChildError('');
+                          setNewChildName('');
+                          setSendHealthOnAdd(true);
+                          setShowAddChild(true);
+                        }}
+                        style={{
+                          borderRadius: 999,
+                          border: parentOnly ? undefined : '1px dashed var(--border)',
+                          gap: 4,
+                        }}
+                      >
+                        <Plus size={12} /> הוסף ילד / מתאמן
+                      </button>
+                    )}
+                  </div>
+                  {parentOnly && (
+                    <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
+                      אין מתאמן רשום עדיין
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              );
+            })()}
 
             {/* Selected child details — compact inline rows */}
             {!parentOnly && (() => {
@@ -4542,6 +4618,95 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             </label>
             {addChildError && (
               <div className="alert alert-warn" style={{ marginTop: 4 }}>{addChildError}</div>
+            )}
+          </form>
+        </Modal>
+      )}
+
+      {showAddContact && (
+        <Modal
+          title="הוספת איש קשר לתיק"
+          onClose={() => !addingContact && setShowAddContact(false)}
+          footer={
+            <>
+              <button className="btn btn-ghost" disabled={addingContact} onClick={() => setShowAddContact(false)}>ביטול</button>
+              <button
+                form="add-contact-form"
+                type="submit"
+                className="btn btn-primary"
+                disabled={addingContact || !contactName.trim() || !contactPhone.trim()}
+              >
+                <Plus size={15} /> {addingContact ? 'מוסיף...' : 'הוסף איש קשר'}
+              </button>
+            </>
+          }
+        >
+          <form id="add-contact-form" onSubmit={handleAddContact} className="form-grid">
+            <div className="form-grid-2">
+              <div className="form-group">
+                <label className="form-label">שם *</label>
+                <input
+                  className="input"
+                  required
+                  autoFocus
+                  placeholder="שם מלא"
+                  value={contactName}
+                  onChange={(e) => setContactName(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label className="form-label">טלפון *</label>
+                <input
+                  className="input"
+                  type="tel"
+                  required
+                  placeholder="052-1234567"
+                  value={contactPhone}
+                  onChange={(e) => setContactPhone(e.target.value)}
+                />
+              </div>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+              מספר שכבר קיים במערכת — למשל מי ששלח לנו הודעה — יצורף לתיק הזה במקום להיפתח ככרטיס נפרד.
+              איש קשר אינו מתאמן: לא נפתח לו תיק אימונים.
+            </div>
+            {contactCandidates.length > 1 && (
+              <div className="form-group">
+                <label className="form-label">משויך למתאמנים</label>
+                {contactCandidates.map((sib) => {
+                  const id = String(sib.id);
+                  const checked = contactStudentIds.includes(id);
+                  return (
+                    <label
+                      key={id}
+                      className="checkbox-item"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        cursor: 'pointer',
+                        background: 'var(--bg-input)',
+                        padding: 8,
+                        borderRadius: 8,
+                        marginBottom: 6,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        style={{ accentColor: 'var(--primary)' }}
+                        onChange={(e) => setContactStudentIds((prev) => (
+                          e.target.checked ? [...prev, id] : prev.filter((row) => row !== id)
+                        ))}
+                      />
+                      <span style={{ fontSize: 13 }}>{sib.name}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            {addContactError && (
+              <div className="alert alert-warn" style={{ marginTop: 4 }}>{addContactError}</div>
             )}
           </form>
         </Modal>

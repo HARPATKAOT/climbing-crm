@@ -19,6 +19,7 @@ import {
   describeBotState,
 } from '../whatsappBot.js';
 import { supa } from '../supa.js';
+import { childrenOfParent } from '../studentGuardians.js';
 import { recordMessage, setMessageStatusByMetaId, toLogRow } from './messageStore.js';
 
 function ageFromBirthDate(birthDate) {
@@ -197,7 +198,10 @@ export function updateMessageStatusByMetaId(metaMessageId, status) {
 }
 
 function studentsForParent(parentId) {
-  return (db.get('students') || []).filter((s) => s.parentId === parentId);
+  // Own children plus the ones linked to this card. In a merged household every
+  // child belongs to both parents, and reading `parentId` alone made whichever
+  // parent did not register a child blind to them.
+  return childrenOfParent(db, parentId);
 }
 
 function familyWhatsappPhones(parent, students = []) {

@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, CheckCircle, Download, PenTool, Plus, Trash2 } from 'lucide-react';
+import {
+  AlertTriangle, ArrowLeft, CheckCircle, Download, Lock, PenTool, Plus, ShieldCheck, Trash2,
+} from 'lucide-react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
   blobToBase64,
@@ -443,6 +445,10 @@ export default function PublicOnboardingForm() {
   // Which participant has already been told their ID looks wrong, so the
   // warning is a warning and not a wall.
   const [idWarnedFor, setIdWarnedFor] = useState('');
+  // Which set of unanswered renewal offers has already been named on screen.
+  // Keyed by the names themselves, so answering one and leaving another still
+  // gets its own warning.
+  const [skipWarnedFor, setSkipWarnedFor] = useState('');
 
   /**
    * The parent's name as one string, always first name then surname. The CRM
@@ -482,8 +488,43 @@ export default function PublicOnboardingForm() {
     return !!(known?.linked && known.health_valid);
   };
 
+  /**
+   * A parent or guardian signs for their minors only — an adult signs for
+   * themselves, whoever their parent is. So a participant on the file who has
+   * reached 18 is not part of what this parent can submit, and the form says
+   * so instead of quietly asking them to sign for an adult.
+   */
+  const needsOwnSignature = (child) => {
+    if (isAdultSelf) return false;
+    const age = ageFromBirthDate(child?.birthDate);
+    return age !== null && age >= 18;
+  };
+
+  /**
+   * Left out of this submission: either the parent declined the renewal for
+   * now — a participant who moved abroad or stopped climbing is a real answer
+   * — or they are an adult who has to sign for themselves.
+   */
+  const skipsThisRound = (child) => !!child?.skipThisTime
+    || (!!child?.id && needsOwnSignature(child));
+
+  /**
+   * On the file, nothing in force, and the parent has not answered the offer
+   * yet. Renewing is offered, never demanded, so an untouched card is simply
+   * not part of the submission.
+   */
+  const awaitingRenewChoice = (child) => !!child?.id
+    && !child?.onFileHealthValid
+    && !child?.renewOptIn
+    && !skipsThisRound(child);
+
+  /** Whether this card's own fields and declaration are being asked for now. */
+  const fillsDeclaration = (child) => !skipsThisRound(child)
+    && !awaitingRenewChoice(child)
+    && !reusesDeclaration(child);
+
   const totalStepsLabel = 2 + Math.max(
-    children.filter((c) => c.name.trim() && !reusesDeclaration(c)).length,
+    children.filter((c) => c.name.trim() && fillsDeclaration(c)).length,
     1
   );
 
@@ -777,9 +818,14 @@ export default function PublicOnboardingForm() {
     }
   };
 
-  const namedChildren = () => children.filter((c) => c.name.trim());
+  /**
+   * Everyone this submission is actually about. A card left out of it — an
+   * offer the parent declined, or a participant who has to sign for themselves
+   * — is neither validated nor sent.
+   */
+  const namedChildren = () => children.filter((c) => c.name.trim() && !skipsThisRound(c) && !awaitingRenewChoice(c));
 
-  const healthChildren = () => namedChildren().filter((child) => !reusesDeclaration(child));
+  const healthChildren = () => namedChildren().filter((child) => fillsDeclaration(child));
 
   const goNextFromParent = async () => {
     setError('');
@@ -894,10 +940,16 @@ export default function PublicOnboardingForm() {
     setError('');
     const kids = namedChildren();
     if (!kids.length) {
-      setError('יש להוסיף לפחות משתתף/ת אחד');
+      setError('יש לבחור לפחות משתתף/ת אחד למילוי, או להוסיף משתתף/ת חדש');
       return;
     }
     for (const kid of kids) {
+      // A participant typed in by hand who turns out to be an adult: the form
+      // says so here rather than dropping the card without a word.
+      if (needsOwnSignature(kid)) {
+        setError(`${kid.name} מעל גיל 18 — הורה לא יכול לחתום עבורו/ה. יש למלא טופס נפרד בשמו/ה, או לתקן את תאריך הלידה`);
+        return;
+      }
       // A participant whose card is collapsed behind "declaration in force" was
       // never shown these fields, so they cannot be the thing blocking the form.
       if (reusesDeclaration(kid)) continue;
@@ -945,6 +997,18 @@ export default function PublicOnboardingForm() {
         if (checked.some(([, match]) => match.match)) return;
       }
     }
+    // Renewing is optional, but leaving without it must not happen by accident:
+    // a parent who came for exactly that and walked past the offer would have
+    // finished with nothing renewed. So the first press names who is being left
+    // out and the second one goes ahead — the same soft stop the ID check uses.
+    const unofferedAnswer = children.filter((c) => c.name.trim() && awaitingRenewChoice(c));
+    const unofferedKey = unofferedAnswer.map((c) => c.name.trim()).join('|');
+    if (unofferedKey && skipWarnedFor !== unofferedKey) {
+      setSkipWarnedFor(unofferedKey);
+      setError(`לא בחרתם אם לחדש את הצהרת הבריאות של ${unofferedAnswer.map((c) => c.name.trim()).join(', ')} — לחצו „המשך” שוב כדי להמשיך בלי לחדש.`);
+      return;
+    }
+
     // Everyone here already has a declaration in force on their existing file.
     if (!healthChildren().length) {
       await submitAll(children);
@@ -1040,7 +1104,9 @@ export default function PublicOnboardingForm() {
       // must not reach the signed PDF as something they agreed to.
       const asked = new Set(questions.map((q) => q.id));
       const kids = (childrenSnapshot || children)
-        .filter((c) => c.name.trim())
+        // Same rule as the screen: a declined offer, or an adult who signs for
+        // themselves, is not part of what this parent submits.
+        .filter((c) => c.name.trim() && !skipsThisRound(c) && !awaitingRenewChoice(c))
         .map((c) => {
           const reuse = reusesDeclaration(c);
           const answers = Object.fromEntries(
@@ -1248,7 +1314,9 @@ export default function PublicOnboardingForm() {
           <div className="logo-circle">
             <img src={brandLogo} alt={brandName} />
           </div>
-          <h2>מילוי פרטים והרשמה</h2>
+          {/* „מילוי פרטים והרשמה” לא אמר למה חותמים. הכותרת נושאת את שם
+              המסמך עצמו, בכל שלושת השלבים. */}
+          <h2>הצהרת בריאות והסרת אחריות</h2>
           <p>
             {step === 1 && (isAdultSelf ? 'הפרטים שלי ורשימות עדכונים' : 'פרטי הורה ורשימות עדכונים')}
             {step === 2 && (isAdultSelf ? 'הפרטים שלי כמשתתף' : 'פרטי המשתתפים בחוג')}
@@ -1512,8 +1580,28 @@ export default function PublicOnboardingForm() {
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                  <div style={{ fontSize: 13, color: '#F97316', fontWeight: 700 }}>
-                    {isAdultSelf ? 'משתתף מבוגר' : `משתתף/ת ${index + 1}`}
+                  {/* The name is the card's title. An ordinal told the parent
+                      nothing about whose card they were about to change; the
+                      name is the only thing that does. Until it is typed the
+                      ordinal is all there is, so it stays as the fallback. */}
+                  <div style={{ minWidth: 0 }}>
+                    {(child.name || '').trim() ? (
+                      <div style={{
+                        fontSize: 20, fontWeight: 800, color: '#fff', lineHeight: 1.25,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}>
+                        {child.name.trim()}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 18, fontWeight: 800, color: 'rgba(255,255,255,0.45)', lineHeight: 1.25 }}>
+                        {isAdultSelf ? 'משתתף מבוגר' : `משתתף/ת ${index + 1}`}
+                      </div>
+                    )}
+                    {!isAdultSelf && children.length > 1 && (
+                      <div style={{ fontSize: 11, color: '#F97316', fontWeight: 700, marginTop: 2 }}>
+                        משתתף/ת {index + 1} מתוך {children.length}
+                      </div>
+                    )}
                   </div>
                   {!isAdultSelf && children.length > 1 && !child.onFileHealthValid && (
                     <button type="button" className="clear-btn" onClick={() => removeChild(index)}>
@@ -1522,30 +1610,125 @@ export default function PublicOnboardingForm() {
                   )}
                 </div>
 
-                {/* The other half of the same answer: someone who is already on
-                    the file and has nothing in force looked exactly like a
-                    participant typed in from scratch, so the one card the parent
-                    actually has to fill in was the one card saying nothing.
-                    Only for participants that came from the file — `id` — since
-                    an empty new card obviously has no declaration yet. */}
-                {child.id && !child.onFileHealthValid && (
+                {/* בגר — הורה חותם רק על ילדיו הקטינים. הכרטיס יוצא מהטופס
+                    ואומר למה, במקום להעלים משתתף בלי הסבר. */}
+                {child.id && needsOwnSignature(child) && (
+                  <div style={{
+                    background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,0.12)',
+                    borderRadius: 12, padding: 12, marginBottom: 0,
+                  }}>
+                    <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)', fontWeight: 700, marginBottom: 4 }}>
+                      מעל גיל 18 — חותם/ת בעצמו/ה
+                    </div>
+                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', lineHeight: 1.55 }}>
+                      חתימת הורה תקפה רק עד גיל 18. {child.name?.trim() || 'משתתף/ת זה'}
+                      {' '}צריך/ה למלא את הטופס בעצמו/ה — העבירו לו/ה את הקישור לטופס,
+                      ושם יש לסמן „אני מעל גיל 18 ואני ממלא/ת עבור עצמי”.
+                      {' '}הכרטיס הזה לא ייכלל בשליחה.
+                    </div>
+                  </div>
+                )}
+
+                {/* על הפרק, לא על החובה: מי שרשום בתיק ואין לו הצהרה בתוקף
+                    מקבל הצעה לחדש. אולי הוא כבר לא מטפס, ולכן „לא הפעם” הוא
+                    תשובה לגיטימית — אבל השאלה חייבת להישאל. */}
+                {child.id && !child.onFileHealthValid && !needsOwnSignature(child) && !child.renewOptIn && (
+                  <div style={{
+                    background: child.skipThisTime ? 'rgba(255,255,255,.04)' : 'rgba(249,115,22,.1)',
+                    border: `1px solid ${child.skipThisTime ? 'rgba(255,255,255,0.12)' : 'rgba(249,115,22,.4)'}`,
+                    borderRadius: 12, padding: 12, marginBottom: 0,
+                  }}>
+                    {child.skipThisTime ? (
+                      <div style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        gap: 10, flexWrap: 'wrap',
+                      }}>
+                        <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>
+                          לא ימולא הפעם — לא ייכלל בשליחה
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => updateChild(index, { skipThisTime: false })}
+                          style={{
+                            background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
+                            borderRadius: 10, color: 'rgba(255,255,255,0.7)',
+                            fontFamily: 'inherit', fontSize: 12, padding: '7px 12px', cursor: 'pointer',
+                          }}
+                        >
+                          בעצם כן, נמלא
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{
+                          display: 'flex', alignItems: 'center', gap: 6,
+                          fontSize: 14, color: '#fdba74', fontWeight: 700, marginBottom: 4,
+                        }}>
+                          <AlertTriangle size={15} /> אין הצהרת בריאות בתוקף
+                        </div>
+                        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', lineHeight: 1.55, marginBottom: 10 }}>
+                          {child.onFileHealthSignedAt
+                            ? `ההצהרה מ-${String(child.onFileHealthSignedAt).slice(0, 10)} כבר אינה בתוקף. `
+                            : 'לא נמצאה הצהרה בתוקף. '}
+                          הפרטים כבר קיימים במערכת — אפשר לחדש עכשיו.
+                          {' '}אם {child.name?.trim() || 'המשתתף/ת'} כבר לא מטפס/ת, אפשר לדלג — בלי הצהרה בתוקף לא נכנסים לפעילות.
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            onClick={() => updateChild(index, { renewOptIn: true, skipThisTime: false })}
+                            style={{
+                              background: '#F97316', border: 'none', borderRadius: 10, color: '#fff',
+                              fontFamily: 'inherit', fontSize: 13, fontWeight: 700,
+                              padding: '9px 14px', cursor: 'pointer',
+                            }}
+                          >
+                            כן, לחדש עכשיו
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => updateChild(index, { skipThisTime: true })}
+                            style={{
+                              background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
+                              borderRadius: 10, color: 'rgba(255,255,255,0.65)',
+                              fontFamily: 'inherit', fontSize: 13, padding: '9px 14px', cursor: 'pointer',
+                            }}
+                          >
+                            לא הפעם
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* אחרי „כן, לחדש” — מה עוד נדרש, ודרך חזרה. */}
+                {child.id && !child.onFileHealthValid && !needsOwnSignature(child) && child.renewOptIn && (
                   <div style={{
                     background: 'rgba(249,115,22,.1)', border: '1px solid rgba(249,115,22,.35)',
                     borderRadius: 12, padding: 12, marginBottom: 14,
                   }}>
-                    {/* Named as the task rather than as a status, because at
-                        this point the parent is looking at a card that is
-                        already filled in and needs to be told what is still
-                        being asked of them. */}
-                    <div style={{ fontSize: 14, color: '#fdba74', fontWeight: 700, marginBottom: 4 }}>
-                      השלמה של הצהרת בריאות עבור {child.name || 'משתתף/ת זה'}
+                    <div style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      gap: 10, flexWrap: 'wrap',
+                    }}>
+                      <div style={{ fontSize: 14, color: '#fdba74', fontWeight: 700 }}>
+                        חידוש ההצהרה עבור {child.name?.trim() || 'משתתף/ת זה'}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => updateChild(index, { renewOptIn: false })}
+                        style={{
+                          background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
+                          borderRadius: 10, color: 'rgba(255,255,255,0.65)',
+                          fontFamily: 'inherit', fontSize: 12, padding: '7px 12px', cursor: 'pointer',
+                        }}
+                      >
+                        ביטול
+                      </button>
                     </div>
-                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', lineHeight: 1.55 }}>
-                      הפרטים כבר קיימים במערכת — חסרה רק הצהרת הבריאות.
-                      {' '}
-                      {child.onFileHealthSignedAt
-                        ? `ההצהרה מ-${String(child.onFileHealthSignedAt).slice(0, 10)} כבר אינה בתוקף, יש לחתום עליה כאן מחדש.`
-                        : 'בדקו שהפרטים נכונים והמשיכו לחתימה על ההצהרה.'}
+                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', lineHeight: 1.55, marginTop: 4 }}>
+                      בדקו שהפרטים נכונים והמשיכו לחתימה על ההצהרה.
                     </div>
                   </div>
                 )}
@@ -1553,42 +1736,123 @@ export default function PublicOnboardingForm() {
                 {/* Someone already on file with a declaration in force is shown
                     as settled, not handed their own form again. Reopening it is
                     one tick, because a health change is the whole reason to. */}
-                {child.onFileHealthValid && (
+                {child.onFileHealthValid && !child.resignHealth && (
                   <div style={{
-                    background: 'rgba(52,211,153,.1)', border: '1px solid rgba(52,211,153,.3)',
-                    borderRadius: 12, padding: 12, marginBottom: child.resignHealth ? 14 : 0,
+                    background: 'rgba(52,211,153,.08)', border: '1px solid rgba(52,211,153,.3)',
+                    borderRadius: 12, padding: 12, marginBottom: 0,
                   }}>
-                    <div style={{ fontSize: 13, color: '#6ee7b7', fontWeight: 700, marginBottom: 4 }}>
-                      ל{child.name || 'משתתף/ת זה'} יש הצהרת בריאות בתוקף
+                    {/* Reads as a record, not as a form: a locked strip across
+                        the top, so the eye lands on „קיימת” before it lands on
+                        anything clickable. */}
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      fontSize: 11, fontWeight: 700, letterSpacing: '.02em',
+                      color: 'rgba(255,255,255,0.5)', marginBottom: 8,
+                      paddingBottom: 8, borderBottom: '1px solid rgba(255,255,255,0.07)',
+                    }}>
+                      <Lock size={12} /> הצהרה קיימת בתיק — נעולה
+                    </div>
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      fontSize: 14, color: '#6ee7b7', fontWeight: 700, marginBottom: 4,
+                    }}>
+                      <ShieldCheck size={16} /> הצהרת בריאות והסרת אחריות בתוקף
                     </div>
                     <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', lineHeight: 1.55 }}>
                       {child.onFileHealthSignedAt
                         ? `נחתמה ב-${String(child.onFileHealthSignedAt).slice(0, 10)}. `
                         : ''}
-                      אין צורך למלא שוב.
+                      אין צורך למלא שוב — הפרטים נשארים כפי שהם.
                     </div>
-                    <label
-                      className="event-check"
-                      style={{
-                        cursor: 'pointer', marginTop: 10,
-                        borderColor: child.resignHealth ? 'rgba(249,115,22,0.45)' : 'rgba(255,255,255,0.08)',
-                        background: child.resignHealth ? 'rgba(249,115,22,0.08)' : 'rgba(255,255,255,0.03)',
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={!!child.resignHealth}
-                        onChange={(e) => updateChild(index, { resignHealth: e.target.checked })}
-                      />
-                      {/* מנוסח כתנאי ולא כהצהרה: „משהו השתנה” נקרא כאילו כבר
-                          קבענו שכן, ומי שקורא מהר מסמן בלי לחשוב. „אם משהו
-                          השתנה” מחזיר את השאלה למי שיודע את התשובה. */}
-                      <span>אם משהו השתנה במצב הבריאותי — סמנו כאן ומלאו הצהרה מחדש</span>
-                    </label>
+
+                    {/* שני קליקים במכוון: הצהרה קיימת נמחקה בטעות בסימון אחד
+                        בדרך אגב. הראשון רק פותח את השאלה, השני הוא זה שמוחק. */}
+                    {!child.resignAsk ? (
+                      <button
+                        type="button"
+                        onClick={() => updateChild(index, { resignAsk: true })}
+                        style={{
+                          marginTop: 12, background: 'transparent',
+                          border: '1px solid rgba(255,255,255,0.15)', borderRadius: 10,
+                          color: 'rgba(255,255,255,0.6)', fontFamily: 'inherit', fontSize: 12,
+                          padding: '8px 12px', cursor: 'pointer',
+                        }}
+                      >
+                        משהו השתנה במצב הבריאותי?
+                      </button>
+                    ) : (
+                      <div style={{
+                        marginTop: 12, background: 'rgba(249,115,22,.1)',
+                        border: '1px solid rgba(249,115,22,.4)', borderRadius: 10, padding: 12,
+                      }}>
+                        <div style={{
+                          display: 'flex', alignItems: 'center', gap: 6,
+                          fontSize: 13, fontWeight: 700, color: '#fdba74', marginBottom: 6,
+                        }}>
+                          <AlertTriangle size={14} /> למלא הצהרה חדשה?
+                        </div>
+                        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)', lineHeight: 1.55, marginBottom: 10 }}>
+                          {/* בשמו, ובלי לאיים במחיקה: הצהרה לא מוחלפת אלא
+                              מצטרפת לתיק, והחדשה היא זו שתקפה מכאן. */}
+                          תתווסף ל{child.name?.trim() || 'משתתף/ת זה'} הצהרה חדשה שתצטרכו למלא ולחתום עליה.
+                          {' '}ההצהרה
+                          {child.onFileHealthSignedAt ? ` מ-${String(child.onFileHealthSignedAt).slice(0, 10)}` : ' הקודמת'}
+                          {' '}נשמרת בתיק כמו שהיא, והחדשה היא שתהיה בתוקף.
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            onClick={() => updateChild(index, { resignHealth: true, resignAsk: false })}
+                            style={{
+                              background: '#F97316', border: 'none', borderRadius: 10, color: '#fff',
+                              fontFamily: 'inherit', fontSize: 13, fontWeight: 700,
+                              padding: '9px 14px', cursor: 'pointer',
+                            }}
+                          >
+                            כן, למלא הצהרה חדשה
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => updateChild(index, { resignAsk: false })}
+                            style={{
+                              background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
+                              borderRadius: 10, color: 'rgba(255,255,255,0.65)',
+                              fontFamily: 'inherit', fontSize: 13, padding: '9px 14px', cursor: 'pointer',
+                            }}
+                          >
+                            לא, השאירו כמו שזה
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {(!child.onFileHealthValid || child.resignHealth) && (
+                {/* אחרי שנפתחה — הדרך חזרה נשארת פתוחה עד השליחה. */}
+                {child.onFileHealthValid && child.resignHealth && (
+                  <div style={{
+                    background: 'rgba(249,115,22,.1)', border: '1px solid rgba(249,115,22,.4)',
+                    borderRadius: 12, padding: 12, marginBottom: 14,
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap',
+                  }}>
+                    <div style={{ fontSize: 13, color: '#fdba74', fontWeight: 700 }}>
+                      ההצהרה תמולא מחדש
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => updateChild(index, { resignHealth: false, resignAsk: false })}
+                      style={{
+                        background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
+                        borderRadius: 10, color: 'rgba(255,255,255,0.65)',
+                        fontFamily: 'inherit', fontSize: 12, padding: '7px 12px', cursor: 'pointer',
+                      }}
+                    >
+                      ביטול — השאירו את ההצהרה הקיימת
+                    </button>
+                  </div>
+                )}
+
+                {fillsDeclaration(child) && (
                 <>
                 <div className="form-group">
                   <label>{isAdultSelf ? 'שם מלא *' : 'שם פרטי של המשתתף בחוג *'}</label>
@@ -1645,6 +1909,17 @@ export default function PublicOnboardingForm() {
                       חזרו לשלב הקודם והסירו את הסימון „אני מעל גיל 18”.
                     </div>
                   )}
+                  {/* הצד השני של אותו כלל: הורה חותם רק על קטינים. */}
+                  {needsOwnSignature(child) && (
+                    <div style={{
+                      background: 'rgba(248,113,113,.12)', border: '1px solid rgba(248,113,113,.35)',
+                      borderRadius: 10, padding: 10, marginTop: 8,
+                      fontSize: 12, lineHeight: 1.5, color: '#fca5a5',
+                    }}>
+                      מגיל 18 ומעלה חתימת הורה אינה תקפה — {child.name?.trim() || 'המשתתף/ת'}
+                      {' '}צריך/ה למלא טופס בעצמו/ה ולסמן בו „אני מעל גיל 18 ואני ממלא/ת עבור עצמי”.
+                    </div>
+                  )}
                 </div>
                 <KnownChildPrompt
                   childName={child.name}
@@ -1679,21 +1954,34 @@ export default function PublicOnboardingForm() {
                 {!isAdultSelf && (
                   <div className="form-group">
                     <label>טלפון של הילד/ה</label>
+                    {/* הסבר ארוך בתוך שדה נחתך בטלפון — placeholder לא נשבר
+                        לשורה שנייה. ההסבר יורד מתחת לשדה, ובשדה נשאר רק
+                        מה שצריך להקליד. */}
                     <input
                       type="tel"
                       value={child.childPhone}
                       onChange={(e) => updateChild(index, { childPhone: e.target.value })}
-                      placeholder="בשביל יומן המטפסים ופיצ'רים מגניבים לילדים"
+                      placeholder="לא חובה"
                     />
+                    <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', marginTop: 6, lineHeight: 1.5 }}>
+                      בשביל יומן המטפסים ופיצ'רים מגניבים לילדים
+                    </div>
                   </div>
                 )}
                 <div className="form-group">
                   <label>הערות להרשמה</label>
-                  <input
+                  {/* אותה בעיה: השורה נחתכה באמצע. textarea נשברת לשורות
+                      ומראה את כל מה שנכתב בה. */}
+                  <textarea
+                    rows={2}
                     value={child.registrationNotes}
                     onChange={(e) => updateChild(index, { registrationNotes: e.target.value })}
-                    placeholder="יום שמתאים, רוצים להירשם אחרי תאריך מסוים וכו׳"
+                    placeholder="לא חובה"
+                    style={{ resize: 'vertical', minHeight: 62 }}
                   />
+                  <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', marginTop: 6, lineHeight: 1.5 }}>
+                    יום שמתאים, רוצים להירשם אחרי תאריך מסוים וכו׳
+                  </div>
                 </div>
                 </>
                 )}
@@ -1874,7 +2162,7 @@ export default function PublicOnboardingForm() {
                   </p>
                 )}
 
-                <div className="section-title" style={{ marginTop: 20 }}>חתימה על הצהרת בריאות ובטיחות</div>
+                <div className="section-title" style={{ marginTop: 20 }}>חתימה על הצהרת בריאות והסרת אחריות</div>
                 <div className="canvas-container">
                   <div className="canvas-toolbar">
                     <span style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>

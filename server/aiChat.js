@@ -18,6 +18,7 @@ import {
   normalizeAttStatus,
 } from './attendanceUtils.js';
 import { resolveJoinDate } from './equipmentService.js';
+import { childrenOfParent } from './studentGuardians.js';
 import { countEnrolled, maxSlotsOf } from './groupCapacity.js';
 import { activeRegistrations, remainingCapacity } from './activityRegistration.js';
 import { REGISTRATION_PAYMENT_STATUSES, listInterest } from './activityInterest.js';
@@ -89,14 +90,13 @@ function toolSearchCustomers(db, { query = '' } = {}) {
   if (!needle) return { error: 'query חובה' };
   const digits = phoneKey(needle);
 
-  const students = rows(db, 'students');
+  // A merged household's children belong to both parents, so searching by a
+  // child's name has to find either card — and each card lists them all.
   const matches = rows(db, 'parents').filter((parent) => {
     if (includesLoose(parent.name, needle) || includesLoose(parent.lastName, needle)) return true;
     if (includesLoose(parent.email, needle)) return true;
     if (digits.length >= 6 && phoneKey(parent.phone) === digits) return true;
-    return students.some(
-      (student) => String(student.parentId) === String(parent.id) && includesLoose(student.name, needle)
-    );
+    return childrenOfParent(db, parent.id).some((student) => includesLoose(student.name, needle));
   });
 
   return {
@@ -106,8 +106,7 @@ function toolSearchCustomers(db, { query = '' } = {}) {
       name: parent.name || '',
       phone: parent.phone || '',
       status: parent.status || '',
-      students: students
-        .filter((student) => String(student.parentId) === String(parent.id))
+      students: childrenOfParent(db, parent.id)
         .map((student) => student.name)
         .filter(Boolean),
     })),
@@ -169,7 +168,7 @@ function toolGetCustomer(db, { parent_id: parentId } = {}) {
   const parent = findParent(db, parentId);
   if (!parent) return { error: 'לא נמצא לקוח עם המזהה הזה' };
 
-  const students = rows(db, 'students').filter((row) => String(row.parentId) === String(parent.id));
+  const students = childrenOfParent(db, parent.id);
   const studentIds = new Set(students.map((row) => String(row.id)));
   const enrollments = rows(db, 'enrollments').filter((row) => studentIds.has(String(row.student_id)));
 
@@ -676,9 +675,8 @@ export function normalizeChatAction(db, name, args = {}, { today = israelDateStr
     if (args.parent_id && !parent) throw badRequest('parent_id לא קיים');
 
     const student = parent && clean(args.student_name)
-      ? rows(db, 'students').find(
-        (row) => String(row.parentId) === String(parent.id)
-            && clean(row.name).toLocaleLowerCase('he') === clean(args.student_name).toLocaleLowerCase('he')
+      ? childrenOfParent(db, parent.id).find(
+        (row) => clean(row.name).toLocaleLowerCase('he') === clean(args.student_name).toLocaleLowerCase('he')
       )
       : null;
 
@@ -759,9 +757,8 @@ export function normalizeChatAction(db, name, args = {}, { today = israelDateStr
 
   // שם המשתתף נלקח מהמתאמן שבכרטיס אם הוא נמצא שם, ורק אחרת מהמודל.
   const student = parent && clean(args.student_name)
-    ? rows(db, 'students').find(
-      (row) => String(row.parentId) === String(parent.id)
-          && clean(row.name).toLocaleLowerCase('he') === clean(args.student_name).toLocaleLowerCase('he')
+    ? childrenOfParent(db, parent.id).find(
+      (row) => clean(row.name).toLocaleLowerCase('he') === clean(args.student_name).toLocaleLowerCase('he')
     )
     : null;
   if (clean(args.student_name) && !student) {

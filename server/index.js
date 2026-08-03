@@ -199,7 +199,9 @@ import {
   aggregatePosSales,
 } from './posUtils.js';
 import {
+  childrenOfParent,
   chooseRecipientParent,
+  expandHousehold,
   familyCandidates,
   findChildMatches,
   guardianParentIds,
@@ -2848,17 +2850,58 @@ app.get('/api/students/:id/guardians', (req, res) => {
   res.json({ student_id: student.id, guardians: parents });
 });
 
-/** Staff linking a second parent by hand — the public forms do it themselves. */
+/**
+ * Staff adding another contact by hand — the public forms do it themselves.
+ *
+ * Three ways in, all landing on the same link: an existing card picked by id, a
+ * phone that already messaged us and became its own lead card, or a name and
+ * phone that are new to the CRM. The number decides which: `upsertParentByPhone`
+ * returns the card that owns it rather than minting a second copy.
+ *
+ * `studentIds` links the whole household in one request. Doing it per child from
+ * the browser would race two parallel creates into two duplicate parent cards.
+ */
 app.post('/api/students/:id/guardians', async (req, res) => {
   const student = db.getOne('students', req.params.id);
   if (!student) return res.status(404).json({ error: 'המתאמן לא נמצא' });
-  const parentId = String(req.body?.parentId || '').trim();
-  if (!db.getOne('parents', parentId)) {
+
+  const askedParentId = String(req.body?.parentId || '').trim();
+  let parent = askedParentId ? db.getOne('parents', askedParentId) : null;
+  if (askedParentId && !parent) {
     return res.status(400).json({ error: 'כרטיס ההורה לא נמצא' });
   }
-  const link = linkGuardian(db, { studentId: student.id, parentId, source: 'staff' });
-  if (link) await persistCore('student_guardians', link);
-  res.status(201).json({ linked: !!link, student_id: student.id, parent_id: parentId });
+  if (!parent) {
+    const name = String(req.body?.name || '').trim();
+    const phone = String(req.body?.phone || '').trim();
+    if (!name || !phone) {
+      return res.status(400).json({ error: 'צריך שם וטלפון לאיש הקשר' });
+    }
+    // No `status` in the extras on purpose: it would overwrite the status of a
+    // card that already exists, turning a paying customer back into a new lead.
+    parent = db.upsertParentByPhone(name, phone, String(req.body?.email || '').trim(), {});
+    if (!parent?.id) return res.status(400).json({ error: 'יצירת איש הקשר נכשלה' });
+    await persistCore('parents', parent);
+  }
+  const parentId = String(parent.id);
+
+  const asked = Array.isArray(req.body?.studentIds) && req.body.studentIds.length
+    ? req.body.studentIds.map(String)
+    : [String(student.id)];
+  const targets = asked.map((id) => db.getOne('students', id)).filter(Boolean);
+  if (!targets.length) return res.status(400).json({ error: 'לא נבחר מתאמן לשיוך' });
+
+  const alreadyOn = targets.filter((row) => guardianParentIds(db, row).includes(parentId));
+  if (alreadyOn.length === targets.length) {
+    return res.status(400).json({ error: 'איש הקשר הזה כבר מופיע בתיק' });
+  }
+
+  const linked = [];
+  for (const target of targets) {
+    const link = linkGuardian(db, { studentId: target.id, parentId, source: 'staff' });
+    if (link) await persistCore('student_guardians', link);
+    linked.push(String(target.id));
+  }
+  res.status(201).json({ linked: true, student_ids: linked, parent_id: parentId, parent });
 });
 
 /** Who the CRM addresses by default for this child. */
@@ -5463,8 +5506,11 @@ async function loadPublicHousehold(rawPhone) {
   if (!parent) {
     return { found: false, parent: null, children: [], adult_health_valid: false };
   }
-  const children = (db.get('students') || [])
-    .filter((student) => String(student.parentId) === String(parent.id) && student.isAdult !== true)
+  // The household's children, not only the ones whose card names this parent as
+  // primary: after a merge every child belongs to both parents, and a public
+  // form that lists one parent's half asks a family to register a child twice.
+  const children = childrenOfParent(db, parent.id)
+    .filter((student) => student.isAdult !== true)
     .map((student) => {
       const declaration = findLatestValidDeclaration(db, { studentId: student.id });
       const signedAt = declarationSignedAt(declaration) || student.healthSignedAt || null;
@@ -5485,14 +5531,12 @@ async function loadPublicHousehold(rawPhone) {
     .filter((child) => child.name)
     .sort((a, b) => a.name.localeCompare(b.name, 'he'));
 
-  const adultStudent = (db.get('students') || []).find((student) => {
-    if (String(student.parentId) !== String(parent.id) || student.isAdult !== true) return false;
+  const adultStudent = childrenOfParent(db, parent.id).find((student) => {
+    if (student.isAdult !== true) return false;
     const parentName = String(parent.name || '').trim().toLowerCase();
     const studentName = String(student.name || '').trim().toLowerCase();
     return !parentName || studentName === parentName;
-  }) || (db.get('students') || []).find(
-    (student) => String(student.parentId) === String(parent.id) && student.isAdult === true
-  );
+  }) || childrenOfParent(db, parent.id).find((student) => student.isAdult === true);
   const adultDeclaration = (adultStudent
     ? findLatestValidDeclaration(db, { studentId: adultStudent.id })
     : null)
@@ -10936,8 +10980,9 @@ function resolveStudentForHealthForm({ studentId, parent, climberName, phone }) 
     return sn === cleanName || (climberFirstName && sn.includes(climberFirstName));
   };
 
-  // 2) Same parent + matching climber name
-  const siblings = students.filter((s) => s.parentId === parent.id);
+  // 2) Same household + matching climber name — a child registered by the other
+  //     parent is still this parent's child once the family is one card.
+  const siblings = childrenOfParent(db, parent.id);
   const byName = siblings.find(nameMatches);
   if (byName) return byName;
 
@@ -11225,9 +11270,26 @@ app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
     ? findParentForOnboard({ parentId, phone, studentId, idNumber })
     : null;
   const listDefs = db.getBroadcastListDefs();
-  const students = parent
-    ? (db.get('students') || []).filter((s) => s.parentId === parent.id)
-    : [];
+  // The whole household, not only the children whose `parentId` happens to be
+  // this parent. A child registered by the other parent — or moved during a
+  // merge — is linked through `student_guardians`, and filtering on `parentId`
+  // alone dropped them from the form: the parent was never offered a renewal
+  // for a child the CRM shows on their own card.
+  const household = parent ? expandHousehold(db, parent.id) : { parentIds: [], students: [] };
+  const householdParents = household.parentIds
+    .map((id) => db.getOne('parents', id))
+    .filter(Boolean);
+  // A parent who climbs themselves also has a student card. That card is not a
+  // participant this form registers — signing for yourself is what the "I am
+  // over 18 and filling in for myself" box at the top is for.
+  const isParentThemselves = (student) => householdParents.some((p) => {
+    const parentId = normalizedIdNumber(p.idNumber);
+    const studentId = normalizedIdNumber(student.idNumber);
+    if (parentId && studentId) return parentId === studentId;
+    return student.isAdult === true
+      && normalizedChildName(p.name) === normalizedChildName(student.name);
+  });
+  const students = parent ? household.students.filter((s) => !isParentThemselves(s)) : [];
 
   // Onboarding: classes is always on; other lists default off unless explicitly subscribed.
   const broadcastRows = db.get('broadcast_lists') || [];
