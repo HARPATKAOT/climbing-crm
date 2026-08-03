@@ -3227,6 +3227,9 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   const [displayMenuOpen, setDisplayMenuOpen] = useState(false);
   // עולה בכל פעם שהשמות המשובצים הגיעו, כדי שהצ'יפים ייצבעו מחדש איתם.
   const [staffNamesVersion, setStaffNamesVersion] = useState(0);
+  // סינון לפי עובד: מזהה עובד, או ריק לכולם. חל על כל התצוגות.
+  const [staffFilter, setStaffFilter] = useState('');
+  const [staffOptions, setStaffOptions] = useState([]);
   // עולה בכל שינוי שיבוץ, כדי שהשמות על האירועים יתעדכנו בלי לרענן את הדף.
   const [staffNamesTick, setStaffNamesTick] = useState(0);
   const refreshStaffNames = useCallback(() => setStaffNamesTick((t) => t + 1), []);
@@ -3432,10 +3435,19 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     setModal({ ...activity });
   }, [activities]);
 
+  /** האם העובד שנבחר לסינון משובץ לאירוע. בלי סינון — כל האירועים עוברים. */
+  const matchesStaffFilter = useCallback((activity) => {
+    if (!staffFilter) return true;
+    return activityStaffEntries(activity?.id).some((e) => e.id === staffFilter);
+    // staffNamesVersion בתלויות כדי שהסינון יחושב מחדש כשהשיבוצים נטענו.
+  }, [staffFilter, staffNamesVersion]);
+
   const filtered = useMemo(() => {
-    if (typeFilter === 'all') return activities;
-    return activities.filter((a) => activityMatchesFilter(a.type, typeFilter));
-  }, [activities, typeFilter]);
+    const byType = typeFilter === 'all'
+      ? activities
+      : activities.filter((a) => activityMatchesFilter(a.type, typeFilter));
+    return byType.filter(matchesStaffFilter);
+  }, [activities, typeFilter, matchesStaffFilter]);
 
   // Google calendars we may create events on: shown on the board, not the synced
   // wall calendar, and the connected account has write access.
@@ -3450,7 +3462,9 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     ));
   }, [overlayCalendars, overlaySelectedIds, googleStatus?.calendarId]);
 
-  const listItems = useMemo(() => {
+  // הבסיס לפני סינון העובד — ממנו נגזר טווח משיכת השיבוצים, אחרת הסינון היה
+  // מצמצם את הטווח ומוחק את המידע שהוא עצמו נשען עליו.
+  const listItemsBase = useMemo(() => {
     const rows = typeFilter === 'all'
       ? activities.filter((a) => a.type === 'training_vacation')
       : activities.filter((a) => activityMatchesFilter(a.type, typeFilter));
@@ -3461,6 +3475,18 @@ export default function ActivitiesCalendar({ isOwner = false }) {
       return String(a.name || '').localeCompare(String(b.name || ''), 'he');
     });
   }, [activities, typeFilter]);
+
+  const listItems = useMemo(
+    () => listItemsBase.filter(matchesStaffFilter),
+    [listItemsBase, matchesStaffFilter]
+  );
+
+  // עמודת הצוות ברשימה מופיעה כשביקשו לראות מדריך, או כשמסננים לפי עובד —
+  // אחרת אי אפשר לראות למה אירוע נשאר ברשימה.
+  const showStaffColumn = displayFields.includes('staff') || !!staffFilter;
+  const listGridColumns = showStaffColumn
+    ? 'minmax(130px, 170px) minmax(150px, 1fr) minmax(150px, 1fr) minmax(110px, 1fr) auto'
+    : 'minmax(140px, 180px) minmax(160px, 1fr) minmax(120px, 1.2fr) auto';
 
   const byDate = useMemo(() => {
     const map = new Map();
@@ -3533,13 +3559,13 @@ export default function ActivitiesCalendar({ isOwner = false }) {
    */
   const staffRange = useMemo(() => {
     if (viewMode !== 'list') return visibleRange;
-    const dates = listItems
+    const dates = listItemsBase
       .map((item) => String(item.date || '').slice(0, 10))
       .filter(Boolean)
       .sort();
     if (!dates.length) return visibleRange;
     return { from: dates[0], to: dates[dates.length - 1] };
-  }, [viewMode, visibleRange, listItems]);
+  }, [viewMode, visibleRange, listItemsBase]);
 
   const overlayIdsKey = (googleStatus?.overlayCalendarIds || []).join('|');
 
@@ -3584,18 +3610,27 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     ])
       .then(([rows, employees]) => {
         if (cancelled) return;
-        const nameById = new Map(
-          (Array.isArray(employees) ? employees : []).map((e) => [e.id, e.name || ''])
+        const list = Array.isArray(employees) ? employees : [];
+        const nameById = new Map(list.map((e) => [e.id, e.name || '']));
+        setStaffOptions(
+          list
+            .filter((e) => e.is_active !== false && e.name)
+            .map((e) => ({ id: e.id, name: e.name }))
+            .sort((a, b) => a.name.localeCompare(b.name, 'he'))
         );
         const map = new Map();
         for (const row of Array.isArray(rows) ? rows : []) {
           if (!row?.activity_id) continue;
           const name = nameById.get(row.employee_id);
           if (!name) continue;
-          const list = map.get(row.activity_id) || [];
-          if (list.some((e) => e.name === name)) continue;
-          list.push({ name, role: row.role || workTypeRole(row.work_type) || '' });
-          map.set(row.activity_id, list);
+          const entries = map.get(row.activity_id) || [];
+          if (entries.some((e) => e.id === row.employee_id)) continue;
+          entries.push({
+            id: row.employee_id,
+            name,
+            role: row.role || workTypeRole(row.work_type) || '',
+          });
+          map.set(row.activity_id, entries);
         }
         setActivityStaffNames(map);
         setStaffNamesVersion((v) => v + 1);
@@ -4519,6 +4554,32 @@ export default function ActivitiesCalendar({ isOwner = false }) {
             );
           })}
 
+          {/* סינון לפי עובד: מציג רק אירועים שהעובד משובץ אליהם, בכל התצוגות. */}
+          {staffOptions.length > 0 && (
+            <AppSelect
+              className="input"
+              value={staffFilter}
+              onChange={(e) => setStaffFilter(e.target.value)}
+              title="להציג רק אירועים שעובד מסוים משובץ אליהם"
+              style={{
+                fontSize: 12,
+                fontWeight: 700,
+                padding: '5px 10px',
+                borderRadius: 999,
+                width: 'auto',
+                minWidth: 150,
+                border: `1px solid ${staffFilter ? '#38BDF8' : 'var(--border)'}`,
+                background: staffFilter ? 'rgba(56,189,248,0.15)' : 'transparent',
+                color: staffFilter ? '#7DD3FC' : 'var(--text-3)',
+              }}
+            >
+              <option value="">כל העובדים</option>
+              {staffOptions.map((emp) => (
+                <option key={emp.id} value={emp.id}>{emp.name}</option>
+              ))}
+            </AppSelect>
+          )}
+
           {/* בחירת פרטים להצגה. היום רק המדריך — הרשימה בנויה לגדול. */}
           <div style={{ position: 'relative' }}>
             <button
@@ -4721,10 +4782,12 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           border: '1px solid var(--border)',
           borderRadius: 14,
           overflow: 'hidden',
+          // ברוחב מסך צר העמודות לא נדחסות — הטבלה נגללת לצדדים במקום.
+          overflowX: 'auto',
         }}>
           <div style={{
             display: 'grid',
-            gridTemplateColumns: 'minmax(140px, 180px) minmax(160px, 1fr) minmax(120px, 1.2fr) auto',
+            gridTemplateColumns: listGridColumns,
             gap: 12,
             padding: '12px 16px',
             borderBottom: '1px solid var(--border)',
@@ -4735,6 +4798,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           }}>
             <div>תאריכים</div>
             <div>שם</div>
+            {showStaffColumn && <div>צוות</div>}
             <div>הערות</div>
             <div style={{ textAlign: 'start' }}>פעולות</div>
           </div>
@@ -4761,7 +4825,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
                   key={item.id}
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: 'minmax(140px, 180px) minmax(160px, 1fr) minmax(120px, 1.2fr) auto',
+                    gridTemplateColumns: listGridColumns,
                     gap: 12,
                     padding: '12px 16px',
                     borderBottom: '1px solid var(--border)',
@@ -4778,49 +4842,55 @@ export default function ActivitiesCalendar({ isOwner = false }) {
                   }}>
                     {formatListDateRange(item)}
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                      <RowIcon
-                        size={15}
-                        strokeWidth={2.2}
-                        style={{ color: staffIconColor(item) || meta.color, flexShrink: 0 }}
-                        aria-hidden="true"
-                      />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <RowIcon
+                      size={15}
+                      strokeWidth={2.2}
+                      style={{ color: staffIconColor(item) || meta.color, flexShrink: 0 }}
+                      aria-hidden="true"
+                    />
+                    <span style={{
+                      fontWeight: 700, color: 'var(--text-1)', overflow: 'hidden',
+                      textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {item.name || 'ללא שם'}
+                    </span>
+                    {/* כל האירועים חולקים צבע אחד, אז התגית היא מה שמבדיל בין
+                        יום הולדת לקבוצת בית ספר במבט על הרשימה. */}
+                    {isEventType(item.type) && eventKindLabel(activityEventKind(item)) && (
                       <span style={{
-                        fontWeight: 700, color: 'var(--text-1)', overflow: 'hidden',
-                        textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        flexShrink: 0, fontSize: 10, fontWeight: 700, padding: '2px 7px',
+                        borderRadius: 999, color: meta.color, background: meta.bg,
+                        border: `1px solid ${meta.color}44`,
                       }}>
-                        {item.name || 'ללא שם'}
+                        {eventKindLabel(activityEventKind(item))}
                       </span>
-                      {/* כל האירועים חולקים צבע אחד, אז התגית היא מה שמבדיל בין
-                          יום הולדת לקבוצת בית ספר במבט על הרשימה. */}
-                      {isEventType(item.type) && eventKindLabel(activityEventKind(item)) && (
-                        <span style={{
-                          flexShrink: 0, fontSize: 10, fontWeight: 700, padding: '2px 7px',
-                          borderRadius: 999, color: meta.color, background: meta.bg,
-                          border: `1px solid ${meta.color}44`,
-                        }}>
-                          {eventKindLabel(activityEventKind(item))}
-                        </span>
-                      )}
-                    </div>
-                    {/* ברשימה יש רוחב לשורה לכל עובד, אז מופיע גם התפקיד — בצ'יפ
-                        הצר ביומן נשארים השמות בלבד. */}
-                    {displayFields.includes('staff') && activityStaffEntries(item.id).map((staff) => (
-                      <div
-                        key={`${item.id}-${staff.name}`}
-                        style={{
-                          fontSize: 11,
-                          color: 'var(--text-3)',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {staff.role ? `${staff.name} — ${staff.role}` : staff.name}
-                      </div>
-                    ))}
+                    )}
                   </div>
+                  {/* עמודת הצוות: שורה לכל עובד עם התפקיד שלו באירוע. */}
+                  {showStaffColumn && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                      {activityStaffEntries(item.id).length === 0 ? (
+                        <span style={{ fontSize: 12, color: 'var(--text-3)' }}>—</span>
+                      ) : activityStaffEntries(item.id).map((staff) => (
+                        <div
+                          key={`${item.id}-${staff.id}`}
+                          style={{
+                            fontSize: 12,
+                            color: 'var(--text-2)',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {staff.name}
+                          {staff.role && (
+                            <span style={{ color: 'var(--text-3)' }}>{` — ${staff.role}`}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div style={{
                     fontSize: 12, color: 'var(--text-3)', overflow: 'hidden',
                     textOverflow: 'ellipsis', whiteSpace: 'nowrap',
