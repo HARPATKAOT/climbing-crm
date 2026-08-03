@@ -517,6 +517,31 @@ function redirectEquipmentCheckout(req, res) {
 app.get('/e/:token', redirectEquipmentCheckout);
 app.get('/api/e/:token', redirectEquipmentCheckout);
 
+/**
+ * Short link to a group's registration page.
+ *
+ * The community centre's own address carries the class name in the query
+ * string, so it arrives in WhatsApp as four lines of percent-encoding — ugly,
+ * and impossible to tell apart from the next one. This is `/s/<group>/<freq>`
+ * and it looks up the real address at click time, which also means a link
+ * already sent to a family keeps working after the centre changes theirs.
+ */
+function redirectGroupSignup(req, res) {
+  const id = String(req.params.groupId || '').trim();
+  const twice = String(req.params.freq || '').toLowerCase() === '2';
+  const group = db.getOne('groups', id);
+  if (!group) return res.status(404).send('הקבוצה לא נמצאה');
+  const target = twice
+    ? (group.signupLinkTwice || group.signupLinkWeek)
+    : (group.signupLinkWeek || group.signupLinkTwice);
+  if (!target) return res.status(404).send('אין קישור הרשמה לקבוצה הזו');
+  return res.redirect(302, target);
+}
+app.get('/s/:groupId/:freq', redirectGroupSignup);
+app.get('/s/:groupId', redirectGroupSignup);
+app.get('/api/s/:groupId/:freq', redirectGroupSignup);
+app.get('/api/s/:groupId', redirectGroupSignup);
+
 /** Same contract as /e, for the two approved event template buttons. */
 function eventRedirect(pagePath) {
   return (req, res) => {
@@ -3684,6 +3709,68 @@ app.get('/api/public/equipment/:token', publicFormRateLimit, async (req, res) =>
   } catch (err) {
     console.error('public equipment lookup error:', err.message);
     res.status(503).json({ error: err.message || 'טעינת דף הציוד נכשלה' });
+  }
+});
+
+/**
+ * "We already have that from last year."
+ *
+ * A family was made to pay for a chalk bag they already owned, because the only
+ * way to record owning one was a staff member ticking it in the CRM — and the
+ * parent staring at the payment page had no way to say so. The status already
+ * existed; what was missing was the parent's own hand on it.
+ *
+ * Shoes are excluded: they are rented for the season, not owned, and marking
+ * them "own" here would quietly cancel a rental the wall has to hand out.
+ */
+app.post('/api/public/equipment/:token/own', publicFormRateLimit, async (req, res) => {
+  try {
+    const checkout = await resolveEquipmentCheckout(req.params.token);
+    if (!checkout) return res.status(404).json({ error: 'קישור התשלום לא נמצא' });
+    if (checkout.expires_at && new Date(checkout.expires_at).getTime() < Date.now()) {
+      return res.status(410).json({ error: 'פג תוקף הקישור — בקשו קישור חדש מהצוות' });
+    }
+    await refreshStudentEquipmentCache();
+    const student = db.getOne('students', checkout.student_id);
+    if (!student || !isKidStudent(student)) {
+      return res.status(404).json({ error: 'המתאמן לא נמצא' });
+    }
+
+    const wanted = Array.isArray(req.body?.itemTypes)
+      ? req.body.itemTypes.map((t) => String(t || '').trim())
+      : [];
+    const allowed = wanted.filter(
+      (t) => EQUIPMENT_ITEM_TYPES.includes(t) && t !== 'shoes'
+    );
+    if (!allowed.length) {
+      return res.status(400).json({ error: 'בחרו לפחות פריט אחד שכבר יש למתאמן' });
+    }
+
+    const items = ensureStudentEquipment({ db, student, persist: persistCore });
+    const marked = [];
+    for (const type of allowed) {
+      const row = items.find((i) => i.item_type === type);
+      if (!row) continue;
+      // Never overwrite something already paid for — that is a real payment.
+      if (row.payment_status === 'paid') continue;
+      const result = markEquipmentOwn({ db, persist: persistCore, rowId: row.id });
+      if (result.ok) marked.push(type);
+    }
+    if (!marked.length) {
+      return res.status(400).json({ error: 'לא נמצאו פריטים לסימון' });
+    }
+
+    const fresh = ensureStudentEquipment({ db, student, persist: persistCore });
+    res.json({
+      ok: true,
+      marked,
+      items: fresh,
+      unpaid_items: unpaidEquipmentItems(fresh),
+      all_paid: unpaidEquipmentItems(fresh).length === 0,
+    });
+  } catch (err) {
+    console.error('public equipment own error:', err.message);
+    res.status(503).json({ error: err.message || 'סימון הציוד נכשל' });
   }
 });
 

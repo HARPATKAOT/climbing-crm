@@ -553,8 +553,23 @@ export function markEquipmentUnpaid({ db, persist, rowId } = {}) {
 }
 
 /** @param {{shoes?:number}} [overrides] מחיר נעליים מקוזז, כשהוא ידוע */
+/**
+ * `settings` may be the whole settings object or just its `prices` — both are
+ * passed around, and telling them apart by eye is exactly what went wrong: the
+ * bot handed over a bare prices object, `normalizeEquipmentSettings` found no
+ * `.prices` inside it, and every quote fell back to the built-in defaults. A
+ * customer was told 350 ₪ for equipment priced at 280.
+ */
+function pricesFrom(settings) {
+  if (settings && typeof settings === 'object' && !settings.prices
+    && ('shoes' in settings || 'shirt' in settings || 'chalk_bag' in settings)) {
+    return normalizeEquipmentSettings({ prices: settings }).prices;
+  }
+  return normalizeEquipmentSettings(settings).prices;
+}
+
 export function computeEquipmentTotal(settings, itemTypes = [], overrides = {}) {
-  const prices = { ...normalizeEquipmentSettings(settings).prices };
+  const prices = { ...pricesFrom(settings) };
   if (Number.isFinite(Number(overrides?.shoes))) {
     prices.shoes = Math.max(0, Number(overrides.shoes));
   }

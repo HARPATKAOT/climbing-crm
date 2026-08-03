@@ -36,6 +36,7 @@ export default function PublicEquipmentPayment() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
+  const [owning, setOwning] = useState('');
   const [iframeHeight, setIframeHeight] = useState(720);
 
   useEffect(() => {
@@ -108,6 +109,31 @@ export default function PublicEquipmentPayment() {
     );
   };
 
+  /**
+   * The parent tells us the child already has this. It is recorded on the
+   * trainee, exactly as if a staff member had ticked it — so nobody chases the
+   * payment, and the wall knows not to hand one out.
+   */
+  const markOwn = async (type) => {
+    setOwning(type);
+    setError('');
+    try {
+      const res = await fetch(`/api/public/equipment/${token}/own`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemTypes: [type] }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || 'הסימון נכשל');
+      setData((prev) => (prev ? { ...prev, ...body } : prev));
+      setSelected((prev) => prev.filter((t) => t !== type));
+    } catch (err) {
+      setError(err.message || 'הסימון נכשל');
+    } finally {
+      setOwning('');
+    }
+  };
+
   const startPay = async () => {
     setPaying(true);
     setError('');
@@ -165,6 +191,13 @@ export default function PublicEquipmentPayment() {
               <p className="eq-pay-sub">
                 שלום {data?.parent_name || 'הורה'}, בחרו את הפריטים לתשלום.
               </p>
+              {/* Said once, plainly: a child who turns up without the gear
+                  cannot train, and that is not something to discover at the
+                  door. */}
+              <p className="eq-pay-required">
+                ההגעה לחוג עם הציוד היא חובה. אם כבר יש למתאמן פריט מהבית או
+                משנה שעברה — סמנו אותו למטה במקום לשלם עליו.
+              </p>
             </>
           )}
         </header>
@@ -193,6 +226,18 @@ export default function PublicEquipmentPayment() {
                           <strong>{labels[type] || type}</strong>
                           <span>{formatIls(prices[type] || 0)}</span>
                         </div>
+                        {/* Shoes are rented for the season, never owned, so
+                            there is nothing to declare about them here. */}
+                        {type !== 'shoes' && (
+                          <button
+                            type="button"
+                            className="eq-pay-own"
+                            disabled={!!paymentUrl || owning === type}
+                            onClick={(e) => { e.preventDefault(); markOwn(type); }}
+                          >
+                            {owning === type ? 'שומר…' : 'כבר יש לנו'}
+                          </button>
+                        )}
                       </label>
                     );
                   })}
@@ -291,6 +336,19 @@ export default function PublicEquipmentPayment() {
         .eq-pay-kicker{margin:14px 0 0;color:#94a3b8;font-size:13px;font-weight:700}
         .eq-pay-title{margin:8px 0 10px;font-size:clamp(28px,5vw,40px);line-height:1.2;font-weight:900;color:#fff}
         .eq-pay-sub{margin:0;color:#cbd5e1;line-height:1.6}
+        .eq-pay-required{
+          margin:12px 0 0;padding:10px 12px;border-radius:12px;line-height:1.6;
+          border:1px solid rgba(251,191,36,.35);background:rgba(251,191,36,.08);
+          color:#fcd34d;font-size:13px;font-weight:600;
+        }
+        .eq-pay-own{
+          margin-inline-start:auto;flex-shrink:0;cursor:pointer;
+          border:1px solid rgba(255,255,255,.18);border-radius:999px;
+          background:transparent;color:#cbd5e1;font:inherit;font-size:12px;
+          font-weight:700;padding:6px 12px;white-space:nowrap;
+        }
+        .eq-pay-own:hover:not(:disabled){border-color:#38bdf8;color:#38bdf8}
+        .eq-pay-own:disabled{opacity:.5;cursor:default}
         .eq-pay-card{
           border:1px solid rgba(255,255,255,.12);border-radius:22px;padding:18px;
           background:rgba(15,23,42,.96);box-shadow:0 24px 70px rgba(0,0,0,.45);

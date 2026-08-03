@@ -12,7 +12,7 @@ import { groupMatchesGradeLetter } from './groupBands.js';
 import { studentsForParent, isIdentifiedParent } from './whatsappBot.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { healthExpiryDate, declarationSignedAt } from './healthValidity.js';
-import { appPublicBase } from './publicLinks.js';
+import { appPublicBase, apiRedirectBase } from './publicLinks.js';
 import { persistCore } from './db.js';
 import {
   newCheckoutToken,
@@ -882,8 +882,13 @@ export function buildCustomerTools({
         };
       }
       const group = groups[0];
-      const week = group.signupLinkWeek || '';
-      const twice = group.signupLinkTwice || '';
+      // Short links on our own domain: the community centre's address arrives
+      // as four lines of percent-encoding, and two of them look identical.
+      // Built here rather than through buildRedirectUrl, which percent-encodes
+      // its token — and the frequency lives in a second path segment.
+      const shortLink = (freq) => `${apiRedirectBase()}/s/${encodeURIComponent(group.id)}/${freq}`;
+      const week = group.signupLinkWeek ? shortLink(1) : '';
+      const twice = group.signupLinkTwice ? shortLink(2) : '';
       return {
         קישורים: [{
           שכבה: group.ageCategory || '',
