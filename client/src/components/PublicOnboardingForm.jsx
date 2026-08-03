@@ -564,8 +564,11 @@ export default function PublicOnboardingForm() {
         }
         if (Array.isArray(data.students) && data.students.length) {
           setChildren(data.students.map((s) => {
-            const answers = {};
-            qs.forEach((q) => { answers[q.id] = false; });
+            // Unanswered, not "no". Filling these in as false meant a returning
+            // family opened the questionnaire with every medical question
+            // already answered on their behalf — and a parent who scrolled past
+            // it would have declared, in signature, that nothing applies.
+            const answers = blankAnswers(qs);
             return {
               id: s.id,
               name: s.name || '',
