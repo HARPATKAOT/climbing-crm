@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   BOT_CAPABILITIES,
+  CAPABILITY_INPUT_KEYS,
   CAPABILITY_KEYS,
   capabilitySettingKey,
   capabilityState,
@@ -49,6 +50,27 @@ test('registering an interest cannot outlive talking about events', () => {
 
   const state = capabilityState({ botCap_events: false });
   assert.equal(state.find((c) => c.key === 'event_interest').enabled, false);
+});
+
+test('a capability may own a field, and stays inert while it is empty', () => {
+  // The community centre's secretary can change, so the phone is something the
+  // owner types — not a redeploy. The switch itself carries no model tool: the
+  // exchange is handled in code, and the switch gates that branch.
+  const centre = capabilityState({}).find((c) => c.key === 'centre_report');
+  assert.equal(centre.input.key, 'aiCentrePhones');
+  assert.equal(centre.input.value, '');
+  assert.deepEqual(CAPABILITY_INPUT_KEYS, ['aiCentrePhones']);
+
+  const withPhone = capabilityState({ aiCentrePhones: '0501234567' })
+    .find((c) => c.key === 'centre_report');
+  assert.equal(withPhone.input.value, '0501234567');
+
+  // Turning it off must not withdraw a tool from the model — it owns none.
+  assert.deepEqual(
+    [...enabledToolNames({ botCap_centre_report: false })].sort(),
+    [...enabledToolNames({})].sort()
+  );
+  assert.equal(isCapabilityEnabled({ botCap_centre_report: false }, 'centre_report'), false);
 });
 
 test('the settings key is stable, because it is stored in the database', () => {

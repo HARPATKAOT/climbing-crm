@@ -14,7 +14,7 @@ import {
 } from './whatsapp.js';
 import { whatsappConnectService } from './whatsappConnect.js';
 import { automationsService, runScheduledAutomationsIfDue } from './automations.js';
-import { capabilityState, capabilitySettingKey, CAPABILITY_KEYS } from './botCapabilities.js';
+import { capabilityState, capabilitySettingKey, CAPABILITY_KEYS, CAPABILITY_INPUT_KEYS } from './botCapabilities.js';
 import { listBotActions, botActionSummary, BOT_ACTION_TYPES } from './botActivityLog.js';
 import {
   loadAgendaSettings,
@@ -1204,6 +1204,15 @@ app.put('/api/whatsapp/capabilities', requireOwner, async (req, res) => {
   for (const key of CAPABILITY_KEYS) {
     if (incoming[key] === undefined) continue;
     patch[capabilitySettingKey(key)] = !!incoming[key];
+  }
+  // A capability may own one free-text setting — the community centre's phone
+  // numbers, so a change of secretary is a field the owner edits, not a deploy.
+  const values = req.body?.values;
+  if (values && typeof values === 'object') {
+    for (const key of CAPABILITY_INPUT_KEYS) {
+      if (values[key] === undefined) continue;
+      patch[key] = String(values[key] || '').slice(0, 300);
+    }
   }
   if (!Object.keys(patch).length) {
     return res.status(400).json({ error: 'לא נשלחה אף יכולת מוכרת' });

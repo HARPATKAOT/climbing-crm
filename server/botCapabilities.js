@@ -79,7 +79,27 @@ export const BOT_CAPABILITIES = [
     hint: 'רואה את הילדים כדי לשאול «בשביל מי מהם?»',
     tools: ['getFamilyCard'],
   },
+  {
+    key: 'centre_report',
+    label: 'דיווח למתנ״ס',
+    hint: 'המתנ״ס כותב שם של ילד, והבוט עונה ממתי הוא מתאמן (בלי אימון ההיכרות) '
+      + 'ומסמן אותו כרשום',
+    // Not a model tool: a fixed exchange with one right answer, handled in code
+    // before the model is reached. The switch gates that branch instead.
+    tools: [],
+    input: {
+      key: 'aiCentrePhones',
+      label: 'מספרי הטלפון של המתנ״ס',
+      placeholder: '0501234567, 0521234567',
+      hint: 'מופרדים בפסיק. ריק = התהליך לא יופעל על אף הודעה.',
+    },
+  },
 ];
+
+/** Free-text settings a capability owns, so the panel may write them. */
+export const CAPABILITY_INPUT_KEYS = BOT_CAPABILITIES
+  .filter((c) => c.input)
+  .map((c) => c.input.key);
 
 export const CAPABILITY_KEYS = BOT_CAPABILITIES.map((c) => c.key);
 
@@ -113,7 +133,7 @@ export function enabledToolNames(settings) {
   return allowed;
 }
 
-/** The switches as the screen renders them. */
+/** The switches as the screen renders them, with any value they own. */
 export function capabilityState(settings) {
   return BOT_CAPABILITIES.map((capability) => ({
     key: capability.key,
@@ -121,5 +141,8 @@ export function capabilityState(settings) {
     hint: capability.hint,
     requires: capability.requires || null,
     enabled: isCapabilityEnabled(settings, capability.key),
+    input: capability.input
+      ? { ...capability.input, value: String(settings?.[capability.input.key] ?? '') }
+      : null,
   }));
 }

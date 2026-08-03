@@ -110,6 +110,7 @@ import {
 import { runCustomerToolTurn, historyToContents } from './botToolTurn.js';
 import { alertRecipients } from './staffAlerts.js';
 import { recordBotAction } from './botActivityLog.js';
+import { isCapabilityEnabled } from './botCapabilities.js';
 import { buildCentreReport, formatReportDate } from './centreReport.js';
 import { groupMatchesGradeLetter } from './groupBands.js';
 
@@ -1879,7 +1880,7 @@ export const whatsappService = {
     // The community centre writes us a child's name and waits for a billing
     // date. It is a fixed exchange with one right answer, so it never reaches
     // the model: a wrong date here is a wrong charge to a family.
-    if (isCentrePhone(settings, normalizedPhone)) {
+    if (isCapabilityEnabled(settings, 'centre_report') && isCentrePhone(settings, normalizedPhone)) {
       const report = await handleCentreMessage({ text, phone: normalizedPhone, isSimulator });
       if (report) {
         await whatsappService.sendBotReply(normalizedPhone, report.reply, {

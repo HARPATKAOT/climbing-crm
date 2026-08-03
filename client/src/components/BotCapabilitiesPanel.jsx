@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Loader2 } from 'lucide-react';
 
 /**
@@ -15,6 +15,8 @@ export default function BotCapabilitiesPanel({ disabled = false }) {
   const [loading, setLoading] = useState(true);
   const [savingKey, setSavingKey] = useState('');
   const [error, setError] = useState('');
+  // What the server last confirmed, so an untouched field is never re-saved.
+  const savedValues = useRef({});
 
   useEffect(() => {
     let cancelled = false;
@@ -22,7 +24,11 @@ export default function BotCapabilitiesPanel({ disabled = false }) {
       try {
         const res = await fetch('/api/whatsapp/capabilities');
         const data = await res.json();
-        if (!cancelled) setCapabilities(data.capabilities || []);
+        if (cancelled) return;
+        setCapabilities(data.capabilities || []);
+        for (const c of data.capabilities || []) {
+          if (c.input) savedValues.current[c.input.key] = c.input.value;
+        }
       } catch {
         if (!cancelled) setError('לא הצלחנו לטעון את היכולות');
       } finally {
@@ -32,28 +38,50 @@ export default function BotCapabilitiesPanel({ disabled = false }) {
     return () => { cancelled = true; };
   }, []);
 
-  const toggle = async (key, enabled) => {
+  const save = async (key, body, revert) => {
     setSavingKey(key);
     setError('');
-    // Optimistic, then reconciled with the server's answer: a dependent switch
-    // ("register an interest") can be turned off by its parent, and the server
-    // is the one that knows.
-    setCapabilities((prev) => prev.map((c) => (c.key === key ? { ...c, enabled } : c)));
     try {
       const res = await fetch('/api/whatsapp/capabilities', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ capabilities: { [key]: enabled } }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'שמירה נכשלה');
       setCapabilities(data.capabilities || []);
+      for (const c of data.capabilities || []) {
+        if (c.input) savedValues.current[c.input.key] = c.input.value;
+      }
     } catch (err) {
       setError(err.message || 'שמירה נכשלה');
-      setCapabilities((prev) => prev.map((c) => (c.key === key ? { ...c, enabled: !enabled } : c)));
+      if (revert) revert();
     } finally {
       setSavingKey('');
     }
+  };
+
+  const toggle = (key, enabled) => {
+    // Optimistic, then reconciled with the server's answer: a dependent switch
+    // ("register an interest") can be turned off by its parent, and the server
+    // is the one that knows.
+    setCapabilities((prev) => prev.map((c) => (c.key === key ? { ...c, enabled } : c)));
+    return save(key, { capabilities: { [key]: enabled } }, () =>
+      setCapabilities((prev) => prev.map((c) => (c.key === key ? { ...c, enabled: !enabled } : c))));
+  };
+
+  /** Typing is local; the write happens when the field is left, and only if
+   *  the value actually changed — leaving a field alone is not an edit. */
+  const setInputValue = (key, value) => setCapabilities((prev) => prev.map(
+    (c) => (c.key === key ? { ...c, input: { ...c.input, value } } : c)
+  ));
+
+  const saveInput = (capability) => {
+    const saved = savedValues.current[capability.input.key];
+    const next = capability.input.value;
+    if (saved === next) return;
+    savedValues.current[capability.input.key] = next;
+    save(capability.key, { values: { [capability.input.key]: next } });
   };
 
   const byKey = Object.fromEntries(capabilities.map((c) => [c.key, c]));
@@ -80,37 +108,69 @@ export default function BotCapabilitiesPanel({ disabled = false }) {
             const parentOff = c.requires && byKey[c.requires] && !byKey[c.requires].enabled;
             const rowDisabled = disabled || !!parentOff || savingKey === c.key;
             return (
-              <label
+              <div
                 key={c.key}
                 style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: 10,
                   padding: '10px 8px',
                   borderRadius: 8,
-                  cursor: rowDisabled ? 'not-allowed' : 'pointer',
-                  opacity: rowDisabled ? 0.5 : 1,
+                  opacity: rowDisabled && !c.input ? 0.5 : 1,
                   background: c.enabled ? 'rgba(37,211,102,0.05)' : 'transparent',
                 }}
               >
-                <input
-                  type="checkbox"
-                  checked={!!c.enabled}
-                  disabled={rowDisabled}
-                  onChange={(e) => toggle(c.key, e.target.checked)}
-                  style={{ width: 18, height: 18, marginTop: 2, flexShrink: 0 }}
-                />
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
-                    {c.label}
-                    {savingKey === c.key && <Loader2 size={12} className="spin" />}
+                {/* The label wraps only the switch: a capability with a field
+                    must let you click into the field without flipping it. */}
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 10,
+                    cursor: rowDisabled ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!c.enabled}
+                    disabled={rowDisabled}
+                    onChange={(e) => toggle(c.key, e.target.checked)}
+                    style={{ width: 18, height: 18, marginTop: 2, flexShrink: 0 }}
+                  />
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {c.label}
+                      {savingKey === c.key && <Loader2 size={12} className="spin" />}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+                      {c.hint}
+                      {parentOff ? ' · כבוי כי היכולת שמעליו כבויה' : ''}
+                    </div>
                   </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
-                    {c.hint}
-                    {parentOff ? ' · כבוי כי היכולת שמעליו כבויה' : ''}
+                </label>
+
+                {c.input && (
+                  <div style={{ marginTop: 8, marginInlineStart: 28 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 4 }}>
+                      {c.input.label}
+                    </div>
+                    <input
+                      type="text"
+                      className="input"
+                      dir="ltr"
+                      value={c.input.value}
+                      placeholder={c.input.placeholder}
+                      disabled={disabled || !c.enabled}
+                      onChange={(e) => setInputValue(c.key, e.target.value)}
+                      onBlur={() => saveInput(c)}
+                      style={{ width: '100%', fontSize: 12 }}
+                    />
+                    <div style={{ fontSize: 10.5, color: 'var(--text-3)', marginTop: 4 }}>
+                      {c.input.hint}
+                      {!String(c.input.value).trim() && c.enabled
+                        ? ' · אין מספר, לכן התהליך לא פעיל בפועל'
+                        : ''}
+                    </div>
                   </div>
-                </div>
-              </label>
+                )}
+              </div>
             );
           })}
         </div>
