@@ -244,7 +244,11 @@ function ShopPurchase({ slug }) {
       // A child typed in by hand may already be on the other parent's file.
       // Ask once, before anything is written.
       if (!holder.id && !knownChild) {
-        const match = await checkKnownChild({ ...holder, phone: buyer.phone });
+        const match = await checkKnownChild({
+          ...holder,
+          phone: buyer.phone,
+          templateSlug: item?.form_template?.slug || '',
+        });
         setKnownChild({ ...match, linked: match.match ? null : false });
         if (match.match) return;
       }

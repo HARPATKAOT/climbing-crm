@@ -990,6 +990,7 @@ export default function PublicOnboardingForm() {
             birthDate: kid.birthDate,
             idNumber: kid.idNumber,
             phone: parent.phone,
+            templateSlug: template?.slug || '',
           });
           return [childKey(kid), { ...match, linked: match.match ? null : false }];
         }));

@@ -5,7 +5,7 @@
  * The answer only ever offers a link; a failed or slow check must never block a
  * registration, so every error resolves to "no match".
  */
-export async function checkKnownChild({ name, birthDate, idNumber = '', phone = '' } = {}) {
+export async function checkKnownChild({ name, birthDate, idNumber = '', phone = '', templateSlug = '' } = {}) {
   const child = String(name || '').trim();
   const born = String(birthDate || '').trim();
   const id = String(idNumber || '').replace(/\D/g, '');
@@ -13,7 +13,10 @@ export async function checkKnownChild({ name, birthDate, idNumber = '', phone = 
   // date are only meaningful together.
   if (!id && (!child || !born)) return { match: false };
   try {
+    // Which declaration is being filled. Whether the matched child is already
+    // covered is only an answer about a particular form.
     const params = new URLSearchParams({ name: child, birthDate: born, idNumber: id, phone });
+    if (templateSlug) params.set('templateSlug', templateSlug);
     const response = await fetch(`/api/public/child-check?${params.toString()}`);
     if (!response.ok) return { match: false };
     const body = await response.json();

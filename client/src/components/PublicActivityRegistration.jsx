@@ -309,6 +309,7 @@ export default function PublicActivityRegistration() {
             name: participant.name,
             birthDate: participant.birthDate,
             phone: parent.phone,
+            templateSlug: activity?.form_template?.slug || '',
           });
           return [participant.key, { ...match, linked: match.match ? null : false }];
         }));

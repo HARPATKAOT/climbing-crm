@@ -5797,10 +5797,18 @@ app.get('/api/public/child-check', publicFormRateLimit, async (req, res) => {
       if (remoteDecls) db.set('health_declarations', remoteDecls);
     }
     const matched = matches.length === 1 ? matches[0].student : null;
+    // Scoped to the form being filled: a child linked from another family is
+    // covered for the wall, not for a trip whose risks that signature never
+    // mentioned. The submit enforces the same rule — without this the form
+    // would promise a reuse the server then refuses.
+    const wantedSlug = String(req.query.templateSlug || '').trim().toLowerCase();
+    const flagCoversThisForm = !wantedSlug || wantedSlug === 'wall';
     res.json(publicChildMatchPayload(matches, {
       healthValid: matched
-        ? !!findLatestValidDeclaration(db, { studentId: matched.id })
-          || (!!matched.healthSignedAt && isHealthDeclarationValid(matched.healthSignedAt))
+        ? !!findLatestValidDeclaration(db, { studentId: matched.id, templateSlug: wantedSlug })
+          || (flagCoversThisForm
+            && !!matched.healthSignedAt
+            && isHealthDeclarationValid(matched.healthSignedAt))
         : false,
     }));
   } catch (err) {
