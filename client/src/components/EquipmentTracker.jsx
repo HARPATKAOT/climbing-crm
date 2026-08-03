@@ -278,6 +278,11 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
       season_start: monthDayToDisplay(settings?.season_start) || '01/09',
       season_mid: monthDayToDisplay(settings?.season_mid) || '15/02',
       season_end: monthDayToDisplay(settings?.season_end) || '31/07',
+      info_shoes: settings?.item_info?.shoes || '',
+      info_shirt: settings?.item_info?.shirt || '',
+      info_chalk_bag: settings?.item_info?.chalk_bag || '',
+      enrichment_fee: settings?.enrichment_fee == null ? '' : String(settings.enrichment_fee),
+      enrichment_info: settings?.enrichment_info || '',
     });
   };
 
@@ -326,6 +331,15 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
           // נשמר בשקט כגיבוי לשרת; תאריכי העונה הם המקור העיקרי.
           rental_days: settings?.rental_days,
           price_includes_vat: draft.price_includes_vat !== false,
+          // What each item is for, and what the enrichment fee buys. The bot
+          // reads these verbatim — an empty field means it says nothing.
+          item_info: {
+            shoes: draft.info_shoes || '',
+            shirt: draft.info_shirt || '',
+            chalk_bag: draft.info_chalk_bag || '',
+          },
+          enrichment_fee: String(draft.enrichment_fee || '').trim(),
+          enrichment_info: draft.enrichment_info || '',
           ...season,
         }),
       });
@@ -527,6 +541,69 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
             />
             המחירים כוללים מע״מ
           </label>
+
+          {/* A price answers "how much", never "why". A parent asking what
+              magnesium is, or what the enrichment fee pays for, used to reach
+              the team — the CRM held the number and nobody had written the
+              reason down. The bot reads these fields word for word, and says
+              nothing where they are empty. */}
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14, marginTop: 4 }}>
+            <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 2 }}>
+              מה זה ולמה צריך את זה
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.6 }}>
+              מה שתכתבו כאן הוא מה שהבוט יענה לשאלות „למה צריך נעלי טיפוס?”,
+              „מה זה מגנזיום?”, „על מה משלמים דמי העשרה?”. שדה ריק — הבוט לא
+              ימציא הסבר, אלא יעביר לצוות.
+            </div>
+
+            {[
+              { key: 'info_shoes', label: 'נעלי טיפוס', placeholder: 'למה צריך נעליים ייעודיות, ואיך ההשכרה עובדת' },
+              { key: 'info_chalk_bag', label: 'שק מגנזיום ומגנזיום', placeholder: 'מה זה מגנזיום ולמה משתמשים בו' },
+              { key: 'info_shirt', label: 'חולצת חוג', placeholder: 'למה צריך חולצה' },
+            ].map(({ key, label, placeholder }) => (
+              <div key={key} style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                <textarea
+                  className="input input-sm"
+                  rows={2}
+                  placeholder={placeholder}
+                  value={draft[key] || ''}
+                  onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
+                  style={{ width: '100%', resize: 'vertical', lineHeight: 1.6 }}
+                />
+              </div>
+            ))}
+
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>דמי העשרה — סכום (₪)</div>
+              <input
+                className="input input-sm"
+                type="number"
+                min="0"
+                placeholder="למשל 110"
+                value={draft.enrichment_fee || ''}
+                onChange={(e) => setDraft((d) => ({ ...d, enrichment_fee: e.target.value }))}
+                style={{ maxWidth: 160 }}
+              />
+              <div style={{ fontSize: 10.5, color: 'var(--text-3)', marginTop: 4 }}>
+                השאירו ריק אם אין דמי העשרה — הבוט לא ינקוב בסכום.
+              </div>
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>דמי העשרה — על מה זה הולך</div>
+              <textarea
+                className="input input-sm"
+                rows={4}
+                placeholder={'למשל: תקציב שנתי לצ׳ופרים לילדים — סופגניות בחנוכה, אוזני המן בפורים, '
+                  + 'ואותות דרגה שהילדים מקבלים אחרי מבחני הדרגה בסוף השנה.'}
+                value={draft.enrichment_info || ''}
+                onChange={(e) => setDraft((d) => ({ ...d, enrichment_info: e.target.value }))}
+                style={{ width: '100%', resize: 'vertical', lineHeight: 1.6 }}
+              />
+            </div>
+          </div>
 
           {settingsError && (
             <div style={{ padding: 8, borderRadius: 10, background: 'rgba(248,113,113,.12)', color: '#f87171', fontSize: 12 }}>

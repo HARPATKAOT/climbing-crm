@@ -220,6 +220,16 @@ export async function loadEquipmentPrices({ fresh = false } = {}) {
   return prices;
 }
 
+/**
+ * The full equipment settings — prices plus the explanations the owner wrote.
+ * `null` when we could not read them, for the same reason as the prices.
+ */
+export async function loadEquipmentInfo() {
+  const read = await supa.readAppSetting('equipment_settings').catch(() => ({ ok: false }));
+  if (!read.ok || !read.configured) return null;
+  return normalizeEquipmentSettings(read.value);
+}
+
 export function resetEquipmentPriceCache() {
   equipmentCache = { value: null, at: 0 };
 }
@@ -306,7 +316,9 @@ export function buildPriceReply({ groups = [], equipmentPrices = null, enrichmen
  * that has not filled the field in yet.
  */
 export function enrichmentFeeFromSettings(settings = {}) {
-  const field = Number(settings.aiEnrichmentFee);
+  // The owner-facing field lives with the equipment settings, where the
+  // explanation of what the fee buys sits beside it.
+  const field = Number(settings.enrichment_fee ?? settings.aiEnrichmentFee);
   if (Number.isFinite(field) && field >= 0) return field;
 
   const facts = String(settings.aiBusinessFacts || '');

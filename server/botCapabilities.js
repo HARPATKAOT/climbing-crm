@@ -57,9 +57,9 @@ export const BOT_CAPABILITIES = [
   },
   {
     key: 'equipment',
-    label: 'קישור תשלום ציוד',
-    hint: 'ציוד שטרם שולם עבור ילד מסוים',
-    tools: ['getEquipmentPaymentLink'],
+    label: 'ציוד ודמי העשרה',
+    hint: 'קישור תשלום, ומה כל פריט ולמה — לפי מה שכתוב במסך הציוד',
+    tools: ['getEquipmentPaymentLink', 'getEquipmentInfo'],
   },
   {
     key: 'follow_ups',

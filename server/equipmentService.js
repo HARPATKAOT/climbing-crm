@@ -26,6 +26,17 @@ export const EQUIPMENT_ITEM_LABELS = {
 export const EQUIPMENT_TEMPLATE_NAME = 'equipment_payment_link';
 export const EQUIPMENT_TEMPLATE_LEGACY_NAMES = ['equipment_payment'];
 
+/**
+ * What each item is *for*, in the owner's words.
+ *
+ * A price on its own does not answer "why does my child need magnesium?" —
+ * a parent asking that got a handoff, because the CRM held the number and
+ * nobody had written down the reason. These are free text on purpose: the
+ * answer changes with the season and the gym, and the bot reads them rather
+ * than carrying an explanation of its own.
+ */
+export const EQUIPMENT_INFO_KEYS = ['shoes', 'shirt', 'chalk_bag'];
+
 export const DEFAULT_EQUIPMENT_SETTINGS = {
   prices: {
     // נעליים מושכרות לחצי עונת חוגים. זה המחיר המלא לחצי עונה,
@@ -34,6 +45,10 @@ export const DEFAULT_EQUIPMENT_SETTINGS = {
     shirt: 120,
     chalk_bag: 80,
   },
+  // Empty by default: an explanation nobody wrote is not one the bot may give.
+  item_info: { shoes: '', shirt: '', chalk_bag: '' },
+  enrichment_fee: null,
+  enrichment_info: '',
   shirt_sizes: ['6', '8', '10', '12', '14', 'XS', 'S', 'M', 'L'],
   rental_days: 182,
   price_includes_vat: true,
@@ -72,8 +87,24 @@ export function normalizeEquipmentSettings(raw = {}) {
     .filter(Boolean);
   if (!shirtSizes.length) shirtSizes = [...base.shirt_sizes];
   const rentalDays = Math.max(1, Number(raw.rental_days ?? base.rental_days) || base.rental_days);
+
+  // Free text, trimmed and capped. Empty stays empty — an explanation nobody
+  // wrote must not be replaced by one the code made up.
+  const infoIn = raw.item_info && typeof raw.item_info === 'object' ? raw.item_info : {};
+  const itemInfo = {};
+  for (const key of EQUIPMENT_INFO_KEYS) {
+    itemInfo[key] = String(infoIn[key] ?? '').trim().slice(0, 1200);
+  }
+  const feeRaw = raw.enrichment_fee;
+  const fee = feeRaw === '' || feeRaw === null || feeRaw === undefined
+    ? null
+    : Math.max(0, Number(feeRaw) || 0);
+
   return {
     prices,
+    item_info: itemInfo,
+    enrichment_fee: fee,
+    enrichment_info: String(raw.enrichment_info ?? '').trim().slice(0, 2000),
     shirt_sizes: shirtSizes,
     rental_days: rentalDays,
     price_includes_vat: raw.price_includes_vat !== false,

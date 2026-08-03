@@ -15,6 +15,7 @@ import { healthExpiryDate, declarationSignedAt } from './healthValidity.js';
 import { appPublicBase, buildRedirectUrl } from './publicLinks.js';
 import { persistCore } from './db.js';
 import {
+  EQUIPMENT_ITEM_LABELS,
   newCheckoutToken,
   unpaidEquipmentItems,
   describeEquipmentItems,
@@ -37,6 +38,7 @@ import {
 } from './botFollowUps.js';
 import {
   loadEquipmentPrices,
+  loadEquipmentInfo,
   enrichmentFeeFromSettings,
   formatOpeningHoursReply,
   formatPublicEventsReply,
@@ -167,6 +169,14 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         equipment: { type: 'boolean', description: 'לכלול מחירי ציוד' },
       },
     },
+  },
+  {
+    name: 'getEquipmentInfo',
+    description:
+      'למה צריך כל פריט ציוד ומה זה, ומה הם דמי ההעשרה ולמה הם משמשים — '
+      + 'בלשון העסק. להשתמש בכל שאלה מסוג «למה צריך X», «מה זה מגנזיום», '
+      + '«על מה משלמים דמי העשרה». אם שדה חוזר ריק — אין הסבר כתוב, ואין להמציא.',
+    parameters: { type: 'object', properties: {} },
   },
   {
     name: 'getOpeningHours',
@@ -730,6 +740,32 @@ export function buildCustomerTools({
         ? fee
         : { הערה: 'דמי ההעשרה אינם מוגדרים — אין לנקוב בסכום' };
       return payload;
+    },
+
+    /**
+     * The "why", not the "how much". A parent asking what magnesium is, or
+     * what the enrichment fee pays for, used to get a handoff: the CRM held
+     * the price and nobody had written down the reason.
+     */
+    getEquipmentInfo: async () => {
+      const info = await loadEquipmentInfo();
+      if (!info) {
+        return { הערה: 'לא הצלחנו לקרוא את פרטי הציוד כרגע — יש להעביר לצוות' };
+      }
+      const items = {};
+      for (const [key, label] of Object.entries(EQUIPMENT_ITEM_LABELS)) {
+        const text = String(info.item_info?.[key] || '').trim();
+        if (text) items[label] = text;
+      }
+      const fee = Number(info.enrichment_fee);
+      const feeText = String(info.enrichment_info || '').trim();
+      return {
+        ...(Object.keys(items).length ? { ציוד: items } : {}),
+        ...(Number.isFinite(fee) && fee > 0 ? { דמי_העשרה_בשקלים: fee } : {}),
+        ...(feeText ? { דמי_העשרה_הסבר: feeText } : {}),
+        הערה: 'אלה ההסברים שהעסק כתב. מה שלא מופיע כאן — לא כתוב, ואין להשלים '
+          + 'אותו מהידע הכללי. אפשר לומר שנבדוק ונחזור.',
+      };
     },
 
     getOpeningHours: async () => ({
