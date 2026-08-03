@@ -36,6 +36,7 @@ const TEAM_RULES = [
   { methods: ['GET'], pattern: /^\/whatsapp\/settings$/ },
   // Reading the switches renders the panel; only an owner may flip one.
   { methods: ['GET'], pattern: /^\/whatsapp\/capabilities$/ },
+  { methods: ['GET'], pattern: /^\/bot\/activity$/ },
   { methods: ['POST'], pattern: /^\/whatsapp\/(reply|bot-enabled)$/ },
   { methods: ['GET'], pattern: /^\/conversations\/[^/]+$/ },
   { methods: ['POST'], pattern: /^\/conversations\/[^/]+\/reply$/ },

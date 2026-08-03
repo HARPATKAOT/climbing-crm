@@ -69,9 +69,9 @@ export const BOT_CAPABILITIES = [
   },
   {
     key: 'save_name',
-    label: 'שמירת שם הלקוח',
-    hint: 'רושם בכרטיס שם שנמסר בשיחה, אם הכרטיס ריק',
-    tools: ['saveCustomerName'],
+    label: 'עדכון פרטים בכרטיס',
+    hint: 'שם הלקוח, ותאריך לידה של ילד — אחרי אישור הלקוח',
+    tools: ['saveCustomerName', 'saveChildBirthDate'],
   },
   {
     key: 'family_card',

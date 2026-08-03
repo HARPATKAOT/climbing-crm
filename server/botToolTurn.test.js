@@ -172,6 +172,7 @@ test('the tools offered to the model are facts, links and placements — never s
     'getSignupLink',
     'joinWaitlist',
     'listClasses',
+    'saveChildBirthDate',
     'saveCustomerName',
     'scheduleFollowUp',
     'startSignup',

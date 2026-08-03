@@ -11,6 +11,7 @@ import {
 import { studentGroupIds } from './studentGroups.js';
 import { alertRecipients } from './staffAlerts.js';
 import { persistCore } from './db.js';
+import { recordBotAction } from './botActivityLog.js';
 import {
   isOptedOut,
   isBotPaused,
@@ -546,6 +547,12 @@ export const automationsService = {
             sent += 1;
             markSent({ id: sendId, event: 'bot_followup', date: today, phone });
             await closeFollowUp(row, 'sent');
+            recordBotAction(db, persistCore, {
+              type: 'followup_sent',
+              summary: `מעקב נשלח בתבנית: ${subject}`,
+              details: { reason: row.reason, via: 'template' },
+              parentId: parent.id, parentName: parent.name, phone,
+            });
           } else {
             needStaff.push({ row, parent });
           }
@@ -565,6 +572,12 @@ export const automationsService = {
           sent += 1;
           markSent({ id: sendId, event: 'bot_followup', date: today, phone });
           await closeFollowUp(row, 'sent');
+          recordBotAction(db, persistCore, {
+            type: 'followup_sent',
+            summary: `מעקב נשלח: ${row.note || 'מעקב'}`,
+            details: { reason: row.reason, via: 'freeform' },
+            parentId: parent.id, parentName: parent.name, phone,
+          });
         }
       } catch (err) {
         console.error('bot follow-up send failed:', err.message);

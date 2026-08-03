@@ -8,6 +8,7 @@ import TemplatesManager, { TemplatePreview } from './TemplatesManager.jsx';
 import SavedRepliesManager from './SavedRepliesManager.jsx';
 import BotSettingsPanel from './BotSettingsPanel.jsx';
 import BotLearningPanel from './BotLearningPanel.jsx';
+import BotActivityPanel from './BotActivityPanel.jsx';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import AppSelect from './AppSelect.jsx';
 
@@ -1006,6 +1007,15 @@ export default function Broadcasts({ parents, students, groups = [] }) {
           </div>
         </div>
         <BotLearningPanel />
+
+        <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, marginTop: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>יומן הפעולות של הבוט</div>
+          <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.6 }}>
+            כל מה שהבוט שינה וכל מה שהוא אמר, לפי סדר. „פעולות” הן שינויים
+            במערכת, „הודעות” הן מה שנשלח ללקוח.
+          </div>
+          <BotActivityPanel />
+        </div>
         </div>
       )}
     </div>

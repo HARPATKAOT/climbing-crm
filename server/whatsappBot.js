@@ -664,6 +664,23 @@ export function isStaffPhone(settings, phone) {
   return staffPhones(settings).some((staff) => phonesMatch(staff, phone));
 }
 
+/**
+ * The community centre's own numbers. They are neither customers nor staff:
+ * the centre writes us a child's name and expects a billing date back, so
+ * their messages take a different path entirely.
+ */
+export function centrePhones(settings) {
+  return String(settings?.aiCentrePhones || '')
+    .split(/[,|\n]+/)
+    .map((v) => String(v || '').trim())
+    .filter(Boolean);
+}
+
+export function isCentrePhone(settings, phone) {
+  if (!phone) return false;
+  return centrePhones(settings).some((centre) => phonesMatch(centre, phone));
+}
+
 /** Recent turns of this conversation in the shape the CRM agent expects. */
 /**
  * History rows older than this get a visible age tag. The model has no clock:

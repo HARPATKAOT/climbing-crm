@@ -15,6 +15,7 @@ import {
 import { whatsappConnectService } from './whatsappConnect.js';
 import { automationsService, runScheduledAutomationsIfDue } from './automations.js';
 import { capabilityState, capabilitySettingKey, CAPABILITY_KEYS } from './botCapabilities.js';
+import { listBotActions, botActionSummary, BOT_ACTION_TYPES } from './botActivityLog.js';
 import {
   loadAgendaSettings,
   saveAgendaSettings,
@@ -1168,6 +1169,20 @@ app.get('/api/whatsapp/settings', async (req, res) => {
       process.env.META_WA_PHONE_NUMBER_ID &&
       process.env.META_WA_ACCESS_TOKEN
     ),
+  });
+});
+
+/**
+ * What the bot has been doing — one journal for actions and messages both.
+ * Read-only, and open to the team: seeing it is how a systematic mistake gets
+ * caught before it repeats a hundred times.
+ */
+app.get('/api/bot/activity', (req, res) => {
+  const { kind = '', type = '', parentId = '', since = '', limit = '200' } = req.query || {};
+  res.json({
+    types: BOT_ACTION_TYPES,
+    summary: botActionSummary(db, { since }),
+    actions: listBotActions(db, { kind, type, parentId, since, limit: Number(limit) || 200 }),
   });
 });
 

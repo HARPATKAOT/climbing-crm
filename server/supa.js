@@ -125,6 +125,8 @@ export const OPERATIONAL_TABLES = [
   'customer_coupons',
   // Reminders the bot sets for itself — same kv pattern, no migration.
   'bot_followups',
+  // Everything the bot did, in one journal.
+  'bot_actions',
 ];
 
 // Kept as the public name used by db.js: every listed collection is durable.

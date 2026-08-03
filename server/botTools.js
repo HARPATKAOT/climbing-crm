@@ -27,6 +27,7 @@ import {
   normalizeInterestInput,
   normalizedName,
 } from './activityInterest.js';
+import { recordBotAction } from './botActivityLog.js';
 import {
   FOLLOWUP_COLLECTION,
   FOLLOWUP_OPEN,
@@ -46,6 +47,72 @@ import {
 } from './botFacts.js';
 
 const DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
+
+/**
+ * The child's age, worked out here rather than by the model.
+ *
+ * Handed a raw birth date, the model did the arithmetic itself and got it
+ * wrong — it read December 2021 and told a parent their child was "about 3"
+ * in August 2026, when the card beside it said four and a half. A date is an
+ * invitation to calculate; an age is a fact, so a fact is what it receives.
+ */
+function ageFromBirthDate(birthDate, now = new Date()) {
+  const birth = new Date(birthDate || '');
+  if (Number.isNaN(birth.getTime())) return null;
+  let years = now.getFullYear() - birth.getFullYear();
+  const monthDiff = now.getMonth() - birth.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birth.getDate())) years -= 1;
+  if (years < 0 || years > 120) return null;
+  let months = (now.getFullYear() - birth.getFullYear()) * 12 + monthDiff;
+  if (now.getDate() < birth.getDate()) months -= 1;
+  return { years, half: (months % 12) >= 6 };
+}
+
+/** "4" or "4 וחצי" — the age as people say it about a child. */
+export function ageLabelFor(birthDate, now = new Date()) {
+  const age = ageFromBirthDate(birthDate, now);
+  if (!age) return '';
+  return age.half ? `${age.years} וחצי` : String(age.years);
+}
+
+/**
+ * A date the customer typed, as an unambiguous ISO date.
+ *
+ * "10.4.2013" is the tenth of April in Israel and the fourth of October in
+ * half the world's software. Guessing is how a thirteen-year-old becomes a
+ * three-year-old, so day-first is assumed — the local convention — and the
+ * caller is told to read the date back in words before it is saved.
+ */
+export function parseCustomerDate(value) {
+  const raw = String(value || '').trim();
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  const dmy = /^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/.exec(raw);
+  let year; let month; let day;
+  if (iso) {
+    [, year, month, day] = iso.map(Number);
+  } else if (dmy) {
+    [, day, month, year] = dmy.map(Number);
+  } else {
+    return null;
+  }
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  const now = new Date();
+  if (date.getTime() > now.getTime()) return null;
+  if (year < now.getFullYear() - 120) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+const HEB_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני',
+  'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+
+/** "10 באפריל 2013" — a date nobody can misread back to the customer. */
+export function spellOutDate(isoDate) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(isoDate || ''));
+  if (!m) return '';
+  return `${Number(m[3])} ב${HEB_MONTHS[Number(m[2]) - 1]} ${m[1]}`;
+}
 
 /** The public health form, with the phone prefilled so the card is found. */
 function healthFormUrl(phone = '') {
@@ -213,6 +280,28 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         childName: { type: 'string', description: 'שם הילד כפי שמופיע בכרטיס' },
       },
       required: ['childName'],
+    },
+  },
+  {
+    name: 'saveChildBirthDate',
+    description:
+      'שומר תאריך לידה של ילד בכרטיס. להשתמש רק אחרי שהלקוח אישר את התאריך '
+      + 'במילים — «10 באפריל 2013» ולא «10.4». הכלי מפרש תאריך מספרי כיום-חודש-שנה, '
+      + 'ולכן אם הלקוח כתב «10.4» חובה לוודא איתו שזה אפריל ולא אוקטובר לפני השמירה.',
+    parameters: {
+      type: 'object',
+      properties: {
+        childName: { type: 'string', description: 'שם הילד כפי שמופיע בכרטיס' },
+        birthDate: {
+          type: 'string',
+          description: 'התאריך כפי שהלקוח מסר: 10.4.2013 או 2013-04-10',
+        },
+        confirmed: {
+          type: 'boolean',
+          description: 'true רק אחרי שהלקוח אישר את התאריך במילים (יום, שם החודש, שנה)',
+        },
+      },
+      required: ['childName', 'birthDate', 'confirmed'],
     },
   },
   {
@@ -482,6 +571,18 @@ export function buildCustomerTools({
   phone = '',
   onPlacement = null,
 } = {}) {
+  /** One journal line, already carrying who this conversation is with. */
+  const journal = (type, summary, details = {}, student = null) => recordBotAction(db, persistCore, {
+    type,
+    summary,
+    details,
+    parentId: parent?.id || null,
+    parentName: parent?.name || '',
+    studentId: student?.id || null,
+    studentName: student?.name || '',
+    phone: parent?.phone || phone || '',
+  });
+
   // Named so one tool can build on another — the registration pack reuses the
   // equipment link instead of repeating the lookup.
   const tools = {
@@ -633,6 +734,13 @@ export function buildCustomerTools({
       });
       if (!row?.id) return { error: 'רישום המתעניין נכשל — יש להעביר לצוות' };
 
+      journal(
+        'interest_added',
+        `${name} נרשם כמתעניין ל${activity.name || 'פעילות'}`,
+        { activity_id: activity.id, activity: activity.name || '', date: eventDateLabel(activity) },
+        child
+      );
+
       return {
         נרשם_כמתעניין: name,
         אירוע: activity.name || '',
@@ -667,6 +775,7 @@ export function buildCustomerTools({
           updated_at: new Date().toISOString(),
         });
         await persistCore(FOLLOWUP_COLLECTION, updated || existing);
+        journal('followup_scheduled', `תזכורת עודכנה ל-${plan.due_date}: ${subject}`, { ...plan, note: subject });
         return { נקבע: plan.due_date, נושא: subject, הערה: 'עודכנה התזכורת הקיימת ללקוח הזה.' };
       }
 
@@ -684,6 +793,7 @@ export function buildCustomerTools({
       });
       if (!row?.id) return { error: 'קביעת התזכורת נכשלה' };
       await persistCore(FOLLOWUP_COLLECTION, row);
+      journal('followup_scheduled', `נקבעה חזרה ללקוח ב-${plan.due_date}: ${subject}`, { ...plan, note: subject });
       return {
         נקבע: plan.due_date,
         נושא: subject,
@@ -851,6 +961,12 @@ export function buildCustomerTools({
       // arrives by phone or not at all. Asking the parent tomorrow is what
       // turns a soft hold into either a registration or a known problem.
       await scheduleSignupCheck({ parent, phone, student: row, settings });
+      journal(
+        'placement',
+        `${student.name || 'מתאמן'} שובץ ל${describeGroup(group)} — ממתין להרשמה`,
+        { group_id: group.id, group: describeGroup(group), from_status: student.status, to_status: 'pending_signup' },
+        row
+      );
 
       return {
         שובץ: student.name || '',
@@ -918,11 +1034,73 @@ export function buildCustomerTools({
         console.error('placement notice failed:', err.message);
       }
 
+      journal(
+        'placement_cancelled',
+        `${student.name || 'מתאמן'} הוסר מ${group ? describeGroup(group) : 'הקבוצה'}`,
+        { group: group ? describeGroup(group) : '', from_status: status, to_status: 'health_signed' },
+        row
+      );
+
       return {
         בוטל: student.name || '',
         קבוצה_קודמת: group ? describeGroup(group) : '',
         סטטוס: 'חתם הצהרה — ללא קבוצה',
         הערה: 'השיבוץ הוסר. אפשר לשבץ לקבוצה אחרת בכל שלב.',
+      };
+    },
+
+    /**
+     * A wrong birth date on a card is not a small thing: the band comes from
+     * the age, so a parent asking for a seventh-grade group was told their
+     * thirteen-year-old was three and turned away. The bot could see the
+     * mistake and had to hand it to the team to retype.
+     *
+     * The confirmation is the whole safety of this: "10.4" is April here and
+     * October in half the world's software, so the tool refuses to save until
+     * the customer has been read the date back in words.
+     */
+    saveChildBirthDate: async ({ childName, birthDate, confirmed } = {}) => {
+      if (!parent?.id) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
+      const parsed = parseCustomerDate(birthDate);
+      if (!parsed) {
+        return { error: 'לא הצלחתי לקרוא את התאריך — יש לבקש אותו כיום, חודש ושנה' };
+      }
+      if (confirmed !== true) {
+        return {
+          נשמר: false,
+          צריך_אישור: spellOutDate(parsed),
+          הערה: `יש לשאול את הלקוח לאישור: «${spellOutDate(parsed)}?» ורק אחרי `
+            + 'תשובה חיובית לקרוא שוב לכלי עם confirmed=true.',
+        };
+      }
+
+      const kids = studentsForParent(parent);
+      if (!kids.length) return { error: 'אין מתאמנים בכרטיס' };
+      const named = String(childName || '').trim();
+      const matches = named
+        ? kids.filter((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
+        : kids;
+      if (!matches.length) return { error: `אין בכרטיס מתאמן בשם ${named} — יש לשאול את הלקוח` };
+      if (matches.length > 1) {
+        return {
+          error: 'יש כמה ילדים מתאימים — יש לשאול על מי מדובר',
+          ילדים: matches.map((s) => s.name || ''),
+        };
+      }
+
+      const student = matches[0];
+      const previous = student.birthDate || student.birth_date || '';
+      const updated = db.update('students', student.id, { birthDate: parsed });
+      if (!updated) return { error: 'שמירת תאריך הלידה נכשלה — יש להעביר לצוות' };
+      await persistCore('students', updated);
+
+      return {
+        נשמר: true,
+        מתאמן: student.name || '',
+        תאריך_לידה: spellOutDate(parsed),
+        גיל: ageLabelFor(parsed),
+        קודם: previous ? spellOutDate(previous) : 'לא היה תאריך',
+        הערה: 'יש לאשר ללקוח מה נשמר, ואז להמשיך לשאלה שבגללה זה עלה.',
       };
     },
 
@@ -948,6 +1126,7 @@ export function buildCustomerTools({
       if (!updated) return { error: 'שמירת השם נכשלה' };
       await persistCore('parents', updated);
       parent = updated;
+      journal('details_saved', `שם הלקוח נשמר בכרטיס: ${fullName}`, { field: 'name', value: fullName });
       return { נשמר: true, שם: fullName };
     },
 
@@ -970,6 +1149,13 @@ export function buildCustomerTools({
       } catch (err) {
         console.error('placement notice failed:', err.message);
       }
+
+      journal(
+        'waitlist',
+        `${student.name || 'מתאמן'} נכנס לרשימת ההמתנה של ${describeGroup(group)}`,
+        { group_id: group.id, group: describeGroup(group), from_status: student.status, to_status: 'waitlist' },
+        row
+      );
 
       return {
         שובץ: student.name || '',
@@ -1031,14 +1217,21 @@ export function buildCustomerTools({
       const groups = db.get('groups') || [];
       const kids = studentsForParent(parent).map((s) => {
         const group = groups.find((g) => String(g.id) === String(s.groupId || ''));
+        const birthDate = s.birthDate || s.birth_date || '';
         return {
           שם: s.name || '',
-          תאריך_לידה: s.birthDate || s.birth_date || '',
+          // The age is computed here on purpose — see ageLabelFor.
+          גיל: ageLabelFor(birthDate) || 'לא ידוע',
+          תאריך_לידה: birthDate ? spellOutDate(birthDate) : '',
           קבוצה: group ? describeGroup(group) : '',
           סטטוס: s.status || '',
         };
       });
-      return { שם_הלקוח: parent.name || '', ילדים: kids };
+      return {
+        שם_הלקוח: parent.name || '',
+        ילדים: kids,
+        הערה: 'הגיל כבר מחושב — אין לחשב גיל מתאריך הלידה.',
+      };
     },
   };
 

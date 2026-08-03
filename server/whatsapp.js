@@ -62,6 +62,8 @@ import {
 import {
   mergeBotSettings,
   withBotMark,
+  isCentrePhone,
+  CUSTOMER_STATUSES,
   loadBrandedBotSettings,
   normalizeMenuChoice,
   decideBotGate,
@@ -107,6 +109,8 @@ import {
 } from './botLearning.js';
 import { runCustomerToolTurn, historyToContents } from './botToolTurn.js';
 import { alertRecipients } from './staffAlerts.js';
+import { recordBotAction } from './botActivityLog.js';
+import { buildCentreReport, formatReportDate } from './centreReport.js';
 import { groupMatchesGradeLetter } from './groupBands.js';
 
 export { israelClockParts, isBotEnabled, shouldAiAutoReply };
@@ -150,6 +154,9 @@ const DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'שבת'];
 // Meta message types the model cannot see into. A caption travels as the text,
 // so an image with a caption is handled as an ordinary text message.
 const MEDIA_MESSAGE_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker']);
+
+/** Any Hebrew letter — a name from the community centre always has one. */
+const HEBREW_LETTER = /[֐-׿]/;
 
 
 /** Strip day/time suffixes already shown separately (e.g. "— יום א׳ 15:30"). */
@@ -902,6 +909,78 @@ async function assignWaitlistIfFull(phone, parent, intake = {}) {
   return result.ok ? result.reply : '';
 }
 
+
+/**
+ * One name from the community centre, answered end to end.
+ *
+ * Returns null when the message is not a name we can act on, so an ordinary
+ * "תודה" from the same number still falls through to the normal path rather
+ * than being answered with a billing report.
+ */
+async function handleCentreMessage({ text, phone, isSimulator = false }) {
+  const typed = String(text || '').trim();
+  // A name, not a sentence: the exchange is "יונתן כהן" and nothing else, so a
+  // "תודה!" from the same number still reaches the ordinary path below.
+  if (!typed || typed.length > 40 || typed.split(/\s+/).length > 4) return null;
+  if (!HEBREW_LETTER.test(typed)) return null;
+
+  const report = buildCentreReport({
+    students: db.get('students') || [],
+    attendance: db.get('attendance') || [],
+    name: typed,
+  });
+
+  const student = report.student || null;
+  const parent = student?.parentId ? db.getOne('parents', student.parentId) : null;
+
+  // Registration is the one thing the centre's word settles: they are the ones
+  // who register the child. Only move forward, never drag a status back.
+  let statusChanged = false;
+  if (report.ok && student && !CUSTOMER_STATUSES.has(String(student.status || ''))) {
+    const updated = db.update('students', student.id, { status: 'registered' });
+    if (updated) {
+      await persistCore('students', updated);
+      statusChanged = true;
+      recordBotAction(db, persistCore, {
+        type: 'status_changed',
+        summary: `${student.name} סומן כרשום לחוג לפי דיווח המתנ״ס`,
+        details: { from_status: student.status, to_status: 'registered' },
+        parentId: parent?.id || null,
+        parentName: parent?.name || '',
+        studentId: student.id,
+        studentName: student.name,
+        phone: parent?.phone || '',
+      });
+    }
+  }
+
+  recordBotAction(db, persistCore, {
+    type: 'centre_report',
+    summary: report.ok
+      ? `דווח למתנ״ס: ${student?.name} מתאמן מ-${formatReportDate(report.date)}`
+      : `בקשת המתנ״ס לא נענתה אוטומטית (${report.reason}): "${typed}"`,
+    details: { ok: report.ok, reason: report.reason || '', date: report.date || '', typed, statusChanged },
+    studentId: student?.id || null,
+    studentName: student?.name || '',
+    phone,
+  });
+
+  // Anything the bot could not settle is a person's job, and the team is told
+  // with the reason rather than left to notice a missing answer.
+  if (!report.ok) {
+    await notifyStaffOfHandoff({
+      settings: db.getSettings(),
+      parent: { name: 'המתנ״ס' },
+      phone,
+      customerText: `המתנ״ס שאל על "${typed}" — ${report.reason}`,
+      reason: 'handoff',
+      isSimulator,
+    });
+  }
+
+  return report;
+}
+
 /** Ping staff phones when the bot hands a chat to humans. */
 export async function notifyStaffOfHandoff({
   settings,
@@ -1626,9 +1705,20 @@ export const whatsappService = {
     }
   },
 
-  async sendBotReply(phone, replyText, { isSimulator = false, source = 'ai' } = {}) {
+  async sendBotReply(phone, replyText, { isSimulator = false, source = 'ai', parent = null, logType = '' } = {}) {
     if (!replyText) return { success: false };
     const text = withBotMark(replyText);
+    // The journal is what makes "what did the bot say today" one question with
+    // one answer, instead of a scroll through every conversation.
+    const owner = parent || findPrimaryParent(phone);
+    recordBotAction(db, persistCore, {
+      type: logType || (source === 'bot_control' ? 'handoff' : 'reply'),
+      summary: clipReply(text, 160),
+      details: { source, simulator: !!isSimulator },
+      parentId: owner?.id || null,
+      parentName: owner?.name || '',
+      phone: formatWaPhone(phone) || phone,
+    });
     if (isSimulator) {
       recordMessage({
         phone: formatWaPhone(phone) || phone,
@@ -1784,6 +1874,19 @@ export const whatsappService = {
       const staffReply = await whatsappService.runStaffChat(normalizedPhone, text);
       await whatsappService.sendBotReply(normalizedPhone, staffReply, { isSimulator, source: 'staff_chat' });
       return { parent, student, isNew, replied: true, reply: staffReply, reason: 'staff_chat' };
+    }
+
+    // The community centre writes us a child's name and waits for a billing
+    // date. It is a fixed exchange with one right answer, so it never reaches
+    // the model: a wrong date here is a wrong charge to a family.
+    if (isCentrePhone(settings, normalizedPhone)) {
+      const report = await handleCentreMessage({ text, phone: normalizedPhone, isSimulator });
+      if (report) {
+        await whatsappService.sendBotReply(normalizedPhone, report.reply, {
+          isSimulator, source: 'bot_control', logType: 'reply',
+        });
+        return { parent, student, isNew, replied: true, reply: report.reply, reason: 'centre_report' };
+      }
     }
 
     // 5. Bot decision gates
