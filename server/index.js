@@ -305,6 +305,7 @@ import {
   VACATION_ATT_STATUS,
   VACATION_MARKER,
 } from './attendanceUtils.js';
+import { buildShiftJournal } from './employeeShiftJournal.js';
 import {
   PAY_MODES,
   ratesOf,
@@ -8584,7 +8585,9 @@ function wageWithRates(agreement) {
 }
 
 function normalizeWageBody(body = {}) {
-  const next = { ...body };
+  // `apply_from` הוא הוראה לשמירה הזו בלבד ולא שדה של ההסכם.
+  const { apply_from: _applyFrom, ...rest } = body;
+  const next = { ...rest };
   if (Array.isArray(body.rates)) {
     next.rates = body.rates
       .filter((r) => r && r.role)
@@ -8600,6 +8603,37 @@ function normalizeWageBody(body = {}) {
   return next;
 }
 
+/** תאריך תקין בלבד — כל ערך אחר אומר „אל תיגע בשורות קיימות”. */
+function normalizeApplyFrom(value) {
+  const s = String(value || '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
+/**
+ * החלת תעריף חדש על שורות עבודה שכבר נרשמו.
+ *
+ * שורה שננעלה — יום שנסגר או שכר שאושר — לא זזה גם אם היא בטווח: זו האמת על
+ * מה ששולם. השאר מתומחרות מחדש לפי ההסכם החדש, כי בלי זה אירוע שנקבע מראש
+ * היה נשאר לנצח עם התעריף שהיה ביום ששיבצו אליו.
+ */
+function repriceWorkRowsFrom(employeeId, fromDate) {
+  const from = normalizeApplyFrom(fromDate);
+  if (!employeeId || !from) return { updated: 0, locked: 0 };
+  let updated = 0;
+  let locked = 0;
+  for (const row of db.get('work_assignments') || []) {
+    if (row.employee_id !== employeeId) continue;
+    if (!row.date || row.date < from) continue;
+    if (row.pay_locked_at) {
+      locked += 1;
+      continue;
+    }
+    db.update('work_assignments', row.id, payFieldsForWorkRow(row));
+    updated += 1;
+  }
+  return { updated, locked };
+}
+
 app.get('/api/wages', (req, res) => {
   res.json((db.get('wage_agreements') || []).map(wageWithRates));
 });
@@ -8608,23 +8642,31 @@ app.post('/api/wages', (req, res) => {
   const { employee_id } = req.body || {};
   if (!employee_id) return res.status(400).json({ error: 'employee_id is required' });
   const body = normalizeWageBody(req.body);
+  const applyFrom = normalizeApplyFrom(req.body?.apply_from);
 
   // One agreement per employee: reuse the existing row instead of creating a duplicate.
   const existing = (db.get('wage_agreements') || []).find((w) => w.employee_id === employee_id);
   if (existing) {
     const updated = db.update('wage_agreements', existing.id, { ...body, id: existing.id });
-    return res.json(wageWithRates(updated));
+    return res.json({ ...wageWithRates(updated), repriced: repriceWorkRowsFrom(employee_id, applyFrom) });
   }
 
   const created = db.insert('wage_agreements', body);
-  res.status(201).json(wageWithRates(created));
+  res.status(201).json({
+    ...wageWithRates(created),
+    repriced: repriceWorkRowsFrom(employee_id, applyFrom),
+  });
 });
 
 app.put('/api/wages/:id', (req, res) => {
   const { id } = req.params;
+  const applyFrom = normalizeApplyFrom(req.body?.apply_from);
   const updated = db.update('wage_agreements', id, normalizeWageBody(req.body));
   if (!updated) return res.status(404).json({ error: 'Wage agreement not found' });
-  res.json(wageWithRates(updated));
+  res.json({
+    ...wageWithRates(updated),
+    repriced: repriceWorkRowsFrom(updated.employee_id, applyFrom),
+  });
 });
 
 // ─── Work assignments (pay segments per employee) ────────────────────────────
@@ -8856,7 +8898,16 @@ app.get('/api/work-assignments', (req, res) => {
 });
 
 app.post('/api/work-assignments/from-activity', async (req, res) => {
-  const { activity_id, employee_ids, employee_roles: employeeRoles } = req.body || {};
+  const {
+    activity_id,
+    employee_ids,
+    employee_roles: employeeRoles,
+    role: roleOverride,
+    pay_mode: payModeOverride,
+    flat_amount: flatAmountOverride,
+    start_time: startOverride,
+    end_time: endOverride,
+  } = req.body || {};
   if (!activity_id) return res.status(400).json({ error: 'activity_id is required' });
   const activity = db.getOne('activities', activity_id);
   if (!activity) return res.status(404).json({ error: 'Activity not found' });
@@ -8868,23 +8919,42 @@ app.post('/api/work-assignments/from-activity', async (req, res) => {
   if (!ids.length) return res.status(400).json({ error: 'employee_ids is required' });
 
   const workType = activityTypeToWorkType(activity.type);
-  const eventStart = activity.start_time || '09:00';
-  const eventEnd = activity.end_time || '17:00';
+  // מה שנבחר במסך השיבוץ גובר על ההגדרה השמורה של האירוע: הבחירה נעשית רגע
+  // לפני הלחיצה, ולפעמים עוד לפני ששמרו את האירוע עצמו.
+  const hm = (value) => {
+    const s = String(value || '').slice(0, 5);
+    return /^\d{2}:\d{2}$/.test(s) ? s : null;
+  };
+  const eventStart = hm(startOverride) || activity.start_time || '09:00';
+  const eventEnd = hm(endOverride) || activity.end_time || '17:00';
   const eventHours = hoursBetweenHm(eventStart, eventEnd) || 2;
   // האירוע עצמו קובע את התפקיד ואת אופן התשלום: „לפי תעריף” מושך את התעריף
   // האישי של כל עובד לתפקיד הזה, ו„גלובלי” משלם סכום קבוע שהוגדר על האירוע.
   // כשלסוג הפעילות מתאימים כמה תפקידים, כל עובד יכול לשבת בתפקיד אחר —
   // `employee_roles` נושא את הבחירה, ובלי זה נופלים לתפקיד הראשון שמתאים.
   const allowedRoles = await rolesForActivityType(activity.type);
-  const defaultRole = activity.staff_role || allowedRoles[0] || workTypeRole(workType) || null;
-  const flatPay = activity.staff_pay_mode === 'flat';
-  const flatAmount = flatPay ? (Number(activity.staff_flat_amount) || 0) : null;
+  const defaultRole = (roleOverride ? String(roleOverride) : '')
+    || activity.staff_role
+    || allowedRoles[0]
+    || workTypeRole(workType)
+    || null;
+  const flatPay = payModeOverride
+    ? payModeOverride === 'flat'
+    : activity.staff_pay_mode === 'flat';
+  const flatSource = flatAmountOverride !== undefined
+    ? flatAmountOverride
+    : activity.staff_flat_amount;
+  const flatAmount = flatPay ? (Number(flatSource) || 0) : null;
+  // שעות שנקבעו במפורש הן ההוראה; שאיבה משעון הנוכחות היא רק ניחוש כשאין כזו.
+  const explicitTimes = !!(hm(startOverride) && hm(endOverride));
   const existing = (db.get('work_assignments') || []).filter((r) => r.activity_id === activity_id);
   const created = [];
 
   for (const employeeId of ids) {
     if (existing.some((r) => r.employee_id === employeeId)) continue;
-    const suggestion = suggestHoursFromClock(employeeId, activity.date, eventStart, eventEnd);
+    const suggestion = explicitTimes
+      ? null
+      : suggestHoursFromClock(employeeId, activity.date, eventStart, eventEnd);
     const row = db.insert('work_assignments', withFrozenPay({
       employee_id: employeeId,
       activity_id,
@@ -9081,6 +9151,26 @@ app.get('/api/employees/:id/attendance-summary', (req, res) => {
   }
 
   res.json({ from: from || null, to: to || null, ...summary, rows });
+});
+
+/**
+ * יומן המשמרות בתיק העובד — עבר ועתיד ברשימה אחת ממוינת. הבנייה עצמה
+ * ב-employeeShiftJournal.js; כאן רק אוספים את הטבלאות ומגישים.
+ */
+app.get('/api/employees/:id/shift-journal', (req, res) => {
+  const employee = db.getOne('employees', req.params.id);
+  if (!employee) return res.status(404).json({ error: 'העובד לא נמצא' });
+  const horizonDays = Number(req.query.horizon_days);
+  const journal = buildShiftJournal({
+    employeeId: req.params.id,
+    workAssignments: db.get('work_assignments') || [],
+    staffAttendance: db.get('staff_attendance') || [],
+    groups: db.get('groups') || [],
+    activities: db.get('activities') || [],
+    shiftHours: db.get('shift_hours') || [],
+    horizonDays: Number.isFinite(horizonDays) ? horizonDays : 60,
+  });
+  res.json(journal);
 });
 
 app.post('/api/work-assignments/approve', (req, res) => {

@@ -319,6 +319,196 @@ function MonthlyPayCard({ employee, agreement, rows, month, onEditWage }) {
   );
 }
 
+const HEB_WEEKDAYS = ['א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ש'];
+
+/** תווית וצבע לכל מצב של משמרת ביומן. */
+const SHIFT_STATUS_META = {
+  logged:   { label: 'נרשמה',        color: 'var(--green)' },
+  planned:  { label: 'מתוכננת',      color: 'var(--blue)' },
+  absent:   { label: 'נעדר',         color: 'var(--red)' },
+  vacation: { label: 'חופשה — בוטל', color: 'var(--text-3)' },
+  open:     { label: 'פתוחה עכשיו',  color: 'var(--amber)' },
+};
+
+const SHIFT_FILTERS = [
+  { key: 'future', label: 'עתידיות' },
+  { key: 'past',   label: 'עבר' },
+  { key: 'all',    label: 'הכל' },
+];
+
+function monthTitle(ym) {
+  return new Date(`${ym}-01T12:00:00`).toLocaleDateString('he-IL', { month: 'long', year: 'numeric' });
+}
+
+/**
+ * יומן המשמרות בתיק העובד: כל מה שעבד וכל מה שמחכה לו, ברשימה אחת ממוינת
+ * ומחולקת לחודשים, עם סינון לעבר או לעתיד. השרת מאחד את המקורות (שורות עבודה,
+ * נוכחות בחוגים, חוגים קבועים עתידיים ומשמרת פתוחה בשעון) — כאן רק מציגים.
+ */
+function ShiftJournalCard({ employeeId }) {
+  const [journal, setJournal] = useState(null);
+  const [failed, setFailed] = useState(false);
+  const [filter, setFilter] = useState('future');
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setJournal(null);
+    setFailed(false);
+    setExpanded(false);
+    fetch(`/api/employees/${encodeURIComponent(employeeId)}/shift-journal`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('failed'))))
+      .then((body) => { if (!cancelled) setJournal(body); })
+      .catch(() => { if (!cancelled) setFailed(true); });
+    return () => { cancelled = true; };
+  }, [employeeId]);
+
+  const today = journal?.today || '';
+  const filtered = useMemo(() => {
+    const rows = journal?.entries || [];
+    if (filter === 'future') return rows.filter((e) => e.date >= today);
+    if (filter === 'past') return rows.filter((e) => e.date < today).reverse();
+    return rows;
+  }, [journal, filter, today]);
+
+  // רשימה ארוכה נפתחת בלחיצה — תיק העובד הוא כרטיס, לא טבלת שכר.
+  const LIMIT = 12;
+  const shown = expanded ? filtered : filtered.slice(0, LIMIT);
+
+  const totals = useMemo(() => {
+    const hours = filtered.reduce((sum, e) => sum + (Number(e.hours) || 0), 0);
+    return { count: filtered.length, hours: Math.round(hours * 100) / 100 };
+  }, [filtered]);
+
+  // כותרת חודש מוזרקת בכל פעם שהחודש מתחלף, כדי שהעין תמצא תאריך בלי לקרוא הכל.
+  const withMonthHeaders = [];
+  let lastMonth = null;
+  for (const entry of shown) {
+    const ym = String(entry.date).slice(0, 7);
+    if (ym !== lastMonth) {
+      withMonthHeaders.push({ header: ym });
+      lastMonth = ym;
+    }
+    withMonthHeaders.push({ entry });
+  }
+
+  return (
+    <div className="card card-p">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Calendar size={14} style={{ color: 'var(--text-3)' }} /> יומן משמרות
+        </div>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {SHIFT_FILTERS.map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              className="btn btn-xs"
+              onClick={() => { setFilter(f.key); setExpanded(false); }}
+              style={{
+                background: filter === f.key ? 'rgba(56,189,248,0.15)' : 'transparent',
+                color: filter === f.key ? 'var(--blue)' : 'var(--text-3)',
+                border: '1px solid var(--border)',
+              }}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {failed && <div style={{ fontSize: 12, color: 'var(--text-3)' }}>לא הצלחנו לטעון את היומן.</div>}
+      {!failed && !journal && <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען...</div>}
+
+      {journal && filtered.length === 0 && (
+        <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+          {filter === 'future' ? 'אין משמרות משובצות קדימה.' : 'אין משמרות רשומות.'}
+        </div>
+      )}
+
+      {journal && filtered.length > 0 && (
+        <>
+          <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>
+            {totals.count} משמרות · {totals.hours} שעות
+            {filter === 'future' && journal.horizon && (
+              <> · עד <DateDMY value={journal.horizon} /></>
+            )}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {withMonthHeaders.map((item) => {
+              if (item.header) {
+                return (
+                  <div key={`h-${item.header}`} style={{
+                    fontSize: 10, color: 'var(--text-3)', fontWeight: 700,
+                    marginTop: 8, paddingBottom: 4, borderBottom: '1px solid var(--border)',
+                  }}>
+                    {monthTitle(item.header)}
+                  </div>
+                );
+              }
+              const e = item.entry;
+              const meta = SHIFT_STATUS_META[e.status] || SHIFT_STATUS_META.logged;
+              const d = new Date(`${e.date}T12:00:00`);
+              const isToday = e.date === today;
+              return (
+                <div key={e.key} style={{
+                  display: 'flex', alignItems: 'center', gap: 10, padding: '6px 4px',
+                  borderRadius: 6,
+                  background: isToday ? 'rgba(56,189,248,0.08)' : 'transparent',
+                  opacity: e.status === 'vacation' ? 0.55 : 1,
+                }}>
+                  <div style={{ textAlign: 'center', width: 34, flexShrink: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 800, lineHeight: 1 }}>{d.getDate()}</div>
+                    {/* החודש כבר בכותרת הקבוצה, ולכן כאן רק יום בשבוע. */}
+                    <div style={{ fontSize: 9, color: 'var(--text-3)' }}>
+                      יום {HEB_WEEKDAYS[d.getDay()]}׳
+                    </div>
+                  </div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{
+                      fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
+                      overflow: 'hidden', textOverflow: 'ellipsis',
+                      textDecoration: e.status === 'vacation' ? 'line-through' : 'none',
+                    }}>
+                      {e.title}
+                      {e.subtitle && e.subtitle !== e.title && (
+                        <span style={{ color: 'var(--text-3)', fontWeight: 400 }}> · {e.subtitle}</span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--text-3)', display: 'flex', gap: 6, alignItems: 'center' }}>
+                      {e.start_time && (
+                        <span dir="ltr">{e.start_time}{e.end_time ? `–${e.end_time}` : ''}</span>
+                      )}
+                      {e.hours > 0 && <span>{e.hours} ש׳</span>}
+                      {e.notes && e.status === 'vacation' && <span>{e.notes}</span>}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'left', flexShrink: 0 }}>
+                    <div style={{ fontSize: 10, color: meta.color, fontWeight: 700 }}>{meta.label}</div>
+                    {e.pay_amount > 0 && (
+                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>₪{e.pay_amount.toLocaleString()}</div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {filtered.length > LIMIT && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              style={{ width: '100%', marginTop: 8 }}
+              onClick={() => setExpanded((v) => !v)}
+            >
+              {expanded ? 'הצג פחות' : `הצג את כל ${filtered.length} המשמרות`}
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 /**
  * תאריך בפורמט יום/חודש/שנה. הערך נשמר כ-ISO (1986-04-10) ובעברית נקרא הפוך,
  * ולכן ההצגה עטופה ב-span עם כיוון LTR מבודד — בלי זה הדפדפן מסדר מחדש את
@@ -1061,13 +1251,9 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
             </div>
 
             <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>פיננסים ותנאי העסקה</div>
-            <div className="form-grid-3">
-              <div className="form-group">
-                <label className="form-label">{fieldMeta('paymentMethod', 'מקבל תשלום ב..', PAYMENT_OPTIONS).label}</label>
-                <AppSelect className="input select" value={answers.paymentMethod} onChange={e => setAnswer('paymentMethod', e.target.value)}>
-                  {fieldMeta('paymentMethod', 'מקבל תשלום ב..', PAYMENT_OPTIONS).options.map(o => <option key={o} value={o}>{o}</option>)}
-                </AppSelect>
-              </div>
+            {/* אופן קבלת התשלום חי ליד התעריפים בטאב השכר; כאן נשארו רק הפרטים
+                שהעובד מוסר פעם אחת ולא נוגעים בכסף שמשולם לו. */}
+            <div className="form-grid-2">
               <div className="form-group">
                 <label className="form-label">{fieldMeta('bankAccount', 'מספר חשבון בנק').label}</label>
                 <input className="input" value={answers.bankAccount} onChange={e => setAnswer('bankAccount', e.target.value)} placeholder="בנק, סניף, חשבון" />
@@ -1218,6 +1404,14 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
             </div>
 
             <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>הסכם שכר</div>
+            <div className="form-grid-2">
+              <div className="form-group">
+                <label className="form-label">{fieldMeta('paymentMethod', 'מקבל תשלום ב..', PAYMENT_OPTIONS).label}</label>
+                <AppSelect className="input select" value={answers.paymentMethod} onChange={e => setAnswer('paymentMethod', e.target.value)}>
+                  {fieldMeta('paymentMethod', 'מקבל תשלום ב..', PAYMENT_OPTIONS).options.map(o => <option key={o} value={o}>{o}</option>)}
+                </AppSelect>
+              </div>
+            </div>
             {certifications.length === 0 ? (
               <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
                 סמנו לעובד תפקידים למעלה — לכל תפקיד מסומן תיפתח כאן שורת תעריף.
@@ -1357,6 +1551,20 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
 // ─── Modal: Wage Agreement Form (Add/Edit) ──────────────────────────────────
 const PAY_MODE_LABELS = { hourly: '₪ לשעה', daily: '₪ ליום', flat: '₪ גלובלי' };
 
+/**
+ * מאיזה תאריך התעריף החדש מחליף את הישן על שורות עבודה שכבר נרשמו.
+ * `null` = לא נוגעים בכלום, התעריף החדש יתפוס רק בשיבוצים חדשים.
+ */
+function applyFromDate(scope) {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const asDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  if (scope === 'today') return asDate(now);
+  if (scope === 'this_month') return asDate(new Date(now.getFullYear(), now.getMonth(), 1));
+  if (scope === 'next_month') return asDate(new Date(now.getFullYear(), now.getMonth() + 1, 1));
+  return null;
+}
+
 function WageFormModal({ wage, employees, onSave, onClose }) {
   const [employeeId, setEmployeeId] = useState(wage?.employee_id || employees[0]?.id || '');
   // שורה לכל תפקיד שקיים היום בקטלוג — תפקיד שנמחק לא מקבל שורת תעריף.
@@ -1375,6 +1583,7 @@ function WageFormModal({ wage, employees, onSave, onClose }) {
     // מזהה ההסכם ולא האובייקט — כדי שרינדור מחדש לא ימחק סכום שהוקלד ועוד לא נשמר.
   }, [catalog, wage?.id]);
   const [travel, setTravel] = useState(String(wage?.travel_per_day ?? ''));
+  const [applyScope, setApplyScope] = useState('today');
   const [saving, setSaving] = useState(false);
 
   const patchRate = (role, patch) => {
@@ -1386,9 +1595,9 @@ function WageFormModal({ wage, employees, onSave, onClose }) {
     if (!employeeId || saving) return;
 
     setSaving(true);
-    let ok = false;
+    let result = false;
     try {
-      ok = await onSave({
+      result = await onSave({
         id: wage?.id || `wa-${Date.now()}`,
         employee_id: employeeId,
         // תפקיד בלי סכום פשוט אינו בהסכם — עדיף מאשר לשמור אפס שנראה כמו תעריף.
@@ -1396,12 +1605,23 @@ function WageFormModal({ wage, employees, onSave, onClose }) {
           .filter((r) => r.amount !== '' && Number(r.amount) > 0)
           .map((r) => ({ role: r.role, mode: r.mode, amount: parseFloat(r.amount) || 0 })),
         travel_per_day: parseFloat(travel) || 0,
+        apply_from: applyFromDate(applyScope),
       });
     } finally {
       setSaving(false);
     }
-    if (ok) onClose();
-    else alert('שמירת הסכם השכר נכשלה. נסו שוב או פנו לתמיכה.');
+    if (!result) {
+      alert('שמירת הסכם השכר נכשלה. נסו שוב או פנו לתמיכה.');
+      return;
+    }
+    const repriced = result?.repriced;
+    if (repriced?.updated || repriced?.locked) {
+      alert([
+        repriced.updated ? `עודכנו ${repriced.updated} שורות עבודה קיימות לפי התעריף החדש.` : '',
+        repriced.locked ? `${repriced.locked} שורות שכבר ננעלו לתשלום נשארו כפי שהיו.` : '',
+      ].filter(Boolean).join('\n'));
+    }
+    onClose();
   };
 
   return (
@@ -1476,6 +1696,24 @@ function WageFormModal({ wage, employees, onSave, onClose }) {
             </div>
             <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: -6 }}>
               משולם פעם אחת לכל יום שהעובד עבד בו, גם אם היו בו כמה משמרות.
+            </div>
+
+            <div className="form-group" style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+              <label className="form-label">מאיזה תאריך התעריף החדש תופס</label>
+              <AppSelect
+                className="input select"
+                value={applyScope}
+                onChange={(e) => setApplyScope(e.target.value)}
+              >
+                <option value="today">מהיום והלאה</option>
+                <option value="this_month">מתחילת החודש הנוכחי</option>
+                <option value="next_month">מתחילת החודש הבא</option>
+                <option value="none">רק שיבוצים חדשים — לא לגעת בקיימים</option>
+              </AppSelect>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
+                שורות עבודה בטווח שנבחר מתומחרות מחדש. שכר שכבר ננעל לתשלום לא זז,
+                גם אם התאריך שלו בטווח.
+              </div>
             </div>
 
           </form>
@@ -1961,9 +2199,11 @@ export default function Employees() {
         body: JSON.stringify(data)
       });
       if (!response.ok) return false;
+      const saved = await response.json().catch(() => ({}));
       await refreshData();
       setEditingWage(null);
-      return true;
+      // מוחזר לטופס כדי שיוכל לומר כמה שורות עבודה קיימות תומחרו מחדש.
+      return saved || true;
     } catch (err) {
       console.error(err);
       return false;
@@ -2310,6 +2550,8 @@ export default function Employees() {
                 <div style={{ fontSize: 12, color: 'var(--text-3)' }}>לא מקבל התראות</div>
               )}
             </div>
+
+            <ShiftJournalCard employeeId={selectedEmployee.id} />
 
             <ClassAttendanceSummary
               employeeId={selectedEmployee.id}
