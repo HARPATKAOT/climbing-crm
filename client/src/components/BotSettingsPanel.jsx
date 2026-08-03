@@ -1,4 +1,5 @@
 import AppSelect from './AppSelect.jsx';
+import BotCapabilitiesPanel from './BotCapabilitiesPanel.jsx';
 const DAY_OPTIONS = [
   { value: 0, label: 'א׳' },
   { value: 1, label: 'ב׳' },
@@ -71,6 +72,12 @@ export default function BotSettingsPanel({
             הבוט כבוי — לא יישלחו תשובות אוטומטיות, גם לא ללידים חדשים.
           </div>
         )}
+
+        {/* Saved on the spot, so it sits inside the master-switch card rather
+            than under the form's "save settings" button. */}
+        <div style={{ marginTop: 14 }}>
+          <BotCapabilitiesPanel disabled={!settings.aiResponderEnabled} />
+        </div>
 
         <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 10 }}>

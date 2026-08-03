@@ -8,6 +8,14 @@
  * הרשומות נשמרות באוסף הכללי `bot_followups` (kv_collections), באותו דפוס של
  * `activity_interest`, כדי שלא תידרש מיגרציה על מסד נעול.
  *
+ * ## למה שעה ולא תאריך
+ *
+ * מטא מרשה טקסט חופשי רק בתוך 24 שעות מההודעה האחרונה של הלקוח. „מחר בבוקר”
+ * הוא לרוב אחרי שהחלון נסגר, ולכן מעקב יומיים נפל בדיוק על מי שהכי חשוב לחזור
+ * אליו. לכן מעקב קצר נקבע ל-23 שעות אחרי ההודעה האחרונה — עדיין בתוך החלון,
+ * ובלי תבנית ובלי עלות. מעקב ארוך („נדבר בספטמבר”) אינו יכול להיכנס לחלון
+ * ולכן הוא מסומן ככזה שדורש תבנית מאושרת.
+ *
  * מה שנשמר הוא *מה הובטח*, לא נוסח ההודעה: את הניסוח עושים ברגע השליחה, כדי
  * שהודעת המעקב תישמע כמו המשך שיחה ולא כמו הדבקה של טקסט מלפני יום.
  */
@@ -27,8 +35,13 @@ export const FOLLOWUP_REASONS = new Set([
   'general',
 ]);
 
-/** Never more than a fortnight out: past that it is a task, not a follow-up. */
-const MAX_DAYS_AHEAD = 14;
+/** Never more than three months out: past that it is not a follow-up. */
+const MAX_DAYS_AHEAD = 90;
+
+/** Meta's free-text window, and how long before it closes we aim to write. */
+const WINDOW_HOURS = 24;
+const AIM_HOURS = 23;
+const HOUR_MS = 60 * 60 * 1000;
 
 function clean(value) {
   return String(value ?? '').trim();
@@ -47,6 +60,70 @@ export function newFollowUpId() {
 export function followUpRows(db) {
   const rows = db.get(FOLLOWUP_COLLECTION);
   return Array.isArray(rows) ? rows : [];
+}
+
+/** Minutes past midnight, Israel time, for a moment in time. */
+function israelMinutes(at) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Jerusalem',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(at);
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value || 0);
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value || 0);
+  return hour * 60 + minute;
+}
+
+function parseHhMm(value, fallback) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(clean(value));
+  if (!m) return fallback;
+  return Math.min(24 * 60, Number(m[1]) * 60 + Number(m[2]));
+}
+
+/**
+ * When to write, so the message lands inside the free-text window *and* at an
+ * hour a person would actually write at.
+ *
+ * Aiming at 23 hours is right until the customer's last message came in at 4am:
+ * then 23 hours later is 3am, and nobody sends a nudge at 3am. In that case the
+ * latest civilised moment still inside the window is the answer — usually the
+ * evening before. If there is no such moment left, this returns null and the
+ * caller falls back to a template or to the team.
+ *
+ * @returns {string|null} ISO timestamp
+ */
+export function inWindowSendAt({
+  lastInboundAt,
+  now = new Date(),
+  activeStart = '09:00',
+  activeEnd = '21:00',
+} = {}) {
+  const inbound = new Date(lastInboundAt || 0).getTime();
+  if (!inbound) return null;
+  const closesAt = inbound + WINDOW_HOURS * HOUR_MS;
+  const nowMs = new Date(now).getTime();
+  if (closesAt <= nowMs) return null;
+
+  const startMin = parseHhMm(activeStart, 9 * 60);
+  const endMin = parseHhMm(activeEnd, 21 * 60);
+  const inHours = (ms) => {
+    const minutes = israelMinutes(new Date(ms));
+    return minutes >= startMin && minutes <= endMin;
+  };
+
+  const aim = inbound + AIM_HOURS * HOUR_MS;
+  if (aim > nowMs && aim < closesAt && inHours(aim)) return new Date(aim).toISOString();
+
+  // Walk back from the moment the window shuts, a quarter-hour at a time, to
+  // the last slot that is both inside the window and inside working hours.
+  const step = 15 * 60 * 1000;
+  for (let t = closesAt - step; t > nowMs; t -= step) {
+    if (inHours(t)) return new Date(t).toISOString();
+  }
+  // Nothing civilised left, but the window is open now and we are awake.
+  if (inHours(nowMs)) return new Date(nowMs).toISOString();
+  return null;
 }
 
 /**
@@ -72,6 +149,37 @@ export function resolveDueDate({ days = null, dueDate = '', today = israelDateSt
   return null;
 }
 
+/**
+ * Everything the caller needs to store a follow-up: when to write, and whether
+ * that moment is inside the free-text window or needs an approved template.
+ */
+export function planFollowUp({
+  days,
+  lastInboundAt,
+  now = new Date(),
+  settings = {},
+} = {}) {
+  const dueDate = resolveDueDate({ days });
+  if (!dueDate) return null;
+
+  // One day out is the case the window can still cover.
+  if (Number(days) <= 1) {
+    const sendAt = inWindowSendAt({
+      lastInboundAt,
+      now,
+      activeStart: settings.aiActiveHoursStart,
+      activeEnd: settings.aiActiveHoursEnd,
+    });
+    if (sendAt) return { due_at: sendAt, due_date: sendAt.slice(0, 10), needs_template: false };
+  }
+  // Further out than the window can reach: noon on the day, by template.
+  return {
+    due_at: `${dueDate}T09:00:00.000Z`,
+    due_date: dueDate,
+    needs_template: true,
+  };
+}
+
 /** One open follow-up per customer per reason — a chat that circles back to the
  *  same promise must not turn into three messages the next morning. */
 export function findOpenFollowUp(db, { parentId, reason }) {
@@ -82,11 +190,16 @@ export function findOpenFollowUp(db, { parentId, reason }) {
   ) || null;
 }
 
-export function dueFollowUps(db, { today = israelDateStr() } = {}) {
+/** Open follow-ups whose moment has arrived. Older rows carry a date only. */
+export function dueFollowUps(db, { now = new Date() } = {}) {
+  const nowMs = new Date(now).getTime();
+  const today = israelDateStr(new Date(now));
   return followUpRows(db)
     .filter((row) => String(row.status || FOLLOWUP_OPEN) === FOLLOWUP_OPEN)
-    .filter((row) => clean(row.due_date) && clean(row.due_date) <= today)
-    .sort((a, b) => String(a.due_date || '').localeCompare(String(b.due_date || '')));
+    .filter((row) => (row.due_at
+      ? new Date(row.due_at).getTime() <= nowMs
+      : clean(row.due_date) && clean(row.due_date) <= today))
+    .sort((a, b) => String(a.due_at || a.due_date || '').localeCompare(String(b.due_at || b.due_date || '')));
 }
 
 /**

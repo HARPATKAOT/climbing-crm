@@ -7,6 +7,7 @@
  */
 import { callGeminiChat } from './aiChat.js';
 import { CUSTOMER_TOOL_DECLARATIONS, buildCustomerTools } from './botTools.js';
+import { enabledToolNames } from './botCapabilities.js';
 
 const MAX_TOOL_STEPS = 4;
 
@@ -140,6 +141,11 @@ export async function runCustomerToolTurn({
   maxSteps = MAX_TOOL_STEPS,
 } = {}) {
   const tools = buildCustomerTools({ settings, parent, phone, onPlacement });
+  // A capability switched off in the settings is not offered to the model at
+  // all. Filtering the declarations rather than refusing the call is what makes
+  // the switch real: the model cannot talk itself into a tool it cannot see.
+  const allowed = enabledToolNames(settings);
+  const declarations = CUSTOMER_TOOL_DECLARATIONS.filter((d) => allowed.has(d.name));
   const contents = [
     ...history,
     { role: 'user', parts: [{ text: String(incomingText || '') }] },
@@ -158,7 +164,7 @@ export async function runCustomerToolTurn({
     const { content, error } = await callModel({
       contents,
       systemInstruction: instruction,
-      declarations: CUSTOMER_TOOL_DECLARATIONS,
+      declarations,
       apiKey,
     });
     if (!content) return { text: '', handoff: false, toolsUsed, reason: error || 'model_error' };
@@ -190,7 +196,7 @@ export async function runCustomerToolTurn({
     contents.push(content);
     const responseParts = [];
     for (const call of calls) {
-      const tool = tools[call.name];
+      const tool = allowed.has(call.name) ? tools[call.name] : null;
       if (!tool) {
         responseParts.push({
           functionResponse: { name: call.name, response: { error: 'אין כלי כזה' } },

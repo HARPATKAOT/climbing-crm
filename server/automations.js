@@ -22,6 +22,7 @@ import {
   dueFollowUps,
   followUpMessage,
 } from './botFollowUps.js';
+import { FOLLOWUP_TEMPLATE_NAME } from './scripts/createFollowUpTemplate.js';
 
 /** A follow-up is answered once — sent, or handed to the team, or dropped. */
 async function closeFollowUp(row, status) {
@@ -481,8 +482,7 @@ export const automationsService = {
     const reminder = await automationsService.runIntroReminders();
     const followup = await automationsService.runIntroFollowups();
     const stalled = await automationsService.runStalledSignupNotice();
-    const botFollowUps = await automationsService.runBotFollowUps();
-    return { reminder, followup, stalled, botFollowUps };
+    return { reminder, followup, stalled };
   },
 
   /**
@@ -495,8 +495,9 @@ export const automationsService = {
    * silent failure is exactly the hole this was built to close. A template
    * would make the rest autonomous, and that is a decision for the owner.
    */
-  runBotFollowUps: async ({ today = israelDateStr() } = {}) => {
-    const due = dueFollowUps(db, { today });
+  runBotFollowUps: async ({ now = new Date() } = {}) => {
+    const today = israelDateStr(new Date(now));
+    const due = dueFollowUps(db, { now });
     if (!due.length) return { event: 'bot_followup', date: today, due: 0, sent: 0 };
 
     const settings = db.getSettings ? db.getSettings() : {};
@@ -520,9 +521,38 @@ export const automationsService = {
         continue;
       }
 
-      const body = withBotMark(followUpMessage(row, { firstName: parentFirstName(parent) }));
+      const firstName = parentFirstName(parent);
+      const body = withBotMark(followUpMessage(row, { firstName }));
+
+      // Short follow-ups are scheduled 23 hours after the customer wrote, so
+      // this is normally still open and costs nothing. A long one — "let's talk
+      // in September" — can only travel as an approved template.
       if (!canSendFreeform(parent, 'whatsapp')) {
-        needStaff.push({ row, parent });
+        if (!templateIsApproved(FOLLOWUP_TEMPLATE_NAME)) {
+          needStaff.push({ row, parent });
+          continue;
+        }
+        try {
+          const subject = row.reason === 'pending_signup'
+            ? `ההרשמה של ${row.subject || 'המתאמן'} במתנ״ס`
+            : (row.note || 'מה שדיברנו עליו');
+          const result = await whatsappService.sendTemplateMessage(
+            phone,
+            FOLLOWUP_TEMPLATE_NAME,
+            [firstName || 'שלום', subject],
+            { parentId: parent.id, language: 'he', source: 'automation' }
+          );
+          if (result?.success) {
+            sent += 1;
+            markSent({ id: sendId, event: 'bot_followup', date: today, phone });
+            await closeFollowUp(row, 'sent');
+          } else {
+            needStaff.push({ row, parent });
+          }
+        } catch (err) {
+          console.error('bot follow-up template failed:', err.message);
+          needStaff.push({ row, parent });
+        }
         continue;
       }
 

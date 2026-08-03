@@ -14,6 +14,7 @@ import {
 } from './whatsapp.js';
 import { whatsappConnectService } from './whatsappConnect.js';
 import { automationsService, runScheduledAutomationsIfDue } from './automations.js';
+import { capabilityState, capabilitySettingKey, CAPABILITY_KEYS } from './botCapabilities.js';
 import {
   loadAgendaSettings,
   saveAgendaSettings,
@@ -1168,6 +1169,39 @@ app.get('/api/whatsapp/settings', async (req, res) => {
       process.env.META_WA_ACCESS_TOKEN
     ),
   });
+});
+
+/**
+ * The bot's capability switches. Read by any signed-in team member so the panel
+ * can render, written by the owner only — turning off "placement" changes what
+ * the bot may do to customer records.
+ */
+app.get('/api/whatsapp/capabilities', (req, res) => {
+  res.json({ capabilities: capabilityState(db.getSettings()) });
+});
+
+app.put('/api/whatsapp/capabilities', requireOwner, async (req, res) => {
+  const incoming = req.body?.capabilities;
+  if (!incoming || typeof incoming !== 'object') {
+    return res.status(400).json({ error: 'חסרות הגדרות לעדכון' });
+  }
+  const patch = {};
+  for (const key of CAPABILITY_KEYS) {
+    if (incoming[key] === undefined) continue;
+    patch[capabilitySettingKey(key)] = !!incoming[key];
+  }
+  if (!Object.keys(patch).length) {
+    return res.status(400).json({ error: 'לא נשלחה אף יכולת מוכרת' });
+  }
+  try {
+    // saveSettings merges, so an untouched switch keeps its value.
+    const saved = db.saveSettings({ ...db.getSettings(), ...patch });
+    console.log(`🤖 Bot capabilities updated by ${req.crmUser?.email || 'unknown'}:`, JSON.stringify(patch));
+    res.json({ capabilities: capabilityState(saved) });
+  } catch (error) {
+    console.error('capabilities update failed:', error.message);
+    res.status(500).json({ error: 'שמירת ההגדרות נכשלה' });
+  }
 });
 
 // Toggle bot on/off immediately (staff + owner) — awaits durable store write
@@ -12193,6 +12227,13 @@ app.listen(PORT, () => {
   // Intro class reminder + day-after followup (from 08:00 Asia/Jerusalem)
   setTimeout(() => { runScheduledAutomationsIfDue(8); }, 45_000);
   setInterval(() => { runScheduledAutomationsIfDue(8); }, 15 * 60 * 1000);
+  // Follow-ups are not a once-a-day job: a short one is aimed 23 hours after
+  // the customer's last message so it lands while free text is still allowed,
+  // and a morning-only run would miss that hour on most conversations.
+  setInterval(() => {
+    automationsService.runBotFollowUps().catch((err) =>
+      console.error('bot follow-ups failed:', err.message));
+  }, 15 * 60 * 1000);
 
   // Evening agenda digests — tomorrow's plan daily, the coming week on Saturday
   setTimeout(() => { runAgendaDigestsIfDue(); }, 70_000);

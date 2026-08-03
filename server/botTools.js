@@ -32,7 +32,7 @@ import {
   FOLLOWUP_OPEN,
   findOpenFollowUp,
   newFollowUpId,
-  resolveDueDate,
+  planFollowUp,
 } from './botFollowUps.js';
 import {
   loadEquipmentPrices,
@@ -331,9 +331,15 @@ const REGISTERED_STATUSES = new Set(['registered', 'active']);
  * sometimes remembers is worse than none, since nobody knows which customers
  * are covered.
  */
-async function scheduleSignupCheck({ parent, phone, student }) {
+async function scheduleSignupCheck({ parent, phone, student, settings }) {
   if (!parent?.id) return;
   if (findOpenFollowUp(db, { parentId: parent.id, reason: 'pending_signup' })) return;
+  const plan = planFollowUp({
+    days: 1,
+    lastInboundAt: parent.last_inbound_whatsapp,
+    settings,
+  });
+  if (!plan) return;
   const row = db.insert(FOLLOWUP_COLLECTION, {
     id: newFollowUpId(),
     parent_id: parent.id,
@@ -342,7 +348,7 @@ async function scheduleSignupCheck({ parent, phone, student }) {
     note: 'ההרשמה במתנ״ס',
     subject: student?.name || '',
     student_id: student?.id || null,
-    due_date: resolveDueDate({ days: 1 }),
+    ...plan,
     status: FOLLOWUP_OPEN,
     created_by: 'bot',
     created_at: new Date().toISOString(),
@@ -643,21 +649,25 @@ export function buildCustomerTools({
      */
     scheduleFollowUp: async ({ days, note } = {}) => {
       if (!parent?.id) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
-      const dueDate = resolveDueDate({ days });
-      if (!dueDate) return { error: 'צריך לציין בעוד כמה ימים לחזור (1 = מחר)' };
-
       const subject = String(note || '').trim();
       if (!subject) return { error: 'חסר על מה לחזור' };
+
+      const plan = planFollowUp({
+        days,
+        lastInboundAt: parent.last_inbound_whatsapp,
+        settings,
+      });
+      if (!plan) return { error: 'צריך לציין בעוד כמה ימים לחזור (1 = מחר)' };
 
       const existing = findOpenFollowUp(db, { parentId: parent.id, reason: 'customer_asked' });
       if (existing) {
         const updated = db.update(FOLLOWUP_COLLECTION, existing.id, {
-          due_date: dueDate,
+          ...plan,
           note: subject,
           updated_at: new Date().toISOString(),
         });
         await persistCore(FOLLOWUP_COLLECTION, updated || existing);
-        return { נקבע: dueDate, נושא: subject, הערה: 'עודכנה התזכורת הקיימת ללקוח הזה.' };
+        return { נקבע: plan.due_date, נושא: subject, הערה: 'עודכנה התזכורת הקיימת ללקוח הזה.' };
       }
 
       const row = db.insert(FOLLOWUP_COLLECTION, {
@@ -667,7 +677,7 @@ export function buildCustomerTools({
         reason: 'customer_asked',
         note: subject,
         subject: '',
-        due_date: dueDate,
+        ...plan,
         status: FOLLOWUP_OPEN,
         created_by: 'bot',
         created_at: new Date().toISOString(),
@@ -675,7 +685,7 @@ export function buildCustomerTools({
       if (!row?.id) return { error: 'קביעת התזכורת נכשלה' };
       await persistCore(FOLLOWUP_COLLECTION, row);
       return {
-        נקבע: dueDate,
+        נקבע: plan.due_date,
         נושא: subject,
         הערה: 'יש לומר ללקוח שנחזור אליו, בלי להבטיח שעה מדויקת.',
       };
@@ -840,7 +850,7 @@ export function buildCustomerTools({
       // "ממתין להרשמה" ends when the מתנ״ס confirms, and that confirmation
       // arrives by phone or not at all. Asking the parent tomorrow is what
       // turns a soft hold into either a registration or a known problem.
-      await scheduleSignupCheck({ parent, phone, student: row });
+      await scheduleSignupCheck({ parent, phone, student: row, settings });
 
       return {
         שובץ: student.name || '',
