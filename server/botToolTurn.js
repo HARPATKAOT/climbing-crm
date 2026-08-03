@@ -9,7 +9,16 @@ import { callGeminiChat } from './aiChat.js';
 import { CUSTOMER_TOOL_DECLARATIONS, buildCustomerTools } from './botTools.js';
 import { enabledToolNames } from './botCapabilities.js';
 
-const MAX_TOOL_STEPS = 4;
+/**
+ * A turn is one model call per step, so this is a ceiling on cost — but set too
+ * low it is a correctness bug. Four was enough when the tools only read facts.
+ * A real registration now runs: read the family card, correct the birth date,
+ * place the trainee, fetch the registration links — four calls, leaving no step
+ * to write the answer. The turn ended empty, the old path answered "passing
+ * this to the team", and the customer was told nothing had happened when in
+ * fact everything had.
+ */
+const MAX_TOOL_STEPS = 7;
 
 export const CUSTOMER_TOOL_RULES = [
   '## איך לענות',
@@ -37,6 +46,7 @@ export const CUSTOMER_TOOL_RULES = [
   'אם הלקוח שאל על אירוע מסוים בשמו («מה הפרטים של הטיול לנקיק השחור») — ענה מהנתונים ורשום אותו כמתעניין באותה תשובה, בלי לשאול קודם אם לרשום.',
   'לקוח שמבקש לחזור אליו («תבדוק איתי מחר», «נדבר בשבוע הבא») — קרא ל-scheduleFollowUp עם מספר הימים ועם מה שסוכם, ואמור לו שנחזור אליו. אל תבטיח שעה מדויקת.',
   'אל תמציא כתובת אינטרנט. קישור נשלח רק אם הוא הוחזר מכלי.',
+  'לפני שיבוץ, ודא שהגיל בכרטיס מתאים לקבוצה. אם הלקוח אומר גיל שונה ממה שבכרטיס — אל תשבץ ואל תסמוך על מה שנאמר: בקש את תאריך הלידה, אשר אותו במילים, שמור, ורק אז שבץ. אם הגיל האמיתי לא מתאים לאף קבוצה — העבר לצוות.',
   'הגיל של ילד מגיע מוכן מהמערכת בשדה «גיל». אל תחשב גיל מתאריך לידה בעצמך, ואל תסיק ממנו שכבה.',
   'אם הלקוח אומר שתאריך הלידה או הגיל בכרטיס שגוי — בקש את התאריך, קרא לו בחזרה במילים («10 באפריל 2013?»), וכשאישר שמור עם saveChildBirthDate ו-confirmed=true. תאריך מספרי כמו «10.4» תמיד יום-חודש.',
   'לקוח שמסר את שמו בשיחה («קוראים לי נעמה», «מדברת דנה») — קרא ל-saveCustomerName עם השם, ואז המשך לעניין עצמו.',

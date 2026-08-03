@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight, ChevronDown, Package, Sparkles, ExternalLink, AlertTriangle, UserCheck, List, ShieldCheck, ShieldAlert, Maximize2, Minimize2, Clipboard, Check, SlidersHorizontal } from "lucide-react";
+import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight, ChevronDown, Package, Sparkles, ExternalLink, AlertTriangle, UserCheck, List, ShieldCheck, ShieldAlert, Maximize2, Minimize2, Clipboard, Check, SlidersHorizontal, Clock } from "lucide-react";
 import { DAYS_FULL } from '../mockData.js';
 import {
   SYSTEM_ROLE_KEYS, staffForRole, canFillRole, noStaffForRoleMessage,
@@ -2004,9 +2004,16 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
   const kidMembers = members.filter(s => !s.isAdult);
   const assignable = students.filter(s => !studentInGroup(s, group.id) && s.status !== 'archived');
 
-  const pct    = group.maxSlots > 0 ? Math.round(members.length / group.maxSlots * 100) : 0;
-  const isFull = members.length >= group.maxSlots;
-  const freeSlots = Math.max(0, group.maxSlots - members.length);
+  // "ממתין להרשמה" is a soft hold taken before the מתנ״ס confirms, and the
+  // whole point of it is that it does not take a seat. The server has always
+  // counted it that way; this screen did not, so a child who had not
+  // registered showed up as filling a place, with nothing to say otherwise.
+  const holdingMembers = members.filter(s => s.status === 'pending_signup');
+  const seatedCount = members.length - holdingMembers.length;
+
+  const pct    = group.maxSlots > 0 ? Math.round(seatedCount / group.maxSlots * 100) : 0;
+  const isFull = seatedCount >= group.maxSlots;
+  const freeSlots = Math.max(0, group.maxSlots - seatedCount);
 
   const trainer = employees.find(e => e.id === group.trainer);
   const assistantNames = assistantNamesOf(group, employees);
@@ -2264,11 +2271,32 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
           {/* bdi מבודד כל מספר לעצמו. בלעדיו הדפדפן מצרף „1/12” ו„11”
               לרצף ניטרלי אחד וההצגה יוצאת „11/1/12”. */}
           <span style={{ fontSize: 12, fontWeight: 700, color: isFull ? 'var(--red)' : 'var(--text-2)', minWidth: 90 }}>
-            <bdi>{members.length}/{group.maxSlots}</bdi>
+            <bdi>{seatedCount}/{group.maxSlots}</bdi>
             {' · '}
             <bdi>{freeSlots} פנויים</bdi>
           </span>
         </div>
+
+        {/* Named, not just excluded from the count: somebody holding a place
+            without having registered is exactly what the team needs to chase. */}
+        {holdingMembers.length > 0 && (
+          <div style={{
+            marginTop: 8,
+            fontSize: 11.5,
+            color: '#FBBF24',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            flexWrap: 'wrap',
+          }}>
+            <Clock size={13} style={{ flexShrink: 0 }} />
+            <span>
+              ועוד {holdingMembers.length} ממתינים להרשמה (לא תופסים מקום):
+              {' '}
+              {holdingMembers.map((s) => s.name).join(' · ')}
+            </span>
+          </div>
+        )}
 
         {/* פעולות בלבד — הניווט כולו יושב בטאבים שמתחת, כדי שלא יהיו
             שני „נוכחות” זה מעל זה. */}

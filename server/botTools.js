@@ -445,6 +445,46 @@ async function scheduleSignupCheck({ parent, phone, student, settings }) {
   if (row?.id) await persistCore(FOLLOWUP_COLLECTION, row);
 }
 
+/**
+ * Roughly who each band is for, in years. Used only to catch a contradiction,
+ * never to choose a group — so the edges are deliberately generous.
+ */
+const BAND_AGE_RANGE = [
+  [/א'?-ב'?|א׳-ב׳/, 5, 9],
+  [/ג'?-ד'?|ג׳-ד׳/, 7, 11],
+  [/ה'?-ו'?|ה׳-ו׳/, 9, 13],
+  [/חטיב/, 11, 16],
+  [/תיכון/, 13, 19],
+  [/בוגר/, 16, 120],
+];
+
+function bandAgeRange(group) {
+  const category = String(group?.ageCategory || '');
+  // A combined band ("חטיבה + תיכון") spans both, so widen rather than pick.
+  const hits = BAND_AGE_RANGE.filter(([pattern]) => pattern.test(category));
+  if (!hits.length) return null;
+  return [Math.min(...hits.map((h) => h[1])), Math.max(...hits.map((h) => h[2]))];
+}
+
+/**
+ * Does the child's recorded birth date agree with the band being asked for?
+ *
+ * A parent said "he's 7" and the card said four and a half, and the bot placed
+ * him anyway — trusting a sentence over the record and leaving a four-year-old
+ * holding a place in a first-grade group. The two disagreeing is not a reason
+ * to guess: it is a reason to ask which one is right.
+ *
+ * @returns {{ ok: true } | { ok: false, age: string, range: number[] }}
+ */
+export function checkAgeAgainstBand(student, group) {
+  const birthDate = student?.birthDate || student?.birth_date || '';
+  const age = ageFromBirthDate(birthDate);
+  const range = bandAgeRange(group);
+  if (!age || !range) return { ok: true };
+  if (age.years >= range[0] && age.years <= range[1]) return { ok: true };
+  return { ok: false, age: ageLabelFor(birthDate), range };
+}
+
 export function isRegisteredTrainee(student) {
   return REGISTERED_STATUSES.has(String(student?.status || ''));
 }
@@ -963,6 +1003,21 @@ export function buildCustomerTools({
 
       const { student } = child;
       const { group } = picked;
+
+      // The card and the customer must agree before anyone is placed.
+      const age = checkAgeAgainstBand(student, group);
+      if (!age.ok) {
+        return {
+          error: `לפי הכרטיס ${student.name || 'המתאמן'} בן ${age.age}, `
+            + `והקבוצה הזו מיועדת לגילאי ${age.range[0]}–${age.range[1]}.`,
+          מה_לעשות: 'לא לשבץ. יש לשאול את הלקוח מה תאריך הלידה המדויק, לאשר '
+            + 'אותו במילים, לשמור עם saveChildBirthDate, ואז לנסות שוב. אם '
+            + 'הגיל באמת לא מתאים לאף קבוצה — להעביר לצוות.',
+          גיל_בכרטיס: age.age,
+          טווח_הקבוצה: age.range,
+        };
+      }
+
       const row = db.update('students', student.id, {
         status: 'pending_signup',
         groupId: group.id,
