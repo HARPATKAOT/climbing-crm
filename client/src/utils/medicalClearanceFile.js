@@ -17,7 +17,9 @@
  * and re-encoding it would only lose it.
  */
 
-import { jsPDF } from 'jspdf';
+// jsPDF is loaded only when a photograph actually has to be wrapped. It is
+// 130KB, and it was being downloaded by every visitor of a public registration
+// page, most of whom are never asked for a doctor's approval at all.
 
 /** Longest edge of a stored photo. Enough to read a doctor's handwriting. */
 const MAX_EDGE = 1600;
@@ -126,6 +128,7 @@ export async function prepareClearanceFile(file) {
 
   // One A4 page, the photo scaled to fit inside it whole. `compress` matters:
   // without it jsPDF stores the image far larger than the JPEG it came from.
+  const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
