@@ -29,6 +29,7 @@ import {
   normalizedName,
 } from './activityInterest.js';
 import { recordBotAction } from './botActivityLog.js';
+import { FORM_SHORT, FORM_FULL, FORM_PURPOSE } from './participationForm.js';
 import {
   FOLLOWUP_COLLECTION,
   FOLLOWUP_OPEN,
@@ -248,9 +249,8 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
   {
     name: 'getHealthDeclarations',
     description:
-      'האם למתאמנים של הלקוח הזה יש הצהרת בריאות והסרת אחריות בתוקף, עד מתי היא '
-      + 'בתוקף, וקישור למילוי. מי שאין לו הצהרה בתוקף צריך לקבל את הקישור. '
-      + 'הטופס עצמו כולל פרטי משתתף, הצהרת בריאות והסרת אחריות.',
+      `למי מהמתאמנים של הלקוח הזה יש ${FORM_SHORT} חתום ובתוקף, עד מתי, `
+      + `וקישור למילוי. ${FORM_FULL}.`,
     parameters: { type: 'object', properties: {} },
   },
   {
@@ -268,7 +268,7 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
   {
     name: 'startSignup',
     description:
-      'משבץ מתאמן שכבר חתם הצהרת בריאות לקבוצה, כשיבוץ רך בסטטוס «ממתין להרשמה» '
+      `משבץ מתאמן שכבר חתם על ${FORM_SHORT} לקבוצה, כשיבוץ רך בסטטוס «ממתין להרשמה» `
       + 'עד שמתקבל אישור ההרשמה. השיבוץ אינו תופס מקום בקבוצה. חובה שם ילד וקבוצה '
       + 'מדויקת. בלי הצהרה חתומה אי אפשר לשבץ.',
     parameters: {
@@ -354,7 +354,7 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
   {
     name: 'getRegistrationPack',
     description:
-      'שלושת הקישורים להשלמת הרשמה בסדר הנכון — הצהרת בריאות, הרשמה לקבוצה, '
+      `שלושת הקישורים להשלמת הרשמה בסדר הנכון — ${FORM_SHORT}, הרשמה לקבוצה, `
       + 'ותשלום ציוד — עם סימון מה כבר הושלם.',
     parameters: {
       type: 'object',
@@ -426,8 +426,16 @@ function openGroupsPayload(groups) {
       גודל_הקבוצה: g.capacityKnown === false ? 'לא מוגדר' : Number(g.maxSlots),
       מדריך: trainerNameForGroup(db, g) || '',
       רמה: g.skillLevel || 'מתחילים',
-      מחיר_פעם_בשבוע: Number(g.priceWeek) || 0,
-      מחיר_פעמיים_בשבוע: Number(g.priceTwice) || 0,
+      // A missing price is not a price of zero, and it is not an offer either.
+      // Both frequencies were always listed, so a group sold only once a week
+      // came back as "twice a week: 0" — and the bot offered a twice-weekly
+      // option that has no price and no registration link behind it.
+      ...(Number(g.priceWeek) > 0 ? { מחיר_פעם_בשבוע: Number(g.priceWeek) } : {}),
+      ...(Number(g.priceTwice) > 0 ? { מחיר_פעמיים_בשבוע: Number(g.priceTwice) } : {}),
+      תדירויות_אפשריות: [
+        Number(g.priceWeek) > 0 ? 'פעם בשבוע' : '',
+        Number(g.priceTwice) > 0 ? 'פעמיים בשבוע' : '',
+      ].filter(Boolean),
       ...groupInfoFields(g),
       ...groupChatFields(g),
     }));
@@ -606,7 +614,7 @@ function requireDeclaredChild(parent, childName) {
   const kids = parent ? studentsForParent(parent) : [];
   if (!kids.length) {
     return {
-      error: 'אין מתאמן בכרטיס — יש לשלוח קודם את קישור הצהרת הבריאות, החתימה היא שיוצרת את המתאמן',
+      error: `אין מתאמן בכרטיס — יש לשלוח קודם את הקישור ל${FORM_SHORT}; ${FORM_PURPOSE}`,
       צריך_הצהרה: true,
     };
   }
@@ -633,7 +641,7 @@ function requireDeclaredChild(parent, childName) {
   }
   if (!findLatestValidDeclaration(db, { studentId: student.id })) {
     return {
-      error: `ל${student.name || 'מתאמן'} אין הצהרת בריאות בתוקף — קודם חותמים, ורק אז משבצים`,
+      error: `ל${student.name || 'מתאמן'} אין ${FORM_SHORT} בתוקף — קודם חותמים, ורק אז משבצים`,
       צריך_הצהרה: true,
     };
   }
@@ -995,14 +1003,14 @@ export function buildCustomerTools({
         const expiry = declaration ? healthExpiryDate(declarationSignedAt(declaration)) : null;
         return {
           שם: student.name || '',
-          הצהרה_בתוקף: !!declaration,
+          טופס_השתתפות_בתוקף: !!declaration,
           בתוקף_עד: expiry ? expiry.toLocaleDateString('he-IL') : '',
         };
       });
       return {
         מתאמנים: rows,
         קישור_למילוי: link,
-        הערה: rows.every((r) => r.הצהרה_בתוקף)
+        הערה: rows.every((r) => r.טופס_השתתפות_בתוקף)
           ? 'לכולם יש הצהרה בתוקף — אין צורך לשלוח קישור'
           : 'יש מתאמן בלי הצהרה בתוקף — יש לשלוח לו את הקישור',
       };
@@ -1062,16 +1070,16 @@ export function buildCustomerTools({
 
       const itemTypes = unpaid.map((r) => r.item_type || r.itemType).filter(Boolean);
       const shirtSize = unpaid.find((r) => (r.item_type || r.itemType) === 'shirt')?.shirt_size || null;
-      // The link is still worth sending — the payment page prices the items
-      // itself — but the figure in the message must not be a guess.
-      const prices = await loadEquipmentPrices();
+      // No sum, deliberately. The payment page prices the items itself and is
+      // the one place that can be right, so quoting a figure in the message
+      // only creates a number to argue with. What the parent needs to know is
+      // that the kit is required and where to complete what is missing.
       return {
         מתאמן: student.name || '',
         פריטים: describeEquipmentItems(itemTypes, shirtSize),
-        ...(prices
-          ? { סכום: computeEquipmentTotal(prices, itemTypes) }
-          : { הערה: 'מחירי הציוד אינם זמינים כרגע — לשלוח את הקישור בלי לנקוב בסכום' }),
         קישור: buildRedirectUrl('e', token),
+        הערה: 'זהו ציוד חובה לאימונים. יש לומר שאלה הפריטים שחסרים, ולשלוח את '
+          + 'הקישור להשלמת הרכישה — בלי לנקוב בסכום ובלי לפרט מחיר לפריט.',
       };
     },
 
@@ -1334,8 +1342,7 @@ export function buildCustomerTools({
           : {
             מצב: 'חסרה',
             קישור: healthFormUrl(phone),
-            הסבר: 'זה השלב הראשון — הטופס כולל פרטי משתתף, הצהרת בריאות '
-              + 'והסרת אחריות, והחתימה היא שפותחת את כרטיס המתאמן',
+            הסבר: `זה השלב הראשון. ${FORM_FULL}. ${FORM_PURPOSE}`,
           },
       };
 

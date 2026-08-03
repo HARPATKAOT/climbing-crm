@@ -30,8 +30,13 @@ const BRAND_NAME = DEFAULT_BUSINESS_PROFILE.display_name;
  * Every automatic reply opens with this, so a customer can tell at a glance
  * whether they are reading a person or the bot — the same answer the bot gives
  * when asked outright. Staff replies are never marked: they really are people.
+ *
+ * The climber is the wall's own mark. It used to sit at the end of a few canned
+ * messages as decoration, which would now put it twice in one message and stop
+ * it reading as "this is the bot" — so those trailing copies were removed and
+ * this is the only place it appears.
  */
-export const BOT_MARK = '🤖';
+export const BOT_MARK = '🧗';
 
 export function withBotMark(text) {
   const body = String(text || '').trim();
@@ -64,7 +69,7 @@ export const DEFAULT_BOT_SETTINGS = {
   // Explicit human ask / hard topics only — bare «צוות» must not match «בצוות».
   aiHandoffKeywords:
     'אדם,נציג,תלונה,מנהל,דחוף,לדבר עם,ביטול,לבטל,החזר,זיכוי,חשבונית,פציעה,נפצע,כאב',
-  aiHandoffAckMessage: `מעבירים אתכם לצוות ${BRAND_NAME} 🧗\nמישהו יחזור אליכם בהקדם.`,
+  aiHandoffAckMessage: `מעבירים אתכם לצוות ${BRAND_NAME}\nמישהו יחזור אליכם בהקדם.`,
   aiStopKeywords: 'עצור,הסר,stop,unsubscribe,הסר אותי',
   aiOptOutMessage: 'הוסרתם מרשימת המענה האוטומטי.\nאם תרצו לחזור — כתבו «הפעל בוט».',
   aiPauseOnHumanReply: true,
@@ -108,7 +113,7 @@ export const DEFAULT_BOT_SETTINGS = {
   aiInteractiveMenuEnabled: true,
   // Health declaration is sent by staff when registering — not an opening-menu item.
   aiGreetingMenu:
-    `היי! אני הבוט של ${BRAND_NAME} 🧗\n\nבמה אפשר לעזור?\n1️⃣ חוגים, מחירים ורישום 🤸\n2️⃣ שעות פתיחה ומיקום 🗺️\n3️⃣ לדבר עם צוות 👤\n4️⃣ אירועים וטיולים 🎒\n\nכתבו מספר או שאלה קצרה 😊`,
+    `היי! אני הבוט של ${BRAND_NAME}\n\nבמה אפשר לעזור?\n1️⃣ חוגים, מחירים ורישום 🤸\n2️⃣ שעות פתיחה ומיקום 🗺️\n3️⃣ לדבר עם צוות 👤\n4️⃣ אירועים וטיולים 🎒\n\nכתבו מספר או שאלה קצרה 😊`,
   aiReactivateKeywords: 'הפעל בוט,הפעל,activate',
   // מספרי צוות שמקבלים התראת העברה + סוכן CRM. ריק = אין התראות.
   aiStaffPhones: '',
@@ -1103,7 +1108,7 @@ export async function advanceLeadCapture(phone, parent, incomingText, helpers = 
     }
     let reply = classesHint
       ? `${summary}\n\n${classesHint}\n\nרוצים שנקבע אימון היכרות? אפשר גם לכתוב 3 לדבר עם צוות.`
-      : `${summary}\n\nצוות יחזור אליכם לתיאום אימון היכרות 🧗`;
+      : `${summary}\n\nצוות יחזור אליכם לתיאום אימון היכרות`;
     if (waitlistNote) {
       reply = `${summary}\n\n${waitlistNote}`;
     }

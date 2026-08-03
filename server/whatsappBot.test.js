@@ -137,11 +137,12 @@ test('only a listed staff number gets the CRM agent', () => {
 });
 
 test('every bot reply is marked, and the mark never stacks', () => {
-  assert.equal(withBotMark('היי דלק!'), '🤖 היי דלק!');
-  assert.equal(withBotMark('שעות:\nשני 16:30'), '🤖 שעות:\nשני 16:30');
+  // The climber is the wall's own mark, and it opens the reply exactly once.
+  assert.equal(withBotMark('היי דלק!'), '🧗 היי דלק!');
+  assert.equal(withBotMark('שעות:\nשני 16:30'), '🧗 שעות:\nשני 16:30');
   // sendBotReply and the caller can both pass through the same text.
-  assert.equal(withBotMark('🤖 היי דלק!'), '🤖 היי דלק!');
-  assert.equal(withBotMark('  היי  '), '🤖 היי');
+  assert.equal(withBotMark('🧗 היי דלק!'), '🧗 היי דלק!');
+  assert.equal(withBotMark('  היי  '), '🧗 היי');
   // Nothing to mark stays nothing, so an empty reply is still not sent.
   assert.equal(withBotMark(''), '');
   assert.equal(withBotMark(null), '');
