@@ -5656,10 +5656,16 @@ app.get('/api/public/activities/:slug', publicFormRateLimit, async (req, res) =>
  * Shared by every public flow that opens with a phone number. Nothing here
  * leaves the allowlist below: no notes, no siblings' declarations, no history.
  */
-async function loadPublicHousehold(rawPhone) {
+/**
+ * @param {string} rawPhone
+ * @param {string} templateSlug איזו הצהרה נחתמת בפעילות הזאת. „יש הצהרה בתוקף”
+ *   היא תשובה ביחס לטופס מסוים: מי שחתם על הצהרת הקיר לא קרא מעולם את הסעיפים
+ *   על גלישה על חבל, ולכן הוא אינו מכוסה לטיול.
+ */
+async function loadPublicHousehold(rawPhone, templateSlug = '') {
   const phone = normalizePhone(rawPhone || '');
   if (!phone || phone.replace(/\D/g, '').length < 9) {
-    return { found: false, parent: null, children: [], adult_health_valid: false };
+    return { found: false, parent: null, children: [], adults: [], adult_health_valid: false };
   }
   if (supa.isEnabled()) {
     const [remoteParents, remoteStudents, remoteDecls] = await Promise.all([
@@ -5673,32 +5679,56 @@ async function loadPublicHousehold(rawPhone) {
   }
   const parent = findParentForOnboard({ phone });
   if (!parent) {
-    return { found: false, parent: null, children: [], adult_health_valid: false };
+    return { found: false, parent: null, children: [], adults: [], adult_health_valid: false };
   }
+  // The untyped `healthSignedAt` flag on a student predates the split into one
+  // declaration per activity, when the wall's was the only form there was. It
+  // stands in for that one and nothing else.
+  const wantedSlug = String(templateSlug || '').trim().toLowerCase();
+  const flagCoversThisForm = !wantedSlug || wantedSlug === 'wall';
+  const validFor = (studentId) => findLatestValidDeclaration(db, {
+    studentId,
+    templateSlug: wantedSlug,
+  });
   // The household's children, not only the ones whose card names this parent as
   // primary: after a merge every child belongs to both parents, and a public
   // form that lists one parent's half asks a family to register a child twice.
+  const memberOf = (student) => {
+    const declaration = validFor(student.id);
+    const signedAt = declarationSignedAt(declaration) || student.healthSignedAt || null;
+    // A missing signature date is *not* a valid declaration here. Elsewhere an
+    // unknown date is read generously so old records are not flagged; on a
+    // public form that generosity would offer to reuse a signature that was
+    // never given.
+    const healthValid = !!declaration
+      || (flagCoversThisForm
+        && !!student.healthSignedAt
+        && isHealthDeclarationValid(student.healthSignedAt));
+    return {
+      id: student.id,
+      name: String(student.name || '').trim(),
+      birthDate: student.birthDate || '',
+      is_adult: student.isAdult === true,
+      health_valid: healthValid,
+      health_signed_at: signedAt,
+    };
+  };
+  const byName = (a, b) => a.name.localeCompare(b.name, 'he');
+
   const children = childrenOfParent(db, parent.id)
     .filter((student) => student.isAdult !== true)
-    .map((student) => {
-      const declaration = findLatestValidDeclaration(db, { studentId: student.id });
-      const signedAt = declarationSignedAt(declaration) || student.healthSignedAt || null;
-      // A missing signature date is *not* a valid declaration here. Elsewhere an
-      // unknown date is read generously so old records are not flagged; on a
-      // public form that generosity would offer to reuse a signature that was
-      // never given.
-      const healthValid = !!declaration
-        || (!!student.healthSignedAt && isHealthDeclarationValid(student.healthSignedAt));
-      return {
-        id: student.id,
-        name: String(student.name || '').trim(),
-        birthDate: student.birthDate || '',
-        health_valid: healthValid,
-        health_signed_at: signedAt,
-      };
-    })
+    .map(memberOf)
     .filter((child) => child.name)
-    .sort((a, b) => a.name.localeCompare(b.name, 'he'));
+    .sort(byName);
+
+  // Grown-ups on the file are participants too. A trip is booked by a family
+  // that climbs together, and offering only the children meant a parent could
+  // not put themselves on the list at all.
+  const adults = childrenOfParent(db, parent.id)
+    .filter((student) => student.isAdult === true)
+    .map(memberOf)
+    .filter((adult) => adult.name)
+    .sort(byName);
 
   const adultStudent = childrenOfParent(db, parent.id).find((student) => {
     if (student.isAdult !== true) return false;
@@ -5706,12 +5736,11 @@ async function loadPublicHousehold(rawPhone) {
     const studentName = String(student.name || '').trim().toLowerCase();
     return !parentName || studentName === parentName;
   }) || childrenOfParent(db, parent.id).find((student) => student.isAdult === true);
-  const adultDeclaration = (adultStudent
-    ? findLatestValidDeclaration(db, { studentId: adultStudent.id })
-    : null)
+  const adultDeclaration = (adultStudent ? validFor(adultStudent.id) : null)
     || findLatestValidDeclaration(db, {
       parentId: parent.id,
       climberName: parent.name,
+      templateSlug: wantedSlug,
     });
 
   return {
@@ -5724,6 +5753,7 @@ async function loadPublicHousehold(rawPhone) {
       city: parent.city || '',
     },
     children,
+    adults,
     adult_student_id: adultStudent?.id || null,
     adult_health_valid: !!adultDeclaration,
     listDefs: typeof db.getBroadcastListDefs === 'function' ? db.getBroadcastListDefs() : [],
@@ -5818,7 +5848,9 @@ app.get('/api/public/activities/:slug/household', publicFormRateLimit, async (re
       return res.status(unavailable.status).json(unavailable.body);
     }
     if (!activity) return res.status(404).json({ error: 'הפעילות לא נמצאה' });
-    res.json(await loadPublicHousehold(req.query.phone));
+    // Judged against the declaration this activity actually calls for.
+    const template = declarationTemplateForActivity(db, activity, resolveDeclarationTemplate);
+    res.json(await loadPublicHousehold(req.query.phone, template?.slug));
   } catch (err) {
     console.error('public activity household error:', err.message);
     res.status(500).json({ error: err.message || 'טעינת פרטי הלקוח נכשלה' });
@@ -5986,7 +6018,8 @@ app.get('/api/public/shop/:slug/household', publicFormRateLimit, async (req, res
       return res.status(unavailable.status).json(unavailable.body);
     }
     if (!item) return res.status(404).json({ error: 'הפריט לא נמצא או שאינו נמכר אונליין' });
-    res.json(await loadPublicHousehold(req.query.phone));
+    // A shop purchase signs the default declaration, so that is what counts.
+    res.json(await loadPublicHousehold(req.query.phone, resolveDefaultDeclarationTemplate(db)?.slug));
   } catch (err) {
     console.error('public shop household error:', err.message);
     res.status(500).json({ error: err.message || 'טעינת פרטי הלקוח נכשלה' });

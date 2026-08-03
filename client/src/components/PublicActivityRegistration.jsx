@@ -123,16 +123,19 @@ export default function PublicActivityRegistration() {
         }),
       })];
     }
-    const fromExisting = (household?.children || [])
-      .filter((child) => selectedChildIds.includes(child.id))
-      .map((child) => mergeMirror(emptyParticipant(questions, {
-        key: `existing-${child.id}`,
-        id: child.id,
-        type: 'child',
-        name: child.name,
-        birthDate: child.birthDate || '',
-        reuse_health: !!child.health_valid,
-        health_valid: !!child.health_valid,
+    // Adults and children from the file, in the order they were offered. An
+    // adult keeps `type: 'adult'` so the parent-only clauses stay hidden and
+    // the record is not created as somebody's child.
+    const fromExisting = [...(household?.adults || []), ...(household?.children || [])]
+      .filter((member) => selectedChildIds.includes(member.id))
+      .map((member) => mergeMirror(emptyParticipant(questions, {
+        key: `existing-${member.id}`,
+        id: member.id,
+        type: member.is_adult ? 'adult' : 'child',
+        name: member.name,
+        birthDate: member.birthDate || '',
+        reuse_health: !!member.health_valid,
+        health_valid: !!member.health_valid,
       })));
     const newChildren = participants
       .filter(
@@ -228,6 +231,30 @@ export default function PublicActivityRegistration() {
     }
     return body;
   };
+
+  /**
+   * Recognise the household while the phone is being typed, not only when
+   * Continue is pressed. Until the lookup has run there is no answer to "is
+   * this a family we know", and the form was announcing a new family file to
+   * people whose file it was about to find.
+   */
+  useEffect(() => {
+    const digits = String(parent.phone || '').replace(/\D/g, '');
+    if (digits.length < 9) {
+      setHousehold(null);
+      return undefined;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      lookupHousehold().catch(() => {
+        // A failed lookup leaves the form exactly as it was: recognising a
+        // returning family is a convenience, never a gate.
+        if (!cancelled) setHousehold(null);
+      });
+    }, 500);
+    return () => { cancelled = true; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parent.phone, slug]);
 
   const next = async () => {
     setError('');
@@ -447,16 +474,28 @@ export default function PublicActivityRegistration() {
             <Field label="טלפון" type="tel" value={parent.phone} onChange={(phone) => setParent({ ...parent, phone })} />
             <Field label="דואר אלקטרוני" type="email" value={parent.email} onChange={(email) => setParent({ ...parent, email })} />
             <Field label="עיר" value={parent.city} onChange={(city) => setParent({ ...parent, city })} />
-            <KnownFamilyPrompt
-              families={families}
-              chosenId={familyParentId}
-              onChoose={setFamilyParentId}
-            />
-            <KnownFamilyNote
-              families={families}
-              chosenId={familyParentId}
-              onCancel={() => setFamilyParentId(null)}
-            />
+            {/* Only ask about joining a family, or announce a new file, when we
+                do not already know whose file this is. The phone matched an
+                existing household a moment ago — telling that person a new
+                family file is being opened is simply untrue. */}
+            {household === null ? null : household.found ? (
+              <p className="event-hint" style={{ color: '#86efac' }}>
+                מצאנו את התיק שלכם במערכת.
+              </p>
+            ) : (
+              <>
+                <KnownFamilyPrompt
+                  families={families}
+                  chosenId={familyParentId}
+                  onChoose={setFamilyParentId}
+                />
+                <KnownFamilyNote
+                  families={families}
+                  chosenId={familyParentId}
+                  onCancel={() => setFamilyParentId(null)}
+                />
+              </>
+            )}
 
             <h2 style={{ marginTop: 28 }}>רשימות דיוור</h2>
             <p className="event-hint">אפשר לסמן רשימות שמעניינות אתכם — חוגים, טיולים, אירועים ועוד.</p>
@@ -494,27 +533,31 @@ export default function PublicActivityRegistration() {
             <h2>מי משתתף?</h2>
             {household?.found && (
               <p className="event-hint">
-                נמצאת במערכת. בחרו ילד קיים או הוסיפו ילד אחר.
+                נמצאתם במערכת. סמנו את מי שמשתתף — מבוגרים וילדים — או הוסיפו משתתף/ת חדש/ה.
               </p>
             )}
-            {(household?.children || []).map((child) => {
-              const checked = selectedChildIds.includes(child.id);
+            {/* Grown-ups on the file are offered like everyone else. A family
+                books a trip together, and listing only the children left the
+                parents with no way to put themselves on it. */}
+            {[...(household?.adults || []), ...(household?.children || [])].map((member) => {
+              const checked = selectedChildIds.includes(member.id);
               return (
-                <label className="event-check event-existing-child" key={child.id}>
+                <label className="event-check event-existing-child" key={member.id}>
                   <input
                     type="checkbox"
                     checked={checked}
                     onChange={() => {
                       setSelectedChildIds((current) => (
                         checked
-                          ? current.filter((id) => id !== child.id)
-                          : [...current, child.id]
+                          ? current.filter((id) => id !== member.id)
+                          : [...current, member.id]
                       ));
                     }}
                   />
                   <span>
-                    <strong>{child.name}</strong>
-                    {child.health_valid
+                    <strong>{member.name}</strong>
+                    {member.is_adult ? ' (מבוגר/ת)' : ''}
+                    {member.health_valid
                       ? ' — יש הצהרת בריאות בתוקף'
                       : ' — נדרשת הצהרת בריאות'}
                   </span>
