@@ -20,6 +20,20 @@ import {
   describeEquipmentItems,
   computeEquipmentTotal,
 } from './equipmentService.js';
+import { upcomingPublicActivities, activityPublicSlug } from './publicSite.js';
+import {
+  addInterest,
+  interestRows,
+  normalizeInterestInput,
+  normalizedName,
+} from './activityInterest.js';
+import {
+  FOLLOWUP_COLLECTION,
+  FOLLOWUP_OPEN,
+  findOpenFollowUp,
+  newFollowUpId,
+  resolveDueDate,
+} from './botFollowUps.js';
 import {
   loadEquipmentPrices,
   enrichmentFeeFromSettings,
@@ -27,6 +41,8 @@ import {
   formatPublicEventsReply,
   trainerNameForGroup,
   groupSignupUrl,
+  eventPublicUrl,
+  eventDateLabel,
 } from './botFacts.js';
 
 const DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
@@ -87,8 +103,50 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
   },
   {
     name: 'getEvents',
-    description: 'אירועים וטיולים שסומנו לפרסום, כולל קישור הרשמה אם יש.',
+    description:
+      'אירועים וטיולים שסומנו לפרסום: שם, תאריך, מקום, מחיר, מקומות פנויים '
+      + 'וקישור הרשמה. לכל אירוע מוחזר «מזהה» — יש להעביר אותו ל-addActivityInterest.',
     parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'addActivityInterest',
+    description:
+      'רושם את הלקוח כמתעניין באירוע או בטיול. שיבוץ רך: אינו תופס מקום, אינו '
+      + 'הרשמה ואינו חיוב — הצוות חוזר אליו כדי להשלים. להשתמש כשהלקוח מביע '
+      + 'עניין באירוע מסוים, גם בלי שביקש במפורש להירשם. חובה «מזהה» מ-getEvents.',
+    parameters: {
+      type: 'object',
+      properties: {
+        eventId: { type: 'string', description: 'ה«מזהה» של האירוע כפי שחזר מ-getEvents' },
+        participantName: {
+          type: 'string',
+          description: 'שם המשתתף — ילד מהכרטיס, או שם שהלקוח מסר. ריק = הלקוח עצמו',
+        },
+        notes: { type: 'string', description: 'מה הלקוח ביקש לציין, אם ציין' },
+      },
+      required: ['eventId'],
+    },
+  },
+  {
+    name: 'scheduleFollowUp',
+    description:
+      'קובע לבוט תזכורת לחזור ללקוח הזה ביום אחר. להשתמש כשהלקוח מבקש לחזור '
+      + 'אליו («תבדוק איתי מחר», «נדבר בשבוע הבא»), או כשסוכם משהו שדורש בדיקה. '
+      + 'לא לקבוע תזכורת לשאלה שכבר נענתה במלואה.',
+    parameters: {
+      type: 'object',
+      properties: {
+        days: {
+          type: 'integer',
+          description: 'בעוד כמה ימים לחזור: 1 = מחר, 7 = בעוד שבוע. עד 14',
+        },
+        note: {
+          type: 'string',
+          description: 'על מה לחזור, במילים של הלקוח — למשל «ההרשמה של לילי לחוג»',
+        },
+      },
+      required: ['days', 'note'],
+    },
   },
   {
     name: 'getSignupLink',
@@ -266,6 +324,31 @@ function isSquadGroup(group) {
  * in that journey, and the bot was sending it to the team instead.
  */
 const REGISTERED_STATUSES = new Set(['registered', 'active']);
+
+/**
+ * The day-after check on a soft placement. Set by the placement itself rather
+ * than by the model, because it must happen every time — a follow-up the model
+ * sometimes remembers is worse than none, since nobody knows which customers
+ * are covered.
+ */
+async function scheduleSignupCheck({ parent, phone, student }) {
+  if (!parent?.id) return;
+  if (findOpenFollowUp(db, { parentId: parent.id, reason: 'pending_signup' })) return;
+  const row = db.insert(FOLLOWUP_COLLECTION, {
+    id: newFollowUpId(),
+    parent_id: parent.id,
+    phone: parent.phone || phone || '',
+    reason: 'pending_signup',
+    note: 'ההרשמה במתנ״ס',
+    subject: student?.name || '',
+    student_id: student?.id || null,
+    due_date: resolveDueDate({ days: 1 }),
+    status: FOLLOWUP_OPEN,
+    created_by: 'bot',
+    created_at: new Date().toISOString(),
+  });
+  if (row?.id) await persistCore(FOLLOWUP_COLLECTION, row);
+}
 
 export function isRegisteredTrainee(student) {
   return REGISTERED_STATUSES.has(String(student?.status || ''));
@@ -462,8 +545,140 @@ export function buildCustomerTools({
     }),
 
     getEvents: async () => {
-      const text = formatPublicEventsReply(db);
-      return text ? { אירועים: text } : { אירועים: '', הערה: 'אין אירועים פתוחים להרשמה' };
+      // A formatted paragraph was all the model got, so it could describe a trip
+      // but never act on one — there was no handle to pass anywhere. The slug is
+      // that handle: already public, already unique, already on the link.
+      const events = upcomingPublicActivities(db).map((event) => ({
+        מזהה: event.slug || '',
+        שם: event.name || '',
+        תאריך: eventDateLabel(event),
+        מיקום: event.location || '',
+        מחיר: Number(event.price) || 0,
+        מקומות_פנויים: event.remaining == null ? 'ללא הגבלה' : event.remaining,
+        תיאור: String(event.description || '').slice(0, 300),
+        קישור: eventPublicUrl(event.slug) || '',
+      }));
+      if (!events.length) return { אירועים: [], הערה: 'אין אירועים פתוחים להרשמה' };
+      return {
+        אירועים: events,
+        הערה: 'אם הלקוח מתעניין באחד מהם — אפשר לרשום אותו כמתעניין עם addActivityInterest.',
+      };
+    },
+
+    /**
+     * The team already works this way: someone interested is slotted before
+     * they register or pay, and the list is what the follow-up runs on. The bot
+     * could describe a trip and then let the interest evaporate at the end of
+     * the conversation; now it lands in the same place a staff member would put
+     * it. Never a registration and never a charge — those need a person.
+     */
+    addActivityInterest: async ({ eventId, participantName, notes } = {}) => {
+      const slug = String(eventId || '').trim();
+      if (!slug) return { error: 'חסר מזהה אירוע — יש לקרוא קודם ל-getEvents' };
+      if (!parent?.id) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
+
+      const published = upcomingPublicActivities(db).some((e) => e.slug === slug);
+      const activity = (db.get('activities') || []).find(
+        (a) => activityPublicSlug(a) === slug
+      );
+      if (!activity || !published) {
+        return { error: 'אין אירוע פתוח להרשמה עם המזהה הזה — יש לקרוא שוב ל-getEvents' };
+      }
+
+      // Who is going: a child from the card, a name the customer gave, or the
+      // customer themselves. A name that matches no child is still recorded —
+      // it may be a friend or a sibling nobody registered yet.
+      const kids = studentsForParent(parent);
+      const named = String(participantName || '').trim();
+      const child = named
+        ? kids.find((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
+        : null;
+      const name = child?.name || named || parent.name || '';
+      if (!name) return { error: 'חסר שם משתתף — יש לשאול את הלקוח' };
+
+      const already = interestRows(db).find(
+        (row) => String(row.activity_id || '') === String(activity.id)
+          && String(row.status || 'interested') === 'interested'
+          && (String(row.parent_id || '') === String(parent.id))
+          && normalizedName(row.name) === normalizedName(name)
+      );
+      if (already) {
+        return {
+          נרשם_כמתעניין: name,
+          אירוע: activity.name || '',
+          הערה: 'כבר היה רשום כמתעניין — לא נוצרה כפילות. אפשר לומר ללקוח שהוא רשום ושהצוות יחזור אליו.',
+        };
+      }
+
+      const row = await addInterest({
+        db,
+        persist: persistCore,
+        activityId: activity.id,
+        input: normalizeInterestInput({
+          name,
+          phone: parent.phone || phone || '',
+          email: parent.email || '',
+          parent_id: parent.id,
+          student_id: child?.id || null,
+          participant_type: child ? 'child' : 'adult',
+          notes: [String(notes || '').trim(), 'נרשם כמתעניין דרך הבוט']
+            .filter(Boolean).join(' · '),
+        }),
+      });
+      if (!row?.id) return { error: 'רישום המתעניין נכשל — יש להעביר לצוות' };
+
+      return {
+        נרשם_כמתעניין: name,
+        אירוע: activity.name || '',
+        תאריך: eventDateLabel(activity),
+        הערה: 'זהו שיבוץ רך שאינו תופס מקום ואינו הרשמה. יש לומר ללקוח שנרשם '
+          + 'כמתעניין ושהצוות יחזור אליו להשלמת ההרשמה, ולציין מה המחיר אם יש.',
+      };
+    },
+
+    /**
+     * "תבדוק איתי מחר" used to end the conversation politely and vanish: the bot
+     * had nowhere to write down that it had promised something. Now it does, and
+     * the daily run brings it back.
+     */
+    scheduleFollowUp: async ({ days, note } = {}) => {
+      if (!parent?.id) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
+      const dueDate = resolveDueDate({ days });
+      if (!dueDate) return { error: 'צריך לציין בעוד כמה ימים לחזור (1 = מחר)' };
+
+      const subject = String(note || '').trim();
+      if (!subject) return { error: 'חסר על מה לחזור' };
+
+      const existing = findOpenFollowUp(db, { parentId: parent.id, reason: 'customer_asked' });
+      if (existing) {
+        const updated = db.update(FOLLOWUP_COLLECTION, existing.id, {
+          due_date: dueDate,
+          note: subject,
+          updated_at: new Date().toISOString(),
+        });
+        await persistCore(FOLLOWUP_COLLECTION, updated || existing);
+        return { נקבע: dueDate, נושא: subject, הערה: 'עודכנה התזכורת הקיימת ללקוח הזה.' };
+      }
+
+      const row = db.insert(FOLLOWUP_COLLECTION, {
+        id: newFollowUpId(),
+        parent_id: parent.id,
+        phone: parent.phone || phone || '',
+        reason: 'customer_asked',
+        note: subject,
+        subject: '',
+        due_date: dueDate,
+        status: FOLLOWUP_OPEN,
+        created_by: 'bot',
+        created_at: new Date().toISOString(),
+      });
+      if (!row?.id) return { error: 'קביעת התזכורת נכשלה' };
+      await persistCore(FOLLOWUP_COLLECTION, row);
+      return {
+        נקבע: dueDate,
+        נושא: subject,
+        הערה: 'יש לומר ללקוח שנחזור אליו, בלי להבטיח שעה מדויקת.',
+      };
     },
 
     getSignupLink: async ({ grade, band, day, time } = {}) => {
@@ -622,12 +837,18 @@ export function buildCustomerTools({
         console.error('placement notice failed:', err.message);
       }
 
+      // "ממתין להרשמה" ends when the מתנ״ס confirms, and that confirmation
+      // arrives by phone or not at all. Asking the parent tomorrow is what
+      // turns a soft hold into either a registration or a known problem.
+      await scheduleSignupCheck({ parent, phone, student: row });
+
       return {
         שובץ: student.name || '',
         קבוצה: describeGroup(group),
         סטטוס: 'ממתין להרשמה',
         הערה: 'המקום נשמר ואינו תופס מקום בקבוצה. יש לומר ללקוח שההרשמה נסגרת '
-          + 'רק אחרי אישור, ולשלוח את קישורי ההרשמה והציוד.',
+          + 'רק אחרי אישור, ולשלוח את קישורי ההרשמה והציוד. נקבעה בדיקה חוזרת '
+          + 'מחר — אין צורך לקרוא ל-scheduleFollowUp בנוסף.',
       };
     },
 

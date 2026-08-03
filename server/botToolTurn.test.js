@@ -160,6 +160,7 @@ test('a link the model wrote itself never reaches the customer', () => {
 test('the tools offered to the model are facts, links and placements — never sends or charges', () => {
   const names = CUSTOMER_TOOL_DECLARATIONS.map((d) => d.name).sort();
   assert.deepEqual(names, [
+    'addActivityInterest',
     'cancelSignup',
     'getEquipmentPaymentLink',
     'getEvents',
@@ -172,6 +173,7 @@ test('the tools offered to the model are facts, links and placements — never s
     'joinWaitlist',
     'listClasses',
     'saveCustomerName',
+    'scheduleFollowUp',
     'startSignup',
   ]);
   // Every writing tool must name the child it acts on, so the bot can never

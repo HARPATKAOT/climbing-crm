@@ -10,6 +10,27 @@ import {
 } from './attendanceUtils.js';
 import { studentGroupIds } from './studentGroups.js';
 import { alertRecipients } from './staffAlerts.js';
+import { persistCore } from './db.js';
+import {
+  isOptedOut,
+  isBotPaused,
+  parentFirstName,
+  withBotMark,
+} from './whatsappBot.js';
+import {
+  FOLLOWUP_COLLECTION,
+  dueFollowUps,
+  followUpMessage,
+} from './botFollowUps.js';
+
+/** A follow-up is answered once — sent, or handed to the team, or dropped. */
+async function closeFollowUp(row, status) {
+  const updated = db.update(FOLLOWUP_COLLECTION, row.id, {
+    status,
+    closed_at: new Date().toISOString(),
+  });
+  if (updated) await persistCore(FOLLOWUP_COLLECTION, updated);
+}
 
 /**
  * Where to come. Read from the business facts the owner edits, because a
@@ -460,7 +481,106 @@ export const automationsService = {
     const reminder = await automationsService.runIntroReminders();
     const followup = await automationsService.runIntroFollowups();
     const stalled = await automationsService.runStalledSignupNotice();
-    return { reminder, followup, stalled };
+    const botFollowUps = await automationsService.runBotFollowUps();
+    return { reminder, followup, stalled, botFollowUps };
+  },
+
+  /**
+   * The promises the bot made — "תבדוק איתי מחר", and the day-after check on a
+   * placement — come due here.
+   *
+   * Meta only allows free text inside 24 hours of the customer's last message,
+   * and a follow-up is by definition a day later. So a customer who has written
+   * since gets the message; anyone else becomes a note to the team, because a
+   * silent failure is exactly the hole this was built to close. A template
+   * would make the rest autonomous, and that is a decision for the owner.
+   */
+  runBotFollowUps: async ({ today = israelDateStr() } = {}) => {
+    const due = dueFollowUps(db, { today });
+    if (!due.length) return { event: 'bot_followup', date: today, due: 0, sent: 0 };
+
+    const settings = db.getSettings ? db.getSettings() : {};
+    let sent = 0;
+    const needStaff = [];
+
+    for (const row of due) {
+      const sendId = `bf-${row.id}`;
+      if (alreadySent(sendId)) continue;
+
+      const parent = (db.get('parents') || []).find((p) => String(p.id) === String(row.parent_id));
+      const phone = row.phone || parent?.phone || '';
+      if (!parent || !phone) {
+        await closeFollowUp(row, 'cancelled');
+        continue;
+      }
+      // A customer who asked us to stop, or who is mid-conversation with a
+      // person, must not get an automatic nudge on top of that.
+      if (isOptedOut(parent) || isBotPaused(parent)) {
+        await closeFollowUp(row, 'cancelled');
+        continue;
+      }
+
+      const body = withBotMark(followUpMessage(row, { firstName: parentFirstName(parent) }));
+      if (!canSendFreeform(parent, 'whatsapp')) {
+        needStaff.push({ row, parent });
+        continue;
+      }
+
+      try {
+        const result = await whatsappService.sendTextMessage(phone, body, true, {
+          source: 'ai',
+          parentId: parent.id,
+        });
+        if (result?.success) {
+          sent += 1;
+          markSent({ id: sendId, event: 'bot_followup', date: today, phone });
+          await closeFollowUp(row, 'sent');
+        }
+      } catch (err) {
+        console.error('bot follow-up send failed:', err.message);
+      }
+    }
+
+    // Everyone the 24h window locked out, in one message rather than a stream.
+    let staffNotified = 0;
+    if (needStaff.length) {
+      const { phones } = alertRecipients(db, 'handoff', settings);
+      const lines = needStaff.slice(0, 15).map(({ row, parent }) => {
+        const what = row.reason === 'pending_signup'
+          ? `הרשמה של ${row.subject || 'מתאמן'}`
+          : (row.note || 'מעקב');
+        return `• ${parent.name || '—'} · ${parent.phone || ''} — ${what}`;
+      });
+      const body = [
+        '⏰ מעקב שהבוט הבטיח ולא יכול לשלוח',
+        ...lines,
+        needStaff.length > lines.length ? `ועוד ${needStaff.length - lines.length}…` : '',
+        '← חלון 24 השעות סגור, צריך פנייה מכם',
+      ].filter(Boolean).join('\n');
+      for (const staffPhone of phones) {
+        try {
+          const result = await whatsappService.sendTextMessage(staffPhone, body, false, {
+            source: 'staff_notify',
+            clip: false,
+          });
+          if (result?.success) staffNotified += 1;
+        } catch (err) {
+          console.error('bot follow-up staff notice failed:', err.message);
+        }
+      }
+      // Closed either way: the team has it now, and a note that repeats every
+      // morning is how a queue becomes noise nobody reads.
+      for (const { row } of needStaff) await closeFollowUp(row, 'sent');
+    }
+
+    return {
+      event: 'bot_followup',
+      date: today,
+      due: due.length,
+      sent,
+      window_closed: needStaff.length,
+      staffNotified,
+    };
   },
 
   /**

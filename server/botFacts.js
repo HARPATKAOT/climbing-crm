@@ -161,7 +161,7 @@ export function eventPublicUrl(slug) {
   return `${appPublicBase()}/event/${encodeURIComponent(clean)}`;
 }
 
-function eventDateLabel(activity) {
+export function eventDateLabel(activity) {
   const start = dayLabelForDate(activity.date);
   const end = activity.end_date && activity.end_date !== activity.date
     ? dayLabelForDate(activity.end_date)

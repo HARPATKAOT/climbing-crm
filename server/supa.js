@@ -123,6 +123,8 @@ export const OPERATIONAL_TABLES = [
   'campaign_sends',
   'campaign_runs',
   'customer_coupons',
+  // Reminders the bot sets for itself — same kv pattern, no migration.
+  'bot_followups',
 ];
 
 // Kept as the public name used by db.js: every listed collection is durable.
