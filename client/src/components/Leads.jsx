@@ -10,6 +10,7 @@ import {
 } from '../utils/levelTestKinds.js';
 import { LEVELS, levelColor, routeStyleMeta, ROUTE_STYLE, highestPassedLevel } from '../utils/levelGrades.js';
 import GenderPicker, { AdultMark, GenderMark, genderKind } from './GenderPicker.jsx';
+import GroupPickerCards from './GroupPickerCards.jsx';
 import {
   blobToBase64,
   buildHealthDeclarationPdf,
@@ -3486,29 +3487,17 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               >
                 {editingGroup ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto' }}>
-                      {groups.map((g) => {
-                        const checked = editGroupIds.includes(String(g.id));
-                        return (
-                          <label key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              disabled={savingGroup}
-                              onChange={() => {
-                                setEditGroupIds((prev) => (
-                                  checked
-                                    ? prev.filter((id) => id !== String(g.id))
-                                    : [...prev, String(g.id)]
-                                ));
-                              }}
-                              style={{ width: 15, height: 15 }}
-                            />
-                            <span>{g.name}</span>
-                          </label>
-                        );
-                      })}
-                    </div>
+                    <GroupPickerCards
+                      groups={groups}
+                      selectedIds={editGroupIds}
+                      disabled={savingGroup}
+                      maxHeight={220}
+                      onToggle={(id) => {
+                        setEditGroupIds((prev) => (
+                          prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+                        ));
+                      }}
+                    />
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button type="button" className="btn btn-primary btn-sm" disabled={savingGroup} onClick={handleSaveGroup}>
                         <Check size={13} /> {savingGroup ? 'שומר...' : 'שמור'}
@@ -4762,28 +4751,16 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   </div>
                   <div className="form-group">
                     <label className="form-label">שיוך לחוגים</label>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 180, overflowY: 'auto', padding: '6px 0' }}>
-                      {groups.map((g) => {
-                        const checked = editGroupIds.includes(String(g.id));
-                        return (
-                          <label key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => {
-                                setEditGroupIds((prev) => (
-                                  checked
-                                    ? prev.filter((id) => id !== String(g.id))
-                                    : [...prev, String(g.id)]
-                                ));
-                              }}
-                              style={{ width: 15, height: 15 }}
-                            />
-                            <span>{g.name}</span>
-                          </label>
-                        );
-                      })}
-                    </div>
+                    <GroupPickerCards
+                      groups={groups}
+                      selectedIds={editGroupIds}
+                      maxHeight={200}
+                      onToggle={(id) => {
+                        setEditGroupIds((prev) => (
+                          prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+                        ));
+                      }}
+                    />
                   </div>
                 </div>
                 <div className="form-group">

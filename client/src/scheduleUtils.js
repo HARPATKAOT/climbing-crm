@@ -16,6 +16,35 @@ export function getGroupDays(group) {
   return [group?.day].filter((d) => d != null);
 }
 
+// The palette the weekly board paints its blocks with, keyed by age band. It
+// lives here rather than in Schedule.jsx because the group pickers elsewhere
+// have to come out the same colour — a card the user recognises from the board.
+export const AGE_COLORS = {
+  "א'-ב'":  { bg: 'rgba(99,102,241,0.15)',  border: 'rgba(99,102,241,0.35)',  text: '#A5B4FC' },
+  "ג'-ד'":  { bg: 'rgba(16,185,129,0.13)',  border: 'rgba(16,185,129,0.35)',  text: '#34D399' },
+  "ה'-ו'":  { bg: 'rgba(245,158,11,0.13)',  border: 'rgba(245,158,11,0.35)',  text: '#FCD34D' },
+  'חטיבה':  { bg: 'rgba(168,85,247,0.13)',  border: 'rgba(168,85,247,0.35)',  text: '#C084FC' },
+  'תיכון':  { bg: 'rgba(236,72,153,0.13)',  border: 'rgba(236,72,153,0.35)',  text: '#F472B6' },
+  'בוגרים': { bg: 'rgba(6,182,212,0.13)',   border: 'rgba(6,182,212,0.35)',   text: '#67E8F9' },
+};
+export const DEF_COLOR = { bg: 'rgba(99,102,241,0.12)', border: 'rgba(99,102,241,0.3)', text: '#A5B4FC' };
+
+/** Board colours for a group; bands with no colour of their own fall to indigo. */
+export function groupColor(group) {
+  return AGE_COLORS[group?.ageCategory] || DEF_COLOR;
+}
+
+/**
+ * The block caption on the board: the day is already the column it sits in, so
+ * it is dropped from the name and only the class and its hour remain.
+ */
+export function shortGroupLabel(name) {
+  return String(name || '')
+    .replace(/—\s*יום\s*[א-ו]׳\s*/g, '')
+    .replace(/—\s*[א-ו]׳\+[א-ו]׳\s*/g, '')
+    .trim();
+}
+
 /** Local YYYY-MM-DD (Israel-safe; avoids UTC day-shift from toISOString). */
 export function localDateStr(d = new Date()) {
   const y = d.getFullYear();

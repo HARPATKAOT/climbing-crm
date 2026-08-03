@@ -35,6 +35,9 @@ import {
   isAttPending,
   isAttAbsent,
   attStatusMeta,
+  AGE_COLORS,
+  DEF_COLOR,
+  shortGroupLabel,
 } from '../scheduleUtils.js';
 import { StatusPill } from './AttendanceList.jsx';
 import StudentFileButton from './StudentFileButton.jsx';
@@ -91,15 +94,8 @@ async function saveAttendanceMark(record) {
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const AGE_COLORS = {
-  "א'-ב'":  { bg: 'rgba(99,102,241,0.15)',  border: 'rgba(99,102,241,0.35)',  text: '#A5B4FC' },
-  "ג'-ד'":  { bg: 'rgba(16,185,129,0.13)',  border: 'rgba(16,185,129,0.35)',  text: '#34D399' },
-  "ה'-ו'":  { bg: 'rgba(245,158,11,0.13)',  border: 'rgba(245,158,11,0.35)',  text: '#FCD34D' },
-  'חטיבה':  { bg: 'rgba(168,85,247,0.13)',  border: 'rgba(168,85,247,0.35)',  text: '#C084FC' },
-  'תיכון':  { bg: 'rgba(236,72,153,0.13)',  border: 'rgba(236,72,153,0.35)',  text: '#F472B6' },
-  'בוגרים': { bg: 'rgba(6,182,212,0.13)',   border: 'rgba(6,182,212,0.35)',   text: '#67E8F9' },
-};
-const DEF_COLOR = { bg: 'rgba(99,102,241,0.12)', border: 'rgba(99,102,241,0.3)', text: '#A5B4FC' };
+// AGE_COLORS / DEF_COLOR now live in scheduleUtils.js — the pickers on the
+// customer file paint their cards from the same table.
 
 // Grid: 1.5px per minute, starting at 14:00, ending at 22:00
 const START_MIN  = 14 * 60;   // 840 min
@@ -890,10 +886,7 @@ function GroupBlock({ group, enrolledCount, selected, onClick }) {
   const full = enrolledCount >= group.maxSlots;
 
   // Short label
-  const label = group.name
-    .replace(/—\s*יום\s*[א-ו]׳\s*/g, '')
-    .replace(/—\s*[א-ו]׳\+[א-ו]׳\s*/g, '')
-    .trim();
+  const label = shortGroupLabel(group.name);
 
   const assistantNames = Array.isArray(group.assistantNames) ? group.assistantNames : [];
   const staffTitle = [
