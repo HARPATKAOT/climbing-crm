@@ -29,21 +29,10 @@ import {
   questionsForSigner,
   unansweredQuestions,
 } from '../utils/healthQuestions.js';
-import {
-  ACCEPTED_TYPES,
-  clearanceBudgetError,
-  prepareClearanceFile,
-} from '../utils/medicalClearanceFile.js';
+import { clearanceBudgetError } from '../utils/medicalClearanceFile.js';
+import { declarationSectionTitles, splitWaiverText, withSignerName } from '../utils/declarationSections.js';
+import MedicalClearanceField from './MedicalClearanceField.jsx';
 import GenderPicker from './GenderPicker.jsx';
-
-/**
- * `{{שם החותם}}` in a template's text becomes the name typed on the form.
- * Left unwritten, the template reads exactly as it did before.
- */
-function withSignerName(text, signerName = '') {
-  const signer = String(signerName || '').trim();
-  return String(text || '').replace(/\{\{\s*(שם החותם|signer)\s*\}\}/g, signer);
-}
 
 /**
  * The binding text — the one layer there is. Naming the signer inside it is
@@ -128,93 +117,6 @@ function ageFromBirthDate(value) {
   if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < born.getDate())) age -= 1;
   if (age < 0 || age > 120) return null;
   return age;
-}
-
-/**
- * Attaching the doctor's approval, shown only when an answer asked for one.
- *
- * The file never leaves the browser until the form is submitted: it travels in
- * the same request as the declaration, so a saved signature and a missing
- * approval cannot exist as two separate outcomes.
- */
-function MedicalClearanceField({ triggers, value, onChange, onError }) {
-  const [busy, setBusy] = useState(false);
-  const inputRef = useRef(null);
-
-  const pick = async (event) => {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
-    setBusy(true);
-    try {
-      onChange(await prepareClearanceFile(file));
-      onError('');
-    } catch (err) {
-      onChange(null);
-      onError(err.message || 'צירוף הקובץ נכשל');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div style={{
-      background: 'rgba(249,115,22,.1)', border: '1px solid rgba(249,115,22,.35)',
-      borderRadius: 12, padding: 14, marginTop: 10,
-    }}>
-      <div style={{ fontSize: 13, fontWeight: 800, color: '#fdba74', marginBottom: 6 }}>
-        נדרש אישור רופא להשתתפות בפעילות ספורטיבית
-      </div>
-      <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)', lineHeight: 1.6, marginBottom: 10 }}>
-        {triggers.length === 1
-          ? `לפי התשובה על „${questionLabel(triggers[0])}” — `
-          : 'לפי התשובות שסימנתם — '}
-        ההשתתפות מותנית באישור רופא בכתב. צלמו את האישור או צרפו קובץ PDF.
-        בלי האישור לא ניתן להשלים את ההרשמה.
-      </div>
-      <input
-        ref={inputRef}
-        type="file"
-        accept={ACCEPTED_TYPES}
-        onChange={pick}
-        style={{ display: 'none' }}
-      />
-      <button
-        type="button"
-        onClick={() => inputRef.current?.click()}
-        disabled={busy}
-        style={{
-          width: '100%', padding: '11px 12px', borderRadius: 11, font: 'inherit',
-          fontSize: 13, fontWeight: 700, cursor: busy ? 'default' : 'pointer',
-          border: '1px solid rgba(255,255,255,.2)', background: 'rgba(255,255,255,.07)',
-          color: '#e2e8f0',
-        }}
-      >
-        {busy ? 'מעבד את הקובץ…' : (value ? 'החלפת הקובץ' : 'צילום או צירוף אישור רופא')}
-      </button>
-      {value && (
-        <div style={{
-          marginTop: 10, display: 'flex', alignItems: 'center', gap: 8,
-          fontSize: 12, color: '#86efac',
-        }}>
-          <CheckCircle size={14} />
-          <span style={{ flex: 1, wordBreak: 'break-all' }}>
-            {value.fileName} ({Math.max(1, Math.round(value.bytes / 1024))} KB)
-          </span>
-          <button
-            type="button"
-            onClick={() => onChange(null)}
-            style={{
-              background: 'none', border: 'none', color: '#fca5a5', font: 'inherit',
-              fontSize: 12, cursor: 'pointer', textDecoration: 'underline',
-            }}
-          >
-            הסרה
-          </button>
-        </div>
-      )}
-    </div>
-  );
 }
 
 /**
@@ -372,6 +274,10 @@ export default function PublicOnboardingForm() {
   // written with {{שם החותם}} — the same person either way.
   const signerName = joinParentName(parent.name, parent.lastName);
   const waiverText = withSignerName(template?.waiverText || fallbackWaiver, signerName);
+  // The three parts of the declaration, each named — the same headings the
+  // activity page shows, so a family meets one document twice, not two.
+  const sectionTitles = declarationSectionTitles({ ...(template || {}), waiverText });
+  const waiverBody = splitWaiverText(waiverText).body;
   // Phone verification. The token is what the submit sends; `verifiedPhone`
   // remembers which number earned it, so editing the phone re-triggers the
   // code. `sendFailed` opens the continue-without gate — a delivery problem on
@@ -2026,7 +1932,7 @@ export default function PublicOnboardingForm() {
                           box would file "nobody asked" as "no". */}
                       {screening.length > 0 && (
                         <>
-                          <div className="section-title">שאלון בריאות — {currentChild.name}</div>
+                          <div className="section-title">{sectionTitles.health} — {currentChild.name}</div>
                           <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
                             תשובה „כן” לא מונעת השתתפות. היא רק מאפשרת לצוות לדעת ולהיערך.
                           </p>
@@ -2099,7 +2005,7 @@ export default function PublicOnboardingForm() {
                         </>
                       )}
                       <div className="section-title" style={{ marginTop: screening.length ? 20 : 0 }}>
-                        הצהרה ובטיחות — {currentChild.name}
+                        {sectionTitles.confirm} — {currentChild.name}
                       </div>
                       <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
                         יש לסמן את כל הסעיפים לאחר שקראתם אותם.
@@ -2127,7 +2033,10 @@ export default function PublicOnboardingForm() {
 
             {healthSubStep === 2 && (
               <>
-                <div className="section-title">הסרת אחריות — {currentChild.name}</div>
+                <div className="section-title">{sectionTitles.waiver}</div>
+                <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', margin: '0 2px 12px' }}>
+                  עבור {currentChild.name}
+                </p>
                 {/* One text, the binding one, with the signer's own name inside
                     it. A summary layer above it repeated the same clauses and
                     made the page say everything twice. */}
@@ -2145,7 +2054,7 @@ export default function PublicOnboardingForm() {
                       borderRadius: 10, padding: 12,
                     }}
                   >
-                    {waiverText}
+                    {waiverBody}
                   </div>
                 </div>
                 <label className="event-check" style={{ opacity: waiverRead ? 1 : 0.55 }}>

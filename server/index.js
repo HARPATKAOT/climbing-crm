@@ -5886,6 +5886,12 @@ app.post('/api/public/activities/:slug/register', publicFormRateLimit, async (re
     }
     const participantSlug =
       activity.participant_registration_slug || activity.registration_slug;
+    // The doctor's approvals travel in the registration body, exactly as they
+    // do on the registration form, and are stored before a declaration is
+    // written. Whether one was required at all is decided by the declaration
+    // service, against the template this activity actually uses.
+    const clearance = await uploadClearanceFiles((req.body || {}).participants || []);
+    if (clearance.error) return res.status(clearance.status).json({ error: clearance.error });
     const result = await registerActivityGroup({
       db,
       persist: persistCore,
@@ -5933,6 +5939,17 @@ app.post('/api/public/activities/:slug/register', publicFormRateLimit, async (re
         console.warn('⚠️ [activity interest] auto-close skipped:', interestErr.message);
       }
     }
+    // A resend of the same registration already has its approval on file.
+    if (!result.duplicate) await fileClearanceDocuments(clearance.uploads, {
+      parentId: parent?.id || null,
+      findTarget: (upload) => {
+        const match = (result.crm?.participants || []).find((p) => p.name === upload.name);
+        return {
+          studentId: match?.student?.id || null,
+          declarationId: match?.declaration?.id || null,
+        };
+      },
+    });
     let emailResult = { sent: false };
     if (parent?.email && !result.duplicate) {
       emailResult = await sendActivityRegistrationConfirmation({
@@ -11785,6 +11802,69 @@ function decodeClearanceUpload(payload) {
   return { buffer, mimeType, extension, fileName };
 }
 
+/**
+ * Uploads every attached doctor's approval, or says why it could not.
+ *
+ * Done before anything is written: a signed declaration on file with the
+ * approval missing is the one outcome this whole feature exists to prevent. An
+ * orphan file in storage, if the save then fails, costs nothing.
+ */
+async function uploadClearanceFiles(participants = []) {
+  const uploads = [];
+  for (const participant of participants) {
+    if (!participant?.medicalClearance) continue;
+    const prepared = decodeClearanceUpload(participant.medicalClearance);
+    if (prepared.error) {
+      return { error: `${prepared.error} (${participant.name})`, status: 400 };
+    }
+    const storagePath = `medical-clearance/${Date.now()}_${crypto.randomUUID()}.${prepared.extension}`;
+    let uploaded;
+    try {
+      uploaded = await supa.uploadClientDocument(storagePath, prepared.buffer, prepared.mimeType);
+    } catch (err) {
+      console.error('medical clearance upload error:', err.message);
+      return { error: 'שמירת אישור הרופא נכשלה — נסו שוב', status: 503 };
+    }
+    if (!uploaded?.ok) {
+      return { error: uploaded?.error || 'שמירת אישור הרופא נכשלה — נסו שוב', status: 503 };
+    }
+    uploads.push({
+      name: participant.name,
+      storagePath,
+      fileName: prepared.fileName,
+      mimeType: prepared.mimeType,
+    });
+  }
+  return { uploads };
+}
+
+/**
+ * Files the uploaded approvals in the personal file, alongside the signed
+ * declaration, so the office sees why this registration was let through and can
+ * open the approval itself.
+ */
+async function fileClearanceDocuments(uploads, { parentId, findTarget }) {
+  const documents = [];
+  for (const upload of uploads) {
+    const target = findTarget(upload) || {};
+    const doc = db.insert('client_documents', {
+      parentId: parentId || null,
+      studentId: target.studentId || null,
+      declarationId: target.declarationId || null,
+      type: 'medical_clearance',
+      fileName: upload.fileName,
+      storagePath: upload.storagePath,
+      mimeType: upload.mimeType,
+    });
+    const durableDoc = await persistCore('client_documents', doc);
+    if (durableDoc?.ok === false) {
+      console.error('medical clearance document persist failed:', durableDoc.error);
+    }
+    documents.push(doc);
+  }
+  return documents;
+}
+
 // Public full onboarding submit (details + lists + health per child)
 app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   const {
@@ -11901,34 +11981,8 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     }
   }
 
-  // Uploaded before anything is written: a signed declaration on file with the
-  // approval missing is the one outcome this whole feature exists to prevent.
-  // An orphan file in storage, if the save then fails, costs nothing.
-  const clearanceUploads = [];
-  for (const child of childList) {
-    if (!child.medicalClearance) continue;
-    const prepared = decodeClearanceUpload(child.medicalClearance);
-    if (prepared.error) {
-      return res.status(400).json({ error: `${prepared.error} (${child.name})` });
-    }
-    const storagePath = `medical-clearance/${Date.now()}_${crypto.randomUUID()}.${prepared.extension}`;
-    let uploaded;
-    try {
-      uploaded = await supa.uploadClientDocument(storagePath, prepared.buffer, prepared.mimeType);
-    } catch (err) {
-      console.error('medical clearance upload error:', err.message);
-      return res.status(503).json({ error: 'שמירת אישור הרופא נכשלה — נסו שוב' });
-    }
-    if (!uploaded?.ok) {
-      return res.status(503).json({ error: uploaded?.error || 'שמירת אישור הרופא נכשלה — נסו שוב' });
-    }
-    clearanceUploads.push({
-      name: child.name,
-      storagePath,
-      fileName: prepared.fileName,
-      mimeType: prepared.mimeType,
-    });
-  }
+  const clearance = await uploadClearanceFiles(childList);
+  if (clearance.error) return res.status(clearance.status).json({ error: clearance.error });
 
   let crmResult;
   try {
@@ -11966,29 +12020,17 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   const declarations = crmResult.declarations;
   const savedStudents = crmResult.participants.map((participant) => participant.student);
 
-  // The uploaded approvals become documents in the personal file, alongside the
-  // signed declaration PDF, so the office sees why this registration was let
-  // through and can open the approval itself.
-  const clearanceDocuments = [];
-  for (const upload of clearanceUploads) {
-    const index = childList.findIndex((child) => child.name === upload.name);
-    const student = index >= 0 ? savedStudents[index] : null;
-    const declaration = declarations.find((d) => d.studentId === student?.id) || null;
-    const doc = db.insert('client_documents', {
-      parentId: parent?.id || null,
-      studentId: student?.id || null,
-      declarationId: declaration?.id || null,
-      type: 'medical_clearance',
-      fileName: upload.fileName,
-      storagePath: upload.storagePath,
-      mimeType: upload.mimeType,
-    });
-    const durableDoc = await persistCore('client_documents', doc);
-    if (durableDoc?.ok === false) {
-      console.error('medical clearance document persist failed:', durableDoc.error);
-    }
-    clearanceDocuments.push(doc);
-  }
+  const clearanceDocuments = await fileClearanceDocuments(clearance.uploads, {
+    parentId: parent?.id || null,
+    findTarget: (upload) => {
+      const index = childList.findIndex((child) => child.name === upload.name);
+      const student = index >= 0 ? savedStudents[index] : null;
+      return {
+        studentId: student?.id || null,
+        declarationId: declarations.find((d) => d.studentId === student?.id)?.id || null,
+      };
+    },
+  });
 
   for (let index = 0; index < savedStudents.length; index += 1) {
     const student = savedStudents[index];

@@ -17,11 +17,16 @@ import {
 import { checkKnownChild, linkFieldsFor } from '../utils/childCheck.js';
 import {
   blankAnswers,
+  clearanceTriggers,
   isScreeningQuestion,
+  needsMedicalClearance,
   questionLabel,
   questionsForSigner,
   unansweredQuestions,
 } from '../utils/healthQuestions.js';
+import MedicalClearanceField from './MedicalClearanceField.jsx';
+import { clearanceBudgetError } from '../utils/medicalClearanceFile.js';
+import { declarationSectionTitles, splitWaiverText, withSignerName } from '../utils/declarationSections.js';
 import { joinParentName } from '../utils/parentName.js';
 
 const emptyParticipant = (questions = [], extras = {}) => ({
@@ -32,6 +37,7 @@ const emptyParticipant = (questions = [], extras = {}) => ({
   birthDate: '',
   answers: blankAnswers(questions),
   answerNotes: {},
+  medicalClearance: null,
   waiverAccepted: false,
   signature: '',
   reuse_health: false,
@@ -114,6 +120,9 @@ export default function PublicActivityRegistration() {
 
   const paidMode = activity?.registration_mode === 'paid_per_participant';
   const questions = activity?.form_template?.healthQuestions || [];
+  // Each part of the declaration says what it is, and the trip says "טיול"
+  // where the wall says "פעילות".
+  const sectionTitles = declarationSectionTitles(activity?.form_template);
 
   const allParticipants = useMemo(() => {
     const mergeMirror = (base) => {
@@ -361,8 +370,21 @@ export default function PublicActivityRegistration() {
         setError(`סימנתם „כן” על „${questionLabel(undetailed)}” — יש לפרט בשדה שמתחת לשאלה`);
         return;
       }
+      // The written approval is a condition of signing at all, not a note to
+      // add later — the same gate the registration form applies.
+      if (needsMedicalClearance(asked, current.answers || {}) && !current.medicalClearance) {
+        setError('נדרש אישור רופא להשתתפות בפעילות ספורטיבית — צרפו אותו כדי להמשיך');
+        return;
+      }
       if (!current.waiverAccepted || !current.signature) {
         setError('יש לאשר את כתב הוויתור ולחתום');
+        return;
+      }
+      // Every approval travels in the one registration request, so the whole
+      // set has to fit in it.
+      const overBudget = clearanceBudgetError(allParticipants.map(resolvedHealthParticipant));
+      if (overBudget) {
+        setError(overBudget);
         return;
       }
       if (healthIndex < participantsNeedingHealth.length - 1) {
@@ -693,6 +715,7 @@ export default function PublicActivityRegistration() {
                 <>
                   {screening.length > 0 && (
                     <>
+                      <h3 className="event-subheading">{sectionTitles.health}</h3>
                       <p className="event-hint">
                         תשובה „כן” לא מונעת השתתפות. היא רק מאפשרת לצוות לדעת ולהיערך.
                       </p>
@@ -729,11 +752,22 @@ export default function PublicActivityRegistration() {
                           )}
                         </div>
                       ))}
+                      {/* A doctor already limited this person's physical
+                          activity. The wall does not overrule that on a tick
+                          box — the same rule the registration form applies. */}
+                      {needsMedicalClearance(asked, answers) && (
+                        <MedicalClearanceField
+                          triggers={clearanceTriggers(asked, answers)}
+                          value={healthCurrent.medicalClearance || null}
+                          onChange={(file) => patchHealthParticipant(healthCurrent, { medicalClearance: file })}
+                          onError={setError}
+                        />
+                      )}
                     </>
                   )}
                   {confirmations.length > 0 && (
                     <>
-                      <h3 className="event-subheading">הצהרה ובטיחות</h3>
+                      <h3 className="event-subheading">{sectionTitles.confirm}</h3>
                       <p className="event-hint">יש לסמן את כל הסעיפים לאחר שקראתם אותם.</p>
                       {confirmations.map((question) => (
                         <label className="event-check" key={question.id}>
@@ -750,7 +784,15 @@ export default function PublicActivityRegistration() {
                 </>
               );
             })()}
-            <div className="event-waiver">{activity.form_template?.waiverText}</div>
+            <h3 className="event-subheading">{sectionTitles.waiver}</h3>
+            {/* The clauses name the person taking the risk on themselves. The
+                placeholder was reaching the screen unwritten. */}
+            <div className="event-waiver">
+              {withSignerName(
+                splitWaiverText(activity.form_template?.waiverText).body,
+                joinParentName(parent.name, parent.lastName)
+              )}
+            </div>
             <label className="event-check">
               <input
                 type="checkbox"

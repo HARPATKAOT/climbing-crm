@@ -8,7 +8,7 @@ import {
   mergeFamily,
   normalizedIdNumber,
 } from './studentGuardians.js';
-import { declarationGap, questionsForSigner } from './healthQuestions.js';
+import { declarationGap, needsMedicalClearance, questionsForSigner } from './healthQuestions.js';
 
 // The safety rules are not repeated here: they are the items ticked one by one
 // on the declaration step, which is both better evidence and one list instead
@@ -158,12 +158,18 @@ export function validateParticipantDeclarations(participants, template) {
     // Parent-only clauses are excluded for an adult signing for themselves —
     // the form does not show them, so demanding them here would reject a
     // submission that is in fact complete.
-    const gap = declarationGap(
-      questionsForSigner(questions, { isAdultSelf: participant.type === 'adult' }),
-      participant.answers,
-      name
-    );
+    const asked = questionsForSigner(questions, { isAdultSelf: participant.type === 'adult' });
+    const gap = declarationGap(asked, participant.answers, name);
     if (gap) throw Object.assign(new Error(gap), { status: 400 });
+    // A doctor already limited this person's physical activity. The written
+    // approval is a condition of filing the declaration at all — checked here
+    // and not only in the form, which is the half of this a caller can skip.
+    if (needsMedicalClearance(asked, participant.answers) && !participant.medicalClearance) {
+      throw Object.assign(
+        new Error(`נדרש אישור רופא להשתתפות בפעילות ספורטיבית עבור ${name}`),
+        { status: 400 }
+      );
+    }
   }
 }
 

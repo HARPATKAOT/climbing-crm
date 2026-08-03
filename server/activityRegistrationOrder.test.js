@@ -373,3 +373,51 @@ test('activity mailing lists are optional including classes', () => {
   assert.equal(payload.subscriptions.classes, false);
   assert.equal(payload.subscriptions.events, true);
 });
+
+/**
+ * The same rule the registration form applies: a "yes" on a question marked as
+ * requiring a doctor's approval cannot be signed away with a tick box. This
+ * lived only in the onboarding route, so registering for a trip could disclose
+ * a condition a doctor had limited and be let through.
+ */
+test('a disclosure that demands a doctor approval cannot register without one', async () => {
+  const clearanceTemplate = {
+    id: 'form-clearance',
+    slug: 'trip',
+    title: 'הצהרה',
+    waiverText: 'כתב ויתור מלא',
+    healthQuestions: [
+      { id: 'required', label: 'אני כשיר', requireYes: true },
+      { id: 'm1', label: 'האם יש מגבלה רפואית?', kind: 'screen', requiresClearance: true },
+    ],
+    isDefault: true,
+    isActive: true,
+  };
+  const db = createDb({ form_templates: [clearanceTemplate] });
+  const activity = { id: 'activity-clearance', name: 'טיול', max_participants: 10 };
+  db.store.activities.push(activity);
+  const discloser = {
+    ...signed('ילד עם מגבלה'),
+    answers: { required: true, m1: true },
+    healthNotes: 'אסתמה',
+  };
+  const register = (participant) => registerActivityGroup({
+    db,
+    persist,
+    activity,
+    payload: { idempotency_key: `clearance-${participant.name}`, parent, participants: [participant] },
+    createPaymentUrl: async () => null,
+  });
+
+  await assert.rejects(() => register(discloser), /אישור רופא/);
+  // With the approval attached the same registration goes through, and a "no"
+  // never asked for one.
+  const withFile = await register({
+    ...discloser,
+    name: 'ילד עם אישור',
+    medicalClearance: { base64: 'x', mimeType: 'application/pdf', fileName: 'a.pdf', bytes: 10 },
+  });
+  assert.equal(withFile.registrations.length, 1);
+  const withoutDisclosure = await register({ ...signed('ילד בריא'), answers: { required: true, m1: false } });
+  assert.equal(withoutDisclosure.registrations.length, 1);
+});

@@ -1,5 +1,6 @@
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
+import { withSignerName } from './declarationSections.js';
 
 const DEFAULT_QUESTIONS = {
   q1: 'האם המתאמן סובל מאסתמה, קוצר נשימה או מחלת ריאות?',
@@ -207,7 +208,9 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, questionKinds 
         ? `<div class="field" style="margin-top:10px"><div class="label">פירוט שנמסר</div><div class="value">${escapeHtml(decl.healthNotes)}</div></div>`
         : ''}
 
-      ${waiverText ? `<h2>כתב ויתור / הסרת אחריות</h2><div class="waiver">${escapeHtml(waiverText)}</div>` : ''}
+      ${waiverText
+        ? `<h2>כתב ויתור / הסרת אחריות</h2><div class="waiver">${escapeHtml(withSignerName(waiverText, parentName))}</div>`
+        : ''}
 
       <div class="sig-section">
         <h2>חתימה דיגיטלית</h2>
