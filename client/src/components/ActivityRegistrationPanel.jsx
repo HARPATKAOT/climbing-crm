@@ -828,12 +828,76 @@ export default function ActivityRegistrationPanel({
 
   return (
     <div className="activity-registration-operations">
-      {!templateMode && (
-      <>
       <div className="activity-registration-operations-title">
+        תשלום והרשמה
+      </div>
+
+      {!hideRegistrationToggle && (
+        <label style={{
+          display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-2)',
+        }}>
+          <input
+            type="checkbox"
+            checked={!!form.registration_enabled}
+            onChange={(e) => set('registration_enabled', e.target.checked)}
+            disabled={readOnly}
+          />
+          הפעלת דף הרשמה ציבורי
+        </label>
+      )}
+
+      {/* Separate from the registration link: a private birthday has a link the
+          host shares themselves, and must not be advertised on the website. */}
+      {!hideRegistrationToggle && form.registration_enabled && (
+        <label style={{
+          display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13, color: 'var(--text-2)',
+        }}>
+          <input
+            type="checkbox"
+            checked={!!form.show_on_site}
+            onChange={(e) => set('show_on_site', e.target.checked)}
+            disabled={readOnly}
+            style={{ marginTop: 3 }}
+          />
+          <span>
+            להציג באתר הציבורי
+            <span style={{ display: 'block', fontSize: 11, color: 'var(--text-3)' }}>
+              לפעילויות פתוחות לקהל בלבד. אירוע פרטי — להשאיר לא מסומן.
+            </span>
+          </span>
+        </label>
+      )}
+
+      <label className="activity-registration-field">
+        <span className="activity-registration-field-label">אופן ההרשמה והתשלום</span>
+        <AppSelect
+          className="input"
+          value={form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')}
+          onChange={(e) => setMany({
+            registration_mode: e.target.value,
+            collect_registration_payment: e.target.value === 'paid_per_participant',
+          })}
+          disabled={readOnly}
+        >
+          <option value="paid_per_participant">הרשמה בתשלום לכל משתתף</option>
+          <option value="host_pays">המזמין משלם על כל האירוע</option>
+        </AppSelect>
+        <span className="activity-registration-field-hint">
+          {(form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')) === 'host_pays'
+            ? 'המזמין מקבל קישור תשלום פרטי. המשתתפים נרשמים בחינם עם הצהרה וחתימה.'
+            : 'כל הורה, ילד או מבוגר נספר במכסה ומחויב במחיר הפעילות.'}
+        </span>
+      </label>
+
+      {/* מזמין קיים רק כשהוא זה שמשלם. בהרשמה בתשלום לכל משתתף אין מזמין,
+          ולכן בחירת הלקוח נעלמת — ונשאר רק סטטוס תשלום ישן, אם יש כסף בפנים. */}
+      {!templateMode && showHostPayStatus && (
+      <>
+      <div className="activity-registration-divider">
         מזמין
       </div>
 
+      {isHostPays && (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
           בחירת מזמין מלקוחות המערכת
@@ -964,12 +1028,9 @@ export default function ActivityRegistrationPanel({
           </div>
         )}
       </div>
+      )}
 
-      <div className="activity-registration-divider">
-        תשלום והרשמה
-      </div>
-
-      {/* „נגבה מכל משתתף בנפרד” כבר נאמר בשדה „אופן ההרשמה והתשלום” שמתחת,
+      {/* „נגבה מכל משתתף בנפרד” כבר נאמר בשדה „אופן ההרשמה והתשלום” שמעל,
           ולכן כאן מוצג רק סטטוס תשלום המזמין — כשיש כזה. */}
       {showHostPayStatus && (
       <div className="activity-registration-field">
@@ -1032,69 +1093,6 @@ export default function ActivityRegistrationPanel({
       )}
       </>
       )}
-
-      {templateMode && (
-        <div className="activity-registration-operations-title">
-          תשלום והרשמה
-        </div>
-      )}
-
-      {!hideRegistrationToggle && (
-        <label style={{
-          display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-2)',
-        }}>
-          <input
-            type="checkbox"
-            checked={!!form.registration_enabled}
-            onChange={(e) => set('registration_enabled', e.target.checked)}
-            disabled={readOnly}
-          />
-          הפעלת דף הרשמה ציבורי
-        </label>
-      )}
-
-      {/* Separate from the registration link: a private birthday has a link the
-          host shares themselves, and must not be advertised on the website. */}
-      {!hideRegistrationToggle && form.registration_enabled && (
-        <label style={{
-          display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13, color: 'var(--text-2)',
-        }}>
-          <input
-            type="checkbox"
-            checked={!!form.show_on_site}
-            onChange={(e) => set('show_on_site', e.target.checked)}
-            disabled={readOnly}
-            style={{ marginTop: 3 }}
-          />
-          <span>
-            להציג באתר הציבורי
-            <span style={{ display: 'block', fontSize: 11, color: 'var(--text-3)' }}>
-              לפעילויות פתוחות לקהל בלבד. אירוע פרטי — להשאיר לא מסומן.
-            </span>
-          </span>
-        </label>
-      )}
-
-      <label className="activity-registration-field">
-        <span className="activity-registration-field-label">אופן ההרשמה והתשלום</span>
-        <AppSelect
-          className="input"
-          value={form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')}
-          onChange={(e) => setMany({
-            registration_mode: e.target.value,
-            collect_registration_payment: e.target.value === 'paid_per_participant',
-          })}
-          disabled={readOnly}
-        >
-          <option value="paid_per_participant">הרשמה בתשלום לכל משתתף</option>
-          <option value="host_pays">המזמין משלם על כל האירוע</option>
-        </AppSelect>
-        <span className="activity-registration-field-hint">
-          {(form.registration_mode || (form.collect_registration_payment ? 'paid_per_participant' : 'host_pays')) === 'host_pays'
-            ? 'המזמין מקבל קישור תשלום פרטי. המשתתפים נרשמים בחינם עם הצהרה וחתימה.'
-            : 'כל הורה, ילד או מבוגר נספר במכסה ומחויב במחיר הפעילות.'}
-        </span>
-      </label>
 
       {activityId && (
         <div className="registration-sections">
@@ -1307,7 +1305,9 @@ export default function ActivityRegistrationPanel({
 
       {!activityId && !templateMode && (
         <div style={{ fontSize: 12, color: 'var(--text-3)', fontStyle: 'italic' }}>
-          אחרי שמירה אפשר ליצור קישור הרשמה ולשלוח למזמין
+          {isHostPays
+            ? 'אחרי שמירה אפשר ליצור קישור הרשמה ולשלוח למזמין'
+            : 'אחרי שמירה אפשר ליצור קישור הרשמה למשתתפים'}
         </div>
       )}
 

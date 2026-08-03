@@ -2,9 +2,10 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Clock, LogIn, LogOut, Coins, Plus, Trash2, Edit2,
   Save, X, UserCheck, RefreshCw, Briefcase, Award, ArrowUpRight, Search, ChevronDown, ChevronUp,
-  Upload, Download, FileText, Users, Banknote, Link2, Copy, Settings2, MessageCircle, Check,
+  Upload, Download, FileText, Users, Banknote, Link2, Copy, Settings2, MessageCircle, Check, ChevronLeft, CalendarRange,
   Phone, Mail, MapPin, CreditCard, User, Calendar, Cake, Landmark, Car, Lock
 , Pencil , Bell } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { Modal } from './UI.jsx';
 import GenderPicker from './GenderPicker.jsx';
 import { STAFF_ALERT_KINDS } from '../utils/staffAlerts.js';
@@ -38,6 +39,28 @@ const WORK_TYPE_OPTIONS = [
   { id: 'private_shift', label: 'פרטי' },
   { id: 'route_building_shift', label: 'בונה מסלולים' },
 ];
+
+// רוחב תיק העובד. 560 הוא ברירת המחדל; מתחת ל-380 הכרטיסים נשברים, ומעל
+// 900 המגירה מכסה את המסך שמאחוריה.
+const DRAWER_WIDTH_KEY = 'crm.employeeDrawerWidth';
+const DRAWER_DEFAULT_WIDTH = 560;
+const DRAWER_MIN_WIDTH = 380;
+const DRAWER_MAX_WIDTH = 900;
+
+function clampDrawerWidth(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return DRAWER_DEFAULT_WIDTH;
+  const roof = Math.min(DRAWER_MAX_WIDTH, Math.max(DRAWER_MIN_WIDTH, window.innerWidth - 120));
+  return Math.round(Math.min(roof, Math.max(DRAWER_MIN_WIDTH, n)));
+}
+
+function loadDrawerWidth() {
+  try {
+    const saved = localStorage.getItem(DRAWER_WIDTH_KEY);
+    if (saved) return clampDrawerWidth(saved);
+  } catch { /* אין localStorage — ברירת המחדל תספיק */ }
+  return DRAWER_DEFAULT_WIDTH;
+}
 
 function monthBounds(ym) {
   // ym = 'YYYY-MM'
@@ -341,11 +364,44 @@ function monthTitle(ym) {
 }
 
 /**
+ * לאן שורה ביומן מובילה בלחיצה — למקום שבו עורכים את *השעות של המשמרת הזו*.
+ *
+ * זה לא תמיד האירוע ביומן: לאירוע יש שעות משלו, ולמשמרת שנרשמה ממנו יש שעות
+ * בפועל שנשמרו בשורת התשלום ויכולות להיות אחרות (אירוע 16:30–21:00, ומי
+ * שעבד בו נשאר עד 22:00). לכן שורה שכבר נרשמה מובילה לשורת התשלום, ומשמרת
+ * עתידית שעוד אין לה רישום מובילה למקור שממנו היא נגזרה.
+ */
+function shiftEntryTarget(entry) {
+  if (!entry) return null;
+  if (String(entry.key || '').startsWith('work:')) {
+    return {
+      kind: 'work_row',
+      id: entry.key.slice('work:'.length),
+      month: String(entry.date).slice(0, 7),
+      hint: 'פתח את שורת התשלום לעריכת השעות בפועל',
+    };
+  }
+  if (entry.group_id) {
+    return { kind: 'group', id: entry.group_id, hint: 'פתח את החוג בלוח החוגים' };
+  }
+  if (entry.activity_id) {
+    return { kind: 'activity', id: entry.activity_id, hint: 'פתח את האירוע ביומן' };
+  }
+  return null;
+}
+
+/** האירוע ביומן שממנו נולדה המשמרת — קיצור נוסף, רק אם הוא לא היעד הראשי. */
+function shiftEntryEvent(entry, target) {
+  if (!entry?.activity_id || target?.kind === 'activity') return null;
+  return { kind: 'activity', id: entry.activity_id, hint: 'פתח את האירוע עצמו ביומן' };
+}
+
+/**
  * יומן המשמרות בתיק העובד: כל מה שעבד וכל מה שמחכה לו, ברשימה אחת ממוינת
  * ומחולקת לחודשים, עם סינון לעבר או לעתיד. השרת מאחד את המקורות (שורות עבודה,
  * נוכחות בחוגים, חוגים קבועים עתידיים ומשמרת פתוחה בשעון) — כאן רק מציגים.
  */
-function ShiftJournalCard({ employeeId }) {
+function ShiftJournalCard({ employeeId, onOpenEntry }) {
   const [journal, setJournal] = useState(null);
   const [failed, setFailed] = useState(false);
   const [filter, setFilter] = useState('future');
@@ -439,8 +495,8 @@ function ShiftJournalCard({ employeeId }) {
               if (item.header) {
                 return (
                   <div key={`h-${item.header}`} style={{
-                    fontSize: 10, color: 'var(--text-3)', fontWeight: 700,
-                    marginTop: 8, paddingBottom: 4, borderBottom: '1px solid var(--border)',
+                    fontSize: 11, color: 'var(--text-3)', fontWeight: 700,
+                    marginTop: 10, paddingBottom: 4, borderBottom: '1px solid var(--border)',
                   }}>
                     {monthTitle(item.header)}
                   </div>
@@ -450,23 +506,37 @@ function ShiftJournalCard({ employeeId }) {
               const meta = SHIFT_STATUS_META[e.status] || SHIFT_STATUS_META.logged;
               const d = new Date(`${e.date}T12:00:00`);
               const isToday = e.date === today;
+              const target = shiftEntryTarget(e);
+              const eventTarget = shiftEntryEvent(e, target);
               return (
-                <div key={e.key} style={{
-                  display: 'flex', alignItems: 'center', gap: 10, padding: '6px 4px',
-                  borderRadius: 6,
-                  background: isToday ? 'rgba(56,189,248,0.08)' : 'transparent',
-                  opacity: e.status === 'vacation' ? 0.55 : 1,
-                }}>
-                  <div style={{ textAlign: 'center', width: 34, flexShrink: 0 }}>
-                    <div style={{ fontSize: 14, fontWeight: 800, lineHeight: 1 }}>{d.getDate()}</div>
+                <div
+                  key={e.key}
+                  role={target ? 'button' : undefined}
+                  tabIndex={target ? 0 : undefined}
+                  title={target ? target.hint : undefined}
+                  onClick={target ? () => onOpenEntry?.(e, target) : undefined}
+                  onKeyDown={target ? (ev) => {
+                    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onOpenEntry?.(e, target); }
+                  } : undefined}
+                  className={target ? 'shift-journal-row' : undefined}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 12, padding: '8px 6px',
+                    borderRadius: 6,
+                    background: isToday ? 'rgba(56,189,248,0.08)' : 'transparent',
+                    opacity: e.status === 'vacation' ? 0.55 : 1,
+                    cursor: target ? 'pointer' : 'default',
+                  }}
+                >
+                  <div style={{ textAlign: 'center', width: 38, flexShrink: 0 }}>
+                    <div style={{ fontSize: 16, fontWeight: 800, lineHeight: 1 }}>{d.getDate()}</div>
                     {/* החודש כבר בכותרת הקבוצה, ולכן כאן רק יום בשבוע. */}
-                    <div style={{ fontSize: 9, color: 'var(--text-3)' }}>
+                    <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>
                       יום {HEB_WEEKDAYS[d.getDay()]}׳
                     </div>
                   </div>
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{
-                      fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
+                      fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
                       overflow: 'hidden', textOverflow: 'ellipsis',
                       textDecoration: e.status === 'vacation' ? 'line-through' : 'none',
                     }}>
@@ -475,7 +545,7 @@ function ShiftJournalCard({ employeeId }) {
                         <span style={{ color: 'var(--text-3)', fontWeight: 400 }}> · {e.subtitle}</span>
                       )}
                     </div>
-                    <div style={{ fontSize: 10, color: 'var(--text-3)', display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)', display: 'flex', gap: 8, alignItems: 'center', marginTop: 2 }}>
                       {e.start_time && (
                         <span dir="ltr">{e.start_time}{e.end_time ? `–${e.end_time}` : ''}</span>
                       )}
@@ -484,11 +554,27 @@ function ShiftJournalCard({ employeeId }) {
                     </div>
                   </div>
                   <div style={{ textAlign: 'left', flexShrink: 0 }}>
-                    <div style={{ fontSize: 10, color: meta.color, fontWeight: 700 }}>{meta.label}</div>
+                    <div style={{ fontSize: 11, color: meta.color, fontWeight: 700 }}>{meta.label}</div>
                     {e.pay_amount > 0 && (
-                      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>₪{e.pay_amount.toLocaleString()}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-3)' }}>₪{e.pay_amount.toLocaleString()}</div>
                     )}
                   </div>
+                  {/* קיצור לאירוע ביומן, לצד היעד הראשי שהוא שורת השעות. */}
+                  {eventTarget && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-icon btn-xs"
+                      title={eventTarget.hint}
+                      onClick={(ev) => { ev.stopPropagation(); onOpenEntry?.(e, eventTarget); }}
+                      style={{ flexShrink: 0 }}
+                    >
+                      <CalendarRange size={12} />
+                    </button>
+                  )}
+                  {/* חץ קטן רק בשורות שיש להן לאן ללכת — הוא ההבטחה שהלחיצה תעבוד. */}
+                  {target && (
+                    <ChevronLeft size={14} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+                  )}
                 </div>
               );
             })}
@@ -1908,6 +1994,7 @@ function EmployeeOnboardingLinkPanel() {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function Employees() {
+  const navigate = useNavigate();
   // התפקידים שהמסך מציג נגזרים מהקטלוג, כדי שמחיקה או שינוי שם יופיעו כאן מיד.
   // הקטלוג נטען פעם אחת; עריכה מהחלון שמכאן מחליפה אותו בלי לטעון מחדש.
   const fetchedCatalog = useRoleCatalog();
@@ -1952,6 +2039,57 @@ export default function Employees() {
   // Shift logging quick state
   const [currentTime, setCurrentTime]     = useState(new Date());
   const [clockActivity, setClockActivity] = useState({});
+
+  // רוחב תיק העובד — נגרר ונשמר בדפדפן, כי הרוחב הנוח תלוי במסך של כל אחד.
+  const [drawerWidth, setDrawerWidth] = useState(loadDrawerWidth);
+  const [draggingDrawer, setDraggingDrawer] = useState(false);
+  useEffect(() => {
+    try { localStorage.setItem(DRAWER_WIDTH_KEY, String(drawerWidth)); } catch { /* ignore */ }
+  }, [drawerWidth]);
+
+  const startDrawerResize = (event) => {
+    event.preventDefault();
+    setDraggingDrawer(true);
+    // המגירה נעוצה בשפה השמאלית, ולכן מיקום העכבר הוא הרוחב.
+    const onMove = (ev) => setDrawerWidth(clampDrawerWidth(ev.clientX));
+    const onUp = () => {
+      setDraggingDrawer(false);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  // שורה ביומן המשמרות מובילה למקום שבו עורכים אותה באמת.
+  const [highlightWorkId, setHighlightWorkId] = useState('');
+  const openShiftEntry = (entry, target) => {
+    if (target.kind === 'activity') {
+      navigate(`/activities?activity=${encodeURIComponent(target.id)}`);
+      return;
+    }
+    if (target.kind === 'group') {
+      navigate(`/schedule?group=${encodeURIComponent(target.id)}`);
+      return;
+    }
+    // שורת תשלום: היא חיה בטבלה של החודש שלה, ולכן מחליפים חודש, לשונית,
+    // וסוגרים את התיק — אחרת המגירה מסתירה בדיוק את השורה שרצינו.
+    if (target.month && target.month !== payrollMonth) setPayrollMonth(target.month);
+    setActiveTab('payroll');
+    setSelectedEmployee(null);
+    setHighlightWorkId(target.id);
+  };
+
+  // הגלילה אל השורה נעשית אחרי שהטבלה של החודש הנכון כבר צוירה.
+  useEffect(() => {
+    if (!highlightWorkId) return;
+    const timer = setTimeout(() => {
+      const row = document.querySelector(`[data-work-row="${highlightWorkId}"]`);
+      if (row) row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }, 150);
+    const clear = setTimeout(() => setHighlightWorkId(''), 6000);
+    return () => { clearTimeout(timer); clearTimeout(clear); };
+  }, [highlightWorkId, workAssignments]);
 
   const refreshData = async () => {
     try {
@@ -2375,11 +2513,25 @@ export default function Employees() {
 
       {/* Selected Employee Detail Side Drawer */}
       {selectedEmployee && (
+        <>
+        {/* ידית גרירה על שפת המגירה. היא fixed ולא חלק מהמגירה, כדי שגלילה
+            בתוך התיק לא תגרור אותה למעלה. לחיצה כפולה מחזירה לרוחב המקורי. */}
+        <div
+          onMouseDown={startDrawerResize}
+          onDoubleClick={() => setDrawerWidth(DRAWER_DEFAULT_WIDTH)}
+          title="גררו כדי לשנות את רוחב התיק"
+          style={{
+            position: 'fixed', top: 0, height: '100vh', width: 10,
+            left: drawerWidth - 5, zIndex: 301, cursor: 'col-resize',
+            background: draggingDrawer ? 'rgba(56,189,248,0.35)' : 'transparent',
+          }}
+        />
         <div style={{
-          position: 'fixed', top: 0, left: 0, height: '100vh', width: 440,
+          position: 'fixed', top: 0, left: 0, height: '100vh', width: drawerWidth,
           background: '#0D1117', borderRight: '1px solid var(--border)',
           zIndex: 300, display: 'flex', flexDirection: 'column', padding: 20,
-          boxShadow: '4px 0 24px rgba(0,0,0,0.5)', overflowY: 'auto'
+          boxShadow: '4px 0 24px rgba(0,0,0,0.5)', overflowY: 'auto',
+          userSelect: draggingDrawer ? 'none' : 'auto',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--border)', paddingBottom: 14, marginBottom: 16 }}>
             <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
@@ -2551,7 +2703,7 @@ export default function Employees() {
               )}
             </div>
 
-            <ShiftJournalCard employeeId={selectedEmployee.id} />
+            <ShiftJournalCard employeeId={selectedEmployee.id} onOpenEntry={openShiftEntry} />
 
             <ClassAttendanceSummary
               employeeId={selectedEmployee.id}
@@ -2578,6 +2730,7 @@ export default function Employees() {
             </button>
           </div>
         </div>
+        </>
       )}
 
       {/* Selected Wage Detail Panel */}
@@ -3198,7 +3351,13 @@ export default function Employees() {
                     const payMode = row.pay_mode === 'flat' ? 'flat' : 'hourly';
                     const amount = payAmountForAssignment(row, agreement);
                     return (
-                      <tr key={row.id}>
+                      <tr
+                        key={row.id}
+                        data-work-row={row.id}
+                        style={highlightWorkId === row.id
+                          ? { background: 'rgba(56,189,248,0.14)', outline: '1px solid rgba(56,189,248,0.5)' }
+                          : undefined}
+                      >
                         <td>{row.date}</td>
                         <td style={{ fontWeight: 700 }}>{emp?.name || '—'}</td>
                         <td style={{ fontSize: 12, color: 'var(--text-3)' }}>

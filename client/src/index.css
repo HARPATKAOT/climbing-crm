@@ -3589,3 +3589,12 @@ select option, select optgroup {
     max-height: calc(100vh - 120px);
   }
 }
+
+/* שורה ביומן המשמרות בתיק העובד — נדלקת בריחוף כדי שיהיה ברור שהיא קישור. */
+.shift-journal-row:hover {
+  background: var(--bg-card-hover) !important;
+}
+.shift-journal-row:focus-visible {
+  outline: 1px solid var(--blue);
+  outline-offset: -1px;
+}

@@ -2243,9 +2243,13 @@ function EventChip({ activity, onClick, draggable = true }) {
   const meta = activityTypeMeta(activity.type);
   const TypeIcon = activityIcon(activity);
   const extraLines = activityDisplayLines(activity);
+  // אירוע שאינו יום שלם מציג טווח מלא — „10:00–14:00” ולא רק שעת ההתחלה,
+  // כדי שיהיה אפשר לראות מהיומן מתי הוא נגמר בלי לפתוח אותו.
+  const chipStart = activity.start_time ? String(activity.start_time).slice(0, 5) : '';
+  const chipEnd = activity.end_time ? String(activity.end_time).slice(0, 5) : '';
   const timeLabel = activity.all_day
     ? 'יום שלם'
-    : (activity.start_time ? String(activity.start_time).slice(0, 5) : '');
+    : (chipStart && chipEnd ? `${chipStart}–${chipEnd}` : chipStart);
   const editable = canEditEvent(activity);
   return (
     <button
@@ -3213,6 +3217,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     opts: {},
   }));
   const skipClickUntilRef = useRef(0);
+  const deepLinkDoneRef = useRef(false);
   const undoStackRef = useRef([]);
   const undoBusyRef = useRef(false);
   const visibleRangeRef = useRef({ from: '', to: '' });
@@ -3398,6 +3403,34 @@ export default function ActivitiesCalendar({ isOwner = false }) {
       window.history.replaceState({}, '', '/activities');
     }
   }, [loadActivities, loadGoogleStatus]);
+
+  /**
+   * ‎/activities?activity=<id> — קישור ישיר לאירוע מסך אחר (למשל יומן המשמרות
+   * בתיק העובד). ממתין שהאירועים ייטענו, מזיז את הלוח לחודש של האירוע ופותח
+   * אותו לעריכה. הפרמטר נמחק מהכתובת כדי שרענון לא יפתח את הטופס שוב.
+   */
+  useEffect(() => {
+    if (deepLinkDoneRef.current || !activities.length) return;
+    const params = new URLSearchParams(window.location.search);
+    const wanted = params.get('activity');
+    if (!wanted) {
+      deepLinkDoneRef.current = true;
+      return;
+    }
+    const activity = activities.find((a) => a.id === wanted);
+    deepLinkDoneRef.current = true;
+    window.history.replaceState({}, '', '/activities');
+    if (!activity) {
+      setBanner('האירוע המקושר לא נמצא — ייתכן שנמחק');
+      return;
+    }
+    if (activity.date) {
+      const d = new Date(`${String(activity.date).slice(0, 10)}T12:00:00`);
+      if (!Number.isNaN(d.getTime())) setCursor(new Date(d.getFullYear(), d.getMonth(), 1));
+    }
+    setFormError('');
+    setModal({ ...activity });
+  }, [activities]);
 
   const filtered = useMemo(() => {
     if (typeFilter === 'all') return activities;

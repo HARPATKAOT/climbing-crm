@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, Archive, ArchiveRestore, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
 import {
@@ -10,7 +10,7 @@ import {
 } from '../utils/levelTestKinds.js';
 import { LEVELS, levelColor, routeStyleMeta, ROUTE_STYLE, highestPassedLevel } from '../utils/levelGrades.js';
 import GenderPicker, { AdultMark, GenderMark, genderKind } from './GenderPicker.jsx';
-import GroupPickerCards from './GroupPickerCards.jsx';
+import { GroupPickerField } from './GroupPickerCards.jsx';
 import {
   blobToBase64,
   buildHealthDeclarationPdf,
@@ -144,6 +144,35 @@ const PAYMENT_STATUS_BADGES = {
 
 function paymentStatusBadge(status) {
   return PAYMENT_STATUS_BADGES[status] || { label: status || '—', cls: 'badge badge-gray' };
+}
+
+const SALE_STATUS_BADGES = {
+  paid: { label: 'שולם', cls: 'badge badge-green' },
+  quoted: { label: 'הצעת מחיר', cls: 'badge badge-amber' },
+  pending: { label: 'ממתין לתשלום', cls: 'badge badge-amber' },
+  refunded: { label: 'זוכה', cls: 'badge badge-gray' },
+  cancelled: { label: 'בוטל', cls: 'badge badge-gray' },
+};
+
+function saleStatusBadge(status) {
+  return SALE_STATUS_BADGES[status] || { label: status || '—', cls: 'badge badge-gray' };
+}
+
+const SALE_METHOD_LABELS = {
+  cash: 'מזומן',
+  card: 'אשראי',
+  cc: 'אשראי',
+  credit: 'אשראי',
+  emv: 'אשראי בדלפק',
+  online: 'קישור תשלום',
+  bit: 'ביט',
+  transfer: 'העברה בנקאית',
+  check: 'צ׳ק',
+};
+
+function saleMethodLabel(method) {
+  const key = String(method || '').toLowerCase();
+  return SALE_METHOD_LABELS[key] || '';
 }
 
 function paymentHasRefundDoc(payment) {
@@ -821,7 +850,30 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [showIssueCoupon, setShowIssueCoupon] = useState(false);
   const [couponDraft, setCouponDraft] = useState({ ...EMPTY_COUPON_DRAFT });
   const [couponError, setCouponError] = useState('');
+  const [sales, setSales] = useState([]);
+  const [salesLoading, setSalesLoading] = useState(false);
   const showEquipment = !parentOnly && !student.isAdult;
+
+  // What was actually bought — counter sales and payment links alike. Payments
+  // only shows the charge; this shows the goods behind it.
+  const refreshSales = async () => {
+    const params = new URLSearchParams();
+    if (parent?.id) params.set('parentId', parent.id);
+    if (!parentOnly && student?.id) params.set('studentId', student.id);
+    if (!params.toString()) {
+      setSales([]);
+      return;
+    }
+    setSalesLoading(true);
+    try {
+      const data = await fetch(`/api/pos/sales?${params}`).then((r) => (r.ok ? r.json() : []));
+      setSales(Array.isArray(data) ? data : []);
+    } catch {
+      setSales([]);
+    } finally {
+      setSalesLoading(false);
+    }
+  };
 
   // Benefits follow the family: a campaign issues against the customer card,
   // manual ones may be tied to one trainee.
@@ -1250,6 +1302,11 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     refreshCoupons();
     setShowIssueCoupon(false);
     setCouponError('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parentOnly, student.id, parent?.id]);
+
+  useEffect(() => {
+    refreshSales();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parentOnly, student.id, parent?.id]);
 
@@ -2047,6 +2104,15 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       : coupons.length === 0
         ? 'אין הטבות'
         : 'אין בתוקף';
+  const salesPending = sales.filter((s) => s.status !== 'paid' && s.status !== 'refunded').length;
+  const salesCountLabel = sales.length === 1 ? 'רכישה אחת' : `${sales.length} רכישות`;
+  const salesSummary = salesLoading
+    ? 'טוען...'
+    : sales.length === 0
+      ? 'אין רכישות'
+      : salesPending > 0
+        ? `${salesCountLabel} · ${salesPending} ממתין לתשלום`
+        : salesCountLabel;
   const equipmentUnpaid = equipmentItems.filter((i) => i.payment_status !== 'paid').length;
   const equipmentAwaiting = equipmentItems.filter(
     (i) => i.payment_status === 'paid' && i.fulfillment_status !== 'given'
@@ -3487,7 +3553,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               >
                 {editingGroup ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <GroupPickerCards
+                    <GroupPickerField
                       groups={groups}
                       selectedIds={editGroupIds}
                       disabled={savingGroup}
@@ -3889,6 +3955,70 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   </button>
                 )}
               </div>
+            </FolderRow>
+
+            {/* Purchases folder — what was bought, not just what was charged */}
+            <FolderRow
+              id="purchases"
+              title="רכישות"
+              icon={ShoppingBag}
+              accent="#38BDF8"
+              summary={salesSummary}
+              summaryColor={salesPending > 0 ? 'var(--amber, #FBBF24)' : undefined}
+              open={openFolder === 'purchases'}
+              onToggle={toggleFolder}
+            >
+              {salesLoading && !sales.length ? (
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען...</div>
+              ) : sales.length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                  עדיין לא נרשמה כאן רכישה — מכירה בדלפק או קישור תשלום יופיעו כאן.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 300, overflowY: 'auto', overscrollBehavior: 'contain' }}>
+                  {sales.map((sale) => {
+                    const badge = saleStatusBadge(sale.status);
+                    const names = (sale.items || [])
+                      .map((i) => {
+                        const label = i.description || i.name || 'פריט';
+                        return Number(i.quantity) > 1 ? `${label} ×${i.quantity}` : label;
+                      })
+                      .join(' · ');
+                    return (
+                      <div key={sale.id} style={{ borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 700, fontSize: 13 }}>{names || 'רכישה'}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+                              {sale.created_at
+                                ? new Date(sale.created_at).toLocaleDateString('he-IL')
+                                : ''}
+                              {saleMethodLabel(sale.payment_method) ? ` · ${saleMethodLabel(sale.payment_method)}` : ''}
+                              {sale.icount_doc_number ? ` · מס׳ ${sale.icount_doc_number}` : ''}
+                            </div>
+                          </div>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, fontSize: 12 }}>
+                            ₪{Number(sale.total || 0).toLocaleString()}
+                            <span className={badge.cls}>{badge.label}</span>
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                          {sale.icount_doc_url && (
+                            <a className="btn btn-ghost btn-xs" href={sale.icount_doc_url} target="_blank" rel="noreferrer">
+                              <ReceiptText size={12} /> חשבונית
+                            </a>
+                          )}
+                          {sale.status !== 'paid' && sale.payment_url && (
+                            <a className="btn btn-ghost btn-xs" href={sale.payment_url} target="_blank" rel="noreferrer">
+                              <CreditCard size={12} /> קישור לתשלום
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </FolderRow>
 
             {/* Equipment folder — kids only */}
@@ -4748,18 +4878,20 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         הבחירה הנוכחית מנקה אותה, במקום „— לא הוגדר —”. */}
                     <GenderPicker value={editGender} onChange={setEditGender} />
                   </div>
-                  <div className="form-group">
-                    <label className="form-label">שיוך לחוגים</label>
-                    <GroupPickerCards
-                      groups={groups}
-                      selectedIds={editGroupIds}
-                      onToggle={(id) => {
-                        setEditGroupIds((prev) => (
-                          prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-                        ));
-                      }}
-                    />
-                  </div>
+                </div>
+                {/* Its own row — the board opens in a window of its own, and a
+                    half-width form cell had nowhere to put the chosen classes. */}
+                <div className="form-group">
+                  <label className="form-label">שיוך לחוגים</label>
+                  <GroupPickerField
+                    groups={groups}
+                    selectedIds={editGroupIds}
+                    onToggle={(id) => {
+                      setEditGroupIds((prev) => (
+                        prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+                      ));
+                    }}
+                  />
                 </div>
                 <div className="form-group">
                   <label className="form-label">תאריך מעקב הבא</label>
