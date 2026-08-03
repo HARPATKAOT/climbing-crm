@@ -24,6 +24,7 @@ import { activityIcon, activityTypeIcon } from '../utils/activityIcons.js';
 import {
   CALENDAR_DISPLAY_FIELDS, loadDisplayFields, saveDisplayFields,
   setSelectedDisplayFields, setActivityStaffNames, activityDisplayLines,
+  activityStaffNames,
 } from '../utils/calendarDisplayFields.js';
 import AppSelect from './AppSelect.jsx';
 
@@ -264,6 +265,15 @@ function canEditEvent(ev) {
   return true;
 }
 
+/**
+ * צבע אייקון הדלת של שעות פתיחה: אדום כשעוד לא שובץ עובד, ירוק כששובץ.
+ * שאר סוגי האירועים מקבלים `undefined` ונשארים בצבע הצ'יפ.
+ */
+function staffIconColor(activity) {
+  if (String(activity?.type || '').toLowerCase() !== 'opening_hours') return undefined;
+  return activityStaffNames(activity.id).length ? '#34D399' : '#FB7185';
+}
+
 function scheduleChanged(a, b) {
   return a.date !== b.date
     || String(a.end_date || '') !== String(b.end_date || '')
@@ -404,7 +414,15 @@ function hoursFromTimes(startHm, endHm) {
  * ולראות שעות ועלות משוערות לפי שעות האירוע והסכם השכר, והשורות עצמן נוצרות
  * ברגע שהאירוע נשמר. אחרי השמירה זו אותה רשימה, עם עריכה מלאה של כל שורה.
  */
-function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, onStaffPayChange = null, draft = null }) {
+function WorkAssignmentsBlock({
+  activityId,
+  activityType = '',
+  staffPay = null,
+  onStaffPayChange = null,
+  draft = null,
+  onAssignmentsChanged = null,
+  eventTimes = null,
+}) {
   const [employees, setEmployees] = useState([]);
   const [wages, setWages] = useState([]);
   const [roleCatalog, setRoleCatalog] = useState(null);
@@ -412,8 +430,17 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
   const [selectedIds, setSelectedIds] = useState([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  // „כל האירוע” או חלק ממנו. נבחר לפני השיבוץ ונשמר על השורות שנוצרות.
+  const [hoursScope, setHoursScope] = useState('all');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
 
   const draftMode = !activityId && !!draft;
+  const eventStart = eventTimes?.start || draft?.startTime || '09:00';
+  const eventEnd = eventTimes?.end || draft?.endTime || '17:00';
+  const partialHours = hoursScope === 'part';
+  const shiftStart = partialHours ? (customStart || eventStart) : eventStart;
+  const shiftEnd = partialHours ? (customEnd || eventEnd) : eventEnd;
 
   const load = useCallback(async () => {
     try {
@@ -468,9 +495,9 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
       work_type: draft.activityType === 'route_building' ? 'route_building_shift' : 'counter_shift',
       // ההערכה משקפת את הגדרת התשלום של האירוע — תפקיד או סכום גלובלי.
       role: staffPay?.role || null,
-      start_time: draft.startTime || '09:00',
-      end_time: draft.endTime || '17:00',
-      hours: hoursFromTimes(draft.startTime || '09:00', draft.endTime || '17:00') ?? 2,
+      start_time: shiftStart,
+      end_time: shiftEnd,
+      hours: hoursFromTimes(shiftStart, shiftEnd) ?? 2,
       pay_mode: staffPay?.mode === 'flat' ? 'flat' : 'hourly',
       flat_amount: staffPay?.mode === 'flat' ? (staffPay?.flatAmount ?? '') : '',
     }))
@@ -483,6 +510,8 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
     }
     if (draftMode) {
       draft.setEmployeeIds([...draftIds, ...selectedIds.filter((id) => !draftIds.includes(id))]);
+      // השעות שנבחרו נוסעות עם הטופס, כדי שהשורות שייווצרו בשמירה יהיו אותן שעות.
+      draft.setTimes?.(partialHours ? { start: shiftStart, end: shiftEnd } : null);
       setSelectedIds([]);
       setMsg('');
       return;
@@ -493,7 +522,17 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
       const res = await fetch('/api/work-assignments/from-activity', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ activity_id: activityId, employee_ids: selectedIds }),
+        // מה שנבחר כאן גובר על ההגדרה השמורה של האירוע — אחרת בחירה שנעשתה
+        // רגע לפני הלחיצה, בלי לשמור את האירוע, הייתה נעלמת.
+        body: JSON.stringify({
+          activity_id: activityId,
+          employee_ids: selectedIds,
+          role: staffPay?.role || '',
+          pay_mode: staffPay?.mode === 'flat' ? 'flat' : 'hourly',
+          flat_amount: staffPay?.mode === 'flat' ? (staffPay?.flatAmount ?? 0) : null,
+          start_time: shiftStart,
+          end_time: shiftEnd,
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -501,6 +540,7 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
       } else {
         setSelectedIds([]);
         await load();
+        onAssignmentsChanged?.();
       }
     } catch {
       setMsg('שיבוץ נכשל');
@@ -529,7 +569,10 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
         }),
       });
       if (!res.ok) setMsg('שמירת שורה נכשלה');
-      else await load();
+      else {
+        await load();
+        onAssignmentsChanged?.();
+      }
     } catch {
       setMsg('שמירת שורה נכשלה');
     } finally {
@@ -543,6 +586,7 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
     try {
       await fetch(`/api/work-assignments/${id}`, { method: 'DELETE' });
       await load();
+      onAssignmentsChanged?.();
     } finally {
       setBusy(false);
     }
@@ -588,122 +632,184 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
         עובדים במשמרת
       </div>
 
-      {onStaffPayChange && (
-        <div style={{ display: 'grid', gridTemplateColumns: staffPay?.mode === 'flat' ? '1fr 1fr 1fr' : '1fr 1fr', gap: 8 }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
-            תפקיד לשיבוץ
-            <AppSelect
-              className="input"
-              value={staffPay?.role || ''}
-              onChange={(e) => onStaffPayChange({ staff_role: e.target.value })}
-              style={{ fontSize: 12, padding: '4px 6px' }}
-            >
-              <option value="">לפי סוג האירוע</option>
-              {payableRoles.map(({ role }) => (
-                <option key={role} value={role}>{role}</option>
-              ))}
-            </AppSelect>
-          </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
-            תשלום לעובדים
-            <AppSelect
-              className="input"
-              value={staffPay?.mode === 'flat' ? 'flat' : 'rate'}
-              onChange={(e) => onStaffPayChange({ staff_pay_mode: e.target.value })}
-              style={{ fontSize: 12, padding: '4px 6px' }}
-            >
-              <option value="rate">לפי התעריף האישי</option>
-              <option value="flat">גלובלי לאירוע</option>
-            </AppSelect>
-          </label>
-          {staffPay?.mode === 'flat' && (
+      {/* הוספת עובד לאירוע: תפקיד, שכר, שעות, ואז מי — בסדר הזה, כי התפקיד
+          הוא שקובע מי בכלל מופיע ברשימת העובדים שאפשר לשבץ. */}
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        padding: 10,
+        borderRadius: 10,
+        border: '1px dashed var(--border)',
+      }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)' }}>
+          הוספת עובד לאירוע
+        </div>
+
+        {draftMode && (
+          <div style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-3)' }}>
+            אפשר לבחור עובדים כבר עכשיו. השעות והעלות כאן הן הערכה, והשיבוץ עצמו
+            ייווצר עם שמירת האירוע — אז אפשר יהיה לשנות שעות ותשלום לכל אחד.
+          </div>
+        )}
+
+        {onStaffPayChange && (
+          <div style={{ display: 'grid', gridTemplateColumns: staffPay?.mode === 'flat' ? '1fr 1fr 1fr' : '1fr 1fr', gap: 8 }}>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
-              סכום לעובד (₪)
-              <input
+              באיזה תפקיד
+              <AppSelect
                 className="input"
-                type="number"
-                min="0"
-                value={staffPay?.flatAmount ?? ''}
-                onChange={(e) => onStaffPayChange({ staff_flat_amount: e.target.value })}
+                value={staffPay?.role || ''}
+                onChange={(e) => onStaffPayChange({ staff_role: e.target.value })}
                 style={{ fontSize: 12, padding: '4px 6px' }}
-              />
+              >
+                <option value="">לפי סוג האירוע</option>
+                {payableRoles.map(({ role }) => (
+                  <option key={role} value={role}>{role}</option>
+                ))}
+              </AppSelect>
             </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+              איך משלמים
+              <AppSelect
+                className="input"
+                value={staffPay?.mode === 'flat' ? 'flat' : 'rate'}
+                onChange={(e) => onStaffPayChange({ staff_pay_mode: e.target.value })}
+                style={{ fontSize: 12, padding: '4px 6px' }}
+              >
+                <option value="rate">לפי התעריף האישי של העובד</option>
+                <option value="flat">סכום גלובלי לאירוע</option>
+              </AppSelect>
+            </label>
+            {staffPay?.mode === 'flat' && (
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                סכום לעובד (₪)
+                <input
+                  className="input"
+                  type="number"
+                  min="0"
+                  value={staffPay?.flatAmount ?? ''}
+                  onChange={(e) => onStaffPayChange({ staff_flat_amount: e.target.value })}
+                  style={{ fontSize: 12, padding: '4px 6px' }}
+                />
+              </label>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: partialHours ? '1fr 1fr 1fr' : '1fr', gap: 8 }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+            לאילו שעות
+            <AppSelect
+              className="input"
+              value={hoursScope}
+              onChange={(e) => {
+                setHoursScope(e.target.value);
+                if (e.target.value === 'part') {
+                  if (!customStart) setCustomStart(eventStart);
+                  if (!customEnd) setCustomEnd(eventEnd);
+                }
+              }}
+              style={{ fontSize: 12, padding: '4px 6px' }}
+            >
+              <option value="all">{`כל האירוע (${eventStart}–${eventEnd})`}</option>
+              <option value="part">חלק מהאירוע</option>
+            </AppSelect>
+          </label>
+          {partialHours && (
+            <>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                התחלה
+                <input
+                  className="input"
+                  type="time"
+                  value={customStart}
+                  onChange={(e) => setCustomStart(e.target.value)}
+                  style={{ fontSize: 12, padding: '4px 6px' }}
+                />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                סיום
+                <input
+                  className="input"
+                  type="time"
+                  value={customEnd}
+                  onChange={(e) => setCustomEnd(e.target.value)}
+                  style={{ fontSize: 12, padding: '4px 6px' }}
+                />
+              </label>
+            </>
           )}
         </div>
-      )}
 
-      {draftMode && (
-        <div style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-3)' }}>
-          אפשר לבחור עובדים כבר עכשיו. השעות והעלות כאן הן הערכה לפי שעות האירוע,
-          והשיבוץ עצמו ייווצר עם שמירת האירוע — אז אפשר יהיה לשנות שעות ותשלום לכל אחד.
-        </div>
-      )}
-
-      {blockedByRole && (
-        <div style={{ fontSize: 12, color: 'var(--amber)' }}>
-          {noStaffForRoleMessage(requiredRoles)}
-        </div>
-      )}
-
-      {available.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end' }}>
-          <div style={{ flex: 1, minWidth: 180, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>בחירת עובדים לשיבוץ</div>
-            <div style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 6,
-              padding: 8,
-              maxHeight: 130,
-              overflowY: 'auto',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              background: 'var(--bg-input, rgba(0,0,0,0.12))',
-            }}>
-              {available.map((employee) => {
-                const checked = selectedIds.includes(employee.id);
-                return (
-                  <label
-                    key={employee.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      padding: '4px 6px',
-                      borderRadius: 6,
-                      cursor: 'pointer',
-                      color: 'var(--text-1)',
-                      background: checked ? 'rgba(99,102,241,0.12)' : 'transparent',
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={(event) => {
-                        setSelectedIds((prev) => (
-                          event.target.checked
-                            ? [...prev, employee.id]
-                            : prev.filter((id) => id !== employee.id)
-                        ));
-                      }}
-                    />
-                    <span style={{ fontSize: 13 }}>{employee.name}</span>
-                  </label>
-                );
-              })}
-            </div>
+        {blockedByRole && (
+          <div style={{ fontSize: 12, color: 'var(--amber)' }}>
+            {noStaffForRoleMessage(requiredRoles)}
           </div>
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            disabled={busy || !selectedIds.length}
-            onClick={addFromPlan}
-          >
-            {busy ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
-            {assignLabel}
-          </button>
-        </div>
-      )}
+        )}
+
+        {available.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end' }}>
+            <div style={{ flex: 1, minWidth: 180, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                {staffPay?.role ? `את מי משבצים — רק מי שמסומן כ״${staffPay.role}״` : 'את מי משבצים'}
+              </div>
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+                padding: 8,
+                maxHeight: 130,
+                overflowY: 'auto',
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                background: 'var(--bg-input, rgba(0,0,0,0.12))',
+              }}>
+                {available.map((employee) => {
+                  const checked = selectedIds.includes(employee.id);
+                  return (
+                    <label
+                      key={employee.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '4px 6px',
+                        borderRadius: 6,
+                        cursor: 'pointer',
+                        color: 'var(--text-1)',
+                        background: checked ? 'rgba(99,102,241,0.12)' : 'transparent',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(event) => {
+                          setSelectedIds((prev) => (
+                            event.target.checked
+                              ? [...prev, employee.id]
+                              : prev.filter((id) => id !== employee.id)
+                          ));
+                        }}
+                      />
+                      <span style={{ fontSize: 13 }}>{employee.name}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={busy || !selectedIds.length}
+              onClick={addFromPlan}
+            >
+              {busy ? <Loader2 size={14} className="spin" /> : <Plus size={14} />}
+              {assignLabel}
+            </button>
+          </div>
+        )}
+      </div>
 
       {shownRows.length === 0 ? (
         <div style={{ fontSize: 12, color: 'var(--text-3)', fontStyle: 'italic' }}>
@@ -862,8 +968,14 @@ function WorkAssignmentsBlock({ activityId, activityType = '', staffPay = null, 
                   alignItems: 'end',
                 }}>
                   {payMode === 'hourly' ? (
-                    <div style={{ fontSize: 11, color: 'var(--text-3)', alignSelf: 'center' }}>
-                      תעריף נבחר: ₪{rate}/שעה
+                    <div style={{
+                      fontSize: 11,
+                      alignSelf: 'center',
+                      color: rate ? 'var(--text-3)' : '#FBBF24',
+                    }}>
+                      {rate
+                        ? `תעריף נבחר: ₪${rate}/שעה`
+                        : 'אין לעובד תעריף לתפקיד הזה — הוסיפו אותו בהסכם השכר'}
                     </div>
                   ) : (
                     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
@@ -1027,6 +1139,7 @@ function RegularActivityModal({
   submit,
   title,
   declarationTemplates = [],
+  onStaffChanged = null,
 }) {
   const activityId = isEdit && !isTemplateEdit ? initial?.id : null;
   const isTemplateCreate = isTemplateEdit && !initial?._template_id;
@@ -1433,13 +1546,16 @@ function RegularActivityModal({
                   flatAmount: form.staff_flat_amount,
                 }}
                 onStaffPayChange={readOnly ? null : (patch) => setForm((prev) => ({ ...prev, ...patch }))}
+                eventTimes={{ start: form.start_time, end: form.end_time }}
                 draft={isEdit ? null : {
                   employeeIds: form._pending_employee_ids || [],
                   setEmployeeIds: (ids) => setForm((prev) => ({ ...prev, _pending_employee_ids: ids })),
+                  setTimes: (times) => setForm((prev) => ({ ...prev, _pending_staff_times: times })),
                   activityType: form.type,
                   startTime: form.start_time,
                   endTime: form.end_time,
                 }}
+                onAssignmentsChanged={onStaffChanged}
               />
             )}
           </div>
@@ -1521,6 +1637,7 @@ function ActivityFormModal({
   saving,
   error,
   externalCalendars = [],
+  onStaffChanged = null,
 }) {
   const isOverlay = !!initial?.overlay;
   // New external event: overlay form with no Google event behind it yet.
@@ -1698,6 +1815,7 @@ function ActivityFormModal({
         submit={submit}
         title={title}
         declarationTemplates={declarationTemplates}
+        onStaffChanged={onStaffChanged}
       />
     );
   }
@@ -2178,7 +2296,12 @@ function EventChip({ activity, onClick, draggable = true }) {
       }}
     >
       <span style={{ display: 'flex', alignItems: 'center', gap: 3, minWidth: 0 }}>
-        <TypeIcon size={12} strokeWidth={2.4} style={{ flexShrink: 0 }} aria-hidden="true" />
+        <TypeIcon
+          size={12}
+          strokeWidth={2.4}
+          style={{ flexShrink: 0, color: staffIconColor(activity) }}
+          aria-hidden="true"
+        />
         <PaymentStatusIcon
           status={activity.payment_status}
           perParticipant={isPaidPerParticipant(activity)}
@@ -2383,7 +2506,12 @@ function WeekTimedEvent({
           )}
           <span style={{ display: 'flex', alignItems: 'flex-start', gap: 3, minWidth: 0 }}>
             {TypeIcon && (
-              <TypeIcon size={11} strokeWidth={2.4} style={{ flexShrink: 0 }} aria-hidden="true" />
+              <TypeIcon
+                size={11}
+                strokeWidth={2.4}
+                style={{ flexShrink: 0, color: staffIconColor(event) }}
+                aria-hidden="true"
+              />
             )}
             {!isOverlay && (
               <PaymentStatusIcon
@@ -2428,7 +2556,12 @@ function WeekTimedEvent({
       ) : (
         <span style={{ display: 'flex', alignItems: 'center', gap: 3, minWidth: 0 }}>
           {TypeIcon && (
-            <TypeIcon size={11} strokeWidth={2.4} style={{ flexShrink: 0 }} aria-hidden="true" />
+            <TypeIcon
+                size={11}
+                strokeWidth={2.4}
+                style={{ flexShrink: 0, color: staffIconColor(event) }}
+                aria-hidden="true"
+              />
           )}
           {!isOverlay && (
               <PaymentStatusIcon
@@ -3089,6 +3222,9 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   const [displayMenuOpen, setDisplayMenuOpen] = useState(false);
   // עולה בכל פעם שהשמות המשובצים הגיעו, כדי שהצ'יפים ייצבעו מחדש איתם.
   const [staffNamesVersion, setStaffNamesVersion] = useState(0);
+  // עולה בכל שינוי שיבוץ, כדי שהשמות על האירועים יתעדכנו בלי לרענן את הדף.
+  const [staffNamesTick, setStaffNamesTick] = useState(0);
+  const refreshStaffNames = useCallback(() => setStaffNamesTick((t) => t + 1), []);
   setSelectedDisplayFields(displayFields);
 
   const toggleDisplayField = (id) => {
@@ -3383,11 +3519,12 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   }, [visibleRange.from, visibleRange.to, loadOverlayEvents]);
 
   /**
-   * שמות המשובצים לכל אירוע בטווח שמוצג. נמשך רק כשבאמת ביקשו לראות מדריך,
-   * כי זו שאילתה נוספת בכל מעבר חודש — ובקריאה אחת לכל הטווח, לא אחת לאירוע.
+   * שמות המשובצים לכל אירוע בטווח שמוצג — קריאה אחת לכל הטווח, לא אחת לאירוע.
+   * נמשך תמיד, גם כששמות המדריכים לא מוצגים, כי צבע אייקון הדלת של שעות
+   * הפתיחה נגזר מאותו מידע.
    */
   useEffect(() => {
-    if (!displayFields.includes('staff') || !visibleRange.from) {
+    if (!visibleRange.from) {
       setActivityStaffNames(new Map());
       setStaffNamesVersion((v) => v + 1);
       return undefined;
@@ -3417,7 +3554,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [displayFields, visibleRange.from, visibleRange.to]);
+  }, [visibleRange.from, visibleRange.to, staffNamesTick]);
 
   const monthLabel = `${HEB_MONTHS[cursor.getMonth()]} ${cursor.getFullYear()}`;
 
@@ -3944,6 +4081,8 @@ export default function ActivitiesCalendar({ isOwner = false }) {
         closeAfter: _closeAfter,
         // Employees picked before the event existed — attached right after it is created.
         _pending_employee_ids: pendingEmployeeIds = [],
+        // שעות חלקיות שנבחרו למשמרת לפני שהאירוע נשמר.
+        _pending_staff_times: pendingStaffTimes = null,
         ...body
       } = payload;
       const res = await fetch(isEdit ? `/api/activities/${payload.id}` : '/api/activities', {
@@ -3969,7 +4108,12 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           const assignRes = await fetch('/api/work-assignments/from-activity', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ activity_id: data.id, employee_ids: pendingEmployeeIds }),
+            body: JSON.stringify({
+              activity_id: data.id,
+              employee_ids: pendingEmployeeIds,
+              start_time: pendingStaffTimes?.start || undefined,
+              end_time: pendingStaffTimes?.end || undefined,
+            }),
           });
           if (!assignRes.ok) {
             const assignErr = await assignRes.json().catch(() => ({}));
@@ -3981,6 +4125,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
       }
 
       await loadActivities();
+      refreshStaffNames();
       const savedBanner = assignmentWarning
         ? `האירוע נשמר · ${assignmentWarning}`
         : 'האירוע נשמר';
@@ -4025,6 +4170,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
       });
       setModal(null);
       await loadActivities();
+      refreshStaffNames();
     } catch (err) {
       setBanner(err.message || 'מחיקה נכשלה');
     } finally {
@@ -4588,7 +4734,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
                     <RowIcon
                       size={15}
                       strokeWidth={2.2}
-                      style={{ color: meta.color, flexShrink: 0 }}
+                      style={{ color: staffIconColor(item) || meta.color, flexShrink: 0 }}
                       aria-hidden="true"
                     />
                     <span style={{
@@ -4833,6 +4979,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           saving={saving}
           error={formError}
           externalCalendars={writableOverlayCalendars}
+          onStaffChanged={refreshStaffNames}
         />
       )}
 
