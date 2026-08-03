@@ -6289,6 +6289,19 @@ app.get('/api/google-contacts/status', async (req, res) => {
   }
 });
 
+// Sync state of one record, e.g. ?key=parent:12 — powers the badge on the customer screen
+app.get('/api/google-contacts/contact-status', async (req, res) => {
+  const key = String(req.query.key || '').trim();
+  if (!key) return res.status(400).json({ error: 'חסר מזהה רשומה' });
+  try {
+    res.json(await googleContactsService.getContactSyncStatus(googleContactsDeps, key, {
+      refresh: req.query.refresh === '1',
+    }));
+  } catch (err) {
+    res.status(500).json({ key, state: 'error', label: 'בדיקת הסנכרון נכשלה', error: err.message });
+  }
+});
+
 app.get('/api/google-contacts/auth-url', requireOwner, (req, res) => {
   try {
     res.json({ url: googleContactsService.getAuthUrl() });
@@ -9594,6 +9607,18 @@ function cancelPunch(pass, punch, { cancelledBy, reason }) {
 
 app.get('/api/pos/sales', async (req, res) => {
   let sales = db.get('pos_sales') || [];
+
+  // A customer card asks for its own purchases — by trainee, by household, or both.
+  const askStudent = String(req.query.studentId || '').trim();
+  const askParent = String(req.query.parentId || '').trim();
+  if (askStudent || askParent) {
+    sales = sales.filter(
+      (s) =>
+        (askStudent && String(s.student_id || '') === askStudent) ||
+        (askParent && String(s.parent_id || '') === askParent)
+    );
+  }
+
   if (req.crmUser?.role === 'staff') {
     const today = new Date().toISOString().slice(0, 10);
     sales = sales.filter(

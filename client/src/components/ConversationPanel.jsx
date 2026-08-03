@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useLiveMessages } from '../hooks/useLiveMessages.js';
 import {
   Send,
@@ -18,6 +18,9 @@ import {
   Pencil,
   ThumbsUp,
   ThumbsDown,
+  UserCheck,
+  UserX,
+  Clock,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { normalizeTemplateVariables, buildPrefillValues } from './templateVariables.js';
@@ -71,6 +74,92 @@ function WindowBadge({ windows, channel }) {
     <span style={{ ...WINDOW_BADGE_STYLE, ...windowTone(w.open) }}>
       {CHANNEL_LABELS[channel]}: {w.label}
     </span>
+  );
+}
+
+const CONTACT_SYNC_TONES = {
+  synced: { background: 'rgba(34,197,94,0.15)', color: '#4ade80' },
+  missing: { background: 'rgba(251,191,36,0.12)', color: '#FBBF24' },
+  stale: { background: 'rgba(251,191,36,0.12)', color: '#FBBF24' },
+  no_phone: { background: 'rgba(148,163,184,0.12)', color: '#94A3B8' },
+  not_connected: { background: 'rgba(148,163,184,0.12)', color: '#94A3B8' },
+  error: { background: 'rgba(248,113,113,0.12)', color: '#F87171' },
+};
+
+const CONTACT_SYNC_SHORT = {
+  synced: 'איש קשר מסונכרן',
+  missing: 'ממתין לסנכרון',
+  stale: 'ממתין לעדכון',
+  no_phone: 'אין מספר לסנכרון',
+  not_connected: 'אנשי קשר: לא מחובר',
+  error: 'בדיקת סנכרון נכשלה',
+};
+
+function contactSyncTitle(info) {
+  const lines = [];
+  if (info.expectedName) lines.push(`השם בטלפון: ${info.expectedName}`);
+  if (info.state === 'stale' && info.currentName) lines.push(`כרגע בגוגל: ${info.currentName}`);
+  if (info.state === 'missing') lines.push('הלקוח עדיין לא נוצר באנשי הקשר');
+  if (info.state === 'no_phone') lines.push('אין מספר תקין, ולכן הלקוח לא נכנס לאנשי הקשר');
+  if (info.state === 'error' && info.error) lines.push(info.error);
+  if (info.lastSyncAt) lines.push(`סנכרון אחרון: ${new Date(info.lastSyncAt).toLocaleString('he-IL')}`);
+  lines.push('לחיצה בודקת מחדש מול גוגל');
+  return lines.join('\n');
+}
+
+/** Does this customer sit in the phone's address book under the agreed name. */
+function ContactSyncBadge({ parentId }) {
+  const [info, setInfo] = useState(null);
+  const [checking, setChecking] = useState(false);
+
+  const check = useCallback(async (refresh) => {
+    if (!parentId) return;
+    setChecking(true);
+    try {
+      const res = await fetch(
+        `/api/google-contacts/contact-status?key=parent:${encodeURIComponent(parentId)}${refresh ? '&refresh=1' : ''}`
+      );
+      const json = await res.json().catch(() => null);
+      setInfo(json?.state ? json : null);
+    } catch {
+      setInfo(null);
+    } finally {
+      setChecking(false);
+    }
+  }, [parentId]);
+
+  useEffect(() => {
+    setInfo(null);
+    check(false);
+  }, [check]);
+
+  // Without Google keys on the server the whole feature is off — stay silent.
+  if (!info || info.state === 'not_configured') return null;
+  const tone = CONTACT_SYNC_TONES[info.state] || CONTACT_SYNC_TONES.error;
+  const Icon = info.state === 'synced'
+    ? UserCheck
+    : info.state === 'missing' || info.state === 'stale'
+      ? Clock
+      : UserX;
+
+  return (
+    <button
+      type="button"
+      onClick={() => check(true)}
+      disabled={checking}
+      title={contactSyncTitle(info)}
+      style={{
+        ...WINDOW_BADGE_STYLE,
+        ...tone,
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        cursor: checking ? 'default' : 'pointer',
+      }}
+    >
+      <Icon size={11} />
+      {checking ? 'בודק...' : CONTACT_SYNC_SHORT[info.state] || info.label}
+    </button>
   );
 }
 
@@ -772,6 +861,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
           ) : (
             <WindowBadge windows={data?.windows} channel={channel} />
           )}
+          <ContactSyncBadge parentId={parent.id} />
           {botBadge && (
             <div ref={botMenuRef} style={{ position: 'relative' }}>
               <button

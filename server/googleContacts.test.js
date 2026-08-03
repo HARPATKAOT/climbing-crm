@@ -5,6 +5,7 @@ import {
   headlineStatus,
   buildDesiredContacts,
   planSync,
+  contactSyncState,
 } from './googleContacts.js';
 
 test('toE164 normalizes Israeli numbers the dialer can match', () => {
@@ -145,4 +146,13 @@ test('planSync leaves untouched contacts alone', () => {
   assert.equal(toCreate.length, 0);
   assert.equal(toUpdate.length, 0);
   assert.equal(toDelete.length, 0);
+});
+
+test('contactSyncState tells the customer screen where the record stands', () => {
+  const wanted = { key: 'parent:p1', name: 'חוג פעיל - דנה כהן', phone: '+972521234567' };
+  assert.equal(contactSyncState(wanted, { ...wanted, resourceName: 'people/c1' }), 'synced');
+  assert.equal(contactSyncState(wanted, null), 'missing');
+  assert.equal(contactSyncState(wanted, { ...wanted, name: 'ליד חדש - דנה כהן' }), 'stale');
+  assert.equal(contactSyncState(wanted, { ...wanted, phone: '+972500000000' }), 'stale');
+  assert.equal(contactSyncState(null, null), 'no_phone');
 });

@@ -519,6 +519,7 @@ export async function syncContacts(deps, { force = false } = {}) {
   const students = deps.getStudents() || [];
   const desired = buildDesiredContacts(parents, students);
   const { managed, duplicates } = await listManagedContacts();
+  managedCache = null; // whatever this run writes makes a cached read wrong
   const { toCreate, toUpdate, toDelete } = planSync(desired, managed);
 
   // A CRM read that came back empty must never wipe the address book.
@@ -603,6 +604,74 @@ export async function syncContacts(deps, { force = false } = {}) {
   return { success: !errors.length, ...stats, errors };
 }
 
+// ─── Per-customer status ─────────────────────────────────────────────────────
+
+/**
+ * The address book read is the expensive part, and the customer screen asks for
+ * one record at a time, so the managed map is cached and shared across records.
+ * Any sync drops it, since a sync is exactly what makes it wrong.
+ */
+const MANAGED_CACHE_MS = Number(process.env.GOOGLE_CONTACTS_CACHE_MS || 5 * 60_000);
+let managedCache = null;
+
+async function getManagedContacts({ refresh = false } = {}) {
+  if (!refresh && managedCache && Date.now() - managedCache.at < MANAGED_CACHE_MS) {
+    return managedCache;
+  }
+  const { managed } = await listManagedContacts();
+  managedCache = { at: Date.now(), managed };
+  return managedCache;
+}
+
+const SYNC_STATE_LABELS = {
+  not_configured: 'סנכרון אנשי קשר לא מוגדר',
+  not_connected: 'לא מחובר לאנשי קשר בגוגל',
+  no_phone: 'אין מספר טלפון לסנכרון',
+  missing: 'ממתין לסנכרון',
+  stale: 'ממתין לעדכון',
+  synced: 'מסונכרן',
+};
+
+/**
+ * Compare one record against the contact Google actually holds.
+ * `stale` means the contact exists but its name or number drifted from the
+ * template — the next sync fixes it.
+ */
+export function contactSyncState(wanted, current) {
+  if (!wanted) return 'no_phone';
+  if (!current) return 'missing';
+  if (current.name !== wanted.name || current.phone !== wanted.phone) return 'stale';
+  return 'synced';
+}
+
+/** The same comparison for one record, against the live address book. */
+export async function getContactSyncStatus(deps, key, { refresh = false } = {}) {
+  const settings = await loadSettings();
+  const base = { key, expectedName: null, currentName: null, phone: null };
+  if (!clientConfigured()) return { ...base, state: 'not_configured', label: SYNC_STATE_LABELS.not_configured };
+  if (!isConnected(settings)) return { ...base, state: 'not_connected', label: SYNC_STATE_LABELS.not_connected };
+
+  const desired = buildDesiredContacts(deps.getParents() || [], deps.getStudents() || []);
+  const wanted = desired.get(key) || null;
+  const lastSyncAt = settings.lastSyncAt || null;
+  if (!wanted) return { ...base, state: 'no_phone', label: SYNC_STATE_LABELS.no_phone, lastSyncAt };
+
+  const { managed, at } = await getManagedContacts({ refresh });
+  const current = managed.get(key) || null;
+  const state = contactSyncState(wanted, current);
+
+  return {
+    key,
+    state,
+    label: SYNC_STATE_LABELS[state],
+    expectedName: wanted.name,
+    currentName: current?.name || null,
+    phone: wanted.phone,
+    lastSyncAt,
+    checkedAt: new Date(at).toISOString(),
+  };
+}
+
 // ─── Debounced trigger from CRM write paths ──────────────────────────────────
 
 let pendingTimer = null;
@@ -659,6 +728,7 @@ export const googleContactsService = {
   completeOAuth,
   disconnect,
   syncContacts,
+  getContactSyncStatus,
   scheduleSync,
   oauthCallbackRedirectUrl,
   frontendBase,
