@@ -175,7 +175,8 @@ function formatGroupLine(group) {
   const free = Number.isFinite(group.freeSlots)
     ? group.freeSlots
     : spotsLeft(group, db.get('students') || []);
-  const seat = free > 0 ? `${free} פנויים` : 'מלאה';
+  // No configured capacity: say nothing about places rather than invent one.
+  const seat = free === null ? '' : (free > 0 ? `${free} פנויים` : 'מלאה');
   const week = Number(group.priceWeek) || 0;
   const twice = Number(group.priceTwice) || 0;
   const price = [
@@ -638,7 +639,11 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
   const defaultMenu = s.aiGreetingMenu || DEFAULT_BOT_SETTINGS.aiGreetingMenu;
 
   if (menuPick === '3') {
-    return { text: s.aiHandoffAckMessage, confidence: 'high', handoff: true };
+    // A bare «נציג» or «אדם» anywhere in a sentence lands here, so "יש אדם
+    // שאחראי על החוג?" became a handoff instead of an answer. The gate's
+    // wantsExplicitHumanStaff already catches a genuine request before this;
+    // in tools mode the model gets to read the rest.
+    return { text: s.aiHandoffAckMessage, confidence: 'high', handoff: true, softHandoff: true };
   }
 
   // “Is this a climbing wall?” — never escalate; answer from brand facts.
@@ -652,8 +657,13 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
   }
 
   if (asksAboutGroupChat(raw)) {
+    // Its handoff is guessed from a raw groupId, without the family card the
+    // model would read — and listClasses now carries the invite links, so the
+    // model can answer this properly.
     const chat = formatGroupChatReply(db, students, raw);
-    if (chat.text) return { text: chat.text, confidence: 'high', handoff: chat.handoff };
+    if (chat.text) {
+      return { text: chat.text, confidence: 'high', handoff: chat.handoff, softHandoff: true };
+    }
   }
 
   if (asksAboutSignupLink(raw)) {
@@ -725,9 +735,12 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
     const detailGroups = exactGroups.length
       ? exactGroups
       : (asksAboutGroupSize(raw) ? (db.get('groups') || []) : []);
+    // «עוזר» or «סייע» anywhere in the message reaches here. Group size and
+    // the trainer are both in the listClasses payload now, so the model can
+    // answer without this guessing first.
     const details = formatGroupDetailsReply(db, detailGroups, raw);
     if (details.text) {
-      return { text: details.text, confidence: 'high', handoff: details.handoff };
+      return { text: details.text, confidence: 'high', handoff: details.handoff, softHandoff: true };
     }
   }
 
@@ -742,7 +755,10 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
     // Membership / punch card / birthday pricing is not in the CRM — asking
     // which grade the child is in would only stall the customer.
     if (asksAboutNonClassPayment(raw)) {
-      return { text: PRICE_HANDOFF_REPLY, confidence: 'high', handoff: true };
+      // The right outcome — the CRM does not price these — but the model
+      // reaches it too, and phrases it as part of the conversation instead of
+      // dropping a fixed sentence on top of whatever else was asked.
+      return { text: PRICE_HANDOFF_REPLY, confidence: 'high', handoff: true, softHandoff: true };
     }
     if (!asksAboutEquipment(raw) && !asksAboutEnrichment(raw)) {
       // Never dump the whole catalog on a vague "מה העלות?" — need a grade
@@ -757,7 +773,14 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
       enrichmentFee: enrichmentFeeFromSettings(s),
       text: raw,
     });
-    return { text: priceReply.text, confidence: 'high', handoff: priceReply.handoff };
+    // buildPriceReply hands off simply because it could not assemble a price —
+    // a case the model, with getPrices in front of it, handles better.
+    return {
+      text: priceReply.text,
+      confidence: 'high',
+      handoff: priceReply.handoff,
+      softHandoff: true,
+    };
   }
 
   // "מתי אתם פתוחים" is an opening-hours question, and «מתי» alone would drag
@@ -1578,9 +1601,13 @@ export const whatsappService = {
         apiKey,
       });
       if (turn.text) {
+        // `unsure` was computed and then dropped here, so the clarify-then-
+        // handoff ladder — ask once, hand over if the next message is still
+        // noise — did not exist in tools mode at all.
         return {
           text: clipReply(turn.text, settings.aiMaxReplyChars),
           handoff: turn.handoff,
+          unsure: turn.unsure,
           confidence: 'medium',
           toolsUsed: turn.toolsUsed,
         };

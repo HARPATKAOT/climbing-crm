@@ -92,7 +92,9 @@ test('only a published activity is offered, with its registration link', () => {
   });
   const reply = formatPublicEventsReply(db);
   assert.match(reply, /טיול לנקיק השחור/);
-  assert.match(reply, /\/event\/abc123/);
+  // The address is now the short redirect on our own host; /ev resolves it to
+  // the same public page, and survives the page moving.
+  assert.match(reply, /\/ev\/abc123/);
   assert.doesNotMatch(reply, /יום הולדת/);
   assert.doesNotMatch(reply, /secret9/);
 });
@@ -240,6 +242,12 @@ test('a group whose link is only a JID hands off rather than sending it', () => 
 });
 
 test('the signup link carries the specific class as the interest', () => {
+  // A group from the CRM has an id, so the link is short and the class is
+  // resolved at click time — renaming the group cannot strand a sent link.
+  const short = groupSignupUrl({ id: 'g-42', ageCategory: 'ג׳-ד׳' }, { phone: '972501234567' });
+  assert.match(short, /\/g\/g-42\/972501234567$/);
+
+  // Without an id there is nothing to look up, so the label still travels.
   const url = groupSignupUrl({ ageCategory: 'ג׳-ד׳', day: 2, time: '15:00' }, { phone: '972501234567' });
   assert.match(url, /\/onboard\?/);
   const interest = new URL(url).searchParams.get('interest');

@@ -126,7 +126,10 @@ export function publicGroups(db) {
         time: group.time || '',
         duration: Number(group.duration) || null,
         age_category: group.ageCategory || '',
-        has_room: free > 0,
+        // Unknown capacity is not a closed door: the site says nothing rather
+        // than turning a family away on an invented number.
+        has_room: free === null ? true : free > 0,
+        capacity_known: free !== null,
       };
     });
 }

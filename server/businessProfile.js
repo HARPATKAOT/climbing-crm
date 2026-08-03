@@ -40,9 +40,15 @@ export function normalizeBusinessProfile(raw = {}, { validateImage = false } = {
 
 export async function getBusinessProfile({ fresh = false } = {}) {
   if (!fresh && memoryProfile) return { ...memoryProfile };
-  const stored = await supa.getAppSetting(SETTINGS_KEY);
-  memoryProfile = normalizeBusinessProfile(stored || DEFAULT_BUSINESS_PROFILE);
-  return { ...memoryProfile };
+  const read = await supa.readAppSetting(SETTINGS_KEY);
+  const profile = normalizeBusinessProfile(
+    (read.ok && read.configured ? read.value : null) || DEFAULT_BUSINESS_PROFILE
+  );
+  // A failed read is not an answer to remember. The cache had no expiry, so one
+  // unlucky read at boot pinned the fallback business name — the one that goes
+  // into a signed waiver — for the entire life of the process.
+  if (read.ok) memoryProfile = profile;
+  return { ...profile };
 }
 
 export async function saveBusinessProfile(input = {}) {

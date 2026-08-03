@@ -46,8 +46,26 @@ export function appPublicBase(publicAppBase = '') {
   return LIVE_APP_BASE;
 }
 
-/** Short link behind a template button: `<api>/<path>/<token>`. */
-export function buildRedirectUrl(path, token) {
-  if (!token) return '';
-  return `${apiRedirectBase()}/${path}/${encodeURIComponent(String(token))}`;
+/**
+ * A short link on our own host: `<api>/<path>/<segment>/<segment>…`.
+ *
+ * Every address that goes to a customer should come from here. A long one is
+ * not merely ugly in WhatsApp — the community centre's signup address carries
+ * the class name in its query string, so it arrives as four lines of
+ * percent-encoded Hebrew that no two of which can be told apart, and WhatsApp
+ * sometimes fails to make it tappable at all. Resolving at click time is also
+ * what lets a destination move without breaking links already sent.
+ *
+ * Each segment is encoded on its own, so a path can have several of them —
+ * the single-token version could not express `/s/<group>/<frequency>`, which
+ * is why the first caller that needed it built its URL by hand instead.
+ */
+export function buildRedirectUrl(path, ...segments) {
+  const parts = segments
+    .flat()
+    .map((s) => String(s ?? '').trim())
+    .filter(Boolean)
+    .map((s) => encodeURIComponent(s));
+  if (!parts.length) return '';
+  return `${apiRedirectBase()}/${path}/${parts.join('/')}`;
 }

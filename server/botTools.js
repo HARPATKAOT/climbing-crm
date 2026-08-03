@@ -12,7 +12,7 @@ import { groupMatchesGradeLetter } from './groupBands.js';
 import { studentsForParent, isIdentifiedParent } from './whatsappBot.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { healthExpiryDate, declarationSignedAt } from './healthValidity.js';
-import { appPublicBase, apiRedirectBase } from './publicLinks.js';
+import { appPublicBase, buildRedirectUrl } from './publicLinks.js';
 import { persistCore } from './db.js';
 import {
   newCheckoutToken,
@@ -44,6 +44,7 @@ import {
   groupSignupUrl,
   eventPublicUrl,
   eventDateLabel,
+  inviteLink,
 } from './botFacts.js';
 
 const DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
@@ -114,11 +115,15 @@ export function spellOutDate(isoDate) {
   return `${Number(m[3])} ב${HEB_MONTHS[Number(m[2]) - 1]} ${m[1]}`;
 }
 
-/** The public health form, with the phone prefilled so the card is found. */
-function healthFormUrl(phone = '') {
+/**
+ * The intake form, short. Keyed to the trainee when we know which one, so the
+ * form opens on their record; otherwise to the phone, so a returning family is
+ * recognised instead of being asked to type it again.
+ */
+function healthFormUrl(phone = '', studentId = '') {
+  if (studentId) return buildRedirectUrl('f', studentId);
   const digits = String(phone || '').replace(/\D/g, '');
-  const qs = digits ? `?phone=${encodeURIComponent(digits)}` : '';
-  return `${appPublicBase()}/register${qs}`;
+  return digits ? buildRedirectUrl('fp', digits) : `${appPublicBase()}/register`;
 }
 
 /** Non-grade bands as they are written in the group's age category. */
@@ -372,6 +377,27 @@ function groupInfoFields(group) {
   return info ? { מידע: info } : {};
 }
 
+/**
+ * The parents' WhatsApp group, when there is a real invite to give.
+ *
+ * The same fields also hold group JIDs (`…@g.us`) used for broadcasting, and a
+ * JID in a customer's chat is noise at best — `inviteLink` is what tells them
+ * apart. Until now only the keyword layer could answer "יש קבוצת וואטסאפ?",
+ * so deferring that branch to the model without this would have lost the
+ * answer altogether.
+ */
+function groupChatFields(group) {
+  const parents = inviteLink(group?.waParents);
+  const climbers = inviteLink(group?.waClimbers);
+  if (!parents && !climbers) return {};
+  return {
+    קבוצת_וואטסאפ: {
+      ...(parents ? { הורים: parents } : {}),
+      ...(climbers ? { מתאמנים: climbers } : {}),
+    },
+  };
+}
+
 function openGroupsPayload(groups) {
   const students = db.get('students') || [];
   return enrichGroupsWithCapacity(groups, students)
@@ -381,13 +407,19 @@ function openGroupsPayload(groups) {
       שכבה: g.ageCategory || '',
       יום: DAY_NAMES[Number(g.day)] || String(g.day ?? ''),
       שעה: g.time || '',
-      מצב: g.isFull ? 'מלאה' : 'יש מקום',
-      מקומות_פנויים: Number(g.freeSlots) || 0,
+      // A group with no configured capacity reports neither "full" nor a
+      // number of places — both would be invented.
+      מצב: g.capacityKnown === false
+        ? 'לא מוגדרת מכסה — אין לומר כמה מקומות פנויים'
+        : (g.isFull ? 'מלאה' : 'יש מקום'),
+      ...(g.capacityKnown === false ? {} : { מקומות_פנויים: Number(g.freeSlots) || 0 }),
+      גודל_הקבוצה: g.capacityKnown === false ? 'לא מוגדר' : Number(g.maxSlots),
       מדריך: trainerNameForGroup(db, g) || '',
       רמה: g.skillLevel || 'מתחילים',
       מחיר_פעם_בשבוע: Number(g.priceWeek) || 0,
       מחיר_פעמיים_בשבוע: Number(g.priceTwice) || 0,
       ...groupInfoFields(g),
+      ...groupChatFields(g),
     }));
 }
 
@@ -682,14 +714,21 @@ export function buildCustomerTools({
         }));
       }
       if (equipment !== false) {
+        // No prices we can vouch for: say so rather than quoting zeros, which
+        // read to a customer as "the equipment is free".
         const prices = await loadEquipmentPrices();
-        payload.ציוד = {
-          נעליים: Number(prices?.shoes) || 0,
-          חולצה: Number(prices?.shirt) || 0,
-          שק_מגנזיום: Number(prices?.chalk_bag) || 0,
-        };
+        payload.ציוד = prices
+          ? {
+            נעליים: Number(prices.shoes) || 0,
+            חולצה: Number(prices.shirt) || 0,
+            שק_מגנזיום: Number(prices.chalk_bag) || 0,
+          }
+          : { הערה: 'מחירי הציוד אינם זמינים כרגע — אין לנקוב בסכום, יש להעביר לצוות' };
       }
-      payload.דמי_העשרה = enrichmentFeeFromSettings(settings);
+      const fee = enrichmentFeeFromSettings(settings);
+      payload.דמי_העשרה = fee > 0
+        ? fee
+        : { הערה: 'דמי ההעשרה אינם מוגדרים — אין לנקוב בסכום' };
       return payload;
     },
 
@@ -882,13 +921,8 @@ export function buildCustomerTools({
         };
       }
       const group = groups[0];
-      // Short links on our own domain: the community centre's address arrives
-      // as four lines of percent-encoding, and two of them look identical.
-      // Built here rather than through buildRedirectUrl, which percent-encodes
-      // its token — and the frequency lives in a second path segment.
-      const shortLink = (freq) => `${apiRedirectBase()}/s/${encodeURIComponent(group.id)}/${freq}`;
-      const week = group.signupLinkWeek ? shortLink(1) : '';
-      const twice = group.signupLinkTwice ? shortLink(2) : '';
+      const week = group.signupLinkWeek ? buildRedirectUrl('s', group.id, 1) : '';
+      const twice = group.signupLinkTwice ? buildRedirectUrl('s', group.id, 2) : '';
       return {
         קישורים: [{
           שכבה: group.ageCategory || '',
@@ -992,11 +1026,16 @@ export function buildCustomerTools({
 
       const itemTypes = unpaid.map((r) => r.item_type || r.itemType).filter(Boolean);
       const shirtSize = unpaid.find((r) => (r.item_type || r.itemType) === 'shirt')?.shirt_size || null;
+      // The link is still worth sending — the payment page prices the items
+      // itself — but the figure in the message must not be a guess.
+      const prices = await loadEquipmentPrices();
       return {
         מתאמן: student.name || '',
         פריטים: describeEquipmentItems(itemTypes, shirtSize),
-        סכום: computeEquipmentTotal(await loadEquipmentPrices(), itemTypes),
-        קישור: `${appPublicBase()}/equipment/${encodeURIComponent(token)}`,
+        ...(prices
+          ? { סכום: computeEquipmentTotal(prices, itemTypes) }
+          : { הערה: 'מחירי הציוד אינם זמינים כרגע — לשלוח את הקישור בלי לנקוב בסכום' }),
+        קישור: buildRedirectUrl('e', token),
       };
     },
 

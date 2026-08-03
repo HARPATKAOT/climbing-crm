@@ -250,7 +250,7 @@ function toolListGroups(db, { day = null } = {}) {
         trainer: group.trainer || '',
         enrolled,
         max_slots: max,
-        spots_left: Math.max(0, max - enrolled),
+        spots_left: max === null ? null : Math.max(0, max - enrolled),
         price_week: group.priceWeek ?? null,
         price_twice: group.priceTwice ?? null,
       };
@@ -402,7 +402,9 @@ function toolBusinessSnapshot(db, { today = israelDateStr() } = {}) {
   );
 
   const groups = rows(db, 'groups');
-  const capacity = groups.reduce((sum, group) => sum + maxSlotsOf(group), 0);
+  // Groups with no configured capacity are left out of the total rather than
+  // padding it with a number nobody set.
+  const capacity = groups.reduce((sum, group) => sum + (maxSlotsOf(group) || 0), 0);
   const enrolled = groups.reduce((sum, group) => sum + countEnrolled(group.id, students), 0);
 
   const tasks = rows(db, 'crm_tasks').filter((row) => String(row.status || TASK_OPEN) === TASK_OPEN);

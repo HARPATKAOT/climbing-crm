@@ -264,10 +264,14 @@ const mappers = {
       name: r.name || '',
       day: r.day,
       time: r.time || '',
-      duration: r.duration || 50,
+      // A NULL column means nobody set it. Reading it as 50 minutes or 12 seats
+      // made the guess indistinguishable from a real answer — and the write
+      // mapper below then saved the guess, so it became the record of truth.
+      // The price mappers a few lines down already got this right.
+      duration: r.duration ?? null,
       trainer: r.trainer || '',
       assistants: Array.isArray(r.assistants) ? r.assistants : [],
-      maxSlots: r.max_slots ?? 12,
+      maxSlots: r.max_slots ?? null,
       enrolled: 0,
       ageCategory: r.age_category || '',
       // Empty means a regular class open to anyone — see the migration.
@@ -289,7 +293,7 @@ const mappers = {
       name: o.name || '',
       day: o.day,
       time: o.time || '',
-      duration: o.duration || 50,
+      duration: numOrNull(o.duration),
       trainer: o.trainer || '',
       // trainer_id has a foreign key to the `employees` table — which is empty,
       // because employees are stored in `kv_collections` like the rest of the
@@ -304,7 +308,7 @@ const mappers = {
       assistants: Array.isArray(o.assistants)
         ? o.assistants.filter((id) => typeof id === 'string' && id)
         : [],
-      max_slots: o.maxSlots ?? 12,
+      max_slots: numOrNull(o.maxSlots),
       age_category: o.ageCategory || '',
       skill_level: emptyToNull(o.skillLevel),
       price_week: numOrNull(o.priceWeek) ?? 0,
@@ -753,7 +757,25 @@ export const supa = {
   },
 
   async getAppSetting(key) {
-    if (!client) return null;
+    const result = await supa.readAppSetting(key);
+    return result.ok ? result.value : null;
+  },
+
+  /**
+   * The same read, but able to say *why* it came back empty.
+   *
+   * `getAppSetting` answers `null` for "not configured", "database unreachable"
+   * and "not connected" alike, so a caller could only ever treat all three as
+   * "fall back to the built-in default" — and one transient network blip
+   * quoted a customer the hardcoded equipment price instead of the owner's.
+   * Anything that decides money should read this instead and refuse to guess.
+   *
+   * @returns {{ ok: boolean, value: any, configured: boolean, error?: string }}
+   */
+  async readAppSetting(key) {
+    if (!client) {
+      return { ok: false, value: null, configured: false, error: 'Supabase not configured' };
+    }
     const { data, error } = await client
       .from('app_settings')
       .select('value')
@@ -761,9 +783,10 @@ export const supa = {
       .maybeSingle();
     if (error) {
       console.error(`Supabase getAppSetting(${key}) failed:`, error.message);
-      return null;
+      return { ok: false, value: null, configured: false, error: error.message };
     }
-    return data?.value ?? null;
+    const value = data?.value ?? null;
+    return { ok: true, value, configured: value !== null };
   },
 
   async setAppSetting(key, value) {

@@ -117,6 +117,16 @@ const AGE_CATEGORIES = ["א'-ב'", "ג'-ד'", "ה'-ו'", 'חטיבה', 'חטיב
 // it trains twice a week and is for climbers who already train. מתקדמים is
 // still offered, carrying its label so the answer can say who it suits.
 // Values match `groups.skill_level` in the database.
+/**
+ * An empty capacity or duration field means "not set" — not zero, and not a
+ * number for the server to invent. `parseInt('')` is NaN, which serialises to
+ * null in JSON anyway; this says so on purpose.
+ */
+function numberOrNull(value) {
+  const n = parseFloat(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 const SKILL_LEVELS = ['מתחילים', 'מתקדמים', 'נבחרת'];
 const DEFAULT_SKILL_LEVEL = 'מתחילים';
 const TIME_OPTIONS = [
@@ -1068,14 +1078,27 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
   const [name,       setName]       = useState(group?.name || '');
   const [day,        setDay]        = useState(group?.day ?? 0);
   const [time,       setTime]       = useState(group?.time || '16:00');
-  const [duration,   setDuration]   = useState(group?.duration || 80);
+  /**
+   * A suggestion for a *new* group only. Editing an existing one shows what it
+   * actually holds, including a deliberate 0.
+   *
+   * These were `group?.priceWeek || 280`, and `||` cannot tell 0 from missing.
+   * A group that meets twice a week legitimately has no once-a-week price, so
+   * opening its dialog to change the trainer silently filled in 280 ₪ and
+   * saving wrote that back — a price nobody set, quoted to customers. It had
+   * already happened to "נבחרת בוגרת" by the time we found it.
+   */
+  const existing = !!group;
+  const orSuggest = (value, suggestion) => (existing ? (value ?? '') : suggestion);
+
+  const [duration,   setDuration]   = useState(orSuggest(group?.duration, 80));
   const [trainer,    setTrainer]    = useState(group?.trainer || '');
   const [assistants, setAssistants] = useState(() => normalizeAssistants(group?.assistants));
-  const [maxSlots,   setMaxSlots]   = useState(group?.maxSlots || 12);
+  const [maxSlots,   setMaxSlots]   = useState(orSuggest(group?.maxSlots, 12));
   const [ageCat,     setAgeCat]     = useState(group?.ageCategory || "ג'-ד'");
   const [skillLevel, setSkillLevel] = useState(group?.skillLevel || DEFAULT_SKILL_LEVEL);
-  const [priceWeek,  setPriceWeek]  = useState(group?.priceWeek || 280);
-  const [priceTwice, setPriceTwice] = useState(group?.priceTwice || 360);
+  const [priceWeek,  setPriceWeek]  = useState(orSuggest(group?.priceWeek, 280));
+  const [priceTwice, setPriceTwice] = useState(orSuggest(group?.priceTwice, 360));
   const [waParents,  setWaParents]  = useState(group?.waParents || '');
   const [waClimbers, setWaClimbers] = useState(group?.waClimbers || '');
   const [signupLinkWeek, setSignupLinkWeek] = useState(
@@ -1124,10 +1147,10 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
       name:        name.trim() || autoName,
       day:         parseInt(day),
       time,
-      duration:    parseInt(duration),
+      duration:    numberOrNull(duration),
       trainer:     trainer,
       assistants:  assistants.filter(id => id !== trainer),
-      maxSlots:    parseInt(maxSlots),
+      maxSlots:    numberOrNull(maxSlots),
       ageCategory: ageCat,
       skillLevel,
       priceWeek:   parseFloat(priceWeek) || 0,

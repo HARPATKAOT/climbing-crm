@@ -19,6 +19,7 @@ import {
   isStaffPhone,
   isHumanOutboundLog,
   withBotMark,
+  wantsExplicitHumanStaff,
 } from './whatsappBot.js';
 import { isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 import { db } from './db.js';
@@ -422,4 +423,23 @@ test('schedule helpers still work', () => {
     }),
     true
   );
+});
+
+test('a bare «אדם» is a noun, not a request for a person', () => {
+  // "יש אדם שאחראי על החוג?" was answered with a canned handoff, because the
+  // owner's keyword list carries «אדם» and it matched anywhere in a sentence.
+  const settings = {
+    // The live list, verbatim.
+    aiHandoffKeywords: 'אדם,נציג,תלונה,מנהל,דחוף,לדבר עם,ביטול,לבטל,החזר,זיכוי,חשבונית,פציעה,נפצע,כאב',
+  };
+  assert.equal(wantsExplicitHumanStaff('יש אדם שאחראי על החוג?', settings), false);
+  assert.equal(wantsExplicitHumanStaff('בן אדם אחראי שם?', settings), false);
+
+  // Everything that really is a request still reaches the team.
+  assert.equal(wantsExplicitHumanStaff('אפשר לדבר עם אדם?', settings), true);
+  assert.equal(wantsExplicitHumanStaff('אפשר נציג בבקשה', settings), true);
+  assert.equal(wantsExplicitHumanStaff('נציג', settings), true);
+  assert.equal(wantsExplicitHumanStaff('אני רוצה החזר', settings), true);
+  assert.equal(wantsExplicitHumanStaff('הילד נפצע באימון', settings), true);
+  assert.equal(wantsExplicitHumanStaff('3', settings), true);
 });

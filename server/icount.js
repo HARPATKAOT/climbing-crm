@@ -4,6 +4,8 @@
  * Body: application/x-www-form-urlencoded (not JSON)
  */
 
+import { VAT_RATE, chargeAmount, roundMoney } from './vat.js';
+
 const BASE_URL = 'https://api.icount.co.il/api/v3.php';
 
 function getToken() {
@@ -218,8 +220,12 @@ function buildDocLineFields(items) {
   return fields;
 }
 
-/** Israel standard VAT rate used by this account. */
-const DEFAULT_VAT_RATE = 0.18;
+/**
+ * The rate and the rounding both come from vat.js — a second copy of the VAT
+ * rate here is a second place to forget when the rate changes, and it has
+ * already drifted into a second copy of a bug.
+ */
+const DEFAULT_VAT_RATE = VAT_RATE;
 
 function lineItemsNetTotal(items) {
   return (items || []).reduce((sum, item) => {
@@ -229,9 +235,7 @@ function lineItemsNetTotal(items) {
   }, 0);
 }
 
-function roundMoney(n) {
-  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
-}
+
 
 /**
  * Create tax invoice + receipt (חשבונית מס קבלה)
@@ -270,8 +274,14 @@ export async function createInvRec({
   }
 
   const net = lineItemsNetTotal(items);
-  const paid =
-    Number(vattype) === 1 ? roundMoney(net * (1 + Number(vatRate) || DEFAULT_VAT_RATE)) : roundMoney(net);
+  // vattype 1 means the line prices are net, so VAT is added on top. This line
+  // used to read `net * (1 + Number(vatRate) || DEFAULT_VAT_RATE)`, where `+`
+  // binds tighter than `||` — an unreadable rate made the invoice total 18% of
+  // its face value. chargeAmount now owns that arithmetic, and rejects a rate
+  // it cannot read rather than inventing one.
+  const paid = Number(vattype) === 1
+    ? chargeAmount(net, false, vatRate)
+    : roundMoney(net);
 
   const method = String(paymentMethod || 'cash').toLowerCase();
   if (method === 'emv' || method === 'credit' || method === 'cc' || method === 'card') {

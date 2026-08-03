@@ -71,14 +71,25 @@ export function buildPassFromItem({
   let visitsTotal = null;
   let visitsRemaining = null;
 
+  // These ran as `|| 10` and `|| 30`, so a pricelist item missing its visit
+  // count minted a ten-visit card and a membership with no length became a
+  // month — an entitlement nobody configured, handed over after the customer
+  // had already paid. Refuse instead: the item needs fixing, and the sale can
+  // be redone in a minute.
   if (productType === PRODUCT_TYPES.PUNCH_CARD) {
-    visitsTotal = Number(item.visits_total) || 10;
+    visitsTotal = Number(item.visits_total);
+    if (!Number.isFinite(visitsTotal) || visitsTotal <= 0) {
+      throw new Error(`למוצר "${item.name || item.id}" לא הוגדר מספר כניסות — יש לעדכן במחירון`);
+    }
     visitsRemaining = visitsTotal;
     if (item.validity_days) {
       validUntil = addDays(validFrom, item.validity_days);
     }
   } else if (productType === PRODUCT_TYPES.TIME_MEMBERSHIP) {
-    const days = Number(item.duration_days) || 30;
+    const days = Number(item.duration_days);
+    if (!Number.isFinite(days) || days <= 0) {
+      throw new Error(`למוצר "${item.name || item.id}" לא הוגדר משך מנוי — יש לעדכן במחירון`);
+    }
     validUntil = addDays(validFrom, days);
   }
 

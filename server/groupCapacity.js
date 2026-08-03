@@ -20,31 +20,46 @@ export function countEnrolled(groupId, students = []) {
   return (students || []).filter((s) => countsTowardCapacity(s, groupId)).length;
 }
 
+/**
+ * The group's capacity, or `null` when nobody has set one.
+ *
+ * This used to answer 12 for an unset capacity, and that invented number was
+ * published as fact — "8 מקומות פנויים" on the public site and in WhatsApp,
+ * for a class whose real size nobody had recorded. A gym can recover from
+ * "we'll check how many places are left"; it cannot un-enrol a child it
+ * accepted into a class that was already full.
+ */
 export function maxSlotsOf(group) {
   const n = Number(group?.maxSlots);
-  return Number.isFinite(n) && n > 0 ? n : 12;
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/** Free places, or `null` when the capacity is unknown. */
 export function spotsLeft(group, students = []) {
   if (!group?.id) return 0;
-  return Math.max(0, maxSlotsOf(group) - countEnrolled(group.id, students));
+  const max = maxSlotsOf(group);
+  if (max === null) return null;
+  return Math.max(0, max - countEnrolled(group.id, students));
 }
 
+/** Unknown capacity is never "full" — we have no grounds to turn anyone away. */
 export function isGroupFull(group, students = []) {
-  return spotsLeft(group, students) <= 0;
+  const free = spotsLeft(group, students);
+  return free !== null && free <= 0;
 }
 
 export function enrichGroupsWithCapacity(groups = [], students = []) {
   return (groups || []).map((g) => {
     const enrolled = countEnrolled(g.id, students);
     const maxSlots = maxSlotsOf(g);
-    const free = Math.max(0, maxSlots - enrolled);
+    const free = maxSlots === null ? null : Math.max(0, maxSlots - enrolled);
     return {
       ...g,
       enrolled,
       maxSlots,
       freeSlots: free,
-      isFull: free <= 0,
+      isFull: free !== null && free <= 0,
+      capacityKnown: maxSlots !== null,
     };
   });
 }

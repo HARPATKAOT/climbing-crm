@@ -572,6 +572,52 @@ function redirectOnboarding(req, res) {
 app.get('/o', redirectOnboarding);
 app.get('/api/o', redirectOnboarding);
 
+/**
+ * The intake form for one trainee: `/f/<studentId>`.
+ *
+ * The long form is `/register?studentId=…`, and a query string at the end of a
+ * WhatsApp message is exactly what stops the link being tappable — there is a
+ * comment elsewhere in this file working around that by choosing the shortest
+ * possible parameter. A path segment has no such problem.
+ */
+function redirectIntakeForm(req, res) {
+  const studentId = String(req.params.studentId || '').trim();
+  if (!studentId) return res.status(400).send('חסר מזהה מתאמן');
+  return res.redirect(302, `${eventPublicBase()}/register?studentId=${encodeURIComponent(studentId)}`);
+}
+app.get('/f/:studentId', redirectIntakeForm);
+app.get('/api/f/:studentId', redirectIntakeForm);
+
+/** The same form keyed by phone, for a family with no trainee record yet. */
+function redirectIntakeByPhone(req, res) {
+  const phone = String(req.params.phone || '').replace(/\D/g, '');
+  if (!phone) return res.status(400).send('חסר טלפון');
+  return res.redirect(302, `${eventPublicBase()}/register?phone=${encodeURIComponent(phone)}`);
+}
+app.get('/fp/:phone', redirectIntakeByPhone);
+app.get('/api/fp/:phone', redirectIntakeByPhone);
+
+/**
+ * The intake form pointed at a group: `/g/<groupId>[/<phone>]`.
+ *
+ * The long form carried the class name as a query parameter, which arrived in
+ * WhatsApp as lines of percent-encoded Hebrew. The label is looked up here, so
+ * renaming a group no longer strands the links already sent for it.
+ */
+function redirectGroupIntake(req, res) {
+  const group = db.getOne('groups', String(req.params.groupId || '').trim());
+  if (!group) return res.status(404).send('הקבוצה לא נמצאה');
+  const params = new URLSearchParams();
+  params.set('interest', `${group.ageCategory || group.name || ''}`.trim());
+  const phone = String(req.params.phone || '').replace(/\D/g, '');
+  if (phone) params.set('phone', phone);
+  return res.redirect(302, `${eventPublicBase()}/onboard?${params.toString()}`);
+}
+app.get('/g/:groupId/:phone', redirectGroupIntake);
+app.get('/g/:groupId', redirectGroupIntake);
+app.get('/api/g/:groupId/:phone', redirectGroupIntake);
+app.get('/api/g/:groupId', redirectGroupIntake);
+
 app.use('/api', apiAuth);
 
 app.get('/api/auth/me', (req, res) => {
@@ -3151,6 +3197,10 @@ async function refreshStudentEquipmentCache() {
   }
 }
 
+/**
+ * Equipment settings for display. Falls back the way it always has.
+ * Anything that decides a charge must use `loadEquipmentSettingsForCharge`.
+ */
 async function loadEquipmentSettings() {
   let remote = null;
   try {
@@ -3160,6 +3210,35 @@ async function loadEquipmentSettings() {
   }
   const local = db.getSettings?.()?.equipment_settings;
   return normalizeEquipmentSettings(remote || local || DEFAULT_EQUIPMENT_SETTINGS);
+}
+
+/**
+ * The same settings, but refusing to invent prices.
+ *
+ * A transient database read failure used to be indistinguishable from "never
+ * configured", and both produced the built-in defaults — which is how a 280 ₪
+ * kit could become a 350 ₪ payment link. A checkout that cannot read the real
+ * prices must fail; the customer can try again in a minute, but a wrong charge
+ * has to be refunded.
+ *
+ * @throws when the prices cannot be established
+ */
+async function loadEquipmentSettingsForCharge() {
+  const read = await supa.readAppSetting('equipment_settings');
+  if (!read.ok) {
+    throw Object.assign(
+      new Error('לא הצלחנו לקרוא את מחירי הציוד כרגע — נסו שוב בעוד רגע'),
+      { status: 503 }
+    );
+  }
+  const stored = read.configured ? read.value : db.getSettings?.()?.equipment_settings;
+  if (!stored) {
+    throw Object.assign(
+      new Error('מחירי הציוד אינם מוגדרים במערכת — יש לפנות לצוות'),
+      { status: 503 }
+    );
+  }
+  return normalizeEquipmentSettings(stored);
 }
 
 async function saveEquipmentSettings(next) {
@@ -3798,7 +3877,9 @@ app.post('/api/public/equipment/:token/pay', publicFormRateLimit, async (req, re
     if (!student || !parent) return res.status(404).json({ error: 'הלקוח לא נמצא' });
 
     const items = ensureStudentEquipment({ db, student, persist: persistCore });
-    const settings = await loadEquipmentSettings();
+    // This request ends in a payment link, so the prices must be the real ones
+    // or none at all.
+    const settings = await loadEquipmentSettingsForCharge();
     const unpaidTypes = new Set(
       unpaidEquipmentItems(items).map((i) => i.item_type)
     );

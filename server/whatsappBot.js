@@ -303,14 +303,26 @@ export function textMatchesKeywords(text, keywords) {
 }
 
 /** Explicit request for a human / hard topics — not «בצוות» in an info question. */
+/** Words that only mean "get me a human" inside a request, never on their own. */
+const AMBIGUOUS_HUMAN_WORDS = new Set(['אדם', 'בן אדם']);
+
 export function wantsExplicitHumanStaff(text, settings = {}) {
   if (normalizeMenuChoice(text) === '3') return true;
   const t = String(text || '');
   if (/(?:לדבר עם|רוצה(?:\s+לדבר)?(?:\s+עם)?)\s*(?:את\s*)?(?:ה)?(?:צוות|נציג|אדם)/.test(t)) {
     return true;
   }
+  // The owner's keyword list carries «אדם», which appears in ordinary
+  // questions far more often than in requests for a person. The asking form is
+  // checked above; here the ambiguous words are left out so a plain question
+  // reaches the model.
   const s = mergeBotSettings(settings);
-  return textMatchesKeywords(t, s.aiHandoffKeywords);
+  const keywords = String(s.aiHandoffKeywords || '')
+    .split(',')
+    .map((k) => k.trim())
+    .filter((k) => k && !AMBIGUOUS_HUMAN_WORDS.has(k))
+    .join(',');
+  return textMatchesKeywords(t, keywords);
 }
 
 export function clipReply(text, maxChars = 700) {
@@ -343,7 +355,11 @@ export function normalizeMenuChoice(text) {
   if (/חוג|רישום|אימון|כית/.test(raw) && !/שע|מיקום|כתובת|מחיר|עלות|כסף|שקל/.test(raw)) return '1';
   if (/שע|מיקום|כתובת|פתוח|הגע/.test(raw)) return '2';
   // Explicit ask for a human — not «בצוות» inside an info question.
-  if (/(?:לדבר עם|רוצה(?:\s+לדבר)?(?:\s+עם)?)\s*(?:את\s*)?(?:ה)?(?:צוות|נציג|אדם)|(?:^|\s)(?:נציג|אדם)(?:\s|$|[?؟])/.test(raw)) {
+  // A bare «נציג» is a request for a person. A bare «אדם» is not — it is an
+  // ordinary Hebrew noun, and "יש אדם שאחראי על החוג?" was being answered with
+  // a handoff instead of an answer. «אדם» counts only in the asking form
+  // above ("לדבר עם אדם").
+  if (/(?:לדבר עם|רוצה(?:\s+לדבר)?(?:\s+עם)?)\s*(?:את\s*)?(?:ה)?(?:צוות|נציג|אדם)|(?:^|\s)נציג(?:\s|$|[?؟])/.test(raw)) {
     return '3';
   }
 

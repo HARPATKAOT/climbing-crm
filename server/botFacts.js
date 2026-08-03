@@ -9,7 +9,7 @@
  */
 
 import { upcomingOpeningHours, upcomingPublicActivities } from './publicSite.js';
-import { appPublicBase } from './publicLinks.js';
+import { appPublicBase, buildRedirectUrl } from './publicLinks.js';
 import {
   DEFAULT_EQUIPMENT_SETTINGS,
   EQUIPMENT_ITEM_LABELS,
@@ -155,10 +155,9 @@ export function formatOpeningHoursReply(db, { days = 14, maxDays = 7 } = {}) {
 
 // ─── אירועים ציבוריים + קישור הרשמה ──────────────────────────────────────────
 
+/** The public event page, short — `/ev` has existed all along, unused here. */
 export function eventPublicUrl(slug) {
-  const clean = String(slug || '').trim();
-  if (!clean) return '';
-  return `${appPublicBase()}/event/${encodeURIComponent(clean)}`;
+  return buildRedirectUrl('ev', slug);
 }
 
 export function eventDateLabel(activity) {
@@ -196,17 +195,27 @@ let equipmentCache = { value: null, at: 0 };
 const EQUIPMENT_TTL_MS = 5 * 60 * 1000;
 
 /** Equipment prices, same source the equipment screen reads. */
+/**
+ * Prices the bot may quote, or `null` when we cannot vouch for them.
+ *
+ * This used to swallow the read error and hand back the built-in defaults —
+ * and then cache them for five minutes, so a single blip meant five minutes of
+ * live conversations quoting a price nobody had set. A price we are unsure of
+ * is worse than no price: the caller can say "I'll check and come back", but
+ * it cannot un-quote a number the customer has already read.
+ */
 export async function loadEquipmentPrices({ fresh = false } = {}) {
   if (!fresh && equipmentCache.value && Date.now() - equipmentCache.at < EQUIPMENT_TTL_MS) {
     return equipmentCache.value;
   }
-  let remote = null;
-  try {
-    remote = await supa.getAppSetting('equipment_settings');
-  } catch {
-    remote = null;
+  const read = await supa.readAppSetting('equipment_settings').catch(() => ({ ok: false }));
+  // Never cache a failure: the next question deserves a fresh attempt.
+  if (!read.ok) return null;
+  if (!read.configured) {
+    equipmentCache = { value: null, at: Date.now() };
+    return null;
   }
-  const prices = normalizeEquipmentSettings(remote || DEFAULT_EQUIPMENT_SETTINGS).prices;
+  const prices = normalizeEquipmentSettings(read.value).prices;
   equipmentCache = { value: prices, at: Date.now() };
   return prices;
 }
@@ -285,10 +294,25 @@ export function buildPriceReply({ groups = [], equipmentPrices = null, enrichmen
 }
 
 /** Enrichment fee is a business fact the owner edits, not a CRM table. */
+/**
+ * The enrichment fee, in shekels. 0 means "not configured" — say nothing.
+ *
+ * It used to be scraped out of the free-text business facts with a regular
+ * expression, which is a price living inside prose. Rewording the line broke
+ * it silently and in both directions: "דמי העשרה: 1,100 ₪" came back as 0, and
+ * dropping the word "דמי" did too. A number belongs in a field.
+ *
+ * The prose is still read as a fallback, so nothing changes for an account
+ * that has not filled the field in yet.
+ */
 export function enrichmentFeeFromSettings(settings = {}) {
+  const field = Number(settings.aiEnrichmentFee);
+  if (Number.isFinite(field) && field >= 0) return field;
+
   const facts = String(settings.aiBusinessFacts || '');
-  const match = facts.match(/דמי\s*העשרה[^0-9]{0,20}(\d{2,5})/);
-  return match ? Number(match[1]) : 0;
+  // Thousands separators first: "1,100" must not be read as "100".
+  const match = facts.match(/דמי\s*העשרה[^0-9]{0,20}(\d{1,3}(?:,\d{3})+|\d{2,5})/);
+  return match ? Number(String(match[1]).replace(/,/g, '')) : 0;
 }
 
 // ─── קישורים לקבוצה ──────────────────────────────────────────────────────────
@@ -311,7 +335,20 @@ function groupLabel(group) {
 }
 
 /** Registration page for one class: the onboarding form with the class prefilled. */
+/**
+ * The general intake form, pointed at a group.
+ *
+ * The class name used to travel in the query string, so the address arrived in
+ * WhatsApp as several lines of percent-encoded Hebrew — unreadable, and two of
+ * them indistinguishable. The group id says the same thing in eight characters
+ * and lets the destination change without breaking links already sent.
+ */
 export function groupSignupUrl(group, { phone = '' } = {}) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (group?.id) return buildRedirectUrl('g', group.id, digits);
+  // A group with no id cannot be looked up at click time, so the label still
+  // travels in the query string — losing which class it was would be worse
+  // than a long address.
   const params = new URLSearchParams();
   if (group) params.set('interest', groupLabel(group));
   if (phone) params.set('phone', String(phone));
