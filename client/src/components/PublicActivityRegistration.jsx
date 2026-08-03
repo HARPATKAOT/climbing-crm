@@ -15,6 +15,13 @@ import {
   SignaturePad,
 } from './publicFormKit.jsx';
 import { checkKnownChild, linkFieldsFor } from '../utils/childCheck.js';
+import {
+  blankAnswers,
+  isScreeningQuestion,
+  questionLabel,
+  questionsForSigner,
+  unansweredQuestions,
+} from '../utils/healthQuestions.js';
 import { joinParentName } from '../utils/parentName.js';
 
 const emptyParticipant = (questions = [], extras = {}) => ({
@@ -23,7 +30,8 @@ const emptyParticipant = (questions = [], extras = {}) => ({
   id: null,
   name: '',
   birthDate: '',
-  answers: Object.fromEntries(questions.map((question) => [question.id, false])),
+  answers: blankAnswers(questions),
+  answerNotes: {},
   waiverAccepted: false,
   signature: '',
   reuse_health: false,
@@ -181,10 +189,18 @@ export default function PublicActivityRegistration() {
     });
   };
 
+  /**
+   * `patch` may be a function of the participant it is patching, which is the
+   * only safe form when several updates land in one render — answering a row of
+   * health questions quickly, where a patch built from a captured copy keeps
+   * overwriting the same stale object and only the last answer survives.
+   */
   const updateParticipant = (key, patch) => {
-    setParticipants((current) => current.map((participant) =>
-      participant.key === key ? { ...participant, ...patch } : participant
-    ));
+    setParticipants((current) => current.map((participant) => (
+      participant.key === key
+        ? { ...participant, ...(typeof patch === 'function' ? patch(participant) : patch) }
+        : participant
+    )));
   };
 
   const patchHealthParticipant = (participant, patch) => {
@@ -193,10 +209,13 @@ export default function PublicActivityRegistration() {
       setParticipants((current) => {
         const mirrorKey = participant.key;
         const existing = current.find((item) => item.key === mirrorKey);
+        const applied = (base) => (typeof patch === 'function' ? patch(base) : patch);
         if (existing) {
-          return current.map((item) => (item.key === mirrorKey ? { ...item, ...patch } : item));
+          return current.map((item) => (
+            item.key === mirrorKey ? { ...item, ...applied(item) } : item
+          ));
         }
-        return [...current, { ...participant, ...patch }];
+        return [...current, { ...participant, ...applied(participant) }];
       });
       return;
     }
@@ -322,9 +341,24 @@ export default function PublicActivityRegistration() {
     }
     if (step === 3) {
       const current = resolvedHealthParticipant(currentParticipant);
-      const required = questions.filter((question) => question.requireYes);
-      if (required.some((question) => !current.answers?.[question.id])) {
-        setError('יש לסמן את כל סעיפי ההצהרה');
+      // A screening question is unanswered until it is a real yes or no, so a
+      // medical question nobody touched can never be filed as "no".
+      const asked = questionsForSigner(questions, { isAdultSelf: current.type === 'adult' });
+      const missing = unansweredQuestions(asked, current.answers || {});
+      if (missing.length) {
+        setError(
+          missing.some(isScreeningQuestion)
+            ? 'יש לענות כן או לא על כל שאלות הבריאות'
+            : 'יש לסמן את כל סעיפי ההצהרה והבטיחות'
+        );
+        return;
+      }
+      // A condition nobody described is a condition the instructor cannot act on.
+      const undetailed = asked.find((question) => isScreeningQuestion(question)
+        && current.answers?.[question.id] === true
+        && !String(current.answerNotes?.[question.id] || '').trim());
+      if (undetailed) {
+        setError(`סימנתם „כן” על „${questionLabel(undetailed)}” — יש לפרט בשדה שמתחת לשאלה`);
         return;
       }
       if (!current.waiverAccepted || !current.signature) {
@@ -345,9 +379,21 @@ export default function PublicActivityRegistration() {
     try {
       const payloadParticipants = allParticipants.map((participant) => {
         const merged = resolvedHealthParticipant(participant);
-        const { key: _key, health_valid: _valid, ...rest } = merged;
+        const { key: _key, health_valid: _valid, answerNotes, ...rest } = merged;
+        // The per-question detail becomes the one healthNotes string the
+        // declaration, the PDF and the personal file all read — each line still
+        // saying which question it answers.
+        const healthNotes = (activity?.form_template?.healthQuestions || [])
+          .filter((q) => isScreeningQuestion(q) && merged.answers?.[q.id] === true)
+          .map((q) => {
+            const note = String(answerNotes?.[q.id] || '').trim();
+            return note ? `${questionLabel(q)} — ${note}` : '';
+          })
+          .filter(Boolean)
+          .join('\n');
         return {
           ...rest,
+          ...(healthNotes ? { healthNotes } : {}),
           reuse_health: !!rest.reuse_health,
         };
       });
@@ -628,23 +674,82 @@ export default function PublicActivityRegistration() {
         {step === 3 && healthCurrent && (
           <section key={healthCurrent.key}>
             <h2>הצהרה עבור {healthCurrent.name}</h2>
-            {(activity.form_template?.healthQuestions || []).map((question) => (
-              <label className="event-question" key={question.id}>
-                <input
-                  type="checkbox"
-                  checked={!!healthCurrent.answers?.[question.id]}
-                  onChange={(event) => {
-                    patchHealthParticipant(healthCurrent, {
-                      answers: {
-                        ...healthCurrent.answers,
-                        [question.id]: event.target.checked,
-                      },
-                    });
-                  }}
-                />
-                <span>{question.label}</span>
-              </label>
-            ))}
+            {(() => {
+              // The same two kinds the registration form distinguishes. Rendered
+              // as one list of tick boxes, a medical question had no way to be
+              // answered "no" — an untouched box read the same as "nobody asked",
+              // and the safety undertakings were lost among the questions.
+              const asked = questionsForSigner(
+                activity.form_template?.healthQuestions || [],
+                { isAdultSelf: healthCurrent.type === 'adult' }
+              );
+              const screening = asked.filter(isScreeningQuestion);
+              const confirmations = asked.filter((q) => !isScreeningQuestion(q));
+              const answers = healthCurrent.answers || {};
+              const setAnswer = (id, value) => patchHealthParticipant(healthCurrent, (base) => ({
+                answers: { ...(base.answers || answers), [id]: value },
+              }));
+              return (
+                <>
+                  {screening.length > 0 && (
+                    <>
+                      <p className="event-hint">
+                        תשובה „כן” לא מונעת השתתפות. היא רק מאפשרת לצוות לדעת ולהיערך.
+                      </p>
+                      {screening.map((question) => (
+                        <div className="event-screening" key={question.id}>
+                          <div className="event-screening-label">{questionLabel(question)}</div>
+                          <div className="event-screening-answers">
+                            {[['כן', true], ['לא', false]].map(([text, value]) => (
+                              <button
+                                key={text}
+                                type="button"
+                                className={answers[question.id] === value ? 'is-active' : ''}
+                                onClick={() => setAnswer(question.id, value)}
+                              >
+                                {text}
+                              </button>
+                            ))}
+                          </div>
+                          {answers[question.id] === true && (
+                            <div className="event-field" style={{ marginTop: 10 }}>
+                              <label className="event-label">פרטו בבקשה *</label>
+                              <textarea
+                                rows={2}
+                                value={healthCurrent.answerNotes?.[question.id] || ''}
+                                onChange={(e) => patchHealthParticipant(healthCurrent, (base) => ({
+                                  answerNotes: {
+                                    ...(base.answerNotes || healthCurrent.answerNotes || {}),
+                                    [question.id]: e.target.value,
+                                  },
+                                }))}
+                                placeholder="מה המצב, ממתי, והאם נקבעה הגבלה"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </>
+                  )}
+                  {confirmations.length > 0 && (
+                    <>
+                      <h3 className="event-subheading">הצהרה ובטיחות</h3>
+                      <p className="event-hint">יש לסמן את כל הסעיפים לאחר שקראתם אותם.</p>
+                      {confirmations.map((question) => (
+                        <label className="event-check" key={question.id}>
+                          <input
+                            type="checkbox"
+                            checked={answers[question.id] === true}
+                            onChange={(event) => setAnswer(question.id, event.target.checked)}
+                          />
+                          <span>{questionLabel(question)}</span>
+                        </label>
+                      ))}
+                    </>
+                  )}
+                </>
+              );
+            })()}
             <div className="event-waiver">{activity.form_template?.waiverText}</div>
             <label className="event-check">
               <input
