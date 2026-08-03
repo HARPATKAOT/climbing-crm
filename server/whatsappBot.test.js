@@ -18,6 +18,7 @@ import {
   applyBusinessBrand,
   isStaffPhone,
   isHumanOutboundLog,
+  shouldDeferToHumanStaff,
   withBotMark,
   wantsExplicitHumanStaff,
 } from './whatsappBot.js';
@@ -146,6 +147,39 @@ test('every bot reply is marked, and the mark never stacks', () => {
   // Nothing to mark stays nothing, so an empty reply is still not sent.
   assert.equal(withBotMark(''), '');
   assert.equal(withBotMark(null), '');
+});
+
+test('a staff message stops holding the thread once the pause would have ended', () => {
+  // The log-based check exists because a timed pause is lost on restart — it
+  // rebuilds that pause from the message log. It was rebuilding it without the
+  // clock, so one "היי" from a staff member silenced the bot for that customer
+  // for good: thirty-six hours later a parent asked about a class for their
+  // four-year-old and got nothing back.
+  const phone = '972500000001';
+  const rows = [];
+  const at = (minutesAgo) => new Date(Date.now() - minutesAgo * 60000).toISOString();
+
+  const original = db.get;
+  db.get = (table) => (table === 'whatsapp_logs' ? rows : original.call(db, table));
+  try {
+    rows.length = 0;
+    rows.push({ phone, channel: 'whatsapp', direction: 'outbound', source: 'crm', created_at: at(30) });
+    assert.equal(shouldDeferToHumanStaff(phone, { withinMinutes: 120 }), true, 'recent staff reply holds');
+
+    rows.length = 0;
+    rows.push({ phone, channel: 'whatsapp', direction: 'outbound', source: 'crm', created_at: at(2160) });
+    assert.equal(shouldDeferToHumanStaff(phone, { withinMinutes: 120 }), false, '36 hours old must not hold');
+
+    // No window given keeps the old behaviour, for any caller that omits it.
+    assert.equal(shouldDeferToHumanStaff(phone, {}), true);
+
+    // The bot's own reply never holds the thread, however recent.
+    rows.length = 0;
+    rows.push({ phone, channel: 'whatsapp', direction: 'outbound', source: 'ai', is_ai: true, created_at: at(1) });
+    assert.equal(shouldDeferToHumanStaff(phone, { withinMinutes: 120 }), false);
+  } finally {
+    db.get = original;
+  }
 });
 
 test('human outbound logs are detected for staff-thread deferral', () => {

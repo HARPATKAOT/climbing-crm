@@ -494,9 +494,16 @@ export function isHumanOutboundLog(log) {
  * human thread — the bot must not jump in (even if the timed pause was lost
  * after a server restart).
  */
-export function shouldDeferToHumanStaff(phone, { resumedAt = null } = {}) {
+export function shouldDeferToHumanStaff(phone, { resumedAt = null, withinMinutes = null } = {}) {
   const normalized = normalizeWaPhone(phone) || phone;
   if (!normalized) return false;
+  // This check exists because a timed pause is lost when the server restarts —
+  // it reconstructs that pause from the message log. It was reconstructing it
+  // without the clock, so a single "היי" from a staff member silenced the bot
+  // for that customer permanently: thirty-six hours later a parent asked about
+  // a class for their four-year-old and got nothing. A human holds the thread
+  // for as long as the pause lasts, and no longer.
+  const holdMs = Math.max(0, Number(withinMinutes) || 0) * 60 * 1000;
   // "Bring the bot back" had nothing to clear: the signal is the message log,
   // not a flag, so the button cleared a pause that was not there and the next
   // message was blocked by the same staff row. Anything before the resume no
@@ -510,8 +517,10 @@ export function shouldDeferToHumanStaff(phone, { resumedAt = null } = {}) {
   for (const log of logs) {
     if (log.direction === 'inbound') continue;
     if (log.direction !== 'outbound') continue;
-    if (resumedTs && new Date(log.created_at || 0).getTime() <= resumedTs) return false;
-    return isHumanOutboundLog(log);
+    const at = new Date(log.created_at || 0).getTime();
+    if (resumedTs && at <= resumedTs) return false;
+    if (!isHumanOutboundLog(log)) return false;
+    return holdMs ? Date.now() - at < holdMs : true;
   }
   return false;
 }
@@ -554,7 +563,10 @@ export function describeBotState(parent, settings = {}, now = new Date()) {
   // pause row behind it — so the card said "בוט פעיל" while the bot was in fact
   // silent. A state nobody can see is a state nobody can fix: the badge has to
   // report what the gate will actually do on the next message.
-  if (s.aiPauseOnHumanReply !== false && shouldDeferToHumanStaff(parent?.phone || '', { resumedAt: parent?.bot_resumed_at })) {
+  if (s.aiPauseOnHumanReply !== false && shouldDeferToHumanStaff(parent?.phone || '', {
+    resumedAt: parent?.bot_resumed_at,
+    withinMinutes: s.aiPauseMinutesAfterHuman,
+  })) {
     return {
       status: 'staff_thread',
       source: 'staff',
@@ -1149,7 +1161,10 @@ export function decideBotGate(settings, parent, students, text, { isSimulator = 
 
   // Staff already owns this thread (last outbound was human). Timed pause can
   // vanish on restart; the message log is the durable signal.
-  if (!isSimulator && s.aiPauseOnHumanReply !== false && shouldDeferToHumanStaff(parent?.phone || '', { resumedAt: parent?.bot_resumed_at })) {
+  if (!isSimulator && s.aiPauseOnHumanReply !== false && shouldDeferToHumanStaff(parent?.phone || '', {
+    resumedAt: parent?.bot_resumed_at,
+    withinMinutes: s.aiPauseMinutesAfterHuman,
+  })) {
     return { action: 'silence', reason: 'human_thread' };
   }
 
