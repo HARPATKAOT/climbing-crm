@@ -3491,7 +3491,6 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                       groups={groups}
                       selectedIds={editGroupIds}
                       disabled={savingGroup}
-                      maxHeight={220}
                       onToggle={(id) => {
                         setEditGroupIds((prev) => (
                           prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
@@ -4754,7 +4753,6 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     <GroupPickerCards
                       groups={groups}
                       selectedIds={editGroupIds}
-                      maxHeight={200}
                       onToggle={(id) => {
                         setEditGroupIds((prev) => (
                           prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
