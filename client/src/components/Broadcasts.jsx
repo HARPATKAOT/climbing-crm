@@ -54,6 +54,11 @@ export default function Broadcasts({ parents, students, groups = [] }) {
   const [activeTab, setActiveTab] = useState(
     location.state?.broadcastTab || 'compose'
   ); // compose | templates | saved | campaigns | history | settings
+  // The bot page held four unrelated things stacked in one column — settings,
+  // a sandbox, the learning queue and the journal — so the capability list was
+  // squeezed into half a column while the sandbox took the other half. Each is
+  // its own job, so each gets its own tab and the full width.
+  const [botTab, setBotTab] = useState('settings'); // settings | sandbox | learning | journal
   
   // Compose / Send State
   const [lists, setLists] = useState(DEFAULT_LISTS);
@@ -871,8 +876,26 @@ export default function Broadcasts({ parents, students, groups = [] }) {
 
       {/* SETTINGS & AI WORKBENCH */}
       {activeTab === 'settings' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-        <div className="grid-2" style={{ gap: 20, alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 4 }}>
+          {[
+            { key: 'settings', label: 'הגדרות הבוט' },
+            { key: 'sandbox', label: 'ארגז חול' },
+            { key: 'learning', label: 'אימון ולמידה' },
+            { key: 'journal', label: 'יומן פעולות' },
+          ].map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              className={`btn btn-sm ${botTab === t.key ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => setBotTab(t.key)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        {botTab === 'settings' && (
+          <>
           {/* Bot training settings */}
           <div className="card card-p">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
@@ -900,7 +923,11 @@ export default function Broadcasts({ parents, students, groups = [] }) {
               </button>
             </form>
           </div>
+          </>
+        )}
 
+        {botTab === 'sandbox' && (
+          <>
           {/* AI Testing Workbench Playground */}
           <div className="card card-p" style={{ border: '1px solid rgba(99,102,241,0.25)', background: 'linear-gradient(135deg, rgba(99,102,241,0.02) 0%, rgba(168,85,247,0.02) 100%)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -1005,17 +1032,21 @@ export default function Broadcasts({ parents, students, groups = [] }) {
               </button>
             </div>
           </div>
-        </div>
-        <BotLearningPanel />
+          </>
+        )}
 
-        <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 14, marginTop: 14 }}>
-          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>יומן הפעולות של הבוט</div>
-          <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.6 }}>
-            כל מה שהבוט שינה וכל מה שהוא אמר, לפי סדר. „פעולות” הן שינויים
-            במערכת, „הודעות” הן מה שנשלח ללקוח.
+        {botTab === 'learning' && <BotLearningPanel />}
+
+        {botTab === 'journal' && (
+          <div className="card card-p">
+            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>יומן הפעולות של הבוט</div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.6 }}>
+              כל מה שהבוט שינה וכל מה שהוא אמר, לפי סדר. „פעולות” הן שינויים
+              במערכת, „הודעות” הן מה שנשלח ללקוח.
+            </div>
+            <BotActivityPanel />
           </div>
-          <BotActivityPanel />
-        </div>
+        )}
         </div>
       )}
     </div>
