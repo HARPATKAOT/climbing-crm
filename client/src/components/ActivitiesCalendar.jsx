@@ -24,7 +24,7 @@ import { activityIcon, activityTypeIcon } from '../utils/activityIcons.js';
 import {
   CALENDAR_DISPLAY_FIELDS, loadDisplayFields, saveDisplayFields,
   setSelectedDisplayFields, setActivityStaffNames, activityDisplayLines,
-  activityStaffNames,
+  activityStaffNames, activityStaffEntries,
 } from '../utils/calendarDisplayFields.js';
 import AppSelect from './AppSelect.jsx';
 
@@ -3527,6 +3527,20 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     visibleRangeRef.current = visibleRange;
   }, [visibleRange]);
 
+  /**
+   * הטווח שממנו נמשכים השיבוצים. ברשימה אין „חודש שמוצג” — היא מציגה את כל
+   * האירועים של הסינון, ולכן הטווח נגזר מהתאריך הראשון והאחרון שבה.
+   */
+  const staffRange = useMemo(() => {
+    if (viewMode !== 'list') return visibleRange;
+    const dates = listItems
+      .map((item) => String(item.date || '').slice(0, 10))
+      .filter(Boolean)
+      .sort();
+    if (!dates.length) return visibleRange;
+    return { from: dates[0], to: dates[dates.length - 1] };
+  }, [viewMode, visibleRange, listItems]);
+
   const overlayIdsKey = (googleStatus?.overlayCalendarIds || []).join('|');
 
   const loadOverlayEvents = useCallback(async (from, to) => {
@@ -3557,13 +3571,13 @@ export default function ActivitiesCalendar({ isOwner = false }) {
    * הפתיחה נגזר מאותו מידע.
    */
   useEffect(() => {
-    if (!visibleRange.from) {
+    if (!staffRange.from) {
       setActivityStaffNames(new Map());
       setStaffNamesVersion((v) => v + 1);
       return undefined;
     }
     let cancelled = false;
-    const qs = `from=${visibleRange.from}&to=${visibleRange.to}`;
+    const qs = `from=${staffRange.from}&to=${staffRange.to}`;
     Promise.all([
       fetch(`/api/work-assignments?${qs}`).then((r) => (r.ok ? r.json() : [])),
       fetch('/api/employees').then((r) => (r.ok ? r.json() : [])),
@@ -3579,7 +3593,8 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           const name = nameById.get(row.employee_id);
           if (!name) continue;
           const list = map.get(row.activity_id) || [];
-          if (!list.includes(name)) list.push(name);
+          if (list.some((e) => e.name === name)) continue;
+          list.push({ name, role: row.role || workTypeRole(row.work_type) || '' });
           map.set(row.activity_id, list);
         }
         setActivityStaffNames(map);
@@ -3587,7 +3602,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [visibleRange.from, visibleRange.to, staffNamesTick]);
+  }, [staffRange.from, staffRange.to, staffNamesTick]);
 
   const monthLabel = `${HEB_MONTHS[cursor.getMonth()]} ${cursor.getFullYear()}`;
 
@@ -4763,30 +4778,48 @@ export default function ActivitiesCalendar({ isOwner = false }) {
                   }}>
                     {formatListDateRange(item)}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                    <RowIcon
-                      size={15}
-                      strokeWidth={2.2}
-                      style={{ color: staffIconColor(item) || meta.color, flexShrink: 0 }}
-                      aria-hidden="true"
-                    />
-                    <span style={{
-                      fontWeight: 700, color: 'var(--text-1)', overflow: 'hidden',
-                      textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}>
-                      {item.name || 'ללא שם'}
-                    </span>
-                    {/* כל האירועים חולקים צבע אחד, אז התגית היא מה שמבדיל בין
-                        יום הולדת לקבוצת בית ספר במבט על הרשימה. */}
-                    {isEventType(item.type) && eventKindLabel(activityEventKind(item)) && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                      <RowIcon
+                        size={15}
+                        strokeWidth={2.2}
+                        style={{ color: staffIconColor(item) || meta.color, flexShrink: 0 }}
+                        aria-hidden="true"
+                      />
                       <span style={{
-                        flexShrink: 0, fontSize: 10, fontWeight: 700, padding: '2px 7px',
-                        borderRadius: 999, color: meta.color, background: meta.bg,
-                        border: `1px solid ${meta.color}44`,
+                        fontWeight: 700, color: 'var(--text-1)', overflow: 'hidden',
+                        textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                       }}>
-                        {eventKindLabel(activityEventKind(item))}
+                        {item.name || 'ללא שם'}
                       </span>
-                    )}
+                      {/* כל האירועים חולקים צבע אחד, אז התגית היא מה שמבדיל בין
+                          יום הולדת לקבוצת בית ספר במבט על הרשימה. */}
+                      {isEventType(item.type) && eventKindLabel(activityEventKind(item)) && (
+                        <span style={{
+                          flexShrink: 0, fontSize: 10, fontWeight: 700, padding: '2px 7px',
+                          borderRadius: 999, color: meta.color, background: meta.bg,
+                          border: `1px solid ${meta.color}44`,
+                        }}>
+                          {eventKindLabel(activityEventKind(item))}
+                        </span>
+                      )}
+                    </div>
+                    {/* ברשימה יש רוחב לשורה לכל עובד, אז מופיע גם התפקיד — בצ'יפ
+                        הצר ביומן נשארים השמות בלבד. */}
+                    {displayFields.includes('staff') && activityStaffEntries(item.id).map((staff) => (
+                      <div
+                        key={`${item.id}-${staff.name}`}
+                        style={{
+                          fontSize: 11,
+                          color: 'var(--text-3)',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {staff.role ? `${staff.name} — ${staff.role}` : staff.name}
+                      </div>
+                    ))}
                   </div>
                   <div style={{
                     fontSize: 12, color: 'var(--text-3)', overflow: 'hidden',

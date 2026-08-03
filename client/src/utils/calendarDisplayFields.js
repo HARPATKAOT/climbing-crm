@@ -48,15 +48,21 @@ export function selectedDisplayFields() {
   return selected;
 }
 
-/** מזהה אירוע → שמות העובדים המשובצים אליו. */
+/** מזהה אירוע → העובדים המשובצים אליו, כל אחד עם התפקיד שלו באירוע. */
 let staffNames = new Map();
 
 export function setActivityStaffNames(map) {
   staffNames = map instanceof Map ? map : new Map();
 }
 
-export function activityStaffNames(activityId) {
+/** השיבוצים המלאים — `{ name, role }` לכל עובד. */
+export function activityStaffEntries(activityId) {
   return staffNames.get(activityId) || [];
+}
+
+/** רק השמות, לצ'יפ הצר ביומן ולצביעת האייקון. */
+export function activityStaffNames(activityId) {
+  return activityStaffEntries(activityId).map((e) => e.name);
 }
 
 /**
