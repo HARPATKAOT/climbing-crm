@@ -583,6 +583,13 @@ export function buildCustomerTools({
     phone: parent?.phone || phone || '',
   });
 
+  /**
+   * Has anyone in this family already completed the intake form? If so, that
+   * form is not a link to send them — it is the thing they just did.
+   */
+  const familyHasDeclaredChild = () => (parent ? studentsForParent(parent) : [])
+    .some((s) => findLatestValidDeclaration(db, { studentId: s.id }));
+
   // Named so one tool can build on another — the registration pack reuses the
   // equipment link instead of repeating the lookup.
   const tools = {
@@ -844,8 +851,19 @@ export function buildCustomerTools({
           שעה: group.time || '',
           קישור_פעם_בשבוע: week,
           קישור_פעמיים_בשבוע: twice,
-          // No group-specific link on file: the general intake form still works.
-          קישור_כללי: week || twice ? '' : groupSignupUrl(group, { phone }),
+          // The general intake form is the fallback only for a family that has
+          // not filled it. A parent who just signed the declaration and was
+          // told "now complete the registration" was handed back the very form
+          // they had finished a minute earlier — it looked like the bot had not
+          // noticed, and there was nothing new to fill in.
+          קישור_כללי: (week || twice || familyHasDeclaredChild())
+            ? ''
+            : groupSignupUrl(group, { phone }),
+          ...(week || twice || !familyHasDeclaredChild() ? {} : {
+            הערה: 'לקבוצה הזו אין קישור הרשמה של המתנ״ס במערכת, והלקוח כבר '
+              + 'מילא את טופס ההצטרפות. אין קישור לשלוח — יש לומר שהמקום נשמר '
+              + 'ושהצוות משלים את ההרשמה מול המתנ״ס ומעדכן.',
+          }),
         }],
       };
     },
@@ -1187,14 +1205,21 @@ export function buildCustomerTools({
       };
 
       const picked = pickSingleGroup({ grade, band, day, time });
+      // Same rule as getSignupLink: the intake form is not a link to send back
+      // to a family that has already filled it.
+      const groupLink = picked.error
+        ? ''
+        : (picked.group.signupLinkWeek || picked.group.signupLinkTwice
+          || (familyHasDeclaredChild() ? '' : groupSignupUrl(picked.group, { phone })));
       pack.שלב_2_הרשמה_לקבוצה = picked.error
         ? { מצב: 'צריך לבחור קבוצה', הערה: picked.error, ...(picked.קבוצות_אפשריות ? { קבוצות_אפשריות: picked.קבוצות_אפשריות } : {}) }
-        : {
-          קישור: picked.group.signupLinkWeek
-            || picked.group.signupLinkTwice
-            || groupSignupUrl(picked.group, { phone }),
-          הסבר: 'ההרשמה עצמה נעשית בטופס הזה, והאישור מגיע אחרי כמה ימים',
-        };
+        : (groupLink
+          ? { קישור: groupLink, הסבר: 'ההרשמה עצמה נעשית בטופס הזה, והאישור מגיע אחרי כמה ימים' }
+          : {
+            מצב: 'אין קישור הרשמה לקבוצה הזו',
+            הערה: 'הצוות משלים את ההרשמה מול המתנ״ס. אין קישור לשלוח — אין '
+              + 'לשלוח את טופס ההצטרפות שוב, הלקוח כבר מילא אותו.',
+          });
 
       const equipment = await tools.getEquipmentPaymentLink({ childName });
       pack.שלב_3_תשלום_ציוד = equipment.קישור
