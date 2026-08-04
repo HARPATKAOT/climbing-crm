@@ -12,6 +12,7 @@ const PUBLIC_API_ROUTES = [
   /^\/google-calendar\/webhook$/,
   /^\/google-calendar\/oauth\/callback$/,
   /^\/google-calendar\/sync-due$/,
+  /^\/google-contacts\/oauth\/callback$/,
 ];
 
 const TEAM_RULES = [

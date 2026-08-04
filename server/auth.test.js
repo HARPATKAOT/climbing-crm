@@ -17,6 +17,7 @@ test('public API contains forms and signed webhook entrypoints only', () => {
   assert.equal(isPublicApiPath('/api/automations/run-scheduled'), true);
   assert.equal(isPublicApiPath('/api/google-calendar/webhook'), true);
   assert.equal(isPublicApiPath('/api/google-calendar/oauth/callback'), true);
+  assert.equal(isPublicApiPath('/api/google-contacts/oauth/callback'), true);
   assert.equal(isPublicApiPath('/api/parents'), false);
   assert.equal(isPublicApiPath('/api/payments'), false);
 });
