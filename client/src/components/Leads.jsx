@@ -3416,28 +3416,34 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                       className={`badge ${kind.badge}`}
                                       title={doc.fileName || kind.label}
                                       style={{
-                                        fontSize: 10, flexShrink: 0,
-                                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                                        height: 32, padding: '0 10px', boxSizing: 'border-box',
+                                        fontSize: 12, lineHeight: 1, flexShrink: 0,
+                                        display: 'inline-flex', alignItems: 'center', gap: 5,
                                       }}
                                     >
-                                      <kind.Icon size={11} style={{ flexShrink: 0 }} />
+                                      <kind.Icon size={13} style={{ flexShrink: 0 }} />
                                       {kind.label}
                                     </span>
                                   ) : (
                                     <span
                                       title={doc.fileName || title}
                                       style={{
-                                        fontSize: 12, fontWeight: 600, color: 'var(--text-1)',
-                                        whiteSpace: 'nowrap', flexShrink: 0,
+                                        height: 32, fontSize: 12, fontWeight: 600, lineHeight: 1,
+                                        color: 'var(--text-1)', whiteSpace: 'nowrap', flexShrink: 0,
+                                        display: 'inline-flex', alignItems: 'center',
                                       }}
                                     >
                                       {title}
                                     </span>
                                   )}
                                   {healthRow && healthExpired && (
-                                    <span className="badge badge-amber" style={{ fontSize: 10, flexShrink: 0 }}>פג תוקף</span>
+                                    <span className="badge badge-amber" style={{ height: 32, fontSize: 11, lineHeight: 1, flexShrink: 0 }}>פג תוקף</span>
                                   )}
-                                  <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-2)', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                                  <span style={{
+                                    height: 32, fontSize: 12, fontWeight: 500, lineHeight: 1,
+                                    color: 'var(--text-2)', whiteSpace: 'nowrap', flexShrink: 0,
+                                    display: 'inline-flex', alignItems: 'center',
+                                  }}>
                                     {stamp
                                       ? `${stamp.toLocaleDateString('he-IL')} · ${stamp.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`
                                       : ''}
@@ -3446,17 +3452,25 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                     <button
                                       type="button"
                                       className="btn btn-primary btn-xs"
-                                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                                      style={{
+                                        height: 32, padding: '0 10px', boxSizing: 'border-box',
+                                        display: 'inline-flex', alignItems: 'center', gap: 5,
+                                        fontSize: 12, lineHeight: 1,
+                                      }}
                                       title="הורדת הקובץ"
                                       disabled={busy || downloadingPdf || (doc.isVirtual && !(doc.virtualData || healthDecl))}
                                       onClick={() => handleDownloadDoc(doc)}
                                     >
-                                      <Download size={12} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
+                                      <Download size={13} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
                                     </button>
                                     <button
                                       type="button"
                                       className="btn btn-ghost btn-xs"
-                                      style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--red, #F87171)' }}
+                                      style={{
+                                        width: 32, height: 32, padding: 0, boxSizing: 'border-box',
+                                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                        color: 'var(--red, #F87171)',
+                                      }}
                                       title={healthRow ? `מחיקת ${FORM_SHORT} מהתיק` : 'מחיקת המסמך מהתיק'}
                                       disabled={busy || !!deletingDocId}
                                       onClick={() => {
@@ -3464,7 +3478,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                         setPendingDocDelete({ doc, healthRow });
                                       }}
                                     >
-                                      <Trash2 size={12} />
+                                      <Trash2 size={13} />
                                     </button>
                                   </div>
                                 </div>
