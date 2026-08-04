@@ -131,6 +131,13 @@ export const STAFF_ALERT_KINDS = [
     label: 'שיבוץ מהבוט',
     hint: 'הבוט שיבץ מתאמן לקבוצה או לרשימת המתנה',
   },
+  {
+    key: 'cash_register_closed',
+    category: 'management',
+    scope: 'all',
+    label: 'סגירת קופה',
+    hint: 'סיכום יומי אחרי סגירת משמרת — חריגה ויתרת מזומן במגירה',
+  },
 ];
 
 export const STAFF_ALERT_KEYS = STAFF_ALERT_KINDS.map((a) => a.key);

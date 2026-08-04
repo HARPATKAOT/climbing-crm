@@ -105,6 +105,8 @@ export const OPERATIONAL_TABLES = [
   'automations',
   'automation_sends',
   'cash_register_shifts',
+  'cash_register_sessions',
+  'cash_ledger',
   'webhook_logs',
   'customer_passes',
   'pass_punches',

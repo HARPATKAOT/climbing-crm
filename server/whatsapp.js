@@ -1430,6 +1430,71 @@ export const whatsappService = {
     }
   },
 
+  /**
+   * Session-window CTA with a URL button. Works inside the 24h customer window
+   * without a Meta-approved template; outside that window use sendTemplateMessage.
+   */
+  sendCtaUrlMessage: async (phone, { body, buttonText, url, footer } = {}, options = {}) => {
+    const text = String(body || '').trim();
+    const displayText = String(buttonText || 'לפתיחה').trim().slice(0, 20);
+    const href = String(url || '').trim();
+    if (!text || !href) {
+      return { success: false, error: 'חסרים תוכן או קישור להודעת הכפתור' };
+    }
+    const interactive = {
+      type: 'cta_url',
+      body: { text },
+      action: {
+        name: 'cta_url',
+        parameters: {
+          display_text: displayText,
+          url: href,
+        },
+      },
+    };
+    const foot = String(footer || '').trim();
+    if (foot) interactive.footer = { text: foot.slice(0, 60) };
+
+    try {
+      const result = await callMetaWhatsAppAPI(phone, {
+        type: 'interactive',
+        interactive,
+      });
+      const preview = `${text}\n[${displayText}] ${href}`;
+      recordMessage({
+        phone: formatWaPhone(phone) || phone,
+        channel: 'whatsapp',
+        direction: 'outbound',
+        message: preview,
+        status: result.mock ? 'sent' : 'delivered',
+        source: options.source || 'crm',
+        message_type: 'interactive',
+        meta_message_id: result.messageId || null,
+        parent_id: options.parentId || null,
+        student_id: options.studentId || null,
+      });
+      return {
+        success: true,
+        mock: !!result.mock,
+        message: preview,
+        messageId: result.messageId || null,
+      };
+    } catch (error) {
+      recordMessage({
+        phone: formatWaPhone(phone) || phone,
+        channel: 'whatsapp',
+        direction: 'outbound',
+        message: text,
+        status: 'failed',
+        source: options.source || 'crm',
+        message_type: 'interactive',
+        parent_id: options.parentId || null,
+        student_id: options.studentId || null,
+      });
+      return { success: false, error: error.message };
+    }
+  },
+
   // Send a template message
   sendTemplateMessage: async (phone, templateName, variables = [], options = {}) => {
     try {

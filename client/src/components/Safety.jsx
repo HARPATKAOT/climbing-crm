@@ -74,7 +74,11 @@ function addDays(dateStr, days) {
 
 // ─── Modal: Sign check ───────────────────────────────────────────────────
 function SignCheckModal({ check, employees, onSave, onClose }) {
-  const [testerId, setTesterId] = useState(employees[0]?.id || '');
+  const isDaily = check?.frequency === 'יומי' || Number(check?.interval_days) === 1;
+  const eligible = isDaily
+    ? employees.filter((e) => e.is_active !== false && e.can_sign_daily_safety === true)
+    : employees.filter((e) => e.is_active !== false);
+  const [testerId, setTesterId] = useState(eligible[0]?.id || '');
   const [status, setStatus] = useState('תקין');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -121,10 +125,15 @@ function SignCheckModal({ check, employees, onSave, onClose }) {
               <label className="form-label">שם הבודק *</label>
               <AppSelect className="input select" value={testerId} onChange={(e) => setTesterId(e.target.value)} required>
                 <option value="">בחר עובד...</option>
-                {employees.map((emp) => (
+                {eligible.map((emp) => (
                   <option key={emp.id} value={emp.id}>{emp.name}</option>
                 ))}
               </AppSelect>
+              {isDaily && eligible.length === 0 && (
+                <div style={{ fontSize: 12, color: 'var(--amber)', marginTop: 6 }}>
+                  אין עובד שמורשה לחתום על בדיקות יומיות — סמנו בתיק העובד.
+                </div>
+              )}
             </div>
 
             <div className="form-group">

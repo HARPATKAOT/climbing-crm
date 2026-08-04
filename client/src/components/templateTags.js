@@ -18,12 +18,14 @@ const PALETTE = [
 
 const FIXED = {
   'הצהרת בריאות': PALETTE[5],
+  'טופס השתתפות': PALETTE[5],
   'תשלום': PALETTE[0],
   'הרשמה': PALETTE[6],
   'ציוד': PALETTE[3],
   'אירועים': PALETTE[2],
   'חוגים': PALETTE[1],
   'שיווק': PALETTE[4],
+  'מילוי פרטים': PALETTE[1],
 };
 
 /** Labels offered in the editor — free text is still allowed. */

@@ -153,12 +153,22 @@ export function spellOutDate(isoDate) {
 /**
  * The intake form, short. Keyed to the trainee when we know which one, so the
  * form opens on their record; otherwise to the phone, so a returning family is
- * recognised instead of being asked to type it again.
+ * recognised instead of being asked to type it again. Optional slug picks the
+ * wall / event / trip form.
  */
-function healthFormUrl(phone = '', studentId = '') {
-  if (studentId) return buildRedirectUrl('f', studentId);
+function healthFormUrl(phone = '', studentId = '', slug = '') {
+  const formSlug = String(slug || '').trim().toLowerCase();
+  const withSlug = formSlug && formSlug !== 'wall';
+  if (studentId) {
+    return withSlug
+      ? buildRedirectUrl('f', studentId, formSlug)
+      : buildRedirectUrl('f', studentId);
+  }
   const digits = String(phone || '').replace(/\D/g, '');
-  return digits ? buildRedirectUrl('fp', digits) : `${appPublicBase()}/register`;
+  if (!digits) return `${appPublicBase()}/register`;
+  return withSlug
+    ? buildRedirectUrl('fp', digits, formSlug)
+    : buildRedirectUrl('fp', digits);
 }
 
 /** Non-grade bands as they are written in the group's age category. */

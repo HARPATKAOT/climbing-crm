@@ -1,53 +1,106 @@
 import React, { useState, useEffect } from 'react';
-import { Search, LogIn, LogOut, Clock, CheckCircle2, ShieldAlert, ShieldCheck, Flame, RefreshCw, QrCode } from 'lucide-react';
+import { Search, LogIn, LogOut, Clock, CheckCircle2, ShieldAlert, ShieldCheck, Flame, RefreshCw, QrCode, Circle, Wallet } from 'lucide-react';
 import { CheckIcon } from './safetyCheckIcons.jsx';
 import { isHealthDeclarationValid } from '../utils/healthValidity.js';
-import { SYSTEM_ROLE_KEYS, canFillRole, fetchRoleCatalog, roleLabelOf } from '../utils/staffRoles.js';
 import AppSelect from './AppSelect.jsx';
+import CashCountModal from './CashCountModal.jsx';
+
+function StepRow({ done, current, title, children }) {
+  const Icon = done ? CheckCircle2 : current ? Clock : Circle;
+  const color = done ? 'var(--green)' : current ? '#FBBF24' : 'var(--text-3)';
+  return (
+    <div style={{
+      padding: '12px 14px',
+      borderRadius: 12,
+      border: `1px solid ${done ? 'rgba(16,185,129,0.35)' : current ? 'rgba(251,191,36,0.4)' : 'var(--border)'}`,
+      background: done ? 'rgba(16,185,129,0.06)' : current ? 'rgba(251,191,36,0.06)' : 'transparent',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontWeight: 700, color }}>
+        <Icon size={18} />
+        {title}
+        {done && <span className="badge badge-green" style={{ marginInlineStart: 'auto', fontSize: 11 }}>בוצע</span>}
+        {!done && current && (
+          <span className="badge" style={{
+            marginInlineStart: 'auto', fontSize: 11,
+            background: 'rgba(251,191,36,0.15)', color: '#FBBF24',
+          }}>
+            השלב הבא
+          </span>
+        )}
+      </div>
+      {children}
+    </div>
+  );
+}
 
 /**
- * משמרת קיר מהמסוף: מי שפותח את הקיר פותח כאן משמרת, ומי שסוגר — סוגר.
- * הסגירה יוצרת שורת שכר של מפעיל קיר לפי השעות בפועל, מעוגל לחצי שעה למעלה.
+ * חלון ראשי לפתיחה/סגירת משמרת: קופה → בטיחות → פתיחת קיר;
+ * בסגירה: כפתור אחד → ספירת קופה → אישור ניקיון → סגירת משמרת.
  */
-function WallShiftPanel({ employees, onShiftOpened }) {
+function WallShiftPanel({
+  employees,
+  dueSafety = [],
+  onShiftOpened,
+  onRefreshSafety,
+  onSignSafety,
+  signingId,
+  signerByCheck,
+  setSignerByCheck,
+}) {
   const [openShifts, setOpenShifts] = useState([]);
   const [pickedId, setPickedId] = useState('');
-  // מי בפועל סוגר כל משמרת פתוחה — ברירת המחדל היא בעל המשמרת עצמו, אבל
-  // מדריך אחר יכול לסגור בשמו (למשל אם הוא כבר הלך).
-  const [closerByShift, setCloserByShift] = useState({});
-  const [operatorLabel, setOperatorLabel] = useState(roleLabelOf(null, SYSTEM_ROLE_KEYS.WALL_OPERATOR));
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
-  const [safetyNudge, setSafetyNudge] = useState('');
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmMessage, setConfirmMessage] = useState('המקום מסודר ונקי?');
+  const [confirmMode, setConfirmMode] = useState('open'); // 'open' | 'close'
+  const [pendingWallClose, setPendingWallClose] = useState(false);
+  const [cashOpen, setCashOpen] = useState(null);
+  const [cashExpected, setCashExpected] = useState(null);
+  const [cashMode, setCashMode] = useState(null); // 'open' | 'close' | null
 
-  useEffect(() => {
-    let cancelled = false;
-    fetchRoleCatalog().then((c) => {
-      if (!cancelled) setOperatorLabel(roleLabelOf(c, SYSTEM_ROLE_KEYS.WALL_OPERATOR));
-    });
-    return () => { cancelled = true; };
-  }, []);
+  const CLOSE_CHECKLIST =
+    'סגירת משמרת — האם רוקנת פח, דלפק נקי ומסודר, אוטומטיים למעלה, והכל במקום?';
 
   const load = async () => {
     try {
-      const rows = await fetch('/api/wall-shift/open').then((r) => (r.ok ? r.json() : []));
+      const [rows, cash] = await Promise.all([
+        fetch('/api/wall-shift/open').then((r) => (r.ok ? r.json() : [])),
+        fetch('/api/cash-register/session').then((r) => (r.ok ? r.json() : null)),
+      ]);
       setOpenShifts(Array.isArray(rows) ? rows : []);
-    } catch { setOpenShifts([]); }
+      setCashOpen(cash?.open || null);
+      setCashExpected(cash?.expected_cash ?? null);
+    } catch {
+      setOpenShifts([]);
+      setCashOpen(null);
+    }
   };
   useEffect(() => { load(); }, []);
 
-  // רק מי שסומן בתפקיד מפעיל הקיר יכול לפתוח משמרת קיר.
   const operators = employees.filter((e) =>
-    e.is_active !== false && canFillRole(e, operatorLabel));
+    e.is_active !== false && e.can_open_wall === true);
+  const safetySigners = employees.filter((e) =>
+    e.is_active !== false && e.can_sign_daily_safety === true);
   const openIds = new Set(openShifts.map((s) => s.employee_id));
   const canOpen = operators.filter((e) => !openIds.has(e.id));
   const activeEmployees = employees.filter((e) => e.is_active !== false);
   const nameOf = (id) => employees.find((e) => e.id === id)?.name || 'עובד';
 
+  const pendingSafety = dueSafety.filter((c) => c.is_due && !c.signed_today);
+  const safetyDone = dueSafety.length === 0 || pendingSafety.length === 0;
+  const wallOpen = openShifts.length > 0;
+  const cashIsOpen = !!cashOpen;
+
+  // שלבי פתיחה: קופה → בטיחות → פתיחת קיר
+  const openStep = !cashIsOpen ? 1 : !safetyDone ? 2 : !wallOpen ? 3 : 0;
+
   const call = async (path, body, okMsg) => {
     setBusy(true);
     setMsg('');
-    setSafetyNudge('');
     try {
       const res = await fetch(path, {
         method: 'POST',
@@ -55,21 +108,97 @@ function WallShiftPanel({ employees, onShiftOpened }) {
         body: JSON.stringify(body),
       });
       const responseBody = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(responseBody.error || 'הפעולה נכשלה');
+      if (!res.ok) {
+        if (responseBody.code === 'CONFIRM_REQUIRED' && responseBody.confirm_message) {
+          setConfirmMode('open');
+          setConfirmMessage(responseBody.confirm_message);
+          setConfirmOpen(true);
+          return;
+        }
+        throw new Error(responseBody.error || 'הפעולה נכשלה');
+      }
       setMsg(okMsg);
       setPickedId('');
-      if (path.includes('/wall-shift/open')) {
-        const pending = (responseBody.due_safety || []).filter((c) => c.is_due && !c.signed_today);
-        if (pending.length > 0) {
-          const names = pending.map((c) => c.name).filter(Boolean).join(', ');
-          setSafetyNudge(
-            pending.length === 1
-              ? `יש בדיקת בטיחות שממתינה: ${names}`
-              : `יש ${pending.length} בדיקות בטיחות שממתינות: ${names}`
-          );
-        }
-        if (typeof onShiftOpened === 'function') onShiftOpened(responseBody);
+      setConfirmOpen(false);
+      setPendingWallClose(false);
+      if (path.includes('/wall-shift/open') && typeof onShiftOpened === 'function') {
+        onShiftOpened(responseBody);
       }
+      if (typeof onRefreshSafety === 'function') onRefreshSafety();
+      await load();
+    } catch (err) {
+      setMsg(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const requestOpen = () => {
+    if (!pickedId) return;
+    if (!cashIsOpen) {
+      setMsg('יש לפתוח קופה קודם');
+      return;
+    }
+    setConfirmMode('open');
+    setConfirmOpen(true);
+    fetch('/api/settings/staff-attendance')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (body?.wall_open_confirm_message) {
+          setConfirmMessage(body.wall_open_confirm_message);
+        }
+      })
+      .catch(() => {});
+  };
+
+  const confirmAndOpen = () => {
+    call(
+      '/api/wall-shift/open',
+      { employee_id: pickedId, confirmed: true },
+      `הקיר נפתח · ${nameOf(pickedId)}`
+    );
+  };
+
+  const showCloseChecklist = () => {
+    setConfirmMode('close');
+    setConfirmMessage(CLOSE_CHECKLIST);
+    setConfirmOpen(true);
+  };
+
+  const beginCloseShift = () => {
+    setMsg('');
+    if (cashIsOpen) {
+      setPendingWallClose(true);
+      setCashMode('close');
+      return;
+    }
+    showCloseChecklist();
+  };
+
+  const confirmAndCloseWall = async () => {
+    if (!openShifts.length) {
+      setConfirmOpen(false);
+      return;
+    }
+    setBusy(true);
+    setMsg('');
+    try {
+      for (const shift of openShifts) {
+        const res = await fetch('/api/wall-shift/close', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            employee_id: shift.employee_id,
+            closed_by: shift.employee_id,
+          }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error || 'סגירת משמרת נכשלה');
+      }
+      setMsg('המשמרת נסגרה');
+      setConfirmOpen(false);
+      setPendingWallClose(false);
+      if (typeof onRefreshSafety === 'function') onRefreshSafety();
       await load();
     } catch (err) {
       setMsg(err.message);
@@ -85,103 +214,242 @@ function WallShiftPanel({ employees, onShiftOpened }) {
 
   return (
     <div className="card" style={{ marginBottom: 24 }}>
-      <div className="section-title" style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div className="section-title" style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <Clock size={18} />
-        משמרת קיר
-        {openShifts.length > 0 && <span className="badge badge-green">{openShifts.length} במשמרת</span>}
+        {wallOpen ? 'משמרת פתוחה' : 'פתיחה וסגירת יום'}
+        {wallOpen ? (
+          <span className="badge badge-green">קיר פתוח</span>
+        ) : cashIsOpen ? (
+          <span className="badge" style={{ background: 'rgba(56,189,248,0.15)', color: '#38BDF8' }}>ממתין לפתיחת קיר</span>
+        ) : null}
+        {cashOpen === null ? null : cashIsOpen ? (
+          <span className="badge badge-green" style={{ marginInlineStart: 'auto' }}>קופה פתוחה</span>
+        ) : (
+          <span className="badge" style={{ marginInlineStart: 'auto', background: 'rgba(251,191,36,0.15)', color: '#FBBF24' }}>קופה סגורה</span>
+        )}
       </div>
-      <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {openShifts.map((shift) => {
-          const closerId = closerByShift[shift.id] ?? shift.employee_id;
-          return (
-            <div key={shift.id} style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-              flexWrap: 'wrap',
-              padding: '10px 12px', borderRadius: 10,
-              background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.35)',
-            }}>
-              <div>
-                <div style={{ fontWeight: 700 }}>{nameOf(shift.employee_id)}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>פתח את המשמרת ב-{hhmm(shift.clock_in)}</div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <AppSelect
-                  className="input select input-sm"
-                  style={{ height: 34, fontSize: 12 }}
-                  value={closerId}
-                  onChange={(e) => setCloserByShift((prev) => ({ ...prev, [shift.id]: e.target.value }))}
-                  title="מי סוגר את המשמרת?"
-                >
-                  {activeEmployees.map((emp) => (
-                    <option key={emp.id} value={emp.id}>
-                      {emp.id === shift.employee_id ? emp.name : `${emp.name} (סוגר במקום ${nameOf(shift.employee_id)})`}
-                    </option>
-                  ))}
-                </AppSelect>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm"
-                  disabled={busy}
-                  onClick={() => call(
-                    '/api/wall-shift/close',
-                    { employee_id: shift.employee_id, closed_by: closerId },
-                    `המשמרת של ${nameOf(shift.employee_id)} נסגרה ונרשמה לשכר`
-                  )}
-                >
-                  <LogOut size={14} /> סגירת משמרת
-                </button>
-              </div>
-            </div>
-          );
-        })}
 
-        {canOpen.length > 0 && (
-          <div style={{ display: 'flex', gap: 8 }}>
-            <AppSelect
-              className="input select"
-              style={{ flex: 1, height: 40 }}
-              value={pickedId}
-              onChange={(e) => setPickedId(e.target.value)}
-            >
-              <option value="">מי פותח משמרת?</option>
-              {canOpen.map((emp) => (
-                <option key={emp.id} value={emp.id}>{emp.name}</option>
+      <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {!wallOpen && (
+          <>
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 2 }}>שלבים לפתיחת היום</div>
+
+            <StepRow done={cashIsOpen} current={openStep === 1} title="1. פתיחת קופה">
+              {!cashIsOpen ? (
+                <button type="button" className="btn btn-primary btn-sm" onClick={() => setCashMode('open')}>
+                  <Wallet size={14} /> פתיחת קופה
+                </button>
+              ) : (
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                  נפתחה ע״י {cashOpen.opened_by_name || 'צוות'}
+                </div>
+              )}
+            </StepRow>
+
+            <StepRow done={safetyDone} current={openStep === 2} title="2. חתימה על בדיקות בטיחות">
+              {dueSafety.length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין בדיקות שחייבות היום</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {dueSafety.map((check) => {
+                    const isDaily = check.frequency === 'יומי' || Number(check.interval_days) === 1;
+                    const signers = isDaily ? safetySigners : activeEmployees;
+                    return (
+                      <div
+                        key={check.id}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                          padding: '8px 10px', borderRadius: 8,
+                          background: check.signed_today ? 'rgba(16,185,129,0.08)' : 'var(--bg-input)',
+                          border: '1px solid var(--border)',
+                        }}
+                      >
+                        <CheckIcon name={check.name} size={14} />
+                        <div style={{ flex: 1, minWidth: 120 }}>
+                          <div style={{ fontWeight: 600, fontSize: 13 }}>{check.name}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{check.frequency}</div>
+                        </div>
+                        {check.signed_today ? (
+                          <span className="badge badge-green">נחתם</span>
+                        ) : (
+                          <>
+                            <AppSelect
+                              className="input select input-sm"
+                              style={{ height: 32, fontSize: 12, minWidth: 120 }}
+                              value={signerByCheck[check.id] || signers[0]?.id || ''}
+                              onChange={(e) => setSignerByCheck((prev) => ({ ...prev, [check.id]: e.target.value }))}
+                            >
+                              <option value="">בודק...</option>
+                              {signers.map((emp) => (
+                                <option key={emp.id} value={emp.id}>{emp.name}</option>
+                              ))}
+                            </AppSelect>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              disabled={signingId === check.id || signers.length === 0}
+                              onClick={() => onSignSafety(check)}
+                            >
+                              {signingId === check.id ? 'שומר...' : 'חתימה'}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {safetySigners.length === 0 && pendingSafety.length > 0 && (
+                    <div style={{ fontSize: 12, color: 'var(--amber)' }}>
+                      אין עובד שמורשה לחתום על בדיקות יומיות — סמנו בתיק העובד.
+                    </div>
+                  )}
+                </div>
+              )}
+            </StepRow>
+
+            <StepRow done={false} current={openStep === 3} title="3. פתיחת קיר">
+              {operators.length === 0 ? (
+                <div style={{ fontSize: 12, color: 'var(--amber)' }}>
+                  אין עובד שמסומן כמורשה לפתוח קיר — סמנו בתיק העובד.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <AppSelect
+                    className="input select"
+                    style={{ flex: 1, minWidth: 160, height: 40 }}
+                    value={pickedId}
+                    onChange={(e) => setPickedId(e.target.value)}
+                    disabled={!cashIsOpen}
+                  >
+                    <option value="">מי פותח את הקיר?</option>
+                    {canOpen.map((emp) => (
+                      <option key={emp.id} value={emp.id}>{emp.name}</option>
+                    ))}
+                  </AppSelect>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    disabled={busy || !pickedId || !cashIsOpen}
+                    onClick={requestOpen}
+                    title={cashIsOpen ? 'פתיחת קיר אחרי שהקופה כבר פתוחה' : 'יש לפתוח קופה קודם'}
+                  >
+                    <LogIn size={14} /> פתיחת קיר
+                  </button>
+                </div>
+              )}
+              {!cashIsOpen && (
+                <div style={{ fontSize: 12, color: 'var(--amber)' }}>יש לפתוח קופה לפני השלב הזה.</div>
+              )}
+              {cashIsOpen && (
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                  הקופה כבר פתוחה — השלב הבא הוא פתיחת הקיר (לא פתיחת קופה מחדש).
+                </div>
+              )}
+            </StepRow>
+          </>
+        )}
+
+        {wallOpen && (
+          <div style={{
+            padding: 18,
+            borderRadius: 14,
+            background: 'rgba(16,185,129,0.08)',
+            border: '1px solid rgba(16,185,129,0.35)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 14,
+            alignItems: 'stretch',
+          }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 6 }}>משמרת פתוחה</div>
+              {openShifts.map((shift) => (
+                <div key={shift.id} style={{ marginBottom: openShifts.length > 1 ? 6 : 0 }}>
+                  <div style={{ fontWeight: 700 }}>{nameOf(shift.employee_id)}</div>
+                  <div style={{ fontSize: 13, color: 'var(--text-3)' }}>
+                    נפתחה ב-{hhmm(shift.clock_in)}
+                  </div>
+                </div>
               ))}
-            </AppSelect>
+            </div>
             <button
               type="button"
-              className="btn btn-primary btn-sm"
-              disabled={busy || !pickedId}
-              onClick={() => call('/api/wall-shift/open', { employee_id: pickedId }, `נפתחה משמרת ל${nameOf(pickedId)}`)}
+              className="btn btn-primary"
+              disabled={busy}
+              onClick={beginCloseShift}
+              style={{ minHeight: 46, fontWeight: 800 }}
             >
-              <LogIn size={14} /> פתיחת משמרת
+              <LogOut size={16} /> סגירת משמרת
             </button>
           </div>
         )}
-        {operators.length === 0 && (
-          <div style={{ fontSize: 12, color: 'var(--amber)' }}>
-            אין עובד שסומן כ"{operatorLabel}" — סמנו את התפקיד בכרטיס העובד.
-          </div>
-        )}
+
         {msg && <div style={{ fontSize: 12, color: 'var(--text-2)' }}>{msg}</div>}
-        {safetyNudge && (
-          <div style={{
-            fontSize: 13,
-            fontWeight: 600,
-            color: '#FBBF24',
-            padding: '8px 10px',
-            borderRadius: 8,
-            background: 'rgba(251,191,36,0.12)',
-            border: '1px solid rgba(251,191,36,0.35)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-          }}>
-            <ShieldAlert size={16} />
-            {safetyNudge}
-          </div>
-        )}
       </div>
+
+      {cashMode && (
+        <CashCountModal
+          mode={cashMode}
+          employees={employees}
+          expectedCash={cashMode === 'close' ? cashExpected : null}
+          revealExpected={false}
+          onClose={() => {
+            setCashMode(null);
+            setPendingWallClose(false);
+          }}
+          onSuccess={async () => {
+            const wasClose = cashMode === 'close';
+            const continueWall = pendingWallClose && wasClose;
+            setCashMode(null);
+            setMsg(wasClose ? 'הקופה נסגרה' : 'הקופה נפתחה');
+            await load();
+            if (continueWall) {
+              setPendingWallClose(false);
+              showCloseChecklist();
+            }
+          }}
+        />
+      )}
+
+      {confirmOpen && (
+        <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && !busy && setConfirmOpen(false)}>
+          <div className="modal slide-up" style={{ maxWidth: 420 }}>
+            <div className="modal-header">
+              <div className="modal-title">
+                {confirmMode === 'close' ? 'סגירת משמרת' : 'אישור פתיחת קיר'}
+              </div>
+              <button type="button" className="btn btn-ghost btn-icon btn-sm" disabled={busy} onClick={() => setConfirmOpen(false)}>×</button>
+            </div>
+            <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ fontSize: 15, fontWeight: 600, lineHeight: 1.55 }}>
+                {confirmMessage}
+              </div>
+              {confirmMode === 'open' && (
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                  פותח: {nameOf(pickedId)}
+                </div>
+              )}
+              {confirmMode === 'close' && openShifts.length > 0 && (
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                  נסגרת משמרת של: {openShifts.map((s) => nameOf(s.employee_id)).join(', ')}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setConfirmOpen(false)}>
+                  ביטול
+                </button>
+                {confirmMode === 'close' ? (
+                  <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={confirmAndCloseWall}>
+                    מאשר — סגור משמרת
+                  </button>
+                ) : (
+                  <button type="button" className="btn btn-primary btn-sm" disabled={busy || !pickedId} onClick={confirmAndOpen}>
+                    מאשר ופותח
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -259,9 +527,15 @@ export default function CheckInConsole({ students, groups }) {
   }, []);
 
   const handleSignSafety = async (check) => {
-    const testerId = signerByCheck[check.id] || employees[0]?.id;
+    const isDaily = check?.frequency === 'יומי' || Number(check?.interval_days) === 1;
+    const pool = isDaily
+      ? employees.filter((e) => e.is_active !== false && e.can_sign_daily_safety === true)
+      : employees.filter((e) => e.is_active !== false);
+    const testerId = signerByCheck[check.id] || pool[0]?.id;
     if (!testerId) {
-      alert('אין עובדים במערכת — הוסיפו עובד ואז חתמו');
+      alert(isDaily
+        ? 'אין עובד שמורשה לחתום על בדיקות יומיות — סמנו בתיק העובד'
+        : 'אין עובדים במערכת — הוסיפו עובד ואז חתמו');
       return;
     }
     setSigningId(check.id);
@@ -393,8 +667,6 @@ export default function CheckInConsole({ students, groups }) {
 
   const today = new Date().toDateString();
   const todayCheckIns = checkIns.filter(c => new Date(c.timestamp).toDateString() === today);
-  const pendingSafety = dueSafety.filter((c) => c.is_due && !c.signed_today);
-  const doneSafety = dueSafety.filter((c) => c.signed_today);
 
   return (
     <div className="fade-in" style={{ maxWidth: 900, margin: '0 auto' }}>
@@ -404,84 +676,16 @@ export default function CheckInConsole({ students, groups }) {
         </div>
       )}
 
-      <WallShiftPanel employees={employees} onShiftOpened={() => refreshSafety()} />
-
-      {dueSafety.length > 0 && (
-        <div className="card" style={{ marginBottom: 24 }}>
-          <div className="section-title" style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <ShieldCheck size={18} />
-              בדיקות בטיחות להיום
-              {pendingSafety.length > 0 ? (
-                <span className="badge badge-red">{pendingSafety.length} ממתינות</span>
-              ) : (
-                <span className="badge badge-green">הכל בוצע</span>
-              )}
-            </span>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={refreshSafety}>
-              <RefreshCw size={14} />
-            </button>
-          </div>
-          <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {dueSafety.map((check) => (
-              <div
-                key={check.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 12,
-                  flexWrap: 'wrap',
-                  padding: '10px 12px',
-                  borderRadius: 10,
-                  background: check.signed_today ? 'rgba(16,185,129,0.08)' : 'var(--bg-input)',
-                  border: `1px solid ${check.signed_today ? 'rgba(16,185,129,0.35)' : 'var(--border)'}`,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 160 }}>
-                  <CheckIcon name={check.name} size={16} />
-                  <div>
-                    <div style={{ fontWeight: 700 }}>{check.name}</div>
-                    <div style={{ fontSize: 12, color: 'var(--text-3)' }}>{check.frequency}</div>
-                  </div>
-                </div>
-                {check.signed_today ? (
-                  <span className="badge badge-green" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <CheckCircle2 size={12} />
-                    {check.today_log?.tester_name || check.last_tester_name || 'נחתם'}
-                  </span>
-                ) : (
-                  <>
-                    <AppSelect
-                      className="input select"
-                      style={{ maxWidth: 180, height: 36 }}
-                      value={signerByCheck[check.id] || employees[0]?.id || ''}
-                      onChange={(e) => setSignerByCheck((prev) => ({ ...prev, [check.id]: e.target.value }))}
-                    >
-                      {employees.length === 0 && <option value="">אין עובדים</option>}
-                      {employees.map((emp) => (
-                        <option key={emp.id} value={emp.id}>{emp.name}</option>
-                      ))}
-                    </AppSelect>
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm"
-                      disabled={signingId === check.id || employees.length === 0}
-                      onClick={() => handleSignSafety(check)}
-                    >
-                      {signingId === check.id ? 'שומר...' : 'אשר ביצוע'}
-                    </button>
-                  </>
-                )}
-              </div>
-            ))}
-            {doneSafety.length > 0 && pendingSafety.length === 0 && (
-              <div style={{ fontSize: 13, color: 'var(--text-3)', textAlign: 'center', paddingTop: 4 }}>
-                כל בדיקות היום נחתמו.
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      <WallShiftPanel
+        employees={employees}
+        dueSafety={dueSafety}
+        onShiftOpened={() => refreshSafety()}
+        onRefreshSafety={refreshSafety}
+        onSignSafety={handleSignSafety}
+        signingId={signingId}
+        signerByCheck={signerByCheck}
+        setSignerByCheck={setSignerByCheck}
+      />
 
       <div className="grid-2" style={{ alignItems: 'start', gap: 24 }}>
         <div className="card card-p">

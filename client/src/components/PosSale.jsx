@@ -15,6 +15,8 @@ import {
   imageFitOf,
 } from './productCategories.js';
 import AppSelect from './AppSelect.jsx';
+import CashCountModal from './CashCountModal.jsx';
+import { printReceiptFromSale, openInvoiceFallback, thermalSupported } from '../utils/thermalPrinter.js';
 
 const PAY_METHODS = [
   { id: 'cash', label: 'מזומן', icon: Banknote },
@@ -47,7 +49,7 @@ function applyLineDiscount(listPrice, discountType, discountValue) {
 }
 
 /** `onManageProducts` opens the catalogue tab — omitted for non-owners. */
-export default function PosSale({ onManageProducts = null }) {
+export default function PosSale({ onManageProducts = null, employees = [], isOwner = false }) {
   const [pricelist, setPricelist] = useState([]);
   const [students, setStudents] = useState([]);
   const [parents, setParents] = useState([]);
@@ -88,20 +90,39 @@ export default function PosSale({ onManageProducts = null }) {
   const [showContactFields, setShowContactFields] = useState(false);
   const [showCustomForm, setShowCustomForm] = useState(false);
   const [customDraft, setCustomDraft] = useState({ name: '', price: '', quantity: '1' });
+  const [cashSessionOpen, setCashSessionOpen] = useState(false);
+  const [tenderedAmount, setTenderedAmount] = useState('');
+  const [lastChange, setLastChange] = useState(null);
+  const [cashClosedHint, setCashClosedHint] = useState(false);
+  const [showOpenCash, setShowOpenCash] = useState(false);
+
+  useEffect(() => {
+    if (!cashSessionOpen && paymentMethod === 'cash') {
+      setPaymentMethod('online');
+    }
+    if (cashSessionOpen) {
+      setCashClosedHint(false);
+      setShowOpenCash(false);
+    }
+  }, [cashSessionOpen, paymentMethod]);
 
   const refresh = useCallback(async () => {
     try {
-      const [pRes, sRes, parRes, cRes] = await Promise.all([
+      const [pRes, sRes, parRes, cRes, sessRes] = await Promise.all([
         fetch('/api/pricelist'),
         fetch('/api/students'),
         fetch('/api/parents'),
         fetch('/api/product-categories'),
+        fetch('/api/cash-register/session'),
       ]);
-      const [p, s, par, cats] = await Promise.all([
+      const [p, s, par, cats, sess] = await Promise.all([
         pRes.ok ? pRes.json() : [],
         sRes.ok ? sRes.json() : [],
         parRes.ok ? parRes.json() : [],
         cRes.ok ? cRes.json() : [],
+        sessRes.ok
+          ? sessRes.json().catch(() => ({ can_sell_cash: false }))
+          : Promise.resolve({ can_sell_cash: false }),
       ]);
       setPricelist(
         Array.isArray(p)
@@ -117,6 +138,7 @@ export default function PosSale({ onManageProducts = null }) {
       );
       setStudents(Array.isArray(s) ? s : []);
       setParents(Array.isArray(par) ? par : []);
+      setCashSessionOpen(!!sess?.can_sell_cash);
       if (Array.isArray(cats) && cats.length) {
         setCatalogCategories(cats.filter((c) => c.active !== false));
       }
@@ -569,6 +591,17 @@ export default function PosSale({ onManageProducts = null }) {
       setError('לא ניתן ליצור קישור תשלום לסכום 0 — עמוד הסליקה יציג מחיר ברירת מחדל. שינוי מחיר או גבייה במזומן');
       return false;
     }
+    if (paymentMethod === 'cash' && !cashSessionOpen) {
+      setError('אי אפשר לגבות במזומן בלי לפתוח קופה קודם — עברו ללשונית פתיחה / סגירה, או גבו בסליקה בקישור');
+      return false;
+    }
+    if (paymentMethod === 'cash' && Number(total) > 0) {
+      const tendered = Number(tenderedAmount);
+      if (!(tendered >= total - 0.001)) {
+        setError('סכום שהתקבל מהלקוח חייב להיות לפחות כמו סכום העגלה');
+        return false;
+      }
+    }
     return true;
   };
 
@@ -620,8 +653,27 @@ export default function PosSale({ onManageProducts = null }) {
         }
       }
 
+      if (data.changeGiven != null) {
+        setLastChange(Number(data.changeGiven));
+      }
+      if (data.receiptBytes?.base64) {
+        try {
+          await printReceiptFromSale(data.receiptBytes);
+        } catch (printErr) {
+          console.warn('thermal print failed', printErr);
+          const docUrl = data.doc?.docUrl || data.sale?.icount_doc_url;
+          if (docUrl) openInvoiceFallback(docUrl);
+          setError(
+            thermalSupported()
+              ? 'המכירה נקלטה, אבל ההדפסה נכשלה — בדקו את חיבור המדפסת או פתחו את החשבונית מהקישור'
+              : 'המכירה נקלטה. הדפסה ישירה לא זמינה בדפדפן הזה — נפתחה החשבונית להדפסה רגילה'
+          );
+        }
+      }
+
       // Clear cart after any successful checkout action
       setCart([]);
+      setTenderedAmount('');
       setShowQuoteOptions(false);
       if (data.isNewLead || (!selectedParentId && !selectedStudentId && pendingNewLeadName)) {
         clearCustomer();
@@ -642,10 +694,45 @@ export default function PosSale({ onManageProducts = null }) {
       await runAction('/api/pos/payment-link', { couponCode });
       return;
     }
-    await runAction('/api/pos/sale', { paymentMethod, couponCode });
+    const tendered = tenderedAmount === '' ? total : Number(tenderedAmount);
+    await runAction('/api/pos/sale', {
+      paymentMethod,
+      couponCode,
+      tenderedAmount: tendered,
+    });
+  };
+
+  const changePreview = useMemo(() => {
+    if (paymentMethod !== 'cash') return null;
+    const tendered = Number(tenderedAmount);
+    if (!(tendered >= 0) || Number.isNaN(tendered)) return null;
+    return roundMoney(tendered - total);
+  }, [paymentMethod, tenderedAmount, total]);
+
+  const selectPaymentMethod = (id) => {
+    if (id === 'cash' && !cashSessionOpen) {
+      setPaymentMethod('online');
+      setCashClosedHint(true);
+      return;
+    }
+    setCashClosedHint(false);
+    setPaymentMethod(id);
+    if (id === 'cash' && tenderedAmount === '') {
+      setTenderedAmount(String(total));
+    }
+  };
+
+  const handleCashOpened = async () => {
+    setCashSessionOpen(true);
+    setCashClosedHint(false);
+    setShowOpenCash(false);
+    setPaymentMethod('cash');
+    setTenderedAmount((prev) => (prev === '' ? String(total) : prev));
+    await refresh();
   };
 
   return (
+    <>
     <div className="grid-2" style={{ alignItems: 'flex-start', gap: 20 }}>
       <div>
         <div className="card card-p" style={{ marginBottom: 16 }}>
@@ -1101,7 +1188,39 @@ export default function PosSale({ onManageProducts = null }) {
         </div>
 
         <div className="card card-p" style={{ marginBottom: 16, position: 'relative', zIndex: 1 }}>
-          <div className="section-title" style={{ marginBottom: 12 }}>עגלה</div>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10,
+              flexWrap: 'wrap',
+              marginBottom: 12,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <div className="section-title" style={{ marginBottom: 0 }}>עגלה</div>
+              {!cashSessionOpen && (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => {
+                    setShowOpenCash(true);
+                    setCashClosedHint(false);
+                  }}
+                >
+                  פתח קופה
+                </button>
+              )}
+            </div>
+            <span
+              className={`badge ${cashSessionOpen ? 'badge-green' : 'badge-amber'}`}
+              style={{ fontWeight: 700 }}
+            >
+              {cashSessionOpen ? 'קופה פתוחה' : 'קופה סגורה'}
+            </span>
+          </div>
+
           {cart.length === 0 ? (
             <div style={{ color: 'var(--text-3)', fontSize: 13, textAlign: 'center', padding: 16 }}>העגלה ריקה</div>
           ) : (
@@ -1369,18 +1488,80 @@ export default function PosSale({ onManageProducts = null }) {
           <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
             {PAY_METHODS.map((m) => {
               const Icon = m.icon;
+              const cashBlocked = m.id === 'cash' && !cashSessionOpen;
               return (
                 <button
                   key={m.id}
                   type="button"
                   className={`btn btn-sm ${paymentMethod === m.id ? 'btn-primary' : 'btn-ghost'}`}
-                  onClick={() => setPaymentMethod(m.id)}
+                  onClick={() => selectPaymentMethod(m.id)}
+                  title={cashBlocked ? 'יש לפתוח קופה לפני גבייה במזומן' : undefined}
+                  style={cashBlocked ? { opacity: 0.55 } : undefined}
                 >
                   <Icon size={13} /> {m.label}
                 </button>
               );
             })}
           </div>
+
+          {cashClosedHint && !cashSessionOpen && (
+            <div className="alert alert-warn" style={{ marginTop: 10, fontSize: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div>הקופה סגורה — אי אפשר לגבות במזומן לפני פתיחת משמרת.</div>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                style={{ alignSelf: 'flex-start' }}
+                onClick={() => {
+                  setShowOpenCash(true);
+                  setCashClosedHint(false);
+                }}
+              >
+                פתח קופה
+              </button>
+            </div>
+          )}
+
+          {paymentMethod === 'cash' && cashSessionOpen && (
+            <div
+              style={{
+                marginTop: 12,
+                padding: 12,
+                borderRadius: 10,
+                border: '1px solid var(--border)',
+                background: 'var(--bg-input)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+              }}
+            >
+              <label style={{ fontSize: 13, fontWeight: 600 }}>
+                התקבל מהלקוח (ש״ח)
+                <input
+                  className="input"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  inputMode="decimal"
+                  value={tenderedAmount}
+                  onChange={(e) => setTenderedAmount(e.target.value)}
+                  style={{ marginTop: 6 }}
+                />
+              </label>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>
+                {changePreview == null
+                  ? 'הזינו כמה התקבל מהלקוח'
+                  : changePreview < 0
+                    ? `חסרים ₪${Math.abs(changePreview).toFixed(2)}`
+                    : `עודף להחזר: ₪${changePreview.toFixed(2)}`}
+              </div>
+            </div>
+          )}
+
+          {lastChange != null && lastChange > 0 && (
+            <div className="alert alert-success" style={{ marginTop: 10, fontSize: 16, fontWeight: 800 }}>
+              עודף להחזר ללקוח: ₪{Number(lastChange).toFixed(2)}
+            </div>
+          )}
 
           <div style={{ display: 'flex', gap: 16, marginTop: 12, fontSize: 13, flexWrap: 'wrap' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
@@ -1559,5 +1740,15 @@ export default function PosSale({ onManageProducts = null }) {
         </div>
       </div>
     </div>
+
+    {showOpenCash && !cashSessionOpen && (
+      <CashCountModal
+        mode="open"
+        employees={employees}
+        onClose={() => setShowOpenCash(false)}
+        onSuccess={handleCashOpened}
+      />
+    )}
+    </>
   );
 }

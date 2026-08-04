@@ -1,0 +1,393 @@
+[
+  {
+    "name": "ארטיק תמרה",
+    "price": 10,
+    "categories": ["קיוסק"],
+    "product_type": "product",
+    "image_query": "Tamara ice cream popsicle Israel",
+    "image_fit": "cover",
+    "track_inventory": true
+  },
+  {
+    "name": "חמש מדבקות",
+    "price": 10,
+    "categories": ["קיוסק"],
+    "product_type": "product",
+    "image_query": "colorful vinyl stickers pack",
+    "image_fit": "cover",
+    "track_inventory": true
+  },
+  {
+    "name": "נקניקיה בלחמניה",
+    "price": 10,
+    "categories": ["קיוסק"],
+    "product_type": "product",
+    "image_query": "hot dog in bun",
+    "image_fit": "cover",
+    "track_inventory": false
+  },
+  {
+    "name": "חישוק לחיזוק הידיים",
+    "price": 25,
+    "categories": ["קיוסק"],
+    "product_type": "product",
+    "image_query": "hand grip strengthener ring",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "קפיץ לחיזוק הידיים",
+    "price": 45,
+    "categories": ["קיוסק"],
+    "product_type": "product",
+    "image_query": "hand grip spring exerciser",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "POWER BALL",
+    "price": 85,
+    "categories": ["קיוסק"],
+    "product_type": "product",
+    "image_query": "Powerball gyroscopic wrist exerciser",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "צמיד ליד",
+    "price": 30,
+    "categories": ["קיוסק"],
+    "product_type": "product",
+    "image_query": "silicone wristband bracelet",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "שרשרת עם תליון",
+    "price": 40,
+    "categories": ["קיוסק"],
+    "product_type": "product",
+    "image_query": "necklace with pendant",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "שיעור פרטי - עם מדריך נוער",
+    "price": 180,
+    "categories": ["אימונים אישיים"],
+    "product_type": "product",
+    "image_query": "climbing coach private lesson gym",
+    "image_fit": "cover",
+    "track_inventory": false
+  },
+  {
+    "name": "שיעור זוגי עם מדריך נוער",
+    "price": 220,
+    "categories": ["אימונים אישיים"],
+    "product_type": "product",
+    "image_query": "two people climbing lesson with instructor",
+    "image_fit": "cover",
+    "track_inventory": false
+  },
+  {
+    "name": "כרטיסיית 5 אימונים אישיים - עם מדריך נוער",
+    "price": 750,
+    "categories": ["אימונים אישיים"],
+    "product_type": "punch_card",
+    "visits_total": 5,
+    "image_query": "punch card personal training climbing",
+    "image_fit": "cover",
+    "track_inventory": false
+  },
+  {
+    "name": "כרטיסיית 5 אימונים זוגיים - עם מדריך נוער",
+    "price": 900,
+    "categories": ["אימונים אישיים"],
+    "product_type": "punch_card",
+    "visits_total": 5,
+    "image_query": "punch card couple training climbing",
+    "image_fit": "cover",
+    "track_inventory": false
+  },
+  {
+    "name": "מנוי אישי + נעליים",
+    "price": 440,
+    "categories": ["כרטיסיות ומנויים"],
+    "product_type": "punch_card",
+    "visits_total": 10,
+    "description": "כרטיסייה 10 כניסות כולל נעליים",
+    "image_query": "climbing gym membership card shoes",
+    "image_fit": "cover",
+    "track_inventory": false
+  },
+  {
+    "name": "מנוי משפחתי",
+    "price": 410,
+    "categories": ["כרטיסיות ומנויים"],
+    "product_type": "punch_card",
+    "visits_total": 10,
+    "description": "כרטיסייה 10 כניסות משפחתית",
+    "image_query": "family climbing gym membership",
+    "image_fit": "cover",
+    "track_inventory": false
+  },
+  {
+    "name": "מנוי אוגוסט 4 כניסות",
+    "price": 140,
+    "categories": ["כרטיסיות ומנויים"],
+    "product_type": "punch_card",
+    "visits_total": 4,
+    "validity_until": "2026-08-31",
+    "description": "כרטיסייה 4 כניסות — תוקף לאוגוסט בלבד",
+    "image_query": "summer climbing gym punch card August",
+    "image_fit": "cover",
+    "track_inventory": false
+  },
+  {
+    "name": "טבעת BOOMS",
+    "price": 7,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "BOOMS climbing carabiner",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "טבעת SALEWA - רגילה",
+    "price": 60,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "Salewa climbing carabiner",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "טבעת SALEWA - ננעלת",
+    "price": 65,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "Salewa locking carabiner",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "טבעת CT רגילה",
+    "price": 80,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "Climbing Technology carabiner",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "טבעת CT ננעלת",
+    "price": 100,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "Climbing Technology locking carabiner",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "נעלי טיפוס VSR",
+    "price": 779,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "Scarpa Instinct VSR climbing shoes",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "נעלי DRIFTER",
+    "price": 400,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "Evolv Drifter climbing shoes",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "נעלי REFLEX",
+    "price": 499,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "Red Chili Reflex climbing shoes",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "נעלי REFLEX KIDS",
+    "price": 350,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "kids climbing shoes Reflex",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "וויפור V",
+    "price": 679,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "Scarpa Vapor V climbing shoes",
+    "image_fit": "contain",
+    "track_inventory": true,
+    "match_names": ["VAPOR V LV", "VAPOR V", "וויפור V", "נעלי וויפור V"]
+  },
+  {
+    "name": "רתמת ZACK",
+    "price": 280,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "Ocun Zack climbing harness",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "רתמת JAY",
+    "price": 310,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "Ocun Jay climbing harness",
+    "image_fit": "contain",
+    "track_inventory": true,
+    "match_names": ["רתמת טיפוס JAY", "רתמת טיפוס  JAY", "רתמת JAY", "JAY"]
+  },
+  {
+    "name": "כדור מגנזיום אחד",
+    "price": 30,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "climbing chalk ball",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "מגנזיום מטוליוס 71 גרם",
+    "price": 30,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "Metolius Super Chalk 71g",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "מגנזיום קאמפ 200 גרם",
+    "price": 60,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "Camp climbing chalk 200g",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "מגנזיום קאמפ 120 גרם",
+    "price": 40,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "Camp climbing chalk 120g",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "מברשת ניקוי אחיזות",
+    "price": 35,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "climbing hold brush chalk brush",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "שק מגנזיום luckstone",
+    "price": 50,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "Luckstone chalk bag climbing",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "שק מגנזיום OCUN - רגיל",
+    "price": 100,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "Ocun chalk bag climbing",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "שק מגנזיום OCUN - מסוגנן",
+    "price": 110,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "Ocun patterned chalk bag",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "שק מגנזיום 8B+",
+    "price": 175,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "8B+ chalk bag climbing",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "חולצה",
+    "price": 65,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "climbing gym t-shirt blue",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "טייפ לאצבעות",
+    "price": 45,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "climbing finger tape roll",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "פרוסיק - לפי מטר",
+    "price": 10,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "prusik cord climbing rope meter",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "כרטיס לימוד קשרים",
+    "price": 60,
+    "categories": ["ציוד טיפוס"],
+    "product_type": "product",
+    "image_query": "climbing knots learning card",
+    "image_fit": "contain",
+    "track_inventory": true
+  },
+  {
+    "name": "מינוי עוזרי מדריך",
+    "price": 320,
+    "categories": ["חוגים"],
+    "product_type": "time_membership",
+    "duration_days": 30,
+    "image_query": "climbing instructor assistant membership",
+    "image_fit": "cover",
+    "track_inventory": false
+  },
+  {
+    "name": "מינוי ילד חוגים",
+    "price": 350,
+    "categories": ["חוגים"],
+    "product_type": "time_membership",
+    "duration_days": 30,
+    "image_query": "kids climbing class membership",
+    "image_fit": "cover",
+    "track_inventory": false
+  }
+]

@@ -15,6 +15,21 @@ import {
 import { whatsappConnectService } from './whatsappConnect.js';
 import { automationsService, runScheduledAutomationsIfDue } from './automations.js';
 import { runShiftRemindersIfDue, notifyShiftAssigned } from './shiftAlerts.js';
+import {
+  DENOMINATIONS,
+  sessionSnapshot,
+  openSession,
+  closeSession,
+  adjustCash,
+  recordSaleInLedger,
+  listLedger,
+  actionTypeLabel,
+  getOpenSession,
+  roundMoney as cashRoundMoney,
+} from './cashRegister.js';
+import { buildSaleReceipt, buildDrawerOnlyPayload } from './escposReceipt.js';
+import { alertSubscribers } from './staffAlerts.js';
+import { sendStaffAlert } from './staffNotify.js';
 import { notifyGroupMembershipDiff, runIntroHeadsUpIfDue } from './groupAlerts.js';
 import { capabilityState, capabilitySettingKey, CAPABILITY_KEYS, CAPABILITY_INPUT_KEYS } from './botCapabilities.js';
 import { listBotActions, botActionSummary, BOT_ACTION_TYPES } from './botActivityLog.js';
@@ -266,6 +281,14 @@ import {
 import { ensureOnboardingLinkTemplate } from './onboardingWhatsappTemplate.js';
 import { ensureAgendaDigestTemplate } from './agendaDigestTemplate.js';
 import {
+  PARTICIPATION_FORM_TEMPLATE,
+  ensureParticipationFormWhatsappTemplate,
+  findApprovedParticipationFormTemplate,
+  participationFormButtonParam,
+  buildParticipationFormRedirectUrl,
+} from './participationFormWhatsappTemplate.js';
+import { FORM_FULL } from './participationForm.js';
+import {
   ensureProductCategories,
   renameCategoryOnProducts,
   normalizeProductCategories,
@@ -319,6 +342,16 @@ import {
   workTypeRole,
   applyRoleLabels,
 } from './wageRates.js';
+import {
+  readStaffAttendanceSettings,
+  writeStaffAttendanceSettings,
+  employeeCanOpenWall,
+  employeeCanSignDailySafety,
+  requireOpenCashSession,
+  overlappingPaidMinutes,
+  earlyArrivalNote,
+} from './staffAttendanceSettings.js';
+import { isDailySafetyCheck } from './wallOperatingDay.js';
 import {
   getConversation,
   listConversations,
@@ -576,28 +609,43 @@ app.get('/o', redirectOnboarding);
 app.get('/api/o', redirectOnboarding);
 
 /**
- * The intake form for one trainee: `/f/<studentId>`.
+ * The intake / participation form for one trainee: `/f/<studentId>[/<slug>]`.
  *
- * The long form is `/register?studentId=…`, and a query string at the end of a
- * WhatsApp message is exactly what stops the link being tappable — there is a
- * comment elsewhere in this file working around that by choosing the shortest
- * possible parameter. A path segment has no such problem.
+ * The long form is `/register[/<slug>]?studentId=…`. A query string at the end
+ * of a WhatsApp message is exactly what stops the link being tappable — a path
+ * segment has no such problem. The optional slug picks wall / event / trip so
+ * the Meta template button can carry the right form without freezing three
+ * separate button URLs.
  */
+function resolveIntakeRegisterPath(slugParam) {
+  const raw = String(slugParam || '').trim().toLowerCase();
+  const alias = { birthday: 'event' };
+  const slug = alias[raw] || raw;
+  if (!slug || slug === 'wall') return '/register';
+  return `/register/${encodeURIComponent(slug)}`;
+}
+
 function redirectIntakeForm(req, res) {
   const studentId = String(req.params.studentId || '').trim();
   if (!studentId) return res.status(400).send('חסר מזהה מתאמן');
-  return res.redirect(302, `${eventPublicBase()}/register?studentId=${encodeURIComponent(studentId)}`);
+  const path = resolveIntakeRegisterPath(req.params.slug);
+  return res.redirect(302, `${eventPublicBase()}${path}?studentId=${encodeURIComponent(studentId)}`);
 }
+app.get('/f/:studentId/:slug', redirectIntakeForm);
 app.get('/f/:studentId', redirectIntakeForm);
+app.get('/api/f/:studentId/:slug', redirectIntakeForm);
 app.get('/api/f/:studentId', redirectIntakeForm);
 
 /** The same form keyed by phone, for a family with no trainee record yet. */
 function redirectIntakeByPhone(req, res) {
   const phone = String(req.params.phone || '').replace(/\D/g, '');
   if (!phone) return res.status(400).send('חסר טלפון');
-  return res.redirect(302, `${eventPublicBase()}/register?phone=${encodeURIComponent(phone)}`);
+  const path = resolveIntakeRegisterPath(req.params.slug);
+  return res.redirect(302, `${eventPublicBase()}${path}?phone=${encodeURIComponent(phone)}`);
 }
+app.get('/fp/:phone/:slug', redirectIntakeByPhone);
 app.get('/fp/:phone', redirectIntakeByPhone);
+app.get('/api/fp/:phone/:slug', redirectIntakeByPhone);
 app.get('/api/fp/:phone', redirectIntakeByPhone);
 
 /**
@@ -961,6 +1009,24 @@ app.put('/api/settings/employee-onboard-fields', requireOwner, async (req, res) 
     res.json(mergeFieldDefs(config));
   } catch (error) {
     res.status(400).json({ error: error.message || 'שמירת הגדרות הטופס נכשלה' });
+  }
+});
+
+// הגדרות שעון נוכחות / פתיחת קיר (דקות לפני שיבוץ + נוסח אישור)
+app.get('/api/settings/staff-attendance', async (_req, res) => {
+  try {
+    res.json(await readStaffAttendanceSettings(db, supa));
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'טעינת ההגדרות נכשלה' });
+  }
+});
+
+app.put('/api/settings/staff-attendance', requireOwner, async (req, res) => {
+  try {
+    const saved = await writeStaffAttendanceSettings(db, supa, req.body || {});
+    res.json(saved);
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'שמירת ההגדרות נכשלה' });
   }
 });
 
@@ -1628,6 +1694,7 @@ app.get('/api/message-templates', (req, res) => {
       persist: persistCore,
     });
     ensureOnboardingLinkTemplate({ db, persist: persistCore });
+    ensureParticipationFormWhatsappTemplate({ db, persist: persistCore });
     ensureAgendaDigestTemplate({ db, persist: persistCore });
   } catch (err) {
     console.warn('event whatsapp templates ensure on list skipped:', err.message);
@@ -7954,19 +8021,47 @@ app.get('/api/wall-shift/open', (req, res) => {
   })));
 });
 
-app.post('/api/wall-shift/open', (req, res) => {
-  const { employee_id: employeeId } = req.body || {};
+app.post('/api/wall-shift/open', async (req, res) => {
+  const { employee_id: employeeId, confirmed } = req.body || {};
   if (!employeeId) return res.status(400).json({ error: 'employee_id is required' });
   const emp = (db.get('employees') || []).find((e) => e.id === employeeId);
   if (!emp) return res.status(404).json({ error: 'העובד לא נמצא' });
+  if (!employeeCanOpenWall(emp)) {
+    return res.status(403).json({ error: 'העובד אינו מורשה לפתוח קיר' });
+  }
+  try {
+    requireOpenCashSession(db);
+  } catch (err) {
+    return res.status(409).json({ error: err.message, code: err.code || 'CASH_CLOSED' });
+  }
+  const settings = await readStaffAttendanceSettings(db, supa);
+  if (confirmed !== true) {
+    return res.status(400).json({
+      error: 'נדרש אישור פתיחת קיר',
+      code: 'CONFIRM_REQUIRED',
+      confirm_message: settings.wall_open_confirm_message,
+    });
+  }
   const shift = db.clockIn(employeeId, 'counter_shift', 'משמרת קיר — מסוף כניסה');
   const dueSafety = (db.getSafetyDueToday() || []).filter((c) => c.is_due && !c.signed_today);
-  res.status(201).json({ shift, due_safety: dueSafety });
+  res.status(201).json({
+    shift,
+    due_safety: dueSafety,
+    confirm_message: settings.wall_open_confirm_message,
+  });
 });
 
 app.post('/api/wall-shift/close', async (req, res) => {
   const { employee_id: employeeId, closed_by: closedById } = req.body || {};
   if (!employeeId) return res.status(400).json({ error: 'employee_id is required' });
+
+  // אי אפשר לסגור משמרת קיר לפני שסוגרים את הקופה.
+  if (getOpenSession(db)) {
+    return res.status(409).json({
+      error: 'יש לסגור את הקופה לפני סגירת משמרת הקיר',
+      code: 'CASH_STILL_OPEN',
+    });
+  }
 
   // מי שסוגר לא חייב להיות מי שפתח — מדריך אחר יכול לסגור בשם מי שכבר הלך.
   // אם לא צוין סוגר, מניחים שהעובד סוגר לעצמו.
@@ -7980,13 +8075,33 @@ app.post('/api/wall-shift/close', async (req, res) => {
   const shift = db.clockOut(employeeId, closerNote, closedById || null);
   if (!shift) return res.status(404).json({ error: 'אין משמרת פתוחה לעובד הזה' });
 
-  // שורת השכר נגזרת מהשעון: מהכניסה עד היציאה, מעוגל לחצי שעה כלפי מעלה.
-  // השעות תמיד משולמות לבעל המשמרת — מי שסגר הוא רק פרט מתועד, לא מקבל השכר.
+  // שורת השכר: חלון הפעלת קיר פחות דקות שיבוצים שעתיים חופפים (בלי כפל).
   const cin = israelLocalParts(shift.clock_in);
   const cout = israelLocalParts(shift.clock_out);
   let row = null;
+  const settings = await readStaffAttendanceSettings(db, supa);
   if (cin && cout) {
-    const minutes = (new Date(shift.clock_out) - new Date(shift.clock_in)) / 60000;
+    const totalMinutes = Math.max(
+      0,
+      (new Date(shift.clock_out) - new Date(shift.clock_in)) / 60000
+    );
+    const dayAssignments = (db.get('work_assignments') || []).filter(
+      (r) => r.employee_id === employeeId && r.date === cin.date
+    );
+    const carved = overlappingPaidMinutes(
+      dayAssignments,
+      cin.date,
+      cin.minutes,
+      cout.minutes
+    );
+    const wallMinutes = Math.max(0, totalMinutes - carved);
+    const exception = earlyArrivalNote(
+      dayAssignments,
+      cin.date,
+      cin.minutes,
+      settings.minutes_before_shift_ok
+    );
+    const noteParts = [closerNote, exception].filter(Boolean);
     row = db.insert('work_assignments', withFrozenPay({
       employee_id: employeeId,
       activity_id: null,
@@ -7996,13 +8111,14 @@ app.post('/api/wall-shift/close', async (req, res) => {
       role: await systemRoleLabel(SYSTEM_ROLE_KEYS.WALL_OPERATOR),
       start_time: cin.hm,
       end_time: cout.hm,
-      hours: roundHoursHalfUp(minutes / 60),
+      hours: roundHoursHalfUp(wallMinutes / 60),
       pay_mode: 'hourly',
       flat_amount: null,
       source: 'wall_shift',
       shift_id: shift.id,
       approved: false,
-      notes: closerNote,
+      notes: noteParts.join(' · '),
+      exception_notes: exception || '',
     }));
   }
   res.json({ shift, row });
@@ -8966,6 +9082,9 @@ function normalizeWorkAssignment(body = {}, { existing = null } = {}) {
     shift_id: body.shift_id !== undefined ? (body.shift_id || null) : (existing?.shift_id ?? null),
     approved: body.approved !== undefined ? !!body.approved : !!(existing?.approved),
     notes: body.notes !== undefined ? (body.notes || '') : (existing?.notes || ''),
+    exception_notes: body.exception_notes !== undefined
+      ? (body.exception_notes || '')
+      : (existing?.exception_notes || ''),
   };
 }
 
@@ -9350,6 +9469,18 @@ app.post('/api/safety/inspections', (req, res) => {
     if (!body.completed_by_employee_id && !body.tester_name && !body.testerName) {
       return res.status(400).json({ error: 'נא לבחור את שם הבודק' });
     }
+    const typeId = body.check_type_id || body.checkTypeId;
+    const type = typeId
+      ? (db.get('safety_check_types') || []).find((t) => t.id === typeId)
+      : null;
+    if (type && isDailySafetyCheck(type) && body.completed_by_employee_id) {
+      const emp = (db.get('employees') || []).find((e) => e.id === body.completed_by_employee_id);
+      if (!employeeCanSignDailySafety(emp)) {
+        return res.status(403).json({
+          error: 'העובד אינו מורשה לחתום על בדיקות בטיחות יומיות',
+        });
+      }
+    }
     const record = db.insertSafetyInspection(body);
     return res.status(201).json(record);
   } catch (err) {
@@ -9451,12 +9582,129 @@ app.delete('/api/level-tests/:id', (req, res) => {
 
 // Cash Register endpoints
 app.get('/api/cash-register', (req, res) => {
-  res.json(db.get('cash_register_shifts'));
+  // Legacy list of old close reports — kept for history tab compatibility
+  res.json(db.get('cash_register_shifts') || []);
 });
 
 app.post('/api/cash-register', (req, res) => {
+  // Legacy close-only path — prefer /api/cash-register/close
   const record = db.insert('cash_register_shifts', req.body);
   res.status(201).json(record);
+});
+
+app.get('/api/cash-register/session', (req, res) => {
+  res.json({
+    ...sessionSnapshot(db),
+    denominations: DENOMINATIONS,
+  });
+});
+
+app.post('/api/cash-register/open', (req, res) => {
+  try {
+    const result = openSession(db, {
+      denominations: req.body?.denominations || {},
+      confirmSuggested: req.body?.confirmSuggested === true,
+      notes: req.body?.notes || '',
+      reqUser: req.crmUser,
+      body: req.body,
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'שגיאה בפתיחת קופה' });
+  }
+});
+
+app.post('/api/cash-register/close', async (req, res) => {
+  try {
+    const result = closeSession(db, {
+      denominations: req.body?.denominations || {},
+      notes: req.body?.notes || '',
+      reqUser: req.crmUser,
+      body: req.body,
+    });
+    // Mirror into legacy collection so older history views still show closes
+    db.insert('cash_register_shifts', {
+      date: new Date().toISOString().slice(0, 10),
+      shift: 'סגירה',
+      employee: result.session?.closed_by_name || '',
+      expected: result.expected,
+      actual: result.actual,
+      discrepancy: result.discrepancy,
+      status: 'closed',
+      session_id: result.session?.id || null,
+    });
+
+    const subscribers = alertSubscribers(db, 'cash_register_closed');
+    let alertsSent = 0;
+    for (const employee of subscribers) {
+      const sent = await sendStaffAlert({
+        employee,
+        kind: 'cash_register_closed',
+        text: result.summaryText,
+        sendId: `sa-cash-close-${result.session?.id}-${employee.id}`,
+        date: new Date().toISOString().slice(0, 10),
+      });
+      if (sent.sent) alertsSent += 1;
+    }
+    res.status(201).json({ ...result, alertsSent, alertSubscribers: subscribers.length });
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'שגיאה בסגירת קופה' });
+  }
+});
+
+app.post('/api/cash-register/fill', requireOwner, (req, res) => {
+  try {
+    res.status(201).json(adjustCash(db, { action: 'fill', ...req.body, reqUser: req.crmUser, body: req.body }));
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'שגיאה' });
+  }
+});
+
+app.post('/api/cash-register/empty', requireOwner, (req, res) => {
+  try {
+    res.status(201).json(adjustCash(db, { action: 'empty', ...req.body, reqUser: req.crmUser, body: req.body }));
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'שגיאה' });
+  }
+});
+
+app.post('/api/cash-register/reset', requireOwner, (req, res) => {
+  try {
+    res.status(201).json(adjustCash(db, { action: 'reset', ...req.body, reqUser: req.crmUser, body: req.body }));
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'שגיאה' });
+  }
+});
+
+app.get('/api/cash-register/ledger', (req, res) => {
+  const rows = listLedger(db, {
+    type: req.query.type,
+    from: req.query.from,
+    to: req.query.to,
+    limit: req.query.limit,
+  }).map((r) => ({ ...r, action_label: actionTypeLabel(r.action_type) }));
+  res.json({
+    rows,
+    expected_cash: sessionSnapshot(db).expected_cash,
+    session: getOpenSession(db),
+  });
+});
+
+app.post('/api/cash-register/receipt-bytes', (req, res) => {
+  try {
+    if (req.body?.drawerOnly) {
+      return res.json(buildDrawerOnlyPayload());
+    }
+    const sale = req.body?.sale || {};
+    res.json(buildSaleReceipt({
+      businessName: req.body?.businessName || 'קיר בועז',
+      sale,
+      changeGiven: req.body?.changeGiven || sale.change_given || 0,
+      openDrawer: req.body?.openDrawer !== false,
+    }));
+  } catch (err) {
+    res.status(400).json({ error: err.message || 'שגיאה בבניית הדפסה' });
+  }
 });
 
 // ─── POS: sales, quotes, punch cards ────────────────────────────────────────
@@ -10356,6 +10604,7 @@ app.post('/api/pos/sale', async (req, res) => {
       sendEmail = false,
       sendWhatsapp = false,
       couponCode,
+      tenderedAmount,
     } = req.body || {};
 
     let lines = mapCartLines(cart);
@@ -10397,6 +10646,25 @@ app.post('/api/pos/sale', async (req, res) => {
         error:
           'אשראי במסוף לא זמין כרגע — אין חיבור למסוף פיזי. השתמשו במזומן או בסליקה בקישור.',
       });
+    }
+
+    const openSessionRow = getOpenSession(db);
+    let tendered = null;
+    let changeGiven = null;
+    if (method === 'cash') {
+      if (!openSessionRow) {
+        return res.status(400).json({
+          error: 'אי אפשר לגבות במזומן בלי לפתוח קופה קודם — עברו ללשונית סגירת קופה ופתחו משמרת, או גבו בסליקה בקישור.',
+          code: 'CASH_SESSION_REQUIRED',
+        });
+      }
+      tendered = tenderedAmount != null ? cashRoundMoney(tenderedAmount) : cashRoundMoney(total);
+      if (!(tendered >= total - 0.001)) {
+        return res.status(400).json({
+          error: `הסכום שהתקבל (₪${tendered}) קטן מסכום העגלה (₪${total})`,
+        });
+      }
+      changeGiven = cashRoundMoney(tendered - total);
     }
     let clientId = parent?.icount_client_id || null;
     let syncedParent = parent;
@@ -10445,8 +10713,21 @@ app.post('/api/pos/sale', async (req, res) => {
       coupon_id: coupon?.id || null,
       coupon_code: coupon?.code || null,
       coupon_discount: couponDiscount || 0,
+      tendered_amount: tendered,
+      change_given: changeGiven,
+      session_id: openSessionRow?.id || null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+    });
+
+    recordSaleInLedger(db, {
+      paymentMethod: method,
+      total,
+      tendered,
+      changeGiven,
+      saleId: sale.id,
+      sessionId: openSessionRow?.id || null,
+      reqUser: req.crmUser,
     });
 
     if (coupon) {
@@ -10508,6 +10789,14 @@ app.post('/api/pos/sale', async (req, res) => {
       }
     }
 
+    const receipt = method === 'cash'
+      ? buildSaleReceipt({
+        sale,
+        changeGiven,
+        openDrawer: true,
+      })
+      : null;
+
     res.status(201).json({
       sale,
       passes,
@@ -10516,6 +10805,8 @@ app.post('/api/pos/sale', async (req, res) => {
       isNewLead: !!isNewLead,
       parent: syncedParent,
       coupon: coupon ? { code: coupon.code, discount: couponDiscount } : null,
+      changeGiven,
+      receiptBytes: receipt,
     });
   } catch (err) {
     console.error('POS sale error:', err.message, err.details?.error_details || '');
@@ -12129,6 +12420,16 @@ app.post('/api/public/onboard/:declarationId/pdf', publicFormRateLimit, async (r
   const decl = (db.get('health_declarations') || []).find((d) => d.id === declarationId);
   if (!decl) return res.status(404).json({ error: 'הצהרה לא נמצאה' });
 
+  // One certificate per declaration. Opening the file (or a sibling's
+  // onboarding) used to mint another copy every time, so the folder filled
+  // with identical "קיר טיפוס" rows for a single signature.
+  const already = (db.get('client_documents') || []).find(
+    (d) => d.declarationId === declarationId && d.type === 'health_waiver_pdf'
+  );
+  if (already) {
+    return res.json({ success: true, document: already, existing: true });
+  }
+
   const raw = pdfBase64.includes(',') ? pdfBase64.split(',')[1] : pdfBase64;
   let buffer;
   try {
@@ -12174,8 +12475,18 @@ app.post('/api/public/onboard/:declarationId/pdf', publicFormRateLimit, async (r
 });
 
 // Staff: list documents in personal file
-app.get('/api/students/:id/documents', (req, res) => {
+app.get('/api/students/:id/documents', async (req, res) => {
   const studentId = req.params.id;
+  // Always re-read the durable store. A long-lived process can keep deleted
+  // copies in memory after a cleanup, and the folder then looks full again.
+  if (supa.isEnabled()) {
+    try {
+      const remote = await supa.getAll('client_documents');
+      if (remote) db.set('client_documents', remote);
+    } catch (err) {
+      console.error('client_documents refresh failed:', err.message);
+    }
+  }
   const docs = (db.get('client_documents') || [])
     .filter((d) => d.studentId === studentId)
     .slice()
@@ -12513,65 +12824,157 @@ app.post('/api/leads/:studentId/send-onboard-link', async (req, res) => {
   }
 });
 
-// Send health-form link via WhatsApp (from lead card)
+// Send participation-form link via WhatsApp (from lead card)
 app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
   const target = resolveLeadSendTarget(req.params.studentId, req.body?.parentId);
   if (target.error) return res.status(target.status).json({ error: target.error });
   const { student, parent } = target;
 
+  try {
+    ensureParticipationFormWhatsappTemplate({ db, persist: persistCore });
+  } catch (tplErr) {
+    console.warn('participation form template ensure skipped:', tplErr.message);
+  }
+
   const origin = resolvePublicAppOrigin(req.body?.origin);
   const requestedSlug = slugifyFormTemplate(req.body?.templateSlug || req.body?.slug || '');
-  const template = requestedSlug
+  const formTemplate = requestedSlug
     ? findFormTemplateBySlug(requestedSlug)
     : findDefaultFormTemplate();
-  const pathSlug = template?.slug && !template.isDefault ? `/${template.slug}` : '';
+  const pathSlug = formTemplate?.slug && !formTemplate.isDefault ? `/${formTemplate.slug}` : '';
   const healthUrl = buildShareableHealthUrl(origin, {
     pathSlug,
     studentId: student.id,
     phone: parent.phone,
   });
+  const buttonParam = participationFormButtonParam(student.id, formTemplate);
+  const shortUrl = buildParticipationFormRedirectUrl(student.id, formTemplate) || healthUrl;
+
+  const parentLabel = parent.name || 'לקוח';
+  const studentLabel = student.name || parentLabel;
+  const forChild = studentLabel
+    && parentLabel
+    && studentLabel.trim().toLowerCase() !== parentLabel.trim().toLowerCase();
+  // The form is three things — participant details, the health declaration and
+  // the waiver. Calling it "the health declaration" undersold it.
+  const bodyText = forChild
+    ? `שלום ${parentLabel}, מצורף קישור למילוי ${FORM_FULL} עבור ${studentLabel}.`
+    : `שלום ${parentLabel}, בבקשה מלאו את ${FORM_FULL} לפני הגעתכם.`;
+  const freeformText = `${bodyText}\n\n${healthUrl}`;
+
+  let sent = false;
+  let via = null;
+  let result = null;
+  let warning;
 
   try {
-    const settings = db.getSettings() || {};
-    const parentLabel = parent.name || 'לקוח';
-    const studentLabel = student.name || '';
-    const forChild = studentLabel
-      && parentLabel
-      && studentLabel.trim().toLowerCase() !== parentLabel.trim().toLowerCase();
-    // The form is three things — participant details, the health declaration
-    // and the waiver. Calling it "the health declaration" undersold it, and a
-    // parent who opened it found fields nobody had mentioned.
-    const freeformText = forChild
-      ? `שלום ${parentLabel}, מצורף קישור למילוי פרטי המשתתף, הצהרת בריאות והסרת אחריות עבור ${studentLabel}:\n\n${healthUrl}`
-      : `שלום ${parentLabel}, בבקשה מלאו את פרטי המשתתף, הצהרת הבריאות והסרת האחריות לפני הגעתכם:\n\n${healthUrl}`;
-    const send = await sendWhatsAppWithOptionalTemplate(parent.phone, {
-      templateCandidates: [
-        settings.waHealthTemplate,
-        process.env.WA_HEALTH_TEMPLATE,
-        't2',
-      ].filter(Boolean),
-      variables: [parentLabel],
-      freeformText,
-      parentId: parent.id,
-    });
+    const approvedTpl = findApprovedParticipationFormTemplate(db);
+    const templateName = approvedTpl?.meta_name || '';
+
+    // 1) Approved Meta template with a URL button (works outside the 24h window).
+    if (templateName && buttonParam) {
+      try {
+        const waResult = await whatsappService.sendTemplateMessage(
+          parent.phone,
+          templateName,
+          [parentLabel, studentLabel],
+          {
+            parentId: parent.id,
+            studentId: student.id,
+            buttonUrlParam: buttonParam,
+            source: 'participation_form',
+          }
+        );
+        if (waResult?.success) {
+          sent = true;
+          via = 'template';
+          result = waResult;
+        } else {
+          warning = waResult?.error || 'שליחת תבנית וואטסאפ נכשלה';
+        }
+      } catch (waErr) {
+        warning = waErr.message || 'שליחת תבנית וואטסאפ נכשלה';
+      }
+    }
+
+    // 2) Session-window CTA button — neat link without waiting for Meta review.
+    const inWindow = canSendFreeform(parent, 'whatsapp');
+    if (!sent && inWindow) {
+      try {
+        const waResult = await whatsappService.sendCtaUrlMessage(
+          parent.phone,
+          {
+            body: bodyText,
+            buttonText: 'למילוי הטופס',
+            url: shortUrl,
+          },
+          {
+            parentId: parent.id,
+            studentId: student.id,
+            source: 'participation_form',
+          }
+        );
+        if (waResult?.success) {
+          sent = true;
+          via = 'cta';
+          result = waResult;
+          warning = undefined;
+        } else if (!warning) {
+          warning = waResult?.error;
+        }
+      } catch (waErr) {
+        if (!warning) warning = waErr.message;
+      }
+    }
+
+    // 3) Plain text with the full URL — last resort inside the window.
+    if (!sent && inWindow) {
+      try {
+        const waResult = await whatsappService.sendTextMessage(parent.phone, freeformText, false, {
+          parentId: parent.id,
+          studentId: student.id,
+          source: 'participation_form',
+          clip: false,
+        });
+        if (waResult?.success) {
+          sent = true;
+          via = 'text';
+          result = waResult;
+          warning = undefined;
+        } else if (!warning) {
+          warning = waResult?.error || 'שליחת טקסט חופשי נכשלה';
+        }
+      } catch (waErr) {
+        if (!warning) warning = waErr.message;
+      }
+    }
+
+    if (!sent && !inWindow && !approvedTpl) {
+      warning =
+        warning ||
+        `חלון 24 השעות סגור, והתבנית «${PARTICIPATION_FORM_TEMPLATE}» עדיין לא מאושרת במטא. ` +
+        'במסך דיוור ← תבניות: שלחו לאישור את «טופס השתתפות · קישור למילוי».';
+    }
+
     res.json({
-      success: !!send.sent,
-      sent: !!send.sent,
+      success: sent,
+      sent,
+      via: via || null,
       healthUrl,
-      templateSlug: template?.slug || null,
-      // Which of the two parents it actually went to — the card says so rather
-      // than leaving staff to assume it followed the tab they were on.
+      shortUrl,
+      templateSlug: formTemplate?.slug || null,
+      templateName: via === 'template' ? templateName : null,
       sentTo: parentLabel,
-      result: send.result || null,
-      warning: send.sent ? undefined : send.error,
+      result,
+      warning: sent ? undefined : warning,
     });
   } catch (err) {
-    // Still return the link so staff can copy/share manually
     res.status(200).json({
       success: false,
       sent: false,
       healthUrl,
-      templateSlug: template?.slug || null,
+      shortUrl,
+      templateSlug: formTemplate?.slug || null,
       warning: err.message,
     });
   }
@@ -12624,6 +13027,11 @@ initDb({ requireDurable: requiresDurableStore() }).then(() => {
     });
   } catch (err) {
     console.warn('event whatsapp templates seed skipped:', err.message);
+  }
+  try {
+    ensureParticipationFormWhatsappTemplate({ db, persist: persistCore });
+  } catch (err) {
+    console.warn('participation form template seed skipped:', err.message);
   }
   Promise.resolve(ensureDefaultScenarios({ db, persist: persistCore }))
     .then((created) => {

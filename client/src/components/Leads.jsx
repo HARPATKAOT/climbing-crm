@@ -27,6 +27,11 @@ import {
 import { studentDeclarationStatus } from '../utils/declarationStatus.js';
 import { safetyTestStatus, SAFETY_TONE } from '../utils/safetyValidity.js';
 import {
+  FORM_FOLDER,
+  FORM_SHORT,
+  FORM_SIGNED_ROW,
+} from '../utils/participationForm.js';
+import {
   buildLeadEntries,
   isArchivedParent,
   isParentOnlyLead,
@@ -324,9 +329,9 @@ const sourceLabel = (m) => {
 function DeclarationIcons({ status, validOnly = false, size = 13, onClick }) {
   const marks = [
     // האייקון מגיע מקטלוג סוגי ההצהרות, כדי שאותו סימן ישמש כאן ובתיק הלקוח.
-    { key: 'wall', Icon: DECLARATION_KINDS.wall.Icon, label: 'הצהרת בריאות' },
-    { key: 'event', Icon: DECLARATION_KINDS.event.Icon, label: 'הצהרה לפעילות בקיר' },
-    { key: 'trip', Icon: DECLARATION_KINDS.trip.Icon, label: 'הצהרה לטיולים' },
+    { key: 'wall', Icon: DECLARATION_KINDS.wall.Icon, label: 'טופס השתתפות לקיר' },
+    { key: 'event', Icon: DECLARATION_KINDS.event.Icon, label: 'טופס השתתפות לפעילות בקיר' },
+    { key: 'trip', Icon: DECLARATION_KINDS.trip.Icon, label: 'טופס השתתפות לטיולים' },
   ];
   const validMarks = marks.filter(({ key }) => {
     const state = status?.[key];
@@ -347,7 +352,7 @@ function DeclarationIcons({ status, validOnly = false, size = 13, onClick }) {
   return (
     <Wrap
       {...(onClick
-        ? { type: 'button', onClick, title: 'פתיחת תיקיית הצהרות' }
+        ? { type: 'button', onClick, title: `פתיחת תיקיית ${FORM_FOLDER}` }
         : {})}
       style={{
         display: 'inline-flex',
@@ -676,38 +681,53 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     return () => { cancelled = true; };
   }, [parentOnly, student.id]);
 
-  // Backfill personal-file PDF when a signed declaration exists but no file was stored yet
+  // Backfill a personal-file PDF for every signed declaration that still has
+  // none. The old check stopped at "any health PDF on the file", so a trip
+  // signed after the wall never got a row — the icon went green, the folder
+  // stayed empty for that activity.
   const pdfBackfillRef = useRef(new Set());
   useEffect(() => {
-    if (parentOnly || !student?.id || !healthDecl?.id || docsLoading) return;
-    if (clientDocuments.some((d) => d.declarationId === healthDecl.id || d.type === 'health_waiver_pdf')) return;
-    if (pdfBackfillRef.current.has(healthDecl.id)) return;
-    pdfBackfillRef.current.add(healthDecl.id);
+    if (parentOnly || !student?.id || docsLoading) return;
+    const missing = studentDeclarations.filter((decl) => {
+      if (!decl?.id) return false;
+      if (!(decl.signed || decl.status === 'approved' || decl.waiverAccepted)) return false;
+      if (clientDocuments.some((d) => d.declarationId === decl.id && d.type === 'health_waiver_pdf')) return false;
+      if (pdfBackfillRef.current.has(decl.id)) return false;
+      return true;
+    });
+    if (!missing.length) return;
 
     let cancelled = false;
     (async () => {
-      try {
-        const { blob, fileName } = await buildHealthDeclarationPdf(healthDecl);
-        const pdfBase64 = await blobToBase64(blob);
-        const res = await fetch(`/api/public/onboard/${encodeURIComponent(healthDecl.id)}/pdf`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pdfBase64, fileName }),
-        });
-        if (!res.ok || cancelled) {
-          pdfBackfillRef.current.delete(healthDecl.id);
-          return;
+      let uploadedAny = false;
+      for (const decl of missing) {
+        if (cancelled) break;
+        pdfBackfillRef.current.add(decl.id);
+        try {
+          const { blob, fileName } = await buildHealthDeclarationPdf(decl);
+          const pdfBase64 = await blobToBase64(blob);
+          const res = await fetch(`/api/public/onboard/${encodeURIComponent(decl.id)}/pdf`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pdfBase64, fileName }),
+          });
+          if (!res.ok) {
+            pdfBackfillRef.current.delete(decl.id);
+            continue;
+          }
+          uploadedAny = true;
+        } catch {
+          pdfBackfillRef.current.delete(decl.id);
         }
-        const docsRes = await fetch(`/api/students/${encodeURIComponent(student.id)}/documents`);
-        const docs = docsRes.ok ? await docsRes.json() : [];
-        if (!cancelled) setClientDocuments(Array.isArray(docs) ? docs : []);
-      } catch {
-        pdfBackfillRef.current.delete(healthDecl.id);
       }
+      if (!uploadedAny || cancelled) return;
+      const docsRes = await fetch(`/api/students/${encodeURIComponent(student.id)}/documents`);
+      const docs = docsRes.ok ? await docsRes.json() : [];
+      if (!cancelled) setClientDocuments(Array.isArray(docs) ? docs : []);
     })();
 
     return () => { cancelled = true; };
-  }, [parentOnly, student.id, healthDecl, docsLoading, clientDocuments]);
+  }, [parentOnly, student.id, studentDeclarations, docsLoading, clientDocuments]);
 
   const openPersonalWhatsApp = (message) => {
     const digits = String(parent?.phone || '').replace(/[^\d]/g, '');
@@ -763,9 +783,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       const result = await sendHealthFormForStudent(student.id, student.name);
       setHealthSendLink(result.link || healthShareUrl);
       if (result.sent) {
+        const formLabel = selectedTemplate
+          ? templateShortLabel(selectedTemplate)
+          : FORM_SHORT;
         setHealthSendMsg(result.sentTo
-          ? `נשלח קישור להצהרת בריאות בוואטסאפ ל${result.sentTo}`
-          : 'נשלח קישור להצהרת בריאות בוואטסאפ');
+          ? `נשלח קישור ל${formLabel} בוואטסאפ ל${result.sentTo}`
+          : `נשלח קישור ל${formLabel} בוואטסאפ`);
       } else {
         setHealthSendMsg(
           result.warning
@@ -1316,8 +1339,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   // הלחיצה ולא אחריה.
   const punchSafety = safetyTestStatus(levelTestsHistory);
   const punchBlockers = [];
-  if (!isHealthSigned) punchBlockers.push('אין הצהרת בריאות והסרת אחריות');
-  else if (healthExpired) punchBlockers.push('הצהרת הבריאות פגה');
+  if (!isHealthSigned) punchBlockers.push(`אין ${FORM_SHORT} בתוקף`);
+  else if (healthExpired) punchBlockers.push(`${FORM_SHORT} פג תוקף`);
   if (punchSafety.state === 'missing') punchBlockers.push('אין מבחן אבטחה');
   else if (punchSafety.state === 'expired') punchBlockers.push('מבחן האבטחה פג תוקף');
   const punchBlockReason = punchBlockers.join(' · ');
@@ -1460,7 +1483,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         const sendResult = await sendHealthFormForStudent(newId, name);
         const pendingHealthLink = sendResult.link || '';
         const pendingHealthMsg = sendResult.sent
-          ? `נשלח קישור להצהרת בריאות בוואטסאפ ל${sendResult.sentTo || 'הורה'}`
+          ? `נשלח קישור ל${FORM_SHORT} בוואטסאפ ל${sendResult.sentTo || 'הורה'}`
           : (sendResult.warning
             || 'השליחה האוטומטית נכשלה — העתיקו את הקישור או שלחו מוואטסאפ אישי');
         if (pendingHealthLink) {
@@ -3073,7 +3096,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               <>
             <FolderRow
               id="health"
-              title="הצהרת בריאות"
+              title={FORM_FOLDER}
               icon={FileCheck2}
               accent="#F472B6"
               summary={healthSummary}
@@ -3097,34 +3120,90 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     || null;
                   return decl ? declarationKind(decl) : null;
                 };
-                const combinedDocuments = [...clientDocuments];
-                const hasStoredHealthDoc = combinedDocuments.some(isHealthDoc);
-                if (
-                  !hasStoredHealthDoc
-                  && healthDecl
-                  && (healthDecl.signature_url || healthDecl.signed || healthDecl.waiverAccepted || healthDecl.status === 'approved')
-                ) {
-                  combinedDocuments.push({
-                    id: `virtual_${healthDecl.id}`,
-                    fileName: 'הצהרת בריאות חתומה',
-                    created_at: healthDecl.signedAt || healthDecl.signedDate || healthDecl.date || healthDecl.createdAt || Date.now(),
+                // One row per declaration (newest file wins). Duplicate PDFs
+                // for the same signature used to stack as identical lines.
+                const byDeclaration = new Map();
+                for (const doc of clientDocuments) {
+                  if (!isHealthDoc(doc)) continue;
+                  const key = doc.declarationId || doc.id;
+                  const prev = byDeclaration.get(key);
+                  if (!prev || String(doc.created_at || '') > String(prev.created_at || '')) {
+                    byDeclaration.set(key, doc);
+                  }
+                }
+                for (const decl of studentDeclarations) {
+                  if (!(decl.signed || decl.status === 'approved' || decl.waiverAccepted)) continue;
+                  if (byDeclaration.has(decl.id)) continue;
+                  if ([...byDeclaration.values()].some((d) => d.declarationId === decl.id)) continue;
+                  byDeclaration.set(decl.id, {
+                    id: `virtual_${decl.id}`,
+                    fileName: FORM_SIGNED_ROW,
+                    created_at: decl.signedAt || decl.signedDate || decl.date || decl.createdAt || Date.now(),
                     type: 'health_waiver_pdf',
+                    declarationId: decl.id,
                     isVirtual: true,
-                    virtualData: healthDecl,
+                    virtualData: decl,
                   });
-                } else if (!hasStoredHealthDoc && isHealthSigned) {
-                  combinedDocuments.push({
+                }
+                if (
+                  !byDeclaration.size
+                  && isHealthSigned
+                  && !studentDeclarations.length
+                ) {
+                  byDeclaration.set(`virtual_signed_${student.id}`, {
                     id: `virtual_signed_${student.id}`,
-                    fileName: 'הצהרת בריאות חתומה',
+                    fileName: FORM_SIGNED_ROW,
                     created_at: student.healthSignedAt || student.waiverSignedAt || Date.now(),
                     type: 'health_waiver_pdf',
                     isVirtual: true,
                     virtualData: healthDecl,
                   });
                 }
+                const combinedDocuments = [
+                  ...[...byDeclaration.values()].sort((a, b) =>
+                    String(b.created_at || '').localeCompare(String(a.created_at || ''))
+                  ),
+                  ...clientDocuments.filter(isClearanceDoc),
+                ];
                 const hasHealthDoc = combinedDocuments.some(isHealthDoc);
-                // Renewal controls appear when nothing is signed, or the signature expired
+                // Renewal banner when nothing is signed, or the signature expired
                 const showUnsignedControls = healthExpired || (!isHealthSigned && !hasHealthDoc);
+                // Form-type picker + send stay available even after a signature —
+                // a family may still need the trip or activity form.
+                const canSendForm = !!parent?.phone;
+
+                const formTypePicker = formTemplates.length > 0 ? (
+                  <div className="form-group" style={{ marginBottom: 10 }}>
+                    <label className="form-label" style={{ fontSize: 11 }}>סוג הטופס שיישלח</label>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {formTemplates.map((t) => {
+                        const kind = templateKind(t);
+                        const KindIcon = kind.Icon;
+                        const active = t.slug === selectedFormSlug;
+                        return (
+                          <button
+                            key={t.id}
+                            type="button"
+                            title={t.title}
+                            onClick={() => setSelectedFormSlug(t.slug)}
+                            style={{
+                              display: 'inline-flex', alignItems: 'center', gap: 5,
+                              padding: '5px 10px', borderRadius: 999, cursor: 'pointer',
+                              fontSize: 12, fontWeight: active ? 700 : 600,
+                              lineHeight: 1.2,
+                              color: active ? kind.color : 'var(--text-2)',
+                              background: active ? 'rgba(255,255,255,0.07)' : 'transparent',
+                              border: `1px solid ${active ? kind.color : 'var(--border)'}`,
+                            }}
+                          >
+                            <KindIcon size={13} style={{ flexShrink: 0 }} />
+                            {templateShortLabel(t)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null;
 
                 const handleDownloadDoc = async (doc) => {
                   const source = doc.virtualData || healthDecl;
@@ -3185,18 +3264,27 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     if (healthRow) {
                       if (declId) pdfBackfillRef.current.delete(declId);
                       setStudentDeclarations((prev) => prev.filter((d) => d.id !== declId));
-                      setHealthDecl((prev) => (!declId || prev?.id === declId ? null : prev));
+                      setHealthDecl((prev) => {
+                        if (!declId || prev?.id === declId) {
+                          const next = studentDeclarations.find((d) => d.id !== declId);
+                          return next || null;
+                        }
+                        return prev;
+                      });
+                      // Keep the card marks in sync with whatever is still on
+                      // file — clearing them while a trip/wall signature remains
+                      // made the icons lie about a delete that was only partial.
                       if (onUpdateStudent) {
                         onUpdateStudent(student.id, {
-                          healthSignedAt: null,
-                          waiverSignedAt: null,
+                          healthSignedAt: data.student?.healthSignedAt ?? null,
+                          waiverSignedAt: data.student?.waiverSignedAt ?? null,
                           status: data.student?.status || student.status,
                         });
                       }
                     }
                     const docsRes = await fetch(`/api/students/${encodeURIComponent(student.id)}/documents`);
                     setClientDocuments(docsRes.ok ? await docsRes.json() : []);
-                    setHealthSendMsg(healthRow ? 'הצהרת הבריאות נמחקה מהתיק' : 'המסמך נמחק מהתיק');
+                    setHealthSendMsg(healthRow ? `${FORM_SHORT} נמחק מהתיק` : 'המסמך נמחק מהתיק');
                   } catch (err) {
                     console.error(err);
                     setHealthSendMsg(err.message === 'delete failed' ? 'מחיקת המסמך נכשלה' : (err.message || 'מחיקת המסמך נכשלה'));
@@ -3222,52 +3310,17 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                             </div>
                             {healthExpired && (
                               <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 4 }}>
-                                ההצהרה הקודמת פגה בתאריך {healthExpiry.toLocaleDateString('he-IL')} · הקובץ הישן נשמר בתיק
+                                הטופס הקודם פג בתאריך {healthExpiry.toLocaleDateString('he-IL')} · הקובץ הישן נשמר בתיק
                               </div>
                             )}
                           </div>
                         </div>
-                        {/* בורר סוג ההצהרה. הכותרות המלאות פותחות כולן באותן
-                            מילים, ולכן הרשימה הנפתחת הציגה שלוש שורות כמעט
-                            זהות שנחתכו בקצה. כפתור לכל סוג, עם האייקון שלו
-                            מהרשימה, אומר במבט מה נשלח. */}
-                        {formTemplates.length > 0 && (
-                          <div className="form-group" style={{ marginBottom: 10 }}>
-                            <label className="form-label" style={{ fontSize: 11 }}>סוג ההצהרה שתישלח</label>
-                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                              {formTemplates.map((t) => {
-                                const kind = templateKind(t);
-                                const KindIcon = kind.Icon;
-                                const active = t.slug === selectedFormSlug;
-                                return (
-                                  <button
-                                    key={t.id}
-                                    type="button"
-                                    title={t.title}
-                                    onClick={() => setSelectedFormSlug(t.slug)}
-                                    style={{
-                                      display: 'inline-flex', alignItems: 'center', gap: 5,
-                                      padding: '5px 10px', borderRadius: 999, cursor: 'pointer',
-                                      fontSize: 12, fontWeight: active ? 700 : 600,
-                                      lineHeight: 1.2,
-                                      color: active ? kind.color : 'var(--text-2)',
-                                      background: active ? 'rgba(255,255,255,0.07)' : 'transparent',
-                                      border: `1px solid ${active ? kind.color : 'var(--border)'}`,
-                                    }}
-                                  >
-                                    <KindIcon size={13} style={{ flexShrink: 0 }} />
-                                    {templateShortLabel(t)}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
+                        {formTypePicker}
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                           <button
                             type="button"
                             className="btn btn-success btn-xs"
-                            disabled={sendingHealth || !parent?.phone}
+                            disabled={sendingHealth || !canSendForm}
                             onClick={handleSendHealthForm}
                           >
                             <Send size={12} /> {sendingHealth ? 'שולח...' : 'שלח בוואטסאפ'}
@@ -3286,38 +3339,43 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                       </>
                     )}
 
-                    {parentOnly && isHealthSigned && !healthExpired && (
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        <button
-                          type="button"
-                          className="btn btn-success btn-xs"
-                          disabled={sendingHealth || !parent?.phone}
-                          onClick={handleSendHealthForm}
-                        >
-                          <Send size={12} /> {sendingHealth ? 'שולח...' : 'שלח בוואטסאפ'}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-primary btn-xs"
-                          disabled={downloadingPdf || !healthDecl}
-                          onClick={async () => {
-                            if (!healthDecl) return;
-                            setDownloadingPdf(true);
-                            setHealthSendMsg('');
-                            try {
-                              await downloadHealthDeclarationPdf(healthDecl);
-                              setHealthSendMsg('קובץ האישור החתום הורד למחשב');
-                            } catch (err) {
-                              console.error(err);
-                              setHealthSendMsg('שגיאה בהורדת האישור');
-                            } finally {
-                              setDownloadingPdf(false);
-                            }
-                          }}
-                        >
-                          <Download size={12} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
-                        </button>
-                      </div>
+                    {!showUnsignedControls && (
+                      <>
+                        {formTypePicker}
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            className="btn btn-success btn-xs"
+                            disabled={sendingHealth || !canSendForm}
+                            onClick={handleSendHealthForm}
+                          >
+                            <Send size={12} /> {sendingHealth ? 'שולח...' : 'שלח בוואטסאפ'}
+                          </button>
+                          {parentOnly && isHealthSigned && !healthExpired && (
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-xs"
+                              disabled={downloadingPdf || !healthDecl}
+                              onClick={async () => {
+                                if (!healthDecl) return;
+                                setDownloadingPdf(true);
+                                setHealthSendMsg('');
+                                try {
+                                  await downloadHealthDeclarationPdf(healthDecl);
+                                  setHealthSendMsg('קובץ האישור החתום הורד למחשב');
+                                } catch (err) {
+                                  console.error(err);
+                                  setHealthSendMsg('שגיאה בהורדת האישור');
+                                } finally {
+                                  setDownloadingPdf(false);
+                                }
+                              }}
+                            >
+                              <Download size={12} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
+                            </button>
+                          )}
+                        </div>
+                      </>
                     )}
 
                     {healthSendMsg && (
@@ -3352,28 +3410,13 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     )}
 
                     {!parentOnly && (
-                      <div style={{ marginTop: showUnsignedControls || healthSendMsg ? 12 : 0 }}>
-                        {(showUnsignedControls || healthSendMsg) && (
-                          <div style={{ borderTop: '1px solid var(--border)', marginBottom: 12 }} />
-                        )}
-                        {/* One send button for the whole file — it used to repeat
-                            on every row, which is what made the list look busy. */}
+                      <div style={{ marginTop: 12 }}>
+                        <div style={{ borderTop: '1px solid var(--border)', marginBottom: 12 }} />
                         <div style={{
                           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                           gap: 8, marginBottom: 8,
                         }}>
                           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)' }}>מסמכים בתיק</div>
-                          {!showUnsignedControls && hasHealthDoc && (
-                            <button
-                              type="button"
-                              className="btn btn-success btn-xs"
-                              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}
-                              disabled={sendingHealth || !parent?.phone}
-                              onClick={handleSendHealthForm}
-                            >
-                              <Send size={12} /> {sendingHealth ? 'שולח...' : 'שלח בוואטסאפ'}
-                            </button>
-                          )}
                         </div>
                         {docsLoading && !hasHealthDoc ? (
                           <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען...</div>
@@ -3392,7 +3435,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                               // the child's name inside it, and it wrapped over
                               // three lines. It moves to the tooltip; the row says
                               // what the document is.
-                              const title = clearanceRow ? 'אישור רופא' : 'הצהרת בריאות חתומה';
+                              const title = clearanceRow ? 'אישור רופא' : FORM_SIGNED_ROW;
                               const stamp = doc.created_at ? new Date(doc.created_at) : null;
                               return (
                                 <div
@@ -3454,7 +3497,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                       type="button"
                                       className="btn btn-ghost btn-xs"
                                       style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--red, #F87171)' }}
-                                      title={healthRow ? 'מחיקת הצהרת הבריאות מהתיק' : 'מחיקת המסמך מהתיק'}
+                                      title={healthRow ? `מחיקת ${FORM_SHORT} מהתיק` : 'מחיקת המסמך מהתיק'}
                                       disabled={busy || !!deletingDocId}
                                       onClick={() => {
                                         setDeleteConfirmText('');
@@ -3481,7 +3524,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         <div className="modal slide-up" style={{ maxWidth: 420 }}>
                           <div className="modal-header">
                             <div className="modal-title">
-                              {pendingDocDelete.healthRow ? 'מחיקת הצהרת בריאות' : 'מחיקת מסמך'}
+                              {pendingDocDelete.healthRow ? `מחיקת ${FORM_SHORT}` : 'מחיקת מסמך'}
                             </div>
                             <button
                               type="button"
@@ -3494,7 +3537,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                           <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                             <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}>
                               {pendingDocDelete.healthRow
-                                ? `הצהרת הבריאות של ${student.name || 'המתאמן'} תימחק מהתיק יחד עם הקבצים ששמורים תחתיה, והמתאמן יסומן שוב כמי שטרם חתם.`
+                                ? `${FORM_SHORT} של ${student.name || 'המתאמן'} יימחק מהתיק יחד עם הקבצים ששמורים תחתיו, והמתאמן יסומן שוב כמי שטרם חתם.`
                                 : 'המסמך יימחק מהתיק ולא ניתן יהיה לשחזר אותו.'}
                             </div>
                             <div className="form-group" style={{ marginBottom: 0 }}>
@@ -4692,7 +4735,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 <PlusCircle size={15} />
                 {addingChild
                   ? 'מוסיף...'
-                  : (sendHealthOnAdd ? 'הוסף ושלח הצהרה' : 'הוסף')}
+                  : (sendHealthOnAdd ? `הוסף ושלח ${FORM_SHORT}` : 'הוסף')}
               </button>
             </>
           }
@@ -4732,7 +4775,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 onChange={(e) => setSendHealthOnAdd(e.target.checked)}
                 style={{ accentColor: 'var(--primary)' }}
               />
-              <span style={{ fontSize: 13 }}>שלח הצהרת בריאות להורה בוואטסאפ</span>
+              <span style={{ fontSize: 13 }}>שלח {FORM_SHORT} להורה בוואטסאפ</span>
             </label>
             {addChildError && (
               <div className="alert alert-warn" style={{ marginTop: 4 }}>{addChildError}</div>

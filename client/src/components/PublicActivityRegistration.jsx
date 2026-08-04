@@ -358,7 +358,7 @@ export default function PublicActivityRegistration() {
         setError(
           missing.some(isScreeningQuestion)
             ? 'יש לענות כן או לא על כל שאלות הבריאות'
-            : 'יש לסמן את כל סעיפי ההצהרה והבטיחות'
+            : 'יש לסמן את כל סעיפי טופס ההשתתפות והבטיחות'
         );
         return;
       }
@@ -627,8 +627,8 @@ export default function PublicActivityRegistration() {
                     <strong>{member.name}</strong>
                     {member.is_adult ? ' (מבוגר/ת)' : ''}
                     {member.health_valid
-                      ? ' — יש הצהרת בריאות בתוקף'
-                      : ' — נדרשת הצהרת בריאות'}
+                      ? ' — יש טופס השתתפות בתוקף'
+                      : ' — נדרש טופס השתתפות'}
                   </span>
                 </label>
               );
@@ -695,7 +695,7 @@ export default function PublicActivityRegistration() {
 
         {step === 3 && healthCurrent && (
           <section key={healthCurrent.key}>
-            <h2>הצהרה עבור {healthCurrent.name}</h2>
+            <h2>טופס השתתפות עבור {healthCurrent.name}</h2>
             {(() => {
               // The same two kinds the registration form distinguishes. Rendered
               // as one list of tick boxes, a medical question had no way to be
@@ -820,7 +820,7 @@ export default function PublicActivityRegistration() {
               {allParticipants.map((participant) => (
                 <div key={participant.key}>
                   <span>{participant.name}</span>
-                  <strong>{participant.reuse_health ? 'הצהרה בתוקף' : 'הצהרה חדשה'}</strong>
+                  <strong>{participant.reuse_health ? 'טופס השתתפות בתוקף' : 'טופס השתתפות חדש'}</strong>
                 </div>
               ))}
               {paidMode && (

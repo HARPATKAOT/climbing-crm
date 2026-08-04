@@ -19,6 +19,9 @@ const EVENT_SYSTEM_META_NAMES = new Set([
   'event_host_payment',
   'event_participant_link',
   'equipment_payment',
+  'equipment_payment_link',
+  'participation_form_link',
+  'customer_details_v2',
 ]);
 
 const CATEGORY_META = {

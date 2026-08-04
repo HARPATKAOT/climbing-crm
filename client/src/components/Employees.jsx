@@ -36,7 +36,10 @@ import {
   summarizeByRole,
   workTypeRole,
 } from '../utils/wageRates.js';
-import { roleIcon, employeeAvatarIcon, AVATAR_ICON_OPTIONS } from '../utils/roleIcons.js';
+import {
+  roleIcon, roleColor, employeeAvatarIcon, employeeAvatarColor,
+  AVATAR_ICON_OPTIONS, travelColor,
+} from '../utils/roleIcons.js';
 import AppSelect from './AppSelect.jsx';
 
 const STATUS_OPTIONS = ['עובד פעיל', 'מנהל', 'עובד זמני', 'מדריך צעיר', 'מועמד', 'ארכיון', 'סנפלינג'];
@@ -303,11 +306,13 @@ function MonthlyPayCard({ employee, agreement, rows, month, onEditWage }) {
               : rate?.mode === 'daily'
                 ? `${entry.count === 1 ? 'יום אחד' : `${entry.count} ימים`} × ₪${rate.amount}`
                 : `${entry.hours} ש׳${rate ? ` × ₪${rate.amount}` : ''}`;
-            const EntryIcon = roleIcon(entry.role || entry.label);
+            const roleKey = entry.role || entry.label;
+            const EntryIcon = roleIcon(roleKey);
+            const entryColor = roleColor(roleKey);
             return (
               <div key={entry.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, gap: 8 }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                  <EntryIcon size={13} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+                  <EntryIcon size={13} style={{ color: entryColor, flexShrink: 0 }} />
                   {entry.label}
                   <span style={{ color: 'var(--text-3)', fontSize: 11 }}> · {detail}</span>
                 </span>
@@ -320,7 +325,7 @@ function MonthlyPayCard({ employee, agreement, rows, month, onEditWage }) {
 
           {line(
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <Car size={13} style={{ flexShrink: 0 }} />
+              <Car size={13} style={{ color: travelColor, flexShrink: 0 }} />
               נסיעות · {totals.days === 1 ? 'יום עבודה אחד' : `${totals.days} ימי עבודה`}{travel ? ` × ₪${travel}` : ''}
             </span>,
             travel ? `₪${totals.travel.toLocaleString()}` : 'לא הוגדר',
@@ -356,9 +361,10 @@ function PaymentMethodBadge({ method }) {
 /** שורת תעריף אחת: אייקון התפקיד, שמו והסכום — בכל מקום באותה צורה. */
 function RateLine({ role, amount, mode, muted = false }) {
   const Icon = roleIcon(role);
+  const color = roleColor(role);
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <Icon size={13} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+      <Icon size={13} style={{ color, flexShrink: 0 }} />
       <span style={{ color: muted ? 'var(--text-3)' : 'inherit' }}>{role}</span>
       <span style={{ color: 'var(--green)', fontWeight: 600 }}>
         ₪{Number(amount).toLocaleString()}{mode === 'daily' ? '/יום' : '/ש׳'}
@@ -396,13 +402,14 @@ function EmployeeWageAgreementCard({ employee, agreement, onEdit }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {rates.map((r) => {
             const Icon = roleIcon(r.role);
+            const color = roleColor(r.role);
             return (
               <div key={r.role} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, gap: 8 }}>
                 <span style={{
                   display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0,
                   color: myRoles.includes(r.role) ? 'var(--text-1)' : 'var(--text-3)',
                 }}>
-                  <Icon size={13} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+                  <Icon size={13} style={{ color, flexShrink: 0 }} />
                   {r.role}
                   {!myRoles.includes(r.role) && <span style={{ fontSize: 10, color: 'var(--text-3)' }}> · לא מסומן אצלו</span>}
                 </span>
@@ -418,7 +425,7 @@ function EmployeeWageAgreementCard({ employee, agreement, onEdit }) {
             borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 4,
           }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--text-3)' }}>
-              <Car size={13} /> נסיעות ליום עבודה
+              <Car size={13} style={{ color: travelColor }} /> נסיעות ליום עבודה
             </span>
             <span style={{ fontWeight: 700 }}>{travel ? `₪${travel}` : 'לא הוגדר'}</span>
           </div>
@@ -1189,11 +1196,22 @@ function RoleCatalogModal({ catalog, onCatalogChange, onRoleRenamed, onRoleDelet
   );
 }
 
-// ─── Modal: Employee Form (Add/Edit) ──────────────────────────────────────────
-function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'details', onSave, onClose }) {
-  const isEdit = !!employee;
+// ─── טופס עובד: בתוך התיק (embedded) או חלונית להוספה מהירה ─────────────────
+function EmployeeFormModal({
+  employee,
+  employees,
+  wage = null,
+  initialTab = 'details',
+  /** כשמועבר — הלשונית נשלטת מבחוץ (תיק העובד), בלי טאבים פנימיים */
+  activeSection = null,
+  embedded = false,
+  onSave,
+  onClose,
+}) {
+  const isEdit = !!(employee && employee.id);
   // מי שנכנס דרך „תעריפים” רוצה את מסך השכר, לא את הפרטים האישיים.
-  const [tab, setTab] = useState(initialTab); // 'details' | 'roles'
+  const [tab, setTab] = useState(initialTab); // 'details' | 'roles' | 'alerts'
+  const section = activeSection || tab;
   // One answers object, keyed exactly like the public onboarding form's field
   // catalog — the same source of truth for label/type/options, so a field
   // renamed there reads the same way here without a second edit.
@@ -1234,6 +1252,13 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
       .catch(() => {});
   }, []);
   const [customCert, setCustomCert]   = useState('');
+  const [canOpenWall, setCanOpenWall] = useState(() => employee?.can_open_wall === true);
+  const [canSignDailySafety, setCanSignDailySafety] = useState(
+    () => employee?.can_sign_daily_safety === true
+  );
+  const [canOperateCash, setCanOperateCash] = useState(
+    () => employee?.can_operate_cash === true
+  );
   // קטלוג התפקידים מגיע מהשרת; תפקידי מערכת נעולים, השאר ניתנים לעריכה.
   const [roleCatalog, setRoleCatalog] = useState(null);
   const [showCatalog, setShowCatalog] = useState(false);
@@ -1313,7 +1338,7 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
     setSaving(true);
     setSaveError('');
     try {
-      await onSave({
+      const saved = await onSave({
         ...(employee || {}),
         name: answers.name.trim(),
         phone: answers.phone.trim(),
@@ -1334,6 +1359,9 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
         hasIdPhoto: hasEmployeeDoc({ documents }, 'idPhoto') || !!pendingFiles.idPhoto,
         hasForm101: hasEmployeeDoc({ documents }, 'form101') || !!pendingFiles.form101,
         certifications,
+        can_open_wall: canOpenWall,
+        can_sign_daily_safety: canSignDailySafety,
+        can_operate_cash: canOperateCash,
         alerts,
         access_level: accessLevel,
         // Settings for alerts nobody is subscribed to are dropped: a lead time
@@ -1355,7 +1383,10 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
           travel_per_day: parseFloat(travel) || 0,
         },
       });
-      onClose();
+      if (saved?.documents) setDocuments(saved.documents);
+      setPendingFiles({});
+      if (!embedded && typeof onClose === 'function') onClose();
+      return saved;
     } catch (err) {
       setSaveError(err?.message || 'שמירה נכשלה');
     } finally {
@@ -1363,41 +1394,11 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
     }
   };
 
-  return (
-    <div className="modal-backdrop" onClick={e => e.target === e.currentTarget && !saving && onClose()}>
-      <div className="modal slide-up" style={{ maxWidth: 680 }}>
-        <div className="modal-header">
-          <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {isEdit ? <Edit2 size={16} /> : <Plus size={16} />}
-            {/* השם בכותרת — בעריכה צריך לדעת על מי מסתכלים בלי לגלול לשדה השם. */}
-            {isEdit ? 'עריכת פרטי עובד' : 'הוספת עובד חדש'}
-            {isEdit && answers.name?.trim() && (
-              <span style={{ color: 'var(--text-3)', fontWeight: 400 }}>
-                · {answers.name.trim()}
-              </span>
-            )}
-          </div>
-          <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} disabled={saving}><X size={18} /></button>
-        </div>
-        <div className="tab-bar tab-bar-inline" style={{ padding: '10px 16px 0' }}>
-          <button type="button" className={`tab-pill ${tab === 'details' ? 'active' : ''}`} onClick={() => setTab('details')}>
-            פרטי העובד
-          </button>
-          <button type="button" className={`tab-pill ${tab === 'roles' ? 'active' : ''}`} onClick={() => setTab('roles')}>
-            <Award size={14} /> תפקידים ושכר
-          </button>
-          <button type="button" className={`tab-pill ${tab === 'alerts' ? 'active' : ''}`} onClick={() => setTab('alerts')}>
-            <Bell size={14} /> התראות
-            {alerts.length > 0 && (
-              <span className="badge badge-green" style={{ fontSize: 10, marginRight: 4 }}>{alerts.length}</span>
-            )}
-          </button>
-        </div>
-        <div className="modal-body">
+  const formBody = (
           <form id="employee-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
-            {/* שני הטאבים חיים באותו טופס; הסתרה ולא הסרה, כדי ששמירה אחת תיקח את שניהם. */}
-            <div style={{ display: tab === 'details' ? 'flex' : 'none', flexDirection: 'column', gap: 14 }}>
+            {/* כל הסעיפים באותו טופס; הסתרה ולא הסרה, כדי ששמירה אחת תיקח הכול. */}
+            <div style={{ display: section === 'details' ? 'flex' : 'none', flexDirection: 'column', gap: 14 }}>
             <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6 }}>פרטים אישיים</div>
             <div className="form-grid-2">
               <div className="form-group">
@@ -1512,7 +1513,7 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
             </div>
             </div>
 
-            <div style={{ display: tab === 'roles' ? 'flex' : 'none', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: section === 'roles' ? 'flex' : 'none', flexDirection: 'column', gap: 14 }}>
             <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span>תפקידים והסמכות</span>
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowCatalog(true)}>
@@ -1536,17 +1537,18 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {certifications.map((c) => {
                   const CertIcon = roleIcon(c);
+                  const color = roleColor(c);
                   return (
                   <span
                     key={c}
                     style={{
                       display: 'inline-flex', alignItems: 'center', gap: 6,
                       padding: '4px 8px 4px 10px', borderRadius: 20, fontSize: 12,
-                      background: 'rgba(99,102,241,0.2)', color: '#A5B4FC',
-                      outline: '1px solid #A5B4FC55', fontWeight: 700,
+                      background: `${color}22`, color,
+                      outline: `1px solid ${color}55`, fontWeight: 700,
                     }}
                   >
-                    <CertIcon size={13} style={{ flexShrink: 0 }} />
+                    <CertIcon size={13} style={{ flexShrink: 0, color }} />
                     {c}
                     <button
                       type="button"
@@ -1567,6 +1569,7 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               {certOptions.filter((c) => !certifications.includes(c)).map((c) => {
                 const CertIcon = roleIcon(c);
+                const color = roleColor(c);
                 return (
                 <button
                   key={c}
@@ -1579,7 +1582,7 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
                     outline: '1px solid var(--border)',
                   }}
                 >
-                  <CertIcon size={13} style={{ flexShrink: 0 }} />
+                  <CertIcon size={13} style={{ flexShrink: 0, color }} />
                   + {c}
                 </button>
                 );
@@ -1611,6 +1614,37 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
               </button>
             </div>
 
+            <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>
+              הרשאות מסוף
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: -6 }}>
+              סימון ידני אחרי שהעובד עבר את ההסמכה המתאימה — לא נגזר אוטומטית מהתפקידים.
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={canOpenWall}
+                onChange={(e) => setCanOpenWall(e.target.checked)}
+              />
+              מורשה לפתוח קיר
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={canSignDailySafety}
+                onChange={(e) => setCanSignDailySafety(e.target.checked)}
+              />
+              מורשה לחתום על בדיקות בטיחות
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={canOperateCash}
+                onChange={(e) => setCanOperateCash(e.target.checked)}
+              />
+              מורשה לפתוח ולסגור קופה
+            </label>
+
             <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>הסכם שכר</div>
             <div className="form-grid-2">
               <div className="form-group">
@@ -1633,10 +1667,11 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
                 {certifications.map((role) => {
                   const row = wageRates[role] || { mode: defaultModeFor(role), amount: '' };
                   const RoleIcon = roleIcon(role);
+                  const color = roleColor(role);
                   return (
                     <div key={role} style={{ display: 'grid', gridTemplateColumns: '1fr 110px 110px', gap: 8, alignItems: 'center' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-                        <RoleIcon size={13} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+                        <RoleIcon size={13} style={{ color, flexShrink: 0 }} />
                         {role}
                       </div>
                       <AppSelect
@@ -1665,7 +1700,7 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
                   alignItems: 'center', borderTop: '1px solid var(--border)', paddingTop: 10,
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-                    <Car size={13} style={{ color: 'var(--text-3)', flexShrink: 0 }} /> נסיעות
+                    <Car size={13} style={{ color: travelColor, flexShrink: 0 }} /> נסיעות
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>ליום עבודה</div>
                   <input
@@ -1689,7 +1724,7 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
                 because the list only grows, and an instructor scrolling past
                 "שיבוץ מהבוט" to reach their own group is how a screen stops
                 being read. */}
-            <div style={{ display: tab === 'alerts' ? 'flex' : 'none', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: section === 'alerts' ? 'flex' : 'none', flexDirection: 'column', gap: 14 }}>
               <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
                 הודעות פנימיות מהמערכת לטלפון שלמעלה. אף אחד לא מסומן — ההתראות
                 נשלחות למספרים שבהגדרות הבוט.
@@ -1823,22 +1858,25 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
               <div style={{ fontSize: 13, color: 'var(--red)' }}>{saveError}</div>
             )}
 
+            <div style={{
+              display: 'flex', gap: 8, justifyContent: embedded ? 'stretch' : 'flex-end',
+              paddingTop: 8, borderTop: '1px solid var(--border)', position: 'sticky', bottom: 0,
+              background: embedded ? '#0D1117' : undefined, paddingBottom: embedded ? 4 : 0,
+            }}>
+              {!embedded && (
+                <button type="button" className="btn btn-ghost" onClick={onClose} disabled={saving}>ביטול</button>
+              )}
+              <button type="submit" className="btn btn-primary" disabled={saving} style={embedded ? { flex: 1 } : undefined}>
+                <Save size={15} /> {saving ? 'שומר...' : (isEdit ? 'שמור שינויים' : 'הוסף עובד')}
+              </button>
+            </div>
           </form>
-        </div>
-        <div className="modal-footer">
-          <button className="btn btn-ghost" onClick={onClose} disabled={saving}>ביטול</button>
-          <button form="employee-form" type="submit" className="btn btn-primary" disabled={saving}>
-            <Save size={15} /> {saving ? 'שומר...' : (isEdit ? 'שמור שינויים' : 'הוסף עובד')}
-          </button>
-        </div>
-      </div>
+  );
 
-      {showCatalog && (
+  const catalogModal = showCatalog ? (
         <RoleCatalogModal
           catalog={roleCatalog}
           onCatalogChange={setRoleCatalog}
-          // הטופס הפתוח מחזיק עותק מקומי של התפקידים — מיישרים אותו עם השינוי,
-          // אחרת שמירה תחזיר את השם הישן לעובד הזה.
           onRoleRenamed={(from, to) => {
             setCertifications((prev) => prev.map((c) => (c === from ? to : c)));
             setWageRates((prev) => {
@@ -1853,7 +1891,53 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
           }}
           onClose={() => setShowCatalog(false)}
         />
-      )}
+  ) : null;
+
+  if (embedded) {
+    return (
+      <>
+        {formBody}
+        {catalogModal}
+      </>
+    );
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && !saving && onClose()}>
+      <div className="modal slide-up" style={{ maxWidth: 680 }}>
+        <div className="modal-header">
+          <div className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {isEdit ? <Edit2 size={16} /> : <Plus size={16} />}
+            {isEdit ? 'עריכת פרטי עובד' : 'הוספת עובד חדש'}
+            {isEdit && answers.name?.trim() && (
+              <span style={{ color: 'var(--text-3)', fontWeight: 400 }}>
+                · {answers.name.trim()}
+              </span>
+            )}
+          </div>
+          <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={onClose} disabled={saving}><X size={18} /></button>
+        </div>
+        {!activeSection && (
+          <div className="tab-bar tab-bar-inline" style={{ padding: '10px 16px 0' }}>
+            <button type="button" className={`tab-pill ${tab === 'details' ? 'active' : ''}`} onClick={() => setTab('details')}>
+              פרטי העובד
+            </button>
+            <button type="button" className={`tab-pill ${tab === 'roles' ? 'active' : ''}`} onClick={() => setTab('roles')}>
+              <Award size={14} /> תפקידים ושכר
+            </button>
+            <button type="button" className={`tab-pill ${tab === 'alerts' ? 'active' : ''}`} onClick={() => setTab('alerts')}>
+              <Bell size={14} /> התראות
+              {alerts.length > 0 && (
+                <span className="badge badge-green" style={{ fontSize: 10, marginRight: 4 }}>{alerts.length}</span>
+              )}
+            </button>
+          </div>
+        )}
+        <div className="modal-body">
+          {formBody}
+        </div>
+      </div>
+      {catalogModal}
     </div>
   );
 }
@@ -1994,12 +2078,13 @@ function WageFormModal({ wage, employees, onSave, onClose }) {
 
             {visibleRates.map((rate) => {
               const RoleIcon = roleIcon(rate.role);
+              const color = roleColor(rate.role);
               return (
               <div key={rate.role} style={{
                 display: 'grid', gridTemplateColumns: '1fr 110px 110px', gap: 8, alignItems: 'center',
               }}>
                 <div style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 7 }}>
-                  <RoleIcon size={14} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+                  <RoleIcon size={14} style={{ color, flexShrink: 0 }} />
                   {rate.role}
                 </div>
                 <AppSelect
@@ -2028,7 +2113,7 @@ function WageFormModal({ wage, employees, onSave, onClose }) {
               alignItems: 'center', borderTop: '1px solid var(--border)', paddingTop: 10,
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-                <Car size={13} style={{ color: 'var(--text-3)', flexShrink: 0 }} /> נסיעות
+                <Car size={13} style={{ color: travelColor, flexShrink: 0 }} /> נסיעות
               </div>
               <div style={{ fontSize: 12, color: 'var(--text-3)', textAlign: 'center' }}>ליום עבודה</div>
               <input
@@ -2274,6 +2359,8 @@ export default function Employees() {
   // ברירת המחדל בתשלום החודשי: רק מי שבאמת עבד החודש. רשימת כל העובדים
   // הפכה את המסך לים של אפסים שצריך לדוג ממנו את השורות האמיתיות.
   const [payrollWorkedOnly, setPayrollWorkedOnly] = useState(true);
+  // סינון הטבלה למטה לפי עובד — נפתח מלחיצה על „לא מאושרות” בכרטיס.
+  const [payrollEmpFilter, setPayrollEmpFilter] = useState('');
   const [newManualRow, setNewManualRow] = useState({
     employee_id: '',
     date: '',
@@ -2286,7 +2373,13 @@ export default function Employees() {
   });
 
   // UI state
-  const [activeTab, setActiveTab]         = useState('permanent'); // permanent | certs | wages | shifts | payroll
+  const [activeTab, setActiveTab]         = useState('permanent'); // permanent | certs | wages | shifts | payroll | settings
+  const [staffAttSettings, setStaffAttSettings] = useState({
+    minutes_before_shift_ok: 15,
+    wall_open_confirm_message: 'המקום מסודר ונקי?',
+  });
+  const [staffAttBusy, setStaffAttBusy] = useState(false);
+  const [staffAttMsg, setStaffAttMsg] = useState('');
   const [selectedEmployee, setSelectedEmployee] = useState(null);
   // תיק העובד מחולק ללשוניות; פרטים, שכר, משמרות, תעודות והתראות — כל אחד עולם בפני עצמו.
   const [drawerTab, setDrawerTab] = useState('file'); // file | wage | shifts | certs | alerts
@@ -2297,10 +2390,16 @@ export default function Employees() {
   const [editingEmployee, setEditingEmployee]   = useState(null);
   const [editingWage, setEditingWage]           = useState(null);
 
-  // מעבר לעובד אחר מחזיר את התיק ללשונית הראשונה — אחרת נפתח תיק חדש
-  // באמצע הסכם השכר של הקודם.
+  // פתיחת תיק בלשונית מסוימת. הלשונית נקבעת כאן (לא ב־useEffect),
+  // כדי שלחיצה מתשלום חודשי תוכל לפתוח ישר במשמרות בלי שיאופס לתיק אישי.
+  const openEmployeeDrawer = (emp, tab = 'file') => {
+    if (!emp) return;
+    setAvatarPickerOpen(false);
+    setDrawerTab(tab);
+    setSelectedEmployee(emp);
+  };
+
   useEffect(() => {
-    setDrawerTab('file');
     setAvatarPickerOpen(false);
   }, [selectedEmployee?.id]);
 
@@ -2311,7 +2410,7 @@ export default function Employees() {
     const openId = takeOpenParam(searchParams, setSearchParams);
     if (!openId) return;
     const match = employees.find((e) => String(e.id) === String(openId));
-    if (match) setSelectedEmployee(match);
+    if (match) openEmployeeDrawer(match, 'file');
   }, [employees, searchParams, setSearchParams]);
 
   // Sorting and Filtering
@@ -2377,40 +2476,49 @@ export default function Employees() {
   }, [highlightWorkId, workAssignments]);
 
   const refreshData = async () => {
-    try {
+    const loadOnce = async () => {
       const { from, to } = monthBounds(payrollMonth);
       const [emps, wgs, sfts, asgs, acts, grps] = await Promise.all([
-        fetch('/api/employees').then(r => r.json()).catch(() => null),
-        fetch('/api/wages').then(r => r.json()).catch(() => null),
-        fetch('/api/shifts').then(r => r.json()).catch(() => null),
-        fetch(`/api/work-assignments?from=${from}&to=${to}`).then(r => r.json()).catch(() => null),
-        fetch('/api/activities').then(r => r.json()).catch(() => null),
-        // שורות שנולדו מנוכחות בחוג תלויות בקבוצה ולא באירוע ביומן.
-        fetch('/api/groups').then(r => r.json()).catch(() => null),
+        fetch('/api/employees').then(async (r) => {
+          const data = await r.json().catch(() => null);
+          if (!r.ok) throw new Error(data?.error || `employees ${r.status}`);
+          return data;
+        }),
+        fetch('/api/wages').then((r) => r.json()).catch(() => null),
+        fetch('/api/shifts').then((r) => r.json()).catch(() => null),
+        fetch(`/api/work-assignments?from=${from}&to=${to}`).then((r) => r.json()).catch(() => null),
+        fetch('/api/activities').then((r) => r.json()).catch(() => null),
+        fetch('/api/groups').then((r) => r.json()).catch(() => null),
       ]);
+      if (!Array.isArray(emps)) throw new Error('רשימת עובדים לא תקינה');
+      return { emps, wgs, sfts, asgs, acts, grps };
+    };
 
-      setEmployees(Array.isArray(emps) ? emps : []);
-      setWages(Array.isArray(wgs) ? wgs : []);
-      setShifts(Array.isArray(sfts) ? sfts : []);
-      setWorkAssignments(Array.isArray(asgs)
-        ? asgs.map((r) => ({
-          ...r,
-          hours: roundHoursQuarter(r.hours),
-          pay_mode: r.pay_mode === 'flat' ? 'flat' : 'hourly',
-          flat_amount: r.flat_amount ?? '',
-        }))
-        : []);
-      setActivities(Array.isArray(acts) ? acts : []);
-      setGroups(Array.isArray(grps) ? grps : []);
-    } catch (err) {
-      console.error('Failed to fetch staff data:', err);
-      setEmployees([]);
-      setWages([]);
-      setShifts([]);
-      setWorkAssignments([]);
-      setActivities([]);
-      setGroups([]);
+    let lastErr = null;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        const { emps, wgs, sfts, asgs, acts, grps } = await loadOnce();
+        setEmployees(emps);
+        setWages(Array.isArray(wgs) ? wgs : []);
+        setShifts(Array.isArray(sfts) ? sfts : []);
+        setWorkAssignments(Array.isArray(asgs)
+          ? asgs.map((r) => ({
+            ...r,
+            hours: roundHoursQuarter(r.hours),
+            pay_mode: r.pay_mode === 'flat' ? 'flat' : 'hourly',
+            flat_amount: r.flat_amount ?? '',
+          }))
+          : []);
+        setActivities(Array.isArray(acts) ? acts : []);
+        setGroups(Array.isArray(grps) ? grps : []);
+        return;
+      } catch (err) {
+        lastErr = err;
+        // אחרי הפעלת שרת מחדש יש כמה שניות של טעינה — מנסים שוב
+        await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
+      }
     }
+    console.error('Failed to fetch staff data:', lastErr);
   };
 
   useEffect(() => {
@@ -2418,6 +2526,40 @@ export default function Employees() {
     const t = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(t);
   }, [payrollMonth]);
+
+  useEffect(() => { setPayrollEmpFilter(''); }, [payrollMonth]);
+
+  useEffect(() => {
+    if (activeTab !== 'settings') return;
+    let cancelled = false;
+    fetch('/api/settings/staff-attendance')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => {
+        if (!cancelled && body) setStaffAttSettings(body);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeTab]);
+
+  const saveStaffAttSettings = async () => {
+    setStaffAttBusy(true);
+    setStaffAttMsg('');
+    try {
+      const res = await fetch('/api/settings/staff-attendance', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(staffAttSettings),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'שמירה נכשלה');
+      setStaffAttSettings(body);
+      setStaffAttMsg('נשמר');
+    } catch (err) {
+      setStaffAttMsg(err.message || 'שמירה נכשלה');
+    } finally {
+      setStaffAttBusy(false);
+    }
+  };
 
   // המשמרות הפתוחות עכשיו, עם העובד שלהן — זה כל מה שמעניין במסך הנוכחות.
   const openShifts = useMemo(() => shifts
@@ -2633,7 +2775,9 @@ export default function Employees() {
 
     await refreshData();
     setEditingEmployee(null);
-    if (selectedEmployee?.id === saved.id) {
+    setShowEmployeeForm(false);
+    // תיק פתוח (כולל טיוטת עובד חדש) מתעדכן אחרי שמירה — בלי לסגור את המגירה.
+    if (!selectedEmployee?.id || selectedEmployee.id === saved.id) {
       setSelectedEmployee(saved);
     }
     return saved;
@@ -2687,12 +2831,34 @@ export default function Employees() {
     setShowWageForm(true);
   };
 
-  /** פותח את טופס העריכה בלשונית הרלוונטית — כל לשונית בתיק מפנה לחלק שלה. */
-  const openEmployeeEdit = (emp, tab = 'details') => {
+  /** פותח את התיק בלשונית הרלוונטית — העריכה בתוך התיק, בלי חלונית. */
+  const openEmployeeEdit = (emp, tab = 'file') => {
     if (!emp) return;
-    setEditingEmployee(emp);
-    setEmployeeFormTab(tab);
-    setShowEmployeeForm(true);
+    const drawerKey = tab === 'details' ? 'file'
+      : tab === 'roles' ? 'wage'
+      : tab === 'alerts' ? 'alerts'
+      : tab;
+    openEmployeeDrawer(emp, drawerKey);
+  };
+
+  const openNewEmployeeDrawer = () => {
+    setSelectedEmployee({
+      name: '',
+      phone: '',
+      is_active: true,
+      certifications: [],
+      alerts: [],
+      documents: {},
+    });
+    setDrawerTab('file');
+    setAvatarPickerOpen(false);
+  };
+
+  const formSectionForDrawer = (tab) => {
+    if (tab === 'file' || tab === 'certs') return 'details';
+    if (tab === 'wage') return 'roles';
+    if (tab === 'alerts') return 'alerts';
+    return null;
   };
 
   /** שמירת אייקון התיק בנפרד — בחירה מהירה בלי לפתוח את כל הטופס. */
@@ -2771,8 +2937,9 @@ export default function Employees() {
           hours: roundHoursQuarter(row.hours),
           pay_mode: payMode,
           flat_amount: payMode === 'flat' ? Number(row.flat_amount) || 0 : null,
-          source: 'manual',
+          source: row.source || 'manual',
           notes: row.notes || '',
+          exception_notes: row.exception_notes || '',
           approved: row.approved,
         }),
       });
@@ -2857,17 +3024,6 @@ export default function Employees() {
     <div className="fade-in">
       
       {/* ─── Modals ───────────────────────────────────────────────────────── */}
-      {showEmployeeForm && (
-        <EmployeeFormModal
-          employee={editingEmployee}
-          employees={employees}
-          wage={wages.find((w) => w.employee_id === editingEmployee?.id) || null}
-          initialTab={employeeFormTab}
-          onSave={handleSaveEmployee}
-          onClose={() => { setShowEmployeeForm(false); setEditingEmployee(null); }}
-        />
-      )}
-
       {showWageForm && (
         <WageFormModal
           wage={editingWage}
@@ -2901,6 +3057,7 @@ export default function Employees() {
         }}>
           {(() => {
             const AvatarIcon = employeeAvatarIcon(selectedEmployee.avatar_icon);
+            const avatarColor = employeeAvatarColor(selectedEmployee.avatar_icon);
             return (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--border)', paddingBottom: 14, marginBottom: 16, position: 'relative' }}>
             <div style={{ display: 'flex', gap: 14, alignItems: 'center', minWidth: 0 }}>
@@ -2908,23 +3065,25 @@ export default function Employees() {
               <button
                 type="button"
                 className="avatar avatar-lg"
-                title="בחירת אייקון"
-                onClick={() => setAvatarPickerOpen((v) => !v)}
+                title={selectedEmployee.id ? 'בחירת אייקון' : 'שמרו את העובד ואז בחרו אייקון'}
+                onClick={() => selectedEmployee.id && setAvatarPickerOpen((v) => !v)}
                 style={{
-                  border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                  border: 'none', cursor: selectedEmployee.id ? 'pointer' : 'default', fontFamily: 'inherit',
                   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  color: '#7DD3FC',
+                  color: avatarColor,
                 }}
               >
                 <AvatarIcon size={26} strokeWidth={1.75} />
               </button>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 26, fontWeight: 800, lineHeight: 1.15, letterSpacing: '-0.02em' }}>
-                  {selectedEmployee.name}
+                  {selectedEmployee.name?.trim() || (selectedEmployee.id ? 'עובד' : 'עובד חדש')}
                 </div>
-                <div style={{ marginTop: 6 }}>
-                  <PaymentMethodBadge method={selectedEmployee.payment_method} />
-                </div>
+                {selectedEmployee.id && (
+                  <div style={{ marginTop: 6 }}>
+                    <PaymentMethodBadge method={selectedEmployee.payment_method} />
+                  </div>
+                )}
               </div>
             </div>
             <button
@@ -2943,7 +3102,7 @@ export default function Employees() {
                   display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, width: 200,
                 }}
               >
-                {AVATAR_ICON_OPTIONS.map(({ key, Icon, label }) => {
+                {AVATAR_ICON_OPTIONS.map(({ key, Icon, label, color }) => {
                   const active = (selectedEmployee.avatar_icon || 'user') === key;
                   return (
                     <button
@@ -2954,12 +3113,12 @@ export default function Employees() {
                       style={{
                         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
                         padding: '8px 4px', borderRadius: 10, cursor: 'pointer',
-                        border: active ? '1px solid #38BDF8' : '1px solid transparent',
-                        background: active ? 'rgba(56,189,248,0.12)' : 'transparent',
-                        color: active ? '#7DD3FC' : 'var(--text-2)', fontFamily: 'inherit',
+                        border: active ? `1px solid ${color}` : '1px solid transparent',
+                        background: active ? `${color}22` : 'transparent',
+                        color: active ? color : 'var(--text-2)', fontFamily: 'inherit',
                       }}
                     >
-                      <Icon size={20} strokeWidth={1.75} />
+                      <Icon size={20} strokeWidth={1.75} style={{ color }} />
                       <span style={{ fontSize: 10, lineHeight: 1.2 }}>{label}</span>
                     </button>
                   );
@@ -2970,13 +3129,12 @@ export default function Employees() {
             );
           })()}
 
-          {/* לשוניות התיק — כל עולם תוכן בפני עצמו, במקום גלילה אחת ארוכה. */}
+          {/* לשוניות התיק — העריכה בתוך התיק, בלי חלונית נפרדת. */}
           <div className="tab-bar" style={{ marginBottom: 14, flexWrap: 'wrap' }}>
             {[
               { key: 'file',   label: 'תיק אישי',       icon: User },
-              { key: 'wage',   label: 'הסכם שכר',       icon: Coins },
+              { key: 'wage',   label: 'תפקידים ושכר',   icon: Coins },
               { key: 'shifts', label: 'משמרות',         icon: CalendarRange },
-              { key: 'certs',  label: 'תעודות ומסמכים', icon: Award },
               { key: 'alerts', label: 'התראות',         icon: Bell },
             ].map(({ key, label, icon: Icon }) => (
               <button
@@ -2992,186 +3150,7 @@ export default function Employees() {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14, flex: 1, overflowY: 'auto' }}>
 
-            {drawerTab === 'file' && (<>
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => openEmployeeEdit(selectedEmployee, 'details')}
-              >
-                <Pencil size={12} /> עריכה
-              </button>
-            </div>
-            <div className="card card-p">
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>פרטי התקשרות</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
-                <DetailRow icon={Phone} label="טלפון">{selectedEmployee.phone}</DetailRow>
-                {selectedEmployee.email && (
-                  <DetailRow icon={Mail} label="אימייל">{selectedEmployee.email}</DetailRow>
-                )}
-                {selectedEmployee.address && (
-                  <DetailRow icon={MapPin} label="מגורים">{selectedEmployee.address}</DetailRow>
-                )}
-              </div>
-            </div>
-
-            <div className="card card-p">
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>פרטים אישיים</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 13 }}>
-                <DetailRow icon={CreditCard} label="ת.ז">{selectedEmployee.idNumber || '—'}</DetailRow>
-                <DetailRow icon={User} label="מין">{selectedEmployee.gender || 'זכר'}</DetailRow>
-                <DetailRow icon={Calendar} label="תאריך לידה">
-                  <DateDMY value={selectedEmployee.birthDate} />
-                </DetailRow>
-                <DetailRow icon={Cake} label="גיל">{calculateAge(selectedEmployee.birthDate) || '—'}</DetailRow>
-              </div>
-            </div>
-
-            <div className="card card-p">
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>פרטי בנק</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
-                <DetailRow icon={Banknote} label="חשבון בנק">
-                  {selectedEmployee.bank_account_details || 'טרם עודכן'}
-                </DetailRow>
-                {selectedEmployee.pensionCompany && (
-                  <DetailRow icon={Landmark} label="חברת פנסיה">{selectedEmployee.pensionCompany}</DetailRow>
-                )}
-              </div>
-            </div>
-            </>)}
-
-            {drawerTab === 'certs' && (<>
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => openEmployeeEdit(selectedEmployee, 'details')}
-              >
-                <Pencil size={12} /> עריכת מסמכים
-              </button>
-            </div>
-            <div className="card card-p">
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>טפסים ואישורים</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
-                {EMPLOYEE_DOC_FIELDS.map((field) => {
-                  const doc = selectedEmployee.documents?.[field.key];
-                  const present = hasEmployeeDoc(selectedEmployee, field.key);
-                  return (
-                    <div key={field.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        {present ? (
-                          <span style={{
-                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                            width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
-                            background: 'rgba(52,211,153,0.15)',
-                            border: '1px solid rgba(52,211,153,0.5)',
-                            color: 'var(--green)',
-                          }}>
-                            <Check size={11} strokeWidth={3} />
-                          </span>
-                        ) : (
-                          <span style={{
-                            display: 'inline-block', width: 18, height: 18, borderRadius: '50%',
-                            flexShrink: 0, border: '1px dashed var(--border-hover)',
-                          }} />
-                        )}
-                        <span style={{ color: present ? 'var(--text-1)' : 'var(--text-3)' }}>{field.label}</span>
-                      </span>
-                      {doc?.storagePath && (
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          onClick={async () => {
-                            const res = await fetch(`/api/employees/${encodeURIComponent(selectedEmployee.id)}/documents/${field.key}/download`);
-                            if (!res.ok) return;
-                            const blob = await res.blob();
-                            const url = URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.href = url;
-                            a.download = doc.fileName || field.label;
-                            a.click();
-                            URL.revokeObjectURL(url);
-                          }}
-                        >
-                          <Download size={12} /> הורד
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="card card-p">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <span style={{ fontSize: 11, color: 'var(--text-3)', flex: 1 }}>תפקידים והסמכות</span>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => openEmployeeEdit(selectedEmployee, 'roles')}
-                >
-                  <Pencil size={12} /> עריכה
-                </button>
-              </div>
-              {selectedEmployee.certifications?.length > 0 ? (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {selectedEmployee.certifications.map((c) => {
-                    const CertIcon = roleIcon(c);
-                    return (
-                      <span
-                        key={c}
-                        className="badge badge-blue"
-                        style={{ fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 5 }}
-                      >
-                        <CertIcon size={12} />
-                        {c}
-                      </span>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>לא הוגדרו תפקידים</div>
-              )}
-            </div>
-            </>)}
-
-            {drawerTab === 'alerts' && (<>
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => openEmployeeEdit(selectedEmployee, 'alerts')}
-              >
-                <Pencil size={12} /> עריכה
-              </button>
-            </div>
-            <div className="card card-p">
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>
-                רמת הרשאה · {accessLevelLabel(employeeAccessLevel(selectedEmployee))}
-              </div>
-              {(selectedEmployee.alerts || []).length > 0 ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {STAFF_ALERT_KINDS
-                    .filter((a) => (selectedEmployee.alerts || []).includes(a.key))
-                    .map((a) => (
-                      <div key={a.key} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13 }}>
-                        <Bell size={13} style={{ color: 'var(--green)', marginTop: 2, flexShrink: 0 }} />
-                        <div>
-                          <div style={{ fontWeight: 700 }}>{a.label}</div>
-                          {a.hint && (
-                            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{a.hint}</div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                </div>
-              ) : (
-                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>לא מקבל התראות</div>
-              )}
-            </div>
-            </>)}
-
-            {drawerTab === 'shifts' && (<>
+            {drawerTab === 'shifts' && selectedEmployee.id && (<>
             <ShiftJournalCard employeeId={selectedEmployee.id} onOpenEntry={openShiftEntry} />
 
             <ClassAttendanceSummary
@@ -3181,21 +3160,35 @@ export default function Employees() {
             />
             </>)}
 
-            {drawerTab === 'wage' && (<>
-            <MonthlyPayCard
-              employee={selectedEmployee}
-              agreement={wages.find(wg => wg.employee_id === selectedEmployee.id) || null}
-              rows={workAssignments.filter((a) => a.employee_id === selectedEmployee.id)}
-              month={payrollMonth}
-              onEditWage={() => openWageForEmployee(selectedEmployee)}
-            />
+            {drawerTab === 'shifts' && !selectedEmployee.id && (
+              <div style={{ fontSize: 13, color: 'var(--text-3)' }}>
+                שמרו את העובד קודם — ואז יופיעו המשמרות.
+              </div>
+            )}
 
-            <EmployeeWageAgreementCard
-              employee={selectedEmployee}
-              agreement={wages.find(wg => wg.employee_id === selectedEmployee.id) || null}
-              onEdit={() => openWageForEmployee(selectedEmployee)}
-            />
-            </>)}
+            {drawerTab === 'wage' && selectedEmployee.id && (
+              <MonthlyPayCard
+                employee={selectedEmployee}
+                agreement={wages.find(wg => wg.employee_id === selectedEmployee.id) || null}
+                rows={workAssignments.filter((a) => a.employee_id === selectedEmployee.id)}
+                month={payrollMonth}
+                onEditWage={() => setDrawerTab('wage')}
+              />
+            )}
+
+            {/* טופס אחד לכל הלשוניות — נשאר מורכב גם במשמרות כדי לא לאבד עריכה. */}
+            <div style={{ display: formSectionForDrawer(drawerTab) ? 'block' : 'none' }}>
+              <EmployeeFormModal
+                key={selectedEmployee.id || 'new'}
+                employee={selectedEmployee.id ? selectedEmployee : null}
+                employees={employees}
+                wage={wages.find((w) => w.employee_id === selectedEmployee.id) || null}
+                embedded
+                activeSection={formSectionForDrawer(drawerTab) || 'details'}
+                onSave={handleSaveEmployee}
+                onClose={() => {}}
+              />
+            </div>
           </div>
         </div>
         </>
@@ -3223,20 +3216,27 @@ export default function Employees() {
             <div className="card card-p">
               {ratesOf(selectedWage).length === 0 ? (
                 <div style={{ fontSize: 12, color: 'var(--text-3)' }}>לא הוגדר אף תעריף.</div>
-              ) : ratesOf(selectedWage).map((r) => (
+              ) : ratesOf(selectedWage).map((r) => {
+                const Icon = roleIcon(r.role);
+                const color = roleColor(r.role);
+                return (
                 <div key={r.role} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 8 }}>
-                  <span>{r.role}:</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <Icon size={13} style={{ color }} />
+                    {r.role}:
+                  </span>
                   <strong style={{ color: 'var(--green)' }}>
                     ₪{r.amount}{r.mode === 'daily' ? ' ליום' : ' לשעה'}
                   </strong>
                 </div>
-              ))}
+                );
+              })}
               <div style={{
                 display: 'flex', justifyContent: 'space-between', fontSize: 13,
                 borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 4,
               }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  <Car size={13} style={{ color: 'var(--text-3)' }} /> נסיעות ליום עבודה:
+                  <Car size={13} style={{ color: travelColor }} /> נסיעות ליום עבודה:
                 </span>
                 <strong style={{ color: travelPerDay(selectedWage) ? 'var(--green)' : 'var(--text-3)' }}>
                   {travelPerDay(selectedWage) ? `₪${travelPerDay(selectedWage)}` : 'לא הוגדר'}
@@ -3282,7 +3282,7 @@ export default function Employees() {
           <button className="btn btn-ghost btn-sm" onClick={() => { setEditingWage(null); setShowWageForm(true); }}>
             <Plus size={14} /> הסכם שכר חדש
           </button>
-          <button className="btn btn-primary btn-sm" onClick={() => { setEditingEmployee(null); setEmployeeFormTab('details'); setShowEmployeeForm(true); }}>
+          <button className="btn btn-primary btn-sm" onClick={openNewEmployeeDrawer}>
             <Plus size={14} /> עובד חדש
           </button>
         </div>
@@ -3296,6 +3296,7 @@ export default function Employees() {
           { key: 'wages',     label: 'הסכמי שכר',            icon: Coins },
           { key: 'shifts',    label: 'שעון נוכחות ומשמרות',  icon: Clock },
           { key: 'payroll',   label: 'תשלום חודשי',          icon: Banknote },
+          { key: 'settings',  label: 'הגדרות',               icon: Settings2 },
           { key: 'onboard-link', label: 'קישור קליטה',       icon: Link2 },
         ].map(({ key, label, icon: Icon }) => (
           <button
@@ -3326,6 +3327,56 @@ export default function Employees() {
       )}
 
       {/* ─── Tab: Onboarding link ───────────────────────────────────────────── */}
+      {activeTab === 'settings' && (
+        <div className="card card-p" style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 520 }}>
+          <div>
+            <div className="section-title" style={{ marginBottom: 4 }}>הגדרות שעון ופתיחת קיר</div>
+            <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+              חלון הדקות לפני שיבוץ, ונוסח האישור שמופיע במסוף לפני פתיחת קיר.
+            </div>
+          </div>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-3)' }}>
+            דקות מותרות לפני שיבוץ (בלי חריגה)
+            <input
+              className="input"
+              type="number"
+              min={0}
+              max={180}
+              value={staffAttSettings.minutes_before_shift_ok}
+              onChange={(e) => setStaffAttSettings((p) => ({
+                ...p,
+                minutes_before_shift_ok: Number(e.target.value),
+              }))}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-3)' }}>
+            נוסח אישור פתיחת קיר
+            <textarea
+              className="input textarea"
+              rows={3}
+              value={staffAttSettings.wall_open_confirm_message}
+              onChange={(e) => setStaffAttSettings((p) => ({
+                ...p,
+                wall_open_confirm_message: e.target.value,
+              }))}
+            />
+          </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={staffAttBusy}
+              onClick={saveStaffAttSettings}
+            >
+              <Save size={14} /> שמירה
+            </button>
+            {staffAttMsg && (
+              <span style={{ fontSize: 12, color: 'var(--text-2)' }}>{staffAttMsg}</span>
+            )}
+          </div>
+        </div>
+      )}
+
       {activeTab === 'onboard-link' && <EmployeeOnboardingLinkPanel />}
 
       {/* ─── Tab 1: Permanent Employees ────────────────────────────────────── */}
@@ -3365,6 +3416,7 @@ export default function Employees() {
             <span style={{ fontWeight: 700 }}>מקרא:</span>
             {certOptions.map((role) => {
               const Icon = roleIcon(role);
+              const color = roleColor(role);
               const active = empFilterRole === role;
               return (
                 <button
@@ -3374,11 +3426,14 @@ export default function Employees() {
                   title={`סינון לפי ${role}`}
                   style={{
                     display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
-                    background: 'none', border: 'none', padding: 0, fontFamily: 'inherit', fontSize: 11,
-                    color: active ? 'var(--blue)' : 'var(--text-3)',
+                    background: active ? `${color}22` : 'none',
+                    border: 'none', padding: '2px 6px', borderRadius: 8,
+                    fontFamily: 'inherit', fontSize: 11,
+                    color: active ? color : 'var(--text-2)',
+                    outline: active ? `1px solid ${color}66` : 'none',
                   }}
                 >
-                  <Icon size={13} /> {role}
+                  <Icon size={13} style={{ color }} /> {role}
                 </button>
               );
             })}
@@ -3402,7 +3457,7 @@ export default function Employees() {
                   .map(emp => {
                     const stats = employeeShiftStats[emp.id] || { hours: 0, pay: 0 };
                     return (
-                      <tr key={emp.id} style={{ cursor: 'pointer', opacity: emp.is_active ? 1 : 0.5 }} onClick={() => setSelectedEmployee(emp)}>
+                      <tr key={emp.id} style={{ cursor: 'pointer', opacity: emp.is_active ? 1 : 0.5 }} onClick={() => openEmployeeDrawer(emp, 'file')}>
                         <td>
                           <button
                             type="button"
@@ -3419,9 +3474,10 @@ export default function Employees() {
                           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                             {(emp.certifications || []).map((role) => {
                               const Icon = roleIcon(role);
+                              const color = roleColor(role);
                               return (
-                                <span key={role} title={role} style={{ display: 'inline-flex', color: 'var(--blue)' }}>
-                                  <Icon size={15} />
+                                <span key={role} title={role} style={{ display: 'inline-flex', color }}>
+                                  <Icon size={15} style={{ color }} />
                                 </span>
                               );
                             })}
@@ -3468,7 +3524,7 @@ export default function Employees() {
                         </td>
                         <td onClick={e => e.stopPropagation()}>
                           <div style={{ display: 'flex', gap: 6 }}>
-                            <button className="btn btn-ghost btn-icon btn-xs" onClick={() => { setEditingEmployee(emp); setEmployeeFormTab('details'); setShowEmployeeForm(true); }}>
+                            <button className="btn btn-ghost btn-icon btn-xs" onClick={() => openEmployeeDrawer(emp, 'file')} title="פתיחת תיק">
                               <Edit2 size={12} />
                             </button>
                           </div>
@@ -3497,7 +3553,7 @@ export default function Employees() {
               </thead>
               <tbody>
                 {employees.map(emp => (
-                  <tr key={emp.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedEmployee(emp)}>
+                  <tr key={emp.id} style={{ cursor: 'pointer' }} onClick={() => openEmployeeDrawer(emp, 'file')}>
                     <td style={{ fontWeight: 700 }}>{emp.name}</td>
                     <td style={{ fontSize: 13, color: 'var(--text-3)' }}>{emp.phone || '—'}</td>
                     <td>
@@ -3582,16 +3638,20 @@ export default function Employees() {
       {activeTab === 'shifts' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           
-          {/* מה זה שעון הנוכחות: רישום ידני של כניסה ויציאה בפועל, לעובדים
-              שאין להם שיבוץ מראש. השעות שלו נחשבות לשכר רק אם אין לעובד שורות
-              עבודה באותו חודש — לכן זה כלי עזר, לא מקור האמת של השכר. */}
+          {/* השכר אצלנו מגיע משיבוצים (יומן / חוגים / פתיחת קיר). השעון הוא
+              רק גיבוי למי שעבד בלי שיבוץ בכלל בחודש — אחרת הוא לא נכנס לשכר. */}
           <div className="card card-p" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
             <Clock size={18} style={{ color: 'var(--blue)', flexShrink: 0, marginTop: 2 }} />
             <div style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.6 }}>
-              <span style={{ color: 'var(--text-1)', fontWeight: 700 }}>שעון נוכחות</span> — רישום כניסה ויציאה
-              בזמן אמת, למי שעבד בלי שיבוץ מראש. השעות שנרשמות כאן נחשבות לשכר
-              <span style={{ color: 'var(--text-1)' }}> רק לעובד שאין לו שורות עבודה באותו חודש</span>;
-              מי שמשובץ בלוח המשמרות מקבל שכר לפי שורות העבודה שלו, והשעון לא משנה לו כלום.
+              <div style={{ color: 'var(--text-1)', fontWeight: 700, marginBottom: 4 }}>
+                בדרך כלל אין צורך בשעון הזה
+              </div>
+              השכר מחושב מפעילויות ביומן, מלוח החוגים ומפתיחה/סגירה של הקיר —
+              אלה יוצרים שורות עבודה, ומהן משלמים.
+              <br />
+              השעון כאן הוא רק גיבוי: רישום ידני של כניסה ויציאה למי שעבד בלי
+              שיבוץ בכלל. אם לעובד יש אפילו שורת עבודה אחת בחודש — השעון
+              <span style={{ color: 'var(--text-1)' }}> לא משפיע על השכר שלו</span>.
             </div>
           </div>
 
@@ -3737,7 +3797,8 @@ export default function Employees() {
                 <span style={{ color: 'var(--green)', marginInlineStart: 10 }}>₪{payrollMonthTotal.toLocaleString()}</span>
               </div>
               <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
-                לכל עובד — פירוט לפי סוג העבודה, שעות החודש והתעריף מהסכם השכר שלו. משלמים לפי שורות מאושרות.
+                לכל עובד — פירוט לפי סוג העבודה. לחיצה על השם פותחת את המשמרות שלו.
+                אישור שורות — בטבלה למטה (או על התג „לא מאושרות”).
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -3779,20 +3840,35 @@ export default function Employees() {
 
           <div className="grid-3" style={{ gap: 12 }}>
             {payrollVisible.map(({ emp, agreement, byRole, stats, pending }) => (
-              <div key={emp.id} className="card card-p" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div
+                key={emp.id}
+                className="card card-p"
+                role="button"
+                tabIndex={0}
+                onClick={() => openEmployeeDrawer(emp, 'shifts')}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') openEmployeeDrawer(emp, 'shifts'); }}
+                style={{ display: 'flex', flexDirection: 'column', gap: 8, cursor: 'pointer' }}
+              >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-                  <button
-                    type="button"
-                    onClick={() => { setSelectedEmployee(emp); setDrawerTab('wage'); }}
-                    style={{
-                      background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                      fontWeight: 800, fontSize: 14, color: 'var(--text-1)', fontFamily: 'inherit',
-                    }}
-                  >
+                  <span style={{ fontWeight: 800, fontSize: 14, color: 'var(--text-1)' }}>
                     {emp.name}
-                  </button>
+                  </span>
                   {pending > 0 && (
-                    <span className="badge badge-amber" style={{ fontSize: 10 }}>{pending} לא מאושרות</span>
+                    <button
+                      type="button"
+                      className="badge badge-amber"
+                      title="עבור לטבלת האישור"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setPayrollEmpFilter(emp.id);
+                        requestAnimationFrame(() => {
+                          document.getElementById('payroll-assignments')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        });
+                      }}
+                      style={{ fontSize: 10, cursor: 'pointer', border: 'none', fontFamily: 'inherit' }}
+                    >
+                      {pending} לא מאושרות
+                    </button>
                   )}
                 </div>
 
@@ -3811,11 +3887,13 @@ export default function Employees() {
                         : rate?.mode === 'daily'
                           ? `${entry.count === 1 ? 'יום אחד' : `${entry.count} ימים`} × ₪${rate.amount}`
                           : `${entry.hours} ש׳${rate ? ` × ₪${rate.amount}` : ' · בלי תעריף'}`;
-                      const EntryIcon = roleIcon(entry.role || entry.label);
+                      const roleKey = entry.role || entry.label;
+                      const EntryIcon = roleIcon(roleKey);
+                      const entryColor = roleColor(roleKey);
                       return (
                         <div key={entry.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, gap: 8 }}>
                           <span style={{ minWidth: 0, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                            <EntryIcon size={13} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+                            <EntryIcon size={13} style={{ color: entryColor, flexShrink: 0 }} />
                             {entry.label}
                             <span style={{ color: 'var(--text-3)', fontSize: 11 }}> · {detail}</span>
                           </span>
@@ -3828,7 +3906,7 @@ export default function Employees() {
                     {stats.travel > 0 && (
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-3)' }}>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                          <Car size={12} /> נסיעות · {stats.days === 1 ? 'יום אחד' : `${stats.days} ימים`}
+                          <Car size={12} style={{ color: travelColor }} /> נסיעות · {stats.days === 1 ? 'יום אחד' : `${stats.days} ימים`}
                         </span>
                         <span>₪{stats.travel.toLocaleString()}</span>
                       </div>
@@ -3965,11 +4043,32 @@ export default function Employees() {
             </div>
           </div>
 
-          <div className="card">
+          <div className="card" id="payroll-assignments">
+            {payrollEmpFilter && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+                padding: '10px 14px', borderBottom: '1px solid var(--border)', fontSize: 13,
+              }}>
+                <span>
+                  מציג שורות של{' '}
+                  <strong>{employees.find((e) => e.id === payrollEmpFilter)?.name || 'עובד'}</strong>
+                  {' — '}כפתור „אשר” בכל שורה, או „אשר הכל בחודש” למעלה.
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  onClick={() => setPayrollEmpFilter('')}
+                >
+                  הצג את כולם
+                </button>
+              </div>
+            )}
             <div className="table-wrap">
               <table className="crm-table">
                 <thead>
                   <tr>
+                    {/* עמודה ראשונה מימין (RTL) — דביקה כדי שישאר נראה גם בגלילה. */}
+                    <th style={{ position: 'sticky', right: 0, zIndex: 3, background: 'var(--bg-card, #161B22)' }}>אישור</th>
                     <th>תאריך</th>
                     <th>עובד</th>
                     <th>אירוע</th>
@@ -3978,27 +4077,71 @@ export default function Employees() {
                     <th>התחלה</th>
                     <th>סיום</th>
                     <th>שעות</th>
+                    <th>הערות</th>
                     <th>תעריף / גלובלי</th>
                     <th>סכום</th>
-                    <th>סטטוס</th>
-                    <th>פעולות</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {workAssignments.map((row) => {
+                  {(payrollEmpFilter
+                    ? workAssignments.filter((r) => r.employee_id === payrollEmpFilter)
+                    : workAssignments
+                  ).map((row) => {
                     const emp = employees.find((e) => e.id === row.employee_id);
                     const agreement = wages.find((w) => w.employee_id === row.employee_id) || defaultAgreement;
                     const rate = rateForRow(agreement, row);
                     const payMode = row.pay_mode === 'flat' ? 'flat' : 'hourly';
                     const amount = payAmountForAssignment(row, agreement);
+                    const rowBg = highlightWorkId === row.id
+                      ? 'rgba(56,189,248,0.14)'
+                      : 'var(--bg-card, #161B22)';
                     return (
                       <tr
                         key={row.id}
                         data-work-row={row.id}
                         style={highlightWorkId === row.id
-                          ? { background: 'rgba(56,189,248,0.14)', outline: '1px solid rgba(56,189,248,0.5)' }
+                          ? { background: rowBg, outline: '1px solid rgba(56,189,248,0.5)' }
                           : undefined}
                       >
+                        <td style={{
+                          position: 'sticky', right: 0, zIndex: 2, background: rowBg,
+                          whiteSpace: 'nowrap', minWidth: 120,
+                        }}>
+                          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                            {row.approved ? (
+                              <span className="badge badge-green" style={{ fontSize: 11 }}>מאושר</span>
+                            ) : (
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-xs"
+                                disabled={payrollBusy}
+                                onClick={() => approveAssignments([row.id])}
+                                title="אישור השורה לתשלום"
+                              >
+                                <UserCheck size={12} /> אשר
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-icon btn-xs"
+                              title="שמור שינויים"
+                              disabled={payrollBusy}
+                              onClick={() => saveAssignmentRow(row)}
+                            >
+                              <Save size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-icon btn-xs"
+                              title="מחק"
+                              disabled={payrollBusy}
+                              onClick={() => deleteAssignment(row.id)}
+                              style={{ color: '#F87171' }}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </td>
                         <td>{row.date}</td>
                         <td style={{ fontWeight: 700 }}>
                           {emp ? (
@@ -4081,6 +4224,9 @@ export default function Employees() {
                             disabled={payMode === 'flat'}
                           />
                         </td>
+                        <td style={{ fontSize: 11, color: 'var(--amber)', maxWidth: 180 }}>
+                          {row.exception_notes || row.notes || '—'}
+                        </td>
                         <td>
                           {payMode === 'flat' ? (
                             <input
@@ -4106,33 +4252,18 @@ export default function Employees() {
                             )}
                           </span>
                         </td>
-                        <td>
-                          <span className={`badge ${row.approved ? 'badge-green' : 'badge-gray'}`}>
-                            {row.approved ? 'מאושר' : 'ממתין'}
-                          </span>
-                        </td>
-                        <td>
-                          <div style={{ display: 'flex', gap: 4 }}>
-                            <button className="btn btn-ghost btn-icon btn-xs" title="שמור" disabled={payrollBusy} onClick={() => saveAssignmentRow(row)}>
-                              <Save size={12} />
-                            </button>
-                            {!row.approved && (
-                              <button className="btn btn-ghost btn-icon btn-xs" title="אשר" disabled={payrollBusy} onClick={() => approveAssignments([row.id])}>
-                                <UserCheck size={12} />
-                              </button>
-                            )}
-                            <button className="btn btn-ghost btn-icon btn-xs" title="מחק" disabled={payrollBusy} onClick={() => deleteAssignment(row.id)} style={{ color: '#F87171' }}>
-                              <Trash2 size={12} />
-                            </button>
-                          </div>
-                        </td>
                       </tr>
                     );
                   })}
-                  {workAssignments.length === 0 && (
+                  {(payrollEmpFilter
+                    ? workAssignments.filter((r) => r.employee_id === payrollEmpFilter)
+                    : workAssignments
+                  ).length === 0 && (
                     <tr>
-                      <td colSpan={12} style={{ textAlign: 'center', padding: 30, color: 'var(--text-3)' }}>
-                        אין שורות תשלום בחודש הזה. אפשר לשייך עובדים מאירוע ביומן או להוסיף שורה ידנית.
+                      <td colSpan={11} style={{ textAlign: 'center', padding: 30, color: 'var(--text-3)' }}>
+                        {payrollEmpFilter
+                          ? 'אין שורות תשלום לעובד הזה בחודש הזה.'
+                          : 'אין שורות תשלום בחודש הזה. אפשר לשייך עובדים מאירוע ביומן או להוסיף שורה ידנית.'}
                       </td>
                     </tr>
                   )}

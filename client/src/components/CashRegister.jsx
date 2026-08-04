@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
-import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X, Printer, ShoppingCart, Package, Calculator, History, BarChart3 } from 'lucide-react';
+import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X, Printer, ShoppingCart, Package, Calculator, History, BarChart3, Wallet } from 'lucide-react';
 import EntityLink from '../utils/entityLinks.jsx';
 import PosSale from './PosSale.jsx';
 import Pricelist from './Pricelist.jsx';
 import AppSelect from './AppSelect.jsx';
+import CashShiftPanel from './CashShiftPanel.jsx';
+import CashManagerPanel from './CashManagerPanel.jsx';
 
 function docAmount(doc) {
   const n = Number(doc?.totalwithvat ?? doc?.total ?? doc?.sum ?? 0);
@@ -114,12 +116,10 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
     try {
       const data = await fetch('/api/cash-register').then((r) => (r.ok ? r.json() : []));
       setShifts(Array.isArray(data) ? data : []);
-      if (isOwner) {
-        const emps = await fetch('/api/employees').then((r) => (r.ok ? r.json() : []));
-        const list = Array.isArray(emps) ? emps : [];
-        setEmployees(list);
-        if (list.length && !employee) setEmployee(list[0].name);
-      }
+      const emps = await fetch('/api/employees').then((r) => (r.ok ? r.json() : []));
+      const list = Array.isArray(emps) ? emps : [];
+      setEmployees(list);
+      if (isOwner && list.length && !employee) setEmployee(list[0].name);
     } catch (err) {
       console.error(err);
       setShifts([]);
@@ -370,7 +370,7 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
   }, [activeTab, isOwner, refreshReports]);
 
   useEffect(() => {
-    if (!isOwner && (activeTab === 'icount' || activeTab === 'reports' || activeTab === 'products')) {
+    if (!isOwner && (activeTab === 'icount' || activeTab === 'reports' || activeTab === 'products' || activeTab === 'manager')) {
       setActiveTab('sale');
     }
   }, [isOwner, activeTab]);
@@ -383,7 +383,8 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
   const tabs = [
     { k: 'sale', label: 'מכירה', icon: ShoppingCart },
     ...(isOwner ? [{ k: 'products', label: 'מוצרים', icon: Package }] : []),
-    { k: 'close', label: 'סגירת קופה', icon: Calculator },
+    { k: 'close', label: 'פתיחה / סגירה', icon: Calculator },
+    ...(isOwner ? [{ k: 'manager', label: 'מסוף מנהל', icon: Wallet }] : []),
     { k: 'history', label: 'היסטוריה', icon: History },
     ...(isOwner
       ? [
@@ -563,150 +564,20 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
       </div>
 
       {activeTab === 'sale' && (
-        <PosSale onManageProducts={isOwner ? () => setActiveTab('products') : null} />
+        <PosSale
+          onManageProducts={isOwner ? () => setActiveTab('products') : null}
+          employees={employees}
+          isOwner={isOwner}
+        />
       )}
 
       {activeTab === 'products' && isOwner && <Pricelist />}
 
       {activeTab === 'close' && (
-        <div className="grid-2" style={{ alignItems: 'flex-start' }}>
-          <div className="card card-p">
-            <div className="section-title" style={{ marginBottom: 20 }}>
-              סגירת קופה — {new Date().toLocaleDateString('he-IL')}
-            </div>
-
-            {savedOk && (
-              <div className="alert alert-success" style={{ marginBottom: 16 }}>
-                <span>הקופה נסגרה ונשמרה בהצלחה</span>
-              </div>
-            )}
-
-            <div className="form-grid" style={{ gap: 14 }}>
-              <div className="form-grid-2">
-                <div className="form-group">
-                  <label className="form-label">משמרת</label>
-                  <AppSelect className="input select" value={shiftType} onChange={(e) => setShiftType(e.target.value)}>
-                    {['בוקר', 'צהריים', 'ערב', 'לילה'].map((s) => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                  </AppSelect>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">שם העובד</label>
-                  {isOwner && employees.length > 0 ? (
-                    <AppSelect className="input select" value={employee} onChange={(e) => setEmployee(e.target.value)}>
-                      {employees.map((emp) => (
-                        <option key={emp.id} value={emp.name}>{emp.name}</option>
-                      ))}
-                    </AppSelect>
-                  ) : (
-                    <input
-                      className="input"
-                      value={employee}
-                      onChange={(e) => setEmployee(e.target.value)}
-                      placeholder="שם העובד"
-                    />
-                  )}
-                </div>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">סכום צפוי בקופה (ש״ח) *</label>
-                <div className="input-icon-wrap">
-                  <span className="input-icon" style={{ fontSize: 14 }}>₪</span>
-                  <input
-                    className="input"
-                    type="number"
-                    placeholder="0.00"
-                    style={{ paddingRight: 32 }}
-                    value={expectedAmount}
-                    onChange={(e) => setExpectedAmount(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">סכום בפועל בקופה (ספירת מזומן) *</label>
-                <div className="input-icon-wrap">
-                  <span className="input-icon" style={{ fontSize: 14 }}>₪</span>
-                  <input
-                    className="input"
-                    type="number"
-                    placeholder="0.00"
-                    style={{
-                      paddingRight: 32,
-                      borderColor:
-                        discrepancy !== null
-                          ? discrepancy === 0
-                            ? 'var(--green)'
-                            : 'var(--red)'
-                          : undefined,
-                    }}
-                    value={actualAmount}
-                    onChange={(e) => setActualAmount(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              {discrepancy !== null && (
-                <div className={`alert ${discrepancy === 0 ? 'alert-success' : 'alert-error'}`}>
-                  <div>
-                    {discrepancy === 0 ? (
-                      <strong>הקופה מאוזנת — אין חריגה</strong>
-                    ) : (
-                      <>
-                        <strong>
-                          חריגה של {discrepancy > 0 ? '+' : ''}
-                          {discrepancy} ש״ח
-                        </strong>
-                        <div style={{ fontSize: 12, marginTop: 4 }}>
-                          {discrepancy > 0
-                            ? 'עודף — בדוק אם חסרה רשומת מכירה'
-                            : 'גירעון — בדוק עם הצוות'}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <button
-                className="btn btn-primary btn-full"
-                style={{ paddingBlock: 13 }}
-                onClick={handleClose}
-                disabled={saving}
-              >
-                {saving ? 'שומר...' : 'סגור קופה ושמור דוח'}
-              </button>
-            </div>
-          </div>
-
-          <div className="card card-p">
-            <div className="section-title" style={{ marginBottom: 14 }}>תשלומים ממתינים</div>
-            {pendingPayments.length === 0 ? (
-              <div style={{ fontSize: 13, color: 'var(--text-3)' }}>אין דרישות תשלום פתוחות</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {pendingPayments.slice(0, 8).map((p) => (
-                  <div
-                    key={p.id}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      gap: 8,
-                      padding: '8px 0',
-                      borderBottom: '1px solid var(--border)',
-                    }}
-                  >
-                    <span style={{ fontSize: 13, color: 'var(--text-2)' }}>{p.description}</span>
-                    <span style={{ fontWeight: 700 }}>₪{Number(p.amount).toLocaleString()}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
+        <CashShiftPanel employees={employees} isOwner={isOwner} />
       )}
+
+      {activeTab === 'manager' && isOwner && <CashManagerPanel employees={employees} />}
 
       {activeTab === 'history' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
