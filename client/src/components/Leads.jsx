@@ -3399,58 +3399,50 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                               const clearanceRow = isClearanceDoc(doc);
                               const kind = kindForDoc(doc);
                               const busy = deletingDocId === doc.id;
-                              // The stored file name is a long English string with
-                              // the child's name inside it, and it wrapped over
-                              // three lines. It moves to the tooltip; the row says
-                              // what the document is.
-                              const title = clearanceRow ? 'אישור רופא' : FORM_SIGNED_ROW;
+                              const title = clearanceRow ? 'אישור רופא' : (kind?.label || FORM_SHORT);
                               const stamp = doc.created_at ? new Date(doc.created_at) : null;
                               return (
                                 <div
                                   key={doc.id}
                                   style={{
-                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+                                    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'nowrap',
                                     padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)',
                                     background: 'rgba(255,255,255,0.03)', opacity: busy ? 0.5 : 1,
+                                    overflowX: 'auto',
                                   }}
                                 >
-                                  <div style={{ minWidth: 0, flex: 1 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                      {/* Which activity this declaration covers.
-                                          Several rows here are otherwise the
-                                          same sentence repeated. */}
-                                      {kind && !clearanceRow && (
-                                        <span
-                                          className={`badge ${kind.badge}`}
-                                          style={{
-                                            fontSize: 10, flexShrink: 0,
-                                            display: 'inline-flex', alignItems: 'center', gap: 4,
-                                          }}
-                                        >
-                                          <kind.Icon size={11} style={{ flexShrink: 0 }} />
-                                          {kind.label}
-                                        </span>
-                                      )}
-                                      <span
-                                        title={doc.fileName || title}
-                                        style={{
-                                          fontSize: 12, fontWeight: 600, color: 'var(--text-1)',
-                                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                                        }}
-                                      >
-                                        {title}
-                                      </span>
-                                      {healthRow && healthExpired && (
-                                        <span className="badge badge-amber" style={{ fontSize: 10, flexShrink: 0 }}>פג תוקף</span>
-                                      )}
-                                    </div>
-                                    <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 2 }}>
-                                      {stamp
-                                        ? `${stamp.toLocaleDateString('he-IL')} · ${stamp.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`
-                                        : ''}
-                                    </div>
-                                  </div>
-                                  <div style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center' }}>
+                                  {kind && !clearanceRow ? (
+                                    <span
+                                      className={`badge ${kind.badge}`}
+                                      title={doc.fileName || kind.label}
+                                      style={{
+                                        fontSize: 10, flexShrink: 0,
+                                        display: 'inline-flex', alignItems: 'center', gap: 4,
+                                      }}
+                                    >
+                                      <kind.Icon size={11} style={{ flexShrink: 0 }} />
+                                      {kind.label}
+                                    </span>
+                                  ) : (
+                                    <span
+                                      title={doc.fileName || title}
+                                      style={{
+                                        fontSize: 12, fontWeight: 600, color: 'var(--text-1)',
+                                        whiteSpace: 'nowrap', flexShrink: 0,
+                                      }}
+                                    >
+                                      {title}
+                                    </span>
+                                  )}
+                                  {healthRow && healthExpired && (
+                                    <span className="badge badge-amber" style={{ fontSize: 10, flexShrink: 0 }}>פג תוקף</span>
+                                  )}
+                                  <span style={{ fontSize: 10, color: 'var(--text-3)', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                                    {stamp
+                                      ? `${stamp.toLocaleDateString('he-IL')} · ${stamp.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`
+                                      : ''}
+                                  </span>
+                                  <div style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center', marginInlineStart: 'auto' }}>
                                     <button
                                       type="button"
                                       className="btn btn-primary btn-xs"
