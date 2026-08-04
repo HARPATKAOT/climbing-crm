@@ -3437,7 +3437,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                   {healthRow && healthExpired && (
                                     <span className="badge badge-amber" style={{ fontSize: 10, flexShrink: 0 }}>פג תוקף</span>
                                   )}
-                                  <span style={{ fontSize: 10, color: 'var(--text-3)', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                                  <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-2)', whiteSpace: 'nowrap', flexShrink: 0 }}>
                                     {stamp
                                       ? `${stamp.toLocaleDateString('he-IL')} · ${stamp.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`
                                       : ''}
