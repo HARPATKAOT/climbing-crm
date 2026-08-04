@@ -1,4 +1,4 @@
-import { db, persistCore } from '../db.js';
+import { db, persistCore, CHANNEL_PLACEHOLDER_NAMES } from '../db.js';
 import { phonesMatch, normalizeWaPhone } from '../whatsappConnect.js';
 import {
   getParentChannelWindows,
@@ -103,6 +103,14 @@ function scoreParentRecord(parent) {
   if (parent.last_inbound_whatsapp || parent.last_inbound_instagram || parent.last_inbound_messenger) score += 1;
   if (parent.status && parent.status !== 'lead_new') score += 1;
   return score;
+}
+
+/** A card the channel opened by itself and nobody ever filled in. */
+function isBlankLeadCard(parent, parentIdsWithChildren) {
+  if (!parent) return false;
+  if (!CHANNEL_PLACEHOLDER_NAMES.includes(String(parent.name || '').trim())) return false;
+  if (String(parent.email || '').trim()) return false;
+  return !parentIdsWithChildren.has(parent.id);
 }
 
 function touchInbound(parent, channel, at = new Date().toISOString()) {
@@ -513,14 +521,20 @@ function buildOwnerIndex(store) {
     if (parent.messenger_psid) claim(index.byMessenger, String(parent.messenger_psid), parent);
   }
 
-  for (const student of store.read('students')) {
+  const students = store.read('students');
+  const parentIdsWithChildren = new Set(students.map((s) => s.parentId).filter(Boolean));
+
+  for (const student of students) {
     const key = phoneKey(student.phone);
     if (!key) continue;
     index.studentByPhone.set(key, student);
-    // A child's own phone routes to the family card, never over the parent's own number.
-    if (index.byPhone.has(key)) continue;
     const parent = index.byId.get(student.parentId);
-    if (parent) index.byPhone.set(key, parent);
+    if (!parent) continue;
+    // A child's own phone routes to the family card, never over the parent's own number —
+    // unless the card holding that number is an empty lead the channel opened by itself.
+    const holder = index.byPhone.get(key);
+    if (holder && !isBlankLeadCard(holder, parentIdsWithChildren)) continue;
+    index.byPhone.set(key, parent);
   }
 
   return index;

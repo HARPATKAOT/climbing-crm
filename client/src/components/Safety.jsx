@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   CheckCircle2, AlertTriangle, Plus, X, ShieldAlert, Check, Pencil, Trash2, History, ListChecks
 } from 'lucide-react';
+import EntityLink from '../utils/entityLinks.jsx';
 import { CheckIcon } from './safetyCheckIcons.jsx';
 import AppSelect from './AppSelect.jsx';
 
@@ -435,7 +436,11 @@ function CheckDetailModal({ check, logs, employees, onSign, onEdit, onClose }) {
                       {log.performed_at ? formatDateTime(log.performed_at) : log.date}
                     </td>
                     <td style={{ fontWeight: 600, color: 'var(--green)' }}>
-                      {log.tester_name || employees.find((e) => e.id === log.completed_by_employee_id)?.name || '—'}
+                      {log.completed_by_employee_id ? (
+                        <EntityLink kind="employee" id={log.completed_by_employee_id} title="מעבר לתיק העובד">
+                          {log.tester_name || employees.find((e) => e.id === log.completed_by_employee_id)?.name || '—'}
+                        </EntityLink>
+                      ) : (log.tester_name || '—')}
                     </td>
                     <td>
                       <span className={`badge ${log.status === 'נמצאו ליקויים' ? 'badge-red' : 'badge-green'}`}>
@@ -961,7 +966,11 @@ export default function Safety() {
                       </span>
                     </td>
                     <td style={{ fontWeight: 600, color: 'var(--green)' }}>
-                      {log.tester_name || employees.find((e) => e.id === log.completed_by_employee_id)?.name || '—'}
+                      {log.completed_by_employee_id ? (
+                        <EntityLink kind="employee" id={log.completed_by_employee_id} title="מעבר לתיק העובד">
+                          {log.tester_name || employees.find((e) => e.id === log.completed_by_employee_id)?.name || '—'}
+                        </EntityLink>
+                      ) : (log.tester_name || '—')}
                     </td>
                     <td>
                       <span className={`badge ${log.status === 'נמצאו ליקויים' ? 'badge-red' : 'badge-green'}`}>
@@ -1016,7 +1025,11 @@ export default function Safety() {
                       <td style={{ fontSize: 12, color: 'var(--text-2)', maxWidth: 200 }}>{inc.description}</td>
                       <td style={{ fontSize: 12, color: '#FCA5A5', fontWeight: 600 }}>{inc.injury_description || '—'}</td>
                       <td style={{ fontSize: 12, color: 'var(--text-2)' }}>{inc.action_taken}</td>
-                      <td style={{ fontWeight: 600 }}>{emp?.name || '—'}</td>
+                      <td style={{ fontWeight: 600 }}>
+                        {emp ? (
+                          <EntityLink kind="employee" id={emp.id} title="מעבר לתיק העובד">{emp.name}</EntityLink>
+                        ) : '—'}
+                      </td>
                     </tr>
                   );
                 })}

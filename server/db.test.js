@@ -4,6 +4,7 @@ import {
   planDurableHydration,
   normalizeParentPhone,
   parentPhonesMatch,
+  isBlankLeadCard,
 } from './db.js';
 
 test('normalizeParentPhone maps 050… to 972…', () => {
@@ -15,6 +16,14 @@ test('normalizeParentPhone maps 050… to 972…', () => {
 test('parentPhonesMatch treats 050 and 972 as the same person', () => {
   assert.equal(parentPhonesMatch('0508862878', '972508862878'), true);
   assert.equal(parentPhonesMatch('0508862878', '0501234567'), false);
+});
+
+test('a lead card counts as blank only while nobody filled it in', () => {
+  const data = { students: [{ id: 's1', parentId: 'has-kid' }] };
+  assert.equal(isBlankLeadCard({ id: 'x', name: 'לקוח וואטסאפ' }, data), true);
+  assert.equal(isBlankLeadCard({ id: 'x', name: 'לקוח וואטסאפ', email: 'a@b.c' }, data), false);
+  assert.equal(isBlankLeadCard({ id: 'has-kid', name: 'לקוח וואטסאפ' }, data), false);
+  assert.equal(isBlankLeadCard({ id: 'x', name: 'דנה כהן' }, data), false);
 });
 
 test('local operational records migrate when the durable store is empty', () => {

@@ -14,6 +14,8 @@ import {
 } from './whatsapp.js';
 import { whatsappConnectService } from './whatsappConnect.js';
 import { automationsService, runScheduledAutomationsIfDue } from './automations.js';
+import { runShiftRemindersIfDue, notifyShiftAssigned } from './shiftAlerts.js';
+import { notifyGroupMembershipDiff, runIntroHeadsUpIfDue } from './groupAlerts.js';
 import { capabilityState, capabilitySettingKey, CAPABILITY_KEYS, CAPABILITY_INPUT_KEYS } from './botCapabilities.js';
 import { listBotActions, botActionSummary, BOT_ACTION_TYPES } from './botActivityLog.js';
 import {
@@ -288,7 +290,7 @@ import { applyBusinessBrand, resetPlaygroundConversation } from './whatsappBot.j
 import { waitForMessages, currentVersion } from './liveUpdates.js';
 import { shouldMarkIntroPaid } from './introStatus.js';
 import { countEnrolled } from './groupCapacity.js';
-import { enrichStudentsWithGroupIds, studentInGroup } from './studentGroups.js';
+import { enrichStudentsWithGroupIds, studentGroupIds, studentInGroup } from './studentGroups.js';
 import {
   ensureAttendanceRows,
   israelDateStr,
@@ -3124,6 +3126,10 @@ app.put('/api/students/:id', async (req, res) => {
     ...rest
   } = body;
 
+  // Read before anything moves: the trainers are told what changed, and the
+  // only place that knows the previous groups is the record as it is now.
+  const groupsBefore = studentGroupIds(db.withStudentRelation(db.getOne('students', id)));
+
   const hasGroupIds = Object.prototype.hasOwnProperty.call(body, 'groupIds');
   const hasAdd = Object.prototype.hasOwnProperty.call(body, 'addGroupId');
   const hasRemove = Object.prototype.hasOwnProperty.call(body, 'removeGroupId');
@@ -3181,6 +3187,13 @@ app.put('/api/students/:id', async (req, res) => {
   if (durable?.ok === false) {
     return res.status(503).json({ error: durable.error || 'העדכון לא נשמר' });
   }
+  // Only after the change is durable — a trainer told about a move that failed
+  // to save is worse than a trainer told a minute later.
+  notifyGroupMembershipDiff({
+    student: updated,
+    before: groupsBefore,
+    after: studentGroupIds(updated),
+  }).catch((err) => console.error('group membership notify failed:', err.message));
   touchGoogleContacts();
   res.json(updated);
 });
@@ -9045,6 +9058,11 @@ app.post('/api/work-assignments/from-activity', async (req, res) => {
     created.push(row);
   }
 
+  // The employee hears about their own placement without the screen waiting on
+  // WhatsApp: a slow send must not make the assignment look like it failed.
+  notifyShiftAssigned(created).catch((err) =>
+    console.error('shift assigned notify failed:', err.message));
+
   res.status(201).json({ created, existing_count: existing.length });
 });
 
@@ -12686,6 +12704,16 @@ app.listen(PORT, () => {
     automationsService.runBotFollowUps().catch((err) =>
       console.error('bot follow-ups failed:', err.message));
   }, 15 * 60 * 1000);
+
+  // Staff reminders before their own shifts. Every 10 minutes rather than once
+  // a day, because the lead time is each employee's own choice — two hours for
+  // one, two days for another — and a daily pass can only serve one of them.
+  setTimeout(() => { runShiftRemindersIfDue(); }, 55_000);
+  setInterval(() => { runShiftRemindersIfDue(); }, 10 * 60 * 1000);
+
+  // "Someone is coming to try out tomorrow" — one evening pass, from 17:00.
+  setTimeout(() => { runIntroHeadsUpIfDue(17); }, 80_000);
+  setInterval(() => { runIntroHeadsUpIfDue(17); }, 15 * 60 * 1000);
 
   // Evening agenda digests — tomorrow's plan daily, the coming week on Saturday
   setTimeout(() => { runAgendaDigestsIfDue(); }, 70_000);

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import EntityLink from '../utils/entityLinks.jsx';
 import { Plus, Edit2, Trash2, Save, X, Users, Calendar, UserPlus, UserMinus, History, Loader2, ChevronLeft, ChevronRight, ChevronDown, Package, Sparkles, ExternalLink, AlertTriangle, UserCheck, List, ShieldCheck, ShieldAlert, Maximize2, Minimize2, Clipboard, Check, SlidersHorizontal, Clock } from "lucide-react";
 import { DAYS_FULL } from '../mockData.js';
 import {
@@ -3667,7 +3668,13 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
                         <td style={{ color: 'var(--text-2)' }}>{days.map(d => DAYS_FULL[d]).join(' + ')}</td>
                         <td>{g.time}</td>
                         <td style={{ color: 'var(--text-3)' }}>{g.duration}′</td>
-                        <td style={{ color: 'var(--text-2)' }}>{g.trainerName || '—'}</td>
+                        <td style={{ color: 'var(--text-2)' }}>
+                          {g.trainer && g.trainerName ? (
+                            <EntityLink kind="employee" id={g.trainer} title="מעבר לתיק המדריך">
+                              {g.trainerName}
+                            </EntityLink>
+                          ) : (g.trainerName || '—')}
+                        </td>
                         <td>
                           <span className="badge" style={{ background: c.bg, color: c.text }}>
                             {g.ageCategory}

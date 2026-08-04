@@ -5,6 +5,7 @@ import {
   CheckCircle, AlertCircle, Clock3, Check, Pencil, Undo2, Users,
   Eye, EyeOff, Copy, SlidersHorizontal,
 } from 'lucide-react';
+import EntityLink from '../utils/entityLinks.jsx';
 import ActivityPageDesigner from './ActivityPageDesigner.jsx';
 import ActivityRegistrationPanel from './ActivityRegistrationPanel.jsx';
 import ActivityTemplatesMenu from './ActivityTemplatesMenu.jsx';
@@ -110,6 +111,16 @@ function activityMatchesFilter(activityType, typeFilter) {
   const match = matchTypesForFilter(typeFilter);
   if (!match) return true;
   return match.includes(activityType);
+}
+
+/**
+ * הסינון לפי סוג הוא רב-בחירה: `null` פירושו „הכל מוצג” — כולל סוגים שייווצרו
+ * בהמשך — ומערך הוא הרשימה המפורשת של התגיות שנבחרו. מערך ריק מסתיר הכל.
+ */
+function activityMatchesTypeSelection(activityType, selectedTypes) {
+  if (selectedTypes === null) return true;
+  if (!selectedTypes.length) return false;
+  return selectedTypes.some((id) => activityMatchesFilter(activityType, id));
 }
 
 const WORK_TYPE_OPTIONS = [
@@ -837,7 +848,9 @@ function WorkAssignmentsBlock({
               >
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
-                    {empName(row.employee_id)}
+                    <EntityLink kind="employee" id={row.employee_id} title="מעבר לתיק העובד">
+                      {empName(row.employee_id)}
+                    </EntityLink>
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
                     {row.start_time}–{row.end_time} · {row.hours} שעות ·{' '}
@@ -884,7 +897,11 @@ function WorkAssignmentsBlock({
                 }}>
                   <div>
                     <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>עובד</div>
-                    <div style={{ fontSize: 13, fontWeight: 700 }}>{empName(row.employee_id)}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>
+                      <EntityLink kind="employee" id={row.employee_id} title="מעבר לתיק העובד">
+                        {empName(row.employee_id)}
+                      </EntityLink>
+                    </div>
                     <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
                       {SOURCE_LABELS[row.source] || row.source}
                       {row.approved ? ' · מאושר' : ''}
@@ -3187,7 +3204,7 @@ function OverlaySidebar({
 
 export default function ActivitiesCalendar({ isOwner = false }) {
   // סוגי הפעילות נמשכים כאן פעם אחת; כל מה שמתחת קורא אותם דרך activityTypes().
-  useActivityTypes();
+  const liveActivityTypes = useActivityTypes();
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState('month'); // month | week | list
@@ -3195,7 +3212,8 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     const n = new Date();
     return new Date(n.getFullYear(), n.getMonth(), 1);
   });
-  const [typeFilter, setTypeFilter] = useState('all');
+  // `null` = כל הסוגים מוצגים. מערך = בדיוק התגיות שנבחרו (ריק = הכל מוסתר).
+  const [selectedTypes, setSelectedTypes] = useState(null);
   const [modal, setModal] = useState(null); // form initial or null
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
@@ -3415,7 +3433,8 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   useEffect(() => {
     if (deepLinkDoneRef.current || !activities.length) return;
     const params = new URLSearchParams(window.location.search);
-    const wanted = params.get('activity');
+    // `open` הוא השם האחיד לכל המסכים; `activity` נשאר לקישורים ותיקים.
+    const wanted = params.get('activity') || params.get('open');
     if (!wanted) {
       deepLinkDoneRef.current = true;
       return;
@@ -3435,6 +3454,22 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     setModal({ ...activity });
   }, [activities]);
 
+  const allChipIds = useMemo(() => filterChips().map((c) => c.id), [liveActivityTypes]);
+  const everyTypeShown = selectedTypes === null
+    || allChipIds.every((id) => selectedTypes.includes(id));
+  const chipActive = (id) => selectedTypes === null || selectedTypes.includes(id);
+  /** תגית אחת בלבד נבחרה — אז יש „סוג נוכחי” לכותרת, לכפתור ההוספה ולעמודה הריקה. */
+  const soleType = selectedTypes && selectedTypes.length === 1 ? selectedTypes[0] : null;
+
+  const toggleType = (id) => {
+    setSelectedTypes((prev) => {
+      const base = prev === null ? allChipIds : prev;
+      const next = base.includes(id) ? base.filter((x) => x !== id) : [...base, id];
+      // חזרה לבחירה מלאה נשמרת כ-null, כדי שסוג חדש שייווצר יופיע מעצמו.
+      return allChipIds.every((chipId) => next.includes(chipId)) ? null : next;
+    });
+  };
+
   /** האם העובד שנבחר לסינון משובץ לאירוע. בלי סינון — כל האירועים עוברים. */
   const matchesStaffFilter = useCallback((activity) => {
     if (!staffFilter) return true;
@@ -3443,11 +3478,11 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   }, [staffFilter, staffNamesVersion]);
 
   const filtered = useMemo(() => {
-    const byType = typeFilter === 'all'
+    const byType = selectedTypes === null
       ? activities
-      : activities.filter((a) => activityMatchesFilter(a.type, typeFilter));
+      : activities.filter((a) => activityMatchesTypeSelection(a.type, selectedTypes));
     return byType.filter(matchesStaffFilter);
-  }, [activities, typeFilter, matchesStaffFilter]);
+  }, [activities, selectedTypes, matchesStaffFilter]);
 
   // Google calendars we may create events on: shown on the board, not the synced
   // wall calendar, and the connected account has write access.
@@ -3465,16 +3500,14 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   // הבסיס לפני סינון העובד — ממנו נגזר טווח משיכת השיבוצים, אחרת הסינון היה
   // מצמצם את הטווח ומוחק את המידע שהוא עצמו נשען עליו.
   const listItemsBase = useMemo(() => {
-    const rows = typeFilter === 'all'
-      ? activities.filter((a) => a.type === 'training_vacation')
-      : activities.filter((a) => activityMatchesFilter(a.type, typeFilter));
+    const rows = activities.filter((a) => activityMatchesTypeSelection(a.type, selectedTypes));
     return [...rows].sort((a, b) => {
       const da = String(a.date || '');
       const db = String(b.date || '');
       if (da !== db) return da.localeCompare(db);
       return String(a.name || '').localeCompare(String(b.name || ''), 'he');
     });
-  }, [activities, typeFilter]);
+  }, [activities, selectedTypes]);
 
   const listItems = useMemo(
     () => listItemsBase.filter(matchesStaffFilter),
@@ -3685,10 +3718,9 @@ export default function ActivitiesCalendar({ isOwner = false }) {
 
   const openCreate = (dateStr, opts = {}) => {
     if (Date.now() < skipClickUntilRef.current) return;
-    if (viewMode === 'list' || typeFilter === 'training_vacation') {
-      let createType = 'training_vacation';
-      if (typeFilter === 'activities') createType = 'event';
-      else if (typeFilter !== 'all' && typeFilter !== 'training_vacation') createType = typeFilter;
+    // סוג יחיד שנבחר קובע מה נוצר; בלי סוג יחיד נפתח תפריט התבניות הרגיל.
+    if (soleType) {
+      const createType = soleType === 'activities' ? 'event' : soleType;
       setFormError('');
       setModal(emptyForm(dateStr, {
         ...opts,
@@ -3835,6 +3867,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     delete rest.occurrenceDate;
     setModal(rest);
   };
+
 
   /**
    * שכפול: טופס יצירה חדש עם אותם הפרטים, במקום למלא הכול שוב.
@@ -4439,11 +4472,11 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           )}
           {viewMode === 'list' && (
             <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--text-1)' }}>
-              {typeFilter === 'all' || typeFilter === 'training_vacation'
-                ? 'חופשות מאימונים'
-                : (filterChips().find((c) => c.id === typeFilter)?.label
-                  || activityTypes().find((t) => t.id === typeFilter)?.label
-                  || 'רשימת אירועים')}
+              {soleType
+                ? (filterChips().find((c) => c.id === soleType)?.label
+                  || activityTypes().find((t) => t.id === soleType)?.label
+                  || 'רשימת אירועים')
+                : 'רשימת אירועים'}
               <span style={{ marginInlineStart: 8, fontSize: 13, fontWeight: 600, color: 'var(--text-3)' }}>
                 ({listItems.length})
               </span>
@@ -4470,10 +4503,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
             <button
               type="button"
               className={`tab-pill ${viewMode === 'list' ? 'active' : ''}`}
-              onClick={() => {
-                setViewMode('list');
-                if (typeFilter === 'all') setTypeFilter('training_vacation');
-              }}
+              onClick={() => setViewMode('list')}
             >
               <List size={14} /> רשימה
             </button>
@@ -4501,9 +4531,9 @@ export default function ActivitiesCalendar({ isOwner = false }) {
             />
             <button type="button" className="btn btn-primary" onClick={() => openCreate(toDateStr(new Date()))}>
               <Plus size={16} strokeWidth={2.5} />
-              {viewMode === 'list'
-                ? listCopyForFilter(typeFilter).add
-                : (typeFilter === 'training_vacation' ? 'חופשה חדשה' : 'אירוע חדש')}
+              {soleType
+                ? listCopyForFilter(soleType).add
+                : 'אירוע חדש'}
             </button>
           </div>
         </div>
@@ -4515,29 +4545,33 @@ export default function ActivitiesCalendar({ isOwner = false }) {
         justifyContent: 'space-between',
       }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+          {/* כפתור אחד לשני הכיוונים: כשהכל מוצג הוא מסתיר הכל, ואחרת מחזיר הכל. */}
           <button
             type="button"
-            onClick={() => setTypeFilter('all')}
+            onClick={() => setSelectedTypes(everyTypeShown ? [] : null)}
+            title={everyTypeShown
+              ? 'להסתיר את כל סוגי האירועים'
+              : 'להציג את כל סוגי האירועים'}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 6,
               padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: 'pointer',
-              border: `1px solid ${typeFilter === 'all' ? '#38BDF8' : 'var(--border)'}`,
-              background: typeFilter === 'all' ? 'rgba(56,189,248,0.15)' : 'transparent',
-              color: typeFilter === 'all' ? '#7DD3FC' : 'var(--text-3)',
+              border: `1px solid ${everyTypeShown ? '#38BDF8' : 'var(--border)'}`,
+              background: everyTypeShown ? 'rgba(56,189,248,0.15)' : 'transparent',
+              color: everyTypeShown ? '#7DD3FC' : 'var(--text-3)',
             }}
           >
-            הכל
+            {everyTypeShown ? 'הסתר הכל' : 'הצג הכל'}
           </button>
           {filterChips().map((t) => {
-            const active = typeFilter === t.id;
-            const dimmed = typeFilter !== 'all' && !active;
+            const active = chipActive(t.id);
+            const dimmed = !active;
             const ChipIcon = activityTypeIcon(t.id);
             return (
               <button
                 key={t.id}
                 type="button"
-                onClick={() => setTypeFilter(active ? 'all' : t.id)}
-                title={active ? 'הצג הכל' : `סנן לפי ${t.label}`}
+                onClick={() => toggleType(t.id)}
+                title={active ? `להסתיר ${t.label}` : `להציג ${t.label}`}
                 style={{
                   display: 'inline-flex', alignItems: 'center', gap: 6,
                   padding: '5px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: 'pointer',
@@ -4804,7 +4838,9 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           </div>
           {listItems.length === 0 ? (
             <div style={{ padding: '36px 20px', textAlign: 'center', color: 'var(--text-3)', lineHeight: 1.6 }}>
-              {listCopyForFilter(typeFilter).empty}
+              {selectedTypes && selectedTypes.length === 0
+                ? 'לא נבחר סוג אירוע להצגה — סמנו סוג בשורת התגיות'
+                : (soleType ? listCopyForFilter(soleType).empty : 'אין אירועים להצגה')}
               <div style={{ marginTop: 12 }}>
                 <button
                   type="button"
@@ -4812,7 +4848,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
                   onClick={() => openCreate(toDateStr(new Date()))}
                 >
                   <Plus size={15} strokeWidth={2.5} />
-                  {listCopyForFilter(typeFilter).add}
+                  {soleType ? listCopyForFilter(soleType).add : 'אירוע חדש'}
                 </button>
               </div>
             </div>
@@ -4883,7 +4919,9 @@ export default function ActivitiesCalendar({ isOwner = false }) {
                             whiteSpace: 'nowrap',
                           }}
                         >
-                          {staff.name}
+                          <EntityLink kind="employee" id={staff.id} title="מעבר לתיק העובד">
+                            {staff.name}
+                          </EntityLink>
                           {staff.role && (
                             <span style={{ color: 'var(--text-3)' }}>{` — ${staff.role}`}</span>
                           )}

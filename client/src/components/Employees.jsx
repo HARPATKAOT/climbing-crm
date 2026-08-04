@@ -3,12 +3,19 @@ import {
   Clock, LogIn, LogOut, Coins, Plus, Trash2, Edit2,
   Save, X, UserCheck, RefreshCw, Briefcase, Award, ArrowUpRight, Search, ChevronDown, ChevronUp,
   Upload, Download, FileText, Users, Banknote, Link2, Copy, Settings2, MessageCircle, Check, ChevronLeft, CalendarRange,
-  Phone, Mail, MapPin, CreditCard, User, Calendar, Cake, Landmark, Car, Lock
-, Pencil , Bell } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+  Phone, Mail, MapPin, CreditCard, User, Calendar, Cake, Landmark, Car, Lock, Receipt
+, Pencil , Bell , Shield } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import EntityLink, { takeOpenParam } from '../utils/entityLinks.jsx';
 import { Modal } from './UI.jsx';
 import GenderPicker from './GenderPicker.jsx';
-import { STAFF_ALERT_KINDS } from '../utils/staffAlerts.js';
+import {
+  STAFF_ALERT_KINDS,
+  STAFF_ACCESS_LEVELS,
+  accessLevelLabel,
+  alertSectionsFor,
+  employeeAccessLevel,
+} from '../utils/staffAlerts.js';
 import {
   STAFF_ROLE_OPTIONS,
   assignableLabelsOf,
@@ -29,6 +36,7 @@ import {
   summarizeByRole,
   workTypeRole,
 } from '../utils/wageRates.js';
+import { roleIcon } from '../utils/roleIcons.js';
 import AppSelect from './AppSelect.jsx';
 
 const STATUS_OPTIONS = ['עובד פעיל', 'מנהל', 'עובד זמני', 'מדריך צעיר', 'מועמד', 'ארכיון', 'סנפלינג'];
@@ -103,6 +111,11 @@ function hoursFromTimes(startHm, endHm) {
   const b = parse(endHm);
   if (a == null || b == null || b <= a) return null;
   return roundHoursQuarter((b - a) / 60);
+}
+
+/** מספר ישראלי בפורמט שוואטסאפ מבין. */
+function waNumber(phone) {
+  return String(phone || '').replace(/\D/g, '').replace(/^0/, '972');
 }
 
 function workTypeLabel(workType) {
@@ -254,11 +267,6 @@ function MonthlyPayCard({ employee, agreement, rows, month, onEditWage }) {
   const travel = travelPerDay(agreement);
   const monthLabel = new Date(`${month}-01T12:00:00`).toLocaleDateString('he-IL', { month: 'long', year: 'numeric' });
 
-  // תעריף לתפקיד מוצג רק לתפקידים שהעובד מסומן בהם — השאר אינו רלוונטי לו.
-  const myRoles = Array.isArray(employee?.certifications) ? employee.certifications : [];
-  const myRates = ratesOf(agreement).filter((r) => myRoles.includes(r.role));
-  const missingRates = myRoles.filter((role) => !ratesOf(agreement).some((r) => r.role === role));
-
   const line = (label, value, opts = {}) => (
     <div style={{
       display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
@@ -295,9 +303,11 @@ function MonthlyPayCard({ employee, agreement, rows, month, onEditWage }) {
               : rate?.mode === 'daily'
                 ? `${entry.count === 1 ? 'יום אחד' : `${entry.count} ימים`} × ₪${rate.amount}`
                 : `${entry.hours} ש׳${rate ? ` × ₪${rate.amount}` : ''}`;
+            const EntryIcon = roleIcon(entry.role || entry.label);
             return (
-              <div key={entry.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontSize: 12 }}>
-                <span>
+              <div key={entry.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, gap: 8 }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                  <EntryIcon size={13} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
                   {entry.label}
                   <span style={{ color: 'var(--text-3)', fontSize: 11 }}> · {detail}</span>
                 </span>
@@ -320,22 +330,104 @@ function MonthlyPayCard({ employee, agreement, rows, month, onEditWage }) {
         </div>
       )}
 
-      {myRates.length > 0 && (
-        <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
-          <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>התעריפים שלו</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {myRates.map((r) => (
-              <span key={r.role} className="badge badge-gray" style={{ fontSize: 10 }}>
-                {r.role} ₪{r.amount}{r.mode === 'daily' ? '/יום' : '/ש׳'}
-              </span>
-            ))}
+      {/* התעריפים עצמם והתפקידים בלי תעריף מוצגים בכרטיס ההסכם שמתחת — אין
+          טעם לחזור עליהם פעמיים באותה לשונית. */}
+    </div>
+  );
+}
+
+/**
+ * תלוש מול חשבונית: שני מסלולי העסקה שונים לגמרי, ולכן הם נבדלים בסימן
+ * ובצבע ולא רק במילה.
+ */
+function PaymentMethodBadge({ method }) {
+  const invoice = method === 'invoice' || method === 'חשבונית';
+  return (
+    <span
+      className={`badge ${invoice ? 'badge-amber' : 'badge-blue'}`}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+    >
+      {invoice ? <FileText size={12} /> : <Receipt size={12} />}
+      {invoice ? 'חשבונית' : 'תלוש'}
+    </span>
+  );
+}
+
+/** שורת תעריף אחת: אייקון התפקיד, שמו והסכום — בכל מקום באותה צורה. */
+function RateLine({ role, amount, mode, muted = false }) {
+  const Icon = roleIcon(role);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <Icon size={13} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+      <span style={{ color: muted ? 'var(--text-3)' : 'inherit' }}>{role}</span>
+      <span style={{ color: 'var(--green)', fontWeight: 600 }}>
+        ₪{Number(amount).toLocaleString()}{mode === 'daily' ? '/יום' : '/ש׳'}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * הסכם השכר עצמו בתוך תיק העובד: כל התעריפים שנקבעו לו, נסיעות ליום, ומה
+ * חסר. עד היום ההסכם היה נגיש רק מלשונית נפרדת במסך הראשי.
+ */
+function EmployeeWageAgreementCard({ employee, agreement, onEdit }) {
+  const rates = ratesOf(agreement);
+  const travel = travelPerDay(agreement);
+  const myRoles = Array.isArray(employee?.certifications) ? employee.certifications : [];
+  const missing = myRoles.filter((role) => !rates.some((r) => r.role === role));
+
+  return (
+    <div className="card card-p">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Coins size={14} style={{ color: 'var(--text-3)' }} /> הסכם השכר שלו
+        </div>
+        <button type="button" className="btn btn-ghost btn-xs" onClick={onEdit}>
+          <Edit2 size={11} /> {agreement ? 'עריכת ההסכם' : 'יצירת הסכם'}
+        </button>
+      </div>
+
+      {rates.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+          אין לעובד הסכם שכר. בלי תעריף, שורות העבודה שלו יסתכמו באפס.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {rates.map((r) => {
+            const Icon = roleIcon(r.role);
+            return (
+              <div key={r.role} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, gap: 8 }}>
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0,
+                  color: myRoles.includes(r.role) ? 'var(--text-1)' : 'var(--text-3)',
+                }}>
+                  <Icon size={13} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+                  {r.role}
+                  {!myRoles.includes(r.role) && <span style={{ fontSize: 10, color: 'var(--text-3)' }}> · לא מסומן אצלו</span>}
+                </span>
+                <span style={{ fontWeight: 700, flexShrink: 0 }}>
+                  ₪{Number(r.amount).toLocaleString()}
+                  <span style={{ color: 'var(--text-3)', fontWeight: 500 }}>{r.mode === 'daily' ? ' ליום' : ' לשעה'}</span>
+                </span>
+              </div>
+            );
+          })}
+          <div style={{
+            display: 'flex', justifyContent: 'space-between', fontSize: 12,
+            borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 4,
+          }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--text-3)' }}>
+              <Car size={13} /> נסיעות ליום עבודה
+            </span>
+            <span style={{ fontWeight: 700 }}>{travel ? `₪${travel}` : 'לא הוגדר'}</span>
           </div>
         </div>
       )}
 
-      {missingRates.length > 0 && (
+      {missing.length > 0 && (
         <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 8 }}>
-          בלי תעריף אישי: {missingRates.join(', ')} — יקבל תשלום רק מאירוע שהוגדר גלובלי.
+          תפקידים בלי תעריף: {missing.join(', ')}
         </div>
       )}
     </div>
@@ -1126,6 +1218,21 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
   const [pendingFiles, setPendingFiles] = useState({});
   const [certifications, setCertifications] = useState(employee?.certifications || []);
   const [alerts, setAlerts] = useState(Array.isArray(employee?.alerts) ? employee.alerts : []);
+  // Per-alert choices — how long before an event, which WhatsApp template.
+  const [alertConfig, setAlertConfig] = useState(() => ({ ...(employee?.alert_settings || {}) }));
+  const [accessLevel, setAccessLevel] = useState(() => employeeAccessLevel(employee));
+  const alertSections = useMemo(
+    () => alertSectionsFor(accessLevel, alerts),
+    [accessLevel, alerts]
+  );
+  // Only templates Meta already approved can be sent, so only those are offered.
+  const [approvedTemplates, setApprovedTemplates] = useState([]);
+  useEffect(() => {
+    fetch('/api/message-templates?approved=1')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows) => setApprovedTemplates(Array.isArray(rows) ? rows : []))
+      .catch(() => {});
+  }, []);
   const [customCert, setCustomCert]   = useState('');
   // קטלוג התפקידים מגיע מהשרת; תפקידי מערכת נעולים, השאר ניתנים לעריכה.
   const [roleCatalog, setRoleCatalog] = useState(null);
@@ -1228,6 +1335,12 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
         hasForm101: hasEmployeeDoc({ documents }, 'form101') || !!pendingFiles.form101,
         certifications,
         alerts,
+        access_level: accessLevel,
+        // Settings for alerts nobody is subscribed to are dropped: a lead time
+        // left behind by an unchecked alert would come back to life silently.
+        alert_settings: Object.fromEntries(
+          Object.entries(alertConfig).filter(([key]) => alerts.includes(key))
+        ),
         _pendingFiles: pendingFiles,
         // רק תפקידים שמסומנים כרגע נשמרים בהסכם — תפקיד שהוסר מוריד את התעריף שלו.
         _wage: {
@@ -1559,40 +1672,138 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
             </div>
 
             {/* Its own tab: an alert list is a standing preference, not a
-                detail buried under someone's address. */}
+                detail buried under someone's address. Divided into sections,
+                because the list only grows, and an instructor scrolling past
+                "שיבוץ מהבוט" to reach their own group is how a screen stops
+                being read. */}
             <div style={{ display: tab === 'alerts' ? 'flex' : 'none', flexDirection: 'column', gap: 14 }}>
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
                 הודעות פנימיות מהמערכת לטלפון שלמעלה. אף אחד לא מסומן — ההתראות
                 נשלחות למספרים שבהגדרות הבוט.
               </div>
+
+              {/* The level decides which sections exist for this person. This is
+                  also the only place where "מי מנהל" is defined. */}
+              <div className="card card-p" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: 12, fontWeight: 700 }}>רמת הרשאה</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {STAFF_ACCESS_LEVELS.map((level) => (
+                    <button
+                      key={level.key}
+                      type="button"
+                      className={`tab-pill ${accessLevel === level.key ? 'active' : ''}`}
+                      onClick={() => setAccessLevel(level.key)}
+                    >
+                      {level.key === 'manager' && <Shield size={13} />}
+                      {level.label}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                  {STAFF_ACCESS_LEVELS.find((l) => l.key === accessLevel)?.hint}
+                </div>
+              </div>
+
               {!answers.phone?.trim() && alerts.length > 0 && (
-                <div style={{ fontSize: 12, color: '#FBBF24', marginBottom: 6 }}>
+                <div style={{ fontSize: 12, color: '#FBBF24' }}>
                   אין טלפון לעובד הזה, ולכן ההתראות שסומנו לא יישלחו.
                 </div>
               )}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {STAFF_ALERT_KINDS.map((alert) => (
-                  <label
-                    key={alert.key}
-                    style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, cursor: 'pointer' }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={alerts.includes(alert.key)}
-                      onChange={(e) => setAlerts((prev) => (
-                        e.target.checked
-                          ? [...new Set([...prev, alert.key])]
-                          : prev.filter((k) => k !== alert.key)
-                      ))}
-                      style={{ marginTop: 2 }}
-                    />
-                    <span>
-                      <span style={{ fontWeight: 700 }}>{alert.label}</span>
-                      <span style={{ color: 'var(--text-3)' }}> — {alert.hint}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
+
+              {alertSections.map((section) => (
+                <div key={section.key} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{
+                    display: 'flex', alignItems: 'baseline', gap: 6,
+                    borderBottom: '1px solid var(--border)', paddingBottom: 5,
+                  }}>
+                    <span style={{ fontSize: 13, fontWeight: 700 }}>{section.label}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-3)' }}>{section.hint}</span>
+                    {section.locked && (
+                      <span className="badge" style={{ fontSize: 10, marginRight: 'auto' }}>
+                        מחוץ לרמת ההרשאה
+                      </span>
+                    )}
+                  </div>
+                  {section.kinds.map((alert) => {
+                    const checked = alerts.includes(alert.key);
+                    const config = alertConfig[alert.key] || {};
+                    const patch = (fields) => setAlertConfig((prev) => ({
+                      ...prev,
+                      [alert.key]: { ...(prev[alert.key] || {}), ...fields },
+                    }));
+                    return (
+                      <div key={alert.key} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => setAlerts((prev) => (
+                              e.target.checked
+                                ? [...new Set([...prev, alert.key])]
+                                : prev.filter((k) => k !== alert.key)
+                            ))}
+                            style={{ marginTop: 2 }}
+                          />
+                          <span>
+                            <span style={{ fontWeight: 700 }}>{alert.label}</span>
+                            <span style={{ color: 'var(--text-3)' }}> — {alert.hint}</span>
+                          </span>
+                        </label>
+
+                        {/* Timing and template only matter once the alert is on,
+                            and shown always they would treble the list. */}
+                        {checked && (alert.settings?.length || alert.templateChoice) && (
+                          <div style={{
+                            marginInlineStart: 24, display: 'flex', flexDirection: 'column', gap: 6,
+                            borderInlineStart: '2px solid var(--border)', paddingInlineStart: 10,
+                          }}>
+                            {(alert.settings || []).map((field) => (
+                              <div key={field.key} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span style={{ fontSize: 11, color: 'var(--text-3)', minWidth: 70 }}>{field.label}</span>
+                                <AppSelect
+                                  className="input input-sm"
+                                  style={{ maxWidth: 170 }}
+                                  value={String(
+                                    config[field.key] === undefined || config[field.key] === null
+                                      ? field.default
+                                      : config[field.key]
+                                  )}
+                                  onChange={(e) => patch({ [field.key]: Number(e.target.value) })}
+                                >
+                                  {field.options.map((option) => (
+                                    <option key={option.value} value={String(option.value)}>{option.label}</option>
+                                  ))}
+                                </AppSelect>
+                              </div>
+                            ))}
+                            {alert.templateChoice && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span style={{ fontSize: 11, color: 'var(--text-3)', minWidth: 70 }}>תבנית</span>
+                                <AppSelect
+                                  className="input input-sm"
+                                  style={{ maxWidth: 240 }}
+                                  value={config.template_id || ''}
+                                  onChange={(e) => patch({ template_id: e.target.value || null })}
+                                >
+                                  <option value="">הודעה רגילה מהמערכת</option>
+                                  {approvedTemplates.map((t) => (
+                                    <option key={t.id} value={t.id}>{t.name || t.meta_name}</option>
+                                  ))}
+                                </AppSelect>
+                              </div>
+                            )}
+                            {alert.templateChoice && config.template_id && (
+                              <div style={{ fontSize: 10, color: 'var(--text-3)' }}>
+                                המשתנים נשלחים לפי הסדר: {alert.templateVars.join(' · ')}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
             </div>
 
             {saveError && (
@@ -1672,6 +1883,16 @@ function WageFormModal({ wage, employees, onSave, onClose }) {
   const [applyScope, setApplyScope] = useState('today');
   const [saving, setSaving] = useState(false);
 
+  // תעריף לתפקיד שהעובד לא מוסמך אליו הוא רעש. מציגים את התפקידים שסומנו לו,
+  // ובנוסף כל תפקיד שכבר יש בו סכום — אחרת לא הייתה דרך לראות אותו או לבטלו.
+  const [showAllRoles, setShowAllRoles] = useState(false);
+  const selectedEmp = employees.find((e) => String(e.id) === String(employeeId));
+  const empRoles = Array.isArray(selectedEmp?.certifications) ? selectedEmp.certifications : [];
+  const visibleRates = showAllRoles
+    ? rates
+    : rates.filter((r) => empRoles.includes(r.role) || Number(r.amount) > 0);
+  const hiddenRates = rates.length - visibleRates.length;
+
   const patchRate = (role, patch) => {
     setRates((prev) => prev.map((r) => (r.role === role ? { ...r, ...patch } : r)));
   };
@@ -1734,15 +1955,40 @@ function WageFormModal({ wage, employees, onSave, onClose }) {
               תעריף לפי תפקיד
             </div>
             <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: -8 }}>
-              השאירו ריק תפקיד שהעובד לא מקבל עליו תשלום. השעות מעוגלות לחצי השעה
-              הקרובה כלפי מעלה — חוג של 50 דקות משולם כשעה.
+              {hiddenRates > 0 && !showAllRoles
+                ? 'מוצגים רק התפקידים שהעובד מוסמך אליהם. '
+                : 'השאירו ריק תפקיד שהעובד לא מקבל עליו תשלום. '}
+              השעות מעוגלות לחצי השעה הקרובה כלפי מעלה — חוג של 50 דקות משולם כשעה.
+              {hiddenRates > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllRoles((v) => !v)}
+                  style={{
+                    background: 'none', border: 'none', padding: 0, marginInlineStart: 6,
+                    color: 'var(--blue)', cursor: 'pointer', fontSize: 11, fontFamily: 'inherit',
+                  }}
+                >
+                  {showAllRoles ? 'הצג רק את התפקידים שלו' : `הצג את כל התפקידים (${hiddenRates})`}
+                </button>
+              )}
             </div>
 
-            {rates.map((rate) => (
+            {visibleRates.length === 0 && (
+              <div style={{ fontSize: 12, color: 'var(--amber)' }}>
+                לא הוגדרו לעובד תפקידים, ולכן אין לו תעריפים להזין. סמנו לו תפקידים בתיק העובד.
+              </div>
+            )}
+
+            {visibleRates.map((rate) => {
+              const RoleIcon = roleIcon(rate.role);
+              return (
               <div key={rate.role} style={{
                 display: 'grid', gridTemplateColumns: '1fr 110px 110px', gap: 8, alignItems: 'center',
               }}>
-                <div style={{ fontSize: 13 }}>{rate.role}</div>
+                <div style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <RoleIcon size={14} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+                  {rate.role}
+                </div>
                 <AppSelect
                   className="input input-sm"
                   value={rate.mode}
@@ -1760,7 +2006,8 @@ function WageFormModal({ wage, employees, onSave, onClose }) {
                   onChange={(e) => patchRate(rate.role, { amount: e.target.value })}
                 />
               </div>
-            ))}
+              );
+            })}
 
             {/* אותה רשת כמו שורות התעריף שמעל, כדי שהעמודות יתיישרו. */}
             <div style={{
@@ -2011,6 +2258,9 @@ export default function Employees() {
   const [payrollMonth, setPayrollMonth] = useState(() => currentYearMonth());
   const [employeeFormTab, setEmployeeFormTab] = useState('details');
   const [payrollBusy, setPayrollBusy] = useState(false);
+  // ברירת המחדל בתשלום החודשי: רק מי שבאמת עבד החודש. רשימת כל העובדים
+  // הפכה את המסך לים של אפסים שצריך לדוג ממנו את השורות האמיתיות.
+  const [payrollWorkedOnly, setPayrollWorkedOnly] = useState(true);
   const [newManualRow, setNewManualRow] = useState({
     employee_id: '',
     date: '',
@@ -2025,20 +2275,39 @@ export default function Employees() {
   // UI state
   const [activeTab, setActiveTab]         = useState('permanent'); // permanent | certs | wages | shifts | payroll
   const [selectedEmployee, setSelectedEmployee] = useState(null);
+  // תיק העובד מחולק ללשוניות; פרטים, שכר, משמרות ותעודות הם ארבעה עולמות
+  // שונים, וגלילה אחת ארוכה הסתירה את השכר בתחתית התיק.
+  const [drawerTab, setDrawerTab] = useState('file'); // file | wage | shifts | certs
   const [selectedWage, setSelectedWage]         = useState(null);
   const [showEmployeeForm, setShowEmployeeForm] = useState(false);
   const [showWageForm, setShowWageForm]         = useState(false);
   const [editingEmployee, setEditingEmployee]   = useState(null);
   const [editingWage, setEditingWage]           = useState(null);
 
+  // מעבר לעובד אחר מחזיר את התיק ללשונית הראשונה — אחרת נפתח תיק חדש
+  // באמצע הסכם השכר של הקודם.
+  useEffect(() => { setDrawerTab('file'); }, [selectedEmployee?.id]);
+
+  // קישור נכנס — /employees?open=<id> פותח את תיק העובד.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    if (!employees.length) return;
+    const openId = takeOpenParam(searchParams, setSearchParams);
+    if (!openId) return;
+    const match = employees.find((e) => String(e.id) === String(openId));
+    if (match) setSelectedEmployee(match);
+  }, [employees, searchParams, setSearchParams]);
+
   // Sorting and Filtering
   const [empSearch, setEmpSearch] = useState('');
   const [empFilterActive, setEmpFilterActive] = useState('all');
+  const [empFilterRole, setEmpFilterRole] = useState('all');
   const [empSortConfig, setEmpSortConfig] = useState({ key: 'name', direction: 'asc' });
 
   // Shift logging quick state
   const [currentTime, setCurrentTime]     = useState(new Date());
   const [clockActivity, setClockActivity] = useState({});
+  const [clockInEmployee, setClockInEmployee] = useState('');
 
   // רוחב תיק העובד — נגרר ונשמר בדפדפן, כי הרוחב הנוח תלוי במסך של כל אחד.
   const [drawerWidth, setDrawerWidth] = useState(loadDrawerWidth);
@@ -2134,10 +2403,14 @@ export default function Employees() {
     return () => clearInterval(t);
   }, [payrollMonth]);
 
-  const clockedInCount = employees.filter(e => {
-    const activeOpenShift = shifts.some(s => s.employee_id === e.id && s.status === 'open');
-    return activeOpenShift;
-  }).length;
+  // המשמרות הפתוחות עכשיו, עם העובד שלהן — זה כל מה שמעניין במסך הנוכחות.
+  const openShifts = useMemo(() => shifts
+    .filter((s) => s.status === 'open')
+    .map((shift) => ({ shift, emp: employees.find((e) => e.id === shift.employee_id) }))
+    .sort((a, b) => new Date(a.shift.clock_in) - new Date(b.shift.clock_in)),
+  [shifts, employees]);
+
+  const clockedInCount = openShifts.length;
 
   // ברירת מחדל לעובד בלי הסכם — כדי שהמסך יראה סכום ולא ריק.
   const defaultAgreement = {
@@ -2192,6 +2465,38 @@ export default function Employees() {
     return map;
   }, [employees, shifts, wages, workAssignments, payrollMonth]);
 
+  /**
+   * התשלום החודשי לכל עובד, מפורק לפי סוג העבודה שהוא באמת עשה: כמה שעות,
+   * באיזה תעריף מההסכם שלו, וכמה זה יוצא. הרשימה ממוינת לפי הסכום, ומי שלא
+   * עבד בחודש הנבחר מסונן החוצה אלא אם ביקשו לראות את כולם.
+   */
+  const payrollBreakdown = useMemo(() => {
+    const { from, to } = monthBounds(payrollMonth);
+    return employees
+      .filter((e) => e.is_active !== false)
+      .map((emp) => {
+        const agreement = wages.find((w) => w.employee_id === emp.id) || null;
+        const rows = workAssignments.filter(
+          (a) => a.employee_id === emp.id && a.date >= from && a.date <= to
+        );
+        const stats = employeeShiftStats[emp.id] || { hours: 0, days: 0, travel: 0, total: 0 };
+        return {
+          emp,
+          agreement,
+          rows,
+          byRole: summarizeByRole(rows, agreement || defaultAgreement),
+          stats,
+          pending: rows.filter((r) => !r.approved).length,
+          // גם שעות שעון בלי שורות עבודה נחשבות "עבד החודש".
+          worked: rows.length > 0 || (stats.hours || 0) > 0,
+        };
+      })
+      .sort((a, b) => (b.stats.total || 0) - (a.stats.total || 0) || a.emp.name.localeCompare(b.emp.name, 'he'));
+  }, [employees, wages, workAssignments, employeeShiftStats, payrollMonth]);
+
+  const payrollVisible = payrollWorkedOnly ? payrollBreakdown.filter((p) => p.worked) : payrollBreakdown;
+  const payrollMonthTotal = payrollBreakdown.reduce((sum, p) => sum + (p.stats.total || 0), 0);
+
   const groupName = (id) => {
     if (!id) return '';
     return groups.find((g) => g.id === id)?.name || '';
@@ -2212,7 +2517,8 @@ export default function Employees() {
     let filtered = employees.filter(emp => {
       const matchSearch = emp.name.toLowerCase().includes(empSearch.toLowerCase()) || (emp.phone || '').includes(empSearch);
       const matchActive = empFilterActive === 'all' ? true : empFilterActive === 'active' ? emp.is_active : !emp.is_active;
-      return matchSearch && matchActive;
+      const matchRole = empFilterRole === 'all' || (emp.certifications || []).includes(empFilterRole);
+      return matchSearch && matchActive && matchRole;
     });
 
     filtered.sort((a, b) => {
@@ -2233,7 +2539,13 @@ export default function Employees() {
       return 0;
     });
     return filtered;
-  }, [employees, empSearch, empFilterActive, empSortConfig, employeeShiftStats]);
+  }, [employees, empSearch, empFilterActive, empFilterRole, empSortConfig, employeeShiftStats]);
+
+  // ההסמכות שאפשר לסנן לפיהן: תפקידי הקטלוג, ובנוסף כל הסמכה שהוזנה ידנית.
+  const certOptions = useMemo(() => {
+    const assignable = assignableLabelsOf(roleCatalog);
+    return [...new Set([...assignable, ...certsInUse(employees)])];
+  }, [roleCatalog, employees]);
 
   const handleSaveEmployee = async (data) => {
     const { _pendingFiles = {}, _wage = null, ...payload } = data;
@@ -2346,6 +2658,17 @@ export default function Employees() {
       console.error(err);
       return false;
     }
+  };
+
+  /**
+   * פותח את הסכם השכר של העובד מתוך התיק שלו. אין הסכם? נפתח טופס ריק שכבר
+   * מקושר אליו, כדי שלא צריך לצאת ללשונית הסכמי השכר ולחפש אותו ברשימה.
+   */
+  const openWageForEmployee = (emp) => {
+    if (!emp) return;
+    const existing = wages.find((w) => w.employee_id === emp.id);
+    setEditingWage(existing || { employee_id: emp.id });
+    setShowWageForm(true);
   };
 
   const handleClock = async (empId) => {
@@ -2547,7 +2870,7 @@ export default function Employees() {
                     style={{ cursor: 'pointer', border: 'none', fontFamily: 'inherit' }}>
                     {selectedEmployee.is_active ? 'פעיל (לחץ להשבתה)' : 'לא פעיל (לחץ להפעלה)'}
                   </button>
-                  <span className="badge badge-gray">{selectedEmployee.payment_method === 'invoice' ? 'חשבונית' : 'תלוש'}</span>
+                  <PaymentMethodBadge method={selectedEmployee.payment_method} />
                 </div>
               </div>
             </div>
@@ -2567,8 +2890,28 @@ export default function Employees() {
             </div>
           </div>
 
+          {/* לשוניות התיק — כל עולם תוכן בפני עצמו, במקום גלילה אחת ארוכה. */}
+          <div className="tab-bar" style={{ marginBottom: 14 }}>
+            {[
+              { key: 'file',   label: 'תיק אישי',       icon: User },
+              { key: 'wage',   label: 'הסכם שכר',       icon: Coins },
+              { key: 'shifts', label: 'משמרות',         icon: CalendarRange },
+              { key: 'certs',  label: 'תעודות ומסמכים', icon: Award },
+            ].map(({ key, label, icon: Icon }) => (
+              <button
+                key={key}
+                type="button"
+                className={`tab-pill ${drawerTab === key ? 'active' : ''}`}
+                onClick={() => setDrawerTab(key)}
+              >
+                <Icon size={13} /> {label}
+              </button>
+            ))}
+          </div>
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14, flex: 1, overflowY: 'auto' }}>
-            
+
+            {drawerTab === 'file' && (<>
             <div className="card card-p">
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>פרטי התקשרות</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
@@ -2605,7 +2948,9 @@ export default function Employees() {
                 )}
               </div>
             </div>
+            </>)}
 
+            {drawerTab === 'certs' && (<>
             <div className="card card-p">
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>טפסים ואישורים</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
@@ -2661,7 +3006,20 @@ export default function Employees() {
             </div>
 
             <div className="card card-p">
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>תפקידים והסמכות</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 11, color: 'var(--text-3)', flex: 1 }}>תפקידים והסמכות</span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => {
+                    setEditingEmployee(selectedEmployee);
+                    setEmployeeFormTab('roles');
+                    setShowEmployeeForm(true);
+                  }}
+                >
+                  <Pencil size={12} /> עריכה
+                </button>
+              </div>
               {selectedEmployee.certifications?.length > 0 ? (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                   {selectedEmployee.certifications.map(c => (
@@ -2672,12 +3030,18 @@ export default function Employees() {
                 <div style={{ fontSize: 12, color: 'var(--text-3)' }}>לא הוגדרו תפקידים</div>
               )}
             </div>
+            </>)}
 
             {/* Visible on the card, not only inside the edit form — this is
                 where anyone looks to see what an employee is signed up for. */}
+            {drawerTab === 'file' && (
             <div className="card card-p">
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <span style={{ fontSize: 11, color: 'var(--text-3)', flex: 1 }}>התראות בוואטסאפ</span>
+                <span style={{ fontSize: 11, color: 'var(--text-3)', flex: 1 }}>
+                  התראות בוואטסאפ
+                  {' · '}
+                  {accessLevelLabel(employeeAccessLevel(selectedEmployee))}
+                </span>
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
@@ -2702,7 +3066,9 @@ export default function Employees() {
                 <div style={{ fontSize: 12, color: 'var(--text-3)' }}>לא מקבל התראות</div>
               )}
             </div>
+            )}
 
+            {drawerTab === 'shifts' && (<>
             <ShiftJournalCard employeeId={selectedEmployee.id} onOpenEntry={openShiftEntry} />
 
             <ClassAttendanceSummary
@@ -2710,18 +3076,25 @@ export default function Employees() {
               month={payrollMonth}
               paidHoursThisMonth={employeeShiftStats[selectedEmployee.id]?.hours}
             />
+            </>)}
 
+            {drawerTab === 'wage' && (<>
             <MonthlyPayCard
               employee={selectedEmployee}
               agreement={wages.find(wg => wg.employee_id === selectedEmployee.id) || null}
               rows={workAssignments.filter((a) => a.employee_id === selectedEmployee.id)}
               month={payrollMonth}
-              onEditWage={() => {
-                setEditingEmployee(selectedEmployee);
-                setEmployeeFormTab('roles');
-                setShowEmployeeForm(true);
-              }}
+              onEditWage={() => openWageForEmployee(selectedEmployee)}
             />
+
+            {/* ההסכם עצמו, ולא רק מה שנצבר החודש — מכאן פותחים אותו לעריכה
+                בלי לחפש אותו בלשונית הסכמי השכר של המסך הראשי. */}
+            <EmployeeWageAgreementCard
+              employee={selectedEmployee}
+              agreement={wages.find(wg => wg.employee_id === selectedEmployee.id) || null}
+              onEdit={() => openWageForEmployee(selectedEmployee)}
+            />
+            </>)}
           </div>
 
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, display: 'flex', gap: 10, marginTop: 10 }}>
@@ -2823,7 +3196,7 @@ export default function Employees() {
       {/* ─── Tabs Navigation ──────────────────────────────────────────────── */}
       <div className="tab-bar">
         {[
-          { key: 'permanent', label: 'עובדים קבועים',        icon: Users },
+          { key: 'permanent', label: 'עובדים',               icon: Users },
           { key: 'certs',     label: 'תעודות והסמכות',       icon: Award },
           { key: 'wages',     label: 'הסכמי שכר',            icon: Coins },
           { key: 'shifts',    label: 'שעון נוכחות ומשמרות',  icon: Clock },
@@ -2879,6 +3252,41 @@ export default function Employees() {
               <option value="active">פעילים בלבד</option>
               <option value="inactive">לא פעילים</option>
             </AppSelect>
+            {/* סינון לפי הסמכה — "מי יכול להדריך סנפלינג" היא השאלה שהכי
+                נשאלת מול הרשימה הזאת. */}
+            <AppSelect className="input input-sm" style={{ width: 180 }} value={empFilterRole} onChange={e => setEmpFilterRole(e.target.value)}>
+              <option value="all">כל ההסמכות</option>
+              {certOptions.map((role) => (
+                <option key={role} value={role}>{role}</option>
+              ))}
+            </AppSelect>
+          </div>
+
+          {/* מקרא האייקונים — בלעדיו עמודת ההסמכות היא חידה. */}
+          <div style={{
+            display: 'flex', flexWrap: 'wrap', gap: 14, padding: '10px 20px',
+            borderBottom: '1px solid var(--border)', fontSize: 11, color: 'var(--text-3)',
+          }}>
+            <span style={{ fontWeight: 700 }}>מקרא:</span>
+            {certOptions.map((role) => {
+              const Icon = roleIcon(role);
+              const active = empFilterRole === role;
+              return (
+                <button
+                  key={role}
+                  type="button"
+                  onClick={() => setEmpFilterRole(active ? 'all' : role)}
+                  title={`סינון לפי ${role}`}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer',
+                    background: 'none', border: 'none', padding: 0, fontFamily: 'inherit', fontSize: 11,
+                    color: active ? 'var(--blue)' : 'var(--text-3)',
+                  }}
+                >
+                  <Icon size={13} /> {role}
+                </button>
+              );
+            })}
           </div>
           <div className="table-wrap">
             <table className="crm-table">
@@ -2886,6 +3294,7 @@ export default function Employees() {
                 <tr>
                   <th onClick={() => handleSort('status')} style={{ cursor: 'pointer' }}>סטטוס {empSortConfig.key === 'status' ? (empSortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
                   <th onClick={() => handleSort('name')} style={{ cursor: 'pointer' }}>שם מלא {empSortConfig.key === 'name' ? (empSortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
+                  <th>הסמכות</th>
                   <th>מקבל תשלום ב..</th>
                   <th onClick={() => handleSort('hours')} style={{ cursor: 'pointer' }}>שעות החודש {empSortConfig.key === 'hours' ? (empSortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
                   <th onClick={() => handleSort('pay')} style={{ cursor: 'pointer' }}>סה"כ תשלומים {empSortConfig.key === 'pay' ? (empSortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
@@ -2905,7 +3314,22 @@ export default function Employees() {
                           </span>
                         </td>
                         <td style={{ fontWeight: 700 }}>{emp.name}</td>
-                        <td><span className="badge badge-gray">{emp.payment_method === 'invoice' ? 'חשבונית' : 'תלוש'}</span></td>
+                        <td>
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {(emp.certifications || []).map((role) => {
+                              const Icon = roleIcon(role);
+                              return (
+                                <span key={role} title={role} style={{ display: 'inline-flex', color: 'var(--blue)' }}>
+                                  <Icon size={15} />
+                                </span>
+                              );
+                            })}
+                            {(emp.certifications || []).length === 0 && (
+                              <span style={{ color: 'var(--text-3)', fontSize: 11 }}>—</span>
+                            )}
+                          </div>
+                        </td>
+                        <td><PaymentMethodBadge method={emp.payment_method} /></td>
                         <td style={{ fontWeight: 600 }}>{stats.hours} שעות</td>
                         <td style={{ color: 'var(--green)', fontWeight: 700 }}>
                           ₪{(stats.total ?? stats.pay).toLocaleString()}
@@ -2915,7 +3339,32 @@ export default function Employees() {
                             </span>
                           )}
                         </td>
-                        <td style={{ color: 'var(--text-3)' }}>{emp.phone}</td>
+                        {/* מספר מוצג הוא מספר שרוצים לחייג אליו או לכתוב אליו. */}
+                        <td onClick={(e) => e.stopPropagation()}>
+                          {emp.phone ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <a
+                                href={`tel:${emp.phone}`}
+                                className="btn btn-ghost btn-xs"
+                                style={{ color: 'var(--text-2)', textDecoration: 'none' }}
+                              >
+                                <Phone size={12} /> {emp.phone}
+                              </a>
+                              <a
+                                href={`https://wa.me/${waNumber(emp.phone)}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                title="וואטסאפ"
+                                className="btn btn-ghost btn-icon btn-xs"
+                                style={{ color: 'var(--green)' }}
+                              >
+                                <MessageCircle size={12} />
+                              </a>
+                            </div>
+                          ) : (
+                            <span style={{ color: 'var(--text-3)' }}>—</span>
+                          )}
+                        </td>
                         <td onClick={e => e.stopPropagation()}>
                           <div style={{ display: 'flex', gap: 6 }}>
                             <button className="btn btn-ghost btn-icon btn-xs" onClick={() => { setEditingEmployee(emp); setEmployeeFormTab('details'); setShowEmployeeForm(true); }}>
@@ -2985,8 +3434,8 @@ export default function Employees() {
               <thead>
                 <tr>
                   <th>עובד קשור</th>
+                  {/* הנסיעות הן עוד שורת תעריף, ולא נושא שמצדיק עמודה משלו. */}
                   <th>תעריפים</th>
-                  <th>נסיעות ליום</th>
                   <th>צורת תשלום</th>
                   <th>פעולות</th>
                 </tr>
@@ -2998,20 +3447,20 @@ export default function Employees() {
                     <tr key={w.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedWage(w)}>
                       <td style={{ fontWeight: 700 }}>{emp?.name || 'עובד הוסר'}</td>
                       <td style={{ fontSize: 12 }}>
-                        {ratesOf(w).length === 0 ? (
+                        {ratesOf(w).length === 0 && !travelPerDay(w) ? (
                           <span style={{ color: 'var(--text-3)' }}>—</span>
-                        ) : ratesOf(w).map((r) => (
-                          <div key={r.role}>
-                            {r.role} <span style={{ color: 'var(--green)', fontWeight: 600 }}>
-                              ₪{r.amount}{r.mode === 'daily' ? '/יום' : '/ש׳'}
-                            </span>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                            {ratesOf(w).map((r) => (
+                              <RateLine key={r.role} role={r.role} amount={r.amount} mode={r.mode} />
+                            ))}
+                            {travelPerDay(w) > 0 && (
+                              <RateLine role="נסיעות" amount={travelPerDay(w)} mode="daily" muted />
+                            )}
                           </div>
-                        ))}
+                        )}
                       </td>
-                      <td style={{ color: travelPerDay(w) ? 'var(--green)' : 'var(--text-3)', fontWeight: 600 }}>
-                        {travelPerDay(w) ? `₪${travelPerDay(w)}` : '—'}
-                      </td>
-                      <td><span className="badge badge-gray">{emp?.payment_method === 'invoice' ? 'חשבונית' : 'תלוש'}</span></td>
+                      <td><PaymentMethodBadge method={emp?.payment_method} /></td>
                       <td onClick={e => e.stopPropagation()}>
                         <div style={{ display: 'flex', gap: 6 }}>
                           <button className="btn btn-ghost btn-icon btn-xs" onClick={() => { setEditingWage(w); setShowWageForm(true); }}>
@@ -3032,78 +3481,89 @@ export default function Employees() {
       {activeTab === 'shifts' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           
-          {/* Quick clock grids */}
-          <div className="grid-3" style={{ gap: 16 }}>
-            {employees
-              .filter(e => e.is_active)
-              .map(emp => {
-                const openShift = shifts.find(s => s.employee_id === emp.id && s.status === 'open');
-                
-                let duration = null;
-                if (openShift) {
-                  const diffMs = currentTime - new Date(openShift.clock_in);
+          {/* מה זה שעון הנוכחות: רישום ידני של כניסה ויציאה בפועל, לעובדים
+              שאין להם שיבוץ מראש. השעות שלו נחשבות לשכר רק אם אין לעובד שורות
+              עבודה באותו חודש — לכן זה כלי עזר, לא מקור האמת של השכר. */}
+          <div className="card card-p" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+            <Clock size={18} style={{ color: 'var(--blue)', flexShrink: 0, marginTop: 2 }} />
+            <div style={{ fontSize: 12, color: 'var(--text-3)', lineHeight: 1.6 }}>
+              <span style={{ color: 'var(--text-1)', fontWeight: 700 }}>שעון נוכחות</span> — רישום כניסה ויציאה
+              בזמן אמת, למי שעבד בלי שיבוץ מראש. השעות שנרשמות כאן נחשבות לשכר
+              <span style={{ color: 'var(--text-1)' }}> רק לעובד שאין לו שורות עבודה באותו חודש</span>;
+              מי שמשובץ בלוח המשמרות מקבל שכר לפי שורות העבודה שלו, והשעון לא משנה לו כלום.
+            </div>
+          </div>
+
+          {/* עכשיו במשמרת — רק מי שבאמת בפנים, במקום רשת של כל העובדים */}
+          <div>
+            <div className="section-title" style={{ marginBottom: 12 }}>
+              עכשיו במשמרת {openShifts.length > 0 && <span style={{ color: 'var(--green)' }}>({openShifts.length})</span>}
+            </div>
+            {openShifts.length === 0 ? (
+              <div className="card card-p" style={{ fontSize: 13, color: 'var(--text-3)' }}>
+                אף אחד לא רשום כרגע במשמרת.
+              </div>
+            ) : (
+              <div className="grid-3" style={{ gap: 12 }}>
+                {openShifts.map(({ shift, emp }) => {
+                  const diffMs = currentTime - new Date(shift.clock_in);
                   const hrs = Math.floor(diffMs / (1000 * 60 * 60));
                   const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-                  duration = `${hrs}ש׳ ${mins}ד׳`;
-                }
-
-                return (
-                  <div key={emp.id} className="card card-p" style={{
-                    borderColor: openShift ? 'rgba(16,185,129,0.3)' : 'var(--border)',
-                    background: openShift ? 'rgba(16,185,129,0.03)' : 'var(--bg-card)',
-                    display: 'flex', flexDirection: 'column', justifyContent: 'space-between', minHeight: 180
-                  }}>
-                    <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                          <div className="avatar">
-                            {emp.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
-                          </div>
-                          <div>
-                            <div style={{ fontWeight: 700, fontSize: 13 }}>{emp.name}</div>
-                            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>מאמן מוסמך</div>
+                  return (
+                    <div key={shift.id} className="card card-p" style={{
+                      borderColor: 'rgba(16,185,129,0.3)', background: 'rgba(16,185,129,0.03)',
+                      display: 'flex', flexDirection: 'column', gap: 10,
+                    }}>
+                      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                        <div className="avatar">{(emp?.name || '??').split(' ').map(w => w[0]).join('').slice(0, 2)}</div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontWeight: 700, fontSize: 13 }}>{emp?.name || 'עובד שנמחק'}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
+                            {workTypeLabel(shift.activity_type)} · נכנס ב-{new Date(shift.clock_in).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}
                           </div>
                         </div>
-                        <div style={{
-                          width: 8, height: 8, borderRadius: '50%',
-                          background: openShift ? '#10B981' : 'var(--text-3)',
-                          boxShadow: openShift ? '0 0 8px rgba(16,185,129,0.5)' : 'none'
-                        }} />
+                        <span style={{ color: 'var(--green)', fontWeight: 800, fontSize: 13 }}>{hrs}ש׳ {mins}ד׳</span>
                       </div>
-
-                      {openShift ? (
-                        <div style={{ marginTop: 12, fontSize: 12 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-3)' }}>
-                            <span>נכנס ב- {new Date(openShift.clock_in).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}</span>
-                            <span style={{ color: 'var(--green)', fontWeight: 700 }}>⏳ {duration}</span>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="form-group" style={{ marginTop: 12 }}>
-                          <label className="form-label" style={{ fontSize: 10 }}>בחר סוג פעילות</label>
-                          <AppSelect className="input select btn-xs" style={{ paddingBlock: 4 }}
-                            value={clockActivity[emp.id] || 'counter_shift'}
-                            onChange={e => setClockActivity(prev => ({ ...prev, [emp.id]: e.target.value }))}>
-                            <option value="counter_shift">משמרת דלפק (שעתי)</option>
-                            <option value="class_shift">הדרכת חוג (שעתי)</option>
-                            <option value="private_shift">שיעור פרטי (שעתי)</option>
-                            <option value="route_building_shift">בונה מסלולים (שעתי)</option>
-                          </AppSelect>
-                        </div>
-                      )}
+                      <button className="btn btn-danger btn-full btn-xs" onClick={() => handleClock(shift.employee_id)}>
+                        <LogOut size={13} /> יציאה מהמשמרת
+                      </button>
                     </div>
-
-                    <button
-                      className={`btn btn-full btn-xs ${openShift ? 'btn-danger' : 'btn-success'}`}
-                      style={{ marginTop: 12 }}
-                      onClick={() => handleClock(emp.id)}
-                    >
-                      {openShift ? <><LogOut size={13} /> יציאה מהמשמרת</> : <><LogIn size={13} /> כניסה למשמרת</>}
-                    </button>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
+            )}
           </div>
+
+          {/* רישום כניסה — שורה אחת במקום כרטיס לכל עובד במערכת */}
+          <div className="card card-p" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-end' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)', flex: '1 1 200px' }}>
+              עובד
+              <AppSelect className="input input-sm" value={clockInEmployee} onChange={(e) => setClockInEmployee(e.target.value)}>
+                <option value="">בחירה...</option>
+                {employees
+                  .filter((e) => e.is_active && !shifts.some((s) => s.employee_id === e.id && s.status === 'open'))
+                  .map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+              </AppSelect>
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)', flex: '1 1 200px' }}>
+              סוג פעילות
+              <AppSelect
+                className="input input-sm"
+                value={clockActivity[clockInEmployee] || 'counter_shift'}
+                onChange={(e) => setClockActivity((prev) => ({ ...prev, [clockInEmployee]: e.target.value }))}
+              >
+                {WORK_TYPE_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+              </AppSelect>
+            </label>
+            <button
+              className="btn btn-success btn-sm"
+              disabled={!clockInEmployee}
+              onClick={() => { handleClock(clockInEmployee); setClockInEmployee(''); }}
+            >
+              <LogIn size={14} /> רישום כניסה למשמרת
+            </button>
+          </div>
+
 
           {/* Shifts log history */}
           <div>
@@ -3171,12 +3631,32 @@ export default function Employees() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div className="card card-p" style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
-              <div style={{ fontSize: 15, fontWeight: 800 }}>תשלום חודשי</div>
+              <div style={{ fontSize: 15, fontWeight: 800 }}>
+                תשלום חודשי
+                <span style={{ color: 'var(--green)', marginInlineStart: 10 }}>₪{payrollMonthTotal.toLocaleString()}</span>
+              </div>
               <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
-                שורות עבודה לפי עובד — שעתי לפי תעריף מהסכם, או סכום גלובלי לפעילות. משלמים לפי שורות מאושרות.
+                לכל עובד — פירוט לפי סוג העבודה, שעות החודש והתעריף מהסכם השכר שלו. משלמים לפי שורות מאושרות.
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 4 }}>
+                {[[true, 'עבדו החודש'], [false, 'כל העובדים']].map(([value, label]) => (
+                  <button
+                    key={String(value)}
+                    type="button"
+                    className="btn btn-xs"
+                    onClick={() => setPayrollWorkedOnly(value)}
+                    style={{
+                      background: payrollWorkedOnly === value ? 'rgba(56,189,248,0.15)' : 'transparent',
+                      color: payrollWorkedOnly === value ? 'var(--blue)' : 'var(--text-3)',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
                 חודש
                 <input
@@ -3197,19 +3677,79 @@ export default function Employees() {
           </div>
 
           <div className="grid-3" style={{ gap: 12 }}>
-            {employees.filter((e) => e.is_active !== false).map((emp) => {
-              const stats = employeeShiftStats[emp.id] || { hours: 0, pay: 0 };
-              return (
-                <div key={emp.id} className="card card-p">
-                  <div style={{ fontWeight: 800, marginBottom: 6 }}>{emp.name}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-                    {stats.hours} שעות · {stats.days || 0} ימים · ₪{stats.total ?? stats.pay}
-                    {stats.travel > 0 ? ` (כולל ₪${stats.travel} נסיעות)` : ''}
-                    {stats.fromAssignments ? '' : ' (לפי שעון)'}
-                  </div>
+            {payrollVisible.map(({ emp, agreement, byRole, stats, pending }) => (
+              <div key={emp.id} className="card card-p" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => { setSelectedEmployee(emp); setDrawerTab('wage'); }}
+                    style={{
+                      background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                      fontWeight: 800, fontSize: 14, color: 'var(--text-1)', fontFamily: 'inherit',
+                    }}
+                  >
+                    {emp.name}
+                  </button>
+                  {pending > 0 && (
+                    <span className="badge badge-amber" style={{ fontSize: 10 }}>{pending} לא מאושרות</span>
+                  )}
                 </div>
-              );
-            })}
+
+                {byRole.length === 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                    {stats.hours > 0
+                      ? `${stats.hours} שעות לפי שעון הנוכחות — בלי שורות עבודה מפורטות.`
+                      : 'לא עבד בחודש הזה.'}
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {byRole.map((entry) => {
+                      const rate = entry.flat ? null : rateForRole(agreement || defaultAgreement, entry.role);
+                      const detail = entry.flat
+                        ? (entry.count === 1 ? 'אירוע אחד' : `${entry.count} אירועים`)
+                        : rate?.mode === 'daily'
+                          ? `${entry.count === 1 ? 'יום אחד' : `${entry.count} ימים`} × ₪${rate.amount}`
+                          : `${entry.hours} ש׳${rate ? ` × ₪${rate.amount}` : ' · בלי תעריף'}`;
+                      const EntryIcon = roleIcon(entry.role || entry.label);
+                      return (
+                        <div key={entry.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, gap: 8 }}>
+                          <span style={{ minWidth: 0, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                            <EntryIcon size={13} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+                            {entry.label}
+                            <span style={{ color: 'var(--text-3)', fontSize: 11 }}> · {detail}</span>
+                          </span>
+                          <span style={{ color: entry.amount > 0 ? 'var(--green)' : 'var(--text-3)', fontWeight: 600, flexShrink: 0 }}>
+                            ₪{entry.amount.toLocaleString()}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    {stats.travel > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-3)' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <Car size={12} /> נסיעות · {stats.days === 1 ? 'יום אחד' : `${stats.days} ימים`}
+                        </span>
+                        <span>₪{stats.travel.toLocaleString()}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+                  borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 'auto',
+                  fontSize: 14, fontWeight: 800,
+                }}>
+                  <span>סה״כ</span>
+                  <span style={{ color: 'var(--green)' }}>₪{(stats.total || 0).toLocaleString()}</span>
+                </div>
+              </div>
+            ))}
+            {payrollVisible.length === 0 && (
+              <div className="card card-p" style={{ gridColumn: '1 / -1', textAlign: 'center', color: 'var(--text-3)', fontSize: 13 }}>
+                אף עובד לא עבד בחודש הזה.
+              </div>
+            )}
           </div>
 
           <div className="card card-p" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -3359,9 +3899,23 @@ export default function Employees() {
                           : undefined}
                       >
                         <td>{row.date}</td>
-                        <td style={{ fontWeight: 700 }}>{emp?.name || '—'}</td>
+                        <td style={{ fontWeight: 700 }}>
+                          {emp ? (
+                            <EntityLink kind="employee" id={emp.id} title="מעבר לתיק העובד">
+                              {emp.name}
+                            </EntityLink>
+                          ) : '—'}
+                        </td>
                         <td style={{ fontSize: 12, color: 'var(--text-3)' }}>
-                          {activityName(row.activity_id) || groupName(row.group_id) || '—'}
+                          {row.activity_id && activityName(row.activity_id) ? (
+                            <EntityLink kind="activity" id={row.activity_id} title="פתיחת האירוע ביומן">
+                              {activityName(row.activity_id)}
+                            </EntityLink>
+                          ) : row.group_id && groupName(row.group_id) ? (
+                            <EntityLink kind="group" id={row.group_id} title="פתיחת החוג בלוח החוגים">
+                              {groupName(row.group_id)}
+                            </EntityLink>
+                          ) : '—'}
                         </td>
                         <td>
                           <AppSelect

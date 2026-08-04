@@ -153,6 +153,39 @@ test('a message from a child phone is credited to the family and names the child
   assert.equal(conversations[0].fromStudentName, 'נועם');
 });
 
+test('a trainee phone beats the blank lead card that grabbed it first', () => {
+  const store = fakeStore({
+    parents: [
+      { id: 'stray', name: 'לקוח וואטסאפ', phone: '0523333333' },
+      { id: 'p1', name: 'דנה', phone: '0501111111', email: 'dana@example.com' },
+    ],
+    students: [{ id: 's1', parentId: 'p1', name: 'נועם', phone: '0523333333' }],
+    messages: [
+      { id: 'm1', phone: '0523333333', direction: 'inbound', message: 'אני מאחר', created_at: '2026-07-29T09:00:00.000Z' },
+    ],
+  });
+
+  const { conversations, total } = listConversations({ store });
+  assert.equal(total, 1);
+  assert.equal(conversations[0].parentId, 'p1');
+  assert.equal(conversations[0].fromStudentName, 'נועם');
+});
+
+test('a real parent card still keeps its own number against a child elsewhere', () => {
+  const store = fakeStore({
+    parents: [
+      { id: 'owner', name: 'רותם לוי', phone: '0523333333', email: 'rotem@example.com' },
+      { id: 'p1', name: 'דנה', phone: '0501111111' },
+    ],
+    students: [{ id: 's1', parentId: 'p1', name: 'נועם', phone: '0523333333' }],
+    messages: [
+      { id: 'm1', phone: '0523333333', direction: 'inbound', message: 'היי', created_at: '2026-07-29T09:00:00.000Z' },
+    ],
+  });
+
+  assert.equal(listConversations({ store }).conversations[0].parentId, 'owner');
+});
+
 test('a card awaiting handling still appears when its thread cache is empty', () => {
   const store = fakeStore({
     parents: [{ id: 'p1', name: 'דנה', phone: '0501111111', last_inbound_whatsapp: '2026-07-29T09:00:00.000Z' }],

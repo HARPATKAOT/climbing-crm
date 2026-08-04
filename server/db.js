@@ -48,6 +48,20 @@ export function parentPhonesMatch(a, b) {
   return tailA.length === 9 && tailA === tailB;
 }
 
+export const CHANNEL_PLACEHOLDER_NAMES = ['לקוח וואטסאפ', 'ליד מאינסטגרם', 'לקוח מסנג׳ר', "לקוח מסנג'ר"];
+
+/**
+ * A card the channel opened by itself and nobody ever filled in: placeholder name,
+ * no email, no children. Such a card must never outrank a real family that owns the
+ * same number through one of its trainees.
+ */
+export function isBlankLeadCard(parent, data) {
+  if (!parent) return false;
+  if (!CHANNEL_PLACEHOLDER_NAMES.includes(String(parent.name || '').trim())) return false;
+  if (String(parent.email || '').trim()) return false;
+  return !(data?.students || []).some((s) => s.parentId === parent.id);
+}
+
 function scoreParentRecord(p) {
   let score = 0;
   if (p?.email) score += 4;
@@ -563,6 +577,19 @@ export async function initDb({ requireDurable = false } = {}) {
       }
     } catch (mergeErr) {
       console.error('Parent phone de-dupe failed:', mergeErr.message);
+    }
+    // A trainee imported after a blank lead card grabbed their number: fold the card in,
+    // so the family — not an empty lead — owns the conversation from the next boot on.
+    try {
+      const traineeHeal = db.mergeBlankLeadCardsIntoTraineeFamilies();
+      if (traineeHeal.count > 0) {
+        console.log(`🔗 Blank lead cards folded into trainee families: ${traineeHeal.count}`);
+        for (const row of traineeHeal.merged) {
+          console.log(`   ${row.student} → ${row.family}`);
+        }
+      }
+    } catch (healErr) {
+      console.error('Trainee lead-card heal failed:', healErr.message);
     }
     try {
       const phoneBackfill = db.backfillStudentPhonesFromNotes();
@@ -1158,11 +1185,52 @@ export const db = {
     return { updated };
   },
 
+  /**
+   * One-time heal: a trainee's own phone opened a blank "לקוח וואטסאפ" card before that
+   * trainee existed in the CRM. Fold each such card — and its conversation — into the
+   * family the phone really belongs to. Cards with a real name or children are left alone.
+   */
+  mergeBlankLeadCardsIntoTraineeFamilies: () => {
+    const data = readDb();
+    const merged = [];
+
+    for (const student of data.students || []) {
+      if (!student.phone || !student.parentId) continue;
+      const family = (data.parents || []).find((p) => p.id === student.parentId);
+      if (!family) continue;
+
+      const strays = (data.parents || []).filter(
+        (p) => p.id !== family.id
+          && parentPhonesMatch(p.phone, student.phone)
+          && isBlankLeadCard(p, data)
+      );
+      if (!strays.length) continue;
+
+      const absorbed = absorbDuplicateParentsInto(data, family, strays);
+      if (absorbed.length) {
+        merged.push({ student: student.name, family: family.name, absorbed });
+      }
+    }
+
+    if (merged.length) writeDb(data);
+    return { merged, count: merged.reduce((sum, m) => sum + m.absorbed.length, 0) };
+  },
+
   createLeadFromWhatsApp: async (phone, text) => {
     const dataBefore = readDb();
 
+    // A trainee messaging from their own phone belongs to their family, even when a
+    // blank "לקוח וואטסאפ" card grabbed that number before the trainee was imported.
+    const studentByPhone = (dataBefore.students || []).find((s) => parentPhonesMatch(s.phone, phone));
+    const traineeFamily = studentByPhone?.parentId
+      ? (dataBefore.parents || []).find((p) => p.id === studentByPhone.parentId)
+      : null;
+
     // Prefer a real parent card when the number is already on a parent.
-    const parentMatch = (dataBefore.parents || []).find((p) => parentPhonesMatch(p.phone, phone));
+    const parentMatch = (dataBefore.parents || []).find(
+      (p) => parentPhonesMatch(p.phone, phone)
+        && !(traineeFamily && p.id !== traineeFamily.id && isBlankLeadCard(p, dataBefore))
+    );
     if (parentMatch) {
       const parent = db.upsertParentByPhone(
         parentMatch.name || 'לקוח וואטסאפ',
@@ -1196,21 +1264,17 @@ export const db = {
     }
 
     // Child / trainee phone: attach to the existing parent card — never invent a new lead.
-    const studentMatch = (dataBefore.students || []).find((s) => parentPhonesMatch(s.phone, phone));
-    if (studentMatch?.parentId) {
-      const parent = dataBefore.parents.find((p) => p.id === studentMatch.parentId);
-      if (parent) {
-        const updatedParent = db.update('parents', parent.id, {
-          channel: parent.channel === 'phone' ? 'whatsapp' : (parent.channel || 'whatsapp'),
-        }) || parent;
-        await persistCore('parents', updatedParent);
-        return {
-          parent: updatedParent,
-          student: studentMatch,
-          isNew: false,
-          matchedVia: 'child_phone',
-        };
-      }
+    if (traineeFamily) {
+      const updatedParent = db.update('parents', traineeFamily.id, {
+        channel: traineeFamily.channel === 'phone' ? 'whatsapp' : (traineeFamily.channel || 'whatsapp'),
+      }) || traineeFamily;
+      await persistCore('parents', updatedParent);
+      return {
+        parent: updatedParent,
+        student: studentByPhone,
+        isNew: false,
+        matchedVia: 'child_phone',
+      };
     }
 
     const parent = db.upsertParentByPhone('לקוח וואטסאפ', phone, '', {

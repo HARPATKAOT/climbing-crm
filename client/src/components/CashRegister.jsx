@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X, Printer, ShoppingCart, Package, Calculator, History, BarChart3 } from 'lucide-react';
+import EntityLink from '../utils/entityLinks.jsx';
 import PosSale from './PosSale.jsx';
 import Pricelist from './Pricelist.jsx';
 import AppSelect from './AppSelect.jsx';
@@ -882,7 +883,17 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
                               : '—'}
                           </td>
                           <td>
-                            <div style={{ fontWeight: 600 }}>{sale.customer_name || 'לקוח'}</div>
+                            <div style={{ fontWeight: 600 }}>
+                              {sale.student_id || sale.parent_id ? (
+                                <EntityLink
+                                  kind="customer"
+                                  id={sale.student_id || `parent:${sale.parent_id}`}
+                                  title="מעבר לתיק הלקוח"
+                                >
+                                  {sale.customer_name || 'לקוח'}
+                                </EntityLink>
+                              ) : (sale.customer_name || 'לקוח')}
+                            </div>
                             {sale.customer_phone && (
                               <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{sale.customer_phone}</div>
                             )}
