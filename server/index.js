@@ -11903,7 +11903,7 @@ app.get('/api/public/health-context', publicFormRateLimit, (req, res) => {
 });
 
 // Public onboarding context — prefill parent/children + mailing lists
-app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
+app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => {
   const parentId = String(req.query.parentId || '').trim();
   const studentId = String(req.query.studentId || '').trim();
   const phone = String(req.query.phone || '').trim();
@@ -11915,6 +11915,26 @@ app.get('/api/public/onboard-context', publicFormRateLimit, (req, res) => {
     ? (findFormTemplateBySlug(requestedSlug) || findDefaultFormTemplate())
     : findDefaultFormTemplate();
   const contextTemplateSlug = String(contextTemplate?.slug || 'wall').toLowerCase();
+
+  // Fresh from the durable store. A long-lived process can still hold the
+  // pre-signature student/declaration rows, and then a form signed yesterday
+  // is shown as "expired" even though July 2028 is the real end of the cycle.
+  if (supa.isEnabled()) {
+    try {
+      const [remoteParents, remoteStudents, remoteDecls, remoteGuardians] = await Promise.all([
+        supa.getAll('parents'),
+        supa.getAll('students'),
+        supa.getAll('health_declarations'),
+        supa.getAll('student_guardians'),
+      ]);
+      if (remoteParents) db.set('parents', remoteParents);
+      if (remoteStudents) db.set('students', remoteStudents);
+      if (remoteDecls) db.set('health_declarations', remoteDecls);
+      if (remoteGuardians) db.set('student_guardians', remoteGuardians);
+    } catch (err) {
+      console.error('onboard-context refresh failed:', err.message);
+    }
+  }
 
   const parent = (parentId || studentId || phone || idNumber)
     ? findParentForOnboard({ parentId, phone, studentId, idNumber })

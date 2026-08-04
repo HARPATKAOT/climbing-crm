@@ -34,6 +34,19 @@ import { declarationSectionTitles, splitWaiverText, withSignerName } from '../ut
 import MedicalClearanceField from './MedicalClearanceField.jsx';
 import GenderPicker from './GenderPicker.jsx';
 
+/** Day for the form UI — digits with dots so RTL does not reshuffle ISO dates. */
+function formatSignedDay(value) {
+  const raw = String(value || '').trim();
+  const isoDay = raw.slice(0, 10);
+  const match = isoDay.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) return `${match[3]}.${match[2]}.${match[1]}`;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  return `${dd}.${mm}.${d.getFullYear()}`;
+}
+
 /**
  * The binding text — the one layer there is. Naming the signer inside it is
  * deliberate: "I take the risk" read by someone scrolling is a sentence about
@@ -528,8 +541,8 @@ export default function PublicOnboardingForm() {
               answerNotes: {},
               // Already on file with a declaration in force. The form shows
               // that rather than asking them to fill everything in again.
-              onFileHealthValid: !!s.healthValid,
-              onFileHealthSignedAt: s.healthSignedAt || '',
+              onFileHealthValid: !!(s.healthValid ?? s.health_valid),
+              onFileHealthSignedAt: s.healthSignedAt || s.health_signed_at || '',
               resignHealth: false,
               waiverAccepted: false,
               signature: '',
@@ -710,8 +723,8 @@ export default function PublicOnboardingForm() {
               // The same two fields the first load sets. Without them this
               // path — the one that runs when a returning parent types their
               // phone — handed them their own declaration to sign again.
-              onFileHealthValid: !!s.healthValid,
-              onFileHealthSignedAt: s.healthSignedAt || '',
+              onFileHealthValid: !!(s.healthValid ?? s.health_valid),
+              onFileHealthSignedAt: s.healthSignedAt || s.health_signed_at || '',
               resignHealth: false,
             }));
           const merged = [...fromFile, ...typed];
@@ -1571,12 +1584,12 @@ export default function PublicOnboardingForm() {
                           display: 'flex', alignItems: 'center', gap: 6,
                           fontSize: 14, color: '#fdba74', fontWeight: 700, marginBottom: 4,
                         }}>
-                          <AlertTriangle size={15} /> אין הצהרת בריאות בתוקף
+                          <AlertTriangle size={15} /> אין טופס השתתפות בתוקף
                         </div>
                         <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', lineHeight: 1.55, marginBottom: 10 }}>
                           {child.onFileHealthSignedAt
-                            ? `ההצהרה מ-${String(child.onFileHealthSignedAt).slice(0, 10)} כבר אינה בתוקף. `
-                            : 'לא נמצאה הצהרה בתוקף. '}
+                            ? `הטופס מ-${formatSignedDay(child.onFileHealthSignedAt)} כבר אינו בתוקף. `
+                            : 'לא נמצא טופס השתתפות בתוקף. '}
                           הפרטים כבר קיימים במערכת — אפשר לחדש עכשיו.
                           {' '}אם {child.name?.trim() || 'המשתתף/ת'} כבר לא מטפס/ת, אפשר לדלג — בלי הצהרה בתוקף לא נכנסים לפעילות.
                         </div>
@@ -1667,7 +1680,7 @@ export default function PublicOnboardingForm() {
                     </div>
                     <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', lineHeight: 1.55 }}>
                       {child.onFileHealthSignedAt
-                        ? `נחתמה ב-${String(child.onFileHealthSignedAt).slice(0, 10)}. `
+                        ? `נחתם ב-${formatSignedDay(child.onFileHealthSignedAt)}. `
                         : ''}
                       אין צורך למלא שוב — הפרטים נשארים כפי שהם.
                     </div>
@@ -1703,7 +1716,7 @@ export default function PublicOnboardingForm() {
                               מצטרפת לתיק, והחדשה היא זו שתקפה מכאן. */}
                           תתווסף ל{child.name?.trim() || 'משתתף/ת זה'} הצהרה חדשה שתצטרכו למלא ולחתום עליה.
                           {' '}ההצהרה
-                          {child.onFileHealthSignedAt ? ` מ-${String(child.onFileHealthSignedAt).slice(0, 10)}` : ' הקודמת'}
+                          {child.onFileHealthSignedAt ? ` מ-${formatSignedDay(child.onFileHealthSignedAt)}` : ' הקודם'}
                           {' '}נשמרת בתיק כמו שהיא, והחדשה היא שתהיה בתוקף.
                         </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
