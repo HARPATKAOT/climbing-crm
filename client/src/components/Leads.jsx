@@ -492,6 +492,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [healthSendLink, setHealthSendLink] = useState('');
   const [formTemplates, setFormTemplates] = useState([]);
   const [selectedFormSlug, setSelectedFormSlug] = useState('');
+  const [showHealthSendModal, setShowHealthSendModal] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [clientDocuments, setClientDocuments] = useState([]);
   const [docsLoading, setDocsLoading] = useState(false);
@@ -541,6 +542,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     setEditingGroup(false);
     setEditingFollowup(false);
     setOpenFolder(null);
+    setShowHealthSendModal(false);
     setShowPaymentModal(false);
     setShowAddChild(false);
     setRemoveChildError('');
@@ -795,6 +797,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             || 'השליחה האוטומטית נכשלה — העתיקו את הקישור או שלחו מוואטסאפ אישי'
         );
       }
+      setShowHealthSendModal(false);
     } finally {
       setSendingHealth(false);
     }
@@ -3172,39 +3175,6 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 // a family may still need the trip or activity form.
                 const canSendForm = !!parent?.phone;
 
-                const formTypePicker = formTemplates.length > 0 ? (
-                  <div className="form-group" style={{ marginBottom: 10 }}>
-                    <label className="form-label" style={{ fontSize: 11 }}>סוג הטופס שיישלח</label>
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {formTemplates.map((t) => {
-                        const kind = templateKind(t);
-                        const KindIcon = kind.Icon;
-                        const active = t.slug === selectedFormSlug;
-                        return (
-                          <button
-                            key={t.id}
-                            type="button"
-                            title={t.title}
-                            onClick={() => setSelectedFormSlug(t.slug)}
-                            style={{
-                              display: 'inline-flex', alignItems: 'center', gap: 5,
-                              padding: '5px 10px', borderRadius: 999, cursor: 'pointer',
-                              fontSize: 12, fontWeight: active ? 700 : 600,
-                              lineHeight: 1.2,
-                              color: active ? kind.color : 'var(--text-2)',
-                              background: active ? 'rgba(255,255,255,0.07)' : 'transparent',
-                              border: `1px solid ${active ? kind.color : 'var(--border)'}`,
-                            }}
-                          >
-                            <KindIcon size={13} style={{ flexShrink: 0 }} />
-                            {templateShortLabel(t)}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ) : null;
-
                 const handleDownloadDoc = async (doc) => {
                   const source = doc.virtualData || healthDecl;
                   if (doc.isVirtual || (!doc.id || String(doc.id).startsWith('virtual_'))) {
@@ -3315,15 +3285,14 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                             )}
                           </div>
                         </div>
-                        {formTypePicker}
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                           <button
                             type="button"
                             className="btn btn-success btn-xs"
                             disabled={sendingHealth || !canSendForm}
-                            onClick={handleSendHealthForm}
+                            onClick={() => setShowHealthSendModal(true)}
                           >
-                            <Send size={12} /> {sendingHealth ? 'שולח...' : 'שלח בוואטסאפ'}
+                            <Send size={12} /> שלח הצהרה
                           </button>
                           {parentOnly && healthExpired && healthDecl && (
                             <button
@@ -3341,15 +3310,14 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
 
                     {!showUnsignedControls && (
                       <>
-                        {formTypePicker}
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                           <button
                             type="button"
                             className="btn btn-success btn-xs"
                             disabled={sendingHealth || !canSendForm}
-                            onClick={handleSendHealthForm}
+                            onClick={() => setShowHealthSendModal(true)}
                           >
-                            <Send size={12} /> {sendingHealth ? 'שולח...' : 'שלח בוואטסאפ'}
+                            <Send size={12} /> שלח הצהרה
                           </button>
                           {parentOnly && isHealthSigned && !healthExpired && (
                             <button
@@ -4718,6 +4686,77 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
           )}
         </div>
       </div>
+
+      {showHealthSendModal && (
+        <Modal
+          title="שליחת הצהרה בוואטסאפ"
+          onClose={() => !sendingHealth && setShowHealthSendModal(false)}
+          footer={(
+            <>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={sendingHealth}
+                onClick={() => setShowHealthSendModal(false)}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="btn btn-success"
+                disabled={sendingHealth || !parent?.phone || !selectedTemplate}
+                onClick={handleSendHealthForm}
+              >
+                <Send size={15} /> {sendingHealth ? 'שולח...' : 'שלח בוואטסאפ'}
+              </button>
+            </>
+          )}
+        >
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">איזה טופס לשלוח?</label>
+            {formTemplates.length > 0 ? (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {formTemplates.map((template) => {
+                  const kind = templateKind(template);
+                  const KindIcon = kind.Icon;
+                  const active = template.slug === selectedFormSlug;
+                  return (
+                    <button
+                      key={template.id}
+                      type="button"
+                      title={template.title}
+                      aria-pressed={active}
+                      onClick={() => setSelectedFormSlug(template.slug)}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 7,
+                        padding: '9px 14px',
+                        borderRadius: 999,
+                        cursor: 'pointer',
+                        fontSize: 13,
+                        fontWeight: active ? 700 : 600,
+                        lineHeight: 1.2,
+                        color: active ? kind.color : 'var(--text-2)',
+                        background: active ? 'rgba(255,255,255,0.07)' : 'transparent',
+                        border: `1px solid ${active ? kind.color : 'var(--border)'}`,
+                      }}
+                    >
+                      <KindIcon size={15} style={{ flexShrink: 0 }} />
+                      {templateShortLabel(template)}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="alert alert-warn">לא נמצאו טפסים פעילים לשליחה.</div>
+            )}
+            <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-3)' }}>
+              הקישור יישלח בוואטסאפ אל {parentDisplayName(parent)} · {parent?.phone}
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {showAddChild && (
         <Modal
