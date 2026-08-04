@@ -936,7 +936,7 @@ function GroupBlock({ group, enrolledCount, selected, onClick }) {
       {h >= 55 && (
         <div title={staffTitle} style={{ marginTop: 1, flexShrink: 0, minWidth: 0 }}>
           <div style={{ fontSize: 10, display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
-            <Users size={9} style={{ flexShrink: 0, opacity: 0.7, color: c.text }} />
+            <Users size={9} style={{ flexShrink: 0, opacity: 0.55, color: 'rgba(255,255,255,0.45)' }} />
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               color: group.trainerName ? c.text : 'rgba(255,255,255,0.35)', fontWeight: 600 }}>
               {group.trainerName || 'ללא מדריך'}
@@ -945,7 +945,7 @@ function GroupBlock({ group, enrolledCount, selected, onClick }) {
           {assistantNames.length > 0 && (
             <div style={{ fontSize: 10, display: 'flex', alignItems: 'center', gap: 4,
               minWidth: 0, marginTop: 1 }}>
-              <UserPlus size={9} style={{ flexShrink: 0, opacity: 0.55, color: c.text }} />
+              <UserPlus size={9} style={{ flexShrink: 0, opacity: 0.5, color: 'rgba(255,255,255,0.45)' }} />
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 color: 'rgba(255,255,255,0.55)' }}>
                 {assistantNames.join(', ')}

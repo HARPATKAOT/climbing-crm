@@ -55,4 +55,29 @@ export function workTypeIcon(workType) {
   return BY_WORK_TYPE[workType] || Briefcase;
 }
 
+/**
+ * אייקונים לבחירה בתיק העובד (במקום אותיות השם בעיגול).
+ * המפתח נשמר על העובד ב־avatar_icon — יציב גם אם משנים תווית תפקיד.
+ */
+export const AVATAR_ICON_OPTIONS = [
+  { key: 'user', Icon: User, label: 'אישי' },
+  { key: SYSTEM_ROLE_KEYS.TRAINER, Icon: GraduationCap, label: 'הדרכת חוג' },
+  { key: SYSTEM_ROLE_KEYS.ASSISTANT, Icon: HandHelping, label: 'עוזר מדריך' },
+  { key: SYSTEM_ROLE_KEYS.WALL_OPERATOR, Icon: Mountain, label: 'הפעלת קיר' },
+  { key: SYSTEM_ROLE_KEYS.RAPPEL, Icon: ArrowDownToLine, label: 'סנפלינג' },
+  { key: SYSTEM_ROLE_KEYS.ROUTE, Icon: Route, label: 'בונה מסלולים' },
+  { key: 'desk', Icon: ConciergeBell, label: 'דלפק' },
+  { key: 'travel', Icon: Car, label: 'נסיעות' },
+  { key: 'briefcase', Icon: Briefcase, label: 'אחר' },
+];
+
+const AVATAR_BY_KEY = Object.fromEntries(
+  AVATAR_ICON_OPTIONS.map(({ key, Icon }) => [key, Icon])
+);
+
+/** אייקון התיק של העובד לפי השדה השמור, עם נפילה לצללית כללית. */
+export function employeeAvatarIcon(avatarKey) {
+  return AVATAR_BY_KEY[avatarKey] || User;
+}
+
 export { Car as travelIcon };

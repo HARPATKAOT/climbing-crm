@@ -36,7 +36,7 @@ import {
   summarizeByRole,
   workTypeRole,
 } from '../utils/wageRates.js';
-import { roleIcon } from '../utils/roleIcons.js';
+import { roleIcon, employeeAvatarIcon, AVATAR_ICON_OPTIONS } from '../utils/roleIcons.js';
 import AppSelect from './AppSelect.jsx';
 
 const STATUS_OPTIONS = ['עובד פעיל', 'מנהל', 'עובד זמני', 'מדריך צעיר', 'מועמד', 'ארכיון', 'סנפלינג'];
@@ -1534,7 +1534,9 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
             )}
             {certifications.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {certifications.map((c) => (
+                {certifications.map((c) => {
+                  const CertIcon = roleIcon(c);
+                  return (
                   <span
                     key={c}
                     style={{
@@ -1544,6 +1546,7 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
                       outline: '1px solid #A5B4FC55', fontWeight: 700,
                     }}
                   >
+                    <CertIcon size={13} style={{ flexShrink: 0 }} />
                     {c}
                     <button
                       type="button"
@@ -1557,24 +1560,30 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
                       <X size={13} />
                     </button>
                   </span>
-                ))}
+                  );
+                })}
               </div>
             )}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {certOptions.filter((c) => !certifications.includes(c)).map((c) => (
+              {certOptions.filter((c) => !certifications.includes(c)).map((c) => {
+                const CertIcon = roleIcon(c);
+                return (
                 <button
                   key={c}
                   type="button"
                   onClick={() => addCert(c)}
                   style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
                     padding: '4px 10px', borderRadius: 20, fontSize: 12, cursor: 'pointer', border: 'none',
                     background: 'rgba(255,255,255,0.04)', color: 'var(--text-3)',
                     outline: '1px solid var(--border)',
                   }}
                 >
+                  <CertIcon size={13} style={{ flexShrink: 0 }} />
                   + {c}
                 </button>
-              ))}
+                );
+              })}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <input
@@ -1623,9 +1632,13 @@ function EmployeeFormModal({ employee, employees, wage = null, initialTab = 'det
                 </div>
                 {certifications.map((role) => {
                   const row = wageRates[role] || { mode: defaultModeFor(role), amount: '' };
+                  const RoleIcon = roleIcon(role);
                   return (
                     <div key={role} style={{ display: 'grid', gridTemplateColumns: '1fr 110px 110px', gap: 8, alignItems: 'center' }}>
-                      <div style={{ fontSize: 13 }}>{role}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+                        <RoleIcon size={13} style={{ color: 'var(--text-3)', flexShrink: 0 }} />
+                        {role}
+                      </div>
                       <AppSelect
                         className="input input-sm"
                         value={row.mode || defaultModeFor(role)}
@@ -2275,9 +2288,9 @@ export default function Employees() {
   // UI state
   const [activeTab, setActiveTab]         = useState('permanent'); // permanent | certs | wages | shifts | payroll
   const [selectedEmployee, setSelectedEmployee] = useState(null);
-  // תיק העובד מחולק ללשוניות; פרטים, שכר, משמרות ותעודות הם ארבעה עולמות
-  // שונים, וגלילה אחת ארוכה הסתירה את השכר בתחתית התיק.
-  const [drawerTab, setDrawerTab] = useState('file'); // file | wage | shifts | certs
+  // תיק העובד מחולק ללשוניות; פרטים, שכר, משמרות, תעודות והתראות — כל אחד עולם בפני עצמו.
+  const [drawerTab, setDrawerTab] = useState('file'); // file | wage | shifts | certs | alerts
+  const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
   const [selectedWage, setSelectedWage]         = useState(null);
   const [showEmployeeForm, setShowEmployeeForm] = useState(false);
   const [showWageForm, setShowWageForm]         = useState(false);
@@ -2286,7 +2299,10 @@ export default function Employees() {
 
   // מעבר לעובד אחר מחזיר את התיק ללשונית הראשונה — אחרת נפתח תיק חדש
   // באמצע הסכם השכר של הקודם.
-  useEffect(() => { setDrawerTab('file'); }, [selectedEmployee?.id]);
+  useEffect(() => {
+    setDrawerTab('file');
+    setAvatarPickerOpen(false);
+  }, [selectedEmployee?.id]);
 
   // קישור נכנס — /employees?open=<id> פותח את תיק העובד.
   const [searchParams, setSearchParams] = useSearchParams();
@@ -2671,6 +2687,33 @@ export default function Employees() {
     setShowWageForm(true);
   };
 
+  /** פותח את טופס העריכה בלשונית הרלוונטית — כל לשונית בתיק מפנה לחלק שלה. */
+  const openEmployeeEdit = (emp, tab = 'details') => {
+    if (!emp) return;
+    setEditingEmployee(emp);
+    setEmployeeFormTab(tab);
+    setShowEmployeeForm(true);
+  };
+
+  /** שמירת אייקון התיק בנפרד — בחירה מהירה בלי לפתוח את כל הטופס. */
+  const saveAvatarIcon = async (emp, iconKey) => {
+    if (!emp?.id) return;
+    const updated = { ...emp, avatar_icon: iconKey };
+    try {
+      const response = await fetch(`/api/employees/${emp.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updated),
+      });
+      if (!response.ok) return;
+      setSelectedEmployee(updated);
+      setAvatarPickerOpen(false);
+      refreshData();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const handleClock = async (empId) => {
     const emp = employees.find(e => e.id === empId);
     if (!emp) return;
@@ -2856,47 +2899,85 @@ export default function Employees() {
           boxShadow: '4px 0 24px rgba(0,0,0,0.5)', overflowY: 'auto',
           userSelect: draggingDrawer ? 'none' : 'auto',
         }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--border)', paddingBottom: 14, marginBottom: 16 }}>
-            <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-              <div className="avatar avatar-lg">
-                {selectedEmployee.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
-              </div>
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 800 }}>{selectedEmployee.name}</div>
-                <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                  <button 
-                    onClick={() => handleToggleActive(selectedEmployee)}
-                    className={`badge ${selectedEmployee.is_active ? 'badge-blue' : 'badge-danger'}`} 
-                    style={{ cursor: 'pointer', border: 'none', fontFamily: 'inherit' }}>
-                    {selectedEmployee.is_active ? 'פעיל (לחץ להשבתה)' : 'לא פעיל (לחץ להפעלה)'}
-                  </button>
+          {(() => {
+            const AvatarIcon = employeeAvatarIcon(selectedEmployee.avatar_icon);
+            return (
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--border)', paddingBottom: 14, marginBottom: 16, position: 'relative' }}>
+            <div style={{ display: 'flex', gap: 14, alignItems: 'center', minWidth: 0 }}>
+              {/* בחירת אייקון במקום אותיות השם — לחיצה פותחת את הרשת. */}
+              <button
+                type="button"
+                className="avatar avatar-lg"
+                title="בחירת אייקון"
+                onClick={() => setAvatarPickerOpen((v) => !v)}
+                style={{
+                  border: 'none', cursor: 'pointer', fontFamily: 'inherit',
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  color: '#7DD3FC',
+                }}
+              >
+                <AvatarIcon size={26} strokeWidth={1.75} />
+              </button>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 26, fontWeight: 800, lineHeight: 1.15, letterSpacing: '-0.02em' }}>
+                  {selectedEmployee.name}
+                </div>
+                <div style={{ marginTop: 6 }}>
                   <PaymentMethodBadge method={selectedEmployee.payment_method} />
                 </div>
               </div>
             </div>
-            {/* עריכה בראש הכרטיס — הכפתור התחתון דרש גלילה דרך כל הפרטים. */}
-            <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-              <button
-                className="btn btn-ghost btn-sm"
-                onClick={() => {
-                  setEditingEmployee(selectedEmployee);
-                  setEmployeeFormTab('details');
-                  setShowEmployeeForm(true);
+            <button
+              className="btn btn-ghost btn-icon btn-sm"
+              onClick={() => { setSelectedEmployee(null); setAvatarPickerOpen(false); }}
+            >
+              <X size={16} />
+            </button>
+
+            {avatarPickerOpen && (
+              <div
+                style={{
+                  position: 'absolute', top: '100%', right: 0, marginTop: 8, zIndex: 20,
+                  background: '#161B22', border: '1px solid var(--border)', borderRadius: 12,
+                  padding: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.45)',
+                  display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, width: 200,
                 }}
               >
-                <Edit2 size={13} /> עריכה
-              </button>
-              <button className="btn btn-ghost btn-icon btn-sm" onClick={() => setSelectedEmployee(null)}><X size={16} /></button>
-            </div>
+                {AVATAR_ICON_OPTIONS.map(({ key, Icon, label }) => {
+                  const active = (selectedEmployee.avatar_icon || 'user') === key;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      title={label}
+                      onClick={() => saveAvatarIcon(selectedEmployee, key)}
+                      style={{
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+                        padding: '8px 4px', borderRadius: 10, cursor: 'pointer',
+                        border: active ? '1px solid #38BDF8' : '1px solid transparent',
+                        background: active ? 'rgba(56,189,248,0.12)' : 'transparent',
+                        color: active ? '#7DD3FC' : 'var(--text-2)', fontFamily: 'inherit',
+                      }}
+                    >
+                      <Icon size={20} strokeWidth={1.75} />
+                      <span style={{ fontSize: 10, lineHeight: 1.2 }}>{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
+            );
+          })()}
 
           {/* לשוניות התיק — כל עולם תוכן בפני עצמו, במקום גלילה אחת ארוכה. */}
-          <div className="tab-bar" style={{ marginBottom: 14 }}>
+          <div className="tab-bar" style={{ marginBottom: 14, flexWrap: 'wrap' }}>
             {[
               { key: 'file',   label: 'תיק אישי',       icon: User },
               { key: 'wage',   label: 'הסכם שכר',       icon: Coins },
               { key: 'shifts', label: 'משמרות',         icon: CalendarRange },
               { key: 'certs',  label: 'תעודות ומסמכים', icon: Award },
+              { key: 'alerts', label: 'התראות',         icon: Bell },
             ].map(({ key, label, icon: Icon }) => (
               <button
                 key={key}
@@ -2912,6 +2993,15 @@ export default function Employees() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14, flex: 1, overflowY: 'auto' }}>
 
             {drawerTab === 'file' && (<>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => openEmployeeEdit(selectedEmployee, 'details')}
+              >
+                <Pencil size={12} /> עריכה
+              </button>
+            </div>
             <div className="card card-p">
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>פרטי התקשרות</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
@@ -2951,6 +3041,15 @@ export default function Employees() {
             </>)}
 
             {drawerTab === 'certs' && (<>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => openEmployeeEdit(selectedEmployee, 'details')}
+              >
+                <Pencil size={12} /> עריכת מסמכים
+              </button>
+            </div>
             <div className="card card-p">
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>טפסים ואישורים</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
@@ -2960,8 +3059,6 @@ export default function Employees() {
                   return (
                     <div key={field.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
                       <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        {/* וי בעיגול ירוק למה שהושלם, ועיגול ריק למה שחסר — כדי
-                            שהעין תתפוס את הסטטוס לפני שהיא קוראת את השם. */}
                         {present ? (
                           <span style={{
                             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -3011,20 +3108,26 @@ export default function Employees() {
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
-                  onClick={() => {
-                    setEditingEmployee(selectedEmployee);
-                    setEmployeeFormTab('roles');
-                    setShowEmployeeForm(true);
-                  }}
+                  onClick={() => openEmployeeEdit(selectedEmployee, 'roles')}
                 >
                   <Pencil size={12} /> עריכה
                 </button>
               </div>
               {selectedEmployee.certifications?.length > 0 ? (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                  {selectedEmployee.certifications.map(c => (
-                    <span key={c} className="badge badge-blue" style={{ fontSize: 10 }}>{c}</span>
-                  ))}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {selectedEmployee.certifications.map((c) => {
+                    const CertIcon = roleIcon(c);
+                    return (
+                      <span
+                        key={c}
+                        className="badge badge-blue"
+                        style={{ fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                      >
+                        <CertIcon size={12} />
+                        {c}
+                      </span>
+                    );
+                  })}
                 </div>
               ) : (
                 <div style={{ fontSize: 12, color: 'var(--text-3)' }}>לא הוגדרו תפקידים</div>
@@ -3032,41 +3135,41 @@ export default function Employees() {
             </div>
             </>)}
 
-            {/* Visible on the card, not only inside the edit form — this is
-                where anyone looks to see what an employee is signed up for. */}
-            {drawerTab === 'file' && (
+            {drawerTab === 'alerts' && (<>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => openEmployeeEdit(selectedEmployee, 'alerts')}
+              >
+                <Pencil size={12} /> עריכה
+              </button>
+            </div>
             <div className="card card-p">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <span style={{ fontSize: 11, color: 'var(--text-3)', flex: 1 }}>
-                  התראות בוואטסאפ
-                  {' · '}
-                  {accessLevelLabel(employeeAccessLevel(selectedEmployee))}
-                </span>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => {
-                    setEditingEmployee(selectedEmployee);
-                    setEmployeeFormTab('alerts');
-                    setShowEmployeeForm(true);
-                  }}
-                >
-                  <Pencil size={12} /> עריכה
-                </button>
+              <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 8 }}>
+                רמת הרשאה · {accessLevelLabel(employeeAccessLevel(selectedEmployee))}
               </div>
               {(selectedEmployee.alerts || []).length > 0 ? (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {STAFF_ALERT_KINDS
                     .filter((a) => (selectedEmployee.alerts || []).includes(a.key))
                     .map((a) => (
-                      <span key={a.key} className="badge badge-green" style={{ fontSize: 10 }}>{a.label}</span>
+                      <div key={a.key} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13 }}>
+                        <Bell size={13} style={{ color: 'var(--green)', marginTop: 2, flexShrink: 0 }} />
+                        <div>
+                          <div style={{ fontWeight: 700 }}>{a.label}</div>
+                          {a.hint && (
+                            <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{a.hint}</div>
+                          )}
+                        </div>
+                      </div>
                     ))}
                 </div>
               ) : (
                 <div style={{ fontSize: 12, color: 'var(--text-3)' }}>לא מקבל התראות</div>
               )}
             </div>
-            )}
+            </>)}
 
             {drawerTab === 'shifts' && (<>
             <ShiftJournalCard employeeId={selectedEmployee.id} onOpenEntry={openShiftEntry} />
@@ -3087,20 +3190,12 @@ export default function Employees() {
               onEditWage={() => openWageForEmployee(selectedEmployee)}
             />
 
-            {/* ההסכם עצמו, ולא רק מה שנצבר החודש — מכאן פותחים אותו לעריכה
-                בלי לחפש אותו בלשונית הסכמי השכר של המסך הראשי. */}
             <EmployeeWageAgreementCard
               employee={selectedEmployee}
               agreement={wages.find(wg => wg.employee_id === selectedEmployee.id) || null}
               onEdit={() => openWageForEmployee(selectedEmployee)}
             />
             </>)}
-          </div>
-
-          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16, display: 'flex', gap: 10, marginTop: 10 }}>
-            <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setEditingEmployee(selectedEmployee); setEmployeeFormTab('details'); setShowEmployeeForm(true); }}>
-              <Edit2 size={13} /> ערוך פרטים
-            </button>
           </div>
         </div>
         </>
@@ -3309,9 +3404,15 @@ export default function Employees() {
                     return (
                       <tr key={emp.id} style={{ cursor: 'pointer', opacity: emp.is_active ? 1 : 0.5 }} onClick={() => setSelectedEmployee(emp)}>
                         <td>
-                          <span className={`badge ${emp.is_active ? 'badge-green' : 'badge-danger'}`}>
+                          <button
+                            type="button"
+                            className={`badge ${emp.is_active ? 'badge-green' : 'badge-danger'}`}
+                            title={emp.is_active ? 'לחץ להשבתה' : 'לחץ להפעלה'}
+                            onClick={(e) => { e.stopPropagation(); handleToggleActive(emp); }}
+                            style={{ cursor: 'pointer', border: 'none', fontFamily: 'inherit' }}
+                          >
                             {emp.is_active ? 'פעיל' : 'לא פעיל'}
-                          </span>
+                          </button>
                         </td>
                         <td style={{ fontWeight: 700 }}>{emp.name}</td>
                         <td>
