@@ -159,7 +159,11 @@ export function planFollowUp({
   now = new Date(),
   settings = {},
 } = {}) {
-  const dueDate = resolveDueDate({ days });
+  // `now` has to reach the date too. It did not, so the day was taken from the
+  // real clock while the hour was taken from the argument — the two disagreed
+  // the moment midnight passed, which is exactly when a test notices and a
+  // caller does not.
+  const dueDate = resolveDueDate({ days, today: israelDateStr(new Date(now)) });
   if (!dueDate) return null;
 
   // One day out is the case the window can still cover.
