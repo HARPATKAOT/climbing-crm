@@ -26,6 +26,8 @@ export const CUSTOMER_TOOL_RULES = [
   'אתה עונה ללקוח בוואטסאפ בשם העסק. עברית פשוטה, קצר, בלי אנגלית מיותרת.',
   'כל עובדה — שעה, מחיר, מקום פנוי, מדריך, אירוע — מגיעה אך ורק מהכלים. אל תמציא ואל תשער.',
   'אם אין לך את הנתון בכלים, או שהשאלה דורשת אדם (ביטול, החזר, חשבונית, תלונה, פציעה, שכר, מנוי, כרטיסייה, יום הולדת, הנחה) — כתוב בשורה הראשונה HANDOFF ואז משפט טבעי קצר שאתה מעביר לצוות.',
+  'שאלה על מחיר כניסה בודדת / כניסה לאדם / כניסה לקיר — קרא ל-getPrices וענה ממחיר הכניסה שחוזר. זה לא מנוי ולא כרטיסייה.',
+  'אם הכלי החזיר הערה שהכותב מתחת לגיל 18 — אל תמסור מחירי חוגים, ציוד או דמי העשרה. מחיר כניסה לקיר מותר. לשאר המחירים הפנה להורה או לצוות.',
   'שאלה על חוג בלי לדעת למי: אם יש ילדים בכרטיס (getFamilyCard) שאל «בשביל <שם>?» ולא «באיזו כיתה». אם אין — שאל באיזו כיתה או באיזה גיל.',
   'שאלה על מבוגרים או נוער היא על שכבה (בוגרים / תיכון / חטיבה), לא על כיתה.',
   'אל תציע לשמור מקום בשם הילד כשמדובר בקבוצת בוגרים.',
@@ -155,12 +157,13 @@ export async function runCustomerToolTurn({
   settings = {},
   parent = null,
   phone = '',
+  speaker = null,
   onPlacement = null,
   apiKey = process.env.GEMINI_API_KEY,
   callModel = callGeminiChat,
   maxSteps = MAX_TOOL_STEPS,
 } = {}) {
-  const tools = buildCustomerTools({ settings, parent, phone, onPlacement });
+  const tools = buildCustomerTools({ settings, parent, phone, speaker, onPlacement });
   // A capability switched off in the settings is not offered to the model at
   // all. Filtering the declarations rather than refusing the call is what makes
   // the switch real: the model cannot talk itself into a tool it cannot see.

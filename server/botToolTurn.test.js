@@ -7,7 +7,13 @@ import {
   unknownUrlsInReply,
   CUSTOMER_TOOL_RULES,
 } from './botToolTurn.js';
-import { CUSTOMER_TOOL_DECLARATIONS, isRegisteredTrainee } from './botTools.js';
+import {
+  CUSTOMER_TOOL_DECLARATIONS,
+  isRegisteredTrainee,
+  shouldHideYouthPrices,
+  buildCustomerTools,
+} from './botTools.js';
+import { db } from './db.js';
 
 /** A model stand-in: replies with whatever script the test hands it. */
 function scriptedModel(steps) {
@@ -191,4 +197,44 @@ test('the tools offered to the model are facts, links and placements — never s
   assert.equal(names.some((n) => /send|delete|remove|charge|refund/i.test(n)), false);
   assert.deepEqual(names.filter((n) => /cancel/i.test(n)), ['cancelSignup']);
   assert.match(CUSTOMER_TOOL_RULES, /HANDOFF/);
+});
+
+test('trainees under 18 do not receive class or equipment prices', async () => {
+  const now = new Date('2026-08-04T12:00:00Z');
+  assert.equal(shouldHideYouthPrices(null, now), false);
+  assert.equal(
+    shouldHideYouthPrices({ name: 'עומר', birth_date: '2009-09-17' }, now),
+    true
+  );
+  assert.equal(
+    shouldHideYouthPrices({ name: 'דני', birthDate: '2005-01-01' }, now),
+    false
+  );
+  // Unknown age on a trainee speaker — hide rather than guess.
+  assert.equal(shouldHideYouthPrices({ name: 'נועם' }, now), true);
+
+  const prev = db.get('pricelist');
+  db.set('pricelist', [
+    { name: 'כניסה לקיר', price: 70, category: 'כניסה', active: true },
+  ]);
+  try {
+    const tools = buildCustomerTools({
+      speaker: { name: 'עומר בזר', birth_date: '2009-09-17' },
+    });
+    const prices = await tools.getPrices({ grade: 'ג', equipment: true, entry: true });
+    assert.ok(prices.כניסה_לקיר);
+    assert.equal(prices.חוגים, undefined);
+    assert.equal(prices.ציוד, undefined);
+    assert.equal(prices.דמי_העשרה, undefined);
+    assert.match(prices.הערה, /מתחת לגיל 18/);
+
+    const adultTools = buildCustomerTools({
+      speaker: { name: 'דני', birthDate: '2005-01-01' },
+    });
+    const adultPrices = await adultTools.getPrices({ entry: true, equipment: false });
+    assert.ok(adultPrices.כניסה_לקיר);
+    assert.equal(adultPrices.הערה, undefined);
+  } finally {
+    db.set('pricelist', prev || []);
+  }
 });

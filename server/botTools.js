@@ -41,6 +41,7 @@ import {
   loadEquipmentPrices,
   loadEquipmentInfo,
   enrichmentFeeFromSettings,
+  entryProductsFromPricelist,
   formatOpeningHoursReply,
   formatPublicEventsReply,
   trainerNameForGroup,
@@ -77,6 +78,37 @@ export function ageLabelFor(birthDate, now = new Date()) {
   const age = ageFromBirthDate(birthDate, now);
   if (!age) return '';
   return age.half ? `${age.years} וחצי` : String(age.years);
+}
+
+/**
+ * A trainee writing from their own phone who is under 18.
+ *
+ * Class / equipment / enrichment prices go to the parent, not to the minor.
+ * Wall-entry prices are allowed. When age is unknown on a trainee speaker we
+ * hide those prices too — better than quoting a fee to a sixteen-year-old.
+ * A parent writing (no speaker) is never blocked.
+ */
+export function shouldHideYouthPrices(speaker, now = new Date()) {
+  if (!speaker) return false;
+  const birth = speaker.birthDate || speaker.birth_date || '';
+  const age = ageFromBirthDate(birth, now);
+  if (!age) return true;
+  return age.years < 18;
+}
+
+const YOUTH_PRICE_NOTE =
+  'הכותב מתחת לגיל 18 — אין למסור מחירי חוגים, ציוד או דמי העשרה. '
+  + 'מחיר כניסה לקיר מותר. לשאר המחירים הפנה להורה או לצוות.';
+
+function stripGroupPrices(groupsPayload = []) {
+  return groupsPayload.map((g) => {
+    const {
+      מחיר_פעם_בשבוע: _w,
+      מחיר_פעמיים_בשבוע: _t,
+      ...rest
+    } = g;
+    return rest;
+  });
 }
 
 /**
@@ -160,14 +192,19 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
   {
     name: 'getPrices',
     description:
-      'מחירים מהמערכת: מחירי חוגים לפי כיתה או שכבה, מחירי ציוד, ודמי העשרה. '
-      + 'כל מחיר אחר (מנוי, כרטיסייה, יום הולדת, הנחה) אינו כאן — יש להעביר לצוות.',
+      'מחירים מהמערכת: מחירי חוגים לפי כיתה או שכבה, מחירי ציוד, דמי העשרה, '
+      + 'וכניסה בודדת לקיר מהמחירון. '
+      + 'מנוי, כרטיסייה, יום הולדת והנחה אינם כאן — יש להעביר לצוות.',
     parameters: {
       type: 'object',
       properties: {
         grade: { type: 'string', description: 'אות כיתה למחיר חוג' },
         band: { type: 'string', description: 'שכבה שאינה כיתה למחיר חוג' },
         equipment: { type: 'boolean', description: 'לכלול מחירי ציוד' },
+        entry: {
+          type: 'boolean',
+          description: 'לכלול מחיר כניסה בודדת לקיר (ברירת מחדל: כן)',
+        },
       },
     },
   },
@@ -659,8 +696,11 @@ export function buildCustomerTools({
   settings = {},
   parent = null,
   phone = '',
+  speaker = null,
   onPlacement = null,
 } = {}) {
+  const hideYouthPrices = shouldHideYouthPrices(speaker);
+
   /** One journal line, already carrying who this conversation is with. */
   const journal = (type, summary, details = {}, student = null) => recordBotAction(db, persistCore, {
     type,
@@ -716,11 +756,27 @@ export function buildCustomerTools({
             + 'מהמשפחה אם מתאים. להעביר לצוות רק אם הלקוח מבקש.',
         };
       }
-      return { קבוצות: openGroupsPayload(groups) };
+      const payload = openGroupsPayload(groups);
+      return {
+        קבוצות: hideYouthPrices ? stripGroupPrices(payload) : payload,
+        ...(hideYouthPrices ? { הערה: YOUTH_PRICE_NOTE } : {}),
+      };
     },
 
-    getPrices: async ({ grade, band, equipment } = {}) => {
+    getPrices: async ({ grade, band, equipment, entry } = {}) => {
       const payload = {};
+      // Minors may only hear wall-entry prices. Class / equipment / enrichment
+      // stay with the parent.
+      if (hideYouthPrices) {
+        if (entry !== false) {
+          const entries = entryProductsFromPricelist(db.get('pricelist') || []);
+          payload.כניסה_לקיר = entries.length
+            ? entries
+            : { הערה: 'מחיר כניסה בודדת אינו מוגדר במחירון — אין לנקוב בסכום, יש להעביר לצוות' };
+        }
+        payload.הערה = YOUTH_PRICE_NOTE;
+        return payload;
+      }
       if (grade || band) {
         const groups = selectGroups({ grade, band });
         payload.חוגים = openGroupsPayload(groups).map((g) => ({
@@ -742,6 +798,12 @@ export function buildCustomerTools({
             שק_מגנזיום: Number(prices.chalk_bag) || 0,
           }
           : { הערה: 'מחירי הציוד אינם זמינים כרגע — אין לנקוב בסכום, יש להעביר לצוות' };
+      }
+      if (entry !== false) {
+        const entries = entryProductsFromPricelist(db.get('pricelist') || []);
+        payload.כניסה_לקיר = entries.length
+          ? entries
+          : { הערה: 'מחיר כניסה בודדת אינו מוגדר במחירון — אין לנקוב בסכום, יש להעביר לצוות' };
       }
       const fee = enrichmentFeeFromSettings(settings);
       payload.דמי_העשרה = fee > 0
@@ -769,10 +831,15 @@ export function buildCustomerTools({
       const feeText = String(info.enrichment_info || '').trim();
       return {
         ...(Object.keys(items).length ? { ציוד: items } : {}),
-        ...(Number.isFinite(fee) && fee > 0 ? { דמי_העשרה_בשקלים: fee } : {}),
+        // Minors get the explanation, never the enrichment fee amount.
+        ...(!hideYouthPrices && Number.isFinite(fee) && fee > 0
+          ? { דמי_העשרה_בשקלים: fee }
+          : {}),
         ...(feeText ? { דמי_העשרה_הסבר: feeText } : {}),
-        הערה: 'אלה ההסברים שהעסק כתב. מה שלא מופיע כאן — לא כתוב, ואין להשלים '
-          + 'אותו מהידע הכללי. אפשר לומר שנבדוק ונחזור.',
+        הערה: hideYouthPrices
+          ? YOUTH_PRICE_NOTE
+          : ('אלה ההסברים שהעסק כתב. מה שלא מופיע כאן — לא כתוב, ואין להשלים '
+            + 'אותו מהידע הכללי. אפשר לומר שנבדוק ונחזור.'),
       };
     },
 

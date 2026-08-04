@@ -18,6 +18,9 @@ import {
   groupSignupUrl,
   inviteLink,
   asksAboutNonClassPayment,
+  asksAboutWallEntry,
+  entryProductsFromPricelist,
+  formatEntryPricesReply,
   soundsLikeComplaint,
   trainerNameForGroup,
 } from './botFacts.js';
@@ -285,4 +288,38 @@ test('membership and punch-card pricing is not a class question', () => {
   assert.equal(asksAboutNonClassPayment('כמה עולה יום הולדת?'), true);
   assert.equal(asksAboutNonClassPayment('כמה עולה חוג לכיתה ג?'), false);
   assert.equal(asksAboutNonClassPayment('כמה עולות נעליים?'), false);
+  // Single wall entry is priced from the pricelist — not a staff handoff.
+  assert.equal(asksAboutNonClassPayment('כמה עולה כניסה לאדם?'), false);
+  assert.equal(asksAboutNonClassPayment('כמה עולה כניסה בודדת?'), false);
+});
+
+test('wall entry questions are recognised separately from memberships', () => {
+  assert.equal(asksAboutWallEntry('כמה עולה כניסה לאדם?'), true);
+  assert.equal(asksAboutWallEntry('כמה עולה כניסה בודדת לקיר?'), true);
+  assert.equal(asksAboutWallEntry('כמה עולה מנוי עם 4 כניסות?'), false);
+  assert.equal(asksAboutWallEntry('כמה עולה חוג?'), false);
+});
+
+test('entry products come only from the כניסה category with a real price', () => {
+  const list = [
+    { name: 'כניסה לקיר', price: 70, category: 'כניסה', active: true },
+    { name: 'מנוי אישי', price: 440, category: 'כרטיסיות ומנויים', active: true },
+    { name: 'כניסה ישנה', price: 0, category: 'כניסה', active: true },
+    { name: 'כניסה כבויה', price: 70, category: 'כניסה', active: false },
+  ];
+  assert.deepEqual(entryProductsFromPricelist(list), [
+    { שם: 'כניסה לקיר', מחיר: 70, הערה: '' },
+  ]);
+  assert.match(formatEntryPricesReply(list), /70/);
+  assert.equal(formatEntryPricesReply([]), '');
+});
+
+test('buildPriceReply answers wall entry from the pricelist', () => {
+  const reply = buildPriceReply({
+    text: 'כמה עולה כניסה לאדם?',
+    pricelist: [{ name: 'כניסה לקיר', price: 70, category: 'כניסה', active: true }],
+  });
+  assert.equal(reply.handoff, false);
+  assert.match(reply.text, /70/);
+  assert.match(reply.text, /כניסה/);
 });

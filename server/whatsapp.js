@@ -35,12 +35,14 @@ import {
   asksAboutSalary,
   asksAboutStaffHeadcount,
   asksAboutNonClassPayment,
+  asksAboutWallEntry,
   soundsLikeComplaint,
   PRICE_HANDOFF_REPLY,
   asksAboutEquipment,
   asksAboutEnrichment,
   asksAboutTrainer,
   buildPriceReply,
+  formatEntryPricesReply,
   enrichmentFeeFromSettings,
   formatGroupChatReply,
   formatGroupDetailsReply,
@@ -108,11 +110,16 @@ import {
   proposeFromHandoffStaffReply,
 } from './botLearning.js';
 import { runCustomerToolTurn, historyToContents } from './botToolTurn.js';
+import { shouldHideYouthPrices } from './botTools.js';
 import { alertRecipients } from './staffAlerts.js';
 import { recordBotAction } from './botActivityLog.js';
 import { isCapabilityEnabled } from './botCapabilities.js';
 import { buildCentreReport, formatReportDate } from './centreReport.js';
 import { groupMatchesGradeLetter } from './groupBands.js';
+
+const YOUTH_PRICE_REPLY =
+  'לגבי מחירי חוגים, ציוד ודמי העשרה כדאי שההורה יפנה אלינו 🙏\n'
+  + 'על מחיר כניסה לקיר אפשר לשאול אותי ישירות.';
 
 export { israelClockParts, isBotEnabled, shouldAiAutoReply };
 
@@ -170,7 +177,7 @@ function cleanGroupTitle(group) {
 }
 
 /** Compact line for AI/CRM context (not WhatsApp customers). */
-function formatGroupLine(group) {
+function formatGroupLine(group, { hidePrices = false } = {}) {
   const dayLabel = DAY_NAMES[Number(group.day)] || `יום ${group.day}`;
   const free = Number.isFinite(group.freeSlots)
     ? group.freeSlots
@@ -179,14 +186,16 @@ function formatGroupLine(group) {
   const seat = free === null ? '' : (free > 0 ? `${free} פנויים` : 'מלאה');
   const week = Number(group.priceWeek) || 0;
   const twice = Number(group.priceTwice) || 0;
-  const price = [
-    week ? `פעם בשבוע ${week} ₪` : '',
-    twice ? `פעמיים בשבוע ${twice} ₪` : '',
-  ].filter(Boolean).join(' / ') || 'מחיר לא מעודכן';
+  const price = hidePrices
+    ? ''
+    : ([
+      week ? `פעם בשבוע ${week} ₪` : '',
+      twice ? `פעמיים בשבוע ${twice} ₪` : '',
+    ].filter(Boolean).join(' / ') || 'מחיר לא מעודכן');
   const trainer = trainerNameForGroup(db, group);
   const max = Number(group.maxSlots) || 0;
   return `• ${cleanGroupTitle(group)} | יום ${dayLabel} ${group.time || ''} | ${group.ageCategory || ''} | ${seat}`
-    + ` | ${price}${trainer ? ` | מדריך: ${trainer}` : ''}${max ? ` | עד ${max} מתאמנים` : ''}`;
+    + `${price ? ` | ${price}` : ''}${trainer ? ` | מדריך: ${trainer}` : ''}${max ? ` | עד ${max} מתאמנים` : ''}`;
 }
 
 function extractGradeLetter(text) {
@@ -496,7 +505,7 @@ function formatClassesWhatsAppReply(groups, incomingText = '', { grade: knownGra
 }
 
 /** Live CRM snapshot injected into the AI prompt / heuristic replies */
-function buildCrmBotContext(settings = {}, { phone, parent, students, equipmentPrices = null } = {}) {
+function buildCrmBotContext(settings = {}, { phone, parent, students, equipmentPrices = null, speaker = null } = {}) {
   const s = mergeBotSettings(settings);
   const brand = s.brandName || 'הרפתקאות';
   const allStudents = db.get('students') || [];
@@ -509,12 +518,13 @@ function buildCrmBotContext(settings = {}, { phone, parent, students, equipmentP
     allStudents
   );
 
+  const hideYouthPrices = shouldHideYouthPrices(speaker);
   const groupLines = groups.length
-    ? groups.map(formatGroupLine).join('\n')
+    ? groups.map((g) => formatGroupLine(g, { hidePrices: hideYouthPrices })).join('\n')
     : 'אין כרגע קבוצות במערכת.';
 
   const extra = phone
-    ? buildAiExtraContext(s, phone, parent, students || [])
+    ? buildAiExtraContext(s, phone, parent, students || [], { speaker })
     : [
       '## שם העסק',
       brand,
@@ -537,12 +547,14 @@ function buildCrmBotContext(settings = {}, { phone, parent, students, equipmentP
   const chatLinksText = chatLinks.handoff || !chatLinks.text
     ? 'אין קישור לקבוצת וואטסאפ עבור הלקוח הזה.'
     : chatLinks.text;
-  const equipmentText = equipmentPrices
-    ? Object.entries(equipmentPrices)
-      .filter(([, price]) => Number(price) > 0)
-      .map(([item, price]) => `${EQUIPMENT_LABELS[item] || item}: ${price} ₪`)
-      .join(' | ')
-    : 'מחירי ציוד לא נטענו — אל תנקוב בהם.';
+  const equipmentText = hideYouthPrices
+    ? 'הכותב מתחת לגיל 18 — אין למסור מחירי ציוד. הפנה להורה או לצוות.'
+    : (equipmentPrices
+      ? Object.entries(equipmentPrices)
+        .filter(([, price]) => Number(price) > 0)
+        .map(([item, price]) => `${EQUIPMENT_LABELS[item] || item}: ${price} ₪`)
+        .join(' | ')
+      : 'מחירי ציוד לא נטענו — אל תנקוב בהם.');
 
   return {
     groups,
@@ -565,7 +577,7 @@ ${chatLinksText}
 
 ### מחירי ציוד
 ${equipmentText}
-(נעליים מושכרות לחצי עונה; מי שמצטרף באמצע משלם יחסית.)
+${hideYouthPrices ? '' : '(נעליים מושכרות לחצי עונה; מי שמצטרף באמצע משלם יחסית.)'}
 
 ### כללים לתשובה לפי נתונים
 - אם שאלו על כיתה/גיל — הצג רק קבוצות רלוונטיות מהרשימה.
@@ -574,7 +586,8 @@ ${equipmentText}
 - פתח תשובות על חוגים ב־«כן, בטח!» והצג כל יום/שעה בשורה נפרדת.
 - מספר מקומות פנויים — רק אם הלקוח שאל במפורש כמה מקומות / תפוסה.
 - כשקבוצה מלאה — הצע שיבוץ לרשימת המתנה.
-- מחיר: רק מהרשימות שלמעלה (מחיר קבוצה, מחירי ציוד, דמי העשרה). כל מחיר אחר — מנוי, כרטיסייה, יום הולדת, הנחה, החזר — הפנה לצוות ואל תנקוב בסכום.
+- מחיר: רק מהרשימות שלמעלה (מחיר קבוצה, מחירי ציוד, דמי העשרה, כניסה בודדת). כל מחיר אחר — מנוי, כרטיסייה, יום הולדת, הנחה, החזר — הפנה לצוות ואל תנקוב בסכום.
+- אם הכותב מתחת לגיל 18: מותר רק מחיר כניסה לקיר; אל תמסור מחירי חוגים, ציוד או דמי העשרה.
 - שעות פתיחה: רק מהרשימה שלמעלה. אם אין — אמור שהשעות לא עודכנו והפנה לצוות.
 - אירועים: רק מהרשימה שלמעלה, כולל קישור ההרשמה. אל תזכיר אירועים אחרים.
 - מדריך וגודל קבוצה: רק מהרשימה. עוזרי מדריך אינם במערכת — הפנה לצוות.
@@ -607,7 +620,7 @@ function addressFromSettings(settings = {}) {
   return line ? line.replace(/^\s*כתובת\s*:\s*/, '').trim() : '';
 }
 
-async function buildHeuristicReply(incomingText, settings = {}, { phone = '', students = [], parent = null } = {}) {
+async function buildHeuristicReply(incomingText, settings = {}, { phone = '', students = [], parent = null, speaker = null } = {}) {
   const s = mergeBotSettings(settings);
   const raw = String(incomingText || '').trim();
   const text = raw.toLowerCase();
@@ -752,6 +765,26 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
   const priceIntent = asksAboutPrices(raw)
     || (isBareAudienceAnswer(raw) && customerAskedAboutPrices(phone));
   if (priceIntent) {
+    // Single wall entry is a pricelist fact — never ask which grade first.
+    if (asksAboutWallEntry(raw)) {
+      const entryText = formatEntryPricesReply(db.get('pricelist') || []);
+      return {
+        text: entryText || PRICE_HANDOFF_REPLY,
+        confidence: 'high',
+        handoff: !entryText,
+        softHandoff: true,
+      };
+    }
+    // A trainee under 18 writing themselves: class / equipment / enrichment
+    // prices stay with the parent. Entry was handled above.
+    if (shouldHideYouthPrices(speaker)) {
+      return {
+        text: YOUTH_PRICE_REPLY,
+        confidence: 'high',
+        handoff: false,
+        softHandoff: true,
+      };
+    }
     // Membership / punch card / birthday pricing is not in the CRM — asking
     // which grade the child is in would only stall the customer.
     if (asksAboutNonClassPayment(raw)) {
@@ -772,6 +805,7 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
       equipmentPrices: await loadEquipmentPrices(),
       enrichmentFee: enrichmentFeeFromSettings(s),
       text: raw,
+      pricelist: db.get('pricelist') || [],
     });
     // buildPriceReply hands off simply because it could not assemble a price —
     // a case the model, with getPrices in front of it, handles better.
@@ -1544,13 +1578,16 @@ export const whatsappService = {
     const phone = context.phone || '';
     const parent = context.parent || (phone ? findPrimaryParent(phone) : null);
     const students = context.students || (parent ? studentsForParent(parent) : []);
+    // When the inbound number belongs to a trainee, greet that trainee — not
+    // the parent whose card the thread is filed under.
+    const speaker = context.speaker || null;
 
     const systemPrompt = settings.aiSystemPrompt;
     const apiKey = process.env.GEMINI_API_KEY;
     const hasModel = !!apiKey && apiKey !== 'YOUR_GEMINI_API_KEY_HERE';
 
     const toolsEnabled = botToolsEnabled(settings);
-    const quick = await buildHeuristicReply(incomingText, settings, { phone, students, parent });
+    const quick = await buildHeuristicReply(incomingText, settings, { phone, students, parent, speaker });
     // A `softHandoff` is the keyword layer guessing "I found no group for this
     // child" — the very guess the tools replace, and it is answering the wrong
     // question when the customer asked to *remove* a child from a group. It
@@ -1575,7 +1612,7 @@ export const whatsappService = {
         systemInstruction: [
           `שם העסק הרשמי: ${settings.brandName || 'הרפתקאות'}\nהזכר את העסק רק בשם הרשמי הזה.`,
           settings.aiSystemPrompt,
-          buildParentCardContext(parent, students),
+          buildParentCardContext(parent, students, { speaker }),
           settings.aiBusinessFacts ? `עובדות העסק:\n${settings.aiBusinessFacts}` : '',
           settings.aiKnowledgeBase ? `בסיס ידע / שאלות נפוצות:\n${settings.aiKnowledgeBase}` : '',
           settings.aiForbiddenTopics ? `אסור:\n${settings.aiForbiddenTopics}` : '',
@@ -1587,6 +1624,7 @@ export const whatsappService = {
         settings,
         parent,
         phone,
+        speaker,
         // A placement the bot makes is reversible, but only if the team hears
         // about it the moment it happens.
         onPlacement: ({ student, group, kind }) => notifyStaffOfPlacement({
@@ -1628,6 +1666,7 @@ export const whatsappService = {
       phone,
       parent,
       students,
+      speaker,
       equipmentPrices: await loadEquipmentPrices(),
     });
     const crmText = learnedBlock ? `${crm.text}\n\n${learnedBlock}` : crm.text;
@@ -1672,7 +1711,7 @@ export const whatsappService = {
     }
 
     if (quick.skipMenu && isIdentifiedParent(parent)) {
-      const fallback = resolveIdentifiedParentFallback(parent, incomingText, settings);
+      const fallback = resolveIdentifiedParentFallback(parent, incomingText, settings, { speaker });
       return {
         text: clipReply(fallback.text, settings.aiMaxReplyChars),
         confidence: 'low',
@@ -1966,6 +2005,16 @@ export const whatsappService = {
     // collects the names — the scripted lead capture would only talk over it.
     const toolsRunTheConversation = botToolsEnabled(settings);
 
+    // A reaction is stored on the thread so the team sees it, but it is not a
+    // question. Answering it used to race the next real message: both turns
+    // saw the price question in history and both handed off — two near-identical
+    // replies for one ask (Dan Lieberman, 4.8.2026).
+    const isReaction = String(meta.type || '') === 'reaction'
+      || /^ריאקציה:\s*/u.test(String(text || '').trim());
+    if (isReaction) {
+      return { parent, student, isNew, replied: false, skippedReason: 'reaction' };
+    }
+
     // A photo, a voice note or a document is not something the model can read.
     // Without this the customer got silence — and hours later the model would
     // answer the stale placeholder from history instead of the new message.
@@ -2051,7 +2100,14 @@ export const whatsappService = {
     }
 
     // Interactive greeting for brand-new leads with low-intent first message
-    const aiResult = await whatsappService.generateAIResponse(text, { phone: normalizedPhone, parent, students, isSimulator });
+    const speaker = matchedVia === 'child_phone' ? student : null;
+    const aiResult = await whatsappService.generateAIResponse(text, {
+      phone: normalizedPhone,
+      parent,
+      students,
+      speaker,
+      isSimulator,
+    });
     if (aiResult.handoff) {
       await recordBotHandoff(normalizedPhone);
       // Prefer the model's natural wording; canned ack only when empty.

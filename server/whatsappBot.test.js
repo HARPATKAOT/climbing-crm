@@ -438,7 +438,12 @@ test('business identity and low-signal helpers', async () => {
 });
 
 test('a named card hands the model a first name to greet with', async () => {
-  const { buildParentCardContext, BOT_BOUNDS_RULES } = await import('./whatsappBot.js');
+  const {
+    buildParentCardContext,
+    BOT_BOUNDS_RULES,
+    greetingFirstName,
+    knownParentGreeting,
+  } = await import('./whatsappBot.js');
   const named = buildParentCardContext({ name: 'דלק כהן', phone: '0500000000' }, []);
   assert.match(named, /שם פרטי לפנייה: דלק/);
   assert.doesNotMatch(named, /שם פרטי לפנייה: דלק כהן/);
@@ -447,6 +452,18 @@ test('a named card hands the model a first name to greet with', async () => {
   assert.doesNotMatch(placeholder, /שם פרטי לפנייה/);
 
   assert.match(BOT_BOUNDS_RULES, /שם פרטי לפנייה/);
+
+  // A trainee writing from their own number must be greeted as themselves —
+  // not as the parent whose card the thread is filed under (Omer / Mirit).
+  const parent = { name: 'מירית בזר', phone: '972544402660' };
+  const speaker = { id: 's1', name: 'עומר בזר', phone: '972539304898' };
+  assert.equal(greetingFirstName(parent, speaker), 'עומר');
+  assert.equal(greetingFirstName(parent, null), 'מירית');
+  const fromChild = buildParentCardContext(parent, [speaker], { speaker });
+  assert.match(fromChild, /שם פרטי לפנייה: עומר/);
+  assert.doesNotMatch(fromChild, /שם פרטי לפנייה: מירית/);
+  assert.match(fromChild, /הכותב הוא המתאמן עומר בזר/);
+  assert.match(knownParentGreeting(parent, speaker), /מה נשמע עומר/);
 });
 
 test('schedule helpers still work', () => {

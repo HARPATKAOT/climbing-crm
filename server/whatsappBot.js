@@ -46,8 +46,9 @@ export function withBotMark(text) {
 }
 
 export const PRICE_SOURCE_RULE =
-  'כלל קשיח: מסור רק מחירים שמופיעים בנתוני המערכת — מחיר הקבוצה, מחירי הציוד ודמי ההעשרה. '
-  + 'כל שאלת תשלום אחרת (מנוי, כרטיסייה, יום הולדת, הנחה, החזר, חשבונית, שכר) — הפנה לצוות בלי לנקוב בסכום.';
+  'כלל קשיח: מסור רק מחירים שמופיעים בנתוני המערכת — מחיר הקבוצה, מחירי הציוד, דמי ההעשרה וכניסה בודדת מהמחירון. '
+    + 'כל שאלת תשלום אחרת (מנוי, כרטיסייה, יום הולדת, הנחה, החזר, חשבונית, שכר) — הפנה לצוות בלי לנקוב בסכום. '
+    + 'אם הכותב מתחת לגיל 18: מותר רק מחיר כניסה לקיר; אל תמסור מחירי חוגים, ציוד או דמי העשרה — הפנה להורה או לצוות.';
 
 /** Runtime allow/forbid — short bounds, no conversation script. */
 export const BOT_BOUNDS_RULES = [
@@ -141,8 +142,21 @@ export function parentFirstName(parent) {
   return name.split(/\s+/)[0];
 }
 
-export function knownParentGreeting(parent) {
-  const first = parentFirstName(parent);
+/**
+ * Who to greet: the person writing this message.
+ *
+ * A child's WhatsApp is filed on the parent card (`matchedVia === 'child_phone'`),
+ * so using the parent name alone greeted Omer as "מירית" — his mother. When the
+ * speaker is a known trainee, their first name wins.
+ */
+export function greetingFirstName(parent, speaker = null) {
+  const speakerName = String(speaker?.name || '').trim();
+  if (speakerName) return speakerName.split(/\s+/)[0];
+  return parentFirstName(parent);
+}
+
+export function knownParentGreeting(parent, speaker = null) {
+  const first = greetingFirstName(parent, speaker);
   return first
     ? `בסדר גמור 🙂\nמה נשמע ${first}?`
     : 'בסדר גמור 🙂\nמה נשמע?';
@@ -152,9 +166,9 @@ export function knownParentGreeting(parent) {
  * When the model is down, never spam the same greeting on a real message.
  * Greeting template only for low-intent hellos; otherwise ask to rephrase.
  */
-export function resolveIdentifiedParentFallback(parent, incomingText, settings = {}) {
+export function resolveIdentifiedParentFallback(parent, incomingText, settings = {}, { speaker = null } = {}) {
   if (isLowIntentGreeting(incomingText)) {
-    return { text: knownParentGreeting(parent), skipMenu: true };
+    return { text: knownParentGreeting(parent, speaker), skipMenu: true };
   }
   const clarify = String(settings?.aiClarifyReply || DEFAULT_BOT_SETTINGS.aiClarifyReply || '').trim();
   return {
@@ -763,7 +777,7 @@ export function getConversationHistory(phone, limit = 8) {
     });
 }
 
-export function buildParentCardContext(parent, students = []) {
+export function buildParentCardContext(parent, students = [], { speaker = null } = {}) {
   if (!parent) return 'אין כרטיס לקוח.';
   const groups = db.get('groups') || [];
   const lines = [
@@ -771,9 +785,16 @@ export function buildParentCardContext(parent, students = []) {
   ];
   // The model was given the full name and still opened with a nameless "היי".
   // Handing it the first name as its own labelled line is what the greeting
-  // rule in BOT_BOUNDS_RULES points at.
-  const firstName = parentFirstName(parent);
+  // rule in BOT_BOUNDS_RULES points at. When a trainee wrote from their own
+  // number, that first name is theirs — not the parent's.
+  const firstName = greetingFirstName(parent, speaker);
   if (firstName) lines.push(`שם פרטי לפנייה: ${firstName}`);
+  if (speaker?.name) {
+    lines.push(
+      `הכותב הוא המתאמן ${String(speaker.name).trim()} — כתב ממספר שלו, לא ממספר ההורה. `
+      + 'פנה אליו בשמו, לא בשם ההורה.'
+    );
+  }
   if (!students.length) {
     lines.push('אין מתאמנים מקושרים.');
   } else {
@@ -790,7 +811,7 @@ export function buildParentCardContext(parent, students = []) {
   return lines.join('\n');
 }
 
-export function buildAiExtraContext(settings, phone, parent, students) {
+export function buildAiExtraContext(settings, phone, parent, students, { speaker = null } = {}) {
   const s = mergeBotSettings(settings);
   const brand = s.brandName || DEFAULT_BUSINESS_PROFILE.display_name;
   const history = getConversationHistory(phone, s.aiHistoryCount);
@@ -809,7 +830,7 @@ export function buildAiExtraContext(settings, phone, parent, students) {
     s.aiForbiddenTopics || '',
     '',
     '## כרטיס לקוח',
-    buildParentCardContext(parent, students),
+    buildParentCardContext(parent, students, { speaker }),
   ];
   if (history.length) {
     parts.push('', '## היסטוריית שיחה אחרונה', history.join('\n'));

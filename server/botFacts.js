@@ -62,13 +62,29 @@ export function asksAboutPrices(text) {
 }
 
 /**
- * Payment questions the CRM does not price: membership, punch cards, single
- * entries, birthdays, discounts. Without this, "כמה עולה מנוי חודשי" was
- * treated as a class question and answered with "באיזו כיתה הילד/ה?".
+ * A single wall-entry price lives in the pricelist under category «כניסה».
+ * Packages (מנוי / כרטיסייה) are different — those still go to staff.
+ */
+export function asksAboutWallEntry(text) {
+  const t = String(text || '');
+  if (/מנוי|כרטיסי[יה]|כרטיסייה/.test(t)) return false;
+  if (!/כניסה/.test(t)) return false;
+  // "כניסה לאדם", "כניסה בודדת", "כמה עולה כניסה", "כניסה לקיר"
+  return asksAboutPrices(t)
+    || /בודד|חד[\s-]*פעמי|לאדם|לקיר|חופשית|יחיד|חד.?פעם/.test(t);
+}
+
+/**
+ * Payment questions the CRM does not price: membership, punch cards,
+ * birthdays, discounts. Single wall entry is priced from the pricelist
+ * (see asksAboutWallEntry / entryProductsFromPricelist). Without this,
+ * "כמה עולה מנוי חודשי" was treated as a class question and answered with
+ * "באיזו כיתה הילד/ה?".
  */
 export function asksAboutNonClassPayment(text) {
   const t = String(text || '');
-  return /מנוי|כרטיסי[יה]|כרטיסייה|יום\s*הולדת|כניסה\s*(?:חד|בוד|חופשית)|כניסה\s*יחיד|הנחה|החזר|זיכוי|חשבונית|תשלום\s*חד/.test(t);
+  if (asksAboutWallEntry(t)) return false;
+  return /מנוי|כרטיסי[יה]|כרטיסייה|יום\s*הולדת|הנחה|החזר|זיכוי|חשבונית|תשלום\s*חד/.test(t);
 }
 
 export function asksAboutEquipment(text) {
@@ -248,6 +264,39 @@ function groupPriceLine(group) {
   return `• ${title} — ${parts.join(' / ')}`;
 }
 
+/**
+ * Single-visit wall entry products from the pricelist category «כניסה».
+ * Memberships and punch cards live under other categories and are not listed.
+ */
+export function entryProductsFromPricelist(pricelist = []) {
+  return (pricelist || [])
+    .filter((p) => p && p.active !== false)
+    .filter((p) => {
+      const cats = [
+        ...(Array.isArray(p.categories) ? p.categories : []),
+        p.category,
+      ].filter(Boolean).map((c) => String(c));
+      if (cats.some((c) => c === 'כניסה' || /(^|\s)כניסה(\s|$)/.test(c))) return true;
+      return /^כניסה\b/.test(String(p.name || '').trim());
+    })
+    .map((p) => ({
+      שם: String(p.name || '').trim() || 'כניסה לקיר',
+      מחיר: Number(p.price) || 0,
+      הערה: String(p.description || '').trim(),
+    }))
+    .filter((p) => p.מחיר > 0);
+}
+
+export function formatEntryPricesReply(pricelist = []) {
+  const entries = entryProductsFromPricelist(pricelist);
+  if (!entries.length) return '';
+  const lines = entries.map((e) => {
+    const note = e.הערה ? ` (${e.הערה})` : '';
+    return `• ${e.שם} — ${e.מחיר} ₪${note}`;
+  });
+  return `💰 כניסה לקיר:\n${lines.join('\n')}`;
+}
+
 function equipmentLines(prices) {
   return ['shoes', 'shirt', 'chalk_bag']
     .filter((item) => Number(prices?.[item]) > 0)
@@ -266,11 +315,23 @@ function equipmentLines(prices) {
  * כרטיסייה, יום הולדת, הנחה — goes to the team instead of being guessed.
  * @returns {{ text: string, handoff: boolean }}
  */
-export function buildPriceReply({ groups = [], equipmentPrices = null, enrichmentFee = 0, text = '' } = {}) {
+export function buildPriceReply({
+  groups = [],
+  equipmentPrices = null,
+  enrichmentFee = 0,
+  text = '',
+  pricelist = [],
+} = {}) {
   const blocks = [];
   const wantsEquipment = asksAboutEquipment(text);
   const wantsEnrichment = asksAboutEnrichment(text);
-  const wantsClasses = !wantsEquipment && !wantsEnrichment;
+  const wantsEntry = asksAboutWallEntry(text);
+  const wantsClasses = !wantsEquipment && !wantsEnrichment && !wantsEntry;
+
+  if (wantsEntry) {
+    const entryBlock = formatEntryPricesReply(pricelist);
+    if (entryBlock) blocks.push(entryBlock);
+  }
 
   if (wantsClasses) {
     const seen = new Set();
