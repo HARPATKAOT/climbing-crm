@@ -45,6 +45,7 @@ export const OPERATIONAL_PERMISSIONS = Object.freeze([
 ]);
 
 const MODULE_IDS = new Set(MODULE_CATALOG.map((item) => item.id));
+const MODULE_BY_ID = new Map(MODULE_CATALOG.map((item) => [item.id, item]));
 const ALL_EDIT = Object.freeze(Object.fromEntries(MODULE_CATALOG.map((item) => [item.id, item.levels?.includes('edit') === false ? 'view' : 'edit'])));
 
 const modulesOf = (entries = {}) => Object.fromEntries(
@@ -95,6 +96,48 @@ function emailSet(value) {
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 const unique = (values) => [...new Set((Array.isArray(values) ? values : []).map(String).filter(Boolean))];
 
+function normalizePermissionOverrides(raw = {}) {
+  const sourceModules = raw?.modules && typeof raw.modules === 'object' ? raw.modules : {};
+  const sourceSensitive = raw?.sensitive && typeof raw.sensitive === 'object' ? raw.sensitive : {};
+  const modules = {};
+  for (const [moduleId, requested] of Object.entries(sourceModules)) {
+    const module = MODULE_BY_ID.get(moduleId);
+    const level = String(requested || '');
+    const allowed = module?.levels || ['none', 'view', 'edit'];
+    if (module && allowed.includes(level)) modules[moduleId] = level;
+  }
+  const sensitive = {};
+  for (const permission of SENSITIVE_CATALOG) {
+    if (typeof sourceSensitive[permission.id] === 'boolean') sensitive[permission.id] = sourceSensitive[permission.id];
+  }
+  return { modules, sensitive };
+}
+
+function validatePermissionOverrides(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw Object.assign(new Error('מבנה ההרשאות האישיות אינו תקין'), { statusCode: 400 });
+  }
+  const sourceModules = raw.modules === undefined ? {} : raw.modules;
+  const sourceSensitive = raw.sensitive === undefined ? {} : raw.sensitive;
+  if (!sourceModules || typeof sourceModules !== 'object' || Array.isArray(sourceModules)
+    || !sourceSensitive || typeof sourceSensitive !== 'object' || Array.isArray(sourceSensitive)) {
+    throw Object.assign(new Error('מבנה ההרשאות האישיות אינו תקין'), { statusCode: 400 });
+  }
+  for (const [moduleId, requested] of Object.entries(sourceModules)) {
+    const module = MODULE_BY_ID.get(moduleId);
+    const allowed = module?.levels || ['none', 'view', 'edit'];
+    if (!module || !allowed.includes(String(requested))) {
+      throw Object.assign(new Error('אחת מההרשאות האישיות אינה נתמכת'), { statusCode: 400 });
+    }
+  }
+  for (const [permissionId, allowed] of Object.entries(sourceSensitive)) {
+    if (!SENSITIVE_CATALOG.some((permission) => permission.id === permissionId) || typeof allowed !== 'boolean') {
+      throw Object.assign(new Error('אחת מהרשאות המידע הרגיש אינה נתמכת'), { statusCode: 400 });
+    }
+  }
+  return normalizePermissionOverrides(raw);
+}
+
 export function legacyCrmRole(user) {
   const email = normalizeEmail(user?.email);
   if (emailSet(process.env.CRM_OWNER_EMAILS).has(email)) return 'owner';
@@ -139,6 +182,10 @@ export function normalizeAccessEntry(raw = {}) {
     email,
     role_ids: roleIds,
     role: roleIds[0] || 'staff',
+    permission_overrides: normalizePermissionOverrides(raw.permission_overrides || {
+      modules: raw.module_overrides,
+      sensitive: raw.sensitive_overrides,
+    }),
     status: USER_STATUSES.has(raw.status) ? raw.status : 'invited',
     invited_at: raw.invited_at || null,
     updated_at: raw.updated_at || null,
@@ -225,6 +272,17 @@ function mergeRoleAccess(roles) {
   return { modules, sensitive };
 }
 
+export function applyPermissionOverrides(baseAccess, rawOverrides) {
+  const overrides = normalizePermissionOverrides(rawOverrides);
+  return {
+    modules: { ...modulesOf(baseAccess?.modules), ...overrides.modules },
+    sensitive: {
+      finance: typeof overrides.sensitive.finance === 'boolean' ? overrides.sensitive.finance : baseAccess?.sensitive?.finance === true,
+      hr: typeof overrides.sensitive.hr === 'boolean' ? overrides.sensitive.hr : baseAccess?.sensitive?.hr === true,
+    },
+  };
+}
+
 export function previewAccessForEntry(entry, registry = { roles: defaultRoles() }, employees) {
   if (!entry) return null;
   const employee = employeeMatchForEmail(entry.email, employees);
@@ -235,6 +293,8 @@ export function previewAccessForEntry(entry, registry = { roles: defaultRoles() 
   const merged = owner
     ? { modules: { ...ALL_EDIT }, sensitive: { finance: true, hr: true } }
     : mergeRoleAccess(assignedRoles);
+  const overrides = owner ? { modules: {}, sensitive: {} } : normalizePermissionOverrides(entry.permission_overrides);
+  const effective = owner ? merged : applyPermissionOverrides(merged, overrides);
   const roleNames = owner
     ? ['מנהל ראשי']
     : assignedRoles.map((role) => role.name);
@@ -247,8 +307,11 @@ export function previewAccessForEntry(entry, registry = { roles: defaultRoles() 
     access_enabled: entry.status !== 'blocked',
     role_ids: owner ? ['owner'] : assignedRoles.map((role) => role.id),
     role_names: roleNames,
-    modules: merged.modules,
-    sensitive: merged.sensitive,
+    role_modules: merged.modules,
+    role_sensitive: merged.sensitive,
+    permission_overrides: overrides,
+    modules: effective.modules,
+    sensitive: effective.sensitive,
     ...employee,
   };
 }
@@ -284,6 +347,8 @@ export function resolveAccessContext(user, registry = { configured: false, users
   const assignedRoles = unique(entry.role_ids).map((roleId) => accessRole(registry, roleId)).filter(Boolean);
   if (!assignedRoles.length && !employee.employee_id) return null;
   const merged = mergeRoleAccess(assignedRoles);
+  const overrides = normalizePermissionOverrides(entry.permission_overrides);
+  const effective = applyPermissionOverrides(merged, overrides);
   const roleNames = assignedRoles.map((item) => item.name);
   if (employee.employee_id) roleNames.unshift('עובד');
   return {
@@ -292,8 +357,9 @@ export function resolveAccessContext(user, registry = { configured: false, users
     roleIds: assignedRoles.map((item) => item.id),
     roleName: roleNames.join(' · ') || 'עובד',
     roleNames,
-    permissions: legacyPermissionIds(merged.modules),
-    ...merged,
+    permissions: legacyPermissionIds(effective.modules),
+    permissionOverrides: overrides,
+    ...effective,
     ...employee,
   };
 }
@@ -321,7 +387,7 @@ export async function loadAccessRegistry() {
     const storedVersion = Number(localValue?.version || 1);
     return {
       configured: true,
-      version: 2,
+      version: 3,
       users: (Array.isArray(source) ? source : []).map(normalizeAccessEntry).filter(Boolean),
       roles: storedVersion >= 2
         ? roleSource.map(normalizeAccessRoleDefinition).filter(Boolean)
@@ -335,7 +401,7 @@ export async function loadAccessRegistry() {
   const storedVersion = Number(result.value?.version || 1);
   return {
     configured: true,
-    version: 2,
+    version: 3,
     users: (Array.isArray(source) ? source : []).map(normalizeAccessEntry).filter(Boolean),
     // Version 1 stored only the old custom role list, so seed the new presets once
     // during migration. Version 2 is authoritative: a deliberately deleted preset
@@ -440,7 +506,7 @@ export async function sendAuthorizedUserPasswordReset(id, currentOwner) {
 
 async function saveRegistry(registry) {
   const value = {
-    version: 2,
+    version: 3,
     users: registry.users,
     roles: registry.roles,
   };
@@ -498,6 +564,7 @@ export async function inviteAuthorizedUser({ name, email, role, role_ids: rawRol
   const next = {
     id: String(authUser?.id || randomUUID()), auth_user_id: authUser?.id ? String(authUser.id) : null,
     name: cleanName, email: normalizedEmail, role_ids: roleIds, role: roleIds[0] || 'employee',
+    permission_overrides: { modules: {}, sensitive: {} },
     status: authUser?.last_sign_in_at ? 'active' : 'invited',
     invited_at: authUser?.invited_at || authUser?.created_at || now, updated_at: now,
   };
@@ -512,10 +579,12 @@ export async function updateAuthorizedUser(id, patch, currentOwner) {
     throw Object.assign(new Error('סטטוס המשתמש אינו נתמך'), { statusCode: 400 });
   }
   const hasRoles = patch?.role_ids !== undefined || patch?.role !== undefined;
+  const hasOverrides = patch?.permission_overrides !== undefined;
   const nextRoles = hasRoles
     ? validateRoleIds(registry, patch.role_ids !== undefined ? patch.role_ids : [patch.role])
     : null;
-  if (status === undefined && !hasRoles) throw Object.assign(new Error('לא נשלח עדכון תקין'), { statusCode: 400 });
+  const nextOverrides = hasOverrides ? validatePermissionOverrides(patch.permission_overrides) : null;
+  if (status === undefined && !hasRoles && !hasOverrides) throw Object.assign(new Error('לא נשלח עדכון תקין'), { statusCode: 400 });
   const rows = await listAuthorizedUsers(currentOwner);
   const target = rows.find((row) => String(row.id) === String(id));
   if (!target) throw Object.assign(new Error('המשתמש לא נמצא'), { statusCode: 404 });
@@ -527,6 +596,7 @@ export async function updateAuthorizedUser(id, patch, currentOwner) {
     ...target,
     ...(status !== undefined ? { status } : {}),
     ...(nextRoles ? { role_ids: nextRoles, role: nextRoles[0] || 'employee' } : {}),
+    ...(nextOverrides ? { permission_overrides: nextOverrides } : {}),
     updated_at: new Date().toISOString(),
   };
   await saveStaffRows(rows.map((row) => row.id === target.id ? updated : row));
@@ -545,7 +615,7 @@ export async function removeAuthorizedUser(id, currentOwner) {
 export async function listAccessRoles() {
   const registry = ensureRegistryAvailable(await loadAccessRegistry());
   return {
-    version: 2,
+    version: 3,
     permissions: OPERATIONAL_PERMISSIONS,
     modules: MODULE_CATALOG,
     sensitive: SENSITIVE_CATALOG,

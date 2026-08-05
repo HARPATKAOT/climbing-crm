@@ -3,7 +3,7 @@ import {
   AlertTriangle, Award, Ban, Briefcase, CalendarDays, CalendarRange, Check, Coins,
   Eye, FileHeart, GraduationCap, LayoutDashboard, Loader2, LockKeyhole, LogIn,
   MailPlus, MessageSquare, Monitor, Mountain, Package, Pencil, Plus, Save,
-  Settings2, ShieldCheck, Sparkles, Trash2, ExternalLink, UserCog, UserRoundCheck,
+  RotateCcw, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, ExternalLink, UserCog, UserRoundCheck,
   UserRoundX, UsersRound, X, Zap,
 } from 'lucide-react';
 import AppSelect from './AppSelect.jsx';
@@ -113,6 +113,11 @@ export default function BusinessUsers() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState('');
   const [previewEmployeeOpen, setPreviewEmployeeOpen] = useState(false);
+  const [permissionTarget, setPermissionTarget] = useState(null);
+  const [permissionData, setPermissionData] = useState(null);
+  const [permissionDraft, setPermissionDraft] = useState({ modules: {}, sensitive: {} });
+  const [permissionLoading, setPermissionLoading] = useState(false);
+  const [permissionError, setPermissionError] = useState('');
 
   const assignableRoles = useMemo(() => roles.filter((role) => !role.locked), [roles]);
   const inviteRoles = useMemo(() => {
@@ -131,6 +136,24 @@ export default function BusinessUsers() {
   const visiblePreviewPages = useMemo(() => PREVIEW_PAGES
     .map((page) => ({ ...page, level: previewPageLevel(page, previewData) }))
     .filter((page) => page.level !== 'none'), [previewData]);
+  const effectivePermissionDraft = useMemo(() => {
+    const roleModules = permissionData?.role_modules || {};
+    const roleSensitive = permissionData?.role_sensitive || {};
+    return {
+      modules: Object.fromEntries(moduleCatalog.map((module) => [
+        module.id,
+        Object.prototype.hasOwnProperty.call(permissionDraft.modules || {}, module.id)
+          ? permissionDraft.modules[module.id]
+          : (roleModules[module.id] || 'none'),
+      ])),
+      sensitive: Object.fromEntries(sensitiveCatalog.map((permission) => [
+        permission.id,
+        Object.prototype.hasOwnProperty.call(permissionDraft.sensitive || {}, permission.id)
+          ? permissionDraft.sensitive[permission.id]
+          : roleSensitive[permission.id] === true,
+      ])),
+    };
+  }, [moduleCatalog, permissionData, permissionDraft, sensitiveCatalog]);
 
   const load = async () => {
     setLoading(true);
@@ -330,6 +353,85 @@ export default function BusinessUsers() {
     }
   };
 
+  const openPermissionEditor = async (user) => {
+    setPermissionTarget(user);
+    setPermissionData(null);
+    setPermissionDraft({ modules: {}, sensitive: {} });
+    setPermissionError('');
+    setPermissionLoading(true);
+    try {
+      const response = await fetch(`/api/settings/users/${encodeURIComponent(user.id)}/preview`);
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'טעינת הרשאות המשתמש נכשלה');
+      setPermissionData(body);
+      setPermissionDraft({
+        modules: { ...(body.permission_overrides?.modules || {}) },
+        sensitive: { ...(body.permission_overrides?.sensitive || {}) },
+      });
+    } catch (err) {
+      setPermissionError(err.message || 'טעינת הרשאות המשתמש נכשלה');
+    } finally {
+      setPermissionLoading(false);
+    }
+  };
+
+  const setPersonalModuleLevel = (moduleId, level) => {
+    const roleLevel = permissionData?.role_modules?.[moduleId] || 'none';
+    setPermissionDraft((current) => {
+      const modules = { ...(current.modules || {}) };
+      if (level === roleLevel) delete modules[moduleId]; else modules[moduleId] = level;
+      return { ...current, modules };
+    });
+  };
+
+  const setPersonalSensitive = (permissionId, allowed) => {
+    const roleAllowed = permissionData?.role_sensitive?.[permissionId] === true;
+    setPermissionDraft((current) => {
+      const sensitive = { ...(current.sensitive || {}) };
+      if (allowed === roleAllowed) delete sensitive[permissionId]; else sensitive[permissionId] = allowed;
+      return { ...current, sensitive };
+    });
+  };
+
+  const resetPersonalModule = (moduleId) => setPermissionDraft((current) => {
+    const modules = { ...(current.modules || {}) };
+    delete modules[moduleId];
+    return { ...current, modules };
+  });
+
+  const resetPersonalSensitive = (permissionId) => setPermissionDraft((current) => {
+    const sensitive = { ...(current.sensitive || {}) };
+    delete sensitive[permissionId];
+    return { ...current, sensitive };
+  });
+
+  const savePersonalPermissions = async () => {
+    if (!permissionTarget) return;
+    setBusyId(`permissions:${permissionTarget.id}`);
+    setPermissionError('');
+    try {
+      const response = await fetch(`/api/settings/users/${encodeURIComponent(permissionTarget.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ permission_overrides: permissionDraft }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'שמירת ההרשאות האישיות נכשלה');
+      setUsers((current) => current.map((row) => row.id === permissionTarget.id ? { ...row, ...body } : row));
+      setPermissionData((current) => current ? {
+        ...current,
+        permission_overrides: permissionDraft,
+        modules: effectivePermissionDraft.modules,
+        sensitive: effectivePermissionDraft.sensitive,
+      } : current);
+      flash(`ההרשאות האישיות של ${permissionTarget.name} נשמרו`);
+    } catch (err) {
+      setPermissionError(err.message || 'שמירת ההרשאות האישיות נכשלה');
+    } finally {
+      setBusyId('');
+    }
+  };
+
   const sendPasswordReset = async (user) => {
     if (!window.confirm(`לשלוח אל ${user.email} קישור מאובטח לאיפוס הסיסמה?`)) return;
     setBusyId(`reset:${user.id}`);
@@ -461,6 +563,8 @@ export default function BusinessUsers() {
         {users.map((user) => {
           const owner = user.role === 'owner';
           const status = STATUS[user.status] || STATUS.invited;
+          const personalOverrideCount = Object.keys(user.permission_overrides?.modules || {}).length
+            + Object.keys(user.permission_overrides?.sensitive || {}).length;
           return <article key={user.id} className="business-user-card">
             <div className="business-user-card-main">
               <div className="business-user-card-avatar"><UsersRound /></div>
@@ -476,10 +580,12 @@ export default function BusinessUsers() {
                 {user.employee_match === 'duplicate' && <span className="business-employee-match is-warning"><AlertTriangle size={12} /> המייל מופיע בכמה תיקי עובדים</span>}
                 {user.employee_match === 'missing' && <span className="business-employee-match is-muted">לא נמצא תיק עובד תואם</span>}
                 <RolePicker roles={assignableRoles} value={user.role_ids || []} disabled={busyId === `user:${user.id}`} onChange={(role_ids) => updateUser(user, { role_ids }, `התפקידים של ${user.name} עודכנו`)} />
+                {personalOverrideCount > 0 && <span className="business-user-custom-badge"><SlidersHorizontal size={12} /> {personalOverrideCount} התאמות הרשאה אישיות</span>}
               </>}
             </div>
             {!owner && <div className="business-user-card-actions">
               <div className="business-user-card-actions-title">פעולות משתמש</div>
+              <button className="btn btn-sm btn-ghost" type="button" onClick={() => openPermissionEditor(user)}><SlidersHorizontal size={14} /> הרשאות אישיות</button>
               <button className="btn btn-sm btn-ghost" type="button" onClick={() => openUserPreview(user)}><Monitor size={14} /> תצוגת משתמש</button>
               <button className="btn btn-sm btn-ghost" type="button" disabled={busyId === `reset:${user.id}`} onClick={() => sendPasswordReset(user)}>{busyId === `reset:${user.id}` ? <Loader2 className="spin" size={14} /> : <LockKeyhole size={14} />} איפוס סיסמה</button>
               <button
@@ -552,6 +658,81 @@ export default function BusinessUsers() {
             </section>}
 
             <div className="business-user-preview-security"><LockKeyhole size={16} /><span>זוהי תצוגה לקריאה בלבד. לא נוצרה התחברות ולא ניתן לבצע פעולות בשם המשתמש. סיסמאות אינן ניתנות לצפייה; ניתן רק לשלוח קישור מאובטח לאיפוס.</span></div>
+          </>}
+        </section>
+      </div>}
+
+      {permissionTarget && <div className="business-user-preview-backdrop" onMouseDown={() => setPermissionTarget(null)}>
+        <section className="business-user-preview business-user-permissions-editor" role="dialog" aria-modal="true" aria-labelledby="business-user-permissions-title" onMouseDown={(event) => event.stopPropagation()}>
+          <header>
+            <div className="business-user-preview-heading">
+              <div className="business-user-preview-avatar"><SlidersHorizontal size={20} /></div>
+              <div><h3 id="business-user-permissions-title">ההרשאות של {permissionTarget.name}</h3><span dir="ltr">{permissionTarget.email}</span></div>
+            </div>
+            <button className="icon-btn" type="button" aria-label="סגירת הרשאות אישיות" onClick={() => setPermissionTarget(null)}><X size={18} /></button>
+          </header>
+
+          {permissionLoading && <div className="business-user-preview-loading"><Loader2 className="spin" size={18} /> טוען את ריכוז ההרשאות...</div>}
+          {permissionError && <div className="business-settings-alert is-error">{permissionError}</div>}
+          {permissionData && <>
+            <div className="business-user-preview-roles">
+              {(permissionData.role_names || []).map((name) => <span key={name}>{name}</span>)}
+            </div>
+            <div className="business-user-permissions-summary">
+              <div><strong>{Object.values(effectivePermissionDraft.modules).filter((level) => level !== 'none').length}</strong><span>תחומים זמינים</span></div>
+              <div><strong>{Object.values(effectivePermissionDraft.modules).filter((level) => level === 'edit').length}</strong><span>תחומים לעריכה</span></div>
+              <div><strong>{Object.keys(permissionDraft.modules || {}).length + Object.keys(permissionDraft.sensitive || {}).length}</strong><span>התאמות אישיות</span></div>
+            </div>
+            {permissionData.employee_id && <div className="business-user-self-access-note"><Briefcase size={17} /><span><strong>התיק שלי</strong><small>גישה אישית קבועה לתיק העובד שזוהה לפי כתובת המייל; אינה מעניקה גישה לתיקי עובדים אחרים.</small></span></div>}
+
+            <section className="business-user-personal-sensitive">
+              <div className="business-user-preview-section-title"><strong>מידע רגיש</strong><small>ההרשאה הסופית לאחר איחוד התפקידים וההתאמות האישיות</small></div>
+              {sensitiveCatalog.map((permission) => {
+                const customized = Object.prototype.hasOwnProperty.call(permissionDraft.sensitive || {}, permission.id);
+                const allowed = effectivePermissionDraft.sensitive[permission.id] === true;
+                return <div className={`business-user-personal-row ${customized ? 'is-customized' : ''}`} key={permission.id}>
+                  <div className="business-user-personal-label">
+                    <strong>{permission.name}</strong>
+                    <small>{customized ? 'התאמה אישית למשתמש' : `מהתפקידים: ${permissionData.role_sensitive?.[permission.id] ? 'מורשה' : 'חסום'}`}</small>
+                  </div>
+                  <div className="business-user-sensitive-controls">
+                    <button type="button" aria-label={`${permission.name}: חסום`} className={!allowed ? 'is-active is-none' : ''} onClick={() => setPersonalSensitive(permission.id, false)}><Ban size={15} /></button>
+                    <button type="button" aria-label={`${permission.name}: מורשה`} className={allowed ? 'is-active is-view' : ''} onClick={() => setPersonalSensitive(permission.id, true)}><Eye size={15} /></button>
+                    <button type="button" className="is-reset" aria-label={`${permission.name}: איפוס לפי תפקידים`} title="איפוס לפי תפקידים" disabled={!customized} onClick={() => resetPersonalSensitive(permission.id)}><RotateCcw size={14} /></button>
+                  </div>
+                </div>;
+              })}
+            </section>
+
+            <div className="business-permission-legend" aria-label="מקרא רמות הרשאה">
+              <strong>מקרא</strong>
+              {LEVELS.map(({ id, label, Icon }) => <span className={`is-${id}`} key={id}><Icon size={14} /> {label}</span>)}
+              <span className="is-inherited"><RotateCcw size={14} /> לפי התפקידים</span>
+            </div>
+            <div className="business-permission-matrix business-user-personal-matrix">
+              {groupedModules.map(([group, modules]) => <section key={group}>
+                <h4>{group}</h4>
+                {modules.map((module) => {
+                  const customized = Object.prototype.hasOwnProperty.call(permissionDraft.modules || {}, module.id);
+                  const roleLevel = permissionData.role_modules?.[module.id] || 'none';
+                  const effectiveLevel = effectivePermissionDraft.modules[module.id] || 'none';
+                  return <div className={`business-permission-row ${customized ? 'is-customized' : ''}`} key={module.id}>
+                    <span><strong>{module.name}</strong><small>{customized ? 'התאמה אישית' : `מהתפקידים: ${LEVELS.find((level) => level.id === roleLevel)?.label || 'ללא גישה'}`}</small></span>
+                    <div className="business-user-module-controls">
+                      <div className="business-access-levels">
+                        {LEVELS.filter((level) => !module.levels || module.levels.includes(level.id)).map(({ id, label, Icon }) => <button type="button" key={id} title={`${module.name}: ${label}`} aria-label={`${module.name}: ${label}`} className={effectiveLevel === id ? `is-active is-${id}` : ''} onClick={() => setPersonalModuleLevel(module.id, id)}><Icon size={15} /></button>)}
+                      </div>
+                      <button type="button" className="business-user-permission-reset" title="איפוס לפי התפקידים" aria-label={`${module.name}: איפוס לפי התפקידים`} disabled={!customized} onClick={() => resetPersonalModule(module.id)}><RotateCcw size={14} /></button>
+                    </div>
+                  </div>;
+                })}
+              </section>)}
+            </div>
+
+            <footer className="business-user-permissions-actions">
+              <button className="btn btn-ghost" type="button" disabled={Object.keys(permissionDraft.modules || {}).length + Object.keys(permissionDraft.sensitive || {}).length === 0} onClick={() => setPermissionDraft({ modules: {}, sensitive: {} })}><RotateCcw size={14} /> איפוס כל ההתאמות</button>
+              <button className="btn btn-primary" type="button" disabled={busyId === `permissions:${permissionTarget.id}`} onClick={savePersonalPermissions}>{busyId === `permissions:${permissionTarget.id}` ? <Loader2 className="spin" size={14} /> : <Save size={14} />} שמירת הרשאות אישיות</button>
+            </footer>
           </>}
         </section>
       </div>}

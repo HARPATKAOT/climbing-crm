@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   accessAtLeast,
+  applyPermissionOverrides,
   employeeMatchForEmail,
   hasSensitiveAccess,
   normalizeAccessEntry,
@@ -51,6 +52,49 @@ test('multiple roles merge the highest module level and sensitive grants', () =>
   assert.equal(accessAtLeast(context, 'classes', 'edit'), true);
   assert.equal(hasSensitiveAccess(context, 'finance'), true);
   assert.equal(hasSensitiveAccess(context, 'hr'), false);
+});
+
+test('personal overrides can raise or lower role access and sensitive grants', () => {
+  const base = {
+    modules: { classes: 'view', attendance: 'edit', customers: 'none' },
+    sensitive: { finance: true, hr: false },
+  };
+  const effective = applyPermissionOverrides(base, {
+    modules: { classes: 'edit', attendance: 'none', customers: 'view' },
+    sensitive: { finance: false, hr: true },
+  });
+  assert.equal(effective.modules.classes, 'edit');
+  assert.equal(effective.modules.attendance, 'none');
+  assert.equal(effective.modules.customers, 'view');
+  assert.equal(effective.sensitive.finance, false);
+  assert.equal(effective.sensitive.hr, true);
+});
+
+test('managed access applies stored personal overrides after merging roles', () => {
+  const entry = normalizeAccessEntry({
+    email: 'custom@example.com',
+    status: 'active',
+    role_ids: ['coach'],
+    permission_overrides: {
+      modules: { attendance: 'none', customers: 'edit' },
+      sensitive: { finance: false, hr: true },
+    },
+  });
+  const registry = {
+    configured: true,
+    roles: [{
+      id: 'coach', name: 'Coach',
+      modules: { attendance: 'edit', customers: 'view' },
+      sensitive: { finance: true, hr: false },
+    }],
+    users: [entry],
+  };
+  const context = resolveAccessContext({ email: 'custom@example.com' }, registry, []);
+  assert.equal(context.modules.attendance, 'none');
+  assert.equal(context.modules.customers, 'edit');
+  assert.equal(context.sensitive.finance, false);
+  assert.equal(context.sensitive.hr, true);
+  assert.deepEqual(context.permissionOverrides, entry.permission_overrides);
 });
 
 test('employee self access requires one email match and explicit active authorization', () => {
@@ -104,4 +148,24 @@ test('owner preview merges roles and reports self-service without creating a ses
   assert.equal(preview.sensitive.finance, false);
   assert.equal(preview.employee_id, 'emp-1');
   assert.equal(preview.access_enabled, true);
+});
+
+test('user preview separates role access, personal overrides and effective access', () => {
+  const registry = { roles: [
+    { id: 'coach', name: 'מדריך', modules: { classes: 'view', attendance: 'edit' }, sensitive: { finance: false } },
+  ] };
+  const preview = previewAccessForEntry({
+    id: 'u2', name: 'Custom', email: 'custom@example.com', status: 'active', role_ids: ['coach'],
+    permission_overrides: { modules: { classes: 'edit', attendance: 'none' }, sensitive: { finance: true } },
+  }, registry, []);
+  assert.equal(preview.role_modules.classes, 'view');
+  assert.equal(preview.role_modules.attendance, 'edit');
+  assert.equal(preview.modules.classes, 'edit');
+  assert.equal(preview.modules.attendance, 'none');
+  assert.equal(preview.role_sensitive.finance, false);
+  assert.equal(preview.sensitive.finance, true);
+  assert.deepEqual(preview.permission_overrides, {
+    modules: { classes: 'edit', attendance: 'none' },
+    sensitive: { finance: true },
+  });
 });

@@ -4474,6 +4474,7 @@ select option, select optgroup {
 .business-employee-match.is-matched { color: var(--green); background: var(--green-dim); }
 .business-employee-match.is-warning { color: var(--amber); background: var(--amber-dim); }
 .business-employee-match.is-muted { color: var(--text-3); background: var(--bg-input); }
+.business-user-custom-badge { width: fit-content; display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; color: #c4b5fd; background: var(--purple-dim); border-radius: 999px; font-size: 10px; }
 .business-user-preview-backdrop { position: fixed; inset: 0; z-index: 1200; display: grid; place-items: center; padding: 20px; background: rgba(3, 7, 18, .76); backdrop-filter: blur(5px); }
 .business-user-preview { width: min(760px, 100%); max-height: min(88vh, 820px); overflow-y: auto; padding: 20px; border: 1px solid var(--border); border-radius: 16px; background: var(--bg-card); box-shadow: 0 24px 80px rgba(0, 0, 0, .48); }
 .business-user-preview > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding-bottom: 15px; border-bottom: 1px solid var(--border); }
@@ -4509,6 +4510,34 @@ select option, select optgroup {
 .business-user-preview-sensitive .is-allowed > svg { color: var(--green); }
 .business-user-preview-security { display: flex; align-items: flex-start; gap: 8px; margin-top: 16px; padding: 10px 11px; color: var(--text-3); background: rgba(148, 163, 184, .08); border-radius: 9px; font-size: 11px; line-height: 1.5; }
 .business-user-preview-security > svg { flex: 0 0 auto; color: var(--text-2); }
+.business-user-permissions-editor { width: min(920px, 100%); }
+.business-user-permissions-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 14px 0; }
+.business-user-permissions-summary > div { display: grid; gap: 2px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 11px; background: var(--bg-input); }
+.business-user-permissions-summary strong { color: var(--text-1); font-size: 18px; }
+.business-user-permissions-summary span { color: var(--text-3); font-size: 10px; }
+.business-user-self-access-note { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; padding: 10px 12px; color: #2dd4bf; border: 1px solid rgba(45, 212, 191, .24); border-radius: 10px; background: rgba(45, 212, 191, .07); }
+.business-user-self-access-note > span { display: grid; gap: 2px; }
+.business-user-self-access-note strong { color: var(--text-1); font-size: 12px; }
+.business-user-self-access-note small { color: var(--text-3); font-size: 10px; }
+.business-user-personal-sensitive { display: grid; gap: 7px; margin: 14px 0; }
+.business-user-personal-sensitive .business-user-preview-section-title { margin-bottom: 1px; }
+.business-user-personal-row { display: grid; grid-template-columns: minmax(220px, 1fr) auto; align-items: center; gap: 12px; min-height: 58px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--bg-input); }
+.business-user-personal-row.is-customized, .business-user-personal-matrix .business-permission-row.is-customized { background: rgba(124, 108, 242, .07); box-shadow: inset -3px 0 0 rgba(124, 108, 242, .7); }
+.business-user-personal-label, .business-user-personal-matrix .business-permission-row > span { display: grid; gap: 2px; }
+.business-user-personal-label strong, .business-user-personal-matrix .business-permission-row > span > strong { color: var(--text-1); font-size: 12px; }
+.business-user-personal-label small, .business-user-personal-matrix .business-permission-row > span > small { color: var(--text-3); font-size: 9px; }
+.business-user-sensitive-controls, .business-user-module-controls { display: flex; align-items: center; gap: 6px; }
+.business-user-sensitive-controls { padding: 3px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-card); }
+.business-user-sensitive-controls button, .business-user-permission-reset { width: 32px; height: 30px; display: grid; place-items: center; padding: 0; color: var(--text-3); background: transparent; border: 0; border-radius: 6px; cursor: pointer; }
+.business-user-sensitive-controls button:hover:not(:disabled), .business-user-permission-reset:hover:not(:disabled) { color: var(--text-1); background: var(--bg-card-hover); }
+.business-user-sensitive-controls button.is-active { color: #fff; }
+.business-user-sensitive-controls button.is-active.is-none { background: rgba(148, 163, 184, .28); }
+.business-user-sensitive-controls button.is-active.is-view { background: rgba(56, 189, 248, .35); }
+.business-user-sensitive-controls button.is-reset, .business-user-permission-reset { border-inline-start: 1px solid var(--border); border-radius: 0 6px 6px 0; }
+.business-user-sensitive-controls button:disabled, .business-user-permission-reset:disabled { opacity: .25; cursor: default; }
+.business-user-personal-matrix { margin-top: 10px; }
+.business-user-permissions-actions { position: sticky; bottom: -20px; display: flex; justify-content: space-between; gap: 10px; margin: 18px -20px -20px; padding: 13px 20px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--bg-card) 94%, transparent); backdrop-filter: blur(10px); }
+.business-permission-legend > span.is-inherited svg { color: var(--text-2); }
 
 /* Employee self-service file */
 .employee-self { display: grid; gap: 16px; }
@@ -4569,5 +4598,10 @@ select option, select optgroup {
   .business-employee-role-guide { grid-template-columns: auto 1fr; }
   .business-employee-role-guide .btn { grid-column: 1 / -1; justify-content: center; }
   .business-user-preview-pages, .business-user-preview-sensitive { grid-template-columns: 1fr; }
+  .business-user-permissions-summary { grid-template-columns: 1fr; }
+  .business-user-personal-row { grid-template-columns: 1fr; }
+  .business-user-module-controls { justify-content: space-between; }
+  .business-user-permissions-actions { flex-direction: column; }
+  .business-user-permissions-actions .btn { width: 100%; justify-content: center; }
 }
 
