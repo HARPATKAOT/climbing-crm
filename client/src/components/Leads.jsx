@@ -14,12 +14,12 @@ import { GroupPickerField } from './GroupPickerCards.jsx';
 import {
   blobToBase64,
   buildHealthDeclarationPdf,
+  downloadParticipationWaiverPdf,
   downloadHealthDeclarationPdf,
 } from '../utils/healthDeclarationPdf.js';
-import { healthExpiryDate, isHealthDeclarationValid } from '../utils/healthValidity.js';
+import { healthExpiryDate } from '../utils/healthValidity.js';
 import {
   DECLARATION_KINDS,
-  DEFAULT_KIND,
   declarationKind,
   templateKind,
   templateShortLabel,
@@ -29,7 +29,6 @@ import { safetyTestStatus, SAFETY_TONE } from '../utils/safetyValidity.js';
 import {
   FORM_FOLDER,
   FORM_SHORT,
-  FORM_SIGNED_ROW,
 } from '../utils/participationForm.js';
 import {
   buildLeadEntries,
@@ -568,6 +567,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [healthDecl, setHealthDecl] = useState(null);
   // All of this student's declarations, one per activity they signed for.
   const [studentDeclarations, setStudentDeclarations] = useState([]);
+  const [participationWaivers, setParticipationWaivers] = useState([]);
   const [sendingHealth, setSendingHealth] = useState(false);
   const [healthSendMsg, setHealthSendMsg] = useState('');
   const [healthSendLink, setHealthSendLink] = useState('');
@@ -721,6 +721,23 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       })
       .catch(() => setFormTemplates([]));
   }, []);
+
+  useEffect(() => {
+    if (parentOnly || !student?.id) {
+      setParticipationWaivers([]);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/students/${encodeURIComponent(student.id)}/participation-waivers`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((rows) => {
+        if (!cancelled) setParticipationWaivers(Array.isArray(rows) ? rows : []);
+      })
+      .catch(() => {
+        if (!cancelled) setParticipationWaivers([]);
+      });
+    return () => { cancelled = true; };
+  }, [parentOnly, student.id]);
 
   const healthOnlySelected = selectedFormSlug === 'health-renewal';
   const selectedTemplate = healthOnlySelected
@@ -2181,20 +2198,25 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     }
   };
 
-  // Which activities this student has signed for, beyond the everyday wall
-  // form — a trip or a birthday is the thing staff actually look for here.
-  const signedKinds = Array.from(new Map(
-    studentDeclarations
-      .filter((d) => isHealthDeclarationValid(d.signedDate || d.date))
-      .map((d) => [declarationKind(d).key, declarationKind(d)])
-  ).values());
-  const extraKinds = signedKinds.filter((k) => k.key !== DEFAULT_KIND.key);
   const healthSummary = !isHealthSigned
     ? 'חסר'
     : healthExpired
       ? `פג תוקף · ${healthExpiry.toLocaleDateString('he-IL')}`
-      : `חתום${healthExpiry ? ` · בתוקף עד ${healthExpiry.toLocaleDateString('he-IL')}` : ''}${
-        extraKinds.length ? ` · ${extraKinds.map((k) => k.label).join(', ')}` : ''}`;
+      : `חתומה${healthExpiry ? ` · בתוקף עד ${healthExpiry.toLocaleDateString('he-IL')}` : ''}`;
+  const validParticipationWaivers = participationWaivers.filter((waiver) => {
+    if (waiver.status && waiver.status !== 'approved') return false;
+    const expiry = new Date(waiver.expires_at || waiver.expiresAt || 0);
+    return Number.isFinite(expiry.getTime()) && expiry.getTime() >= Date.now();
+  });
+  const validParticipationKinds = Array.from(new Map(
+    validParticipationWaivers.map((waiver) => {
+      const kind = declarationKind(waiver.scope || 'wall');
+      return [kind.key, kind];
+    })
+  ).values());
+  const participationSummary = validParticipationKinds.length
+    ? validParticipationKinds.map((kind) => kind.label).join(', ')
+    : 'אין אישור בתוקף';
   const studentGroups = groups.filter((g) => studentGroupIds(student).includes(String(g.id)));
   const groupSummary = studentGroups.length === 0
     ? 'לא משויך'
@@ -3314,9 +3336,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               <>
             <FolderRow
               id="health"
-              title={FORM_FOLDER}
-              icon={FileCheck2}
-              accent="#F472B6"
+              title="הצהרות בריאות"
+              icon={ShieldCheck}
+              accent="#74B9FF"
               summary={healthSummary}
               summaryColor={isHealthSigned && !healthExpired ? '#34D399' : '#FCD34D'}
               open={openFolder === 'health'}
@@ -3328,16 +3350,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 // the signed form itself is still missing.
                 const isClearanceDoc = (doc) => doc.type === 'medical_clearance';
                 const isHealthDoc = (doc) => !isClearanceDoc(doc)
-                  && (doc.isVirtual || doc.type === 'health_waiver_pdf' || !!doc.declarationId);
-                // Which activity a row belongs to. A stored document knows only
-                // its declaration id, so the activity is read off the
-                // declaration it hangs from.
-                const kindForDoc = (doc) => {
-                  const decl = doc.virtualData
-                    || studentDeclarations.find((d) => d.id === doc.declarationId)
-                    || null;
-                  return decl ? declarationKind(decl) : null;
-                };
+                  && (doc.isVirtual
+                    || doc.type === 'health_declaration_pdf'
+                    || doc.type === 'health_waiver_pdf');
                 // One row per declaration (newest file wins). Duplicate PDFs
                 // for the same signature used to stack as identical lines.
                 const byDeclaration = new Map();
@@ -3355,9 +3370,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   if ([...byDeclaration.values()].some((d) => d.declarationId === decl.id)) continue;
                   byDeclaration.set(decl.id, {
                     id: `virtual_${decl.id}`,
-                    fileName: FORM_SIGNED_ROW,
+                    fileName: 'הצהרת בריאות חתומה',
                     created_at: decl.signedAt || decl.signedDate || decl.date || decl.createdAt || Date.now(),
-                    type: 'health_waiver_pdf',
+                    type: 'health_declaration_pdf',
                     declarationId: decl.id,
                     isVirtual: true,
                     virtualData: decl,
@@ -3370,9 +3385,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 ) {
                   byDeclaration.set(`virtual_signed_${student.id}`, {
                     id: `virtual_signed_${student.id}`,
-                    fileName: FORM_SIGNED_ROW,
+                    fileName: 'הצהרת בריאות חתומה',
                     created_at: student.healthSignedAt || student.waiverSignedAt || Date.now(),
-                    type: 'health_waiver_pdf',
+                    type: 'health_declaration_pdf',
                     isVirtual: true,
                     virtualData: healthDecl,
                   });
@@ -3469,7 +3484,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     }
                     const docsRes = await fetch(`/api/students/${encodeURIComponent(student.id)}/documents`);
                     setClientDocuments(docsRes.ok ? await docsRes.json() : []);
-                    setHealthSendMsg(healthRow ? `${FORM_SHORT} נמחק מהתיק` : 'המסמך נמחק מהתיק');
+                    setHealthSendMsg(healthRow ? 'הצהרת הבריאות נמחקה מהתיק' : 'המסמך נמחק מהתיק');
                   } catch (err) {
                     console.error(err);
                     setHealthSendMsg(err.message === 'delete failed' ? 'מחיקת המסמך נכשלה' : (err.message || 'מחיקת המסמך נכשלה'));
@@ -3612,9 +3627,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                             {combinedDocuments.map((doc) => {
                               const healthRow = isHealthDoc(doc);
                               const clearanceRow = isClearanceDoc(doc);
-                              const kind = kindForDoc(doc);
                               const busy = deletingDocId === doc.id;
-                              const title = clearanceRow ? 'אישור רופא' : (kind?.label || FORM_SHORT);
+                              const title = clearanceRow ? 'אישור רופא' : 'הצהרת בריאות';
                               const stamp = doc.created_at ? new Date(doc.created_at) : null;
                               return (
                                 <div
@@ -3626,31 +3640,16 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                     overflowX: 'auto',
                                   }}
                                 >
-                                  {kind && !clearanceRow ? (
-                                    <span
-                                      className={`badge ${kind.badge}`}
-                                      title={doc.fileName || kind.label}
-                                      style={{
-                                        height: 32, padding: '0 10px', boxSizing: 'border-box',
-                                        fontSize: 12, lineHeight: 1, flexShrink: 0,
-                                        display: 'inline-flex', alignItems: 'center', gap: 5,
-                                      }}
-                                    >
-                                      <kind.Icon size={13} style={{ flexShrink: 0 }} />
-                                      {kind.label}
-                                    </span>
-                                  ) : (
-                                    <span
-                                      title={doc.fileName || title}
-                                      style={{
-                                        height: 32, fontSize: 12, fontWeight: 600, lineHeight: 1,
-                                        color: 'var(--text-1)', whiteSpace: 'nowrap', flexShrink: 0,
-                                        display: 'inline-flex', alignItems: 'center',
-                                      }}
-                                    >
-                                      {title}
-                                    </span>
-                                  )}
+                                  <span
+                                    title={doc.fileName || title}
+                                    style={{
+                                      height: 32, fontSize: 12, fontWeight: 600, lineHeight: 1,
+                                      color: 'var(--text-1)', whiteSpace: 'nowrap', flexShrink: 0,
+                                      display: 'inline-flex', alignItems: 'center',
+                                    }}
+                                  >
+                                    {title}
+                                  </span>
                                   {healthRow && healthExpired && (
                                     <span className="badge badge-amber" style={{ height: 32, fontSize: 11, lineHeight: 1, flexShrink: 0 }}>פג תוקף</span>
                                   )}
@@ -3686,7 +3685,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                                         color: 'var(--red, #F87171)',
                                       }}
-                                      title={healthRow ? `מחיקת ${FORM_SHORT} מהתיק` : 'מחיקת המסמך מהתיק'}
+                                      title={healthRow ? 'מחיקת הצהרת הבריאות מהתיק' : 'מחיקת המסמך מהתיק'}
                                       disabled={busy || !!deletingDocId}
                                       onClick={() => {
                                         setDeleteConfirmText('');
@@ -3713,7 +3712,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         <div className="modal slide-up" style={{ maxWidth: 420 }}>
                           <div className="modal-header">
                             <div className="modal-title">
-                              {pendingDocDelete.healthRow ? `מחיקת ${FORM_SHORT}` : 'מחיקת מסמך'}
+                              {pendingDocDelete.healthRow ? 'מחיקת הצהרת בריאות' : 'מחיקת מסמך'}
                             </div>
                             <button
                               type="button"
@@ -3726,7 +3725,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                           <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                             <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}>
                               {pendingDocDelete.healthRow
-                                ? `${FORM_SHORT} של ${student.name || 'המתאמן'} יימחק מהתיק יחד עם הקבצים ששמורים תחתיו, והמתאמן יסומן שוב כמי שטרם חתם.`
+                                ? `הצהרת הבריאות של ${student.name || 'המתאמן'} תימחק מהתיק יחד עם הקבצים ששמורים תחתיה, והמתאמן יסומן שוב כמי שטרם חתם.`
                                 : 'המסמך יימחק מהתיק ולא ניתן יהיה לשחזר אותו.'}
                             </div>
                             <div className="form-group" style={{ marginBottom: 0 }}>
@@ -3768,6 +3767,155 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                       </div>
                     )}
                   </>
+                );
+              })()}
+            </FolderRow>
+
+            <FolderRow
+              id="participation"
+              title="אישורי השתתפות"
+              icon={FileCheck2}
+              accent="#F472B6"
+              summary={participationSummary}
+              summaryColor={validParticipationKinds.length ? '#34D399' : '#FCD34D'}
+              open={openFolder === 'participation'}
+              onToggle={toggleFolder}
+            >
+              {(() => {
+                const physicalDocs = clientDocuments.filter((doc) => doc.type === 'participation_waiver_pdf');
+                const byWaiverId = new Map(
+                  physicalDocs
+                    .filter((doc) => doc.waiverId)
+                    .map((doc) => [String(doc.waiverId), doc])
+                );
+                const rows = [
+                  ...physicalDocs.map((doc) => ({
+                    doc,
+                    waiver: participationWaivers.find((row) => String(row.id) === String(doc.waiverId || '')) || null,
+                  })),
+                  ...participationWaivers
+                    .filter((waiver) => !byWaiverId.has(String(waiver.id)))
+                    .map((waiver) => ({
+                      doc: {
+                        id: `virtual_waiver_${waiver.id}`,
+                        waiverId: waiver.id,
+                        fileName: '',
+                        created_at: waiver.signed_at || waiver.signedAt || waiver.created_at || '',
+                        isVirtual: true,
+                      },
+                      waiver,
+                    })),
+                ].sort((a, b) => String(b.doc.created_at || '').localeCompare(String(a.doc.created_at || '')));
+
+                const inferredScope = (doc, waiver) => {
+                  if (waiver?.scope) return waiver.scope;
+                  const match = String(doc?.fileName || '').match(/participation-waiver_(wall|event|trip)/i);
+                  return match?.[1]?.toLowerCase() || '';
+                };
+
+                const downloadParticipationDoc = async (doc, waiver) => {
+                  setDownloadingPdf(true);
+                  setHealthSendMsg('');
+                  try {
+                    if (!doc.isVirtual) {
+                      const res = await fetch(`/api/documents/${encodeURIComponent(doc.id)}/download`);
+                      if (!res.ok) throw new Error('download failed');
+                      const blob = await res.blob();
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = doc.fileName || 'participation-waiver.pdf';
+                      document.body.appendChild(a);
+                      a.click();
+                      a.remove();
+                      URL.revokeObjectURL(url);
+                    } else {
+                      const snapshot = waiver?.form_snapshot || waiver?.formSnapshot || {};
+                      const participant = snapshot.participant || {};
+                      const signer = snapshot.signer || {};
+                      await downloadParticipationWaiverPdf({
+                        ...snapshot,
+                        ...waiver,
+                        documentType: 'participation_waiver',
+                        templateSlug: waiver?.scope || snapshot.scope || 'wall',
+                        climberName: participant.name || student.name || '',
+                        studentName: participant.name || student.name || '',
+                        parentName: signer.name || parent?.name || '',
+                        parentIdNum: signer.idNumber || parent?.idNumber || '',
+                        phone: signer.phone || parent?.phone || '',
+                        signature_url: waiver?.signature_url || '',
+                        signedDate: waiver?.signed_at || waiver?.signedAt || '',
+                      });
+                    }
+                    setHealthSendMsg('קובץ אישור ההשתתפות הורד למחשב');
+                  } catch (err) {
+                    console.error(err);
+                    setHealthSendMsg('שגיאה בהורדת אישור ההשתתפות');
+                  } finally {
+                    setDownloadingPdf(false);
+                  }
+                };
+
+                if (!rows.length) {
+                  return (
+                    <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                      אין בתיק אישורי השתתפות חתומים. הצהרת הבריאות נשמרת בנפרד בתיקייה שמעל.
+                    </div>
+                  );
+                }
+
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {rows.map(({ doc, waiver }) => {
+                      const scope = inferredScope(doc, waiver);
+                      const kind = scope ? declarationKind(scope) : null;
+                      const expiry = new Date(waiver?.expires_at || waiver?.expiresAt || 0);
+                      const hasExpiry = Number.isFinite(expiry.getTime());
+                      const expired = hasExpiry && expiry.getTime() < Date.now();
+                      const title = `אישור השתתפות — ${kind?.label || 'תחום לא מסווג'}`;
+                      const KindIcon = kind?.Icon || FileCheck2;
+                      return (
+                        <div
+                          key={doc.id}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                            padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)',
+                            background: 'rgba(255,255,255,0.03)',
+                          }}
+                        >
+                          <span
+                            className={`badge ${kind?.badge || 'badge-gray'}`}
+                            title={doc.fileName || title}
+                            style={{
+                              height: 32, padding: '0 10px', boxSizing: 'border-box',
+                              fontSize: 12, lineHeight: 1, flexShrink: 0,
+                              display: 'inline-flex', alignItems: 'center', gap: 5,
+                            }}
+                          >
+                            <KindIcon size={13} style={{ flexShrink: 0 }} />
+                            {title}
+                          </span>
+                          {expired && (
+                            <span className="badge badge-amber" style={{ height: 32, fontSize: 11 }}>פג תוקף</span>
+                          )}
+                          {hasExpiry && (
+                            <span style={{ fontSize: 12, color: 'var(--text-2)' }}>
+                              בתוקף עד {expiry.toLocaleDateString('he-IL')}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-xs"
+                            style={{ marginInlineStart: 'auto' }}
+                            disabled={downloadingPdf}
+                            onClick={() => downloadParticipationDoc(doc, waiver)}
+                          >
+                            <Download size={13} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
                 );
               })()}
             </FolderRow>

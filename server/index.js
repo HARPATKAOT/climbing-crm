@@ -14620,6 +14620,27 @@ app.get('/api/students/:id/documents', async (req, res) => {
   res.json(docs);
 });
 
+// Participation approvals are legal records, separate from the global health
+// declaration. The customer file needs their scope even when the PDF upload is
+// still pending, so the UI reads the canonical rows rather than guessing from
+// a file name or from a health declaration's template.
+app.get('/api/students/:id/participation-waivers', async (req, res) => {
+  const studentId = String(req.params.id || '');
+  if (supa.isEnabled()) {
+    try {
+      const remote = await supa.getAll('participation_waivers');
+      if (remote) db.set('participation_waivers', remote);
+    } catch (err) {
+      console.error('participation_waivers refresh failed:', err.message);
+    }
+  }
+  const rows = (db.get('participation_waivers') || [])
+    .filter((row) => String(row.student_id || row.studentId || '') === studentId)
+    .slice()
+    .sort((a, b) => String(b.signed_at || b.signedAt || '').localeCompare(String(a.signed_at || a.signedAt || '')));
+  res.json(rows);
+});
+
 // Staff export of the immutable evidence chain for a signed record or PDF.
 app.get('/api/signature-evidence', async (req, res) => {
   if (supa.isEnabled()) {
