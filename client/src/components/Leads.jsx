@@ -4951,7 +4951,17 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     border: `1px solid ${healthOnlySelected ? '#38bdf8' : 'var(--border)'}`,
                   }}
                 >
-                  <ShieldCheck size={15} style={{ flexShrink: 0 }} />
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      flexShrink: 0,
+                      fontSize: 20,
+                      lineHeight: 1,
+                      fontFamily: 'Arial, sans-serif',
+                    }}
+                  >
+                    ⚕
+                  </span>
                   חידוש בריאות בלבד
                 </button>
                 {formTemplates.map((template) => {
