@@ -18,7 +18,6 @@ const PublicHostPayment          = lazy(() => import('./components/PublicHostPay
 const PublicEquipmentPayment     = lazy(() => import('./components/PublicEquipmentPayment.jsx'));
 const PublicShop                 = lazy(() => import('./components/PublicShopPurchase.jsx'));
 const PublicSite                 = lazy(() => import('./public-site/PublicSite.jsx'));
-const CustomerCardPreview       = lazy(() => import('./CustomerCardPreview.jsx'));
 
 /**
  * One deployment serves two things: the CRM on `app.<domain>` (and locally /
@@ -78,7 +77,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/equipment/:token" element={<PublicEquipmentPayment />} />
             <Route path="/shop" element={<PublicShop />} />
             <Route path="/shop/:slug" element={<PublicShop />} />
-            <Route path="/__customer-preview" element={<CustomerCardPreview />} />
             <Route
               path="*"
               element={showsCrmShell() ? <AuthGate><App /></AuthGate> : <PublicSite />}
