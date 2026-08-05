@@ -75,6 +75,20 @@ import {
 } from './campaignRunner.js';
 import { icount } from './icount.js';
 import { apiAuth, requireOwner } from './auth.js';
+import {
+  accessAtLeast,
+  createAccessRole,
+  deleteAccessRole,
+  hasSensitiveAccess,
+  getAuthorizedUserPreview,
+  inviteAuthorizedUser,
+  listAccessRoles,
+  listAuthorizedUsers,
+  removeAuthorizedUser,
+  sendAuthorizedUserPasswordReset,
+  updateAccessRole,
+  updateAuthorizedUser,
+} from './userAccess.js';
 import { googleCalendarService } from './googleCalendar.js';
 import { googleContactsService } from './googleContacts.js';
 import {
@@ -127,7 +141,7 @@ import {
   updateScenario,
   updateTask,
 } from './aiActions.js';
-import { runChatTurn } from './aiChat.js';
+import { READ_TOOLS, runChatTurn } from './aiChat.js';
 import {
   approveFeedback,
   feedbackStats,
@@ -331,6 +345,7 @@ import {
   VACATION_MARKER,
 } from './attendanceUtils.js';
 import { buildShiftJournal } from './employeeShiftJournal.js';
+import { canAccessLevelTest } from './levelTestAccess.js';
 import {
   PAY_MODES,
   ratesOf,
@@ -675,7 +690,123 @@ app.get('/api/auth/me', (req, res) => {
   res.json(req.crmUser);
 });
 
-app.get('/api/dashboard/stats', requireOwner, async (_req, res) => {
+app.get('/api/settings/users', requireOwner, async (req, res) => {
+  try {
+    res.json(await listAuthorizedUsers(req.crmUser));
+  } catch (error) {
+    res.status(503).json({ error: error.message || 'טעינת המשתמשים נכשלה' });
+  }
+});
+
+app.get('/api/settings/users/:id/preview', requireOwner, async (req, res) => {
+  try {
+    res.json(await getAuthorizedUserPreview(req.params.id, req.crmUser));
+  } catch (error) {
+    res.status(error.statusCode || 503).json({ error: error.message || 'טעינת תצוגת המשתמש נכשלה' });
+  }
+});
+
+app.get('/api/settings/user-roles', requireOwner, async (_req, res) => {
+  try {
+    res.json(await listAccessRoles());
+  } catch (error) {
+    res.status(503).json({ error: error.message || 'טעינת התפקידים נכשלה' });
+  }
+});
+
+app.post('/api/settings/user-roles', requireOwner, async (req, res) => {
+  try {
+    res.status(201).json(await createAccessRole(req.body || {}));
+  } catch (error) {
+    res.status(error.statusCode || 503).json({ error: error.message || 'יצירת התפקיד נכשלה' });
+  }
+});
+
+app.patch('/api/settings/user-roles/:id', requireOwner, async (req, res) => {
+  try {
+    res.json(await updateAccessRole(req.params.id, req.body || {}));
+  } catch (error) {
+    res.status(error.statusCode || 503).json({ error: error.message || 'עדכון התפקיד נכשל' });
+  }
+});
+
+app.delete('/api/settings/user-roles/:id', requireOwner, async (req, res) => {
+  try {
+    res.json(await deleteAccessRole(req.params.id, req.body?.replacement_role_id || null));
+  } catch (error) {
+    res.status(error.statusCode || 503).json({
+      error: error.message || 'מחיקת התפקיד נכשלה',
+      ...(error.assignedCount ? { assigned_count: error.assignedCount } : {}),
+    });
+  }
+});
+
+app.post('/api/settings/users', requireOwner, async (req, res) => {
+  try {
+    res.status(201).json(await inviteAuthorizedUser(req.body || {}, req.crmUser));
+  } catch (error) {
+    res.status(error.statusCode || 503).json({ error: error.message || 'שליחת ההזמנה נכשלה' });
+  }
+});
+
+app.patch('/api/settings/users/:id', requireOwner, async (req, res) => {
+  try {
+    res.json(await updateAuthorizedUser(req.params.id, req.body || {}, req.crmUser));
+  } catch (error) {
+    res.status(error.statusCode || 503).json({ error: error.message || 'עדכון המשתמש נכשל' });
+  }
+});
+
+app.delete('/api/settings/users/:id', requireOwner, async (req, res) => {
+  try {
+    res.json(await removeAuthorizedUser(req.params.id, req.crmUser));
+  } catch (error) {
+    res.status(error.statusCode || 503).json({ error: error.message || 'הסרת הגישה נכשלה' });
+  }
+});
+
+app.post('/api/settings/users/:id/password-reset', requireOwner, async (req, res) => {
+  try {
+    res.json(await sendAuthorizedUserPasswordReset(req.params.id, req.crmUser));
+  } catch (error) {
+    res.status(error.statusCode || 503).json({ error: error.message || 'שליחת קישור האיפוס נכשלה' });
+  }
+});
+
+// Minimal operational roster. Staff need names and class placement to mark
+// attendance and wall entry; customer contacts, billing and business data stay
+// on owner-only endpoints.
+app.get('/api/operations/roster', (req, res) => {
+  const students = db.withStudentRelations(db.get('students') || [])
+    .filter((student) => student.status !== 'archived')
+    .map((student) => ({
+    id: student.id,
+    name: student.name || '',
+    status: student.status || '',
+    groupId: student.groupId || null,
+    groupIds: studentGroupIds(student),
+    isAdult: student.isAdult === true,
+    healthSignedAt: student.healthSignedAt || null,
+  }));
+  const groups = (db.get('groups') || []).map((group) => ({
+    id: group.id,
+    name: group.name || '',
+    day: group.day,
+    days: Array.isArray(group.days) ? group.days : undefined,
+    time: group.time || '',
+    duration: group.duration,
+    ageCategory: group.ageCategory || '',
+    maxSlots: group.maxSlots,
+    trainer: group.trainer || null,
+    assistants: Array.isArray(group.assistants) ? group.assistants : [],
+  }));
+  res.json({ students, groups });
+});
+
+app.get('/api/dashboard/stats', async (req, res) => {
+  const visibleStats = (stats) => hasSensitiveAccess(req.crmUser, 'finance')
+    ? stats
+    : omitFields(stats, new Set(['dailySales']));
   try {
     const cached = {
       sales: db.get('pos_sales') || [],
@@ -689,20 +820,20 @@ app.get('/api/dashboard/stats', requireOwner, async (_req, res) => {
       supa.getAll('students'),
       supa.getAll('lead_status_history'),
     ]);
-    res.json(calculateDashboardStats({
+    res.json(visibleStats(calculateDashboardStats({
       sales: sales ?? cached.sales,
       parents: parents ?? cached.parents,
       students: students ?? cached.students,
       history: history ?? cached.history,
-    }));
+    })));
   } catch (error) {
     console.error('GET /api/dashboard/stats failed:', error.message);
-    res.json(calculateDashboardStats({
+    res.json(visibleStats(calculateDashboardStats({
       sales: db.get('pos_sales') || [],
       parents: db.get('parents') || [],
       students: db.get('students') || [],
       history: db.get('lead_status_history') || [],
-    }));
+    })));
   }
 });
 
@@ -808,19 +939,28 @@ app.post('/api/admin/merge-duplicate-parents', requireOwner, (req, res) => {
 });
 
 // Get all parents (prefer Supabase so Render never serves a stale empty cache)
+function customerForRequest(req, row) {
+  if (hasSensitiveAccess(req.crmUser, 'finance')) return row;
+  const allowedFinancialStatus = new Set(['payment_status', 'paid', 'is_paid', 'membership_status', 'pass_status']);
+  const sensitiveKey = /(?:amount|balance|price|cost|fee|invoice|receipt|refund|revenue|profit|payment_(?:id|link|url|token)|icount)/i;
+  return Object.fromEntries(Object.entries(row || {}).filter(([key]) => (
+    allowedFinancialStatus.has(key) || !sensitiveKey.test(key)
+  )));
+}
+
 app.get('/api/parents', async (req, res) => {
   try {
     if (supa.isEnabled()) {
       const rows = await supa.getAll('parents');
       if (rows) {
         if (typeof db.set === 'function') db.set('parents', rows);
-        return res.json(rows);
+        return res.json(rows.map((row) => customerForRequest(req, row)));
       }
     }
   } catch (err) {
     console.error('GET /api/parents Supabase error:', err.message);
   }
-  res.json(db.get('parents'));
+  res.json((db.get('parents') || []).map((row) => customerForRequest(req, row)));
 });
 
 // Get all students (prefer Supabase)
@@ -838,13 +978,13 @@ app.get('/api/students', async (req, res) => {
         if (guardians && typeof db.set === 'function') db.set('student_guardians', guardians);
         // Same enrichment as the local path — a screen must never see a child
         // with groups but no guardians just because the fresh read was used.
-        return res.json(db.withStudentRelations(rows));
+        return res.json(db.withStudentRelations(rows).map((row) => customerForRequest(req, row)));
       }
     }
   } catch (err) {
     console.error('GET /api/students Supabase error:', err.message);
   }
-  res.json(db.withStudentRelations(db.get('students')));
+  res.json(db.withStudentRelations(db.get('students')).map((row) => customerForRequest(req, row)));
 });
 
 function withGroupEnrollmentCounts(groups, students) {
@@ -2835,6 +2975,50 @@ app.post('/api/bot-learning/learned/:id/active', async (req, res) => {
   }
 });
 
+function aiToolsForRequest(req) {
+  if (req.crmUser?.role === 'owner') return READ_TOOLS;
+  const tools = {};
+  const finance = hasSensitiveAccess(req.crmUser, 'finance');
+  if (accessAtLeast(req.crmUser, 'customers')) {
+    tools.search_customers = READ_TOOLS.search_customers;
+    tools.get_customer = (database, args) => {
+      const result = READ_TOOLS.get_customer(database, args);
+      if (finance || result?.error) return result;
+      return {
+        ...result,
+        payments: (result.payments || []).map((payment) => ({
+          status: payment.status,
+          paid_at: payment.paid_at,
+          description: payment.description,
+        })),
+      };
+    };
+  }
+  if (accessAtLeast(req.crmUser, 'attendance') || accessAtLeast(req.crmUser, 'classes')) {
+    tools.get_student_attendance = READ_TOOLS.get_student_attendance;
+  }
+  if (accessAtLeast(req.crmUser, 'classes')) tools.list_groups = READ_TOOLS.list_groups;
+  if (accessAtLeast(req.crmUser, 'activities')) {
+    tools.list_activities = (database, args) => omitFields(
+      READ_TOOLS.list_activities(database, args),
+      finance ? new Set() : new Set(['price'])
+    );
+    tools.get_activity = (database, args) => omitFields(
+      READ_TOOLS.get_activity(database, args),
+      finance ? new Set() : new Set(['price'])
+    );
+  }
+  if (accessAtLeast(req.crmUser, 'dashboard') || accessAtLeast(req.crmUser, 'assistant')) {
+    tools.list_tasks = READ_TOOLS.list_tasks;
+    tools.business_snapshot = (database, args) => omitFields(
+      READ_TOOLS.business_snapshot(database, args),
+      finance ? new Set() : new Set(['paid_this_month'])
+    );
+  }
+  if (finance) tools.list_payments = READ_TOOLS.list_payments;
+  return tools;
+}
+
 /**
  * סוכן השיחה — הצוות שואל, המודל קורא נתונים בכלים ועונה.
  * חסר-מצב: ההיסטוריה מגיעה מהלקוח בכל קריאה. פעולות כתיבה לא מבוצעות כאן,
@@ -2857,6 +3041,14 @@ app.post('/api/ai/chat', async (req, res) => {
       actor: req.crmUser?.email || '',
       page: String(req.body?.page || '').slice(0, 40),
       brandName: await businessBrand(),
+      readTools: aiToolsForRequest(req),
+      // The staged action catalogue mixes ordinary tasks with financial
+      // registrations. Until proposals are split by capability, team users
+      // get a read-only assistant so no role can cross its permission boundary.
+      allowActions: req.crmUser?.role === 'owner',
+      extraRules: hasSensitiveAccess(req.crmUser, 'finance')
+        ? ''
+        : 'אין להציג סכומי תשלום, הכנסות, עלויות אירוע, רווחיות או מידע פיננסי היסטורי.',
     });
     res.json({
       reply: result.reply,
@@ -4274,22 +4466,62 @@ function applyGooglePull(dbRef) {
   });
 }
 
+const ACTIVITY_FINANCE_FIELDS = new Set([
+  'price', 'cost', 'budget', 'revenue', 'profit', 'payment_link', 'payment_url',
+  'host_payment_token', 'host_payment_id', 'collect_registration_payment', 'registration_mode',
+  'refund_amount', 'amount', 'total_amount', 'paid_amount', 'payment_id', 'icount_doc_id',
+  'icount_doc_url', 'refund_doc_url', 'refund_doc_number',
+]);
+const ACTIVITY_HR_FIELDS = new Set(['staff_pay_mode', 'staff_flat_amount', 'staff_cost', 'staff_rate']);
+
+function omitFields(value, blocked) {
+  if (Array.isArray(value)) return value.map((item) => omitFields(item, blocked));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !blocked.has(key))
+    .map(([key, item]) => [key, omitFields(item, blocked)]));
+}
+
+function activityForRequest(req, activity) {
+  let result = activity;
+  if (!hasSensitiveAccess(req.crmUser, 'finance')) result = omitFields(result, ACTIVITY_FINANCE_FIELDS);
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) result = omitFields(result, ACTIVITY_HR_FIELDS);
+  return result;
+}
+
+function rejectActivitySensitiveChanges(req, body = {}, existing = {}) {
+  const checks = [
+    [ACTIVITY_FINANCE_FIELDS, hasSensitiveAccess(req.crmUser, 'finance'), 'אין הרשאה לשנות נתונים כספיים של האירוע'],
+    [ACTIVITY_HR_FIELDS, hasSensitiveAccess(req.crmUser, 'hr'), 'אין הרשאה לשנות תעריפי עבודה באירוע'],
+  ];
+  for (const [fields, allowed, message] of checks) {
+    if (allowed) continue;
+    const changed = [...fields].some((key) => body[key] !== undefined && JSON.stringify(body[key]) !== JSON.stringify(existing?.[key]));
+    if (changed) throw Object.assign(new Error(message), { statusCode: 403 });
+  }
+}
+
 app.get('/api/activities', async (req, res) => {
   try {
     if (supa.isEnabled()) {
       const rows = await supa.getAll('activities');
       if (rows) {
         if (typeof db.set === 'function') db.set('activities', rows);
-        return res.json(rows);
+        return res.json(rows.map((row) => activityForRequest(req, row)));
       }
     }
   } catch (err) {
     console.error('activities refresh failed:', err.message);
   }
-  res.json(db.get('activities') || []);
+  res.json((db.get('activities') || []).map((row) => activityForRequest(req, row)));
 });
 
 app.post('/api/activities', async (req, res) => {
+  try {
+    rejectActivitySensitiveChanges(req, req.body || {}, {});
+  } catch (error) {
+    return res.status(error.statusCode || 403).json({ error: error.message });
+  }
   const payload = normalizeActivityPayload(req.body || {});
   if (!payload.name) return res.status(400).json({ error: 'חסר שם פעילות' });
   if (!payload.date) return res.status(400).json({ error: 'חסר תאריך' });
@@ -4309,7 +4541,7 @@ app.post('/api/activities', async (req, res) => {
     console.error('activity create persist failed:', durable.error);
     return res.status(503).json({ error: durable.error || 'שמירת האירוע למסד נכשלה' });
   }
-  res.status(201).json(record);
+  res.status(201).json(activityForRequest(req, record));
   // Don't block the UI on Google — sync in the background
   syncActivityToGoogle(record).catch((err) =>
     console.error('Background Google push failed:', err.message)
@@ -4323,6 +4555,11 @@ app.put('/api/activities/:id', async (req, res) => {
   const { id } = req.params;
   const existing = db.getOne('activities', id);
   if (!existing) return res.status(404).json({ error: 'Activity not found' });
+  try {
+    rejectActivitySensitiveChanges(req, req.body || {}, existing);
+  } catch (error) {
+    return res.status(error.statusCode || 403).json({ error: error.message });
+  }
   const payload = normalizeActivityPayload({ ...existing, ...(req.body || {}) });
   if (!payload.name) return res.status(400).json({ error: 'חסר שם פעילות' });
   if (!payload.date) return res.status(400).json({ error: 'חסר תאריך' });
@@ -4356,7 +4593,7 @@ app.put('/api/activities/:id', async (req, res) => {
     console.error('activity update persist failed:', durable.error);
     return res.status(503).json({ error: durable.error || 'שמירת האירוע למסד נכשלה' });
   }
-  res.json(updated);
+  res.json(activityForRequest(req, updated));
   syncActivityToGoogle(updated).catch((err) =>
     console.error('Background Google push failed:', err.message)
   );
@@ -4391,7 +4628,7 @@ app.get('/api/activities/unpaid-open', (req, res) => {
     payment_status: normalizeHostPaymentStatus(a.payment_status),
     price: Number(a.price) || 0,
   }));
-  res.json(rows);
+  res.json(hasSensitiveAccess(req.crmUser, 'finance') ? rows : rows.map(({ price: _price, ...row }) => row));
 });
 
 app.get('/api/activities/:id/registrations', async (req, res) => {
@@ -4497,9 +4734,11 @@ app.get('/api/activities/:id/registrations', async (req, res) => {
     activity_id: activity.id,
     max_participants: activity.max_participants ?? null,
     remaining: remainingCapacity(activity, regs),
-    registrations: enriched,
+    registrations: hasSensitiveAccess(req.crmUser, 'finance')
+      ? enriched
+      : omitFields(enriched, ACTIVITY_FINANCE_FIELDS),
     interested: listInterest(db, activity.id).map((row) => enrichInterest(db, row)),
-    host_payment: hostPayment,
+    host_payment: hasSensitiveAccess(req.crmUser, 'finance') ? hostPayment : null,
   });
 });
 
@@ -5438,13 +5677,13 @@ app.get('/api/activity-templates', (req, res) => {
   const includeInactive = String(req.query.include_inactive || '') === '1';
   const rows = listActivityTemplates(db, { includeInactive });
   if (String(req.query.grouped || '') === '1') {
-    return res.json({
+    return res.json(activityForRequest(req, {
       categories: TEMPLATE_CATEGORIES,
       groups: groupTemplatesByCategory(rows),
       templates: rows,
-    });
+    }));
   }
-  res.json(rows);
+  res.json(activityForRequest(req, rows));
 });
 
 app.get('/api/activity-templates/categories', (_req, res) => {
@@ -5453,6 +5692,11 @@ app.get('/api/activity-templates/categories', (_req, res) => {
 
 app.post('/api/activity-templates', async (req, res) => {
   const body = req.body || {};
+  try {
+    rejectActivitySensitiveChanges(req, body, {});
+  } catch (error) {
+    return res.status(error.statusCode || 403).json({ error: error.message });
+  }
   let payload;
   if (body.activity_id) {
     const activity = db.getOne('activities', body.activity_id);
@@ -5472,12 +5716,17 @@ app.post('/api/activity-templates', async (req, res) => {
     console.error('activity template create persist failed:', durable.error);
     return res.status(503).json({ error: durable.error || 'שמירת התבנית למסד נכשלה' });
   }
-  res.status(201).json(record);
+  res.status(201).json(activityForRequest(req, record));
 });
 
 app.put('/api/activity-templates/:id', async (req, res) => {
   const existing = db.getOne('activity_templates', req.params.id);
   if (!existing) return res.status(404).json({ error: 'Template not found' });
+  try {
+    rejectActivitySensitiveChanges(req, req.body || {}, existing);
+  } catch (error) {
+    return res.status(error.statusCode || 403).json({ error: error.message });
+  }
   const payload = normalizeActivityTemplatePayload({ ...existing, ...(req.body || {}) });
   if (!payload.name) return res.status(400).json({ error: 'חסר שם תבנית' });
   const updated = db.update('activity_templates', existing.id, payload);
@@ -5487,7 +5736,7 @@ app.put('/api/activity-templates/:id', async (req, res) => {
     console.error('activity template update persist failed:', durable.error);
     return res.status(503).json({ error: durable.error || 'שמירת התבנית למסד נכשלה' });
   }
-  res.json(updated);
+  res.json(activityForRequest(req, updated));
 });
 
 app.delete('/api/activity-templates/:id', (req, res) => {
@@ -5501,7 +5750,7 @@ app.get('/api/activity-templates/:id/draft', (req, res) => {
   const template = db.getOne('activity_templates', req.params.id);
   if (!template) return res.status(404).json({ error: 'Template not found' });
   const date = req.query.date || null;
-  res.json(activityDraftFromTemplate(template, { date }));
+  res.json(activityForRequest(req, activityDraftFromTemplate(template, { date })));
 });
 
 app.post('/api/activity-templates/:id/create-activity', async (req, res) => {
@@ -5534,7 +5783,7 @@ app.post('/api/activity-templates/:id/create-activity', async (req, res) => {
     console.error('template create-activity persist failed:', durable.error);
     return res.status(503).json({ error: durable.error || 'שמירת האירוע למסד נכשלה' });
   }
-  res.status(201).json(record);
+  res.status(201).json(activityForRequest(req, record));
   syncActivityToGoogle(record).catch((err) =>
     console.error('Background Google push failed:', err.message)
   );
@@ -6511,6 +6760,9 @@ function filterAttendanceRows(rows, { groupId, date, studentId }) {
 
 app.get('/api/attendance', async (req, res) => {
   const { groupId, date, studentId } = req.query;
+  if (req.crmUser?.role === 'staff' && !groupId && !date) {
+    return res.status(403).json({ error: 'צוות תפעול יכול לצפות בנוכחות לפי חוג או תאריך בלבד' });
+  }
   const hasFilter = Boolean(groupId || date || studentId);
   try {
     if (supa.isEnabled()) {
@@ -8599,6 +8851,9 @@ app.get('/api/trainers', (req, res) => {
       id: employee.id,
       name: employee.name || '',
       role: employee.role || 'trainer',
+      is_active: employee.is_active !== false && employee.active !== false,
+      can_open_wall: employee.can_open_wall === true,
+      can_sign_daily_safety: employee.can_sign_daily_safety === true,
       // The schedule screen only offers an employee for a slot they are marked
       // for, so the roles list has to travel with the name — without it every
       // dropdown there is empty but for people already assigned.
@@ -8606,8 +8861,51 @@ app.get('/api/trainers', (req, res) => {
     })));
 });
 
+const EMPLOYEE_OPERATIONAL_FIELDS = new Set([
+  'id', 'name', 'role', 'certifications', 'is_active', 'active', 'availability',
+  'can_open_wall', 'can_sign_daily_safety', 'can_operate_cash',
+]);
+
+function isOwnEmployeeRequest(req, employeeId) {
+  return Boolean(req.crmUser?.employee_id && String(req.crmUser.employee_id) === String(employeeId));
+}
+
+function employeeOperationalView(employee) {
+  return Object.fromEntries(Object.entries(employee || {}).filter(([key]) => EMPLOYEE_OPERATIONAL_FIELDS.has(key)));
+}
+
+function employeePrivateView(employee) {
+  if (!employee) return employee;
+  return {
+    ...employee,
+    documents: publicLegacyDocuments(employee.documents || {}),
+    payroll_documents: payrollDocumentsOf(employee).map(publicPayrollDocument),
+  };
+}
+
+function employeeForRequest(req, employee) {
+  if (!employee) return employee;
+  if (hasSensitiveAccess(req.crmUser, 'hr') || isOwnEmployeeRequest(req, employee.id)) return employeePrivateView(employee);
+  return employeeOperationalView(employee);
+}
+
+function employeePatchForRequest(req, current, patch = {}) {
+  if (hasSensitiveAccess(req.crmUser, 'hr')) return patch;
+  const safe = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (EMPLOYEE_OPERATIONAL_FIELDS.has(key) && key !== 'id') {
+      safe[key] = value;
+      continue;
+    }
+    if (JSON.stringify(value) !== JSON.stringify(current?.[key])) {
+      throw Object.assign(new Error('אין הרשאה לשנות שכר או מידע אישי של העובד'), { statusCode: 403 });
+    }
+  }
+  return safe;
+}
+
 app.get('/api/employees', (req, res) => {
-  res.json(db.get('employees'));
+  res.json((db.get('employees') || []).map((employee) => employeeForRequest(req, employee)));
 });
 
 // Same field catalog the public onboarding form renders from (label/type/
@@ -8625,15 +8923,25 @@ app.get('/api/employees/onboard-fields', async (_req, res) => {
 });
 
 app.post('/api/employees', (req, res) => {
-  const employee = db.insert('employees', req.body);
-  res.status(201).json(employee);
+  try {
+    const payload = employeePatchForRequest(req, {}, req.body || {});
+    const employee = db.insert('employees', payload);
+    res.status(201).json(employeeForRequest(req, employee));
+  } catch (error) {
+    res.status(error.statusCode || 400).json({ error: error.message });
+  }
 });
 
 app.put('/api/employees/:id', (req, res) => {
   const { id } = req.params;
-  const updated = db.update('employees', id, req.body);
-  if (!updated) return res.status(404).json({ error: 'Employee not found' });
-  res.json(updated);
+  const current = db.getOne('employees', id);
+  if (!current) return res.status(404).json({ error: 'Employee not found' });
+  try {
+    const updated = db.update('employees', id, employeePatchForRequest(req, current, req.body || {}));
+    res.json(employeeForRequest(req, updated));
+  } catch (error) {
+    res.status(error.statusCode || 400).json({ error: error.message });
+  }
 });
 
 const EMPLOYEE_DOC_TYPES = {
@@ -8668,6 +8976,9 @@ function extFromMime(mimeType = '', fileName = '') {
 app.post('/api/employees/:id/documents', async (req, res) => {
   const emp = (db.get('employees') || []).find((e) => e.id === req.params.id);
   if (!emp) return res.status(404).json({ error: 'העובד לא נמצא' });
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'רק מנהל או בעל הרשאת משאבי אנוש יכול להעלות מסמך רשמי' });
+  }
 
   const { docType, fileBase64, fileName, mimeType } = req.body || {};
   if (!EMPLOYEE_DOC_TYPES[docType]) {
@@ -8718,12 +9029,19 @@ app.post('/api/employees/:id/documents', async (req, res) => {
     ...(flag ? { [flag]: true } : {}),
   });
   await persistCore('employees', updated);
-  res.json({ success: true, document: docMeta, employee: updated });
+  res.json({
+    success: true,
+    document: publicLegacyDocuments({ [docType]: docMeta })[docType],
+    employee: employeePrivateView(updated),
+  });
 });
 
 app.delete('/api/employees/:id/documents/:docType', async (req, res) => {
   const emp = (db.get('employees') || []).find((e) => e.id === req.params.id);
   if (!emp) return res.status(404).json({ error: 'העובד לא נמצא' });
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'רק מנהל או בעל הרשאת משאבי אנוש יכול למחוק מסמך רשמי' });
+  }
 
   const { docType } = req.params;
   if (!EMPLOYEE_DOC_TYPES[docType]) {
@@ -8743,12 +9061,15 @@ app.delete('/api/employees/:id/documents/:docType', async (req, res) => {
     ...(flag ? { [flag]: false } : {}),
   });
   await persistCore('employees', updated);
-  res.json({ success: true, employee: updated });
+  res.json({ success: true, employee: employeePrivateView(updated) });
 });
 
 app.get('/api/employees/:id/documents/:docType/download', async (req, res) => {
   const emp = (db.get('employees') || []).find((e) => e.id === req.params.id);
   if (!emp) return res.status(404).json({ error: 'העובד לא נמצא' });
+  if (!hasSensitiveAccess(req.crmUser, 'hr') && !isOwnEmployeeRequest(req, emp.id)) {
+    return res.status(403).json({ error: 'אין הרשאה להוריד מסמך של עובד אחר' });
+  }
 
   const { docType } = req.params;
   const doc = emp.documents?.[docType];
@@ -9088,6 +9409,23 @@ function normalizeWorkAssignment(body = {}, { existing = null } = {}) {
   };
 }
 
+const WORK_PAY_FIELDS = new Set([
+  'pay_mode', 'flat_amount', 'pay_amount', 'pay_rate', 'rate', 'frozen_rate', 'wage_agreement_id',
+  'pay_frozen_at', 'pay_locked_at', 'travel_amount', 'total_pay',
+]);
+
+function workAssignmentForRequest(req, row) {
+  if (hasSensitiveAccess(req.crmUser, 'hr') || isOwnEmployeeRequest(req, row?.employee_id)) return row;
+  return Object.fromEntries(Object.entries(row || {}).filter(([key]) => !WORK_PAY_FIELDS.has(key)));
+}
+
+function rejectWorkPayOverride(req, body = {}) {
+  if (hasSensitiveAccess(req.crmUser, 'hr')) return;
+  if ([...WORK_PAY_FIELDS].some((key) => body[key] !== undefined && body[key] !== null && body[key] !== '')) {
+    throw Object.assign(new Error('אין הרשאה לשנות תעריף או סכום שכר'), { statusCode: 403 });
+  }
+}
+
 app.get('/api/work-assignments', (req, res) => {
   let rows = db.get('work_assignments') || [];
   const { from, to, employee_id, activity_id } = req.query;
@@ -9097,7 +9435,7 @@ app.get('/api/work-assignments', (req, res) => {
   if (to) rows = rows.filter((r) => r.date && r.date <= to);
   rows = [...rows].sort((a, b) => String(a.date || '').localeCompare(String(b.date || ''))
     || String(a.start_time || '').localeCompare(String(b.start_time || '')));
-  res.json(rows);
+  res.json(rows.map((row) => workAssignmentForRequest(req, row)));
 });
 
 app.post('/api/work-assignments/from-activity', async (req, res) => {
@@ -9111,6 +9449,14 @@ app.post('/api/work-assignments/from-activity', async (req, res) => {
     start_time: startOverride,
     end_time: endOverride,
   } = req.body || {};
+  try {
+    rejectWorkPayOverride(req, {
+      pay_mode: payModeOverride,
+      flat_amount: flatAmountOverride,
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 403).json({ error: error.message });
+  }
   if (!activity_id) return res.status(400).json({ error: 'activity_id is required' });
   const activity = db.getOne('activities', activity_id);
   if (!activity) return res.status(404).json({ error: 'Activity not found' });
@@ -9182,7 +9528,10 @@ app.post('/api/work-assignments/from-activity', async (req, res) => {
   notifyShiftAssigned(created).catch((err) =>
     console.error('shift assigned notify failed:', err.message));
 
-  res.status(201).json({ created, existing_count: existing.length });
+  res.status(201).json({
+    created: created.map((row) => workAssignmentForRequest(req, row)),
+    existing_count: existing.length,
+  });
 });
 
 /**
@@ -9336,6 +9685,9 @@ app.post('/api/groups/:id/staff-attendance', async (req, res) => {
  * שהתנדבות כעוזר מדריך לא תיראה כמו שעות בתשלום.
  */
 app.get('/api/employees/:id/attendance-summary', (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr') && !isOwnEmployeeRequest(req, req.params.id)) {
+    return res.status(403).json({ error: 'אין הרשאה לצפות בנוכחות של עובד אחר' });
+  }
   const { from, to } = req.query;
   const rows = staffAttendanceRows({ employeeId: req.params.id })
     .filter((r) => (!from || r.date >= from) && (!to || r.date <= to));
@@ -9368,6 +9720,9 @@ app.get('/api/employees/:id/attendance-summary', (req, res) => {
 app.get('/api/employees/:id/shift-journal', (req, res) => {
   const employee = db.getOne('employees', req.params.id);
   if (!employee) return res.status(404).json({ error: 'העובד לא נמצא' });
+  if (!hasSensitiveAccess(req.crmUser, 'hr') && !isOwnEmployeeRequest(req, employee.id)) {
+    return res.status(403).json({ error: 'אין הרשאה לצפות ביומן של עובד אחר' });
+  }
   const horizonDays = Number(req.query.horizon_days);
   const journal = buildShiftJournal({
     employeeId: req.params.id,
@@ -9381,7 +9736,251 @@ app.get('/api/employees/:id/shift-journal', (req, res) => {
   res.json(journal);
 });
 
+const PAYROLL_DOCUMENT_TYPES = Object.freeze({
+  payslip: 'תלוש משכורת',
+  salary_transfer: 'אישור העברת או הפקדת משכורת',
+  pension_deposit: 'אישור הפקדה לפנסיה',
+  tax_insurance: 'מסמכי מס וביטוח',
+  employment: 'חוזה העסקה או טופס 101',
+  certificate: 'תעודות ואישורים מקצועיים',
+  other: 'מסמך אחר',
+});
+
+function payrollDocumentsOf(employee) {
+  return Array.isArray(employee?.payroll_documents) ? employee.payroll_documents : [];
+}
+
+function publicPayrollDocument(document) {
+  if (!document) return null;
+  const { storage_path: _storagePath, ...safe } = document;
+  return safe;
+}
+
+function publicLegacyDocuments(documents = {}) {
+  return Object.fromEntries(Object.entries(documents).map(([key, value]) => {
+    if (!value || typeof value !== 'object') return [key, value];
+    const { storagePath: _storagePath, ...safe } = value;
+    return [key, safe];
+  }));
+}
+
+function employeeSelfPayload(employee) {
+  return {
+    ...employee,
+    documents: publicLegacyDocuments(employee?.documents || {}),
+    payroll_documents: payrollDocumentsOf(employee).map(publicPayrollDocument),
+  };
+}
+
+function employeeJournal(employeeId, horizonDays = 60) {
+  return buildShiftJournal({
+    employeeId,
+    workAssignments: db.get('work_assignments') || [],
+    staffAttendance: db.get('staff_attendance') || [],
+    groups: db.get('groups') || [],
+    activities: db.get('activities') || [],
+    shiftHours: db.get('shift_hours') || [],
+    horizonDays,
+  });
+}
+
+function employeeFilePayload(employee, requestedMonth) {
+  const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(requestedMonth || ''))
+    ? String(requestedMonth)
+    : israelDateStr().slice(0, 7);
+  const journal = employeeJournal(employee.id, 60);
+  const entries = journal.entries.filter((entry) => String(entry.date || '').startsWith(month));
+  const earned = entries.reduce((sum, entry) => (
+    entry.status === 'logged' ? sum + (Number(entry.pay_amount) || 0) : sum
+  ), 0);
+  const hours = entries.reduce((sum, entry) => (
+    entry.status === 'logged' ? sum + (Number(entry.hours) || 0) : sum
+  ), 0);
+  const agreement = (db.get('wage_agreements') || []).find((item) => item.employee_id === employee.id);
+  return {
+    employee: employeeSelfPayload(employee),
+    wage: agreement ? wageWithRates(agreement) : null,
+    month,
+    shifts: entries,
+    summary: { hours: Math.round(hours * 100) / 100, earned: Math.round(earned * 100) / 100 },
+    document_types: PAYROLL_DOCUMENT_TYPES,
+  };
+}
+
+async function savePayrollDocument(req, employee, source) {
+  const { type, period, title, fileBase64, fileName, mimeType } = req.body || {};
+  const cleanType = String(type || '').trim();
+  if (!PAYROLL_DOCUMENT_TYPES[cleanType]) {
+    throw Object.assign(new Error('סוג המסמך אינו תקין'), { statusCode: 400 });
+  }
+  const cleanPeriod = String(period || '').trim();
+  if (cleanPeriod && !/^\d{4}-(0[1-9]|1[0-2])$/.test(cleanPeriod)) {
+    throw Object.assign(new Error('תקופת המסמך חייבת להיות בפורמט YYYY-MM'), { statusCode: 400 });
+  }
+  if (!fileBase64 || typeof fileBase64 !== 'string') {
+    throw Object.assign(new Error('חסר קובץ'), { statusCode: 400 });
+  }
+  const raw = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
+  const buffer = Buffer.from(raw, 'base64');
+  if (!buffer.length || buffer.length > 10 * 1024 * 1024) {
+    throw Object.assign(new Error('גודל הקובץ אינו תקין'), { statusCode: 400 });
+  }
+  const safeMime = String(mimeType || 'application/pdf').slice(0, 120);
+  const safeName = String(fileName || `${cleanType}.${extFromMime(safeMime, fileName)}`)
+    .replace(/[^\w\u0590-\u05ff.\-]+/g, '_')
+    .slice(0, 120);
+  const id = `paydoc-${crypto.randomUUID()}`;
+  const extension = extFromMime(safeMime, safeName);
+  const storagePath = `${employee.id}/payroll/${cleanPeriod || 'general'}/${id}.${extension}`;
+  const uploaded = await supa.uploadEmployeeDocument(storagePath, buffer, safeMime);
+  if (!uploaded.ok) throw new Error(uploaded.error || 'שמירת הקובץ נכשלה');
+  const document = {
+    id,
+    employee_id: employee.id,
+    type: cleanType,
+    type_label: PAYROLL_DOCUMENT_TYPES[cleanType],
+    period: cleanPeriod || null,
+    title: String(title || PAYROLL_DOCUMENT_TYPES[cleanType]).trim().slice(0, 160),
+    file_name: safeName,
+    mime_type: safeMime,
+    storage_path: storagePath,
+    source,
+    uploaded_by_user_id: String(req.crmUser?.id || ''),
+    uploaded_by_name: String(req.crmUser?.name || req.crmUser?.email || ''),
+    uploaded_at: new Date().toISOString(),
+  };
+  const updated = db.update('employees', employee.id, {
+    payroll_documents: [document, ...payrollDocumentsOf(employee)],
+  });
+  await persistCore('employees', updated);
+  return document;
+}
+
+async function removePayrollDocument(req, employee, documentId, { self = false } = {}) {
+  const document = payrollDocumentsOf(employee).find((item) => item.id === documentId);
+  if (!document) throw Object.assign(new Error('המסמך לא נמצא'), { statusCode: 404 });
+  if (self && (document.source !== 'employee' || document.uploaded_by_user_id !== String(req.crmUser?.id || ''))) {
+    throw Object.assign(new Error('עובד יכול להסיר רק מסמך שהוא העלה בעצמו'), { statusCode: 403 });
+  }
+  if (document.storage_path) await supa.removeEmployeeDocument(document.storage_path);
+  const updated = db.update('employees', employee.id, {
+    payroll_documents: payrollDocumentsOf(employee).filter((item) => item.id !== documentId),
+  });
+  await persistCore('employees', updated);
+  return document;
+}
+
+async function downloadPayrollDocument(res, employee, documentId) {
+  const document = payrollDocumentsOf(employee).find((item) => item.id === documentId);
+  if (!document?.storage_path) return res.status(404).json({ error: 'המסמך לא נמצא' });
+  const downloaded = await supa.downloadEmployeeDocument(document.storage_path);
+  if (!downloaded.ok || !downloaded.blob) {
+    return res.status(500).json({ error: downloaded.error || 'הורדת המסמך נכשלה' });
+  }
+  const buffer = Buffer.from(await downloaded.blob.arrayBuffer());
+  res.setHeader('Content-Type', document.mime_type || 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(document.file_name || 'document.pdf')}`);
+  return res.send(buffer);
+}
+
+app.get('/api/settings/users/:id/employee-file', requireOwner, async (req, res) => {
+  try {
+    const preview = await getAuthorizedUserPreview(req.params.id, req.crmUser);
+    if (!preview.employee_id) {
+      return res.status(404).json({ error: 'לא נמצא תיק עובד יחיד התואם למייל המשתמש' });
+    }
+    const employee = db.getOne('employees', preview.employee_id);
+    if (!employee) return res.status(404).json({ error: 'תיק העובד לא נמצא' });
+    return res.json({ ...employeeFilePayload(employee, req.query.month), read_only: true });
+  } catch (error) {
+    return res.status(error.statusCode || 503).json({ error: error.message || 'טעינת תיק העובד נכשלה' });
+  }
+});
+
+app.get('/api/me/employee', (req, res) => {
+  const employee = req.crmUser?.employee_id ? db.getOne('employees', req.crmUser.employee_id) : null;
+  if (!employee) return res.status(404).json({ error: 'לא נמצא תיק עובד יחיד התואם למייל המשתמש' });
+  res.json(employeeFilePayload(employee, req.query.month));
+});
+
+app.get('/api/me/employee/documents', (req, res) => {
+  const employee = req.crmUser?.employee_id ? db.getOne('employees', req.crmUser.employee_id) : null;
+  if (!employee) return res.status(404).json({ error: 'תיק העובד לא נמצא' });
+  res.json(payrollDocumentsOf(employee).map(publicPayrollDocument));
+});
+
+app.post('/api/me/employee/documents', async (req, res) => {
+  const employee = req.crmUser?.employee_id ? db.getOne('employees', req.crmUser.employee_id) : null;
+  if (!employee) return res.status(404).json({ error: 'תיק העובד לא נמצא' });
+  try {
+    res.status(201).json(publicPayrollDocument(await savePayrollDocument(req, employee, 'employee')));
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'העלאת המסמך נכשלה' });
+  }
+});
+
+app.delete('/api/me/employee/documents/:documentId', async (req, res) => {
+  const employee = req.crmUser?.employee_id ? db.getOne('employees', req.crmUser.employee_id) : null;
+  if (!employee) return res.status(404).json({ error: 'תיק העובד לא נמצא' });
+  try {
+    const removed = await removePayrollDocument(req, employee, req.params.documentId, { self: true });
+    res.json({ success: true, document: publicPayrollDocument(removed) });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'מחיקת המסמך נכשלה' });
+  }
+});
+
+app.get('/api/me/employee/documents/:documentId/download', async (req, res) => {
+  const employee = req.crmUser?.employee_id ? db.getOne('employees', req.crmUser.employee_id) : null;
+  if (!employee) return res.status(404).json({ error: 'תיק העובד לא נמצא' });
+  return downloadPayrollDocument(res, employee, req.params.documentId);
+});
+
+app.get('/api/employees/:id/payroll-documents', (req, res) => {
+  const employee = db.getOne('employees', req.params.id);
+  if (!employee) return res.status(404).json({ error: 'העובד לא נמצא' });
+  if (!hasSensitiveAccess(req.crmUser, 'hr') && !isOwnEmployeeRequest(req, employee.id)) {
+    return res.status(403).json({ error: 'אין הרשאה למסמכי העובד' });
+  }
+  res.json(payrollDocumentsOf(employee).map(publicPayrollDocument));
+});
+
+app.post('/api/employees/:id/payroll-documents', async (req, res) => {
+  const employee = db.getOne('employees', req.params.id);
+  if (!employee) return res.status(404).json({ error: 'העובד לא נמצא' });
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  try {
+    res.status(201).json(publicPayrollDocument(await savePayrollDocument(req, employee, 'employer')));
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'העלאת המסמך נכשלה' });
+  }
+});
+
+app.delete('/api/employees/:id/payroll-documents/:documentId', async (req, res) => {
+  const employee = db.getOne('employees', req.params.id);
+  if (!employee) return res.status(404).json({ error: 'העובד לא נמצא' });
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  try {
+    const removed = await removePayrollDocument(req, employee, req.params.documentId);
+    res.json({ success: true, document: publicPayrollDocument(removed) });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'מחיקת המסמך נכשלה' });
+  }
+});
+
+app.get('/api/employees/:id/payroll-documents/:documentId/download', async (req, res) => {
+  const employee = db.getOne('employees', req.params.id);
+  if (!employee) return res.status(404).json({ error: 'העובד לא נמצא' });
+  if (!hasSensitiveAccess(req.crmUser, 'hr') && !isOwnEmployeeRequest(req, employee.id)) {
+    return res.status(403).json({ error: 'אין הרשאה למסמכי העובד' });
+  }
+  return downloadPayrollDocument(res, employee, req.params.documentId);
+});
+
 app.post('/api/work-assignments/approve', (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'אישור שכר דורש הרשאת משאבי אנוש' });
+  }
   const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
   if (!ids.length) return res.status(400).json({ error: 'ids is required' });
   const updated = [];
@@ -9394,22 +9993,32 @@ app.post('/api/work-assignments/approve', (req, res) => {
 });
 
 app.post('/api/work-assignments', (req, res) => {
+  try {
+    rejectWorkPayOverride(req, req.body || {});
+  } catch (error) {
+    return res.status(error.statusCode || 403).json({ error: error.message });
+  }
   const normalized = normalizeWorkAssignment(req.body || {});
   if (!normalized.employee_id) return res.status(400).json({ error: 'employee_id is required' });
   if (!normalized.date) return res.status(400).json({ error: 'date is required' });
   const created = db.insert('work_assignments', withFrozenPay(normalized));
-  res.status(201).json(created);
+  res.status(201).json(workAssignmentForRequest(req, created));
 });
 
 app.put('/api/work-assignments/:id', (req, res) => {
   const { id } = req.params;
   const existing = db.getOne('work_assignments', id);
   if (!existing) return res.status(404).json({ error: 'Work assignment not found' });
+  try {
+    rejectWorkPayOverride(req, req.body || {});
+  } catch (error) {
+    return res.status(error.statusCode || 403).json({ error: error.message });
+  }
   const normalized = normalizeWorkAssignment(req.body || {}, { existing });
   // עריכה ידנית של השורה מתמחרת אותה מחדש — גם אם היום שלה כבר ננעל. שינוי
   // תעריף או שם תפקיד לעומת זאת לא עובר כאן, ולכן לא נוגע בשורות ישנות.
   const updated = db.update('work_assignments', id, withFrozenPay({ ...existing, ...normalized }));
-  res.json(updated);
+  res.json(workAssignmentForRequest(req, updated));
 });
 
 app.delete('/api/work-assignments/:id', (req, res) => {
@@ -9500,7 +10109,7 @@ app.post('/api/safety/incidents', (req, res) => {
 
 // Level Tests history
 app.get('/api/level-tests', (req, res) => {
-  res.json(db.get('level_tests'));
+  res.json((db.get('level_tests') || []).filter((test) => canAccessLevelTest(req.crmUser, test, 'view')));
 });
 
 /**
@@ -9564,17 +10173,30 @@ app.get('/api/groups/:id/training-brief', async (req, res) => {
 });
 
 app.post('/api/level-tests', (req, res) => {
+  if (!canAccessLevelTest(req.crmUser, req.body || {}, 'edit')) {
+    return res.status(403).json({ error: 'אין הרשאה ליצור מבחן מהסוג הזה' });
+  }
   const record = db.insertLevelTest(req.body);
   res.status(201).json(record);
 });
 
 app.put('/api/level-tests/:id', (req, res) => {
+  const existing = db.getOne('level_tests', req.params.id);
+  if (!existing) return res.status(404).json({ error: 'מבחן לא נמצא' });
+  if (!canAccessLevelTest(req.crmUser, existing, 'edit') || !canAccessLevelTest(req.crmUser, { ...existing, ...(req.body || {}) }, 'edit')) {
+    return res.status(403).json({ error: 'אין הרשאה לערוך מבחן מהסוג הזה' });
+  }
   const updated = db.updateLevelTest(req.params.id, req.body || {});
   if (!updated) return res.status(404).json({ error: 'מבחן לא נמצא' });
   res.json(updated);
 });
 
 app.delete('/api/level-tests/:id', (req, res) => {
+  const existing = db.getOne('level_tests', req.params.id);
+  if (!existing) return res.status(404).json({ error: 'מבחן לא נמצא' });
+  if (!canAccessLevelTest(req.crmUser, existing, 'edit')) {
+    return res.status(403).json({ error: 'אין הרשאה למחוק מבחן מהסוג הזה' });
+  }
   const ok = db.deleteLevelTest(req.params.id);
   if (!ok) return res.status(404).json({ error: 'מבחן לא נמצא' });
   res.json({ ok: true });
@@ -10341,7 +10963,7 @@ app.get('/api/campaigns/pending', requireOwner, (req, res) => {
   const rows = (db.get('campaign_sends') || [])
     .filter((row) => row.status === SEND_STATUS.PENDING)
     .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
-  res.json(rows);
+  res.json(activityForRequest(req, rows));
 });
 
 app.get('/api/campaigns', requireOwner, (req, res) => {
@@ -10485,6 +11107,9 @@ app.post('/api/campaigns/pending/:sendId/reject', requireOwner, async (req, res)
 });
 
 app.get('/api/pos/passes', (req, res) => {
+  if (req.crmUser?.role === 'staff' && !req.query.studentId) {
+    return res.status(403).json({ error: 'צוות תפעול יכול לצפות בכרטיסייה רק בזמן כניסת מתאמן' });
+  }
   let passes = db.get('customer_passes') || [];
   if (req.query.studentId) {
     passes = passes.filter((p) => String(p.student_id) === String(req.query.studentId));
@@ -11598,7 +12223,35 @@ app.get('/api/public/form-templates/:slug', (req, res) => {
 
 // Check-in endpoints
 app.get('/api/check-ins', (req, res) => {
-  res.json(db.get('check_ins'));
+  const rows = db.get('check_ins') || [];
+  if (req.crmUser?.role !== 'staff') return res.json(rows);
+  const today = israelDateStr();
+  return res.json(rows.filter((row) => {
+    const timestamp = row.timestamp || row.created_at;
+    return timestamp && israelLocalParts(timestamp)?.date === today;
+  }));
+});
+
+app.put('/api/safety/inspections/:id', (req, res) => {
+  const existing = db.getOne('safety_inspections', req.params.id);
+  if (!existing) return res.status(404).json({ error: 'בדיקת הבטיחות לא נמצאה' });
+  const updated = db.update('safety_inspections', req.params.id, {
+    ...(req.body || {}),
+    id: existing.id,
+    updated_at: new Date().toISOString(),
+  });
+  res.json(activityForRequest(req, updated));
+});
+
+app.patch('/api/safety/inspections/:id', (req, res) => {
+  const existing = db.getOne('safety_inspections', req.params.id);
+  if (!existing) return res.status(404).json({ error: 'בדיקת הבטיחות לא נמצאה' });
+  const updated = db.update('safety_inspections', req.params.id, {
+    ...(req.body || {}),
+    id: existing.id,
+    updated_at: new Date().toISOString(),
+  });
+  res.json(activityForRequest(req, updated));
 });
 
 app.post('/api/check-ins', (req, res) => {

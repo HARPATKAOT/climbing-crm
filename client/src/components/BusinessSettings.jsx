@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Loader2, Save, Upload, Building2, Plug } from 'lucide-react';
+import { Loader2, Save, Upload, Building2, Plug, Users } from 'lucide-react';
 import {
   DEFAULT_BUSINESS_PROFILE,
   useBusinessProfile,
 } from '../BusinessProfileContext.jsx';
 import Integrations from './Integrations.jsx';
+import BusinessUsers from './BusinessUsers.jsx';
 
 function SettingsTabs({ tab, setTab }) {
   return (
@@ -12,6 +13,7 @@ function SettingsTabs({ tab, setTab }) {
       {[
         { key: 'profile', label: 'פרטי עסק', icon: Building2 },
         { key: 'integrations', label: 'חיבורים', icon: Plug },
+        { key: 'users', label: 'משתמשים והרשאות', icon: Users },
       ].map(({ key, label, icon: Icon }) => (
         <button
           key={key}
@@ -134,6 +136,15 @@ export default function BusinessSettings() {
       <div className="business-settings">
         <SettingsTabs tab={tab} setTab={setTab} />
         <Integrations />
+      </div>
+    );
+  }
+
+  if (tab === 'users') {
+    return (
+      <div className="business-settings">
+        <SettingsTabs tab={tab} setTab={setTab} />
+        <BusinessUsers />
       </div>
     );
   }

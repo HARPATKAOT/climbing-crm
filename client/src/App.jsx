@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Calendar, CalendarRange, ShieldCheck, UserCog, LogIn,
@@ -27,6 +27,7 @@ const Automations        = lazy(() => import('./components/Automations.jsx'));
 const AiAssistant        = lazy(() => import('./components/AiAssistant.jsx'));
 const BusinessSettings   = lazy(() => import('./components/BusinessSettings.jsx'));
 const EquipmentTracker   = lazy(() => import('./components/EquipmentTracker.jsx'));
+const EmployeeSelf       = lazy(() => import('./components/EmployeeSelf.jsx'));
 
 function PageLoader() {
   return (
@@ -52,6 +53,7 @@ const NAV = [
   { key: 'health',     label: 'הצהרות וטפסים',      icon: FileHeart,        section: 'ops',  accent: '#F472B6' },
   { key: 'automations',label: 'אוטומציות',         icon: Zap,              section: 'ops',  accent: '#22D3EE' },
   { key: 'assistant',  label: 'עוזר חכם',           icon: Sparkles,         section: 'ops',  accent: '#818CF8' },
+  { key: 'myfile',     label: 'התיק שלי',            icon: UserCog,           section: 'ops',  accent: '#2DD4BF', employeeOnly: true },
   { key: 'business',   label: 'הגדרות עסק',        icon: Building2,        section: 'ops',  accent: '#C084FC', ownerOnly: true },
 ];
 
@@ -71,6 +73,7 @@ const PAGE_PATHS = {
   health:      '/health-declarations',
   automations: '/automations',
   assistant:   '/ai-assistant',
+  myfile:      '/my-employee-file',
   business:    '/business-settings',
 };
 
@@ -79,7 +82,22 @@ const PATH_TO_PAGE = Object.fromEntries(
 );
 
 // Public routes are handled outside App (main.jsx). Never redirect these into the CRM shell.
-const STAFF_PAGES = new Set(['checkin', 'leads', 'schedule', 'equipment', 'activities', 'health', 'cash']);
+const PAGE_MODULES = {
+  dashboard: ['dashboard'],
+  checkin: ['checkin'],
+  leads: ['customers'],
+  schedule: ['classes', 'attendance'],
+  equipment: ['equipment'],
+  activities: ['activities', 'activity_registrations'],
+  broadcasts: ['broadcasts'],
+  cash: ['pos', 'cash_management'],
+  safety: ['safety_checks', 'safety_settings'],
+  employees: ['employees', 'shifts', 'hr'],
+  levels: ['level_tests', 'safety_tests', 'lead_tests'],
+  health: ['health'],
+  automations: ['automations'],
+  assistant: ['assistant'],
+};
 
 function pathToPage(pathname) {
   if (pathname === '/' || pathname === '') return 'dashboard';
@@ -100,6 +118,7 @@ const PAGE_TITLES = {
   levels:     { title: 'מבחנים',                  sub: 'רמה · אבטחה · הובלה' },
   health:     { title: 'הצהרות בריאות וטפסים',    sub: 'עריכת טקסט ההצהרה שנשלחת ללקוחות + מעקב חתימות' },
   automations:{ title: 'אוטומציות ומסעות לקוח',  sub: 'הגדרת פעולות שיווקיות ותפעוליות אוטומטיות' },
+  myfile:     { title: 'התיק שלי',                  sub: 'משמרות, שכר ומסמכים אישיים' },
   business:   { title: 'הגדרות עסק',             sub: 'שם, לוגו ופרטי קשר שמופיעים ללקוחות' },
 };
 
@@ -112,10 +131,27 @@ export default function App() {
   const brandName = profile.display_name || 'הרפתקאות';
   const brandLogo = profile.logo_url || '/logo.png';
   const requestedPage = pathToPage(location.pathname) ?? 'dashboard';
-  const page = !isOwner && !STAFF_PAGES.has(requestedPage) ? 'leads' : requestedPage;
+  const moduleLevel = (moduleId) => user?.modules?.[moduleId] || 'none';
+  const moduleAtLeast = (moduleId, level = 'view') => {
+    const rank = { none: 0, view: 1, edit: 2 };
+    return (rank[moduleLevel(moduleId)] || 0) >= (rank[level] || 0);
+  };
+  const staffPages = useMemo(() => new Set([
+    ...Object.entries(PAGE_MODULES)
+      .filter(([, modules]) => modules.some((moduleId) => {
+        const rank = { none: 0, view: 1, edit: 2 };
+        return (rank[user?.modules?.[moduleId]] || 0) >= rank.view;
+      }))
+      .map(([key]) => key),
+    ...(user?.employee_id ? ['myfile'] : []),
+  ]), [user?.employee_id, user?.modules]);
+  const defaultStaffPage = ['myfile', 'dashboard', 'checkin', 'schedule', 'safety', 'leads'].find((key) => staffPages.has(key)) || 'no-access';
+  const page = requestedPage === 'myfile' && !user?.employee_id
+    ? (isOwner ? 'dashboard' : defaultStaffPage)
+    : (!isOwner && !staffPages.has(requestedPage) ? defaultStaffPage : requestedPage);
   const visibleNav = isOwner
-    ? NAV
-    : NAV.filter((item) => STAFF_PAGES.has(item.key) && !item.ownerOnly);
+    ? NAV.filter((item) => !item.employeeOnly || user?.employee_id)
+    : NAV.filter((item) => staffPages.has(item.key) && !item.ownerOnly && (!item.employeeOnly || user?.employee_id));
 
   const goToPage = (key) => {
     const path = PAGE_PATHS[key] || '/';
@@ -137,13 +173,17 @@ export default function App() {
       return;
     }
     if (pathToPage(location.pathname) === null) {
-      navigate(isOwner ? '/' : '/leads', { replace: true });
+      navigate(isOwner ? '/' : (PAGE_PATHS[defaultStaffPage] || '/'), { replace: true });
       return;
     }
-    if (!isOwner && !STAFF_PAGES.has(pathToPage(location.pathname))) {
-      navigate('/leads', { replace: true });
+    if (pathToPage(location.pathname) === 'myfile' && !user?.employee_id) {
+      navigate(isOwner ? '/' : (PAGE_PATHS[defaultStaffPage] || '/'), { replace: true });
+      return;
     }
-  }, [isOwner, location.pathname, navigate]);
+    if (!isOwner && !staffPages.has(pathToPage(location.pathname))) {
+      navigate(PAGE_PATHS[defaultStaffPage] || '/', { replace: true });
+    }
+  }, [defaultStaffPage, isOwner, location.pathname, navigate, staffPages, user?.employee_id]);
 
   // Start empty so deleted/demo records never flash before the API responds.
   const [students, setStudents] = useState([]);
@@ -178,6 +218,51 @@ export default function App() {
 
     async function fetchData() {
       try {
+        if (!isOwner) {
+          const canCustomers = moduleAtLeast('customers');
+          const canClasses = moduleAtLeast('classes');
+          const needsRoster = ['attendance', 'checkin', 'safety_tests', 'level_tests', 'lead_tests']
+            .some((moduleId) => moduleAtLeast(moduleId));
+          if (!canCustomers && !canClasses && !needsRoster) {
+            setStudents([]);
+            setGroups([]);
+            setParents([]);
+            setCoreLoadError('');
+            return;
+          }
+          if (canCustomers) {
+            const [studentsResponse, parentsResponse, groupsResponse] = await Promise.all([
+              fetch('/api/students'),
+              fetch('/api/parents'),
+              canClasses ? fetch('/api/groups') : Promise.resolve(null),
+            ]);
+            const [studentRows, parentRows, groupRows] = await Promise.all([
+              studentsResponse.json().catch(() => []),
+              parentsResponse.json().catch(() => []),
+              groupsResponse ? groupsResponse.json().catch(() => []) : Promise.resolve([]),
+            ]);
+            if (!studentsResponse.ok || !parentsResponse.ok || (groupsResponse && !groupsResponse.ok)) {
+              throw new Error('טעינת נתוני הלקוחות נכשלה');
+            }
+            if (cancelled) return;
+            setStudents(Array.isArray(studentRows) ? studentRows : []);
+            setParents(Array.isArray(parentRows) ? parentRows : []);
+            setGroups(Array.isArray(groupRows) ? groupRows : []);
+            setCoreLoadError('');
+            attempt = 0;
+            return;
+          }
+          const response = await fetch('/api/operations/roster');
+          const body = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(body.error || 'טעינת נתוני התפעול נכשלה');
+          if (cancelled) return;
+          setStudents(Array.isArray(body.students) ? body.students : []);
+          setGroups(Array.isArray(body.groups) ? body.groups : []);
+          setParents([]);
+          setCoreLoadError('');
+          attempt = 0;
+          return;
+        }
         const [resStudents, resParents, resGroups] = await Promise.all([
           fetchCollection('/api/students', 'מתאמנים'),
           fetchCollection('/api/parents', 'הורים'),
@@ -224,7 +309,7 @@ export default function App() {
     };
     // Fetch core data once on mount (plus retry/visibility logic above) —
     // NOT on every tab change, which used to re-download all parents/students/groups.
-  }, [coreReloadKey]);
+  }, [coreReloadKey, isOwner, user?.modules]); // eslint-disable-line react-hooks/exhaustive-deps
   const [showNotifications, setShowNotifications] = useState(false);
   const info   = PAGE_TITLES[page] || {};
 
@@ -348,7 +433,7 @@ export default function App() {
             <div className="avatar">DE</div>
             <div>
               <div className="user-name">{user?.name || user?.email}</div>
-              <div className="user-role">{isOwner ? 'מנהל ראשי' : 'צוות תפעול'}</div>
+              <div className="user-role">{isOwner ? 'מנהל ראשי' : (user?.roleName || 'צוות')}</div>
             </div>
             <button className="icon-btn" type="button" onClick={signOut} title="יציאה">
               <LogOut size={15} />
@@ -366,12 +451,12 @@ export default function App() {
             <div className="page-sub">{info.sub}</div>
           </div>
           <div className="topbar-right">
-            <GlobalSearch
+            {(isOwner || moduleAtLeast('customers')) && <GlobalSearch
               students={students}
               parents={parents}
               onOpen={(recordId) => navigate(`/leads?open=${encodeURIComponent(recordId)}`)}
-            />
-            <div style={{ position: 'relative' }}>
+            />}
+            {(isOwner || moduleAtLeast('dashboard')) && <div style={{ position: 'relative' }}>
               <button className="icon-btn" onClick={() => setShowNotifications(!showNotifications)}>
                 <Bell size={17} />
                 {newLeadsCount > 0 && <span className="icon-btn-dot" />}
@@ -414,7 +499,7 @@ export default function App() {
                   )}
                 </div>
               )}
-            </div>
+            </div>}
           </div>
         </header>
 
@@ -430,7 +515,7 @@ export default function App() {
                 onNavigate={navigate}
               />
             )}
-            {page === 'checkin'    && <CheckInConsole students={students} groups={groups} />}
+            {page === 'checkin'    && <CheckInConsole students={students} groups={groups} operationalOnly={!isOwner} />}
             {page === 'leads'      && (
               <Leads
                 students={students}
@@ -438,7 +523,7 @@ export default function App() {
                 parents={parents}
                 setParents={setParents}
                 groups={groups}
-                canManageBilling={isOwner}
+                canManageBilling={isOwner || user?.sensitive?.finance === true}
                 canViewComms
                 loadError={coreLoadError}
                 onRetryLoad={() => {
@@ -455,7 +540,8 @@ export default function App() {
                 setGroups={setGroups}
                 setStudents={setStudents}
                 setParents={setParents}
-                canManageBilling={isOwner}
+                canManageBilling={isOwner || user?.sensitive?.finance === true}
+                operationalOnly={!isOwner && !moduleAtLeast('classes', 'edit')}
               />
             )}
             {page === 'equipment'  && (
@@ -467,16 +553,37 @@ export default function App() {
                 }}
               />
             )}
-            {page === 'activities' && <ActivitiesCalendar isOwner={isOwner} />}
+            {page === 'activities' && (
+              <ActivitiesCalendar
+                isOwner={isOwner}
+                canEdit={isOwner || moduleAtLeast('activities', 'edit')}
+                canViewFinance={isOwner || user?.sensitive?.finance === true}
+                canViewHr={isOwner || user?.sensitive?.hr === true}
+              />
+            )}
             {page === 'broadcasts' && <Broadcasts parents={parents} students={students} groups={groups} />}
-            {page === 'cash'       && <CashRegister isOwner={isOwner} initialTab={location.state?.cashTab} />}
-            {page === 'safety'     && <Safety />}
-            {page === 'employees'  && <Employees />}
+            {page === 'cash'       && <CashRegister isOwner={isOwner || user?.sensitive?.finance === true} initialTab={location.state?.cashTab} />}
+            {page === 'safety'     && <Safety canManageSettings={isOwner || moduleAtLeast('safety_settings', 'edit')} />}
+            {page === 'employees'  && (
+              <Employees
+                canViewHr={isOwner || user?.sensitive?.hr === true}
+                canEditEmployees={isOwner || moduleAtLeast('employees', 'edit')}
+                canViewShifts={isOwner || moduleAtLeast('shifts', 'view')}
+              />
+            )}
             {page === 'levels'     && <LevelTests students={students} groups={groups} />}
-            {page === 'health'     && <HealthDeclarations parents={parents} students={students} canManageTemplates={isOwner} />}
+            {page === 'health'     && <HealthDeclarations parents={parents} students={students} canManageTemplates={isOwner || moduleAtLeast('health', 'edit')} />}
             {page === 'automations'&& <Automations />}
             {page === 'assistant'  && <AiAssistant />}
+            {page === 'myfile'     && user?.employee_id && <EmployeeSelf />}
             {page === 'business'   && isOwner && <BusinessSettings />}
+            {page === 'no-access' && (
+              <div className="empty-state">
+                <ShieldCheck size={32} />
+                <strong>לא הוגדרו הרשאות לתפקיד שלך</strong>
+                <span>יש לפנות לבעל העסק כדי לקבל גישה ליכולת תפעולית.</span>
+              </div>
+            )}
           </Suspense>
         </main>
 

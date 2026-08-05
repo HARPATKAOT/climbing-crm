@@ -73,14 +73,14 @@ function addDays(dateStr, days) {
 }
 
 // ─── Modal: Sign check ───────────────────────────────────────────────────
-function SignCheckModal({ check, employees, onSave, onClose }) {
+function SignCheckModal({ check, employees, initialLog = null, onSave, onClose }) {
   const isDaily = check?.frequency === 'יומי' || Number(check?.interval_days) === 1;
   const eligible = isDaily
     ? employees.filter((e) => e.is_active !== false && e.can_sign_daily_safety === true)
     : employees.filter((e) => e.is_active !== false);
-  const [testerId, setTesterId] = useState(eligible[0]?.id || '');
-  const [status, setStatus] = useState('תקין');
-  const [notes, setNotes] = useState('');
+  const [testerId, setTesterId] = useState(initialLog?.completed_by_employee_id || eligible[0]?.id || '');
+  const [status, setStatus] = useState(initialLog?.status || 'תקין');
+  const [notes, setNotes] = useState(initialLog?.description || '');
   const [saving, setSaving] = useState(false);
 
   const handleSubmit = async (e) => {
@@ -111,7 +111,7 @@ function SignCheckModal({ check, employees, onSave, onClose }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <CheckIcon name={check.name} size={18} />
             <div>
-              <div className="modal-title">אישור ביצוע בדיקה</div>
+              <div className="modal-title">{initialLog ? 'עריכת בדיקת בטיחות' : 'אישור ביצוע בדיקה'}</div>
               <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
                 {check.name} · {check.frequency}
               </div>
@@ -172,7 +172,7 @@ function SignCheckModal({ check, employees, onSave, onClose }) {
         <div className="modal-footer">
           <button type="button" className="btn btn-ghost" onClick={onClose}>ביטול</button>
           <button form="sign-check-form" type="submit" className="btn btn-primary" disabled={saving}>
-            {saving ? 'שומר...' : 'חתום'}
+            {saving ? 'שומר...' : (initialLog ? 'שמור שינויים' : 'חתום')}
           </button>
         </div>
       </div>
@@ -346,7 +346,7 @@ function AddIncidentModal({ employees, onSave, onClose }) {
 }
 
 // ─── Modal: Check detail + its own log ───────────────────────────────────
-function CheckDetailModal({ check, logs, employees, onSign, onEdit, onClose }) {
+function CheckDetailModal({ check, logs, employees, onSign, onEdit, onClose, canManageSettings = true }) {
   const interval = Number(check.interval_days) || FREQ_DAYS[check.frequency] || 1;
   const last = logs[0] || null;
   const nextDue = Object.prototype.hasOwnProperty.call(check, 'next_due')
@@ -473,9 +473,9 @@ function CheckDetailModal({ check, logs, employees, onSign, onEdit, onClose }) {
 
         <div className="modal-footer">
           <button type="button" className="btn btn-ghost" onClick={onClose}>סגור</button>
-          <button type="button" className="btn btn-ghost" onClick={() => onEdit(check)}>
+          {canManageSettings && <button type="button" className="btn btn-ghost" onClick={() => onEdit(check)}>
             <Pencil size={14} /> עריכת הגדרות
-          </button>
+          </button>}
           <button type="button" className="btn btn-primary" onClick={() => onSign(check)}>
             חתום
           </button>
@@ -486,7 +486,7 @@ function CheckDetailModal({ check, logs, employees, onSign, onEdit, onClose }) {
 }
 
 // ─── Main Safety Component ───────────────────────────────────────────────
-export default function Safety() {
+export default function Safety({ canManageSettings = true }) {
   const [types, setTypes] = useState([]);
   const [dueToday, setDueToday] = useState([]);
   const [logs, setLogs] = useState([]);
@@ -500,6 +500,7 @@ export default function Safety() {
   const [editingType, setEditingType] = useState(null);
   const [showIncidentForm, setShowIncidentForm] = useState(false);
   const [detailCheck, setDetailCheck] = useState(null);
+  const [editingLog, setEditingLog] = useState(null);
 
   const refreshData = async () => {
     try {
@@ -508,7 +509,7 @@ export default function Safety() {
         fetch('/api/safety/due-today').then((r) => (r.ok ? r.json() : [])),
         fetch('/api/safety/inspections').then((r) => (r.ok ? r.json() : [])),
         fetch('/api/safety/incidents').then((r) => (r.ok ? r.json() : [])),
-        fetch('/api/employees').then((r) => (r.ok ? r.json() : [])),
+        fetch(canManageSettings ? '/api/employees' : '/api/trainers').then((r) => (r.ok ? r.json() : [])),
       ]);
       setTypes(Array.isArray(typeList) ? typeList : []);
       setDueToday(Array.isArray(due) ? due : []);
@@ -555,13 +556,14 @@ export default function Safety() {
 
   const openSign = (check) => {
     setDetailCheck(null);
+    setEditingLog(null);
     setSelectedCheck(check);
     setShowSignForm(true);
   };
 
   const handleSign = async (payload) => {
-    const response = await fetch('/api/safety/inspections', {
-      method: 'POST',
+    const response = await fetch(editingLog ? `/api/safety/inspections/${editingLog.id}` : '/api/safety/inspections', {
+      method: editingLog ? 'PUT' : 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
@@ -571,7 +573,19 @@ export default function Safety() {
       alert(msg);
       throw new Error(msg);
     }
+    setEditingLog(null);
     await refreshData();
+  };
+
+  const openEditLog = (log) => {
+    const check = types.find((type) => type.id === log.check_type_id || type.name === log.title) || {
+      id: log.check_type_id,
+      name: log.title,
+      frequency: '',
+    };
+    setSelectedCheck(check);
+    setEditingLog(log);
+    setShowSignForm(true);
   };
 
   const handleSaveType = async (payload) => {
@@ -682,8 +696,9 @@ export default function Safety() {
         <SignCheckModal
           check={selectedCheck}
           employees={employees}
+          initialLog={editingLog}
           onSave={handleSign}
-          onClose={() => { setShowSignForm(false); setSelectedCheck(null); }}
+          onClose={() => { setShowSignForm(false); setSelectedCheck(null); setEditingLog(null); }}
         />
       )}
 
@@ -716,6 +731,7 @@ export default function Safety() {
             setShowTypeForm(true);
           }}
           onClose={() => setDetailCheck(null)}
+          canManageSettings={canManageSettings}
         />
       )}
 
@@ -746,13 +762,13 @@ export default function Safety() {
           <div className="section-sub">הגדרת תדירויות, חתימה על ביצוע, ומעקב היסטוריה</div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button
+          {canManageSettings && <button
             type="button"
             className="btn btn-primary btn-sm"
             onClick={() => { setEditingType(null); setShowTypeForm(true); }}
           >
             <Plus size={14} /> בדיקה חדשה
-          </button>
+          </button>}
           <button type="button" className="btn btn-danger btn-sm" onClick={() => setShowIncidentForm(true)}>
             <ShieldAlert size={14} /> דיווח אירוע
           </button>
@@ -899,22 +915,22 @@ export default function Safety() {
                           >
                             <History size={12} />
                           </button>
-                          <button
+                          {canManageSettings && <button
                             type="button"
                             className="btn btn-ghost btn-xs"
                             title="עריכת הבדיקה"
                             onClick={() => { setEditingType(t); setShowTypeForm(true); }}
                           >
                             <Pencil size={12} />
-                          </button>
-                          <button
+                          </button>}
+                          {canManageSettings && <button
                             type="button"
                             className="btn btn-ghost btn-xs"
                             title="מחיקת הבדיקה"
                             onClick={() => handleDeleteType(t)}
                           >
                             <Trash2 size={12} />
-                          </button>
+                          </button>}
                         </div>
                       </td>
                     </tr>
@@ -924,13 +940,13 @@ export default function Safety() {
                   <tr>
                     <td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>
                       <div style={{ marginBottom: 12 }}>אין בדיקות מוגדרות.</div>
-                      <button
+                      {canManageSettings && <button
                         type="button"
                         className="btn btn-primary btn-sm"
                         onClick={() => { setEditingType(null); setShowTypeForm(true); }}
                       >
                         <Plus size={14} /> הוספת בדיקה
-                      </button>
+                      </button>}
                     </td>
                   </tr>
                 )}
@@ -962,6 +978,7 @@ export default function Safety() {
                   <th>בודק</th>
                   <th>תוצאה</th>
                   <th>הערות</th>
+                  <th>פעולות</th>
                 </tr>
               </thead>
               <tbody>
@@ -987,11 +1004,12 @@ export default function Safety() {
                       </span>
                     </td>
                     <td style={{ fontSize: 12, color: 'var(--text-2)' }}>{log.description || '—'}</td>
+                    <td><button type="button" className="btn btn-ghost btn-xs" title="עריכת בדיקה" onClick={() => openEditLog(log)}><Pencil size={12} /></button></td>
                   </tr>
                 ))}
                 {filteredLogs.length === 0 && (
                   <tr>
-                    <td colSpan={5} style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>
+                    <td colSpan={6} style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>
                       אין חתימות ביומן.
                     </td>
                   </tr>

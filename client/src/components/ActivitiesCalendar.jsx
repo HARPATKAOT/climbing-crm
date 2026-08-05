@@ -430,6 +430,7 @@ function WorkAssignmentsBlock({
   activityType = '',
   staffPay = null,
   onStaffPayChange = null,
+  canViewHr = false,
   draft = null,
   onAssignmentsChanged = null,
   eventTimes = null,
@@ -460,11 +461,11 @@ function WorkAssignmentsBlock({
         activityId
           ? fetch(`/api/work-assignments?activity_id=${encodeURIComponent(activityId)}`)
           : Promise.resolve(null),
-        fetch('/api/wages'),
+        canViewHr ? fetch('/api/wages') : Promise.resolve(null),
       ]);
       const emps = empRes.ok ? await empRes.json() : [];
       const asgs = asgRes?.ok ? await asgRes.json() : [];
-      const wageList = wageRes.ok ? await wageRes.json() : [];
+      const wageList = wageRes?.ok ? await wageRes.json() : [];
       setEmployees(Array.isArray(emps) ? emps.filter((e) => e.is_active !== false) : []);
       setWages(Array.isArray(wageList) ? wageList : []);
       setRows(Array.isArray(asgs)
@@ -480,7 +481,7 @@ function WorkAssignmentsBlock({
       setWages([]);
       setRows([]);
     }
-  }, [activityId]);
+  }, [activityId, canViewHr]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -539,8 +540,10 @@ function WorkAssignmentsBlock({
           activity_id: activityId,
           employee_ids: selectedIds,
           role: staffPay?.role || '',
-          pay_mode: staffPay?.mode === 'flat' ? 'flat' : 'hourly',
-          flat_amount: staffPay?.mode === 'flat' ? (staffPay?.flatAmount ?? 0) : null,
+          ...(canViewHr ? {
+            pay_mode: staffPay?.mode === 'flat' ? 'flat' : 'hourly',
+            flat_amount: staffPay?.mode === 'flat' ? (staffPay?.flatAmount ?? 0) : null,
+          } : {}),
           start_time: shiftStart,
           end_time: shiftEnd,
         }),
@@ -573,8 +576,10 @@ function WorkAssignmentsBlock({
           start_time: row.start_time,
           end_time: row.end_time,
           hours: roundHoursQuarter(row.hours),
-          pay_mode: payMode,
-          flat_amount: payMode === 'flat' ? Number(row.flat_amount) || 0 : null,
+          ...(canViewHr ? {
+            pay_mode: payMode,
+            flat_amount: payMode === 'flat' ? Number(row.flat_amount) || 0 : null,
+          } : {}),
           source: 'manual',
           notes: row.notes || '',
         }),
@@ -657,14 +662,14 @@ function WorkAssignmentsBlock({
           הוספת עובד לאירוע
         </div>
 
-        {draftMode && (
+        {draftMode && canViewHr && (
           <div style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-3)' }}>
             אפשר לבחור עובדים כבר עכשיו. השעות והעלות כאן הן הערכה, והשיבוץ עצמו
             ייווצר עם שמירת האירוע — אז אפשר יהיה לשנות שעות ותשלום לכל אחד.
           </div>
         )}
 
-        {onStaffPayChange && (
+        {canViewHr && onStaffPayChange && (
           <div style={{ display: 'grid', gridTemplateColumns: staffPay?.mode === 'flat' ? '1fr 1fr 1fr' : '1fr 1fr', gap: 8 }}>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
               באיזה תפקיד
@@ -825,6 +830,45 @@ function WorkAssignmentsBlock({
       {shownRows.length === 0 ? (
         <div style={{ fontSize: 12, color: 'var(--text-3)', fontStyle: 'italic' }}>
           עדיין אין עובדים משויכים לאירוע הזה
+        </div>
+      ) : !canViewHr ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {shownRows.map((row) => (
+            <div
+              key={row.id}
+              style={{
+                display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr auto', gap: 8,
+                alignItems: 'end', padding: 8, borderRadius: 8, border: '1px solid var(--border)',
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>עובד</div>
+                <strong>{empName(row.employee_id)}</strong>
+              </div>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                התחלה
+                <input className="input" type="time" value={row.start_time || ''} onChange={(event) => patchLocal(row.id, { start_time: event.target.value })} disabled={draftMode} />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                סיום
+                <input className="input" type="time" value={row.end_time || ''} onChange={(event) => patchLocal(row.id, { end_time: event.target.value })} disabled={draftMode} />
+              </label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ color: 'var(--text-3)', fontSize: 12 }}>{roundHoursQuarter(row.hours)} שעות</span>
+                {!draftMode && <button type="button" className="icon-btn" title="שמור" disabled={busy} onClick={() => saveRow(row)}><Save size={13} /></button>}
+                <button
+                  type="button"
+                  className="icon-btn"
+                  title="הסר"
+                  disabled={busy}
+                  onClick={() => draftMode
+                    ? draft.setEmployeeIds(draftIds.filter((id) => id !== row.employee_id))
+                    : deleteRow(row.id)}
+                ><Trash2 size={13} /></button>
+              </div>
+            </div>
+          ))}
+          <div style={{ fontSize: 11, color: 'var(--text-3)' }}>נתוני שכר ותעריפים מוסתרים לפי ההרשאות שלך.</div>
         </div>
       ) : draftMode ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -1155,6 +1199,8 @@ function RegularActivityModal({
   showError,
   submit,
   title,
+  canViewFinance,
+  canViewHr,
   declarationTemplates = [],
   onStaffChanged = null,
 }) {
@@ -1377,7 +1423,7 @@ function RegularActivityModal({
 
             <section className="activity-settings-card">
               <div className="activity-settings-card-title">
-                {isOps ? 'מועד ומקום' : 'מועד, מקום ומחיר'}
+                {isOps || !canViewFinance ? 'מועד ומקום' : 'מועד, מקום ומחיר'}
               </div>
 
               {!isTemplateEdit && (
@@ -1473,7 +1519,7 @@ function RegularActivityModal({
                 />
               </label>
 
-              {!isOps && (
+              {!isOps && canViewFinance && (
                 <>
                   <div className="activity-settings-grid activity-settings-grid--price-vat">
                     <label>
@@ -1534,6 +1580,7 @@ function RegularActivityModal({
                 form={form}
                 setForm={setForm}
                 readOnly={readOnly}
+                canViewFinance={canViewFinance}
                 hideRegistrationToggle
                 templateMode={isTemplateEdit}
               />
@@ -1562,7 +1609,8 @@ function RegularActivityModal({
                   mode: form.staff_pay_mode === 'flat' ? 'flat' : 'rate',
                   flatAmount: form.staff_flat_amount,
                 }}
-                onStaffPayChange={readOnly ? null : (patch) => setForm((prev) => ({ ...prev, ...patch }))}
+                canViewHr={canViewHr}
+                onStaffPayChange={readOnly || !canViewHr ? null : (patch) => setForm((prev) => ({ ...prev, ...patch }))}
                 eventTimes={{ start: form.start_time, end: form.end_time }}
                 draft={isEdit ? null : {
                   employeeIds: form._pending_employee_ids || [],
@@ -1653,6 +1701,8 @@ function ActivityFormModal({
   onClose,
   saving,
   error,
+  canViewFinance = false,
+  canViewHr = false,
   externalCalendars = [],
   onStaffChanged = null,
 }) {
@@ -1721,6 +1771,20 @@ function ActivityFormModal({
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
+  const permittedPayload = (payload) => {
+    const next = { ...payload };
+    if (!canViewFinance) {
+      for (const key of [
+        'price', 'price_includes_vat', 'collect_registration_payment', 'registration_mode',
+        'payment_link', 'payment_url', 'host_payment_id', 'host_payment_token',
+      ]) delete next[key];
+    }
+    if (!canViewHr) {
+      for (const key of ['staff_pay_mode', 'staff_flat_amount', 'staff_cost', 'staff_rate']) delete next[key];
+    }
+    return next;
+  };
+
   const submit = (e, options = {}) => {
     e.preventDefault();
     if (readOnly) return;
@@ -1740,7 +1804,7 @@ function ActivityFormModal({
     const closeAfter = options.closeAfter !== false;
 
     if (isTemplateEdit) {
-      onSave({
+      onSave(permittedPayload({
         _editing_template: true,
         _template_id: initial._template_id,
         name: String(form.name).trim(),
@@ -1767,7 +1831,7 @@ function ActivityFormModal({
         registration_page_body: form.registration_page_body || '',
         theme: form.registration_theme || {},
         closeAfter,
-      });
+      }));
       return;
     }
 
@@ -1788,7 +1852,7 @@ function ActivityFormModal({
       });
       return;
     }
-    onSave({
+    onSave(permittedPayload({
       ...form,
       end_date: endDateNorm || null,
       staff_role: form.staff_role || null,
@@ -1799,7 +1863,7 @@ function ActivityFormModal({
       price_includes_vat: !!form.price_includes_vat,
       max_participants: form.max_participants === '' ? null : Number(form.max_participants),
       closeAfter,
-    });
+    }));
   };
 
   const title = readOnly
@@ -1831,6 +1895,8 @@ function ActivityFormModal({
         showError={showError}
         submit={submit}
         title={title}
+        canViewFinance={canViewFinance}
+        canViewHr={canViewHr}
         declarationTemplates={declarationTemplates}
         onStaffChanged={onStaffChanged}
       />
@@ -2056,8 +2122,8 @@ function ActivityFormModal({
 
           {!isOverlay && (
             <>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-3)' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: canViewFinance ? '1fr 1fr' : '1fr', gap: 10 }}>
+                {canViewFinance && <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-3)' }}>
                   מחיר
                   <input
                     className="input"
@@ -2067,7 +2133,7 @@ function ActivityFormModal({
                     value={form.price}
                     onChange={(e) => set('price', e.target.value)}
                   />
-                </label>
+                </label>}
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--text-3)' }}>
                   מקסימום משתתפים
                   <input
@@ -2114,6 +2180,7 @@ function ActivityFormModal({
               form={form}
               setForm={setForm}
               readOnly={readOnly}
+              canViewFinance={canViewFinance}
             />
           )}
 
@@ -2126,7 +2193,8 @@ function ActivityFormModal({
                 mode: form.staff_pay_mode === 'flat' ? 'flat' : 'rate',
                 flatAmount: form.staff_flat_amount,
               }}
-              onStaffPayChange={readOnly ? null : (patch) => setForm((prev) => ({ ...prev, ...patch }))}
+              canViewHr={canViewHr}
+              onStaffPayChange={readOnly || !canViewHr ? null : (patch) => setForm((prev) => ({ ...prev, ...patch }))}
               draft={isEdit ? null : {
                 employeeIds: form._pending_employee_ids || [],
                 setEmployeeIds: (ids) => setForm((prev) => ({ ...prev, _pending_employee_ids: ids })),
@@ -3202,7 +3270,12 @@ function OverlaySidebar({
   );
 }
 
-export default function ActivitiesCalendar({ isOwner = false }) {
+export default function ActivitiesCalendar({
+  isOwner = false,
+  canEdit = false,
+  canViewFinance = false,
+  canViewHr = false,
+}) {
   // סוגי הפעילות נמשכים כאן פעם אחת; כל מה שמתחת קורא אותם דרך activityTypes().
   const liveActivityTypes = useActivityTypes();
   const [activities, setActivities] = useState([]);
@@ -3717,6 +3790,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   };
 
   const openCreate = (dateStr, opts = {}) => {
+    if (!canEdit) return;
     if (Date.now() < skipClickUntilRef.current) return;
     // סוג יחיד שנבחר קובע מה נוצר; בלי סוג יחיד נפתח תפריט התבניות הרגיל.
     if (soleType) {
@@ -3736,12 +3810,14 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   };
 
   const openBlankCreate = (dateStr, opts = {}) => {
+    if (!canEdit) return;
     setFormError('');
     setModal(emptyForm(dateStr, opts));
     setBanner('אירוע מותאם — מלאו מחיר, מזמין ודף הרשמה');
   };
 
   const openExternalCreate = (calendarId, dateStr, opts = {}) => {
+    if (!canEdit) return;
     const cal = writableOverlayCalendars.find((c) => c.id === calendarId)
       || writableOverlayCalendars[0]
       || null;
@@ -3762,6 +3838,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   };
 
   const openFromTemplate = (tpl, dateStr, opts = {}) => {
+    if (!canEdit) return;
     setFormError('');
     const base = emptyForm(dateStr, opts);
     const theme = tpl.theme && typeof tpl.theme === 'object' ? tpl.theme : {};
@@ -3800,6 +3877,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   };
 
   const openEditTemplate = (tpl) => {
+    if (!canEdit) return;
     setFormError('');
     const theme = tpl.theme && typeof tpl.theme === 'object' ? tpl.theme : {};
     setModal({
@@ -3831,6 +3909,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   };
 
   const openCreateTemplate = (categoryId = 'wall') => {
+    if (!canEdit) return;
     setFormError('');
     const category = normalizeTemplateCategory(categoryId);
     const defaultType = category === 'ops' ? 'other' : 'event';
@@ -3865,7 +3944,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
     if (!canonical) return;
     const rest = { ...canonical };
     delete rest.occurrenceDate;
-    setModal(rest);
+    setModal(canEdit ? rest : { ...rest, read_only: true });
   };
 
 
@@ -3878,6 +3957,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
    * כך שאפשר לשנות תאריך או שם לפני השמירה.
    */
   const openDuplicate = (activity) => {
+    if (!canEdit) return;
     if (!activity) return;
     setFormError('');
     const copy = { ...activity };
@@ -3913,7 +3993,7 @@ export default function ActivitiesCalendar({ isOwner = false }) {
   };
 
   const persistScheduleChange = async (event, patch, { recordUndo = true } = {}) => {
-    if (!event || !canEditEvent(event)) return;
+    if (!canEdit || !event || !canEditEvent(event)) return;
     const before = snapshotSchedule(event);
     const next = {
       ...before,
@@ -5152,6 +5232,8 @@ export default function ActivitiesCalendar({ isOwner = false }) {
           onClose={() => { setModal(null); setFormError(''); }}
           saving={saving}
           error={formError}
+          canViewFinance={canViewFinance}
+          canViewHr={canViewHr}
           externalCalendars={writableOverlayCalendars}
           onStaffChanged={refreshStaffNames}
         />

@@ -15,6 +15,7 @@ const LeadIntakeForm             = lazy(() => import('./LeadIntakeForm.jsx'));
 const PrivacyPolicy              = lazy(() => import('./PrivacyPolicy.jsx'));
 
 const AuthContext = createContext(null);
+const localPreviewAuthDisabled = import.meta.env.DEV && import.meta.env.VITE_CRM_AUTH_DISABLED === 'true';
 
 export function useAuth() {
   return useContext(AuthContext);
@@ -267,7 +268,11 @@ export default function AuthGate({ children }) {
     fetch('/api/auth/me')
       .then(async (response) => {
         const body = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(body.error || 'לא ניתן לאמת את ההרשאה');
+        if (!response.ok) {
+          const authError = new Error(body.error || 'לא ניתן לאמת את ההרשאה');
+          authError.status = response.status;
+          throw authError;
+        }
         return body;
       })
       .then((body) => {
@@ -278,7 +283,12 @@ export default function AuthGate({ children }) {
       })
       .catch((loadError) => {
         if (!active) return;
-        const localProfile = fallbackProfile();
+        // A deliberate 401/403 from the API is authoritative (notably for a
+        // user blocked in Business Settings). Metadata is only a resilience
+        // fallback when the API itself is temporarily unavailable.
+        const localProfile = loadError.status >= 400 && loadError.status < 500
+          ? null
+          : fallbackProfile();
         if (localProfile) {
           setProfile(localProfile);
           setError('');
@@ -317,6 +327,20 @@ export default function AuthGate({ children }) {
     else if (path.startsWith('/equipment/')) publicPage = <PublicEquipmentPayment />;
     if (!publicPage) return null;
     return <Suspense fallback={publicFallback}>{publicPage}</Suspense>;
+  }
+
+  if (localPreviewAuthDisabled) {
+    const localOwner = {
+      id: 'local-development',
+      email: 'local@crm.test',
+      name: 'תצוגת פיתוח',
+      role: 'owner',
+      roleIds: ['owner'],
+      roleNames: ['מנהל ראשי'],
+      modules: {},
+      sensitive: { finance: true, hr: true },
+    };
+    return <AuthContext.Provider value={{ user: localOwner, role: 'owner', isOwner: true, signOut: () => {} }}>{children}</AuthContext.Provider>;
   }
 
   if (!authConfigured) {

@@ -22,44 +22,56 @@ test('public API contains forms and signed webhook entrypoints only', () => {
   assert.equal(isPublicApiPath('/api/payments'), false);
 });
 
-test('staff can operate leads and attendance but cannot access billing or settings', () => {
-  assert.equal(isStaffRequestAllowed('GET', '/api/students'), true);
+test('legacy operational staff can use attendance, safety and wall-entry APIs only', () => {
+  assert.equal(isStaffRequestAllowed('GET', '/api/operations/roster'), true);
   assert.equal(isStaffRequestAllowed('POST', '/api/attendance/bulk'), true);
-  assert.equal(isStaffRequestAllowed('POST', '/api/whatsapp/reply'), true);
   assert.equal(isStaffRequestAllowed('GET', '/api/trainers'), true);
   assert.equal(isStaffRequestAllowed('GET', '/api/payments'), false);
-  assert.equal(isStaffRequestAllowed('POST', '/api/icount/invoice'), false);
-  assert.equal(isStaffRequestAllowed('POST', '/api/whatsapp/settings'), false);
-  assert.equal(isStaffRequestAllowed('GET', '/api/employees'), true);
-  assert.equal(isStaffRequestAllowed('POST', '/api/pos/sale'), true);
-  assert.equal(isStaffRequestAllowed('GET', '/api/pos/passes'), true);
-  assert.equal(isStaffRequestAllowed('POST', '/api/pos/passes/abc/punch'), true);
-  assert.equal(isStaffRequestAllowed('GET', '/api/pricelist'), true);
-  assert.equal(isStaffRequestAllowed('GET', '/api/cash-register'), true);
-  assert.equal(isStaffRequestAllowed('POST', '/api/cash-register'), true);
-  assert.equal(isStaffRequestAllowed('GET', '/api/pos/sales'), true);
-  assert.equal(isStaffRequestAllowed('GET', '/api/pos/reports'), false);
-  assert.equal(isStaffRequestAllowed('POST', '/api/pos/sync-inventory'), false);
-  assert.equal(isStaffRequestAllowed('GET', '/api/activities'), true);
-  assert.equal(isStaffRequestAllowed('POST', '/api/activities'), true);
-  assert.equal(isStaffRequestAllowed('GET', '/api/activities/unpaid-open'), true);
-  assert.equal(isStaffRequestAllowed('GET', '/api/activity-templates'), true);
-  assert.equal(isStaffRequestAllowed('PATCH', '/api/activities/abc/payment-status'), true);
-  assert.equal(isStaffRequestAllowed('GET', '/api/google-calendar/status'), true);
-  assert.equal(isStaffRequestAllowed('POST', '/api/google-calendar/sync'), true);
-  assert.equal(isStaffRequestAllowed('GET', '/api/google-calendar/auth-url'), false);
-  assert.equal(isStaffRequestAllowed('POST', '/api/google-calendar/disconnect'), false);
   assert.equal(isStaffRequestAllowed('GET', '/api/safety/due-today'), true);
   assert.equal(isStaffRequestAllowed('POST', '/api/safety/inspections'), true);
   assert.equal(isStaffRequestAllowed('GET', '/api/safety/check-types'), true);
-  assert.equal(isStaffRequestAllowed('POST', '/api/safety/check-types'), true);
-  assert.equal(isStaffRequestAllowed('PUT', '/api/safety/check-types/abc'), true);
-  assert.equal(isStaffRequestAllowed('DELETE', '/api/safety/check-types/abc'), true);
+  assert.equal(isStaffRequestAllowed('POST', '/api/safety/check-types'), false);
   assert.equal(isStaffRequestAllowed('POST', '/api/safety/incidents'), true);
-  assert.equal(isStaffRequestAllowed('GET', '/api/students/abc/equipment'), true);
-  assert.equal(isStaffRequestAllowed('POST', '/api/students/abc/equipment/payment-link'), true);
-  assert.equal(isStaffRequestAllowed('PUT', '/api/equipment/item1'), true);
-  assert.equal(isStaffRequestAllowed('POST', '/api/equipment/item1/mark-given'), true);
+  assert.equal(isStaffRequestAllowed('GET', '/api/students'), false);
+  assert.equal(isStaffRequestAllowed('GET', '/api/employees'), false);
+  assert.equal(isStaffRequestAllowed('POST', '/api/groups'), false);
+  assert.equal(isStaffRequestAllowed('POST', '/api/wall-shift/open'), true);
+  assert.equal(isStaffRequestAllowed('GET', '/api/cash-register/session'), false);
+});
+
+test('custom staff permissions are enforced per operational capability', () => {
+  assert.equal(isStaffRequestAllowed('POST', '/api/attendance/bulk', ['attendance']), true);
+  assert.equal(isStaffRequestAllowed('POST', '/api/safety/inspections', ['attendance']), false);
+  assert.equal(isStaffRequestAllowed('POST', '/api/check-ins', ['wall_entry']), true);
+  assert.equal(isStaffRequestAllowed('GET', '/api/operations/roster', ['wall_entry']), true);
+  assert.equal(isStaffRequestAllowed('GET', '/api/operations/roster', ['safety']), true);
+  assert.equal(isStaffRequestAllowed('GET', '/api/auth/me', []), true);
+});
+
+test('module levels and sensitive grants are both enforced', () => {
+  const context = {
+    role: 'staff',
+    modules: { activities: 'view', activity_registrations: 'edit', cash_management: 'edit' },
+    sensitive: { finance: false, hr: false },
+  };
+  assert.equal(isStaffRequestAllowed('GET', '/api/activities', context), true);
+  assert.equal(isStaffRequestAllowed('PUT', '/api/activities/a1', context), false);
+  assert.equal(isStaffRequestAllowed('POST', '/api/activities/a1/registrations', context), true);
+  assert.equal(isStaffRequestAllowed('GET', '/api/cash-register/session', context), false);
+  assert.equal(isStaffRequestAllowed('GET', '/api/activities/a1/host-payment/invoice', context), false);
+});
+
+test('self employee routes require an employee link', () => {
+  const base = { role: 'staff', modules: {}, sensitive: {} };
+  assert.equal(isStaffRequestAllowed('GET', '/api/me/employee', base), false);
+  assert.equal(isStaffRequestAllowed('GET', '/api/me/employee', { ...base, employee_id: 'emp-1' }), true);
+  assert.equal(isStaffRequestAllowed('GET', '/api/settings/users/user-1/employee-file', { ...base, employee_id: 'emp-1' }), false);
+  assert.equal(isStaffRequestAllowed('GET', '/api/employees/emp-2/payroll-documents', { ...base, employee_id: 'emp-1' }), false);
+  assert.equal(isStaffRequestAllowed('GET', '/api/employees/emp-2/payroll-documents', {
+    ...base,
+    modules: { hr: 'view' },
+    sensitive: { hr: true },
+  }), true);
 });
 
 test('roles resolve from metadata and configured email lists', () => {

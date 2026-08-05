@@ -484,7 +484,7 @@ function healthStatusFor(climber, declarations) {
   return dates.some((dt) => isHealthDeclarationValid(dt)) ? 'valid' : 'expired';
 }
 
-export default function CheckInConsole({ students, groups }) {
+export default function CheckInConsole({ students, groups, operationalOnly = false }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClimber, setSelectedClimber] = useState(null);
   const [selectedPasses, setSelectedPasses] = useState([]);
@@ -501,7 +501,7 @@ export default function CheckInConsole({ students, groups }) {
     try {
       const [due, emps] = await Promise.all([
         fetch('/api/safety/due-today').then((r) => (r.ok ? r.json() : [])),
-        fetch('/api/employees').then((r) => (r.ok ? r.json() : [])),
+        fetch(operationalOnly ? '/api/trainers' : '/api/employees').then((r) => (r.ok ? r.json() : [])),
       ]);
       setDueSafety(Array.isArray(due) ? due : []);
       setEmployees(Array.isArray(emps) ? emps : []);
@@ -513,7 +513,9 @@ export default function CheckInConsole({ students, groups }) {
   const refreshCheckins = async () => {
     try {
       const data = await fetch('/api/check-ins').then(r => r.ok ? r.json() : []);
-      const decls = await fetch('/api/health-declarations').then(r => r.ok ? r.json() : []);
+      const decls = operationalOnly
+        ? []
+        : await fetch('/api/health-declarations').then(r => r.ok ? r.json() : []);
       setCheckIns(data);
       setDeclarations(decls);
     } catch (err) {
@@ -676,7 +678,7 @@ export default function CheckInConsole({ students, groups }) {
         </div>
       )}
 
-      <WallShiftPanel
+      {!operationalOnly && <WallShiftPanel
         employees={employees}
         dueSafety={dueSafety}
         onShiftOpened={() => refreshSafety()}
@@ -685,7 +687,7 @@ export default function CheckInConsole({ students, groups }) {
         signingId={signingId}
         signerByCheck={signerByCheck}
         setSignerByCheck={setSignerByCheck}
-      />
+      />}
 
       <div className="grid-2" style={{ alignItems: 'start', gap: 24 }}>
         <div className="card card-p">

@@ -2338,7 +2338,7 @@ function EmployeeOnboardingLinkPanel() {
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
-export default function Employees() {
+export default function Employees({ canViewHr = true, canEditEmployees = true, canViewShifts = true }) {
   const navigate = useNavigate();
   // התפקידים שהמסך מציג נגזרים מהקטלוג, כדי שמחיקה או שינוי שם יופיעו כאן מיד.
   // הקטלוג נטען פעם אחת; עריכה מהחלון שמכאן מחליפה אותו בלי לטעון מחדש.
@@ -2484,9 +2484,9 @@ export default function Employees() {
           if (!r.ok) throw new Error(data?.error || `employees ${r.status}`);
           return data;
         }),
-        fetch('/api/wages').then((r) => r.json()).catch(() => null),
-        fetch('/api/shifts').then((r) => r.json()).catch(() => null),
-        fetch(`/api/work-assignments?from=${from}&to=${to}`).then((r) => r.json()).catch(() => null),
+        canViewHr ? fetch('/api/wages').then((r) => r.json()).catch(() => null) : Promise.resolve([]),
+        canViewShifts ? fetch('/api/shifts').then((r) => r.json()).catch(() => null) : Promise.resolve([]),
+        (canViewShifts || canViewHr) ? fetch(`/api/work-assignments?from=${from}&to=${to}`).then((r) => r.json()).catch(() => null) : Promise.resolve([]),
         fetch('/api/activities').then((r) => r.json()).catch(() => null),
         fetch('/api/groups').then((r) => r.json()).catch(() => null),
       ]);
@@ -3024,7 +3024,7 @@ export default function Employees() {
     <div className="fade-in">
       
       {/* ─── Modals ───────────────────────────────────────────────────────── */}
-      {showWageForm && (
+      {canViewHr && showWageForm && (
         <WageFormModal
           wage={editingWage}
           employees={employees}
@@ -3066,9 +3066,9 @@ export default function Employees() {
                 type="button"
                 className="avatar avatar-lg"
                 title={selectedEmployee.id ? 'בחירת אייקון' : 'שמרו את העובד ואז בחרו אייקון'}
-                onClick={() => selectedEmployee.id && setAvatarPickerOpen((v) => !v)}
+                onClick={() => selectedEmployee.id && canViewHr && canEditEmployees && setAvatarPickerOpen((v) => !v)}
                 style={{
-                  border: 'none', cursor: selectedEmployee.id ? 'pointer' : 'default', fontFamily: 'inherit',
+                  border: 'none', cursor: selectedEmployee.id && canViewHr && canEditEmployees ? 'pointer' : 'default', fontFamily: 'inherit',
                   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                   color: avatarColor,
                 }}
@@ -3079,7 +3079,7 @@ export default function Employees() {
                 <div style={{ fontSize: 26, fontWeight: 800, lineHeight: 1.15, letterSpacing: '-0.02em' }}>
                   {selectedEmployee.name?.trim() || (selectedEmployee.id ? 'עובד' : 'עובד חדש')}
                 </div>
-                {selectedEmployee.id && (
+                {selectedEmployee.id && canViewHr && (
                   <div style={{ marginTop: 6 }}>
                     <PaymentMethodBadge method={selectedEmployee.payment_method} />
                   </div>
@@ -3093,7 +3093,7 @@ export default function Employees() {
               <X size={16} />
             </button>
 
-            {avatarPickerOpen && (
+            {canViewHr && canEditEmployees && avatarPickerOpen && (
               <div
                 style={{
                   position: 'absolute', top: '100%', right: 0, marginTop: 8, zIndex: 20,
@@ -3133,9 +3133,9 @@ export default function Employees() {
           <div className="tab-bar" style={{ marginBottom: 14, flexWrap: 'wrap' }}>
             {[
               { key: 'file',   label: 'תיק אישי',       icon: User },
-              { key: 'wage',   label: 'תפקידים ושכר',   icon: Coins },
-              { key: 'shifts', label: 'משמרות',         icon: CalendarRange },
-              { key: 'alerts', label: 'התראות',         icon: Bell },
+              ...(canViewHr ? [{ key: 'wage', label: 'תפקידים ושכר', icon: Coins }] : []),
+              ...(canViewShifts ? [{ key: 'shifts', label: 'משמרות', icon: CalendarRange }] : []),
+              ...(canViewHr ? [{ key: 'alerts', label: 'התראות', icon: Bell }] : []),
             ].map(({ key, label, icon: Icon }) => (
               <button
                 key={key}
@@ -3177,7 +3177,7 @@ export default function Employees() {
             )}
 
             {/* טופס אחד לכל הלשוניות — נשאר מורכב גם במשמרות כדי לא לאבד עריכה. */}
-            <div style={{ display: formSectionForDrawer(drawerTab) ? 'block' : 'none' }}>
+            {canViewHr ? <div style={{ display: formSectionForDrawer(drawerTab) ? 'block' : 'none' }}>
               <EmployeeFormModal
                 key={selectedEmployee.id || 'new'}
                 employee={selectedEmployee.id ? selectedEmployee : null}
@@ -3188,14 +3188,37 @@ export default function Employees() {
                 onSave={handleSaveEmployee}
                 onClose={() => {}}
               />
-            </div>
+            </div> : drawerTab === 'file' && (
+              <div className="card card-p" style={{ display: 'grid', gap: 14 }}>
+                <div>
+                  <div className="form-label">שם</div>
+                  <strong>{selectedEmployee.name || '—'}</strong>
+                </div>
+                <div>
+                  <div className="form-label">סטטוס מקצועי</div>
+                  <span className={`badge ${selectedEmployee.is_active ? 'badge-green' : 'badge-danger'}`}>
+                    {selectedEmployee.is_active ? 'פעיל' : 'לא פעיל'}
+                  </span>
+                </div>
+                <div>
+                  <div className="form-label">הסמכות ותפקידים</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {(selectedEmployee.certifications || []).map((role) => <span key={role} className="badge">{role}</span>)}
+                    {(selectedEmployee.certifications || []).length === 0 && <span style={{ color: 'var(--text-3)' }}>לא הוגדרו</span>}
+                  </div>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
+                  פרטי שכר, בנק, פנסיה ומסמכים אישיים מוסתרים בהתאם להרשאות שלך.
+                </div>
+              </div>
+            )}
           </div>
         </div>
         </>
       )}
 
       {/* Selected Wage Detail Panel */}
-      {selectedWage && (
+      {canViewHr && selectedWage && (
         <div style={{
           position: 'fixed', top: 0, left: 0, height: '100vh', width: 400,
           background: '#0D1117', borderRight: '1px solid var(--border)',
@@ -3260,31 +3283,31 @@ export default function Employees() {
           <div className="stat-value">{employees.filter(e => e.is_active).length}</div>
           <div className="stat-sub">פעילים במערכת</div>
         </div>
-        <div className="card stat-card" style={{ '--stat-color': '#10B981' }} onClick={() => setActiveTab('shifts')}>
+        {canViewShifts && <div className="card stat-card" style={{ '--stat-color': '#10B981' }} onClick={() => setActiveTab('shifts')}>
           <div className="stat-label">עובדים במשמרת כרגע</div>
           <div className="stat-value">{clockedInCount}</div>
           <div className="stat-sub">שעון נוכחות פתוח</div>
-        </div>
-        <div className="card stat-card" style={{ '--stat-color': '#F59E0B' }} onClick={() => setActiveTab('wages')}>
+        </div>}
+        {canViewHr && <div className="card stat-card" style={{ '--stat-color': '#F59E0B' }} onClick={() => setActiveTab('wages')}>
           <div className="stat-label">הסכמי שכר פעילים</div>
           <div className="stat-value">{wages.length}</div>
           <div className="stat-sub">מקושרים למאמנים</div>
-        </div>
+        </div>}
       </div>
 
       {/* ─── Header Toolbar ────────────────────────────────────────────────── */}
       <div className="section-header" style={{ marginBottom: 20 }}>
         <div>
-          <div className="section-title">ניהול עובדים, שכר ותעודות</div>
-          <div className="section-sub">מעקב דיווחי משמרות, הסכמי שכר ותאימות תעודות מזהות של המאמנים</div>
+          <div className="section-title">{canViewHr ? 'ניהול עובדים, שכר ותעודות' : 'עובדים ותפקידים מקצועיים'}</div>
+          <div className="section-sub">{canViewHr ? 'מעקב דיווחי משמרות, הסכמי שכר ותאימות תעודות מזהות של המאמנים' : 'מידע מקצועי בלבד; נתוני שכר ומידע אישי מוסתרים'}</div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-ghost btn-sm" onClick={() => { setEditingWage(null); setShowWageForm(true); }}>
+          {canViewHr && <button className="btn btn-ghost btn-sm" onClick={() => { setEditingWage(null); setShowWageForm(true); }}>
             <Plus size={14} /> הסכם שכר חדש
-          </button>
-          <button className="btn btn-primary btn-sm" onClick={openNewEmployeeDrawer}>
+          </button>}
+          {canViewHr && canEditEmployees && <button className="btn btn-primary btn-sm" onClick={openNewEmployeeDrawer}>
             <Plus size={14} /> עובד חדש
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -3292,12 +3315,12 @@ export default function Employees() {
       <div className="tab-bar">
         {[
           { key: 'permanent', label: 'עובדים',               icon: Users },
-          { key: 'certs',     label: 'תעודות והסמכות',       icon: Award },
-          { key: 'wages',     label: 'הסכמי שכר',            icon: Coins },
-          { key: 'shifts',    label: 'שעון נוכחות ומשמרות',  icon: Clock },
-          { key: 'payroll',   label: 'תשלום חודשי',          icon: Banknote },
-          { key: 'settings',  label: 'הגדרות',               icon: Settings2 },
-          { key: 'onboard-link', label: 'קישור קליטה',       icon: Link2 },
+          ...(canViewHr ? [{ key: 'certs', label: 'תעודות והסמכות', icon: Award }] : []),
+          ...(canViewHr ? [{ key: 'wages', label: 'הסכמי שכר', icon: Coins }] : []),
+          ...(canViewShifts ? [{ key: 'shifts', label: 'שעון נוכחות ומשמרות', icon: Clock }] : []),
+          ...(canViewHr ? [{ key: 'payroll', label: 'תשלום חודשי', icon: Banknote }] : []),
+          ...(canViewHr ? [{ key: 'settings', label: 'הגדרות', icon: Settings2 }] : []),
+          ...(canViewHr ? [{ key: 'onboard-link', label: 'קישור קליטה', icon: Link2 }] : []),
         ].map(({ key, label, icon: Icon }) => (
           <button
             key={key}
@@ -3309,9 +3332,9 @@ export default function Employees() {
         ))}
         {/* הגדרה כלל-מערכתית ולא לשונית תוכן — לכן היא נפתחת כחלון מכאן,
             במקום לחייב לפתוח כרטיס של עובד אקראי כדי להגיע אליה. */}
-        <button className="tab-pill" onClick={() => setShowCatalog(true)}>
+        {canViewHr && <button className="tab-pill" onClick={() => setShowCatalog(true)}>
           <Settings2 size={14} /> תפקידים וסוגי פעילות
-        </button>
+        </button>}
       </div>
 
       {showCatalog && (
@@ -3387,7 +3410,7 @@ export default function Employees() {
               <Search className="input-icon" size={15} />
               <input
                 className="input input-sm"
-                placeholder="חיפוש שם, טלפון..."
+                placeholder={canViewHr ? 'חיפוש שם, טלפון...' : 'חיפוש שם...'}
                 style={{ width: '100%', paddingRight: 32 }}
                 value={empSearch}
                 onChange={e => setEmpSearch(e.target.value)}
@@ -3445,11 +3468,11 @@ export default function Employees() {
                   <th onClick={() => handleSort('status')} style={{ cursor: 'pointer' }}>סטטוס {empSortConfig.key === 'status' ? (empSortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
                   <th onClick={() => handleSort('name')} style={{ cursor: 'pointer' }}>שם מלא {empSortConfig.key === 'name' ? (empSortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
                   <th>הסמכות</th>
-                  <th>מקבל תשלום ב..</th>
-                  <th onClick={() => handleSort('hours')} style={{ cursor: 'pointer' }}>שעות החודש {empSortConfig.key === 'hours' ? (empSortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
-                  <th onClick={() => handleSort('pay')} style={{ cursor: 'pointer' }}>סה"כ תשלומים {empSortConfig.key === 'pay' ? (empSortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>
-                  <th>טלפון</th>
-                  <th>עריכה פנימית</th>
+                  {canViewHr && <th>מקבל תשלום ב..</th>}
+                  {canViewShifts && <th onClick={() => handleSort('hours')} style={{ cursor: 'pointer' }}>שעות החודש {empSortConfig.key === 'hours' ? (empSortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>}
+                  {canViewHr && <th onClick={() => handleSort('pay')} style={{ cursor: 'pointer' }}>סה"כ תשלומים {empSortConfig.key === 'pay' ? (empSortConfig.direction === 'asc' ? '↑' : '↓') : ''}</th>}
+                  {canViewHr && <th>טלפון</th>}
+                  <th>{canViewHr && canEditEmployees ? 'עריכה פנימית' : 'פרטים מקצועיים'}</th>
                 </tr>
               </thead>
               <tbody>
@@ -3462,9 +3485,9 @@ export default function Employees() {
                           <button
                             type="button"
                             className={`badge ${emp.is_active ? 'badge-green' : 'badge-danger'}`}
-                            title={emp.is_active ? 'לחץ להשבתה' : 'לחץ להפעלה'}
-                            onClick={(e) => { e.stopPropagation(); handleToggleActive(emp); }}
-                            style={{ cursor: 'pointer', border: 'none', fontFamily: 'inherit' }}
+                            title={canEditEmployees ? (emp.is_active ? 'לחץ להשבתה' : 'לחץ להפעלה') : undefined}
+                            onClick={(e) => { e.stopPropagation(); if (canEditEmployees) handleToggleActive(emp); }}
+                            style={{ cursor: canEditEmployees ? 'pointer' : 'default', border: 'none', fontFamily: 'inherit' }}
                           >
                             {emp.is_active ? 'פעיל' : 'לא פעיל'}
                           </button>
@@ -3486,18 +3509,18 @@ export default function Employees() {
                             )}
                           </div>
                         </td>
-                        <td><PaymentMethodBadge method={emp.payment_method} /></td>
-                        <td style={{ fontWeight: 600 }}>{stats.hours} שעות</td>
-                        <td style={{ color: 'var(--green)', fontWeight: 700 }}>
+                        {canViewHr && <td><PaymentMethodBadge method={emp.payment_method} /></td>}
+                        {canViewShifts && <td style={{ fontWeight: 600 }}>{stats.hours} שעות</td>}
+                        {canViewHr && <td style={{ color: 'var(--green)', fontWeight: 700 }}>
                           ₪{(stats.total ?? stats.pay).toLocaleString()}
                           {stats.travel > 0 && (
                             <span style={{ fontSize: 10, color: 'var(--text-3)', fontWeight: 500 }}>
                               {' '}· נסיעות ₪{stats.travel}
                             </span>
                           )}
-                        </td>
+                        </td>}
                         {/* מספר מוצג הוא מספר שרוצים לחייג אליו או לכתוב אליו. */}
-                        <td onClick={(e) => e.stopPropagation()}>
+                        {canViewHr && <td onClick={(e) => e.stopPropagation()}>
                           {emp.phone ? (
                             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                               <a
@@ -3521,11 +3544,11 @@ export default function Employees() {
                           ) : (
                             <span style={{ color: 'var(--text-3)' }}>—</span>
                           )}
-                        </td>
+                        </td>}
                         <td onClick={e => e.stopPropagation()}>
                           <div style={{ display: 'flex', gap: 6 }}>
-                            <button className="btn btn-ghost btn-icon btn-xs" onClick={() => openEmployeeDrawer(emp, 'file')} title="פתיחת תיק">
-                              <Edit2 size={12} />
+                            <button className="btn btn-ghost btn-icon btn-xs" onClick={() => openEmployeeDrawer(emp, 'file')} title={canViewHr && canEditEmployees ? 'פתיחת תיק לעריכה' : 'פתיחת פרטים מקצועיים'}>
+                              {canViewHr && canEditEmployees ? <Edit2 size={12} /> : <User size={12} />}
                             </button>
                           </div>
                         </td>

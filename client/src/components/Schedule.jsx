@@ -1628,7 +1628,7 @@ function StaffAttendanceSection({
   );
 }
 
-function AttendanceModal({ group, students, parents, employees, initialDate, onClose, onMarked, onOpenStudent, canManageBilling = false }) {
+function AttendanceModal({ group, students, parents, employees, initialDate, onClose, onMarked, onOpenStudent, canManageBilling = false, operationalOnly = false }) {
   const members = students.filter(s => studentInGroup(s, group.id) && s.status !== 'archived');
   const [date, setDate] = useState(initialDate || localDateStr());
   const [view, setView] = useState('sheet'); // 'sheet' | 'history'
@@ -1734,6 +1734,10 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
 
   /** ציוד למסירה ומצב מבחן האבטחה — מה שהמדריך צריך לראות ליד השם. */
   const loadBrief = useCallback(() => {
+    if (operationalOnly) {
+      setBrief({});
+      return;
+    }
     fetch(`/api/groups/${encodeURIComponent(group.id)}/training-brief?date=${date}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((body) => {
@@ -1741,7 +1745,7 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
         setBrief(Object.fromEntries((body.rows || []).map((row) => [row.student_id, row])));
       })
       .catch(() => {});
-  }, [group.id, date]);
+  }, [group.id, date, operationalOnly]);
 
   useEffect(() => { loadBrief(); }, [loadBrief]);
 
@@ -1846,7 +1850,7 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <EquipmentLegend />
+                {!operationalOnly && <EquipmentLegend />}
                 {members.map(s => {
                   const parent = parents.find(p => p.id === s.parentId);
                   const currentStatus = normalizeAttStatus(state[s.id] || 'pending');
@@ -1870,16 +1874,18 @@ function AttendanceModal({ group, students, parents, employees, initialDate, onC
                         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 5 }}>
                           {isIntro && <IntroPill />}
                           <AbsenceStreakPill streak={absenceStreakFor(s.id)} />
-                          <EquipmentIcons
-                            items={studentBrief?.equipment}
-                            size={34}
-                            onEdit={s.isAdult ? null : (item) => setEquipmentFor({ student: s, itemId: item.id })}
-                          />
-                          <SafetyPill
-                            safety={studentBrief?.safety}
-                            size={34}
-                            onClick={() => setSafetyFor(s)}
-                          />
+                          {!operationalOnly && <>
+                            <EquipmentIcons
+                              items={studentBrief?.equipment}
+                              size={34}
+                              onEdit={s.isAdult ? null : (item) => setEquipmentFor({ student: s, itemId: item.id })}
+                            />
+                            <SafetyPill
+                              safety={studentBrief?.safety}
+                              size={34}
+                              onClick={() => setSafetyFor(s)}
+                            />
+                          </>}
                           {savingId === s.id && <span style={{ fontSize: 11, color: 'var(--text-3)' }}>שומר...</span>}
                         </div>
                       </div>
@@ -3044,7 +3050,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
 }
 
 // ─── Main Schedule Component ──────────────────────────────────────────────────
-export default function Schedule({ groups, students, parents, setGroups, setStudents, setParents, canManageBilling = false }) {
+export default function Schedule({ groups, students, parents, setGroups, setStudents, setParents, canManageBilling = false, operationalOnly = false }) {
   const [studentFileId,   setStudentFileId]   = useState(null);
   const [selectedGroup,   setSelectedGroup]   = useState(null);
   const [editingGroup,    setEditingGroup]     = useState(null);
@@ -3053,7 +3059,7 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
   const [attendanceDate,  setAttendanceDate]   = useState(localDateStr());
   const [dayMarks,        setDayMarks]         = useState({}); // groupId -> { marked, present, total }
   const [dayVacation,     setDayVacation]      = useState(null); // «חופשה מאימונים» covering the day
-  const [viewMode,        setViewMode]         = useState('week');
+  const [viewMode,        setViewMode]         = useState(operationalOnly ? 'attendance' : 'week');
   const [employees,       setEmployees]        = useState([]);
   const [daysMenuOpen,    setDaysMenuOpen]     = useState(false);
   const daysMenuRef = useRef(null);
@@ -3323,10 +3329,11 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
           onClose={() => setAttendanceGroup(null)}
           onMarked={() => setAttendanceGroup(g => (g ? { ...g } : g))}
           canManageBilling={canManageBilling}
-          onOpenStudent={setStudentFileId}
+          operationalOnly={operationalOnly}
+          onOpenStudent={operationalOnly ? null : setStudentFileId}
         />
       )}
-      {(showAddModal || editingGroup) && (
+      {!operationalOnly && (showAddModal || editingGroup) && (
         <GroupFormModal
           group={editingGroup || null}
           employees={employees}
@@ -3335,7 +3342,7 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
           onClose={() => { setEditingGroup(null); setShowAddModal(false); }}
         />
       )}
-      {liveSelectedGroup && !editingGroup && !showAddModal && !attendanceGroup && (
+      {!operationalOnly && liveSelectedGroup && !editingGroup && !showAddModal && !attendanceGroup && (
         <GroupPanel
           group={liveSelectedGroup}
           students={students}
@@ -3365,14 +3372,14 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <div className="tab-bar tab-bar-inline">
+          {!operationalOnly && <div className="tab-bar tab-bar-inline">
             <button className={`tab-pill ${viewMode === 'attendance' ? 'active' : ''}`}
               onClick={() => setViewMode('attendance')}><UserCheck size={14} /> נוכחות</button>
             <button className={`tab-pill ${viewMode === 'week' ? 'active' : ''}`}
               onClick={() => setViewMode('week')}><Calendar size={14} /> שבוע</button>
             <button className={`tab-pill ${viewMode === 'list' ? 'active' : ''}`}
               onClick={() => setViewMode('list')}><List size={14} /> רשימה</button>
-          </div>
+          </div>}
           {viewMode === 'week' && (
             <div ref={daysMenuRef} style={{ position: 'relative' }}>
               <button
@@ -3431,9 +3438,9 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
               )}
             </div>
           )}
-          <button className="btn btn-primary btn-sm" onClick={openAdd}>
+          {!operationalOnly && <button className="btn btn-primary btn-sm" onClick={openAdd}>
             <Plus size={14} /> קבוצה חדשה
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -3537,9 +3544,9 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
                       <button className="btn btn-primary btn-sm" onClick={() => openAttendance(g, attendanceDate)}>
                         <Users size={14} /> פתח נוכחות
                       </button>
-                      <button className="btn btn-ghost btn-sm" onClick={() => openPanel(g)}>
+                      {!operationalOnly && <button className="btn btn-ghost btn-sm" onClick={() => openPanel(g)}>
                         פרטי קבוצה
-                      </button>
+                      </button>}
                     </div>
                   </div>
                 );

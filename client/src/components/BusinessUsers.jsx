@@ -1,0 +1,563 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  AlertTriangle, Award, Ban, Briefcase, CalendarDays, CalendarRange, Check, Coins,
+  Eye, FileHeart, GraduationCap, LayoutDashboard, Loader2, LockKeyhole, LogIn,
+  MailPlus, MessageSquare, Monitor, Mountain, Package, Pencil, Plus, Save,
+  Settings2, ShieldCheck, Sparkles, Trash2, ExternalLink, UserCog, UserRoundCheck,
+  UserRoundX, UsersRound, X, Zap,
+} from 'lucide-react';
+import AppSelect from './AppSelect.jsx';
+import EmployeeSelf from './EmployeeSelf.jsx';
+
+const STATUS = {
+  invited: { label: 'מוזמן', className: 'is-invited' },
+  active: { label: 'פעיל', className: 'is-active' },
+  blocked: { label: 'חסום', className: 'is-blocked' },
+};
+const LEVELS = [
+  { id: 'none', label: 'ללא גישה', Icon: Ban },
+  { id: 'view', label: 'צפייה', Icon: Eye },
+  { id: 'edit', label: 'עריכה', Icon: Pencil },
+];
+
+const PREVIEW_PAGES = [
+  { id: 'dashboard', label: 'מסך עבודה', Icon: LayoutDashboard, modules: ['dashboard'] },
+  { id: 'checkin', label: 'מסוף כניסה', Icon: LogIn, modules: ['checkin'] },
+  { id: 'customers', label: 'לקוחות ולידים', Icon: UsersRound, modules: ['customers'] },
+  { id: 'classes', label: 'לוח חוגים', Icon: CalendarDays, modules: ['classes', 'attendance'] },
+  { id: 'equipment', label: 'ציוד לאימונים', Icon: Package, modules: ['equipment'] },
+  { id: 'activities', label: 'יומן ואירועים', Icon: CalendarRange, modules: ['activities', 'activity_registrations'] },
+  { id: 'broadcasts', label: 'דיוור', Icon: MessageSquare, modules: ['broadcasts'] },
+  { id: 'cash', label: 'קופה ומכירה', Icon: Coins, modules: ['pos', 'cash_management'] },
+  { id: 'safety', label: 'בדיקות בטיחות', Icon: ShieldCheck, modules: ['safety_checks', 'safety_settings'] },
+  { id: 'employees', label: 'עובדים ומשמרות', Icon: UserCog, modules: ['employees', 'shifts', 'hr'] },
+  { id: 'tests', label: 'מבחנים', Icon: Award, modules: ['level_tests', 'safety_tests', 'lead_tests'] },
+  { id: 'health', label: 'הצהרות וטפסים', Icon: FileHeart, modules: ['health'] },
+  { id: 'automations', label: 'אוטומציות', Icon: Zap, modules: ['automations'] },
+  { id: 'assistant', label: 'עוזר חכם', Icon: Sparkles, modules: ['assistant'] },
+  { id: 'myfile', label: 'התיק שלי', Icon: Briefcase, employeeOnly: true },
+];
+
+function previewPageLevel(page, preview) {
+  if (page.employeeOnly) return preview?.employee_id ? 'view' : 'none';
+  const rank = { none: 0, view: 1, edit: 2 };
+  return (page.modules || []).reduce((best, moduleId) => (
+    rank[preview?.modules?.[moduleId]] > rank[best] ? preview.modules[moduleId] : best
+  ), 'none');
+}
+
+function roleVisual(role = {}) {
+  const id = String(role.id || '').toLowerCase();
+  const name = String(role.name || '');
+  if (id === 'owner') return { Icon: ShieldCheck, tone: 'owner' };
+  if (id === 'employee') return { Icon: Briefcase, tone: 'employee' };
+  if (id === 'operations' || id === 'operations-manager') return { Icon: Settings2, tone: 'operations' };
+  if (id === 'instructor' || /מדריך|הדרכה/.test(name)) return { Icon: GraduationCap, tone: 'instructor' };
+  if (id === 'safety-officer' || /בטיחות/.test(name)) return { Icon: ShieldCheck, tone: 'safety' };
+  if (id === 'reception' || /קבלה|כניסה/.test(name)) return { Icon: LogIn, tone: 'reception' };
+  if (id === 'staff' || /צוות/.test(name)) return { Icon: UsersRound, tone: 'staff' };
+  if (/קיר|טיפוס/.test(name)) return { Icon: Mountain, tone: 'wall' };
+  return { Icon: UserCog, tone: 'custom' };
+}
+
+function RoleIcon({ role, size = 15 }) {
+  const { Icon, tone } = roleVisual(role);
+  return <Icon className={`business-role-icon is-${tone}`} size={size} aria-hidden="true" />;
+}
+
+function RolePicker({ roles, value, onChange, disabled = false }) {
+  const selected = new Set(value || []);
+  return (
+    <div className={`business-role-picker ${disabled ? 'is-disabled' : ''}`}>
+      {roles.map((role) => {
+        const active = selected.has(role.id);
+        return (
+          <button
+            type="button"
+            key={role.id}
+            className={[active ? 'is-selected' : '', role.id === 'employee' ? 'is-employee' : ''].filter(Boolean).join(' ')}
+            disabled={disabled}
+            onClick={() => {
+              const next = new Set(selected);
+              if (active) next.delete(role.id); else next.add(role.id);
+              onChange([...next]);
+            }}
+          >
+            <RoleIcon role={role} size={13} />{role.name}{active && <Check className="business-role-picker-check" size={12} />}
+          </button>
+        );
+      })}
+      {roles.length === 0 && <span className="business-users-empty">אין תפקידים לבחירה.</span>}
+    </div>
+  );
+}
+
+export default function BusinessUsers() {
+  const [users, setUsers] = useState([]);
+  const [roles, setRoles] = useState([]);
+  const [moduleCatalog, setModuleCatalog] = useState([]);
+  const [sensitiveCatalog, setSensitiveCatalog] = useState([]);
+  const [selectedRoleId, setSelectedRoleId] = useState('');
+  const [form, setForm] = useState({ name: '', email: '', role_ids: [] });
+  const [newRoleName, setNewRoleName] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [replacementRoleId, setReplacementRoleId] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [busyId, setBusyId] = useState('');
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [activeSection, setActiveSection] = useState('users');
+  const [previewTarget, setPreviewTarget] = useState(null);
+  const [previewData, setPreviewData] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState('');
+  const [previewEmployeeOpen, setPreviewEmployeeOpen] = useState(false);
+
+  const assignableRoles = useMemo(() => roles.filter((role) => !role.locked), [roles]);
+  const inviteRoles = useMemo(() => {
+    const employeeRole = roles.find((role) => role.id === 'employee');
+    return employeeRole ? [employeeRole, ...assignableRoles] : assignableRoles;
+  }, [roles, assignableRoles]);
+  const selectedRole = roles.find((role) => role.id === selectedRoleId) || roles[0] || null;
+  const groupedModules = useMemo(() => {
+    const groups = new Map();
+    for (const module of moduleCatalog) {
+      if (!groups.has(module.group)) groups.set(module.group, []);
+      groups.get(module.group).push(module);
+    }
+    return [...groups.entries()];
+  }, [moduleCatalog]);
+  const visiblePreviewPages = useMemo(() => PREVIEW_PAGES
+    .map((page) => ({ ...page, level: previewPageLevel(page, previewData) }))
+    .filter((page) => page.level !== 'none'), [previewData]);
+
+  const load = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const [usersResponse, rolesResponse] = await Promise.all([
+        fetch('/api/settings/users'),
+        fetch('/api/settings/user-roles'),
+      ]);
+      const usersBody = await usersResponse.json().catch(() => ({}));
+      const rolesBody = await rolesResponse.json().catch(() => ({}));
+      if (!usersResponse.ok) throw new Error(usersBody.error || 'טעינת המשתמשים נכשלה');
+      if (!rolesResponse.ok) throw new Error(rolesBody.error || 'טעינת התפקידים נכשלה');
+      const nextRoles = Array.isArray(rolesBody.roles) ? rolesBody.roles : [];
+      setUsers(Array.isArray(usersBody) ? usersBody : []);
+      setRoles(nextRoles);
+      setModuleCatalog(Array.isArray(rolesBody.modules) ? rolesBody.modules : []);
+      setSensitiveCatalog(Array.isArray(rolesBody.sensitive) ? rolesBody.sensitive : []);
+      setSelectedRoleId((current) => nextRoles.some((role) => role.id === current) ? current : (nextRoles.find((role) => !role.locked)?.id || nextRoles[0]?.id || ''));
+    } catch (err) {
+      setError(err.message || 'טעינת המשתמשים והתפקידים נכשלה');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const flash = (text) => {
+    setError('');
+    setMessage(text);
+  };
+
+  const updateRoleDraft = (roleId, patch) => setRoles((current) => current.map((role) => role.id === roleId ? { ...role, ...patch } : role));
+
+  const setModuleLevel = (role, moduleId, level) => updateRoleDraft(role.id, {
+    modules: { ...(role.modules || {}), [moduleId]: level },
+  });
+
+  const saveRole = async (role) => {
+    setBusyId(`role:${role.id}`);
+    setError('');
+    setMessage('');
+    try {
+      const response = await fetch(`/api/settings/user-roles/${encodeURIComponent(role.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: role.name, modules: role.modules, sensitive: role.sensitive }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'שמירת התפקיד נכשלה');
+      updateRoleDraft(role.id, body);
+      setUsers((current) => current.map((user) => user.role_ids?.includes(role.id)
+        ? { ...user, role_names: (user.role_ids || []).map((id) => id === role.id ? body.name : roles.find((item) => item.id === id)?.name || id) }
+        : user));
+      flash(`התפקיד „${body.name}” נשמר`);
+    } catch (err) {
+      setError(err.message || 'שמירת התפקיד נכשלה');
+      await load();
+    } finally {
+      setBusyId('');
+    }
+  };
+
+  const createRole = async (event) => {
+    event.preventDefault();
+    setBusyId('new-role');
+    setError('');
+    try {
+      const response = await fetch('/api/settings/user-roles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newRoleName, modules: {}, sensitive: {} }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'יצירת התפקיד נכשלה');
+      setRoles((current) => [...current, body]);
+      setSelectedRoleId(body.id);
+      setNewRoleName('');
+      flash(`התפקיד „${body.name}” נוצר`);
+    } catch (err) {
+      setError(err.message || 'יצירת התפקיד נכשלה');
+    } finally {
+      setBusyId('');
+    }
+  };
+
+  const deleteRole = async () => {
+    if (!deleteTarget) return;
+    setBusyId(`delete-role:${deleteTarget.id}`);
+    setError('');
+    try {
+      const response = await fetch(`/api/settings/user-roles/${encodeURIComponent(deleteTarget.id)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ replacement_role_id: replacementRoleId || null }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'מחיקת התפקיד נכשלה');
+      setDeleteTarget(null);
+      setReplacementRoleId('');
+      flash(body.reassigned ? `התפקיד נמחק ו־${body.reassigned} משתמשים הועברו לתפקיד החלופי` : 'התפקיד נמחק');
+      await load();
+    } catch (err) {
+      setError(err.message || 'מחיקת התפקיד נכשלה');
+    } finally {
+      setBusyId('');
+    }
+  };
+
+  const invite = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    setMessage('');
+    try {
+      const employeeAccessRequested = form.role_ids.includes('employee');
+      const response = await fetch('/api/settings/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...form,
+          role_ids: form.role_ids.filter((roleId) => roleId !== 'employee'),
+          employee_access_requested: employeeAccessRequested,
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'שליחת ההזמנה נכשלה');
+      setForm({ name: '', email: '', role_ids: [] });
+      flash(`הזמנה נשלחה אל ${body.email}`);
+      await load();
+    } catch (err) {
+      setError(err.message || 'שליחת ההזמנה נכשלה');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const updateUser = async (user, patch, successMessage) => {
+    setBusyId(`user:${user.id}`);
+    setError('');
+    setMessage('');
+    try {
+      const response = await fetch(`/api/settings/users/${encodeURIComponent(user.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'עדכון המשתמש נכשל');
+      setUsers((current) => current.map((row) => row.id === user.id ? { ...row, ...body } : row));
+      flash(successMessage);
+    } catch (err) {
+      setError(err.message || 'עדכון המשתמש נכשל');
+    } finally {
+      setBusyId('');
+    }
+  };
+
+  const setAccess = (user) => {
+    const nextStatus = user.status === 'blocked' ? 'active' : 'blocked';
+    return updateUser(user, { status: nextStatus }, nextStatus === 'blocked' ? `הגישה של ${user.name} נחסמה` : `הגישה של ${user.name} הופעלה`);
+  };
+
+  const removeAccess = async (user) => {
+    if (!window.confirm(`להסיר את ${user.name} מרשימת המשתמשים המורשים?\n\nהכניסה ל־CRM תבוטל, אך תיק העובד, המשמרות והמסמכים לא יימחקו. ניתן להזמין את המשתמש מחדש בעתיד.`)) return;
+    setBusyId(`user:${user.id}`);
+    setError('');
+    try {
+      const response = await fetch(`/api/settings/users/${encodeURIComponent(user.id)}`, { method: 'DELETE' });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'הסרת הגישה נכשלה');
+      setUsers((current) => current.filter((row) => row.id !== user.id));
+      flash(`הגישה של ${user.name} הוסרה`);
+    } catch (err) {
+      setError(err.message || 'הסרת הגישה נכשלה');
+    } finally {
+      setBusyId('');
+    }
+  };
+
+  const openUserPreview = async (user) => {
+    setPreviewTarget(user);
+    setPreviewEmployeeOpen(false);
+    setPreviewData(null);
+    setPreviewError('');
+    setPreviewLoading(true);
+    try {
+      const response = await fetch(`/api/settings/users/${encodeURIComponent(user.id)}/preview`);
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'טעינת תצוגת המשתמש נכשלה');
+      setPreviewData(body);
+    } catch (err) {
+      setPreviewError(err.message || 'טעינת תצוגת המשתמש נכשלה');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const sendPasswordReset = async (user) => {
+    if (!window.confirm(`לשלוח אל ${user.email} קישור מאובטח לאיפוס הסיסמה?`)) return;
+    setBusyId(`reset:${user.id}`);
+    setError('');
+    setMessage('');
+    try {
+      const response = await fetch(`/api/settings/users/${encodeURIComponent(user.id)}/password-reset`, { method: 'POST' });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'שליחת קישור האיפוס נכשלה');
+      flash(`קישור לאיפוס הסיסמה נשלח אל ${body.email}`);
+    } catch (err) {
+      setError(err.message || 'שליחת קישור האיפוס נכשלה');
+    } finally {
+      setBusyId('');
+    }
+  };
+
+  if (loading) return <div className="business-users-loading"><Loader2 size={18} className="spin" /> טוען משתמשים ותפקידים...</div>;
+
+  return (
+    <div className="business-users">
+      <nav className="tab-bar" aria-label="ניהול משתמשים והרשאות">
+        <button type="button" className={`tab-pill ${activeSection === 'users' ? 'active' : ''}`} onClick={() => { setActiveSection('users'); setDeleteTarget(null); }}>
+          <UsersRound size={15} /> משתמשים רשומים
+        </button>
+        <button type="button" className={`tab-pill ${activeSection === 'roles' ? 'active' : ''}`} onClick={() => setActiveSection('roles')}>
+          <ShieldCheck size={15} /> תפקידים והרשאות
+        </button>
+      </nav>
+
+      {activeSection === 'roles' && <>
+      <section className="business-role-workspace">
+        <aside className="business-role-sidebar">
+          <div className="business-role-sidebar-head"><strong>תפקידים</strong><span>{roles.length}</span></div>
+          {roles.map((role) => (
+            <button type="button" key={role.id} className={selectedRole?.id === role.id ? 'is-active' : ''} onClick={() => setSelectedRoleId(role.id)}>
+              <span><RoleIcon role={role} />{role.name}{role.id === 'employee' && <small>אוטומטי</small>}</span>{role.locked && <ShieldCheck size={13} />}
+            </button>
+          ))}
+          <form className="business-role-create-stacked" onSubmit={createRole}>
+            <input className="input" placeholder="שם תפקיד חדש" value={newRoleName} onChange={(event) => setNewRoleName(event.target.value)} required />
+            <button className="btn btn-ghost" disabled={busyId === 'new-role'}>{busyId === 'new-role' ? <Loader2 className="spin" size={14} /> : <Plus size={14} />} הוספת תפקיד</button>
+          </form>
+        </aside>
+
+        <div className="business-role-editor">
+          {selectedRole && <>
+            <header className="business-role-editor-head">
+              <div>
+                {selectedRole.locked
+                  ? <h3><RoleIcon role={selectedRole} size={18} /> {selectedRole.name}</h3>
+                  : <div className="business-role-name-edit"><RoleIcon role={selectedRole} size={17} /><input className="input business-role-name-input" value={selectedRole.name} onChange={(event) => updateRoleDraft(selectedRole.id, { name: event.target.value })} /></div>}
+                <p>{selectedRole.id === 'employee' ? 'גישה אוטומטית לתיק העובד האישי בלבד.' : selectedRole.id === 'owner' ? 'גישה מלאה וקבועה לכל המערכת.' : 'בחרו רמת גישה לכל תחום.'}</p>
+              </div>
+              {!selectedRole.locked && <div className="business-role-editor-actions">
+                <button className="btn btn-ghost is-danger" type="button" onClick={() => { setDeleteTarget(selectedRole); setReplacementRoleId(''); }}><Trash2 size={14} /> מחיקה</button>
+                <button className="btn btn-primary" type="button" disabled={busyId === `role:${selectedRole.id}`} onClick={() => saveRole(selectedRole)}>{busyId === `role:${selectedRole.id}` ? <Loader2 className="spin" size={14} /> : <Save size={14} />} שמירת תפקיד</button>
+              </div>}
+            </header>
+
+            {selectedRole.locked ? selectedRole.id === 'employee' ? <div className="business-employee-role-guide">
+              <div className="business-employee-role-guide-icon"><UsersRound size={21} /></div>
+              <div>
+                <strong>כך מוסיפים עובד למערכת</strong>
+                <ol>
+                  <li>יוצרים לעובד תיק במסך „עובדים ומשמרות” ומזינים בו את כתובת המייל שלו.</li>
+                  <li>חוזרים לכאן ושולחים הזמנה בדיוק לאותה כתובת מייל.</li>
+                </ol>
+                <p>אין צורך לבחור את התפקיד „עובד” — הוא מזוהה אוטומטית. אפשר לצרף גם תפקידים נוספים, כמו מדריך חוגים או אחראי בטיחות.</p>
+              </div>
+              <a className="btn btn-primary btn-sm" href="/employees"><ExternalLink size={14} /> פתיחת עובדים ומשמרות</a>
+            </div> : <div className="business-role-system-note"><ShieldCheck size={20} /><span>למנהל הראשי יש גישה מלאה לכל היכולות והמידע הרגיש.</span></div> : <>
+              <div className="business-sensitive-permissions">
+                {sensitiveCatalog.map((permission) => (
+                  <label key={permission.id}>
+                    <input type="checkbox" checked={selectedRole.sensitive?.[permission.id] === true} onChange={(event) => updateRoleDraft(selectedRole.id, { sensitive: { ...(selectedRole.sensitive || {}), [permission.id]: event.target.checked } })} />
+                    <span><strong>{permission.name}</strong><small>{permission.id === 'finance' ? 'כולל דוחות, קופה, חשבוניות ועלויות אירוע.' : 'כולל שכר, בנק, פנסיה ומסמכים של עובדים אחרים.'}</small></span>
+                  </label>
+                ))}
+              </div>
+              <div className="business-permission-legend" aria-label="מקרא רמות הרשאה">
+                <strong>מקרא</strong>
+                {LEVELS.map(({ id, label, Icon }) => <span className={`is-${id}`} key={id}><Icon size={14} /> {label}</span>)}
+              </div>
+              <div className="business-permission-matrix">
+                {groupedModules.map(([group, modules]) => <section key={group}>
+                  <h4>{group}</h4>
+                  {modules.map((module) => <div className="business-permission-row" key={module.id}>
+                    <span>{module.name}</span>
+                    <div className="business-access-levels">
+                      {LEVELS.filter((level) => !module.levels || module.levels.includes(level.id)).map(({ id, label, Icon }) => <button type="button" key={id} title={`${module.name}: ${label}`} aria-label={`${module.name}: ${label}`} className={(selectedRole.modules?.[module.id] || 'none') === id ? `is-active is-${id}` : ''} onClick={() => setModuleLevel(selectedRole, module.id, id)}><Icon size={15} /></button>)}
+                    </div>
+                  </div>)}
+                </section>)}
+              </div>
+            </>}
+          </>}
+        </div>
+      </section>
+
+      {deleteTarget && <div className="business-role-delete-confirm">
+        <AlertTriangle />
+        <div><strong>מחיקת „{deleteTarget.name}”</strong><p>אם התפקיד משויך למשתמשים, יש לבחור תפקיד חלופי. ההחלפה תתבצע יחד עם המחיקה.</p></div>
+        <AppSelect className="input select" value={replacementRoleId} onChange={(event) => setReplacementRoleId(event.target.value)}>
+          <option value="">בחירת תפקיד חלופי...</option>
+          {assignableRoles.filter((role) => role.id !== deleteTarget.id).map((role) => <option value={role.id} key={role.id}>{role.name}</option>)}
+        </AppSelect>
+        <button className="btn btn-ghost" type="button" onClick={() => setDeleteTarget(null)}><X size={14} /> ביטול</button>
+        <button className="btn btn-danger" type="button" disabled={busyId === `delete-role:${deleteTarget.id}`} onClick={deleteRole}><Trash2 size={14} /> מחיקה</button>
+      </div>}
+
+      </>}
+
+      {activeSection === 'users' && <>
+      <form className="business-user-invite" onSubmit={invite}>
+        <div className="business-user-invite-intro">
+          <span className="business-users-heading-icon is-invite"><MailPlus size={18} /></span>
+          <div className="business-settings-card-title">הזמנת משתמש</div>
+        </div>
+        <div className="business-user-invite-fields">
+          <label className="business-settings-field">שם<input className="input" value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} required /></label>
+          <label className="business-settings-field">כתובת מייל<input className="input" type="email" dir="ltr" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} required /></label>
+        </div>
+        <div className="business-settings-field business-invite-roles"><span>תפקידים — אפשר לבחור כמה</span><RolePicker roles={inviteRoles} value={form.role_ids} onChange={(role_ids) => setForm((current) => ({ ...current, role_ids }))} /></div>
+        <div className="business-user-invite-action"><button className="btn btn-primary" type="submit" disabled={saving}>{saving ? <Loader2 size={14} className="spin" /> : <MailPlus size={14} />} שליחת הזמנה</button></div>
+      </form>
+
+      <div className="business-user-cards">
+        {users.map((user) => {
+          const owner = user.role === 'owner';
+          const status = STATUS[user.status] || STATUS.invited;
+          return <article key={user.id} className="business-user-card">
+            <div className="business-user-card-main">
+              <div className="business-user-card-avatar"><UsersRound /></div>
+              <div><strong>{user.name}</strong><span dir="ltr">{user.email}</span></div>
+              <span className={`business-user-status ${status.className}`}>{status.label}</span>
+            </div>
+            <div className="business-user-card-roles">
+              {owner ? <span className="business-user-owner-note"><ShieldCheck size={13} /> מנהל ראשי</span> : <>
+                {user.employee_match === 'matched' && <>
+                  <span className="business-employee-match is-matched"><Check size={12} /> עובד — זוהה לפי מייל</span>
+                  {user.employee_id && <a className="btn btn-ghost btn-xs" href={`/employees?open=${encodeURIComponent(user.employee_id)}`}><ExternalLink size={12} /> פתיחת תיק העובד</a>}
+                </>}
+                {user.employee_match === 'duplicate' && <span className="business-employee-match is-warning"><AlertTriangle size={12} /> המייל מופיע בכמה תיקי עובדים</span>}
+                {user.employee_match === 'missing' && <span className="business-employee-match is-muted">לא נמצא תיק עובד תואם</span>}
+                <RolePicker roles={assignableRoles} value={user.role_ids || []} disabled={busyId === `user:${user.id}`} onChange={(role_ids) => updateUser(user, { role_ids }, `התפקידים של ${user.name} עודכנו`)} />
+              </>}
+            </div>
+            {!owner && <div className="business-user-card-actions">
+              <div className="business-user-card-actions-title">פעולות משתמש</div>
+              <button className="btn btn-sm btn-ghost" type="button" onClick={() => openUserPreview(user)}><Monitor size={14} /> תצוגת משתמש</button>
+              <button className="btn btn-sm btn-ghost" type="button" disabled={busyId === `reset:${user.id}`} onClick={() => sendPasswordReset(user)}>{busyId === `reset:${user.id}` ? <Loader2 className="spin" size={14} /> : <LockKeyhole size={14} />} איפוס סיסמה</button>
+              <button
+                className={`btn btn-sm ${user.status === 'blocked' ? 'btn-primary' : 'btn-ghost'}`}
+                type="button"
+                title={user.status === 'blocked' ? 'החזרת גישה למשתמש שנחסם זמנית' : 'חסימה זמנית; המשתמש והתפקידים נשארים שמורים'}
+                disabled={busyId === `user:${user.id}`}
+                onClick={() => setAccess(user)}
+              >
+                {user.status === 'blocked' ? <UserRoundCheck size={14} /> : <UserRoundX size={14} />}
+                {user.status === 'blocked' ? 'הפעל גישה' : 'השהה גישה'}
+              </button>
+              <button
+                className="btn btn-sm btn-ghost is-danger"
+                type="button"
+                title="הסרה מרשימת המשתמשים המורשים; תיק העובד והמסמכים נשארים"
+                disabled={busyId === `user:${user.id}`}
+                onClick={() => removeAccess(user)}
+              ><Trash2 size={14} /> הסר מהרשימה</button>
+              <small className="business-user-card-actions-note">השהיה היא זמנית · הסרה מבטלת את הרשאת ה־CRM</small>
+            </div>}
+          </article>;
+        })}
+        {users.length === 0 && <div className="business-users-empty">אין משתמשים מורשים.</div>}
+      </div>
+      </>}
+
+      {previewTarget && <div className="business-user-preview-backdrop" onMouseDown={() => { setPreviewTarget(null); setPreviewEmployeeOpen(false); }}>
+        <section className={`business-user-preview ${previewEmployeeOpen ? 'is-employee-file' : ''}`} role="dialog" aria-modal="true" aria-labelledby="business-user-preview-title" onMouseDown={(event) => event.stopPropagation()}>
+          <header>
+            <div className="business-user-preview-heading">
+              <div className="business-user-preview-avatar"><Monitor size={20} /></div>
+              <div><h3 id="business-user-preview-title">{previewEmployeeOpen ? `התיק האישי של ${previewTarget.name}` : `מה ${previewTarget.name} רואה במערכת`}</h3><span dir="ltr">{previewTarget.email}</span></div>
+            </div>
+            <button className="icon-btn" type="button" aria-label="סגירת תצוגת משתמש" onClick={() => { setPreviewTarget(null); setPreviewEmployeeOpen(false); }}><X size={18} /></button>
+          </header>
+
+          {previewLoading && <div className="business-user-preview-loading"><Loader2 className="spin" size={18} /> טוען הרשאות אפקטיביות...</div>}
+          {previewError && <div className="business-settings-alert is-error">{previewError}</div>}
+          {previewData && previewEmployeeOpen && <EmployeeSelf previewUserId={previewTarget.id} onBack={() => setPreviewEmployeeOpen(false)} />}
+          {previewData && !previewEmployeeOpen && <>
+            <div className={`business-user-preview-status is-${previewData.status}`}>
+              {previewData.status === 'blocked' ? <Ban size={15} /> : <Check size={15} />}
+              {previewData.status === 'blocked' ? 'הגישה חסומה — המשתמש אינו יכול להיכנס כרגע' : previewData.status === 'invited' ? 'מוזמן — הגישה תופעל לאחר קבלת ההזמנה' : 'גישה פעילה'}
+            </div>
+
+            <div className="business-user-preview-roles">
+              {(previewData.role_names || []).map((name) => <span key={name}>{name}</span>)}
+            </div>
+
+            <section className="business-user-preview-section">
+              <div className="business-user-preview-section-title"><strong>המסכים שיופיעו בתפריט</strong><small>לפי איחוד כל התפקידים</small></div>
+              <div className="business-user-preview-pages">
+                {visiblePreviewPages.map(({ id, label, Icon, level, employeeOnly }) => {
+                  const content = <><Icon size={17} /><span>{label}</span><small className={`is-${level}`}>{employeeOnly ? 'פתיחה' : level === 'edit' ? 'כולל עריכה' : 'צפייה'}</small></>;
+                  return employeeOnly
+                    ? <button key={id} className="business-user-preview-page is-clickable" type="button" onClick={() => setPreviewEmployeeOpen(true)}>{content}</button>
+                    : <article key={id} className="business-user-preview-page">{content}</article>;
+                })}
+                {visiblePreviewPages.length === 0 && <div className="business-users-empty">לא הוגדרה גישה לאף מסך.</div>}
+              </div>
+            </section>
+
+            {(previewData.sensitive?.finance || previewData.sensitive?.hr) && <section className="business-user-preview-section">
+              <div className="business-user-preview-section-title"><strong>מידע רגיש שניתן לצפייה</strong></div>
+              <div className="business-user-preview-sensitive">
+                {previewData.sensitive?.finance && <div className="is-allowed"><Eye size={15} /><span><strong>נתונים פיננסיים של העסק</strong><small>גלויים</small></span></div>}
+                {previewData.sensitive?.hr && <div className="is-allowed"><Eye size={15} /><span><strong>שכר ומידע אישי של עובדים אחרים</strong><small>גלויים</small></span></div>}
+              </div>
+            </section>}
+
+            <div className="business-user-preview-security"><LockKeyhole size={16} /><span>זוהי תצוגה לקריאה בלבד. לא נוצרה התחברות ולא ניתן לבצע פעולות בשם המשתמש. סיסמאות אינן ניתנות לצפייה; ניתן רק לשלוח קישור מאובטח לאיפוס.</span></div>
+          </>}
+        </section>
+      </div>}
+
+      {error && <div className="business-settings-alert is-error">{error}</div>}
+      {message && <div className="business-settings-alert is-ok">{message}</div>}
+    </div>
+  );
+}

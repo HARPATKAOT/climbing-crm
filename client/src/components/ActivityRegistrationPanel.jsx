@@ -131,6 +131,7 @@ export default function ActivityRegistrationPanel({
   form,
   setForm,
   readOnly,
+  canViewFinance = true,
   hideRegistrationToggle = false,
   templateMode = false,
 }) {
@@ -868,7 +869,7 @@ export default function ActivityRegistrationPanel({
         </label>
       )}
 
-      <label className="activity-registration-field">
+      {canViewFinance && <label className="activity-registration-field">
         <span className="activity-registration-field-label">אופן ההרשמה והתשלום</span>
         <AppSelect
           className="input"
@@ -887,7 +888,7 @@ export default function ActivityRegistrationPanel({
             ? 'המזמין מקבל קישור תשלום פרטי. המשתתפים נרשמים בחינם עם הצהרה וחתימה.'
             : 'כל הורה, ילד או מבוגר נספר במכסה ומחויב במחיר הפעילות.'}
         </span>
-      </label>
+      </label>}
 
       {/* מזמין קיים רק כשהוא זה שמשלם. בהרשמה בתשלום לכל משתתף אין מזמין,
           ולכן בחירת הלקוח נעלמת — ונשאר רק סטטוס תשלום ישן, אם יש כסף בפנים. */}
@@ -1035,7 +1036,7 @@ export default function ActivityRegistrationPanel({
       {showHostPayStatus && (
       <div className="activity-registration-field">
         <span className="activity-registration-field-label">סטטוס תשלום המזמין</span>
-        {editingPaymentStatus && !readOnly ? (
+        {editingPaymentStatus && !readOnly && canViewFinance ? (
           <div className="activity-registration-status-row">
             <AppSelect
               className="input"
@@ -1064,7 +1065,7 @@ export default function ActivityRegistrationPanel({
             <span className="activity-registration-status-value">
               {payLabel[form.payment_status || 'unpaid'] || payLabel.unpaid}
             </span>
-            {!readOnly && (
+            {!readOnly && canViewFinance && (
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
@@ -1079,7 +1080,7 @@ export default function ActivityRegistrationPanel({
       </div>
       )}
 
-      {activityId && !readOnly && (form.payment_status || 'unpaid') === 'paid' && isHostPays && (
+      {activityId && !readOnly && canViewFinance && (form.payment_status || 'unpaid') === 'paid' && isHostPays && (
         <button
           type="button"
           className="btn btn-ghost btn-sm"
@@ -1096,7 +1097,7 @@ export default function ActivityRegistrationPanel({
 
       {activityId && (
         <div className="registration-sections">
-          {isHostPays && (
+          {isHostPays && canViewFinance && (
             <div className="registration-section registration-section--host">
               <div className="registration-section-header">
                 <span className="registration-section-badge registration-section-badge--host">תשלום</span>
@@ -1453,7 +1454,7 @@ export default function ActivityRegistrationPanel({
                       )}
                       {!readOnly && (
                         <span className="registration-participant-actions">
-                          {r.payment_status === 'paid' && (
+                          {canViewFinance && r.payment_status === 'paid' && (
                             <button
                               type="button"
                               className="icon-btn"

@@ -8,6 +8,7 @@ import {
   testKindMeta,
 } from '../utils/levelTestKinds.js';
 import AppSelect from './AppSelect.jsx';
+import { useAuth } from './AuthGate.jsx';
 
 const ROUTE_TYPES = Object.values(ROUTE_STYLE);
 
@@ -34,9 +35,9 @@ function normalizeTest(t) {
   };
 }
 
-function TestFormModal({ students, groups, employees, initial, onSave, onClose }) {
+function TestFormModal({ students, groups, employees, allowedKinds = TEST_KINDS, initial, onSave, onClose }) {
   const [studentId, setStudentId]     = useState(initial?.studentId || initial?.climber_id || '');
-  const [testType, setTestType]       = useState(initial?.test_type || 'level');
+  const [testType, setTestType]       = useState(initial?.test_type || allowedKinds[0]?.key || 'level');
   const [level, setLevel]             = useState(initial?.level || initial?.grade || '5A');
   const [routeStyle, setRouteStyle]   = useState(initial?.route_style || initial?.route_type || 'top-rope');
   const [examinerId, setExaminerId]   = useState(
@@ -115,7 +116,7 @@ function TestFormModal({ students, groups, employees, initial, onSave, onClose }
         <div className="form-group">
           <label className="form-label">סוג מבחן *</label>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {TEST_KINDS.map((k) => {
+            {allowedKinds.map((k) => {
               const active = testType === k.key;
               const Icon = k.Icon;
               return (
@@ -227,7 +228,7 @@ function TestFormModal({ students, groups, employees, initial, onSave, onClose }
   );
 }
 
-function StudentLevelCard({ student, tests, groups, onEdit, onDelete }) {
+function StudentLevelCard({ student, tests, groups, onEdit, onDelete, canEditTest = () => true }) {
   const [expanded, setExpanded] = useState(false);
   const myTests = tests
     .filter(t => (t.climber_id || t.studentId) === student.id)
@@ -335,12 +336,12 @@ function StudentLevelCard({ student, tests, groups, onEdit, onDelete }) {
                     {t.notes && <div style={{ fontSize: 11, color: 'var(--text-2)', marginTop: 3 }}>{t.notes}</div>}
                   </div>
                   <span style={{ fontSize: 12, fontWeight: 700, color: statusColor }}>{statusLabel}</span>
-                  <button type="button" className="btn btn-ghost btn-icon btn-xs" title="עריכה" onClick={(e) => { e.stopPropagation(); onEdit?.(t); }}>
+                  {canEditTest(t) && <button type="button" className="btn btn-ghost btn-icon btn-xs" title="עריכה" onClick={(e) => { e.stopPropagation(); onEdit?.(t); }}>
                     <Edit2 size={13} />
-                  </button>
-                  <button type="button" className="btn btn-ghost btn-icon btn-xs" title="מחיקה" style={{ color: 'var(--red)' }} onClick={(e) => { e.stopPropagation(); onDelete?.(t); }}>
+                  </button>}
+                  {canEditTest(t) && <button type="button" className="btn btn-ghost btn-icon btn-xs" title="מחיקה" style={{ color: 'var(--red)' }} onClick={(e) => { e.stopPropagation(); onDelete?.(t); }}>
                     <Trash2 size={13} />
-                  </button>
+                  </button>}
                 </div>
               );
             })}
@@ -352,6 +353,14 @@ function StudentLevelCard({ student, tests, groups, onEdit, onDelete }) {
 }
 
 export default function LevelTests({ students, groups }) {
+  const { user, isOwner } = useAuth();
+  const rank = { none: 0, view: 1, edit: 2 };
+  const testModule = (key) => key === 'security' ? 'safety_tests' : key === 'lead' ? 'lead_tests' : 'level_tests';
+  const canAccessKind = (key, level = 'view') => isOwner
+    || (rank[user?.modules?.[testModule(key)]] || 0) >= rank[level];
+  const visibleKinds = TEST_KINDS.filter((kind) => canAccessKind(kind.key));
+  const editableKinds = TEST_KINDS.filter((kind) => canAccessKind(kind.key, 'edit'));
+  const canEditTest = (test) => canAccessKind(testKindMeta(test?.test_type).key, 'edit');
   const [tests, setTests]               = useState([]);
   const [employees, setEmployees]       = useState([]);
   const [formTest, setFormTest]         = useState(null); // null | {} (new) | test (edit)
@@ -479,11 +488,12 @@ export default function LevelTests({ students, groups }) {
 
   return (
     <div className="fade-in">
-      {formTest !== null && (
+      {formTest !== null && editableKinds.length > 0 && (
         <TestFormModal
           students={students}
           groups={groups}
           employees={employees}
+          allowedKinds={editableKinds}
           initial={formTest.id ? formTest : null}
           onSave={handleSave}
           onClose={() => setFormTest(null)}
@@ -521,9 +531,9 @@ export default function LevelTests({ students, groups }) {
               <Trophy size={15} /> לוח הנבחרת
             </button>
           </div>
-          <button className="btn btn-primary btn-sm" onClick={() => setFormTest({})}>
+          {editableKinds.length > 0 && <button className="btn btn-primary btn-sm" onClick={() => setFormTest({})}>
             <Plus size={15} /> שמירת מבחן חדש
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -535,7 +545,7 @@ export default function LevelTests({ students, groups }) {
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 <button className={`btn btn-xs ${filterKind === 'all' ? 'btn-primary' : 'btn-ghost'}`}
                   onClick={() => setFilterKind('all')}>הכל</button>
-                {TEST_KINDS.map((k) => {
+                {visibleKinds.map((k) => {
                   const Icon = k.Icon;
                   const active = filterKind === k.key;
                   return (
@@ -659,12 +669,12 @@ export default function LevelTests({ students, groups }) {
                           <td style={{ fontSize: 12, color: 'var(--text-3)', maxWidth: 160 }}>{t.notes || '—'}</td>
                           <td>
                             <div style={{ display: 'flex', gap: 4 }}>
-                              <button type="button" className="btn btn-ghost btn-icon btn-xs" title="עריכה" onClick={() => setFormTest(t)}>
+                              {canEditTest(t) && <button type="button" className="btn btn-ghost btn-icon btn-xs" title="עריכה" onClick={() => setFormTest(t)}>
                                 <Edit2 size={13} />
-                              </button>
-                              <button type="button" className="btn btn-ghost btn-icon btn-xs" title="מחיקה" style={{ color: 'var(--red)' }} onClick={() => handleDelete(t)}>
+                              </button>}
+                              {canEditTest(t) && <button type="button" className="btn btn-ghost btn-icon btn-xs" title="מחיקה" style={{ color: 'var(--red)' }} onClick={() => handleDelete(t)}>
                                 <Trash2 size={13} />
-                              </button>
+                              </button>}
                             </div>
                           </td>
                         </tr>
@@ -684,12 +694,12 @@ export default function LevelTests({ students, groups }) {
               <div className="grid-2" style={{ gap: 12, alignItems: 'flex-start' }}>
                 <div>
                   {studentsWithTests.slice(0, Math.ceil(studentsWithTests.length / 2)).map(s => (
-                    <StudentLevelCard key={s.id} student={s} tests={tests} groups={groups} onEdit={setFormTest} onDelete={handleDelete} />
+                    <StudentLevelCard key={s.id} student={s} tests={tests} groups={groups} onEdit={setFormTest} onDelete={handleDelete} canEditTest={canEditTest} />
                   ))}
                 </div>
                 <div>
                   {studentsWithTests.slice(Math.ceil(studentsWithTests.length / 2)).map(s => (
-                    <StudentLevelCard key={s.id} student={s} tests={tests} groups={groups} onEdit={setFormTest} onDelete={handleDelete} />
+                    <StudentLevelCard key={s.id} student={s} tests={tests} groups={groups} onEdit={setFormTest} onDelete={handleDelete} canEditTest={canEditTest} />
                   ))}
                 </div>
               </div>

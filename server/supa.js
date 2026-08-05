@@ -758,6 +758,49 @@ export const supa = {
     return data.user;
   },
 
+  async listAuthUsers() {
+    if (!client) return { ok: false, users: [], error: 'Supabase service role is not configured' };
+    const users = [];
+    const perPage = 1000;
+    for (let page = 1; ; page += 1) {
+      const { data, error } = await client.auth.admin.listUsers({ page, perPage });
+      if (error) return { ok: false, users: [], error: error.message };
+      const chunk = data?.users || [];
+      users.push(...chunk);
+      if (chunk.length < perPage) break;
+    }
+    return { ok: true, users };
+  },
+
+  async findAuthUserByEmail(email) {
+    const result = await supa.listAuthUsers();
+    if (!result.ok) return { ok: false, user: null, error: result.error };
+    const normalized = String(email || '').trim().toLowerCase();
+    return {
+      ok: true,
+      user: result.users.find((user) => String(user.email || '').toLowerCase() === normalized) || null,
+    };
+  },
+
+  async inviteAuthUser(email, name) {
+    if (!client) return { ok: false, user: null, error: 'Supabase service role is not configured' };
+    const redirectTo = process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || undefined;
+    const options = { data: { full_name: name, name } };
+    if (redirectTo) options.redirectTo = redirectTo;
+    const { data, error } = await client.auth.admin.inviteUserByEmail(email, options);
+    if (error) return { ok: false, user: null, error: error.message };
+    return { ok: true, user: data?.user || null };
+  },
+
+  async sendPasswordResetEmail(email) {
+    if (!authClient) return { ok: false, error: 'Supabase authentication is not configured' };
+    const redirectTo = process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || undefined;
+    const options = redirectTo ? { redirectTo } : undefined;
+    const { error } = await authClient.auth.resetPasswordForEmail(email, options);
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+  },
+
   async getAppSetting(key) {
     const result = await supa.readAppSetting(key);
     return result.ok ? result.value : null;
