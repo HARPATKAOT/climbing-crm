@@ -21,7 +21,7 @@ import {
 } from './studentGuardians.js';
 import { saveCrmParticipants } from './crmWaiverService.js';
 import { declarationGap, mustConfirm } from './healthQuestions.js';
-import { addPendingSpouse, splitExplicitHousehold } from './households.js';
+import { addPendingSpouse, ensureHouseholdForParent, splitExplicitHousehold } from './households.js';
 
 function createDb(seed = {}) {
   const store = {
@@ -177,6 +177,73 @@ test('matching an existing spouse joins their whole explicit household', async (
   assert.equal(db.getOne('households', 'hh-b').status, 'merged');
   assert.deepEqual(guardianParentIds(db, 's-noam').sort(), ['p-avner', 'p-rotem'].sort());
   assert.deepEqual(guardianParentIds(db, 's-shaked').sort(), ['p-avner', 'p-rotem'].sort());
+});
+
+test('materialising a household ignores a guardian link to a deleted parent', async () => {
+  const db = createDb({
+    parents: [{ id: 'p-avner', name: 'אבנר לוי', phone: '0521112222' }],
+    students: [{ id: 's-noam', name: 'נועם לוי', parentId: 'p-avner', birthDate: '2014-03-02' }],
+    student_guardians: [{
+      id: 'sg-s-noam-p-deleted',
+      student_id: 's-noam',
+      parent_id: 'p-deleted',
+      source: 'old-merge',
+    }],
+    households: [],
+    household_members: [],
+  });
+  const writes = [];
+
+  const household = await ensureHouseholdForParent(db, async (table, row) => {
+    writes.push({ table, row });
+    return { ok: true };
+  }, 'p-avner');
+
+  assert.ok(household.id);
+  assert.equal(
+    writes.some(({ table, row }) => table === 'household_members' && row.parent_id === 'p-deleted'),
+    false
+  );
+  assert.deepEqual(
+    db.store.household_members.filter((row) => row.parent_id).map((row) => row.parent_id),
+    ['p-avner']
+  );
+  assert.equal(
+    db.store.household_members.some((row) => row.student_id === 's-noam'),
+    true
+  );
+});
+
+test('merging explicit households does not retry an orphan member row', async () => {
+  const db = createDb({
+    parents: [
+      { id: 'p-avner', name: 'אבנר לוי', phone: '0521112222' },
+      { id: 'p-rotem', name: 'רותם לוי', phone: '0539998888' },
+    ],
+    students: [{ id: 's-noam', name: 'נועם לוי', parentId: 'p-avner', birthDate: '2014-03-02' }],
+    student_guardians: [{ id: 'sg-1', student_id: 's-noam', parent_id: 'p-rotem' }],
+    households: [
+      { id: 'hh-a', status: 'active' },
+      { id: 'hh-b', status: 'active' },
+    ],
+    household_members: [
+      { id: 'hm-a', household_id: 'hh-a', parent_id: 'p-avner', role: 'adult' },
+      { id: 'hm-b', household_id: 'hh-b', parent_id: 'p-rotem', role: 'adult' },
+      { id: 'hm-orphan', household_id: 'hh-b', parent_id: 'p-deleted', role: 'adult' },
+    ],
+  });
+  const writes = [];
+
+  await ensureHouseholdForParent(db, async (table, row) => {
+    writes.push({ table, row });
+    return { ok: true };
+  }, 'p-avner');
+
+  assert.equal(
+    writes.some(({ table, row }) => table === 'household_members' && row.id === 'hm-orphan'),
+    false
+  );
+  assert.equal(db.getOne('household_members', 'hm-b').household_id, 'hh-a');
 });
 
 test('staff split rebuilds separate explicit households', async () => {

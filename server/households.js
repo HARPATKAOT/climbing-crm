@@ -23,6 +23,12 @@ function studentMember(db, studentId) {
   return (db.get('household_members') || []).find((row) => String(row.student_id || '') === String(studentId)) || null;
 }
 
+function memberTargetExists(db, row) {
+  if (row?.parent_id) return !!db.getOne('parents', row.parent_id);
+  if (row?.student_id) return !!db.getOne('students', row.student_id);
+  return false;
+}
+
 async function save(persist, table, row) {
   if (!persist) return;
   const result = await persist(table, row);
@@ -45,7 +51,16 @@ function upsertMember(db, householdId, patch) {
 /** Materialise the explicit household model from the proven guardian graph. */
 export async function ensureHouseholdForParent(db, persist, parentId) {
   const graph = expandHousehold(db, parentId);
-  const parentIds = graph.parentIds?.length ? graph.parentIds : [parentId];
+  // Guardian links can outlive a parent card after an old merge/delete. Such
+  // an orphan is useful to clean up separately, but it must never be written
+  // into household_members: that table has a real FK to parents and the whole
+  // signed-form submission would otherwise fail at its final step.
+  const parentIds = (graph.parentIds?.length ? graph.parentIds : [parentId])
+    .map(String)
+    .filter((id, index, ids) => ids.indexOf(id) === index && db.getOne('parents', id));
+  if (!parentIds.length) {
+    throw Object.assign(new Error('לא ניתן ליצור תיק משפחה ללא הורה קיים'), { status: 409 });
+  }
   const existingMembers = (db.get('household_members') || []).filter((row) => parentIds.includes(row.parent_id));
   const householdId = existingMembers[0]?.household_id || makeId('hh');
   let household = db.getOne('households', householdId);
@@ -65,6 +80,10 @@ export async function ensureHouseholdForParent(db, persist, parentId) {
   const otherIds = [...new Set(existingMembers.map((row) => row.household_id).filter((id) => id && id !== householdId))];
   for (const otherId of otherIds) {
     for (const row of (db.get('household_members') || []).filter((item) => item.household_id === otherId)) {
+      // A stale local cache may still carry the member row after its parent or
+      // student was deleted durably. Do not make a harmless household merge
+      // retry that invalid FK row.
+      if (!memberTargetExists(db, row)) continue;
       const updated = db.update('household_members', row.id, { household_id: householdId, updated_at: new Date().toISOString() }) || row;
       await save(persist, 'household_members', updated);
     }
