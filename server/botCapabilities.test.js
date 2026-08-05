@@ -5,6 +5,7 @@ import {
   CAPABILITY_INPUT_KEYS,
   CAPABILITY_KEYS,
   capabilitySettingKey,
+  capabilitySettingsPatch,
   capabilityState,
   enabledToolNames,
   isCapabilityEnabled,
@@ -76,4 +77,16 @@ test('a capability may own a field, and stays inert while it is empty', () => {
 test('the settings key is stable, because it is stored in the database', () => {
   assert.equal(capabilitySettingKey('events'), 'botCap_events');
   assert.equal(capabilityState({}).length, BOT_CAPABILITIES.length);
+});
+
+test('a capability-owned field saves without a switch in the same request', () => {
+  assert.deepEqual(
+    capabilitySettingsPatch({ values: { aiCentrePhones: '0501234567' } }),
+    { aiCentrePhones: '0501234567' }
+  );
+  assert.deepEqual(
+    capabilitySettingsPatch({ capabilities: { centre_report: false } }),
+    { botCap_centre_report: false }
+  );
+  assert.deepEqual(capabilitySettingsPatch({ values: { unknown: 'x' } }), {});
 });

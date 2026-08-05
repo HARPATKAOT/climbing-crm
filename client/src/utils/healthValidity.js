@@ -1,13 +1,5 @@
-/**
- * Health declarations expire together on a fixed two-year cycle:
- * the end of July of even years (31.7.2026, 31.7.2028, ...).
- * A declaration signed during July of a renewal year already counts
- * for the next cycle, so it is not born expired.
- * Old declarations stay stored in the client file — expiry only means
- * a new signature is required.
- */
-
-const endOfJuly = (year) => new Date(year, 6, 31, 23, 59, 59, 999);
+/** Activity season validity. Keep in sync with server/healthValidity.js. */
+const endOfAugust = (year) => new Date(`${year}-08-31T23:59:59.999+03:00`);
 
 function toDate(value) {
   if (!value) return null;
@@ -19,26 +11,37 @@ function toDate(value) {
 export function healthExpiryDate(signedAt) {
   const signed = toDate(signedAt);
   if (!signed) return null;
-  const year = signed.getFullYear();
-  let expiry = endOfJuly(year % 2 === 0 ? year : year + 1);
-  if (signed.getTime() > expiry.getTime()) {
-    expiry = endOfJuly(expiry.getFullYear() + 2);
-  }
-  // Signed during the renewal month itself -> valid for the next cycle
-  if (signed.getFullYear() === expiry.getFullYear() && signed.getMonth() === 6) {
-    expiry = endOfJuly(expiry.getFullYear() + 2);
-  }
-  return expiry;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jerusalem', year: 'numeric', month: '2-digit',
+  }).formatToParts(signed);
+  const year = Number(parts.find((part) => part.type === 'year')?.value);
+  const month = Number(parts.find((part) => part.type === 'month')?.value);
+  return endOfAugust(month >= 8 ? year + 1 : year);
 }
 
 /** Unknown signature date is treated as valid so old records are not flagged by mistake. */
 export function isHealthDeclarationValid(signedAt, now = new Date()) {
   const expiry = healthExpiryDate(signedAt);
   if (!expiry) return true;
-  return now.getTime() <= expiry.getTime();
+  const checkedAt = toDate(now);
+  return !!checkedAt && checkedAt.getTime() <= expiry.getTime();
 }
 
 export function formatHealthExpiry(signedAt) {
   const expiry = healthExpiryDate(signedAt);
   return expiry ? expiry.toLocaleDateString('he-IL') : '';
+}
+
+export function participationWaiverExpiryDate(signedAt) {
+  const signed = toDate(signedAt);
+  if (!signed) return null;
+  const year = Number(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jerusalem', year: 'numeric',
+  }).formatToParts(signed).find((part) => part.type === 'year')?.value);
+  return endOfAugust(year + 2);
+}
+
+export function isParticipationWaiverValid(signedAt, now = new Date()) {
+  const expiry = participationWaiverExpiryDate(signedAt);
+  return !!expiry && now.getTime() <= expiry.getTime();
 }

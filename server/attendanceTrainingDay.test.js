@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { consecutiveAbsences, ensureAttendanceRows } from './attendanceUtils.js';
+import {
+  consecutiveAbsences,
+  ensureAttendanceRows,
+  getSortedGroupDays,
+  groupMeetsOnDay,
+} from './attendanceUtils.js';
 
 // day: 2 = יום שלישי. 2026-07-31 הוא יום שישי, 2026-08-04 הוא יום שלישי.
 const GROUPS = [{ id: 'g1', name: "ילדים ג'-ד' — יום ג'", day: 2, active: true }];
@@ -47,6 +52,14 @@ test('קבוצה שמתאמנת פעמיים בשבוע נתפסת בשני הי
   assert.equal(ensureAttendanceRows({ ...base, date: '2026-08-06' }).created.length, 1);
   // 2026-08-04 שלישי — לא יום אימון של הקבוצה הזו
   assert.equal(ensureAttendanceRows({ ...base, date: '2026-08-04' }).created.length, 0);
+});
+
+test('ימי קבוצה כפולה מוחזרים בסדר כרונולוגי ומתאימים לכל אחד מהימים', () => {
+  const group = { name: 'נבחרת צעירה — ב׳+ה׳ 17:00', day: 4 };
+  assert.deepEqual(getSortedGroupDays(group), [1, 4]);
+  assert.equal(groupMeetsOnDay(group, 1), true);
+  assert.equal(groupMeetsOnDay(group, 4), true);
+  assert.equal(groupMeetsOnDay(group, 2), false);
 });
 
 test('קבוצה לא פעילה לא מייצרת שורות גם ביום האימון', () => {

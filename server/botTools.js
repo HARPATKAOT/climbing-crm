@@ -9,7 +9,8 @@
 import { db } from './db.js';
 import { enrichGroupsWithCapacity } from './groupCapacity.js';
 import { groupMatchesGradeLetter } from './groupBands.js';
-import { studentsForParent, isIdentifiedParent } from './whatsappBot.js';
+import { getSortedGroupDays, groupMeetsOnDay } from './attendanceUtils.js';
+import { studentsForParent, updateCustomerFullName } from './whatsappBot.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { healthExpiryDate, declarationSignedAt } from './healthValidity.js';
 import { appPublicBase, buildRedirectUrl } from './publicLinks.js';
@@ -52,6 +53,32 @@ import {
 } from './botFacts.js';
 
 const DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
+
+export function groupTrainingDayLabels(group) {
+  return getSortedGroupDays(group).map((day) => DAY_NAMES[day]);
+}
+
+export function groupScheduleFields(group) {
+  const days = groupTrainingDayLabels(group);
+  const fallback = String(group?.day ?? '');
+  return {
+    יום: days.join('+') || fallback,
+    ימי_אימון: days,
+  };
+}
+
+function groupDaysPhrase(group) {
+  const days = groupTrainingDayLabels(group);
+  if (!days.length) return `יום ${String(group?.day ?? '')}`.trim();
+  return days.length === 1 ? `יום ${days[0]}` : `ימים ${days.join(' ו')}`;
+}
+
+function firstGroupDay(group) {
+  const first = getSortedGroupDays(group)[0];
+  if (first != null) return first;
+  const fallback = Number(group?.day);
+  return Number.isInteger(fallback) ? fallback : 7;
+}
 
 /**
  * The child's age, worked out here rather than by the model.
@@ -178,6 +205,12 @@ const BAND_PATTERNS = {
   חטיבה: /חטיב/,
 };
 
+const CLASS_FREQUENCY_PROPERTY = {
+  type: 'string',
+  enum: ['פעם בשבוע', 'פעמיים בשבוע'],
+  description: 'התדירות שהלקוח ביקש. חובה להעביר כשנאמרה תדירות.',
+};
+
 export const CUSTOMER_TOOL_DECLARATIONS = [
   {
     name: 'listClasses',
@@ -192,6 +225,7 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         grade: { type: 'string', description: 'אות כיתה אחת: א ב ג ד ה או ו' },
         band: { type: 'string', description: 'שכבה שאינה כיתה: בוגרים / תיכון / חטיבה' },
         day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת, אם הלקוח ציין יום' },
+        frequency: CLASS_FREQUENCY_PROPERTY,
         level: {
           type: 'string',
           description: 'רק אם הלקוח שאל במפורש על רמה: "מתחילים" / "מתקדמים" / "נבחרת"',
@@ -210,6 +244,7 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
       properties: {
         grade: { type: 'string', description: 'אות כיתה למחיר חוג' },
         band: { type: 'string', description: 'שכבה שאינה כיתה למחיר חוג' },
+        frequency: CLASS_FREQUENCY_PROPERTY,
         equipment: { type: 'boolean', description: 'לכלול מחירי ציוד' },
         entry: {
           type: 'boolean',
@@ -290,6 +325,7 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         band: { type: 'string', description: 'שכבה שאינה כיתה: בוגרים / תיכון / חטיבה' },
         day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת' },
         time: { type: 'string', description: 'שעת הקבוצה, למשל 15:30' },
+        frequency: CLASS_FREQUENCY_PROPERTY,
       },
     },
   },
@@ -326,6 +362,7 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         band: { type: 'string', description: 'שכבה שאינה כיתה: בוגרים / תיכון / חטיבה' },
         day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת' },
         time: { type: 'string', description: 'שעת הקבוצה, למשל 15:30' },
+        frequency: CLASS_FREQUENCY_PROPERTY,
       },
       required: ['childName'],
     },
@@ -345,40 +382,17 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
     },
   },
   {
-    name: 'saveChildBirthDate',
+    name: 'updateCustomerDetails',
     description:
-      'שומר תאריך לידה של ילד בכרטיס. להשתמש רק אחרי שהלקוח אישר את התאריך '
-      + 'במילים — «10 באפריל 2013» ולא «10.4». הכלי מפרש תאריך מספרי כיום-חודש-שנה, '
-      + 'ולכן אם הלקוח כתב «10.4» חובה לוודא איתו שזה אפריל ולא אוקטובר לפני השמירה.',
-    parameters: {
-      type: 'object',
-      properties: {
-        childName: { type: 'string', description: 'שם הילד כפי שמופיע בכרטיס' },
-        birthDate: {
-          type: 'string',
-          description: 'התאריך כפי שהלקוח מסר: 10.4.2013 או 2013-04-10',
-        },
-        confirmed: {
-          type: 'boolean',
-          description: 'true רק אחרי שהלקוח אישר את התאריך במילים (יום, שם החודש, שנה)',
-        },
-      },
-      required: ['childName', 'birthDate', 'confirmed'],
-    },
-  },
-  {
-    name: 'saveCustomerName',
-    description:
-      'שומר בכרטיס את שם הלקוח כשהוא מוסר אותו בשיחה ("קוראים לי נעמה"). '
-      + 'להשתמש פעם אחת, מיד כשנמסר שם, ורק בשם של הכותב עצמו — לא בשם של ילד. '
-      + 'לא לשאול לשם רק כדי לשמור אותו.',
+      'משלים בכרטיס של לקוח לא מזוהה שם פרטי ושם משפחה בלבד. שני השדות חובה. '
+      + 'אין לכלי שדות אחרים: תאריך לידה, תעודת זהות וכל יתר פרטי ההרשמה נאספים בטופס.',
     parameters: {
       type: 'object',
       properties: {
         firstName: { type: 'string', description: 'שם פרטי כפי שהלקוח מסר' },
-        lastName: { type: 'string', description: 'שם משפחה, אם נמסר' },
+        lastName: { type: 'string', description: 'שם משפחה כפי שהלקוח מסר' },
       },
-      required: ['firstName'],
+      required: ['firstName', 'lastName'],
     },
   },
   {
@@ -394,6 +408,7 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         band: { type: 'string', description: 'שכבה שאינה כיתה' },
         day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת' },
         time: { type: 'string', description: 'שעת הקבוצה' },
+        frequency: CLASS_FREQUENCY_PROPERTY,
       },
       required: ['childName'],
     },
@@ -411,6 +426,7 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         band: { type: 'string', description: 'שכבה לקישור ההרשמה' },
         day: { type: 'integer', description: 'יום בשבוע של הקבוצה' },
         time: { type: 'string', description: 'שעת הקבוצה' },
+        frequency: CLASS_FREQUENCY_PROPERTY,
       },
     },
   },
@@ -455,14 +471,31 @@ function groupChatFields(group) {
   };
 }
 
+export function groupSupportsFrequency(group, frequency = '') {
+  const wanted = String(frequency || '').trim();
+  if (!wanted) return true;
+  if (wanted === 'פעם בשבוע') return Number(group?.priceWeek) > 0;
+  if (wanted === 'פעמיים בשבוע') {
+    return Number(group?.priceTwice) > 0 && Boolean(String(group?.signupLinkTwice || '').trim());
+  }
+  return false;
+}
+
+function availableGroupFrequencies(group) {
+  return [
+    groupSupportsFrequency(group, 'פעם בשבוע') ? 'פעם בשבוע' : '',
+    groupSupportsFrequency(group, 'פעמיים בשבוע') ? 'פעמיים בשבוע' : '',
+  ].filter(Boolean);
+}
+
 function openGroupsPayload(groups) {
   const students = db.get('students') || [];
   return enrichGroupsWithCapacity(groups, students)
     .slice()
-    .sort((a, b) => Number(a.day) - Number(b.day) || String(a.time || '').localeCompare(String(b.time || '')))
+    .sort((a, b) => firstGroupDay(a) - firstGroupDay(b) || String(a.time || '').localeCompare(String(b.time || '')))
     .map((g) => ({
       שכבה: g.ageCategory || '',
-      יום: DAY_NAMES[Number(g.day)] || String(g.day ?? ''),
+      ...groupScheduleFields(g),
       שעה: g.time || '',
       // A group with no configured capacity reports neither "full" nor a
       // number of places — both would be invented.
@@ -478,11 +511,8 @@ function openGroupsPayload(groups) {
       // came back as "twice a week: 0" — and the bot offered a twice-weekly
       // option that has no price and no registration link behind it.
       ...(Number(g.priceWeek) > 0 ? { מחיר_פעם_בשבוע: Number(g.priceWeek) } : {}),
-      ...(Number(g.priceTwice) > 0 ? { מחיר_פעמיים_בשבוע: Number(g.priceTwice) } : {}),
-      תדירויות_אפשריות: [
-        Number(g.priceWeek) > 0 ? 'פעם בשבוע' : '',
-        Number(g.priceTwice) > 0 ? 'פעמיים בשבוע' : '',
-      ].filter(Boolean),
+      ...(groupSupportsFrequency(g, 'פעמיים בשבוע') ? { מחיר_פעמיים_בשבוע: Number(g.priceTwice) } : {}),
+      תדירויות_אפשריות: availableGroupFrequencies(g),
       ...groupInfoFields(g),
       ...groupChatFields(g),
     }));
@@ -586,13 +616,27 @@ export function isRegisteredTrainee(student) {
   return REGISTERED_STATUSES.has(String(student?.status || ''));
 }
 
+/** A pending placement only exists when it points at a real group. */
+export function botVisibleStudentStatus(student, group = null) {
+  const status = String(student?.status || '');
+  if (status === 'pending_signup' && !group) return 'health_signed';
+  return status;
+}
+
 /**
  * `includeSquads` separates browsing from picking. A customer asking "what is
  * there" must not be offered a squad — but once they name an exact group
  * (signup, waitlist, a link), hiding squads would make "תרשמי אותו לנבחרת"
  * impossible to fulfil.
  */
-function selectGroups({ grade = '', band = '', day = null, level = '', includeSquads = false } = {}) {
+function selectGroups({
+  grade = '',
+  band = '',
+  day = null,
+  level = '',
+  frequency = '',
+  includeSquads = false,
+} = {}) {
   let groups = db.get('groups') || [];
   const wantedLevel = String(level || '').trim();
   if (wantedLevel) {
@@ -611,24 +655,24 @@ function selectGroups({ grade = '', band = '', day = null, level = '', includeSq
   }
   if (day != null && day !== '') {
     const d = Number(day);
-    if (Number.isInteger(d)) groups = groups.filter((g) => Number(g.day) === d);
+    if (Number.isInteger(d)) groups = groups.filter((g) => groupMeetsOnDay(g, d));
   }
+  if (frequency) groups = groups.filter((g) => groupSupportsFrequency(g, frequency));
   return groups;
 }
 
 function describeGroup(group) {
-  const day = DAY_NAMES[Number(group?.day)] || String(group?.day ?? '');
-  return `${group?.ageCategory || ''} · יום ${day} ${group?.time || ''}`.trim();
+  return `${group?.ageCategory || ''} · ${groupDaysPhrase(group)} ${group?.time || ''}`.trim();
 }
 
 /** Exactly one group, or a note saying what the customer still has to choose. */
-function pickSingleGroup({ grade, band, day, time } = {}) {
+function pickSingleGroup({ grade, band, day, time, frequency } = {}) {
   if (!String(grade || '').trim() && !String(band || '').trim()) {
     return { error: 'חסר לאיזו כיתה או שכבה — יש לשאול את הלקוח' };
   }
   // Squads included: an exact pick is deliberate, and if both a squad and a
   // regular group match, the multiple-match answer makes the bot ask anyway.
-  let groups = selectGroups({ grade, band, day, includeSquads: true });
+  let groups = selectGroups({ grade, band, day, frequency, includeSquads: true });
   const wantedTime = String(time || '').trim();
   if (wantedTime) {
     const exact = groups.filter((g) => String(g.time || '').trim() === wantedTime);
@@ -640,7 +684,7 @@ function pickSingleGroup({ grade, band, day, time } = {}) {
       error: 'יותר מקבוצה אחת מתאימה — יש לשאול לאיזו',
       קבוצות_אפשריות: groups.map((g) => ({
         שכבה: g.ageCategory || '',
-        יום: DAY_NAMES[Number(g.day)] || String(g.day ?? ''),
+        ...groupScheduleFields(g),
         שעה: g.time || '',
         רמה: g.skillLevel || 'מתחילים',
         // The difference between two groups at the same hour is often only in
@@ -733,8 +777,8 @@ export function buildCustomerTools({
   // Named so one tool can build on another — the registration pack reuses the
   // equipment link instead of repeating the lookup.
   const tools = {
-    listClasses: async ({ grade, band, day, level } = {}) => {
-      const groups = selectGroups({ grade, band, day, level });
+    listClasses: async ({ grade, band, day, level, frequency } = {}) => {
+      const groups = selectGroups({ grade, band, day, level, frequency });
       if (!groups.length) {
         // An empty result used to order a handoff, so a parent asking about a
         // toddler was passed to the team instead of hearing the obvious: the
@@ -773,7 +817,7 @@ export function buildCustomerTools({
       };
     },
 
-    getPrices: async ({ grade, band, equipment, entry } = {}) => {
+    getPrices: async ({ grade, band, frequency, equipment, entry } = {}) => {
       const payload = {};
       // Minors may only hear wall-entry prices. Class / equipment / enrichment
       // stay with the parent.
@@ -788,13 +832,15 @@ export function buildCustomerTools({
         return payload;
       }
       if (grade || band) {
-        const groups = selectGroups({ grade, band });
+        const groups = selectGroups({ grade, band, frequency });
         payload.חוגים = openGroupsPayload(groups).map((g) => ({
           שכבה: g.שכבה,
           יום: g.יום,
+          ימי_אימון: g.ימי_אימון,
           שעה: g.שעה,
           מחיר_פעם_בשבוע: g.מחיר_פעם_בשבוע,
           מחיר_פעמיים_בשבוע: g.מחיר_פעמיים_בשבוע,
+          תדירויות_אפשריות: g.תדירויות_אפשריות,
         }));
       }
       if (equipment !== false) {
@@ -1008,7 +1054,7 @@ export function buildCustomerTools({
       };
     },
 
-    getSignupLink: async ({ grade, band, day, time } = {}) => {
+    getSignupLink: async ({ grade, band, day, time, frequency } = {}) => {
       // A link belongs to one group. Without a class or band the model would be
       // choosing a group on the customer's behalf.
       if (!String(grade || '').trim() && !String(band || '').trim()) {
@@ -1017,7 +1063,7 @@ export function buildCustomerTools({
           הערה: 'חסר לאיזו כיתה או שכבה — יש לשאול את הלקוח לפני שליחת קישור',
         };
       }
-      let groups = selectGroups({ grade, band, day, includeSquads: true });
+      let groups = selectGroups({ grade, band, day, frequency, includeSquads: true });
       const wantedTime = String(time || '').trim();
       if (wantedTime) {
         const exact = groups.filter((g) => String(g.time || '').trim() === wantedTime);
@@ -1033,7 +1079,7 @@ export function buildCustomerTools({
           קישורים: [],
           קבוצות_אפשריות: groups.map((g) => ({
             שכבה: g.ageCategory || '',
-            יום: DAY_NAMES[Number(g.day)] || String(g.day ?? ''),
+            ...groupScheduleFields(g),
             שעה: g.time || '',
             רמה: g.skillLevel || 'מתחילים',
             ...groupInfoFields(g),
@@ -1042,13 +1088,28 @@ export function buildCustomerTools({
         };
       }
       const group = groups[0];
-      const week = group.signupLinkWeek ? buildRedirectUrl('s', group.id, 1) : '';
-      const twice = group.signupLinkTwice ? buildRedirectUrl('s', group.id, 2) : '';
+      const frequencies = availableGroupFrequencies(group);
+      if (!frequency && frequencies.length > 1) {
+        return {
+          קישורים: [],
+          קבוצה: describeGroup(group),
+          תדירויות_אפשריות: frequencies,
+          הערה: 'לקבוצה יש יותר מתדירות אחת — יש לשאול פעם או פעמיים בשבוע לפני שליחת קישור',
+        };
+      }
+      const selectedFrequency = frequency || frequencies[0] || '';
+      const week = selectedFrequency === 'פעם בשבוע' && group.signupLinkWeek
+        ? buildRedirectUrl('s', group.id, 1)
+        : '';
+      const twice = selectedFrequency === 'פעמיים בשבוע' && groupSupportsFrequency(group, selectedFrequency)
+        ? buildRedirectUrl('s', group.id, 2)
+        : '';
       return {
         קישורים: [{
           שכבה: group.ageCategory || '',
-          יום: DAY_NAMES[Number(group.day)] || String(group.day ?? ''),
+          ...groupScheduleFields(group),
           שעה: group.time || '',
+          תדירות: selectedFrequency,
           קישור_פעם_בשבוע: week,
           קישור_פעמיים_בשבוע: twice,
           // The general intake form is the fallback only for a family that has
@@ -1056,7 +1117,7 @@ export function buildCustomerTools({
           // told "now complete the registration" was handed back the very form
           // they had finished a minute earlier — it looked like the bot had not
           // noticed, and there was nothing new to fill in.
-          קישור_כללי: (week || twice || familyHasDeclaredChild())
+          קישור_כללי: (week || twice || familyHasDeclaredChild() || selectedFrequency === 'פעמיים בשבוע')
             ? ''
             : groupSignupUrl(group, { phone }),
           ...(week || twice || !familyHasDeclaredChild() ? {} : {
@@ -1160,10 +1221,10 @@ export function buildCustomerTools({
       };
     },
 
-    startSignup: async ({ childName, grade, band, day, time } = {}) => {
+    startSignup: async ({ childName, grade, band, day, time, frequency } = {}) => {
       const child = requireDeclaredChild(parent, childName);
       if (child.error) return child;
-      const picked = pickSingleGroup({ grade, band, day, time });
+      const picked = pickSingleGroup({ grade, band, day, time, frequency });
       if (picked.error) return picked;
 
       const { student } = child;
@@ -1175,9 +1236,8 @@ export function buildCustomerTools({
         return {
           error: `לפי הכרטיס ${student.name || 'המתאמן'} בן ${age.age}, `
             + `והקבוצה הזו מיועדת לגילאי ${age.range[0]}–${age.range[1]}.`,
-          מה_לעשות: 'לא לשבץ. יש לשאול את הלקוח מה תאריך הלידה המדויק, לאשר '
-            + 'אותו במילים, לשמור עם saveChildBirthDate, ואז לנסות שוב. אם '
-            + 'הגיל באמת לא מתאים לאף קבוצה — להעביר לצוות.',
+          מה_לעשות: 'לא לשבץ ולא לבקש תאריך לידה בשיחה. תאריך לידה ויתר פרטי '
+            + 'ההרשמה מתעדכנים דרך טופס ההרשמה. אם הטופס כבר מולא והסתירה נשארה — להעביר לצוות.',
           גיל_בכרטיס: age.age,
           טווח_הקבוצה: age.range,
         };
@@ -1275,7 +1335,7 @@ export function buildCustomerTools({
       journal(
         'placement_cancelled',
         `${student.name || 'מתאמן'} הוסר מ${group ? describeGroup(group) : 'הקבוצה'}`,
-        { group: group ? describeGroup(group) : '', from_status: status, to_status: 'health_signed' },
+        { group: group ? describeGroup(group) : '', from_status: student.status, to_status: 'health_signed' },
         row
       );
 
@@ -1287,91 +1347,24 @@ export function buildCustomerTools({
       };
     },
 
-    /**
-     * A wrong birth date on a card is not a small thing: the band comes from
-     * the age, so a parent asking for a seventh-grade group was told their
-     * thirteen-year-old was three and turned away. The bot could see the
-     * mistake and had to hand it to the team to retype.
-     *
-     * The confirmation is the whole safety of this: "10.4" is April here and
-     * October in half the world's software, so the tool refuses to save until
-     * the customer has been read the date back in words.
-     */
-    saveChildBirthDate: async ({ childName, birthDate, confirmed } = {}) => {
-      if (!parent?.id) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
-      const parsed = parseCustomerDate(birthDate);
-      if (!parsed) {
-        return { error: 'לא הצלחתי לקרוא את התאריך — יש לבקש אותו כיום, חודש ושנה' };
+    updateCustomerDetails: async ({ firstName, lastName } = {}) => {
+      const saved = await updateCustomerFullName(parent, { firstName, lastName });
+      if (saved.error) return { error: saved.error };
+      parent = saved.parent;
+      if (saved.saved) {
+        journal('details_saved', `שם הלקוח נשמר בכרטיס: ${saved.name}`, {
+          fields: ['firstName', 'lastName'],
+          firstName,
+          lastName,
+        });
       }
-      if (confirmed !== true) {
-        return {
-          נשמר: false,
-          צריך_אישור: spellOutDate(parsed),
-          הערה: `יש לשאול את הלקוח לאישור: «${spellOutDate(parsed)}?» ורק אחרי `
-            + 'תשובה חיובית לקרוא שוב לכלי עם confirmed=true.',
-        };
-      }
-
-      const kids = studentsForParent(parent);
-      if (!kids.length) return { error: 'אין מתאמנים בכרטיס' };
-      const named = String(childName || '').trim();
-      const matches = named
-        ? kids.filter((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
-        : kids;
-      if (!matches.length) return { error: `אין בכרטיס מתאמן בשם ${named} — יש לשאול את הלקוח` };
-      if (matches.length > 1) {
-        return {
-          error: 'יש כמה ילדים מתאימים — יש לשאול על מי מדובר',
-          ילדים: matches.map((s) => s.name || ''),
-        };
-      }
-
-      const student = matches[0];
-      const previous = student.birthDate || student.birth_date || '';
-      const updated = db.update('students', student.id, { birthDate: parsed });
-      if (!updated) return { error: 'שמירת תאריך הלידה נכשלה — יש להעביר לצוות' };
-      await persistCore('students', updated);
-
-      return {
-        נשמר: true,
-        מתאמן: student.name || '',
-        תאריך_לידה: spellOutDate(parsed),
-        גיל: ageLabelFor(parsed),
-        קודם: previous ? spellOutDate(previous) : 'לא היה תאריך',
-        הערה: 'יש לאשר ללקוח מה נשמר, ואז להמשיך לשאלה שבגללה זה עלה.',
-      };
+      return { נשמר: saved.saved, שם_פרטי: firstName, שם_משפחה: lastName, שם: saved.name };
     },
 
-    /**
-     * The model already greeted her by name — the card did not. A customer who
-     * writes "קוראים לי נעמה" was still filed as "לקוח וואטסאפ", because with
-     * tools on nothing writes the name down. Only fills a blank or the
-     * placeholder: a name the team typed is never overwritten by the bot.
-     */
-    saveCustomerName: async ({ firstName, lastName } = {}) => {
-      const first = String(firstName || '').trim();
-      if (!first) return { error: 'חסר שם פרטי' };
-      if (!parent?.id) return { error: 'אין כרטיס לקוח לשמור אליו' };
-      if (isIdentifiedParent(parent)) {
-        return { נשמר: false, סיבה: 'בכרטיס כבר יש שם', שם_קיים: parent.name };
-      }
-      const last = String(lastName || '').trim();
-      const fullName = [first, last].filter(Boolean).join(' ');
-      const updated = db.update('parents', parent.id, {
-        name: fullName,
-        ...(last ? { lastName: last } : {}),
-      });
-      if (!updated) return { error: 'שמירת השם נכשלה' };
-      await persistCore('parents', updated);
-      parent = updated;
-      journal('details_saved', `שם הלקוח נשמר בכרטיס: ${fullName}`, { field: 'name', value: fullName });
-      return { נשמר: true, שם: fullName };
-    },
-
-    joinWaitlist: async ({ childName, grade, band, day, time } = {}) => {
+    joinWaitlist: async ({ childName, grade, band, day, time, frequency } = {}) => {
       const child = requireDeclaredChild(parent, childName);
       if (child.error) return child;
-      const picked = pickSingleGroup({ grade, band, day, time });
+      const picked = pickSingleGroup({ grade, band, day, time, frequency });
       if (picked.error) return picked;
 
       const { student } = child;
@@ -1403,7 +1396,7 @@ export function buildCustomerTools({
       };
     },
 
-    getRegistrationPack: async ({ childName, grade, band, day, time } = {}) => {
+    getRegistrationPack: async ({ childName, grade, band, day, time, frequency } = {}) => {
       const kids = parent ? studentsForParent(parent) : [];
       const named = String(childName || '').trim();
       const student = named
@@ -1423,22 +1416,36 @@ export function buildCustomerTools({
           },
       };
 
-      const picked = pickSingleGroup({ grade, band, day, time });
+      const picked = pickSingleGroup({ grade, band, day, time, frequency });
       // Same rule as getSignupLink: the intake form is not a link to send back
       // to a family that has already filled it.
-      const groupLink = picked.error
+      const frequencies = picked.error ? [] : availableGroupFrequencies(picked.group);
+      const needsFrequency = !picked.error && !frequency && frequencies.length > 1;
+      const selectedFrequency = frequency || frequencies[0] || '';
+      const groupLink = picked.error || needsFrequency
         ? ''
-        : (picked.group.signupLinkWeek || picked.group.signupLinkTwice
-          || (familyHasDeclaredChild() ? '' : groupSignupUrl(picked.group, { phone })));
+        : (selectedFrequency === 'פעמיים בשבוע'
+          ? (groupSupportsFrequency(picked.group, selectedFrequency)
+            ? buildRedirectUrl('s', picked.group.id, 2)
+            : '')
+          : (picked.group.signupLinkWeek
+            ? buildRedirectUrl('s', picked.group.id, 1)
+            : (familyHasDeclaredChild() ? '' : groupSignupUrl(picked.group, { phone }))));
       pack.שלב_2_הרשמה_לקבוצה = picked.error
         ? { מצב: 'צריך לבחור קבוצה', הערה: picked.error, ...(picked.קבוצות_אפשריות ? { קבוצות_אפשריות: picked.קבוצות_אפשריות } : {}) }
+        : (needsFrequency
+          ? {
+            מצב: 'צריך לבחור תדירות',
+            תדירויות_אפשריות: frequencies,
+            הערה: 'יש לשאול פעם או פעמיים בשבוע לפני שליחת קישור',
+          }
         : (groupLink
-          ? { קישור: groupLink, הסבר: 'ההרשמה עצמה נעשית בטופס הזה, והאישור מגיע אחרי כמה ימים' }
+          ? { תדירות: selectedFrequency, קישור: groupLink, הסבר: 'ההרשמה עצמה נעשית בטופס הזה, והאישור מגיע אחרי כמה ימים' }
           : {
             מצב: 'אין קישור הרשמה לקבוצה הזו',
             הערה: 'הצוות משלים את ההרשמה מול המתנ״ס. אין קישור לשלוח — אין '
               + 'לשלוח את טופס ההצטרפות שוב, הלקוח כבר מילא אותו.',
-          });
+          }));
 
       const equipment = await tools.getEquipmentPaymentLink({ childName });
       pack.שלב_3_תשלום_ציוד = equipment.קישור
@@ -1468,7 +1475,10 @@ export function buildCustomerTools({
           גיל: ageLabelFor(birthDate) || 'לא ידוע',
           תאריך_לידה: birthDate ? spellOutDate(birthDate) : '',
           קבוצה: group ? describeGroup(group) : '',
-          סטטוס: s.status || '',
+          סטטוס: botVisibleStudentStatus(s, group),
+          ...(s.status === 'pending_signup' && !group
+            ? { הערת_סטטוס: 'אין קבוצה משובצת, ולכן אין להציג את המתאמן כממתין להרשמה' }
+            : {}),
         };
       });
       return {

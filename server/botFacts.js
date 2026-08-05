@@ -16,9 +16,16 @@ import {
   normalizeEquipmentSettings,
 } from './equipmentService.js';
 import { supa } from './supa.js';
+import { getSortedGroupDays } from './attendanceUtils.js';
 
 const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 const SHORT_DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'שבת'];
+
+function shortGroupDaysPhrase(group) {
+  const days = getSortedGroupDays(group).map((day) => SHORT_DAY_NAMES[day]);
+  if (!days.length) return '';
+  return days.length === 1 ? `יום ${days[0]}` : `ימים ${days.join(' ו')}`;
+}
 
 export const NO_OPENING_HOURS_REPLY =
   'שעות הפתיחה של הימים הקרובים עדיין לא עודכנו ביומן 🙏\n'
@@ -258,8 +265,7 @@ function groupPriceLine(group) {
   if (week) parts.push(`פעם בשבוע ${week} ₪`);
   if (twice) parts.push(`פעמיים בשבוע ${twice} ₪`);
   const age = String(group.ageCategory || '').trim();
-  const day = SHORT_DAY_NAMES[Number(group.day)] || '';
-  const when = [day ? `יום ${day}` : '', String(group.time || '').trim()].filter(Boolean).join(' ');
+  const when = [shortGroupDaysPhrase(group), String(group.time || '').trim()].filter(Boolean).join(' ');
   const title = [age, when].filter(Boolean).join(' · ') || 'חוג טיפוס';
   return `• ${title} — ${parts.join(' / ')}`;
 }
@@ -402,8 +408,7 @@ export function inviteLink(value) {
 
 function groupLabel(group) {
   const age = String(group?.ageCategory || '').trim();
-  const day = SHORT_DAY_NAMES[Number(group?.day)] || '';
-  const when = [day ? `יום ${day}` : '', String(group?.time || '').trim()].filter(Boolean).join(' ');
+  const when = [shortGroupDaysPhrase(group), String(group?.time || '').trim()].filter(Boolean).join(' ');
   return [age, when].filter(Boolean).join(' · ') || String(group?.name || 'החוג');
 }
 
@@ -503,8 +508,7 @@ export function trainerNameForGroup(db, group) {
 
 function groupTitle(group) {
   const age = String(group.ageCategory || '').trim();
-  const day = SHORT_DAY_NAMES[Number(group.day)] || '';
-  const when = [day ? `יום ${day}` : '', String(group.time || '').trim()].filter(Boolean).join(' ');
+  const when = [shortGroupDaysPhrase(group), String(group.time || '').trim()].filter(Boolean).join(' ');
   return [age, when].filter(Boolean).join(' · ') || String(group.name || 'הקבוצה');
 }
 

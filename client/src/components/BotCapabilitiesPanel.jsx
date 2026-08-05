@@ -80,7 +80,8 @@ export default function BotCapabilitiesPanel({ disabled = false }) {
     const saved = savedValues.current[capability.input.key];
     const next = capability.input.value;
     if (saved === next) return;
-    savedValues.current[capability.input.key] = next;
+    // The successful response updates savedValues. Keeping the old confirmed
+    // value on failure means leaving the field again will retry the save.
     save(capability.key, { values: { [capability.input.key]: next } });
   };
 

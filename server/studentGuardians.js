@@ -244,7 +244,11 @@ export function findChildMatches(db, {
  * first name of the parent holding the file — enough for "אתה ההורה השני?" and
  * nothing that identifies or reaches that household.
  */
-export function publicChildMatchPayload(matches = [], { healthValid = false } = {}) {
+export function publicChildMatchPayload(matches = [], {
+  healthValid = false,
+  healthDocumentValid = healthValid,
+  waiverValid = healthValid,
+} = {}) {
   if (!matches.length) return { match: false };
   const first = matches[0];
   return {
@@ -254,6 +258,8 @@ export function publicChildMatchPayload(matches = [], { healthValid = false } = 
     guardian_count: first.guardians.length,
     // Lets the second parent skip a declaration the first one already signed.
     health_valid: !!healthValid,
+    health_document_valid: !!healthDocumentValid,
+    waiver_valid: !!waiverValid,
     // More than one child shares this name and birth date — staff must decide,
     // so the form offers no link at all.
     ambiguous: matches.length > 1,

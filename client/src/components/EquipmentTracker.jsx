@@ -594,7 +594,8 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
             <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.6 }}>
               מה שתכתבו כאן הוא מה שהבוט יענה לשאלות „למה צריך נעלי טיפוס?”,
               „מה זה מגנזיום?”, „על מה משלמים דמי העשרה?”. שדה ריק — הבוט לא
-              ימציא הסבר, אלא יעביר לצוות.
+              ימציא הסבר, אלא יעביר לצוות. ההסבר של שק המגנזיום מוצג גם בתוך
+              כרטיס הפריט בדף תשלום הציוד להורים.
             </div>
 
             {[

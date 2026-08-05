@@ -14,7 +14,7 @@ import {
 } from './whatsapp.js';
 import { whatsappConnectService } from './whatsappConnect.js';
 import { automationsService, runScheduledAutomationsIfDue } from './automations.js';
-import { runShiftRemindersIfDue, notifyShiftAssigned } from './shiftAlerts.js';
+import { israelTimeToEpoch, runShiftRemindersIfDue, notifyShiftAssigned } from './shiftAlerts.js';
 import {
   DENOMINATIONS,
   sessionSnapshot,
@@ -31,7 +31,7 @@ import { buildSaleReceipt, buildDrawerOnlyPayload } from './escposReceipt.js';
 import { alertSubscribers } from './staffAlerts.js';
 import { sendStaffAlert } from './staffNotify.js';
 import { notifyGroupMembershipDiff, runIntroHeadsUpIfDue } from './groupAlerts.js';
-import { capabilityState, capabilitySettingKey, CAPABILITY_KEYS, CAPABILITY_INPUT_KEYS } from './botCapabilities.js';
+import { capabilityState, capabilitySettingsPatch } from './botCapabilities.js';
 import { listBotActions, botActionSummary, BOT_ACTION_TYPES } from './botActivityLog.js';
 import {
   loadAgendaSettings,
@@ -196,6 +196,7 @@ import {
 import {
   resolveDeclarationTemplate,
   resolveDefaultDeclarationTemplate,
+  findLatestDeclaration,
   findLatestValidDeclaration,
   saveCrmParticipants,
 } from './crmWaiverService.js';
@@ -211,11 +212,44 @@ import {
 import { EVENT_KINDS, normalizeActivityType } from './eventKinds.js';
 import { declarationTemplateForActivity, templateActivityTypes } from './activityDeclaration.js';
 import { createOtpService } from './otpService.js';
+import { resolvePublicIdentity } from './publicIdentity.js';
+import {
+  appendSignatureEvidence,
+  createSignatureEvidenceEvent,
+  evidenceReference,
+  requestEvidence,
+  sha256,
+  verifySignatureEvidenceEvent,
+} from './signatureEvidence.js';
 import {
   declarationSignedAt,
   isHealthDeclarationValid,
+  scopedDeclarationSignedAt,
 } from './healthValidity.js';
+import { participationEligibility } from './participationEligibility.js';
+import {
+  CANONICAL_HEALTH_QUESTIONS,
+  normalizeParticipationScope,
+  scopeForActivity,
+} from './participationDocuments.js';
+import {
+  ensureAdultParticipantForParent,
+  ensureHouseholdForParent,
+  householdIdForParent,
+  isStudentInHousehold,
+  splitExplicitHousehold,
+} from './households.js';
+import {
+  createPolicy,
+  currentPolicyVersion,
+  publishPolicy,
+  recordPolicyAcceptance,
+  resolvePolicyFor,
+  savePolicyDraft,
+  suggestedRefund,
+} from './cancellationPolicies.js';
 import { passPunchBlockReason } from './passPunchEligibility.js';
+import { runParticipationDocumentReminders } from './participationReminders.js';
 import {
   enrichPricelistItem,
   buildPassFromItem,
@@ -311,6 +345,7 @@ import {
   renameCategoryOnProducts,
   normalizeProductCategories,
   backfillPricelistCategories,
+  backfillWallClimbingProducts,
   clampImage,
 } from './productCategories.js';
 import {
@@ -864,6 +899,66 @@ app.put('/api/settings/business-profile', requireOwner, async (req, res) => {
     res.json(await saveBusinessProfile(req.body || {}));
   } catch (error) {
     res.status(400).json({ error: error.message || 'שמירת פרטי העסק נכשלה' });
+  }
+});
+
+app.get('/api/settings/cancellation-policies', requireOwner, async (_req, res) => {
+  try {
+    if (supa.isEnabled()) {
+      const [policies, versions] = await Promise.all([
+        supa.getAll('cancellation_policies'),
+        supa.getAll('cancellation_policy_versions'),
+      ]);
+      if (policies) db.set('cancellation_policies', policies);
+      if (versions) db.set('cancellation_policy_versions', versions);
+    }
+    const versions = db.get('cancellation_policy_versions') || [];
+    res.json({
+      policies: (db.get('cancellation_policies') || []).map((policy) => ({
+        ...policy,
+        versions: versions
+          .filter((version) => version.policy_id === policy.id)
+          .sort((a, b) => Number(b.version_number) - Number(a.version_number)),
+        current: currentPolicyVersion(db, policy.id)?.snapshot || null,
+      })),
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'טעינת המדיניות נכשלה' });
+  }
+});
+
+app.post('/api/settings/cancellation-policies', requireOwner, async (req, res) => {
+  try {
+    const actor = req.crmUser?.id || req.crmUser?.email || '';
+    res.status(201).json(await createPolicy(db, persistCore, req.body || {}, actor));
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'יצירת המדיניות נכשלה' });
+  }
+});
+
+app.put('/api/settings/cancellation-policies/:id/draft', requireOwner, async (req, res) => {
+  try {
+    const actor = req.crmUser?.id || req.crmUser?.email || '';
+    res.json(await savePolicyDraft(db, persistCore, req.params.id, req.body || {}, actor));
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'שמירת הטיוטה נכשלה' });
+  }
+});
+
+app.post('/api/settings/cancellation-policies/:id/publish', requireOwner, async (req, res) => {
+  try {
+    const actor = req.crmUser?.id || req.crmUser?.email || '';
+    res.json(await publishPolicy(db, persistCore, req.params.id, req.body || {}, actor));
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'פרסום המדיניות נכשל' });
+  }
+});
+
+app.post('/api/settings/cancellation-policies/refund-preview', requireOwner, (req, res) => {
+  try {
+    res.json(suggestedRefund(req.body || {}));
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'חישוב ההחזר נכשל' });
   }
 });
 
@@ -1483,23 +1578,15 @@ app.get('/api/whatsapp/capabilities', (req, res) => {
 
 app.put('/api/whatsapp/capabilities', requireOwner, async (req, res) => {
   const incoming = req.body?.capabilities;
-  if (!incoming || typeof incoming !== 'object') {
+  const values = req.body?.values;
+  const invalidCapabilities = incoming !== undefined
+    && (!incoming || typeof incoming !== 'object' || Array.isArray(incoming));
+  const invalidValues = values !== undefined
+    && (!values || typeof values !== 'object' || Array.isArray(values));
+  if (invalidCapabilities || invalidValues) {
     return res.status(400).json({ error: 'חסרות הגדרות לעדכון' });
   }
-  const patch = {};
-  for (const key of CAPABILITY_KEYS) {
-    if (incoming[key] === undefined) continue;
-    patch[capabilitySettingKey(key)] = !!incoming[key];
-  }
-  // A capability may own one free-text setting — the community centre's phone
-  // numbers, so a change of secretary is a field the owner edits, not a deploy.
-  const values = req.body?.values;
-  if (values && typeof values === 'object') {
-    for (const key of CAPABILITY_INPUT_KEYS) {
-      if (values[key] === undefined) continue;
-      patch[key] = String(values[key] || '').slice(0, 300);
-    }
-  }
+  const patch = capabilitySettingsPatch({ capabilities: incoming, values });
   if (!Object.keys(patch).length) {
     return res.status(400).json({ error: 'לא נשלחה אף יכולת מוכרת' });
   }
@@ -3337,6 +3424,10 @@ app.post('/api/parents/:id/split-family', async (req, res) => {
       }
     }
   }
+  await splitExplicitHousehold(db, persistCore, {
+    parentIds: snapshot.parents.map((parent) => parent.id),
+    assignments,
+  });
 
   res.json({
     ok: true,
@@ -3369,6 +3460,7 @@ app.post('/api/parents/:id/merge-family', async (req, res) => {
     return res.status(400).json({ error: result.error || 'מיזוג המשפחות נכשל' });
   }
   for (const link of result.links) await persistCore('student_guardians', link);
+  await ensureHouseholdForParent(db, persistCore, req.params.id);
 
   res.json({
     ok: true,
@@ -4461,6 +4553,9 @@ function normalizeActivityPayload(body = {}) {
   return {
     name: String(body.name || '').trim(),
     type,
+    participation_scope: body.participation_scope
+      ? normalizeParticipationScope(body.participation_scope)
+      : scopeForActivity({ type, category }),
     event_kind: eventKind,
     category,
     status: body.status || 'open',
@@ -4501,6 +4596,12 @@ function normalizeActivityPayload(body = {}) {
     form_template_slug: body.form_template_slug || 'wall',
     registration_page_title: body.registration_page_title || '',
     registration_page_body: body.registration_page_body || '',
+    audience: body.audience || '',
+    included: body.included || '',
+    what_to_bring: body.what_to_bring || '',
+    important_info: body.important_info || '',
+    cancellation_policy_id: body.cancellation_policy_id || null,
+    cancellation_policy_disabled: body.cancellation_policy_disabled === true,
     registration_theme: sanitizeRegistrationTheme(
       body.registration_theme && typeof body.registration_theme === 'object'
         ? body.registration_theme
@@ -5183,11 +5284,19 @@ app.get('/api/activities/:id/attendance', async (req, res) => {
     const registrations = activeRegistrations(db, activity.id)
       .slice()
       .sort((a, b) => String(a.participant_name || '').localeCompare(String(b.participant_name || ''), 'he'))
-      .map((registration) => ({
-        ...registration,
-        parent_name:
-          parents.find((parent) => String(parent.id) === String(registration.parent_id))?.name || '',
-      }));
+      .map((registration) => {
+        const eligibility = participationEligibility(db, {
+          studentId: registration.student_id,
+          scope: scopeForActivity(activity),
+        });
+        return {
+          ...registration,
+          document_status: eligibility.status,
+          eligible_now: eligibility.eligible,
+          parent_name:
+            parents.find((parent) => String(parent.id) === String(registration.parent_id))?.name || '',
+        };
+      });
 
     res.json(buildActivityAttendance({
       activity,
@@ -5229,6 +5338,27 @@ app.post('/api/activity-attendance', async (req, res) => {
       if (!activity) return res.status(404).json({ error: 'האירוע לא נמצא' });
       if (!registrationCountsForAttendance(registration)) {
         return res.status(400).json({ error: 'לא ניתן לסמן נוכחות למשתתף שבוטל' });
+      }
+      const requestedAttendanceStatus = String(record.status || '').toLowerCase();
+      if (['attended', 'present', 'late', 'הגיע'].includes(requestedAttendanceStatus)) {
+        const eligibility = participationEligibility(db, {
+          studentId: registration.student_id,
+          scope: scopeForActivity(activity),
+        });
+        const refreshedRegistration = db.update('activity_registrations', registration.id, {
+          document_status: eligibility.status,
+          updated_at: new Date().toISOString(),
+        });
+        if (refreshedRegistration) await persistCore('activity_registrations', refreshedRegistration);
+        if (!eligibility.eligible) {
+          return res.status(409).json({
+            error: eligibility.status === 'blocked_health'
+              ? `${registration.participant_name || 'המשתתף/ת'} חסום/ה עקב שינוי במצב הבריאותי`
+              : `${registration.participant_name || 'המשתתף/ת'} חסר/ת מסמכים תקפים לפעילות`,
+            code: 'participation_documents_required',
+            documentStatus: eligibility.status,
+          });
+        }
       }
 
       const id = activityAttendanceId(registration.id, record.date);
@@ -5272,6 +5402,42 @@ app.post('/api/activity-attendance', async (req, res) => {
     res.status(500).json({ error: err.message || 'שמירת הנוכחות נכשלה' });
   }
 });
+
+function cancellationReviewForPayment({ activity, payment, order = null, paidAmount, participantsCancelled = 1, organizerCancelled = false } = {}) {
+  const snapshot = order?.policy_snapshot
+    || payment?.policy_snapshot
+    || resolvePolicyFor(db, activity)?.snapshot
+    || null;
+  const startsAt = israelTimeToEpoch(activity?.date, activity?.start_time || '00:00');
+  const recommendation = snapshot
+    ? suggestedRefund({
+        snapshot,
+        paidAmount,
+        activityStartsAt: new Date(startsAt),
+        organizerCancelled,
+        participantsCancelled,
+      })
+    : {
+        amount: Math.max(0, Number(paidAmount) || 0),
+        rule_id: 'legacy_full_refund',
+        refund_percent: 100,
+        fixed_fee: 0,
+      };
+  const chargedAmount = Math.max(0, Number(payment?.amount) || 0);
+  const automaticFullRefund = Math.abs(Number(recommendation.amount) - chargedAmount) < 0.005;
+  return {
+    recommendation,
+    policy_snapshot: snapshot,
+    charged_amount: chargedAmount,
+    automatic_full_refund: automaticFullRefund,
+    manual_partial_refund_required: !automaticFullRefund,
+    icount_doc_app_url: icount.docAppUrl({
+      doctype: payment?.icount_doctype || 'invrec',
+      docnum: payment?.icount_doc_number,
+      docId: payment?.icount_doc_id,
+    }),
+  };
+}
 
 async function resolveEquipmentFamily(checkout) {
   let parent = db.getOne('parents', checkout?.parent_id);
@@ -5358,6 +5524,38 @@ async function buildPublicEquipmentPayload(checkout, suppliedSettings = null) {
   };
 }
 
+function registrationRefundReview(activity, registration, plan, options = {}) {
+  const siblingCount = Math.max(1, plan.affectedRegistrations?.length || 1);
+  const allocatedPaid = Number(registration.amount) > 0
+    ? Number(registration.amount)
+    : (Number(plan.amount) || 0) / siblingCount;
+  return cancellationReviewForPayment({
+    activity,
+    payment: plan.payment,
+    order: plan.order,
+    paidAmount: allocatedPaid,
+    participantsCancelled: 1,
+    ...options,
+  });
+}
+
+app.post('/api/activities/:id/registrations/:registrationId/refund-preview', (req, res) => {
+  const activity = db.getOne('activities', req.params.id);
+  const registration = db.getOne('activity_registrations', req.params.registrationId);
+  if (!activity || !registration || String(registration.activity_id) !== String(activity.id)) {
+    return res.status(404).json({ error: 'המשתתף לא נמצא באירוע' });
+  }
+  const plan = buildRegistrationRefundPlan(db, { activity, registration });
+  if (!plan.ok) return res.status(400).json({ error: plan.error, code: plan.code || null });
+  return res.json({
+    ...registrationRefundReview(activity, registration, plan, {
+      organizerCancelled: req.body?.organizer_cancelled === true,
+    }),
+    shared_payment: plan.sharedPayment,
+    participant_names: plan.participantNames,
+  });
+});
+
 app.post('/api/activities/:id/registrations/:registrationId/refund', async (req, res) => {
   try {
     if (!icount.isConfigured()) {
@@ -5383,6 +5581,25 @@ app.post('/api/activities/:id/registrations/:registrationId/refund', async (req,
     const plan = buildRegistrationRefundPlan(db, { activity, registration });
     if (!plan.ok) {
       return res.status(400).json({ error: plan.error, code: plan.code || null });
+    }
+    const refundReview = registrationRefundReview(activity, registration, plan, {
+      organizerCancelled: req.body?.organizer_cancelled === true,
+    });
+    const approvedAmount = Number(req.body?.approved_amount);
+    if (!Number.isFinite(approvedAmount)
+      || Math.abs(approvedAmount - Number(refundReview.recommendation.amount)) >= 0.005) {
+      return res.status(409).json({
+        error: 'יש לעיין בהחזר המומלץ ולאשר את הסכום לפני ביצוע הזיכוי',
+        code: 'refund_amount_approval_required',
+        ...refundReview,
+      });
+    }
+    if (refundReview.manual_partial_refund_required) {
+      return res.status(409).json({
+        error: 'ההחזר המומלץ הוא חלקי. יש לבצע אותו במסמך המקורי ב-iCount; המערכת לא תזכה בטעות את כל העסקה.',
+        code: 'manual_partial_refund_required',
+        ...refundReview,
+      });
     }
 
     const reason =
@@ -5454,11 +5671,25 @@ app.post('/api/activities/:id/registrations/:registrationId/refund', async (req,
     const details = Array.isArray(err.details?.error_details)
       ? err.details.error_details.filter(Boolean).join(' · ')
       : '';
-    res.status(502).json({
+    res.status(err.status || 502).json({
       error: details || err.message,
       code: err.code,
     });
   }
+});
+
+app.post('/api/activities/:id/host-payment/refund-preview', (req, res) => {
+  const activity = db.getOne('activities', req.params.id);
+  if (!activity) return res.status(404).json({ error: 'Activity not found' });
+  const plan = buildHostRefundPlan(db, activity);
+  if (!plan.ok) return res.status(400).json({ error: plan.error, code: plan.code || null });
+  return res.json(cancellationReviewForPayment({
+    activity,
+    payment: plan.payment,
+    paidAmount: plan.amount,
+    participantsCancelled: 1,
+    organizerCancelled: req.body?.organizer_cancelled === true,
+  }));
 });
 
 app.post('/api/activities/:id/host-payment/refund', async (req, res) => {
@@ -5480,6 +5711,29 @@ app.post('/api/activities/:id/host-payment/refund', async (req, res) => {
     const plan = buildHostRefundPlan(db, fresh);
     if (!plan.ok) {
       return res.status(400).json({ error: plan.error, code: plan.code || null });
+    }
+    const refundReview = cancellationReviewForPayment({
+      activity: fresh,
+      payment: plan.payment,
+      paidAmount: plan.amount,
+      participantsCancelled: 1,
+      organizerCancelled: req.body?.organizer_cancelled === true,
+    });
+    const approvedAmount = Number(req.body?.approved_amount);
+    if (!Number.isFinite(approvedAmount)
+      || Math.abs(approvedAmount - Number(refundReview.recommendation.amount)) >= 0.005) {
+      return res.status(409).json({
+        error: 'יש לעיין בהחזר המומלץ ולאשר את הסכום לפני ביצוע הזיכוי',
+        code: 'refund_amount_approval_required',
+        ...refundReview,
+      });
+    }
+    if (refundReview.manual_partial_refund_required) {
+      return res.status(409).json({
+        error: 'ההחזר המומלץ הוא חלקי. יש לבצע אותו במסמך המקורי ב-iCount.',
+        code: 'manual_partial_refund_required',
+        ...refundReview,
+      });
     }
 
     const reason =
@@ -6062,6 +6316,7 @@ app.get('/api/public/host-payments/:token', publicFormRateLimit, async (req, res
     const theme = normalizeActivityTheme(
       activity.registration_theme || activity.theme || {}
     );
+    const cancellationPolicy = resolvePolicyFor(db, activity);
     res.json({
       id: activity.id,
       name: activity.name,
@@ -6074,6 +6329,12 @@ app.get('/api/public/host-payments/:token', publicFormRateLimit, async (req, res
       payment_status: activity.payment_status || 'unpaid',
       cover_image: theme.cover_image || '',
       cover_position: theme.cover_position || '50% 50%',
+      description: activity.registration_page_body || activity.description || '',
+      audience: activity.audience || '',
+      included: activity.included || '',
+      what_to_bring: activity.what_to_bring || '',
+      important_info: activity.important_info || '',
+      cancellation_policy: cancellationPolicy?.snapshot || null,
     });
   } catch (err) {
     console.error('host payment lookup error:', err.message);
@@ -6093,6 +6354,13 @@ app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req
     }
     if (activity.payment_status === 'paid') {
       return res.json({ success: true, alreadyPaid: true });
+    }
+    const cancellationPolicy = resolvePolicyFor(db, activity);
+    if (cancellationPolicy && req.body?.cancellationPolicyAccepted !== true) {
+      return res.status(400).json({
+        error: 'יש לקרוא ולאשר את מדיניות הביטול לפני המעבר לתשלום',
+        code: 'cancellation_policy_acceptance_required',
+      });
     }
     let parent = db.getOne('parents', activity.host_parent_id);
     if (!parent && activity.host_parent_id && supa.isEnabled()) {
@@ -6153,8 +6421,27 @@ app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req
     });
     payment = db.update('payments', payment.id, {
       payment_url: paymentUrl,
+      policy_snapshot: cancellationPolicy?.snapshot || null,
       updated_at: new Date().toISOString(),
     }) || payment;
+    let policyAcceptance = null;
+    if (cancellationPolicy) {
+      policyAcceptance = (db.get('cancellation_acceptances') || []).find((acceptance) => (
+        String(acceptance.payment_id || '') === String(payment.id)
+        && String(acceptance.policy_version_id || '') === String(cancellationPolicy.version.id)
+      )) || await recordPolicyAcceptance(db, persistCore, {
+        policy: cancellationPolicy.policy,
+        version: cancellationPolicy.version,
+        parentId: parent.id,
+        activityId: activity.id,
+        paymentId: payment.id,
+        acceptedVia: 'host',
+      });
+      payment = db.update('payments', payment.id, {
+        cancellation_acceptance_id: policyAcceptance?.id || null,
+        updated_at: new Date().toISOString(),
+      }) || payment;
+    }
     const paymentPersisted = await persistCore('payments', payment);
     if (paymentPersisted?.ok === false) throw new Error(paymentPersisted.error);
     const updatedActivity = db.update('activities', activity.id, {
@@ -6162,7 +6449,7 @@ app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req
     }) || activity;
     const activityPersisted = await persistCore('activities', updatedActivity);
     if (activityPersisted?.ok === false) throw new Error(activityPersisted.error);
-    res.json({ success: true, paymentUrl });
+    res.json({ success: true, paymentUrl, cancellationAcceptanceId: policyAcceptance?.id || null });
   } catch (err) {
     console.error('host activity payment error:', err.message);
     res.status(503).json({ error: err.message || 'יצירת התשלום נכשלה' });
@@ -6226,9 +6513,11 @@ app.get('/api/public/activities/:slug', publicFormRateLimit, async (req, res) =>
     // The declaration the event itself calls for — a trip asks the trip
     // questions. This used to be the default template whatever the event was.
     const template = declarationTemplateForActivity(db, activity, resolveDeclarationTemplate);
+    const cancellationPolicy = resolvePolicyFor(db, activity);
     res.json({
       ...publicRegistrationPayload(activity, regs),
       form_template: template,
+      cancellation_policy: cancellationPolicy?.snapshot || null,
     });
   } catch (err) {
     console.error('public activity get error:', err.message);
@@ -6246,59 +6535,80 @@ app.get('/api/public/activities/:slug', publicFormRateLimit, async (req, res) =>
  */
 /**
  * @param {string} rawPhone
+ * @param {string} idNumber government identity number typed before OTP
  * @param {string} templateSlug איזו הצהרה נחתמת בפעילות הזאת. „יש הצהרה בתוקף”
  *   היא תשובה ביחס לטופס מסוים: מי שחתם על הצהרת הקיר לא קרא מעולם את הסעיפים
  *   על גלישה על חבל, ולכן הוא אינו מכוסה לטיול.
  */
-async function loadPublicHousehold(rawPhone, templateSlug = '') {
+async function loadPublicHousehold(rawPhone, idNumber = '', templateSlug = '') {
   const phone = normalizePhone(rawPhone || '');
-  if (!phone || phone.replace(/\D/g, '').length < 9) {
-    return { found: false, parent: null, children: [], adults: [], adult_health_valid: false };
+  const idDigits = normalizedIdNumber(idNumber);
+  if (!phone || phone.replace(/\D/g, '').length < 9 || idDigits.length < 5) {
+    return {
+      found: false, identity_status: 'incomplete', parent: null,
+      children: [], adults: [], adult_health_valid: false,
+    };
   }
   if (supa.isEnabled()) {
-    const [remoteParents, remoteStudents, remoteDecls] = await Promise.all([
+    const [remoteParents, remoteStudents, remoteDecls, remoteWaivers, remoteHolds, remoteGuardians, remoteHouseholds, remoteMembers] = await Promise.all([
       supa.getAll('parents'),
       supa.getAll('students'),
       supa.getAll('health_declarations'),
+      supa.getAll('participation_waivers'),
+      supa.getAll('health_holds'),
+      supa.getAll('student_guardians'),
+      supa.getAll('households'),
+      supa.getAll('household_members'),
     ]);
     if (remoteParents) db.set('parents', remoteParents);
     if (remoteStudents) db.set('students', remoteStudents);
     if (remoteDecls) db.set('health_declarations', remoteDecls);
+    if (remoteWaivers) db.set('participation_waivers', remoteWaivers);
+    if (remoteHolds) db.set('health_holds', remoteHolds);
+    if (remoteGuardians) db.set('student_guardians', remoteGuardians);
+    if (remoteHouseholds) db.set('households', remoteHouseholds);
+    if (remoteMembers) db.set('household_members', remoteMembers);
   }
-  const parent = findParentForOnboard({ phone });
+  const identity = resolvePublicIdentity(db.get('parents') || [], { phone, idNumber: idDigits });
+  if (identity.status === 'review_required') {
+    return {
+      found: false,
+      identity_status: 'review_required',
+      review_required: true,
+      parent: null,
+      children: [],
+      adults: [],
+      adult_health_valid: false,
+      error: 'הפרטים תואמים לרשומות שונות או אינם חד־משמעיים. לא נפתח תיק חדש; יש לפנות לצוות לבדיקה.',
+    };
+  }
+  const parent = identity.status === 'found' ? identity.parent : null;
   if (!parent) {
-    return { found: false, parent: null, children: [], adults: [], adult_health_valid: false };
+    return {
+      found: false, identity_status: 'new', parent: null,
+      children: [], adults: [], adult_health_valid: false,
+    };
   }
-  // The untyped `healthSignedAt` flag on a student predates the split into one
-  // declaration per activity, when the wall's was the only form there was. It
-  // stands in for that one and nothing else.
   const wantedSlug = String(templateSlug || '').trim().toLowerCase();
-  const flagCoversThisForm = !wantedSlug || wantedSlug === 'wall';
-  const validFor = (studentId) => findLatestValidDeclaration(db, {
-    studentId,
-    templateSlug: wantedSlug,
-  });
+  const scope = normalizeParticipationScope(wantedSlug);
+  const explicitHousehold = await ensureHouseholdForParent(db, persistCore, parent.id);
   // The household's children, not only the ones whose card names this parent as
   // primary: after a merge every child belongs to both parents, and a public
   // form that lists one parent's half asks a family to register a child twice.
   const memberOf = (student) => {
-    const declaration = validFor(student.id);
-    const signedAt = declarationSignedAt(declaration) || student.healthSignedAt || null;
-    // A missing signature date is *not* a valid declaration here. Elsewhere an
-    // unknown date is read generously so old records are not flagged; on a
-    // public form that generosity would offer to reuse a signature that was
-    // never given.
-    const healthValid = !!declaration
-      || (flagCoversThisForm
-        && !!student.healthSignedAt
-        && isHealthDeclarationValid(student.healthSignedAt));
+    const eligibility = participationEligibility(db, { studentId: student.id, scope });
     return {
       id: student.id,
       name: String(student.name || '').trim(),
       birthDate: student.birthDate || '',
+      gender: student.gender || '',
       is_adult: student.isAdult === true,
-      health_valid: healthValid,
-      health_signed_at: signedAt,
+      health_valid: eligibility.eligible,
+      health_document_valid: eligibility.health.state === 'valid',
+      waiver_valid: eligibility.waiver.state === 'valid',
+      document_status: eligibility.status,
+      health_signed_at: eligibility.health.signed_at,
+      waiver_signed_at: eligibility.waiver.signed_at,
     };
   };
   const byName = (a, b) => a.name.localeCompare(b.name, 'he');
@@ -6312,7 +6622,7 @@ async function loadPublicHousehold(rawPhone, templateSlug = '') {
   // Grown-ups on the file are participants too. A trip is booked by a family
   // that climbs together, and offering only the children meant a parent could
   // not put themselves on the list at all.
-  const adults = childrenOfParent(db, parent.id)
+  const adultStudents = childrenOfParent(db, parent.id)
     .filter((student) => student.isAdult === true)
     .map(memberOf)
     .filter((adult) => adult.name)
@@ -6324,26 +6634,56 @@ async function loadPublicHousehold(rawPhone, templateSlug = '') {
     const studentName = String(student.name || '').trim().toLowerCase();
     return !parentName || studentName === parentName;
   }) || childrenOfParent(db, parent.id).find((student) => student.isAdult === true);
-  const adultDeclaration = (adultStudent ? validFor(adultStudent.id) : null)
-    || findLatestValidDeclaration(db, {
-      parentId: parent.id,
-      climberName: parent.name,
-      templateSlug: wantedSlug,
-    });
+  const graph = expandHousehold(db, parent.id);
+  const householdParents = (graph.parentIds || [parent.id])
+    .map((id) => db.getOne('parents', id))
+    .filter(Boolean);
+  const representedParentIds = new Set(adultStudents.map((adult) => {
+    const student = db.getOne('students', adult.id);
+    return student?.parentId || null;
+  }).filter(Boolean));
+  const adults = [
+    ...adultStudents,
+    ...householdParents
+      .filter((candidate) => !representedParentIds.has(candidate.id))
+      .map((candidate) => ({
+        id: `parent:${candidate.id}`,
+        parent_member_id: candidate.id,
+        name: candidate.name || '',
+        birthDate: '',
+        gender: candidate.gender || '',
+        is_adult: true,
+        profile_status: candidate.id === parent.id ? 'complete' : 'pending_profile',
+        health_valid: false,
+        health_document_valid: false,
+        waiver_valid: false,
+        document_status: 'pending_profile',
+      })),
+  ].sort(byName);
+  const adultEligibility = adultStudent
+    ? participationEligibility(db, { studentId: adultStudent.id, scope })
+    : null;
 
   return {
     found: true,
+    identity_status: 'found',
     parent: {
       id: parent.id,
       name: parent.name || '',
-      phone: parent.phone || '',
+      lastName: parent.lastName || '',
+      relation: parent.relation || '',
+      idNumber: parent.idNumber || '',
       email: parent.email || '',
       city: parent.city || '',
     },
     children,
     adults,
+    household_id: explicitHousehold.id,
     adult_student_id: adultStudent?.id || null,
-    adult_health_valid: !!adultDeclaration,
+    adult: adultStudent ? memberOf(adultStudent) : null,
+    adult_health_valid: !!adultEligibility?.eligible,
+    adult_health_document_valid: adultEligibility?.health.state === 'valid',
+    adult_waiver_valid: adultEligibility?.waiver.state === 'valid',
     listDefs: typeof db.getBroadcastListDefs === 'function' ? db.getBroadcastListDefs() : [],
     subscriptions: typeof db.getParentBroadcastLists === 'function'
       ? db.getParentBroadcastLists(parent.id)
@@ -6362,15 +6702,23 @@ async function loadPublicHousehold(rawPhone, templateSlug = '') {
  */
 app.get('/api/public/child-check', publicFormRateLimit, async (req, res) => {
   try {
+    const verified = requireVerifiedPublicPhone(req, res, req.query.phone);
+    if (!verified) return;
     if (supa.isEnabled()) {
-      const [remoteStudents, remoteParents, remoteGuardians] = await Promise.all([
+      const [remoteStudents, remoteParents, remoteGuardians, remoteDecls, remoteWaivers, remoteHolds] = await Promise.all([
         supa.getAll('students'),
         supa.getAll('parents'),
         supa.getAll('student_guardians'),
+        supa.getAll('health_declarations'),
+        supa.getAll('participation_waivers'),
+        supa.getAll('health_holds'),
       ]);
       if (remoteStudents) db.set('students', remoteStudents);
       if (remoteParents) db.set('parents', remoteParents);
       if (remoteGuardians) db.set('student_guardians', remoteGuardians);
+      if (remoteDecls) db.set('health_declarations', remoteDecls);
+      if (remoteWaivers) db.set('participation_waivers', remoteWaivers);
+      if (remoteHolds) db.set('health_holds', remoteHolds);
     }
     // Children already on the caller's own card are the household lookup's job.
     const ownParent = findParentForOnboard({ phone: normalizePhone(req.query.phone || '') });
@@ -6380,24 +6728,22 @@ app.get('/api/public/child-check', publicFormRateLimit, async (req, res) => {
       idNumber: req.query.idNumber,
       excludeParentId: ownParent?.id || null,
     });
-    if (matches.length === 1 && supa.isEnabled()) {
-      const remoteDecls = await supa.getAll('health_declarations');
-      if (remoteDecls) db.set('health_declarations', remoteDecls);
-    }
     const matched = matches.length === 1 ? matches[0].student : null;
     // Scoped to the form being filled: a child linked from another family is
     // covered for the wall, not for a trip whose risks that signature never
     // mentioned. The submit enforces the same rule — without this the form
     // would promise a reuse the server then refuses.
     const wantedSlug = String(req.query.templateSlug || '').trim().toLowerCase();
-    const flagCoversThisForm = !wantedSlug || wantedSlug === 'wall';
+    const eligibility = matched
+      ? participationEligibility(db, {
+          studentId: matched.id,
+          scope: normalizeParticipationScope(wantedSlug || 'wall'),
+        })
+      : null;
     res.json(publicChildMatchPayload(matches, {
-      healthValid: matched
-        ? !!findLatestValidDeclaration(db, { studentId: matched.id, templateSlug: wantedSlug })
-          || (flagCoversThisForm
-            && !!matched.healthSignedAt
-            && isHealthDeclarationValid(matched.healthSignedAt))
-        : false,
+      healthValid: !!eligibility?.eligible,
+      healthDocumentValid: eligibility?.health.state === 'valid',
+      waiverValid: eligibility?.waiver.state === 'valid',
     }));
   } catch (err) {
     console.error('public child check error:', err.message);
@@ -6414,6 +6760,8 @@ app.get('/api/public/child-check', publicFormRateLimit, async (req, res) => {
  */
 app.get('/api/public/family-check', publicFormRateLimit, async (req, res) => {
   try {
+    const verified = requireVerifiedPublicPhone(req, res, req.query.phone);
+    if (!verified) return;
     if (supa.isEnabled()) {
       const [remoteParents, remoteStudents, remoteGuardians] = await Promise.all([
         supa.getAll('parents'),
@@ -6438,6 +6786,8 @@ app.get('/api/public/family-check', publicFormRateLimit, async (req, res) => {
 
 app.get('/api/public/activities/:slug/household', publicFormRateLimit, async (req, res) => {
   try {
+    const verified = requireVerifiedPublicPhone(req, res, req.query.phone);
+    if (!verified) return;
     const { activity, storeAvailable } = await findActivityBySlugFresh(req.params.slug);
     if (!storeAvailable) {
       const unavailable = publicStoreUnavailableError();
@@ -6446,7 +6796,8 @@ app.get('/api/public/activities/:slug/household', publicFormRateLimit, async (re
     if (!activity) return res.status(404).json({ error: 'הפעילות לא נמצאה' });
     // Judged against the declaration this activity actually calls for.
     const template = declarationTemplateForActivity(db, activity, resolveDeclarationTemplate);
-    res.json(await loadPublicHousehold(req.query.phone, template?.slug));
+    const household = await loadPublicHousehold(req.query.phone, req.query.idNumber, template?.slug);
+    res.status(household.review_required ? 409 : 200).json(household);
   } catch (err) {
     console.error('public activity household error:', err.message);
     res.status(500).json({ error: err.message || 'טעינת פרטי הלקוח נכשלה' });
@@ -6455,6 +6806,10 @@ app.get('/api/public/activities/:slug/household', publicFormRateLimit, async (re
 
 app.post('/api/public/activities/:slug/register', publicFormRateLimit, async (req, res) => {
   try {
+    const verified = requireVerifiedPublicPhone(req, res, req.body?.parent?.phone);
+    if (!verified) return;
+    const identity = requirePublicIdentityPair(req, res, verified, req.body?.parent || {});
+    if (!identity) return;
     const { activity, storeAvailable } = await findActivityBySlugFresh(req.params.slug);
     if (!storeAvailable) {
       const unavailable = publicStoreUnavailableError();
@@ -6480,11 +6835,21 @@ app.post('/api/public/activities/:slug/register', publicFormRateLimit, async (re
     // service, against the template this activity actually uses.
     const clearance = await uploadClearanceFiles((req.body || {}).participants || []);
     if (clearance.error) return res.status(clearance.status).json({ error: clearance.error });
+    for (const upload of clearance.uploads) {
+      const participant = req.body?.participants?.[upload.participantIndex];
+      if (participant) participant.medicalClearanceDocumentId = upload.clientDocumentId;
+    }
     const result = await registerActivityGroup({
       db,
       persist: persistCore,
       activity,
-      payload: req.body || {},
+      payload: {
+        ...(req.body || {}),
+        // The OTP authorizes this request; the secret itself never belongs in
+        // an immutable signed-document snapshot.
+        phoneVerification: verifiedPhoneEvidence(verified),
+        evidenceContext: { requestContext: requestEvidence(req) },
+      },
       createPaymentUrl: ({ payment, parent, amount }) => icount.buildPaymentUrl({
         amount,
         description: `הרשמה — ${activity.name}`,
@@ -6538,6 +6903,37 @@ app.post('/api/public/activities/:slug/register', publicFormRateLimit, async (re
         };
       },
     });
+    const documentInvitations = [];
+    if (!result.duplicate) {
+      for (const registration of result.registrations.filter((row) => (
+        ['pending_profile', 'awaiting_documents', 'blocked_health'].includes(row.document_status)
+      ))) {
+        const invitation = await sendActivityRegistrationDocumentMessage({
+          registration,
+          activity,
+          origin: frontendPublicBase(req),
+          kind: 'immediate',
+        });
+        documentInvitations.push({
+          registrationId: registration.id,
+          sent: !!invitation.sent,
+          warning: invitation.sent ? null : invitation.error,
+        });
+        if (invitation.sent) {
+          const reminder = db.insert('participation_reminders', {
+            id: `pr_${crypto.randomUUID()}`,
+            registration_id: registration.id,
+            activity_id: activity.id,
+            student_id: registration.student_id || null,
+            kind: 'immediate',
+            status: 'sent',
+            sent_via: invitation.via || null,
+            sent_at: new Date().toISOString(),
+          });
+          await persistCore('participation_reminders', reminder);
+        }
+      }
+    }
     let emailResult = { sent: false };
     if (parent?.email && !result.duplicate) {
       emailResult = await sendActivityRegistrationConfirmation({
@@ -6554,12 +6950,20 @@ app.post('/api/public/activities/:slug/register', publicFormRateLimit, async (re
     // Same reason as the other public forms: a customer the address book has
     // never heard of shows up as an unknown number when they call.
     touchGoogleContacts();
+    if (!result.duplicate) otpService.consumeToken(verified.token, verified.phone);
     res.status(201).json({
       success: true,
       duplicate: result.duplicate,
       order: result.order,
       registrations: result.registrations,
       declarations: result.crm?.declarations || [],
+      waivers: result.crm?.waivers || [],
+      signedDocuments: (result.crm?.participants || []).map((participant) => ({
+        student: participant.student,
+        health: participant.healthCreated ? participant.healthDeclaration : null,
+        waiver: participant.waiverCreated ? participant.waiver : null,
+      })),
+      documentInvitations,
       paymentUrl: result.paymentUrl,
       emailSent: !!emailResult.sent,
       emailStub: !!emailResult.stub,
@@ -6616,6 +7020,7 @@ app.get('/api/public/shop/:slug', publicFormRateLimit, async (req, res) => {
     res.json({
       ...shopItemPayload(item),
       form_template: resolveDefaultDeclarationTemplate(db),
+      cancellation_policy: resolvePolicyFor(db, item)?.snapshot || null,
     });
   } catch (err) {
     console.error('public shop item error:', err.message);
@@ -6625,6 +7030,8 @@ app.get('/api/public/shop/:slug', publicFormRateLimit, async (req, res) => {
 
 app.get('/api/public/shop/:slug/household', publicFormRateLimit, async (req, res) => {
   try {
+    const verified = requireVerifiedPublicPhone(req, res, req.query.phone);
+    if (!verified) return;
     const { item, storeAvailable } = await findShopItemBySlugFresh(req.params.slug);
     if (!storeAvailable) {
       const unavailable = publicStoreUnavailableError();
@@ -6632,7 +7039,12 @@ app.get('/api/public/shop/:slug/household', publicFormRateLimit, async (req, res
     }
     if (!item) return res.status(404).json({ error: 'הפריט לא נמצא או שאינו נמכר אונליין' });
     // A shop purchase signs the default declaration, so that is what counts.
-    res.json(await loadPublicHousehold(req.query.phone, resolveDefaultDeclarationTemplate(db)?.slug));
+    const household = await loadPublicHousehold(
+      req.query.phone,
+      req.query.idNumber,
+      resolveDefaultDeclarationTemplate(db)?.slug
+    );
+    res.status(household.review_required ? 409 : 200).json(household);
   } catch (err) {
     console.error('public shop household error:', err.message);
     res.status(500).json({ error: err.message || 'טעינת פרטי הלקוח נכשלה' });
@@ -6641,6 +7053,10 @@ app.get('/api/public/shop/:slug/household', publicFormRateLimit, async (req, res
 
 app.post('/api/public/shop/:slug/purchase', publicFormRateLimit, async (req, res) => {
   try {
+    const verified = requireVerifiedPublicPhone(req, res, req.body?.parent?.phone);
+    if (!verified) return;
+    const identity = requirePublicIdentityPair(req, res, verified, req.body?.parent || {});
+    if (!identity) return;
     if (!icount.isConfigured()) {
       return res.status(503).json({ error: 'הרכישה אונליין אינה זמינה כרגע' });
     }
@@ -6666,7 +7082,11 @@ app.post('/api/public/shop/:slug/purchase', publicFormRateLimit, async (req, res
       db,
       persist: persistCore,
       item,
-      payload: req.body || {},
+      payload: {
+        ...(req.body || {}),
+        phoneVerification: verifiedPhoneEvidence(verified),
+        evidenceContext: { requestContext: requestEvidence(req) },
+      },
       syncCustomer: (parent) => syncParentToIcount(parent),
       createPaymentUrl: async ({ payment, parent, amount, description }) => icount.buildPaymentUrl({
         amount,
@@ -6702,10 +7122,16 @@ app.post('/api/public/shop/:slug/purchase', publicFormRateLimit, async (req, res
     console.log(
       `🛒 [shop] ${result.duplicate ? 'retry' : 'new'} purchase item=${item.name} sale=${result.sale.id}`
     );
+    if (!result.duplicate) otpService.consumeToken(verified.token, verified.phone);
     res.status(201).json({
       duplicate: result.duplicate,
       paymentUrl: result.paymentUrl,
       total: result.sale.total,
+      signedDocuments: (result.crm?.participants || []).map((participant) => ({
+        student: participant.student,
+        health: participant.healthCreated ? participant.healthDeclaration : null,
+        waiver: participant.waiverCreated ? participant.waiver : null,
+      })),
     });
   } catch (err) {
     console.error('public shop purchase error:', err.message);
@@ -7296,7 +7722,10 @@ app.delete('/api/attendance/:id', (req, res) => {
 
 // Get all pricelist items
 app.get('/api/pricelist', (req, res) => {
-  const items = (db.get('pricelist') || []).map(enrichPricelistItem);
+  const items = (db.get('pricelist') || []).map((raw) => {
+    const item = enrichPricelistItem(raw);
+    return { ...item, cancellation_policy: resolvePolicyFor(db, item)?.snapshot || null };
+  });
   res.json(items);
 });
 
@@ -10693,10 +11122,86 @@ function mapCartLines(cart) {
       visits_total: item.visits_total,
       validity_days: item.validity_days,
       duration_days: item.duration_days,
+      grants_wall_climbing: item.grants_wall_climbing === true,
+      family_shared: item.family_shared === true,
+      participant_ids: Array.isArray(line.participant_ids)
+        ? line.participant_ids.map(String).filter(Boolean)
+        : [],
       track_inventory: fromCatalog && item.track_inventory === true,
       stock_qty: item.stock_qty,
       item,
     };
+  });
+}
+
+function cancellationPoliciesForSaleLines(lines = []) {
+  const byVersion = new Map();
+  for (const line of lines) {
+    // Custom counter lines are not configured products and therefore have no
+    // implicit policy. Catalogue products explicitly choose default/specific/none.
+    if (!line.pricelist_id) continue;
+    const resolved = resolvePolicyFor(db, line.item || {});
+    if (resolved?.version?.id) byVersion.set(resolved.version.id, resolved);
+  }
+  return [...byVersion.values()];
+}
+
+function requireCounterPolicyAcceptance(req, policies) {
+  if (!policies.length) return;
+  if (req.body?.cancellationPolicyAccepted !== true) {
+    throw Object.assign(new Error('יש להציג ללקוח את מדיניות הביטול ולסמן שהלקוח אישר אותה'), {
+      status: 400,
+      code: 'cancellation_policy_acceptance_required',
+    });
+  }
+}
+
+async function recordCounterPolicyAcceptances(req, policies, sale, parentId) {
+  const acceptances = [];
+  for (const resolved of policies) {
+    const acceptance = await recordPolicyAcceptance(db, persistCore, {
+      policy: resolved.policy,
+      version: resolved.version,
+      parentId: parentId || null,
+      posSaleId: sale.id,
+      acceptedVia: 'counter',
+      acceptedByStaff: req.crmUser?.id || req.crmUser?.email || req.crmUser?.name || null,
+    });
+    if (acceptance) acceptances.push(acceptance);
+  }
+  return acceptances;
+}
+
+async function enforceWallAccessSaleEligibility(lines, { student, parent }) {
+  const relevant = (lines || []).filter((line) => line.grants_wall_climbing && !line.family_shared);
+  if (!relevant.length) return lines;
+  if (!student?.id || !parent?.id) {
+    throw Object.assign(new Error('מוצר שמקנה טיפוס בקיר דורש שיוך לבן משפחה'), { status: 400 });
+  }
+  const household = await ensureHouseholdForParent(db, persistCore, parent.id);
+  return (lines || []).map((line) => {
+    if (!line.grants_wall_climbing || line.family_shared) return line;
+    const quantity = Math.max(1, Number(line.quantity) || 1);
+    const participantIds = line.participant_ids?.length
+      ? line.participant_ids
+      : Array.from({ length: quantity }, () => String(student.id));
+    if (participantIds.length !== quantity) {
+      throw Object.assign(new Error(`יש לשייך כל יחידה של "${line.name}" לבן משפחה`), { status: 400 });
+    }
+    for (const participantId of participantIds) {
+      if (!isStudentInHousehold(db, household.id, participantId)) {
+        throw Object.assign(new Error('לא ניתן לשייך מוצר לאדם שאינו חבר בתיק המשפחה'), { status: 403 });
+      }
+      const eligibility = participationEligibility(db, { studentId: participantId, scope: 'wall' });
+      if (!eligibility.eligible) {
+        const target = db.getOne('students', participantId);
+        const error = new Error(`${target?.name || 'המשתתף'} חסר/ת הצהרת בריאות או אישור קיר בתוקף`);
+        error.status = 409;
+        error.code = 'wall_documents_required';
+        throw error;
+      }
+    }
+    return { ...line, participant_ids: participantIds };
   });
 }
 
@@ -10707,6 +11212,7 @@ function fulfillSalePasses({ sale, lines, studentId, parentId, docId, docNumber 
     if (!studentId) continue;
     const qty = Number(line.quantity) || 1;
     for (let i = 0; i < qty; i += 1) {
+      const assignedStudentId = line.participant_ids?.[i] || studentId;
       const passFields = buildPassFromItem({
         item: {
           id: line.pricelist_id,
@@ -10715,8 +11221,11 @@ function fulfillSalePasses({ sale, lines, studentId, parentId, docId, docNumber 
           visits_total: line.visits_total,
           validity_days: line.validity_days,
           duration_days: line.duration_days,
+          grants_wall_climbing: line.grants_wall_climbing,
+          family_shared: line.family_shared,
+          shared_household_id: line.family_shared ? householdIdForParent(db, parentId) : null,
         },
-        studentId,
+        studentId: assignedStudentId,
         parentId,
         saleId: sale.id,
         docId,
@@ -10748,7 +11257,21 @@ function decrementInventory(lines) {
   }
 }
 
-function punchPass(pass, { punchedBy, source, note }) {
+const passPunchLocks = new Map();
+
+async function withPassPunchLock(passId, work) {
+  const key = String(passId || '');
+  const previous = passPunchLocks.get(key) || Promise.resolve();
+  const current = previous.catch(() => {}).then(work);
+  passPunchLocks.set(key, current);
+  try {
+    return await current;
+  } finally {
+    if (passPunchLocks.get(key) === current) passPunchLocks.delete(key);
+  }
+}
+
+async function punchPass(pass, { punchedBy, source, note, studentId }) {
   if (!pass) {
     const err = new Error('כרטיסייה לא נמצאה');
     err.status = 404;
@@ -10766,9 +11289,20 @@ function punchPass(pass, { punchedBy, source, note }) {
   }
   // הניקוב הוא אישור הצוות בדלפק שהמתאמן יכול לטפס: בלי הצהרת בריאות
   // והסרת אחריות בתוקף ובלי מבחן אבטחה בתוקף אין אישור, ולכן אין ניקוב.
+  const actualStudentId = pass.family_shared ? (studentId || pass.student_id) : pass.student_id;
+  if (pass.family_shared) {
+    if (!actualStudentId || !pass.shared_household_id
+      || !isStudentInHousehold(db, pass.shared_household_id, actualStudentId)) {
+      const err = new Error('המתאמן שנכנס אינו חבר במשפחה של הכרטיסייה');
+      err.status = 403;
+      throw err;
+    }
+  }
   const blocked = passPunchBlockReason({
-    student: pass.student_id ? db.getOne('students', pass.student_id) : null,
+    student: actualStudentId ? db.getOne('students', actualStudentId) : null,
     declarations: db.get('health_declarations') || [],
+    waivers: db.get('participation_waivers') || [],
+    healthHolds: db.get('health_holds') || [],
     tests: db.get('level_tests') || [],
   });
   if (blocked) {
@@ -10778,22 +11312,48 @@ function punchPass(pass, { punchedBy, source, note }) {
   }
   const before = Number(pass.visits_remaining);
   const after = before - 1;
-  const updated = db.update('customer_passes', pass.id, {
-    visits_remaining: after,
-    status: after <= 0 ? 'depleted' : 'active',
-    updated_at: new Date().toISOString(),
-  });
-  const punch = db.insert('pass_punches', {
+  const now = new Date().toISOString();
+  const punch = {
+    id: `pp_${crypto.randomUUID()}`,
     pass_id: pass.id,
-    student_id: pass.student_id,
-    punched_at: new Date().toISOString(),
+    student_id: actualStudentId,
+    punched_at: now,
     punched_by: punchedBy || null,
     source: source || 'manual',
     note: note || '',
     visits_before: before,
     visits_after: after,
+  };
+  if (supa.isEnabled()) {
+    const durable = await supa.atomicPassPunch({ passId: pass.id, punch });
+    if (!durable.ok) {
+      const err = new Error(durable.error || 'שמירת הניקוב האטומית נכשלה');
+      err.status = 503;
+      throw err;
+    }
+    const updated = durable.pass || {
+      ...pass,
+      visits_remaining: after,
+      status: after <= 0 ? 'depleted' : 'active',
+      updated_at: now,
+    };
+    const savedPunch = durable.punch || punch;
+    db.set('customer_passes', (db.get('customer_passes') || []).map((row) => (
+      String(row.id) === String(pass.id) ? updated : row
+    )));
+    db.set('pass_punches', [
+      ...(db.get('pass_punches') || []).filter((row) => String(row.id) !== String(savedPunch.id)),
+      savedPunch,
+    ]);
+    return { pass: updated, punch: savedPunch };
+  }
+  const updated = db.update('customer_passes', pass.id, {
+    visits_remaining: after,
+    status: after <= 0 ? 'depleted' : 'active',
+    updated_at: now,
   });
-  return { pass: updated, punch };
+  const savedPunch = db.insert('pass_punches', punch);
+  return { pass: updated, punch: savedPunch };
 }
 
 /** Undo an accidental punch: give the visit back and keep the row as a cancelled record. */
@@ -11396,7 +11956,12 @@ app.get('/api/pos/passes', (req, res) => {
   }
   let passes = db.get('customer_passes') || [];
   if (req.query.studentId) {
-    passes = passes.filter((p) => String(p.student_id) === String(req.query.studentId));
+    passes = passes.filter((pass) => (
+      String(pass.student_id) === String(req.query.studentId)
+      || (pass.family_shared === true
+        && pass.shared_household_id
+        && isStudentInHousehold(db, pass.shared_household_id, req.query.studentId))
+    ));
   }
   if (req.query.parentId) {
     passes = passes.filter((p) => String(p.parent_id) === String(req.query.parentId));
@@ -11417,13 +11982,16 @@ app.get('/api/pos/passes/:id/punches', (req, res) => {
   res.json(punches);
 });
 
-app.post('/api/pos/passes/:id/punch', (req, res) => {
+app.post('/api/pos/passes/:id/punch', async (req, res) => {
   try {
-    const pass = db.getOne('customer_passes', req.params.id);
-    const result = punchPass(pass, {
-      punchedBy: req.crmUser?.name || req.crmUser?.email || 'צוות',
-      source: req.body?.source || 'customer_card',
-      note: req.body?.note || '',
+    const result = await withPassPunchLock(req.params.id, async () => {
+      const pass = db.getOne('customer_passes', req.params.id);
+      return punchPass(pass, {
+        punchedBy: req.crmUser?.name || req.crmUser?.email || 'צוות',
+        source: req.body?.source || 'customer_card',
+        note: req.body?.note || '',
+        studentId: req.body?.student_id || req.body?.studentId || null,
+      });
     });
     res.status(201).json(result);
   } catch (err) {
@@ -11530,6 +12098,9 @@ app.post('/api/pos/sale', async (req, res) => {
     if (needsCustomer && !student?.id) {
       return res.status(400).json({ error: 'מנוי או כרטיסייה דורשים בחירת מתאמן' });
     }
+    lines = await enforceWallAccessSaleEligibility(lines, { student, parent });
+    const cancellationPolicies = cancellationPoliciesForSaleLines(lines);
+    requireCounterPolicyAcceptance(req, cancellationPolicies);
 
     // The register only previews a coupon — the benefit is recomputed here so a
     // stale screen or a hand-edited request can never hand out a bigger discount.
@@ -11600,7 +12171,7 @@ app.post('/api/pos/sale', async (req, res) => {
       });
     }
 
-    const sale = db.insert('pos_sales', {
+    let sale = db.insert('pos_sales', {
       items: lines.map(({ item, ...rest }) => rest),
       total,
       payment_method: paymentMethod,
@@ -11624,10 +12195,23 @@ app.post('/api/pos/sale', async (req, res) => {
       coupon_discount: couponDiscount || 0,
       tendered_amount: tendered,
       change_given: changeGiven,
+      policy_snapshots: cancellationPolicies.map((resolved) => resolved.snapshot),
       session_id: openSessionRow?.id || null,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
+
+    const policyAcceptances = await recordCounterPolicyAcceptances(
+      req,
+      cancellationPolicies,
+      sale,
+      syncedParent?.id || parentId || null
+    );
+    sale = db.update('pos_sales', sale.id, {
+      cancellation_acceptance_ids: policyAcceptances.map((acceptance) => acceptance.id),
+      updated_at: new Date().toISOString(),
+    }) || sale;
+    await persistCore('pos_sales', sale);
 
     recordSaleInLedger(db, {
       paymentMethod: method,
@@ -11746,7 +12330,7 @@ app.post('/api/pos/quote', async (req, res) => {
       includePaymentLink = false,
     } = req.body || {};
 
-    const lines = mapCartLines(cart);
+    let lines = mapCartLines(cart);
     if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
 
     const needsCustomer = lines.some((l) => requiresCustomer(l.product_type));
@@ -11760,6 +12344,9 @@ app.post('/api/pos/quote', async (req, res) => {
     if (includePaymentLink && needsCustomer && !student?.id) {
       return res.status(400).json({ error: 'מנוי או כרטיסייה דורשים בחירת מתאמן' });
     }
+    if (includePaymentLink) lines = await enforceWallAccessSaleEligibility(lines, { student, parent });
+    const cancellationPolicies = includePaymentLink ? cancellationPoliciesForSaleLines(lines) : [];
+    if (includePaymentLink) requireCounterPolicyAcceptance(req, cancellationPolicies);
 
     const total = computeSaleTotal(lines);
     if (includePaymentLink && !(Number(total) > 0)) {
@@ -11857,9 +12444,23 @@ app.post('/api/pos/quote', async (req, res) => {
       sold_by: req.crmUser?.email || req.crmUser?.name || null,
       sent_email: !!(sendEmail && email),
       sent_whatsapp: !!sendWhatsapp,
+      policy_snapshots: cancellationPolicies.map((resolved) => resolved.snapshot),
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
+
+    const policyAcceptances = await recordCounterPolicyAcceptances(
+      req,
+      cancellationPolicies,
+      sale,
+      syncedParent?.id || parentId || null
+    );
+    if (policyAcceptances.length) {
+      sale = db.update('pos_sales', sale.id, {
+        cancellation_acceptance_ids: policyAcceptances.map((acceptance) => acceptance.id),
+        updated_at: new Date().toISOString(),
+      }) || sale;
+    }
 
     if (payment) {
       const updatedPayment = db.update('payments', payment.id, {
@@ -12114,7 +12715,7 @@ app.post('/api/pos/sales/:id/send-link', async (req, res) => {
     });
     res.json({ ...result, shareUrl });
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    res.status(err.status || 502).json({ error: err.message, code: err.code });
   }
 });
 
@@ -12145,6 +12746,9 @@ app.post('/api/pos/payment-link', async (req, res) => {
     if (needsCustomer && !student?.id) {
       return res.status(400).json({ error: 'מנוי או כרטיסייה דורשים בחירת מתאמן' });
     }
+    lines = await enforceWallAccessSaleEligibility(lines, { student, parent });
+    const cancellationPolicies = cancellationPoliciesForSaleLines(lines);
+    requireCounterPolicyAcceptance(req, cancellationPolicies);
 
     // Same server-side recompute as the counter sale, so the amount baked into
     // the payment link is one we calculated, not one the screen sent.
@@ -12213,7 +12817,7 @@ app.post('/api/pos/payment-link', async (req, res) => {
       updated_at: new Date().toISOString(),
     });
 
-    const sale = db.insert('pos_sales', {
+    let sale = db.insert('pos_sales', {
       items: lines.map(({ item, ...rest }) => rest),
       total,
       payment_method: 'online',
@@ -12230,9 +12834,23 @@ app.post('/api/pos/payment-link', async (req, res) => {
       coupon_id: coupon?.id || null,
       coupon_code: coupon?.code || null,
       coupon_discount: couponDiscount || 0,
+      policy_snapshots: cancellationPolicies.map((resolved) => resolved.snapshot),
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
+
+    const policyAcceptances = await recordCounterPolicyAcceptances(
+      req,
+      cancellationPolicies,
+      sale,
+      syncedParent?.id || parentId || null
+    );
+    if (policyAcceptances.length) {
+      sale = db.update('pos_sales', sale.id, {
+        cancellation_acceptance_ids: policyAcceptances.map((acceptance) => acceptance.id),
+        updated_at: new Date().toISOString(),
+      }) || sale;
+    }
 
     db.update('payments', payment.id, { pos_sale_id: sale.id });
 
@@ -12303,7 +12921,7 @@ app.post('/api/pos/payment-link', async (req, res) => {
     });
   } catch (err) {
     console.error('POS payment-link error:', err.message);
-    res.status(502).json({ error: err.message });
+    res.status(err.status || 502).json({ error: err.message, code: err.code });
   }
 });
 
@@ -12318,11 +12936,7 @@ app.post('/api/health-declarations', (req, res) => {
 });
 
 // ─── Form templates (health + liability pages by activity) ───────────────────
-const DEFAULT_HEALTH_QUESTIONS = [
-  { id: 'q1', label: 'האם המתאמן סובל מאסתמה, קוצר נשימה או מחלת ריאות?' },
-  { id: 'q2', label: 'האם המתאמן סובל מבעיות לב, לחץ דם, או סחרחורות/התעלפויות?' },
-  { id: 'q3', label: 'האם יש בעיה אורתופדית (גב, פרקים, שברים) המגבילה פעילות מאומצת?' },
-];
+const DEFAULT_HEALTH_QUESTIONS = CANONICAL_HEALTH_QUESTIONS.map((question) => ({ ...question }));
 
 function slugifyFormTemplate(raw) {
   return String(raw || '')
@@ -12336,6 +12950,15 @@ function slugifyFormTemplate(raw) {
 
 function listFormTemplates() {
   return db.get('form_templates') || [];
+}
+
+function formTemplateForClient(template) {
+  if (!template) return null;
+  const resolved = resolveDeclarationTemplate(db, {
+    templateId: template.id,
+    templateSlug: template.slug,
+  });
+  return { ...template, ...resolved };
 }
 
 /**
@@ -12416,6 +13039,26 @@ function normalizeFormTemplatePayload(body, existing = null) {
     ? body.healthQuestions
     : (Array.isArray(body.health_questions) ? body.health_questions : (existing?.healthQuestions || DEFAULT_HEALTH_QUESTIONS));
   const activityTypes = normalizeTemplateActivityTypes(body, existing);
+  const normalizedQuestions = healthQuestions.map((q, i) => {
+    const rawLabel = String(q.label || q.text || '').trim();
+    const screening = isScreeningQuestion({ ...q, label: rawLabel });
+    return {
+      id: q.id || `q${i + 1}`,
+      label: questionLabel({ ...q, label: rawLabel }),
+      kind: screening ? 'screen' : 'confirm',
+      audience: isChildOnlyQuestion({ ...q, label: rawLabel }) ? 'child' : 'all',
+      requiresClearance: screening && requiresClearance({ ...q, label: rawLabel }),
+      requireYes: !screening,
+    };
+  }).filter((q) => q.label);
+  const scopedConfirmations = normalizedQuestions.filter((question) => {
+    if (isScreeningQuestion(question)) return false;
+    if (/^m\d+$/i.test(String(question.id || ''))) return false;
+    // The oldest templates stored three medical questions as q1-q3 without a
+    // kind marker. They are questions, not legal confirmations.
+    if (/^q\d+$/i.test(String(question.id || '')) && /^האם\b/.test(question.label)) return false;
+    return true;
+  });
   return {
     slug,
     title: (body.title ?? existing?.title ?? '').trim() || 'הצהרת בריאות',
@@ -12431,25 +13074,17 @@ function normalizeFormTemplatePayload(body, existing = null) {
     // `requiresClearance` were being dropped the same way, which quietly
     // deleted the parent-only clauses and the doctor's-approval rule the first
     // time anyone edited a declaration — the wording survived, the rules did not.
-    healthQuestions: healthQuestions.map((q, i) => {
-      const rawLabel = String(q.label || q.text || '').trim();
-      const screening = isScreeningQuestion({ ...q, label: rawLabel });
-      return {
-        id: q.id || `q${i + 1}`,
-        label: questionLabel({ ...q, label: rawLabel }),
-        kind: screening ? 'screen' : 'confirm',
-        audience: isChildOnlyQuestion({ ...q, label: rawLabel }) ? 'child' : 'all',
-        requiresClearance: screening && requiresClearance({ ...q, label: rawLabel }),
-        requireYes: !screening,
-      };
-    }).filter((q) => q.label),
+    healthQuestions: [
+      ...CANONICAL_HEALTH_QUESTIONS.map((question) => ({ ...question })),
+      ...scopedConfirmations,
+    ],
     isDefault: body.isDefault === true || body.isDefault === 'true' || body.is_default === true,
     isActive: body.isActive !== false && body.is_active !== false,
   };
 }
 
 app.get('/api/form-templates', (req, res) => {
-  res.json(listFormTemplates());
+  res.json(listFormTemplates().map(formTemplateForClient));
 });
 
 app.post('/api/form-templates', (req, res) => {
@@ -12502,7 +13137,7 @@ app.get('/api/public/form-templates/:slug', (req, res) => {
     ? findDefaultFormTemplate()
     : (findFormTemplateBySlug(slugParam) || (slugParam === 'wall' ? findDefaultFormTemplate() : null));
   if (!template) return res.status(404).json({ error: 'הטופס לא נמצא' });
-  res.json(template);
+  res.json(formTemplateForClient(template));
 });
 
 // Check-in endpoints
@@ -12547,6 +13182,74 @@ function normPhone(p) {
   let d = String(p || '').replace(/[^\d]/g, '');
   if (d.startsWith('0') && d.length >= 9) d = `972${d.slice(1)}`;
   return d;
+}
+
+function requireVerifiedPublicPhone(req, res, rawPhone, { allowConsumed = false } = {}) {
+  const phone = normPhone(rawPhone);
+  const token = String(
+    req.body?.phoneVerification?.token
+      || req.query?.verificationToken
+      || req.query?.verification_token
+      || ''
+  ).trim();
+  const valid = allowConsumed
+    ? otpService.checkAttachmentToken(token, phone)
+    : otpService.checkToken(token, phone);
+  if (!phone || !token || !valid) {
+    res.status(403).json({
+      error: 'אימות הטלפון פג או לא בוצע — בקשו קוד חדש ונסו שוב',
+    });
+    return null;
+  }
+  return {
+    phone,
+    token,
+    evidence: otpService.tokenEvidence(token, phone, { allowSpent: allowConsumed }),
+  };
+}
+
+function verifiedPhoneEvidence(verified) {
+  return verified ? {
+    verified: true,
+    method: 'whatsapp_code',
+    phone: verified.phone,
+    at: verified.evidence?.verifiedAt || new Date().toISOString(),
+    challengeId: verified.evidence?.challengeId || null,
+    issuedAt: verified.evidence?.issuedAt || null,
+    deliveredAt: verified.evidence?.deliveredAt || null,
+    providerMessageId: verified.evidence?.providerMessageId || null,
+    verificationAttempts: verified.evidence?.verificationAttempts || null,
+    tokenFingerprint: verified.evidence?.tokenFingerprint || null,
+  } : null;
+}
+
+/**
+ * Public identity is a pair: an ID supplied by the person and possession of
+ * the phone proven by OTP. A conflict is never interpreted as a new family.
+ */
+function requirePublicIdentityPair(req, res, verified, parentInput = {}) {
+  const idNumber = String(parentInput.idNumber || parentInput.parentIdNum || '').trim();
+  if (normalizedIdNumber(idNumber).length < 5) {
+    res.status(400).json({ error: 'נדרשת תעודת זהות של ממלא/ת הטופס' });
+    return null;
+  }
+  const identity = resolvePublicIdentity(db.get('parents') || [], {
+    phone: verified?.phone,
+    idNumber,
+  });
+  if (identity.status === 'review_required') {
+    res.status(409).json({
+      error: 'הפרטים תואמים לרשומות שונות או אינם חד־משמעיים. לא נפתח תיק חדש; יש לפנות לצוות לבדיקה.',
+      code: 'IDENTITY_REVIEW_REQUIRED',
+      identity_status: 'review_required',
+    });
+    return null;
+  }
+  if (identity.status === 'incomplete') {
+    res.status(400).json({ error: 'נדרשים תעודת זהות ומספר טלפון תקין' });
+    return null;
+  }
+  return identity;
 }
 
 function resolveStudentForHealthForm({ studentId, parent, climberName, phone }) {
@@ -12839,6 +13542,35 @@ app.get('/api/public/health-context', publicFormRateLimit, (req, res) => {
   });
 });
 
+function publicDeclarationSummary(eligibility) {
+  const record = eligibility?.health?.record || null;
+  const rawAnswers = record?.answers || record?.formSnapshot?.answers || {};
+  const answers = {};
+  for (let index = 1; index <= 9; index += 1) {
+    const id = `m${index}`;
+    const value = rawAnswers?.[id];
+    if (typeof value === 'boolean') answers[id] = value;
+    else if (['true', 'yes', 'כן', '1'].includes(String(value || '').trim().toLowerCase())) answers[id] = true;
+    else if (['false', 'no', 'לא', '0'].includes(String(value || '').trim().toLowerCase())) answers[id] = false;
+  }
+  return {
+    health: record
+      ? {
+          signedAt: eligibility.health.signed_at || '',
+          expiresAt: eligibility.health.expires_at || record.expiresAt || '',
+          answers,
+          notes: String(record.healthNotes || record.formSnapshot?.healthNotes || '').trim(),
+        }
+      : null,
+    waiver: eligibility?.waiver?.record
+      ? {
+          signedAt: eligibility.waiver.signed_at || '',
+          expiresAt: eligibility.waiver.expires_at || eligibility.waiver.record.expiresAt || '',
+        }
+      : null,
+  };
+}
+
 // Public onboarding context — prefill parent/children + mailing lists
 app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => {
   const parentId = String(req.query.parentId || '').trim();
@@ -12852,30 +13584,69 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
     ? (findFormTemplateBySlug(requestedSlug) || findDefaultFormTemplate())
     : findDefaultFormTemplate();
   const contextTemplateSlug = String(contextTemplate?.slug || 'wall').toLowerCase();
+  const publicTemplate = resolveDeclarationTemplate(db, {
+    templateId: contextTemplate?.id || null,
+    templateSlug: contextTemplateSlug,
+  });
+  const hasPersonalLookup = !!(parentId || studentId || phone || idNumber);
+  const verificationToken = String(req.query.verificationToken || req.query.verification_token || '').trim();
+  if (hasPersonalLookup && (!phone || !verificationToken || !otpService.checkToken(verificationToken, normPhone(phone)))) {
+    const listDefs = db.getBroadcastListDefs();
+    res.json({
+      verification_required: true,
+      identity_status: 'verification_required',
+      parent: null,
+      selfStudent: null,
+      students: [],
+      listDefs,
+      subscriptions: Object.fromEntries(listDefs.map((list) => [list.key, list.key === REQUIRED_BROADCAST_LIST])),
+      requiredListKey: REQUIRED_BROADCAST_LIST,
+      interestOptions: INTEREST_OPTIONS,
+      template: publicTemplate,
+    });
+    return;
+  }
 
   // Fresh from the durable store. A long-lived process can still hold the
   // pre-signature student/declaration rows, and then a form signed yesterday
   // is shown as "expired" even though July 2028 is the real end of the cycle.
   if (supa.isEnabled()) {
     try {
-      const [remoteParents, remoteStudents, remoteDecls, remoteGuardians] = await Promise.all([
+      const [remoteParents, remoteStudents, remoteDecls, remoteWaivers, remoteHolds, remoteGuardians] = await Promise.all([
         supa.getAll('parents'),
         supa.getAll('students'),
         supa.getAll('health_declarations'),
+        supa.getAll('participation_waivers'),
+        supa.getAll('health_holds'),
         supa.getAll('student_guardians'),
       ]);
       if (remoteParents) db.set('parents', remoteParents);
       if (remoteStudents) db.set('students', remoteStudents);
       if (remoteDecls) db.set('health_declarations', remoteDecls);
+      if (remoteWaivers) db.set('participation_waivers', remoteWaivers);
+      if (remoteHolds) db.set('health_holds', remoteHolds);
       if (remoteGuardians) db.set('student_guardians', remoteGuardians);
     } catch (err) {
       console.error('onboard-context refresh failed:', err.message);
     }
   }
 
-  const parent = (parentId || studentId || phone || idNumber)
-    ? findParentForOnboard({ parentId, phone, studentId, idNumber })
-    : null;
+  const hintedParentId = parentId || (
+    studentId
+      ? String((db.get('students') || []).find((student) => String(student.id) === studentId)?.parentId || '')
+      : ''
+  );
+  const identity = (phone || idNumber)
+    ? resolvePublicIdentity(db.get('parents') || [], { phone, idNumber, hintedParentId })
+    : { status: 'incomplete' };
+  if (identity.status === 'review_required') {
+    return res.status(409).json({
+      error: 'הפרטים תואמים לרשומות שונות או אינם חד־משמעיים. לא נפתח תיק חדש; יש לפנות לצוות לבדיקה.',
+      code: 'IDENTITY_REVIEW_REQUIRED',
+      identity_status: 'review_required',
+    });
+  }
+  const parent = identity.status === 'found' ? identity.parent : null;
   const listDefs = db.getBroadcastListDefs();
   // The whole household, not only the children whose `parentId` happens to be
   // this parent. A child registered by the other parent — or moved during a
@@ -12889,13 +13660,24 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
   // A parent who climbs themselves also has a student card. That card is not a
   // participant this form registers — signing for yourself is what the "I am
   // over 18 and filling in for myself" box at the top is for.
-  const isParentThemselves = (student) => householdParents.some((p) => {
-    const parentId = normalizedIdNumber(p.idNumber);
+  const isSamePersonAsParent = (student, candidateParent) => {
+    if (!student || !candidateParent) return false;
+    const parentId = normalizedIdNumber(candidateParent.idNumber);
     const studentId = normalizedIdNumber(student.idNumber);
     if (parentId && studentId) return parentId === studentId;
     return student.isAdult === true
-      && normalizedChildName(p.name) === normalizedChildName(student.name);
+      && normalizedChildName(candidateParent.name) === normalizedChildName(student.name);
+  };
+  const isParentThemselves = (student) => householdParents.some((p) => {
+    return isSamePersonAsParent(student, p);
   });
+  // The selected parent may also climb. Keep that adult card out of the
+  // children list, but return it separately: its birth date and gender live on
+  // the student record, not on the parent record, and the self-signing form
+  // needs those values for its participant step.
+  const selfStudent = parent
+    ? household.students.find((s) => isSamePersonAsParent(s, parent)) || null
+    : null;
   const students = parent ? household.students.filter((s) => !isParentThemselves(s)) : [];
 
   // Onboarding: classes is always on; other lists default off unless explicitly subscribed.
@@ -12915,9 +13697,10 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
 
   // The same template the "already signed" answers above were judged against,
   // so the form and its verdicts can never be about two different documents.
-  const template = contextTemplate || findFormTemplateBySlug('wall');
+  const template = publicTemplate;
 
   res.json({
+    identity_status: identity.status === 'found' ? 'found' : (identity.status === 'new' ? 'new' : 'incomplete'),
     parent: parent
       ? {
           id: parent.id,
@@ -12932,22 +13715,38 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
           idNumber: parent.idNumber || '',
         }
       : null,
+    selfStudent: selfStudent
+      ? (() => {
+          const eligibility = participationEligibility(db, {
+            studentId: selfStudent.id,
+            scope: normalizeParticipationScope(contextTemplateSlug),
+          });
+          return {
+          id: selfStudent.id,
+          name: selfStudent.name || '',
+          birthDate: selfStudent.birthDate || '',
+          gender: selfStudent.gender || '',
+          idNumber: selfStudent.idNumber || '',
+          healthValid: eligibility.eligible,
+          healthDocumentValid: eligibility.health.state === 'valid',
+          waiverValid: eligibility.waiver.state === 'valid',
+          documentStatus: eligibility.status,
+          healthSignedAt: eligibility.health.signed_at || '',
+          waiverSignedAt: eligibility.waiver.signed_at || '',
+          declarationSummary: publicDeclarationSummary(eligibility),
+        };
+      })()
+      : null,
     students: students.map((s) => {
       // Whether this participant already has a declaration in force decides
       // whether the form asks them for one again, so the answer travels with
       // the card rather than being guessed from the status.
       // Scoped to the declaration this form is about, so a child covered for
       // the wall is still asked to sign before a trip.
-      const declaration = findLatestValidDeclaration(db, {
+      const eligibility = participationEligibility(db, {
         studentId: s.id,
-        parentId: parent?.id || null,
-        climberName: s.name || '',
-        templateSlug: contextTemplateSlug,
+        scope: normalizeParticipationScope(contextTemplateSlug),
       });
-      const healthValid = !!declaration
-        || (contextTemplateSlug === 'wall'
-          && !!s.healthSignedAt
-          && isHealthDeclarationValid(s.healthSignedAt));
       return {
         id: s.id,
         name: s.name || '',
@@ -12957,10 +13756,15 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
         status: s.status || '',
         interests: Array.isArray(s.interests) ? s.interests : [],
         notes: s.notes || '',
-        healthValid,
-        healthSignedAt: declaration
-          ? (declaration.signedDate || declaration.date || s.healthSignedAt || '')
-          : (s.healthSignedAt || ''),
+        // Compatibility: old clients read `healthValid` as "this whole form is
+        // complete". New clients get the two independent facts as well.
+        healthValid: eligibility.eligible,
+        healthDocumentValid: eligibility.health.state === 'valid',
+        waiverValid: eligibility.waiver.state === 'valid',
+        documentStatus: eligibility.status,
+        healthSignedAt: eligibility.health.signed_at || '',
+        waiverSignedAt: eligibility.waiver.signed_at || '',
+        declarationSummary: publicDeclarationSummary(eligibility),
       };
     }),
     listDefs,
@@ -12986,6 +13790,17 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
 
 const otpService = createOtpService();
 const OTP_TEMPLATE_NAME = 'phone_verification_code';
+const localTestOtpEnabled = process.env.NODE_ENV !== 'production'
+  && process.env.LOCAL_TEST_OTP === '1';
+
+function completeLocalTestOtp(phone, issued, res, reason) {
+  console.warn(`otp local-test fallback: ${reason}`);
+  otpService.markDelivered(phone, issued.challengeId, {
+    providerMessageId: 'local_test',
+    deliveredAt: new Date().toISOString(),
+  });
+  return res.json({ ok: true, devCode: issued.code, delivery: 'local_test' });
+}
 
 app.post('/api/public/otp/send', publicFormRateLimit, async (req, res) => {
   const phone = normPhone(req.body?.phone);
@@ -13003,14 +13818,30 @@ app.post('/api/public/otp/send', publicFormRateLimit, async (req, res) => {
     );
     if (result && result.error) {
       console.error('otp send failed:', JSON.stringify(result.error).slice(0, 300));
+      if (localTestOtpEnabled) {
+        return completeLocalTestOtp(phone, issued, res, 'WhatsApp provider rejected the test message');
+      }
       return res.status(502).json({ error: 'שליחת הקוד בוואטסאפ נכשלה — בדקו את המספר ונסו שוב' });
     }
+    const providerMessageId = result?.messageId
+      || result?.id
+      || result?.data?.messages?.[0]?.id
+      || null;
+    otpService.markDelivered(phone, issued.challengeId, {
+      providerMessageId,
+      deliveredAt: new Date().toISOString(),
+    });
     // Local development without Meta credentials: the code cannot arrive on a
     // phone, so hand it back for testing. Never in production.
-    const dev = result?.mock ? { devCode: issued.code } : {};
+    const dev = result?.mock && process.env.NODE_ENV !== 'production'
+      ? { devCode: issued.code }
+      : {};
     res.json({ ok: true, ...dev });
   } catch (err) {
     console.error('otp send error:', err.message);
+    if (localTestOtpEnabled) {
+      return completeLocalTestOtp(phone, issued, res, 'WhatsApp provider was unavailable');
+    }
     res.status(502).json({ error: 'שליחת הקוד בוואטסאפ נכשלה — נסו שוב' });
   }
 });
@@ -13022,6 +13853,42 @@ app.post('/api/public/otp/verify', publicFormRateLimit, (req, res) => {
   const outcome = otpService.verifyCode(phone, code);
   if (outcome.error) return res.status(400).json({ error: outcome.error });
   res.json({ ok: true, token: outcome.token });
+});
+
+app.post('/api/public/health-holds', publicFormRateLimit, async (req, res) => {
+  try {
+    const verified = requireVerifiedPublicPhone(req, res, req.body?.phone);
+    if (!verified) return;
+    const studentId = String(req.body?.studentId || req.body?.student_id || '').trim();
+    const parent = findParentForOnboard({ phone: verified.phone });
+    if (!parent || !studentId) return res.status(404).json({ error: 'תיק המשפחה או המשתתף לא נמצאו' });
+    const household = expandHousehold(db, parent.id);
+    if (!(household.students || []).some((student) => String(student.id) === studentId)) {
+      return res.status(403).json({ error: 'אין הרשאה לעדכן את המשתתף הזה' });
+    }
+    const existing = (db.get('health_holds') || []).find((hold) => (
+      String(hold.student_id || hold.studentId || '') === studentId
+      && !hold.released_at
+      && hold.status !== 'released'
+    ));
+    if (existing) return res.json({ hold: existing, duplicate: true });
+    const now = new Date().toISOString();
+    const hold = db.insert('health_holds', {
+      id: `hh_${crypto.randomUUID()}`,
+      student_id: studentId,
+      created_by_parent_id: parent.id,
+      reason: 'health_changed',
+      status: 'active',
+      released_at: null,
+      released_by_declaration_id: null,
+      created_at: now,
+      updated_at: now,
+    });
+    await persistCore('health_holds', hold);
+    res.status(201).json({ hold, duplicate: false });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'שמירת שינוי הבריאות נכשלה' });
+  }
 });
 
 /**
@@ -13077,7 +13944,8 @@ function decodeClearanceUpload(payload) {
  */
 async function uploadClearanceFiles(participants = []) {
   const uploads = [];
-  for (const participant of participants) {
+  for (let participantIndex = 0; participantIndex < participants.length; participantIndex += 1) {
+    const participant = participants[participantIndex];
     if (!participant?.medicalClearance) continue;
     const prepared = decodeClearanceUpload(participant.medicalClearance);
     if (prepared.error) {
@@ -13095,6 +13963,8 @@ async function uploadClearanceFiles(participants = []) {
       return { error: uploaded?.error || 'שמירת אישור הרופא נכשלה — נסו שוב', status: 503 };
     }
     uploads.push({
+      clientDocumentId: `doc_${crypto.randomUUID()}`,
+      participantIndex,
       name: participant.name,
       storagePath,
       fileName: prepared.fileName,
@@ -13114,6 +13984,7 @@ async function fileClearanceDocuments(uploads, { parentId, findTarget }) {
   for (const upload of uploads) {
     const target = findTarget(upload) || {};
     const doc = db.insert('client_documents', {
+      id: upload.clientDocumentId,
       parentId: parentId || null,
       studentId: target.studentId || null,
       declarationId: target.declarationId || null,
@@ -13140,6 +14011,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     interest = '',
     templateSlug,
     templateId,
+    completionRegistrationId,
   } = req.body || {};
 
   const parentName = String(parentBody.name || '').trim();
@@ -13165,18 +14037,35 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   // a phone that never answered a code is the document this gate exists to
   // prevent, and enforcing it only in the form leaves the route open to anyone
   // who skips the form — including the file uploads further down.
-  const otpToken = String(req.body?.phoneVerification?.token || '').trim();
-  if (!otpToken || !otpService.checkToken(otpToken, normPhone(phone))) {
-    return res.status(403).json({
-      error: 'אימות הטלפון פג או לא בוצע — חזרו לתחילת הטופס ובקשו קוד חדש',
-    });
+  const verified = requireVerifiedPublicPhone(req, res, phone);
+  if (!verified) return;
+  const identity = requirePublicIdentityPair(req, res, verified, {
+    ...parentBody,
+    idNumber: parentIdNum,
+  });
+  if (!identity) return;
+  const otpToken = verified.token;
+  const phoneVerification = verifiedPhoneEvidence(verified);
+
+  let completionRegistration = null;
+  let completionOrder = null;
+  if (completionRegistrationId) {
+    completionRegistration = db.getOne('activity_registrations', completionRegistrationId);
+    completionOrder = completionRegistration
+      ? db.getOne('activity_registration_orders', completionRegistration.order_id)
+      : null;
+    const verifiedParent = identity.status === 'found' ? identity.parent : null;
+    const verifiedHouseholdId = verifiedParent ? householdIdForParent(db, verifiedParent.id) : null;
+    if (
+      !completionRegistration
+      || !completionOrder
+      || !verifiedParent
+      || !verifiedHouseholdId
+      || String(verifiedHouseholdId) !== String(completionOrder.household_id || '')
+    ) {
+      return res.status(403).json({ error: 'קישור ההשלמה אינו שייך לתיק המשפחה שאומת' });
+    }
   }
-  const phoneVerification = {
-    verified: true,
-    method: 'whatsapp_code',
-    phone: normPhone(phone),
-    at: new Date().toISOString(),
-  };
 
   const childList = (Array.isArray(children) ? children : [])
     .map((c) => {
@@ -13200,9 +14089,12 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
         medicalClearance: c.medicalClearance || null,
         signature: c.signature || '',
         waiverAccepted: c.waiverAccepted === true || c.waiverAccepted === 'true',
+        signatureEvidenceTimeline: c.signatureEvidenceTimeline || c.signature_evidence_timeline || null,
         // Confirmed on the form as a child already on another parent's file.
         link_student_id: String(c.link_student_id || c.linkStudentId || '').trim() || null,
         reuse_health: c.reuse_health === true || c.reuseHealth === true,
+        reuse_health_document: c.reuse_health_document === true || c.reuseHealthDocument === true,
+        reuse_waiver: c.reuse_waiver === true || c.reuseWaiver === true,
       };
     })
     .filter((c) => c.name);
@@ -13217,20 +14109,26 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     }
     // A declaration already in force is not re-signed; saveCrmParticipants
     // verifies that claim against what was on file before this request.
-    if (child.reuse_health) continue;
-    if (!child.waiverAccepted || !child.signature) {
+    const reusesHealth = child.reuse_health || child.reuse_health_document;
+    const reusesWaiver = child.reuse_health || child.reuse_waiver;
+    if (reusesHealth && reusesWaiver) continue;
+    if ((!reusesWaiver && !child.waiverAccepted) || !child.signature) {
       return res.status(400).json({
         error: `חסרה חתימה או אישור וויתור עבור ${child.name}`,
       });
     }
   }
 
-  const template = templateId
+  const sourceTemplate = templateId
     ? (db.get('form_templates') || []).find((t) => t.id === templateId)
     : (templateSlug ? findFormTemplateBySlug(templateSlug) : findDefaultFormTemplate());
+  const template = resolveDeclarationTemplate(db, {
+    templateId: sourceTemplate?.id || templateId,
+    templateSlug: sourceTemplate?.slug || templateSlug,
+  });
 
   for (const child of childList) {
-    if (child.reuse_health) continue;
+    if (child.reuse_health || child.reuse_health_document) continue;
     const asked = questionsForSigner(template?.healthQuestions || [], {
       isAdultSelf: child.type === 'adult',
     });
@@ -13249,6 +14147,15 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
 
   const clearance = await uploadClearanceFiles(childList);
   if (clearance.error) return res.status(clearance.status).json({ error: clearance.error });
+  for (const upload of clearance.uploads) {
+    const participant = childList[upload.participantIndex];
+    if (participant) participant.medicalClearanceDocumentId = upload.clientDocumentId;
+  }
+  if (completionRegistration && !childList.some((child) => (
+    String(child.id || '') === String(completionRegistration.student_id || '')
+  ))) {
+    return res.status(403).json({ error: 'קישור ההשלמה מיועד למשתתף אחר' });
+  }
 
   let crmResult;
   try {
@@ -13266,8 +14173,10 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
         idNumber: parentIdNum,
       },
       participants: childList,
-      template: template || resolveDeclarationTemplate(db, { templateId, templateSlug }),
+      template,
+      participationScope: normalizeParticipationScope(templateSlug || template?.slug || 'wall'),
       phoneVerification,
+      evidenceContext: { requestContext: requestEvidence(req) },
       source: parentBody.source || 'form',
       onStudentCreated: (student, savedParent) => automationsService.triggerEvent('new_lead', {
         ...student,
@@ -13284,7 +14193,32 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   }
   const parent = crmResult.parent;
   const declarations = crmResult.declarations;
+  const waivers = crmResult.waivers;
   const savedStudents = crmResult.participants.map((participant) => participant.student);
+
+  let completedRegistration = null;
+  if (completionRegistration) {
+    const target = crmResult.participants.find((participant) => (
+      String(participant.student?.id || '') === String(completionRegistration.student_id || '')
+    ));
+    const activity = db.getOne('activities', completionRegistration.activity_id);
+    const eligibility = target && activity
+      ? participationEligibility(db, {
+          studentId: target.student.id,
+          scope: scopeForActivity(activity),
+        })
+      : null;
+    if (!target || !eligibility?.eligible) {
+      return res.status(409).json({ error: 'לא הושלמו כל המסמכים הנדרשים לפעילות' });
+    }
+    completedRegistration = db.update('activity_registrations', completionRegistration.id, {
+      health_declaration_id: target.healthDeclaration?.id || completionRegistration.health_declaration_id || null,
+      participation_waiver_id: target.waiver?.id || completionRegistration.participation_waiver_id || null,
+      document_status: 'eligible',
+      updated_at: new Date().toISOString(),
+    }) || completionRegistration;
+    await persistCore('activity_registrations', completedRegistration);
+  }
 
   const clearanceDocuments = await fileClearanceDocuments(clearance.uploads, {
     parentId: parent?.id || null,
@@ -13354,20 +14288,29 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   // Spent only now, with the registration actually filed. Spending it up front
   // meant a submission refused for a missing birth date burned the
   // verification, and the correction came back "אימות הטלפון פג".
-  otpService.consumeToken(otpToken, normPhone(phone));
+  otpService.consumeToken(otpToken, verified.phone);
 
   res.status(201).json({
     success: true,
     parent,
     students: savedStudents,
     declarations,
+    waivers,
+    signedDocuments: crmResult.participants.map((participant) => ({
+      student: participant.student,
+      health: participant.healthCreated ? participant.healthDeclaration : null,
+      waiver: participant.waiverCreated ? participant.waiver : null,
+    })),
+    completedRegistration,
     subscriptions: savedLists,
     medicalClearances: clearanceDocuments,
   });
 });
 
-// Upload signed PDF into personal file (Supabase Storage)
-app.post('/api/public/onboard/:declarationId/pdf', publicFormRateLimit, async (req, res) => {
+// Upload signed PDF into personal file (Supabase Storage). Public submissions
+// use their spent-but-unexpired OTP token; staff backfills use the authenticated
+// CRM session on the non-public route below.
+async function storeHealthDeclarationPdf(req, res, { publicUpload = true } = {}) {
   const { declarationId } = req.params;
   const { pdfBase64, fileName } = req.body || {};
   if (!pdfBase64 || typeof pdfBase64 !== 'string') {
@@ -13376,12 +14319,23 @@ app.post('/api/public/onboard/:declarationId/pdf', publicFormRateLimit, async (r
 
   const decl = (db.get('health_declarations') || []).find((d) => d.id === declarationId);
   if (!decl) return res.status(404).json({ error: 'הצהרה לא נמצאה' });
+  const declSnapshot = decl.formSnapshot || decl.form_snapshot || {};
+  const verified = publicUpload
+    ? requireVerifiedPublicPhone(
+        req,
+        res,
+        declSnapshot.signer?.phone || decl.phone,
+        { allowConsumed: true }
+      )
+    : null;
+  if (publicUpload && !verified) return;
 
   // One certificate per declaration. Opening the file (or a sibling's
   // onboarding) used to mint another copy every time, so the folder filled
   // with identical "קיר טיפוס" rows for a single signature.
   const already = (db.get('client_documents') || []).find(
-    (d) => d.declarationId === declarationId && d.type === 'health_waiver_pdf'
+    (d) => d.declarationId === declarationId
+      && ['health_declaration_pdf', 'health_waiver_pdf'].includes(d.type)
   );
   if (already) {
     return res.json({ success: true, document: already, existing: true });
@@ -13397,6 +14351,7 @@ app.post('/api/public/onboard/:declarationId/pdf', publicFormRateLimit, async (r
   if (!buffer.length || buffer.length > 10 * 1024 * 1024) {
     return res.status(400).json({ error: 'גודל הקובץ לא תקין' });
   }
+  const fileHash = sha256(buffer);
 
   const safeName = String(fileName || `health-declaration_${declarationId}.pdf`)
     .replace(/[^\w\u0590-\u05ff.\-]+/g, '_')
@@ -13417,17 +14372,175 @@ app.post('/api/public/onboard/:declarationId/pdf', publicFormRateLimit, async (r
     return res.status(500).json({ error: uploaded?.error || 'שמירת הקובץ נכשלה' });
   }
 
+  const documentId = `doc_${crypto.randomUUID()}`;
+  const pdfEvidence = createSignatureEvidenceEvent({
+    eventType: 'pdf_attached',
+    documentType: 'health_declaration_pdf',
+    documentId,
+    signer: declSnapshot.signer || {
+      parentId: decl.parentId || null, name: decl.parentName || '', phone: decl.phone || '',
+    },
+    participant: declSnapshot.participant || {
+      studentId: decl.studentId || null, name: decl.climberName || '',
+    },
+    signingCapacity: 'document_attachment',
+    occurredAt: new Date().toISOString(),
+    contentSnapshot: {
+      sourceDocumentType: 'health_declaration',
+      sourceDocumentId: decl.id,
+      sourceEvidenceId: declSnapshot.evidence?.id || null,
+      fileName: safeName,
+      mimeType: 'application/pdf',
+      fileHash,
+    },
+    phoneVerification: publicUpload
+      ? verifiedPhoneEvidence(verified)
+      : {
+          verified: true,
+          method: 'authenticated_staff_session',
+          at: new Date().toISOString(),
+          actorId: req.crmUser?.id || null,
+          actorEmail: req.crmUser?.email || null,
+          actorRole: req.crmUser?.role || null,
+        },
+    requestContext: requestEvidence(req),
+    fileHash,
+    priorEvidenceId: declSnapshot.evidence?.id || null,
+  });
   const doc = db.insert('client_documents', {
+    id: documentId,
     parentId: decl.parentId || null,
     studentId: decl.studentId || null,
     declarationId: decl.id,
-    type: 'health_waiver_pdf',
+    type: 'health_declaration_pdf',
     fileName: safeName,
     storagePath,
     mimeType: 'application/pdf',
+    sha256: fileHash,
+    evidenceId: pdfEvidence.id,
+    sealedAt: pdfEvidence.occurred_at,
   });
-  await persistCore('client_documents', doc);
+  const persisted = await persistCore('client_documents', doc);
+  if (persisted?.ok === false) return res.status(503).json({ error: persisted.error || 'שמירת המסמך נכשלה' });
+  try {
+    await appendSignatureEvidence(db, pdfEvidence);
+  } catch (error) {
+    console.error('health PDF evidence append failed:', error.message);
+    return res.status(503).json({ error: 'שמירת חותמת הראיות של המסמך נכשלה' });
+  }
 
+  res.status(201).json({ success: true, document: doc });
+}
+
+app.post('/api/public/onboard/:declarationId/pdf', publicFormRateLimit, (req, res) => {
+  storeHealthDeclarationPdf(req, res, { publicUpload: true }).catch((error) => {
+    console.error('public health PDF route failed:', error.message);
+    if (!res.headersSent) res.status(error.status || 500).json({ error: error.message || 'שמירת הקובץ נכשלה' });
+  });
+});
+
+app.post('/api/health-declarations/:declarationId/pdf', (req, res) => {
+  storeHealthDeclarationPdf(req, res, { publicUpload: false }).catch((error) => {
+    console.error('staff health PDF route failed:', error.message);
+    if (!res.headersSent) res.status(error.status || 500).json({ error: error.message || 'שמירת הקובץ נכשלה' });
+  });
+});
+
+// The scoped participation approval is a different legal document and gets a
+// different PDF/file row. It must never be inferred from the health PDF.
+app.post('/api/public/onboard/waivers/:waiverId/pdf', publicFormRateLimit, async (req, res) => {
+  const { waiverId } = req.params;
+  const { pdfBase64, fileName } = req.body || {};
+  if (!pdfBase64 || typeof pdfBase64 !== 'string') {
+    return res.status(400).json({ error: 'חסר קובץ PDF' });
+  }
+  const waiver = (db.get('participation_waivers') || []).find((record) => record.id === waiverId);
+  if (!waiver) return res.status(404).json({ error: 'אישור ההשתתפות לא נמצא' });
+  const waiverSnapshot = waiver.form_snapshot || waiver.formSnapshot || {};
+  const verified = requireVerifiedPublicPhone(
+    req,
+    res,
+    waiverSnapshot.signer?.phone,
+    { allowConsumed: true }
+  );
+  if (!verified) return;
+  const already = (db.get('client_documents') || []).find((doc) => (
+    String(doc.waiverId || doc.waiver_id || '') === waiverId
+    && doc.type === 'participation_waiver_pdf'
+  ));
+  if (already) return res.json({ success: true, document: already, existing: true });
+
+  const raw = pdfBase64.includes(',') ? pdfBase64.split(',')[1] : pdfBase64;
+  let buffer;
+  try {
+    buffer = Buffer.from(raw, 'base64');
+  } catch {
+    return res.status(400).json({ error: 'קובץ PDF לא תקין' });
+  }
+  if (!buffer.length || buffer.length > 10 * 1024 * 1024) {
+    return res.status(400).json({ error: 'גודל הקובץ לא תקין' });
+  }
+  const fileHash = sha256(buffer);
+
+  const studentId = waiver.student_id || waiver.studentId || null;
+  const parentId = waiver.signer_parent_id || waiver.signerParentId || null;
+  const scope = normalizeParticipationScope(waiver.scope || 'wall');
+  const safeName = String(fileName || `participation-waiver_${scope}_${waiverId}.pdf`)
+    .replace(/[^\w\u0590-\u05ff.\-]+/g, '_')
+    .slice(0, 120);
+  const storagePath = `${parentId || 'unknown'}/${studentId || 'unknown'}/${waiverId}_${Date.now()}.pdf`;
+  let uploaded;
+  try {
+    uploaded = await supa.uploadClientDocument(storagePath, buffer, 'application/pdf');
+  } catch (error) {
+    console.error('public participation waiver pdf upload error:', error.message);
+    return res.status(500).json({ error: 'שמירת הקובץ נכשלה' });
+  }
+  if (!uploaded?.ok) return res.status(500).json({ error: uploaded?.error || 'שמירת הקובץ נכשלה' });
+
+  const documentId = `doc_${crypto.randomUUID()}`;
+  const pdfEvidence = createSignatureEvidenceEvent({
+    eventType: 'pdf_attached',
+    documentType: 'participation_waiver_pdf',
+    documentId,
+    signer: waiverSnapshot.signer || { parentId, phone: '' },
+    participant: waiverSnapshot.participant || { studentId, name: '' },
+    signingCapacity: 'document_attachment',
+    occurredAt: new Date().toISOString(),
+    contentSnapshot: {
+      sourceDocumentType: 'participation_waiver',
+      sourceDocumentId: waiver.id,
+      sourceEvidenceId: waiverSnapshot.evidence?.id || null,
+      fileName: safeName,
+      mimeType: 'application/pdf',
+      fileHash,
+    },
+    phoneVerification: verifiedPhoneEvidence(verified),
+    requestContext: requestEvidence(req),
+    fileHash,
+    priorEvidenceId: waiverSnapshot.evidence?.id || null,
+  });
+  const doc = db.insert('client_documents', {
+    id: documentId,
+    parentId,
+    studentId,
+    waiverId,
+    type: 'participation_waiver_pdf',
+    fileName: safeName,
+    storagePath,
+    mimeType: 'application/pdf',
+    sha256: fileHash,
+    evidenceId: pdfEvidence.id,
+    sealedAt: pdfEvidence.occurred_at,
+  });
+  const persisted = await persistCore('client_documents', doc);
+  if (persisted?.ok === false) return res.status(503).json({ error: persisted.error || 'שמירת המסמך נכשלה' });
+  try {
+    await appendSignatureEvidence(db, pdfEvidence);
+  } catch (error) {
+    console.error('waiver PDF evidence append failed:', error.message);
+    return res.status(503).json({ error: 'שמירת חותמת הראיות של המסמך נכשלה' });
+  }
   res.status(201).json({ success: true, document: doc });
 });
 
@@ -13449,6 +14562,25 @@ app.get('/api/students/:id/documents', async (req, res) => {
     .slice()
     .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
   res.json(docs);
+});
+
+// Staff export of the immutable evidence chain for a signed record or PDF.
+app.get('/api/signature-evidence', async (req, res) => {
+  if (supa.isEnabled()) {
+    const remote = await supa.getAll('signature_evidence');
+    if (remote) db.set('signature_evidence', remote);
+  }
+  const documentId = String(req.query.documentId || req.query.document_id || '').trim();
+  const studentId = String(req.query.studentId || req.query.student_id || '').trim();
+  const rows = (db.get('signature_evidence') || [])
+    .filter((row) => !documentId || String(row.document_id || '') === documentId)
+    .filter((row) => !studentId || String(row.student_id || '') === studentId)
+    .slice()
+    .sort((a, b) => String(a.occurred_at || '').localeCompare(String(b.occurred_at || '')));
+  res.json({
+    appendOnly: true,
+    events: rows.map((row) => ({ ...row, seal_valid: verifySignatureEvidenceEvent(row) })),
+  });
 });
 
 /** Drop a stored file and its row — durable store first, then the local cache. */
@@ -13737,6 +14869,84 @@ function buildShareableOnboardUrl(origin, { parentId = '', studentId = '', phone
   return qs ? `${base}?${qs}` : base;
 }
 
+async function sendActivityRegistrationDocumentMessage({
+  registration,
+  activity,
+  origin = PUBLIC_APP_FALLBACK,
+  kind = 'manual',
+} = {}) {
+  const student = db.getOne('students', registration?.student_id);
+  const recipient = student ? db.getOne('parents', student.parentId) : null;
+  if (!registration || !activity || !student || !recipient?.phone) {
+    return { sent: false, error: 'לא נמצא טלפון של המשתתף להשלמת המסמכים' };
+  }
+  const template = declarationTemplateForActivity(db, activity, resolveDeclarationTemplate);
+  const slug = template?.slug && template.slug !== 'wall' ? `/${template.slug}` : '';
+  const params = new URLSearchParams({
+    studentId: student.id,
+    phone: recipient.phone,
+    registrationId: registration.id,
+  });
+  const url = `${resolvePublicAppOrigin(origin)}/register${slug}?${params.toString()}`;
+  const settings = db.getSettings() || {};
+  let result;
+  try {
+    result = await sendWhatsAppWithOptionalTemplate(recipient.phone, {
+      templateCandidates: [settings.waOnboardTemplate, process.env.WA_ONBOARD_TEMPLATE].filter(Boolean),
+      variables: [recipient.name || student.name || 'לקוח'],
+      freeformText:
+        `שלום ${recipient.name || ''}, המקום של ${student.name || 'המשתתף/ת'} ב-${activity.name || 'הפעילות'} נשמר, `
+        + `אך ההשתתפות עדיין ממתינה להשלמת פרטים ומסמכים. להשלמה:\n\n${url}`,
+      parentId: recipient.id,
+    });
+  } catch (error) {
+    return { sent: false, error: error.message, url, recipient, student, kind };
+  }
+  return { ...result, url, recipient, student, kind };
+}
+
+app.post('/api/activity-registrations/:id/send-document-reminder', async (req, res) => {
+  const registration = db.getOne('activity_registrations', req.params.id);
+  const activity = registration ? db.getOne('activities', registration.activity_id) : null;
+  if (!registration || !activity) return res.status(404).json({ error: 'ההרשמה לא נמצאה' });
+  if (registration.document_status === 'eligible') {
+    return res.json({ success: true, sent: false, alreadyComplete: true });
+  }
+  const result = await sendActivityRegistrationDocumentMessage({
+    registration,
+    activity,
+    origin: req.body?.origin,
+    kind: 'staff_resend',
+  });
+  res.status(result.sent ? 200 : 502).json({ success: !!result.sent, ...result });
+});
+
+app.post('/api/public/activity-orders/:id/resend-documents', publicFormRateLimit, async (req, res) => {
+  const verified = requireVerifiedPublicPhone(req, res, req.body?.phone);
+  if (!verified) return;
+  const order = db.getOne('activity_registration_orders', req.params.id);
+  const payer = order ? db.getOne('parents', order.parent_id) : null;
+  if (!order || !payer || normPhone(payer.phone) !== verified.phone) {
+    return res.status(403).json({ error: 'ההזמנה אינה שייכת למספר שאומת' });
+  }
+  const activity = db.getOne('activities', order.activity_id);
+  const registrations = (db.get('activity_registrations') || []).filter((registration) => (
+    registration.order_id === order.id
+    && ['pending_profile', 'awaiting_documents', 'blocked_health'].includes(registration.document_status)
+  ));
+  const results = [];
+  for (const registration of registrations) {
+    const result = await sendActivityRegistrationDocumentMessage({
+      registration,
+      activity,
+      origin: req.body?.origin,
+      kind: 'payer_resend',
+    });
+    results.push({ registrationId: registration.id, sent: !!result.sent, warning: result.error || null });
+  }
+  res.json({ success: results.some((result) => result.sent), results });
+});
+
 // Send full onboarding link via WhatsApp
 app.post('/api/leads/:studentId/send-onboard-link', async (req, res) => {
   const target = resolveLeadSendTarget(req.params.studentId);
@@ -13970,6 +15180,36 @@ async function runDailyAttendanceEnsureIfDue() {
   }
 }
 
+async function runParticipationRemindersSafely() {
+  try {
+    if (supa.isEnabled()) {
+      const [activities, registrations, reminders] = await Promise.all([
+        supa.getAll('activities'),
+        supa.getAll('activity_registrations'),
+        supa.getAll('participation_reminders'),
+      ]);
+      if (activities) db.set('activities', activities);
+      if (registrations) db.set('activity_registrations', registrations);
+      if (reminders) db.set('participation_reminders', reminders);
+    }
+    const summary = await runParticipationDocumentReminders({
+      db,
+      persist: persistCore,
+      send: ({ registration, activity, kind }) => sendActivityRegistrationDocumentMessage({
+        registration,
+        activity,
+        origin: process.env.PUBLIC_APP_URL || PUBLIC_APP_FALLBACK,
+        kind,
+      }),
+    });
+    if (summary.sent || summary.failed) {
+      console.log(`📄 Participation reminders: sent=${summary.sent} failed=${summary.failed} skipped=${summary.skipped}`);
+    }
+  } catch (error) {
+    console.error('Participation reminder scan failed:', error.message);
+  }
+}
+
 // Start Server (after loading CRM-core data from Supabase)
 initDb({ requireDurable: requiresDurableStore() }).then(() => {
   try {
@@ -14009,6 +15249,12 @@ initDb({ requireDurable: requiresDurableStore() }).then(() => {
     const catFix = backfillPricelistCategories(db);
     if (catFix.updated > 0) {
       console.log(`🏷️ Pricelist category backfill: ${catFix.updated} product(s)`);
+    }
+    const wallFix = backfillWallClimbingProducts(db);
+    if (wallFix.updated > 0) {
+      console.log(`🧗 Wall-access product backfill: ${wallFix.updated} product(s)`);
+      Promise.all(wallFix.rows.map((row) => persistCore('pricelist', row)))
+        .catch((persistError) => console.warn('wall-access product backfill persistence skipped:', persistError.message));
     }
   } catch (err) {
     console.warn('product catalog seed skipped:', err.message);
@@ -14070,6 +15316,11 @@ app.listen(PORT, () => {
   // Intro class reminder + day-after followup (from 08:00 Asia/Jerusalem)
   setTimeout(() => { runScheduledAutomationsIfDue(8); }, 45_000);
   setInterval(() => { runScheduledAutomationsIfDue(8); }, 15 * 60 * 1000);
+
+  // Missing spouse/adult documents: once three days before and once the day
+  // before. Durable send markers make the hourly scan restart-safe.
+  setTimeout(() => { runParticipationRemindersSafely(); }, 50_000);
+  setInterval(() => { runParticipationRemindersSafely(); }, 60 * 60 * 1000);
   // Follow-ups are not a once-a-day job: a short one is aimed 23 hours after
   // the customer's last message so it lands while free text is still allowed,
   // and a morning-only run would miss that hour on most conversations.

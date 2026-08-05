@@ -13,6 +13,7 @@
 import crypto from 'crypto';
 import { PRODUCT_TYPES, enrichPricelistItem, requiresCustomer } from './posUtils.js';
 import { resolveDefaultDeclarationTemplate, saveCrmParticipants } from './crmWaiverService.js';
+import { recordPolicyAcceptance, resolvePolicyFor } from './cancellationPolicies.js';
 
 /** Lead source for a customer card opened by a shop purchase. */
 export const SHOP_LEAD_SOURCE = 'shop';
@@ -73,6 +74,8 @@ export function shopItemPayload(item) {
     visits_total: enriched.product_type === PRODUCT_TYPES.PUNCH_CARD ? enriched.visits_total : null,
     validity_days: enriched.product_type === PRODUCT_TYPES.PUNCH_CARD ? enriched.validity_days : null,
     duration_days: enriched.product_type === PRODUCT_TYPES.TIME_MEMBERSHIP ? enriched.duration_days : null,
+    grants_wall_climbing: enriched.grants_wall_climbing === true,
+    family_shared: enriched.family_shared === true,
   };
 }
 
@@ -111,6 +114,9 @@ export function normalizePurchasePayload(body = {}) {
     subscriptions: body.subscriptions && typeof body.subscriptions === 'object' && !Array.isArray(body.subscriptions)
       ? body.subscriptions
       : {},
+    policyAccepted: body.policyAccepted === true || body.policy_accepted === true,
+    phoneVerification: body.phoneVerification || body.phone_verification || null,
+    evidenceContext: body.evidenceContext || body.evidence_context || null,
     holder: {
       ...holder,
       type,
@@ -118,11 +124,19 @@ export function normalizePurchasePayload(body = {}) {
       name: clean(holder.name),
       birthDate: clean(holder.birthDate || holder.birth_date),
       answers: holder.answers || {},
+      healthNotes: clean(holder.healthNotes),
+      medicalClearance: holder.medicalClearance || null,
       signature: holder.signature || '',
       waiverAccepted: holder.waiverAccepted === true || holder.waiverAccepted === 'true',
       reuse_health: holder.reuse_health === true
         || holder.reuseHealth === true
         || holder.reuse_declaration === true,
+      reuse_health_document: holder.reuse_health_document === undefined
+        ? undefined
+        : holder.reuse_health_document === true,
+      reuse_waiver: holder.reuse_waiver === undefined
+        ? undefined
+        : holder.reuse_waiver === true,
     },
   };
 }
@@ -140,6 +154,8 @@ export function purchaseLine(item) {
     visits_total: enriched.visits_total,
     validity_days: enriched.validity_days,
     duration_days: enriched.duration_days,
+    grants_wall_climbing: enriched.grants_wall_climbing === true,
+    family_shared: enriched.family_shared === true,
     track_inventory: false,
   };
 }
@@ -186,6 +202,10 @@ export async function createShopPurchase({
   if (!normalized.holder.name) {
     throw Object.assign(new Error('יש לציין למי הכרטיסייה'), { status: 400 });
   }
+  const cancellationPolicy = resolvePolicyFor(db, item);
+  if (cancellationPolicy && !normalized.policyAccepted) {
+    throw Object.assign(new Error('יש לקרוא ולאשר את תנאי הביטול לפני התשלום'), { status: 400 });
+  }
 
   return withPurchaseLock(`${item.id}:${normalized.idempotencyKey}`, async () => {
     const existing = findExistingSale(db, {
@@ -209,6 +229,9 @@ export async function createShopPurchase({
       parent: normalized.parent,
       participants: [normalized.holder],
       template,
+      phoneVerification: normalized.phoneVerification,
+      evidenceContext: normalized.evidenceContext,
+      skipDocuments: item.grants_wall_climbing !== true || item.family_shared === true,
       source: SHOP_LEAD_SOURCE,
       onStudentCreated,
       onStudentStatusChanged,
@@ -282,9 +305,26 @@ export async function createShopPurchase({
       source: SHOP_LEAD_SOURCE,
       shop_item_id: item.id,
       shop_idempotency_key: normalized.idempotencyKey,
+      policy_snapshot: cancellationPolicy?.snapshot || null,
       created_at: now,
       updated_at: now,
     });
+
+    const acceptance = cancellationPolicy
+      ? await recordPolicyAcceptance(db, persist, {
+        ...cancellationPolicy,
+        parentId: parent.id,
+        posSaleId: sale.id,
+        acceptedVia: 'online',
+      })
+      : null;
+    if (acceptance) {
+      sale = db.update('pos_sales', sale.id, {
+        cancellation_acceptance_id: acceptance.id,
+        policy_snapshot: acceptance.snapshot,
+        updated_at: new Date().toISOString(),
+      }) || sale;
+    }
 
     const paymentUrl = await createPaymentUrl({
       payment,
@@ -309,6 +349,14 @@ export async function createShopPurchase({
     }) || sale;
     await durable(persist, 'pos_sales', sale);
 
-    return { duplicate: false, sale, payment, paymentUrl, crm, declaration: crm.declarations[0] };
+    return {
+      duplicate: false,
+      sale,
+      payment,
+      paymentUrl,
+      crm,
+      declaration: crm.declarations[0],
+      waiver: crm.waivers?.[0] || null,
+    };
   });
 }

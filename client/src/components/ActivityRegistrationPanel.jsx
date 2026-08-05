@@ -554,15 +554,35 @@ export default function ActivityRegistrationPanel({
       return;
     }
     const name = registration.participant_name || 'המשתתף';
-    const ok = window.confirm(
-      `לזכות את התשלום של ${name}?\n\n` +
-      'אם ההרשמה הייתה קבוצתית עם תשלום אחד — יזוכו כל המשתתפים באותו תשלום, והכסף יוחזר לכרטיס דרך מסוף מקס.\n\n' +
-      'פעולה זו לא ניתנת לביטול מהמערכת.'
-    );
-    if (!ok) return;
     setEditBusy(`refund:${registration.id}`);
     setMsg('');
     try {
+      const previewRes = await fetch(
+        `/api/activities/${encodeURIComponent(activityId)}/registrations/${encodeURIComponent(registration.id)}/refund-preview`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }
+      );
+      const preview = await previewRes.json().catch(() => ({}));
+      if (!previewRes.ok) {
+        setMsg(preview.error || 'חישוב ההחזר נכשל');
+        return;
+      }
+      const recommended = Number(preview.recommendation?.amount) || 0;
+      if (preview.manual_partial_refund_required) {
+        const openIcount = window.confirm(
+          `ההחזר המומלץ עבור ${name}: ₪${recommended.toLocaleString()}\n\n` +
+          'זהו זיכוי חלקי. כדי למנוע זיכוי מלא בטעות, יש לבצע אותו במסמך המקורי ב-iCount. לפתוח אותו עכשיו?'
+        );
+        if (openIcount && preview.icount_doc_app_url) {
+          window.open(preview.icount_doc_app_url, '_blank', 'noopener,noreferrer');
+        }
+        setMsg(`החזר מומלץ עבור ${name}: ₪${recommended.toLocaleString()} · נדרש זיכוי חלקי ב-iCount`);
+        return;
+      }
+      const ok = window.confirm(
+        `החזר מומלץ עבור ${name}: ₪${recommended.toLocaleString()}\n\n` +
+        'לאחר האישור יבוצע זיכוי מלא למסמך התשלום. פעולה זו לא ניתנת לביטול מהמערכת.'
+      );
+      if (!ok) return;
       const res = await fetch(
         `/api/activities/${encodeURIComponent(activityId)}/registrations/${encodeURIComponent(registration.id)}/refund`,
         {
@@ -570,6 +590,7 @@ export default function ActivityRegistrationPanel({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             reason: `זיכוי משתתף · ${name}`,
+            approved_amount: recommended,
           }),
         }
       );
@@ -729,15 +750,35 @@ export default function ActivityRegistrationPanel({
       setMsg('דמי ההזמנה לא מסומנים כשולמו');
       return;
     }
-    const ok = window.confirm(
-      'לזכות את דמי ההזמנה של המזמין?\n\n' +
-      'הכסף יוחזר לכרטיס דרך מסוף מקס, והסטטוס ישתנה ל„זוכה”.\n\n' +
-      'פעולה זו לא ניתנת לביטול מהמערכת.'
-    );
-    if (!ok) return;
     setBusy('host-refund');
     setMsg('');
     try {
+      const previewRes = await fetch(
+        `/api/activities/${encodeURIComponent(activityId)}/host-payment/refund-preview`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }
+      );
+      const preview = await previewRes.json().catch(() => ({}));
+      if (!previewRes.ok) {
+        setMsg(preview.error || 'חישוב ההחזר נכשל');
+        return;
+      }
+      const recommended = Number(preview.recommendation?.amount) || 0;
+      if (preview.manual_partial_refund_required) {
+        const openIcount = window.confirm(
+          `החזר מומלץ לדמי ההזמנה: ₪${recommended.toLocaleString()}\n\n` +
+          'זהו זיכוי חלקי ויש לבצע אותו במסמך המקורי ב-iCount. לפתוח אותו עכשיו?'
+        );
+        if (openIcount && preview.icount_doc_app_url) {
+          window.open(preview.icount_doc_app_url, '_blank', 'noopener,noreferrer');
+        }
+        setMsg(`החזר מומלץ: ₪${recommended.toLocaleString()} · נדרש זיכוי חלקי ב-iCount`);
+        return;
+      }
+      const ok = window.confirm(
+        `החזר מומלץ לדמי ההזמנה: ₪${recommended.toLocaleString()}\n\n` +
+        'לאחר האישור יבוצע זיכוי מלא והסטטוס ישתנה ל„זוכה”. פעולה זו לא ניתנת לביטול.'
+      );
+      if (!ok) return;
       const res = await fetch(
         `/api/activities/${encodeURIComponent(activityId)}/host-payment/refund`,
         {
@@ -745,6 +786,7 @@ export default function ActivityRegistrationPanel({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             reason: `זיכוי דמי הזמנה · ${form.name || activityId}`,
+            approved_amount: recommended,
           }),
         }
       );

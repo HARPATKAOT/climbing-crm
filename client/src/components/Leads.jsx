@@ -38,7 +38,7 @@ import {
   normalizePhone,
   resolveLeadOpenTarget,
 } from '../utils/leadUtils.js';
-import { buildFamilyRows, householdStudentsForParent } from '../utils/leadHouseholds.js';
+import { buildFamilyMemberTabs, buildFamilyRows, householdStudentsForParent } from '../utils/leadHouseholds.js';
 import {
   CATEGORY_COLORS,
   CATEGORY_ICONS,
@@ -61,7 +61,7 @@ import { awaitingSince, isAwaitingHandling } from './communicationQueue.js';
 import { consecutiveAbsences } from '../scheduleUtils.js';
 import { studentGroupIds } from '../utils/studentGroups.js';
 import { passPurchasedText, passSubtitle } from '../utils/passes.js';
-import { otherGuardians } from '../utils/studentGuardians.js';
+import { otherGuardians, studentGuardianIds } from '../utils/studentGuardians.js';
 import {
   EQUIPMENT_ICONS,
   EQUIPMENT_ICON_COLORS,
@@ -428,19 +428,39 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   if (!student) return null;
 
   /**
-   * A child can have two parents on file — mum and dad, each with their own
-   * phone, mailing lists and conversation. The card shows one of them at a
-   * time, chosen by the tabs below, and everything else here reads `parent`,
-   * so the whole page follows the tab without a second code path.
+   * Storage keeps payer/contact and trainee records separate, but the person
+   * switcher must not show the same adult twice. `combined` is the one screen
+   * tab that opens both sides of an adult who is also a payer.
    */
+  const parentOnly = isParentOnlyLead(student);
+  const familyMemberTabs = useMemo(
+    () => buildFamilyMemberTabs(siblings, allParents),
+    [siblings, allParents]
+  );
+  const selectedMemberTab = familyMemberTabs.find(
+    (tab) => tab.student && String(tab.student.id) === String(student.id)
+  ) || null;
   const [activeParentId, setActiveParentId] = useState(primaryParent?.id || null);
+  const [profileMode, setProfileMode] = useState(() => (
+    parentOnly ? 'parent' : (selectedMemberTab?.kind || 'student')
+  ));
   useEffect(() => {
-    setActiveParentId(primaryParent?.id || null);
+    const nextMember = familyMemberTabs.find(
+      (tab) => tab.student && String(tab.student.id) === String(student.id)
+    );
+    setActiveParentId(nextMember?.parent?.id || primaryParent?.id || null);
+    setProfileMode(parentOnly ? 'parent' : (nextMember?.kind || 'student'));
+    // Changing person starts their file at the top; the switcher itself stays fixed.
+    if (foldersScrollRef.current) foldersScrollRef.current.scrollTop = 0;
+    // `familyMemberTabs` is intentionally omitted: background data refreshes
+    // must not kick somebody out of a parent tab they explicitly selected.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [student.id, primaryParent?.id]);
   const parent = (allParents || []).find((item) => String(item.id) === String(activeParentId))
     || primaryParent;
 
-  const parentOnly = isParentOnlyLead(student);
+  const showFamilyProfile = profileMode === 'parent' || profileMode === 'combined' || parentOnly;
+  const showStudentProfile = !parentOnly && (profileMode === 'student' || profileMode === 'combined');
   const parentArchived = isArchivedParent(parent);
   const statusKeys = Object.keys(STATUSES);
   const navigate = useNavigate();
@@ -708,7 +728,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         try {
           const { blob, fileName } = await buildHealthDeclarationPdf(decl);
           const pdfBase64 = await blobToBase64(blob);
-          const res = await fetch(`/api/public/onboard/${encodeURIComponent(decl.id)}/pdf`, {
+          const res = await fetch(`/api/health-declarations/${encodeURIComponent(decl.id)}/pdf`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ pdfBase64, fileName }),
@@ -806,6 +826,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   // iCount Billing Fields
   const [billAmount, setBillAmount] = useState('');
   const [billDescription, setBillDescription] = useState('');
+  const [billingStudentId, setBillingStudentId] = useState(parentOnly ? '' : String(student.id));
   const [selectedPricelistItem, setSelectedPricelistItem] = useState('');
   // The catalogue is picked here the same way it is at the till: categories
   // first, products inside the one you opened.
@@ -878,6 +899,14 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [couponError, setCouponError] = useState('');
   const [sales, setSales] = useState([]);
   const [salesLoading, setSalesLoading] = useState(false);
+  const billableStudents = (siblings || []).filter((member) => !isParentOnlyLead(member));
+  const billingStudent = billableStudents.find(
+    (member) => String(member.id) === String(billingStudentId)
+  ) || (!parentOnly ? student : null);
+
+  useEffect(() => {
+    if (!parentOnly) setBillingStudentId(String(student.id));
+  }, [parentOnly, student.id]);
   // Every real trainee has equipment: children get shoes, shirt and chalk;
   // adult trainees get shoes and chalk. Only a parent-only placeholder has no kit.
   const showEquipment = !parentOnly;
@@ -1361,7 +1390,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       const res = await fetch(`/api/pos/passes/${passId}/punch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source: 'customer_card' }),
+        body: JSON.stringify({ source: 'customer_card', student_id: student.id }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'ניקוב נכשל');
@@ -1785,7 +1814,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       setStudentPayments(list.filter((p) => {
         const belongsToFile = (parent?.id && p.parent_id === parent.id) || p.student_id === student.id;
         if (!belongsToFile) return false;
-        if (!p.equipment_family_payment || parentOnly) return true;
+        if (!p.equipment_family_payment || parentOnly || showFamilyProfile) return true;
         return (p.equipment_allocations || []).some(
           (allocation) => String(allocation.student_id) === String(student.id)
         );
@@ -1797,7 +1826,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
 
   useEffect(() => {
     if (canManageBilling) loadStudentPayments();
-  }, [canManageBilling, student.id, parent?.id]);
+  }, [canManageBilling, student.id, parent?.id, showFamilyProfile]);
 
   useEffect(() => {
     setPaymentMenuId(null);
@@ -1902,9 +1931,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          studentId: student.id,
+          studentId: billingStudent?.id || null,
           parentId: parent?.id,
-          studentName: student.name,
+          studentName: billingStudent?.name || parentDisplayName(parent),
           amount: parseFloat(billAmount),
           description: billDescription,
           phone: parent?.phone
@@ -1946,8 +1975,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           parentId: parent?.id,
-          studentId: student.id,
-          studentName: student.name,
+          studentId: billingStudent?.id || null,
+          studentName: billingStudent?.name || parentDisplayName(parent),
           amount: parseFloat(billAmount),
           description: billDescription,
           phone: parent?.phone,
@@ -2199,6 +2228,51 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     return `${active}/${broadcastListDefs.length} רשימות`;
   })();
 
+  const openParentEditor = () => {
+    const nextParentName = parentNameParts(parent);
+    setEditFocus('parent');
+    setEditParentName(nextParentName.firstName);
+    setEditParentLastName(nextParentName.lastName);
+    setEditParentIdNumber(parent?.idNumber || '');
+    setEditPhone(parent?.phone || '');
+    setEditEmail(parent?.email || '');
+    setEditCity(parent?.city || '');
+    setEditNotes(parent?.notes || '');
+    setEditError('');
+    setIsEditing(true);
+  };
+
+  const openStudentEditor = () => {
+    setEditFocus('student');
+    setEditStudentName(student.name || '');
+    setEditBirthDate(student.birthDate || '');
+    setEditStudentPhone(student.phone || '');
+    setEditGender(student.gender || '');
+    setEditNotes(student.notes || '');
+    setEditNextFollowup(student.nextFollowup || '');
+    setEditGroupIds(studentGroupIds(student));
+    setEditError('');
+    setIsEditing(true);
+  };
+
+  const selectFamilyMember = (tab) => {
+    setOpenFolder(null);
+    setProfileMode(tab.kind);
+    if (tab.parent?.id) setActiveParentId(tab.parent.id);
+    if (foldersScrollRef.current) foldersScrollRef.current.scrollTop = 0;
+    if (tab.student && String(tab.student.id) !== String(student.id)) {
+      onSelectSibling?.(tab.student.id);
+    }
+  };
+
+  const activeFamilyTabKey = profileMode === 'parent'
+    ? `parent:${parent?.id || ''}`
+    : `student:${student.id}`;
+  const headerTitle = showStudentProfile ? student.name : parentDisplayName(parent);
+  const headerRole = profileMode === 'combined'
+    ? 'הורה / משלם + מתאמן'
+    : showFamilyProfile ? 'הורה / משלם' : 'תיק מתאמן';
+
   return (
     <>
       {showMergeFamily && (
@@ -2423,145 +2497,178 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             overscrollBehavior: 'contain',
           }}
         >
-          <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+          <div style={{ padding: '14px 14px 10px', borderBottom: '1px solid var(--border)', flexShrink: 0, background: 'var(--bg-card)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-1)', lineHeight: 1.3 }}>
-                  {parentDisplayName(parent) || (parentOnly ? 'ליד ללא מתאמן' : 'הורה')}
+                <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-1)', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {headerTitle || (parentOnly ? 'ליד ללא מתאמן' : 'ללא שם')}
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>הורה / משלם</div>
+                <div style={{ fontSize: 11, color: profileMode === 'combined' ? '#C084FC' : 'var(--text-3)', marginTop: 2, fontWeight: profileMode === 'combined' ? 700 : 500 }}>
+                  {headerRole}
+                </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-xs"
-                  onClick={() => {
-                    const nextParentName = parentNameParts(parent);
-                    setEditFocus('parent');
-                    setEditParentName(nextParentName.firstName);
-                    setEditParentLastName(nextParentName.lastName);
-                    setEditParentIdNumber(parent?.idNumber || '');
-                    setEditPhone(parent?.phone || '');
-                    setEditEmail(parent?.email || '');
-                    setEditCity(parent?.city || '');
-                    setEditNotes(parent?.notes || '');
-                    setEditError('');
-                    setIsEditing(true);
-                  }}
-                  title="עריכת פרטי הורה"
-                  style={{ border: '1px solid var(--border)', gap: 4 }}
-                >
-                  <Edit2 size={11} /> ערוך
-                </button>
+                {showStudentProfile && (
+                  <button type="button" className="btn btn-ghost btn-xs" onClick={openStudentEditor} title="עריכת פרטי המתאמן" style={{ border: '1px solid var(--border)', gap: 4 }}>
+                    <Edit2 size={11} /> מתאמן
+                  </button>
+                )}
+                {showFamilyProfile && parent?.id && (
+                  <button type="button" className="btn btn-ghost btn-xs" onClick={openParentEditor} title="עריכת פרטי ההורה והמשלם" style={{ border: '1px solid var(--border)', gap: 4 }}>
+                    <Edit2 size={11} /> {profileMode === 'combined' ? 'פרטי קשר' : 'ערוך'}
+                  </button>
+                )}
                 <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} aria-label="סגור">
                   <X size={18} />
                 </button>
               </div>
             </div>
 
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
-              {parent?.phone ? (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-                  <a href={`tel:${parent.phone}`} className="btn btn-ghost btn-xs">
-                    <Phone size={12} /> {parent.phone}
-                  </a>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-icon btn-xs"
-                    title={phoneCopied ? 'הועתק' : 'העתקת המספר'}
-                    aria-label="העתקת מספר הטלפון"
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(parent.phone);
-                        setPhoneCopied(true);
-                        setTimeout(() => setPhoneCopied(false), 1500);
-                      } catch { /* ignore */ }
-                    }}
-                  >
-                    {phoneCopied ? <Check size={12} color="var(--green)" /> : <Clipboard size={12} />}
-                  </button>
-                </span>
-              ) : (
-                <span style={{ fontSize: 12, color: 'var(--text-3)' }}>אין טלפון</span>
-              )}
-              {parent?.phone && (
-                <a
-                  href={`https://wa.me/${String(parent.phone).replace(/[^\d]/g, '').replace(/^0/, '972')}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="btn btn-success btn-xs"
-                >
-                  וואטסאפ
+            {showFamilyProfile ? (
+              <>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
+                  {parent?.phone ? (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                      <a href={`tel:${parent.phone}`} className="btn btn-ghost btn-xs">
+                        <Phone size={12} /> {parent.phone}
+                      </a>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-icon btn-xs"
+                        title={phoneCopied ? 'הועתק' : 'העתקת המספר'}
+                        aria-label="העתקת מספר הטלפון"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(parent.phone);
+                            setPhoneCopied(true);
+                            setTimeout(() => setPhoneCopied(false), 1500);
+                          } catch { /* ignore */ }
+                        }}
+                      >
+                        {phoneCopied ? <Check size={12} color="var(--green)" /> : <Clipboard size={12} />}
+                      </button>
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: 12, color: 'var(--text-3)' }}>אין טלפון</span>
+                  )}
+                  {parent?.phone && (
+                    <a
+                      href={`https://wa.me/${String(parent.phone).replace(/[^\d]/g, '').replace(/^0/, '972')}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn btn-success btn-xs"
+                    >
+                      וואטסאפ
+                    </a>
+                  )}
+                  {parent?.email && (
+                    <a href={`mailto:${parent.email}`} className="btn btn-ghost btn-xs">
+                      <Mail size={12} /> {parent.email}
+                    </a>
+                  )}
+                  {parent?.city && (
+                    <span style={{ fontSize: 12, color: 'var(--text-2)' }}>
+                      <MapPin size={11} style={{ verticalAlign: -1 }} /> {parent.city}
+                    </span>
+                  )}
+                  {guardians.some((g) => String(g.id) === String(parent?.id) && !g.primary) && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      disabled={settingPrimary}
+                      title="ההורה הראשי הוא זה שאליו המערכת פונה כברירת מחדל"
+                      onClick={handleMakePrimary}
+                    >
+                      {settingPrimary ? 'מעדכן...' : 'קבע כהורה ראשי'}
+                    </button>
+                  )}
+                </div>
+              </>
+            ) : student.phone ? (
+              <div style={{ marginTop: 8 }}>
+                <a href={`tel:${student.phone}`} className="btn btn-ghost btn-xs">
+                  <Phone size={12} /> {student.phone}
                 </a>
-              )}
-              {parent?.email && (
-                <a href={`mailto:${parent.email}`} className="btn btn-ghost btn-xs">
-                  <Mail size={12} /> {parent.email}
-                </a>
-              )}
-            </div>
-            {parent?.city && (
-              <div style={{ fontSize: 12, color: 'var(--text-2)', marginTop: 6 }}>
-                <MapPin size={11} style={{ verticalAlign: -1 }} /> {parent.city}
               </div>
-            )}
-            {/* Parent tabs — the same idea as the child tabs below: one child,
-                two parents, each with their own details, lists and conversation.
-                The row stays even for a single parent, to carry "הוסף איש קשר". */}
-            {(guardians.length > 1 || (!parentOnly && contactCandidates.length > 0)) && (
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
-                {guardians.length > 1 && guardians.map((guardian) => {
-                  const active = String(guardian.id) === String(parent?.id);
+            ) : null}
+
+            {/* This switcher lives outside the scrolling file, so every family
+                member stays reachable even at the bottom of a long record. */}
+            <div style={{ marginTop: 10, paddingTop: 9, borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-3)', letterSpacing: 0.2 }}>בני המשפחה</span>
+                <span style={{ fontSize: 10, color: 'var(--text-3)' }}>החלפת טאב אינה משנה את השיחה</span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(76px, 1fr))', gap: 6, alignItems: 'stretch' }}>
+                {familyMemberTabs.map((tab) => {
+                  const active = tab.key === activeFamilyTabKey;
+                  const accent = tab.kind === 'student' ? '#FB923C' : tab.kind === 'combined' ? '#C084FC' : '#38BDF8';
+                  const name = tab.student?.name || parentDisplayName(tab.parent);
+                  const role = tab.kind === 'combined' ? 'הורה + מתאמן' : tab.kind === 'parent' ? 'הורה / משלם' : 'מתאמן';
+                  const isPrimary = !!tab.parent && (
+                    String(tab.parent.id) === String(primaryParent?.id)
+                    || guardians.some((g) => String(g.id) === String(tab.parent.id) && g.primary)
+                  );
                   return (
                     <button
-                      key={guardian.id}
+                      key={tab.key}
                       type="button"
-                      onClick={() => setActiveParentId(guardian.id)}
-                      title={active ? 'ההורה המוצג' : `מעבר לפרטים ולשיחה של ${guardian.name}`}
+                      aria-pressed={active}
+                      onClick={() => selectFamilyMember(tab)}
+                      title={`${name} · ${role}${isPrimary ? ' · ראשי' : ''}`}
                       style={{
-                        border: active ? '1px solid rgba(56,189,248,0.65)' : '1px solid var(--border)',
-                        background: active ? 'rgba(56,189,248,0.18)' : 'rgba(255,255,255,0.04)',
+                        minWidth: 0,
+                        padding: '6px 7px',
+                        borderRadius: 12,
+                        border: `1px solid ${active ? accent : 'var(--border)'}`,
+                        background: active ? `${accent}22` : 'rgba(255,255,255,0.035)',
                         color: active ? 'var(--text-1)' : 'var(--text-2)',
-                        borderRadius: 999,
-                        padding: '4px 10px',
-                        fontSize: 12,
-                        fontWeight: active ? 700 : 600,
+                        font: 'inherit',
+                        textAlign: 'right',
                         cursor: 'pointer',
-                        lineHeight: 1.3,
                       }}
                     >
-                      {guardian.name || 'הורה'}
-                      {guardian.primary ? ' · ראשי' : ''}
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+                        {tab.student ? <GenderMark gender={tab.student.gender} size={12} /> : <Users size={12} color={accent} />}
+                        <span style={{ fontSize: 12, fontWeight: active ? 800 : 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+                      </span>
+                      <span style={{ display: 'block', marginTop: 2, color: active ? accent : 'var(--text-3)', fontSize: 9.5, fontWeight: 700, lineHeight: 1.2 }}>
+                        {role}{isPrimary ? ' · ראשי' : ''}
+                      </span>
                     </button>
                   );
                 })}
-                {/* Taking a parent off a child is a family decision, so it lives
-                    in one place only: "פיצול משפחה" under עריכה. */}
-                {guardians.some((g) => String(g.id) === String(parent?.id) && !g.primary) && (
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                {parent?.id && (
                   <button
                     type="button"
                     className="btn btn-ghost btn-xs"
-                    style={{ border: '1px solid var(--border)' }}
-                    disabled={settingPrimary}
-                    title="ההורה הראשי הוא זה שאליו המערכת פונה כברירת מחדל"
-                    onClick={handleMakePrimary}
+                    onClick={() => {
+                      setAddChildError('');
+                      setNewChildName('');
+                      setSendHealthOnAdd(true);
+                      setShowAddChild(true);
+                    }}
+                    style={{ borderRadius: 10, border: '1px dashed var(--border)', gap: 4 }}
+                    title="הוספת ילד או מתאמן לתיק המשפחה"
                   >
-                    {settingPrimary ? 'מעדכן...' : 'קבע כהורה ראשי'}
+                    <Plus size={12} /> מתאמן
                   </button>
                 )}
                 {!parentOnly && contactCandidates.length > 0 && (
                   <button
                     type="button"
                     className="btn btn-ghost btn-xs"
-                    style={{ borderRadius: 999, border: '1px dashed var(--border)', gap: 4 }}
+                    style={{ borderRadius: 10, border: '1px dashed var(--border)', gap: 4 }}
                     title="הורה שני, סבתא או מטפלת — איש קשר בתיק, בלי לפתוח כרטיס מתאמן"
                     onClick={openAddContact}
                   >
-                    <Plus size={12} /> הוסף איש קשר
+                    <Plus size={12} /> איש קשר
                   </button>
                 )}
               </div>
-            )}
+            </div>
           </div>
 
           <div
@@ -2574,8 +2681,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               minHeight: 0,
             }}
           >
-            {/* Parent-level sections — above child tabs */}
-            {parent?.id && (
+            {/* Family-only sections appear only on a parent or combined tab. */}
+            {showFamilyProfile && parent?.id && (
               <div style={{ marginBottom: 12 }}>
                 <FolderRow
                   id="mailing"
@@ -2627,7 +2734,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 {canManageBilling && (
                   <FolderRow
                     id="payments"
-                    title="תשלומים"
+                    title="תשלומים משפחתיים"
                     icon={CreditCard}
                     accent="#34D399"
                     summary={paymentsSummary}
@@ -2638,7 +2745,10 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                       <button
                         type="button"
                         className="btn btn-primary btn-sm"
-                        onClick={() => setShowPaymentModal(true)}
+                        onClick={() => {
+                          setBillingStudentId(String(showStudentProfile ? student.id : (billableStudents[0]?.id || '')));
+                          setShowPaymentModal(true);
+                        }}
                       >
                         <Send size={13} /> שלח בקשת תשלום
                       </button>
@@ -2673,9 +2783,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                           const busy = paymentBusyKey.startsWith(`${p.id}:`);
                           const hasRefundDoc = paymentHasRefundDoc(p);
                           const canRefund = p.status === 'paid' && !!p.icount_doc_number;
-                          const equipmentAllocation = (p.equipment_allocations || []).find(
-                            (allocation) => String(allocation.student_id) === String(student.id)
+                          const paymentStudent = billableStudents.find(
+                            (member) => String(member.id) === String(p.student_id)
                           );
+                          const equipmentAllocations = (p.equipment_allocations || []).filter((allocation) => (
+                            showFamilyProfile || String(allocation.student_id) === String(student.id)
+                          ));
                           return (
                             <div
                               key={p.id}
@@ -2707,13 +2820,27 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                   </button>
                                 </span>
                               </div>
-                              {equipmentAllocation && (
+                              {paymentStudent && (
                                 <div style={{ marginTop: 4, color: 'var(--text-3)', fontSize: 11 }}>
-                                  החלק של {student.name}: ₪{Number(equipmentAllocation.charge_amount ?? equipmentAllocation.total ?? 0).toLocaleString()}
-                                  {Number(equipmentAllocation.discount_amount) > 0
-                                    ? ` · הנחת משפחה ₪${Number(equipmentAllocation.discount_amount).toLocaleString()}`
-                                    : ''}
-                                  {' · '}החשבונית והזיכוי שייכים לעסקה המשפחתית המלאה
+                                  עבור {paymentStudent.name}
+                                </div>
+                              )}
+                              {equipmentAllocations.length > 0 && (
+                                <div style={{ marginTop: 4, color: 'var(--text-3)', fontSize: 11 }}>
+                                  {equipmentAllocations.map((allocation) => {
+                                    const member = billableStudents.find(
+                                      (item) => String(item.id) === String(allocation.student_id)
+                                    );
+                                    return (
+                                      <div key={allocation.student_id || allocation.id}>
+                                        {member?.name || 'משתתף'}: ₪{Number(allocation.charge_amount ?? allocation.total ?? 0).toLocaleString()}
+                                        {Number(allocation.discount_amount) > 0
+                                          ? ` · הנחת משפחה ₪${Number(allocation.discount_amount).toLocaleString()}`
+                                          : ''}
+                                      </div>
+                                    );
+                                  })}
+                                  <div>החשבונית והזיכוי שייכים לעסקה המשפחתית המלאה</div>
                                 </div>
                               )}
                               {menuOpen && (
@@ -2813,95 +2940,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               </div>
             )}
 
-            {/* Household trainee chips — one row for the adults, one for the children.
-                Order stays put when someone else is selected or a parent tab changes. */}
-            {(() => {
-              const ordered = [...siblings].sort(compareTraineeChips);
-              const adultChips = ordered.filter((sib) => sib.isAdult);
-              const childChips = ordered.filter((sib) => !sib.isAdult);
-              const renderChip = (sib) => {
-                const active = !parentOnly && sib.id === student.id;
-                const gLabel = genderLabel(sib.gender);
-                return (
-                  <button
-                    key={sib.id}
-                    type="button"
-                    onClick={() => onSelectSibling?.(sib.id)}
-                    title={[
-                      'החלפת תיק מתאמן — השיחה מימין לא משתנה',
-                      gLabel !== '—' ? gLabel : null,
-                      sib.isAdult ? 'מבוגר' : null,
-                    ].filter(Boolean).join(' · ')}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 5,
-                      border: active
-                        ? '1px solid rgba(249, 115, 22, 0.65)'
-                        : '1px solid var(--border)',
-                      background: active
-                        ? 'rgba(249, 115, 22, 0.18)'
-                        : 'rgba(255,255,255,0.04)',
-                      color: active ? 'var(--text-1)' : 'var(--text-2)',
-                      borderRadius: 999,
-                      padding: '4px 10px',
-                      fontSize: 12,
-                      fontWeight: active ? 700 : 600,
-                      cursor: 'pointer',
-                      lineHeight: 1.3,
-                      maxWidth: '100%',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    <GenderMark gender={sib.gender} size={12} />
-                    {sib.isAdult && <AdultMark size={12} />}
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {sib.name}
-                    </span>
-                  </button>
-                );
-              };
-              const rowStyle = { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' };
-              return (
-                <div style={{ marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {adultChips.length > 0 && (
-                    <div style={rowStyle}>{adultChips.map(renderChip)}</div>
-                  )}
-                  <div style={rowStyle}>
-                    {childChips.map(renderChip)}
-                    {parent?.id && (
-                      <button
-                        type="button"
-                        className={`btn btn-xs ${parentOnly ? 'btn-primary' : 'btn-ghost'}`}
-                        onClick={() => {
-                          setAddChildError('');
-                          setNewChildName('');
-                          setSendHealthOnAdd(true);
-                          setShowAddChild(true);
-                        }}
-                        style={{
-                          borderRadius: 999,
-                          border: parentOnly ? undefined : '1px dashed var(--border)',
-                          gap: 4,
-                        }}
-                      >
-                        <Plus size={12} /> הוסף ילד / מתאמן
-                      </button>
-                    )}
-                  </div>
-                  {parentOnly && (
-                    <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
-                      אין מתאמן רשום עדיין
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-
             {/* Selected child details — compact inline rows */}
-            {!parentOnly && (() => {
+            {showStudentProfile && (() => {
               const streak = consecutiveAbsences(attendanceHistory);
               const streakColor = streak >= 2 ? '#F87171' : streak === 1 ? '#FBBF24' : 'var(--text-1)';
               const detailRow = (label, value, valueStyle = {}) => (
@@ -2939,18 +2979,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   <button
                     type="button"
                     className="btn btn-ghost btn-xs"
-                    onClick={() => {
-                      setEditFocus('student');
-                      setEditStudentName(student.name || '');
-                      setEditBirthDate(student.birthDate || '');
-                      setEditStudentPhone(student.phone || '');
-                      setEditGender(student.gender || '');
-                      setEditNotes(student.notes || '');
-                      setEditNextFollowup(student.nextFollowup || '');
-                      setEditGroupIds(studentGroupIds(student));
-                      setEditError('');
-                      setIsEditing(true);
-                    }}
+                    onClick={openStudentEditor}
                     style={{ borderRadius: 999, border: '1px solid var(--border)', gap: 4, flexShrink: 0 }}
                   >
                     <Edit2 size={11} /> ערוך
@@ -3114,7 +3143,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             })()}
 
             {/* Selected child folders */}
-            {!parentOnly && (
+            {showStudentProfile && (
               <>
             <FolderRow
               id="health"
@@ -5152,13 +5181,35 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
 
       {showPaymentModal && (
         <Modal
-          title="דרישת תשלום / חשבונית"
+          title="חיוב משפחתי"
           onClose={() => setShowPaymentModal(false)}
           footer={
             <button className="btn btn-ghost" onClick={() => setShowPaymentModal(false)}>סגור</button>
           }
         >
           <form onSubmit={handleSendPayment}>
+            <div className="form-group" style={{ marginBottom: 12 }}>
+              <label className="form-label" style={{ fontSize: 11 }}>עבור איזה משתתף?</label>
+              {billableStudents.length > 1 ? (
+                <AppSelect
+                  className="input input-sm"
+                  required
+                  value={billingStudentId}
+                  onChange={(event) => setBillingStudentId(event.target.value)}
+                >
+                  {billableStudents.map((member) => (
+                    <option key={member.id} value={member.id}>{member.name}</option>
+                  ))}
+                </AppSelect>
+              ) : (
+                <div style={{ padding: '8px 10px', borderRadius: 8, background: 'var(--bg-input)', border: '1px solid var(--border)', fontSize: 13, fontWeight: 700 }}>
+                  {billingStudent?.name || 'חיוב כללי למשפחה'}
+                </div>
+              )}
+              <div style={{ marginTop: 4, fontSize: 10.5, color: 'var(--text-3)' }}>
+                החיוב משויך למשתתף, והחשבונית ופרטי התשלום נשארים על שם ההורה המשלם.
+              </div>
+            </div>
             <div className="form-group" style={{ marginBottom: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                 <label className="form-label" style={{ fontSize: 11, margin: 0, flex: 1 }}>
@@ -5748,6 +5799,13 @@ export default function Leads({
       .slice()
       .sort(compareTraineeChips)
     : [];
+  const selectedHouseholdParentIds = new Set(
+    selectedSiblings.flatMap((member) => studentGuardianIds(member))
+  );
+  if (selectedParent?.id) selectedHouseholdParentIds.add(String(selectedParent.id));
+  const selectedHouseholdParents = parents.filter(
+    (item) => selectedHouseholdParentIds.has(String(item.id))
+  );
 
   const handleAdd = async ({ parentName, lastName, idNumber, phone, email, city, source, children }) => {
     let updatedParents = [...parents];
@@ -5900,7 +5958,7 @@ export default function Leads({
         <CustomerCard
           student={selectedStudent}
           parent={selectedParent}
-          parents={parents}
+          parents={selectedHouseholdParents}
           siblings={selectedSiblings}
           onSelectSibling={setSelectedStudentId}
           group={selectedGroup}

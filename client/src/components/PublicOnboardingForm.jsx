@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertTriangle, ArrowLeft, CheckCircle, Download, Lock, PenTool, Plus, ShieldCheck, Trash2,
+  AlertTriangle, ArrowLeft, CheckCircle, Download, Lock, Pencil, PenTool, Plus, ShieldCheck, Trash2,
 } from 'lucide-react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
   blobToBase64,
   buildHealthDeclarationPdf,
+  buildParticipationWaiverPdf,
   downloadHealthDeclarationPdf,
+  downloadParticipationWaiverPdf,
 } from '../utils/healthDeclarationPdf.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import {
@@ -32,7 +34,11 @@ import {
 import { clearanceBudgetError } from '../utils/medicalClearanceFile.js';
 import { declarationSectionTitles, splitWaiverText, withSignerName } from '../utils/declarationSections.js';
 import MedicalClearanceField from './MedicalClearanceField.jsx';
-import GenderPicker from './GenderPicker.jsx';
+import GenderPicker, { GenderMark } from './GenderPicker.jsx';
+import {
+  adultParticipantFromContext,
+  participationGenderValue,
+} from '../utils/participationForm.js';
 
 /** Day for the form UI — digits with dots so RTL does not reshuffle ISO dates. */
 function formatSignedDay(value) {
@@ -68,7 +74,7 @@ function buildFallbackWaiver(legalName) {
 
 5. אני, {{שם החותם}}, נוטל/ת על עצמי את הסיכון הרגיל הכרוך בפעילות, ומוותר/ת על כל טענה, דרישה או תביעה כלפי "${legalName}", בעליו, מנהליו, עובדיו ומי מטעמו, בגין נזק גוף או רכוש שייגרם במסגרת אותו סיכון.
 
-6. הוויתור שבסעיף 5 לא יחול, ואחריות המקום תעמוד בעינה, אך ורק במקרים בהם תוכח מעל לכל ספק רשלנות של המקום.
+6. אין בוויתור שבסעיף 5 כדי לגרוע מאחריות "הרפתקאות" לפי דין, לרבות בשל רשלנות של "הרפתקאות" או של מי שפעל מטעמה.
 
 7. אני מתחייב/ת לפעול לפי כל הוראות הבטיחות שסימנתי בשלב הקודם ולפי הוראות הצוות, ולדווח לצוות באופן מיידי על כל מפגע, תקלה, פציעה או תחושה גופנית חריגה.
 
@@ -89,7 +95,7 @@ function buildFallbackQuestions(legalName) {
     { id: 's1', requireYes: true, audience: 'child', label: 'אין להשאיר ילד עד גיל 11 ללא ליווי מבוגר שלא במסגרת חוג מסודר' },
     { id: 's2', requireYes: true, label: 'נא להימנע מריצה והשתוללות בכל מתחם הקיר' },
     { id: 's3', requireYes: true, label: 'יש להישמע להוראות המדריכים' },
-    { id: 's4', requireYes: true, label: 'טיפוס על הקיר יתאפשר רק לאלו שקיבלו תדריך מסודר' },
+    { id: 's4', requireYes: true, label: 'הטיפוס יתאפשר רק לאחר קבלת תדריך בטיחות מלא ומעבר מבחן בטיחות בפני מדריך מטעם הקיר.' },
     { id: 's5', requireYes: true, label: 'אין להשתמש במתקנים השונים ללא קבלת אישור ממדריך' },
   ];
 }
@@ -132,6 +138,245 @@ function ageFromBirthDate(value) {
   return age;
 }
 
+function isExistingDeclarationRenewal(participant) {
+  return !!participant?.id && !!(participant?.renewOptIn || participant?.resignHealth);
+}
+
+function hasCompleteParticipantProfile(participant) {
+  return !!String(participant?.name || '').trim()
+    && !!String(participant?.idNumber || '').trim()
+    && !!String(participant?.birthDate || '').trim()
+    && !!String(participant?.gender || '').trim();
+}
+
+function hasLockedParticipantProfile(participant) {
+  return isExistingDeclarationRenewal(participant)
+    && hasCompleteParticipantProfile(participant)
+    && !participant?.editProfile;
+}
+
+function ParticipantProfileSummary({ participant, onEdit }) {
+  const gender = participant?.gender === 'male'
+    ? (participant?.type === 'adult' ? 'גבר' : 'בן')
+    : participant?.gender === 'female'
+      ? (participant?.type === 'adult' ? 'אישה' : 'בת')
+      : 'לא צוין';
+  const genderDisplay = participant?.gender ? (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+      <GenderMark gender={participant.gender} size={22} />
+      <span>{gender}</span>
+    </span>
+  ) : gender;
+  const rows = [
+    ['תעודת זהות', participant?.idNumber || '—', true],
+    ['תאריך לידה', formatSignedDay(participant?.birthDate) || '—', true],
+    ['מין', genderDisplay, false],
+  ];
+
+  return (
+    <section
+      aria-label="פרטי המשתתף מהתיק"
+      style={{
+        background: 'linear-gradient(135deg, var(--form-accent-soft-strong, rgba(249,115,22,.14)), rgba(255,255,255,.04))',
+        border: '1px solid var(--form-accent-border, rgba(249,115,22,.38))',
+        borderRadius: 18,
+        padding: 20,
+        marginBottom: 22,
+      }}
+    >
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: 14, flexWrap: 'wrap', marginBottom: 18,
+      }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            fontSize: 12, fontWeight: 800, color: 'var(--form-accent-text, #fdba74)', marginBottom: 5,
+          }}>
+            <Lock size={13} /> פרטי המשתתף/ת
+          </div>
+          <div style={{
+            fontSize: 'clamp(25px, 5vw, 34px)', lineHeight: 1.15,
+            fontWeight: 900, color: '#fff', overflowWrap: 'anywhere',
+          }}>
+            {participant?.name || '—'}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onEdit}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            background: 'rgba(255,255,255,.06)',
+            border: '1px solid rgba(255,255,255,.2)', borderRadius: 11,
+            color: '#fff', padding: '9px 12px', cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: 13, fontWeight: 700,
+          }}
+        >
+          <Pencil size={14} /> עריכת פרטים
+        </button>
+      </div>
+      <dl style={{
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+        gap: 12, margin: 0,
+      }}>
+        {rows.map(([label, value, leftToRight]) => (
+          <div key={label} style={{
+            minWidth: 0, paddingTop: 11, borderTop: '1px solid rgba(255,255,255,.1)',
+          }}>
+            <dt style={{ fontSize: 12, color: 'rgba(255,255,255,.55)', marginBottom: 5 }}>{label}</dt>
+            <dd
+              dir={leftToRight ? 'ltr' : undefined}
+              style={{
+                margin: 0, fontSize: 'clamp(16px, 3vw, 20px)', color: '#fff', fontWeight: 800,
+                textAlign: leftToRight ? 'right' : undefined,
+                overflowWrap: 'anywhere',
+              }}
+            >
+              {value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+function ParentProfileSummary({ parent, onEdit }) {
+  const relationLabels = {
+    father: 'אב',
+    mother: 'אם',
+    guardian: 'אפוטרופוס',
+    other: 'אחר',
+  };
+  const fullName = joinParentName(parent?.name, parent?.lastName) || '—';
+  const rows = [
+    ['תעודת זהות', parent?.idNumber || '—', true],
+    ['טלפון', parent?.phone || '—', true],
+    ['אימייל', parent?.email || '—', true],
+    ['מקום מגורים', parent?.city || '—', false],
+    ['קשר למשפחה', relationLabels[parent?.relation] || 'לא צוין', false],
+  ];
+
+  return (
+    <section
+      aria-label="פרטי ממלא הטופס מהתיק"
+      style={{
+        background: 'linear-gradient(135deg, var(--form-accent-soft-strong, rgba(249,115,22,.14)), rgba(255,255,255,.04))',
+        border: '1px solid var(--form-accent-border, rgba(249,115,22,.38))',
+        borderRadius: 18,
+        padding: 20,
+        marginBottom: 22,
+      }}
+    >
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: 14, flexWrap: 'wrap', marginBottom: 18,
+      }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            fontSize: 12, fontWeight: 800, color: 'var(--form-accent-text, #fdba74)', marginBottom: 5,
+          }}>
+            <Lock size={13} /> פרטי ממלא/ת הטופס
+          </div>
+          <div style={{
+            fontSize: 'clamp(25px, 5vw, 34px)', lineHeight: 1.15,
+            fontWeight: 900, color: '#fff', overflowWrap: 'anywhere',
+          }}>
+            {fullName}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onEdit}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            background: 'rgba(255,255,255,.06)',
+            border: '1px solid rgba(255,255,255,.2)', borderRadius: 11,
+            color: '#fff', padding: '9px 12px', cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: 13, fontWeight: 700,
+          }}
+        >
+          <Pencil size={14} /> עריכת פרטים
+        </button>
+      </div>
+      <dl style={{
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+        gap: 12, margin: 0,
+      }}>
+        {rows.map(([label, value, leftToRight]) => (
+          <div key={label} style={{
+            minWidth: 0, paddingTop: 11, borderTop: '1px solid rgba(255,255,255,.1)',
+          }}>
+            <dt style={{ fontSize: 12, color: 'rgba(255,255,255,.55)', marginBottom: 5 }}>{label}</dt>
+            <dd
+              dir={leftToRight ? 'ltr' : undefined}
+              style={{
+                margin: 0, fontSize: 'clamp(15px, 2.7vw, 19px)', color: '#fff', fontWeight: 800,
+                textAlign: leftToRight ? 'right' : undefined,
+                overflowWrap: 'anywhere',
+              }}
+            >
+              {value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+function ExistingDeclarationSummary({ participant, questions, templateSlug }) {
+  const summary = participant?.onFileDeclarationSummary || {};
+  const health = summary.health || null;
+  const waiver = summary.waiver || null;
+  const storedAnswers = health?.answers || {};
+  const answeredQuestions = (questions || []).filter((question) => (
+    Object.prototype.hasOwnProperty.call(storedAnswers, question.id)
+  ));
+  const positiveQuestions = answeredQuestions.filter((question) => storedAnswers[question.id] === true);
+  const activityLabel = templateSlug === 'trip'
+    ? 'אישור טיולים'
+    : templateSlug === 'event'
+      ? 'אישור פעילות באירוע'
+      : 'אישור פעילות בקיר';
+  const signedAt = health?.signedAt || participant?.onFileHealthSignedAt || '';
+  const waiverSignedAt = waiver?.signedAt || participant?.onFileWaiverSignedAt || '';
+
+  return (
+    <div style={{
+      margin: '10px 0', padding: '10px 12px', borderRadius: 9,
+      background: 'rgba(2,6,23,.28)', border: '1px solid rgba(255,255,255,.1)',
+      color: 'rgba(255,255,255,.66)', fontSize: 11.5, lineHeight: 1.6,
+    }}>
+      <div style={{ color: 'rgba(255,255,255,.82)', fontWeight: 800, marginBottom: 3 }}>
+        מה יישאר בתוקף אם לא מחדשים
+      </div>
+      <div>
+        הצהרת בריאות
+        {signedAt ? `: נחתמה ב-${formatSignedDay(signedAt)}` : ''}
+        {health?.expiresAt ? ` · בתוקף עד ${formatSignedDay(health.expiresAt)}` : ''}
+      </div>
+      <div>
+        {answeredQuestions.length
+          ? positiveQuestions.length
+            ? `תשובות שסומנו „כן”: ${positiveQuestions.map((question) => questionLabel(question)).join(' · ')}`
+            : 'תשובות הבריאות: לא סומנו מצבים רפואיים.'
+          : 'תשובות הבריאות: לא נשמר תקציר זמין ברשומה הישנה.'}
+      </div>
+      {health?.notes && (
+        <div style={{ whiteSpace: 'pre-wrap' }}>פירוט שנשמר: {health.notes}</div>
+      )}
+      <div>
+        {activityLabel}
+        {waiverSignedAt ? `: נחתם ב-${formatSignedDay(waiverSignedAt)}` : ''}
+        {waiver?.expiresAt ? ` · בתוקף עד ${formatSignedDay(waiver.expiresAt)}` : ''}
+      </div>
+    </div>
+  );
+}
+
 /**
  * The code screen, shown in place of the continue button on step 1.
  *
@@ -143,10 +388,11 @@ function PhoneCodeGate({ otp, phone, onCodeChange, onVerify, onResend, onEditPho
   const waitSeconds = Math.max(0, Math.ceil((otp.cooldownUntil - Date.now()) / 1000));
   return (
     <div style={{
-      background: 'rgba(249,115,22,.1)', border: '1px solid rgba(249,115,22,.35)',
+      background: 'var(--form-accent-soft, rgba(249,115,22,.1))',
+      border: '1px solid var(--form-accent-border, rgba(249,115,22,.35))',
       borderRadius: 12, padding: 14,
     }}>
-      <div style={{ fontSize: 13, fontWeight: 800, color: '#fdba74', marginBottom: 6 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--form-accent-text, #fdba74)', marginBottom: 6 }}>
         אימות מספר הטלפון
       </div>
       <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.72)', lineHeight: 1.6, marginBottom: 12 }}>
@@ -194,7 +440,7 @@ function PhoneCodeGate({ otp, phone, onCodeChange, onVerify, onResend, onEditPho
           disabled={otp.sending || waitSeconds > 0}
           style={{
             background: 'none', border: 'none', font: 'inherit', fontSize: 12,
-            color: waitSeconds > 0 ? 'rgba(255,255,255,.4)' : '#fdba74',
+            color: waitSeconds > 0 ? 'rgba(255,255,255,.4)' : 'var(--form-accent-text, #fdba74)',
             cursor: waitSeconds > 0 ? 'default' : 'pointer', textDecoration: 'underline',
             padding: 0,
           }}
@@ -239,7 +485,9 @@ const emptyChild = (questions = []) => {
 export default function PublicOnboardingForm() {
   const { profile, legalName } = useBusinessProfile();
   const brandName = profile.display_name || 'הרפתקאות';
-  const brandLogo = profile.logo_url || '/logo.png';
+  const brandLogo = profile.logo_url && profile.logo_url !== '/logo.png'
+    ? profile.logo_url
+    : '/brand/logo-kirboaz.png';
   const fallbackWaiver = useMemo(() => buildFallbackWaiver(legalName), [legalName]);
   const fallbackQuestions = useMemo(() => buildFallbackQuestions(legalName), [legalName]);
   const [searchParams] = useSearchParams();
@@ -269,6 +517,7 @@ export default function PublicOnboardingForm() {
     city: '',
   });
   const [children, setChildren] = useState([emptyChild()]);
+  const [selfStudent, setSelfStudent] = useState(null);
   const [isAdultSelf, setIsAdultSelf] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
@@ -277,16 +526,41 @@ export default function PublicOnboardingForm() {
   const [uploadingPdfs, setUploadingPdfs] = useState(false);
   const canvasRef = useRef(null);
   const [isDrawing, setIsDrawing] = useState(false);
+  const pageTopRef = useRef(null);
+
+  // The app shell scrolls inside #root (the body itself is fixed), so the
+  // browser does not reset the scroll position when React swaps one form step
+  // for the next. Reset every real screen transition, including the health /
+  // waiver sub-steps and the next family member.
+  useEffect(() => {
+    if (loading) return undefined;
+    const frame = requestAnimationFrame(() => {
+      const root = document.getElementById('root');
+      if (root) root.scrollTop = 0;
+      if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
+      pageTopRef.current?.scrollIntoView({ block: 'start', behavior: 'auto' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [step, healthSubStep, childHealthIndex, isSuccess, loading]);
 
   const allQuestions = (template?.healthQuestions?.length
     ? template.healthQuestions
-    : fallbackQuestions);
-  // Clauses addressed to a parent drop out when the signer is the participant.
-  const questions = questionsForSigner(allQuestions, { isAdultSelf });
+    : fallbackQuestions).filter((question) => !(
+    String(template?.slug || routeSlug || '').toLowerCase() === 'trip'
+    && String(question?.id || '').toLowerCase() === 's1'
+  ));
+  // A family submission may contain the signer and minor children together.
+  // Legal clauses therefore depend on the participant currently being filled.
+  const questionsForParticipant = (participant) => questionsForSigner(allQuestions, {
+    isAdultSelf: participant?.type === 'adult',
+  });
   // The signer's own name goes into the summary they read, and into a template
   // written with {{שם החותם}} — the same person either way.
   const signerName = joinParentName(parent.name, parent.lastName);
   const waiverText = withSignerName(template?.waiverText || fallbackWaiver, signerName);
+  const declarationContextLabel = template?.slug === 'trip'
+    ? 'הצהרת בריאות לטיול'
+    : (template?.slug === 'event' ? 'הצהרת בריאות לפעילות בקיר' : 'הצהרת בריאות');
   // The three parts of the declaration, each named — the same headings the
   // activity page shows, so a family meets one document twice, not two.
   const sectionTitles = declarationSectionTitles({ ...(template || {}), waiverText });
@@ -352,15 +626,23 @@ export default function PublicOnboardingForm() {
   // participant key -> { match, student_id, guardian_first_name, health_valid, linked }
   const [knownChildren, setKnownChildren] = useState({});
   const [prefilledParentId, setPrefilledParentId] = useState('');
+  const [editingParentProfile, setEditingParentProfile] = useState(false);
   // Set once the typed phone turns out to be on a file already: { name, children }.
   const [knownFile, setKnownFile] = useState(null);
+  const [identityStatus, setIdentityStatus] = useState('unverified');
   // Surname match: asked live as soon as last name (+ phone) look like a known family.
   const {
     families,
     familyParentId,
     setFamilyParentId,
+    familyCheckComplete,
     waitingForFamily,
-  } = useFamilyMatch(parent.lastName, parent.phone, { skip: !!prefilledParentId });
+  } = useFamilyMatch(parent.lastName, parent.phone, {
+    skip: identityStatus !== 'new',
+    verificationToken: otp.token,
+  });
+  const identityReady = !!otp.token && ['found', 'new'].includes(identityStatus);
+  const parentProfileLocked = identityReady && !!prefilledParentId && !editingParentProfile;
   // Which participant has already been told their ID looks wrong, so the
   // warning is a warning and not a wall.
   const [idWarnedFor, setIdWarnedFor] = useState('');
@@ -375,6 +657,53 @@ export default function PublicOnboardingForm() {
    * where only a single name field exists.
    */
   const parentFullName = () => joinParentName(parent.name, parent.lastName);
+
+  const changeParentPhone = (phone) => {
+    const nextPhone = String(phone || '');
+    const identityWasLoaded = !!prefilledParentId || !!knownFile;
+    setParent((current) => ({ ...current, phone: nextPhone }));
+    setOtp((current) => ({
+      ...current,
+      stage: 'idle',
+      token: '',
+      verifiedPhone: '',
+      code: '',
+      error: '',
+      sendFailed: false,
+      devCode: '',
+    }));
+    setPrefilledParentId('');
+    setKnownFile(null);
+    setSelfStudent(null);
+    setFamilyParentId(null);
+    setKnownChildren({});
+    setIdentityStatus('unverified');
+    if (identityWasLoaded) {
+      setIsAdultSelf(false);
+      setChildren([emptyChild(allQuestions)]);
+    }
+    setError('');
+  };
+
+  const changeParentIdNumber = (idNumber) => {
+    const identityWasLoaded = !!prefilledParentId || !!knownFile;
+    setParent((current) => ({ ...current, idNumber: String(idNumber || '') }));
+    setOtp((current) => ({
+      ...current, stage: 'idle', token: '', verifiedPhone: '', code: '', error: '',
+      sendFailed: false, devCode: '',
+    }));
+    setPrefilledParentId('');
+    setKnownFile(null);
+    setSelfStudent(null);
+    setFamilyParentId(null);
+    setKnownChildren({});
+    setIdentityStatus('unverified');
+    if (identityWasLoaded) {
+      setIsAdultSelf(false);
+      setChildren([emptyChild(allQuestions)]);
+    }
+    setError('');
+  };
 
   /**
    * Participants are asked for a first name only — the family name is already
@@ -407,6 +736,18 @@ export default function PublicOnboardingForm() {
     return !!(known?.linked && known.health_valid);
   };
 
+  const reusesHealthDocument = (child) => {
+    if (child?.onFileHealthDocumentValid && !child?.resignHealth) return true;
+    const known = knownChildren[childKey(child)];
+    return !!(known?.linked && (known.health_document_valid ?? known.health_valid));
+  };
+
+  const reusesWaiver = (child) => {
+    if (child?.onFileWaiverValid) return true;
+    const known = knownChildren[childKey(child)];
+    return !!(known?.linked && (known.waiver_valid ?? known.health_valid));
+  };
+
   /**
    * A parent or guardian signs for their minors only — an adult signs for
    * themselves, whoever their parent is. So a participant on the file who has
@@ -414,7 +755,7 @@ export default function PublicOnboardingForm() {
    * so instead of quietly asking them to sign for an adult.
    */
   const needsOwnSignature = (child) => {
-    if (isAdultSelf) return false;
+    if (child?.type === 'adult') return false;
     const age = ageFromBirthDate(child?.birthDate);
     return age !== null && age >= 18;
   };
@@ -522,6 +863,7 @@ export default function PublicOnboardingForm() {
             city: data.parent.city || '',
           });
         }
+        setSelfStudent(data.selfStudent || null);
         if (Array.isArray(data.students) && data.students.length) {
           setChildren(data.students.map((s) => {
             // Unanswered, not "no". Filling these in as false meant a returning
@@ -534,7 +876,7 @@ export default function PublicOnboardingForm() {
               name: s.name || '',
               idNumber: s.idNumber || '',
               birthDate: s.birthDate || '',
-              gender: s.gender || '',
+              gender: participationGenderValue(s.gender),
               childPhone: '',
               registrationNotes: '',
               answers,
@@ -542,7 +884,11 @@ export default function PublicOnboardingForm() {
               // Already on file with a declaration in force. The form shows
               // that rather than asking them to fill everything in again.
               onFileHealthValid: !!(s.healthValid ?? s.health_valid),
+              onFileHealthDocumentValid: !!(s.healthDocumentValid ?? s.health_document_valid),
+              onFileWaiverValid: !!(s.waiverValid ?? s.waiver_valid),
               onFileHealthSignedAt: s.healthSignedAt || s.health_signed_at || '',
+              onFileWaiverSignedAt: s.waiverSignedAt || s.waiver_signed_at || '',
+              onFileDeclarationSummary: s.declarationSummary || null,
               resignHealth: false,
               waiverAccepted: false,
               signature: '',
@@ -654,26 +1000,62 @@ export default function PublicOnboardingForm() {
     )));
   };
 
+  const reportHealthChange = async (child, index) => {
+    if (!child?.id || !otp.token) {
+      updateChild(index, { resignHealth: true, resignAsk: false });
+      return;
+    }
+    setError('');
+    try {
+      const response = await fetch('/api/public/health-holds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: parent.phone,
+          studentId: child.id,
+          phoneVerification: { token: otp.token },
+        }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'דיווח השינוי הרפואי נכשל');
+      updateChild(index, { resignHealth: true, resignAsk: false, healthBlocked: true });
+    } catch (reportError) {
+      setError(reportError.message);
+    }
+  };
+
   const addChild = () => {
-    if (isAdultSelf) return;
-    setChildren((prev) => [...prev, emptyChild(questions)]);
+    setChildren((prev) => [...prev, emptyChild(allQuestions)]);
   };
 
   const removeChild = (index) => {
-    if (isAdultSelf) return;
-    setChildren((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)));
+    setChildren((prev) => prev.filter((_, i) => i !== index));
   };
 
   const setAdultSelfMode = (enabled) => {
     setIsAdultSelf(enabled);
     if (enabled) {
-      setChildren([{
-        ...emptyChild(questions),
-        name: parentFullName(),
-        type: 'adult',
-      }]);
+      const currentAdult = children.find((child) => child.type === 'adult');
+      if (!currentAdult) setChildren((current) => [{
+        ...emptyChild(allQuestions),
+        ...adultParticipantFromContext(selfStudent, {
+          fullName: parentFullName(),
+          idNumber: parent.idNumber,
+        }),
+        onFileHealthValid: !!selfStudent?.healthValid,
+        onFileHealthDocumentValid: !!selfStudent?.healthDocumentValid,
+        onFileWaiverValid: !!selfStudent?.waiverValid,
+        onFileHealthSignedAt: selfStudent?.healthSignedAt || '',
+        onFileWaiverSignedAt: selfStudent?.waiverSignedAt || '',
+        onFileDeclarationSummary: selfStudent?.declarationSummary || null,
+      }, ...current]);
     } else {
-      setChildren([emptyChild(questions)]);
+      const currentAdult = children.find((child) => child.type === 'adult');
+      if (currentAdult) setSelfStudent(currentAdult);
+      setChildren((current) => {
+        const withoutAdult = current.filter((child) => child.type !== 'adult');
+        return withoutAdult.length ? withoutAdult : [emptyChild(allQuestions)];
+      });
     }
   };
 
@@ -685,22 +1067,50 @@ export default function PublicOnboardingForm() {
    * copy of the one who is already there. Anything typed here wins over what is
    * stored: the parent is looking at the form, we are not.
    *
-   * A failed lookup returns null and the form carries on as if nobody was
-   * found — recognising a returning parent is a convenience, never a gate.
+   * The result distinguishes a real miss from a network/server error. Treating
+   * both as "new family" is how a temporary lookup failure creates duplicates.
    */
-  const lookupOwnFile = async (phone, idNumber = '') => {
+  const lookupOwnFile = async (phone, idNumber = '', verificationToken = otp.token) => {
     const digits = String(phone || '').replace(/\D/g, '');
     const idDigits = String(idNumber || '').replace(/\D/g, '');
-    if (digits.length < 9 && idDigits.length < 5) return null;
+    if (digits.length < 9 && idDigits.length < 5) return { status: 'missing' };
     try {
       const params = new URLSearchParams({ phone: phone || '', idNumber: idDigits });
       if (template?.slug) params.set('templateSlug', template.slug);
+      if (verificationToken) params.set('verificationToken', verificationToken);
       const res = await fetch(`/api/public/onboard-context?${params.toString()}`);
-      if (!res.ok) return null;
-      const data = await res.json();
-      if (!data?.parent?.id) return null;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (data.identity_status === 'review_required') {
+          setIdentityStatus('review_required');
+          return { status: 'review_required', error: data.error };
+        }
+        return { status: 'error' };
+      }
+      if (!data?.parent?.id) {
+        setIdentityStatus(data.identity_status === 'new' ? 'new' : 'unverified');
+        setKnownFile(null);
+        return { status: data.identity_status === 'new' ? 'new' : 'missing' };
+      }
+
+      setSelfStudent(data.selfStudent || null);
 
       setPrefilledParentId(data.parent.id);
+      setEditingParentProfile(false);
+      setIdentityStatus('found');
+      setFamilyParentId(null);
+      const knownName = splitParentName(data.parent);
+      setParent((current) => ({
+        ...current,
+        name: current.name.trim() || knownName.first,
+        lastName: current.lastName.trim() || knownName.lastName,
+        idNumber: current.idNumber.trim() || data.parent.idNumber || '',
+        relation: current.relation || data.parent.relation || '',
+        email: current.email.trim() || data.parent.email || '',
+        city: current.city.trim() || data.parent.city || '',
+        // Keep the exact number that earned the active OTP token.
+        phone: current.phone,
+      }));
       setKnownFile({
         name: data.parent.name || '',
         children: (data.students || []).map((s) => s.name).filter(Boolean),
@@ -714,26 +1124,30 @@ export default function PublicOnboardingForm() {
           const fromFile = existing
             .filter((s) => s.name && !alreadyListed.has(String(s.name).trim()))
             .map((s) => ({
-              ...emptyChild(questions),
+              ...emptyChild(allQuestions),
               id: s.id,
               name: s.name || '',
               idNumber: s.idNumber || '',
               birthDate: s.birthDate || '',
-              gender: s.gender || '',
+              gender: participationGenderValue(s.gender),
               // The same two fields the first load sets. Without them this
               // path — the one that runs when a returning parent types their
               // phone — handed them their own declaration to sign again.
               onFileHealthValid: !!(s.healthValid ?? s.health_valid),
+              onFileHealthDocumentValid: !!(s.healthDocumentValid ?? s.health_document_valid),
+              onFileWaiverValid: !!(s.waiverValid ?? s.waiver_valid),
               onFileHealthSignedAt: s.healthSignedAt || s.health_signed_at || '',
+              onFileWaiverSignedAt: s.waiverSignedAt || s.waiver_signed_at || '',
+              onFileDeclarationSummary: s.declarationSummary || null,
               resignHealth: false,
             }));
           const merged = [...fromFile, ...typed];
           return merged.length ? merged : current;
         });
       }
-      return data.parent;
+      return { status: 'found', parent: data.parent };
     } catch {
-      return null;
+      return { status: 'error' };
     }
   };
 
@@ -748,10 +1162,45 @@ export default function PublicOnboardingForm() {
 
   const goNextFromParent = async () => {
     setError('');
-    if (!parent.name.trim() || !parent.lastName.trim() || !parent.phone.trim()) {
-      setError('יש למלא שם פרטי, שם משפחה ומספר טלפון');
+    if (String(parent.idNumber || '').replace(/\D/g, '').length < 5 || !parent.phone.trim()) {
+      setError('יש למלא תעודת זהות ומספר טלפון');
       return;
     }
+    // The phone may already be on a file even when the form was opened cold,
+    // without a link that says whose. Looking it up here is what the event and
+    // shop pages already do; without it a returning parent was met with silence
+    // and could add a child who is on their file already.
+    // The phone must answer a one-time code before the form goes on. A number
+    // that was already verified in this session (and not edited since) is not
+    // asked twice.
+    if (!otp.token || otp.verifiedPhone !== parent.phone.trim()) {
+      await sendOtpCode();
+      return;
+    }
+
+    if (!prefilledParentId && !['found', 'new'].includes(identityStatus)) {
+      const own = await lookupOwnFile(parent.phone, parent.idNumber, otp.token);
+      if (own.status === 'review_required') {
+        setError(own.error || 'נמצאה סתירה בפרטי הזיהוי. לא ייפתח תיק חדש; יש לפנות לצוות.');
+        return;
+      }
+      if (own.status === 'error' || own.status === 'missing') {
+        setError('לא הצלחנו לבדוק אם קיים תיק למספר הזה. נסו שוב לפני פתיחת תיק חדש.');
+        return;
+      }
+      // The lookup has just prefilled an existing file, or established that
+      // this really is a new family. Render that result before validating the
+      // details that are deliberately hidden until identification.
+      return;
+    }
+
+    if (!parent.name.trim() || !parent.lastName.trim()) {
+      setError('יש להשלים שם פרטי ושם משפחה');
+      return;
+    }
+
+    // Existing customers get these values from their file immediately after
+    // OTP. New customers fill only the values that are genuinely missing.
     if (!parent.email.trim()) {
       setError('יש למלא אימייל');
       return;
@@ -760,36 +1209,33 @@ export default function PublicOnboardingForm() {
       setError('יש למלא מקום מגורים');
       return;
     }
-    // The phone may already be on a file even when the form was opened cold,
-    // without a link that says whose. Looking it up here is what the event and
-    // shop pages already do; without it a returning parent was met with silence
-    // and could add a child who is on their file already.
-    const own = await lookupOwnFile(parent.phone, parent.idNumber);
 
-    // Surname match is asked live while they type. If the answer is still open,
-    // stay on this step — Continue is hidden in that case anyway.
-    if (!own && !prefilledParentId && waitingForFamily) return;
-
-    // The phone must answer a one-time code before the form goes on. A number
-    // that was already verified in this session (and not edited since) is not
-    // asked twice.
-    if (otp.token && otp.verifiedPhone === parent.phone.trim()) {
-      proceedToStep2();
+    if (waitingForFamily || !familyCheckComplete) return;
+    // A real no-match is shown as a confirmation in future tense. No record
+    // exists until the whole form is submitted successfully.
+    if (!prefilledParentId && !families.length && familyParentId === null) {
+      setFamilyParentId('');
       return;
     }
-    await sendOtpCode();
+    proceedToStep2();
   };
 
   const proceedToStep2 = () => {
     if (isAdultSelf) {
       // Same person on both steps — carry the ID already typed, like the name.
-      setChildren([{
-        ...emptyChild(questions),
-        ...(children[0] || {}),
-        name: parentFullName(),
-        idNumber: parent.idNumber.trim() || children[0]?.idNumber || '',
-        type: 'adult',
-      }]);
+      setChildren((current) => {
+        const adult = current.find((child) => child.type === 'adult');
+        const nextAdult = {
+          ...emptyChild(allQuestions),
+          ...adultParticipantFromContext(adult || selfStudent, {
+            fullName: parentFullName(),
+            idNumber: parent.idNumber.trim() || adult?.idNumber || '',
+          }),
+        };
+        return adult
+          ? current.map((child) => (child === adult ? { ...child, ...nextAdult } : child))
+          : [nextAdult, ...current];
+      });
     }
     setStep(2);
   };
@@ -818,7 +1264,7 @@ export default function PublicOnboardingForm() {
         sending: false,
         stage: 'code',
         sendFailed: false,
-        code: '',
+        code: data.devCode || '',
         error: '',
         devCode: data.devCode || '',
         cooldownUntil: Date.now() + 45000,
@@ -841,6 +1287,10 @@ export default function PublicOnboardingForm() {
         setOtp((o) => ({ ...o, verifying: false, error: data.error || 'האימות נכשל' }));
         return;
       }
+      // OTP unlocks the existing customer file. Load it before dismissing the
+      // code screen, so the user never sees a transient "new family" state and
+      // does not need another click merely to be recognised.
+      const own = await lookupOwnFile(parent.phone, parent.idNumber, data.token);
       setOtp((o) => ({
         ...o,
         verifying: false,
@@ -849,7 +1299,14 @@ export default function PublicOnboardingForm() {
         verifiedPhone: parent.phone.trim(),
         error: '',
       }));
-      proceedToStep2();
+      if (own.status === 'error') {
+        setError('הטלפון אומת, אך טעינת התיק הקיים נכשלה. לחצו המשך כדי לנסות שוב.');
+      } else if (own.status === 'review_required') {
+        setError(own.error || 'נמצאה סתירה בפרטי הזיהוי. לא ייפתח תיק חדש; יש לפנות לצוות.');
+      }
+      // Stay on this step: an existing file is now visibly confirmed and
+      // prefilled; a genuinely new phone may still need to answer a surname
+      // household suggestion before personal family data is shown.
     } catch {
       setOtp((o) => ({ ...o, verifying: false, error: 'שגיאת רשת — נסו שוב' }));
     }
@@ -878,7 +1335,7 @@ export default function PublicOnboardingForm() {
       }
       // Signing for yourself is a legal act a minor cannot perform, so the
       // birth date decides it — not the box that was ticked.
-      if (isAdultSelf) {
+      if (kid.type === 'adult') {
         const age = ageFromBirthDate(kid.birthDate);
         if (age !== null && age < 18) {
           setError('מתחת לגיל 18 אי אפשר למלא עבור עצמך — יש להסיר את הסימון „אני מעל גיל 18” ולמלא כהורה או אפוטרופוס');
@@ -900,8 +1357,8 @@ export default function PublicOnboardingForm() {
     }
     // A child already on another parent's file joins it instead of becoming a
     // second copy — but only the person filling this in can confirm that.
-    if (!isAdultSelf) {
-      const unanswered = kids.filter((kid) => !kid.id && !knownChildren[childKey(kid)]);
+    {
+      const unanswered = kids.filter((kid) => kid.type !== 'adult' && !kid.id && !knownChildren[childKey(kid)]);
       if (unanswered.length) {
         const checked = await Promise.all(unanswered.map(async (kid) => {
           const match = await checkKnownChild({
@@ -910,6 +1367,7 @@ export default function PublicOnboardingForm() {
             idNumber: kid.idNumber,
             phone: parent.phone,
             templateSlug: template?.slug || '',
+            verificationToken: otp.token,
           });
           return [childKey(kid), { ...match, linked: match.match ? null : false }];
         }));
@@ -934,6 +1392,12 @@ export default function PublicOnboardingForm() {
       await submitAll(children);
       return;
     }
+    // Leaving the participant editor locks the canonical profile again. The
+    // health screen presents what will be signed and offers an explicit edit
+    // button instead of keeping ordinary inputs open beside the declaration.
+    setChildren((current) => current.map((child) => (
+      child.editProfile ? { ...child, editProfile: false } : child
+    )));
     setChildHealthIndex(0);
     setHealthSubStep(1);
     setStep(3);
@@ -950,7 +1414,8 @@ export default function PublicOnboardingForm() {
 
     if (healthSubStep === 1) {
       const answers = children[fullIndex]?.answers || {};
-      const missing = unansweredQuestions(questions, answers);
+      const currentQuestions = questionsForParticipant(current);
+      const missing = unansweredQuestions(currentQuestions, answers);
       if (missing.length) {
         setError(
           missing.some(isScreeningQuestion)
@@ -962,7 +1427,7 @@ export default function PublicOnboardingForm() {
       // A condition nobody described is a condition the instructor cannot act
       // on — and each "yes" needs its own words, in the box under the question.
       const notes = children[fullIndex]?.answerNotes || {};
-      const undetailed = questions.find((q) => isScreeningQuestion(q)
+      const undetailed = currentQuestions.find((q) => isScreeningQuestion(q)
         && answers[q.id] === true
         && !String(notes[q.id] || '').trim());
       if (undetailed) {
@@ -972,7 +1437,7 @@ export default function PublicOnboardingForm() {
       // Where a doctor has already limited the activity, the wall is not the
       // one to decide it is safe. The approval is required before the
       // signature, not chased afterwards.
-      if (needsMedicalClearance(questions, answers) && !children[fullIndex]?.medicalClearance) {
+      if (needsMedicalClearance(currentQuestions, answers) && !children[fullIndex]?.medicalClearance) {
         setError('לפי התשובות נדרש אישור רופא להשתתפות בפעילות ספורטיבית — יש לצרף אותו כדי להמשיך');
         return;
       }
@@ -1001,8 +1466,20 @@ export default function PublicOnboardingForm() {
       return;
     }
     const signature = canvas.toDataURL();
+    const capturedAt = new Date().toISOString();
     const withSig = children.map((c, i) =>
-      i === fullIndex ? { ...c, signature, waiverAccepted: true } : c
+      i === fullIndex ? {
+        ...c,
+        signature,
+        waiverAccepted: true,
+        signatureEvidenceTimeline: {
+          ...(c.signatureEvidenceTimeline || {}),
+          termsPresentedAt: c.signatureEvidenceTimeline?.termsPresentedAt || capturedAt,
+          termsReadAt: capturedAt,
+          termsAcceptedAt: c.signatureEvidenceTimeline?.termsAcceptedAt || capturedAt,
+          signatureCapturedAt: capturedAt,
+        },
+      } : c
     );
     setChildren(withSig);
 
@@ -1019,16 +1496,15 @@ export default function PublicOnboardingForm() {
     setIsSubmitting(true);
     setError('');
     try {
-      // Only clauses this signer was actually shown are recorded. A parent-only
-      // clause left over in state from before the "for myself" box was ticked
-      // must not reach the signed PDF as something they agreed to.
-      const asked = new Set(questions.map((q) => q.id));
       const kids = (childrenSnapshot || children)
         // Same rule as the screen: a declined offer, or an adult who signs for
         // themselves, is not part of what this parent submits.
         .filter((c) => c.name.trim() && !skipsThisRound(c) && !awaitingRenewChoice(c))
         .map((c) => {
-          const reuse = reusesDeclaration(c);
+          const participantQuestions = questionsForParticipant(c);
+          const asked = new Set(participantQuestions.map((q) => q.id));
+          const reuseHealth = reusesHealthDocument(c);
+          const reuseActivityWaiver = reusesWaiver(c);
           const answers = Object.fromEntries(
             Object.entries(c.answers || {}).filter(([id]) => asked.has(id))
           );
@@ -1036,7 +1512,7 @@ export default function PublicOnboardingForm() {
           // student's file — reads one healthNotes string, so the per-question
           // details are composed into lines that keep saying which question
           // each one answered.
-          const healthNotes = questions
+          const healthNotes = participantQuestions
             .filter((q) => isScreeningQuestion(q) && answers[q.id] === true)
             .map((q) => {
               const note = String(c.answerNotes?.[q.id] || '').trim();
@@ -1048,7 +1524,7 @@ export default function PublicOnboardingForm() {
             id: c.id,
             name: childFullName(c),
             idNumber: (c.idNumber || '').trim(),
-            type: isAdultSelf || c.type === 'adult' ? 'adult' : 'child',
+            type: c.type === 'adult' ? 'adult' : 'child',
             birthDate: c.birthDate,
             gender: c.gender,
             childPhone: c.childPhone,
@@ -1059,11 +1535,13 @@ export default function PublicOnboardingForm() {
             // together — never a signature on file with the approval missing.
             medicalClearance: c.medicalClearance || null,
             signature: c.signature,
-            waiverAccepted: !reuse,
+            waiverAccepted: !reuseActivityWaiver,
+            signatureEvidenceTimeline: c.signatureEvidenceTimeline || null,
             ...linkFieldsFor(knownChildren[childKey(c)]),
             // Already on this file with a declaration in force: say so, or the
             // server asks for a signature the form deliberately never showed.
-            ...(c.onFileHealthValid && !c.resignHealth ? { reuse_health: true } : {}),
+            reuse_health_document: reuseHealth,
+            reuse_waiver: reuseActivityWaiver,
           };
         });
 
@@ -1087,6 +1565,7 @@ export default function PublicOnboardingForm() {
           subscriptions: { ...subscriptions, [requiredListKey]: true },
           templateSlug: template?.slug || 'wall',
           templateId: template?.id || null,
+          completionRegistrationId: searchParams.get('registrationId') || null,
           phoneVerification: otp.token ? { token: otp.token } : null,
         }),
       });
@@ -1103,42 +1582,90 @@ export default function PublicOnboardingForm() {
         return;
       }
 
-      const decls = (data.declarations || []).map((d, i) => ({
-        ...d,
-        parentName: parentFullName(),
-        phone: parent.phone,
-        climberName: kids[i]?.name || d.climberName,
-        birthDate: kids[i]?.birthDate || d.birthDate,
-        answers: kids[i]?.answers || d.answers,
-        signature_url: kids[i]?.signature || d.signature_url,
-        signature: kids[i]?.signature || d.signature_url,
-        signedBy: parentFullName(),
-        studentName: kids[i]?.name || d.climberName,
-        signedDate: d.signedDate || d.date,
-        templateSlug: template?.slug || 'wall',
-        title: template?.title || 'הצהרת בריאות ובטיחות + הסרת אחריות',
-        brandName,
-        // Stamped into the PDF: this signature came from a phone that answered
-        // a one-time code, or it did not — either way the document says which.
-        phoneVerification: otp.token
-          ? { verified: true, phone: parent.phone.trim(), at: new Date().toISOString() }
-          : { verified: false },
-      }));
-      setSavedDeclarations(decls);
+      const signedDocuments = Array.isArray(data.signedDocuments)
+        ? data.signedDocuments
+        : (data.declarations || []).map((health, index) => ({
+            student: data.students?.[index] || null,
+            health,
+            waiver: data.waivers?.[index] || null,
+          }));
+      const findInput = (entry) => kids.find((kid) => (
+        (entry.student?.id && String(kid.id || '') === String(entry.student.id))
+        || childFullName(kid) === entry.student?.name
+      )) || {};
+      const healthDocuments = signedDocuments.filter((entry) => entry.health).map((entry) => {
+        const input = findInput(entry);
+        const health = entry.health;
+        const snapshot = health.formSnapshot || health.form_snapshot || {};
+        return {
+          ...health,
+          documentType: 'health',
+          parentName: parentFullName(),
+          phone: parent.phone,
+          climberName: entry.student?.name || input.name || health.climberName,
+          birthDate: input.birthDate || health.birthDate,
+          answers: input.answers || health.answers,
+          signature_url: input.signature || health.signature_url,
+          signature: input.signature || health.signature_url,
+          signedBy: parentFullName(),
+          studentName: entry.student?.name || input.name || health.climberName,
+          signedDate: health.signedDate || health.date,
+          title: 'הצהרת בריאות',
+          brandName,
+          phoneVerification: snapshot.phoneVerification || null,
+          evidence: snapshot.evidence || null,
+        };
+      });
+      const waiverDocuments = signedDocuments.filter((entry) => entry.waiver).map((entry) => {
+        const input = findInput(entry);
+        const waiver = entry.waiver;
+        const snapshot = waiver.form_snapshot || waiver.formSnapshot || {};
+        return {
+          ...waiver,
+          documentType: 'participation_waiver',
+          parentName: parentFullName(),
+          parentIdNum: parent.idNumber,
+          phone: parent.phone,
+          climberName: entry.student?.name || input.name || '',
+          climberIdNum: input.idNumber || '',
+          birthDate: input.birthDate || '',
+          signature_url: input.signature || waiver.signature_url,
+          signature: input.signature || waiver.signature_url,
+          signedBy: parentFullName(),
+          studentName: entry.student?.name || input.name || '',
+          signedDate: waiver.signed_at || waiver.signedAt,
+          templateSlug: waiver.scope || template?.slug || 'wall',
+          title: template?.title || 'אישור השתתפות והסרת אחריות',
+          brandName,
+          phoneVerification: snapshot.phoneVerification || null,
+          evidence: snapshot.evidence || null,
+        };
+      });
+      const documents = [...healthDocuments, ...waiverDocuments];
+      setSavedDeclarations(documents);
       setIsSuccess(true);
 
       setUploadingPdfs(true);
-      for (const decl of decls) {
+      for (const document of documents) {
         try {
-          const { blob, fileName } = await buildHealthDeclarationPdf(decl);
+          const { blob, fileName } = document.documentType === 'participation_waiver'
+            ? await buildParticipationWaiverPdf(document)
+            : await buildHealthDeclarationPdf(document);
           const pdfBase64 = await blobToBase64(blob);
-          await fetch(`/api/public/onboard/${encodeURIComponent(decl.id)}/pdf`, {
+          const uploadUrl = document.documentType === 'participation_waiver'
+            ? `/api/public/onboard/waivers/${encodeURIComponent(document.id)}/pdf`
+            : `/api/public/onboard/${encodeURIComponent(document.id)}/pdf`;
+          await fetch(uploadUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pdfBase64, fileName }),
+            body: JSON.stringify({
+              pdfBase64,
+              fileName,
+              phoneVerification: otp.token ? { token: otp.token } : null,
+            }),
           });
         } catch (err) {
-          console.error('PDF upload failed for', decl.id, err);
+          console.error('PDF upload failed for', document.id, err);
         }
       }
       setUploadingPdfs(false);
@@ -1152,7 +1679,7 @@ export default function PublicOnboardingForm() {
 
   if (loading) {
     return (
-      <div className="event-page">
+      <div className="event-page onboard-page" ref={pageTopRef}>
         <div className="event-card" style={{ textAlign: 'center', padding: 40 }}>
           <p style={{ color: 'rgba(255,255,255,0.7)' }}>טוען טופס השלמת פרטים...</p>
         </div>
@@ -1163,9 +1690,9 @@ export default function PublicOnboardingForm() {
 
   if (isSuccess) {
     return (
-      <div className="event-page">
+      <div className="event-page onboard-page" ref={pageTopRef}>
         <div className="event-card event-centered">
-          <CheckCircle size={60} color="#F97316" style={{ margin: '0 auto', marginBottom: 20 }} />
+          <CheckCircle size={60} color="var(--form-accent-solid, #38bdf8)" style={{ margin: '0 auto', marginBottom: 20 }} />
           <h1 style={{ color: '#fff', fontSize: 24, marginBottom: 10 }}>הפרטים התקבלו!</h1>
           <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16 }}>
             תודה {parent.name}. הפרטים והצהרת הבריאות נשמרו במערכת.
@@ -1184,10 +1711,12 @@ export default function PublicOnboardingForm() {
               type="button"
               className="event-primary"
               style={{ marginTop: 14, background: 'rgba(255,255,255,0.08)' }}
-              onClick={() => downloadHealthDeclarationPdf(decl)}
+              onClick={() => (decl.documentType === 'participation_waiver'
+                ? downloadParticipationWaiverPdf(decl)
+                : downloadHealthDeclarationPdf(decl))}
             >
               <Download size={16} style={{ marginLeft: 8 }} />
-              הורד אישור — {decl.climberName || decl.studentName}
+              הורד {decl.documentType === 'participation_waiver' ? 'אישור השתתפות' : 'הצהרת בריאות'} — {decl.climberName || decl.studentName}
             </button>
           ))}
         </div>
@@ -1209,7 +1738,7 @@ export default function PublicOnboardingForm() {
   const progressPercent = Math.round((displayStep / totalStepsLabel) * 100);
 
   return (
-    <div className="event-page">
+    <div className="event-page onboard-page" ref={pageTopRef}>
       <div className="event-card">
         {step > 1 && (
           <button
@@ -1236,12 +1765,11 @@ export default function PublicOnboardingForm() {
           </div>
           {/* „מילוי פרטים והרשמה” לא אמר למה חותמים. הכותרת נושאת את שם
               המסמך עצמו, בכל שלושת השלבים. */}
-          <h2>הצהרת בריאות והסרת אחריות</h2>
-          <p>
-            {step === 1 && (isAdultSelf ? 'הפרטים שלי ורשימות עדכונים' : 'פרטי הורה ורשימות עדכונים')}
-            {step === 2 && (isAdultSelf ? 'הפרטים שלי כמשתתף' : 'פרטי המשתתפים בחוג')}
-            {step === 3 && `הצהרה וחתימה: ${currentChild?.name || ''}`}
-          </p>
+          <h2 className={step === 3 ? 'signing-document-title' : ''}>
+            הצהרת בריאות והסרת אחריות
+            {step === 3 && currentChild?.name ? ` — ${currentChild.name}` : ''}
+          </h2>
+          {step === 2 && <p>בני המשפחה המשתתפים</p>}
           {/* Same progress strip as the event and shop pages. */}
           <div className="event-progress-label">
             שלב {displayStep} מתוך {totalStepsLabel}
@@ -1249,13 +1777,68 @@ export default function PublicOnboardingForm() {
           <div
             className="event-progress"
             style={{
-              background: `linear-gradient(90deg,#f97316 0 ${progressPercent}%,rgba(255,255,255,.1) ${progressPercent}%)`,
+              background: `linear-gradient(90deg,var(--form-accent-solid,#38bdf8) 0 ${progressPercent}%,rgba(255,255,255,.1) ${progressPercent}%)`,
             }}
           />
         </div>
 
         {step === 1 && (
           <div className="fade-in">
+            <div className="section-title">זיהוי ממלא/ת הטופס</div>
+            {parentProfileLocked ? (
+              <ParentProfileSummary
+                parent={parent}
+                onEdit={() => setEditingParentProfile(true)}
+              />
+            ) : (
+              <>
+                <p style={{ fontSize: 13, color: 'var(--text-3)', marginTop: -6, marginBottom: 12, lineHeight: 1.45 }}>
+                  {identityReady
+                    ? 'אפשר לעדכן את הפרטים. שינוי תעודת הזהות או הטלפון יחייב אימות מחדש.'
+                    : 'נזהה את התיק רק לאחר אימות הטלפון. לפני האימות לא יוצגו פרטי משפחה.'}
+                </p>
+                <div className="form-group">
+                  <label>תעודת זהות *</label>
+                  <input
+                    inputMode="numeric"
+                    value={parent.idNumber}
+                    onChange={(e) => changeParentIdNumber(e.target.value)}
+                    placeholder="9 ספרות"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>טלפון *</label>
+                  <input
+                    type="tel"
+                    value={parent.phone}
+                    onChange={(e) => changeParentPhone(e.target.value)}
+                    placeholder="מספר לקבלת קוד בוואטסאפ"
+                  />
+                </div>
+                {otp.stage === 'code' && (
+                  <PhoneCodeGate
+                    otp={otp}
+                    phone={parent.phone.trim()}
+                    onCodeChange={(code) => setOtp((o) => ({ ...o, code, error: '' }))}
+                    onVerify={verifyOtpCode}
+                    onResend={sendOtpCode}
+                    onEditPhone={() => setOtp((o) => ({ ...o, stage: 'idle', code: '', error: '' }))}
+                  />
+                )}
+              </>
+            )}
+            {identityReady && (
+              <>
+                {!prefilledParentId && (
+                  <div style={{
+                    background: 'var(--form-accent-soft, rgba(249,115,22,.10))',
+                    border: '1px solid var(--form-accent-border, rgba(249,115,22,.35))',
+                    borderRadius: 12, padding: 12, fontSize: 13, lineHeight: 1.6,
+                    color: 'var(--form-accent-text, #fdba74)', marginBottom: 16,
+                  }}>
+                    לא נמצא תיק תואם. תיק משפחה חדש ייפתח רק לאחר שליחת הטופס.
+                  </div>
+                )}
             {/* First question on the form, because the answer decides what the
                 rest of it is asking for: a parent filling in for children, or
                 an adult filling in for themselves. Asked later, the parent
@@ -1265,8 +1848,8 @@ export default function PublicOnboardingForm() {
               style={{
                 cursor: 'pointer',
                 marginBottom: 18,
-                borderColor: isAdultSelf ? 'rgba(249,115,22,0.45)' : 'rgba(255,255,255,0.08)',
-                background: isAdultSelf ? 'rgba(249,115,22,0.08)' : 'rgba(255,255,255,0.03)',
+                borderColor: isAdultSelf ? 'var(--form-accent-border, rgba(249,115,22,0.45))' : 'rgba(255,255,255,0.08)',
+                background: isAdultSelf ? 'var(--form-accent-soft, rgba(249,115,22,0.08))' : 'rgba(255,255,255,0.03)',
               }}
             >
               <input
@@ -1274,10 +1857,12 @@ export default function PublicOnboardingForm() {
                 checked={isAdultSelf}
                 onChange={(e) => setAdultSelfMode(e.target.checked)}
               />
-              <span>אני מעל גיל 18 ואני ממלא/ת עבור עצמי</span>
+              <span>גם אני משתתף/ת וממלא/ת עבור עצמי</span>
             </label>
+            {!parentProfileLocked && (
+              <>
             <div className="section-title">
-              {isAdultSelf ? 'הפרטים שלי' : 'פרטי הורה / איש קשר'}
+              פרטי ממלא/ת הטופס
             </div>
             {/* First name and surname are separate on purpose: the surname is
                 what recognises a second parent of a household we already know,
@@ -1304,15 +1889,6 @@ export default function PublicOnboardingForm() {
               </div>
             </div>
             <div className="form-group">
-              <label>טלפון *</label>
-              <input
-                type="tel"
-                value={parent.phone}
-                onChange={(e) => setParent((p) => ({ ...p, phone: e.target.value }))}
-                placeholder="חובה להורה שממלא על ילד"
-              />
-            </div>
-            <div className="form-group">
               <label>Email *</label>
               <input
                 type="email"
@@ -1331,21 +1907,6 @@ export default function PublicOnboardingForm() {
             </div>
             <div className="form-row">
               <div className="form-group">
-                {/* Identifies one person where a name cannot, and it is what the
-                    invoice is issued against. Optional: a missing ID must never
-                    be the reason a registration does not go through. */}
-                <label>תעודת זהות</label>
-                <input
-                  inputMode="numeric"
-                  value={parent.idNumber}
-                  onChange={(e) => setParent((p) => ({ ...p, idNumber: e.target.value }))}
-                  placeholder="9 ספרות"
-                />
-              </div>
-              {/* Only a question when there is someone else on the form. An
-                  adult signing for themselves has no relation to state. */}
-              {!isAdultSelf && (
-              <div className="form-group">
                 {/* Buttons for the same reason as בן / בת below: a native list
                     paints its own highlight and ignores the page. */}
                 <label>קשר למשתתפים</label>
@@ -1363,12 +1924,12 @@ export default function PublicOnboardingForm() {
                           flex: '1 1 auto', padding: '11px 8px', borderRadius: 11, font: 'inherit',
                           fontWeight: 700, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap',
                           border: parent.relation === value
-                            ? '1px solid #f97316'
+                            ? '1px solid var(--form-accent-solid, #f97316)'
                             : '1px solid rgba(255,255,255,.15)',
                           background: parent.relation === value
-                            ? 'rgba(249,115,22,.18)'
+                            ? 'var(--form-accent-soft-strong, rgba(249,115,22,.18))'
                             : '#0b1220',
-                          color: parent.relation === value ? '#fdba74' : '#e2e8f0',
+                          color: parent.relation === value ? 'var(--form-accent-text, #fdba74)' : '#e2e8f0',
                         }}
                       >
                         {text}
@@ -1376,20 +1937,22 @@ export default function PublicOnboardingForm() {
                     ))}
                 </div>
               </div>
-              )}
             </div>
+              </>
+            )}
             {knownFile && (
               <div style={{
-                background: 'rgba(249,115,22,.12)', border: '1px solid rgba(249,115,22,.35)',
+                background: 'var(--form-accent-soft, rgba(249,115,22,.12))',
+                border: '1px solid var(--form-accent-border, rgba(249,115,22,.35))',
                 borderRadius: 12, padding: 12, fontSize: 13, lineHeight: 1.6,
-                color: '#fdba74', marginTop: 4,
+                color: 'var(--form-accent-text, #fdba74)', marginTop: 4,
               }}>
                 מצאנו את התיק שלך במערכת.
                 {knownFile.children.length
                   ? ` ${knownFile.children.join(', ')} ${knownFile.children.length > 1
                     ? 'כבר רשומים ומופיעים'
-                    : 'כבר רשום/ה ומופיע/ה'} בשלב הבא, ואפשר להוסיף שם עוד משתתפים.`
-                  : ' אפשר להוסיף משתתפים בשלב הבא.'}
+                    : 'כבר רשום/ה ומופיע/ה'} בשלב הבא, ואפשר לבחור עבור מי להשלים מסמכים.`
+                  : ' אפשר לבחור בשלב הבא עבור מי להשלים מסמכים.'}
               </div>
             )}
 
@@ -1410,8 +1973,8 @@ export default function PublicOnboardingForm() {
                     className="event-check"
                     style={{
                       cursor: isRequired ? 'default' : 'pointer',
-                      borderColor: checked ? 'rgba(249,115,22,0.45)' : 'rgba(255,255,255,0.08)',
-                      background: checked ? 'rgba(249,115,22,0.08)' : 'rgba(255,255,255,0.03)',
+                      borderColor: checked ? 'var(--form-accent-border, rgba(249,115,22,0.45))' : 'rgba(255,255,255,0.08)',
+                      background: checked ? 'var(--form-accent-soft, rgba(249,115,22,0.08))' : 'rgba(255,255,255,0.03)',
                     }}
                   >
                     <input
@@ -1452,19 +2015,12 @@ export default function PublicOnboardingForm() {
               chosenId={familyParentId}
               onCancel={() => setFamilyParentId(null)}
             />
+              </>
+            )}
 
             {error && <ErrorBox message={error} />}
 
-            {otp.stage === 'code' ? (
-              <PhoneCodeGate
-                otp={otp}
-                phone={parent.phone.trim()}
-                onCodeChange={(code) => setOtp((o) => ({ ...o, code, error: '' }))}
-                onVerify={verifyOtpCode}
-                onResend={sendOtpCode}
-                onEditPhone={() => setOtp((o) => ({ ...o, stage: 'idle', code: '', error: '' }))}
-              />
-            ) : waitingForFamily ? null : (
+            {otp.stage === 'code' || waitingForFamily ? null : (
               <button
                 type="button"
                 className="event-primary"
@@ -1483,7 +2039,7 @@ export default function PublicOnboardingForm() {
         {step === 2 && (
           <div className="fade-in">
             <div className="section-title">
-              {isAdultSelf ? 'הפרטים שלי כמשתתף' : 'פרטי המשתתפים בחוג'}
+              בני המשפחה המשתתפים
             </div>
             <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.55)', margin: '0 0 14px' }}>
               השיבוץ לקבוצה יבוצע על ידי הצוות בהמשך.
@@ -1514,16 +2070,16 @@ export default function PublicOnboardingForm() {
                       </div>
                     ) : (
                       <div style={{ fontSize: 18, fontWeight: 800, color: 'rgba(255,255,255,0.45)', lineHeight: 1.25 }}>
-                        {isAdultSelf ? 'משתתף מבוגר' : `משתתף/ת ${index + 1}`}
+                        {child.type === 'adult' ? 'משתתף/ת מבוגר/ת' : `ילד/ה ${index + 1}`}
                       </div>
                     )}
-                    {!isAdultSelf && children.length > 1 && (
-                      <div style={{ fontSize: 11, color: '#F97316', fontWeight: 700, marginTop: 2 }}>
+                    {children.length > 1 && (
+                      <div style={{ fontSize: 11, color: 'var(--form-accent-text, #F97316)', fontWeight: 700, marginTop: 2 }}>
                         משתתף/ת {index + 1} מתוך {children.length}
                       </div>
                     )}
                   </div>
-                  {!isAdultSelf && children.length > 1 && !child.onFileHealthValid && (
+                  {child.type !== 'adult' && children.length > 1 && !child.onFileHealthValid && (
                     <button type="button" className="clear-btn" onClick={() => removeChild(index)}>
                       <Trash2 size={12} style={{ display: 'inline', verticalAlign: 'middle' }} /> הסר
                     </button>
@@ -1554,8 +2110,8 @@ export default function PublicOnboardingForm() {
                     תשובה לגיטימית — אבל השאלה חייבת להישאל. */}
                 {child.id && !child.onFileHealthValid && !needsOwnSignature(child) && !child.renewOptIn && (
                   <div style={{
-                    background: child.skipThisTime ? 'rgba(255,255,255,.04)' : 'rgba(249,115,22,.1)',
-                    border: `1px solid ${child.skipThisTime ? 'rgba(255,255,255,0.12)' : 'rgba(249,115,22,.4)'}`,
+                    background: child.skipThisTime ? 'rgba(255,255,255,.04)' : 'var(--form-accent-soft, rgba(249,115,22,.1))',
+                    border: `1px solid ${child.skipThisTime ? 'rgba(255,255,255,0.12)' : 'var(--form-accent-border, rgba(249,115,22,.4))'}`,
                     borderRadius: 12, padding: 12, marginBottom: 0,
                   }}>
                     {child.skipThisTime ? (
@@ -1582,15 +2138,18 @@ export default function PublicOnboardingForm() {
                       <>
                         <div style={{
                           display: 'flex', alignItems: 'center', gap: 6,
-                          fontSize: 14, color: '#fdba74', fontWeight: 700, marginBottom: 4,
+                          fontSize: 14, color: 'var(--form-accent-text, #fdba74)', fontWeight: 700, marginBottom: 4,
                         }}>
-                          <AlertTriangle size={15} /> אין טופס השתתפות בתוקף
+                          <AlertTriangle size={15} />
+                          {child.onFileHealthSignedAt
+                            ? `${declarationContextLabel} אינה בתוקף`
+                            : `לא נמצאה ${declarationContextLabel}`}
                         </div>
                         <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', lineHeight: 1.55, marginBottom: 10 }}>
                           {child.onFileHealthSignedAt
-                            ? `הטופס מ-${formatSignedDay(child.onFileHealthSignedAt)} כבר אינו בתוקף. `
-                            : 'לא נמצא טופס השתתפות בתוקף. '}
-                          הפרטים כבר קיימים במערכת — אפשר לחדש עכשיו.
+                            ? `ההצהרה מ-${formatSignedDay(child.onFileHealthSignedAt)} כבר אינה בתוקף. `
+                            : `ל${child.name?.trim() || 'משתתף/ת זה'} עדיין אין ${declarationContextLabel} חתומה. `}
+                          הפרטים כבר קיימים במערכת — אפשר למלא עכשיו.
                           {' '}אם {child.name?.trim() || 'המשתתף/ת'} כבר לא מטפס/ת, אפשר לדלג — בלי הצהרה בתוקף לא נכנסים לפעילות.
                         </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1598,12 +2157,12 @@ export default function PublicOnboardingForm() {
                             type="button"
                             onClick={() => updateChild(index, { renewOptIn: true, skipThisTime: false })}
                             style={{
-                              background: '#F97316', border: 'none', borderRadius: 10, color: '#fff',
+                              background: 'var(--form-accent-solid, #F97316)', border: 'none', borderRadius: 10, color: '#fff',
                               fontFamily: 'inherit', fontSize: 13, fontWeight: 700,
                               padding: '9px 14px', cursor: 'pointer',
                             }}
                           >
-                            כן, לחדש עכשיו
+                            {child.onFileHealthSignedAt ? 'כן, לחדש עכשיו' : 'כן, למלא עכשיו'}
                           </button>
                           <button
                             type="button"
@@ -1625,19 +2184,20 @@ export default function PublicOnboardingForm() {
                 {/* אחרי „כן, לחדש” — מה עוד נדרש, ודרך חזרה. */}
                 {child.id && !child.onFileHealthValid && !needsOwnSignature(child) && child.renewOptIn && (
                   <div style={{
-                    background: 'rgba(249,115,22,.1)', border: '1px solid rgba(249,115,22,.35)',
+                    background: 'var(--form-accent-soft, rgba(249,115,22,.1))',
+                    border: '1px solid var(--form-accent-border, rgba(249,115,22,.35))',
                     borderRadius: 12, padding: 12, marginBottom: 14,
                   }}>
                     <div style={{
                       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                       gap: 10, flexWrap: 'wrap',
                     }}>
-                      <div style={{ fontSize: 14, color: '#fdba74', fontWeight: 700 }}>
+                      <div style={{ fontSize: 14, color: 'var(--form-accent-text, #fdba74)', fontWeight: 700 }}>
                         חידוש ההצהרה עבור {child.name?.trim() || 'משתתף/ת זה'}
                       </div>
                       <button
                         type="button"
-                        onClick={() => updateChild(index, { renewOptIn: false })}
+                        onClick={() => updateChild(index, { renewOptIn: false, editProfile: false })}
                         style={{
                           background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
                           borderRadius: 10, color: 'rgba(255,255,255,0.65)',
@@ -1648,7 +2208,11 @@ export default function PublicOnboardingForm() {
                       </button>
                     </div>
                     <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', lineHeight: 1.55, marginTop: 4 }}>
-                      בדקו שהפרטים נכונים והמשיכו לחתימה על ההצהרה.
+                      {hasLockedParticipantProfile(child)
+                        ? `הצהרת הבריאות של ${child.name.trim()} תופיע במסך הבא.`
+                        : hasCompleteParticipantProfile(child)
+                          ? 'הפרטים פתוחים לעריכה. לאחר השמירה הם יוצגו בראש הצהרת הבריאות.'
+                          : 'חסרים בתיק פרטים הכרחיים. השלימו אותם פעם אחת והמשיכו להצהרת הבריאות.'}
                     </div>
                   </div>
                 )}
@@ -1661,17 +2225,6 @@ export default function PublicOnboardingForm() {
                     background: 'rgba(52,211,153,.08)', border: '1px solid rgba(52,211,153,.3)',
                     borderRadius: 12, padding: 12, marginBottom: 0,
                   }}>
-                    {/* Reads as a record, not as a form: a locked strip across
-                        the top, so the eye lands on „קיימת” before it lands on
-                        anything clickable. */}
-                    <div style={{
-                      display: 'flex', alignItems: 'center', gap: 6,
-                      fontSize: 11, fontWeight: 700, letterSpacing: '.02em',
-                      color: 'rgba(255,255,255,0.5)', marginBottom: 8,
-                      paddingBottom: 8, borderBottom: '1px solid rgba(255,255,255,0.07)',
-                    }}>
-                      <Lock size={12} /> הצהרה קיימת בתיק — נעולה
-                    </div>
                     <div style={{
                       display: 'flex', alignItems: 'center', gap: 6,
                       fontSize: 14, color: '#6ee7b7', fontWeight: 700, marginBottom: 4,
@@ -1684,6 +2237,11 @@ export default function PublicOnboardingForm() {
                         : ''}
                       אין צורך למלא שוב — הפרטים נשארים כפי שהם.
                     </div>
+                    <ExistingDeclarationSummary
+                      participant={child}
+                      questions={allQuestions}
+                      templateSlug={template?.slug || routeSlug || 'wall'}
+                    />
 
                     {/* שני קליקים במכוון: הצהרה קיימת נמחקה בטעות בסימון אחד
                         בדרך אגב. הראשון רק פותח את השאלה, השני הוא זה שמוחק. */}
@@ -1702,12 +2260,12 @@ export default function PublicOnboardingForm() {
                       </button>
                     ) : (
                       <div style={{
-                        marginTop: 12, background: 'rgba(249,115,22,.1)',
-                        border: '1px solid rgba(249,115,22,.4)', borderRadius: 10, padding: 12,
+                        marginTop: 12, background: 'var(--form-accent-soft, rgba(249,115,22,.1))',
+                        border: '1px solid var(--form-accent-border, rgba(249,115,22,.4))', borderRadius: 10, padding: 12,
                       }}>
                         <div style={{
                           display: 'flex', alignItems: 'center', gap: 6,
-                          fontSize: 13, fontWeight: 700, color: '#fdba74', marginBottom: 6,
+                          fontSize: 13, fontWeight: 700, color: 'var(--form-accent-text, #fdba74)', marginBottom: 6,
                         }}>
                           <AlertTriangle size={14} /> למלא הצהרה חדשה?
                         </div>
@@ -1722,9 +2280,9 @@ export default function PublicOnboardingForm() {
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                           <button
                             type="button"
-                            onClick={() => updateChild(index, { resignHealth: true, resignAsk: false })}
+                            onClick={() => reportHealthChange(child, index)}
                             style={{
-                              background: '#F97316', border: 'none', borderRadius: 10, color: '#fff',
+                              background: 'var(--form-accent-solid, #F97316)', border: 'none', borderRadius: 10, color: '#fff',
                               fontFamily: 'inherit', fontSize: 13, fontWeight: 700,
                               padding: '9px 14px', cursor: 'pointer',
                             }}
@@ -1748,44 +2306,37 @@ export default function PublicOnboardingForm() {
                   </div>
                 )}
 
-                {/* אחרי שנפתחה — הדרך חזרה נשארת פתוחה עד השליחה. */}
                 {child.onFileHealthValid && child.resignHealth && (
                   <div style={{
-                    background: 'rgba(249,115,22,.1)', border: '1px solid rgba(249,115,22,.4)',
+                    background: 'var(--form-accent-soft, rgba(249,115,22,.1))',
+                    border: '1px solid var(--form-accent-border, rgba(249,115,22,.4))',
                     borderRadius: 12, padding: 12, marginBottom: 14,
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap',
+                    display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
                   }}>
-                    <div style={{ fontSize: 13, color: '#fdba74', fontWeight: 700 }}>
-                      ההצהרה תמולא מחדש
+                    <div style={{ fontSize: 13, color: 'var(--form-accent-text, #fdba74)', fontWeight: 700 }}>
+                      דווח שינוי במצב הבריאותי. ההשתתפות חסומה עד להשלמת הצהרה חדשה.
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => updateChild(index, { resignHealth: false, resignAsk: false })}
-                      style={{
-                        background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
-                        borderRadius: 10, color: 'rgba(255,255,255,0.65)',
-                        fontFamily: 'inherit', fontSize: 12, padding: '7px 12px', cursor: 'pointer',
-                      }}
-                    >
-                      ביטול — השאירו את ההצהרה הקיימת
-                    </button>
                   </div>
                 )}
 
-                {fillsDeclaration(child) && (
+                {/* A renewal is about health, not another profile intake. The
+                    canonical details travel unchanged in the submission and
+                    are shown read-only beside the declaration on the next
+                    screen. Only an incomplete old profile opens fields. */}
+                {fillsDeclaration(child) && !hasLockedParticipantProfile(child) && (
                 <>
                 <div className="form-group">
-                  <label>{isAdultSelf ? 'שם מלא *' : 'שם פרטי של המשתתף בחוג *'}</label>
+                  <label>{child.type === 'adult' ? 'שם מלא *' : 'שם פרטי של הילד/ה *'}</label>
                   <input
                     value={child.name}
                     onChange={(e) => updateChild(index, { name: e.target.value })}
-                    placeholder={isAdultSelf ? 'שם מלא' : 'שם פרטי'}
-                    readOnly={isAdultSelf}
+                    placeholder={child.type === 'adult' ? 'שם מלא' : 'שם פרטי'}
+                    readOnly={child.type === 'adult'}
                   />
                   {/* Shown rather than assumed: the surname is completed from
                       the parent, and anyone whose child carries a different one
                       can type it here in full. */}
-                  {!isAdultSelf && childFullName(child) !== child.name.trim() && (
+                  {child.type !== 'adult' && childFullName(child) !== child.name.trim() && (
                     <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', marginTop: 6 }}>
                       ייכנס למערכת כ־{childFullName(child)} — אפשר להקליד שם משפחה אחר במידת הצורך
                     </div>
@@ -1817,7 +2368,7 @@ export default function PublicOnboardingForm() {
                       ? `גיל: ${ageFromBirthDate(child.birthDate)}`
                       : 'לבחירת שנה — לחצו על השנה עצמה בחלון שנפתח.'}
                   </div>
-                  {isAdultSelf
+                  {child.type === 'adult'
                     && ageFromBirthDate(child.birthDate) !== null
                     && ageFromBirthDate(child.birthDate) < 18 && (
                     <div style={{
@@ -1860,18 +2411,18 @@ export default function PublicOnboardingForm() {
                       drawn by the operating system, so its highlighted row
                       keeps its own light colours however the page is
                       styled. Same control as the health questions. */}
-                  <label>{isAdultSelf ? 'מין' : 'בן / בת'}</label>
+                  <label>{child.type === 'adult' ? 'מין' : 'בן / בת'}</label>
                   <GenderPicker
                     value={child.gender}
                     onChange={(gender) => updateChild(index, { gender })}
-                    options={isAdultSelf
+                    options={child.type === 'adult'
                       ? [['גבר', 'male'], ['אישה', 'female']]
                       : [['בן', 'male'], ['בת', 'female']]}
                   />
                 </div>
                 {/* The child's own phone. An adult already gave theirs on the
                     first step, so asking again would be asking twice. */}
-                {!isAdultSelf && (
+                {child.type !== 'adult' && (
                   <div className="form-group">
                     <label>טלפון של הילד/ה</label>
                     {/* הסבר ארוך בתוך שדה נחתך בטלפון — placeholder לא נשבר
@@ -1907,19 +2458,17 @@ export default function PublicOnboardingForm() {
                 )}
               </div>
             ))}
-            {!isAdultSelf && (
-              <button
+            <button
                 type="button"
                 onClick={addChild}
                 style={{
-                  width: '100%', background: 'transparent', border: '1px dashed rgba(249,115,22,0.5)',
-                  color: '#F97316', padding: 12, borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
+                  width: '100%', background: 'transparent', border: '1px dashed var(--form-accent-border, rgba(249,115,22,0.5))',
+                  color: 'var(--form-accent-text, #F97316)', padding: 12, borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16,
                 }}
               >
-                <Plus size={16} /> הוסף משתתף/ת
+                <Plus size={16} /> הוספת ילד/ה למשפחה
               </button>
-            )}
             {error && <ErrorBox message={error} />}
             <button type="button" className="event-primary" onClick={goNextFromChildren}>
               המשך להצהרת בריאות <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} />
@@ -1931,13 +2480,24 @@ export default function PublicOnboardingForm() {
           <div className="fade-in">
             {healthSubStep === 1 && (
               <>
+                {hasLockedParticipantProfile(currentChild) && (
+                  <ParticipantProfileSummary
+                    participant={currentChild}
+                    onEdit={() => {
+                      updateChild(currentFullIndex, { editProfile: true });
+                      setError('');
+                      setStep(2);
+                    }}
+                  />
+                )}
                 {(() => {
                   const answers = children[currentFullIndex]?.answers || {};
+                  const participantQuestions = questionsForParticipant(currentChild);
                   const setAnswer = (id, value) => updateChild(currentFullIndex, (child) => ({
                     answers: { ...(child.answers || {}), [id]: value },
                   }));
-                  const screening = questions.filter(isScreeningQuestion);
-                  const confirmations = questions.filter((q) => !isScreeningQuestion(q));
+                  const screening = participantQuestions.filter(isScreeningQuestion);
+                  const confirmations = participantQuestions.filter((q) => !isScreeningQuestion(q));
                   return (
                     <>
                       {/* Screening first: what we need to know before anyone
@@ -1967,12 +2527,12 @@ export default function PublicOnboardingForm() {
                                       flex: 1, padding: '9px 0', borderRadius: 10, font: 'inherit',
                                       fontWeight: 700, fontSize: 14, cursor: 'pointer',
                                       border: answers[q.id] === value
-                                        ? '1px solid #f97316'
+                                        ? '1px solid var(--form-accent-solid, #f97316)'
                                         : '1px solid rgba(255,255,255,.15)',
                                       background: answers[q.id] === value
-                                        ? 'rgba(249,115,22,.18)'
+                                        ? 'var(--form-accent-soft-strong, rgba(249,115,22,.18))'
                                         : 'rgba(255,255,255,.05)',
-                                      color: answers[q.id] === value ? '#fdba74' : '#e2e8f0',
+                                      color: answers[q.id] === value ? 'var(--form-accent-text, #fdba74)' : '#e2e8f0',
                                     }}
                                   >
                                     {text}
@@ -1999,7 +2559,7 @@ export default function PublicOnboardingForm() {
                               )}
                             </div>
                           ))}
-                          {hasPositiveScreening(questions, answers) && (
+                          {hasPositiveScreening(participantQuestions, answers) && (
                             <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', marginTop: 4, lineHeight: 1.5 }}>
                               {/* The detail is a declaration by the signer, not a
                                   briefing we undertake to act on. */}
@@ -2007,9 +2567,9 @@ export default function PublicOnboardingForm() {
                               ולהיוועצות ברופא לפני ההשתתפות, היא של החותם/ת בלבד.
                             </p>
                           )}
-                          {needsMedicalClearance(questions, answers) && (
+                          {needsMedicalClearance(participantQuestions, answers) && (
                             <MedicalClearanceField
-                              triggers={clearanceTriggers(questions, answers)}
+                              triggers={clearanceTriggers(participantQuestions, answers)}
                               value={children[currentFullIndex]?.medicalClearance || null}
                               onChange={(file) => updateChild(currentFullIndex, { medicalClearance: file })}
                               onError={setError}
@@ -2017,13 +2577,20 @@ export default function PublicOnboardingForm() {
                           )}
                         </>
                       )}
-                      <div className="section-title" style={{ marginTop: screening.length ? 20 : 0 }}>
+                      <div
+                        className="section-title declaration-major-title"
+                        style={{ marginTop: screening.length ? 30 : 0 }}
+                      >
                         {sectionTitles.confirm} — {currentChild.name}
                       </div>
                       <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
                         יש לסמן את כל הסעיפים לאחר שקראתם אותם.
-                        {!isAdultSelf && ' אנא הסבירו לילדכם את כללי הבטיחות.'}
                       </p>
+                      {currentChild.type !== 'adult' && (
+                        <p className="child-safety-notice">
+                          אנא הסבירו לילדכם את כללי הבטיחות.
+                        </p>
+                      )}
                       {confirmations.map((q) => (
                         <label key={q.id} className="event-check" style={{ marginBottom: 10 }}>
                           <input
@@ -2149,9 +2716,30 @@ function ErrorBox({ message }) {
 function FormStyles() {
   return (
     <>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;600;700;800;900&display=swap" />
       <EventStyles />
       <style>{`
-        .event-card { padding-bottom: 24px; }
+        .onboard-page {
+          --form-accent-solid: #38bdf8;
+          --form-accent-deep: #0284c7;
+          --form-accent-text: #7dd3fc;
+          --form-accent-border: rgba(56,189,248,.45);
+          --form-accent-soft: rgba(56,189,248,.09);
+          --form-accent-soft-strong: rgba(56,189,248,.18);
+          color-scheme: dark;
+          padding: 20px 14px 40px;
+          background: radial-gradient(circle at top,#1e293b,#070b14 68%);
+          color: #f8fafc;
+          font-family: Heebo,Assistant,system-ui,sans-serif;
+        }
+        .onboard-page .event-card {
+          width: min(720px,100%);
+          padding-bottom: 24px;
+          background: rgba(15,23,42,.96);
+          border: 1px solid rgba(255,255,255,.12);
+          border-radius: 22px;
+          box-shadow: 0 24px 70px rgba(0,0,0,.35);
+        }
         .fade-in { padding: 0 24px; animation: fadeIn .4s ease; }
         .event-centered .fade-in { padding: 0; }
         @keyframes fadeIn {
@@ -2160,16 +2748,38 @@ function FormStyles() {
         }
         .form-header { text-align: center; padding: 22px 24px 0; }
         .logo-circle {
-          width: 60px; height: 60px; border-radius: 50%; background: #fff;
+          width: 118px; height: 118px; border-radius: 0; background: transparent;
           display: flex; align-items: center; justify-content: center;
-          margin: 0 auto 14px; overflow: hidden;
+          margin: 0 auto 18px; overflow: visible;
+          filter: drop-shadow(0 10px 18px rgba(0,0,0,.32));
         }
         .logo-circle img { width: 100%; height: 100%; object-fit: contain; display: block; }
         .form-header h2 { margin: 0 0 6px; padding: 0; font-size: 22px; font-weight: 800; }
+        .form-header h2.signing-document-title {
+          margin-bottom: 0;
+          font-size: clamp(15px, 3.4vw, 28px);
+          line-height: 1.25;
+          white-space: nowrap;
+        }
         .form-header p { margin: 0; font-size: 13px; color: #94a3b8; }
         .section-title {
-          font-size: 17px; letter-spacing: .2px; color: #fb923c;
-          font-weight: 800; margin: 24px 0 14px;
+          font-size: clamp(24px, 4vw, 34px);
+          line-height: 1.2;
+          letter-spacing: 0;
+          color: var(--form-accent-text, #fb923c);
+          font-weight: 900;
+          margin: 30px 0 20px;
+          text-wrap: balance;
+        }
+        .declaration-major-title {
+          font-size: inherit;
+        }
+        .child-safety-notice {
+          margin: -2px 0 18px;
+          color: #f87171;
+          font-size: clamp(20px, 3.5vw, 26px);
+          font-weight: 800;
+          line-height: 1.35;
         }
         .form-group { margin-bottom: 14px; }
         /* Two halves of one name read as one line. They wrap on a narrow
@@ -2182,7 +2792,14 @@ function FormStyles() {
           border: 1px solid rgba(255,255,255,.15); background: #0b1220;
           color: #fff; font: inherit;
         }
-        .form-group input:focus, .form-group select:focus { outline: none; border-color: #f97316; }
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+          outline: none;
+          border-color: var(--form-accent-solid, #f97316);
+          box-shadow: 0 0 0 2px var(--form-accent-soft, rgba(249,115,22,.1));
+        }
+        .onboard-page input[type="checkbox"], .onboard-page input[type="radio"] {
+          accent-color: var(--form-accent-solid, #38bdf8);
+        }
         /* The page sets color-scheme:dark, so the native list opens dark —
            near-black option text on it is invisible. Same pair as the
            equipment page. */
@@ -2203,7 +2820,16 @@ function FormStyles() {
           font-size: 11px; cursor: pointer;
         }
         .event-signature { border: 0; border-radius: 0; height: 150px; cursor: crosshair; }
-        .event-primary { width: 100%; margin-top: 6px; }
+        .onboard-page .event-primary {
+          width: 100%;
+          margin-top: 6px;
+          background: linear-gradient(135deg,var(--form-accent-solid),var(--form-accent-deep));
+        }
+        @media (max-width: 560px) {
+          .onboard-page { padding: 10px 8px 28px; }
+          .onboard-page .event-card { border-radius: 17px; }
+          .logo-circle { width: 94px; height: 94px; }
+        }
       `}</style>
     </>
   );

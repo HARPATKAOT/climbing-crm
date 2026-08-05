@@ -16,6 +16,12 @@ import {
  * true.
  */
 const IN_FORCE_SIGNED_DATE = new Date().toISOString().slice(0, 10);
+const HEALTHY_ANSWERS = {
+  ...Object.fromEntries(
+    Array.from({ length: 9 }, (_unused, index) => [`m${index + 1}`, false])
+  ),
+  required: true,
+};
 
 function createDb(seed = {}) {
   const store = {
@@ -31,6 +37,10 @@ function createDb(seed = {}) {
       isActive: true,
     }],
     health_declarations: [],
+    participation_waivers: [],
+    health_holds: [],
+    households: [],
+    household_members: [],
     activities: [],
     activity_registration_orders: [],
     activity_registrations: [],
@@ -83,8 +93,8 @@ function createDb(seed = {}) {
 const signed = (name, type = 'child') => ({
   name,
   type,
-  birthDate: type === 'child' ? '2015-01-01' : '',
-  answers: { required: true },
+  birthDate: type === 'child' ? '2015-01-01' : '1985-01-01',
+  answers: { ...HEALTHY_ANSWERS },
   waiverAccepted: true,
   signature: 'data:image/png;base64,signed',
 });
@@ -119,8 +129,16 @@ test('paid parent and two children reserve three slots and price units', async (
   assert.equal(result.order.price_includes_vat, true);
   assert.equal(result.registrations.length, 3);
   assert.equal(db.store.health_declarations.length, 3);
+  assert.equal(db.store.participation_waivers.length, 3);
   assert.ok(result.registrations.every((row) => row.health_declaration_id));
+  assert.ok(result.registrations.every((row) => row.participation_waiver_id));
   assert.ok(db.store.health_declarations.every((row) => row.signed && row.signature_url));
+  assert.ok(db.store.health_declarations.every((row) => !Object.hasOwn(row.answers, 'required')));
+  assert.ok(db.store.health_declarations.every((row) => (
+    row.formSnapshot.healthQuestions.map((question) => question.id).join(',')
+      === 'm1,m2,m3,m4,m5,m6,m7,m8,m9'
+  )));
+  assert.ok(db.store.participation_waivers.every((row) => row.form_snapshot.answers.required === true));
   assert.equal(result.registrations[0].student_id, db.store.students.find((s) => s.isAdult)?.id);
   assert.equal(db.store.students.filter((s) => s.isAdult).length, 1);
   assert.equal(db.store.students.length, 3);
@@ -154,6 +172,43 @@ test('existing parent is deduplicated and a missing child is created', async () 
   assert.equal(db.store.students.length, 1);
   assert.equal(result.order.total_amount, 0);
   assert.equal(result.order.status, 'confirmed');
+});
+
+test('an archived parent stored with 972 phone is reused instead of duplicated', async () => {
+  const db = createDb({
+    parents: [{
+      id: 'archived-parent',
+      name: 'דלק איל',
+      lastName: 'איל',
+      phone: '972508862878',
+      status: 'archived',
+      source: 'form',
+    }],
+  });
+  const activity = {
+    id: 'activity-returning-family',
+    name: 'טיול משפחות',
+    price: 0,
+    max_participants: 20,
+    registration_mode: 'paid_per_participant',
+  };
+  db.store.activities.push(activity);
+
+  const result = await registerActivityGroup({
+    db,
+    persist,
+    activity,
+    payload: {
+      idempotency_key: 'returning-archived-parent',
+      parent: { name: 'דלק איל', lastName: 'איל', phone: '0508862878', email: 'dalak@example.com' },
+      participants: [signed('ילד איל')],
+    },
+    createPaymentUrl: async () => null,
+  });
+
+  assert.equal(db.store.parents.length, 1);
+  assert.equal(result.crm.parent.id, 'archived-parent');
+  assert.equal(result.order.payer_person_id, 'archived-parent');
 });
 
 test('capacity rejects oversized group and duplicate concurrent retry is idempotent', async () => {
@@ -326,6 +381,14 @@ test('reuse_health skips creating a new declaration for valid student', async ()
       waiverAccepted: true,
       signature_url: 'data:image/png;base64,old',
     }],
+    participation_waivers: [{
+      id: 'pw1',
+      student_id: 's1',
+      scope: 'trip',
+      signed_at: `${IN_FORCE_SIGNED_DATE}T10:00:00.000Z`,
+      signed: true,
+      signature_url: 'data:image/png;base64,old',
+    }],
   });
   db.upsertParentByPhone = () => db.store.parents[0];
   const activity = {
@@ -355,7 +418,9 @@ test('reuse_health skips creating a new declaration for valid student', async ()
     createPaymentUrl: async () => null,
   });
   assert.equal(db.store.health_declarations.length, before);
+  assert.equal(db.store.participation_waivers.length, 1);
   assert.equal(result.registrations[0].health_declaration_id, 'hd1');
+  assert.equal(result.registrations[0].participation_waiver_id, 'pw1');
   assert.equal(result.registrations[0].student_id, 's1');
 });
 
@@ -398,7 +463,7 @@ test('a disclosure that demands a doctor approval cannot register without one', 
   db.store.activities.push(activity);
   const discloser = {
     ...signed('ילד עם מגבלה'),
-    answers: { required: true, m1: true },
+    answers: { ...HEALTHY_ANSWERS, m2: true },
     healthNotes: 'אסתמה',
   };
   const register = (participant) => registerActivityGroup({
@@ -418,6 +483,6 @@ test('a disclosure that demands a doctor approval cannot register without one', 
     medicalClearance: { base64: 'x', mimeType: 'application/pdf', fileName: 'a.pdf', bytes: 10 },
   });
   assert.equal(withFile.registrations.length, 1);
-  const withoutDisclosure = await register({ ...signed('ילד בריא'), answers: { required: true, m1: false } });
+  const withoutDisclosure = await register({ ...signed('ילד בריא'), answers: { ...HEALTHY_ANSWERS } });
   assert.equal(withoutDisclosure.registrations.length, 1);
 });

@@ -208,15 +208,22 @@ export default function BotSettingsPanel({
             <option value="customers_only">לקוחות פעילים בלבד</option>
           </AppSelect>
         </div>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
-          <input
-            type="checkbox"
-            checked={!!settings.aiLeadCaptureEnabled}
-            onChange={(e) => patch('aiLeadCaptureEnabled', e.target.checked)}
-            style={{ width: 18, height: 18 }}
-          />
-          איסוף ליד מדורג (שם הורה ← ילד ← כיתה ← יום)
-        </label>
+        {settings.aiToolsEnabled ? (
+          <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 10, lineHeight: 1.5 }}>
+            במצב כלים פרטי הלקוח נאספים מתוך השיחה והטפסים. איסוף הליד המדורג
+            שייך רק למנוע הגיבוי הישן ולכן אינו מוצג כמתג פעיל.
+          </div>
+        ) : (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
+            <input
+              type="checkbox"
+              checked={!!settings.aiLeadCaptureEnabled}
+              onChange={(e) => patch('aiLeadCaptureEnabled', e.target.checked)}
+              style={{ width: 18, height: 18 }}
+            />
+            איסוף ליד מדורג (שם הורה ← ילד ← כיתה ← יום)
+          </label>
+        )}
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
           <input
             type="checkbox"

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   clipReply,
   textMatchesKeywords,
+  textMatchesStandaloneKeywords,
   normalizeMenuChoice,
   audienceAllows,
   isBotPaused,
@@ -21,6 +22,11 @@ import {
   shouldDeferToHumanStaff,
   withBotMark,
   wantsExplicitHumanStaff,
+  normalizeHistoryLimit,
+  customerNameParts,
+  hasCustomerFullName,
+  customerNameWords,
+  parseCustomerFullName,
 } from './whatsappBot.js';
 import { isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 import { db } from './db.js';
@@ -51,6 +57,39 @@ test('handoff and stop keywords match', () => {
   assert.equal(textMatchesKeywords('אפשר לדבר עם נציג?', 'אדם,נציג,תלונה'), true);
   assert.equal(textMatchesKeywords('עצור בבקשה', 'עצור,הסר,stop'), true);
   assert.equal(textMatchesKeywords('שלום', 'עצור,הסר'), false);
+  assert.equal(textMatchesStandaloneKeywords('בבקשה הסר אותי', 'עצור,הסר,stop'), true);
+  assert.equal(textMatchesStandaloneKeywords('מה זה טופס הסרת אחריות?', 'עצור,הסר,stop'), false);
+});
+
+test('customer identity requires first and family name, and accepts only name words', () => {
+  assert.equal(hasCustomerFullName({ name: 'לקוח וואטסאפ' }), false);
+  assert.equal(hasCustomerFullName({ name: 'דנה' }), false);
+  assert.equal(hasCustomerFullName({ name: 'דנה לוי' }), true);
+  assert.equal(hasCustomerFullName({ name: 'דנה', lastName: 'לוי' }), true);
+  assert.deepEqual(
+    customerNameParts({ name: 'דנה לוי כהן' }),
+    { firstName: 'דנה', lastName: 'לוי כהן', complete: true }
+  );
+  assert.deepEqual(parseCustomerFullName('קוראים לי דנה לוי'), {
+    firstName: 'דנה',
+    lastName: 'לוי',
+  });
+  assert.deepEqual(customerNameWords('דנה'), ['דנה']);
+  assert.equal(parseCustomerFullName('כמה עולה החוג'), null);
+  assert.equal(parseCustomerFullName('דנה'), null);
+});
+
+test('participation-form wording never opts the customer out', () => {
+  const settings = mergeBotSettings({ aiResponderEnabled: true });
+  const result = decideBotGate(settings, {}, [], 'מה זה טופס הסרת אחריות?', { isSimulator: true });
+  assert.equal(result.action, 'reply');
+});
+
+test('history limit zero is a real off switch', () => {
+  assert.equal(normalizeHistoryLimit(0, 8), 0);
+  assert.equal(normalizeHistoryLimit('0', 8), 0);
+  assert.equal(normalizeHistoryLimit(50, 8), 30);
+  assert.equal(normalizeHistoryLimit('', 8), 8);
 });
 
 test('normalizeMenuChoice maps numbers and titles', () => {

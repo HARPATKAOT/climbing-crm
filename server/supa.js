@@ -7,6 +7,8 @@
 // when Render replaces its ephemeral disk.
 
 import { createClient } from '@supabase/supabase-js';
+import fs from 'fs';
+import path from 'path';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY =
@@ -37,6 +39,21 @@ const isConfigured =
   SUPABASE_SERVICE_KEY &&
   SUPABASE_SERVICE_KEY !== 'YOUR_SUPABASE_ANON_KEY_HERE' &&
   isServiceRoleKey(SUPABASE_SERVICE_KEY);
+
+const localDocumentStorageEnabled =
+  process.env.NODE_ENV !== 'production' && process.env.LOCAL_DOCUMENT_STORAGE === '1';
+const localDocumentRoot = path.resolve(
+  process.env.LOCAL_DOCUMENTS_DIR || path.join(process.cwd(), 'local-client-documents')
+);
+
+function localDocumentPath(storagePath) {
+  const normalized = String(storagePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  const target = path.resolve(localDocumentRoot, normalized);
+  if (target !== localDocumentRoot && !target.startsWith(`${localDocumentRoot}${path.sep}`)) {
+    throw new Error('Invalid local document path');
+  }
+  return target;
+}
 
 let client = null;
 if (isConfigured) {
@@ -73,6 +90,13 @@ const DIRECT_TABLES = [
   'activity_templates',
   'health_declarations',
   'form_templates',
+  'households',
+  'household_members',
+  'participation_waivers',
+  'health_holds',
+  'cancellation_policies',
+  'cancellation_policy_versions',
+  'cancellation_acceptances',
   'client_documents',
   'messages',
   'message_templates',
@@ -116,6 +140,9 @@ export const OPERATIONAL_TABLES = [
   'equipment_payment_allocations',
   'activity_interest',
   'activity_attendance',
+  'participation_reminders',
+  // Append-only cryptographic journal for public signatures and their PDFs.
+  'signature_evidence',
   'ai_suggestions',
   'crm_tasks',
   'ai_scenarios',
@@ -352,6 +379,8 @@ mappers.activities = columnMapper([
   // registration link, so private events are never advertised.
   'show_on_site',
   'collect_registration_payment', 'registration_page_title', 'registration_page_body',
+  'audience', 'included', 'what_to_bring', 'important_info',
+  'cancellation_policy_id', 'cancellation_policy_disabled',
   'registration_theme', 'registration_mode', 'participant_registration_slug',
   'host_payment_token', 'host_payment_id', 'host_paid_at',
   'form_template_id', 'form_template_slug',
@@ -361,7 +390,7 @@ mappers.activities = columnMapper([
   // Which kind of event this is — birthday, company, school. A birthday and a
   // school group are one thing to staff and to pay, so they share the `event`
   // type; this is the label that tells them apart on the board.
-  'event_kind',
+  'event_kind', 'participation_scope',
   'created_at', 'updated_at',
 ]);
 mappers.attendance = columnMapper([
@@ -373,13 +402,43 @@ mappers.enrollments = columnMapper([
 mappers.activity_registrations = columnMapper([
   'id', 'activity_id', 'student_id', 'parent_id', 'participant_name', 'phone', 'email',
   'payment_status', 'amount', 'paid_at', 'status', 'notes', 'payment_id',
-  'order_id', 'participant_type', 'health_declaration_id', 'hold_expires_at',
+  'order_id', 'participant_type', 'health_declaration_id', 'participation_waiver_id',
+  'document_status', 'hold_expires_at',
   'created_at', 'updated_at',
 ]);
 mappers.activity_registration_orders = columnMapper([
   'id', 'activity_id', 'parent_id', 'idempotency_key', 'participant_count',
   'unit_price', 'total_amount', 'payment_status', 'status', 'payment_id',
-  'hold_expires_at', 'created_at', 'updated_at',
+  'hold_expires_at', 'household_id', 'payer_person_id', 'cancellation_acceptance_id',
+  'policy_snapshot', 'created_at', 'updated_at',
+]);
+mappers.households = columnMapper([
+  'id', 'status', 'merged_into_id', 'created_at', 'updated_at',
+]);
+mappers.household_members = columnMapper([
+  'id', 'household_id', 'parent_id', 'student_id', 'role', 'profile_status',
+  'created_at', 'updated_at',
+]);
+mappers.participation_waivers = columnMapper([
+  'id', 'student_id', 'signer_parent_id', 'scope', 'template_id', 'signed_at',
+  'expires_at', 'signature_url', 'status', 'form_snapshot', 'activity_id', 'order_id',
+  'created_at', 'updated_at',
+]);
+mappers.health_holds = columnMapper([
+  'id', 'student_id', 'reason', 'status', 'created_by_parent_id',
+  'released_by_declaration_id', 'released_at', 'created_at', 'updated_at',
+]);
+mappers.cancellation_policies = columnMapper([
+  'id', 'name', 'status', 'is_default', 'current_version_id', 'created_by',
+  'created_at', 'updated_at',
+]);
+mappers.cancellation_policy_versions = columnMapper([
+  'id', 'policy_id', 'version_number', 'rules', 'free_text', 'status',
+  'published_at', 'created_by', 'created_at',
+]);
+mappers.cancellation_acceptances = columnMapper([
+  'id', 'policy_id', 'policy_version_id', 'parent_id', 'activity_id', 'order_id',
+  'pos_sale_id', 'payment_id', 'accepted_via', 'accepted_by_staff', 'snapshot', 'accepted_at',
 ]);
 mappers.student_equipment = columnMapper([
   'id', 'student_id', 'parent_id', 'item_type',
@@ -389,12 +448,14 @@ mappers.student_equipment = columnMapper([
   'created_at', 'updated_at',
 ]);
 mappers.activity_templates = columnMapper([
-  'id', 'name', 'type', 'event_kind', 'category', 'location', 'price', 'max_participants', 'description', 'notes',
+  'id', 'name', 'type', 'event_kind', 'participation_scope', 'category', 'location', 'price', 'max_participants', 'description', 'notes',
   'start_time', 'end_time', 'all_day',
   'registration_enabled', 'collect_registration_payment',
   'registration_mode',
   'price_includes_vat',
   'registration_page_title', 'registration_page_body',
+  'audience', 'included', 'what_to_bring', 'important_info',
+  'cancellation_policy_id', 'cancellation_policy_disabled',
   'theme', 'sort_order', 'is_active',
   'staff_role', 'staff_pay_mode', 'staff_flat_amount',
   'created_at', 'updated_at',
@@ -422,6 +483,9 @@ mappers.health_declarations = {
       formSnapshot: r.form_snapshot || {},
       activityId: r.activity_id || null,
       orderId: r.order_id || null,
+      expiresAt: r.expires_at || null,
+      medicalClearanceDocumentId: r.medical_clearance_document_id || null,
+      supersedesId: r.supersedes_id || null,
     signed: r.status === 'approved' || !!r.signature_url,
     signedDate: r.date || null,
     signedBy: r.parent_name || '',
@@ -448,6 +512,9 @@ mappers.health_declarations = {
     form_snapshot: o.formSnapshot || o.form_snapshot || {},
     activity_id: emptyToNull(o.activityId || o.activity_id),
     order_id: emptyToNull(o.orderId || o.order_id),
+    expires_at: emptyToNull(o.expiresAt || o.expires_at),
+    medical_clearance_document_id: emptyToNull(o.medicalClearanceDocumentId || o.medical_clearance_document_id),
+    supersedes_id: emptyToNull(o.supersedesId || o.supersedes_id),
   }),
 };
 
@@ -457,10 +524,14 @@ mappers.client_documents = {
     parentId: r.parent_id || null,
     studentId: r.student_id || null,
     declarationId: r.declaration_id || null,
+    waiverId: r.waiver_id || null,
     type: r.type || 'health_waiver_pdf',
     fileName: r.file_name || '',
     storagePath: r.storage_path || '',
     mimeType: r.mime_type || 'application/pdf',
+    sha256: r.sha256 || '',
+    evidenceId: r.evidence_id || null,
+    sealedAt: r.sealed_at || null,
     created_at: r.created_at || null,
     updated_at: r.updated_at || null,
   }),
@@ -469,10 +540,14 @@ mappers.client_documents = {
     parent_id: emptyToNull(o.parentId),
     student_id: emptyToNull(o.studentId),
     declaration_id: emptyToNull(o.declarationId),
+    waiver_id: emptyToNull(o.waiverId || o.waiver_id),
     type: o.type || 'health_waiver_pdf',
     file_name: o.fileName || o.file_name || '',
     storage_path: o.storagePath || o.storage_path || '',
     mime_type: o.mimeType || o.mime_type || 'application/pdf',
+    sha256: emptyToNull(o.sha256),
+    evidence_id: emptyToNull(o.evidenceId || o.evidence_id),
+    sealed_at: emptyToNull(o.sealedAt || o.sealed_at),
   }),
 };
 
@@ -727,6 +802,36 @@ export const supa = {
     return { ok: true };
   },
 
+  /** Insert a journal row without an update path. */
+  async insertOnly(table, record) {
+    if (!client) return { ok: false, configured: false, error: 'Supabase not configured' };
+    if (OPERATIONAL_TABLES.includes(table)) {
+      const recordId = record.id ?? record.key;
+      if (recordId === undefined || recordId === null) {
+        return { ok: false, configured: true, error: `Missing durable id for ${table}` };
+      }
+      const row = {
+        collection: table,
+        id: String(recordId),
+        data: record,
+        updated_at: record.created_at || new Date().toISOString(),
+      };
+      const { error } = await client.from('kv_collections').insert(row);
+      if (error) {
+        console.error(`Supabase insertOnly(${table}) failed:`, error.message);
+        return { ok: false, configured: true, error: error.message };
+      }
+      return { ok: true, configured: true };
+    }
+    const row = mapperFor(table).toRow(record);
+    const { error } = await client.from(table).insert(row);
+    if (error) {
+      console.error(`Supabase insertOnly(${table}) failed:`, error.message);
+      return { ok: false, configured: true, error: error.message };
+    }
+    return { ok: true, configured: true };
+  },
+
   // Remove a single record by id. Reports the failure instead of swallowing it:
   // foreign keys live only in the durable store, so a caller that assumes success
   // drops the row locally and gets it back on the next boot hydration.
@@ -750,6 +855,26 @@ export const supa = {
       return { ok: false, error: error.message };
     }
     return { ok: true };
+  },
+
+  /** Atomically decrement a pass and append its audit punch in kv_collections. */
+  async atomicPassPunch({ passId, punch } = {}) {
+    if (!client) return { ok: false, configured: false, error: 'Supabase not configured' };
+    const { data, error } = await client.rpc('punch_customer_pass', {
+      p_pass_id: String(passId || ''),
+      p_punch_id: String(punch?.id || ''),
+      p_punch_data: punch || {},
+    });
+    if (error) {
+      console.error('Supabase atomic pass punch failed:', error.message);
+      return { ok: false, configured: true, error: error.message };
+    }
+    return {
+      ok: true,
+      configured: true,
+      pass: data?.pass || null,
+      punch: data?.punch || null,
+    };
   },
 
   async verifyAccessToken(token) {
@@ -850,6 +975,16 @@ export const supa = {
   },
 
   async uploadClientDocument(storagePath, buffer, mimeType = 'application/pdf') {
+    if (!client && localDocumentStorageEnabled) {
+      try {
+        const target = localDocumentPath(storagePath);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, buffer);
+        return { ok: true, local: true, mimeType };
+      } catch (error) {
+        return { ok: false, error: error.message };
+      }
+    }
     if (!client) return { ok: false, error: 'Supabase not configured' };
     const { error } = await client.storage
       .from('client-documents')
@@ -862,6 +997,14 @@ export const supa = {
   },
 
   async downloadClientDocument(storagePath) {
+    if (!client && localDocumentStorageEnabled) {
+      try {
+        const buffer = fs.readFileSync(localDocumentPath(storagePath));
+        return { ok: true, blob: new Blob([buffer]) };
+      } catch (error) {
+        return { ok: false, error: error.message };
+      }
+    }
     if (!client) return { ok: false, error: 'Supabase not configured' };
     const { data, error } = await client.storage
       .from('client-documents')
@@ -874,6 +1017,14 @@ export const supa = {
   },
 
   async removeClientDocument(storagePath) {
+    if (!client && localDocumentStorageEnabled && storagePath) {
+      try {
+        fs.rmSync(localDocumentPath(storagePath), { force: true });
+        return { ok: true, local: true };
+      } catch (error) {
+        return { ok: false, error: error.message };
+      }
+    }
     if (!client || !storagePath) return { ok: true };
     const { error } = await client.storage
       .from('client-documents')

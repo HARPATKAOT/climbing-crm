@@ -13,6 +13,21 @@ export function getGroupDays(group) {
   return [group?.day].filter((d) => d != null);
 }
 
+/** Canonical weekday numbers for display and filtering, earliest day first. */
+export function getSortedGroupDays(group) {
+  return [...new Set(
+    getGroupDays(group)
+      .map(Number)
+      .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+  )].sort((a, b) => a - b);
+}
+
+/** A twice-weekly group matches either weekday encoded in its name. */
+export function groupMeetsOnDay(group, weekday) {
+  const day = Number(weekday);
+  return Number.isInteger(day) && getSortedGroupDays(group).includes(day);
+}
+
 /** YYYY-MM-DD in Asia/Jerusalem. */
 export function israelDateStr(d = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {

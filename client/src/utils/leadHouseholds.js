@@ -79,6 +79,79 @@ export function householdStudentsForParent(parentId, students, parents) {
   });
 }
 
+function cleanPersonName(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase('he');
+}
+
+function fullParentName(parent) {
+  const name = String(parent?.name || '').replace(/\s+/g, ' ').trim();
+  const lastName = String(parent?.lastName || '').replace(/\s+/g, ' ').trim();
+  if (!lastName || name.endsWith(lastName)) return name;
+  return [name, lastName].filter(Boolean).join(' ');
+}
+
+function adultMatchesParent(student, parent) {
+  if (!student?.isAdult || !parent?.id) return false;
+  if (!studentGuardianIds(student).includes(String(parent.id))) return false;
+
+  const studentIdNumber = String(student.idNumber || student.id_number || '').replace(/\D/g, '');
+  const parentIdNumber = String(parent.idNumber || parent.id_number || '').replace(/\D/g, '');
+  if (studentIdNumber && parentIdNumber && studentIdNumber === parentIdNumber) return true;
+
+  const studentPhone = normalizePhone(student.phone);
+  const parentPhone = normalizePhone(parent.phone);
+  if (studentPhone && parentPhone && studentPhone === parentPhone) return true;
+
+  const studentName = cleanPersonName(student.name);
+  const parentName = cleanPersonName(fullParentName(parent));
+  return !!studentName && studentName === parentName;
+}
+
+/**
+ * One navigation tab per person in the household.
+ *
+ * Adult self-registrations have both a payer/contact row and a trainee row.
+ * Those are two records in storage, but one person on screen, so the records
+ * are paired into a single `combined` tab. A parent who does not train keeps a
+ * parent-only tab, and every child keeps a trainee tab.
+ */
+export function buildFamilyMemberTabs(students, parents) {
+  const realStudents = (students || [])
+    .filter((student) => !isParentOnlyLead(student))
+    .slice()
+    .sort((a, b) => {
+      const adultDiff = (a?.isAdult ? 0 : 1) - (b?.isAdult ? 0 : 1);
+      if (adultDiff) return adultDiff;
+      const nameDiff = String(a?.name || '').localeCompare(String(b?.name || ''), 'he');
+      if (nameDiff) return nameDiff;
+      return String(a?.id || '').localeCompare(String(b?.id || ''));
+    });
+  const householdParents = (parents || []).filter((parent) => parent?.id != null);
+  const pairedParentIds = new Set();
+
+  const traineeTabs = realStudents.map((student) => {
+    const linkedParent = householdParents.find((parent) => adultMatchesParent(student, parent)) || null;
+    if (linkedParent) pairedParentIds.add(String(linkedParent.id));
+    return {
+      key: `student:${student.id}`,
+      kind: linkedParent ? 'combined' : 'student',
+      student,
+      parent: linkedParent,
+    };
+  });
+
+  const parentTabs = householdParents
+    .filter((parent) => !pairedParentIds.has(String(parent.id)))
+    .map((parent) => ({
+      key: `parent:${parent.id}`,
+      kind: 'parent',
+      student: null,
+      parent,
+    }));
+
+  return [...traineeTabs, ...parentTabs];
+}
+
 function expandRowStudents(row, allStudents, parents, household, parentById) {
   if (!allStudents?.length) return row.students;
   const key = row.key || '';

@@ -14,6 +14,8 @@
 import {
   INTRO_ATT_STATUSES,
   consecutiveAbsences,
+  getSortedGroupDays,
+  groupMeetsOnDay,
   israelDateStr,
   normalizeAttStatus,
 } from './attendanceUtils.js';
@@ -237,14 +239,16 @@ function toolListGroups(db, { day = null } = {}) {
   const wanted = day === null || day === undefined || day === '' ? null : Number(day);
 
   const list = rows(db, 'groups')
-    .filter((group) => (wanted === null ? true : Number(group.day) === wanted))
+    .filter((group) => (wanted === null ? true : groupMeetsOnDay(group, wanted)))
     .map((group) => {
       const enrolled = countEnrolled(group.id, students);
       const max = maxSlotsOf(group);
+      const trainingDays = getSortedGroupDays(group).map((weekday) => DAY_NAMES[weekday]);
       return {
         group_id: group.id,
         name: group.name || '',
-        day: DAY_NAMES[Number(group.day)] || '',
+        day: trainingDays.join(' ו'),
+        training_days: trainingDays,
         time: group.time || '',
         age_category: group.ageCategory || '',
         trainer: group.trainer || '',

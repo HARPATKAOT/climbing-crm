@@ -15,6 +15,7 @@ export default function PublicHostPayment() {
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
   const [iframeHeight, setIframeHeight] = useState(720);
+  const [cancellationAccepted, setCancellationAccepted] = useState(false);
 
   // If iCount redirects success into the iframe, break out to the top window.
   useEffect(() => {
@@ -39,19 +40,22 @@ export default function PublicHostPayment() {
           return;
         }
 
-        setPaying(true);
-        const payResponse = await fetch(`/api/public/host-payments/${encodeURIComponent(token)}/pay`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-        });
-        const payBody = await payResponse.json().catch(() => ({}));
-        if (!payResponse.ok) throw new Error(payBody.error || 'יצירת התשלום נכשלה');
-        if (cancelled) return;
-        if (payBody.alreadyPaid) {
-          setActivity((current) => ({ ...current, payment_status: 'paid' }));
-          return;
+        if (!body.cancellation_policy) {
+          setPaying(true);
+          const payResponse = await fetch(`/api/public/host-payments/${encodeURIComponent(token)}/pay`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cancellationPolicyAccepted: false }),
+          });
+          const payBody = await payResponse.json().catch(() => ({}));
+          if (!payResponse.ok) throw new Error(payBody.error || 'יצירת התשלום נכשלה');
+          if (cancelled) return;
+          if (payBody.alreadyPaid) {
+            setActivity((current) => ({ ...current, payment_status: 'paid' }));
+            return;
+          }
+          setPaymentUrl(payBody.paymentUrl || '');
         }
-        setPaymentUrl(payBody.paymentUrl || '');
       } catch (loadError) {
         if (!cancelled) setError(loadError.message);
       } finally {
@@ -63,6 +67,33 @@ export default function PublicHostPayment() {
     })();
     return () => { cancelled = true; };
   }, [token, searchParams]);
+
+  const startPayment = async () => {
+    if (activity?.cancellation_policy && !cancellationAccepted) {
+      setError('יש לקרוא ולאשר את מדיניות הביטול לפני המעבר לתשלום');
+      return;
+    }
+    setPaying(true);
+    setError('');
+    try {
+      const response = await fetch(`/api/public/host-payments/${encodeURIComponent(token)}/pay`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cancellationPolicyAccepted: cancellationAccepted }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'יצירת התשלום נכשלה');
+      if (body.alreadyPaid) {
+        setActivity((current) => ({ ...current, payment_status: 'paid' }));
+        return;
+      }
+      setPaymentUrl(body.paymentUrl || '');
+    } catch (paymentError) {
+      setError(paymentError.message);
+    } finally {
+      setPaying(false);
+    }
+  };
 
   useEffect(() => {
     const onMessage = (event) => {
@@ -150,6 +181,47 @@ export default function PublicHostPayment() {
         </header>
 
         {!paid && !loading && activity && (
+          <section className="host-payment-info">
+            {activity.description && <p>{activity.description}</p>}
+            {[['קהל יעד', activity.audience], ['מה כלול', activity.included], ['מה להביא', activity.what_to_bring], ['מידע חשוב', activity.important_info]]
+              .filter(([, value]) => value)
+              .map(([label, value]) => (
+                <div key={label} className="host-payment-detail"><strong>{label}</strong><span>{value}</span></div>
+              ))}
+            {activity.cancellation_policy && !paymentUrl && (
+              <div className="host-payment-policy">
+                <h2>מדיניות ביטול ותנאים</h2>
+                <ul>
+                  {(activity.cancellation_policy.rules || []).map((rule) => (
+                    <li key={rule.id}>
+                      {Number(rule.min_hours_before) >= 168
+                        ? 'לפחות 7 ימים לפני הפעילות'
+                        : Number(rule.min_hours_before) >= 48
+                          ? 'בין 48 שעות ל־7 ימים לפני הפעילות'
+                          : 'פחות מ־48 שעות לפני הפעילות'}:
+                      {' '}{rule.refund_percent}% החזר
+                      {Number(rule.fixed_fee) > 0 ? `, בניכוי ₪${rule.fixed_fee}` : ''}
+                    </li>
+                  ))}
+                </ul>
+                {activity.cancellation_policy.free_text && <p>{activity.cancellation_policy.free_text}</p>}
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={cancellationAccepted}
+                    onChange={(event) => setCancellationAccepted(event.target.checked)}
+                  />
+                  קראתי ואני מאשר/ת את מדיניות הביטול והתנאים
+                </label>
+                <button type="button" className="host-payment-fallback" onClick={startPayment} disabled={paying}>
+                  <CreditCard size={18} /> {paying ? 'מכין תשלום...' : 'אישור והמשך לתשלום'}
+                </button>
+              </div>
+            )}
+          </section>
+        )}
+
+        {!paid && !loading && activity && (
           <section className="host-payment-embed">
             {error && <div className="host-payment-error" role="alert">{error}</div>}
             {paying && !paymentUrl && (
@@ -166,7 +238,7 @@ export default function PublicHostPayment() {
                 style={{ height: iframeHeight }}
                 allow="payment *"
               />
-            ) : !paying && (
+            ) : !paying && !activity.cancellation_policy && (
               <button
                 type="button"
                 className="host-payment-fallback"
@@ -258,6 +330,20 @@ export default function PublicHostPayment() {
           font-size:13px;
           color:#e2e8f0;
         }
+        .host-payment-info{
+          padding:20px 24px;border-top:1px solid rgba(148,163,184,.16);
+          color:#cbd5e1;line-height:1.65;
+        }
+        .host-payment-detail{display:grid;grid-template-columns:100px 1fr;gap:12px;margin:8px 0}
+        .host-payment-detail strong{color:#f8fafc}
+        .host-payment-policy{
+          margin-top:18px;padding:18px;border:1px solid rgba(249,115,22,.4);
+          border-radius:14px;background:rgba(249,115,22,.08)
+        }
+        .host-payment-policy h2{margin:0 0 10px;color:#fb923c;font-size:20px}
+        .host-payment-policy p{white-space:pre-wrap}
+        .host-payment-policy label{display:flex;gap:9px;align-items:flex-start;font-weight:700;margin:14px 0}
+        .host-payment-policy input{margin-top:5px}
         .host-payment-meta strong{
           color:#fdba74;
           font-size:16px;

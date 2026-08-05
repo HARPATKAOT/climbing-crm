@@ -111,6 +111,9 @@ export function buildPassFromItem({
     paid_price: discount?.paidPrice != null ? Number(discount.paidPrice) : null,
     coupon_code: discount?.couponCode || null,
     coupon_label: discount?.couponLabel || null,
+    grants_wall_climbing: item.grants_wall_climbing === true,
+    family_shared: item.family_shared === true,
+    shared_household_id: item.family_shared === true ? (item.shared_household_id || null) : null,
     created_at: now,
     updated_at: now,
   };

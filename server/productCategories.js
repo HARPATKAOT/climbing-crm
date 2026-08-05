@@ -79,6 +79,38 @@ export function backfillPricelistCategories(db) {
   return { updated };
 }
 
+const INITIAL_WALL_ACCESS_CATEGORIES = new Set([
+  'כניסה',
+  'כרטיסיות ומנויים',
+  'חוגים',
+  'אימונים אישיים',
+]);
+
+/**
+ * One-time classification for rows that predate the explicit safety flag.
+ * Runtime eligibility never guesses from a product name; after this migration
+ * every row carries a boolean that owners can edit in the pricelist.
+ */
+export function backfillWallClimbingProducts(db) {
+  const changed = [];
+  for (const item of db.get('pricelist') || []) {
+    if (typeof item.grants_wall_climbing === 'boolean') continue;
+    const categories = normalizeProductCategories(item);
+    const productType = String(item.product_type || '').trim();
+    const familyLegacy = String(item.name || '').trim() === 'מנוי משפחתי';
+    const grantsWallClimbing = productType === 'punch_card'
+      || productType === 'time_membership'
+      || categories.some((category) => INITIAL_WALL_ACCESS_CATEGORIES.has(category));
+    const updated = db.update('pricelist', item.id, {
+      grants_wall_climbing: grantsWallClimbing,
+      family_shared: familyLegacy,
+      ...(familyLegacy ? { name: 'כרטיסייה משפחתית' } : {}),
+    });
+    if (updated) changed.push(updated);
+  }
+  return { updated: changed.length, rows: changed };
+}
+
 /** When a category is renamed, retarget product category labels. */
 export function renameCategoryOnProducts(db, oldName, newName) {
   if (!oldName || !newName || oldName === newName) return 0;

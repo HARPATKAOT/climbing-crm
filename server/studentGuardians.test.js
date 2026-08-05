@@ -21,6 +21,7 @@ import {
 } from './studentGuardians.js';
 import { saveCrmParticipants } from './crmWaiverService.js';
 import { declarationGap, mustConfirm } from './healthQuestions.js';
+import { addPendingSpouse, splitExplicitHousehold } from './households.js';
 
 function createDb(seed = {}) {
   const store = {
@@ -82,14 +83,135 @@ function createDb(seed = {}) {
 
 const persist = async () => ({ ok: true });
 const mum = { name: 'רותם לוי', phone: '0539998888', email: 'rotem@example.com' };
+const healthyAnswers = {
+  m1: false,
+  m2: false,
+  m3: false,
+  m4: false,
+  m5: false,
+  m6: false,
+  m7: false,
+  m8: false,
+  m9: false,
+  required: true,
+};
 const signedNoam = {
   type: 'child',
   name: 'נועם לוי',
   birthDate: '2014-03-02',
-  answers: { required: true },
+  answers: healthyAnswers,
   waiverAccepted: true,
   signature: 'data:image/png;base64,signed',
 };
+
+test('an adult may sign only their own adult card', async () => {
+  const db = createDb({
+    parents: [
+      { id: 'p-avner', name: 'אבנר לוי', phone: '0521112222' },
+      { id: 'p-rotem', name: 'רותם לוי', phone: '0539998888' },
+    ],
+    students: [
+      { id: 's-noam', name: 'נועם לוי', parentId: 'p-avner', birthDate: '2014-03-02' },
+      { id: 's-rotem', name: 'רותם לוי', parentId: 'p-rotem', birthDate: '1988-05-05', isAdult: true },
+    ],
+    student_guardians: [{ id: 'sg-1', student_id: 's-noam', parent_id: 'p-rotem' }],
+  });
+
+  await assert.rejects(
+    saveCrmParticipants({
+      db,
+      persist,
+      parent: { name: 'אבנר לוי', phone: '0521112222' },
+      participants: [{
+        type: 'adult', id: 's-rotem', name: 'רותם לוי', birthDate: '1988-05-05',
+        answers: healthyAnswers, waiverAccepted: true, signature: 'data:image/png;base64,signed',
+      }],
+    }),
+    /מבוגר רשאי לחתום רק עבור עצמו/
+  );
+});
+
+test('a minor cannot bypass guardian signing by posting type adult', async () => {
+  const db = createDb();
+  await assert.rejects(
+    saveCrmParticipants({
+      db,
+      persist,
+      parent: { name: 'אבנר לוי', phone: '0521112222' },
+      participants: [{
+        type: 'adult', name: 'אבנר לוי', birthDate: '2012-05-05',
+        answers: healthyAnswers, waiverAccepted: true, signature: 'data:image/png;base64,signed',
+      }],
+    }),
+    /קטין אינו רשאי לחתום עבור עצמו/
+  );
+});
+
+test('matching an existing spouse joins their whole explicit household', async () => {
+  const db = createDb({
+    parents: [
+      { id: 'p-avner', name: 'אבנר לוי', phone: '0521112222' },
+      { id: 'p-rotem', name: 'רותם לוי', phone: '0539998888' },
+    ],
+    students: [
+      { id: 's-noam', name: 'נועם לוי', parentId: 'p-avner', birthDate: '2014-03-02' },
+      { id: 's-shaked', name: 'שקד לוי', parentId: 'p-rotem', birthDate: '2017-06-06' },
+    ],
+    households: [
+      { id: 'hh-a', status: 'active' },
+      { id: 'hh-b', status: 'active' },
+    ],
+    household_members: [
+      { id: 'hm-a1', household_id: 'hh-a', parent_id: 'p-avner', role: 'adult' },
+      { id: 'hm-a2', household_id: 'hh-a', student_id: 's-noam', role: 'child' },
+      { id: 'hm-b1', household_id: 'hh-b', parent_id: 'p-rotem', role: 'adult' },
+      { id: 'hm-b2', household_id: 'hh-b', student_id: 's-shaked', role: 'child' },
+    ],
+  });
+
+  const result = await addPendingSpouse(db, persist, {
+    householdId: 'hh-a', name: 'רותם לוי', phone: '0539998888',
+  });
+  assert.equal(result.matchedExisting, true);
+  assert.equal(db.store.household_members.every((row) => row.household_id === 'hh-a'), true);
+  assert.equal(db.getOne('households', 'hh-b').status, 'merged');
+  assert.deepEqual(guardianParentIds(db, 's-noam').sort(), ['p-avner', 'p-rotem'].sort());
+  assert.deepEqual(guardianParentIds(db, 's-shaked').sort(), ['p-avner', 'p-rotem'].sort());
+});
+
+test('staff split rebuilds separate explicit households', async () => {
+  const db = createDb({
+    parents: [
+      { id: 'p-avner', name: 'אבנר לוי', phone: '0521112222' },
+      { id: 'p-rotem', name: 'רותם לוי', phone: '0539998888' },
+    ],
+    students: [
+      { id: 's-noam', name: 'נועם לוי', parentId: 'p-avner', birthDate: '2014-03-02' },
+      { id: 's-shaked', name: 'שקד לוי', parentId: 'p-rotem', birthDate: '2017-06-06' },
+    ],
+    households: [{ id: 'hh-a', status: 'active' }],
+    household_members: [
+      { id: 'hm-a1', household_id: 'hh-a', parent_id: 'p-avner', role: 'adult' },
+      { id: 'hm-a2', household_id: 'hh-a', parent_id: 'p-rotem', role: 'adult' },
+      { id: 'hm-a3', household_id: 'hh-a', student_id: 's-noam', role: 'child' },
+      { id: 'hm-a4', household_id: 'hh-a', student_id: 's-shaked', role: 'child' },
+    ],
+  });
+
+  await splitExplicitHousehold(db, persist, {
+    parentIds: ['p-avner', 'p-rotem'],
+    assignments: [
+      { parentId: 'p-avner', studentId: 's-noam' },
+      { parentId: 'p-rotem', studentId: 's-shaked' },
+    ],
+  });
+  const avnerHousehold = db.store.household_members.find((row) => row.parent_id === 'p-avner').household_id;
+  const rotemHousehold = db.store.household_members.find((row) => row.parent_id === 'p-rotem').household_id;
+  assert.notEqual(avnerHousehold, rotemHousehold);
+  assert.equal(db.store.household_members.find((row) => row.student_id === 's-noam').household_id, avnerHousehold);
+  assert.equal(db.store.household_members.find((row) => row.student_id === 's-shaked').household_id, rotemHousehold);
+  assert.equal(db.getOne('households', 'hh-a').status, 'split');
+});
 
 test('a match needs both the name and the exact date of birth', () => {
   const db = createDb();
@@ -367,7 +489,7 @@ test('confirming the same family puts both parents on every child, once', async 
       type: 'child',
       name: 'שקד לוי',
       birthDate: '2017-06-06',
-      answers: { required: true },
+      answers: healthyAnswers,
       waiverAccepted: true,
       signature: 'data:image/png;base64,signed',
     }],

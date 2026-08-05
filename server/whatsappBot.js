@@ -321,6 +321,23 @@ export function textMatchesKeywords(text, keywords) {
   return list.some((kw) => kw && raw.includes(kw));
 }
 
+/**
+ * Commands such as "stop" / "הסר" must be whole words or phrases. A plain
+ * substring match treated "הסרת אחריות" as a request to opt out of the bot,
+ * even though that is the name customers use for the participation form.
+ */
+export function textMatchesStandaloneKeywords(text, keywords) {
+  const raw = String(text || '').trim().toLowerCase();
+  if (!raw) return false;
+  const list = Array.isArray(keywords) ? keywords : parseKeywordList(keywords);
+  return list.some((keyword) => {
+    const phrase = String(keyword || '').trim().toLowerCase();
+    if (!phrase) return false;
+    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}(?=$|[^\\p{L}\\p{N}])`, 'u').test(raw);
+  });
+}
+
 /** Explicit request for a human / hard topics — not «בצוות» in an info question. */
 /** Words that only mean "get me a human" inside a request, never on their own. */
 const AMBIGUOUS_HUMAN_WORDS = new Set(['אדם', 'בן אדם']);
@@ -748,7 +765,8 @@ function historyAgeTag(createdAt, now = Date.now()) {
 }
 
 export function getChatHistoryMessages(phone, limit = 6) {
-  const n = Math.max(0, Math.min(30, Number(limit) || 6));
+  const n = normalizeHistoryLimit(limit, 6);
+  if (n === 0) return [];
   const logs = db.get('whatsapp_logs') || [];
   const now = Date.now();
   return logs
@@ -765,7 +783,8 @@ export function getChatHistoryMessages(phone, limit = 6) {
 }
 
 export function getConversationHistory(phone, limit = 8) {
-  const n = Math.max(0, Math.min(30, Number(limit) || 8));
+  const n = normalizeHistoryLimit(limit, 8);
+  if (n === 0) return [];
   const logs = db.get('whatsapp_logs') || [];
   return logs
     .filter((l) => (l.channel || 'whatsapp') === 'whatsapp' && phonesMatch(l.phone || l.to || l.from, phone))
@@ -775,6 +794,14 @@ export function getConversationHistory(phone, limit = 8) {
       const who = l.direction === 'inbound' ? 'לקוח' : (l.is_ai || l.source === 'ai' || l.source === 'bot_control' ? 'בוט' : 'צוות');
       return `${who}: ${String(l.message || '').slice(0, 400)}`;
     });
+}
+
+/** The settings screen explicitly allows zero to mean "send no history". */
+export function normalizeHistoryLimit(value, fallback = 8) {
+  if (value === null || value === undefined || value === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.min(30, Math.trunc(parsed)));
 }
 
 export function buildParentCardContext(parent, students = [], { speaker = null } = {}) {
@@ -800,9 +827,15 @@ export function buildParentCardContext(parent, students = [], { speaker = null }
   } else {
     for (const s of students) {
       const group = groups.find((g) => g.id === s.groupId);
+      const visibleStatus = s.status === 'pending_signup' && !group
+        ? 'health_signed'
+        : (s.status || '—');
       lines.push(
-        `מתאמן: ${s.name || '—'} | סטטוס: ${s.status || '—'} | קבוצה: ${group?.name || 'ללא'} | כיתה/גיל: ${group?.ageCategory || s.birthDate || '—'}`
+        `מתאמן: ${s.name || '—'} | סטטוס: ${visibleStatus} | קבוצה: ${group?.name || 'ללא'} | כיתה/גיל: ${group?.ageCategory || s.birthDate || '—'}`
       );
+      if (s.status === 'pending_signup' && !group) {
+        lines.push('הערת מערכת: אין למתאמן קבוצה, ולכן אסור לומר שהוא משובץ או ממתין להרשמה.');
+      }
     }
   }
   if (parent.bot_intake?.step) {
@@ -969,6 +1002,155 @@ export function getIntake(parent) {
 
 export async function setIntake(phone, intake) {
   return updateParentsForPhone(phone, { bot_intake: intake });
+}
+
+/** A usable customer identity is exactly a first name plus a family name. */
+export function customerNameParts(parent) {
+  if (!isIdentifiedParent(parent)) return { firstName: '', lastName: '', complete: false };
+  const words = String(parent?.name || '').trim().split(/\s+/).filter(Boolean);
+  const firstName = words[0] || '';
+  const storedLast = String(parent?.lastName || parent?.last_name || '').trim();
+  const lastName = storedLast || words.slice(1).join(' ');
+  return { firstName, lastName, complete: Boolean(firstName && lastName) };
+}
+
+export function hasCustomerFullName(parent) {
+  return customerNameParts(parent).complete;
+}
+
+const NON_NAME_WORDS = new Set([
+  'כמה', 'מתי', 'איפה', 'האם', 'למה', 'רוצה', 'רוצים', 'צריך', 'צריכה',
+  'חוג', 'חוגים', 'מחיר', 'מחירים', 'שעות', 'הרשמה', 'שלום', 'היי', 'אפשר',
+]);
+
+/** Words accepted only while answering the explicit name question. */
+export function customerNameWords(input) {
+  const cleaned = String(input || '')
+    .trim()
+    .replace(/^(?:קוראים\s+לי|שמי|אני|מדבר(?:ת)?|זה)\s*[:,-]?\s*/u, '')
+    .replace(/[^\p{L}\p{M}'׳״\-\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return [];
+  const words = cleaned.split(' ').filter(Boolean);
+  if (words.length > 4) return [];
+  if (words.some((word) => word.length < 2 || NON_NAME_WORDS.has(word))) return [];
+  return words;
+}
+
+export function parseCustomerFullName(input) {
+  const words = customerNameWords(input);
+  if (words.length < 2) return null;
+  return { firstName: words[0], lastName: words.slice(1).join(' ') };
+}
+
+/** Shared by the deterministic intake and the model tool. No other fields. */
+export async function updateCustomerFullName(parent, { firstName, lastName } = {}) {
+  if (!parent?.id) return { error: 'אין כרטיס לקוח לשמור אליו' };
+  const parsed = parseCustomerFullName(`${String(firstName || '').trim()} ${String(lastName || '').trim()}`);
+  if (!parsed) return { error: 'נדרשים שם פרטי ושם משפחה' };
+
+  const current = customerNameParts(parent);
+  const same = current.complete
+    && current.firstName === parsed.firstName
+    && current.lastName === parsed.lastName;
+  if (same) return { saved: false, parent, name: `${parsed.firstName} ${parsed.lastName}` };
+  if (current.complete) return { error: 'בכרטיס כבר קיים שם מלא — שינוי שלו נעשה על ידי הצוות' };
+
+  const updated = db.update('parents', parent.id, {
+    name: `${parsed.firstName} ${parsed.lastName}`,
+    lastName: parsed.lastName,
+  });
+  if (!updated) return { error: 'שמירת השם נכשלה' };
+  await persistCore('parents', updated);
+  return { saved: true, parent: updated, name: updated.name };
+}
+
+/**
+ * Every bot mode has the same deterministic identity gate. It collects only
+ * the two name fields, then returns the first customer question so the bot can
+ * answer it without making the customer repeat themselves.
+ */
+export async function advanceCustomerNameCapture(phone, parent, incomingText) {
+  if (hasCustomerFullName(parent)) return { done: true, parent, pendingMessage: '' };
+
+  const text = String(incomingText || '').trim();
+  const existing = customerNameParts(parent);
+  const prior = { ...(getIntake(parent) || {}) };
+  const active = /^tools_parent_/.test(String(prior.step || ''));
+
+  if (!active) {
+    const explicit = /^(?:קוראים\s+לי|שמי|אני|מדבר(?:ת)?|זה)\s+/u.test(text)
+      ? parseCustomerFullName(text)
+      : null;
+    if (explicit) {
+      const saved = await updateCustomerFullName(parent, explicit);
+      if (saved.error) return { done: false, reply: saved.error };
+      await setIntake(phone, { step: 'done', name_capture: true });
+      return {
+        done: true,
+        parent: db.getOne('parents', saved.parent.id) || saved.parent,
+        pendingMessage: '',
+      };
+    }
+
+    const step = existing.firstName ? 'tools_parent_last_name' : 'tools_parent_full_name';
+    await setIntake(phone, {
+      step,
+      asked: true,
+      parentFirstName: existing.firstName,
+      pendingMessage: text,
+    });
+    return {
+      done: false,
+      reply: existing.firstName
+        ? `לפני שממשיכים, מה שם המשפחה שלך? יש לי כרגע רק את השם ${existing.firstName}.`
+        : 'לפני שממשיכים, מה השם הפרטי ושם המשפחה שלך?',
+    };
+  }
+
+  if (prior.step === 'tools_parent_full_name') {
+    const full = parseCustomerFullName(text);
+    if (!full) {
+      const words = customerNameWords(text);
+      if (words.length === 1) {
+        await setIntake(phone, {
+          ...prior,
+          step: 'tools_parent_last_name',
+          parentFirstName: words[0],
+        });
+        return { done: false, reply: `תודה ${words[0]}. ומה שם המשפחה?` };
+      }
+      return { done: false, reply: 'צריך בבקשה שם פרטי ושם משפחה בלבד.' };
+    }
+    const saved = await updateCustomerFullName(parent, full);
+    if (saved.error) return { done: false, reply: saved.error };
+    await setIntake(phone, { step: 'done', name_capture: true });
+    return {
+      done: true,
+      parent: db.getOne('parents', saved.parent.id) || saved.parent,
+      pendingMessage: prior.pendingMessage || '',
+    };
+  }
+
+  const lastWords = customerNameWords(text);
+  if (!lastWords.length) return { done: false, reply: 'רשמו בבקשה את שם המשפחה בלבד.' };
+  const firstName = String(prior.parentFirstName || existing.firstName || '').trim();
+  if (!firstName) {
+    await setIntake(phone, { ...prior, step: 'tools_parent_full_name' });
+    return { done: false, reply: 'צריך בבקשה שם פרטי ושם משפחה.' };
+  }
+  const saved = await updateCustomerFullName(parent, {
+    firstName,
+    lastName: lastWords.join(' '),
+  });
+  if (saved.error) return { done: false, reply: saved.error };
+  await setIntake(phone, { step: 'done', name_capture: true });
+  return {
+    done: true,
+    parent: db.getOne('parents', saved.parent.id) || saved.parent,
+    pendingMessage: prior.pendingMessage || '',
+  };
 }
 
 /** Clear intake, pause, opt-out and local conversation mirror for playground testing. */
@@ -1172,7 +1354,7 @@ export function decideBotGate(settings, parent, students, text, { isSimulator = 
     return { action: 'silence', reason: 'opted_out' };
   }
 
-  if (textMatchesKeywords(text, s.aiStopKeywords)) {
+  if (textMatchesStandaloneKeywords(text, s.aiStopKeywords)) {
     return { action: 'opt_out', reply: s.aiOptOutMessage };
   }
 

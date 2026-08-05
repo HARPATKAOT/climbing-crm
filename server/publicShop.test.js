@@ -17,6 +17,12 @@ import {
  * always past.
  */
 const IN_FORCE_SIGNED_DATE = new Date().toISOString().slice(0, 10);
+const HEALTHY_ANSWERS = {
+  ...Object.fromEntries(
+    Array.from({ length: 9 }, (_unused, index) => [`m${index + 1}`, false])
+  ),
+  required: true,
+};
 
 const punchCard = {
   id: 'pl-1',
@@ -30,6 +36,7 @@ const punchCard = {
   validity_days: 365,
   self_serve: true,
   public_slug: 'abc123',
+  grants_wall_climbing: true,
 };
 
 function createDb(seed = {}) {
@@ -37,6 +44,8 @@ function createDb(seed = {}) {
     parents: [],
     students: [],
     health_declarations: [],
+    participation_waivers: [],
+    health_holds: [],
     pricelist: [punchCard],
     pos_sales: [],
     payments: [],
@@ -88,7 +97,7 @@ const signedHolder = {
   type: 'child',
   name: 'יהלי',
   birthDate: '2015-04-01',
-  answers: { required: true },
+  answers: { ...HEALTHY_ANSWERS },
   waiverAccepted: true,
   signature: 'data:image/png;base64,signed',
 };
@@ -142,6 +151,7 @@ test('purchase opens a customer file and a pending sale, and issues no pass', as
   assert.equal(db.store.parents.length, 1);
   assert.equal(db.store.students.length, 1);
   assert.equal(db.store.health_declarations.length, 1);
+  assert.equal(db.store.participation_waivers.length, 1);
 
   const sale = db.store.pos_sales[0];
   const payment = db.store.payments[0];
@@ -175,6 +185,16 @@ test('a declaration still in force is reused instead of re-signed', async () => 
       climberName: 'יהלי',
       signedDate: IN_FORCE_SIGNED_DATE,
       date: IN_FORCE_SIGNED_DATE,
+      signed: true,
+      signature_url: 'data:image/png;base64,old-health',
+    }],
+    participation_waivers: [{
+      id: 'pw1',
+      student_id: 's1',
+      scope: 'wall',
+      signed_at: `${IN_FORCE_SIGNED_DATE}T10:00:00.000Z`,
+      signed: true,
+      signature_url: 'data:image/png;base64,old',
     }],
   });
   const result = await purchase(db, {
@@ -185,7 +205,9 @@ test('a declaration still in force is reused instead of re-signed', async () => 
   });
 
   assert.equal(db.store.health_declarations.length, 1);
+  assert.equal(db.store.participation_waivers.length, 1);
   assert.equal(result.declaration.id, 'hd1');
+  assert.equal(result.waiver.id, 'pw1');
   assert.equal(db.store.pos_sales[0].student_id, 's1');
 });
 

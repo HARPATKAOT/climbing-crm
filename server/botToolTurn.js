@@ -13,7 +13,7 @@ import { FORM_SHORT, FORM_FULL, FORM_PURPOSE } from './participationForm.js';
 /**
  * A turn is one model call per step, so this is a ceiling on cost — but set too
  * low it is a correctness bug. Four was enough when the tools only read facts.
- * A real registration now runs: read the family card, correct the birth date,
+ * A real registration now runs: read the family card, verify the declaration,
  * place the trainee, fetch the registration links — four calls, leaving no step
  * to write the answer. The turn ended empty, the old path answered "passing
  * this to the team", and the customer was told nothing had happened when in
@@ -29,6 +29,7 @@ export const CUSTOMER_TOOL_RULES = [
   'שאלה על מחיר כניסה בודדת / כניסה לאדם / כניסה לקיר — קרא ל-getPrices וענה ממחיר הכניסה שחוזר. זה לא מנוי ולא כרטיסייה.',
   'אם הכלי החזיר הערה שהכותב מתחת לגיל 18 — אל תמסור מחירי חוגים, ציוד או דמי העשרה. מחיר כניסה לקיר מותר. לשאר המחירים הפנה להורה או לצוות.',
   'שאלה על חוג בלי לדעת למי: אם יש ילדים בכרטיס (getFamilyCard) שאל «בשביל <שם>?» ולא «באיזו כיתה». אם אין — שאל באיזו כיתה או באיזה גיל.',
+  'כיתה וגיל הם עובדות, לא העדפה. אם חסרה כיתה שאל «באיזו כיתה הילד/ה לומד/ת כיום?». לעולם אל תשאל «איזו כיתה תעדיפו» ואל תציע לבחור גיל או כיתה.',
   'שאלה על מבוגרים או נוער היא על שכבה (בוגרים / תיכון / חטיבה), לא על כיתה.',
   'אל תציע לשמור מקום בשם הילד כשמדובר בקבוצת בוגרים.',
   'אל תחזור על אותה שאלה פעמיים ברצף. אם הלקוח כתב משהו לא ברור — בקש הבהרה קצרה פעם אחת.',
@@ -50,15 +51,17 @@ export const CUSTOMER_TOOL_RULES = [
   'אם הלקוח שאל על אירוע מסוים בשמו («מה הפרטים של הטיול לנקיק השחור») — ענה מהנתונים ורשום אותו כמתעניין באותה תשובה, בלי לשאול קודם אם לרשום.',
   'לקוח שמבקש לחזור אליו («תבדוק איתי מחר», «נדבר בשבוע הבא») — קרא ל-scheduleFollowUp עם מספר הימים ועם מה שסוכם, ואמור לו שנחזור אליו. אל תבטיח שעה מדויקת.',
   'אל תמציא כתובת אינטרנט. קישור נשלח רק אם הוא הוחזר מכלי.',
-  'לפני שיבוץ, ודא שהגיל בכרטיס מתאים לקבוצה. אם הלקוח אומר גיל שונה ממה שבכרטיס — אל תשבץ ואל תסמוך על מה שנאמר: בקש את תאריך הלידה, אשר אותו במילים, שמור, ורק אז שבץ. אם הגיל האמיתי לא מתאים לאף קבוצה — העבר לצוות.',
+  'לפני שיבוץ, ודא שהגיל בכרטיס מתאים לקבוצה. אם הלקוח אומר גיל שונה ממה שבכרטיס — אל תשבץ ואל תבקש תאריך לידה בשיחה. תאריך לידה מתעדכן דרך טופס ההרשמה; אם הטופס כבר מולא והסתירה נשארה, העבר לצוות.',
   'הגיל של ילד מגיע מוכן מהמערכת בשדה «גיל». אל תחשב גיל מתאריך לידה בעצמך, ואל תסיק ממנו שכבה.',
-  'אם הלקוח אומר שתאריך הלידה או הגיל בכרטיס שגוי — בקש את התאריך, קרא לו בחזרה במילים («10 באפריל 2013?»), וכשאישר שמור עם saveChildBirthDate ו-confirmed=true. תאריך מספרי כמו «10.4» תמיד יום-חודש.',
-  'לקוח שמסר את שמו בשיחה («קוראים לי נעמה», «מדברת דנה») — קרא ל-saveCustomerName עם השם, ואז המשך לעניין עצמו.',
+  'בשיחת וואטסאפ אוספים מהלקוח רק שם פרטי ושם משפחה. אל תבקש תעודת זהות, תאריך לידה, כתובת או פרטי הרשמה אחרים — הם נאספים בטופס ההרשמה.',
+  'לקוח לא מזוהה חייב למסור שם פרטי ושם משפחה. כששניהם נמסרו, קרא ל-updateCustomerDetails עם שני השדות. אם נמסר רק שם פרטי, שאל רק לשם המשפחה.',
   'גודל הקבוצה, המדריך וקישור קבוצת הוואטסאפ מגיעים מ-listClasses. אם שדה חסר שם — הוא לא מוגדר במערכת, ואין להשלים אותו מהראש.',
   'כשקבוצה מוחזרת בלי «מקומות_פנויים» — אין לומר כמה מקומות יש ואין לומר שהיא מלאה. אפשר לומר שנבדוק ונחזור.',
   'הצע רק תדירות שמופיעה ב«תדירויות_אפשריות» של אותה קבוצה. קבוצה בלי «מחיר_פעמיים_בשבוע» אינה נמכרת פעמיים בשבוע — אין לה מחיר ואין לה קישור הרשמה, ואסור להציע אותה כך.',
+  'כשהלקוח אמר פעם או פעמיים בשבוע, העבר את התדירות במפורש בשדה frequency בכל קריאה ל-listClasses, getPrices, getSignupLink, startSignup ו-getRegistrationPack. אל תשנה תדירות בין הכלים.',
   'פעמיים בשבוע היא הרשמה אחת של קבוצה אחת, לא צירוף של שתי קבוצות. אל תבקש מהלקוח לבחור «שני ימים» מתוך הרשימה — בחר איתו קבוצה אחת, ואז שלח את קישור ההרשמה של פעמיים בשבוע של אותה קבוצה.',
   'אל תציע קבוצת נבחרת למי שלא שאל עליה. כשקבוצה חוזרת מכלי עם רמה — מותר לציין את הרמה בתשובה.',
+  'כשקבוצה חוזרת עם ימי_אימון, אלה כל הימים שבהם אותה קבוצה מתאמנת. חובה לציין את כולם; אין להתייחס רק לשדה יום או ליום האחרון.',
   'הודעה בהיסטוריה שמתחילה ב-[לפני X שעות] או [לפני X ימים] היא שיחה קודמת: אל תגיב עליה עכשיו. ענה רק על ההודעה הנוכחית.',
   'זו וואטסאפ: הדגשה היא בכוכבית אחת (*טקסט*), בלי כוכביות כפולות ובלי כותרות Markdown.',
   'בתשובה עם כמה חלקים — פתח כל חלק באימוג׳י מתאים ובכותרת קצרה: הרשמה 🖋️, ציוד 🛠️, הצהרת בריאות 📋, שעות ⏰, מחיר 💰, טיול 🎒. אימוג׳י אחד לכותרת, לא באמצע המשפט.',
@@ -133,6 +136,78 @@ export function unknownUrlsInReply(text, allowed) {
     .filter((url) => !known.has(url));
 }
 
+function successfulToolResult(result) {
+  if (!result || typeof result !== 'object' || result.error) return false;
+  if (result.נשמר === false || result.בוצע === false) return false;
+  return true;
+}
+
+function successfulToolNames(calls = []) {
+  return new Set(calls.map((call) => call.name));
+}
+
+function resultContainsRegisteredStatus(value) {
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.some(resultContainsRegisteredStatus);
+  for (const [key, item] of Object.entries(value)) {
+    if (/^(?:status|סטטוס|מצב_הרשמה)$/i.test(key)) {
+      const status = String(item || '').trim().toLowerCase();
+      if (['registered', 'active', 'רשום', 'רשומה', 'פעיל', 'פעילה'].includes(status)) return true;
+    }
+    if (item && typeof item === 'object' && resultContainsRegisteredStatus(item)) return true;
+  }
+  return false;
+}
+
+/**
+ * Claims about writes are checked after the model finishes phrasing the reply.
+ * A prompt can tell the model not to invent an action; this gate makes that
+ * rule enforceable. Only a successful write tool from this exact turn can back
+ * a first-person past-tense claim.
+ */
+export function unbackedReplyClaims(text, successfulCalls = []) {
+  const reply = String(text || '');
+  const names = successfulToolNames(successfulCalls);
+  const claims = [];
+
+  const claimsPlacement = /(?:שיבצתי|שיבצנו|שריינתי|שריינו)/.test(reply)
+    || /(?:העברתי|העברנו)[^\n.!?]*(?:לקבוצה|לקבוצת|ליום|לשעה|שיבוץ|חוג)/.test(reply)
+    || /(?:שובץ|שובצה|השיבוץ\s+(?:בוצע|הושלם)|המקום\s+נשמר|הקבוצה\s+עודכנה)/.test(reply);
+  if (claimsPlacement
+      && !names.has('startSignup') && !names.has('joinWaitlist')) {
+    claims.push('placement');
+  }
+  if (/(?:ביטלתי|ביטלנו|הסרתי|הסרנו)[^\n.!?]*(?:שיבוץ|קבוצה|חוג)|(?:השיבוץ\s+בוטל|הוסר(?:ה)?[^\n.!?]*מהקבוצה)/.test(reply)
+      && !names.has('cancelSignup')) {
+    claims.push('cancellation');
+  }
+  if (/(?:עדכנתי|עדכנו|תיקנתי|תיקנו)[^\n.!?]*תאריך[^\n.!?]*לידה|תאריך[^\n.!?]*הלידה[^\n.!?]*(?:עודכן|תוקן)/.test(reply)) {
+    claims.push('birth_date');
+  }
+  if (/(?:עדכנתי|עדכנו|שמרתי|שמרנו)[^\n.!?]*(?:שם הלקוח|שם המשפחה|הפרטים בכרטיס)/.test(reply)
+      && !names.has('updateCustomerDetails')) {
+    claims.push('customer_name');
+  }
+  if (/(?:קבעתי|קבענו)[^\n.!?]*(?:תזכורת|חזרה|לחזור)|נקבעה[^\n.!?]*(?:תזכורת|חזרה)/.test(reply)
+      && !names.has('scheduleFollowUp')) {
+    claims.push('follow_up');
+  }
+  if (/(?:רשמתי|רשמנו|הכנסתי|הכנסנו)[^\n.!?]*(?:מתעניין|רשימת ההמתנה)/.test(reply)
+      && !names.has('addActivityInterest') && !names.has('joinWaitlist')) {
+    claims.push('interest_or_waitlist');
+  }
+
+  const claimsCompletedRegistration = /כבר\s+רשו(?:ם|מה|מים|מות)(?:\s|$|[,.!?])/.test(reply);
+  const registrationGrounded = successfulCalls.some((call) => resultContainsRegisteredStatus(call.result));
+  if (claimsCompletedRegistration && !registrationGrounded) claims.push('registered_status');
+
+  if (/איז(?:ו|ה)[^\n.!?]*כיתה[^\n.!?]*תעד|איז(?:ה|ו)[^\n.!?]*גיל[^\n.!?]*תעד/.test(reply)) {
+    claims.push('grade_as_preference');
+  }
+
+  return [...new Set(claims)];
+}
+
 function functionCallsOf(content) {
   return (content?.parts || [])
     .map((part) => part.functionCall)
@@ -169,19 +244,29 @@ export async function runCustomerToolTurn({
   // the switch real: the model cannot talk itself into a tool it cannot see.
   const allowed = enabledToolNames(settings);
   const declarations = CUSTOMER_TOOL_DECLARATIONS.filter((d) => allowed.has(d.name));
-  const contents = [
-    ...history,
-    { role: 'user', parts: [{ text: String(incomingText || '') }] },
-  ].filter((entry) => entry?.parts?.[0]?.text);
+  const contents = history.filter((entry) => entry?.parts?.[0]?.text);
+  const incoming = String(incomingText || '').trim();
+  const last = contents[contents.length - 1];
+  const currentAlreadyStored = last?.role === 'user'
+    && String(last?.parts?.[0]?.text || '').trim() === incoming;
+  if (incoming && !currentAlreadyStored) {
+    contents.push({ role: 'user', parts: [{ text: incoming }] });
+  }
 
   if (!contents.length) return { text: '', handoff: false, toolsUsed: [], reason: 'empty' };
 
   const toolsUsed = [];
+  const successfulCalls = [];
   const instruction = [systemInstruction, CUSTOMER_TOOL_RULES].filter(Boolean).join('\n\n');
   // Addresses the prompt itself carries (the health form, the site) are as good
   // as a tool's — they were not invented by the model either.
   const allowedUrls = collectUrls(instruction);
-  for (const entry of history) collectUrls(entry?.parts?.[0]?.text, allowedUrls);
+  // A previous bot answer may repeat a link it already sent. A customer URL is
+  // not trusted merely because it appears in history: otherwise a fake signup
+  // address sent by the customer bypasses the invented-link guard.
+  for (const entry of history) {
+    if (entry?.role === 'model') collectUrls(entry?.parts?.[0]?.text, allowedUrls);
+  }
 
   for (let step = 0; step < maxSteps; step += 1) {
     const { content, error } = await callModel({
@@ -213,6 +298,38 @@ export async function runCustomerToolTurn({
         };
       }
 
+      const unbacked = unbackedReplyClaims(text, successfulCalls);
+      if (unbacked.includes('grade_as_preference')) {
+        console.error('bot treated a factual grade as a preference');
+        return {
+          text: 'באיזו כיתה הילד/ה לומד/ת כיום?',
+          handoff: false,
+          unsure: false,
+          toolsUsed,
+          reason: 'invalid_grade_question',
+        };
+      }
+      if (unbacked.includes('registered_status')) {
+        console.error('bot claimed a completed registration without a registered CRM status');
+        return {
+          text: 'אין לי אישור שההרשמה הושלמה, ולכן אני לא יכול לומר שהילד/ה כבר רשום/ה. צריך להסתמך על אישור ההרשמה או על הצוות.',
+          handoff: false,
+          unsure: false,
+          toolsUsed,
+          reason: 'unverified_registration',
+        };
+      }
+      if (unbacked.length) {
+        console.error(`bot claimed an action without a successful tool: ${unbacked.join(', ')}`);
+        return {
+          text: 'לא הצלחתי לאמת שהפעולה בוצעה במערכת, ולכן אני לא מאשר שבוצע שינוי. אפשר לנסות שוב.',
+          handoff: false,
+          unsure: false,
+          toolsUsed,
+          reason: 'unverified_action',
+        };
+      }
+
       return { text, handoff, unsure, toolsUsed, reason: 'ok' };
     }
 
@@ -229,6 +346,9 @@ export async function runCustomerToolTurn({
       try {
         const result = await tool(call.args || {});
         toolsUsed.push(call.name);
+        if (successfulToolResult(result)) {
+          successfulCalls.push({ name: call.name, args: call.args || {}, result });
+        }
         collectUrls(result, allowedUrls);
         responseParts.push({ functionResponse: { name: call.name, response: result } });
       } catch (err) {

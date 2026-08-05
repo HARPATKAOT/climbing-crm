@@ -18,6 +18,7 @@ import {
   equipmentGapFlags,
   unpaidEquipmentItems,
   DEFAULT_EQUIPMENT_SETTINGS,
+  DEFAULT_CHALK_BAG_INFO,
   equipmentPublicBase,
   EQUIPMENT_LIVE_APP_BASE,
   EQUIPMENT_LIVE_API_BASE,
@@ -138,6 +139,22 @@ test('family discount settings default to 5 percent and clamp to 0-100', () => {
   assert.equal(normalizeEquipmentSettings({}).family_discount_percent, 5);
   assert.equal(normalizeEquipmentSettings({ family_discount_percent: 250 }).family_discount_percent, 100);
   assert.equal(normalizeEquipmentSettings({ family_discount_percent: -2 }).family_discount_percent, 0);
+});
+
+test('magnesium explanation is concise by default and remains owner-editable', () => {
+  assert.equal(normalizeEquipmentSettings({}).item_info.chalk_bag, DEFAULT_CHALK_BAG_INFO);
+  assert.equal(
+    normalizeEquipmentSettings({ item_info: { chalk_bag: 'טקסט מותאם של העסק' } }).item_info.chalk_bag,
+    'טקסט מותאם של העסק'
+  );
+  assert.equal(
+    normalizeEquipmentSettings({
+      item_info: {
+        chalk_bag: 'מגנזיום הוא אבקה לבנה שמייבשת את הידיים מזיעה, כדי שהאחיזה לא תחליק. כל מטפס משתמש בה. השק נקשר למותן ומלווה את הילד/ה לאורך כל שנות הטיפוס.',
+      },
+    }).item_info.chalk_bag,
+    DEFAULT_CHALK_BAG_INFO
+  );
 });
 
 test('markEquipmentItemsPaid sets shoes rental window and shirt size', () => {

@@ -1,19 +1,37 @@
+import crypto from 'crypto';
 import {
   declarationSignedAt,
+  healthExpiryDate,
   isHealthDeclarationValid,
+  participationWaiverExpiryDate,
 } from './healthValidity.js';
 import {
   linkGuardian,
   linkHouseholdGuardians,
+  guardianParentIds,
+  expandHousehold,
   mergeFamily,
   normalizedIdNumber,
 } from './studentGuardians.js';
-import { declarationGap, needsMedicalClearance, questionsForSigner } from './healthQuestions.js';
+import {
+  declarationGap,
+  isScreeningQuestion,
+  needsMedicalClearance,
+  questionsForSigner,
+} from './healthQuestions.js';
+import { CANONICAL_HEALTH_QUESTIONS, normalizeParticipationScope } from './participationDocuments.js';
+import { healthDocumentState, waiverDocumentState } from './participationEligibility.js';
+import { ensureHouseholdForParent } from './households.js';
+import {
+  appendSignatureEvidence,
+  createSignatureEvidenceEvent,
+  evidenceReference,
+} from './signatureEvidence.js';
 
 // The safety rules are not repeated here: they are the items ticked one by one
 // on the declaration step, which is both better evidence and one list instead
 // of two. Kept in step with the templates in the live database.
-export const STANDARD_WAIVER_TEXT = `אני מצהיר/ה כי אני מודע/ת לסיכונים הכרוכים בפעילות המתקיימת ב"הרפתקאות (קיר בועז)", אני פוטר/ת את "הרפתקאות (קיר בועז)" ו/או מי מטעמו מכל אחריות לפגיעה אם תקרה למשתתף אותו אני רושם לפעילות וזאת אלא אם יוכח כי הינה תוצאה של רשלנות המקום.
+export const STANDARD_WAIVER_TEXT = `אני מצהיר/ה כי אני מודע/ת לסיכונים הכרוכים בפעילות המתקיימת ב"הרפתקאות (קיר בועז)", אני פוטר/ת את "הרפתקאות (קיר בועז)" ו/או מי מטעמו מכל אחריות לפגיעה אם תקרה למשתתף אותו אני רושם לפעילות, למעט אחריות המוטלת לפי דין בשל רשלנות של "הרפתקאות" או של מי שפעל מטעמה.
 
 אני הח"מ מתחייב/ת בזאת למלא את כל הוראות הבטיחות שסימנתי בשלב הקודם.
 
@@ -28,7 +46,7 @@ export const STANDARD_HEALTH_QUESTIONS = [
   { id: 's1', requireYes: true, label: 'אין להשאיר ילד עד גיל 11 ללא ליווי מבוגר שלא במסגרת חוג מסודר' },
   { id: 's2', requireYes: true, label: 'נא להימנע מריצה והשתוללות בכל מתחם הקיר' },
   { id: 's3', requireYes: true, label: 'יש להישמע להוראות המדריכים' },
-  { id: 's4', requireYes: true, label: 'טיפוס על הקיר יתאפשר רק לאלו שקיבלו תדריך מסודר' },
+  { id: 's4', requireYes: true, label: 'הטיפוס יתאפשר רק לאחר קבלת תדריך בטיחות מלא ומעבר מבחן בטיחות בפני מדריך מטעם הקיר.' },
   { id: 's5', requireYes: true, label: 'אין להשתמש במתקנים השונים ללא קבלת אישור ממדריך' },
 ];
 
@@ -46,9 +64,65 @@ function wantsReuse(participant) {
     || participant?.reuse_declaration === true;
 }
 
+function wantsHealthReuse(participant) {
+  if (participant?.reuse_health_document !== undefined) return participant.reuse_health_document === true;
+  return wantsReuse(participant);
+}
+
+function wantsWaiverReuse(participant) {
+  if (participant?.reuse_waiver !== undefined) return participant.reuse_waiver === true;
+  return wantsReuse(participant);
+}
+
+const FORM_STATUS_PRESERVE = new Set([
+  'registered',
+  'active',
+  'pending_signup',
+  'waitlist',
+  'intro_scheduled',
+  'intro_paid',
+  'past_registered',
+]);
+
+/** Signing documents must never move a participant backwards in the journey. */
+export function statusAfterHealthSignature(previousStatus) {
+  const status = String(previousStatus || '').trim();
+  return FORM_STATUS_PRESERVE.has(status) ? status : 'health_signed';
+}
+
 /** Always the active default health template — used by public activity registration. */
 export function resolveDefaultDeclarationTemplate(db) {
   return resolveDeclarationTemplate(db, {});
+}
+
+const TRIP_WAIVER_QUESTION_LABELS = Object.freeze({
+  s4: 'כל אחת מהפעילויות טיפוס / סנפלינג / כניסה למערה תתאפשר רק למי שקיבל/ה תדריך מסודר ורק בהשגחת מדריך',
+  s6: 'אם הפעילות כוללת כניסה למערה, חובה לחבוש קסדה ולהשתמש בתאורה, ואין להיכנס, להתפצל או לצאת ללא הוראת מדריך',
+  s7: 'יש להצטייד במים בכמות מתאימה ולדווח מיד על תשישות, סחרחורת, קוצר נשימה או תחושה לא טובה',
+});
+
+function normalizeTripWaiverText(text) {
+  return String(text || '')
+    .replace(
+      'היציאה כוללת פעילות אתגרית בשטח — גלישה על חבל (סנפלינג), טיפוס, מערנות (פעילות במערות) והליכה בשטח פתוח —',
+      'היציאה כוללת פעילות אתגרית בשטח — טיפוס / סנפלינג / מערנות, בהתאם לפעילות שנבחרה —'
+    )
+    .replace(
+      'ידוע לי כי פעילות במערה מוסיפה סיכונים משלה:',
+      'אם הפעילות כוללת כניסה למערה, ידוע לי כי היא מוסיפה סיכונים משלה:'
+    );
+}
+
+function normalizeLiabilityPartyText(text) {
+  return String(text || '')
+    .replace(
+      '6. הוויתור שבסעיף 5 לא יחול, ואחריות המקום תעמוד בעינה, אך ורק במקרים בהם תוכח מעל לכל ספק רשלנות של המקום.',
+      '6. אין בוויתור שבסעיף 5 כדי לגרוע מאחריות "הרפתקאות" לפי דין, לרבות בשל רשלנות של "הרפתקאות" או של מי שפעל מטעמה.'
+    )
+    .replace(
+      'וזאת אלא אם יוכח כי הינה תוצאה של רשלנות המקום.',
+      'למעט אחריות המוטלת לפי דין בשל רשלנות של "הרפתקאות" או של מי שפעל מטעמה.'
+    );
 }
 
 export function resolveDeclarationTemplate(db, { templateId, templateSlug } = {}) {
@@ -58,15 +132,46 @@ export function resolveDeclarationTemplate(db, { templateId, templateSlug } = {}
     (templateSlug && templates.find((item) => item.slug === templateSlug && item.isActive !== false)) ||
     templates.find((item) => item.isDefault && item.isActive !== false) ||
     templates.find((item) => item.slug === 'wall' && item.isActive !== false);
+  const selectedSlug = String(selected?.slug || templateSlug || 'wall').toLowerCase();
+  const medicalQuestions = CANONICAL_HEALTH_QUESTIONS.map((question) => ({ ...question }));
+  // Old activity templates stored medical screening and scoped safety clauses
+  // in one array. Health is now global, so every legacy screening question is
+  // replaced with the canonical m1-m9 set (including removal of old m10), while
+  // the activity-specific confirmations remain part of the waiver.
+  const waiverQuestions = (selected?.healthQuestions || [])
+    .filter((question) => {
+      // This age/accompaniment notice is an operational rule, not a consent
+      // the parent needs to grant as part of every trip declaration.
+      if (selectedSlug === 'trip' && String(question?.id || '').toLowerCase() === 's1') return false;
+      if (isScreeningQuestion(question)) return false;
+      if (/^m\d+$/i.test(String(question?.id || ''))) return false;
+      const label = String(question?.label || '').trim();
+      if (/^q\d+$/i.test(String(question?.id || '')) && /^האם\b/.test(label)) return false;
+      return true;
+    })
+    .map((question) => {
+      const questionId = String(question?.id || '').toLowerCase();
+      if (selectedSlug === 'trip' && TRIP_WAIVER_QUESTION_LABELS[questionId]) {
+        return {
+          ...question,
+          label: TRIP_WAIVER_QUESTION_LABELS[questionId],
+        };
+      }
+      return { ...question };
+    });
   return {
     id: selected?.id || null,
-    slug: selected?.slug || templateSlug || 'wall',
+    slug: selectedSlug,
     title: selected?.title || 'הצהרת בריאות ובטיחות + הסרת אחריות',
-    waiverText: selected?.waiverText || STANDARD_WAIVER_TEXT,
-    healthQuestions:
-      Array.isArray(selected?.healthQuestions) && selected.healthQuestions.length
-        ? selected.healthQuestions
-        : STANDARD_HEALTH_QUESTIONS,
+    waiverText: selectedSlug === 'trip'
+      ? normalizeTripWaiverText(normalizeLiabilityPartyText(selected?.waiverText || STANDARD_WAIVER_TEXT))
+      : normalizeLiabilityPartyText(selected?.waiverText || STANDARD_WAIVER_TEXT),
+    // `healthQuestions` remains the combined compatibility shape consumed by
+    // the existing UI. The two explicit arrays are the immutable document
+    // boundaries used when records are saved.
+    medicalQuestions,
+    waiverQuestions,
+    healthQuestions: [...medicalQuestions, ...waiverQuestions],
   };
 }
 
@@ -100,14 +205,14 @@ function declarationCovers(declaration, wantedKey) {
   return have === wantedKey;
 }
 
-export function findLatestValidDeclaration(db, {
+function matchingDeclarations(db, {
   studentId = null,
   parentId = null,
   climberName = '',
   templateSlug = '',
 } = {}) {
   const wantedKey = templateKeyOf(templateSlug);
-  const declarations = (db.get('health_declarations') || [])
+  return (db.get('health_declarations') || [])
     .filter((declaration) => {
       if (!declarationCovers(declaration, wantedKey)) return false;
       if (studentId) {
@@ -126,8 +231,15 @@ export function findLatestValidDeclaration(db, {
       const right = String(declarationSignedAt(a) || '');
       return left.localeCompare(right);
     });
+}
 
-  for (const declaration of declarations) {
+/** Latest declaration of the requested kind, including an expired one for display. */
+export function findLatestDeclaration(db, options = {}) {
+  return matchingDeclarations(db, options)[0] || null;
+}
+
+export function findLatestValidDeclaration(db, options = {}) {
+  for (const declaration of matchingDeclarations(db, options)) {
     if (isHealthDeclarationValid(declarationSignedAt(declaration))) {
       return declaration;
     }
@@ -146,8 +258,10 @@ export function validateParticipantDeclarations(participants, template) {
     if (participant.type !== 'adult' && !clean(participant.birthDate) && !participant.id) {
       throw Object.assign(new Error(`חסר תאריך לידה עבור ${name}`), { status: 400 });
     }
-    if (wantsReuse(participant)) continue;
-    if (!(participant.waiverAccepted === true || participant.waiverAccepted === 'true')) {
+    const reuseHealth = wantsHealthReuse(participant);
+    const reuseWaiver = wantsWaiverReuse(participant);
+    if (reuseHealth && reuseWaiver) continue;
+    if (!reuseWaiver && !(participant.waiverAccepted === true || participant.waiverAccepted === 'true')) {
       throw Object.assign(new Error(`חסר אישור כתב הוויתור עבור ${name}`), { status: 400 });
     }
     if (!clean(participant.signature)) {
@@ -159,12 +273,14 @@ export function validateParticipantDeclarations(participants, template) {
     // the form does not show them, so demanding them here would reject a
     // submission that is in fact complete.
     const asked = questionsForSigner(questions, { isAdultSelf: participant.type === 'adult' });
-    const gap = declarationGap(asked, participant.answers, name);
-    if (gap) throw Object.assign(new Error(gap), { status: 400 });
+    if (!reuseHealth) {
+      const gap = declarationGap(asked, participant.answers, name);
+      if (gap) throw Object.assign(new Error(gap), { status: 400 });
+    }
     // A doctor already limited this person's physical activity. The written
     // approval is a condition of filing the declaration at all — checked here
     // and not only in the form, which is the half of this a caller can skip.
-    if (needsMedicalClearance(asked, participant.answers) && !participant.medicalClearance) {
+    if (!reuseHealth && needsMedicalClearance(asked, participant.answers) && !participant.medicalClearance) {
       throw Object.assign(
         new Error(`נדרש אישור רופא להשתתפות בפעילות ספורטיבית עבור ${name}`),
         { status: 400 }
@@ -194,7 +310,11 @@ export async function saveCrmParticipants({
   template: templateInput,
   activityId = null,
   orderId = null,
+  participationScope = null,
   phoneVerification = null,
+  evidenceContext = null,
+  allowEmptyParticipants = false,
+  skipDocuments = false,
   source = 'form',
   onStudentCreated,
   onStudentStatusChanged,
@@ -207,7 +327,9 @@ export async function saveCrmParticipants({
   }
 
   const template = templateInput || resolveDeclarationTemplate(db);
-  validateParticipantDeclarations(participants, template);
+  if (!skipDocuments && (!allowEmptyParticipants || (participants || []).length > 0)) {
+    validateParticipantDeclarations(participants, template);
+  }
 
   // The forms collect the surname in its own field. Storing it means the
   // household matcher and the invoice stop depending on the last word of a
@@ -251,12 +373,28 @@ export async function saveCrmParticipants({
   const signedDate = signedAt.slice(0, 10);
   const savedParticipants = [];
   const declarations = [];
-  const snapshot = {
+  const waivers = [];
+  const medicalQuestions = template.medicalQuestions
+    || CANONICAL_HEALTH_QUESTIONS.map((question) => ({ ...question }));
+  const waiverQuestions = template.waiverQuestions
+    || (template.healthQuestions || []).filter((question) => !isScreeningQuestion(question));
+  const healthSnapshot = {
+    documentType: 'health',
+    title: 'הצהרת בריאות',
+    templateId: template.id,
+    templateSlug: template.slug,
+    templateVersion: template.version || template.updated_at || template.updatedAt || null,
+    healthQuestions: medicalQuestions,
+    ...(phoneVerification ? { phoneVerification } : {}),
+  };
+  const waiverSnapshot = {
+    documentType: 'participation_waiver',
     id: template.id,
-    slug: template.slug,
+    scope: normalizeParticipationScope(template.slug),
     title: template.title,
+    templateVersion: template.version || template.updated_at || template.updatedAt || null,
     waiverText: template.waiverText,
-    healthQuestions: template.healthQuestions,
+    waiverQuestions,
     // Whether the phone on the form answered a one-time code before signing.
     // Lives in the snapshot because it is part of what the signature meant at
     // the time, exactly like the text that was signed.
@@ -298,9 +436,23 @@ export async function saveCrmParticipants({
       linkedFromOtherFamily = String(candidate.parentId || '') !== String(parent.id);
     }
     if (!student && input.id) {
-      student = (db.get('students') || []).find(
-        (item) => String(item.id) === String(input.id) && item.parentId === parent.id
-      );
+      const candidate = (db.get('students') || []).find((item) => String(item.id) === String(input.id));
+      const parentMember = (db.get('household_members') || []).find((row) => String(row.parent_id || '') === String(parent.id));
+      const studentMember = (db.get('household_members') || []).find((row) => String(row.student_id || '') === String(candidate?.id || ''));
+      const sameExplicitHousehold = !!parentMember && !!studentMember
+        && parentMember.household_id === studentMember.household_id;
+      const guardianIds = candidate ? guardianParentIds(db, candidate) : [];
+      const graphParentIds = expandHousehold(db, parent.id)?.parentIds || [parent.id];
+      if (candidate && (
+        String(candidate.parentId || '') === String(parent.id)
+        || guardianIds.includes(parent.id)
+        || graphParentIds.includes(candidate.parentId)
+        || sameExplicitHousehold
+      )) {
+        student = candidate;
+      } else if (candidate) {
+        throw Object.assign(new Error('אפשר לרשום רק משתתפים מתיק המשפחה'), { status: 403 });
+      }
     }
     if (!student) {
       student = (db.get('students') || []).find((item) => {
@@ -310,6 +462,35 @@ export async function saveCrmParticipants({
         if (item.isAdult === true) return false;
         return !input.birthDate || !item.birthDate || item.birthDate === input.birthDate;
       });
+    }
+    const adultCreatesDocument = participantType === 'adult'
+      && !skipDocuments
+      && (!wantsHealthReuse(input) || !wantsWaiverReuse(input));
+    if (adultCreatesDocument) {
+      const canonicalBirthDate = clean(input.birthDate) || clean(student?.birthDate);
+      const birth = /^\d{4}-\d{2}-\d{2}$/.test(canonicalBirthDate)
+        ? new Date(`${canonicalBirthDate}T00:00:00Z`)
+        : null;
+      const today = new Date();
+      let age = birth && !Number.isNaN(birth.getTime())
+        ? today.getUTCFullYear() - birth.getUTCFullYear()
+        : null;
+      if (age != null && (
+        today.getUTCMonth() < birth.getUTCMonth()
+        || (today.getUTCMonth() === birth.getUTCMonth() && today.getUTCDate() < birth.getUTCDate())
+      )) age -= 1;
+      if (!canonicalBirthDate || age == null || age < 18) {
+        throw Object.assign(new Error('קטין אינו רשאי לחתום עבור עצמו — נדרשת חתימת הורה או אפוטרופוס'), { status: 403 });
+      }
+      const adultId = normalizedIdNumber(input.idNumber || input.climberIdNum || student?.idNumber);
+      const parentIdentity = normalizedIdNumber(parentInput?.idNumber || parentInput?.parentIdNum || parent.idNumber);
+      const sameIdentity = (adultId && parentIdentity && adultId === parentIdentity)
+        || normalizedName(name) === normalizedName(parentName);
+      const signsForOwnCard = (!student || String(student.parentId || '') === String(parent.id))
+        && sameIdentity;
+      if (!signsForOwnCard) {
+        throw Object.assign(new Error('מבוגר רשאי לחתום רק עבור עצמו'), { status: 403 });
+      }
     }
     const previousStatus = student?.status;
     // Read before the patch below stamps "signed now" on the record: a reuse
@@ -330,12 +511,15 @@ export async function saveCrmParticipants({
       // Kept on the card too: this is what an instructor needs at the wall.
       healthNotes: clean(input.healthNotes) || student?.healthNotes || '',
       phone: childPhone || student?.phone || '',
-      status: previousStatus === 'registered' ? 'registered' : 'health_signed',
-      healthSignedAt: student?.healthSignedAt || signedAt,
-      waiverSignedAt: student?.waiverSignedAt || signedAt,
+      status: previousStatus === 'registered' ? 'registered' : (student?.status || 'lead_new'),
+      healthSignedAt: student?.healthSignedAt || null,
+      waiverSignedAt: student?.waiverSignedAt || null,
     };
-    if (!wantsReuse(input)) {
+    if (!skipDocuments && !wantsHealthReuse(input)) {
       patch.healthSignedAt = signedAt;
+      patch.status = statusAfterHealthSignature(previousStatus);
+    }
+    if (!skipDocuments && !wantsWaiverReuse(input)) {
       patch.waiverSignedAt = signedAt;
     }
     let createdNow = false;
@@ -364,27 +548,33 @@ export async function saveCrmParticipants({
     // A child signed up by one parent after the two cards were already merged
     // belongs to both of them — only a brand new record, so a family somebody
     // deliberately split does not glue itself back together on the next form.
-    if (createdNow) {
+    if (createdNow && participantType !== 'adult') {
       for (const link of linkHouseholdGuardians(db, { studentId: student.id, source })) {
         await requireDurable(persist, 'student_guardians', link);
       }
     }
 
-    let declaration = null;
-    if (wantsReuse(input)) {
-      // Scoped to the form being filled: a signature given for the wall is not
-      // cover for a trip, whose risks it never mentioned.
-      declaration = findLatestValidDeclaration(db, {
-        studentId: student?.id || null,
-        parentId: parent.id,
-        climberName: name,
-        templateSlug: template.slug,
+    if (skipDocuments) {
+      savedParticipants.push({
+        input,
+        type: participantType,
+        name,
+        student,
+        declaration: null,
+        healthDeclaration: null,
+        waiver: null,
       });
-      // The student flag carries no type. It predates the split, when the only
-      // form was the wall's, so it stands in for that one and nothing else —
-      // otherwise every old record would count as cover for every activity.
-      const flagCoversThisForm = templateKeyOf(template.slug) === 'wall';
-      if (!declaration && flagCoversThisForm && priorHealthSignedAt && isHealthDeclarationValid(priorHealthSignedAt)) {
+      continue;
+    }
+
+    const scope = normalizeParticipationScope(participationScope || template.slug);
+    let declaration = null;
+    let healthCreated = false;
+    if (wantsHealthReuse(input)) {
+      const health = healthDocumentState(db, student.id);
+      if (health.state === 'valid') declaration = health.record;
+      // Compatibility for a wall record that predates durable declarations.
+      if (!declaration && scope === 'wall' && priorHealthSignedAt && isHealthDeclarationValid(priorHealthSignedAt)) {
         declaration = {
           id: null,
           reused_from_student: true,
@@ -394,13 +584,57 @@ export async function saveCrmParticipants({
         };
       }
       if (!declaration) {
-        throw Object.assign(
-          new Error(`אין הצהרת בריאות בתוקף עבור ${name} — יש למלא הצהרה מחדש`),
-          { status: 400 }
-        );
+        throw Object.assign(new Error(
+          health.state === 'blocked'
+            ? `הצהרת הבריאות של ${name} חסומה עד להשלמת הצהרה חדשה`
+            : `אין הצהרת בריאות בתוקף עבור ${name} — יש למלא הצהרה מחדש`
+        ), { status: 400 });
       }
     } else {
+      const participantSnapshot = {
+        studentId: student.id,
+        name,
+        idNumber: clean(input.idNumber || input.climberIdNum || student.idNumber),
+        birthDate: clean(input.birthDate || student.birthDate),
+        gender: clean(input.gender || student.gender),
+      };
+      const signerSnapshot = {
+        parentId: parent.id,
+        name: parentName,
+        idNumber: parent.idNumber || '',
+        phone,
+      };
+      const healthAnswers = Object.fromEntries(
+        medicalQuestions.map((question) => [question.id, input.answers?.[question.id]])
+      );
+      const healthId = `hd_${crypto.randomUUID()}`;
+      const healthContentSnapshot = {
+        ...healthSnapshot,
+        answers: healthAnswers,
+        healthNotes: clean(input.healthNotes),
+        signer: signerSnapshot,
+        participant: participantSnapshot,
+        signedAt,
+      };
+      const healthEvidence = evidenceContext ? createSignatureEvidenceEvent({
+        documentType: 'health_declaration',
+        documentId: healthId,
+        signer: signerSnapshot,
+        participant: participantSnapshot,
+        signingCapacity: participantType === 'adult' ? 'self' : 'parent_or_guardian',
+        relationship: relation,
+        occurredAt: signedAt,
+        contentSnapshot: healthContentSnapshot,
+        signature: input.signature,
+        phoneVerification,
+        requestContext: evidenceContext.requestContext || null,
+        clientTimeline: input.signatureEvidenceTimeline || input.signature_evidence_timeline || null,
+        source,
+        activityId,
+        orderId,
+      }) : null;
       declaration = db.insert('health_declarations', {
+        id: healthId,
         date: signedDate,
         studentId: student?.id || null,
         parentId: parent.id,
@@ -410,34 +644,139 @@ export async function saveCrmParticipants({
         climberName: name,
         climberIdNum: clean(input.idNumber || input.climberIdNum),
         birthDate: clean(input.birthDate),
-        answers: input.answers || {},
+        answers: healthAnswers,
         // What a "yes" on a screening question actually was. It belongs on the
         // signed declaration, not only on the card, because that is the record
         // of what was disclosed at the time.
         healthNotes: clean(input.healthNotes),
-        waiverAccepted: true,
+        // This row is the global medical record only. The legal acceptance is
+        // stored separately in participation_waivers below.
+        waiverAccepted: false,
         signature_url: input.signature,
         status: 'approved',
         notes: clean(input.notes),
         templateSlug: template.slug,
         templateId: template.id,
-        formSnapshot: snapshot,
+        formSnapshot: {
+          ...healthContentSnapshot,
+          ...(healthEvidence ? { evidence: evidenceReference(healthEvidence) } : {}),
+        },
+        medicalClearanceDocumentId: clean(
+          input.medicalClearanceDocumentId || input.medical_clearance_document_id
+        ) || null,
         activityId,
         orderId,
+        expiresAt: healthExpiryDate(signedAt)?.toISOString() || null,
         signed: true,
         signedDate,
         signedBy: parentName,
         studentName: name,
       });
       await requireDurable(persist, 'health_declarations', declaration);
+      if (healthEvidence) await appendSignatureEvidence(db, healthEvidence);
+      healthCreated = true;
+      // Completing the replacement is what releases an immediate health hold.
+      for (const hold of (db.get('health_holds') || []).filter((row) => (
+        String(row.student_id || row.studentId || '') === String(student.id)
+        && !row.released_at
+        && row.status !== 'released'
+      ))) {
+        const released = db.update('health_holds', hold.id, {
+          status: 'released',
+          released_at: signedAt,
+          released_by_declaration_id: declaration.id,
+          updated_at: signedAt,
+        }) || hold;
+        await requireDurable(persist, 'health_holds', released);
+      }
+    }
+
+    let waiver = null;
+    let waiverCreated = false;
+    if (wantsWaiverReuse(input)) {
+      const existingWaiver = waiverDocumentState(db, student.id, scope);
+      if (existingWaiver.state !== 'valid') {
+        throw Object.assign(new Error(`אין אישור השתתפות בתוקף עבור ${name} — יש לחתום מחדש`), { status: 400 });
+      }
+      waiver = existingWaiver.record;
+    } else {
+      const participantSnapshot = {
+        studentId: student.id,
+        name,
+        idNumber: clean(input.idNumber || input.climberIdNum || student.idNumber),
+        birthDate: clean(input.birthDate || student.birthDate),
+        gender: clean(input.gender || student.gender),
+      };
+      const signerSnapshot = {
+        parentId: parent.id,
+        name: parentName,
+        idNumber: parent.idNumber || '',
+        phone,
+      };
+      const waiverAnswers = Object.fromEntries(
+        waiverQuestions.map((question) => [question.id, input.answers?.[question.id]])
+      );
+      const waiverId = `pw_${crypto.randomUUID()}`;
+      const waiverContentSnapshot = {
+        ...waiverSnapshot,
+        scope,
+        answers: waiverAnswers,
+        signer: signerSnapshot,
+        participant: participantSnapshot,
+        signedAt,
+      };
+      const waiverEvidence = evidenceContext ? createSignatureEvidenceEvent({
+        documentType: 'participation_waiver',
+        documentId: waiverId,
+        signer: signerSnapshot,
+        participant: participantSnapshot,
+        signingCapacity: participantType === 'adult' ? 'self' : 'parent_or_guardian',
+        relationship: relation,
+        occurredAt: signedAt,
+        contentSnapshot: waiverContentSnapshot,
+        signature: input.signature,
+        phoneVerification,
+        requestContext: evidenceContext.requestContext || null,
+        clientTimeline: input.signatureEvidenceTimeline || input.signature_evidence_timeline || null,
+        source,
+        activityId,
+        orderId,
+      }) : null;
+      waiver = db.insert('participation_waivers', {
+        id: waiverId,
+        student_id: student.id,
+        signer_parent_id: parent.id,
+        scope,
+        template_id: template.id,
+        signed_at: signedAt,
+        expires_at: participationWaiverExpiryDate(signedAt)?.toISOString() || null,
+        signature_url: input.signature,
+        status: 'approved',
+        form_snapshot: {
+          ...waiverContentSnapshot,
+          ...(waiverEvidence ? { evidence: evidenceReference(waiverEvidence) } : {}),
+        },
+        activity_id: activityId,
+        order_id: orderId,
+        created_at: signedAt,
+        updated_at: signedAt,
+      });
+      await requireDurable(persist, 'participation_waivers', waiver);
+      if (waiverEvidence) await appendSignatureEvidence(db, waiverEvidence);
+      waiverCreated = true;
     }
     declarations.push(declaration);
+    waivers.push(waiver);
     savedParticipants.push({
       input,
       type: participantType,
       name,
       student,
       declaration,
+      healthDeclaration: declaration,
+      waiver,
+      healthCreated,
+      waiverCreated,
     });
   }
 
@@ -455,5 +794,9 @@ export async function saveCrmParticipants({
     await requireDurable(persist, 'student_guardians', link);
   }
 
-  return { parent, participants: savedParticipants, declarations, template, familyLinks };
+  // Materialise the explicit household after guardian linking/merging, so
+  // future orders validate every participant against one durable household.
+  const household = await ensureHouseholdForParent(db, persist, parent.id);
+
+  return { parent, participants: savedParticipants, declarations, waivers, template, familyLinks, household };
 }

@@ -5,7 +5,7 @@
  * The answer only ever offers a link; a failed or slow check must never block a
  * registration, so every error resolves to "no match".
  */
-export async function checkKnownChild({ name, birthDate, idNumber = '', phone = '', templateSlug = '' } = {}) {
+export async function checkKnownChild({ name, birthDate, idNumber = '', phone = '', templateSlug = '', verificationToken = '' } = {}) {
   const child = String(name || '').trim();
   const born = String(birthDate || '').trim();
   const id = String(idNumber || '').replace(/\D/g, '');
@@ -17,6 +17,7 @@ export async function checkKnownChild({ name, birthDate, idNumber = '', phone = 
     // covered is only an answer about a particular form.
     const params = new URLSearchParams({ name: child, birthDate: born, idNumber: id, phone });
     if (templateSlug) params.set('templateSlug', templateSlug);
+    if (verificationToken) params.set('verificationToken', verificationToken);
     const response = await fetch(`/api/public/child-check?${params.toString()}`);
     if (!response.ok) return { match: false };
     const body = await response.json();
@@ -38,13 +39,14 @@ export async function checkKnownChild({ name, birthDate, idNumber = '', phone = 
  * for callers that still pass one, and it is wrong for anyone who writes their
  * family name first.
  */
-export async function checkKnownFamily({ parentName, lastName: explicitLast, phone = '' } = {}) {
+export async function checkKnownFamily({ parentName, lastName: explicitLast, phone = '', verificationToken = '' } = {}) {
   const parts = String(parentName || '').trim().split(/\s+/).filter(Boolean);
   const lastName = String(explicitLast || '').trim()
     || (parts.length > 1 ? parts[parts.length - 1] : '');
   if (lastName.length < 2) return { families: [] };
   try {
     const params = new URLSearchParams({ lastName, phone });
+    if (verificationToken) params.set('verificationToken', verificationToken);
     const response = await fetch(`/api/public/family-check?${params.toString()}`);
     if (!response.ok) return { families: [] };
     const body = await response.json();
@@ -54,11 +56,28 @@ export async function checkKnownFamily({ parentName, lastName: explicitLast, pho
   }
 }
 
+/**
+ * Translate a surname lookup into selection state without inventing consent.
+ * In particular, an empty result is not the explicit "new family" sentinel
+ * (`''`): the server also returns an empty list for a phone it already knows.
+ */
+export function familySelectionAfterLookup({
+  families = [],
+  currentSelection = null,
+  answeredForKey = '',
+  checkKey = '',
+} = {}) {
+  if (!Array.isArray(families) || families.length === 0) return null;
+  if (answeredForKey !== checkKey) return null;
+  return currentSelection;
+}
+
 /** The fields a confirmed link adds to a participant before it is submitted. */
 export function linkFieldsFor(known) {
   if (!known?.linked) return {};
   return {
     link_student_id: known.student_id,
-    reuse_health: !!known.health_valid,
+    reuse_health_document: !!(known.health_document_valid ?? known.health_valid),
+    reuse_waiver: !!(known.waiver_valid ?? known.health_valid),
   };
 }

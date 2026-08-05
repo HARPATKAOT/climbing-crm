@@ -12,10 +12,17 @@ function serviceAt() {
 
 test('a code round-trips into a single-use token', () => {
   const { svc } = serviceAt();
-  const { code } = svc.issueCode(PHONE);
+  const { code, challengeId } = svc.issueCode(PHONE);
   assert.match(code, /^\d{6}$/);
+  assert.ok(challengeId);
+  assert.equal(svc.markDelivered(PHONE, challengeId, { providerMessageId: 'wamid.1' }), true);
   const { token } = svc.verifyCode(PHONE, code);
   assert.ok(token);
+  const evidence = svc.tokenEvidence(token, PHONE);
+  assert.equal(evidence.challengeId, challengeId);
+  assert.equal(evidence.providerMessageId, 'wamid.1');
+  assert.ok(evidence.verifiedAt);
+  assert.match(evidence.tokenFingerprint, /^[a-f0-9]{64}$/);
   assert.equal(svc.consumeToken(token, PHONE), true);
   assert.equal(svc.consumeToken(token, PHONE), false, 'token is spent on first use');
 });

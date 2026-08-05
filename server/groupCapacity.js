@@ -5,6 +5,7 @@
  */
 
 import { studentInGroup } from './studentGroups.js';
+import { getSortedGroupDays, groupMeetsOnDay } from './attendanceUtils.js';
 
 // 'pending_signup' is a soft hold while the customer completes registration at
 // the מתנ"ס: the group association is kept, but the seat stays open for others.
@@ -96,7 +97,7 @@ export function pickGroupForWaitlist(groups, students, { dayIndex = null, timeHi
   if (!list.length) return null;
 
   if (dayIndex != null) {
-    const byDay = list.filter((g) => Number(g.day) === Number(dayIndex));
+    const byDay = list.filter((g) => groupMeetsOnDay(g, dayIndex));
     if (byDay.length) list = byDay;
   }
   if (timeHint) {
@@ -107,7 +108,9 @@ export function pickGroupForWaitlist(groups, students, { dayIndex = null, timeHi
   const ranked = [...list].sort((a, b) => {
     if (preferFull && a.isFull !== b.isFull) return a.isFull ? -1 : 1;
     if (!preferFull && a.isFull !== b.isFull) return a.isFull ? 1 : -1;
-    return Number(a.day) - Number(b.day) || String(a.time || '').localeCompare(String(b.time || ''));
+    const aDay = getSortedGroupDays(a)[0] ?? 7;
+    const bDay = getSortedGroupDays(b)[0] ?? 7;
+    return aDay - bDay || String(a.time || '').localeCompare(String(b.time || ''));
   });
   return ranked[0] || null;
 }

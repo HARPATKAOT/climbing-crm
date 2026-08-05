@@ -180,6 +180,18 @@ test('list_groups מחשב תפוסה בפועל ומסנן לפי יום', () =
   assert.equal(READ_TOOLS.list_groups(db, { day: 3 }).total, 1);
 });
 
+test('list_groups מזהה ומציג את שני הימים של קבוצה דו-שבועית', () => {
+  const db = makeDb({
+    groups: [
+      { id: 'squad', name: 'נבחרת בוגרת — ב׳+ה׳ 19:10', day: 4, time: '19:10', maxSlots: 13 },
+    ],
+  });
+  const monday = READ_TOOLS.list_groups(db, { day: 1 });
+  assert.equal(monday.total, 1);
+  assert.equal(monday.groups[0].day, 'שני וחמישי');
+  assert.deepEqual(monday.groups[0].training_days, ['שני', 'חמישי']);
+});
+
 test('list_tasks מסמן משימה שעבר תאריך היעד שלה', () => {
   const db = makeDb();
   const open = READ_TOOLS.list_tasks(db, { today: TODAY });

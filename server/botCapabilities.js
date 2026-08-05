@@ -70,8 +70,8 @@ export const BOT_CAPABILITIES = [
   {
     key: 'save_name',
     label: 'עדכון פרטים בכרטיס',
-    hint: 'שם הלקוח, ותאריך לידה של ילד — אחרי אישור הלקוח',
-    tools: ['saveCustomerName', 'saveChildBirthDate'],
+    hint: 'שם פרטי ושם משפחה בלבד; יתר הפרטים נאספים בטופס ההרשמה',
+    tools: ['updateCustomerDetails'],
   },
   {
     key: 'family_card',
@@ -106,6 +106,28 @@ export const CAPABILITY_KEYS = BOT_CAPABILITIES.map((c) => c.key);
 /** Settings key for one capability, e.g. botCap_events. */
 export function capabilitySettingKey(key) {
   return `botCap_${key}`;
+}
+
+/**
+ * Turn the two independent pieces of the capability form into one settings
+ * patch. A text field may be saved without toggling a capability in the same
+ * request — this is how the centre phone field saves on blur.
+ */
+export function capabilitySettingsPatch({ capabilities, values } = {}) {
+  const patch = {};
+  if (capabilities && typeof capabilities === 'object' && !Array.isArray(capabilities)) {
+    for (const key of CAPABILITY_KEYS) {
+      if (capabilities[key] === undefined) continue;
+      patch[capabilitySettingKey(key)] = !!capabilities[key];
+    }
+  }
+  if (values && typeof values === 'object' && !Array.isArray(values)) {
+    for (const key of CAPABILITY_INPUT_KEYS) {
+      if (values[key] === undefined) continue;
+      patch[key] = String(values[key] || '').slice(0, 300);
+    }
+  }
+  return patch;
 }
 
 /**

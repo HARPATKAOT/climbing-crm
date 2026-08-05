@@ -98,6 +98,7 @@ const TEAM_RULES = [
   { methods: WRITE, pattern: /^\/agenda-digest(\/|$)/, module: 'automations', level: 'edit' },
   { methods: [...READ, ...WRITE], pattern: /^\/ai(\/|$)/, module: 'assistant' },
   { methods: [...READ, ...WRITE], pattern: /^\/bot-learning(\/|$)/, module: 'assistant' },
+  { methods: READ, pattern: /^\/signature-evidence(\/|$)/, module: 'health' },
 ];
 
 export const resolveCrmRole = legacyCrmRole;

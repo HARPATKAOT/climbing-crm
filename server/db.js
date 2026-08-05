@@ -173,6 +173,16 @@ async function persistHouseholdLinks(student, source = 'household') {
 /** Await durable write for CRM-core tables (use on public form submit). */
 export async function persistCore(table, record) {
   if (!record || !CORE_TABLES.includes(table)) return { ok: true };
+  // The isolated local form environment persists its own db.json copy. It has
+  // no Supabase credentials by design, but that file is still durable for the
+  // lifetime of the test run. Production must never take this branch.
+  if (
+    !supa.isEnabled()
+    && process.env.NODE_ENV !== 'production'
+    && process.env.LOCAL_DURABLE_STORAGE === '1'
+  ) {
+    return { ok: true, local: true };
+  }
   return supa.upsert(table, record);
 }
 
@@ -230,8 +240,8 @@ const SEED_DATA = {
     { id: 'g-b5e58aa6', name: "חטיבה — יום ד׳ 18:40", day: 3, time: '18:40', duration: 80, trainer: '', maxSlots: 12, enrolled: 0, ageCategory: 'חטיבה', priceWeek: 305, priceTwice: 420, waParents: 'https://chat.whatsapp.com/DPqRRjNdEwqKEbkEVHlvcG', waClimbers: 'https://chat.whatsapp.com/JwfMVZUnpUIDK1FX0KLz8q' },
     { id: 'g-4012bf2e', name: "בוגרים — יום ד׳ 20:10", day: 3, time: '20:10', duration: 80, trainer: '', maxSlots: 12, enrolled: 0, ageCategory: 'בוגרים', priceWeek: 305, priceTwice: 420, waParents: 'https://chat.whatsapp.com/KQDVxQC7YPBLvZJOXu5WTr', waClimbers: '' },
     { id: 'g-02d0c7cf', name: "מתקדמים ה'-ו' — ב׳+ה׳ 15:30", day: 4, time: '15:30', duration: 80, trainer: '', maxSlots: 13, enrolled: 0, ageCategory: "ה'-ו'", priceWeek: 0, priceTwice: 420, waParents: 'https://chat.whatsapp.com/KQDVxQC7YPBLvZJOXu5WTr', waClimbers: 'https://chat.whatsapp.com/CbHECN5brUcGiiiLMVulxZ' },
-    { id: 'g-c5aece01', name: 'נבחרת צעירה — ה׳ 17:00', day: 4, time: '17:00', duration: 110, trainer: '', maxSlots: 13, enrolled: 0, ageCategory: 'חטיבה', priceWeek: 550, priceTwice: 550, waParents: 'https://chat.whatsapp.com/KX1HoM5PYqb2Fz7TH8j1aJ', waClimbers: '' },
-    { id: 'g-529e08f6', name: 'נבחרת בוגרת — ה׳ 19:10', day: 4, time: '19:10', duration: 110, trainer: '', maxSlots: 13, enrolled: 0, ageCategory: 'תיכון', priceWeek: 0, priceTwice: 550, waParents: 'https://chat.whatsapp.com/HasZy575i5XAtUVLPfOyX4', waClimbers: 'https://chat.whatsapp.com/LGg0ekCjQr10S1PkmA9OcK' },
+    { id: 'g-c5aece01', name: 'נבחרת צעירה — ב׳+ה׳ 17:00', day: 4, time: '17:00', duration: 110, trainer: '', maxSlots: 13, enrolled: 0, ageCategory: 'חטיבה', priceWeek: 550, priceTwice: 550, waParents: 'https://chat.whatsapp.com/KX1HoM5PYqb2Fz7TH8j1aJ', waClimbers: '' },
+    { id: 'g-529e08f6', name: 'נבחרת בוגרת — ב׳+ה׳ 19:10', day: 4, time: '19:10', duration: 110, trainer: '', maxSlots: 13, enrolled: 0, ageCategory: 'תיכון', priceWeek: 0, priceTwice: 550, waParents: 'https://chat.whatsapp.com/HasZy575i5XAtUVLPfOyX4', waClimbers: 'https://chat.whatsapp.com/LGg0ekCjQr10S1PkmA9OcK' },
   ],
   employees: [],
   safety_check_types: [],
@@ -948,6 +958,30 @@ export const db = {
     writeDb(data);
     syncUpsert(table, newRecord);
     return newRecord;
+  },
+
+  /**
+   * Append an audit event durably before exposing it in the local cache.
+   * There is deliberately no matching update/delete API for this collection.
+   */
+  appendOnly: async (table, record) => {
+    const newRecord = {
+      ...record,
+      id: record.id || `${table.slice(0, 2)}${Date.now()}`,
+      created_at: record.created_at || new Date().toISOString(),
+    };
+    if (supa.isEnabled()) {
+      const durable = await supa.insertOnly(table, newRecord);
+      if (!durable?.ok) return durable || { ok: false, error: `שמירת ${table} נכשלה` };
+    }
+    const data = readDb();
+    if (!data[table]) data[table] = [];
+    if (data[table].some((row) => String(row.id) === String(newRecord.id))) {
+      return { ok: false, error: `Duplicate append-only id for ${table}` };
+    }
+    data[table].push(newRecord);
+    writeDb(data);
+    return { ok: true, record: newRecord };
   },
 
   /** Merge remote records into the in-memory cache by id (no re-upload). */

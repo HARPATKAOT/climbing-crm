@@ -59,3 +59,12 @@ test('pickGroupForWaitlist prefers matching day', () => {
   const picked = pickGroupForWaitlist(groups, [], { dayIndex: 2, preferFull: false });
   assert.equal(picked.id, 'b');
 });
+
+test('pickGroupForWaitlist matches either day of a twice-weekly group', () => {
+  const groups = [
+    { id: 'squad', name: 'נבחרת צעירה — ב׳+ה׳ 17:00', maxSlots: 10, day: 4, time: '17:00' },
+    { id: 'other', name: 'חטיבה — יום ה׳ 18:40', maxSlots: 10, day: 4, time: '18:40' },
+  ];
+  const picked = pickGroupForWaitlist(groups, [], { dayIndex: 1, preferFull: false });
+  assert.equal(picked.id, 'squad');
+});

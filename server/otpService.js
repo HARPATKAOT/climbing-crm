@@ -75,10 +75,10 @@ export function createOtpService({ now = () => Date.now(), secret = '' } = {}) {
     }
   }
 
-  function signToken(phone, expiresAt) {
-    const body = `${phone}.${expiresAt}`;
-    const mac = crypto.createHmac('sha256', key).update(body).digest('base64url');
-    return `${Buffer.from(body).toString('base64url')}.${mac}`;
+  function signToken(payload) {
+    const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const mac = crypto.createHmac('sha256', key).update(encoded).digest('base64url');
+    return `${encoded}.${mac}`;
   }
 
   /** Valid, unexpired, and for this phone — without spending it. */
@@ -92,18 +92,29 @@ export function createOtpService({ now = () => Date.now(), secret = '' } = {}) {
     } catch {
       return null;
     }
-    const expected = crypto.createHmac('sha256', key).update(body).digest('base64url');
+    // Version 2 signs the encoded JSON itself. Read the original v1 format as
+    // well so a deployment does not invalidate forms already in progress.
+    let parsed = null;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      // legacy token below
+    }
+    const signedValue = parsed?.v === 2 ? encoded : body;
+    const expected = crypto.createHmac('sha256', key).update(signedValue).digest('base64url');
     const macBuf = Buffer.from(mac);
     const expectedBuf = Buffer.from(expected);
     if (macBuf.length !== expectedBuf.length) return null;
     if (!crypto.timingSafeEqual(macBuf, expectedBuf)) return null;
 
     const separator = body.lastIndexOf('.');
-    const tokenPhone = body.slice(0, separator);
-    const expiresAt = Number(body.slice(separator + 1));
+    const tokenPhone = parsed?.v === 2 ? String(parsed.phone || '') : body.slice(0, separator);
+    const expiresAt = parsed?.v === 2 ? Number(parsed.expiresAt) : Number(body.slice(separator + 1));
     if (!expiresAt || expiresAt < now()) return null;
     if (tokenPhone !== phone) return null;
-    return { phone: tokenPhone, expiresAt };
+    return parsed?.v === 2
+      ? { ...parsed, phone: tokenPhone, expiresAt }
+      : { v: 1, phone: tokenPhone, expiresAt };
   }
 
   return {
@@ -128,9 +139,22 @@ export function createOtpService({ now = () => Date.now(), secret = '' } = {}) {
       entry.expiresAt = t + CODE_TTL_MS;
       entry.attempts = 0;
       entry.lastSentAt = t;
+      entry.challengeId = crypto.randomUUID();
+      entry.issuedAt = new Date(t).toISOString();
+      entry.deliveredAt = null;
+      entry.providerMessageId = null;
       entry.sends.push(t);
       codes.set(phone, entry);
-      return { code };
+      return { code, challengeId: entry.challengeId, issuedAt: entry.issuedAt };
+    },
+
+    /** Attach the provider receipt to the challenge before it is verified. */
+    markDelivered(phone, challengeId, { providerMessageId = null, deliveredAt = null } = {}) {
+      const entry = codes.get(phone);
+      if (!entry || entry.challengeId !== challengeId) return false;
+      entry.providerMessageId = providerMessageId ? String(providerMessageId).slice(0, 240) : null;
+      entry.deliveredAt = deliveredAt || new Date(now()).toISOString();
+      return true;
     },
 
     /** Verifies a typed code; success returns a single-use submission token. */
@@ -150,7 +174,18 @@ export function createOtpService({ now = () => Date.now(), secret = '' } = {}) {
       }
       // Spent: the same code must not verify a second submission.
       entry.hash = null;
-      return { token: signToken(phone, t + TOKEN_TTL_MS) };
+      const token = signToken({
+        v: 2,
+        phone,
+        expiresAt: t + TOKEN_TTL_MS,
+        challengeId: entry.challengeId || null,
+        issuedAt: entry.issuedAt || null,
+        deliveredAt: entry.deliveredAt || null,
+        providerMessageId: entry.providerMessageId || null,
+        verifiedAt: new Date(t).toISOString(),
+        attempts: entry.attempts,
+      });
+      return { token };
     },
 
     /**
@@ -162,6 +197,28 @@ export function createOtpService({ now = () => Date.now(), secret = '' } = {}) {
     checkToken(token, phone) {
       if (!readToken(token, phone)) return false;
       return !spent.has(String(token || ''));
+    },
+
+    /** A spent token may only finish attaching files to the submission it made. */
+    checkAttachmentToken(token, phone) {
+      return !!readToken(token, phone);
+    },
+
+    /** Non-secret audit facts carried by a valid token. */
+    tokenEvidence(token, phone, { allowSpent = false } = {}) {
+      const payload = readToken(token, phone);
+      if (!payload || (!allowSpent && spent.has(String(token || '')))) return null;
+      return {
+        schemaVersion: payload.v || 1,
+        phone: payload.phone,
+        challengeId: payload.challengeId || null,
+        issuedAt: payload.issuedAt || null,
+        deliveredAt: payload.deliveredAt || null,
+        providerMessageId: payload.providerMessageId || null,
+        verifiedAt: payload.verifiedAt || null,
+        verificationAttempts: Number(payload.attempts) || null,
+        tokenFingerprint: crypto.createHash('sha256').update(String(token || '')).digest('hex'),
+      };
     },
 
     /**

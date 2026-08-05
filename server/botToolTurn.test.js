@@ -5,14 +5,19 @@ import {
   historyToContents,
   whatsappifyMarkdown,
   unknownUrlsInReply,
+  unbackedReplyClaims,
   CUSTOMER_TOOL_RULES,
 } from './botToolTurn.js';
 import {
   CUSTOMER_TOOL_DECLARATIONS,
+  groupScheduleFields,
   isRegisteredTrainee,
   shouldHideYouthPrices,
+  groupSupportsFrequency,
+  botVisibleStudentStatus,
   buildCustomerTools,
 } from './botTools.js';
+import { statusAfterHealthSignature } from './crmWaiverService.js';
 import { db } from './db.js';
 
 /** A model stand-in: replies with whatever script the test hands it. */
@@ -133,6 +138,82 @@ test('history rows become model/user turns', () => {
   assert.deepEqual(contents.map((c) => c.role), ['user', 'model']);
 });
 
+test('the current inbound message is not appended twice when history already contains it', async () => {
+  let received;
+  const turn = await runCustomerToolTurn({
+    history: [{ role: 'user', parts: [{ text: 'כמה עולה חוג?' }] }],
+    incomingText: 'כמה עולה חוג?',
+    apiKey: 'test-key',
+    callModel: async (args) => {
+      received = args.contents;
+      return { content: textReply('לאיזו כיתה?'), error: '' };
+    },
+  });
+  assert.equal(turn.text, 'לאיזו כיתה?');
+  assert.equal(received.length, 1);
+  assert.equal(received[0].parts[0].text, 'כמה עולה חוג?');
+});
+
+test('a customer-provided URL in history is not trusted as a bot link', async () => {
+  const fake = 'https://fake.example/signup';
+  const turn = await runCustomerToolTurn({
+    history: [{ role: 'user', parts: [{ text: `זה הקישור? ${fake}` }] }],
+    incomingText: `זה הקישור? ${fake}`,
+    apiKey: 'test-key',
+    callModel: scriptedModel([textReply(`כן, הנה הקישור: ${fake}`)]),
+  });
+  assert.equal(turn.handoff, true);
+  assert.equal(turn.reason, 'invented_link');
+  assert.doesNotMatch(turn.text, /fake\.example/);
+});
+
+test('a completed action claim is blocked unless a write tool succeeded this turn', async () => {
+  const turn = await runCustomerToolTurn({
+    incomingText: 'תעביר את שקד ליום שלישי',
+    apiKey: 'test-key',
+    callModel: scriptedModel([textReply('העברתי את שקד לקבוצה של יום שלישי בשעה 16:00')]),
+  });
+  assert.equal(turn.reason, 'unverified_action');
+  assert.equal(turn.handoff, false);
+  assert.doesNotMatch(turn.text, /העברתי/);
+
+  assert.deepEqual(
+    unbackedReplyClaims('העברתי את שקד לקבוצה החדשה', [
+      { name: 'startSignup', result: { שובץ: 'שקד' } },
+    ]),
+    []
+  );
+  assert.deepEqual(unbackedReplyClaims('העברתי את זה לצוות'), []);
+  assert.deepEqual(unbackedReplyClaims('שקד שובצה בקבוצה החדשה'), ['placement']);
+});
+
+test('the bot cannot call a pending trainee registered without registered CRM evidence', async () => {
+  const turn = await runCustomerToolTurn({
+    incomingText: 'מה המצב של ראם?',
+    apiKey: 'test-key',
+    callModel: scriptedModel([textReply('ראם כבר רשום לחוג')]),
+  });
+  assert.equal(turn.reason, 'unverified_registration');
+  assert.match(turn.text, /אין לי אישור/);
+
+  assert.deepEqual(
+    unbackedReplyClaims('ראם כבר רשום לחוג', [
+      { name: 'getFamilyCard', result: { ילדים: [{ שם: 'ראם', סטטוס: 'registered' }] } },
+    ]),
+    []
+  );
+});
+
+test('grade is requested as a fact rather than offered as a preference', async () => {
+  const turn = await runCustomerToolTurn({
+    incomingText: 'תאריך הלידה של שקד הוא 4.4.2018',
+    apiKey: 'test-key',
+    callModel: scriptedModel([textReply('איזה גיל או כיתה תעדיף עבור שקד?')]),
+  });
+  assert.equal(turn.reason, 'invalid_grade_question');
+  assert.equal(turn.text, 'באיזו כיתה הילד/ה לומד/ת כיום?');
+});
+
 test('placing, moving and unplacing is locked only once a trainee is registered', () => {
   // The line the owner drew: registration at the מתנ״ס is the team's, and
   // every step before it is the bot's to arrange. An earlier version also
@@ -179,10 +260,9 @@ test('the tools offered to the model are facts, links and placements — never s
     'getSignupLink',
     'joinWaitlist',
     'listClasses',
-    'saveChildBirthDate',
-    'saveCustomerName',
     'scheduleFollowUp',
     'startSignup',
+    'updateCustomerDetails',
   ]);
   // Every writing tool must name the child it acts on, so the bot can never
   // place — or unplace — "somebody" from the card.
@@ -196,7 +276,90 @@ test('the tools offered to the model are facts, links and placements — never s
   // restores the pre-placement state rather than removing a record.
   assert.equal(names.some((n) => /send|delete|remove|charge|refund/i.test(n)), false);
   assert.deepEqual(names.filter((n) => /cancel/i.test(n)), ['cancelSignup']);
+  const details = CUSTOMER_TOOL_DECLARATIONS.find((d) => d.name === 'updateCustomerDetails');
+  assert.deepEqual(details.parameters.required, ['firstName', 'lastName']);
+  assert.deepEqual(Object.keys(details.parameters.properties).sort(), ['firstName', 'lastName']);
+  assert.equal(names.includes('saveChildBirthDate'), false);
   assert.match(CUSTOMER_TOOL_RULES, /HANDOFF/);
+  assert.match(CUSTOMER_TOOL_RULES, /ימי_אימון[\s\S]*כולם/);
+});
+
+test('a twice-weekly squad exposes both training days to the model', () => {
+  assert.deepEqual(
+    groupScheduleFields({ name: 'נבחרת בוגרת — ב׳+ה׳ 19:10', day: 4 }),
+    { יום: 'ב׳+ה׳', ימי_אימון: ['ב׳', 'ה׳'] }
+  );
+});
+
+test('twice-weekly is offered only with both a configured price and signup link', async () => {
+  const valid = {
+    id: 'g-valid-twice',
+    ageCategory: 'ג׳-ד׳',
+    day: 0,
+    time: '15:30',
+    priceWeek: 290,
+    priceTwice: 370,
+    signupLinkWeek: 'https://example.com/week',
+    signupLinkTwice: 'https://example.com/twice',
+  };
+  const invalid = {
+    id: 'g-invalid-twice',
+    ageCategory: 'ג׳-ד׳',
+    day: 2,
+    time: '16:00',
+    priceWeek: 290,
+    priceTwice: 370,
+    signupLinkWeek: 'https://example.com/week-only',
+    signupLinkTwice: '',
+  };
+  assert.equal(groupSupportsFrequency(valid, 'פעמיים בשבוע'), true);
+  assert.equal(groupSupportsFrequency(invalid, 'פעמיים בשבוע'), false);
+
+  const previous = db.get('groups');
+  db.set('groups', [valid, invalid]);
+  try {
+    const tools = buildCustomerTools();
+    const classes = await tools.listClasses({ grade: 'ג', frequency: 'פעמיים בשבוע' });
+    assert.equal(classes.קבוצות.length, 1);
+    assert.equal(classes.קבוצות[0].שעה, '15:30');
+    assert.deepEqual(classes.קבוצות[0].תדירויות_אפשריות, ['פעם בשבוע', 'פעמיים בשבוע']);
+
+    const invalidLink = await tools.getSignupLink({
+      grade: 'ג',
+      day: 2,
+      time: '16:00',
+      frequency: 'פעמיים בשבוע',
+    });
+    assert.deepEqual(invalidLink.קישורים, []);
+
+    const validLink = await tools.getSignupLink({
+      grade: 'ג',
+      day: 0,
+      time: '15:30',
+      frequency: 'פעמיים בשבוע',
+    });
+    assert.equal(validLink.קישורים.length, 1);
+    assert.equal(validLink.קישורים[0].תדירות, 'פעמיים בשבוע');
+    assert.equal(validLink.קישורים[0].קישור_פעם_בשבוע, '');
+    assert.match(validLink.קישורים[0].קישור_פעמיים_בשבוע, /\/s\/g-valid-twice\/2$/);
+  } finally {
+    db.set('groups', previous || []);
+  }
+});
+
+test('document signing preserves progress and pending without a group is not shown as placed', () => {
+  for (const status of ['registered', 'active', 'pending_signup', 'waitlist',
+    'intro_scheduled', 'intro_paid', 'past_registered']) {
+    assert.equal(statusAfterHealthSignature(status), status);
+  }
+  assert.equal(statusAfterHealthSignature('lead_new'), 'health_signed');
+  assert.equal(statusAfterHealthSignature(''), 'health_signed');
+
+  assert.equal(botVisibleStudentStatus({ status: 'pending_signup' }, null), 'health_signed');
+  assert.equal(
+    botVisibleStudentStatus({ status: 'pending_signup' }, { id: 'g1' }),
+    'pending_signup'
+  );
 });
 
 test('trainees under 18 do not receive class or equipment prices', async () => {

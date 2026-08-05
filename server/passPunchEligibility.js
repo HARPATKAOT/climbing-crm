@@ -11,6 +11,7 @@
 
 import { declarationSignedAt, isHealthDeclarationValid } from './healthValidity.js';
 import { safetyTestStatus } from './safetyTestService.js';
+import { participationEligibility } from './participationEligibility.js';
 
 function normalizedName(value) {
   return String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('he');
@@ -86,18 +87,41 @@ function formatDay(iso) {
  * @returns {string|null}
  */
 export function passPunchBlockReason(
-  { student, declarations = [], tests = [] } = {},
+  {
+    student,
+    declarations = [],
+    waivers = [],
+    healthHolds = [],
+    tests = [],
+  } = {},
   refDate = new Date()
 ) {
   if (!student) return 'הכרטיסייה לא משויכת למתאמן — אי אפשר לנקב';
 
-  const health = healthDeclarationState(student, declarations, refDate);
+  const documentDb = {
+    get(table) {
+      if (table === 'health_declarations') return declarations;
+      if (table === 'participation_waivers') return waivers;
+      if (table === 'health_holds') return healthHolds;
+      return [];
+    },
+  };
+  const eligibility = participationEligibility(documentDb, {
+    studentId: student.id,
+    scope: 'wall',
+    now: refDate,
+  });
   const safety = safetyTestStatus(testsForStudent(student, tests), refDate);
 
   const missing = [];
-  if (health.state === 'missing') missing.push('לא נחתמה הצהרת בריאות והסרת אחריות');
-  else if (health.state === 'expired') {
-    missing.push(`הצהרת הבריאות פגה (נחתמה ב-${formatDay(health.signed_at)})`);
+  if (eligibility.health.state === 'blocked') missing.push('קיימת חסימה רפואית עד למילוי הצהרה חדשה');
+  else if (eligibility.health.state === 'missing') missing.push('לא נחתמה הצהרת בריאות');
+  else if (eligibility.health.state === 'expired') {
+    missing.push(`הצהרת הבריאות פגה (נחתמה ב-${formatDay(eligibility.health.signed_at)})`);
+  }
+  if (eligibility.waiver.state === 'missing') missing.push('אין אישור פעילות בקיר');
+  else if (eligibility.waiver.state === 'expired') {
+    missing.push(`אישור הפעילות בקיר פג (נחתם ב-${formatDay(eligibility.waiver.signed_at)})`);
   }
   if (safety.state === 'missing') missing.push('אין מבחן אבטחה');
   else if (safety.state === 'expired') {

@@ -117,7 +117,7 @@ function ImagePicker({ value, onChange, label = 'תמונה', tall = false, fit 
   );
 }
 
-function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory }) {
+function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory, cancellationPolicies = [] }) {
   const isNew = !item?.id;
   const [name, setName] = useState(item?.name || '');
   const [price, setPrice] = useState(item?.price ?? '');
@@ -142,6 +142,13 @@ function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory }) 
   const [image, setImage] = useState(item?.image || '');
   const [imageFit, setImageFit] = useState(item?.image_fit === 'contain' ? 'contain' : 'cover');
   const [selfServe, setSelfServe] = useState(item?.self_serve === true);
+  const [grantsWallClimbing, setGrantsWallClimbing] = useState(item?.grants_wall_climbing === true);
+  const [familyShared, setFamilyShared] = useState(item?.family_shared === true);
+  const [cancellationPolicyChoice, setCancellationPolicyChoice] = useState(
+    item?.cancellation_policy_disabled === true
+      ? 'none'
+      : (item?.cancellation_policy_id || 'default')
+  );
   const sellableOnline = productType === 'punch_card' || productType === 'time_membership';
 
   const toggleCat = (cat) => setCats((prev) =>
@@ -171,6 +178,12 @@ function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory }) 
       track_inventory: productType === 'product' ? !!trackInventory : false,
       stock_qty: productType === 'product' && stockQty !== '' ? parseInt(stockQty, 10) : null,
       self_serve: sellableOnline && selfServe,
+      grants_wall_climbing: grantsWallClimbing,
+      family_shared: productType === 'punch_card' && familyShared,
+      cancellation_policy_id: !['default', 'none'].includes(cancellationPolicyChoice)
+        ? cancellationPolicyChoice
+        : null,
+      cancellation_policy_disabled: cancellationPolicyChoice === 'none',
     });
   };
 
@@ -267,6 +280,40 @@ function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory }) 
           </div>
         </div>
       )}
+
+      <div className="form-group" style={{ padding: 12, borderRadius: 10, background: 'rgba(249,115,22,0.06)', border: '1px solid rgba(249,115,22,0.25)' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+          <input type="checkbox" checked={grantsWallClimbing} onChange={(event) => setGrantsWallClimbing(event.target.checked)} style={{ width: 18, height: 18 }} />
+          <span style={{ fontWeight: 700 }}>מקנה טיפוס בקיר</span>
+        </label>
+        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
+          מסומן רק למוצרים שהשימוש בהם מאפשר כניסה לפעילות בקיר. הבדיקה אינה מסתמכת על שם המוצר.
+        </div>
+        {productType === 'punch_card' && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 12 }}>
+            <input type="checkbox" checked={familyShared} onChange={(event) => setFamilyShared(event.target.checked)} style={{ width: 18, height: 18 }} />
+            <span>כרטיסייה משפחתית — יתרה משותפת, בדיקת מסמכים בכל ניקוב</span>
+          </label>
+        )}
+      </div>
+
+      <div className="form-group">
+        <label className="form-label">מדיניות ביטול ותנאים</label>
+        <AppSelect
+          className="input select"
+          value={cancellationPolicyChoice}
+          onChange={(event) => setCancellationPolicyChoice(event.target.value)}
+        >
+          <option value="default">מדיניות ברירת המחדל</option>
+          <option value="none">ללא מדיניות</option>
+          {cancellationPolicies
+            .filter((policy) => policy.status === 'published')
+            .map((policy) => <option key={policy.id} value={policy.id}>{policy.name}</option>)}
+        </AppSelect>
+        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
+          הגרסה שפורסמה בזמן העסקה תישמר כתצלום קבוע ולא תשתנה בדיעבד.
+        </div>
+      </div>
 
       <div className="form-group">
         <label className="form-label">תיאור</label>
@@ -374,15 +421,18 @@ export default function Pricelist() {
   const [addingCategory, setAddingCategory] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [deleteCatConfirm, setDeleteCatConfirm] = useState(null);
+  const [cancellationPolicies, setCancellationPolicies] = useState([]);
 
   const refresh = async () => {
     try {
-      const [pRes, cRes] = await Promise.all([
+      const [pRes, cRes, policiesRes] = await Promise.all([
         fetch('/api/pricelist'),
         fetch('/api/product-categories'),
+        fetch('/api/settings/cancellation-policies'),
       ]);
       const data = pRes.ok ? await pRes.json() : [];
       const cats = cRes.ok ? await cRes.json() : [];
+      const policiesBody = policiesRes.ok ? await policiesRes.json() : {};
 
       if (!Array.isArray(data) || data.length === 0) {
         setItems(NOTION_PRICELIST);
@@ -397,6 +447,7 @@ export default function Pricelist() {
         })));
       }
       setCategories(Array.isArray(cats) ? cats : []);
+      setCancellationPolicies(Array.isArray(policiesBody.policies) ? policiesBody.policies : []);
     } catch (err) {
       console.error(err);
       setItems(NOTION_PRICELIST);
@@ -684,6 +735,7 @@ export default function Pricelist() {
             item={null}
             defaultCategory={openCatName}
             categoryOptions={categoryNames}
+            cancellationPolicies={cancellationPolicies}
             onSave={handleSaveItem}
             onCancel={() => setAddingNew(false)}
           />
@@ -844,6 +896,7 @@ export default function Pricelist() {
                       item={openCatName === UNCATEGORIZED ? { ...item, categories: [] } : item}
                       defaultCategory={openCatName === UNCATEGORIZED ? null : openCatName}
                       categoryOptions={categoryNames}
+                      cancellationPolicies={cancellationPolicies}
                       onSave={handleSaveItem}
                       onCancel={() => setEditingId(null)}
                     />

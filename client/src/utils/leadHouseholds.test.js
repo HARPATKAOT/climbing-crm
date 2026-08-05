@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildFamilyRows, householdStudentsForParent } from './leadHouseholds.js';
+import { buildFamilyMemberTabs, buildFamilyRows, householdStudentsForParent } from './leadHouseholds.js';
 
 const dad = { id: 'p1', name: 'דלק איל', phone: '972508862878', email: 'a@b.c' };
 const mum = { id: 'p2', name: 'סמדר איל', phone: '972544710597' };
@@ -62,4 +62,32 @@ test('opening either parent lists every trainee on the household', () => {
     householdStudentsForParent('p2', students, [dad, mum]).map((s) => s.id).sort(),
     ['s1', 's2', 's3', 's4']
   );
+});
+
+test('an adult payer and trainee appears as one combined family tab', () => {
+  const tabs = buildFamilyMemberTabs(students, [dad, mum]);
+  assert.equal(tabs.length, 4);
+  assert.deepEqual(
+    tabs.map((tab) => [tab.student?.id || null, tab.parent?.id || null, tab.kind]),
+    [
+      ['s3', 'p1', 'combined'],
+      ['s4', 'p2', 'combined'],
+      ['s1', null, 'student'],
+      ['s2', null, 'student'],
+    ]
+  );
+});
+
+test('a parent who is not a trainee keeps a separate parent tab', () => {
+  const child = { id: 's10', name: 'נועה כהן', parentId: 'p10', guardianIds: ['p10'] };
+  const parent = { id: 'p10', name: 'רוני כהן', phone: '0501112233' };
+  const tabs = buildFamilyMemberTabs([child], [parent]);
+  assert.deepEqual(tabs.map((tab) => tab.kind), ['student', 'parent']);
+});
+
+test('an adult with a different identity is not collapsed into their parent', () => {
+  const adult = { id: 's11', name: 'נועה כהן', parentId: 'p11', guardianIds: ['p11'], isAdult: true };
+  const parent = { id: 'p11', name: 'רוני כהן', phone: '0501112233' };
+  const tabs = buildFamilyMemberTabs([adult], [parent]);
+  assert.deepEqual(tabs.map((tab) => tab.kind), ['student', 'parent']);
 });

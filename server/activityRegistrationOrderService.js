@@ -10,6 +10,17 @@ import {
 } from './crmWaiverService.js';
 import { declarationTemplateForActivity } from './activityDeclaration.js';
 import { chargeAmount, normalizePriceIncludesVat } from './vat.js';
+import {
+  addPendingSpouse,
+  assertNoExternalAdults,
+  ensureAdultParticipantForParent,
+  ensureHouseholdForParent,
+  householdIdForParent,
+  isStudentInHousehold,
+} from './households.js';
+import { participationEligibility, eligibilityStatusForRegistration } from './participationEligibility.js';
+import { scopeForActivity } from './participationDocuments.js';
+import { recordPolicyAcceptance, resolvePolicyFor } from './cancellationPolicies.js';
 
 const activityLocks = new Map();
 const HOLD_MINUTES = 20;
@@ -53,6 +64,9 @@ export function normalizeGroupedRegistrationPayload(body = {}) {
       idempotencyKey: clean(body.idempotency_key || body.idempotencyKey),
       parent: body.parent || {},
       subscriptions: normalizeSubscriptions(body.subscriptions),
+      phoneVerification: body.phoneVerification || body.phone_verification || null,
+      evidenceContext: body.evidenceContext || body.evidence_context || null,
+      policyAccepted: body.policyAccepted === true || body.policy_accepted === true,
       participants: body.participants.map((participant) => ({
         ...participant,
         type: participant.type === 'adult' ? 'adult' : 'child',
@@ -60,6 +74,11 @@ export function normalizeGroupedRegistrationPayload(body = {}) {
         reuse_health: participant.reuse_health === true
           || participant.reuseHealth === true
           || participant.reuse_declaration === true,
+        reuse_health_document: participant.reuse_health_document,
+        reuse_waiver: participant.reuse_waiver,
+        defer_documents: participant.defer_documents === true || participant.deferDocuments === true,
+        spouse_phone: clean(participant.spouse_phone || participant.spousePhone || participant.phone),
+        parent_member_id: clean(participant.parent_member_id || participant.parentMemberId),
       })),
     };
   }
@@ -73,6 +92,9 @@ export function normalizeGroupedRegistrationPayload(body = {}) {
       email: clean(body.email),
     },
     subscriptions: normalizeSubscriptions(body.subscriptions),
+    phoneVerification: body.phoneVerification || body.phone_verification || null,
+    evidenceContext: body.evidenceContext || body.evidence_context || null,
+    policyAccepted: body.policyAccepted === true || body.policy_accepted === true,
     participants: [{
       type: body.participant_type === 'adult' ? 'adult' : 'child',
       name: clean(body.participant_name || body.name),
@@ -138,6 +160,10 @@ export async function registerActivityGroup({
     const unitCharge = paid ? chargeAmount(unitPrice, includesVat) : 0;
     const total = unitCharge * count;
     const pendingPayment = paid && total > 0;
+    const policyResolution = paid ? resolvePolicyFor(db, activity) : null;
+    if (policyResolution && !normalized.policyAccepted) {
+      throw Object.assign(new Error('יש לקרוא ולאשר את תנאי הביטול לפני התשלום'), { status: 400 });
+    }
     const holdExpiresAt = pendingPayment
       ? new Date(Date.now() + HOLD_MINUTES * 60 * 1000).toISOString()
       : null;
@@ -145,19 +171,93 @@ export async function registerActivityGroup({
     // What the participants are actually signing is decided by the event, not
     // by whichever declaration happens to be the default one.
     const template = declarationTemplateForActivity(db, activity, resolveDeclarationTemplate);
+    const participationScope = scopeForActivity(activity);
     const leadSource = leadSourceFromActivityType(activity.type, activity.event_kind);
+    const deferredInputs = normalized.participants.filter((participant) => participant.defer_documents);
+    if (deferredInputs.some((participant) => participant.type !== 'adult')) {
+      throw Object.assign(new Error('רק בן/בת זוג מבוגרים יכולים להשלים מסמכים לאחר התשלום'), { status: 400 });
+    }
+    const signingInputs = normalized.participants.filter((participant) => !participant.defer_documents);
     const crm = await saveCrmParticipants({
       db,
       persist,
       parent: normalized.parent,
-      participants: normalized.participants,
+      participants: signingInputs,
       template,
       activityId: activity.id,
       orderId,
+      participationScope,
+      phoneVerification: normalized.phoneVerification,
+      evidenceContext: normalized.evidenceContext,
+      allowEmptyParticipants: signingInputs.length === 0,
       source: leadSource,
       onStudentCreated,
       onStudentStatusChanged,
     });
+
+    const household = await ensureHouseholdForParent(db, persist, crm.parent.id);
+    assertNoExternalAdults(db, {
+      parent: crm.parent,
+      participants: signingInputs,
+      householdId: household.id,
+    });
+
+    for (const input of deferredInputs) {
+      let student = input.id ? db.getOne('students', input.id) : null;
+      let profileStatus = 'complete';
+      if (!student && input.parent_member_id) {
+        const memberParent = db.getOne('parents', input.parent_member_id);
+        const memberHouseholdId = householdIdForParent(db, memberParent?.id);
+        if (!memberParent || memberHouseholdId !== household.id) {
+          throw Object.assign(new Error('בן/בת הזוג אינם משויכים לתיק המשפחה'), { status: 403 });
+        }
+        const adult = await ensureAdultParticipantForParent(db, persist, {
+          householdId: household.id,
+          parent: memberParent,
+          profileStatus: 'pending_profile',
+          source: leadSource,
+        });
+        student = adult.student;
+        profileStatus = adult.member.profile_status;
+      }
+      if (!student && input.spouse_phone) {
+        const spouse = await addPendingSpouse(db, persist, {
+          householdId: household.id,
+          name: input.name,
+          phone: input.spouse_phone,
+          source: leadSource,
+        });
+        const adult = await ensureAdultParticipantForParent(db, persist, {
+          householdId: household.id,
+          parent: spouse.parent,
+          profileStatus: spouse.member.profile_status,
+          source: leadSource,
+        });
+        student = adult.student;
+        profileStatus = adult.member.profile_status;
+      }
+      if (!student?.id || student.isAdult !== true || !isStudentInHousehold(db, household.id, student.id)) {
+        throw Object.assign(new Error('אפשר לדחות מסמכים רק עבור בן/בת זוג מתיק המשפחה'), { status: 403 });
+      }
+      crm.participants.push({
+        input,
+        type: 'adult',
+        name: student.name || input.name,
+        student,
+        declaration: null,
+        healthDeclaration: null,
+        waiver: null,
+        profileStatus,
+      });
+    }
+
+    // New children created above are now part of the explicit household too.
+    await ensureHouseholdForParent(db, persist, crm.parent.id);
+    for (const participant of crm.participants) {
+      if (!isStudentInHousehold(db, household.id, participant.student?.id)) {
+        throw Object.assign(new Error('אפשר לרשום ולשלם רק עבור בני המשפחה בתיק'), { status: 403 });
+      }
+    }
 
     if (typeof db.updateParentBroadcastLists === 'function') {
       db.updateParentBroadcastLists(crm.parent.id, normalized.subscriptions);
@@ -167,6 +267,8 @@ export async function registerActivityGroup({
       id: orderId,
       activity_id: activity.id,
       parent_id: crm.parent.id,
+      household_id: household.id,
+      payer_person_id: crm.parent.id,
       idempotency_key: normalized.idempotencyKey,
       participant_count: count,
       unit_price: unitPrice,
@@ -176,13 +278,37 @@ export async function registerActivityGroup({
       payment_status: pendingPayment ? 'pending' : 'not_required',
       status: pendingPayment ? 'pending_payment' : 'confirmed',
       payment_id: null,
+      cancellation_acceptance_id: null,
+      policy_snapshot: policyResolution?.snapshot || null,
       hold_expires_at: holdExpiresAt,
       updated_at: new Date().toISOString(),
     });
     await durable(persist, 'activity_registration_orders', order);
 
+    if (policyResolution) {
+      const acceptance = await recordPolicyAcceptance(db, persist, {
+        ...policyResolution,
+        parentId: crm.parent.id,
+        activityId: activity.id,
+        orderId: order.id,
+        acceptedVia: 'online',
+      });
+      order = db.update('activity_registration_orders', order.id, {
+        cancellation_acceptance_id: acceptance?.id || null,
+        updated_at: new Date().toISOString(),
+      }) || order;
+      await durable(persist, 'activity_registration_orders', order);
+    }
+
     const registrations = [];
     for (const participant of crm.participants) {
+      const eligibility = participationEligibility(db, {
+        studentId: participant.student?.id,
+        scope: participationScope,
+      });
+      const documentStatus = eligibilityStatusForRegistration(eligibility, {
+        profileComplete: participant.profileStatus !== 'pending_profile',
+      });
       const registration = db.insert('activity_registrations', {
         activity_id: activity.id,
         order_id: order.id,
@@ -193,6 +319,8 @@ export async function registerActivityGroup({
         phone: crm.parent.phone || '',
         email: crm.parent.email || '',
         health_declaration_id: participant.declaration?.id || null,
+        participation_waiver_id: participant.waiver?.id || null,
+        document_status: documentStatus,
         status: pendingPayment ? 'pending_payment' : 'confirmed',
         hold_expires_at: holdExpiresAt,
         payment_status: pendingPayment ? 'pending' : 'not_required',

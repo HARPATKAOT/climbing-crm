@@ -9,7 +9,12 @@ import {
   claimInboundMetaId,
   releaseInboundMetaId,
 } from './channels/messageStore.js';
-import { israelDateStr, israelHour } from './attendanceUtils.js';
+import {
+  getSortedGroupDays,
+  groupMeetsOnDay,
+  israelDateStr,
+  israelHour,
+} from './attendanceUtils.js';
 import {
   HISTORY_MESSAGES,
   analysisAllowed,
@@ -85,6 +90,7 @@ import {
   buildParentCardContext,
   getConversationHistory,
   getChatHistoryMessages,
+  normalizeHistoryLimit,
   isStaffPhone,
   parseAiReply,
   detectUnsureHeuristic,
@@ -98,6 +104,8 @@ import {
   studentsForParent,
   findPrimaryParent,
   isIdentifiedParent,
+  hasCustomerFullName,
+  advanceCustomerNameCapture,
   isLowIntentGreeting,
   resolveIdentifiedParentFallback,
   extractGeminiResponseText,
@@ -159,6 +167,23 @@ function formatWaPhone(phone) {
 
 const DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'שבת'];
 
+function groupDayLabels(group) {
+  return getSortedGroupDays(group).map((day) => DAY_NAMES[day]);
+}
+
+function groupDaysPhrase(group) {
+  const days = groupDayLabels(group);
+  if (!days.length) return `יום ${String(group?.day ?? '')}`.trim();
+  return days.length === 1 ? `יום ${days[0]}` : `ימים ${days.join(' ו')}`;
+}
+
+function firstGroupDay(group) {
+  const first = getSortedGroupDays(group)[0];
+  if (first != null) return first;
+  const fallback = Number(group?.day);
+  return Number.isInteger(fallback) ? fallback : 7;
+}
+
 // Meta message types the model cannot see into. A caption travels as the text,
 // so an image with a caption is handled as an ordinary text message.
 const MEDIA_MESSAGE_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker']);
@@ -171,6 +196,7 @@ const HEBREW_LETTER = /[֐-׿]/;
 function cleanGroupTitle(group) {
   let name = String(group.name || '').trim();
   name = name.replace(/\s*[—–\-]\s*יום\s*[א-ו]['׳']?\s*\d{1,2}:\d{2}.*$/u, '');
+  name = name.replace(/\s*[—–\-]\s*[א-ו]['׳’]?\s*\+\s*[א-ו]['׳’]?\s*\d{1,2}:\d{2}.*$/u, '');
   name = name.replace(/\s+יום\s*[א-ו]['׳']?\s*\d{1,2}:\d{2}.*$/u, '');
   name = name.replace(/\s+/g, ' ').trim();
   return name || String(group.ageCategory || '').trim() || 'חוג טיפוס';
@@ -178,7 +204,6 @@ function cleanGroupTitle(group) {
 
 /** Compact line for AI/CRM context (not WhatsApp customers). */
 function formatGroupLine(group, { hidePrices = false } = {}) {
-  const dayLabel = DAY_NAMES[Number(group.day)] || `יום ${group.day}`;
   const free = Number.isFinite(group.freeSlots)
     ? group.freeSlots
     : spotsLeft(group, db.get('students') || []);
@@ -194,7 +219,7 @@ function formatGroupLine(group, { hidePrices = false } = {}) {
     ].filter(Boolean).join(' / ') || 'מחיר לא מעודכן');
   const trainer = trainerNameForGroup(db, group);
   const max = Number(group.maxSlots) || 0;
-  return `• ${cleanGroupTitle(group)} | יום ${dayLabel} ${group.time || ''} | ${group.ageCategory || ''} | ${seat}`
+  return `• ${cleanGroupTitle(group)} | ${groupDaysPhrase(group)} ${group.time || ''} | ${group.ageCategory || ''} | ${seat}`
     + `${price ? ` | ${price}` : ''}${trainer ? ` | מדריך: ${trainer}` : ''}${max ? ` | עד ${max} מתאמנים` : ''}`;
 }
 
@@ -433,7 +458,7 @@ function formatClassesWhatsAppReply(groups, incomingText = '', { grade: knownGra
   const enriched = enrichGroupsWithCapacity(groups || [], students);
   const showCounts = asksAboutSpotCount(question);
   const sorted = [...enriched].sort(
-    (a, b) => Number(a.day) - Number(b.day) || String(a.time || '').localeCompare(String(b.time || ''))
+    (a, b) => firstGroupDay(a) - firstGroupDay(b) || String(a.time || '').localeCompare(String(b.time || ''))
   );
   if (!sorted.length) {
     return 'כן, בטח! 🧗 כרגע אין לי קבוצות מתאימות במערכת.\nכתבו את כיתת הילד/ה ונחזור אליכם 📱';
@@ -452,11 +477,12 @@ function formatClassesWhatsAppReply(groups, incomingText = '', { grade: knownGra
 
   const byDay = new Map();
   for (const g of visible) {
-    const day = Number(g.day);
     const time = String(g.time || '').trim();
-    if (Number.isNaN(day) || !time) continue;
-    if (!byDay.has(day)) byDay.set(day, []);
-    byDay.get(day).push(g);
+    if (!time) continue;
+    for (const day of getSortedGroupDays(g)) {
+      if (!byDay.has(day)) byDay.set(day, []);
+      byDay.get(day).push(g);
+    }
   }
 
   const dayBlocks = [...byDay.entries()]
@@ -513,7 +539,7 @@ function buildCrmBotContext(settings = {}, { phone, parent, students, equipmentP
     (db.get('groups') || [])
       .slice()
       .sort((a, b) => String(a.ageCategory || '').localeCompare(String(b.ageCategory || ''), 'he')
-        || Number(a.day) - Number(b.day)
+        || firstGroupDay(a) - firstGroupDay(b)
         || String(a.time || '').localeCompare(String(b.time || ''))),
     allStudents
   );
@@ -635,7 +661,7 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
   const dayHint = extractPreferredDayIndex(raw);
   const sameDay = dayHint == null
     ? matchedGroups
-    : matchedGroups.filter((g) => Number(g.day) === dayHint);
+    : matchedGroups.filter((g) => groupMeetsOnDay(g, dayHint));
   const exactGroups = sameDay.length ? sameDay : matchedGroups;
   const needsAudience = !audience.letters.length;
   // With kids on the card, asking "באיזו כיתה?" ignores what we already know —
@@ -894,7 +920,6 @@ async function assignStudentToWaitlist(parent, group, { childName = '' } = {}) {
     ...(childName ? { name: childName } : {}),
   });
   if (row) await persistCore('students', row);
-  const dayLabel = DAY_NAMES[Number(group.day)] || `יום ${group.day}`;
   const age = group.ageCategory || cleanGroupTitle(group);
   return {
     ok: true,
@@ -903,7 +928,7 @@ async function assignStudentToWaitlist(parent, group, { childName = '' } = {}) {
     reply:
       `נרשמתם לרשימת ההמתנה 🙌\n` +
       `${age}\n` +
-      `יום ${dayLabel} · ${group.time || ''}\n\n` +
+      `${groupDaysPhrase(group)} · ${group.time || ''}\n\n` +
       `נעדכן כשיתפנה מקום.`,
   };
 }
@@ -955,7 +980,7 @@ async function assignWaitlistIfFull(phone, parent, intake = {}) {
   const dayIndex = extractPreferredDayIndex(intake.preferredDay || '');
   const relevant = dayIndex == null
     ? enriched
-    : enriched.filter((g) => Number(g.day) === dayIndex);
+    : enriched.filter((g) => groupMeetsOnDay(g, dayIndex));
   const open = (relevant.length ? relevant : enriched).filter((g) => !g.isFull);
   if (open.length) return '';
 
@@ -1102,13 +1127,12 @@ export async function notifyStaffOfPlacement({
   if (!staffPhones.length) return { sent: 0, skipped: true, reason: 'no_staff_phones' };
 
   const customerPhone = normalizeWaPhone(phone) || phone;
-  const dayLabel = DAY_NAMES[Number(group?.day)] || String(group?.day ?? '');
   const cancelled = kind === 'cancelled';
   const body = [
     cancelled ? '↩️ ביטול שיבוץ מהבוט' : '🧗 שיבוץ מהבוט',
     `מתאמן: ${student?.name || '—'}`,
     `הורה: ${parent?.name || '—'} · ${customerPhone || '—'}`,
-    `${cancelled ? 'הוסר מקבוצה' : 'קבוצה'}: ${group?.ageCategory || ''} · יום ${dayLabel} ${group?.time || ''}`.trim(),
+    `${cancelled ? 'הוסר מקבוצה' : 'קבוצה'}: ${group?.ageCategory || ''} · ${groupDaysPhrase(group)} ${group?.time || ''}`.trim(),
     cancelled
       ? 'סטטוס: חתם הצהרה — ללא קבוצה'
       : (kind === 'waitlist' ? 'סטטוס: רשימת המתנה' : 'סטטוס: ממתין להרשמה (לא תופס מקום)'),
@@ -1667,7 +1691,7 @@ export const whatsappService = {
     // needs, instead of the keyword layer below guessing the intent. A failed
     // turn falls through to the old path — so switching this off is safe.
     if (toolsEnabled && hasModel) {
-      const historyLimit = Math.max(2, Math.min(30, Number(settings.aiHistoryCount) || 8));
+      const historyLimit = normalizeHistoryLimit(settings.aiHistoryCount, 8);
       // The old path fed the model the knowledge base, the bounds rules and the
       // approved learned examples; the tools path launched without them, so a
       // parking question — answered plainly in the knowledge base — came back
@@ -1737,7 +1761,7 @@ export const whatsappService = {
     const crmText = learnedBlock ? `${crm.text}\n\n${learnedBlock}` : crm.text;
 
     if (hasModel) {
-      const historyLimit = Math.max(2, Math.min(30, Number(settings.aiHistoryCount) || 8));
+      const historyLimit = normalizeHistoryLimit(settings.aiHistoryCount, 8);
       const history = phone ? getChatHistoryMessages(phone, historyLimit) : [];
       const geminiText = await callGeminiReply(
         systemPrompt,
@@ -1997,6 +2021,21 @@ export const whatsappService = {
       return { parent, student, isNew, replied: false, skippedReason: 'empty' };
     }
 
+    // Reactions are conversation metadata, not a customer question. Detect
+    // them before staff routing and before the hours gate, otherwise a reaction
+    // outside opening hours receives an automatic "we are closed" reply.
+    const isReaction = String(meta.type || '') === 'reaction'
+      || /^ריאקציה:\s*/u.test(String(text || '').trim());
+    if (isReaction) {
+      return { parent, student, isNew, replied: false, skippedReason: 'reaction' };
+    }
+
+    // A media-only message cannot be read by the model. It still obeys hard
+    // silence states (bot off, opt-out, an active human thread), but it should
+    // not be replaced by the outside-hours template.
+    const mediaOnly = MEDIA_MESSAGE_TYPES.has(String(meta.type || ''))
+      && (!text || /^\[[^\]\r\n]+\]$/u.test(String(text).trim()));
+
     // 4b. Staff numbers talk to the CRM agent, not to the customer bot.
     if (isStaffPhone(settings, normalizedPhone)) {
       if (!isBotEnabled(settings) && !isSimulator) {
@@ -2043,6 +2082,20 @@ export const whatsappService = {
       return { parent, student, isNew, replied: false, skippedReason: gate.reason };
     }
 
+    if (mediaOnly) {
+      const mediaReply = 'קיבלנו 🙏 מעביר לצוות שלנו שיסתכל ויחזור אליכם.';
+      await whatsappService.sendBotReply(normalizedPhone, mediaReply, { isSimulator, source: 'bot_control' });
+      await notifyStaffOfHandoff({
+        settings,
+        parent,
+        phone: normalizedPhone,
+        customerText: `[${meta.type}] הלקוח שלח קובץ מדיה`,
+        reason: 'handoff',
+        isSimulator,
+      });
+      return { parent, student, isNew, replied: true, reply: mediaReply, reason: 'media' };
+    }
+
     if (gate.action === 'outside_hours') {
       if (isSimulator || shouldSendOutsideHoursMessage(parent)) {
         await whatsappService.sendBotReply(normalizedPhone, gate.reply, { isSimulator, source: 'bot_control' });
@@ -2069,34 +2122,28 @@ export const whatsappService = {
     // With tools on, the model runs the conversation and the health declaration
     // collects the names — the scripted lead capture would only talk over it.
     const toolsRunTheConversation = botToolsEnabled(settings);
+    let aiIncomingText = text;
 
-    // A reaction is stored on the thread so the team sees it, but it is not a
-    // question. Answering it used to race the next real message: both turns
-    // saw the price question in history and both handed off — two near-identical
-    // replies for one ask (Dan Lieberman, 4.8.2026).
-    const isReaction = String(meta.type || '') === 'reaction'
-      || /^ריאקציה:\s*/u.test(String(text || '').trim());
-    if (isReaction) {
-      return { parent, student, isNew, replied: false, skippedReason: 'reaction' };
-    }
-
-    // A photo, a voice note or a document is not something the model can read.
-    // Without this the customer got silence — and hours later the model would
-    // answer the stale placeholder from history instead of the new message.
-    const mediaOnly = MEDIA_MESSAGE_TYPES.has(String(meta.type || ''))
-      && (!text || /^\[[a-z_]+\]$/i.test(String(text).trim()));
-    if (mediaOnly) {
-      const mediaReply = 'קיבלנו 🙏 מעביר לצוות שלנו שיסתכל ויחזור אליכם.';
-      await whatsappService.sendBotReply(normalizedPhone, mediaReply, { isSimulator, source: 'bot_control' });
-      await notifyStaffOfHandoff({
-        settings,
-        parent,
-        phone: normalizedPhone,
-        customerText: `[${meta.type}] הלקוח שלח קובץ מדיה`,
-        reason: 'handoff',
-        isSimulator,
-      });
-      return { parent, student, isNew, replied: true, reply: mediaReply, reason: 'media' };
+    // Whichever reply engine is active, identity collection is not optional.
+    // A trainee writing from their known personal phone is already identified;
+    // every other incomplete card must supply first + family name first.
+    if (matchedVia !== 'child_phone'
+      && !hasCustomerFullName(parent)) {
+      const nameCapture = await advanceCustomerNameCapture(normalizedPhone, parent, text);
+      if (!nameCapture.done) {
+        await whatsappService.sendBotReply(normalizedPhone, nameCapture.reply, { isSimulator });
+        return {
+          parent: findPrimaryParent(normalizedPhone) || parent,
+          student,
+          isNew,
+          replied: true,
+          reply: nameCapture.reply,
+          reason: 'name_capture',
+        };
+      }
+      parent = nameCapture.parent || findPrimaryParent(normalizedPhone) || parent;
+      students = studentsForParent(parent);
+      aiIncomingText = nameCapture.pendingMessage || text;
     }
 
     // Active intake — schedule / waitlist questions may interrupt to answer first
@@ -2166,7 +2213,7 @@ export const whatsappService = {
 
     // Interactive greeting for brand-new leads with low-intent first message
     const speaker = matchedVia === 'child_phone' ? student : null;
-    const aiResult = await whatsappService.generateAIResponse(text, {
+    const aiResult = await whatsappService.generateAIResponse(aiIncomingText, {
       phone: normalizedPhone,
       parent,
       students,
@@ -2499,4 +2546,3 @@ export const instagramService = {
     };
   }
 };
-

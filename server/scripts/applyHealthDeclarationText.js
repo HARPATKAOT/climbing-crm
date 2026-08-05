@@ -52,7 +52,7 @@ function buildWaiver({ activityPhrase, riskClause }) {
 
 5. אני, {{שם החותם}}, נוטל/ת על עצמי את הסיכון הרגיל הכרוך בפעילות, ומוותר/ת על כל טענה, דרישה או תביעה כלפי "${LEGAL_NAME}", בעליו, מנהליו, עובדיו ומי מטעמו, בגין נזק גוף או רכוש שייגרם במסגרת אותו סיכון.
 
-6. הוויתור שבסעיף 5 לא יחול, ואחריות המקום תעמוד בעינה, אך ורק במקרים בהם תוכח מעל לכל ספק רשלנות של המקום.
+6. אין בוויתור שבסעיף 5 כדי לגרוע מאחריות "${LEGAL_NAME}" לפי דין, לרבות בשל רשלנות של "${LEGAL_NAME}" או של מי שפעל מטעמה.
 
 7. אני מתחייב/ת לפעול לפי כל הוראות הבטיחות שסימנתי בשלב הקודם ולפי הוראות הצוות, ולדווח לצוות באופן מיידי על כל מפגע, תקלה, פציעה או תחושה גופנית חריגה.
 
@@ -65,7 +65,7 @@ function buildWaiver({ activityPhrase, riskClause }) {
 function buildSummary({ riskBullet }) {
   return `• ${riskBullet}
 • את הסיכון הרגיל של הפעילות אני, {{שם החותם}}, לוקח/ת על עצמי.
-• "${LEGAL_NAME}" יישא באחריות אך ורק במקרים בהם תוכח מעל לכל ספק רשלנות של המקום.
+• אין במסמך כדי לגרוע מאחריות "${LEGAL_NAME}" לפי דין, לרבות בשל רשלנות שלה או של מי שפעל מטעמה.
 • מסרתי מידע רפואי מלא ונכון, ואין מגבלה רפואית שלא סיפרתי עליה.
 • ההחלטה שהפעילות מתאימה למצב הבריאותי היא שלי, ובמקרה הצורך לאחר התייעצות עם רופא.
 • אני מתחייב/ת לפעול לפי הוראות הבטיחות והצוות, ולדווח מיד על פציעה או תחושה לא טובה.
@@ -96,28 +96,6 @@ const MEDICAL_QUESTIONS = [
   { id: 'm8', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם רופא הגביל פעילות גופנית בשנה האחרונה?' },
   { id: 'm9', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש מגבלה רפואית, אבחנה או מידע אחר שחשוב שנדע ולא נשאלנו עליו כאן?' },
 ];
-
-/**
- * Asked only where the activity actually raises it.
- *
- * The nine questions above are deliberately identical everywhere — a heart
- * condition does not care which outing it is. This one is different: fear of
- * confined spaces means nothing on a wall and everything in a cave, and asking
- * it of every birthday party would be noise that teaches families to click
- * through the questionnaire.
- *
- * No doctor's approval attached: this is not a condition to be cleared, it is
- * something the guide needs to know before a narrow passage, so the detail box
- * that opens on "yes" is the whole point.
- */
-const CAVE_QUESTION = {
-  id: 'm10',
-  kind: 'screen',
-  requireYes: false,
-  audience: 'all',
-  requiresClearance: false,
-  label: 'האם יש קלאוסטרופוביה, חרדה או קושי בחללים סגורים, צרים או חשוכים?',
-};
 
 /** The fitness declaration, which names the activity it is made about. */
 function fitnessConfirmation(activityPhrase) {
@@ -157,7 +135,7 @@ const ACTIVITIES = [
       safety('s1', 'אין להשאיר ילד עד גיל 11 ללא ליווי מבוגר שלא במסגרת חוג מסודר', { childOnly: true }),
       safety('s2', 'נא להימנע מריצה והשתוללות בכל מתחם הקיר'),
       safety('s3', 'יש להישמע להוראות המדריכים'),
-      safety('s4', 'טיפוס על הקיר יתאפשר רק לאלו שקיבלו תדריך מסודר'),
+      safety('s4', 'הטיפוס יתאפשר רק לאחר קבלת תדריך בטיחות מלא ומעבר מבחן בטיחות בפני מדריך מטעם הקיר.'),
       safety('s5', 'אין להשתמש במתקנים השונים ללא קבלת אישור ממדריך'),
     ],
   },
@@ -177,7 +155,7 @@ const ACTIVITIES = [
       safety('s1', 'ידוע לי כי באחריות מזמין/ת הפעילות לוודא ליווי מבוגר לילדים שהובאו אליה', { childOnly: true }),
       safety('s2', 'נא להימנע מריצה והשתוללות בכל מתחם הקיר, לרבות באזור הישיבה והכיבוד'),
       safety('s3', 'יש להישמע להוראות המדריכים לאורך כל הפעילות'),
-      safety('s4', 'טיפוס על הקיר יתאפשר רק למשתתפים שקיבלו תדריך מסודר'),
+      safety('s4', 'הטיפוס יתאפשר רק לאחר קבלת תדריך בטיחות מלא ומעבר מבחן בטיחות בפני מדריך מטעם הקיר.'),
       safety('s5', 'אין להשתמש במתקנים השונים ללא קבלת אישור ממדריך'),
       safety('s6', 'ידוע לי כי יש למסור מראש לצוות כל רגישות או אלרגיה למזון של המשתתפים'),
     ],
@@ -185,23 +163,18 @@ const ACTIVITIES = [
   {
     slug: 'trip',
     title: 'הצהרת בריאות ובטיחות + הסרת אחריות — יציאה / טיול',
-    activityPhrase: 'יציאה או טיול — סנפלינג, טיפוס ומערנות',
-    // The only template with a cave in it, and so the only one that asks.
-    asksAboutConfinedSpaces: true,
-    // Most trips are rappelling, and the same day may add climbing or a cave.
-    // One declaration covers all three because they are one outing under one
-    // instructor — but each has to be named, and a cave is not a cliff: it
-    // adds the dark, the cold, and a space you cannot simply walk out of.
-    riskClause: 'ידוע לי כי היציאה כוללת פעילות אתגרית בשטח — גלישה על חבל (סנפלינג), טיפוס, מערנות (פעילות במערות) והליכה בשטח פתוח — הכרוכה מטבעה בסיכון לפגיעה גופנית, לרבות נפילה, החלקה, התדרדרות אבנים, פגיעה מציוד ומאמץ יתר. ידוע לי כי פעילות במערה מוסיפה סיכונים משלה: חללים צרים וחשוכים, רטיבות והחלקה, קור, ותלות בתאורה ובציוד. ידוע לי כי ליציאה לשטח נלווים סיכונים שאינם קיימים במתקן סגור — תנאי מזג אוויר ושטח, בעלי חיים, הנסיעה אל אתר הפעילות וממנו, וריחוק ממענה רפואי מיידי. הסיכון קיים גם בהקפדה מלאה על הוראות הבטיחות.',
-    riskBullet: 'היציאה כוללת סנפלינג, טיפוס ומערנות, ומוסיפה סיכוני שטח, מזג אוויר, חללים חשוכים, נסיעה וריחוק מעזרה רפואית.',
+    activityPhrase: 'יציאה לטיול הליכה / סנפלינג / טיפוס / מערנות',
+    // A trip may be one of these activities, or combine some of them. The
+    // wording must not claim that every outing necessarily includes all three.
+    riskClause: 'ידוע לי כי היציאה כוללת פעילות אתגרית בשטח — טיפוס / סנפלינג / מערנות, בהתאם לפעילות שנבחרה — הכרוכה מטבעה בסיכון לפגיעה גופנית, לרבות נפילה, החלקה, התדרדרות אבנים, פגיעה מציוד ומאמץ יתר. אם הפעילות כוללת כניסה למערה, ידוע לי כי היא מוסיפה סיכונים משלה: חללים צרים וחשוכים, רטיבות והחלקה, קור, ותלות בתאורה ובציוד. ידוע לי כי ליציאה לשטח נלווים סיכונים שאינם קיימים במתקן סגור — תנאי מזג אוויר ושטח, בעלי חיים, הנסיעה אל אתר הפעילות וממנו, וריחוק ממענה רפואי מיידי. הסיכון קיים גם בהקפדה מלאה על הוראות הבטיחות.',
+    riskBullet: 'היציאה כוללת טיפוס / סנפלינג / מערנות, בהתאם לפעילות שנבחרה, וכרוכה בסיכוני שטח, מזג אוויר, נסיעה וריחוק מעזרה רפואית.',
     safety: [
-      safety('s1', 'ידוע לי כי ילד עד גיל 11 יוצא לשטח רק בליווי מבוגר או במסגרת קבוצה מאורגנת', { childOnly: true }),
       safety('s2', 'יש להישמע להוראות המדריך האחראי בכל עת, ואין להתרחק מהקבוצה'),
       safety('s3', 'חובה להגיע עם הציוד, הביגוד והנעליים המתאימים כפי שנדרש ליציאה'),
-      safety('s4', 'סנפלינג, טיפוס וכניסה למערה יתאפשרו רק למי שקיבל/ה תדריך מסודר, ורק בהשגחת מדריך'),
+      safety('s4', 'כל אחת מהפעילויות טיפוס / סנפלינג / כניסה למערה תתאפשר רק למי שקיבל/ה תדריך מסודר ורק בהשגחת מדריך'),
       safety('s5', 'אין לגעת בציוד, בחבלים או בעיגונים ללא הוראת מדריך'),
-      safety('s6', 'במערה חובה קסדה ותאורה, ואין להיכנס, להתפצל או לצאת ללא הוראת מדריך'),
-      safety('s7', 'יש להצטייד במים ולדווח מיד על תשישות, סחרחורת, קוצר נשימה או תחושה לא טובה'),
+      safety('s6', 'אם הפעילות כוללת כניסה למערה, חובה לחבוש קסדה ולהשתמש בתאורה, ואין להיכנס, להתפצל או לצאת ללא הוראת מדריך'),
+      safety('s7', 'יש להצטייד במים בכמות מתאימה ולדווח מיד על תשישות, סחרחורת, קוצר נשימה או תחושה לא טובה'),
       safety('s8', 'ידוע לי כי הצוות רשאי לשנות או לבטל את מסלול הפעילות משיקולי בטיחות ומזג אוויר'),
     ],
   },
@@ -219,7 +192,6 @@ export function declarationFor(activity) {
     waiverSummary: buildSummary(activity),
     healthQuestions: [
       ...MEDICAL_QUESTIONS,
-      ...(activity.asksAboutConfinedSpaces ? [CAVE_QUESTION] : []),
       fitnessConfirmation(activity.activityPhrase),
       ...activity.safety,
     ],

@@ -36,10 +36,11 @@ export default function MedicalClearanceField({ triggers, value, onChange, onErr
 
   return (
     <div style={{
-      background: 'rgba(249,115,22,.1)', border: '1px solid rgba(249,115,22,.35)',
+      background: 'var(--form-accent-soft, rgba(249,115,22,.1))',
+      border: '1px solid var(--form-accent-border, rgba(249,115,22,.35))',
       borderRadius: 12, padding: 14, marginTop: 10,
     }}>
-      <div style={{ fontSize: 13, fontWeight: 800, color: '#fdba74', marginBottom: 6 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--form-accent-text, #fdba74)', marginBottom: 6 }}>
         נדרש אישור רופא להשתתפות בפעילות ספורטיבית
       </div>
       <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)', lineHeight: 1.6, marginBottom: 10 }}>

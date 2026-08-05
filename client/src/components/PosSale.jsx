@@ -95,6 +95,7 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
   const [lastChange, setLastChange] = useState(null);
   const [cashClosedHint, setCashClosedHint] = useState(false);
   const [showOpenCash, setShowOpenCash] = useState(false);
+  const [cancellationAccepted, setCancellationAccepted] = useState(false);
 
   useEffect(() => {
     if (!cashSessionOpen && paymentMethod === 'cash') {
@@ -317,6 +318,19 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
   );
   const couponDiscount = appliedCoupon ? Number(appliedCoupon.discount) || 0 : 0;
   const total = roundMoney(Math.max(0, cartTotal - couponDiscount));
+  const activeCancellationPolicies = useMemo(() => {
+    const byVersion = new Map();
+    for (const line of cart) {
+      const product = pricelist.find((item) => String(item.id) === String(line.pricelist_id));
+      const snapshot = line.cancellation_policy || product?.cancellation_policy;
+      if (snapshot?.version_id) byVersion.set(snapshot.version_id, snapshot);
+    }
+    return [...byVersion.values()];
+  }, [cart, pricelist]);
+
+  useEffect(() => {
+    setCancellationAccepted(false);
+  }, [cart.map((line) => `${line.pricelist_id}:${line.quantity}`).join('|')]);
 
   const needsCustomer = cart.some(
     (line) => line.product_type === 'punch_card' || line.product_type === 'time_membership'
@@ -406,6 +420,7 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
           unitprice: price,
           quantity: 1,
           product_type: item.product_type || 'product',
+          cancellation_policy: item.cancellation_policy || null,
           discountType: null,
           discountValue: 0,
           isCustom: false,
@@ -564,6 +579,7 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
     walkInEmail: effectiveEmail || undefined,
     sendEmail,
     sendWhatsapp,
+    cancellationPolicyAccepted: cancellationAccepted,
   });
 
   const validate = () => {
@@ -601,6 +617,10 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
         setError('סכום שהתקבל מהלקוח חייב להיות לפחות כמו סכום העגלה');
         return false;
       }
+    }
+    if (activeCancellationPolicies.length && !cancellationAccepted) {
+      setError('יש להציג ללקוח את מדיניות הביטול ולסמן שהוא אישר אותה');
+      return false;
     }
     return true;
   };
@@ -1573,6 +1593,40 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
               שליחה לוואטסאפ
             </label>
           </div>
+
+          {activeCancellationPolicies.length > 0 && (
+            <div className="alert alert-warn" style={{ marginTop: 12, display: 'block' }}>
+              <div style={{ fontWeight: 800, marginBottom: 8 }}>מדיניות ביטול ותנאים להצגה ללקוח</div>
+              {activeCancellationPolicies.map((policy) => (
+                <div key={policy.version_id} style={{ marginBottom: 10 }}>
+                  <div style={{ fontWeight: 700 }}>{policy.policy_name}</div>
+                  <ul style={{ margin: '6px 0', paddingInlineStart: 20, lineHeight: 1.6 }}>
+                    {(policy.rules || []).map((rule) => (
+                      <li key={rule.id}>
+                        {Number(rule.min_hours_before) >= 168
+                          ? 'לפחות 7 ימים לפני הפעילות'
+                          : Number(rule.min_hours_before) >= 48
+                            ? 'בין 48 שעות ל־7 ימים לפני הפעילות'
+                            : 'פחות מ־48 שעות לפני הפעילות'}:
+                        {' '}{rule.refund_percent}% החזר
+                        {Number(rule.fixed_fee) > 0 ? `, בניכוי ₪${rule.fixed_fee} לכל משתתף` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                  {policy.free_text && <div style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>{policy.free_text}</div>}
+                </div>
+              ))}
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', fontWeight: 700 }}>
+                <input
+                  type="checkbox"
+                  checked={cancellationAccepted}
+                  onChange={(event) => setCancellationAccepted(event.target.checked)}
+                  style={{ marginTop: 3 }}
+                />
+                הצגתי ללקוח את התנאים והלקוח אישר אותם
+              </label>
+            </div>
+          )}
 
           {error && (
             <div className="alert alert-error" style={{ marginTop: 12 }}>{error}</div>

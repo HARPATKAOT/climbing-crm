@@ -86,9 +86,19 @@ function answerRows(answers = {}, questionLabels = {}, questionKinds = {}) {
 }
 
 async function resolveWaiverAndQuestions(decl) {
-  let waiverText = '';
+  const snapshot = decl.formSnapshot || decl.form_snapshot || {};
+  let waiverText = snapshot.waiverText || '';
   const questionLabels = { ...DEFAULT_QUESTIONS };
   const questionKinds = {};
+  (snapshot.healthQuestions || []).forEach((q) => {
+    if (q?.id && q?.label) questionLabels[q.id] = q.label;
+    if (q?.id && q?.kind) questionKinds[q.id] = q.kind;
+  });
+  // A stored snapshot is immutable evidence. Never replace its wording with a
+  // template that may have been edited after the signature.
+  if (waiverText || Array.isArray(snapshot.healthQuestions)) {
+    return { waiverText, questionLabels, questionKinds };
+  }
   const slug = decl.templateSlug || decl.template_slug;
   if (!slug) {
     return { waiverText, questionLabels, questionKinds };
@@ -110,16 +120,24 @@ async function resolveWaiverAndQuestions(decl) {
 }
 
 function buildCertificateHtml(decl, { waiverText, questionLabels, questionKinds = {}, signatureSrc }) {
-  const parentName = decl.parentName || decl.signedBy || '—';
-  const climberName = decl.climberName || decl.studentName || '—';
-  const phone = decl.phone || decl.emergencyPhone || '—';
-  const date = decl.signedDate || decl.date || '—';
-  const parentId = decl.parentIdNum || '—';
-  const climberId = decl.climberIdNum || '—';
-  const birthDate = decl.birthDate || '—';
+  const snapshot = decl.formSnapshot || decl.form_snapshot || {};
+  const parentName = decl.parentName || decl.signedBy || snapshot.signer?.name || '—';
+  const climberName = decl.climberName || decl.studentName || snapshot.participant?.name || '—';
+  const phone = decl.phone || decl.emergencyPhone || snapshot.signer?.phone || '—';
+  const date = decl.signedDate || decl.date || snapshot.signedAt || '—';
+  const parentId = decl.parentIdNum || snapshot.signer?.idNumber || '—';
+  const climberId = decl.climberIdNum || snapshot.participant?.idNumber || '—';
+  const birthDate = decl.birthDate || snapshot.participant?.birthDate || '—';
   const signature = signatureSrc || decl.signature_url || decl.signature || '';
   const hasSig = typeof signature === 'string' && signature.startsWith('data:image');
-  const title = decl.title || 'הצהרת בריאות + הסרת אחריות — אישור חתום';
+  const documentType = decl.documentType || 'legacy_combined';
+  const includesHealth = documentType !== 'participation_waiver';
+  const includesWaiver = documentType !== 'health';
+  const title = decl.title || (documentType === 'health'
+    ? 'הצהרת בריאות — מסמך חתום'
+    : (documentType === 'participation_waiver'
+      ? 'אישור השתתפות והסרת אחריות — מסמך חתום'
+      : 'הצהרת בריאות + הסרת אחריות — אישור חתום'));
   const templateNote = decl.templateSlug ? `תבנית: ${decl.templateSlug}` : '';
   const brandName = decl.brandName || 'הרפתקאות';
 
@@ -199,16 +217,16 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, questionKinds 
         <div class="field"><div class="label">טלפון</div><div class="value">${escapeHtml(phone)}</div></div>
         <div class="field"><div class="label">תאריך לידה</div><div class="value">${escapeHtml(birthDate)}</div></div>
         <div class="field"><div class="label">תאריך חתימה</div><div class="value">${escapeHtml(date)}</div></div>
-        <div class="field"><div class="label">אישור כתב ויתור</div><div class="value">${decl.waiverAccepted ? 'אושר' : '—'}</div></div>
+        ${includesWaiver ? `<div class="field"><div class="label">אישור כתב ויתור</div><div class="value">${decl.waiverAccepted ? 'אושר' : '—'}</div></div>` : ''}
       </div>
 
-      <h2>הצהרת בריאות ובטיחות</h2>
+      ${includesHealth ? `<h2>הצהרת בריאות</h2>
       ${answerRows(decl.answers || {}, questionLabels, questionKinds)}
       ${decl.healthNotes
         ? `<div class="field" style="margin-top:10px"><div class="label">פירוט שנמסר</div><div class="value">${escapeHtml(decl.healthNotes)}</div></div>`
-        : ''}
+        : ''}` : ''}
 
-      ${waiverText
+      ${includesWaiver && waiverText
         ? `<h2>כתב ויתור / הסרת אחריות</h2><div class="waiver">${escapeHtml(withSignerName(waiverText, parentName))}</div>`
         : ''}
 
@@ -232,6 +250,8 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, questionKinds 
 
       <div class="footer">
         מסמך זה הופק ממערכת ${escapeHtml(brandName)} · מזהה הצהרה: ${escapeHtml(decl.id || '—')}
+        ${decl.evidence?.id ? `<br/>מזהה ראיית חתימה: ${escapeHtml(decl.evidence.id)}` : ''}
+        ${decl.evidence?.payloadHash ? `<br/>טביעת מסמך: ${escapeHtml(decl.evidence.payloadHash)}` : ''}
         ${decl.notes ? `<br/>הערות: ${escapeHtml(decl.notes)}` : ''}
       </div>
     </div>
@@ -288,12 +308,24 @@ export async function buildHealthDeclarationPdf(decl) {
 
     const climber = (decl.climberName || decl.studentName || 'declaration').replace(/[^\w\u0590-\u05ff-]+/g, '_');
     const date = decl.signedDate || decl.date || 'signed';
-    const fileName = `health-declaration_${climber}_${date}.pdf`;
+    const prefix = decl.documentType === 'participation_waiver'
+      ? `participation-waiver_${decl.scope || decl.templateSlug || 'wall'}`
+      : 'health-declaration';
+    const fileName = `${prefix}_${climber}_${date}.pdf`;
     const blob = pdf.output('blob');
     return { blob, fileName, pdf };
   } finally {
     document.body.removeChild(host);
   }
+}
+
+/** Build the scoped legal approval as its own immutable PDF. */
+export async function buildParticipationWaiverPdf(waiver) {
+  return buildHealthDeclarationPdf({
+    ...waiver,
+    documentType: 'participation_waiver',
+    waiverAccepted: true,
+  });
 }
 
 /**
@@ -303,6 +335,11 @@ export async function buildHealthDeclarationPdf(decl) {
  */
 export async function downloadHealthDeclarationPdf(decl) {
   const { pdf, fileName } = await buildHealthDeclarationPdf(decl);
+  pdf.save(fileName);
+}
+
+export async function downloadParticipationWaiverPdf(waiver) {
+  const { pdf, fileName } = await buildParticipationWaiverPdf(waiver);
   pdf.save(fileName);
 }
 

@@ -628,7 +628,7 @@ export default function CheckInConsole({ students, groups, operationalOnly = fal
             const punchRes = await fetch(`/api/pos/passes/${punchCard.id}/punch`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ source: 'check_in' }),
+              body: JSON.stringify({ source: 'check_in', student_id: climber.id }),
             });
             const punchData = await punchRes.json().catch(() => ({}));
             if (punchRes.ok) {

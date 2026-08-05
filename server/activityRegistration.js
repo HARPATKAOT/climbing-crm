@@ -152,6 +152,7 @@ export function publicRegistrationPayload(activity, registrations) {
     id: activity.id,
     name: activity.name,
     type: activity.type,
+    participation_scope: activity.participation_scope || null,
     date: activity.date,
     end_date: activity.end_date || null,
     start_time: activity.start_time,
@@ -170,6 +171,10 @@ export function publicRegistrationPayload(activity, registrations) {
     unit_price: collectPay ? price : 0,
     page_title: activity.registration_page_title || activity.name || '',
     page_body: activity.registration_page_body || activity.description || '',
+    audience: activity.audience || '',
+    included: activity.included || '',
+    what_to_bring: activity.what_to_bring || '',
+    important_info: activity.important_info || '',
     cover_image: safeTheme.cover_image || '',
     cover_position: safeTheme.cover_position || '50% 50%',
     host_name: activity.host_name || activity.contact_name || '',
@@ -181,6 +186,7 @@ export function templateFieldsFromActivity(activity = {}) {
   return {
     name: activity.name || '',
     type: activity.type || 'birthday',
+    participation_scope: activity.participation_scope || null,
     category: normalizeTemplateCategory(activity.category),
     location: activity.location || '',
     price: Number(activity.price) || 0,
@@ -199,6 +205,12 @@ export function templateFieldsFromActivity(activity = {}) {
     ),
     registration_page_title: activity.registration_page_title || '',
     registration_page_body: activity.registration_page_body || '',
+    audience: activity.audience || '',
+    included: activity.included || '',
+    what_to_bring: activity.what_to_bring || '',
+    important_info: activity.important_info || '',
+    cancellation_policy_id: activity.cancellation_policy_id || null,
+    cancellation_policy_disabled: activity.cancellation_policy_disabled === true,
     theme:
       (activity.theme && typeof activity.theme === 'object' && activity.theme)
       || (activity.registration_theme && typeof activity.registration_theme === 'object' && activity.registration_theme)
@@ -217,6 +229,9 @@ export function normalizeTemplatePayload(body = {}) {
   return {
     name: String(body.name || '').trim(),
     type: body.type || 'birthday',
+    participation_scope: ['wall', 'event', 'trip'].includes(body.participation_scope)
+      ? body.participation_scope
+      : null,
     category: normalizeTemplateCategory(body.category),
     location: body.location || '',
     price: body.price === '' || body.price == null ? 0 : Number(body.price) || 0,
@@ -240,6 +255,12 @@ export function normalizeTemplatePayload(body = {}) {
       : 'paid_per_participant',
     registration_page_title: body.registration_page_title || '',
     registration_page_body: body.registration_page_body || '',
+    audience: body.audience || '',
+    included: body.included || '',
+    what_to_bring: body.what_to_bring || '',
+    important_info: body.important_info || '',
+    cancellation_policy_id: body.cancellation_policy_id || null,
+    cancellation_policy_disabled: body.cancellation_policy_disabled === true,
     theme,
     sort_order: body.sort_order == null ? 0 : Number(body.sort_order) || 0,
     is_active: body.is_active !== false,
@@ -252,6 +273,7 @@ export function activityDraftFromTemplate(template = {}, { date } = {}) {
   return {
     name: fields.name,
     type: fields.type,
+    participation_scope: fields.participation_scope,
     date: date || null,
     end_date: null,
     start_time: fields.start_time || '10:00',
@@ -276,6 +298,12 @@ export function activityDraftFromTemplate(template = {}, { date } = {}) {
     registration_mode: fields.registration_mode,
     registration_page_title: fields.registration_page_title || fields.name,
     registration_page_body: fields.registration_page_body || fields.description,
+    audience: fields.audience || '',
+    included: fields.included || '',
+    what_to_bring: fields.what_to_bring || '',
+    important_info: fields.important_info || '',
+    cancellation_policy_id: fields.cancellation_policy_id || null,
+    cancellation_policy_disabled: fields.cancellation_policy_disabled === true,
     registration_theme: fields.theme || {},
     status: 'open',
     _from_template_id: template.id || null,

@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ImagePlus, X } from 'lucide-react';
 import { compressImageFile, readImageFileAsDataUrl } from './productCategories.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
@@ -62,12 +62,23 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
   const [imageBusy, setImageBusy] = useState(false);
   const [imageError, setImageError] = useState('');
   const [dragOver, setDragOver] = useState(false);
+  const [policies, setPolicies] = useState([]);
   const theme = themeFrom(form.registration_theme);
   const coverImage = theme.cover_image || '';
   const { x, y } = parsePosition(theme.cover_position);
   const position = formatPosition(x, y);
   const publicTitle = form.registration_page_title || form.name || '';
   const publicBody = form.registration_page_body || form.description || '';
+
+  useEffect(() => {
+    if (readOnly) return undefined;
+    let active = true;
+    fetch('/api/settings/cancellation-policies')
+      .then((response) => response.ok ? response.json() : { policies: [] })
+      .then((body) => { if (active) setPolicies((body.policies || []).filter((policy) => policy.status !== 'archived')); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [readOnly]);
 
   const patch = (values) => {
     if (readOnly) return;
@@ -272,6 +283,63 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
             placeholder="מידע קצר על הפעילות..."
             rows={3}
           />
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 12, marginTop: 16 }}>
+          {[
+            ['audience', 'קהל יעד'],
+            ['included', 'מה כלול'],
+            ['what_to_bring', 'מה להביא / ציוד'],
+            ['important_info', 'מידע חשוב'],
+          ].map(([key, label]) => (
+            readOnly ? (
+              form[key] ? <div key={key}><strong>{label}</strong><p style={{ whiteSpace: 'pre-wrap' }}>{form[key]}</p></div> : null
+            ) : (
+              <label key={key} className="event-field" style={{ margin: 0 }}>
+                <span>{label}</span>
+                <textarea rows={3} value={form[key] || ''} onChange={(event) => patch({ [key]: event.target.value })} />
+              </label>
+            )
+          ))}
+        </div>
+
+        {!readOnly && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 12, marginTop: 16 }}>
+            <label className="event-field" style={{ margin: 0 }}>
+              <span>האישור הנדרש מהמשתתפים</span>
+              <select
+                value={form.participation_scope || (
+                  form.type === 'trip' ? 'trip' : (form.type === 'event' ? 'event' : 'wall')
+                )}
+                onChange={(event) => patch({ participation_scope: event.target.value })}
+              >
+                <option value="wall">אישור פעילות בקיר</option>
+                <option value="event">אישור השתתפות באירוע</option>
+                <option value="trip">יציאה לטיול הליכה / סנפלינג / טיפוס / מערנות</option>
+              </select>
+            </label>
+            <label className="event-field" style={{ margin: 0 }}>
+              <span>מדיניות ביטול</span>
+              <select
+                value={form.cancellation_policy_disabled
+                  ? '__none__'
+                  : (form.cancellation_policy_id || '__default__')}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  patch({
+                    cancellation_policy_id: value.startsWith('__') ? null : value,
+                    cancellation_policy_disabled: value === '__none__',
+                  });
+                }}
+              >
+                <option value="__default__">ברירת המחדל של העסק</option>
+                <option value="__none__">ללא מדיניות</option>
+                {policies.filter((policy) => policy.status === 'published').map((policy) => (
+                  <option key={policy.id} value={policy.id}>{policy.name}</option>
+                ))}
+              </select>
+            </label>
+          </div>
         )}
       </div>
     </section>

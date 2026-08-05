@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { CheckCircle, Loader2, Plus, Trash2 } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { CheckCircle, Copy, Loader2, Plus, Trash2 } from 'lucide-react';
 import { useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
@@ -7,11 +7,13 @@ import {
   EventShell,
   EventStyles,
   Field,
+  PhoneCodeGate,
   KnownChildNote,
   KnownChildPrompt,
   KnownFamilyNote,
   KnownFamilyPrompt,
   useFamilyMatch,
+  usePhoneVerification,
   SignaturePad,
 } from './publicFormKit.jsx';
 import { checkKnownChild, linkFieldsFor } from '../utils/childCheck.js';
@@ -25,9 +27,11 @@ import {
   unansweredQuestions,
 } from '../utils/healthQuestions.js';
 import MedicalClearanceField from './MedicalClearanceField.jsx';
+import GenderPicker from './GenderPicker.jsx';
 import { clearanceBudgetError } from '../utils/medicalClearanceFile.js';
 import { declarationSectionTitles, splitWaiverText, withSignerName } from '../utils/declarationSections.js';
-import { joinParentName } from '../utils/parentName.js';
+import { joinParentName, splitParentName } from '../utils/parentName.js';
+import { uploadSignedParticipationPdfs } from '../utils/participationPdfUpload.js';
 
 const emptyParticipant = (questions = [], extras = {}) => ({
   key: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
@@ -57,6 +61,13 @@ function formatDate(iso) {
   });
 }
 
+function cancellationRuleText(rule) {
+  const min = Number(rule.min_hours_before) || 0;
+  if (min >= 168) return `שבעה ימים ומעלה לפני הפעילות — החזר בניכוי ${formatIls(rule.fixed_fee || 0)} לכל משתתף מבוטל`;
+  if (min >= 48) return `בין 48 שעות לשבעה ימים לפני הפעילות — החזר של ${Number(rule.refund_percent) || 0}%`;
+  return `פחות מ-48 שעות לפני הפעילות — ${Number(rule.refund_percent) ? `החזר של ${rule.refund_percent}%` : 'ללא החזר'}`;
+}
+
 export default function PublicActivityRegistration() {
   const { profile } = useBusinessProfile();
   const brandName = profile.display_name || 'הרפתקאות';
@@ -71,28 +82,81 @@ export default function PublicActivityRegistration() {
   const [error, setError] = useState('');
   const [done, setDone] = useState(false);
   const [step, setStep] = useState(1);
+  const [showInfo, setShowInfo] = useState(() => searchParams.get('paid') !== '1');
   const [healthIndex, setHealthIndex] = useState(0);
   const [isAdultSelf, setIsAdultSelf] = useState(false);
   // `firstName` and `lastName` are what the form shows; `name` is kept as the
   // joined version, because the surname on its own is what matches a household
   // and what reaches the invoice.
-  const [parent, setParent] = useState({ name: '', firstName: '', lastName: '', phone: '', email: '', city: '' });
+  const [parent, setParent] = useState({
+    name: '', firstName: '', lastName: '', phone: '', email: '', city: '', idNumber: '',
+    birthDate: '', gender: '',
+  });
   const [participants, setParticipants] = useState([]);
   const [household, setHousehold] = useState(null);
+  const [identityStatus, setIdentityStatus] = useState('unverified');
   const [listDefs, setListDefs] = useState([]);
   const [subscriptions, setSubscriptions] = useState({});
   const [selectedChildIds, setSelectedChildIds] = useState([]);
+  const [newSpouse, setNewSpouse] = useState({ enabled: false, name: '', phone: '' });
+  const [policyAccepted, setPolicyAccepted] = useState(false);
+  const [registrationLinkCopied, setRegistrationLinkCopied] = useState(false);
+  const pageTopRef = useRef(null);
   // participant key -> { match, student_id, guardian_first_name, health_valid, linked }
   const [knownChildren, setKnownChildren] = useState({});
+  const phoneVerification = usePhoneVerification(parent.phone);
+  const { otp } = phoneVerification;
   const {
     families,
     familyParentId,
     setFamilyParentId,
     waitingForFamily,
-  } = useFamilyMatch(parent.lastName, parent.phone);
+  } = useFamilyMatch(parent.lastName, parent.phone, {
+    skip: identityStatus !== 'new',
+    verificationToken: otp?.token || '',
+  });
+  const identityReady = phoneVerification.verified && ['found', 'new'].includes(identityStatus);
+
+  // Public pages live inside the app's #root scroll container. Moving between
+  // the information page, family selection, declarations and payment must feel
+  // like a real page transition rather than retaining the previous screen's
+  // scroll position.
+  useEffect(() => {
+    if (loading) return undefined;
+    const frame = requestAnimationFrame(() => {
+      const root = document.getElementById('root');
+      if (root) root.scrollTop = 0;
+      if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
+      pageTopRef.current?.scrollIntoView({ block: 'start', behavior: 'auto' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [showInfo, step, healthIndex, done, loading]);
+
+  const changeIdentityField = (field, value) => {
+    setParent((current) => ({ ...current, [field]: value }));
+    setIdentityStatus('unverified');
+    setHousehold(null);
+    setSelectedChildIds([]);
+    setFamilyParentId(null);
+    phoneVerification.setOtp((current) => ({
+      ...current, stage: 'idle', code: '', token: '', verifiedPhone: '', error: '',
+    }));
+    setError('');
+  };
   const [idempotencyKey] = useState(
     () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`
   );
+
+  const copySeparateRegistrationLink = async () => {
+    const link = `${window.location.origin}/event/${encodeURIComponent(slug)}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      setRegistrationLinkCopied(true);
+      window.setTimeout(() => setRegistrationLinkCopied(false), 2500);
+    } catch {
+      window.prompt('העתיקו את קישור ההרשמה:', link);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -129,29 +193,41 @@ export default function PublicActivityRegistration() {
       const mirror = participants.find((item) => item.key === base.key);
       return mirror ? { ...base, ...mirror, ...base, answers: mirror.answers || base.answers, waiverAccepted: mirror.waiverAccepted ?? base.waiverAccepted, signature: mirror.signature || base.signature } : base;
     };
+    const selected = [];
     if (isAdultSelf) {
-      return [mergeMirror({
+      selected.push(mergeMirror({
         ...emptyParticipant(questions, {
           key: 'adult-self',
+          id: household?.adult_student_id || null,
           type: 'adult',
           name: parent.name.trim(),
+          birthDate: household?.adult?.birthDate || parent.birthDate || '',
+          gender: household?.adult?.gender || parent.gender || '',
+          idNumber: parent.idNumber || '',
           reuse_health: !!household?.adult_health_valid,
+          reuse_health_document: !!household?.adult_health_document_valid,
+          reuse_waiver: !!household?.adult_waiver_valid,
           health_valid: !!household?.adult_health_valid,
         }),
-      })];
+      }));
     }
     // Adults and children from the file, in the order they were offered. An
     // adult keeps `type: 'adult'` so the parent-only clauses stay hidden and
     // the record is not created as somebody's child.
     const fromExisting = [...(household?.adults || []), ...(household?.children || [])]
       .filter((member) => selectedChildIds.includes(member.id))
+      .filter((member) => !(isAdultSelf && member.id === household?.adult_student_id))
       .map((member) => mergeMirror(emptyParticipant(questions, {
         key: `existing-${member.id}`,
         id: member.id,
+        parent_member_id: member.parent_member_id || null,
         type: member.is_adult ? 'adult' : 'child',
         name: member.name,
         birthDate: member.birthDate || '',
         reuse_health: !!member.health_valid,
+        reuse_health_document: !!member.health_document_valid,
+        reuse_waiver: !!member.waiver_valid,
+        defer_documents: member.is_adult && !member.health_valid,
         health_valid: !!member.health_valid,
       })));
     const newChildren = participants
@@ -169,11 +245,18 @@ export default function PublicActivityRegistration() {
           ? { ...participant, ...linkFieldsFor(known), health_valid: !!known.health_valid }
           : participant;
       });
-    return [...fromExisting, ...newChildren];
-  }, [isAdultSelf, parent.name, household, selectedChildIds, participants, questions, knownChildren]);
+    if (newSpouse.enabled && newSpouse.name.trim() && newSpouse.phone.trim()) {
+      selected.push(emptyParticipant(questions, {
+        key: 'pending-spouse', type: 'adult', name: newSpouse.name.trim(),
+        spouse_phone: newSpouse.phone.trim(), defer_documents: true,
+        reuse_health: false, health_valid: false,
+      }));
+    }
+    return [...selected, ...fromExisting, ...newChildren];
+  }, [isAdultSelf, parent.name, household, selectedChildIds, participants, questions, knownChildren, newSpouse]);
 
   const participantsNeedingHealth = useMemo(
-    () => allParticipants.filter((participant) => !participant.reuse_health),
+    () => allParticipants.filter((participant) => !participant.defer_documents && !participant.reuse_health),
     [allParticipants]
   );
 
@@ -236,17 +319,30 @@ export default function PublicActivityRegistration() {
     return mirror ? { ...participant, ...mirror } : participant;
   };
 
-  const lookupHousehold = async () => {
+  const lookupHousehold = async (verificationToken = otp.token) => {
     const response = await fetch(
-      `/api/public/activities/${encodeURIComponent(slug)}/household?phone=${encodeURIComponent(parent.phone)}`
+      `/api/public/activities/${encodeURIComponent(slug)}/household?phone=${encodeURIComponent(parent.phone)}&idNumber=${encodeURIComponent(parent.idNumber)}&verificationToken=${encodeURIComponent(verificationToken || '')}`
     );
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || 'בדיקת לקוח קיים נכשלה');
+    if (!response.ok) {
+      if (body.identity_status === 'review_required') setIdentityStatus('review_required');
+      throw new Error(body.error || 'בדיקת לקוח קיים נכשלה');
+    }
+    setIdentityStatus(body.identity_status || (body.found ? 'found' : 'new'));
     setHousehold(body.found ? body : { found: false, children: [], adult_health_valid: false });
     if (body.found) {
-      if (body.parent?.email && !parent.email) {
-        setParent((current) => ({ ...current, email: body.parent.email || current.email, city: body.parent.city || current.city }));
-      }
+      const knownName = splitParentName(body.parent || {});
+      setParent((current) => ({
+        ...current,
+        firstName: knownName.first || current.firstName,
+        lastName: knownName.lastName || current.lastName,
+        name: joinParentName(knownName.first || current.firstName, knownName.lastName || current.lastName),
+        email: body.parent?.email || current.email,
+        city: body.parent?.city || current.city,
+        idNumber: body.parent?.idNumber || current.idNumber,
+        birthDate: body.adult?.birthDate || current.birthDate,
+        gender: body.adult?.gender || current.gender,
+      }));
       if (Array.isArray(body.listDefs) && body.listDefs.length) setListDefs(body.listDefs);
       if (body.subscriptions && typeof body.subscriptions === 'object') {
         setSubscriptions({ ...body.subscriptions });
@@ -266,49 +362,47 @@ export default function PublicActivityRegistration() {
    * this a family we know", and the form was announcing a new family file to
    * people whose file it was about to find.
    */
-  useEffect(() => {
-    const digits = String(parent.phone || '').replace(/\D/g, '');
-    if (digits.length < 9) {
-      setHousehold(null);
-      return undefined;
-    }
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      lookupHousehold().catch(() => {
-        // A failed lookup leaves the form exactly as it was: recognising a
-        // returning family is a convenience, never a gate.
-        if (!cancelled) setHousehold(null);
-      });
-    }, 500);
-    return () => { cancelled = true; clearTimeout(timer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parent.phone, slug]);
-
   const next = async () => {
     setError('');
     if (step === 1) {
-      if (!parent.firstName.trim() || !parent.lastName.trim() || !parent.phone.trim() || !parent.email.trim()) {
-        setError('יש למלא שם פרטי, שם משפחה, טלפון ודואר אלקטרוני');
+      if (String(parent.idNumber || '').replace(/\D/g, '').length < 5 || !parent.phone.trim()) {
+        setError('יש למלא תעודת זהות ומספר טלפון');
         return;
       }
-      let found = null;
-      try {
-        found = await lookupHousehold();
-      } catch (lookupError) {
-        setError(lookupError.message);
+      if (!phoneVerification.verified) {
+        await phoneVerification.send();
+        return;
+      }
+      let found = household;
+      if (!found || !['found', 'new'].includes(identityStatus)) {
+        try {
+          found = await lookupHousehold();
+        } catch (lookupError) {
+          setError(lookupError.message);
+          return;
+        }
+        // Show the resolved/prefilled details before asking the person to
+        // confirm or complete them.
+        return;
+      }
+      if (!parent.firstName.trim() || !parent.lastName.trim() || !parent.email.trim()) {
+        setError('יש להשלים שם פרטי, שם משפחה ודואר אלקטרוני');
+        return;
+      }
+      if (isAdultSelf && !(household?.adult?.birthDate || parent.birthDate)) {
+        setError('יש למלא תאריך לידה למשתתף/ת בוגר/ת');
         return;
       }
       // Surname match is asked live while they type. Stay here until they answer.
       if (!found?.found && waitingForFamily) return;
-      if (isAdultSelf) {
-        setHealthIndex(0);
-        setStep(household?.adult_health_valid ? 4 : 3);
-        return;
-      }
       setStep(2);
       return;
     }
     if (step === 2) {
+      if (newSpouse.enabled && (!newSpouse.name.trim() || !newSpouse.phone.trim())) {
+        setError('יש למלא שם וטלפון של בן/בת הזוג, או לבטל את הוספתם');
+        return;
+      }
       if (!allParticipants.length) {
         setError('יש לבחור או להוסיף לפחות משתתף אחד');
         return;
@@ -338,6 +432,7 @@ export default function PublicActivityRegistration() {
             birthDate: participant.birthDate,
             phone: parent.phone,
             templateSlug: activity?.form_template?.slug || '',
+            verificationToken: otp.token,
           });
           return [participant.key, { ...match, linked: match.match ? null : false }];
         }));
@@ -396,6 +491,10 @@ export default function PublicActivityRegistration() {
   };
 
   const submit = async () => {
+    if (paidMode && activity?.cancellation_policy && !policyAccepted) {
+      setError('יש לקרוא ולאשר את תנאי הביטול לפני המעבר לתשלום');
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {
@@ -427,10 +526,20 @@ export default function PublicActivityRegistration() {
           parent: { ...parent, family_parent_id: familyParentId || null },
           subscriptions,
           participants: payloadParticipants,
+          phoneVerification: { token: otp.token },
+          policyAccepted,
         }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || 'ההרשמה נכשלה');
+      await uploadSignedParticipationPdfs({
+        signedDocuments: body.signedDocuments || [],
+        submittedParticipants: payloadParticipants,
+        parent,
+        template: activity?.form_template || {},
+        brandName,
+        phoneVerificationToken: otp.token,
+      });
       if (body.paymentUrl) {
         window.location.assign(body.paymentUrl);
         return;
@@ -455,6 +564,40 @@ export default function PublicActivityRegistration() {
     );
   }
 
+  if (showInfo) {
+    const cover = activity?.cover_image || activity?.theme?.cover_image || '';
+    return (
+      <div className="event-page" ref={pageTopRef}>
+        <main className="event-card">
+          {cover && <div className="event-cover"><img src={cover} alt="" /></div>}
+          <header className="event-hero">
+            {brandLogo ? <div className="event-brand-logo"><img src={brandLogo} alt={brandName} /></div> : <div className="event-brand">{brandName}</div>}
+            <h1>{activity.page_title || activity.name}</h1>
+            <div className="event-meta">
+              <span>{formatDate(activity.date)}{activity.start_time ? ` · ${activity.start_time.slice(0, 5)}` : ''}</span>
+              {activity.location && <span>{activity.location}</span>}
+              {activity.remaining != null && <span>{activity.remaining} מקומות פנויים</span>}
+            </div>
+            {(activity.page_body || activity.description) && <p className="event-body">{activity.page_body || activity.description}</p>}
+            {paidMode && unitVat.entered > 0 && <div className="event-price-chip">{formatIls(unitVat.gross)} למשתתף</div>}
+          </header>
+          <section style={{ marginTop: 20 }}>
+            {activity.audience && <p><strong>למי מתאים:</strong> {activity.audience}</p>}
+            {activity.included && <p><strong>מה כלול:</strong> {activity.included}</p>}
+            {activity.what_to_bring && <p><strong>מה להביא:</strong> {activity.what_to_bring}</p>}
+            {activity.important_info && <p><strong>חשוב לדעת:</strong> {activity.important_info}</p>}
+          </section>
+          <footer className="event-actions">
+            <button type="button" className="event-primary" onClick={() => setShowInfo(false)}>
+              {paidMode ? `להרשמה ותשלום${unitVat.entered > 0 ? ` · ${formatIls(unitVat.gross)}` : ''}` : 'להרשמה'}
+            </button>
+          </footer>
+        </main>
+        <EventStyles />
+      </div>
+    );
+  }
+
   const coverImage = activity?.cover_image || activity?.theme?.cover_image || '';
   const coverPosition = activity?.cover_position
     || activity?.theme?.cover_position
@@ -465,7 +608,7 @@ export default function PublicActivityRegistration() {
   const healthCurrent = currentParticipant ? resolvedHealthParticipant(currentParticipant) : null;
 
   return (
-    <div className="event-page">
+    <div className="event-page" ref={pageTopRef}>
       <main className="event-card">
         {coverImage ? (
           <div className="event-cover">
@@ -518,82 +661,98 @@ export default function PublicActivityRegistration() {
 
         {step === 1 && (
           <section>
-            <label className="event-check event-adult-toggle">
-              <input
-                type="checkbox"
-                checked={isAdultSelf}
-                onChange={(event) => {
-                  setIsAdultSelf(event.target.checked);
-                  setSelectedChildIds([]);
+            <h2>זיהוי ממלא/ת הטופס</h2>
+            <p className="event-hint">
+              נזהה את התיק רק לאחר אימות הטלפון. לפני האימות לא יוצגו פרטי משפחה.
+            </p>
+            <Field
+              label="תעודת זהות *"
+              value={parent.idNumber}
+              onChange={(idNumber) => changeIdentityField('idNumber', idNumber)}
+            />
+            <Field
+              label="טלפון *"
+              type="tel"
+              value={parent.phone}
+              onChange={(phone) => changeIdentityField('phone', phone)}
+            />
+            {otp.stage === 'code' && (
+              <PhoneCodeGate
+                otp={otp}
+                phone={parent.phone.trim()}
+                onCodeChange={(code) => phoneVerification.setOtp((current) => ({ ...current, code }))}
+                onVerify={async () => {
+                  const token = await phoneVerification.verify();
+                  if (token) await lookupHousehold(token).catch((lookupError) => setError(lookupError.message));
                 }}
+                onResend={phoneVerification.send}
+                onEditPhone={() => phoneVerification.setOtp((current) => ({ ...current, stage: 'idle', code: '' }))}
               />
-              אני ממלא עבור עצמי (בוגר מעל גיל 18)
-            </label>
-            <h2>{step1Title}</h2>
-            <Field
-              label={isAdultSelf ? 'שם פרטי' : 'שם פרטי (הורה)'}
-              value={parent.firstName}
-              onChange={(firstName) => setParent((p) => ({ ...p, firstName, name: joinParentName(firstName, p.lastName) }))}
-            />
-            <Field
-              label={isAdultSelf ? 'שם משפחה' : 'שם משפחה (הורה)'}
-              value={parent.lastName}
-              onChange={(lastName) => setParent((p) => ({ ...p, lastName, name: joinParentName(p.firstName, lastName) }))}
-            />
-            <Field label="טלפון" type="tel" value={parent.phone} onChange={(phone) => setParent({ ...parent, phone })} />
-            <Field label="דואר אלקטרוני" type="email" value={parent.email} onChange={(email) => setParent({ ...parent, email })} />
-            <Field label="עיר" value={parent.city} onChange={(city) => setParent({ ...parent, city })} />
-            {/* Only ask about joining a family, or announce a new file, when we
-                do not already know whose file this is. The phone matched an
-                existing household a moment ago — telling that person a new
-                family file is being opened is simply untrue. */}
-            {household === null ? null : household.found ? (
-              <p className="event-hint" style={{ color: '#86efac' }}>
-                מצאנו את התיק שלכם במערכת.
-              </p>
-            ) : (
+            )}
+            {identityReady && (
               <>
-                <KnownFamilyPrompt
-                  families={families}
-                  chosenId={familyParentId}
-                  onChoose={setFamilyParentId}
+                <p className="event-hint" style={{ color: household?.found ? '#86efac' : '#fdba74' }}>
+                  {household?.found
+                    ? 'מצאנו את התיק שלכם והשלמנו את הפרטים הקיימים.'
+                    : 'לא נמצא תיק תואם. תיק משפחה חדש ייפתח רק לאחר שליחת הטופס.'}
+                </p>
+                <label className="event-check event-adult-toggle">
+                  <input
+                    type="checkbox"
+                    checked={isAdultSelf}
+                    onChange={(event) => setIsAdultSelf(event.target.checked)}
+                  />
+                  גם אני משתתף/ת בפעילות (בוגר/ת מעל גיל 18)
+                </label>
+                <h2>{step1Title}</h2>
+                <Field
+                  label={isAdultSelf ? 'שם פרטי' : 'שם פרטי (הורה)'}
+                  value={parent.firstName}
+                  onChange={(firstName) => setParent((p) => ({ ...p, firstName, name: joinParentName(firstName, p.lastName) }))}
                 />
-                <KnownFamilyNote
-                  families={families}
-                  chosenId={familyParentId}
-                  onCancel={() => setFamilyParentId(null)}
+                <Field
+                  label={isAdultSelf ? 'שם משפחה' : 'שם משפחה (הורה)'}
+                  value={parent.lastName}
+                  onChange={(lastName) => setParent((p) => ({ ...p, lastName, name: joinParentName(p.firstName, lastName) }))}
                 />
+                <Field label="דואר אלקטרוני" type="email" value={parent.email} onChange={(email) => setParent({ ...parent, email })} />
+                <Field label="עיר" value={parent.city} onChange={(city) => setParent({ ...parent, city })} />
+                {isAdultSelf && (
+                  <>
+                    <Field label="תאריך לידה *" type="date" value={parent.birthDate} onChange={(birthDate) => setParent({ ...parent, birthDate })} />
+                    <GenderPicker value={parent.gender} onChange={(gender) => setParent({ ...parent, gender })} />
+                  </>
+                )}
+                {!household?.found && (
+                  <>
+                    <KnownFamilyPrompt families={families} chosenId={familyParentId} onChoose={setFamilyParentId} />
+                    <KnownFamilyNote families={families} chosenId={familyParentId} onCancel={() => setFamilyParentId(null)} />
+                  </>
+                )}
+
+                <h2 style={{ marginTop: 28 }}>רשימות דיוור</h2>
+                <p className="event-hint">אפשר לסמן רשימות שמעניינות אתכם — חוגים, טיולים, אירועים ועוד.</p>
+                <div className="event-lists">
+                  {listDefs.map((list) => {
+                    const checked = subscriptions[list.key] === true;
+                    return (
+                      <label className="event-check" key={list.key}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => setSubscriptions((prev) => ({ ...prev, [list.key]: !prev[list.key] }))}
+                        />
+                        <span>
+                          <strong>{list.label || list.key}</strong>
+                          {list.description ? ` — ${list.description}` : ''}
+                        </span>
+                      </label>
+                    );
+                  })}
+                  {!listDefs.length && <p className="event-hint">רשימות הדיוור יישמרו עם ההרשמה.</p>}
+                </div>
               </>
             )}
-
-            <h2 style={{ marginTop: 28 }}>רשימות דיוור</h2>
-            <p className="event-hint">אפשר לסמן רשימות שמעניינות אתכם — חוגים, טיולים, אירועים ועוד.</p>
-            <div className="event-lists">
-              {listDefs.map((list) => {
-                const checked = subscriptions[list.key] === true;
-                return (
-                  <label className="event-check" key={list.key}>
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => {
-                        setSubscriptions((prev) => ({
-                          ...prev,
-                          [list.key]: !prev[list.key],
-                        }));
-                      }}
-                    />
-                    <span>
-                      <strong>{list.label || list.key}</strong>
-                      {list.description ? ` — ${list.description}` : ''}
-                    </span>
-                  </label>
-                );
-              })}
-              {!listDefs.length && (
-                <p className="event-hint">רשימות הדיוור יישמרו עם ההרשמה.</p>
-              )}
-            </div>
           </section>
         )}
 
@@ -608,7 +767,10 @@ export default function PublicActivityRegistration() {
             {/* Grown-ups on the file are offered like everyone else. A family
                 books a trip together, and listing only the children left the
                 parents with no way to put themselves on it. */}
-            {[...(household?.adults || []), ...(household?.children || [])].map((member) => {
+            {[...(household?.adults || []).filter((member) => (
+              member.id !== household?.adult_student_id
+              && member.parent_member_id !== household?.parent?.id
+            )), ...(household?.children || [])].map((member) => {
               const checked = selectedChildIds.includes(member.id);
               return (
                 <label className="event-check event-existing-child" key={member.id}>
@@ -629,6 +791,11 @@ export default function PublicActivityRegistration() {
                     {member.health_valid
                       ? ' — יש טופס השתתפות בתוקף'
                       : ' — נדרש טופס השתתפות'}
+                    {member.is_adult && !member.health_valid && (
+                      <small style={{ display: 'block', marginTop: 4, color: 'rgba(255,255,255,.62)' }}>
+                        אפשר לשמור עבורה/ו מקום ולשלם עכשיו. השלמת הפרטים והחתימה תישלח אליה/ו בנפרד.
+                      </small>
+                    )}
                   </span>
                 </label>
               );
@@ -688,8 +855,36 @@ export default function PublicActivityRegistration() {
                 emptyParticipant(questions),
               ])}
             >
-              <Plus size={17} /> הוספת ילד אחר
+              <Plus size={17} /> הוספת ילד/ה למשפחה
             </button>
+            <p className="event-hint" style={{ marginTop: 8 }}>
+              הוספת ילד/ה מיועדת רק לילד שאתם הורה או אפוטרופוס שלו. ילד ממשפחה אחרת נרשם בקישור נפרד על ידי הורהו.
+            </p>
+            <button
+              type="button"
+              className="event-secondary"
+              onClick={copySeparateRegistrationLink}
+            >
+              <Copy size={17} />
+              {registrationLinkCopied ? 'הקישור הועתק' : 'העתקת קישור להרשמה נפרדת למשפחה אחרת'}
+            </button>
+
+            <label className="event-check event-adult-toggle" style={{ marginTop: 18 }}>
+              <input
+                type="checkbox"
+                checked={newSpouse.enabled}
+                onChange={(event) => setNewSpouse((current) => ({ ...current, enabled: event.target.checked }))}
+              />
+              רישום בן/בת הזוג לפעילות
+            </label>
+            {newSpouse.enabled && (
+              <div className="participant-card">
+                <strong>פרטים ראשוניים של בן/בת הזוג</strong>
+                <Field label="שם מלא" value={newSpouse.name} onChange={(name) => setNewSpouse((current) => ({ ...current, name }))} />
+                <Field label="טלפון" type="tel" value={newSpouse.phone} onChange={(phone) => setNewSpouse((current) => ({ ...current, phone }))} />
+                <p className="event-hint">אפשר לשלם ולשמור מקום כעת. קישור להשלמת הפרטים והחתימה יישלח לטלפון הזה.</p>
+              </div>
+            )}
           </section>
         )}
 
@@ -798,7 +993,15 @@ export default function PublicActivityRegistration() {
                 type="checkbox"
                 checked={!!healthCurrent.waiverAccepted}
                 onChange={(event) => {
-                  patchHealthParticipant(healthCurrent, { waiverAccepted: event.target.checked });
+                  const at = new Date().toISOString();
+                  patchHealthParticipant(healthCurrent, {
+                    waiverAccepted: event.target.checked,
+                    signatureEvidenceTimeline: {
+                      ...(healthCurrent.signatureEvidenceTimeline || {}),
+                      termsPresentedAt: healthCurrent.signatureEvidenceTimeline?.termsPresentedAt || at,
+                      termsAcceptedAt: event.target.checked ? at : null,
+                    },
+                  });
                 }}
               />
               קראתי ואני מאשר או מאשרת את כתב הוויתור
@@ -806,7 +1009,17 @@ export default function PublicActivityRegistration() {
             <p className="event-label">חתימה</p>
             <SignaturePad
               value={healthCurrent.signature}
-              onChange={(signature) => patchHealthParticipant(healthCurrent, { signature })}
+              onChange={(signature) => {
+                const at = new Date().toISOString();
+                patchHealthParticipant(healthCurrent, {
+                  signature,
+                  signatureEvidenceTimeline: {
+                    ...(healthCurrent.signatureEvidenceTimeline || {}),
+                    termsPresentedAt: healthCurrent.signatureEvidenceTimeline?.termsPresentedAt || at,
+                    signatureCapturedAt: signature ? at : null,
+                  },
+                });
+              }}
             />
           </section>
         )}
@@ -842,6 +1055,19 @@ export default function PublicActivityRegistration() {
                 </>
               )}
             </div>
+            {paidMode && activity.cancellation_policy && (
+              <div className="participant-card" style={{ marginTop: 16 }}>
+                <h3 style={{ marginTop: 0 }}>תנאי ביטול</h3>
+                <ul style={{ lineHeight: 1.7 }}>
+                  {(activity.cancellation_policy.rules || []).map((rule) => <li key={rule.id}>{cancellationRuleText(rule)}</li>)}
+                </ul>
+                {activity.cancellation_policy.free_text && <p className="event-hint" style={{ whiteSpace: 'pre-wrap' }}>{activity.cancellation_policy.free_text}</p>}
+                <label className="event-check">
+                  <input type="checkbox" checked={policyAccepted} onChange={(event) => setPolicyAccepted(event.target.checked)} />
+                  קראתי ואני מאשר/ת את תנאי הביטול
+                </label>
+              </div>
+            )}
             {!paidMode && <p className="event-free-note">אין צורך בתשלום</p>}
           </section>
         )}
@@ -864,7 +1090,7 @@ export default function PublicActivityRegistration() {
             </button>
           )}
           {step < 4 ? (
-            waitingForFamily && step === 1 ? null : (
+            (otp.stage === 'code' && step === 1) || (waitingForFamily && step === 1) ? null : (
               <button type="button" className="event-primary" onClick={next}>המשך</button>
             )
           ) : (
