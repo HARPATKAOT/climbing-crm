@@ -15,13 +15,13 @@ const TEMPLATES = [
 
 test('the declaration marked for an activity is the one that activity uses', () => {
   assert.equal(defaultSlugForType('trip', TEMPLATES), 'trip');
-  assert.equal(defaultSlugForType('event', TEMPLATES), 'event');
+  assert.equal(defaultSlugForType('event', TEMPLATES), 'wall');
   assert.equal(defaultSlugForType('wall', TEMPLATES), 'wall');
 });
 
-test('the three types that preceded the merge behave like an event', () => {
+test('events and their legacy types all use the wall scope', () => {
   for (const legacy of ['birthday', 'school', 'company']) {
-    assert.equal(defaultSlugForType(legacy, TEMPLATES), 'event', legacy);
+    assert.equal(defaultSlugForType(legacy, TEMPLATES), 'wall', legacy);
   }
 });
 
@@ -29,15 +29,14 @@ test('changing which declaration is marked changes what gets signed', () => {
   // The owner points trips at the wall-activity declaration instead, from the
   // health screen. Nothing in the code names slugs, so this just follows.
   const retagged = [
-    { slug: 'wall', activityType: 'wall' },
-    { slug: 'event', activityType: 'trip' },
+    { slug: 'wall', activityType: 'trip' },
   ];
-  assert.equal(defaultSlugForType('trip', retagged), 'event');
+  assert.equal(defaultSlugForType('trip', retagged), 'wall');
 });
 
-test('a type nobody marked falls through to the default declaration', () => {
-  assert.equal(declarationSlugForActivity({ type: 'personal_training' }, TEMPLATES), '');
-  assert.equal(declarationSlugForActivity({ type: 'route_building' }, TEMPLATES), '');
+test('all non-trip participant activities fall into the wall scope', () => {
+  assert.equal(declarationSlugForActivity({ type: 'personal_training' }, TEMPLATES), 'wall');
+  assert.equal(declarationSlugForActivity({ type: 'route_building' }, TEMPLATES), 'wall');
   assert.equal(declarationSlugForActivity({}, TEMPLATES), '');
 });
 
@@ -47,8 +46,19 @@ test('a declaration that was switched off is not used', () => {
 });
 
 test('an explicit choice on the event wins over the activity type', () => {
-  assert.equal(declarationSlugForActivity({ type: 'trip', form_template_slug: 'event' }, TEMPLATES), 'event');
+  assert.equal(declarationSlugForActivity({ type: 'trip', form_template_slug: 'event' }, TEMPLATES), 'wall');
   assert.equal(declarationSlugForActivity({ type: 'event', form_template_slug: 'trip' }, TEMPLATES), 'trip');
+});
+
+test('a stored id for the retired event template is ignored in favour of wall', () => {
+  const seen = [];
+  const db = { get: (table) => (table === 'form_templates' ? [
+    { id: 'ft_wall', slug: 'wall', activityType: 'wall', isActive: true },
+    { id: 'ft_event', slug: 'event', activityType: 'event', isActive: true },
+  ] : []) };
+  const resolve = (_db, args) => { seen.push(args); return args; };
+  declarationTemplateForActivity(db, { type: 'event', form_template_id: 'ft_event' }, resolve);
+  assert.deepEqual(seen[0], { templateId: null, templateSlug: 'wall' });
 });
 
 test('the stored "wall" is not read as a choice', () => {

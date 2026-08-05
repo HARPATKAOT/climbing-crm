@@ -28,7 +28,7 @@ test('asked about a form, only that form counts', () => {
   const db = dbWith([decl('wall')]);
   assert.ok(findLatestValidDeclaration(db, { studentId: 's1', templateSlug: 'wall' }));
   assert.equal(findLatestValidDeclaration(db, { studentId: 's1', templateSlug: 'trip' }), null);
-  assert.equal(findLatestValidDeclaration(db, { studentId: 's1', templateSlug: 'event' }), null);
+  assert.ok(findLatestValidDeclaration(db, { studentId: 's1', templateSlug: 'event' }));
 });
 
 test('asked without a form, anything on file counts', () => {
@@ -42,6 +42,7 @@ test('a signature given under the old name still covers the form it became', () 
   // The wall-activity declaration was called `birthday` until it turned out to
   // cover company days and school groups too. Same document, same risks.
   const db = dbWith([decl('birthday')]);
+  assert.ok(findLatestValidDeclaration(db, { studentId: 's1', templateSlug: 'wall' }));
   assert.ok(findLatestValidDeclaration(db, { studentId: 's1', templateSlug: 'event' }));
   assert.ok(findLatestValidDeclaration(db, { studentId: 's1', templateSlug: 'birthday' }));
   assert.equal(findLatestValidDeclaration(db, { studentId: 's1', templateSlug: 'trip' }), null);
@@ -58,7 +59,13 @@ test('holding one form does not hide the other being missing', () => {
   const db = dbWith([decl('wall'), decl('trip', { id: 'hd_trip2' })]);
   assert.equal(findLatestValidDeclaration(db, { studentId: 's1', templateSlug: 'wall' })?.id, 'hd_wall');
   assert.equal(findLatestValidDeclaration(db, { studentId: 's1', templateSlug: 'trip' })?.id, 'hd_trip2');
-  assert.equal(findLatestValidDeclaration(db, { studentId: 's1', templateSlug: 'event' }), null);
+  assert.equal(findLatestValidDeclaration(db, { studentId: 's1', templateSlug: 'event' })?.id, 'hd_wall');
+});
+
+test('a historical event declaration now covers the canonical wall scope', () => {
+  const db = dbWith([decl('event')]);
+  assert.equal(findLatestValidDeclaration(db, { studentId: 's1', templateSlug: 'wall' })?.id, 'hd_event');
+  assert.equal(findLatestValidDeclaration(db, { studentId: 's1', templateSlug: 'trip' }), null);
 });
 
 test('an expired declaration of the right kind is still no cover', () => {

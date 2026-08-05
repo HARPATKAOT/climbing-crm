@@ -130,12 +130,24 @@ function normalizeLiabilityPartyText(text) {
 
 export function resolveDeclarationTemplate(db, { templateId, templateSlug } = {}) {
   const templates = db.get('form_templates') || [];
+  const idCandidate = templateId
+    ? templates.find((item) => String(item.id) === String(templateId))
+    : null;
+  const requestedScope = normalizeParticipationScope(
+    idCandidate?.slug || templateSlug || 'wall'
+  );
   const selected =
-    (templateId && templates.find((item) => String(item.id) === String(templateId))) ||
-    (templateSlug && templates.find((item) => item.slug === templateSlug && item.isActive !== false)) ||
+    (idCandidate
+      && !['event', 'birthday'].includes(String(idCandidate.slug || '').toLowerCase())
+      && idCandidate.isActive !== false
+      ? idCandidate
+      : null) ||
+    templates.find((item) => normalizeParticipationScope(item.slug) === requestedScope
+      && item.slug === requestedScope
+      && item.isActive !== false) ||
     templates.find((item) => item.isDefault && item.isActive !== false) ||
     templates.find((item) => item.slug === 'wall' && item.isActive !== false);
-  const selectedSlug = String(selected?.slug || templateSlug || 'wall').toLowerCase();
+  const selectedSlug = normalizeParticipationScope(selected?.slug || requestedScope);
   const medicalQuestions = CANONICAL_HEALTH_QUESTIONS.map((question) => ({ ...question }));
   // Old activity templates stored medical screening and scoped safety clauses
   // in one array. Health is now global, so every legacy screening question is
@@ -183,7 +195,7 @@ export function resolveDeclarationTemplate(db, { templateId, templateSlug } = {}
  * `birthday` until it turned out to cover company days and school groups too,
  * and signatures given under the old name still cover the same risks.
  */
-const EQUIVALENT_TEMPLATE_SLUGS = { birthday: 'event' };
+const EQUIVALENT_TEMPLATE_SLUGS = { birthday: 'wall', event: 'wall' };
 
 function templateKeyOf(value) {
   const key = String(value || '').trim().toLowerCase();

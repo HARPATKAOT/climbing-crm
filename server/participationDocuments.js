@@ -1,12 +1,10 @@
 export const PARTICIPATION_SCOPES = Object.freeze({
   WALL: 'wall',
-  EVENT: 'event',
   TRIP: 'trip',
 });
 
 export const PARTICIPATION_SCOPE_LABELS = Object.freeze({
   wall: 'פעילות בקיר',
-  event: 'השתתפות באירוע',
   trip: 'יציאה לטיול הליכה / סנפלינג / טיפוס / מערנות',
 });
 
@@ -27,7 +25,11 @@ export const CANONICAL_HEALTH_QUESTIONS = Object.freeze([
 
 export function normalizeParticipationScope(value) {
   const key = String(value || '').trim().toLowerCase();
-  if (key === 'birthday') return PARTICIPATION_SCOPES.EVENT;
+  // `event` and its older name `birthday` used to be a separate wall waiver.
+  // The risks and rules are now deliberately covered by the single wall scope;
+  // keeping these aliases here makes old links, activities and signed records
+  // compatible without creating a third document type again.
+  if (key === 'event' || key === 'birthday') return PARTICIPATION_SCOPES.WALL;
   return Object.values(PARTICIPATION_SCOPES).includes(key) ? key : PARTICIPATION_SCOPES.WALL;
 }
 
@@ -39,6 +41,5 @@ export function scopeForActivity(activity = {}) {
   if (explicit) return normalizeParticipationScope(explicit);
   const kind = String(activity.type || activity.category || '').trim().toLowerCase();
   if (['trip', 'טיול', 'hike', 'rappelling', 'caving'].includes(kind)) return PARTICIPATION_SCOPES.TRIP;
-  if (['birthday', 'event', 'company', 'school'].includes(kind)) return PARTICIPATION_SCOPES.EVENT;
   return PARTICIPATION_SCOPES.WALL;
 }

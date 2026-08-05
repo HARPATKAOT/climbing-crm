@@ -35,7 +35,7 @@ test('a July signature does not spill into the following season', () => {
   assert.equal(isHealthDeclarationValid('2026-07-15', day('2026-08-04')), true);
 });
 
-test('wall, event and trip waivers expire on 31 August two years after signing', () => {
+test('participation waivers expire on 31 August two years after signing', () => {
   const expiry = participationWaiverExpiryDate('2026-08-03');
   assert.equal(expiry.getFullYear(), 2028);
   assert.equal(expiry.getMonth(), 7);

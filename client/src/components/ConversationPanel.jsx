@@ -21,6 +21,7 @@ import {
   UserCheck,
   UserX,
   Clock,
+  X,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { normalizeTemplateVariables, buildPrefillValues } from './templateVariables.js';
@@ -54,36 +55,42 @@ function phonesMatchClient(a, b) {
 }
 
 const WINDOW_BADGE_STYLE = {
-  fontSize: 10,
-  padding: '3px 7px',
-  borderRadius: 6,
+  fontSize: 11,
+  height: 30,
+  padding: '0 8px',
+  boxSizing: 'border-box',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  borderRadius: 8,
   border: '1px solid var(--border)',
+  background: 'transparent',
+  color: 'var(--text-2)',
   whiteSpace: 'nowrap',
 };
 
 function windowTone(open) {
-  return open
-    ? { background: 'rgba(34,197,94,0.15)', color: '#4ade80' }
-    : { background: 'rgba(248,113,113,0.12)', color: '#F87171' };
+  return open ? '#34D399' : '#F87171';
 }
 
 function WindowBadge({ windows, channel }) {
   const w = windows?.[channel];
   if (!w) return null;
   return (
-    <span style={{ ...WINDOW_BADGE_STYLE, ...windowTone(w.open) }}>
-      {CHANNEL_LABELS[channel]}: {w.label}
+    <span style={WINDOW_BADGE_STYLE} title={`${CHANNEL_LABELS[channel]}: ${w.label}`}>
+      <MessageCircle size={14} style={{ color: windowTone(w.open), flexShrink: 0 }} />
+      <span>{w.label}</span>
     </span>
   );
 }
 
 const CONTACT_SYNC_TONES = {
-  synced: { background: 'rgba(34,197,94,0.15)', color: '#4ade80' },
-  missing: { background: 'rgba(251,191,36,0.12)', color: '#FBBF24' },
-  stale: { background: 'rgba(251,191,36,0.12)', color: '#FBBF24' },
-  no_phone: { background: 'rgba(148,163,184,0.12)', color: '#94A3B8' },
-  not_connected: { background: 'rgba(148,163,184,0.12)', color: '#94A3B8' },
-  error: { background: 'rgba(248,113,113,0.12)', color: '#F87171' },
+  synced: '#34D399',
+  missing: '#FBBF24',
+  stale: '#FBBF24',
+  no_phone: '#94A3B8',
+  not_connected: '#94A3B8',
+  error: '#F87171',
 };
 
 const CONTACT_SYNC_SHORT = {
@@ -135,7 +142,7 @@ function ContactSyncBadge({ parentId }) {
 
   // Without Google keys on the server the whole feature is off — stay silent.
   if (!info || info.state === 'not_configured') return null;
-  const tone = CONTACT_SYNC_TONES[info.state] || CONTACT_SYNC_TONES.error;
+  const iconColor = CONTACT_SYNC_TONES[info.state] || CONTACT_SYNC_TONES.error;
   const Icon = info.state === 'synced'
     ? UserCheck
     : info.state === 'missing' || info.state === 'stale'
@@ -148,17 +155,16 @@ function ContactSyncBadge({ parentId }) {
       onClick={() => check(true)}
       disabled={checking}
       title={contactSyncTitle(info)}
+      aria-label={checking ? 'בודק סנכרון איש קשר' : CONTACT_SYNC_SHORT[info.state] || info.label}
       style={{
         ...WINDOW_BADGE_STYLE,
-        ...tone,
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 4,
+        width: 30,
+        padding: 0,
+        justifyContent: 'center',
         cursor: checking ? 'default' : 'pointer',
       }}
     >
-      <Icon size={11} />
-      {checking ? 'בודק...' : CONTACT_SYNC_SHORT[info.state] || info.label}
+      <Icon size={14} style={{ color: iconColor, flexShrink: 0 }} />
     </button>
   );
 }
@@ -166,8 +172,9 @@ function ContactSyncBadge({ parentId }) {
 function ThreadWindowBadge({ thread, channel }) {
   if (channel === 'whatsapp' && thread?.window) {
     return (
-      <span style={{ ...WINDOW_BADGE_STYLE, ...windowTone(!!thread.window.open) }}>
-        וואטסאפ: {thread.window.label}
+      <span style={WINDOW_BADGE_STYLE} title={`וואטסאפ: ${thread.window.label}`}>
+        <MessageCircle size={14} style={{ color: windowTone(!!thread.window.open), flexShrink: 0 }} />
+        <span>{thread.window.label}</span>
       </span>
     );
   }
@@ -292,9 +299,9 @@ export function describeBotBadge(bot, now = Date.now()) {
 }
 
 const BOT_TONES = {
-  active: { color: '#4ade80', background: 'rgba(34,197,94,0.15)' },
-  paused: { color: '#FBBF24', background: 'rgba(251,191,36,0.14)' },
-  off: { color: '#94A3B8', background: 'rgba(148,163,184,0.14)' },
+  active: '#34D399',
+  paused: '#FBBF24',
+  off: '#94A3B8',
 };
 
 function messageMatchesThread(message, thread, parentPhone) {
@@ -314,9 +321,40 @@ function messageMatchesThread(message, thread, parentPhone) {
   return phonesMatchClient(message.phone, thread.phone);
 }
 
-export default function ConversationPanel({ parent, student, selectedThreadId = 'parent', fillHeight = false, onHandled }) {
+// These lists are shared by every conversation. Keeping them at module scope
+// prevents two identical API round trips each time staff move to another
+// customer, while the conversation itself can still refresh normally.
+let approvedTemplatesCache = null;
+let savedRepliesCache = null;
+let composerResourcesPromise = null;
+const conversationCache = new Map();
+
+async function loadComposerResources() {
+  if (Array.isArray(approvedTemplatesCache) && Array.isArray(savedRepliesCache)) {
+    return { templates: approvedTemplatesCache, savedReplies: savedRepliesCache };
+  }
+  if (!composerResourcesPromise) {
+    composerResourcesPromise = Promise.all([
+      fetch('/api/message-templates?approved=1&archived=1')
+        .then((res) => (res.ok ? res.json() : null))
+        .catch(() => null),
+      fetch('/api/saved-replies')
+        .then((res) => (res.ok ? res.json() : null))
+        .catch(() => null),
+    ]).then(([templates, savedReplies]) => {
+      if (Array.isArray(templates)) approvedTemplatesCache = templates;
+      if (Array.isArray(savedReplies)) savedRepliesCache = savedReplies;
+      return { templates, savedReplies };
+    }).finally(() => {
+      composerResourcesPromise = null;
+    });
+  }
+  return composerResourcesPromise;
+}
+
+export default function ConversationPanel({ parent, student, selectedThreadId = 'parent', fillHeight = false, onClose, onHandled, onConversationChange }) {
   const navigate = useNavigate();
-  const [data, setData] = useState(null);
+  const [data, setData] = useState(() => conversationCache.get(String(parent?.id || '')) || null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [markingHandled, setMarkingHandled] = useState(false);
@@ -330,8 +368,8 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
   const [channel, setChannel] = useState('whatsapp');
   const [activeThreadId, setActiveThreadId] = useState(selectedThreadId || 'parent');
   const [mode, setMode] = useState('text'); // text | template | saved | image
-  const [templates, setTemplates] = useState([]);
-  const [savedReplies, setSavedReplies] = useState([]);
+  const [templates, setTemplates] = useState(() => approvedTemplatesCache || []);
+  const [savedReplies, setSavedReplies] = useState(() => savedRepliesCache || []);
   const [selectedTemplate, setSelectedTemplate] = useState('');
   const [templateVars, setTemplateVars] = useState([]);
   const [showArchivedTemplates, setShowArchivedTemplates] = useState(false);
@@ -372,6 +410,8 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
   const requestedThreadIdRef = useRef(selectedThreadId || 'parent');
   // Skip overlapping quiet polls when a round trip is slower than the interval.
   const loadInFlightRef = useRef(false);
+  const currentParentIdRef = useRef(String(parent?.id || ''));
+  currentParentIdRef.current = String(parent?.id || '');
 
   const pickThread = (threadId) => {
     activeThreadIdRef.current = threadId;
@@ -382,7 +422,10 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
     const res = await fetch('/api/message-templates?approved=1&archived=1');
     const rows = res.ok ? await res.json().catch(() => null) : null;
     setTemplatesUnavailable(!Array.isArray(rows));
-    if (Array.isArray(rows)) setTemplates(rows);
+    if (Array.isArray(rows)) {
+      approvedTemplatesCache = rows;
+      setTemplates(rows);
+    }
   };
 
   /**
@@ -412,6 +455,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
 
   const load = async ({ quiet = false } = {}) => {
     if (!parent?.id) return;
+    const requestedParentId = String(parent.id);
     // A slow round trip must not stack quiet polls on top of itself.
     if (quiet && loadInFlightRef.current) return;
     loadInFlightRef.current = true;
@@ -422,32 +466,34 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
       // change, and re-fetching them every few seconds delayed new messages.
       let convRes;
       if (quiet) {
-        convRes = await fetch(`/api/conversations/${parent.id}`);
+        convRes = await fetch(`/api/conversations/${requestedParentId}`);
       } else {
-        const [cRes, tplRes, srRes] = await Promise.all([
-          fetch(`/api/conversations/${parent.id}`),
-          // Archived ones come along so the picker can offer them behind a
-          // toggle instead of a second round trip.
-          fetch('/api/message-templates?approved=1&archived=1'),
-          fetch('/api/saved-replies'),
+        const [cRes, resources] = await Promise.all([
+          fetch(`/api/conversations/${requestedParentId}`),
+          loadComposerResources(),
         ]);
         convRes = cRes;
 
         // Templates / saved replies first — don't lose them if conversation load fails
-        const tpls = tplRes.ok ? await tplRes.json().catch(() => null) : null;
+        const tpls = resources.templates;
         // A round trip that failed must not empty the picker. Background polls
         // run while the API restarts, and overwriting the list with [] made that
         // read as "Meta approved nothing" — sending staff to press a sync button
         // that fixes nothing, on a list that was fine a second earlier.
         setTemplatesUnavailable(!Array.isArray(tpls));
         if (Array.isArray(tpls)) setTemplates(tpls);
-        const srs = srRes.ok ? await srRes.json().catch(() => null) : null;
+        const srs = resources.savedReplies;
         if (Array.isArray(srs)) setSavedReplies(srs);
       }
 
       const conv = await convRes.json().catch(() => ({}));
       if (!convRes.ok) throw new Error(conv.error || 'טעינת שיחה נכשלה');
+      conversationCache.set(requestedParentId, conv);
+      // A slower previous customer must never replace the card that is now on
+      // screen. Its result stays cached for an instant return visit.
+      if (currentParentIdRef.current !== requestedParentId) return;
       setData(conv);
+      onConversationChange?.(requestedParentId, conv);
 
       const threads = Array.isArray(conv.threads) ? conv.threads : [];
       const preferredThreadId = conv.defaultThreadId || 'parent';
@@ -489,6 +535,10 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
       if (!quiet) setLoading(false);
     }
   };
+
+  useEffect(() => {
+    setData(conversationCache.get(String(parent?.id || '')) || null);
+  }, [parent?.id]);
 
   useEffect(() => {
     const requestedThreadId = selectedThreadId || 'parent';
@@ -572,6 +622,15 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
     channels: data?.channels || {},
     window: data?.windows?.whatsapp,
   };
+  const parentName = (() => {
+    const first = String(parent?.name || '').replace(/\s+/g, ' ').trim();
+    const last = String(parent?.lastName || '').replace(/\s+/g, ' ').trim();
+    if (!last || first.endsWith(last)) return first;
+    return [first, last].filter(Boolean).join(' ');
+  })();
+  const conversationName = activeThread?.role === 'student'
+    ? (student?.name || activeThread?.label || 'מתאמן')
+    : (parentName || activeThread?.label || 'לקוח');
   const threadChannels = activeThread?.channels || data?.channels || {};
   const allMessages = data?.messages || [];
   const messages = allMessages.filter((m) => messageMatchesThread(m, activeThread, parent?.phone));
@@ -847,28 +906,29 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          gap: 8,
-          padding: fillHeight ? '12px 14px' : undefined,
+          gap: 6,
+          padding: fillHeight ? '8px 14px' : undefined,
           borderBottom: fillHeight ? '1px solid var(--border)' : undefined,
           flexShrink: 0,
         }}
       >
-        <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6, margin: 0, minWidth: 0 }}>
-          <MessageCircle size={15} />
-          <span style={{ whiteSpace: 'nowrap' }}>שיחה עם</span>
-          <span style={{ color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {activeThread?.label || parent?.name || 'לקוח'}
-          </span>
-          <span style={{ fontSize: 10, color: 'var(--text-3)', fontWeight: 600, whiteSpace: 'nowrap' }}>
-            {activeThread?.role === 'student' ? 'מתאמן' : 'הורה'}
-          </span>
+        <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <div
+              className="section-title"
+              title={conversationName}
+              style={{ margin: 0, flexShrink: 0, maxWidth: 180, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            >
+              {conversationName}
+            </div>
+            {channel === 'whatsapp' && activeThread?.window ? (
+              <ThreadWindowBadge thread={activeThread} channel={channel} />
+            ) : (
+              <WindowBadge windows={data?.windows} channel={channel} />
+            )}
+          </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          {channel === 'whatsapp' && activeThread?.window ? (
-            <ThreadWindowBadge thread={activeThread} channel={channel} />
-          ) : (
-            <WindowBadge windows={data?.windows} channel={channel} />
-          )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap', justifyContent: 'center', minWidth: 0 }}>
           <ContactSyncBadge parentId={parent.id} />
           {botBadge && (
             <div ref={botMenuRef} style={{ position: 'relative' }}>
@@ -880,20 +940,17 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                 aria-haspopup="menu"
                 aria-expanded={botMenuOpen}
                 style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
+                  ...WINDOW_BADGE_STYLE,
+                  width: 44,
+                  padding: 0,
+                  justifyContent: 'center',
                   gap: 4,
-                  fontSize: 10,
-                  padding: '3px 7px',
-                  borderRadius: 6,
+                  lineHeight: 0,
                   cursor: botBusy ? 'default' : 'pointer',
-                  border: '1px solid var(--border)',
-                  ...BOT_TONES[botBadge.tone],
                 }}
               >
-                <botBadge.icon size={11} />
-                {botBusy ? 'מעדכן...' : botBadge.label}
-                <ChevronDown size={11} style={{ transform: botMenuOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+                <botBadge.icon size={15} style={{ color: BOT_TONES[botBadge.tone] || BOT_TONES.off, flexShrink: 0 }} />
+                <ChevronDown size={11} style={{ color: 'var(--text-3)', flexShrink: 0, transform: botMenuOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
               </button>
               {botMenuOpen && (
                 <div
@@ -957,18 +1014,39 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
           )}
           <button
             type="button"
-            className={`btn btn-xs ${awaitingHandling ? 'btn-success' : 'btn-ghost'}`}
+            className="btn btn-ghost btn-xs"
             onClick={handleMarkHandled}
             disabled={!awaitingHandling || markingHandled}
             title={awaitingHandling ? 'סיום הטיפול והסרת הלקוח מרשימת ההמתנה' : 'אין טיפול פתוח ללקוח זה'}
+            aria-label={markingHandled ? 'מסיים טיפול' : awaitingHandling ? 'סיום טיפול' : 'הטיפול הסתיים'}
+            style={{ ...WINDOW_BADGE_STYLE, width: 30, padding: 0, justifyContent: 'center' }}
           >
-            <CheckCircle2 size={12} />
-            {markingHandled ? 'מסיים...' : awaitingHandling ? 'סיום טיפול' : 'הטיפול הסתיים'}
+            <CheckCircle2 size={14} style={{ color: awaitingHandling ? '#34D399' : 'var(--text-3)', flexShrink: 0 }} />
           </button>
-          <button type="button" className="btn btn-ghost btn-xs" onClick={() => load()} disabled={loading}>
-            <RefreshCw size={12} /> רענון
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs btn-icon"
+            onClick={() => load()}
+            disabled={loading}
+            title="רענון השיחה"
+            aria-label="רענון השיחה"
+            style={{ ...WINDOW_BADGE_STYLE, width: 30, padding: 0, justifyContent: 'center' }}
+          >
+            <RefreshCw size={14} />
           </button>
         </div>
+        {onClose && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon btn-xs"
+            onClick={onClose}
+            title="סגירת התיק"
+            aria-label="סגירת התיק"
+            style={{ width: 30, height: 30, border: '1px solid var(--border)', background: 'transparent', flexShrink: 0 }}
+          >
+            <X size={15} />
+          </button>
+        )}
       </div>
 
       <div
@@ -1035,16 +1113,6 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
             <button type="button" className="btn btn-ghost btn-xs" onClick={() => load()} disabled={loading}>
               <RefreshCw size={12} /> {loading ? 'טוען' : 'טעינה מחדש'}
             </button>
-          </div>
-        )}
-
-        {channel === 'whatsapp' && activeThread?.phone && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '8px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-            <span style={{ fontSize: 10, color: 'var(--text-3)', alignSelf: 'center' }}>
-              {activeThread.role === 'student' ? 'נשלח למתאמן' : 'נשלח להורה'}
-              {' · '}
-              <span style={{ direction: 'ltr', unicodeBidi: 'plaintext' }}>{activeThread.phone}</span>
-            </span>
           </div>
         )}
 

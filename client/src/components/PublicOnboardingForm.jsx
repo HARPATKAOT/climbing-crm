@@ -339,9 +339,7 @@ function ExistingDeclarationSummary({ participant, questions, templateSlug }) {
   const positiveQuestions = answeredQuestions.filter((question) => storedAnswers[question.id] === true);
   const activityLabel = templateSlug === 'trip'
     ? 'אישור טיולים'
-    : templateSlug === 'event'
-      ? 'אישור פעילות באירוע'
-      : 'אישור פעילות בקיר';
+    : 'אישור פעילות בקיר';
   const signedAt = health?.signedAt || participant?.onFileHealthSignedAt || '';
   const waiverSignedAt = waiver?.signedAt || participant?.onFileWaiverSignedAt || '';
 
@@ -592,7 +590,7 @@ export default function PublicOnboardingForm() {
   const waiverText = withSignerName(template?.waiverText || fallbackWaiver, signerName);
   const declarationContextLabel = template?.slug === 'trip'
     ? 'הצהרת בריאות לטיול'
-    : (template?.slug === 'event' ? 'הצהרת בריאות לפעילות בקיר' : 'הצהרת בריאות');
+    : 'הצהרת בריאות';
   // The three parts of the declaration, each named — the same headings the
   // activity page shows, so a family meets one document twice, not two.
   const sectionTitles = declarationSectionTitles({ ...(template || {}), waiverText });

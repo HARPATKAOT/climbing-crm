@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { awaitingSince, isAwaitingHandling } from './communicationQueue.js';
+import { awaitingSince, isAwaitingHandling, threadIsAwaitingReply } from './communicationQueue.js';
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -60,4 +60,35 @@ test('the queue sorts by whichever happened last', () => {
   const messaged = { last_inbound_whatsapp: iso(now - 3 * HOUR) };
   const justSigned = [{ status: 'health_signed', healthSignedAt: iso(now - HOUR) }];
   assert.ok(awaitingSince({}, justSigned) > awaitingSince(messaged, []));
+});
+
+test('reply indicator belongs only to the exact family member whose last message is inbound', () => {
+  const conversation = {
+    parent: { phone: '0501111111' },
+    threads: [
+      { id: 'parent', role: 'parent', phone: '0501111111' },
+      { id: 'student:s1', role: 'student', studentId: 's1', phone: '0522222222' },
+    ],
+    messages: [
+      { direction: 'inbound', phone: '0501111111', created_at: '2026-08-05T08:00:00.000Z' },
+      { direction: 'outbound', phone: '0501111111', created_at: '2026-08-05T08:01:00.000Z' },
+      { direction: 'inbound', phone: '0522222222', student_id: 's1', created_at: '2026-08-05T08:02:00.000Z' },
+    ],
+  };
+
+  assert.equal(threadIsAwaitingReply(conversation, 'parent'), false);
+  assert.equal(threadIsAwaitingReply(conversation, 'student:s1'), true);
+});
+
+test('an outbound reply clears only its own thread indicator', () => {
+  const conversation = {
+    parent: { phone: '0501111111' },
+    threads: [{ id: 'parent', role: 'parent', phone: '0501111111' }],
+    messages: [
+      { direction: 'inbound', channel: 'whatsapp', phone: '0501111111', created_at: '2026-08-05T08:00:00.000Z' },
+      { direction: 'outbound', channel: 'whatsapp', phone: '0501111111', created_at: '2026-08-05T08:03:00.000Z' },
+    ],
+  };
+
+  assert.equal(threadIsAwaitingReply(conversation, 'parent'), false);
 });

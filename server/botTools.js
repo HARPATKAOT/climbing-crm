@@ -181,7 +181,7 @@ export function spellOutDate(isoDate) {
  * The intake form, short. Keyed to the trainee when we know which one, so the
  * form opens on their record; otherwise to the phone, so a returning family is
  * recognised instead of being asked to type it again. Optional slug picks the
- * wall / event / trip form.
+ * wall / trip form (legacy event links resolve to wall).
  */
 function healthFormUrl(phone = '', studentId = '', slug = '') {
   const formSlug = String(slug || '').trim().toLowerCase();

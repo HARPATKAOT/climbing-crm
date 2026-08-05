@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ImagePlus, X } from 'lucide-react';
 import { compressImageFile, readImageFileAsDataUrl } from './productCategories.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
+import { normalizeParticipationScope } from '../utils/participationDocuments.js';
 
 function parsePosition(position) {
   const raw = String(position || '50% 50%').trim().toLowerCase();
@@ -308,13 +309,12 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
             <label className="event-field" style={{ margin: 0 }}>
               <span>האישור הנדרש מהמשתתפים</span>
               <select
-                value={form.participation_scope || (
-                  form.type === 'trip' ? 'trip' : (form.type === 'event' ? 'event' : 'wall')
+                value={normalizeParticipationScope(
+                  form.participation_scope || (form.type === 'trip' ? 'trip' : 'wall')
                 )}
                 onChange={(event) => patch({ participation_scope: event.target.value })}
               >
                 <option value="wall">אישור פעילות בקיר</option>
-                <option value="event">אישור השתתפות באירוע</option>
                 <option value="trip">יציאה לטיול הליכה / סנפלינג / טיפוס / מערנות</option>
               </select>
             </label>

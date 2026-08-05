@@ -13,6 +13,7 @@
  */
 
 import { isEventType } from './eventKinds.js';
+import { normalizeParticipationScope } from './participationDocuments.js';
 
 /**
  * מי מחליט מה ברירת המחדל: **שדה „סוג הפעילות” על ההצהרה עצמה**, במסך עריכת
@@ -26,21 +27,25 @@ export function templateActivityTypes(template) {
   const list = Array.isArray(template?.activityTypes)
     ? template.activityTypes
     : (Array.isArray(template?.activity_types) ? template.activity_types : null);
-  if (list && list.length) return list.map((t) => String(t || '').trim().toLowerCase()).filter(Boolean);
+  if (list && list.length) return [...new Set(list
+    .map((t) => normalizeParticipationScope(t))
+    .filter(Boolean))];
   const single = String(template?.activityType || template?.activity_type || '').trim().toLowerCase();
-  return single ? [single] : [];
+  return single ? [normalizeParticipationScope(single)] : [];
 }
 
 export function defaultSlugForType(type, templates = []) {
   const key = String(type || '').trim().toLowerCase();
   if (!key) return '';
-  // סוגי האירוע שקדמו לאיחוד מתנהגים כמו „אירוע”.
-  const wanted = isEventType(key) ? 'event' : key;
+  // אירועים בקיר, חוגים, כניסות ואימונים חולקים אישור קיר אחד. רק יציאה
+  // לשטח מקבלת מסמך נפרד.
+  const wanted = normalizeParticipationScope(isEventType(key) ? 'wall' : key);
   const match = (templates || []).find((t) => {
     if (t?.isActive === false) return false;
+    if (['event', 'birthday'].includes(String(t?.slug || '').toLowerCase())) return false;
     return templateActivityTypes(t).includes(wanted);
   });
-  return String(match?.slug || '').trim().toLowerCase();
+  return match ? normalizeParticipationScope(match.slug) : '';
 }
 
 /**
@@ -48,7 +53,9 @@ export function defaultSlugForType(type, templates = []) {
  * מחזיר '' כשאין העדפה — ואז נופלים להצהרת ברירת המחדל.
  */
 export function declarationSlugForActivity(activity, templates = []) {
-  const explicit = String(activity?.form_template_slug || activity?.formTemplateSlug || '').trim().toLowerCase();
+  const rawExplicit = String(activity?.form_template_slug || activity?.formTemplateSlug || '').trim().toLowerCase();
+  const explicit = rawExplicit ? normalizeParticipationScope(rawExplicit) : '';
+  if (['event', 'birthday'].includes(rawExplicit)) return 'wall';
   // 'wall' הוא מה שנשמר אוטומטית על כל אירוע מאז ומעולם, ולכן הוא לא עדות
   // לבחירה — רק בחירה שנבדלת מברירת המחדל הישנה נחשבת מפורשת.
   if (explicit && explicit !== 'wall') return explicit;
@@ -61,8 +68,16 @@ export function declarationSlugForActivity(activity, templates = []) {
  * הזה יישאר בר-בדיקה בלי מסד נתונים.
  */
 export function declarationTemplateForActivity(db, activity, resolve) {
-  const templateId = activity?.form_template_id || activity?.formTemplateId || null;
+  const storedTemplateId = activity?.form_template_id || activity?.formTemplateId || null;
   const templates = db?.get?.('form_templates') || [];
   const templateSlug = declarationSlugForActivity(activity, templates);
+  const storedTemplate = storedTemplateId
+    ? templates.find((template) => String(template.id) === String(storedTemplateId))
+    : null;
+  // An old activity may point by id at the retired event template. Its legal
+  // scope is wall now, so resolve by canonical slug instead of resurrecting it.
+  const templateId = !storedTemplate || !['event', 'birthday'].includes(String(storedTemplate.slug || '').toLowerCase())
+    ? storedTemplateId
+    : null;
   return resolve(db, { templateId, templateSlug });
 }

@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { requiresDurableStore, publicStoreUnavailableError } from './runtimeSafety.js';
+import {
+  requiresDurableStore,
+  publicStoreUnavailableError,
+  scheduledJobsEnabled,
+} from './runtimeSafety.js';
 
 test('durable store is mandatory in production and on Render', () => {
   assert.equal(requiresDurableStore({ NODE_ENV: 'production' }), true);
@@ -12,6 +16,19 @@ test('durable store is mandatory in production and on Render', () => {
 test('local development may run with fixture data', () => {
   assert.equal(requiresDurableStore({ NODE_ENV: 'development' }), false);
   assert.equal(requiresDurableStore({}), false);
+});
+
+test('scheduled jobs run on production workers but stay off in local previews', () => {
+  assert.equal(scheduledJobsEnabled({ NODE_ENV: 'production' }), true);
+  assert.equal(scheduledJobsEnabled({ RENDER: 'true' }), true);
+  assert.equal(scheduledJobsEnabled({ RENDER_SERVICE_ID: 'srv-1' }), true);
+  assert.equal(scheduledJobsEnabled({ NODE_ENV: 'development' }), false);
+  assert.equal(scheduledJobsEnabled({}), false);
+});
+
+test('scheduled jobs require an explicit override outside production', () => {
+  assert.equal(scheduledJobsEnabled({ NODE_ENV: 'development', RUN_SCHEDULED_JOBS: 'true' }), true);
+  assert.equal(scheduledJobsEnabled({ NODE_ENV: 'production', RUN_SCHEDULED_JOBS: 'false' }), false);
 });
 
 test('public durable-store failure is retryable and not reported as missing data', () => {

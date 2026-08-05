@@ -5,6 +5,9 @@ import {
   dueFollowUps,
   findOpenFollowUp,
   followUpMessage,
+  claimFollowUpSend,
+  finishFollowUpSend,
+  releaseFollowUpSend,
   newFollowUpId,
   inWindowSendAt,
   planFollowUp,
@@ -131,4 +134,68 @@ test('two follow-ups born in the same tick keep separate ids', () => {
   // "check with me tomorrow" in one turn collided, and only one was ever sent.
   const ids = new Set(Array.from({ length: 200 }, () => newFollowUpId()));
   assert.equal(ids.size, 200);
+});
+
+function claimStore() {
+  const rows = [];
+  return {
+    rows,
+    get: (table) => (table === 'automation_sends' ? rows : []),
+    appendOnly: async (_table, record) => {
+      if (rows.some((row) => row.id === record.id)) return { ok: false, error: 'duplicate key' };
+      const saved = { ...record, created_at: record.created_at || record.claimed_at };
+      rows.push(saved);
+      return { ok: true, record: saved };
+    },
+    update: (_table, id, updates) => {
+      const index = rows.findIndex((row) => row.id === id);
+      if (index < 0) return null;
+      rows[index] = { ...rows[index], ...updates };
+      return rows[index];
+    },
+    deleteDurable: async (_table, id) => {
+      const index = rows.findIndex((row) => row.id === id);
+      if (index < 0) return { ok: false, notFound: true };
+      rows.splice(index, 1);
+      return { ok: true };
+    },
+  };
+}
+
+test('only one process can claim the same follow-up before sending', async () => {
+  const db = claimStore();
+  const row = { id: 'same-follow-up' };
+  const [first, second] = await Promise.all([
+    claimFollowUpSend(db, row, { date: TODAY, phone: '972500000000' }),
+    claimFollowUpSend(db, row, { date: TODAY, phone: '972500000000' }),
+  ]);
+
+  assert.equal([first, second].filter((result) => result.claimed).length, 1);
+  assert.equal(db.rows.length, 1);
+  assert.equal(db.rows[0].status, 'claimed');
+});
+
+test('a completed claim blocks repeats and a failed claim can be retried', async () => {
+  const db = claimStore();
+  const row = { id: 'follow-up-1' };
+  const first = await claimFollowUpSend(db, row, { date: TODAY });
+  assert.equal(first.claimed, true);
+
+  const persisted = [];
+  const finished = await finishFollowUpSend(db, first.id, {
+    persist: async (_table, record) => {
+      persisted.push(record);
+      return { ok: true };
+    },
+  });
+  assert.equal(finished.ok, true);
+  assert.equal(db.rows[0].status, 'sent');
+  assert.equal(persisted.length, 1);
+  assert.equal((await claimFollowUpSend(db, row, { date: TODAY })).claimed, false);
+
+  const retryRow = { id: 'follow-up-2' };
+  const retryClaim = await claimFollowUpSend(db, retryRow, { date: TODAY });
+  assert.equal(retryClaim.claimed, true);
+  assert.equal((await releaseFollowUpSend(db, retryClaim.id)).ok, true);
+  assert.equal((await claimFollowUpSend(db, retryRow, { date: TODAY })).claimed, true);
 });

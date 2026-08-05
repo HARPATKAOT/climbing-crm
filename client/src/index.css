@@ -790,6 +790,9 @@ input, select, textarea { font-family: var(--font); }
   padding: 12px 12px 14px;
   border-top: 1px solid color-mix(in srgb, var(--folder-accent) 22%, transparent);
 }
+.folder-row-headerless .folder-row-body {
+  border-top: none;
+}
 
 .btn-sm { padding: 6px 12px; font-size: 12px; }
 .btn-xs { padding: 4px 8px; font-size: 11px; }

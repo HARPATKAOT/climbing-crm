@@ -194,12 +194,12 @@ function expandRowStudents(row, allStudents, parents, household, parentById) {
  * on that household — a filter must not hide a sibling from the customer file.
  */
 export function buildFamilyRows(students, parents, allStudents) {
-  const parentById = new Map((parents || []).map((p) => [p.id, p]));
+  const parentById = new Map((parents || []).map((p) => [String(p.id), p]));
   const household = buildHouseholdIndex(allStudents || students, parents);
   const groups = new Map();
 
   for (const student of students || []) {
-    const parent = parentById.get(student.parentId) || null;
+    const parent = parentById.get(String(student.parentId)) || null;
     const phoneKey = normalizePhone(parent?.phone) || '';
     const groupKey = parent?.id && household.has(parent.id)
       ? `household:${household.find(parent.id)}`
@@ -252,12 +252,24 @@ export function buildFamilyRows(students, parents, allStudents) {
     });
     const statuses = [...new Set(sorted.map((s) => s.status).filter(Boolean))];
     const created = sorted.map((s) => s.created || (s.created_at ? String(s.created_at).split('T')[0] : '')).filter(Boolean).sort()[0] || '';
+    const primaryStudent = sorted.find((s) => !isParentOnlyLead(s) && !s.isAdult)
+      || sorted.find((s) => !isParentOnlyLead(s))
+      || sorted[0];
+    // The main parent shown in the leads table is the selected trainee's actual
+    // primary guardian. A completeness score is useful only as a fallback; it
+    // must never contradict the primary star shown in the family file.
+    const primaryParent = parentById.get(String(primaryStudent?.parentId || '')) || row.parent;
+    const orderedParents = [...row.parents].sort((a, b) => {
+      if (String(a.id) === String(primaryParent?.id)) return -1;
+      if (String(b.id) === String(primaryParent?.id)) return 1;
+      return 0;
+    });
     return {
       ...row,
+      parent: primaryParent,
+      parents: orderedParents,
       students: sorted,
-      primaryStudent: sorted.find((s) => !isParentOnlyLead(s) && !s.isAdult)
-        || sorted.find((s) => !isParentOnlyLead(s))
-        || sorted[0],
+      primaryStudent,
       statuses,
       created,
     };

@@ -206,6 +206,69 @@ export function dueFollowUps(db, { now = new Date() } = {}) {
     .sort((a, b) => String(a.due_at || a.due_date || '').localeCompare(String(b.due_at || b.due_date || '')));
 }
 
+export function followUpSendId(row) {
+  return `bf-${String(row?.id || '')}`;
+}
+
+/**
+ * Claim before talking to Meta. `automation_sends` has a durable unique
+ * (collection,id) key, so two API processes cannot both claim the same
+ * follow-up even when each holds an old in-memory copy of the open row.
+ */
+export async function claimFollowUpSend(db, row, {
+  date = israelDateStr(),
+  phone = '',
+  now = new Date(),
+} = {}) {
+  const id = followUpSendId(row);
+  if (!row?.id) return { claimed: false, id, reason: 'missing_followup_id' };
+  if ((db.get('automation_sends') || []).some((item) => String(item.id) === id)) {
+    return { claimed: false, id, reason: 'already_claimed' };
+  }
+  if (typeof db.appendOnly !== 'function') {
+    return { claimed: false, id, reason: 'durable_claim_unavailable' };
+  }
+
+  const claimedAt = new Date(now).toISOString();
+  const result = await db.appendOnly('automation_sends', {
+    id,
+    event: 'bot_followup',
+    date,
+    phone,
+    status: 'claimed',
+    claimed_at: claimedAt,
+  });
+  if (!result?.ok) {
+    return { claimed: false, id, reason: 'already_claimed', error: result?.error || '' };
+  }
+  return { claimed: true, id, record: result.record };
+}
+
+/** A successful claim stays as the permanent dedupe marker. */
+export async function finishFollowUpSend(db, claimId, {
+  persist = null,
+  now = new Date(),
+} = {}) {
+  const sentAt = new Date(now).toISOString();
+  const updated = db.update('automation_sends', claimId, {
+    status: 'sent',
+    sent_at: sentAt,
+  });
+  if (updated && typeof persist === 'function') {
+    const durable = await persist('automation_sends', updated);
+    if (durable?.ok === false) return { ok: false, error: durable.error || 'claim_finalize_failed' };
+  }
+  return { ok: true, record: updated || null };
+}
+
+/** A failed delivery releases the claim so a later scan may retry safely. */
+export async function releaseFollowUpSend(db, claimId) {
+  if (!claimId) return { ok: true };
+  if (typeof db.deleteDurable === 'function') return db.deleteDurable('automation_sends', claimId);
+  if (typeof db.delete === 'function') return { ok: db.delete('automation_sends', claimId) };
+  return { ok: false, error: 'claim_release_unavailable' };
+}
+
 /**
  * The message the customer gets. Built from what was promised, so "תבדוק איתי
  * מחר" comes back as that subject and a placement comes back asking about the

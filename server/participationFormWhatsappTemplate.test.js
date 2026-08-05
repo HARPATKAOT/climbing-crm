@@ -36,7 +36,7 @@ test('the button points at the API redirect with a dynamic suffix', () => {
 test('button param carries the form slug only when it is not the default wall form', () => {
   assert.equal(participationFormButtonParam('st1'), 'st1');
   assert.equal(participationFormButtonParam('st1', { slug: 'wall', isDefault: true }), 'st1');
-  assert.equal(participationFormButtonParam('st1', { slug: 'event' }), 'st1/event');
+  assert.equal(participationFormButtonParam('st1', { slug: 'event' }), 'st1');
   assert.equal(participationFormButtonParam('st1', { slug: 'trip' }), 'st1/trip');
   assert.equal(
     participationFormButtonParam('st1', { slug: 'trip' }, { healthOnly: true }),

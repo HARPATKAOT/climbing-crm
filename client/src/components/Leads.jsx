@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, UserRound, Star, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, FolderOpen, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, UserRound, Star, Phone, PhoneOff, AtSign, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, FolderOpen, Download, ReceiptText, History, RotateCw, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert, HeartPulse } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
 import {
@@ -25,6 +25,11 @@ import {
   templateShortLabel,
 } from '../utils/declarationKinds.js';
 import { studentDeclarationStatus } from '../utils/declarationStatus.js';
+import {
+  filterAndSortDocumentRows,
+  participationDocumentScope,
+  participationScopeValidity,
+} from '../utils/participationDocuments.js';
 import { safetyTestStatus, SAFETY_TONE } from '../utils/safetyValidity.js';
 import {
   FORM_FOLDER,
@@ -56,7 +61,7 @@ import {
   activityDayLabel,
   saveActivityAttendance,
 } from './ActivityAttendance.jsx';
-import { awaitingSince, isAwaitingHandling } from './communicationQueue.js';
+import { awaitingSince, isAwaitingHandling, threadIsAwaitingReply } from './communicationQueue.js';
 import { consecutiveAbsences } from '../scheduleUtils.js';
 import { studentGroupIds } from '../utils/studentGroups.js';
 import { passPurchasedText, passSubtitle } from '../utils/passes.js';
@@ -231,22 +236,6 @@ function ageLabel(birthDateStr) {
   return months != null && months >= 6 ? `${years} וחצי` : String(years);
 }
 
-function genderLabel(gender) {
-  const kind = genderKind(gender);
-  if (kind === 'male') return 'בן';
-  if (kind === 'female') return 'בת';
-  return gender || '—';
-}
-
-/** „בן 4 וחצי” בשורה אחת; אם חסר מין או תאריך לידה מציגים את מה שיש. */
-function ageWithGenderLabel(birthDateStr, gender) {
-  const age = ageLabel(birthDateStr);
-  const g = genderLabel(gender);
-  const prefix = g === 'בן' || g === 'בת' ? g : '';
-  if (!prefix) return age ?? '—';
-  return age ? `${prefix} ${age}` : prefix;
-}
-
 function parentDisplayName(parent) {
   if (!parent) return 'ללא הורה';
   const parts = parentNameParts(parent);
@@ -324,7 +313,7 @@ const sourceLabel = (m) => {
 
 /** Collapsible folder row for lead detail panel */
 /**
- * Declaration state for one climber, as icons: the scroll is the wall form,
+ * Declaration state for one climber, as icons: the climber is the wall form,
  * footprints the outdoor trip, gift a booked activity. Green means a valid
  * signature is on file, amber means it is missing or expired — the row is
  * scanned, not read, so the colour has to carry the answer.
@@ -335,8 +324,7 @@ const sourceLabel = (m) => {
 function DeclarationIcons({ status, validOnly = false, size = 13, onClick }) {
   const marks = [
     // האייקון מגיע מקטלוג סוגי ההצהרות, כדי שאותו סימן ישמש כאן ובתיק הלקוח.
-    { key: 'wall', Icon: DECLARATION_KINDS.wall.Icon, label: 'טופס השתתפות לקיר' },
-    { key: 'event', Icon: DECLARATION_KINDS.event.Icon, label: 'טופס השתתפות לפעילות בקיר' },
+    { key: 'wall', Icon: DECLARATION_KINDS.wall.Icon, label: 'אישור פעילות בקיר' },
     { key: 'trip', Icon: DECLARATION_KINDS.trip.Icon, label: 'טופס השתתפות לטיולים' },
   ];
   const validMarks = marks.filter(({ key }) => {
@@ -344,7 +332,7 @@ function DeclarationIcons({ status, validOnly = false, size = 13, onClick }) {
     return !!state?.signed && !state?.expired;
   });
   // Name-row mode: green icons for every valid signature; if none, one amber
-  // scroll so a missing wall form still reads at a glance.
+  // climber so a missing wall form still reads at a glance.
   const shown = validOnly
     ? (validMarks.length ? validMarks : marks.filter(({ key }) => key === 'wall'))
     : marks.filter(({ key }) => {
@@ -393,47 +381,28 @@ function DeclarationIcons({ status, validOnly = false, size = 13, onClick }) {
   );
 }
 
-function TraineeStateIcon({ trainee, size = 12 }) {
-  const label = trainee ? 'מתאמן' : 'לא מתאמן';
-  return (
-    <span
-      role="img"
-      aria-label={label}
-      title={label}
-      style={{ position: 'relative', width: size, height: size, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-    >
-      <Award size={size} color={trainee ? '#34D399' : 'var(--text-3)'} style={{ opacity: trainee ? 1 : 0.45 }} />
-      {!trainee && (
-        <span
-          aria-hidden="true"
-          style={{
-            position: 'absolute',
-            width: size + 3,
-            height: 1.5,
-            borderRadius: 2,
-            background: 'var(--text-3)',
-            transform: 'rotate(-45deg)',
-          }}
-        />
-      )}
-    </span>
-  );
-}
-
-function WhatsAppGlyph({ size = 14 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.46 1.32 4.96L2 22l5.25-1.38a9.9 9.9 0 0 0 4.79 1.22h.01c5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2Zm5.8 14.06c-.25.69-1.45 1.32-2 1.4-.51.08-1.16.11-1.87-.12-.43-.14-.98-.32-1.69-.63-2.97-1.28-4.9-4.27-5.05-4.47-.15-.2-1.2-1.6-1.2-3.05s.76-2.16 1.03-2.46c.27-.3.59-.37.79-.37l.57.01c.18.01.43-.07.82.63.4.96 1.36 3.32 1.48 3.56.12.25.2.53.04.83-.15.3-.23.49-.45.75-.22.26-.47.58-.67.78-.22.22-.46.46-.2.9.26.44 1.16 1.91 2.49 3.09 1.71 1.52 3.15 1.99 3.6 2.21.44.22.7.19.96-.11.26-.3 1.11-1.29 1.4-1.74.3-.44.6-.37 1-.22.4.15 2.53 1.19 2.96 1.41.44.22.73.33.84.51.11.18.11 1.05-.14 1.74Z" />
-    </svg>
-  );
-}
-
-function FolderRow({ id, title, icon: Icon, summary, open, onToggle, children, summaryColor, accent = 'var(--blue)' }) {
+function FolderRow({ id, title, icon: Icon, summary, open, onToggle, children, renderBody, summaryColor, accent = 'var(--blue)', style, headerless = false }) {
+  // Large folders contain maps, formatting and controls for years of customer
+  // history. A render callback means React does none of that work until the
+  // folder is actually opened.
+  const body = () => (renderBody ? renderBody() : children);
+  if (headerless) {
+    if (!open) return null;
+    return (
+      <div
+        data-folder-id={id}
+        className="folder-row folder-row-headerless open"
+        style={{ '--folder-accent': accent, ...style }}
+      >
+        <div className="folder-row-body">{body()}</div>
+      </div>
+    );
+  }
   return (
     <div
       data-folder-id={id}
       className={`folder-row ${open ? 'open' : ''}`}
-      style={{ '--folder-accent': accent }}
+      style={{ '--folder-accent': accent, ...style }}
     >
       <button type="button" className="folder-row-head" onClick={() => onToggle(id)}>
         {Icon && <Icon className="folder-row-icon" size={15} />}
@@ -459,13 +428,13 @@ function FolderRow({ id, title, icon: Icon, summary, open, onToggle, children, s
           }}
         />
       </button>
-      {open && <div className="folder-row-body">{children}</div>}
+      {open && <div className="folder-row-body">{body()}</div>}
     </div>
   );
 }
 
 // ─── Lead/Customer Card (detail sidebar) ────────────────────────────────────
-export function CustomerCard({ student, parent: primaryParent, parents: allParents = [], siblings = [], onSelectSibling, group, groups = [], onClose, onStatusChange, onDelete, onArchive, onUpdateStudent, onUpdateParent, pricelist, refreshData, canManageBilling = false, canViewComms = true, onCommunicationHandled }) {
+export function CustomerCard({ student, parent: primaryParent, parents: allParents = [], siblings = [], declarations: knownDeclarations = [], onSelectSibling, group, groups = [], onClose, onStatusChange, onDelete, onArchive, onUpdateStudent, onUpdateParent, pricelist, refreshData, canManageBilling = false, canViewComms = true, onCommunicationHandled }) {
   if (!student) return null;
 
   /**
@@ -478,6 +447,26 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     () => buildFamilyMemberTabs(siblings, allParents),
     [siblings, allParents]
   );
+  const householdParentCount = new Set(
+    (allParents || []).map((item) => String(item?.id || '')).filter(Boolean)
+  ).size;
+  const primaryAnchorStudent = (siblings || []).find(
+    (member) => !isParentOnlyLead(member) && !member?.isAdult
+  ) || (siblings || []).find((member) => !isParentOnlyLead(member)) || (parentOnly ? null : student);
+  const householdIdentityKey = (allParents || [])
+    .map((item) => String(item?.id || ''))
+    .filter(Boolean)
+    .sort()
+    .join('|');
+  const [familyPrimaryParentId, setFamilyPrimaryParentId] = useState(
+    primaryAnchorStudent?.parentId || primaryParent?.id || null
+  );
+  useEffect(() => {
+    setFamilyPrimaryParentId(primaryAnchorStudent?.parentId || primaryParent?.id || null);
+    // Switching between people in the same household must not move the primary
+    // badge. Reset it only when an entirely different household is opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [householdIdentityKey]);
   const selectedMemberTab = familyMemberTabs.find(
     (tab) => tab.student && String(tab.student.id) === String(student.id)
   ) || null;
@@ -498,6 +487,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [profileMode, setProfileMode] = useState(() => (
     parentOnly ? 'parent' : (selectedMemberTab?.kind || 'student')
   ));
+  const [conversationByParentId, setConversationByParentId] = useState({});
   useEffect(() => {
     const nextMember = familyMemberTabs.find(
       (tab) => tab.student && String(tab.student.id) === String(student.id)
@@ -536,6 +526,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [editingBroadcastLists, setEditingBroadcastLists] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [phoneCopied, setPhoneCopied] = useState(false);
+  const [emailCopied, setEmailCopied] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editingGroup, setEditingGroup] = useState(false);
   const [savingGroup, setSavingGroup] = useState(false);
@@ -547,7 +538,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [editBirthDate, setEditBirthDate] = useState(student.birthDate || '');
   const [editStudentPhone, setEditStudentPhone] = useState(student.phone || '');
   const [editGender, setEditGender] = useState(student.gender || '');
-  const [editNotes, setEditNotes] = useState(student.notes || '');
+  const [editStudentNotes, setEditStudentNotes] = useState(student.notes || '');
   const [editSegment, setEditSegment] = useState(student.segment || '');
   const [editNextFollowup, setEditNextFollowup] = useState(student.nextFollowup || '');
   const [editGroupIds, setEditGroupIds] = useState(() => studentGroupIds(student));
@@ -559,6 +550,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [editPhone, setEditPhone] = useState(parent?.phone || '');
   const [editEmail, setEditEmail] = useState(parent?.email || '');
   const [editCity, setEditCity] = useState(parent?.city || '');
+  const [editParentNotes, setEditParentNotes] = useState(parent?.notes || '');
   const [editSource, setEditSource] = useState(parent?.source || student.source || 'unknown');
   const [editFocus, setEditFocus] = useState('student'); // student | parent
   const [editError, setEditError] = useState('');
@@ -582,6 +574,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   // once the word is typed out by hand.
   const [pendingDocDelete, setPendingDocDelete] = useState(null);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [documentKindFilter, setDocumentKindFilter] = useState('all');
   const [openFolder, setOpenFolder] = useState(null);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showAddChild, setShowAddChild] = useState(false);
@@ -605,7 +598,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     setEditBirthDate(student.birthDate || '');
     setEditStudentPhone(student.phone || '');
     setEditGender(student.gender || '');
-    setEditNotes(isParentOnlyLead(student) ? (parent?.notes || '') : (student.notes || ''));
+    setEditStudentNotes(student.notes || '');
     setEditSegment(student.segment || '');
     setEditNextFollowup(student.nextFollowup || '');
     setEditGroupIds(studentGroupIds(student));
@@ -616,6 +609,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     setEditPhone(parent?.phone || '');
     setEditEmail(parent?.email || '');
     setEditCity(parent?.city || '');
+    setEditParentNotes(parent?.notes || '');
     setEditSource(parent?.source || student.source || 'unknown');
     setIsEditing(false);
     setEditFocus('student');
@@ -623,6 +617,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     setEditingGroup(false);
     setEditingFollowup(false);
     setOpenFolder(null);
+    setDocumentKindFilter('all');
     setShowHealthSendModal(false);
     setShowPaymentModal(false);
     setShowAddChild(false);
@@ -663,6 +658,15 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     setOpenFolder((cur) => (cur === id ? null : id));
   };
 
+  const openFolderView = (id, { documentFilter, testFilter } = {}) => {
+    const container = foldersScrollRef.current;
+    const row = container?.querySelector(`[data-folder-id="${id}"]`);
+    folderAnchorRef.current = row ? { id, top: row.getBoundingClientRect().top } : null;
+    if (documentFilter) setDocumentKindFilter(documentFilter);
+    if (testFilter) setTestKindFilter(testFilter);
+    setOpenFolder(id);
+  };
+
   useLayoutEffect(() => {
     const anchor = folderAnchorRef.current;
     folderAnchorRef.current = null;
@@ -675,9 +679,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   }, [openFolder]);
 
   useEffect(() => {
-    fetch('/api/health-declarations')
-      .then(res => res.ok ? res.json() : [])
-      .then(decls => {
+    const decls = knownDeclarations;
         const phoneKey = normPhone(parent?.phone);
         const studentName = String(student.name || '').trim();
         const studentFirst = studentName.split(/\s+/)[0] || '';
@@ -693,7 +695,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         };
         const match = (decls || []).find(matchesStudent);
         // Every declaration this student holds, newest first. A family can have
-        // one per activity — the wall, a birthday, a trip — and the file has to
+        // one per legal scope — wall activity or trip — and the file has to
         // show which of them are signed, not just that something is.
         const mine = (decls || []).filter(matchesStudent);
         mine.sort((a, b) => String(b.signedDate || b.date || '').localeCompare(String(a.signedDate || a.date || '')));
@@ -706,15 +708,19 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             waiverSignedAt: match.signedDate || match.date || new Date().toISOString(),
           });
         }
-      })
-      .catch(() => setHealthDecl(null));
-  }, [student.id, student.name, student.status, student.healthSignedAt, parent?.phone, onUpdateStudent]);
+  }, [knownDeclarations, student.id, student.name, student.status, student.healthSignedAt, parent?.phone, onUpdateStudent]);
 
   useEffect(() => {
     fetch('/api/form-templates')
       .then(res => res.ok ? res.json() : [])
       .then(list => {
-        const active = (list || []).filter(t => t.isActive !== false);
+        // Event/birthday used to be a third waiver. Old signatures remain in
+        // history, but staff can only send the two canonical scopes now.
+        const active = (list || []).filter((template) => (
+          template.isActive !== false
+          && !['event', 'birthday'].includes(String(template.slug || '').toLowerCase())
+          && ['wall', 'trip'].includes(templateKind(template).key)
+        ));
         setFormTemplates(active);
         const def = active.find(t => t.isDefault) || active[0];
         if (def) setSelectedFormSlug(def.slug);
@@ -1113,22 +1119,21 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     }
   };
 
-  /**
-   * Hand the "primary" badge to the parent whose tab is open. Primary is the
-   * parent the CRM addresses by default — reminders, links, invoices.
-   */
-  const handleMakePrimary = async () => {
-    if (!student?.id || !parent?.id || settingPrimary) return;
+  /** Primary belongs to the family anchor, never to whichever profile is open. */
+  const handleMakePrimary = async (targetParentId = parent?.id) => {
+    const targetStudentId = primaryAnchorStudent?.id || student?.id;
+    if (!targetStudentId || !targetParentId || settingPrimary) return;
     setSettingPrimary(true);
     try {
       const response = await fetch(
-        `/api/students/${encodeURIComponent(student.id)}/guardians/${encodeURIComponent(parent.id)}/primary`,
+        `/api/students/${encodeURIComponent(targetStudentId)}/guardians/${encodeURIComponent(targetParentId)}/primary`,
         { method: 'PUT' }
       );
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         throw new Error(body.error || 'עדכון ההורה הראשי נכשל');
       }
+      setFamilyPrimaryParentId(String(targetParentId));
       await refreshGuardians();
       refreshData?.();
     } catch (err) {
@@ -1717,7 +1722,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     setSavingEdit(true);
     setEditError('');
     try {
-      if (!parentOnly && editFocus !== 'parent') {
+      if (!parentOnly) {
         const trimmedStudentName = editStudentName.trim();
         if (!trimmedStudentName) {
           setEditError('יש למלא שם למתאמן');
@@ -1731,7 +1736,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             birthDate: editBirthDate,
             phone: editStudentPhone.trim(),
             gender: editGender || null,
-            notes: editNotes,
+            notes: editStudentNotes,
             segment: editSegment || null,
             nextFollowup: editNextFollowup || null,
             groupIds: editGroupIds,
@@ -1746,7 +1751,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         onUpdateStudent?.(student.id, sBody);
       }
 
-      if (parent?.id && editFocus !== 'student') {
+      if (parent?.id) {
         const first = editParentName.trim();
         const last = editParentLastName.trim();
         if (!first && !last) {
@@ -1765,7 +1770,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             email: editEmail,
             city: editCity,
             source: editSource,
-            notes: editNotes,
+            notes: editParentNotes,
             status: parentOnly ? student.status : undefined,
           })
         });
@@ -2198,25 +2203,74 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     }
   };
 
-  const healthSummary = !isHealthSigned
-    ? 'חסר'
-    : healthExpired
-      ? `פג תוקף · ${healthExpiry.toLocaleDateString('he-IL')}`
-      : `חתומה${healthExpiry ? ` · בתוקף עד ${healthExpiry.toLocaleDateString('he-IL')}` : ''}`;
-  const validParticipationWaivers = participationWaivers.filter((waiver) => {
-    if (waiver.status && waiver.status !== 'approved') return false;
-    const expiry = new Date(waiver.expires_at || waiver.expiresAt || 0);
-    return Number.isFinite(expiry.getTime()) && expiry.getTime() >= Date.now();
-  });
-  const validParticipationKinds = Array.from(new Map(
-    validParticipationWaivers.map((waiver) => {
-      const kind = declarationKind(waiver.scope || 'wall');
-      return [kind.key, kind];
-    })
-  ).values());
-  const participationSummary = validParticipationKinds.length
-    ? validParticipationKinds.map((kind) => kind.label).join(', ')
-    : 'אין אישור בתוקף';
+  const participationValidity = participationScopeValidity(participationWaivers);
+  const summaryIconSize = 23;
+  const summaryIconBoxSize = 25;
+  const summaryIconStrokeWidth = 1.9;
+  const documentStatusItems = [
+    {
+      key: 'health',
+      label: 'בריאות',
+      valid: isHealthSigned && !healthExpired,
+      Icon: HeartPulse,
+    },
+    ...['wall', 'trip'].map((scope) => {
+      const kind = declarationKind(scope);
+      return {
+        key: scope,
+        label: kind.label,
+        valid: participationValidity[scope],
+        Icon: kind.Icon,
+      };
+    }),
+  ];
+  const documentsSummary = (
+    <span
+      aria-label="מצב מסמכי בריאות והשתתפות"
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 7, direction: 'rtl' }}
+    >
+      {documentStatusItems.map((item) => {
+        const color = item.valid ? '#34D399' : '#F87171';
+        const title = `${item.label}: ${item.valid ? 'בתוקף' : 'חסר או לא בתוקף'}`;
+        const documentFilter = item.key === 'health' ? 'health' : `participation:${item.key}`;
+        return (
+          <button
+            type="button"
+            key={item.key}
+            title={title}
+            aria-label={title}
+            aria-pressed={openFolder === 'health' && documentKindFilter === documentFilter}
+            onClick={() => openFolderView('health', { documentFilter })}
+            style={{
+              width: summaryIconBoxSize,
+              height: summaryIconBoxSize,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+              border: 'none',
+              background: 'transparent',
+              color,
+              lineHeight: 1,
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+          >
+            <item.Icon size={summaryIconSize} strokeWidth={summaryIconStrokeWidth} />
+          </button>
+        );
+      })}
+    </span>
+  );
+  const climbingLevel = highestPassedLevel(levelTestsHistory) || student.levelGrade || null;
+  const climbingLevelTint = climbingLevel?.startsWith('5')
+    ? '#3B82F6'
+    : climbingLevel?.startsWith('6')
+      ? '#16A34A'
+      : climbingLevel ? '#F97316' : 'var(--text-3)';
+  const safetyTone = SAFETY_TONE[punchSafety.state] || SAFETY_TONE.missing;
+  const SafetyStatusIcon = safetyTone.alert ? ShieldAlert : ShieldCheck;
+  const absenceStreak = consecutiveAbsences(attendanceHistory);
   const studentGroups = groups.filter((g) => studentGroupIds(student).includes(String(g.id)));
   const groupSummary = studentGroups.length === 0
     ? 'לא משויך'
@@ -2319,36 +2373,33 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const testsSummary = levelTestsHistory.length === 0
     ? 'אין מבחנים'
     : `${levelTestsHistory.length} מבחנים`;
-  const statusSummary = STATUSES[student.status]?.label || student.status || '—';
+  const studentStatusMeta = STATUSES[student.status];
+  const statusSummary = studentStatusMeta?.label || student.status || '—';
+  const statusColor = studentStatusMeta?.color || '#60A5FA';
   const mailingListSummary = (() => {
     if (!parent?.id) return 'אין הורה';
     const active = broadcastListDefs.filter((list) => broadcastLists[list.key] !== false).length;
     return `${active}/${broadcastListDefs.length} רשימות`;
   })();
 
-  const openParentEditor = () => {
+  const openUnifiedEditor = () => {
     const nextParentName = parentNameParts(parent);
-    setEditFocus('parent');
+    setEditFocus(parentOnly ? 'parent' : 'student');
+    setEditStudentName(student.name || '');
+    setEditBirthDate(student.birthDate || '');
+    setEditStudentPhone(student.phone || '');
+    setEditGender(student.gender || '');
+    setEditStudentNotes(student.notes || '');
+    setEditNextFollowup(student.nextFollowup || '');
+    setEditGroupIds(studentGroupIds(student));
     setEditParentName(nextParentName.firstName);
     setEditParentLastName(nextParentName.lastName);
     setEditParentIdNumber(parent?.idNumber || '');
     setEditPhone(parent?.phone || '');
     setEditEmail(parent?.email || '');
     setEditCity(parent?.city || '');
-    setEditNotes(parent?.notes || '');
-    setEditError('');
-    setIsEditing(true);
-  };
-
-  const openStudentEditor = () => {
-    setEditFocus('student');
-    setEditStudentName(student.name || '');
-    setEditBirthDate(student.birthDate || '');
-    setEditStudentPhone(student.phone || '');
-    setEditGender(student.gender || '');
-    setEditNotes(student.notes || '');
-    setEditNextFollowup(student.nextFollowup || '');
-    setEditGroupIds(studentGroupIds(student));
+    setEditParentNotes(parent?.notes || '');
+    setEditSource(parent?.source || student.source || 'unknown');
     setEditError('');
     setIsEditing(true);
   };
@@ -2381,6 +2432,54 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     return { parentId: tab.parent.id, threadId: 'parent' };
   };
 
+  const conversationParentIds = [...new Set(
+    familyMemberTabs
+      .map((tab) => communicationTargetForTab(tab)?.parentId)
+      .filter(Boolean)
+      .map(String)
+  )];
+  const conversationRefreshKey = conversationParentIds
+    .map((parentId) => {
+      const targetParent = (allParents || []).find((item) => String(item.id) === parentId);
+      return [
+        parentId,
+        targetParent?.last_inbound_whatsapp || '',
+        targetParent?.last_inbound_instagram || '',
+        targetParent?.last_inbound_messenger || '',
+      ].join(':');
+    })
+    .join('|');
+
+  useEffect(() => {
+    if (!canViewComms || !conversationParentIds.length) return undefined;
+    // ConversationPanel already loads the communication card on screen. Only
+    // prefetch the other household contacts for their waiting indicators.
+    const parentIdsToPrefetch = conversationParentIds.filter(
+      (parentId) => String(parentId) !== String(communicationParent?.id || '')
+    );
+    if (!parentIdsToPrefetch.length) return undefined;
+    let cancelled = false;
+    Promise.all(parentIdsToPrefetch.map(async (parentId) => {
+      const response = await fetch(`/api/conversations/${encodeURIComponent(parentId)}`);
+      if (!response.ok) return [parentId, null];
+      return [parentId, await response.json().catch(() => null)];
+    })).then((entries) => {
+      if (cancelled) return;
+      setConversationByParentId((current) => ({ ...current, ...Object.fromEntries(entries) }));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+    // The key includes every target parent and their newest inbound timestamps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canViewComms, conversationRefreshKey]);
+
+  const rememberConversation = (parentId, conversation) => {
+    if (!parentId || !conversation) return;
+    setConversationByParentId((current) => ({
+      ...current,
+      [String(parentId)]: conversation,
+    }));
+  };
+
   const selectCommunicationMember = (tab) => {
     const target = communicationTargetForTab(tab);
     if (!target) return;
@@ -2393,12 +2492,34 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     ? `parent:${parent?.id || ''}`
     : `student:${student.id}`;
   const headerTitle = showStudentProfile ? student.name : parentDisplayName(parent);
-  const headerRole = profileMode === 'combined'
-    ? 'הורה / משלם + מתאמן'
-    : showFamilyProfile ? 'הורה / משלם' : 'תיק מתאמן';
+  const headerAge = showStudentProfile ? ageLabel(student.birthDate) : null;
+  const headerGenderKind = showStudentProfile ? genderKind(student.gender) : null;
+  const headerAgeColor = headerGenderKind === 'female' ? '#F472B6' : '#7DD3FC';
+  const headerDisplayTitle = headerTitle || (parentOnly ? 'ליד ללא מתאמן' : 'ללא שם');
   const profilePhone = showFamilyProfile
     ? (parent?.phone || (showStudentProfile ? student.phone : ''))
     : student.phone;
+  const linkedGuardianIds = new Set([
+    ...studentGuardianIds(primaryAnchorStudent),
+    ...(String(primaryAnchorStudent?.id) === String(student?.id)
+      ? guardians.map((guardian) => String(guardian.id))
+      : []),
+  ]);
+  const primaryGuardianId = familyPrimaryParentId
+    || primaryAnchorStudent?.parentId
+    || primaryParent?.id;
+  const familyTabGroups = [
+    {
+      key: 'parents',
+      label: 'הורים',
+      tabs: familyMemberTabs.filter((tab) => tab.kind !== 'student'),
+    },
+    {
+      key: 'children',
+      label: 'ילדים',
+      tabs: familyMemberTabs.filter((tab) => tab.kind === 'student'),
+    },
+  ].filter((group) => group.tabs.length);
 
   return (
     <>
@@ -2628,48 +2749,36 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             {/* This switcher is the fixed header. The selected person's variable
                 profile content lives below in the scroll area, preventing jumps. */}
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
-                <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-2)', letterSpacing: 0.2 }}>
-                  בני המשפחה · תיק מוצג
-                </span>
-                <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} aria-label="סגור">
-                  <X size={18} />
-                </button>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginBottom: 6, color: 'var(--text-3)', fontSize: 9 }}>
-                <span style={{ fontWeight: 800 }}>מקרא:</span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title="הורה">
-                  <Users size={11} color="#38BDF8" /> הורה
-                </span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title="ילד">
-                  <UserRound size={11} color="#FB923C" /> ילד
-                </span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                  <TraineeStateIcon trainee size={11} /> מתאמן
-                </span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                  <TraineeStateIcon trainee={false} size={11} /> לא מתאמן
-                </span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title="הורה ראשי">
-                  <Star size={11} color="#FBBF24" fill="#FBBF24" /> ראשי
-                </span>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6, alignItems: 'stretch' }}>
-                {familyMemberTabs.map((tab) => {
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {familyTabGroups.map((group) => (
+                  <div
+                    key={group.key}
+                    style={{
+                      minWidth: 0,
+                    }}
+                  >
+                    <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-3)', textAlign: 'right', marginBottom: 3 }}>
+                      {group.label}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6, alignItems: 'stretch' }}>
+                {group.tabs.map((tab) => {
                   const fileActive = tab.key === activeFamilyTabKey;
                   const conversationActive = tab.key === communicationMemberKey;
                   const communicationTarget = communicationTargetForTab(tab);
-                  const accent = tab.kind === 'student' ? '#FB923C' : tab.kind === 'combined' ? '#C084FC' : '#38BDF8';
+                  const conversationAwaiting = communicationTarget
+                    ? threadIsAwaitingReply(
+                      conversationByParentId[String(communicationTarget.parentId)],
+                      communicationTarget.threadId
+                    )
+                    : false;
                   const name = tab.student?.name || parentDisplayName(tab.parent);
                   const isParentEntity = tab.kind !== 'student';
-                  const isTrainee = tab.kind !== 'parent';
-                  const isPrimary = !!tab.parent && (
-                    String(tab.parent.id) === String(primaryParent?.id)
-                    || guardians.some((g) => String(g.id) === String(tab.parent.id) && g.primary)
-                  );
+                  const isPrimary = !!tab.parent
+                    && String(tab.parent.id) === String(primaryGuardianId);
+                  const canSetPrimary = !!tab.parent
+                    && linkedGuardianIds.has(String(tab.parent.id));
                   const roleDescription = [
                     isParentEntity ? 'הורה' : 'ילד',
-                    isTrainee ? 'מתאמן' : 'לא מתאמן',
                     isPrimary ? 'ראשי' : null,
                   ].filter(Boolean).join(' · ');
                   return (
@@ -2680,28 +2789,43 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         minWidth: 0,
                         padding: '5px 6px',
                         borderRadius: 10,
-                        border: `1px solid ${fileActive ? accent : 'var(--border)'}`,
-                        background: fileActive ? `${accent}18` : 'rgba(255,255,255,0.035)',
-                        color: fileActive ? 'var(--text-1)' : 'var(--text-2)',
+                        border: `1px solid ${fileActive ? 'rgba(148,163,184,0.38)' : 'var(--border)'}`,
+                        background: fileActive ? 'rgba(148,163,184,0.12)' : 'transparent',
+                        color: 'var(--text-2)',
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
-                          <span title={isParentEntity ? 'הורה' : 'ילד'} aria-label={isParentEntity ? 'הורה' : 'ילד'} style={{ display: 'inline-flex' }}>
-                            {isParentEntity
-                              ? <Users size={12} color="#38BDF8" />
-                              : <UserRound size={12} color="#FB923C" />}
+                        {canSetPrimary && isPrimary && (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
+                            <button
+                              type="button"
+                              aria-pressed={isPrimary}
+                              aria-label={isPrimary ? `${name} הוא ההורה הראשי` : `קביעת ${name} כהורה ראשי`}
+                              title={isPrimary ? 'הורה ראשי' : 'קבע כהורה ראשי'}
+                              disabled={settingPrimary}
+                              onClick={() => {
+                                if (!isPrimary) handleMakePrimary(tab.parent.id);
+                              }}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                padding: 0,
+                                border: 'none',
+                                background: 'transparent',
+                                color: isPrimary ? '#FBBF24' : 'var(--text-3)',
+                                cursor: isPrimary ? 'default' : 'pointer',
+                                opacity: settingPrimary ? 0.5 : 1,
+                              }}
+                            >
+                              <Star size={12} fill={isPrimary ? '#FBBF24' : 'none'} />
+                            </button>
                           </span>
-                          <TraineeStateIcon trainee={isTrainee} size={12} />
-                          {isPrimary && (
-                            <span title="הורה ראשי" aria-label="הורה ראשי" style={{ display: 'inline-flex' }}>
-                              <Star size={12} color="#FBBF24" fill="#FBBF24" />
-                            </span>
-                          )}
-                        </span>
-                        <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, fontWeight: fileActive ? 800 : 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        )}
+                        <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, fontWeight: 700, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {name}
                         </span>
+                        {tab.student && <GenderMark gender={tab.student.gender} size={13} />}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
                           <button
                             type="button"
@@ -2732,7 +2856,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                             aria-label={communicationTarget ? `מעבר לשיחה עם ${name}` : `אין ל${name} מספר טלפון עצמאי`}
                             onClick={() => selectCommunicationMember(tab)}
                             disabled={!communicationTarget}
-                            title={communicationTarget ? `מעבר לשיחת הוואטסאפ עם ${name}` : 'אין למתאמן מספר טלפון עצמאי'}
+                            title={communicationTarget ? `מעבר לשיחה עם ${name}` : 'אין למתאמן מספר טלפון עצמאי'}
                             style={{
                               width: 26,
                               height: 26,
@@ -2741,21 +2865,39 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                               display: 'inline-flex',
                               alignItems: 'center',
                               justifyContent: 'center',
+                              position: 'relative',
                               borderRadius: 8,
-                              border: `1px solid ${conversationActive ? 'rgba(37,211,102,0.75)' : 'rgba(148,163,184,0.2)'}`,
-                              background: conversationActive ? 'rgba(37,211,102,0.18)' : 'rgba(255,255,255,0.025)',
-                              color: conversationActive ? '#4ADE80' : 'var(--text-3)',
+                              border: `1px solid ${conversationActive ? 'rgba(52,211,153,0.75)' : 'rgba(148,163,184,0.2)'}`,
+                              background: 'rgba(255,255,255,0.025)',
+                              color: conversationActive ? '#34D399' : 'var(--text-3)',
                               cursor: communicationTarget ? 'pointer' : 'not-allowed',
                               opacity: communicationTarget ? 1 : 0.35,
                             }}
                           >
-                            <WhatsAppGlyph size={14} />
+                            <MessageCircle size={14} strokeWidth={2} />
+                            {conversationAwaiting && (
+                              <span
+                                aria-label="שיחה ממתינה לטיפול"
+                                style={{
+                                  position: 'absolute',
+                                  top: -2,
+                                  insetInlineEnd: -2,
+                                  width: 7,
+                                  height: 7,
+                                  borderRadius: '50%',
+                                  background: '#FBBF24',
+                                }}
+                              />
+                            )}
                           </button>
                         </div>
                       </div>
                     </div>
                   );
                 })}
+                    </div>
+                  </div>
+                ))}
               </div>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
                 {parent?.id && (
@@ -2769,12 +2911,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                       setShowAddChild(true);
                     }}
                     style={{ borderRadius: 10, border: '1px dashed var(--border)', gap: 4 }}
-                    title="הוספת ילד או מתאמן לתיק המשפחה"
+                    title="הוספת ילד לתיק המשפחה"
                   >
-                    <Plus size={12} /> מתאמן
+                    <Plus size={12} /> הוסף ילד
                   </button>
                 )}
-                {!parentOnly && contactCandidates.length > 0 && (
+                {!parentOnly && contactCandidates.length > 0 && householdParentCount < 2 && (
                   <button
                     type="button"
                     className="btn btn-ghost btn-xs"
@@ -2782,7 +2924,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     title="הורה שני, סבתא או מטפלת — איש קשר בתיק, בלי לפתוח כרטיס מתאמן"
                     onClick={openAddContact}
                   >
-                    <Plus size={12} /> איש קשר
+                    <Plus size={12} /> הוסף איש קשר
                   </button>
                 )}
               </div>
@@ -2793,6 +2935,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             ref={foldersScrollRef}
             style={{
               flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
               overflowY: 'auto',
               overscrollBehavior: 'contain',
               padding: '12px 14px 16px',
@@ -2802,101 +2946,334 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             {/* The profile belongs to the selected file and may scroll away. The
                 fixed family switcher above therefore keeps exactly one height. */}
             <div style={{ marginBottom: 12, paddingBottom: 10, borderBottom: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                    {showStudentProfile && (
-                      <DeclarationIcons
-                        status={studentDeclarationStatus(studentDeclarations, student, parent?.phone)}
-                        validOnly
-                        size={15}
-                        onClick={() => toggleFolder('health')}
-                      />
-                    )}
-                    <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-1)', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {headerTitle || (parentOnly ? 'ליד ללא מתאמן' : 'ללא שם')}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 56 }}>
+                      <div
+                        title={headerDisplayTitle || undefined}
+                        style={{ minWidth: 0, fontSize: 18, fontWeight: 800, color: 'var(--text-1)', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      >
+                        {headerDisplayTitle}
+                      </div>
+                      {headerAge && (
+                        <span
+                          aria-label={`גיל ${headerAge}`}
+                          title={`גיל ${headerAge}`}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 2,
+                            flexShrink: 0,
+                            color: headerAgeColor,
+                            fontSize: 12,
+                            fontWeight: 800,
+                            lineHeight: 1,
+                          }}
+                        >
+                          <RotateCw size={14} strokeWidth={2.2} />
+                          <span>{headerAge}</span>
+                        </span>
+                      )}
                     </div>
+                    {profilePhone ? (
+                      <span
+                        aria-label="פעולות מספר הטלפון"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          flexShrink: 0,
+                          padding: 2,
+                          border: '1px solid var(--border)',
+                          borderRadius: 8,
+                          background: 'transparent',
+                          overflow: 'hidden',
+                          boxSizing: 'border-box',
+                        }}
+                      >
+                        <a
+                          href={`tel:${profilePhone}`}
+                          className="btn btn-ghost btn-xs"
+                          title="חיוג למספר הטלפון"
+                          aria-label="חיוג למספר הטלפון"
+                          style={{ width: 24, minWidth: 24, height: 24, padding: 0, margin: 0, gap: 0, justifyContent: 'center', border: 'none', borderRadius: 6, boxSizing: 'border-box', background: 'transparent' }}
+                        >
+                          <Phone size={13} />
+                        </a>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-icon btn-xs"
+                          title={phoneCopied ? 'הועתק' : 'העתקת המספר'}
+                          aria-label="העתקת מספר הטלפון"
+                          style={{ width: 24, minWidth: 24, height: 24, padding: 0, margin: 0, gap: 0, justifyContent: 'center', border: 'none', borderRadius: 6, boxSizing: 'border-box', background: 'transparent' }}
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(profilePhone);
+                              setPhoneCopied(true);
+                              setTimeout(() => setPhoneCopied(false), 1500);
+                            } catch { /* ignore */ }
+                          }}
+                        >
+                          {phoneCopied ? <Check size={12} color="var(--green)" /> : <Clipboard size={12} />}
+                        </button>
+                      </span>
+                    ) : (
+                      <span
+                        title="אין מספר טלפון"
+                        aria-label="אין מספר טלפון"
+                        style={{
+                          width: 30,
+                          minWidth: 30,
+                          height: 30,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0,
+                          border: '1px solid var(--border)',
+                          borderRadius: 8,
+                          boxSizing: 'border-box',
+                          background: 'transparent',
+                          color: 'var(--text-3)',
+                          opacity: 0.55,
+                        }}
+                      >
+                        <PhoneOff size={13} />
+                      </span>
+                    )}
+                    {showFamilyProfile && parent?.email && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-icon btn-xs"
+                        title={emailCopied ? 'כתובת המייל הועתקה' : 'העתקת כתובת המייל'}
+                        aria-label="העתקת כתובת המייל"
+                        style={{ background: 'transparent' }}
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(parent.email);
+                            setEmailCopied(true);
+                            setTimeout(() => setEmailCopied(false), 1500);
+                          } catch { /* ignore */ }
+                        }}
+                      >
+                        {emailCopied ? <Check size={12} color="var(--green)" /> : <AtSign size={13} />}
+                      </button>
+                    )}
+                    {showFamilyProfile && parent?.city && (
+                      <span
+                        title={parent.city}
+                        aria-label={`כתובת: ${parent.city}`}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 3,
+                          minWidth: 0,
+                          maxWidth: 78,
+                          height: 30,
+                          padding: '0 7px',
+                          flexShrink: 1,
+                          border: '1px solid var(--border)',
+                          borderRadius: 8,
+                          boxSizing: 'border-box',
+                          fontSize: 11,
+                          color: 'var(--text-2)',
+                          background: 'transparent',
+                        }}
+                      >
+                        <MapPin size={11} style={{ flexShrink: 0 }} />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{parent.city}</span>
+                      </span>
+                    )}
+                    {((showStudentProfile && student?.id) || (showFamilyProfile && parent?.id)) && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-icon btn-xs"
+                        onClick={openUnifiedEditor}
+                        title="עריכת פרטי התיק"
+                        aria-label="עריכת פרטי התיק"
+                        style={{ border: '1px solid var(--border)', background: 'transparent', flexShrink: 0 }}
+                      >
+                        <Edit2 size={13} />
+                      </button>
+                    )}
                   </div>
-                  <div style={{ fontSize: 11, color: profileMode === 'combined' ? '#C084FC' : 'var(--text-3)', marginTop: 2, fontWeight: profileMode === 'combined' ? 700 : 500 }}>
-                    {headerRole}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
                   {showStudentProfile && (
-                    <button type="button" className="btn btn-ghost btn-xs" onClick={openStudentEditor} title="עריכת פרטי המתאמן" style={{ border: '1px solid var(--border)', gap: 4 }}>
-                      <Edit2 size={11} /> מתאמן
-                    </button>
-                  )}
-                  {showFamilyProfile && parent?.id && (
-                    <button type="button" className="btn btn-ghost btn-xs" onClick={openParentEditor} title="עריכת פרטי ההורה והמשלם" style={{ border: '1px solid var(--border)', gap: 4 }}>
-                      <Edit2 size={11} /> {profileMode === 'combined' ? 'פרטי קשר' : 'ערוך'}
-                    </button>
+                    <div
+                      aria-label="סיכום מצב המתאמן"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 11,
+                        minHeight: 31,
+                        marginTop: 5,
+                        paddingTop: 5,
+                        borderTop: '1px solid rgba(148,163,184,0.12)',
+                      }}
+                    >
+                      <span
+                        aria-label="אישורי בריאות, השתתפות, בטיחות וסטטוס"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}
+                      >
+                        {documentsSummary}
+                        <button
+                          type="button"
+                          onClick={() => openFolderView('tests', { testFilter: 'security' })}
+                          title={`מבחן בטיחות: ${safetyTone.label}`}
+                          aria-label={`מבחן בטיחות: ${safetyTone.label}`}
+                          style={{
+                            width: summaryIconBoxSize,
+                            height: summaryIconBoxSize,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: 0,
+                            border: 'none',
+                            background: 'transparent',
+                            color: safetyTone.color,
+                            cursor: 'pointer',
+                            flexShrink: 0,
+                          }}
+                        >
+                          <SafetyStatusIcon size={summaryIconSize} strokeWidth={summaryIconStrokeWidth} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openFolderView('status')}
+                          title={`סטטוס: ${statusSummary}`}
+                          aria-label={`סטטוס: ${statusSummary}`}
+                          aria-pressed={openFolder === 'status'}
+                          style={{
+                            width: summaryIconBoxSize,
+                            height: summaryIconBoxSize,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: 0,
+                            border: 'none',
+                            background: 'transparent',
+                            color: statusColor,
+                            cursor: 'pointer',
+                            flexShrink: 0,
+                          }}
+                        >
+                          <Clipboard size={summaryIconSize} strokeWidth={summaryIconStrokeWidth} />
+                        </button>
+                      </span>
+                      <span
+                        role="separator"
+                        aria-orientation="vertical"
+                        style={{ width: 1, height: 20, flexShrink: 0, background: 'rgba(148,163,184,0.28)' }}
+                      />
+                      <span
+                        aria-label="דרגה והיעדרויות"
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => openFolderView('tests', { testFilter: 'level' })}
+                          title={`רמת טיפוס: ${climbingLevel || 'ללא מבחן רמה'}`}
+                          aria-label={`רמת טיפוס: ${climbingLevel || 'ללא מבחן רמה'}`}
+                          style={{
+                            width: summaryIconBoxSize,
+                            height: summaryIconBoxSize,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: 0,
+                            border: 'none',
+                            background: 'transparent',
+                            color: climbingLevelTint,
+                            cursor: 'pointer',
+                            font: 'inherit',
+                            flexShrink: 0,
+                          }}
+                        >
+                          <svg
+                            aria-hidden="true"
+                            viewBox="0 0 24 24"
+                            width={summaryIconSize}
+                            height={summaryIconSize}
+                            style={{ display: 'block' }}
+                          >
+                            <polygon points="12,1.5 21,6.8 21,17.2 12,22.5 3,17.2 3,6.8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                            <text
+                              x="12"
+                              y="14.7"
+                              fill="currentColor"
+                              textAnchor="middle"
+                              fontSize="8.2"
+                              fontWeight="900"
+                              style={{ fontFamily: 'inherit' }}
+                            >
+                              {climbingLevel || '—'}
+                            </text>
+                          </svg>
+                        </button>
+                        {!attendanceLoading && absenceStreak > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => openFolderView('attendance')}
+                            title={`העדרויות רצופות: ${absenceStreak}`}
+                            aria-label={`העדרויות רצופות: ${absenceStreak}`}
+                            style={{
+                                width: summaryIconBoxSize,
+                                height: summaryIconBoxSize,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              padding: 0,
+                              border: 'none',
+                              background: 'transparent',
+                              color: '#F87171',
+                              cursor: 'pointer',
+                              flexShrink: 0,
+                            }}
+                          >
+                            <svg aria-hidden="true" viewBox="0 0 24 24" width={summaryIconSize} height={summaryIconSize} style={{ display: 'block' }}>
+                              <path
+                                d="M5 21V10a7 7 0 0 1 14 0v11l-2.35-2-2.3 2-2.35-2-2.35 2-2.3-2L5 21Z"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.8"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                              <text
+                                x="12"
+                                y="13.7"
+                                fill="currentColor"
+                                textAnchor="middle"
+                                fontSize="8.2"
+                                fontWeight="900"
+                                style={{ fontFamily: 'inherit' }}
+                              >
+                                {absenceStreak}
+                              </text>
+                            </svg>
+                          </button>
+                        )}
+                      </span>
+                    </div>
                   )}
                 </div>
               </div>
-
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
-                {profilePhone ? (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-                    <a href={`tel:${profilePhone}`} className="btn btn-ghost btn-xs">
-                      <Phone size={12} /> {profilePhone}
-                    </a>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-icon btn-xs"
-                      title={phoneCopied ? 'הועתק' : 'העתקת המספר'}
-                      aria-label="העתקת מספר הטלפון"
-                      onClick={async () => {
-                        try {
-                          await navigator.clipboard.writeText(profilePhone);
-                          setPhoneCopied(true);
-                          setTimeout(() => setPhoneCopied(false), 1500);
-                        } catch { /* ignore */ }
-                      }}
-                    >
-                      {phoneCopied ? <Check size={12} color="var(--green)" /> : <Clipboard size={12} />}
-                    </button>
-                  </span>
-                ) : (
-                  <span style={{ fontSize: 12, color: 'var(--text-3)' }}>אין טלפון</span>
-                )}
-                {showFamilyProfile && profilePhone && (
-                  <a
-                    href={`https://wa.me/${String(profilePhone).replace(/[^\d]/g, '').replace(/^0/, '972')}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="btn btn-success btn-xs"
-                  >
-                    וואטסאפ
-                  </a>
-                )}
-                {showFamilyProfile && parent?.email && (
-                  <a href={`mailto:${parent.email}`} className="btn btn-ghost btn-xs">
-                    <Mail size={12} /> {parent.email}
-                  </a>
-                )}
-                {showFamilyProfile && parent?.city && (
-                  <span style={{ fontSize: 12, color: 'var(--text-2)' }}>
-                    <MapPin size={11} style={{ verticalAlign: -1 }} /> {parent.city}
-                  </span>
-                )}
-                {showFamilyProfile && guardians.some((g) => String(g.id) === String(parent?.id) && !g.primary) && (
+              {showFamilyProfile && guardians.some((g) => String(g.id) === String(parent?.id) && !g.primary) && (
+                <div style={{ display: 'flex', justifyContent: 'center', marginTop: 5 }}>
                   <button
                     type="button"
                     className="btn btn-ghost btn-xs"
                     disabled={settingPrimary}
                     title="ההורה הראשי הוא זה שאליו המערכת פונה כברירת מחדל"
-                    onClick={handleMakePrimary}
+                    onClick={() => handleMakePrimary(parent.id)}
                   >
                     {settingPrimary ? 'מעדכן...' : 'קבע כהורה ראשי'}
                   </button>
-                )}
-              </div>
+                </div>
+              )}
             </div>
 
             {/* Family-only sections appear only on a parent or combined tab. */}
             {showFamilyProfile && parent?.id && (
-              <div style={{ marginBottom: 12 }}>
+              <div style={{ marginBottom: 12, order: 2 }}>
                 <FolderRow
                   id="mailing"
                   title="רשימות תפוצה"
@@ -2905,7 +3282,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   summary={mailingListSummary}
                   open={openFolder === 'mailing'}
                   onToggle={toggleFolder}
-                >
+                  renderBody={() => (
+                    <>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
                     <div style={{ fontSize: 11, color: 'var(--text-3)' }}>רשימות פעילות</div>
                     {!loadingLists && (
@@ -2942,7 +3320,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                       })}
                     </div>
                   )}
-                </FolderRow>
+                    </>
+                  )}
+                />
 
                 {canManageBilling && (
                   <FolderRow
@@ -2953,7 +3333,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     summary={paymentsSummary}
                     open={openFolder === 'payments'}
                     onToggle={toggleFolder}
-                  >
+                    renderBody={() => (
+                      <>
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
                       <button
                         type="button"
@@ -3148,111 +3529,25 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         })}
                       </div>
                     )}
-                  </FolderRow>
+                      </>
+                    )}
+                  />
                 )}
               </div>
             )}
 
-            {/* Selected child details — compact inline rows */}
-            {showStudentProfile && (() => {
-              const streak = consecutiveAbsences(attendanceHistory);
-              const streakColor = streak >= 2 ? '#F87171' : streak === 1 ? '#FBBF24' : 'var(--text-1)';
-              const detailRow = (label, value, valueStyle = {}) => (
-                <div
-                  key={label}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 10,
-                    padding: '5px 0',
-                    borderBottom: '1px solid rgba(255,255,255,0.06)',
-                    fontSize: 12,
-                  }}
-                >
-                  <span style={{ color: 'var(--text-3)', flexShrink: 0 }}>{label}</span>
-                  <span style={{ fontWeight: 600, color: 'var(--text-1)', textAlign: 'left', ...valueStyle }}>{value}</span>
-                </div>
-              );
-              return (
-              <div style={{ marginBottom: 12 }}>
-                <div>
-                  {detailRow('גיל', ageWithGenderLabel(student.birthDate, student.gender))}
-                  {(() => {
-                    const topLevel = highestPassedLevel(levelTestsHistory) || student.levelGrade || null;
-                    const gradeTint = topLevel ? levelColor(topLevel) : null;
-                    return detailRow(
-                      'מבחן רמה',
-                      topLevel ? (
-                        <span style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 5,
-                          color: gradeTint || 'var(--text-1)',
-                          fontWeight: 900,
-                        }}>
-                          <Award size={13} strokeWidth={2.4} />
-                          {topLevel}
-                        </span>
-                      ) : '—',
-                      topLevel ? { color: gradeTint || undefined } : {}
-                    );
-                  })()}
-                  {(() => {
-                    const safety = punchSafety || safetyTestStatus(levelTestsHistory);
-                    const tone = SAFETY_TONE[safety.state] || SAFETY_TONE.missing;
-                    let expiryText = '';
-                    if (safety.state === 'valid' && safety.expires_at) {
-                      const day = safety.expires_at instanceof Date
-                        ? safety.expires_at
-                        : new Date(`${String(safety.expires_at).slice(0, 10)}T12:00:00`);
-                      if (!Number.isNaN(day.getTime())) {
-                        expiryText = ` עד ${day.toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' })}`;
-                      }
-                    }
-                    const label = safety.state === 'valid'
-                      ? `בתוקף${expiryText}`
-                      : tone.label;
-                    const SafetyIcon = tone.alert ? ShieldAlert : ShieldCheck;
-                    return detailRow(
-                      'מבחן בטיחות',
-                      <button
-                        type="button"
-                        onClick={() => toggleFolder('tests')}
-                        title="פתיחת תיקיית מבחנים"
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 5,
-                          height: 24,
-                          padding: '0 8px',
-                          borderRadius: 999,
-                          background: tone.bg,
-                          border: `1px solid ${tone.color}${tone.alert ? 'AA' : '55'}`,
-                          color: tone.color,
-                          fontSize: 11,
-                          fontWeight: 800,
-                          cursor: 'pointer',
-                          fontFamily: 'inherit',
-                        }}
-                      >
-                        <SafetyIcon size={13} strokeWidth={2.5} />
-                        {label}
-                      </button>
-                    );
-                  })()}
-                  {detailRow(
-                    'העדרויות רצופות',
-                    attendanceLoading ? '…' : streak,
-                    { color: streakColor }
-                  )}
+            {/* Follow-up remains a compact editable row; the status metrics now
+                live directly below the trainee header. */}
+            {showStudentProfile && (
+              <div style={{ marginBottom: 12, order: 1 }}>
                   <div
                     style={{
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',
                       gap: 10,
-                      padding: '5px 0',
+                      padding: '7px 2px 0',
+                      marginTop: 3,
                       fontSize: 12,
                     }}
                   >
@@ -3325,25 +3620,31 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         {student.nextFollowup || '+ הוסף'}
                       </button>
                     )}
-                  </div>
                 </div>
               </div>
-              );
-            })()}
+            )}
 
             {/* Selected child folders */}
             {showStudentProfile && (
-              <>
+              <div style={{ order: 3, display: 'flex', flexDirection: 'column' }}>
+            <div style={{ order: 0, display: 'flex', alignItems: 'center', gap: 8, margin: '3px 2px 8px', color: 'var(--text-2)' }}>
+              <span style={{ fontSize: 11, fontWeight: 800, whiteSpace: 'nowrap' }}>אימון ובטיחות</span>
+              <span style={{ height: 1, flex: 1, background: 'var(--border)' }} />
+            </div>
+            <div style={{ order: 6, display: 'flex', alignItems: 'center', gap: 8, margin: '10px 2px 8px', color: 'var(--text-2)' }}>
+              <span style={{ fontSize: 11, fontWeight: 800, whiteSpace: 'nowrap' }}>פעילות ורכישות</span>
+              <span style={{ height: 1, flex: 1, background: 'var(--border)' }} />
+            </div>
             <FolderRow
               id="health"
-              title="הצהרות בריאות"
-              icon={ShieldCheck}
+              title="אישורים"
+              icon={FileCheck2}
               accent="#74B9FF"
-              summary={healthSummary}
-              summaryColor={isHealthSigned && !healthExpired ? '#34D399' : '#FCD34D'}
               open={openFolder === 'health'}
               onToggle={toggleFolder}
-            >
+              style={{ order: 1 }}
+              renderBody={() => (
+                <>
               {(() => {
                 // A doctor's approval hangs off the same declaration but is not
                 // the declaration: counting it as one would hide the fact that
@@ -3399,6 +3700,47 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   ...clientDocuments.filter(isClearanceDoc),
                 ];
                 const hasHealthDoc = combinedDocuments.some(isHealthDoc);
+                const physicalParticipationDocs = clientDocuments.filter((doc) => doc.type === 'participation_waiver_pdf');
+                const participationDocsByWaiverId = new Map(
+                  physicalParticipationDocs
+                    .filter((doc) => doc.waiverId)
+                    .map((doc) => [String(doc.waiverId), doc])
+                );
+                const participationRows = [
+                  ...physicalParticipationDocs.map((doc) => {
+                    const waiver = participationWaivers.find((row) => String(row.id) === String(doc.waiverId || '')) || null;
+                    return {
+                      category: 'participation',
+                      scope: participationDocumentScope(doc, waiver),
+                      createdAt: doc.created_at || '',
+                      doc,
+                      waiver,
+                    };
+                  }),
+                  ...participationWaivers
+                    .filter((waiver) => !participationDocsByWaiverId.has(String(waiver.id)))
+                    .map((waiver) => ({
+                      category: 'participation',
+                      scope: participationDocumentScope(null, waiver),
+                      createdAt: waiver.signed_at || waiver.signedAt || waiver.created_at || '',
+                      doc: {
+                        id: `virtual_waiver_${waiver.id}`,
+                        waiverId: waiver.id,
+                        fileName: '',
+                        created_at: waiver.signed_at || waiver.signedAt || waiver.created_at || '',
+                        isVirtual: true,
+                      },
+                      waiver,
+                    })),
+                ];
+                const unifiedDocumentRows = filterAndSortDocumentRows([
+                  ...combinedDocuments.map((doc) => ({
+                    category: 'health',
+                    createdAt: doc.created_at || '',
+                    doc,
+                  })),
+                  ...participationRows,
+                ], documentKindFilter);
                 // Renewal banner when nothing is signed, or the signature expired
                 const showUnsignedControls = healthExpired || (!isHealthSigned && !hasHealthDoc);
                 // Form-type picker + send stay available even after a signature —
@@ -3493,8 +3835,91 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   }
                 };
 
+                const downloadParticipationDoc = async (doc, waiver) => {
+                  setDownloadingPdf(true);
+                  setHealthSendMsg('');
+                  try {
+                    if (!doc.isVirtual) {
+                      const res = await fetch(`/api/documents/${encodeURIComponent(doc.id)}/download`);
+                      if (!res.ok) throw new Error('download failed');
+                      const blob = await res.blob();
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = doc.fileName || 'participation-waiver.pdf';
+                      document.body.appendChild(a);
+                      a.click();
+                      a.remove();
+                      URL.revokeObjectURL(url);
+                    } else {
+                      const snapshot = waiver?.form_snapshot || waiver?.formSnapshot || {};
+                      const participant = snapshot.participant || {};
+                      const signer = snapshot.signer || {};
+                      await downloadParticipationWaiverPdf({
+                        ...snapshot,
+                        ...waiver,
+                        documentType: 'participation_waiver',
+                        templateSlug: waiver?.scope || snapshot.scope || 'wall',
+                        climberName: participant.name || student.name || '',
+                        studentName: participant.name || student.name || '',
+                        parentName: signer.name || parent?.name || '',
+                        parentIdNum: signer.idNumber || parent?.idNumber || '',
+                        phone: signer.phone || parent?.phone || '',
+                        signature_url: waiver?.signature_url || '',
+                        signedDate: waiver?.signed_at || waiver?.signedAt || '',
+                      });
+                    }
+                    setHealthSendMsg('קובץ אישור ההשתתפות הורד למחשב');
+                  } catch (err) {
+                    console.error(err);
+                    setHealthSendMsg('שגיאה בהורדת אישור ההשתתפות');
+                  } finally {
+                    setDownloadingPdf(false);
+                  }
+                };
+
                 return (
                   <>
+                    <div style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      gap: 8, marginBottom: 12, flexWrap: 'wrap',
+                    }}>
+                      <button
+                        type="button"
+                        className="btn btn-success btn-xs"
+                        disabled={sendingHealth || !canSendForm}
+                        onClick={() => setShowHealthSendModal(true)}
+                      >
+                        <Send size={12} /> שליחת טופס
+                      </button>
+                      {!parentOnly && (
+                        <div style={{
+                          display: 'flex', gap: 4, flexWrap: 'nowrap',
+                          alignItems: 'center', overflowX: 'auto',
+                        }}>
+                          {[
+                            { key: 'all', label: 'הכול' },
+                            { key: 'health', label: 'בריאות' },
+                            { key: 'participation:wall', label: 'קיר' },
+                            { key: 'participation:trip', label: 'טיולים' },
+                          ].map((filter) => {
+                            const active = documentKindFilter === filter.key;
+                            return (
+                              <button
+                                key={filter.key}
+                                type="button"
+                                className={`btn btn-xs ${active ? 'btn-primary' : 'btn-ghost'}`}
+                                aria-pressed={active}
+                                onClick={() => setDocumentKindFilter(filter.key)}
+                                style={{ flexShrink: 0, minWidth: 54, fontWeight: 700 }}
+                              >
+                                {filter.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                     {showUnsignedControls && (
                       <>
                         <div style={{
@@ -3516,14 +3941,6 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                           </div>
                         </div>
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                          <button
-                            type="button"
-                            className="btn btn-success btn-xs"
-                            disabled={sendingHealth || !canSendForm}
-                            onClick={() => setShowHealthSendModal(true)}
-                          >
-                            <Send size={12} /> שלח הצהרה
-                          </button>
                           {parentOnly && healthExpired && healthDecl && (
                             <button
                               type="button"
@@ -3541,14 +3958,6 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     {!showUnsignedControls && (
                       <>
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                          <button
-                            type="button"
-                            className="btn btn-success btn-xs"
-                            disabled={sendingHealth || !canSendForm}
-                            onClick={() => setShowHealthSendModal(true)}
-                          >
-                            <Send size={12} /> שלח הצהרה
-                          </button>
                           {parentOnly && isHealthSigned && !healthExpired && (
                             <button
                               type="button"
@@ -3616,42 +4025,77 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         }}>
                           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)' }}>מסמכים בתיק</div>
                         </div>
-                        {docsLoading && !hasHealthDoc ? (
+                        {docsLoading && !hasHealthDoc && !participationRows.length ? (
                           <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען...</div>
-                        ) : combinedDocuments.length === 0 ? (
+                        ) : unifiedDocumentRows.length === 0 ? (
                           <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-                            עדיין אין קבצים בתיק. אחרי השלמת טופס החתימה יישמר כאן קובץ אישור.
+                            {documentKindFilter === 'health'
+                              ? 'אין בתיק הצהרות בריאות או אישורי רופא.'
+                              : documentKindFilter.startsWith('participation')
+                                ? 'אין בתיק אישורי השתתפות חתומים.'
+                                : 'עדיין אין מסמכי בריאות או אישורי השתתפות בתיק.'}
                           </div>
                         ) : (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                            {combinedDocuments.map((doc) => {
+                            {unifiedDocumentRows.map(({ category, doc, waiver }) => {
+                              const participationRow = category === 'participation';
                               const healthRow = isHealthDoc(doc);
                               const clearanceRow = isClearanceDoc(doc);
                               const busy = deletingDocId === doc.id;
-                              const title = clearanceRow ? 'אישור רופא' : 'הצהרת בריאות';
+                              const scope = participationRow ? participationDocumentScope(doc, waiver) : '';
+                              const kind = participationRow ? declarationKind(scope) : null;
+                              const KindIcon = kind?.Icon || FileCheck2;
+                              const title = participationRow
+                                ? `אישור השתתפות — ${kind.label}`
+                                : clearanceRow ? 'אישור רופא' : 'הצהרת בריאות';
                               const stamp = doc.created_at ? new Date(doc.created_at) : null;
+                              const sourceDeclaration = doc.virtualData
+                                || studentDeclarations.find((decl) => String(decl.id) === String(doc.declarationId || ''))
+                                || (!clearanceRow ? healthDecl : null);
+                              const healthSignedDate = sourceDeclaration?.signedAt
+                                || sourceDeclaration?.signedDate
+                                || sourceDeclaration?.date
+                                || sourceDeclaration?.createdAt
+                                || doc.created_at
+                                || null;
+                              const expiry = participationRow
+                                ? new Date(waiver?.expires_at || waiver?.expiresAt || 0)
+                                : (!clearanceRow && healthSignedDate ? healthExpiryDate(healthSignedDate) : null);
+                              const hasExpiry = !!expiry && Number.isFinite(expiry.getTime());
+                              const expired = hasExpiry && expiry.getTime() < Date.now();
                               return (
                                 <div
                                   key={doc.id}
                                   style={{
-                                    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'nowrap',
+                                    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
                                     padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)',
                                     background: 'rgba(255,255,255,0.03)', opacity: busy ? 0.5 : 1,
-                                    overflowX: 'auto',
                                   }}
                                 >
                                   <span
+                                    className={participationRow ? `badge ${kind?.badge || 'badge-gray'}` : undefined}
                                     title={doc.fileName || title}
                                     style={{
-                                      height: 32, fontSize: 12, fontWeight: 600, lineHeight: 1,
+                                      height: 32, padding: participationRow ? '0 10px' : 0,
+                                      fontSize: 12, fontWeight: 600, lineHeight: 1,
                                       color: 'var(--text-1)', whiteSpace: 'nowrap', flexShrink: 0,
-                                      display: 'inline-flex', alignItems: 'center',
+                                      display: 'inline-flex', alignItems: 'center', gap: 5,
                                     }}
                                   >
+                                    {participationRow
+                                      ? <KindIcon size={13} style={{ flexShrink: 0 }} />
+                                      : clearanceRow
+                                        ? <ShieldCheck size={13} style={{ color: '#74B9FF', flexShrink: 0 }} />
+                                        : <span aria-hidden="true" style={{ color: '#74B9FF', fontSize: 17, fontFamily: 'Arial, sans-serif' }}>⚕</span>}
                                     {title}
                                   </span>
-                                  {healthRow && healthExpired && (
-                                    <span className="badge badge-amber" style={{ height: 32, fontSize: 11, lineHeight: 1, flexShrink: 0 }}>פג תוקף</span>
+                                  {hasExpiry && (
+                                    <span
+                                      className={expired ? 'badge badge-amber' : undefined}
+                                      style={{ height: 32, fontSize: 11, lineHeight: 1, flexShrink: 0, display: 'inline-flex', alignItems: 'center', color: expired ? undefined : 'var(--text-2)' }}
+                                    >
+                                      {expired ? 'פג תוקף' : 'בתוקף עד'} {expiry.toLocaleDateString('he-IL')}
+                                    </span>
                                   )}
                                   <span style={{
                                     height: 32, fontSize: 12, fontWeight: 500, lineHeight: 1,
@@ -3672,28 +4116,32 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                         fontSize: 12, lineHeight: 1,
                                       }}
                                       title="הורדת הקובץ"
-                                      disabled={busy || downloadingPdf || (doc.isVirtual && !(doc.virtualData || healthDecl))}
-                                      onClick={() => handleDownloadDoc(doc)}
+                                      disabled={busy || downloadingPdf || (!participationRow && doc.isVirtual && !(doc.virtualData || healthDecl))}
+                                      onClick={() => participationRow
+                                        ? downloadParticipationDoc(doc, waiver)
+                                        : handleDownloadDoc(doc)}
                                     >
                                       <Download size={13} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
                                     </button>
-                                    <button
-                                      type="button"
-                                      className="btn btn-ghost btn-xs"
-                                      style={{
-                                        width: 32, height: 32, padding: 0, boxSizing: 'border-box',
-                                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                                        color: 'var(--red, #F87171)',
-                                      }}
-                                      title={healthRow ? 'מחיקת הצהרת הבריאות מהתיק' : 'מחיקת המסמך מהתיק'}
-                                      disabled={busy || !!deletingDocId}
-                                      onClick={() => {
-                                        setDeleteConfirmText('');
-                                        setPendingDocDelete({ doc, healthRow });
-                                      }}
-                                    >
-                                      <Trash2 size={13} />
-                                    </button>
+                                    {!participationRow && (
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-xs"
+                                        style={{
+                                          width: 32, height: 32, padding: 0, boxSizing: 'border-box',
+                                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                          color: 'var(--red, #F87171)',
+                                        }}
+                                        title={healthRow ? 'מחיקת הצהרת הבריאות מהתיק' : 'מחיקת המסמך מהתיק'}
+                                        disabled={busy || !!deletingDocId}
+                                        onClick={() => {
+                                          setDeleteConfirmText('');
+                                          setPendingDocDelete({ doc, healthRow });
+                                        }}
+                                      >
+                                        <Trash2 size={13} />
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
                               );
@@ -3769,168 +4217,23 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   </>
                 );
               })()}
-            </FolderRow>
-
-            <FolderRow
-              id="participation"
-              title="אישורי השתתפות"
-              icon={FileCheck2}
-              accent="#F472B6"
-              summary={participationSummary}
-              summaryColor={validParticipationKinds.length ? '#34D399' : '#FCD34D'}
-              open={openFolder === 'participation'}
-              onToggle={toggleFolder}
-            >
-              {(() => {
-                const physicalDocs = clientDocuments.filter((doc) => doc.type === 'participation_waiver_pdf');
-                const byWaiverId = new Map(
-                  physicalDocs
-                    .filter((doc) => doc.waiverId)
-                    .map((doc) => [String(doc.waiverId), doc])
-                );
-                const rows = [
-                  ...physicalDocs.map((doc) => ({
-                    doc,
-                    waiver: participationWaivers.find((row) => String(row.id) === String(doc.waiverId || '')) || null,
-                  })),
-                  ...participationWaivers
-                    .filter((waiver) => !byWaiverId.has(String(waiver.id)))
-                    .map((waiver) => ({
-                      doc: {
-                        id: `virtual_waiver_${waiver.id}`,
-                        waiverId: waiver.id,
-                        fileName: '',
-                        created_at: waiver.signed_at || waiver.signedAt || waiver.created_at || '',
-                        isVirtual: true,
-                      },
-                      waiver,
-                    })),
-                ].sort((a, b) => String(b.doc.created_at || '').localeCompare(String(a.doc.created_at || '')));
-
-                const inferredScope = (doc, waiver) => {
-                  if (waiver?.scope) return waiver.scope;
-                  const match = String(doc?.fileName || '').match(/participation-waiver_(wall|event|trip)/i);
-                  return match?.[1]?.toLowerCase() || '';
-                };
-
-                const downloadParticipationDoc = async (doc, waiver) => {
-                  setDownloadingPdf(true);
-                  setHealthSendMsg('');
-                  try {
-                    if (!doc.isVirtual) {
-                      const res = await fetch(`/api/documents/${encodeURIComponent(doc.id)}/download`);
-                      if (!res.ok) throw new Error('download failed');
-                      const blob = await res.blob();
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = doc.fileName || 'participation-waiver.pdf';
-                      document.body.appendChild(a);
-                      a.click();
-                      a.remove();
-                      URL.revokeObjectURL(url);
-                    } else {
-                      const snapshot = waiver?.form_snapshot || waiver?.formSnapshot || {};
-                      const participant = snapshot.participant || {};
-                      const signer = snapshot.signer || {};
-                      await downloadParticipationWaiverPdf({
-                        ...snapshot,
-                        ...waiver,
-                        documentType: 'participation_waiver',
-                        templateSlug: waiver?.scope || snapshot.scope || 'wall',
-                        climberName: participant.name || student.name || '',
-                        studentName: participant.name || student.name || '',
-                        parentName: signer.name || parent?.name || '',
-                        parentIdNum: signer.idNumber || parent?.idNumber || '',
-                        phone: signer.phone || parent?.phone || '',
-                        signature_url: waiver?.signature_url || '',
-                        signedDate: waiver?.signed_at || waiver?.signedAt || '',
-                      });
-                    }
-                    setHealthSendMsg('קובץ אישור ההשתתפות הורד למחשב');
-                  } catch (err) {
-                    console.error(err);
-                    setHealthSendMsg('שגיאה בהורדת אישור ההשתתפות');
-                  } finally {
-                    setDownloadingPdf(false);
-                  }
-                };
-
-                if (!rows.length) {
-                  return (
-                    <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-                      אין בתיק אישורי השתתפות חתומים. הצהרת הבריאות נשמרת בנפרד בתיקייה שמעל.
-                    </div>
-                  );
-                }
-
-                return (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {rows.map(({ doc, waiver }) => {
-                      const scope = inferredScope(doc, waiver);
-                      const kind = scope ? declarationKind(scope) : null;
-                      const expiry = new Date(waiver?.expires_at || waiver?.expiresAt || 0);
-                      const hasExpiry = Number.isFinite(expiry.getTime());
-                      const expired = hasExpiry && expiry.getTime() < Date.now();
-                      const title = `אישור השתתפות — ${kind?.label || 'תחום לא מסווג'}`;
-                      const KindIcon = kind?.Icon || FileCheck2;
-                      return (
-                        <div
-                          key={doc.id}
-                          style={{
-                            display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
-                            padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)',
-                            background: 'rgba(255,255,255,0.03)',
-                          }}
-                        >
-                          <span
-                            className={`badge ${kind?.badge || 'badge-gray'}`}
-                            title={doc.fileName || title}
-                            style={{
-                              height: 32, padding: '0 10px', boxSizing: 'border-box',
-                              fontSize: 12, lineHeight: 1, flexShrink: 0,
-                              display: 'inline-flex', alignItems: 'center', gap: 5,
-                            }}
-                          >
-                            <KindIcon size={13} style={{ flexShrink: 0 }} />
-                            {title}
-                          </span>
-                          {expired && (
-                            <span className="badge badge-amber" style={{ height: 32, fontSize: 11 }}>פג תוקף</span>
-                          )}
-                          {hasExpiry && (
-                            <span style={{ fontSize: 12, color: 'var(--text-2)' }}>
-                              בתוקף עד {expiry.toLocaleDateString('he-IL')}
-                            </span>
-                          )}
-                          <button
-                            type="button"
-                            className="btn btn-primary btn-xs"
-                            style={{ marginInlineStart: 'auto' }}
-                            disabled={downloadingPdf}
-                            onClick={() => downloadParticipationDoc(doc, waiver)}
-                          >
-                            <Download size={13} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              })()}
-            </FolderRow>
+                </>
+              )}
+            />
 
             {/* Group folder */}
             {!parentOnly && (
               <FolderRow
                 id="group"
-                title="חוג ושיוך"
+                title="קבוצה"
                 icon={Users}
                 accent="#A78BFA"
                 summary={groupSummary}
                 open={openFolder === 'group'}
                 onToggle={toggleFolder}
-              >
+                style={{ order: 2 }}
+                renderBody={() => (
+                  <>
                 {editingGroup ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     <GroupPickerField
@@ -4009,7 +4312,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     </button>
                   </div>
                 )}
-              </FolderRow>
+                  </>
+                )}
+              />
             )}
 
             {/* Passes folder */}
@@ -4022,7 +4327,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 summary={passesSummary}
                 open={openFolder === 'passes'}
                 onToggle={toggleFolder}
-              >
+                style={{ order: 7 }}
+                renderBody={() => (
+                  <>
                 {passesLoading ? (
                   <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען...</div>
                 ) : customerPasses.length === 0 ? (
@@ -4135,7 +4442,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     })}
                   </div>
                 )}
-              </FolderRow>
+                  </>
+                )}
+              />
             )}
 
             {/* Coupons folder — benefits from campaigns, or issued by hand */}
@@ -4148,7 +4457,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               summaryColor={activeCoupons.length > 0 ? 'var(--green)' : undefined}
               open={openFolder === 'coupons'}
               onToggle={toggleFolder}
-            >
+              style={{ order: 10 }}
+              renderBody={() => (
+                <>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {couponsLoading ? (
                   <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען...</div>
@@ -4335,7 +4646,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   </button>
                 )}
               </div>
-            </FolderRow>
+                </>
+              )}
+            />
 
             {/* Purchases folder — what was bought, not just what was charged */}
             <FolderRow
@@ -4347,7 +4660,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               summaryColor={salesPending > 0 ? 'var(--amber, #FBBF24)' : undefined}
               open={openFolder === 'purchases'}
               onToggle={toggleFolder}
-            >
+              style={{ order: 9 }}
+              renderBody={() => (
+                <>
               {salesLoading && !sales.length ? (
                 <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען...</div>
               ) : sales.length === 0 ? (
@@ -4399,19 +4714,23 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   })}
                 </div>
               )}
-            </FolderRow>
+                </>
+              )}
+            />
 
             {/* Equipment folder — children and adult trainees */}
             {showEquipment && (
               <FolderRow
                 id="equipment"
-                title="ציוד לאימונים"
+                title="ציוד"
                 icon={Package}
                 accent="#A3E635"
                 summary={equipmentSummary}
                 open={openFolder === 'equipment'}
                 onToggle={toggleFolder}
-              >
+                style={{ order: 4 }}
+                renderBody={() => (
+                  <>
                 {/* רק הטעינה הראשונה מחליפה את התוכן. רענון אחרי שינוי סטטוס
                     משאיר את הכרטיסיות במקום, אחרת התיק מתכווץ לשורה אחת
                     וכל מה שמתחתיו קופץ למעלה וחזרה. */}
@@ -4590,7 +4909,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     })()}
                   </div>
                 )}
-              </FolderRow>
+                  </>
+                )}
+              />
             )}
 
             {/* Attendance folder */}
@@ -4603,7 +4924,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 summary={attendanceSummary}
                 open={openFolder === 'attendance'}
                 onToggle={toggleFolder}
-              >
+                style={{ order: 3 }}
+                renderBody={() => (
+                  <>
                 {attendanceLoading ? (
                   <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען נוכחות...</div>
                 ) : attendanceHistory.length === 0 ? (
@@ -4614,7 +4937,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     onStatusSaved={handleAttendanceStatusSaved}
                   />
                 )}
-              </FolderRow>
+                  </>
+                )}
+              />
             )}
 
             {!parentOnly && (
@@ -4626,7 +4951,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 summary={activityHistorySummary}
                 open={openFolder === 'activities'}
                 onToggle={toggleFolder}
-              >
+                style={{ order: 8 }}
+                renderBody={() => (
+                  <>
                 {activityHistoryLoading ? (
                   <div style={{ fontSize: 12, color: 'var(--text-3)' }}>טוען פעילויות...</div>
                 ) : activityHistory.length === 0 ? (
@@ -4689,7 +5016,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     ))}
                   </div>
                 )}
-              </FolderRow>
+                  </>
+                )}
+              />
             )}
 
             {/* Tests folder */}
@@ -4702,7 +5031,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 summary={testsSummary}
                 open={openFolder === 'tests'}
                 onToggle={toggleFolder}
-              >
+                style={{ order: 5 }}
+                renderBody={() => (
+                  <>
                 {showTestForm ? (
                   <form onSubmit={handleSaveTest} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)', marginBottom: 8 }}>
@@ -4986,7 +5317,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     })
                   )}
                 </div>
-              </FolderRow>
+                  </>
+                )}
+              />
             )}
 
             {/* Status & notes folder */}
@@ -4998,7 +5331,10 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               summary={statusSummary}
               open={openFolder === 'status'}
               onToggle={toggleFolder}
-            >
+              style={{ order: -1 }}
+              headerless
+              renderBody={() => (
+                <>
               {canManageBilling && (
                 <>
                   <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>שינוי סטטוס</div>
@@ -5022,9 +5358,11 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     </div>
                   </div>
                 </>
-              )}
-            </FolderRow>
-              </>
+                )}
+                  </>
+                )}
+              />
+              </div>
             )}
           </div>
         </div>
@@ -5047,7 +5385,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               student={communicationStudent}
               selectedThreadId={communicationThreadId}
               fillHeight
+              onClose={onClose}
               onHandled={onCommunicationHandled}
+              onConversationChange={rememberConversation}
             />
           ) : (
             <div style={{ padding: 20, color: 'var(--text-3)', fontSize: 13 }}>
@@ -5059,7 +5399,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
 
       {showHealthSendModal && (
         <Modal
-          title="שליחת הצהרה בוואטסאפ"
+          title="שליחת טופס בוואטסאפ"
           onClose={() => !sendingHealth && setShowHealthSendModal(false)}
           footer={(
             <>
@@ -5161,7 +5501,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
 
       {showAddChild && (
         <Modal
-          title="הוספת ילד / מתאמן"
+          title="הוספת ילד"
           onClose={() => !addingChild && setShowAddChild(false)}
           footer={
             <>
@@ -5175,14 +5515,14 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 <PlusCircle size={15} />
                 {addingChild
                   ? 'מוסיף...'
-                  : (sendHealthOnAdd ? `הוסף ושלח ${FORM_SHORT}` : 'הוסף')}
+                  : (sendHealthOnAdd ? `הוסף ילד ושלח ${FORM_SHORT}` : 'הוסף ילד')}
               </button>
             </>
           }
         >
           <form id="add-child-form" onSubmit={handleAddChild} className="form-grid">
             <div className="form-group">
-              <label className="form-label">שם המתאמן *</label>
+              <label className="form-label">שם הילד *</label>
               <input
                 className="input"
                 required
@@ -5314,7 +5654,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       )}
 
       {isEditing && (
-        <Modal title={editFocus === 'parent' ? `עריכת הורה: ${parentDisplayName(parent)}` : `עריכת מתאמן: ${student.name}`} onClose={() => setIsEditing(false)}
+        <Modal title="עריכת פרטי התיק" onClose={() => setIsEditing(false)}
           footer={
             <><button className="btn btn-ghost" onClick={() => setIsEditing(false)}>ביטול</button>
               <button className="btn btn-primary" disabled={savingEdit} onClick={handleUpdateDetails}>
@@ -5323,6 +5663,30 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
           }
         >
           <div className="form-grid">
+            <div className="tab-bar tab-bar-sub" style={{ marginBottom: 8 }} role="tablist" aria-label="סוג הפרטים לעריכה">
+              {!parentOnly && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={editFocus === 'student'}
+                  className={`tab-pill ${editFocus === 'student' ? 'active' : ''}`}
+                  onClick={() => setEditFocus('student')}
+                >
+                  מתאמן
+                </button>
+              )}
+              {parent?.id && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={editFocus === 'parent' || parentOnly}
+                  className={`tab-pill ${editFocus === 'parent' || parentOnly ? 'active' : ''}`}
+                  onClick={() => setEditFocus('parent')}
+                >
+                  פרטי קשר
+                </button>
+              )}
+            </div>
             {editError && (
               <div className="alert alert-warn" style={{ marginBottom: 4 }}>{editError}</div>
             )}
@@ -5429,8 +5793,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 className="input"
                 style={{ minHeight: 80 }}
                 placeholder="הערות פנימיות לצוות"
-                value={editNotes}
-                onChange={e => setEditNotes(e.target.value)}
+                value={editParentNotes}
+                onChange={e => setEditParentNotes(e.target.value)}
               />
             </div>
             <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -5502,8 +5866,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     className="input"
                     style={{ minHeight: 80 }}
                     placeholder="הערות פנימיות לצוות"
-                    value={editNotes}
-                    onChange={e => setEditNotes(e.target.value)}
+                    value={editStudentNotes}
+                    onChange={e => setEditStudentNotes(e.target.value)}
                   />
                 </div>
                 <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
@@ -6023,37 +6387,47 @@ export default function Leads({
   // from the bot, so leaving them out of the queue hides a live conversation
   // from the team: the queue is about an unanswered message, not about status.
   const showArchived = filterStatus === 'archived';
-  const leadEntries = buildLeadEntries(students, parents, {
+  // Building household rows walks the full customer list. Keep that work tied
+  // to actual data/filter changes so opening a card or switching family members
+  // does not rebuild the entire waiting queue on every click.
+  const leadEntries = useMemo(() => buildLeadEntries(students, parents, {
     includeArchived: showArchived || filterStatus === 'communication',
-  });
+  }), [students, parents, showArchived, filterStatus]);
 
-  const filtered = leadEntries.filter(({ student: s, parent: p }) => {
-    const parent = p || parents.find((x) => x.id === s.parentId);
-    const matchSearch = (s.name || '').toLowerCase().includes(search.toLowerCase()) ||
-      parent?.name?.toLowerCase().includes(search.toLowerCase()) ||
-      (parent?.phone || '').includes(search);
-    const matchStatus = showArchived
-      ? isArchivedParent(parent)
-      : filterStatus === 'all'
-        || (filterStatus === 'communication'
-          ? isAwaitingHandling(parent, [s])
-          : s.status === filterStatus);
-    return matchSearch && matchStatus;
-  }).map((entry) => entry.student);
+  const filtered = useMemo(() => {
+    const searchKey = search.toLowerCase();
+    return leadEntries.filter(({ student: s, parent: p }) => {
+      const parent = p || parents.find((x) => x.id === s.parentId);
+      const matchSearch = (s.name || '').toLowerCase().includes(searchKey) ||
+        parent?.name?.toLowerCase().includes(searchKey) ||
+        (parent?.phone || '').includes(search);
+      const matchStatus = showArchived
+        ? isArchivedParent(parent)
+        : filterStatus === 'all'
+          || (filterStatus === 'communication'
+            ? isAwaitingHandling(parent, [s])
+            : s.status === filterStatus);
+      return matchSearch && matchStatus;
+    }).map((entry) => entry.student);
+  }, [leadEntries, parents, search, showArchived, filterStatus]);
 
   // Table: one row per family. Kanban stays per-student for the funnel.
-  const familyRows = buildFamilyRows(filtered, parents, students);
-  if (filterStatus === 'communication') {
-    // Newest first, counting a fresh registration as well as an inbound
-    // message — otherwise a family who just signed sorts to the bottom.
-    // Either parent's message counts: the row stands for the whole household.
-    const rowAwaitingSince = (row) => Math.max(
-      ...(row.parents?.length ? row.parents : [row.parent])
-        .map((parent) => awaitingSince(parent, row.students))
-    );
-    familyRows.sort((a, b) => rowAwaitingSince(b) - rowAwaitingSince(a));
-  }
-  const familyCountByStatus = (() => {
+  const familyRows = useMemo(() => {
+    const rows = buildFamilyRows(filtered, parents, students);
+    if (filterStatus === 'communication') {
+      // Newest first, counting a fresh registration as well as an inbound
+      // message — otherwise a family who just signed sorts to the bottom.
+      // Either parent's message counts: the row stands for the whole household.
+      const rowAwaitingSince = (row) => Math.max(
+        ...(row.parents?.length ? row.parents : [row.parent])
+          .map((parent) => awaitingSince(parent, row.students))
+      );
+      rows.sort((a, b) => rowAwaitingSince(b) - rowAwaitingSince(a));
+    }
+    return rows;
+  }, [filtered, parents, students, filterStatus]);
+
+  const familyCountByStatus = useMemo(() => {
     const map = {
       all: buildFamilyRows(leadEntries.map((e) => e.student), parents, students).length,
       // Counted off its own archive-inclusive list, so the badge shows the same
@@ -6079,7 +6453,7 @@ export default function Leads({
       students
     ).length;
     return map;
-  })();
+  }, [leadEntries, students, parents]);
 
   const applyHandledParents = (updatedParents = [], handledAt) => {
     const byId = new Map(updatedParents.map((item) => [item.id, item]));
@@ -6307,6 +6681,7 @@ export default function Leads({
           parent={selectedParent}
           parents={selectedHouseholdParents}
           siblings={selectedSiblings}
+          declarations={declarations}
           onSelectSibling={setSelectedStudentId}
           group={selectedGroup}
           groups={groups}

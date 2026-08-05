@@ -1,32 +1,38 @@
 /**
  * Which activity a signed declaration belongs to.
  *
- * A family can hold several: the wall for the weekly class, a booked activity
- * at the wall, an outdoor trip. They are separate documents covering separate
- * risks, and in the personal file they must not read as one repeated line — a
- * staff member looking for "did they sign for the trip" needs to see the
- * answer, not count identical rows.
+ * A family can hold two participation scopes: every activity at the wall, and
+ * an outdoor trip. They are separate documents covering separate risks.
  *
- * The slug is what the public link carries (/health, /health/event,
- * /health/trip) and what the declaration records as `templateSlug`.
+ * The slug is what the public link carries (/health, /health/trip) and what the
+ * declaration records as `templateSlug`. Historical event/birthday slugs are
+ * read as wall.
  *
  * The icon is the one the leads list already uses per activity — the same mark
  * has to mean the same declaration wherever it appears, in the list and in the
  * customer file.
  */
 
-import { Footprints, Gift, ScrollText, FileText } from 'lucide-react';
+import { Footprints, FileText, createLucideIcon } from 'lucide-react';
+
+/** A simple front-facing climber on Lucide's 24×24 grid. */
+export const WallClimber = createLucideIcon('WallClimber', [
+  ['circle', { cx: '12', cy: '5.2', r: '2', key: 'head' }],
+  ['path', { d: 'M12 7.7v6.8', key: 'body' }],
+  ['path', { d: 'm12 9.4-4-1.8L6 3.8', key: 'left-arm' }],
+  ['path', { d: 'm12 9.4 4-1.8 2-3.8', key: 'right-arm' }],
+  ['path', { d: 'm12 14.5-3.6 1.2-1.5 4', key: 'left-leg' }],
+  ['path', { d: 'm12 14.5 3.4 1.2 1.3 4.8', key: 'right-leg' }],
+  ['path', { d: 'M4.2 20.6h2.4', key: 'foothold' }],
+]);
 
 const KINDS = {
-  wall: { key: 'wall', label: 'קיר טיפוס', Icon: ScrollText, badge: 'badge-amber', color: '#FCD34D' },
-  // היה „יום הולדת”, והוא בעצם הטופס של כל פעילות מוזמנת בקיר — יום הולדת,
-  // גיבוש חברה או קבוצת בית ספר חותמים על אותם סיכונים.
-  event: { key: 'event', label: 'פעילות בקיר', Icon: Gift, badge: 'badge-purple', color: '#C4B5FD' },
+  wall: { key: 'wall', label: 'פעילות בקיר', Icon: WallClimber, badge: 'badge-amber', color: '#FCD34D' },
   trip: { key: 'trip', label: 'יציאה / טיול', Icon: Footprints, badge: 'badge-cyan', color: '#5EEAD4' },
 };
 
 /** הצהרות שנחתמו לפני השינוי נושאות את הכינוי הישן, וצריכות להיקרא נכון. */
-const LEGACY_KIND_SLUGS = { birthday: 'event' };
+const LEGACY_KIND_SLUGS = { birthday: 'wall', event: 'wall' };
 
 /** טופס נוסף שנבנה בבית ואינו אחד הסוגים המוכרים. */
 export const GENERIC_KIND = { key: 'custom', label: 'טופס נוסף', Icon: FileText, badge: 'badge-gray', color: 'var(--text-3)' };

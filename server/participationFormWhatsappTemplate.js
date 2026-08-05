@@ -2,12 +2,13 @@
  * System WhatsApp template for the participation form link.
  *
  * Meta freezes a button URL on approval, so the button points at the API
- * redirect (`/f/{{1}}`) and the real form (wall / event / trip) is resolved
+ * redirect (`/f/{{1}}`) and the real form (wall / trip) is resolved
  * per click — same contract as equipment and event templates.
  */
 
 import { apiRedirectBase, buildRedirectUrl } from './publicLinks.js';
 import { FORM_SHORT, FORM_FULL } from './participationForm.js';
+import { normalizeParticipationScope } from './participationDocuments.js';
 
 export const PARTICIPATION_FORM_TEMPLATE = 'participation_form_link';
 export const PARTICIPATION_FORM_TEMPLATE_ID = 'tpl-participation-form-link';
@@ -20,7 +21,8 @@ export function participationFormButtonParam(studentId, template = null, { healt
   const id = String(studentId || '').trim();
   if (!id) return '';
   if (healthOnly) return `${id}/health-renewal`;
-  const slug = String(template?.slug || '').trim().toLowerCase();
+  const rawSlug = String(template?.slug || '').trim().toLowerCase();
+  const slug = rawSlug ? normalizeParticipationScope(rawSlug) : '';
   const isDefault = !!template?.isDefault || !slug || slug === 'wall';
   if (isDefault) return id;
   return `${id}/${slug}`;

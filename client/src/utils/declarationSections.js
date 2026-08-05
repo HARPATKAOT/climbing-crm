@@ -26,7 +26,6 @@ export function withSignerName(text, signerName = '') {
 
 const CONFIRM_TITLES = {
   trip: 'הבנת אופי הטיול',
-  event: 'הבנת אופי הפעילות',
   wall: 'הבנת אופי הפעילות',
 };
 
@@ -45,7 +44,11 @@ export function splitWaiverText(text) {
 
 /** The heading for each part, for one template. */
 export function declarationSectionTitles(template) {
-  const slug = String(template?.slug || template?.activityType || '').trim();
+  const rawSlug = String(template?.slug || template?.activityType || '').trim().toLowerCase();
+  // Event/birthday are historical aliases for the single wall waiver. Keeping
+  // the normalization here prevents an old cached template from recreating a
+  // third declaration type in the signing UI.
+  const slug = ['event', 'birthday'].includes(rawSlug) ? 'wall' : rawSlug;
   return {
     health: 'הצהרת בריאות',
     confirm: CONFIRM_TITLES[slug] || 'הבנת אופי הפעילות',

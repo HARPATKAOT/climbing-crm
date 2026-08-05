@@ -45,6 +45,50 @@ export function isAwaitingHandling(parent, students = []) {
   return !Number.isFinite(handledTime) || eventTime > handledTime;
 }
 
+function phoneKey(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('972')) return digits.slice(3);
+  return digits.replace(/^0/, '');
+}
+
+function messageBelongsToThread(message, thread, parentPhone) {
+  if (!thread) return false;
+  const channel = message?.channel || 'whatsapp';
+  if (thread.role === 'parent') {
+    if (channel !== 'whatsapp') return true;
+    if (message?.student_id || message?.fromChild) return false;
+    if (!thread.phone) return !message?.phone || phoneKey(message.phone) === phoneKey(parentPhone);
+    return !message?.phone
+      || phoneKey(message.phone) === phoneKey(thread.phone)
+      || phoneKey(message.phone) === phoneKey(parentPhone);
+  }
+  if (channel !== 'whatsapp') return false;
+  if (message?.student_id && thread.studentId) {
+    return String(message.student_id) === String(thread.studentId);
+  }
+  return phoneKey(message?.phone) === phoneKey(thread.phone);
+}
+
+/** True only when this exact person's thread ends with a message from them. */
+export function threadIsAwaitingReply(conversation, threadId = 'parent') {
+  const threads = Array.isArray(conversation?.threads) ? conversation.threads : [];
+  const thread = threads.find((item) => item.id === threadId);
+  if (!thread) return false;
+
+  let latestMessage = null;
+  let latestTime = 0;
+  for (const message of conversation?.messages || []) {
+    if (!messageBelongsToThread(message, thread, conversation?.parent?.phone)) continue;
+    const time = Date.parse(message?.created_at || '') || 0;
+    if (!latestMessage || time >= latestTime) {
+      latestMessage = message;
+      latestTime = time;
+    }
+  }
+  return latestMessage?.direction === 'inbound';
+}
+
 // Clock skew between the customer card and the message timestamp.
 const INBOUND_MATCH_TOLERANCE_MS = 2000;
 

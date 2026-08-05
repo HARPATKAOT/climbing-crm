@@ -20,8 +20,11 @@ import {
 } from './whatsappBot.js';
 import {
   FOLLOWUP_COLLECTION,
+  claimFollowUpSend,
   dueFollowUps,
+  finishFollowUpSend,
   followUpMessage,
+  releaseFollowUpSend,
 } from './botFollowUps.js';
 import { FOLLOWUP_TEMPLATE_NAME } from './scripts/createFollowUpTemplate.js';
 
@@ -524,13 +527,15 @@ export const automationsService = {
 
       const firstName = parentFirstName(parent);
       const body = withBotMark(followUpMessage(row, { firstName }));
+      const claim = await claimFollowUpSend(db, row, { date: today, phone, now });
+      if (!claim.claimed) continue;
 
       // Short follow-ups are scheduled 23 hours after the customer wrote, so
       // this is normally still open and costs nothing. A long one — "let's talk
       // in September" — can only travel as an approved template.
       if (!canSendFreeform(parent, 'whatsapp')) {
         if (!templateIsApproved(FOLLOWUP_TEMPLATE_NAME)) {
-          needStaff.push({ row, parent });
+          needStaff.push({ row, parent, claimId: claim.id });
           continue;
         }
         try {
@@ -545,7 +550,7 @@ export const automationsService = {
           );
           if (result?.success) {
             sent += 1;
-            markSent({ id: sendId, event: 'bot_followup', date: today, phone });
+            await finishFollowUpSend(db, claim.id, { persist: persistCore });
             await closeFollowUp(row, 'sent');
             recordBotAction(db, persistCore, {
               type: 'followup_sent',
@@ -554,11 +559,11 @@ export const automationsService = {
               parentId: parent.id, parentName: parent.name, phone,
             });
           } else {
-            needStaff.push({ row, parent });
+            needStaff.push({ row, parent, claimId: claim.id });
           }
         } catch (err) {
           console.error('bot follow-up template failed:', err.message);
-          needStaff.push({ row, parent });
+          needStaff.push({ row, parent, claimId: claim.id });
         }
         continue;
       }
@@ -570,7 +575,7 @@ export const automationsService = {
         });
         if (result?.success) {
           sent += 1;
-          markSent({ id: sendId, event: 'bot_followup', date: today, phone });
+          await finishFollowUpSend(db, claim.id, { persist: persistCore });
           await closeFollowUp(row, 'sent');
           recordBotAction(db, persistCore, {
             type: 'followup_sent',
@@ -578,9 +583,12 @@ export const automationsService = {
             details: { reason: row.reason, via: 'freeform' },
             parentId: parent.id, parentName: parent.name, phone,
           });
+        } else {
+          await releaseFollowUpSend(db, claim.id);
         }
       } catch (err) {
         console.error('bot follow-up send failed:', err.message);
+        await releaseFollowUpSend(db, claim.id);
       }
     }
 
@@ -613,7 +621,10 @@ export const automationsService = {
       }
       // Closed either way: the team has it now, and a note that repeats every
       // morning is how a queue becomes noise nobody reads.
-      for (const { row } of needStaff) await closeFollowUp(row, 'sent');
+      for (const { row, claimId } of needStaff) {
+        await finishFollowUpSend(db, claimId, { persist: persistCore });
+        await closeFollowUp(row, 'sent');
+      }
     }
 
     return {

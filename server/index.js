@@ -4,7 +4,11 @@ import express from 'express';
 import cors from 'cors';
 import { db, initDb, persistCore, parentPhonesMatch, setBotEnabledDurable } from './db.js';
 import { supa } from './supa.js';
-import { requiresDurableStore, publicStoreUnavailableError } from './runtimeSafety.js';
+import {
+  requiresDurableStore,
+  publicStoreUnavailableError,
+  scheduledJobsEnabled,
+} from './runtimeSafety.js';
 import {
   whatsappService,
   instagramService,
@@ -340,6 +344,7 @@ import {
   buildParticipationFormRedirectUrl,
 } from './participationFormWhatsappTemplate.js';
 import { FORM_FULL } from './participationForm.js';
+import { migrateUnifiedWallWaiver } from './scripts/applyHealthDeclarationText.js';
 import {
   ensureProductCategories,
   renameCategoryOnProducts,
@@ -667,13 +672,13 @@ app.get('/api/o', redirectOnboarding);
  *
  * The long form is `/register[/<slug>]?studentId=…`. A query string at the end
  * of a WhatsApp message is exactly what stops the link being tappable — a path
- * segment has no such problem. The optional slug picks wall / event / trip so
- * the Meta template button can carry the right form without freezing three
+ * segment has no such problem. The optional slug picks wall / trip so
+ * the Meta template button can carry the right form without freezing two
  * separate button URLs.
  */
 function resolveIntakeRegisterPath(slugParam) {
   const raw = String(slugParam || '').trim().toLowerCase();
-  const alias = { birthday: 'event' };
+  const alias = { birthday: 'wall', event: 'wall' };
   const slug = alias[raw] || raw;
   if (!slug || slug === 'wall') return '/register';
   return `/register/${encodeURIComponent(slug)}`;
@@ -12973,18 +12978,22 @@ function formTemplateForClient(template) {
  * rewritten as one form. The old address keeps working: it was sent out over
  * WhatsApp, and a link that 404s is a family that cannot register.
  */
-const FORM_TEMPLATE_SLUG_ALIASES = { birthday: 'event' };
+const FORM_TEMPLATE_SLUG_ALIASES = { birthday: 'wall', event: 'wall' };
 
 function findFormTemplateBySlug(slug) {
-  const key = slugifyFormTemplate(slug);
+  const rawKey = slugifyFormTemplate(slug);
+  const key = FORM_TEMPLATE_SLUG_ALIASES[rawKey] || rawKey;
   if (!key) return null;
   const templates = listFormTemplates();
   const active = (s) => templates.find((t) => t.slug === s && t.isActive !== false) || null;
-  return active(key) || (FORM_TEMPLATE_SLUG_ALIASES[key] ? active(FORM_TEMPLATE_SLUG_ALIASES[key]) : null);
+  return active(key);
 }
 
 function findDefaultFormTemplate() {
-  const all = listFormTemplates().filter((t) => t.isActive !== false);
+  const all = listFormTemplates().filter((t) => (
+    t.isActive !== false
+    && !['event', 'birthday'].includes(String(t.slug || '').toLowerCase())
+  ));
   return all.find((t) => t.isDefault) || all.find((t) => t.slug === 'wall') || all[0] || null;
 }
 
@@ -13012,7 +13021,7 @@ function normalizeTemplateActivityTypes(body, existing = null) {
   const list = raw || templateActivityTypes(existing || {});
   const seen = new Set();
   return list
-    .map((t) => String(t || '').trim().toLowerCase())
+    .map((t) => normalizeParticipationScope(t))
     .filter((t) => t && t !== 'custom' && !seen.has(t) && seen.add(t));
 }
 
@@ -13037,7 +13046,8 @@ function claimActivityTypes(keepId, types) {
 }
 
 function normalizeFormTemplatePayload(body, existing = null) {
-  const slug = slugifyFormTemplate(body.slug || existing?.slug || body.title || `form-${Date.now()}`);
+  const rawSlug = slugifyFormTemplate(body.slug || existing?.slug || body.title || `form-${Date.now()}`);
+  const slug = FORM_TEMPLATE_SLUG_ALIASES[rawSlug] || rawSlug;
   if (!slug) return { error: 'חסר מזהה קישור (slug)' };
   const healthQuestions = Array.isArray(body.healthQuestions)
     ? body.healthQuestions
@@ -13088,7 +13098,9 @@ function normalizeFormTemplatePayload(body, existing = null) {
 }
 
 app.get('/api/form-templates', (req, res) => {
-  res.json(listFormTemplates().map(formTemplateForClient));
+  res.json(listFormTemplates()
+    .filter((template) => !['event', 'birthday'].includes(String(template.slug || '').toLowerCase()))
+    .map(formTemplateForClient));
 });
 
 app.post('/api/form-templates', (req, res) => {
@@ -13316,9 +13328,13 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
     return res.status(400).json({ error: 'יש לאשר את כתב הוויתור / הסרת האחריות' });
   }
 
-  const template = templateId
+  const sourceTemplate = templateId
     ? listFormTemplates().find((t) => t.id === templateId)
     : (templateSlug ? findFormTemplateBySlug(templateSlug) : findDefaultFormTemplate());
+  const template = resolveDeclarationTemplate(db, {
+    templateId: sourceTemplate?.id || templateId,
+    templateSlug: sourceTemplate?.slug || templateSlug,
+  });
 
   // 1. Upsert parent (phone de-dupe) and resolve / create student
   // The form asks for the surname separately; storing it keeps the household
@@ -14636,6 +14652,10 @@ app.get('/api/students/:id/participation-waivers', async (req, res) => {
   }
   const rows = (db.get('participation_waivers') || [])
     .filter((row) => String(row.student_id || row.studentId || '') === studentId)
+    .map((row) => ({
+      ...row,
+      scope: normalizeParticipationScope(row.scope || 'wall'),
+    }))
     .slice()
     .sort((a, b) => String(b.signed_at || b.signedAt || '').localeCompare(String(a.signed_at || a.signedAt || '')));
   res.json(rows);
@@ -15334,6 +15354,13 @@ initDb({ requireDurable: requiresDurableStore() }).then(() => {
   } catch (err) {
     console.warn('participation form template seed skipped:', err.message);
   }
+  Promise.resolve(migrateUnifiedWallWaiver({ database: db, persist: persistCore }))
+    .then(({ updated, retired }) => {
+      if (updated || retired) {
+        console.log(`📄 Unified wall waiver migration: updated=${updated} retired=${retired}`);
+      }
+    })
+    .catch((err) => console.warn('unified wall waiver migration skipped:', err.message));
   Promise.resolve(ensureDefaultScenarios({ db, persist: persistCore }))
     .then((created) => {
       if (created) console.log(`🧠 Seeded ${created} default AI scenario(s)`);
@@ -15357,6 +15384,7 @@ initDb({ requireDurable: requiresDurableStore() }).then(() => {
   }
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
+  const backgroundJobsEnabled = scheduledJobsEnabled();
   try {
     automationsService.ensureDefaultIntroAutomations();
   } catch (err) {
@@ -15372,9 +15400,11 @@ app.listen(PORT, () => {
   const sealSafely = () => {
     try { sealPastWorkDays(); } catch (err) { console.error('sealPastWorkDays failed:', err.message); }
   };
-  // אחרי טעינת הקטלוג ולא לפניה — התמחור נשען על התוויות שהיא מביאה.
-  readRoleCatalog().then(sealSafely).catch(sealSafely);
-  setInterval(sealSafely, 60 * 60 * 1000);
+  if (backgroundJobsEnabled) {
+    // אחרי טעינת הקטלוג ולא לפניה — התמחור נשען על התוויות שהיא מביאה.
+    readRoleCatalog().then(sealSafely).catch(sealSafely);
+    setInterval(sealSafely, 60 * 60 * 1000);
+  }
 
   // Conversation mirror is derived from the durable `messages` table.
   try {
@@ -15384,12 +15414,19 @@ app.listen(PORT, () => {
     console.error('rebuildLogMirrorFromMessages failed:', err.message);
   }
 
-  // Retry any message whose durable write did not land (Supabase blip).
-  startPendingMessageRetry();
-  flushPendingMessages().catch((err) =>
-    console.error('startup flushPendingMessages failed:', err.message)
-  );
+  if (backgroundJobsEnabled) {
+    // Retry any message whose durable write did not land (Supabase blip).
+    startPendingMessageRetry();
+    flushPendingMessages().catch((err) =>
+      console.error('startup flushPendingMessages failed:', err.message)
+    );
+  }
   
+  if (!backgroundJobsEnabled) {
+    console.log('⏸️ Production background jobs disabled on this local/development process');
+    return;
+  }
+
   // Self-ping keeps the instance awake and surfaces a degraded store early.
   const renderUrl = process.env.RENDER_EXTERNAL_URL || 'https://climbing-crm-api.onrender.com';
   setInterval(() => {

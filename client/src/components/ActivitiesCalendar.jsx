@@ -28,6 +28,7 @@ import {
   activityStaffNames, activityStaffEntries,
 } from '../utils/calendarDisplayFields.js';
 import AppSelect from './AppSelect.jsx';
+import { normalizeParticipationScope } from '../utils/participationDocuments.js';
 
 /** ברירת המחדל בלבד. הרשימה החיה מגיעה מהשרת דרך `activityTypes()`. */
 export const ACTIVITY_TYPES = DEFAULT_ACTIVITY_TYPES;
@@ -1400,7 +1401,7 @@ function RegularActivityModal({
                     <span className="activity-settings-label">הצהרת בריאות</span>
                     <AppSelect
                       className="input"
-                      value={form.form_template_slug && form.form_template_slug !== 'wall' ? form.form_template_slug : ''}
+                      value={normalizeParticipationScope(form.form_template_slug) === 'trip' ? 'trip' : ''}
                       onChange={(event) => setForm((prev) => ({
                         ...prev,
                         form_template_slug: event.target.value,
@@ -1753,7 +1754,11 @@ function ActivityFormModal({
       .then((r) => (r.ok ? r.json() : []))
       .then((list) => {
         if (cancelled || !Array.isArray(list)) return;
-        setDeclarationTemplates(list.filter((t) => t.isActive !== false));
+        setDeclarationTemplates(list.filter((template) => (
+          template.isActive !== false
+          && ['wall', 'trip'].includes(normalizeParticipationScope(template.slug))
+          && !['event', 'birthday'].includes(String(template.slug || '').toLowerCase())
+        )));
       })
       .catch(() => {});
     return () => { cancelled = true; };

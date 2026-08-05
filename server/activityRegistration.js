@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { clampImage } from './productCategories.js';
 import { DEFAULT_BUSINESS_PROFILE } from './businessProfile.js';
 import { normalizePriceIncludesVat } from './vat.js';
+import { normalizeParticipationScope, scopeForActivity } from './participationDocuments.js';
 
 const PAYMENT_STATUSES = new Set(['unpaid', 'paid', 'partial', 'refunded']);
 
@@ -152,7 +153,7 @@ export function publicRegistrationPayload(activity, registrations) {
     id: activity.id,
     name: activity.name,
     type: activity.type,
-    participation_scope: activity.participation_scope || null,
+    participation_scope: scopeForActivity(activity),
     date: activity.date,
     end_date: activity.end_date || null,
     start_time: activity.start_time,
@@ -186,7 +187,7 @@ export function templateFieldsFromActivity(activity = {}) {
   return {
     name: activity.name || '',
     type: activity.type || 'birthday',
-    participation_scope: activity.participation_scope || null,
+    participation_scope: scopeForActivity(activity),
     category: normalizeTemplateCategory(activity.category),
     location: activity.location || '',
     price: Number(activity.price) || 0,
@@ -229,9 +230,9 @@ export function normalizeTemplatePayload(body = {}) {
   return {
     name: String(body.name || '').trim(),
     type: body.type || 'birthday',
-    participation_scope: ['wall', 'event', 'trip'].includes(body.participation_scope)
-      ? body.participation_scope
-      : null,
+    participation_scope: body.participation_scope
+      ? normalizeParticipationScope(body.participation_scope)
+      : scopeForActivity(body),
     category: normalizeTemplateCategory(body.category),
     location: body.location || '',
     price: body.price === '' || body.price == null ? 0 : Number(body.price) || 0,

@@ -8,22 +8,17 @@ import {
   questionLabel,
   requiresClearance,
 } from '../utils/healthQuestions.js';
-import { useActivityTypes } from '../utils/activityTypes.js';
-import AppSelect from './AppSelect.jsx';
+import { normalizeParticipationScope } from '../utils/participationDocuments.js';
 
 /**
  * „סוג הפעילות” על ההצהרה הוא מה שקובע איזו הצהרה נחתמת בהרשמה לאירוע ביומן:
- * ההצהרה שסומנה „יציאה / טיול” היא זו שכל טיול יחתים עליה. לכן הרשימה כאן
- * חייבת להיות סוגי הפעילות האמיתיים של היומן ולא רשימה משלה — אחרת אפשר לסמן
- * סוג שאף אירוע לא נושא, וההצהרה לא תגיע לאיש.
- *
- * `wall` אינו סוג ביומן אלא החוג עצמו, ולכן הוא נוסף כאן בנפרד; `custom` הוא
- * טופס שאינו קשור לשום סוג ומגיעים אליו רק בקישור ישיר.
+ * קיימים שני תחומי אישור בלבד: כל פעילות בקיר, ויציאה / טיול. סוג האירוע
+ * ביומן אינו יוצר מסמך משפטי שלישי.
  */
 const BASE_ACTIVITY_TYPES = [
-  { value: 'wall', label: 'קיר טיפוס (חוג)' },
+  { value: 'wall', label: 'פעילות בקיר — חוגים, כניסות, אימונים ואירועים' },
+  { value: 'trip', label: 'יציאה / טיול' },
 ];
-const CUSTOM_ACTIVITY_TYPE = { value: 'custom', label: 'ללא שיוך — קישור ישיר בלבד' };
 
 const EMPTY_TEMPLATE = {
   title: '',
@@ -86,20 +81,14 @@ function FormTemplatesPanel() {
   const [form, setForm] = useState(EMPTY_TEMPLATE);
   const [msg, setMsg] = useState('');
   const [saving, setSaving] = useState(false);
-  const calendarTypes = useActivityTypes();
-  // הסוגים האמיתיים של היומן, כך שסימון כאן באמת מגיע לאירועים.
-  const activityTypeOptions = [
-    ...BASE_ACTIVITY_TYPES,
-    ...calendarTypes
-      .filter((t) => !['opening_hours', 'training_vacation'].includes(t.id))
-      .map((t) => ({ value: t.id, label: t.label })),
-    CUSTOM_ACTIVITY_TYPE,
-  ];
+  const activityTypeOptions = BASE_ACTIVITY_TYPES;
 
   const load = async () => {
     try {
       const data = await fetch('/api/form-templates').then((r) => (r.ok ? r.json() : []));
-      setTemplates(Array.isArray(data) ? data : []);
+      setTemplates(Array.isArray(data) ? data.filter((template) => (
+        !['event', 'birthday'].includes(String(template.slug || '').toLowerCase())
+      )) : []);
     } catch {
       setTemplates([]);
     }
@@ -118,7 +107,8 @@ function FormTemplatesPanel() {
     setForm({
       title: t.title || '',
       slug: t.slug || '',
-      activityTypes: t.activityTypes || (t.activityType ? [t.activityType] : []),
+      activityTypes: [...new Set((t.activityTypes || (t.activityType ? [t.activityType] : []))
+        .map(normalizeParticipationScope))],
       waiverText: t.waiverText || '',
       waiverSummary: t.waiverSummary || '',
       healthQuestionsText: questionsToText(t.healthQuestions),
@@ -248,7 +238,7 @@ function FormTemplatesPanel() {
                 className="input"
                 value={form.slug}
                 onChange={(e) => setForm((f) => ({ ...f, slug: e.target.value.toLowerCase().replace(/\s+/g, '-') }))}
-                placeholder="birthday"
+                placeholder="wall"
                 dir="ltr"
                 style={{ textAlign: 'left' }}
               />
@@ -263,9 +253,7 @@ function FormTemplatesPanel() {
               {/* הצהרה אחת יכולה לשרת כמה סוגים; סוג שייך להצהרה אחת בלבד, ולכן
                   סימון סוג שתפוס מעביר אותו לכאן — וכתוב למי הוא שייך עכשיו. */}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {activityTypeOptions
-                  .filter((a) => a.value !== 'custom')
-                  .map((a) => {
+                {activityTypeOptions.map((a) => {
                     const chosen = (form.activityTypes || []).includes(a.value);
                     const ownerElsewhere = templates.find((t) => (
                       t.id !== (editing === 'new' ? null : editing?.id)

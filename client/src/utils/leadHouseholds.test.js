@@ -91,3 +91,25 @@ test('an adult with a different identity is not collapsed into their parent', ()
   const tabs = buildFamilyMemberTabs([adult], [parent]);
   assert.deepEqual(tabs.map((tab) => tab.kind), ['student', 'parent']);
 });
+
+test('the main parent in the leads row is the trainee primary, not the richer secondary card', () => {
+  const primary = { id: 'p10', name: 'הורה ראשי' };
+  const richerSecondary = {
+    id: 'p11',
+    name: 'הורה נוסף',
+    phone: '972501112233',
+    email: 'full@example.com',
+    city: 'חיפה',
+  };
+  const child = {
+    id: 's10',
+    name: 'ילד',
+    parentId: 'p10',
+    guardianIds: ['p10', 'p11'],
+    status: 'active',
+  };
+
+  const [row] = buildFamilyRows([child], [primary, richerSecondary]);
+  assert.equal(row.parent.id, 'p10');
+  assert.equal(row.parents[0].id, 'p10');
+});

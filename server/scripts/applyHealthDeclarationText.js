@@ -6,12 +6,10 @@
  * template saved. Everything a customer sees comes from these rows, so a change
  * of wording that is not applied here is a change nobody experiences.
  *
- * **One declaration per activity, built from one skeleton.** The wall, a
- * birthday party and an outdoor trip are not the same undertaking: a trip adds
- * travel, terrain, weather and distance from help, and a party is a room full
- * of children who never had a lesson. A waiver holds up only where the signer
- * understood the risk they were actually taking, so the risk clause and the
- * safety rules differ by activity — while everything else (the medical
+ * **Two participation scopes, built from one skeleton.** Every activity at the
+ * wall (class, entry, personal training or event) uses the wall waiver. A trip
+ * adds travel, terrain, weather and distance from help, so its risk clause and
+ * safety rules remain separate — while everything else (the medical
  * questions, the liability structure, the doctor's-approval rule) is identical,
  * because there is no reason for it not to be.
  *
@@ -76,7 +74,7 @@ function buildSummary({ riskBullet }) {
 
 /**
  * The medical half. Identical everywhere: a heart condition does not become
- * safer because the activity is a birthday party, and a family that answered
+ * safer because the activity is an event, and a family that answered
  * these once should meet the same questions the next time.
  */
 const MEDICAL_QUESTIONS = [
@@ -121,43 +119,22 @@ function safety(id, label, { childOnly = false } = {}) {
 }
 
 /**
- * The three activities. `slug` is what the public link carries
- * (/health, /health/birthday, /health/trip).
+ * The two legal scopes. `slug` is what the public link carries
+ * (/health, /health/trip). Old /health/event and /health/birthday links resolve
+ * to the wall scope in the server.
  */
 const ACTIVITIES = [
   {
     slug: 'wall',
     title: 'הצהרת בריאות ובטיחות + הסרת אחריות',
-    activityPhrase: 'חוג ופעילות טיפוס בקיר',
+    activityPhrase: 'פעילות וטיפוס בקיר — לרבות חוג, אימון, כניסה חד־פעמית ואירוע',
     riskClause: 'ידוע לי כי טיפוס ספורטיבי, על כל צורותיו, הוא פעילות אתגרית הכרוכה מטבעה בסיכון לפגיעה גופנית — לרבות נפילה, החלקה, פגיעה מציוד, מאמץ יתר ופציעה — וכי סיכון זה קיים גם בהקפדה מלאה על הוראות הבטיחות.',
     riskBullet: 'טיפוס הוא פעילות אתגרית. גם כשמקפידים על כל כללי הבטיחות אפשר להיפצע.',
     safety: [
-      safety('s1', 'אין להשאיר ילד עד גיל 11 ללא ליווי מבוגר שלא במסגרת חוג מסודר', { childOnly: true }),
       safety('s2', 'נא להימנע מריצה והשתוללות בכל מתחם הקיר'),
       safety('s3', 'יש להישמע להוראות המדריכים'),
       safety('s4', 'הטיפוס יתאפשר רק לאחר קבלת תדריך בטיחות מלא ומעבר מבחן בטיחות בפני מדריך מטעם הקיר.'),
       safety('s5', 'אין להשתמש במתקנים השונים ללא קבלת אישור ממדריך'),
-    ],
-  },
-  {
-    // היה „יום הולדת”, והתברר שזה הטופס של כל פעילות מוזמנת בקיר: יום הולדת,
-    // יום גיבוש של חברה וקבוצת בית ספר חותמים על אותם סיכונים בדיוק, ממש כמו
-    // שהם סוג אחד ביומן. הכתובת הישנה (/health/birthday) ממשיכה לעבוד.
-    slug: 'event',
-    formerSlug: 'birthday',
-    title: 'הצהרת בריאות ובטיחות + הסרת אחריות — פעילות בקיר',
-    activityPhrase: 'פעילות מוזמנת בקיר',
-    // מה שמייחד פעילות מוזמנת אינו סוג האירוע אלא מי מגיע אליה: קבוצה שרובה
-    // לא טיפסה מעולם, ביום אחד, בלי הליווי המצטבר של חוג.
-    riskClause: 'ידוע לי כי הפעילות כוללת טיפוס בקיר — פעילות אתגרית הכרוכה מטבעה בסיכון לפגיעה גופנית, לרבות נפילה, החלקה, פגיעה מציוד ופציעה — וכי חלק מהמשתתפים מגיעים ללא ניסיון קודם ומשתתפים בה פעם אחת בלבד. הסיכון קיים גם בהקפדה מלאה על הוראות הבטיחות.',
-    riskBullet: 'הפעילות כוללת טיפוס. זו פעילות אתגרית, וגם כשמקפידים על כללי הבטיחות אפשר להיפצע.',
-    safety: [
-      safety('s1', 'ידוע לי כי באחריות מזמין/ת הפעילות לוודא ליווי מבוגר לילדים שהובאו אליה', { childOnly: true }),
-      safety('s2', 'נא להימנע מריצה והשתוללות בכל מתחם הקיר, לרבות באזור הישיבה והכיבוד'),
-      safety('s3', 'יש להישמע להוראות המדריכים לאורך כל הפעילות'),
-      safety('s4', 'הטיפוס יתאפשר רק לאחר קבלת תדריך בטיחות מלא ומעבר מבחן בטיחות בפני מדריך מטעם הקיר.'),
-      safety('s5', 'אין להשתמש במתקנים השונים ללא קבלת אישור ממדריך'),
-      safety('s6', 'ידוע לי כי יש למסור מראש לצוות כל רגישות או אלרגיה למזון של המשתתפים'),
     ],
   },
   {
@@ -201,6 +178,55 @@ export function declarationFor(activity) {
 export const DECLARATIONS = Object.fromEntries(
   ACTIVITIES.map((activity) => [activity.slug, declarationFor(activity)])
 );
+
+/**
+ * One-time, deploy-safe migration for the event→wall merge.
+ *
+ * It runs only while an active legacy event template exists, or while the wall
+ * still contains the removed accompaniment clause. Once migrated, later owner
+ * edits are left alone on every restart.
+ */
+export async function migrateUnifiedWallWaiver({ database = db, persist = null } = {}) {
+  const rows = database.get('form_templates') || [];
+  const legacy = rows.filter((template) => (
+    ['event', 'birthday'].includes(String(template.slug || '').toLowerCase())
+  ));
+  const wall = rows.find((template) => template.slug === 'wall')
+    || rows.find((template) => template.isDefault);
+  const hasRemovedAccompanimentClause = (wall?.healthQuestions || []).some((question) => (
+    String(question?.id || '').toLowerCase() === 's1'
+    && /ליווי מבוגר|גיל 11/.test(String(question?.label || ''))
+  ));
+  const needsMigration = legacy.some((template) => template.isActive !== false)
+    || hasRemovedAccompanimentClause;
+  if (!needsMigration) return { updated: 0, retired: 0 };
+
+  let updated = 0;
+  let retired = 0;
+  if (wall) {
+    const saved = database.update('form_templates', wall.id, {
+      ...DECLARATIONS.wall,
+      activityType: 'wall',
+      activityTypes: ['wall'],
+    });
+    if (saved) {
+      updated += 1;
+      if (persist) await persist('form_templates', saved);
+    }
+  }
+  for (const template of legacy) {
+    if (template.isActive === false && template.isDefault === false) continue;
+    const saved = database.update('form_templates', template.id, {
+      isActive: false,
+      isDefault: false,
+    });
+    if (saved) {
+      retired += 1;
+      if (persist) await persist('form_templates', saved);
+    }
+  }
+  return { updated, retired };
+}
 
 /**
  * Comparable form of a question list.
@@ -261,6 +287,9 @@ async function apply({ dry = false, remote = false } = {}) {
 
   const templates = remote ? await supa.getAll('form_templates') : db.get('form_templates');
   const rows = Array.isArray(templates) ? templates : [];
+  const retiredEventTemplates = rows.filter((template) => (
+    ['event', 'birthday'].includes(String(template.slug || '').toLowerCase())
+  ));
 
   const plan = [];
   for (const activity of ACTIVITIES) {
@@ -280,6 +309,9 @@ async function apply({ dry = false, remote = false } = {}) {
   }
 
   if (dry) {
+    retiredEventTemplates.forEach((template) => {
+      console.log(`\n=== ${template.slug} — תבנית היסטורית שתכובה ותוחלף באישור הקיר`);
+    });
     console.log('\n(--dry) לא נשמר דבר.');
     return;
   }
@@ -299,6 +331,9 @@ async function apply({ dry = false, remote = false } = {}) {
       });
     }
   }
+  for (const template of retiredEventTemplates) {
+    db.update('form_templates', template.id, { isActive: false, isDefault: false });
+  }
 
   if (!remote) {
     console.log('\n✅ נשמר ב-db.json המקומי בלבד (בלי --remote לא נוגעים בפרודקשן).');
@@ -314,6 +349,14 @@ async function apply({ dry = false, remote = false } = {}) {
     const result = await supa.upsert('form_templates', row);
     if (!result?.ok) throw new Error(`${activity.slug}: ${result?.error || 'כתיבה ל-Supabase נכשלה'}`);
   }
+  for (const template of retiredEventTemplates) {
+    const result = await supa.upsert('form_templates', {
+      ...template,
+      isActive: false,
+      isDefault: false,
+    });
+    if (!result?.ok) throw new Error(`${template.slug}: כיבוי התבנית ההיסטורית נכשל — ${result?.error || ''}`);
+  }
 
   const after = await supa.getAll('form_templates');
   const mismatched = [];
@@ -326,8 +369,12 @@ async function apply({ dry = false, remote = false } = {}) {
       mismatched.push(`${activity.slug}/healthQuestions`);
     }
   }
+  for (const template of retiredEventTemplates) {
+    const row = (after || []).find((candidate) => candidate.id === template.id);
+    if (row?.isActive !== false) mismatched.push(`${template.slug}/isActive`);
+  }
   if (mismatched.length) throw new Error(`נשמר חלקית: ${mismatched.join(', ')}`);
-  console.log('\n✅ שלוש ההצהרות נשמרו ב-CRM החי ואומתו בקריאה חוזרת.');
+  console.log('\n✅ שני האישורים נשמרו ב-CRM החי ותבניות האירוע ההיסטוריות כובו ואומתו.');
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
