@@ -265,11 +265,11 @@ export default function PublicEquipmentPayment() {
               <p className="eq-pay-sub">שלום {firstName(data?.parent_name) || 'הורה'}, בוחרים לכל מתאמן בנפרד ומשלמים פעם אחת.</p>
               <div className="eq-pay-required" role="note">
                 <AlertTriangle size={30} aria-hidden="true" />
-                <div>
-                  <strong>חובה להגיע לחוג עם ציוד</strong>
-                  <span>ללא הציוד לא ניתן להשתתף באימון. אם כבר יש פריט מהבית או משנה שעברה, סמנו „כבר יש לנו” ולא תחויבו עליו.</span>
-                  <span className="eq-pay-socks">בנוסף, חובה להגיע לכל אימון עם זוג גרביים נקיים לשימוש בנעלי הטיפוס.</span>
-                </div>
+                <ul>
+                  <li><strong>ציוד חובה:</strong> ללא ציוד לא ניתן להשתתף באימון.</li>
+                  <li><strong>מי שכבר יש לו ציוד לא צריך לרכוש שוב:</strong> סמנו „כבר יש לנו” ולא תחויבו.</li>
+                  <li><strong>כדי לקבל נעלי טיפוס חובה להגיע עם גרביים נקיות.</strong></li>
+                </ul>
               </div>
             </>
           )}
@@ -418,7 +418,7 @@ export default function PublicEquipmentPayment() {
         .eq-pay-header{text-align:center;padding:28px 22px 22px}.eq-pay-card{padding:18px}
         .eq-pay-brand{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;color:#7dd3fc;font-weight:900;font-size:30px;line-height:1.1}.eq-pay-brand img{width:118px;height:118px;object-fit:contain;filter:drop-shadow(0 10px 18px rgba(0,0,0,.32))}.eq-pay-brand span{letter-spacing:.02em;text-align:center}
         .eq-pay-title{margin:26px 0 10px;font-size:clamp(28px,5vw,40px);line-height:1.2;font-weight:900}.eq-pay-sub{margin:0;color:#cbd5e1;line-height:1.6}
-        .eq-pay-required{display:flex;align-items:center;text-align:right;gap:13px;margin:18px 0 0;padding:15px 17px;border-radius:14px;line-height:1.55;border:2px solid rgba(251,191,36,.65);background:rgba(251,191,36,.13);color:#fde68a;box-shadow:0 0 0 1px rgba(251,191,36,.08),inset 0 0 24px rgba(251,191,36,.04)}.eq-pay-required>svg{flex:0 0 auto;color:#fbbf24}.eq-pay-required>div{display:grid;gap:3px}.eq-pay-required strong{color:#fcd34d;font-size:18px;font-weight:900}.eq-pay-required span{font-size:14px;font-weight:700}.eq-pay-required .eq-pay-socks{color:#fef3c7;font-weight:900}
+        .eq-pay-required{display:flex;align-items:flex-start;text-align:right;gap:13px;margin:18px 0 0;padding:15px 17px;border-radius:14px;line-height:1.55;border:2px solid rgba(251,191,36,.65);background:rgba(251,191,36,.13);color:#fde68a;box-shadow:0 0 0 1px rgba(251,191,36,.08),inset 0 0 24px rgba(251,191,36,.04)}.eq-pay-required>svg{flex:0 0 auto;color:#fbbf24;margin-top:3px}.eq-pay-required>ul{display:grid;gap:7px;margin:0;padding-inline-start:22px}.eq-pay-required li{font-size:14px;font-weight:700}.eq-pay-required li::marker{color:#fbbf24;font-size:1.1em}.eq-pay-required strong{color:#fef3c7;font-weight:900}
         .eq-pay-loading{display:flex;align-items:center;justify-content:center;gap:10px;padding:20px}.spin{animation:eq-spin 1s linear infinite}@keyframes eq-spin{to{transform:rotate(360deg)}}
         .eq-pay-success,.eq-pay-pending{display:flex;align-items:center;gap:12px;border-radius:16px;padding:14px 16px}.eq-pay-success{border:1px solid rgba(52,211,153,.35);background:rgba(16,185,129,.12);color:#6ee7b7}.eq-pay-success div{display:grid}.eq-pay-success strong{font-size:17px}.eq-pay-success span{color:#d1fae5;font-size:13px}.eq-pay-pending{border:1px solid rgba(56,189,248,.3);background:rgba(56,189,248,.1);color:#bae6fd}
         .eq-pay-step{display:flex;align-items:center;gap:11px;margin-bottom:14px}.eq-pay-step>span{display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:#38bdf8;color:#082f49;font-weight:900}.eq-pay-step>div{display:grid}.eq-pay-step strong{font-size:18px}.eq-pay-step small{color:#94a3b8}
@@ -431,7 +431,7 @@ export default function PublicEquipmentPayment() {
         .eq-pay-summary{display:grid;gap:8px;margin-top:14px;padding:14px;border-radius:14px;background:rgba(2,6,23,.55)}.eq-pay-summary>div{display:flex;justify-content:space-between}.eq-pay-summary .is-discount{color:#6ee7b7}.eq-pay-summary .is-total{border-top:1px solid rgba(148,163,184,.22);padding-top:10px;font-size:18px}.eq-pay-summary small{color:#94a3b8;line-height:1.5}
         .eq-pay-error{margin-top:12px;padding:10px;border-radius:10px;background:rgba(248,113,113,.12);color:#fca5a5;font-size:13px}.eq-pay-cta{width:100%;display:flex;justify-content:center;align-items:center;gap:8px;margin-top:14px;padding:13px 18px;border:0;border-radius:12px;background:linear-gradient(135deg,#38bdf8,#0284c7);color:white;font:inherit;font-weight:900;cursor:pointer}.eq-pay-cta:disabled{opacity:.5;cursor:default}
         .eq-payment-frame{padding:12px}.eq-frame-summary{display:flex;gap:10px;align-items:center;padding:7px 7px 13px}.eq-frame-summary small{color:#6ee7b7}.eq-frame-summary strong{margin-inline-start:auto;font-size:20px}.eq-pay-iframe{width:100%;border:0;border-radius:14px;background:white;display:block}
-        @media(max-width:560px){.eq-pay-page{padding:10px 8px 28px}.eq-pay-header,.eq-pay-card{border-radius:17px}.eq-pay-brand{font-size:25px;gap:7px}.eq-pay-brand img{width:94px;height:94px}.eq-pay-required{align-items:flex-start;padding:13px}.eq-pay-required strong{font-size:16px}.eq-pay-required span{font-size:13px}.eq-pay-item{grid-template-columns:20px minmax(0,1fr);grid-template-areas:"check details" ". action";row-gap:10px;padding:12px}.eq-pay-item.has-note{grid-template-areas:"check details" ". action" "note note"}.eq-pay-own{justify-self:end}.eq-member{align-items:flex-start;flex-wrap:wrap}.eq-member>b{width:100%;margin-inline-start:32px}.eq-frame-summary{flex-wrap:wrap}}
+        @media(max-width:560px){.eq-pay-page{padding:10px 8px 28px}.eq-pay-header,.eq-pay-card{border-radius:17px}.eq-pay-brand{font-size:25px;gap:7px}.eq-pay-brand img{width:94px;height:94px}.eq-pay-required{padding:13px}.eq-pay-required>svg{width:25px;height:25px}.eq-pay-required>ul{gap:6px;padding-inline-start:18px}.eq-pay-required li{font-size:13px}.eq-pay-item{grid-template-columns:20px minmax(0,1fr);grid-template-areas:"check details" ". action";row-gap:10px;padding:12px}.eq-pay-item.has-note{grid-template-areas:"check details" ". action" "note note"}.eq-pay-own{justify-self:end}.eq-member{align-items:flex-start;flex-wrap:wrap}.eq-member>b{width:100%;margin-inline-start:32px}.eq-frame-summary{flex-wrap:wrap}}
       `}</style>
     </div>
   );
