@@ -1376,7 +1376,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     }
     let cancelled = false;
     setAttendanceLoading(true);
-    fetch(`/api/attendance?studentId=${encodeURIComponent(student.id)}`)
+    fetch(`/api/attendance?studentId=${encodeURIComponent(student.id)}&cached=1`)
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         if (cancelled) return;
@@ -1409,7 +1409,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     }
     let cancelled = false;
     setActivityHistoryLoading(true);
-    fetch(`/api/students/${encodeURIComponent(student.id)}/activity-registrations`)
+    fetch(`/api/students/${encodeURIComponent(student.id)}/activity-registrations?cached=1`)
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         if (!cancelled) setActivityHistory(Array.isArray(data) ? data : []);

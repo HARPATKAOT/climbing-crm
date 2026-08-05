@@ -263,11 +263,22 @@ export default function App() {
           attempt = 0;
           return;
         }
-        const [resStudents, resParents, resGroups] = await Promise.all([
-          fetchCollection('/api/students', 'מתאמנים'),
-          fetchCollection('/api/parents', 'הורים'),
-          fetchCollection('/api/groups', 'חוגים'),
-        ]);
+        const coreResponse = await fetch('/api/crm/core');
+        const core = await coreResponse.json().catch(() => null);
+        let resStudents = Array.isArray(core?.students) ? core.students : null;
+        let resParents = Array.isArray(core?.parents) ? core.parents : null;
+        let resGroups = Array.isArray(core?.groups) ? core.groups : null;
+
+        // During a rolling deployment the client can become available a few
+        // minutes before the matching API release. Keep the legacy requests as
+        // a compatibility fallback so an older server never blocks the CRM.
+        if (!coreResponse.ok || !resStudents || !resParents || !resGroups) {
+          [resStudents, resParents, resGroups] = await Promise.all([
+            fetchCollection('/api/students', 'מתאמנים'),
+            fetchCollection('/api/parents', 'הורים'),
+            fetchCollection('/api/groups', 'קבוצות'),
+          ]);
+        }
         if (cancelled) return;
         setStudents(resStudents);
         setParents(resParents);

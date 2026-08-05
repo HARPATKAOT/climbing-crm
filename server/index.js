@@ -1056,6 +1056,19 @@ function customerForRequest(req, row) {
   )));
 }
 
+// The owner shell needs these three collections together on every full page
+// load. They are already hydrated from Supabase before the server starts and
+// kept current by the write paths, so serving one in-memory snapshot avoids
+// seven duplicate durable-store reads and three HTTP round trips.
+app.get('/api/crm/core', requireOwner, (req, res) => {
+  const students = db.withStudentRelations(db.get('students') || [])
+    .map((row) => customerForRequest(req, row));
+  const parents = (db.get('parents') || [])
+    .map((row) => customerForRequest(req, row));
+  const groups = withGroupEnrollmentCounts(db.get('groups') || [], students);
+  res.json({ students, parents, groups });
+});
+
 app.get('/api/parents', async (req, res) => {
   try {
     if (supa.isEnabled()) {
@@ -7458,6 +7471,13 @@ app.get('/api/attendance', async (req, res) => {
     return res.status(403).json({ error: 'צוות תפעול יכול לצפות בנוכחות לפי חוג או תאריך בלבד' });
   }
   const hasFilter = Boolean(groupId || date || studentId);
+  // Customer-card transitions should not wait on another durable round trip:
+  // the complete attendance table is hydrated on boot and every write updates
+  // this process cache. Other attendance screens keep their current fresh-read
+  // behaviour unless they explicitly opt into the fast snapshot.
+  if (req.query.cached === '1') {
+    return res.json(filterAttendanceRows(db.get('attendance'), { groupId, date, studentId }));
+  }
   try {
     if (supa.isEnabled()) {
       // With a filter: query only the matching rows in the database.
@@ -14767,7 +14787,10 @@ app.get('/api/students/:id/activity-registrations', async (req, res) => {
   try {
     const studentId = String(req.params.id || '').trim();
     if (!studentId) return res.status(400).json({ error: 'חסר מזהה מתאמן' });
-    if (supa.isEnabled()) {
+    // The CRM card can use the boot-hydrated snapshot; registration and
+    // attendance writes keep it current. Full activity screens still perform
+    // their durable refresh by default.
+    if (supa.isEnabled() && req.query.cached !== '1') {
       const [remoteRegs, remoteActivities, remoteMarks] = await Promise.all([
         supa.getAll('activity_registrations'),
         supa.getAll('activities'),

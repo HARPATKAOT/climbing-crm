@@ -9,6 +9,46 @@ import {
   resolveAccessContext,
 } from './userAccess.js';
 
+// Supabase's `getUser` and the access-registry lookup are network calls. A CRM
+// screen often opens several protected resources together, so repeating both
+// checks for every request made a single card transition pay the same latency
+// many times. Cache the resolved context briefly and share concurrent checks;
+// permissions and revocations still take effect within one minute.
+const AUTH_CONTEXT_TTL_MS = 60_000;
+const AUTH_CONTEXT_CACHE_MAX = 250;
+const authContextCache = new Map();
+const authContextInFlight = new Map();
+
+async function resolveCachedAuthContext(token) {
+  const now = Date.now();
+  const cached = authContextCache.get(token);
+  if (cached && cached.expiresAt > now) return cached.value;
+  if (cached) authContextCache.delete(token);
+
+  const pending = authContextInFlight.get(token);
+  if (pending) return pending;
+
+  const request = (async () => {
+    const user = await supa.verifyAccessToken(token);
+    if (!user) return { user: null, access: null };
+    const registry = await loadAccessRegistry();
+    const access = resolveAccessContext(user, registry, db.get('employees') || []);
+    const value = { user, access };
+    if (authContextCache.size >= AUTH_CONTEXT_CACHE_MAX) {
+      authContextCache.delete(authContextCache.keys().next().value);
+    }
+    authContextCache.set(token, { value, expiresAt: Date.now() + AUTH_CONTEXT_TTL_MS });
+    return value;
+  })();
+
+  authContextInFlight.set(token, request);
+  try {
+    return await request;
+  } finally {
+    authContextInFlight.delete(token);
+  }
+}
+
 const PUBLIC_API_ROUTES = [
   /^\/health$/,
   /^\/public\//,
@@ -162,11 +202,8 @@ export async function apiAuth(req, res, next) {
   const token = authorization.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
   if (!token) return res.status(401).json({ error: 'נדרשת כניסה למערכת' });
 
-  const user = await supa.verifyAccessToken(token);
+  const { user, access } = await resolveCachedAuthContext(token);
   if (!user) return res.status(401).json({ error: 'החיבור פג. יש להיכנס מחדש' });
-
-  const registry = await loadAccessRegistry();
-  const access = resolveAccessContext(user, registry, db.get('employees') || []);
   if (!access) return res.status(403).json({ error: 'לחשבון הזה אין הרשאה פעילה למערכת' });
 
   req.crmUser = {

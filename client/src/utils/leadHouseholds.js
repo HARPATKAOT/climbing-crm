@@ -152,28 +152,8 @@ export function buildFamilyMemberTabs(students, parents) {
   return [...traineeTabs, ...parentTabs];
 }
 
-function expandRowStudents(row, allStudents, parents, household, parentById) {
-  if (!allStudents?.length) return row.students;
-  const key = row.key || '';
-  let expanded = null;
-
-  if (key.startsWith('household:')) {
-    const rootId = key.slice('household:'.length);
-    expanded = allStudents.filter((student) => {
-      const ids = studentGuardianIds(student);
-      return ids.some((id) => household.has(id) && household.find(id) === rootId);
-    });
-  } else if (key.startsWith('phone:')) {
-    const phone = key.slice('phone:'.length);
-    expanded = allStudents.filter((student) => {
-      const parent = parentById.get(student.parentId);
-      return normalizePhone(parent?.phone) === phone;
-    });
-  } else if (key.startsWith('parent:')) {
-    const parentId = key.slice('parent:'.length);
-    expanded = allStudents.filter((student) => studentGuardianIds(student).includes(String(parentId)));
-  }
-
+function expandRowStudents(row, studentsByFamilyKey) {
+  const expanded = studentsByFamilyKey.get(row.key);
   if (!expanded?.length) return row.students;
   // Keep any synthetic parent-only entry that the filter brought in — it has
   // no real student row, so the household scan would drop it.
@@ -182,6 +162,16 @@ function expandRowStudents(row, allStudents, parents, household, parentById) {
     if (!byId.has(String(student.id))) byId.set(String(student.id), student);
   }
   return [...byId.values()];
+}
+
+function familyKeyForStudent(student, parentById, household) {
+  const parent = parentById.get(String(student?.parentId)) || null;
+  const phoneKey = normalizePhone(parent?.phone) || '';
+  return parent?.id && household.has(parent.id)
+    ? `household:${household.find(parent.id)}`
+    : (phoneKey
+      ? `phone:${phoneKey}`
+      : (parent?.id ? `parent:${parent.id}` : `student:${student?.id}`));
 }
 
 /**
@@ -195,17 +185,33 @@ function expandRowStudents(row, allStudents, parents, household, parentById) {
  */
 export function buildFamilyRows(students, parents, allStudents) {
   const parentById = new Map((parents || []).map((p) => [String(p.id), p]));
-  const household = buildHouseholdIndex(allStudents || students, parents);
+  const completeStudents = allStudents || students || [];
+  const household = buildHouseholdIndex(completeStudents, parents);
   const groups = new Map();
+
+  // Index the complete roster once. The previous implementation filtered the
+  // full student list separately for every family row, turning a screen with
+  // 1,000+ customers into millions of repeated comparisons per status count.
+  const studentsByFamilyKey = new Map();
+  for (const student of completeStudents) {
+    const key = familyKeyForStudent(student, parentById, household);
+    const bucket = studentsByFamilyKey.get(key);
+    if (bucket) bucket.push(student);
+    else studentsByFamilyKey.set(key, [student]);
+  }
+
+  const parentsByHouseholdRoot = new Map();
+  for (const parent of parents || []) {
+    if (parent?.id == null || !household.has(parent.id)) continue;
+    const rootId = household.find(parent.id);
+    const bucket = parentsByHouseholdRoot.get(rootId);
+    if (bucket) bucket.push(parent);
+    else parentsByHouseholdRoot.set(rootId, [parent]);
+  }
 
   for (const student of students || []) {
     const parent = parentById.get(String(student.parentId)) || null;
-    const phoneKey = normalizePhone(parent?.phone) || '';
-    const groupKey = parent?.id && household.has(parent.id)
-      ? `household:${household.find(parent.id)}`
-      : (phoneKey
-        ? `phone:${phoneKey}`
-        : (parent?.id ? `parent:${parent.id}` : `student:${student.id}`));
+    const groupKey = familyKeyForStudent(student, parentById, household);
 
     let row = groups.get(groupKey);
     if (!row) {
@@ -233,16 +239,14 @@ export function buildFamilyRows(students, parents, allStudents) {
   for (const row of groups.values()) {
     if (!row.key.startsWith('household:')) continue;
     const rootId = row.key.slice('household:'.length);
-    for (const parent of parents || []) {
-      if (parent?.id == null) continue;
-      if (household.find(parent.id) !== rootId) continue;
+    for (const parent of parentsByHouseholdRoot.get(rootId) || []) {
       if (row.parents.some((p) => String(p.id) === String(parent.id))) continue;
       row.parents.push(parent);
     }
   }
 
   return [...groups.values()].map((row) => {
-    const expanded = expandRowStudents(row, allStudents, parents, household, parentById);
+    const expanded = expandRowStudents(row, studentsByFamilyKey);
     const sorted = [...expanded].sort((a, b) => {
       const adultDiff = Number(!!b.isAdult) - Number(!!a.isAdult);
       if (adultDiff) return adultDiff;
