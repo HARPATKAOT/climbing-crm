@@ -264,7 +264,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
       unpaid += row.gaps?.unpaidCount || 0;
       awaiting += row.gaps?.awaitingCount || 0;
     }
-    return { unpaid, awaiting, kids: rows.length };
+    return { unpaid, awaiting, trainees: rows.length };
   }, [rows]);
 
   const resetDraft = () => {
@@ -275,6 +275,8 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
       chalk_bag: String(settings?.prices?.chalk_bag ?? ''),
       shirt_sizes: (settings?.shirt_sizes || []).join(', '),
       price_includes_vat: settings?.price_includes_vat !== false,
+      family_discount_enabled: settings?.family_discount_enabled !== false,
+      family_discount_percent: String(settings?.family_discount_percent ?? 5),
       season_start: monthDayToDisplay(settings?.season_start) || '01/09',
       season_mid: monthDayToDisplay(settings?.season_mid) || '15/02',
       season_end: monthDayToDisplay(settings?.season_end) || '31/07',
@@ -321,6 +323,10 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
         if (!monthDay) throw new Error(`${field.label}: תאריך לא תקין — כתבו יום/חודש, למשל ${field.placeholder}`);
         season[field.key] = monthDay;
       }
+      const familyDiscountPercent = Number(draft.family_discount_percent);
+      if (!Number.isFinite(familyDiscountPercent) || familyDiscountPercent < 0 || familyDiscountPercent > 100) {
+        throw new Error('הנחת המשפחה חייבת להיות בין 0 ל־100 אחוזים');
+      }
 
       const res = await fetch('/api/equipment-settings', {
         method: 'PUT',
@@ -331,6 +337,8 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
           // נשמר בשקט כגיבוי לשרת; תאריכי העונה הם המקור העיקרי.
           rental_days: settings?.rental_days,
           price_includes_vat: draft.price_includes_vat !== false,
+          family_discount_enabled: draft.family_discount_enabled !== false,
+          family_discount_percent: familyDiscountPercent,
           // What each item is for, and what the enrichment fee buys. The bot
           // reads these verbatim — an empty field means it says nothing.
           item_info: {
@@ -360,7 +368,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
         <Package size={18} color="var(--accent)" />
         <div style={{ fontWeight: 800, fontSize: 16 }}>ציוד לאימונים</div>
         <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-          {summary.kids} ילדים · {summary.unpaid} ממתינים לתשלום · {summary.awaiting} שולמו
+          {summary.trainees} מתאמנים · {summary.unpaid} ממתינים לתשלום · {summary.awaiting} שולמו
         </div>
         <button type="button" className="btn btn-ghost btn-sm" onClick={load} style={{ marginInlineStart: 'auto' }}>
           <RefreshCw size={14} /> רענון
@@ -407,6 +415,8 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
             מחירים: נעליים {settings.prices?.shoes}₪ לחצי עונה · חולצה {settings.prices?.shirt}₪ · מגנזיום {settings.prices?.chalk_bag}₪
             {' · '}
             שנת חוגים {monthDayToDisplay(settings.season_start)}–{monthDayToDisplay(settings.season_end)}
+            {' · '}
+            הנחת משפחה: {settings.family_discount_enabled === false ? 'כבויה' : `${settings.family_discount_percent ?? 5}%`}
           </span>
           {settingsMsg && <span style={{ color: '#34d399' }}>{settingsMsg}</span>}
         </div>
@@ -426,7 +436,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Settings size={15} color="var(--accent)" />
-            <div style={{ fontWeight: 800, fontSize: 14 }}>הגדרות מחירים, מידות ושנת חוגים</div>
+            <div style={{ fontWeight: 800, fontSize: 14 }}>הגדרות מחירים, הנחה, מידות ושנת חוגים</div>
             {settingsMsg && (
               <span style={{ fontSize: 12, color: '#34d399', fontWeight: 700 }}>{settingsMsg}</span>
             )}
@@ -471,7 +481,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
           >
             <div style={{ fontWeight: 800, fontSize: 13 }}>קישור לתשלום ציוד</div>
             <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.6 }}>
-              לכל ילד נוצר קישור אישי. ברשימה לחצו על „קישור תשלום” — הכתובת תופיע כאן ותועתק.
+              הקישור שייך לכל תיק המשפחה. ברשימה לחצו על „קישור תשלום” — המשפחה תוכל לבחור מתאמן אחד או יותר ולשלם פעם אחת.
               ביטול השכרת נעליים באמצע התקופה כרוך בדמי ביטול של 30 ₪ (מוצג גם בדף התשלום להורים).
             </div>
             {lastPaymentLink ? (
@@ -541,6 +551,36 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
             />
             המחירים כוללים מע״מ
           </label>
+
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14, display: 'grid', gap: 10 }}>
+            <div style={{ fontWeight: 800, fontSize: 13 }}>הנחת משפחה על ציוד</div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.6 }}>
+              כאשר באותו תשלום נרכש ציוד לשני מתאמנים או יותר, ההנחה חלה על כל סל הציוד בעסקה.
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'end' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, cursor: 'pointer', minHeight: 34 }}>
+                <input
+                  type="checkbox"
+                  checked={draft.family_discount_enabled !== false}
+                  onChange={(e) => setDraft((d) => ({ ...d, family_discount_enabled: e.target.checked }))}
+                />
+                ההנחה פעילה
+              </label>
+              <div className="form-group" style={{ margin: 0, maxWidth: 150 }}>
+                <label className="form-label" style={{ fontSize: 11 }}>גובה ההנחה (%)</label>
+                <input
+                  className="input input-sm"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  value={draft.family_discount_percent}
+                  disabled={draft.family_discount_enabled === false}
+                  onChange={(e) => setDraft((d) => ({ ...d, family_discount_percent: e.target.value }))}
+                />
+              </div>
+            </div>
+          </div>
 
           {/* A price answers "how much", never "why". A parent asking what
               magnesium is, or what the enrichment fee pays for, used to reach
@@ -649,7 +689,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
         <div style={{ color: 'var(--text-3)', fontSize: 13 }}>טוען...</div>
       ) : rows.length === 0 ? (
         <div className="empty-state" style={{ padding: 40 }}>
-          <div className="empty-state-title">אין ילדים שתואמים לסינון</div>
+          <div className="empty-state-title">אין מתאמנים שתואמים לסינון</div>
           <div className="empty-state-sub">נסו לשנות סינון או קבוצה</div>
         </div>
       ) : (
@@ -668,6 +708,11 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
               >
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
                   <div style={{ fontWeight: 800 }}>{row.student_name}</div>
+                  {row.is_adult && (
+                    <span style={{ fontSize: 10, color: 'var(--accent)', border: '1px solid var(--accent)', borderRadius: 999, padding: '2px 7px' }}>
+                      מבוגר/ת
+                    </span>
+                  )}
                   <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
                     {row.parent_name}
                     {row.group_name ? ` · ${row.group_name}` : ''}

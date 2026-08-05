@@ -11,6 +11,10 @@ import {
   computeEquipmentTotal,
   normalizeEquipmentSettings,
   isKidStudent,
+  isEquipmentEligibleStudent,
+  equipmentItemTypesForStudent,
+  backfillAdultEquipment,
+  applyEquipmentFamilyDiscount,
   equipmentGapFlags,
   unpaidEquipmentItems,
   DEFAULT_EQUIPMENT_SETTINGS,
@@ -63,6 +67,77 @@ test('ensureStudentEquipment creates three unpaid rows', () => {
   assert.equal(rows.length, 3);
   assert.deepEqual(rows.map((r) => r.item_type).sort(), ['chalk_bag', 'shirt', 'shoes']);
   assert.ok(rows.every((r) => r.payment_status === 'unpaid'));
+});
+
+test('adult trainees receive shoes and chalk only', () => {
+  const db = makeDb({
+    students: [{ id: 'a1', parentId: 'p1', isAdult: true, status: 'active' }],
+    student_equipment: [],
+  });
+  const adult = db.getOne('students', 'a1');
+  assert.equal(isEquipmentEligibleStudent(adult), true);
+  assert.deepEqual(equipmentItemTypesForStudent(adult), ['shoes', 'chalk_bag']);
+  const rows = ensureStudentEquipment({ db, student: adult });
+  assert.deepEqual(rows.map((row) => row.item_type), ['shoes', 'chalk_bag']);
+
+  const paid = markEquipmentItemsPaid({
+    db,
+    studentId: adult.id,
+    itemTypes: ['shoes', 'shirt', 'chalk_bag'],
+    paymentId: 'adult-payment',
+  });
+  assert.equal(paid.errors.length, 0);
+  assert.deepEqual(paid.updated.map((row) => row.item_type), ['shoes', 'chalk_bag']);
+});
+
+test('adult equipment backfill ignores archived and parent-only cards', () => {
+  const db = makeDb({
+    students: [
+      { id: 'a1', isAdult: true, status: 'active' },
+      { id: 'a2', isAdult: true, status: 'archived' },
+      { id: 'parent:p1', isAdult: true, _parentOnly: true, status: 'active' },
+      { id: 'k1', isAdult: false, status: 'active' },
+    ],
+    student_equipment: [],
+  });
+  const result = backfillAdultEquipment({ db });
+  assert.deepEqual(result, { students: 1, created: 2 });
+  assert.deepEqual(db.get('student_equipment').map((row) => row.student_id), ['a1', 'a1']);
+});
+
+test('family discount applies to the full basket only for two or more trainees', () => {
+  const settings = normalizeEquipmentSettings({
+    family_discount_enabled: true,
+    family_discount_percent: 5,
+  });
+  const one = applyEquipmentFamilyDiscount(settings, [{ student_id: 's1', subtotal: 200 }]);
+  assert.equal(one.discount, 0);
+  assert.equal(one.total, 200);
+
+  const family = applyEquipmentFamilyDiscount(settings, [
+    { student_id: 's1', subtotal: 200 },
+    { student_id: 's2', subtotal: 100 },
+  ]);
+  assert.equal(family.eligible, true);
+  assert.equal(family.percent, 5);
+  assert.equal(family.subtotal, 300);
+  assert.equal(family.discount, 15);
+  assert.equal(family.total, 285);
+  assert.equal(family.allocations.reduce((sum, row) => sum + row.total, 0), 285);
+
+  const disabled = applyEquipmentFamilyDiscount(
+    { family_discount_enabled: false, family_discount_percent: 25 },
+    [{ student_id: 's1', subtotal: 40 }, { student_id: 's2', subtotal: 60 }]
+  );
+  assert.equal(disabled.discount, 0);
+  assert.equal(disabled.total, 100);
+});
+
+test('family discount settings default to 5 percent and clamp to 0-100', () => {
+  assert.equal(normalizeEquipmentSettings({}).family_discount_enabled, true);
+  assert.equal(normalizeEquipmentSettings({}).family_discount_percent, 5);
+  assert.equal(normalizeEquipmentSettings({ family_discount_percent: 250 }).family_discount_percent, 100);
+  assert.equal(normalizeEquipmentSettings({ family_discount_percent: -2 }).family_discount_percent, 0);
 });
 
 test('markEquipmentItemsPaid sets shoes rental window and shirt size', () => {

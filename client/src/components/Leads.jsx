@@ -878,7 +878,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [couponError, setCouponError] = useState('');
   const [sales, setSales] = useState([]);
   const [salesLoading, setSalesLoading] = useState(false);
-  const showEquipment = !parentOnly && !student.isAdult;
+  // Every real trainee has equipment: children get shoes, shirt and chalk;
+  // adult trainees get shoes and chalk. Only a parent-only placeholder has no kit.
+  const showEquipment = !parentOnly;
 
   // What was actually bought — counter sales and payment links alike. Payments
   // only shows the charge; this shows the goods behind it.
@@ -1217,7 +1219,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       const res = await fetch(`/api/students/${encodeURIComponent(student.id)}/equipment/payment-link`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sendWhatsapp: true }),
+        body: JSON.stringify({ sendWhatsapp: true, preferredParentId: parent?.id || null }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -1780,9 +1782,14 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       if (!res.ok) return;
       const data = await res.json();
       const list = Array.isArray(data) ? data : [];
-      setStudentPayments(
-        list.filter((p) => (parent?.id && p.parent_id === parent.id) || p.student_id === student.id)
-      );
+      setStudentPayments(list.filter((p) => {
+        const belongsToFile = (parent?.id && p.parent_id === parent.id) || p.student_id === student.id;
+        if (!belongsToFile) return false;
+        if (!p.equipment_family_payment || parentOnly) return true;
+        return (p.equipment_allocations || []).some(
+          (allocation) => String(allocation.student_id) === String(student.id)
+        );
+      }));
     } catch (err) {
       console.error('Failed to load payments:', err);
     }
@@ -2666,6 +2673,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                           const busy = paymentBusyKey.startsWith(`${p.id}:`);
                           const hasRefundDoc = paymentHasRefundDoc(p);
                           const canRefund = p.status === 'paid' && !!p.icount_doc_number;
+                          const equipmentAllocation = (p.equipment_allocations || []).find(
+                            (allocation) => String(allocation.student_id) === String(student.id)
+                          );
                           return (
                             <div
                               key={p.id}
@@ -2697,6 +2707,15 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                   </button>
                                 </span>
                               </div>
+                              {equipmentAllocation && (
+                                <div style={{ marginTop: 4, color: 'var(--text-3)', fontSize: 11 }}>
+                                  החלק של {student.name}: ₪{Number(equipmentAllocation.charge_amount ?? equipmentAllocation.total ?? 0).toLocaleString()}
+                                  {Number(equipmentAllocation.discount_amount) > 0
+                                    ? ` · הנחת משפחה ₪${Number(equipmentAllocation.discount_amount).toLocaleString()}`
+                                    : ''}
+                                  {' · '}החשבונית והזיכוי שייכים לעסקה המשפחתית המלאה
+                                </div>
+                              )}
                               {menuOpen && (
                                 <div
                                   style={{
@@ -4038,7 +4057,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               )}
             </FolderRow>
 
-            {/* Equipment folder — kids only */}
+            {/* Equipment folder — children and adult trainees */}
             {showEquipment && (
               <FolderRow
                 id="equipment"
@@ -4089,7 +4108,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     <div
                       style={{
                         display: 'grid',
-                        gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                        gridTemplateColumns: `repeat(${Math.max(1, Math.min(3, equipmentItems.length))}, minmax(0, 1fr))`,
                         gap: 8,
                       }}
                     >

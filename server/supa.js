@@ -113,6 +113,7 @@ export const OPERATIONAL_TABLES = [
   'student_guardians',
   'pos_sales',
   'equipment_checkouts',
+  'equipment_payment_allocations',
   'activity_interest',
   'activity_attendance',
   'ai_suggestions',

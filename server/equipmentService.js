@@ -52,6 +52,8 @@ export const DEFAULT_EQUIPMENT_SETTINGS = {
   shirt_sizes: ['6', '8', '10', '12', '14', 'XS', 'S', 'M', 'L'],
   rental_days: 182,
   price_includes_vat: true,
+  family_discount_enabled: true,
+  family_discount_percent: 5,
   // שנת חוגים חוזרת כל שנה, לכן נשמר יום-חודש בלבד ולא תאריך מלא.
   // ברירת המחדל: 11 חודשי חוגים, 5.5 לכל חצי.
   season_start: '09-01',
@@ -108,6 +110,11 @@ export function normalizeEquipmentSettings(raw = {}) {
     shirt_sizes: shirtSizes,
     rental_days: rentalDays,
     price_includes_vat: raw.price_includes_vat !== false,
+    family_discount_enabled: raw.family_discount_enabled !== false,
+    family_discount_percent: Math.min(
+      100,
+      Math.max(0, Number(raw.family_discount_percent ?? base.family_discount_percent) || 0)
+    ),
     season_start: normalizeMonthDay(raw.season_start, base.season_start),
     season_mid: normalizeMonthDay(raw.season_mid, base.season_mid),
     season_end: normalizeMonthDay(raw.season_end, base.season_end),
@@ -122,6 +129,20 @@ export function isKidStudent(student) {
   return true;
 }
 
+/** A real trainee card can buy equipment; parent-only CRM placeholders cannot. */
+export function isEquipmentEligibleStudent(student) {
+  if (!student) return false;
+  if (String(student.id || '').startsWith('parent:')) return false;
+  if (student._parentOnly) return false;
+  return true;
+}
+
+/** Adults use shoes and chalk. Children also receive the club shirt option. */
+export function equipmentItemTypesForStudent(student) {
+  if (!isEquipmentEligibleStudent(student)) return [];
+  return isKidStudent(student) ? [...EQUIPMENT_ITEM_TYPES] : ['shoes', 'chalk_bag'];
+}
+
 export function newEquipmentId(studentId, itemType) {
   return `eq-${studentId}-${itemType}`;
 }
@@ -130,9 +151,10 @@ export function newCheckoutToken() {
   return randomBytes(18).toString('base64url');
 }
 
-/** Ensure the three kit rows exist for a kid. Returns the rows (existing + created). */
+/** Ensure the applicable kit rows exist for a trainee. Returns existing + created rows. */
 export function ensureStudentEquipment({ db, student, persist } = {}) {
-  if (!db || !isKidStudent(student)) return [];
+  if (!db || !isEquipmentEligibleStudent(student)) return [];
+  const applicableTypes = equipmentItemTypesForStudent(student);
   const parentId = student.parentId || student.parent_id || null;
   const existing = (Array.isArray(db.get('student_equipment')) ? db.get('student_equipment') : []).filter(
     (row) => row && row.student_id === student.id
@@ -141,7 +163,7 @@ export function ensureStudentEquipment({ db, student, persist } = {}) {
   const now = new Date().toISOString();
   const result = [];
 
-  for (const itemType of EQUIPMENT_ITEM_TYPES) {
+  for (const itemType of applicableTypes) {
     let row = byType.get(itemType);
     if (!row) {
       row = db.insert('student_equipment', {
@@ -177,6 +199,23 @@ export function ensureStudentEquipment({ db, student, persist } = {}) {
   return result.sort(
     (a, b) => EQUIPMENT_ITEM_TYPES.indexOf(a.item_type) - EQUIPMENT_ITEM_TYPES.indexOf(b.item_type)
   );
+}
+
+/** Backfill the two applicable equipment rows for active adults already in the CRM. */
+export function backfillAdultEquipment({ db, persist } = {}) {
+  if (!db) return { students: 0, created: 0 };
+  const adults = (db.get('students') || []).filter(
+    (student) =>
+      isEquipmentEligibleStudent(student) &&
+      !isKidStudent(student) &&
+      student.status !== 'archived'
+  );
+  const before = (db.get('student_equipment') || []).length;
+  adults.forEach((student) => ensureStudentEquipment({ db, student, persist }));
+  return {
+    students: adults.length,
+    created: Math.max(0, (db.get('student_equipment') || []).length - before),
+  };
 }
 
 export function addDaysIso(fromIso, days) {
@@ -397,15 +436,15 @@ export function markEquipmentItemsPaid({
   const errors = [];
   const updated = [];
   const student = db.getOne('students', studentId);
-  if (!isKidStudent(student)) {
-    return { updated, errors: ['המתאמן אינו ילד או לא נמצא'] };
+  if (!isEquipmentEligibleStudent(student)) {
+    return { updated, errors: ['המתאמן לא נמצא או אינו זכאי לציוד'] };
   }
 
   const rows = ensureStudentEquipment({ db, student, persist });
   const wanted = new Set(
     (Array.isArray(itemTypes) ? itemTypes : [])
       .map((t) => String(t || '').trim())
-      .filter((t) => EQUIPMENT_ITEM_TYPES.includes(t))
+      .filter((t) => equipmentItemTypesForStudent(student).includes(t))
   );
   if (!wanted.size) return { updated, errors: ['לא נבחרו פריטי ציוד'] };
 
@@ -610,6 +649,60 @@ export function computeEquipmentTotal(settings, itemTypes = [], overrides = {}) 
   }, 0);
 }
 
+const roundCurrency = (value) => Math.round((Number(value) || 0) * 100) / 100;
+
+/**
+ * Apply the configured family discount when at least two distinct trainees have
+ * a positive equipment subtotal in this payment. The returned values are safe
+ * to snapshot on the payment so later settings changes cannot rewrite history.
+ */
+export function applyEquipmentFamilyDiscount(settings, allocations = []) {
+  const normalized = normalizeEquipmentSettings(settings);
+  const source = (Array.isArray(allocations) ? allocations : []).map((allocation) => ({
+    ...allocation,
+    subtotal: roundCurrency(Math.max(0, Number(allocation?.subtotal) || 0)),
+  }));
+  const positive = source.filter((allocation) => allocation.subtotal > 0);
+  const eligibleCount = new Set(
+    positive.map((allocation, index) => String(allocation.student_id || allocation.studentId || index))
+  ).size;
+  const percent = normalized.family_discount_enabled && eligibleCount >= 2
+    ? normalized.family_discount_percent
+    : 0;
+  const subtotal = roundCurrency(source.reduce((sum, allocation) => sum + allocation.subtotal, 0));
+  const discount = roundCurrency((subtotal * percent) / 100);
+  let distributed = 0;
+  let positiveIndex = 0;
+
+  const pricedAllocations = source.map((allocation) => {
+    if (allocation.subtotal <= 0 || percent <= 0) {
+      return { ...allocation, discount_percent: percent, discount_amount: 0, total: allocation.subtotal };
+    }
+    positiveIndex += 1;
+    const allocationDiscount = positiveIndex === positive.length
+      ? roundCurrency(discount - distributed)
+      : roundCurrency((allocation.subtotal / subtotal) * discount);
+    distributed = roundCurrency(distributed + allocationDiscount);
+    return {
+      ...allocation,
+      discount_percent: percent,
+      discount_amount: allocationDiscount,
+      total: roundCurrency(allocation.subtotal - allocationDiscount),
+    };
+  });
+
+  return {
+    enabled: normalized.family_discount_enabled,
+    eligible: eligibleCount >= 2,
+    eligible_count: eligibleCount,
+    percent,
+    subtotal,
+    discount,
+    total: roundCurrency(subtotal - discount),
+    allocations: pricedAllocations,
+  };
+}
+
 export function describeEquipmentItems(itemTypes = [], shirtSize = null) {
   const parts = (Array.isArray(itemTypes) ? itemTypes : [])
     .filter((t) => EQUIPMENT_ITEM_TYPES.includes(t))
@@ -676,11 +769,11 @@ export function ensureEquipmentWhatsappTemplate({ db, persist } = {}) {
     status: 'DRAFT',
     usage:
       'נשלחת להורה כשיש לילד פריטי ציוד שטרם שולמו (נעליים, חולצת חוג, שק מגנזיום). ' +
-      'נשלחת מתיק המתאמן או ממסך הציוד. הכפתור מוביל לדף תשלום הציוד של אותו ילד.',
+      'נשלחת מתיק המתאמן או ממסך הציוד. הכפתור מוביל לדף תשלום משפחתי שבו בוחרים מתאמן אחד או יותר.',
     body:
       'שלום {{1}},\n' +
       'לתשלום ציוד האימונים של {{2}} לחצו על הכפתור.\n' +
-      'אפשר לבחור נעליים, חולצת חוג ושק מגנזיום.',
+      'אפשר לבחור את המתאמנים ואת הציוד לכל אחד מהם ולשלם פעם אחת.',
     header: '',
     footer: DEFAULT_BUSINESS_PROFILE.display_name,
     body_examples: ['דנה כהן', 'נועם כהן'],

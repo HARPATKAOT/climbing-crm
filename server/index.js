@@ -266,7 +266,10 @@ import {
   DEFAULT_EQUIPMENT_SETTINGS,
   normalizeEquipmentSettings,
   isKidStudent,
+  isEquipmentEligibleStudent,
+  equipmentItemTypesForStudent,
   ensureStudentEquipment,
+  backfillAdultEquipment,
   markEquipmentItemsPaid,
   resetShoeRental,
   markEquipmentGiven,
@@ -275,6 +278,7 @@ import {
   markEquipmentUnpaid,
   markEquipmentDeclined,
   computeEquipmentTotal,
+  applyEquipmentFamilyDiscount,
   describeEquipmentItems,
   equipmentGapFlags,
   unpaidEquipmentItems,
@@ -3457,7 +3461,7 @@ app.put('/api/students/:id', async (req, res) => {
   res.json(updated);
 });
 
-// ─── Training equipment (kids kit) ───────────────────────────────────────────
+// ─── Training equipment ──────────────────────────────────────────────────────
 async function refreshStudentEquipmentCache() {
   if (!supa.isEnabled()) return db.get('student_equipment') || [];
   try {
@@ -3584,7 +3588,7 @@ app.get('/api/students/:id/equipment', async (req, res) => {
       student = db.getOne('students', req.params.id);
     }
     if (!student) return res.status(404).json({ error: 'המתאמן לא נמצא' });
-    if (!isKidStudent(student)) {
+    if (!isEquipmentEligibleStudent(student)) {
       return res.json({ items: [], applicable: false });
     }
     const items = ensureStudentEquipment({ db, student, persist: persistCore });
@@ -3638,15 +3642,15 @@ app.get('/api/equipment', async (req, res) => {
 
     const groupId = req.query.groupId ? String(req.query.groupId) : '';
     const filter = String(req.query.filter || 'gaps'); // gaps | unpaid | awaiting | all
-    const kids = students.filter(
-      (s) => isKidStudent(s) && s.status !== 'archived' && (!groupId || studentInGroup(s, groupId))
+    const trainees = students.filter(
+      (s) => isEquipmentEligibleStudent(s) && s.status !== 'archived' && (!groupId || studentInGroup(s, groupId))
     );
 
     const parentById = new Map(parents.map((p) => [p.id, p]));
     const groupById = new Map(groups.map((g) => [g.id, g]));
     const rows = [];
 
-    for (const student of kids) {
+    for (const student of trainees) {
       const items = ensureStudentEquipment({ db, student, persist: persistCore });
       const gaps = equipmentGapFlags(items);
       if (filter === 'unpaid' && !gaps.hasUnpaid) continue;
@@ -3657,6 +3661,7 @@ app.get('/api/equipment', async (req, res) => {
       rows.push({
         student_id: student.id,
         student_name: student.name,
+        is_adult: !isKidStudent(student),
         parent_id: parent?.id || student.parentId || null,
         parent_name: parent?.name || '',
         parent_phone: parent?.phone || '',
@@ -3900,15 +3905,26 @@ app.post('/api/students/:id/equipment/payment-link', async (req, res) => {
       }
     }
     if (!student) return res.status(404).json({ error: 'המתאמן לא נמצא' });
-    if (!isKidStudent(student)) {
-      return res.status(400).json({ error: 'ציוד לאימונים מיועד לילדים בלבד' });
+    if (!isEquipmentEligibleStudent(student)) {
+      return res.status(400).json({ error: 'כרטיס המתאמן אינו זכאי לציוד' });
     }
-    const parent = db.getOne('parents', student.parentId);
-    if (!parent?.phone) {
+    const sendWhatsapp = req.body?.sendWhatsapp !== false;
+    const parent = chooseRecipientParent(db.get('parents') || [], {
+      guardianIds: guardianParentIds(db, student),
+      primaryParentId: student.parentId,
+      preferredParentId: req.body?.preferredParentId,
+    });
+    if (!parent) {
+      return res.status(400).json({ error: 'לא נמצא משלם בתיק המשפחה' });
+    }
+    if (sendWhatsapp && !parent.phone) {
       return res.status(400).json({ error: 'חסר טלפון להורה — אי אפשר לשלוח קישור' });
     }
 
-    ensureStudentEquipment({ db, student, persist: persistCore });
+    const familyMembers = expandHousehold(db, parent.id).students.filter(
+      (member) => isEquipmentEligibleStudent(member) && member.status !== 'archived'
+    );
+    familyMembers.forEach((member) => ensureStudentEquipment({ db, student: member, persist: persistCore }));
     try {
       ensureEquipmentWhatsappTemplate({ db, persist: persistCore });
     } catch (tplErr) {
@@ -3945,7 +3961,6 @@ app.post('/api/students/:id/equipment/payment-link', async (req, res) => {
     } catch {
       pageUrl = publicPageUrl;
     }
-    const sendWhatsapp = req.body?.sendWhatsapp !== false;
     let whatsappSent = false;
     let whatsappError = null;
 
@@ -3964,9 +3979,9 @@ app.post('/api/students/:id/equipment/payment-link', async (req, res) => {
       if (inWindow) {
         const msg =
           `שלום ${parent.name || ''},\n` +
-          `לתשלום ציוד האימונים של ${student.name || 'הילד'}:\n\n` +
+          `לתשלום ציוד האימונים של המשפחה:\n\n` +
           `${publicPageUrl}\n\n` +
-          `אפשר לבחור נעליים, חולצת חוג ושק מגנזיום.`;
+          `בקישור אפשר לבחור את המתאמנים ואת הציוד לכל אחד מהם, ולשלם פעם אחת.`;
         try {
           const waResult = await whatsappService.sendTextMessage(phone, msg, false, {
             parentId: parent.id,
@@ -3984,7 +3999,7 @@ app.post('/api/students/:id/equipment/payment-link', async (req, res) => {
           const waResult = await whatsappService.sendTemplateMessage(
             phone,
             EQUIPMENT_TEMPLATE_NAME,
-            [parent.name || 'הורה', student.name || 'הילד'],
+            [parent.name || 'הורה', 'המשפחה'],
             {
               fallbackName: parent.name,
               parentId: parent.id,
@@ -4027,37 +4042,9 @@ app.get('/api/public/equipment/:token', publicFormRateLimit, async (req, res) =>
     }
 
     await refreshStudentEquipmentCache();
-    let student = db.getOne('students', checkout.student_id);
-    let parent = db.getOne('parents', checkout.parent_id);
-    if ((!student || !parent) && supa.isEnabled()) {
-      const [remoteStudents, remoteParents] = await Promise.all([
-        !student ? supa.getAll('students') : null,
-        !parent ? supa.getAll('parents') : null,
-      ]);
-      if (remoteStudents && typeof db.set === 'function') db.set('students', remoteStudents);
-      if (remoteParents && typeof db.set === 'function') db.set('parents', remoteParents);
-      student = student || db.getOne('students', checkout.student_id);
-      parent = parent || db.getOne('parents', checkout.parent_id);
-    }
-    if (!student || !isKidStudent(student)) {
-      return res.status(404).json({ error: 'המתאמן לא נמצא' });
-    }
-
-    const items = ensureStudentEquipment({ db, student, persist: persistCore });
-    const settings = await loadEquipmentSettings();
-    const unpaid = unpaidEquipmentItems(items);
-    const shoesPricing = await shoesPricingForStudent(student.id, settings);
-    res.json({
-      student_name: student.name,
-      parent_name: parent?.name || '',
-      items,
-      unpaid_items: unpaid,
-      // מחיר הנעליים שמוצג הוא המקוזז, כדי שהסכום בדף יתאים לחיוב בפועל.
-      settings: { ...settings, prices: { ...settings.prices, shoes: shoesPricing.amount } },
-      shoes_pricing: shoesPricing,
-      labels: EQUIPMENT_ITEM_LABELS,
-      all_paid: unpaid.length === 0,
-    });
+    const payload = await buildPublicEquipmentPayload(checkout);
+    if (!payload) return res.status(404).json({ error: 'לא נמצאו מתאמנים פעילים בתיק המשפחה' });
+    res.json(payload);
   } catch (err) {
     console.error('public equipment lookup error:', err.message);
     res.status(503).json({ error: err.message || 'טעינת דף הציוד נכשלה' });
@@ -4072,8 +4059,12 @@ app.get('/api/public/equipment/:token', publicFormRateLimit, async (req, res) =>
  * parent staring at the payment page had no way to say so. The status already
  * existed; what was missing was the parent's own hand on it.
  *
- * Shoes are excluded: they are rented for the season, not owned, and marking
- * them "own" here would quietly cancel a rental the wall has to hand out.
+ * This applies to every item, including shoes: some trainees already bring
+ * their own pair and must not be charged for a club rental.
+ *
+ * `owned: false` is the matching undo. The payment page deliberately keeps an
+ * owned row visible so a parent who tapped the pill by mistake can put the item
+ * back into the checkout, including after a refresh.
  */
 app.post('/api/public/equipment/:token/own', publicFormRateLimit, async (req, res) => {
   try {
@@ -4083,42 +4074,49 @@ app.post('/api/public/equipment/:token/own', publicFormRateLimit, async (req, re
       return res.status(410).json({ error: 'פג תוקף הקישור — בקשו קישור חדש מהצוות' });
     }
     await refreshStudentEquipmentCache();
-    const student = db.getOne('students', checkout.student_id);
-    if (!student || !isKidStudent(student)) {
+    const family = await resolveEquipmentFamily(checkout);
+    const studentId = String(req.body?.studentId || checkout.student_id || '');
+    const student = family.members.find((member) => String(member.id) === studentId);
+    if (!student) {
       return res.status(404).json({ error: 'המתאמן לא נמצא' });
     }
 
     const wanted = Array.isArray(req.body?.itemTypes)
       ? req.body.itemTypes.map((t) => String(t || '').trim())
       : [];
-    const allowed = wanted.filter(
-      (t) => EQUIPMENT_ITEM_TYPES.includes(t) && t !== 'shoes'
-    );
+    const allowed = wanted.filter((t) => equipmentItemTypesForStudent(student).includes(t));
     if (!allowed.length) {
       return res.status(400).json({ error: 'בחרו לפחות פריט אחד שכבר יש למתאמן' });
     }
 
     const items = ensureStudentEquipment({ db, student, persist: persistCore });
-    const marked = [];
+    const shouldOwn = req.body?.owned !== false;
+    const updated = [];
     for (const type of allowed) {
       const row = items.find((i) => i.item_type === type);
       if (!row) continue;
       // Never overwrite something already paid for — that is a real payment.
-      if (row.payment_status === 'paid') continue;
-      const result = markEquipmentOwn({ db, persist: persistCore, rowId: row.id });
-      if (result.ok) marked.push(type);
+      // Undo is narrower still: only the "own" state created by this action may
+      // be restored to unpaid.
+      if (shouldOwn && row.payment_status === 'paid') continue;
+      if (!shouldOwn && row.payment_status !== 'own') continue;
+      const result = shouldOwn
+        ? markEquipmentOwn({ db, persist: persistCore, rowId: row.id })
+        : markEquipmentUnpaid({ db, persist: persistCore, rowId: row.id });
+      if (result.ok) updated.push(type);
     }
-    if (!marked.length) {
-      return res.status(400).json({ error: 'לא נמצאו פריטים לסימון' });
+    if (!updated.length) {
+      return res.status(400).json({
+        error: shouldOwn ? 'לא נמצאו פריטים לסימון' : 'לא נמצאו פריטים לביטול הסימון',
+      });
     }
 
-    const fresh = ensureStudentEquipment({ db, student, persist: persistCore });
+    const payload = await buildPublicEquipmentPayload(checkout);
     res.json({
       ok: true,
-      marked,
-      items: fresh,
-      unpaid_items: unpaidEquipmentItems(fresh),
-      all_paid: unpaidEquipmentItems(fresh).length === 0,
+      marked: shouldOwn ? updated : [],
+      unmarked: shouldOwn ? [] : updated,
+      ...payload,
     });
   } catch (err) {
     console.error('public equipment own error:', err.message);
@@ -4126,12 +4124,188 @@ app.post('/api/public/equipment/:token/own', publicFormRateLimit, async (req, re
   }
 });
 
+async function createFamilyEquipmentPayment(req, res, checkout) {
+  const { parent, members } = await resolveEquipmentFamily(checkout);
+  if (!parent || !members.length) {
+    return res.status(404).json({ error: 'לא נמצאו מתאמנים פעילים בתיק המשפחה' });
+  }
+  const settings = await loadEquipmentSettingsForCharge();
+  const byId = new Map(members.map((student) => [String(student.id), student]));
+  const requestedByStudent = new Map();
+  for (const entry of req.body.allocations) {
+    const studentId = String(entry?.studentId || entry?.student_id || '');
+    if (!studentId || requestedByStudent.has(studentId)) continue;
+    requestedByStudent.set(studentId, entry || {});
+  }
+
+  const rawAllocations = [];
+  for (const [studentId, entry] of requestedByStudent) {
+    const student = byId.get(studentId);
+    if (!student) return res.status(400).json({ error: 'נבחר מתאמן שאינו שייך לתיק המשפחה' });
+    const rows = ensureStudentEquipment({ db, student, persist: persistCore });
+    const unpaidTypes = new Set(unpaidEquipmentItems(rows).map((row) => row.item_type));
+    const selected = [...new Set(
+      (Array.isArray(entry.itemTypes) ? entry.itemTypes : [])
+        .map((type) => String(type || '').trim())
+        .filter((type) => equipmentItemTypesForStudent(student).includes(type) && unpaidTypes.has(type))
+    )];
+    if (!selected.length) continue;
+
+    const shirtSize = String(entry.shirtSize || '').trim();
+    if (selected.includes('shirt')) {
+      if (!shirtSize) return res.status(400).json({ error: `יש לבחור מידת חולצה עבור ${student.name}` });
+      if (!settings.shirt_sizes.includes(shirtSize)) {
+        return res.status(400).json({ error: `מידת החולצה של ${student.name} אינה תקפה` });
+      }
+    }
+    const shoesPricing = await shoesPricingForStudent(student.id, settings);
+    const subtotal = computeEquipmentTotal(settings, selected, { shoes: shoesPricing.amount });
+    if (subtotal <= 0) continue;
+    rawAllocations.push({
+      student_id: student.id,
+      student_name: student.name || '',
+      is_adult: !isKidStudent(student),
+      item_types: selected,
+      shirt_size: selected.includes('shirt') ? shirtSize : null,
+      shoes_amount: selected.includes('shoes') ? shoesPricing.amount : null,
+      rental_starts_at: selected.includes('shoes') ? shoesPricing.rental_starts_at : null,
+      rental_ends_at: selected.includes('shoes') ? shoesPricing.half_end : null,
+      rental_days: settings.rental_days,
+      description: describeEquipmentItems(selected, shirtSize || null),
+      subtotal,
+    });
+  }
+  if (!rawAllocations.length) {
+    return res.status(400).json({ error: 'בחרו לפחות פריט אחד לתשלום' });
+  }
+
+  const pricing = applyEquipmentFamilyDiscount(settings, rawAllocations);
+  if (pricing.total <= 0) {
+    return res.status(400).json({ error: 'סכום התשלום אינו תקף — פנו לצוות' });
+  }
+  const includesVat = normalizePriceIncludesVat(settings.price_includes_vat, true);
+  const amount = chargeAmount(pricing.total, includesVat);
+  let allocatedCharge = 0;
+  const allocations = pricing.allocations.map((allocation, index) => {
+    const charge = index === pricing.allocations.length - 1
+      ? Math.round((amount - allocatedCharge) * 100) / 100
+      : chargeAmount(allocation.total, includesVat);
+    allocatedCharge = Math.round((allocatedCharge + charge) * 100) / 100;
+    return { ...allocation, charge_amount: charge };
+  });
+  const description = `ציוד משפחתי: ${allocations.map((allocation) =>
+    `${allocation.student_name} – ${allocation.description.replace(/^ציוד לאימונים:\s*/, '')}`
+  ).join('; ')}`;
+  const cartSignature = crypto
+    .createHash('sha256')
+    .update(JSON.stringify({ allocations, amount, includesVat }))
+    .digest('hex');
+  const existing = (db.get('payments') || []).find(
+    (payment) =>
+      payment.status === 'pending' &&
+      payment.equipment_checkout_token === checkout.id &&
+      payment.equipment_cart_signature === cartSignature &&
+      payment.payment_url
+  );
+  if (existing) {
+    return res.json({
+      success: true,
+      reused: true,
+      paymentUrl: existing.payment_url,
+      amount: existing.amount,
+      description: existing.description,
+      pricing: {
+        subtotal: existing.equipment_family_subtotal,
+        discount: existing.equipment_family_discount_amount,
+        discount_percent: existing.equipment_family_discount_percent,
+        total: existing.equipment_family_total,
+      },
+      allocations: existing.equipment_allocations || allocations,
+    });
+  }
+
+  const now = new Date().toISOString();
+  const payment = db.insert('payments', {
+    parent_id: parent.id,
+    student_id: checkout.student_id || allocations[0].student_id,
+    amount,
+    price_includes_vat: includesVat,
+    description,
+    status: 'pending',
+    payment_url: null,
+    paid_at: null,
+    equipment_payment: true,
+    equipment_family_payment: true,
+    equipment_checkout_token: checkout.id,
+    equipment_cart_signature: cartSignature,
+    equipment_allocations: allocations,
+    equipment_family_subtotal: pricing.subtotal,
+    equipment_family_discount_enabled: pricing.enabled,
+    equipment_family_discount_percent: pricing.percent,
+    equipment_family_discount_amount: pricing.discount,
+    equipment_family_total: pricing.total,
+    updated_at: now,
+  });
+
+  const paymentUrl = await icount.buildPaymentUrl({
+    amount,
+    description,
+    name: parent.name,
+    lastName: parent.lastName,
+    idNumber: parent.idNumber,
+    phone: normalizePhone(parent.phone),
+    email: parent.email,
+    paymentId: payment.id,
+    ipnUrl: icount.buildIpnUrl({ paymentId: payment.id }),
+    successUrl: `${frontendPublicBase(req)}/equipment/${encodeURIComponent(checkout.id)}?paid=1`,
+  });
+  const updatedPayment = db.update('payments', payment.id, {
+    payment_url: paymentUrl,
+    updated_at: new Date().toISOString(),
+  }) || payment;
+  await persistCore('payments', updatedPayment);
+
+  for (const allocation of allocations) {
+    const record = db.insert('equipment_payment_allocations', {
+      id: `eqpa-${payment.id}-${allocation.student_id}`,
+      payment_id: payment.id,
+      checkout_token: checkout.id,
+      parent_id: parent.id,
+      status: 'pending',
+      paid_at: null,
+      ...allocation,
+      created_at: now,
+      updated_at: now,
+    });
+    await persistCore('equipment_payment_allocations', record);
+  }
+
+  return res.json({
+    success: true,
+    paymentUrl,
+    amount,
+    description,
+    pricing: {
+      subtotal: pricing.subtotal,
+      discount: pricing.discount,
+      discount_percent: pricing.percent,
+      total: pricing.total,
+    },
+    allocations,
+  });
+}
+
 app.post('/api/public/equipment/:token/pay', publicFormRateLimit, async (req, res) => {
   try {
     const checkout = await resolveEquipmentCheckout(req.params.token);
     if (!checkout) return res.status(404).json({ error: 'קישור התשלום לא נמצא' });
     if (checkout.expires_at && new Date(checkout.expires_at).getTime() < Date.now()) {
       return res.status(410).json({ error: 'פג תוקף הקישור — בקשו קישור חדש מהצוות' });
+    }
+
+    if (Array.isArray(req.body?.allocations)) {
+      await refreshStudentEquipmentCache();
+      return createFamilyEquipmentPayment(req, res, checkout);
     }
 
     await refreshStudentEquipmentCache();
@@ -5098,6 +5272,91 @@ app.post('/api/activity-attendance', async (req, res) => {
     res.status(500).json({ error: err.message || 'שמירת הנוכחות נכשלה' });
   }
 });
+
+async function resolveEquipmentFamily(checkout) {
+  let parent = db.getOne('parents', checkout?.parent_id);
+  let anchor = db.getOne('students', checkout?.student_id);
+  if ((!parent || !anchor) && supa.isEnabled()) {
+    const [remoteStudents, remoteParents, remoteGuardians] = await Promise.all([
+      supa.getAll('students'),
+      supa.getAll('parents'),
+      supa.getAll('student_guardians'),
+    ]);
+    if (remoteStudents && typeof db.set === 'function') db.set('students', remoteStudents);
+    if (remoteParents && typeof db.set === 'function') db.set('parents', remoteParents);
+    if (remoteGuardians && typeof db.set === 'function') db.set('student_guardians', remoteGuardians);
+    parent = db.getOne('parents', checkout?.parent_id);
+    anchor = db.getOne('students', checkout?.student_id);
+  }
+  if (!parent) return { parent: null, anchor, members: [] };
+
+  const members = expandHousehold(db, parent.id).students.filter(
+    (student) => isEquipmentEligibleStudent(student) && student.status !== 'archived'
+  );
+  if (
+    anchor &&
+    isEquipmentEligibleStudent(anchor) &&
+    anchor.status !== 'archived' &&
+    !members.some((student) => String(student.id) === String(anchor.id))
+  ) {
+    members.push(anchor);
+  }
+  members.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'he'));
+  return { parent, anchor, members };
+}
+
+async function buildPublicEquipmentPayload(checkout, suppliedSettings = null) {
+  const { parent, anchor, members } = await resolveEquipmentFamily(checkout);
+  if (!parent || !members.length) return null;
+  const settings = suppliedSettings || await loadEquipmentSettings();
+  const payloadMembers = [];
+  for (const student of members) {
+    const items = ensureStudentEquipment({ db, student, persist: persistCore });
+    const unpaid = unpaidEquipmentItems(items);
+    const shoesPricing = await shoesPricingForStudent(student.id, settings);
+    payloadMembers.push({
+      student_id: student.id,
+      student_name: student.name || '',
+      is_adult: !isKidStudent(student),
+      items,
+      unpaid_items: unpaid,
+      prices: { ...settings.prices, shoes: shoesPricing.amount },
+      shoes_pricing: shoesPricing,
+      all_resolved: unpaid.length === 0,
+    });
+  }
+
+  const latestPayment = (db.get('payments') || [])
+    .filter((payment) => payment.equipment_checkout_token === checkout.id)
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))[0] || null;
+  const anchorPayload = payloadMembers.find(
+    (member) => String(member.student_id) === String(anchor?.id || checkout.student_id)
+  ) || payloadMembers[0];
+
+  return {
+    parent_name: parent.name || '',
+    anchor_student_id: checkout.student_id,
+    members: payloadMembers,
+    settings,
+    labels: EQUIPMENT_ITEM_LABELS,
+    all_resolved: payloadMembers.every((member) => member.all_resolved),
+    latest_payment: latestPayment ? {
+      id: latestPayment.id,
+      status: latestPayment.status,
+      amount: latestPayment.amount,
+      paid_at: latestPayment.paid_at || null,
+      allocations: latestPayment.equipment_allocations || [],
+      discount_percent: latestPayment.equipment_family_discount_percent || 0,
+      discount_amount: latestPayment.equipment_family_discount_amount || 0,
+    } : null,
+    // Backward-compatible fields for already-open versions of the public page.
+    student_name: anchorPayload?.student_name || anchor?.name || '',
+    items: anchorPayload?.items || [],
+    unpaid_items: anchorPayload?.unpaid_items || [],
+    shoes_pricing: anchorPayload?.shoes_pricing || null,
+    all_paid: anchorPayload?.all_resolved ?? true,
+  };
+}
 
 app.post('/api/activities/:id/registrations/:registrationId/refund', async (req, res) => {
   try {
@@ -8075,7 +8334,32 @@ app.post('/api/icount/webhook', async (req, res) => {
         });
       }
 
-      if (payment.equipment_payment && payment.student_id) {
+      if (payment.equipment_payment && Array.isArray(payment.equipment_allocations) && payment.equipment_allocations.length) {
+        const paidAt = updated?.paid_at || new Date().toISOString();
+        for (const allocation of payment.equipment_allocations) {
+          markEquipmentItemsPaid({
+            db,
+            persist: persistCore,
+            studentId: allocation.student_id,
+            itemTypes: allocation.item_types || [],
+            shirtSize: allocation.shirt_size || null,
+            paymentId: payment.id,
+            rentalDays: allocation.rental_days || DEFAULT_EQUIPMENT_SETTINGS.rental_days,
+            rentalEndsAt: allocation.rental_ends_at || null,
+            paidAt,
+          });
+          const allocationId = `eqpa-${payment.id}-${allocation.student_id}`;
+          const existingAllocation = db.getOne('equipment_payment_allocations', allocationId);
+          if (existingAllocation) {
+            const paidAllocation = db.update('equipment_payment_allocations', allocationId, {
+              status: 'paid',
+              paid_at: paidAt,
+              updated_at: paidAt,
+            });
+            if (paidAllocation) await persistCore('equipment_payment_allocations', paidAllocation);
+          }
+        }
+      } else if (payment.equipment_payment && payment.student_id) {
         const itemTypes = Array.isArray(payment.equipment_item_types)
           ? payment.equipment_item_types
           : [];
@@ -10141,7 +10425,7 @@ app.get('/api/groups/:id/training-brief', async (req, res) => {
     }
 
     const rows = students.map((student) => {
-      const equipment = isKidStudent(student)
+      const equipment = isEquipmentEligibleStudent(student)
         ? ensureStudentEquipment({ db, student, persist: persistCore }).map((item) => ({
             // המזהה נחוץ לעריכת הסטטוס ישירות מגיליון הנוכחות.
             id: item.id,
@@ -13688,6 +13972,14 @@ async function runDailyAttendanceEnsureIfDue() {
 
 // Start Server (after loading CRM-core data from Supabase)
 initDb({ requireDurable: requiresDurableStore() }).then(() => {
+  try {
+    const equipmentBackfill = backfillAdultEquipment({ db, persist: persistCore });
+    if (equipmentBackfill.created > 0) {
+      console.log(`Adult equipment backfill: ${equipmentBackfill.created} row(s) for ${equipmentBackfill.students} trainee(s)`);
+    }
+  } catch (err) {
+    console.warn('adult equipment backfill skipped:', err.message);
+  }
   try {
     ensureEquipmentWhatsappTemplate({ db, persist: persistCore });
   } catch (err) {
