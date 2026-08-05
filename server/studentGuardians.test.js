@@ -345,6 +345,41 @@ test('a second parent joins the child file instead of creating a copy', async ()
   assert.equal(studentsForParent([enriched], mumId).length, 1);
 });
 
+test('health-only renewal creates a health declaration without touching the participation waiver', async () => {
+  const previousWaiverDate = '2025-09-01T08:00:00.000Z';
+  const db = createDb({
+    students: [{
+      id: 's-noam', name: 'נועם לוי', parentId: 'p-avner', birthDate: '2014-03-02',
+      waiverSignedAt: previousWaiverDate,
+    }],
+    participation_waivers: [{
+      id: 'pw-existing', student_id: 's-noam', signer_parent_id: 'p-avner',
+      scope: 'wall', signed_at: previousWaiverDate, status: 'approved',
+    }],
+  });
+
+  const result = await saveCrmParticipants({
+    db,
+    persist,
+    parent: { name: 'אבנר לוי', phone: '0521112222' },
+    participants: [{
+      ...signedNoam,
+      id: 's-noam',
+      healthAccepted: true,
+      waiverAccepted: false,
+      reuse_waiver: false,
+    }],
+    healthOnly: true,
+  });
+
+  assert.equal(db.store.health_declarations.length, 1);
+  assert.equal(db.store.participation_waivers.length, 1, 'no waiver was added or replaced');
+  assert.equal(db.getOne('students', 's-noam').waiverSignedAt, previousWaiverDate);
+  assert.equal(result.participants[0].healthCreated, true);
+  assert.equal(result.participants[0].waiverCreated, false);
+  assert.equal(result.participants[0].waiver, null);
+});
+
 test('a surname typed first still finds the household', async () => {
   const db = createDb();
   // The form sends the two halves separately, so the family name no longer

@@ -682,6 +682,10 @@ function resolveIntakeRegisterPath(slugParam) {
 function redirectIntakeForm(req, res) {
   const studentId = String(req.params.studentId || '').trim();
   if (!studentId) return res.status(400).send('חסר מזהה מתאמן');
+  if (String(req.params.slug || '').trim().toLowerCase() === 'health-renewal') {
+    const params = new URLSearchParams({ studentId, mode: 'health-renewal' });
+    return res.redirect(302, `${eventPublicBase()}/register?${params.toString()}`);
+  }
   const path = resolveIntakeRegisterPath(req.params.slug);
   return res.redirect(302, `${eventPublicBase()}${path}?studentId=${encodeURIComponent(studentId)}`);
 }
@@ -14012,7 +14016,12 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     templateSlug,
     templateId,
     completionRegistrationId,
+    healthOnly: healthOnlyBody = false,
+    mode = '',
+    targetStudentId: targetStudentIdBody = '',
   } = req.body || {};
+  const healthOnly = healthOnlyBody === true || String(mode).trim().toLowerCase() === 'health-renewal';
+  const targetStudentId = String(targetStudentIdBody || '').trim();
 
   const parentName = String(parentBody.name || '').trim();
   const parentLast = String(parentBody.lastName || '').trim();
@@ -14026,10 +14035,10 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   if (!parentName || !phone) {
     return res.status(400).json({ error: 'נדרשים שם הורה ומספר טלפון' });
   }
-  if (!email) {
+  if (!healthOnly && !email) {
     return res.status(400).json({ error: 'נדרש אימייל' });
   }
-  if (!city) {
+  if (!healthOnly && !city) {
     return res.status(400).json({ error: 'נדרש מקום מגורים' });
   }
 
@@ -14046,6 +14055,13 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   if (!identity) return;
   const otpToken = verified.token;
   const phoneVerification = verifiedPhoneEvidence(verified);
+
+  if (healthOnly && identity.status !== 'found') {
+    return res.status(403).json({ error: 'חידוש הצהרת בריאות אפשרי רק עבור משתתף קיים בתיק שאומת' });
+  }
+  if (healthOnly && completionRegistrationId) {
+    return res.status(400).json({ error: 'קישור חידוש בריאות אינו קישור להשלמת הרשמה לפעילות' });
+  }
 
   let completionRegistration = null;
   let completionOrder = null;
@@ -14088,6 +14104,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
         healthNotes: String(c.healthNotes || '').trim(),
         medicalClearance: c.medicalClearance || null,
         signature: c.signature || '',
+        healthAccepted: c.healthAccepted === true || c.healthAccepted === 'true',
         waiverAccepted: c.waiverAccepted === true || c.waiverAccepted === 'true',
         signatureEvidenceTimeline: c.signatureEvidenceTimeline || c.signature_evidence_timeline || null,
         // Confirmed on the form as a child already on another parent's file.
@@ -14103,6 +14120,30 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     return res.status(400).json({ error: 'יש להוסיף לפחות משתתף/ת אחד' });
   }
 
+  if (healthOnly) {
+    const verifiedParent = identity.parent;
+    const householdStudentIds = new Set(
+      (expandHousehold(db, verifiedParent.id)?.students || []).map((student) => String(student.id))
+    );
+    if (
+      !targetStudentId
+      || childList.length !== 1
+      || String(childList[0].id || '') !== targetStudentId
+      || !householdStudentIds.has(targetStudentId)
+    ) {
+      return res.status(403).json({ error: 'קישור חידוש הבריאות אינו שייך למשתתף בתיק המשפחה שאומת' });
+    }
+    // The canonical card decides whether this is an adult signing for
+    // themselves or a minor signed by their guardian; never trust the posted
+    // type on a renewal link.
+    const targetStudent = db.getOne('students', targetStudentId);
+    childList[0].type = targetStudent?.isAdult === true ? 'adult' : 'child';
+    childList[0].reuse_health = false;
+    childList[0].reuse_health_document = false;
+    childList[0].reuse_waiver = false;
+    childList[0].waiverAccepted = false;
+  }
+
   for (const child of childList) {
     if (child.type !== 'adult' && !child.birthDate) {
       return res.status(400).json({ error: `חסר תאריך לידה עבור ${child.name}` });
@@ -14110,11 +14151,16 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     // A declaration already in force is not re-signed; saveCrmParticipants
     // verifies that claim against what was on file before this request.
     const reusesHealth = child.reuse_health || child.reuse_health_document;
-    const reusesWaiver = child.reuse_health || child.reuse_waiver;
+    const reusesWaiver = healthOnly ? true : (child.reuse_health || child.reuse_waiver);
     if (reusesHealth && reusesWaiver) continue;
-    if ((!reusesWaiver && !child.waiverAccepted) || !child.signature) {
+    if (healthOnly && !child.healthAccepted) {
+      return res.status(400).json({ error: `חסר אישור הצהרת הבריאות עבור ${child.name}` });
+    }
+    if (((!healthOnly && !reusesWaiver && !child.waiverAccepted)) || !child.signature) {
       return res.status(400).json({
-        error: `חסרה חתימה או אישור וויתור עבור ${child.name}`,
+        error: healthOnly
+          ? `חסרה חתימה על הצהרת הבריאות עבור ${child.name}`
+          : `חסרה חתימה או אישור וויתור עבור ${child.name}`,
       });
     }
   }
@@ -14129,9 +14175,16 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
 
   for (const child of childList) {
     if (child.reuse_health || child.reuse_health_document) continue;
-    const asked = questionsForSigner(template?.healthQuestions || [], {
+    const templateHealthQuestions = template?.medicalQuestions?.length
+      ? template.medicalQuestions
+      : (template?.healthQuestions || []).filter(isScreeningQuestion);
+    const asked = questionsForSigner(
+      healthOnly
+        ? (templateHealthQuestions.length ? templateHealthQuestions : CANONICAL_HEALTH_QUESTIONS)
+        : (template?.healthQuestions || []), {
       isAdultSelf: child.type === 'adult',
-    });
+      }
+    );
     const gap = declarationGap(asked, child.answers, child.name);
     if (gap) return res.status(400).json({ error: gap });
     // A doctor already limited this person's physical activity. The wall does
@@ -14177,6 +14230,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
       participationScope: normalizeParticipationScope(templateSlug || template?.slug || 'wall'),
       phoneVerification,
       evidenceContext: { requestContext: requestEvidence(req) },
+      healthOnly,
       source: parentBody.source || 'form',
       onStudentCreated: (student, savedParent) => automationsService.triggerEvent('new_lead', {
         ...student,
@@ -14232,7 +14286,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     },
   });
 
-  for (let index = 0; index < savedStudents.length; index += 1) {
+  if (!healthOnly) for (let index = 0; index < savedStudents.length; index += 1) {
     const student = savedStudents[index];
     const child = childList[index];
     const noteParts = [];
@@ -14267,23 +14321,24 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     }
   }
 
-  // Mailing lists — force classes subscribed
-  const listKeys = (db.getBroadcastListDefs() || []).map((l) => l.key);
-  const nextSubs = {};
-  for (const key of listKeys) {
-    if (key === REQUIRED_BROADCAST_LIST) {
-      nextSubs[key] = true;
-    } else {
-      nextSubs[key] = subscriptions[key] === true || subscriptions[key] === 'true';
+  let savedLists = typeof db.getParentBroadcastLists === 'function'
+    ? db.getParentBroadcastLists(parent.id)
+    : {};
+  if (!healthOnly) {
+    // Mailing lists — force classes subscribed only during the full onboarding
+    // flow. A medical renewal must not silently change marketing preferences.
+    const listKeys = (db.getBroadcastListDefs() || []).map((l) => l.key);
+    const nextSubs = {};
+    for (const key of listKeys) {
+      if (key === REQUIRED_BROADCAST_LIST) {
+        nextSubs[key] = true;
+      } else {
+        nextSubs[key] = subscriptions[key] === true || subscriptions[key] === 'true';
+      }
     }
+    savedLists = db.updateParentBroadcastLists(parent.id, nextSubs);
+    touchGoogleContacts();
   }
-  const savedLists = db.updateParentBroadcastLists(parent.id, nextSubs);
-
-  // A family created by a public form should be recognised on an incoming
-  // call like any other customer. Only staff-side paths scheduled this, and
-  // there is no nightly sweep behind it, so these families never reached the
-  // address book at all.
-  touchGoogleContacts();
 
   // Spent only now, with the registration actually filed. Spending it up front
   // meant a submission refused for a missing birth date burned the
@@ -14304,6 +14359,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     completedRegistration,
     subscriptions: savedLists,
     medicalClearances: clearanceDocuments,
+    mode: healthOnly ? 'health-renewal' : 'full',
   });
 });
 
@@ -14843,7 +14899,9 @@ function resolvePublicAppOrigin(requestedOrigin) {
   return PUBLIC_APP_FALLBACK;
 }
 
-function buildShareableHealthUrl(origin, { pathSlug = '', studentId = '', phone = '' } = {}) {
+function buildShareableHealthUrl(origin, {
+  pathSlug = '', studentId = '', phone = '', mode = '',
+} = {}) {
   const base = `${String(origin).replace(/\/$/, '')}/register${pathSlug || ''}`;
   const params = new URLSearchParams();
   // Prefer studentId alone — long phone digits at the end break WhatsApp link detection.
@@ -14852,6 +14910,7 @@ function buildShareableHealthUrl(origin, { pathSlug = '', studentId = '', phone 
   } else if (phone) {
     params.set('phone', phone);
   }
+  if (mode) params.set('mode', mode);
   const qs = params.toString();
   return qs ? `${base}?${qs}` : base;
 }
@@ -14996,6 +15055,11 @@ app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
   const target = resolveLeadSendTarget(req.params.studentId, req.body?.parentId);
   if (target.error) return res.status(target.status).json({ error: target.error });
   const { student, parent } = target;
+  const healthOnly = req.body?.healthOnly === true
+    || String(req.body?.mode || '').trim().toLowerCase() === 'health-renewal';
+  if (healthOnly && String(student.id || '').startsWith('parent:')) {
+    return res.status(400).json({ error: 'יש לבחור משתתף/ת קיים/ת כדי לשלוח חידוש הצהרת בריאות' });
+  }
 
   try {
     ensureParticipationFormWhatsappTemplate({ db, persist: persistCore });
@@ -15010,12 +15074,13 @@ app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
     : findDefaultFormTemplate();
   const pathSlug = formTemplate?.slug && !formTemplate.isDefault ? `/${formTemplate.slug}` : '';
   const healthUrl = buildShareableHealthUrl(origin, {
-    pathSlug,
+    pathSlug: healthOnly ? '' : pathSlug,
     studentId: student.id,
     phone: parent.phone,
+    mode: healthOnly ? 'health-renewal' : '',
   });
-  const buttonParam = participationFormButtonParam(student.id, formTemplate);
-  const shortUrl = buildParticipationFormRedirectUrl(student.id, formTemplate) || healthUrl;
+  const buttonParam = participationFormButtonParam(student.id, formTemplate, { healthOnly });
+  const shortUrl = buildParticipationFormRedirectUrl(student.id, formTemplate, { healthOnly }) || healthUrl;
 
   const parentLabel = parent.name || 'לקוח';
   const studentLabel = student.name || parentLabel;
@@ -15024,9 +15089,13 @@ app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
     && studentLabel.trim().toLowerCase() !== parentLabel.trim().toLowerCase();
   // The form is three things — participant details, the health declaration and
   // the waiver. Calling it "the health declaration" undersold it.
-  const bodyText = forChild
-    ? `שלום ${parentLabel}, מצורף קישור למילוי ${FORM_FULL} עבור ${studentLabel}.`
-    : `שלום ${parentLabel}, בבקשה מלאו את ${FORM_FULL} לפני הגעתכם.`;
+  const bodyText = healthOnly
+    ? (forChild
+        ? `שלום ${parentLabel}, מצורף קישור לחידוש הצהרת הבריאות של ${studentLabel}.`
+        : `שלום ${parentLabel}, מצורף קישור לחידוש הצהרת הבריאות שלך.`)
+    : (forChild
+        ? `שלום ${parentLabel}, מצורף קישור למילוי ${FORM_FULL} עבור ${studentLabel}.`
+        : `שלום ${parentLabel}, בבקשה מלאו את ${FORM_FULL} לפני הגעתכם.`);
   const freeformText = `${bodyText}\n\n${healthUrl}`;
 
   let sent = false;
@@ -15035,7 +15104,11 @@ app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
   let warning;
 
   try {
-    const approvedTpl = findApprovedParticipationFormTemplate(db);
+    // The approved participation template promises a combined form. It must
+    // never be used for a health-only renewal; inside the session window we
+    // send the exact renewal copy, and outside it the CRM opens WhatsApp with
+    // that copy for the staff member to send.
+    const approvedTpl = healthOnly ? null : findApprovedParticipationFormTemplate(db);
     const templateName = approvedTpl?.meta_name || '';
 
     // 1) Approved Meta template with a URL button (works outside the 24h window).
@@ -15049,7 +15122,7 @@ app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
             parentId: parent.id,
             studentId: student.id,
             buttonUrlParam: buttonParam,
-            source: 'participation_form',
+            source: healthOnly ? 'health_renewal' : 'participation_form',
           }
         );
         if (waResult?.success) {
@@ -15078,7 +15151,7 @@ app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
           {
             parentId: parent.id,
             studentId: student.id,
-            source: 'participation_form',
+            source: healthOnly ? 'health_renewal' : 'participation_form',
           }
         );
         if (waResult?.success) {
@@ -15100,7 +15173,7 @@ app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
         const waResult = await whatsappService.sendTextMessage(parent.phone, freeformText, false, {
           parentId: parent.id,
           studentId: student.id,
-          source: 'participation_form',
+          source: healthOnly ? 'health_renewal' : 'participation_form',
           clip: false,
         });
         if (waResult?.success) {
@@ -15117,10 +15190,10 @@ app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
     }
 
     if (!sent && !inWindow && !approvedTpl) {
-      warning =
-        warning ||
-        `חלון 24 השעות סגור, והתבנית «${PARTICIPATION_FORM_TEMPLATE}» עדיין לא מאושרת במטא. ` +
-        'במסך דיוור ← תבניות: שלחו לאישור את «טופס השתתפות · קישור למילוי».';
+      warning = warning || (healthOnly
+        ? 'חלון 24 השעות סגור — ייפתח וואטסאפ אישי עם קישור חידוש הבריאות המוכן לשליחה.'
+        : `חלון 24 השעות סגור, והתבנית «${PARTICIPATION_FORM_TEMPLATE}» עדיין לא מאושרת במטא. `
+          + 'במסך דיוור ← תבניות: שלחו לאישור את «טופס השתתפות · קישור למילוי».');
     }
 
     res.json({
@@ -15130,6 +15203,7 @@ app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
       healthUrl,
       shortUrl,
       templateSlug: formTemplate?.slug || null,
+      mode: healthOnly ? 'health-renewal' : 'full',
       templateName: via === 'template' ? templateName : null,
       sentTo: parentLabel,
       result,
@@ -15142,6 +15216,7 @@ app.post('/api/leads/:studentId/send-health-form', async (req, res) => {
       healthUrl,
       shortUrl,
       templateSlug: formTemplate?.slug || null,
+      mode: healthOnly ? 'health-renewal' : 'full',
       warning: err.message,
     });
   }

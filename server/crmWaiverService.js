@@ -50,6 +50,9 @@ export const STANDARD_HEALTH_QUESTIONS = [
   { id: 's5', requireYes: true, label: 'אין להשתמש במתקנים השונים ללא קבלת אישור ממדריך' },
 ];
 
+export const HEALTH_DECLARATION_CONFIRMATION =
+  'אני מאשר/ת שהמידע שמסרתי בהצהרת הבריאות מלא, נכון ומעודכן, ומתחייב/ת לעדכן את הצוות בכל שינוי במצב הבריאותי.';
+
 function clean(value) {
   return String(value || '').trim();
 }
@@ -247,11 +250,17 @@ export function findLatestValidDeclaration(db, options = {}) {
   return null;
 }
 
-export function validateParticipantDeclarations(participants, template) {
+export function validateParticipantDeclarations(participants, template, { healthOnly = false } = {}) {
   if (!Array.isArray(participants) || participants.length === 0) {
     throw Object.assign(new Error('יש להוסיף לפחות משתתף אחד'), { status: 400 });
   }
-  const questions = template.healthQuestions || [];
+  const templateQuestions = template.healthQuestions || [];
+  const screeningQuestions = templateQuestions.filter(isScreeningQuestion);
+  const questions = healthOnly
+    ? (template.medicalQuestions?.length
+        ? template.medicalQuestions
+        : (screeningQuestions.length ? screeningQuestions : CANONICAL_HEALTH_QUESTIONS))
+    : templateQuestions;
   for (const participant of participants) {
     const name = clean(participant.name);
     if (!name) throw Object.assign(new Error('חסר שם משתתף'), { status: 400 });
@@ -259,9 +268,12 @@ export function validateParticipantDeclarations(participants, template) {
       throw Object.assign(new Error(`חסר תאריך לידה עבור ${name}`), { status: 400 });
     }
     const reuseHealth = wantsHealthReuse(participant);
-    const reuseWaiver = wantsWaiverReuse(participant);
+    const reuseWaiver = healthOnly ? true : wantsWaiverReuse(participant);
     if (reuseHealth && reuseWaiver) continue;
-    if (!reuseWaiver && !(participant.waiverAccepted === true || participant.waiverAccepted === 'true')) {
+    if (healthOnly && !(participant.healthAccepted === true || participant.healthAccepted === 'true')) {
+      throw Object.assign(new Error(`חסר אישור הצהרת הבריאות עבור ${name}`), { status: 400 });
+    }
+    if (!healthOnly && !reuseWaiver && !(participant.waiverAccepted === true || participant.waiverAccepted === 'true')) {
       throw Object.assign(new Error(`חסר אישור כתב הוויתור עבור ${name}`), { status: 400 });
     }
     if (!clean(participant.signature)) {
@@ -315,6 +327,7 @@ export async function saveCrmParticipants({
   evidenceContext = null,
   allowEmptyParticipants = false,
   skipDocuments = false,
+  healthOnly = false,
   source = 'form',
   onStudentCreated,
   onStudentStatusChanged,
@@ -328,7 +341,7 @@ export async function saveCrmParticipants({
 
   const template = templateInput || resolveDeclarationTemplate(db);
   if (!skipDocuments && (!allowEmptyParticipants || (participants || []).length > 0)) {
-    validateParticipantDeclarations(participants, template);
+    validateParticipantDeclarations(participants, template, { healthOnly });
   }
 
   // The forms collect the surname in its own field. Storing it means the
@@ -381,6 +394,7 @@ export async function saveCrmParticipants({
   const healthSnapshot = {
     documentType: 'health',
     title: 'הצהרת בריאות',
+    confirmationText: HEALTH_DECLARATION_CONFIRMATION,
     templateId: template.id,
     templateSlug: template.slug,
     templateVersion: template.version || template.updated_at || template.updatedAt || null,
@@ -465,7 +479,7 @@ export async function saveCrmParticipants({
     }
     const adultCreatesDocument = participantType === 'adult'
       && !skipDocuments
-      && (!wantsHealthReuse(input) || !wantsWaiverReuse(input));
+      && (!wantsHealthReuse(input) || (!healthOnly && !wantsWaiverReuse(input)));
     if (adultCreatesDocument) {
       const canonicalBirthDate = clean(input.birthDate) || clean(student?.birthDate);
       const birth = /^\d{4}-\d{2}-\d{2}$/.test(canonicalBirthDate)
@@ -519,7 +533,7 @@ export async function saveCrmParticipants({
       patch.healthSignedAt = signedAt;
       patch.status = statusAfterHealthSignature(previousStatus);
     }
-    if (!skipDocuments && !wantsWaiverReuse(input)) {
+    if (!skipDocuments && !healthOnly && !wantsWaiverReuse(input)) {
       patch.waiverSignedAt = signedAt;
     }
     let createdNow = false;
@@ -693,7 +707,12 @@ export async function saveCrmParticipants({
 
     let waiver = null;
     let waiverCreated = false;
-    if (wantsWaiverReuse(input)) {
+    if (healthOnly) {
+      // A renewal-only link is deliberately incapable of creating, replacing
+      // or even re-validating a participation waiver. Health and legal scope
+      // are independent documents; only the medical record changes here.
+      waiver = null;
+    } else if (wantsWaiverReuse(input)) {
       const existingWaiver = waiverDocumentState(db, student.id, scope);
       if (existingWaiver.state !== 'valid') {
         throw Object.assign(new Error(`אין אישור השתתפות בתוקף עבור ${name} — יש לחתום מחדש`), { status: 400 });

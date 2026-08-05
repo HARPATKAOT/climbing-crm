@@ -39,6 +39,7 @@ import {
   adultParticipantFromContext,
   participationGenderValue,
 } from '../utils/participationForm.js';
+import { CANONICAL_HEALTH_QUESTIONS } from '../utils/participationDocuments.js';
 
 /** Day for the form UI — digits with dots so RTL does not reshuffle ISO dates. */
 function formatSignedDay(value) {
@@ -475,10 +476,33 @@ const emptyChild = (questions = []) => {
     answers,
     // Free-text detail per screening question answered "yes", keyed by q.id.
     answerNotes: {},
+    healthAccepted: false,
     waiverAccepted: false,
     signature: '',
   };
 };
+
+function participantFromExistingStudent(student, questions = [], {
+  type = 'child', forceHealthRenewal = false,
+} = {}) {
+  return {
+    ...emptyChild(questions),
+    id: student?.id || null,
+    name: student?.name || '',
+    idNumber: student?.idNumber || '',
+    birthDate: student?.birthDate || '',
+    gender: participationGenderValue(student?.gender),
+    type,
+    onFileHealthValid: !!(student?.healthValid ?? student?.health_valid),
+    onFileHealthDocumentValid: !!(student?.healthDocumentValid ?? student?.health_document_valid),
+    onFileWaiverValid: !!(student?.waiverValid ?? student?.waiver_valid),
+    onFileHealthSignedAt: student?.healthSignedAt || student?.health_signed_at || '',
+    onFileWaiverSignedAt: student?.waiverSignedAt || student?.waiver_signed_at || '',
+    onFileDeclarationSummary: student?.declarationSummary || null,
+    renewOptIn: forceHealthRenewal,
+    resignHealth: forceHealthRenewal,
+  };
+}
 
 
 
@@ -491,6 +515,8 @@ export default function PublicOnboardingForm() {
   const fallbackWaiver = useMemo(() => buildFallbackWaiver(legalName), [legalName]);
   const fallbackQuestions = useMemo(() => buildFallbackQuestions(legalName), [legalName]);
   const [searchParams] = useSearchParams();
+  const healthOnlyMode = searchParams.get('mode') === 'health-renewal';
+  const targetStudentId = String(searchParams.get('studentId') || '').trim();
   // A link to one particular declaration (/health/<slug>). Without one the
   // default template arrives with the onboarding context below.
   const { slug: routeSlug } = useParams();
@@ -551,9 +577,15 @@ export default function PublicOnboardingForm() {
   ));
   // A family submission may contain the signer and minor children together.
   // Legal clauses therefore depend on the participant currently being filled.
-  const questionsForParticipant = (participant) => questionsForSigner(allQuestions, {
+  const templateScreeningQuestions = allQuestions.filter(isScreeningQuestion);
+  const healthOnlyQuestions = templateScreeningQuestions.length
+    ? templateScreeningQuestions
+    : CANONICAL_HEALTH_QUESTIONS;
+  const questionsForParticipant = (participant) => questionsForSigner(
+    healthOnlyMode ? healthOnlyQuestions : allQuestions, {
     isAdultSelf: participant?.type === 'adult',
-  });
+    }
+  );
   // The signer's own name goes into the summary they read, and into a template
   // written with {{שם החותם}} — the same person either way.
   const signerName = joinParentName(parent.name, parent.lastName);
@@ -783,10 +815,12 @@ export default function PublicOnboardingForm() {
     && !awaitingRenewChoice(child)
     && !reusesDeclaration(child);
 
-  const totalStepsLabel = 2 + Math.max(
-    children.filter((c) => c.name.trim() && fillsDeclaration(c)).length,
-    1
-  );
+  const totalStepsLabel = healthOnlyMode
+    ? 2
+    : 2 + Math.max(
+        children.filter((c) => c.name.trim() && fillsDeclaration(c)).length,
+        1
+      );
 
   useEffect(() => {
     let cancelled = false;
@@ -1076,6 +1110,7 @@ export default function PublicOnboardingForm() {
     if (digits.length < 9 && idDigits.length < 5) return { status: 'missing' };
     try {
       const params = new URLSearchParams({ phone: phone || '', idNumber: idDigits });
+      if (healthOnlyMode && targetStudentId) params.set('studentId', targetStudentId);
       if (template?.slug) params.set('templateSlug', template.slug);
       if (verificationToken) params.set('verificationToken', verificationToken);
       const res = await fetch(`/api/public/onboard-context?${params.toString()}`);
@@ -1115,6 +1150,27 @@ export default function PublicOnboardingForm() {
         name: data.parent.name || '',
         children: (data.students || []).map((s) => s.name).filter(Boolean),
       });
+
+      if (healthOnlyMode) {
+        const target = String(data.selfStudent?.id || '') === targetStudentId
+          ? data.selfStudent
+          : (data.students || []).find((student) => String(student.id || '') === targetStudentId);
+        if (!target) {
+          setChildren([]);
+          setIsAdultSelf(false);
+          setError('קישור החידוש אינו שייך למשתתף בתיק המשפחה שאומת. יש לבקש מהצוות קישור חדש.');
+          return { status: 'target_mismatch', parent: data.parent };
+        }
+        const targetIsAdult = String(data.selfStudent?.id || '') === targetStudentId;
+        setSelfStudent(targetIsAdult ? target : (data.selfStudent || null));
+        setIsAdultSelf(targetIsAdult);
+        setChildren([participantFromExistingStudent(target, allQuestions, {
+          type: targetIsAdult ? 'adult' : 'child',
+          forceHealthRenewal: true,
+        })]);
+        setKnownFile({ name: data.parent.name || '', children: [target.name].filter(Boolean) });
+        return { status: 'found', parent: data.parent, target };
+      }
 
       const existing = Array.isArray(data.students) ? data.students : [];
       if (existing.length) {
@@ -1191,6 +1247,24 @@ export default function PublicOnboardingForm() {
       // The lookup has just prefilled an existing file, or established that
       // this really is a new family. Render that result before validating the
       // details that are deliberately hidden until identification.
+      return;
+    }
+
+    if (healthOnlyMode) {
+      const target = children.find((child) => String(child.id || '') === targetStudentId);
+      if (identityStatus !== 'found' || !target) {
+        setError('לא ניתן להמשיך: המשתתף שבקישור לא נמצא בתיק המשפחה שאומת.');
+        return;
+      }
+      setChildren((current) => current.map((child) => ({
+        ...child,
+        renewOptIn: true,
+        resignHealth: true,
+        editProfile: false,
+      })));
+      setChildHealthIndex(0);
+      setHealthSubStep(1);
+      setStep(3);
       return;
     }
 
@@ -1453,10 +1527,11 @@ export default function PublicOnboardingForm() {
       return;
     }
 
-    if (!current.waiverAccepted && !(children[fullIndex]?.waiverAccepted)) {
-      // auto-set from checkbox on this step
+    if (healthOnlyMode && !children[fullIndex]?.healthAccepted) {
+      setError('יש לאשר שהמידע בהצהרת הבריאות מלא, נכון ומעודכן');
+      return;
     }
-    if (!(children[fullIndex]?.waiverAccepted)) {
+    if (!healthOnlyMode && !(children[fullIndex]?.waiverAccepted)) {
       setError('יש לאשר את כתב הוויתור / הסרת האחריות');
       return;
     }
@@ -1471,7 +1546,8 @@ export default function PublicOnboardingForm() {
       i === fullIndex ? {
         ...c,
         signature,
-        waiverAccepted: true,
+        healthAccepted: healthOnlyMode ? true : c.healthAccepted,
+        waiverAccepted: healthOnlyMode ? false : true,
         signatureEvidenceTimeline: {
           ...(c.signatureEvidenceTimeline || {}),
           termsPresentedAt: c.signatureEvidenceTimeline?.termsPresentedAt || capturedAt,
@@ -1503,8 +1579,8 @@ export default function PublicOnboardingForm() {
         .map((c) => {
           const participantQuestions = questionsForParticipant(c);
           const asked = new Set(participantQuestions.map((q) => q.id));
-          const reuseHealth = reusesHealthDocument(c);
-          const reuseActivityWaiver = reusesWaiver(c);
+          const reuseHealth = healthOnlyMode ? false : reusesHealthDocument(c);
+          const reuseActivityWaiver = healthOnlyMode ? false : reusesWaiver(c);
           const answers = Object.fromEntries(
             Object.entries(c.answers || {}).filter(([id]) => asked.has(id))
           );
@@ -1535,13 +1611,14 @@ export default function PublicOnboardingForm() {
             // together — never a signature on file with the approval missing.
             medicalClearance: c.medicalClearance || null,
             signature: c.signature,
-            waiverAccepted: !reuseActivityWaiver,
+            healthAccepted: healthOnlyMode ? c.healthAccepted === true : false,
+            waiverAccepted: healthOnlyMode ? false : !reuseActivityWaiver,
             signatureEvidenceTimeline: c.signatureEvidenceTimeline || null,
             ...linkFieldsFor(knownChildren[childKey(c)]),
             // Already on this file with a declaration in force: say so, or the
             // server asks for a signature the form deliberately never showed.
             reuse_health_document: reuseHealth,
-            reuse_waiver: reuseActivityWaiver,
+            reuse_waiver: healthOnlyMode ? false : reuseActivityWaiver,
           };
         });
 
@@ -1567,6 +1644,9 @@ export default function PublicOnboardingForm() {
           templateId: template?.id || null,
           completionRegistrationId: searchParams.get('registrationId') || null,
           phoneVerification: otp.token ? { token: otp.token } : null,
+          healthOnly: healthOnlyMode,
+          mode: healthOnlyMode ? 'health-renewal' : 'full',
+          targetStudentId: healthOnlyMode ? targetStudentId : null,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -1695,11 +1775,15 @@ export default function PublicOnboardingForm() {
           <CheckCircle size={60} color="var(--form-accent-solid, #38bdf8)" style={{ margin: '0 auto', marginBottom: 20 }} />
           <h1 style={{ color: '#fff', fontSize: 24, marginBottom: 10 }}>הפרטים התקבלו!</h1>
           <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16 }}>
-            תודה {parent.name}. הפרטים והצהרת הבריאות נשמרו במערכת.
+            תודה {parent.name}. {healthOnlyMode
+              ? 'הצהרת הבריאות החדשה נשמרה בתיק.'
+              : 'הפרטים והצהרת הבריאות נשמרו במערכת.'}
           </p>
-          <p style={{ color: 'rgba(255,255,255,0.55)', fontSize: 14, marginTop: 12 }}>
-            השיבוץ לחוג יבוצע על ידי הצוות בהמשך.
-          </p>
+          {!healthOnlyMode && (
+            <p style={{ color: 'rgba(255,255,255,0.55)', fontSize: 14, marginTop: 12 }}>
+              השיבוץ לחוג יבוצע על ידי הצוות בהמשך.
+            </p>
+          )}
           {uploadingPdfs && (
             <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginTop: 10 }}>
               שומר עותק PDF בתיק האישי...
@@ -1734,7 +1818,9 @@ export default function PublicOnboardingForm() {
     ? children.findIndex((c) => c === currentChild || (c.name === currentChild.name && c.id === currentChild.id))
     : 0;
   // Steps 1 and 2 are fixed; step 3 repeats once per child who still has to sign.
-  const displayStep = step === 3 ? 2 + childHealthIndex + 1 : step;
+  const displayStep = healthOnlyMode && step === 3
+    ? 2
+    : (step === 3 ? 2 + childHealthIndex + 1 : step);
   const progressPercent = Math.round((displayStep / totalStepsLabel) * 100);
 
   return (
@@ -1751,7 +1837,7 @@ export default function PublicOnboardingForm() {
                 setChildHealthIndex((i) => i - 1);
                 setHealthSubStep(2);
                 initCanvas();
-              } else if (step === 3) setStep(2);
+              } else if (step === 3) setStep(healthOnlyMode ? 1 : 2);
               else setStep(1);
             }}
           >
@@ -1766,7 +1852,7 @@ export default function PublicOnboardingForm() {
           {/* „מילוי פרטים והרשמה” לא אמר למה חותמים. הכותרת נושאת את שם
               המסמך עצמו, בכל שלושת השלבים. */}
           <h2 className={step === 3 ? 'signing-document-title' : ''}>
-            הצהרת בריאות והסרת אחריות
+            {healthOnlyMode ? 'חידוש הצהרת בריאות' : 'הצהרת בריאות והסרת אחריות'}
             {step === 3 && currentChild?.name ? ` — ${currentChild.name}` : ''}
           </h2>
           {step === 2 && <p>בני המשפחה המשתתפים</p>}
@@ -1827,7 +1913,7 @@ export default function PublicOnboardingForm() {
                 )}
               </>
             )}
-            {identityReady && (
+            {identityReady && !healthOnlyMode && (
               <>
                 {!prefilledParentId && (
                   <div style={{
@@ -2018,6 +2104,18 @@ export default function PublicOnboardingForm() {
               </>
             )}
 
+            {identityReady && healthOnlyMode && children.some((child) => String(child.id || '') === targetStudentId) && (
+              <div style={{
+                background: 'var(--form-accent-soft, rgba(56,189,248,.1))',
+                border: '1px solid var(--form-accent-border, rgba(56,189,248,.4))',
+                borderRadius: 14, padding: 14, marginTop: 14, lineHeight: 1.6,
+                color: 'var(--form-accent-text, #7dd3fc)', fontWeight: 700,
+              }}>
+                זוהה התיק. במסך הבא תופיע הצהרת הבריאות של{' '}
+                {children.find((child) => String(child.id || '') === targetStudentId)?.name} בלבד.
+              </div>
+            )}
+
             {error && <ErrorBox message={error} />}
 
             {otp.stage === 'code' || waitingForFamily ? null : (
@@ -2030,7 +2128,7 @@ export default function PublicOnboardingForm() {
               >
                 {otp.sending
                   ? 'שולח קוד אימות בוואטסאפ…'
-                  : <>המשך לפרטי משתתפים <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} /></>}
+                  : <>{healthOnlyMode ? 'המשך להצהרת הבריאות' : 'המשך לפרטי משתתפים'} <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} /></>}
               </button>
             )}
           </div>
@@ -2039,11 +2137,13 @@ export default function PublicOnboardingForm() {
         {step === 2 && (
           <div className="fade-in">
             <div className="section-title">
-              בני המשפחה המשתתפים
+              {healthOnlyMode ? `עדכון פרטי ${children[0]?.name || 'המשתתף/ת'}` : 'בני המשפחה המשתתפים'}
             </div>
-            <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.55)', margin: '0 0 14px' }}>
-              השיבוץ לקבוצה יבוצע על ידי הצוות בהמשך.
-            </p>
+            {!healthOnlyMode && (
+              <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.55)', margin: '0 0 14px' }}>
+                השיבוץ לקבוצה יבוצע על ידי הצוות בהמשך.
+              </p>
+            )}
             {children.map((child, index) => (
               <div
                 key={child.id || index}
@@ -2458,7 +2558,7 @@ export default function PublicOnboardingForm() {
                 )}
               </div>
             ))}
-            <button
+            {!healthOnlyMode && <button
                 type="button"
                 onClick={addChild}
                 style={{
@@ -2468,10 +2568,10 @@ export default function PublicOnboardingForm() {
                 }}
               >
                 <Plus size={16} /> הוספת ילד/ה למשפחה
-              </button>
+              </button>}
             {error && <ErrorBox message={error} />}
             <button type="button" className="event-primary" onClick={goNextFromChildren}>
-              המשך להצהרת בריאות <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} />
+              {healthOnlyMode ? 'שמירת הפרטים וחזרה להצהרת הבריאות' : 'המשך להצהרת בריאות'} <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} />
             </button>
           </div>
         )}
@@ -2577,46 +2677,73 @@ export default function PublicOnboardingForm() {
                           )}
                         </>
                       )}
-                      <div
-                        className="section-title declaration-major-title"
-                        style={{ marginTop: screening.length ? 30 : 0 }}
-                      >
-                        {sectionTitles.confirm} — {currentChild.name}
-                      </div>
-                      <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
-                        יש לסמן את כל הסעיפים לאחר שקראתם אותם.
-                      </p>
-                      {currentChild.type !== 'adult' && (
-                        <p className="child-safety-notice">
-                          אנא הסבירו לילדכם את כללי הבטיחות.
-                        </p>
+                      {confirmations.length > 0 && (
+                        <>
+                          <div
+                            className="section-title declaration-major-title"
+                            style={{ marginTop: screening.length ? 30 : 0 }}
+                          >
+                            {sectionTitles.confirm} — {currentChild.name}
+                          </div>
+                          <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
+                            יש לסמן את כל הסעיפים לאחר שקראתם אותם.
+                          </p>
+                          {currentChild.type !== 'adult' && (
+                            <p className="child-safety-notice">
+                              אנא הסבירו לילדכם את כללי הבטיחות.
+                            </p>
+                          )}
+                          {confirmations.map((q) => (
+                            <label key={q.id} className="event-check" style={{ marginBottom: 10 }}>
+                              <input
+                                type="checkbox"
+                                checked={answers[q.id] === true}
+                                onChange={(e) => setAnswer(q.id, e.target.checked)}
+                              />
+                              <span>{questionLabel(q)}</span>
+                            </label>
+                          ))}
+                        </>
                       )}
-                      {confirmations.map((q) => (
-                        <label key={q.id} className="event-check" style={{ marginBottom: 10 }}>
-                          <input
-                            type="checkbox"
-                            checked={answers[q.id] === true}
-                            onChange={(e) => setAnswer(q.id, e.target.checked)}
-                          />
-                          <span>{questionLabel(q)}</span>
-                        </label>
-                      ))}
                     </>
                   );
                 })()}
                 {error && <ErrorBox message={error} />}
                 <button type="button" className="event-primary" style={{ marginTop: 16 }} onClick={advanceHealthOrSubmit}>
-                  המשך להסרת אחריות וחתימה <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} />
+                  {healthOnlyMode ? 'המשך לאישור וחתימה' : 'המשך להסרת אחריות וחתימה'} <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} />
                 </button>
               </>
             )}
 
             {healthSubStep === 2 && (
               <>
-                <div className="section-title">{sectionTitles.waiver}</div>
-                <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', margin: '0 2px 12px' }}>
-                  עבור {currentChild.name}
-                </p>
+                {healthOnlyMode ? (
+                  <>
+                    <div className="section-title">אישור הצהרת הבריאות — {currentChild.name}</div>
+                    <div style={{
+                      background: 'rgba(56,189,248,.08)',
+                      border: '1px solid rgba(56,189,248,.32)', borderRadius: 12,
+                      padding: 14, marginBottom: 14, fontSize: 14, lineHeight: 1.7,
+                      color: 'rgba(255,255,255,.88)',
+                    }}>
+                      אני מאשר/ת שהמידע שמסרתי בהצהרת הבריאות מלא, נכון ומעודכן,
+                      ומתחייב/ת לעדכן את הצוות בכל שינוי במצב הבריאותי.
+                    </div>
+                    <label className="event-check">
+                      <input
+                        type="checkbox"
+                        checked={!!children[currentFullIndex]?.healthAccepted}
+                        onChange={(e) => updateChild(currentFullIndex, { healthAccepted: e.target.checked })}
+                      />
+                      <span>קראתי ואני מאשר/ת את הצהרת הבריאות</span>
+                    </label>
+                  </>
+                ) : (
+                  <>
+                    <div className="section-title">{sectionTitles.waiver}</div>
+                    <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', margin: '0 2px 12px' }}>
+                      עבור {currentChild.name}
+                    </p>
                 {/* One text, the binding one, with the signer's own name inside
                     it. A summary layer above it repeated the same clauses and
                     made the page say everything twice. */}
@@ -2651,8 +2778,12 @@ export default function PublicOnboardingForm() {
                     גללו את הנוסח המחייב עד סופו — רק אז אפשר לסמן את האישור.
                   </p>
                 )}
+                  </>
+                )}
 
-                <div className="section-title" style={{ marginTop: 20 }}>חתימה על הצהרת בריאות והסרת אחריות</div>
+                <div className="section-title" style={{ marginTop: 20 }}>
+                  {healthOnlyMode ? 'חתימה על הצהרת הבריאות' : 'חתימה על הצהרת בריאות והסרת אחריות'}
+                </div>
                 <div className="canvas-container">
                   <div className="canvas-toolbar">
                     <span style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>

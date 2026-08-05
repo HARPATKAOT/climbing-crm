@@ -314,7 +314,7 @@ function messageMatchesThread(message, thread, parentPhone) {
   return phonesMatchClient(message.phone, thread.phone);
 }
 
-export default function ConversationPanel({ parent, student, fillHeight = false, onHandled }) {
+export default function ConversationPanel({ parent, student, selectedThreadId = 'parent', fillHeight = false, onHandled }) {
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -328,7 +328,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   const [error, setError] = useState('');
   const [replyText, setReplyText] = useState('');
   const [channel, setChannel] = useState('whatsapp');
-  const [activeThreadId, setActiveThreadId] = useState('parent');
+  const [activeThreadId, setActiveThreadId] = useState(selectedThreadId || 'parent');
   const [mode, setMode] = useState('text'); // text | template | saved | image
   const [templates, setTemplates] = useState([]);
   const [savedReplies, setSavedReplies] = useState([]);
@@ -364,10 +364,12 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   // Half-written reply in the composer. `load` runs from a stale closure on the
   // poll, so this has to be a ref rather than the state it mirrors.
   const composingRef = useRef(false);
-  const userPickedThreadRef = useRef(false);
   // Quiet polls keep an old `load` closure — read the live thread id from a ref
   // so a refresh never drags the user back to the parent thread.
-  const activeThreadIdRef = useRef('parent');
+  const activeThreadIdRef = useRef(selectedThreadId || 'parent');
+  // The family cards own the selected communication entity. Keep that request
+  // across the parent change and the following async conversation load.
+  const requestedThreadIdRef = useRef(selectedThreadId || 'parent');
   // Skip overlapping quiet polls when a round trip is slower than the interval.
   const loadInFlightRef = useRef(false);
 
@@ -449,11 +451,13 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
 
       const threads = Array.isArray(conv.threads) ? conv.threads : [];
       const preferredThreadId = conv.defaultThreadId || 'parent';
+      const requestedThreadId = requestedThreadIdRef.current;
       const pickedThreadId = activeThreadIdRef.current;
-      const nextThreadId = userPickedThreadRef.current
-        && threads.some((t) => t.id === pickedThreadId)
-        ? pickedThreadId
-        : preferredThreadId;
+      const nextThreadId = threads.some((t) => t.id === requestedThreadId)
+        ? requestedThreadId
+        : threads.some((t) => t.id === pickedThreadId)
+          ? pickedThreadId
+          : preferredThreadId;
       pickThread(nextThreadId);
 
       const activeThread = threads.find((t) => t.id === nextThreadId) || threads[0];
@@ -487,10 +491,11 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   };
 
   useEffect(() => {
-    userPickedThreadRef.current = false;
+    const requestedThreadId = selectedThreadId || 'parent';
+    requestedThreadIdRef.current = requestedThreadId;
     modeSyncedRef.current = false;
     atBottomRef.current = true;
-    pickThread('parent');
+    pickThread(requestedThreadId);
     load();
     // Reload when a newer inbound lands on the parent card (waiting-queue poll).
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -499,10 +504,11 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     parent?.last_inbound_whatsapp,
     parent?.last_inbound_instagram,
     parent?.last_inbound_messenger,
+    selectedThreadId,
   ]);
 
-  // A different customer starts with an empty composer — never carrying over the
-  // draft, template or image that was aimed at the previous one.
+  // A different communication entity starts with an empty composer — never
+  // carry a draft, template or image to another parent or child.
   useEffect(() => {
     setSelectedTemplate('');
     setTemplateVars([]);
@@ -511,7 +517,7 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     setImagePreview(null);
     setBotMenuOpen(false);
     composingRef.current = false;
-  }, [parent?.id]);
+  }, [parent?.id, selectedThreadId]);
 
   useEffect(() => {
     if (!botMenuOpen) return undefined;
@@ -570,6 +576,12 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
   const allMessages = data?.messages || [];
   const messages = allMessages.filter((m) => messageMatchesThread(m, activeThread, parent?.phone));
 
+  useEffect(() => {
+    if (threadChannels[channel]) return;
+    const nextChannel = ['whatsapp', 'instagram', 'messenger'].find((ch) => threadChannels[ch]) || 'whatsapp';
+    if (nextChannel !== channel) setChannel(nextChannel);
+  }, [activeThreadId, channel, threadChannels.whatsapp, threadChannels.instagram, threadChannels.messenger]);
+
   const windowOpen = channel === 'whatsapp'
     ? !!activeThread?.window?.open
     : !!data?.windows?.[channel]?.open;
@@ -587,17 +599,6 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
     }
     wasBlockedRef.current = !!freeformBlocked;
   }, [freeformBlocked, mode, channel]);
-
-  const selectThread = (threadId) => {
-    userPickedThreadRef.current = true;
-    pickThread(threadId);
-    const thread = threads.find((t) => t.id === threadId);
-    const available = thread?.channels || {};
-    if (!available[channel]) {
-      const next = ['whatsapp', 'instagram', 'messenger'].find((ch) => available[ch]) || 'whatsapp';
-      setChannel(next);
-    }
-  };
 
   const findInboundBefore = (index) => {
     for (let i = index - 1; i >= 0; i -= 1) {
@@ -852,8 +853,15 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
           flexShrink: 0,
         }}
       >
-        <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
-          <MessageCircle size={15} /> תקשורת עם הלקוח
+        <div className="section-title" style={{ display: 'flex', alignItems: 'center', gap: 6, margin: 0, minWidth: 0 }}>
+          <MessageCircle size={15} />
+          <span style={{ whiteSpace: 'nowrap' }}>שיחה עם</span>
+          <span style={{ color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {activeThread?.label || parent?.name || 'לקוח'}
+          </span>
+          <span style={{ fontSize: 10, color: 'var(--text-3)', fontWeight: 600, whiteSpace: 'nowrap' }}>
+            {activeThread?.role === 'student' ? 'מתאמן' : 'הורה'}
+          </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           {channel === 'whatsapp' && activeThread?.window ? (
@@ -1027,22 +1035,6 @@ export default function ConversationPanel({ parent, student, fillHeight = false,
             <button type="button" className="btn btn-ghost btn-xs" onClick={() => load()} disabled={loading}>
               <RefreshCw size={12} /> {loading ? 'טוען' : 'טעינה מחדש'}
             </button>
-          </div>
-        )}
-
-        {threads.length > 0 && (
-          <div style={{ display: 'flex', gap: 6, padding: '8px 12px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap', flexShrink: 0 }}>
-            {threads.map((thread) => (
-              <button
-                key={thread.id}
-                type="button"
-                className={`btn btn-xs ${activeThreadId === thread.id ? 'btn-primary' : 'btn-ghost'}`}
-                onClick={() => selectThread(thread.id)}
-                title={thread.phone || ''}
-              >
-                {thread.role === 'parent' ? `הורה · ${thread.label}` : thread.label}
-              </button>
-            ))}
           </div>
         )}
 

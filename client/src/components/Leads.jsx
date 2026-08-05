@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, UserRound, Star, Phone, Mail, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, FolderOpen, Download, ReceiptText, History, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
 import {
@@ -265,9 +265,15 @@ function compareTraineeChips(a, b) {
 
 /** Count consecutive absences from the newest marked class (skip pending/holiday). */
 /** WhatsApp copy for health declaration — always addressed to the parent. */
-function buildHealthWhatsAppText(parentName, studentName, link) {
+function buildHealthWhatsAppText(parentName, studentName, link, { healthOnly = false } = {}) {
   const p = String(parentName || '').trim();
   const s = String(studentName || '').trim();
+  if (healthOnly) {
+    if (s && p && s.toLowerCase() !== p.toLowerCase()) {
+      return `שלום ${p}, מצורף קישור לחידוש הצהרת הבריאות של ${s}:\n\n${link}`;
+    }
+    return `שלום ${p || ''}, מצורף קישור לחידוש הצהרת הבריאות שלך:\n\n${link}`;
+  }
   // Blank line before URL helps WhatsApp detect a clickable link.
   // Name all three parts of the form: participant details, health declaration
   // and waiver. "A health declaration link" set the wrong expectation.
@@ -296,13 +302,14 @@ function publicShareOrigin() {
   return PUBLIC_APP_FALLBACK;
 }
 
-function buildShareHealthLink(studentId, phone, healthPath = '/register') {
+function buildShareHealthLink(studentId, phone, healthPath = '/register', { healthOnly = false } = {}) {
   const params = new URLSearchParams();
   if (studentId && !String(studentId).startsWith('parent:')) {
     params.set('studentId', studentId);
   } else if (phone) {
     params.set('phone', phone);
   }
+  if (healthOnly) params.set('mode', 'health-renewal');
   const qs = params.toString();
   return `${publicShareOrigin()}${healthPath}${qs ? `?${qs}` : ''}`;
 }
@@ -387,6 +394,41 @@ function DeclarationIcons({ status, validOnly = false, size = 13, onClick }) {
   );
 }
 
+function TraineeStateIcon({ trainee, size = 12 }) {
+  const label = trainee ? 'מתאמן' : 'לא מתאמן';
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      title={label}
+      style={{ position: 'relative', width: size, height: size, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+    >
+      <Award size={size} color={trainee ? '#34D399' : 'var(--text-3)'} style={{ opacity: trainee ? 1 : 0.45 }} />
+      {!trainee && (
+        <span
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            width: size + 3,
+            height: 1.5,
+            borderRadius: 2,
+            background: 'var(--text-3)',
+            transform: 'rotate(-45deg)',
+          }}
+        />
+      )}
+    </span>
+  );
+}
+
+function WhatsAppGlyph({ size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.46 1.32 4.96L2 22l5.25-1.38a9.9 9.9 0 0 0 4.79 1.22h.01c5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2Zm5.8 14.06c-.25.69-1.45 1.32-2 1.4-.51.08-1.16.11-1.87-.12-.43-.14-.98-.32-1.69-.63-2.97-1.28-4.9-4.27-5.05-4.47-.15-.2-1.2-1.6-1.2-3.05s.76-2.16 1.03-2.46c.27-.3.59-.37.79-.37l.57.01c.18.01.43-.07.82.63.4.96 1.36 3.32 1.48 3.56.12.25.2.53.04.83-.15.3-.23.49-.45.75-.22.26-.47.58-.67.78-.22.22-.46.46-.2.9.26.44 1.16 1.91 2.49 3.09 1.71 1.52 3.15 1.99 3.6 2.21.44.22.7.19.96-.11.26-.3 1.11-1.29 1.4-1.74.3-.44.6-.37 1-.22.4.15 2.53 1.19 2.96 1.41.44.22.73.33.84.51.11.18.11 1.05-.14 1.74Z" />
+    </svg>
+  );
+}
+
 function FolderRow({ id, title, icon: Icon, summary, open, onToggle, children, summaryColor, accent = 'var(--blue)' }) {
   return (
     <div
@@ -440,7 +482,20 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const selectedMemberTab = familyMemberTabs.find(
     (tab) => tab.student && String(tab.student.id) === String(student.id)
   ) || null;
+  const initialCommunicationTab = familyMemberTabs.find((tab) => (
+    tab.kind !== 'student' && String(tab.parent?.id) === String(primaryParent?.id)
+  )) || selectedMemberTab || familyMemberTabs[0] || null;
   const [activeParentId, setActiveParentId] = useState(primaryParent?.id || null);
+  // Communication is a separate axis from the file shown in the details pane.
+  // Switching a family tab must never pull the agent out of the conversation
+  // they are currently reading.
+  const [communicationParentId, setCommunicationParentId] = useState(
+    initialCommunicationTab?.parent?.id || primaryParent?.id || null
+  );
+  const [communicationThreadId, setCommunicationThreadId] = useState('parent');
+  const [communicationMemberKey, setCommunicationMemberKey] = useState(
+    initialCommunicationTab?.key || null
+  );
   const [profileMode, setProfileMode] = useState(() => (
     parentOnly ? 'parent' : (selectedMemberTab?.kind || 'student')
   ));
@@ -458,6 +513,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   }, [student.id, primaryParent?.id]);
   const parent = (allParents || []).find((item) => String(item.id) === String(activeParentId))
     || primaryParent;
+  const communicationParent = (allParents || []).find(
+    (item) => String(item.id) === String(communicationParentId)
+  ) || primaryParent || parent;
+  const communicationStudent = familyMemberTabs.find(
+    (tab) => tab.key === communicationMemberKey
+  )?.student || null;
 
   const showFamilyProfile = profileMode === 'parent' || profileMode === 'combined' || parentOnly;
   const showStudentProfile = !parentOnly && (profileMode === 'student' || profileMode === 'combined');
@@ -661,14 +722,19 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       .catch(() => setFormTemplates([]));
   }, []);
 
-  const selectedTemplate = formTemplates.find(t => t.slug === selectedFormSlug)
-    || formTemplates.find(t => t.isDefault)
-    || formTemplates[0];
+  const healthOnlySelected = selectedFormSlug === 'health-renewal';
+  const selectedTemplate = healthOnlySelected
+    ? null
+    : (formTemplates.find(t => t.slug === selectedFormSlug)
+      || formTemplates.find(t => t.isDefault)
+      || formTemplates[0]);
   const healthPath = selectedTemplate && !selectedTemplate.isDefault
     ? `/register/${selectedTemplate.slug}`
     : '/register';
   // WhatsApp-shareable public links (never localhost)
-  const healthShareUrl = buildShareHealthLink(student.id, parent?.phone, healthPath);
+  const healthShareUrl = buildShareHealthLink(student.id, parent?.phone, healthPath, {
+    healthOnly: healthOnlySelected,
+  });
   // Signed if status says so, declaration exists, or durable timestamp was saved on the student
   const isHealthSigned = student.status === 'health_signed'
     || !!student.healthSignedAt
@@ -762,7 +828,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     if (!parent?.phone || !targetStudentId) {
       return { sent: false, link: '', warning: 'אין מספר טלפון לשליחה' };
     }
-    const fallbackLink = buildShareHealthLink(targetStudentId, parent?.phone, healthPath);
+    const fallbackLink = buildShareHealthLink(targetStudentId, parent?.phone, healthPath, {
+      healthOnly: healthOnlySelected,
+    });
     try {
       const res = await fetch(`/api/leads/${encodeURIComponent(targetStudentId)}/send-health-form`, {
         method: 'POST',
@@ -770,6 +838,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         body: JSON.stringify({
           origin: window.location.origin,
           templateSlug: selectedTemplate?.slug || selectedFormSlug || undefined,
+          healthOnly: healthOnlySelected,
+          mode: healthOnlySelected ? 'health-renewal' : 'full',
           // The parent whose tab is open, not the file's primary parent: the
           // message belongs in the conversation staff are actually in.
           parentId: parent?.id || undefined,
@@ -778,7 +848,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       const data = await res.json().catch(() => ({}));
       const link = data.healthUrl || fallbackLink;
       if (!data.sent) {
-        openPersonalWhatsApp(buildHealthWhatsAppText(parent.name, targetStudentName, link));
+        openPersonalWhatsApp(buildHealthWhatsAppText(parent.name, targetStudentName, link, {
+          healthOnly: healthOnlySelected,
+        }));
       }
       return {
         sent: !!data.sent,
@@ -787,7 +859,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         warning: data.sent ? undefined : (data.warning || data.error || 'השליחה האוטומטית נכשלה'),
       };
     } catch {
-      openPersonalWhatsApp(buildHealthWhatsAppText(parent.name, targetStudentName, fallbackLink));
+      openPersonalWhatsApp(buildHealthWhatsAppText(parent.name, targetStudentName, fallbackLink, {
+        healthOnly: healthOnlySelected,
+      }));
       return { sent: false, link: fallbackLink, warning: 'השליחה האוטומטית נכשלה' };
     }
   };
@@ -805,7 +879,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       const result = await sendHealthFormForStudent(student.id, student.name);
       setHealthSendLink(result.link || healthShareUrl);
       if (result.sent) {
-        const formLabel = selectedTemplate
+        const formLabel = healthOnlySelected
+          ? 'חידוש הצהרת בריאות'
+          : selectedTemplate
           ? templateShortLabel(selectedTemplate)
           : FORM_SHORT;
         setHealthSendMsg(result.sentTo
@@ -2265,6 +2341,32 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     }
   };
 
+  const communicationTargetForTab = (tab) => {
+    if (tab.kind === 'student') {
+      const guardianIds = studentGuardianIds(tab.student);
+      const targetParent = tab.parent
+        || (allParents || []).find((item) => String(item.id) === String(tab.student?.parentId))
+        || (allParents || []).find((item) => guardianIds.includes(String(item.id)))
+        || primaryParent;
+      const studentPhone = normalizePhone(tab.student?.phone);
+      const parentPhone = normalizePhone(targetParent?.phone);
+      // The API deliberately collapses two records that share one number. A
+      // child without a distinct phone therefore has no separate conversation.
+      if (!studentPhone || studentPhone === parentPhone || !targetParent?.id) return null;
+      return { parentId: targetParent.id, threadId: `student:${tab.student.id}` };
+    }
+    if (!tab.parent?.id) return null;
+    return { parentId: tab.parent.id, threadId: 'parent' };
+  };
+
+  const selectCommunicationMember = (tab) => {
+    const target = communicationTargetForTab(tab);
+    if (!target) return;
+    setCommunicationParentId(target.parentId);
+    setCommunicationThreadId(target.threadId);
+    setCommunicationMemberKey(tab.key);
+  };
+
   const activeFamilyTabKey = profileMode === 'parent'
     ? `parent:${parent?.id || ''}`
     : `student:${student.id}`;
@@ -2272,6 +2374,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const headerRole = profileMode === 'combined'
     ? 'הורה / משלם + מתאמן'
     : showFamilyProfile ? 'הורה / משלם' : 'תיק מתאמן';
+  const profilePhone = showFamilyProfile
+    ? (parent?.phone || (showStudentProfile ? student.phone : ''))
+    : student.phone;
 
   return (
     <>
@@ -2497,145 +2602,136 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             overscrollBehavior: 'contain',
           }}
         >
-          <div style={{ padding: '14px 14px 10px', borderBottom: '1px solid var(--border)', flexShrink: 0, background: 'var(--bg-card)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-1)', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {headerTitle || (parentOnly ? 'ליד ללא מתאמן' : 'ללא שם')}
-                </div>
-                <div style={{ fontSize: 11, color: profileMode === 'combined' ? '#C084FC' : 'var(--text-3)', marginTop: 2, fontWeight: profileMode === 'combined' ? 700 : 500 }}>
-                  {headerRole}
-                </div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                {showStudentProfile && (
-                  <button type="button" className="btn btn-ghost btn-xs" onClick={openStudentEditor} title="עריכת פרטי המתאמן" style={{ border: '1px solid var(--border)', gap: 4 }}>
-                    <Edit2 size={11} /> מתאמן
-                  </button>
-                )}
-                {showFamilyProfile && parent?.id && (
-                  <button type="button" className="btn btn-ghost btn-xs" onClick={openParentEditor} title="עריכת פרטי ההורה והמשלם" style={{ border: '1px solid var(--border)', gap: 4 }}>
-                    <Edit2 size={11} /> {profileMode === 'combined' ? 'פרטי קשר' : 'ערוך'}
-                  </button>
-                )}
+          <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border)', flexShrink: 0, background: 'var(--bg-card)' }}>
+            {/* This switcher is the fixed header. The selected person's variable
+                profile content lives below in the scroll area, preventing jumps. */}
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-2)', letterSpacing: 0.2 }}>
+                  בני המשפחה · תיק מוצג
+                </span>
                 <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} aria-label="סגור">
                   <X size={18} />
                 </button>
               </div>
-            </div>
-
-            {showFamilyProfile ? (
-              <>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
-                  {parent?.phone ? (
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-                      <a href={`tel:${parent.phone}`} className="btn btn-ghost btn-xs">
-                        <Phone size={12} /> {parent.phone}
-                      </a>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-icon btn-xs"
-                        title={phoneCopied ? 'הועתק' : 'העתקת המספר'}
-                        aria-label="העתקת מספר הטלפון"
-                        onClick={async () => {
-                          try {
-                            await navigator.clipboard.writeText(parent.phone);
-                            setPhoneCopied(true);
-                            setTimeout(() => setPhoneCopied(false), 1500);
-                          } catch { /* ignore */ }
-                        }}
-                      >
-                        {phoneCopied ? <Check size={12} color="var(--green)" /> : <Clipboard size={12} />}
-                      </button>
-                    </span>
-                  ) : (
-                    <span style={{ fontSize: 12, color: 'var(--text-3)' }}>אין טלפון</span>
-                  )}
-                  {parent?.phone && (
-                    <a
-                      href={`https://wa.me/${String(parent.phone).replace(/[^\d]/g, '').replace(/^0/, '972')}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="btn btn-success btn-xs"
-                    >
-                      וואטסאפ
-                    </a>
-                  )}
-                  {parent?.email && (
-                    <a href={`mailto:${parent.email}`} className="btn btn-ghost btn-xs">
-                      <Mail size={12} /> {parent.email}
-                    </a>
-                  )}
-                  {parent?.city && (
-                    <span style={{ fontSize: 12, color: 'var(--text-2)' }}>
-                      <MapPin size={11} style={{ verticalAlign: -1 }} /> {parent.city}
-                    </span>
-                  )}
-                  {guardians.some((g) => String(g.id) === String(parent?.id) && !g.primary) && (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-xs"
-                      disabled={settingPrimary}
-                      title="ההורה הראשי הוא זה שאליו המערכת פונה כברירת מחדל"
-                      onClick={handleMakePrimary}
-                    >
-                      {settingPrimary ? 'מעדכן...' : 'קבע כהורה ראשי'}
-                    </button>
-                  )}
-                </div>
-              </>
-            ) : student.phone ? (
-              <div style={{ marginTop: 8 }}>
-                <a href={`tel:${student.phone}`} className="btn btn-ghost btn-xs">
-                  <Phone size={12} /> {student.phone}
-                </a>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', marginBottom: 6, color: 'var(--text-3)', fontSize: 9 }}>
+                <span style={{ fontWeight: 800 }}>מקרא:</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title="הורה">
+                  <Users size={11} color="#38BDF8" /> הורה
+                </span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title="ילד">
+                  <UserRound size={11} color="#FB923C" /> ילד
+                </span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                  <TraineeStateIcon trainee size={11} /> מתאמן
+                </span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                  <TraineeStateIcon trainee={false} size={11} /> לא מתאמן
+                </span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }} title="הורה ראשי">
+                  <Star size={11} color="#FBBF24" fill="#FBBF24" /> ראשי
+                </span>
               </div>
-            ) : null}
-
-            {/* This switcher lives outside the scrolling file, so every family
-                member stays reachable even at the bottom of a long record. */}
-            <div style={{ marginTop: 10, paddingTop: 9, borderTop: '1px solid rgba(255,255,255,0.07)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
-                <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-3)', letterSpacing: 0.2 }}>בני המשפחה</span>
-                <span style={{ fontSize: 10, color: 'var(--text-3)' }}>החלפת טאב אינה משנה את השיחה</span>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(76px, 1fr))', gap: 6, alignItems: 'stretch' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6, alignItems: 'stretch' }}>
                 {familyMemberTabs.map((tab) => {
-                  const active = tab.key === activeFamilyTabKey;
+                  const fileActive = tab.key === activeFamilyTabKey;
+                  const conversationActive = tab.key === communicationMemberKey;
+                  const communicationTarget = communicationTargetForTab(tab);
                   const accent = tab.kind === 'student' ? '#FB923C' : tab.kind === 'combined' ? '#C084FC' : '#38BDF8';
                   const name = tab.student?.name || parentDisplayName(tab.parent);
-                  const role = tab.kind === 'combined' ? 'הורה + מתאמן' : tab.kind === 'parent' ? 'הורה / משלם' : 'מתאמן';
+                  const isParentEntity = tab.kind !== 'student';
+                  const isTrainee = tab.kind !== 'parent';
                   const isPrimary = !!tab.parent && (
                     String(tab.parent.id) === String(primaryParent?.id)
                     || guardians.some((g) => String(g.id) === String(tab.parent.id) && g.primary)
                   );
+                  const roleDescription = [
+                    isParentEntity ? 'הורה' : 'ילד',
+                    isTrainee ? 'מתאמן' : 'לא מתאמן',
+                    isPrimary ? 'ראשי' : null,
+                  ].filter(Boolean).join(' · ');
                   return (
-                    <button
+                    <div
                       key={tab.key}
-                      type="button"
-                      aria-pressed={active}
-                      onClick={() => selectFamilyMember(tab)}
-                      title={`${name} · ${role}${isPrimary ? ' · ראשי' : ''}`}
+                      title={`${name} · ${roleDescription}`}
                       style={{
                         minWidth: 0,
-                        padding: '6px 7px',
-                        borderRadius: 12,
-                        border: `1px solid ${active ? accent : 'var(--border)'}`,
-                        background: active ? `${accent}22` : 'rgba(255,255,255,0.035)',
-                        color: active ? 'var(--text-1)' : 'var(--text-2)',
-                        font: 'inherit',
-                        textAlign: 'right',
-                        cursor: 'pointer',
+                        padding: '5px 6px',
+                        borderRadius: 10,
+                        border: `1px solid ${fileActive ? accent : 'var(--border)'}`,
+                        background: fileActive ? `${accent}18` : 'rgba(255,255,255,0.035)',
+                        color: fileActive ? 'var(--text-1)' : 'var(--text-2)',
                       }}
                     >
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
-                        {tab.student ? <GenderMark gender={tab.student.gender} size={12} /> : <Users size={12} color={accent} />}
-                        <span style={{ fontSize: 12, fontWeight: active ? 800 : 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-                      </span>
-                      <span style={{ display: 'block', marginTop: 2, color: active ? accent : 'var(--text-3)', fontSize: 9.5, fontWeight: 700, lineHeight: 1.2 }}>
-                        {role}{isPrimary ? ' · ראשי' : ''}
-                      </span>
-                    </button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
+                          <span title={isParentEntity ? 'הורה' : 'ילד'} aria-label={isParentEntity ? 'הורה' : 'ילד'} style={{ display: 'inline-flex' }}>
+                            {isParentEntity
+                              ? <Users size={12} color="#38BDF8" />
+                              : <UserRound size={12} color="#FB923C" />}
+                          </span>
+                          <TraineeStateIcon trainee={isTrainee} size={12} />
+                          {isPrimary && (
+                            <span title="הורה ראשי" aria-label="הורה ראשי" style={{ display: 'inline-flex' }}>
+                              <Star size={12} color="#FBBF24" fill="#FBBF24" />
+                            </span>
+                          )}
+                        </span>
+                        <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, fontWeight: fileActive ? 800 : 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {name}
+                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+                          <button
+                            type="button"
+                            aria-pressed={fileActive}
+                            aria-label={`הצגת התיק של ${name}`}
+                            onClick={() => selectFamilyMember(tab)}
+                            title={`הצגת התיק של ${name}`}
+                            style={{
+                              width: 26,
+                              height: 26,
+                              minWidth: 26,
+                              padding: 0,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              borderRadius: 8,
+                              border: `1px solid ${fileActive ? 'rgba(96,165,250,0.75)' : 'rgba(148,163,184,0.2)'}`,
+                              background: fileActive ? 'rgba(96,165,250,0.2)' : 'rgba(255,255,255,0.025)',
+                              color: fileActive ? '#93C5FD' : 'var(--text-3)',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <FolderOpen size={14} strokeWidth={2} />
+                          </button>
+                          <button
+                            type="button"
+                            aria-pressed={conversationActive}
+                            aria-label={communicationTarget ? `מעבר לשיחה עם ${name}` : `אין ל${name} מספר טלפון עצמאי`}
+                            onClick={() => selectCommunicationMember(tab)}
+                            disabled={!communicationTarget}
+                            title={communicationTarget ? `מעבר לשיחת הוואטסאפ עם ${name}` : 'אין למתאמן מספר טלפון עצמאי'}
+                            style={{
+                              width: 26,
+                              height: 26,
+                              minWidth: 26,
+                              padding: 0,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              borderRadius: 8,
+                              border: `1px solid ${conversationActive ? 'rgba(37,211,102,0.75)' : 'rgba(148,163,184,0.2)'}`,
+                              background: conversationActive ? 'rgba(37,211,102,0.18)' : 'rgba(255,255,255,0.025)',
+                              color: conversationActive ? '#4ADE80' : 'var(--text-3)',
+                              cursor: communicationTarget ? 'pointer' : 'not-allowed',
+                              opacity: communicationTarget ? 1 : 0.35,
+                            }}
+                          >
+                            <WhatsAppGlyph size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
                   );
                 })}
               </div>
@@ -2681,6 +2777,101 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               minHeight: 0,
             }}
           >
+            {/* The profile belongs to the selected file and may scroll away. The
+                fixed family switcher above therefore keeps exactly one height. */}
+            <div style={{ marginBottom: 12, paddingBottom: 10, borderBottom: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                    {showStudentProfile && (
+                      <DeclarationIcons
+                        status={studentDeclarationStatus(studentDeclarations, student, parent?.phone)}
+                        validOnly
+                        size={15}
+                        onClick={() => toggleFolder('health')}
+                      />
+                    )}
+                    <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-1)', lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {headerTitle || (parentOnly ? 'ליד ללא מתאמן' : 'ללא שם')}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 11, color: profileMode === 'combined' ? '#C084FC' : 'var(--text-3)', marginTop: 2, fontWeight: profileMode === 'combined' ? 700 : 500 }}>
+                    {headerRole}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                  {showStudentProfile && (
+                    <button type="button" className="btn btn-ghost btn-xs" onClick={openStudentEditor} title="עריכת פרטי המתאמן" style={{ border: '1px solid var(--border)', gap: 4 }}>
+                      <Edit2 size={11} /> מתאמן
+                    </button>
+                  )}
+                  {showFamilyProfile && parent?.id && (
+                    <button type="button" className="btn btn-ghost btn-xs" onClick={openParentEditor} title="עריכת פרטי ההורה והמשלם" style={{ border: '1px solid var(--border)', gap: 4 }}>
+                      <Edit2 size={11} /> {profileMode === 'combined' ? 'פרטי קשר' : 'ערוך'}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
+                {profilePhone ? (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                    <a href={`tel:${profilePhone}`} className="btn btn-ghost btn-xs">
+                      <Phone size={12} /> {profilePhone}
+                    </a>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-icon btn-xs"
+                      title={phoneCopied ? 'הועתק' : 'העתקת המספר'}
+                      aria-label="העתקת מספר הטלפון"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(profilePhone);
+                          setPhoneCopied(true);
+                          setTimeout(() => setPhoneCopied(false), 1500);
+                        } catch { /* ignore */ }
+                      }}
+                    >
+                      {phoneCopied ? <Check size={12} color="var(--green)" /> : <Clipboard size={12} />}
+                    </button>
+                  </span>
+                ) : (
+                  <span style={{ fontSize: 12, color: 'var(--text-3)' }}>אין טלפון</span>
+                )}
+                {showFamilyProfile && profilePhone && (
+                  <a
+                    href={`https://wa.me/${String(profilePhone).replace(/[^\d]/g, '').replace(/^0/, '972')}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn btn-success btn-xs"
+                  >
+                    וואטסאפ
+                  </a>
+                )}
+                {showFamilyProfile && parent?.email && (
+                  <a href={`mailto:${parent.email}`} className="btn btn-ghost btn-xs">
+                    <Mail size={12} /> {parent.email}
+                  </a>
+                )}
+                {showFamilyProfile && parent?.city && (
+                  <span style={{ fontSize: 12, color: 'var(--text-2)' }}>
+                    <MapPin size={11} style={{ verticalAlign: -1 }} /> {parent.city}
+                  </span>
+                )}
+                {showFamilyProfile && guardians.some((g) => String(g.id) === String(parent?.id) && !g.primary) && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    disabled={settingPrimary}
+                    title="ההורה הראשי הוא זה שאליו המערכת פונה כברירת מחדל"
+                    onClick={handleMakePrimary}
+                  >
+                    {settingPrimary ? 'מעדכן...' : 'קבע כהורה ראשי'}
+                  </button>
+                )}
+              </div>
+            </div>
+
             {/* Family-only sections appear only on a parent or combined tab. */}
             {showFamilyProfile && parent?.id && (
               <div style={{ marginBottom: 12 }}>
@@ -2963,32 +3154,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               );
               return (
               <div style={{ marginBottom: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
-                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                    {/* מימין לשם ב־RTL: האייקונים לפני הטקסט ב־DOM */}
-                    <DeclarationIcons
-                      status={studentDeclarationStatus(studentDeclarations, student, parent?.phone)}
-                      validOnly
-                      size={15}
-                      onClick={() => toggleFolder('health')}
-                    />
-                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
-                      {student.name}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-xs"
-                    onClick={openStudentEditor}
-                    style={{ borderRadius: 999, border: '1px solid var(--border)', gap: 4, flexShrink: 0 }}
-                  >
-                    <Edit2 size={11} /> ערוך
-                  </button>
-                </div>
-
                 <div>
                   {detailRow('גיל', ageWithGenderLabel(student.birthDate, student.gender))}
-                  {detailRow('טלפון', student.phone || '—')}
                   {(() => {
                     const topLevel = highestPassedLevel(levelTestsHistory) || student.levelGrade || null;
                     const gradeTint = topLevel ? levelColor(topLevel) : null;
@@ -4728,8 +4895,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         >
           {canViewComms ? (
             <ConversationPanel
-              parent={parent}
-              student={student}
+              parent={communicationParent}
+              student={communicationStudent}
+              selectedThreadId={communicationThreadId}
               fillHeight
               onHandled={onCommunicationHandled}
             />
@@ -4758,7 +4926,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               <button
                 type="button"
                 className="btn btn-success"
-                disabled={sendingHealth || !parent?.phone || !selectedTemplate}
+                disabled={sendingHealth || !parent?.phone || (!healthOnlySelected && !selectedTemplate)}
                 onClick={handleSendHealthForm}
               >
                 <Send size={15} /> {sendingHealth ? 'שולח...' : 'שלח בוואטסאפ'}
@@ -4768,8 +4936,24 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         >
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label">איזה טופס לשלוח?</label>
-            {formTemplates.length > 0 ? (
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  title="שאלות הבריאות והחתימה עליהן בלבד — ללא אישור השתתפות או הסרת אחריות"
+                  aria-pressed={healthOnlySelected}
+                  onClick={() => setSelectedFormSlug('health-renewal')}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 7,
+                    padding: '9px 14px', borderRadius: 999, cursor: 'pointer',
+                    fontSize: 13, fontWeight: healthOnlySelected ? 700 : 600, lineHeight: 1.2,
+                    color: healthOnlySelected ? '#7dd3fc' : 'var(--text-2)',
+                    background: healthOnlySelected ? 'rgba(56,189,248,.1)' : 'transparent',
+                    border: `1px solid ${healthOnlySelected ? '#38bdf8' : 'var(--border)'}`,
+                  }}
+                >
+                  <ShieldCheck size={15} style={{ flexShrink: 0 }} />
+                  חידוש בריאות בלבד
+                </button>
                 {formTemplates.map((template) => {
                   const kind = templateKind(template);
                   const KindIcon = kind.Icon;
@@ -4801,11 +4985,16 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     </button>
                   );
                 })}
+            </div>
+            {!formTemplates.length && (
+              <div className="alert alert-warn" style={{ marginTop: 10 }}>
+                טפסי הפעילות לא נטענו; עדיין ניתן לשלוח חידוש בריאות בלבד.
               </div>
-            ) : (
-              <div className="alert alert-warn">לא נמצאו טפסים פעילים לשליחה.</div>
             )}
             <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-3)' }}>
+              {healthOnlySelected
+                ? 'הקישור יבקש רק הצהרת בריאות חדשה וחתימה עליה; אישורי ההשתתפות הקיימים לא ישתנו. '
+                : ''}
               הקישור יישלח בוואטסאפ אל {parentDisplayName(parent)} · {parent?.phone}
             </div>
           </div>

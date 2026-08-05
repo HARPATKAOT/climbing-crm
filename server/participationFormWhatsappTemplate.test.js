@@ -38,6 +38,10 @@ test('button param carries the form slug only when it is not the default wall fo
   assert.equal(participationFormButtonParam('st1', { slug: 'wall', isDefault: true }), 'st1');
   assert.equal(participationFormButtonParam('st1', { slug: 'event' }), 'st1/event');
   assert.equal(participationFormButtonParam('st1', { slug: 'trip' }), 'st1/trip');
+  assert.equal(
+    participationFormButtonParam('st1', { slug: 'trip' }, { healthOnly: true }),
+    'st1/health-renewal'
+  );
 });
 
 test('redirect URL encodes student and optional slug as path segments', () => {
@@ -45,6 +49,10 @@ test('redirect URL encodes student and optional slug as path segments', () => {
   assert.match(
     buildParticipationFormRedirectUrl('st1', { slug: 'trip' }),
     /\/f\/st1\/trip$/
+  );
+  assert.match(
+    buildParticipationFormRedirectUrl('st1', null, { healthOnly: true }),
+    /\/f\/st1\/health-renewal$/
   );
 });
 

@@ -16,9 +16,10 @@ export const PARTICIPATION_FORM_REDIRECT_PATH = 'f';
 /** Older / broken names that must never be preferred for this send. */
 export const PARTICIPATION_FORM_LEGACY_META_NAMES = new Set(['t2']);
 
-export function participationFormButtonParam(studentId, template = null) {
+export function participationFormButtonParam(studentId, template = null, { healthOnly = false } = {}) {
   const id = String(studentId || '').trim();
   if (!id) return '';
+  if (healthOnly) return `${id}/health-renewal`;
   const slug = String(template?.slug || '').trim().toLowerCase();
   const isDefault = !!template?.isDefault || !slug || slug === 'wall';
   if (isDefault) return id;
@@ -26,8 +27,8 @@ export function participationFormButtonParam(studentId, template = null) {
 }
 
 /** Short API link staff can copy; resolves to the right /register path on click. */
-export function buildParticipationFormRedirectUrl(studentId, template = null) {
-  const param = participationFormButtonParam(studentId, template);
+export function buildParticipationFormRedirectUrl(studentId, template = null, options = {}) {
+  const param = participationFormButtonParam(studentId, template, options);
   if (!param) return '';
   const parts = param.split('/').filter(Boolean);
   return buildRedirectUrl(PARTICIPATION_FORM_REDIRECT_PATH, ...parts);
