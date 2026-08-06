@@ -295,7 +295,11 @@ test('the template button points at the server redirect, never at the app itself
 
     process.env.PUBLIC_API_URL = 'https://api.example/';
     assert.equal(equipmentRedirectBase(), 'https://api.example');
-    assert.equal(buildEquipmentRedirectUrl('tok 1'), 'https://api.example/e/tok%201');
+    // The link inside a message sits on the customer's own domain, which
+    // proxies /api/* to the API. Only the frozen template button above is
+    // pinned to the API host.
+    process.env.FRONTEND_URL = 'https://app.example';
+    assert.equal(buildEquipmentRedirectUrl('tok 1'), 'https://app.example/api/e/tok%201');
     assert.equal(buildEquipmentRedirectUrl(''), '');
   } finally {
     for (const [key, value] of [

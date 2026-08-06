@@ -353,7 +353,13 @@ function withoutServerSecrets(settings = {}) {
 // local cache, so losing a few hundred ms of it on a crash is acceptable.
 let dbCache = null;
 let flushTimer = null;
+let flushIsLazy = false;
 const FLUSH_DELAY_MS = 300;
+// Refreshing a table from the durable store changes nothing that needs saving —
+// db.json is only a warm-start cache, and boot re-hydrates it from Supabase
+// anyway. Writing 10 MB of JSON on every list read froze the whole server for
+// ~50 ms at a time, so those refreshes flush on a slow timer instead.
+const LAZY_FLUSH_DELAY_MS = 60_000;
 
 function loadDbFromDisk() {
   try {
@@ -377,7 +383,9 @@ function readDb() {
 function flushDbToDisk() {
   if (dbCache === null) return;
   try {
-    const payload = JSON.stringify(dbCache, null, 2);
+    // No indentation: this file is a machine cache, and pretty-printing it cost
+    // both extra CPU per flush and ~30% more bytes on disk.
+    const payload = JSON.stringify(dbCache);
     const tmpFile = `${DB_FILE}.tmp`;
     fs.writeFileSync(tmpFile, payload, 'utf-8');
     try {
@@ -392,13 +400,25 @@ function flushDbToDisk() {
   }
 }
 
-function writeDb(data) {
+// When something was last changed here rather than read from the durable
+// store. A background refresh that started before this must not be written
+// into the cache: its response predates the local change, so applying it would
+// make a just-saved record disappear until the next refresh.
+let lastLocalWriteAt = 0;
+
+function writeDb(data, { lazy = false } = {}) {
   dbCache = data;
-  if (flushTimer) return;
+  if (!lazy) lastLocalWriteAt = Date.now();
+  // A real write must not be held back by a lazy flush that is already pending.
+  if (flushTimer && !(flushIsLazy && !lazy)) return;
+  if (flushTimer) clearTimeout(flushTimer);
+  flushIsLazy = lazy;
   flushTimer = setTimeout(() => {
     flushTimer = null;
     flushDbToDisk();
-  }, FLUSH_DELAY_MS);
+  }, lazy ? LAZY_FLUSH_DELAY_MS : FLUSH_DELAY_MS);
+  // A lazy flush must never keep the process alive on its own.
+  if (lazy && typeof flushTimer?.unref === 'function') flushTimer.unref();
 }
 
 // Persist any pending in-memory changes before the process exits.
@@ -510,6 +530,23 @@ export function botFlagLabel() {
   return enabled ? 'ON' : 'OFF';
 }
 
+/** How many tables boot hydration pulls from the durable store at once. */
+const HYDRATION_CONCURRENCY = 8;
+
+/** Run `worker` over `items`, at most `limit` at a time, preserving order. */
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
 // Called once on server startup: pulls the authoritative CRM-core collections
 // from Supabase into the local db.json so the ephemeral Render disk always
 // reflects the durable store. Non-core collections are left untouched.
@@ -524,9 +561,19 @@ export async function initDb({ requireDurable = false } = {}) {
   try {
     const data = readDb();
     const counts = {};
+    // Fetch the tables together rather than one after another. Done serially
+    // this took ~43s, during which the API answers nothing — and PM2's watcher
+    // restarts the server on every code change, so that wait was paid all day.
+    // Capped so we never open 72 connections at once.
+    const fetched = await mapWithConcurrency(
+      CORE_TABLES,
+      HYDRATION_CONCURRENCY,
+      async (table) => [table, await supa.getAll(table)]
+    );
+    const rowsByTable = new Map(fetched);
     for (const table of CORE_TABLES) {
-      const rows = await supa.getAll(table);
-      if (rows !== null) {
+      const rows = rowsByTable.get(table);
+      if (rows !== null && rows !== undefined) {
         const localRows = Array.isArray(data[table]) ? data[table] : [];
         const hydration = planDurableHydration(table, rows, localRows);
         if (hydration.mode === 'migrate') {
@@ -891,7 +938,26 @@ export const db = {
     data[table] = value;
     writeDb(data);
   },
-  
+
+  /**
+   * Replace a table with rows that just came *from* the durable store.
+   * Nothing needs saving, so the disk flush is deferred rather than triggered
+   * on every read. Use `set` whenever the rows originated here.
+   *
+   * `since` is when the durable read was issued. If anything was written here
+   * after that, the response is older than the cache and is dropped.
+   * @returns {boolean} whether the rows were applied
+   */
+  hydrate: (table, value, since = Date.now()) => {
+    if (!Array.isArray(value)) return false;
+    if (lastLocalWriteAt >= since) return false;
+    const data = readDb();
+    data[table] = value;
+    writeDb(data, { lazy: true });
+    return true;
+  },
+
+
   getOne: (table, id) => {
     const list = db.get(table);
     return list.find(item => item.id === id);

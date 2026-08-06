@@ -2,8 +2,10 @@ import 'dotenv/config';
 import crypto from 'crypto';
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import { db, initDb, persistCore, parentPhonesMatch, setBotEnabledDurable } from './db.js';
-import { supa } from './supa.js';
+import { supa, CORE_TABLES } from './supa.js';
+import { readTable, readTables, markFreshlyLoaded } from './tableCache.js';
 import {
   requiresDurableStore,
   publicStoreUnavailableError,
@@ -458,6 +460,11 @@ const PORT = process.env.PORT || 5000;
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v25.0';
 app.set('trust proxy', 1);
 
+// The customer list is ~1.7 MB of JSON and the pricelist another 1.7 MB, all
+// of it sent uncompressed until now — the single biggest cost of opening a
+// screen from outside the office. JSON gzips roughly ten to one.
+app.use(compression());
+
 const configuredOrigins = String(process.env.ALLOWED_ORIGINS || '')
   .split(',')
   .map((origin) => origin.trim())
@@ -857,24 +864,13 @@ app.get('/api/dashboard/stats', async (req, res) => {
     ? stats
     : omitFields(stats, new Set(['dailySales']));
   try {
-    const cached = {
-      sales: db.get('pos_sales') || [],
-      parents: db.get('parents') || [],
-      students: db.get('students') || [],
-      history: db.get('lead_status_history') || [],
-    };
-    const [sales, parents, students, history] = await Promise.all([
-      supa.getAll('pos_sales'),
-      supa.getAll('parents'),
-      supa.getAll('students'),
-      supa.getAll('lead_status_history'),
-    ]);
-    res.json(visibleStats(calculateDashboardStats({
-      sales: sales ?? cached.sales,
-      parents: parents ?? cached.parents,
-      students: students ?? cached.students,
-      history: history ?? cached.history,
-    })));
+    const [sales, parents, students, history] = await readTables(
+      'pos_sales',
+      'parents',
+      'students',
+      'lead_status_history'
+    );
+    res.json(visibleStats(calculateDashboardStats({ sales, parents, students, history })));
   } catch (error) {
     console.error('GET /api/dashboard/stats failed:', error.message);
     res.json(visibleStats(calculateDashboardStats({
@@ -1072,39 +1068,23 @@ app.get('/api/crm/core', requireOwner, (req, res) => {
 
 app.get('/api/parents', async (req, res) => {
   try {
-    if (supa.isEnabled()) {
-      const rows = await supa.getAll('parents');
-      if (rows) {
-        if (typeof db.set === 'function') db.set('parents', rows);
-        return res.json(rows.map((row) => customerForRequest(req, row)));
-      }
-    }
+    const rows = await readTable('parents');
+    return res.json(rows.map((row) => customerForRequest(req, row)));
   } catch (err) {
-    console.error('GET /api/parents Supabase error:', err.message);
+    console.error('GET /api/parents error:', err.message);
   }
   res.json((db.get('parents') || []).map((row) => customerForRequest(req, row)));
 });
 
-// Get all students (prefer Supabase)
+// Get all students, with their groups and guardians attached.
 app.get('/api/students', async (req, res) => {
   try {
-    if (supa.isEnabled()) {
-      const [rows, enrollments, guardians] = await Promise.all([
-        supa.getAll('students'),
-        supa.getAll('enrollments'),
-        supa.getAll('student_guardians'),
-      ]);
-      if (rows) {
-        if (typeof db.set === 'function') db.set('students', rows);
-        if (enrollments && typeof db.set === 'function') db.set('enrollments', enrollments);
-        if (guardians && typeof db.set === 'function') db.set('student_guardians', guardians);
-        // Same enrichment as the local path — a screen must never see a child
-        // with groups but no guardians just because the fresh read was used.
-        return res.json(db.withStudentRelations(rows).map((row) => customerForRequest(req, row)));
-      }
-    }
+    const [rows] = await readTables('students', 'enrollments', 'student_guardians');
+    // A screen must never see a child with groups but no guardians, so the
+    // enrichment always runs over the same in-memory snapshot.
+    return res.json(db.withStudentRelations(rows).map((row) => customerForRequest(req, row)));
   } catch (err) {
-    console.error('GET /api/students Supabase error:', err.message);
+    console.error('GET /api/students error:', err.message);
   }
   res.json(db.withStudentRelations(db.get('students')).map((row) => customerForRequest(req, row)));
 });
@@ -1122,32 +1102,13 @@ function withGroupEnrollmentCounts(groups, students) {
 }
 
 // Get all groups (with live enrolled count computed from students).
-// Prefer Supabase so Render never serves a stale empty db.json after groups
-// were re-seeded in the durable store without a process restart.
 app.get('/api/groups', async (req, res) => {
   try {
-    if (supa.isEnabled()) {
-      const [rows, studentRows, enrollments] = await Promise.all([
-        supa.getAll('groups'),
-        supa.getAll('students'),
-        supa.getAll('enrollments'),
-      ]);
-      if (rows) {
-        const students = enrichStudentsWithGroupIds(
-          studentRows || db.get('students') || [],
-          enrollments || db.get('enrollments') || []
-        );
-        // Keep the local cache warm for write paths that still use db.json.
-        if (typeof db.set === 'function') {
-          db.set('groups', rows);
-          if (studentRows) db.set('students', studentRows);
-          if (enrollments) db.set('enrollments', enrollments);
-        }
-        return res.json(withGroupEnrollmentCounts(rows, students));
-      }
-    }
+    const [rows, studentRows, enrollments] = await readTables('groups', 'students', 'enrollments');
+    const students = enrichStudentsWithGroupIds(studentRows, enrollments);
+    return res.json(withGroupEnrollmentCounts(rows, students));
   } catch (err) {
-    console.error('GET /api/groups Supabase error:', err.message);
+    console.error('GET /api/groups error:', err.message);
   }
   res.json(withGroupEnrollmentCounts(db.get('groups'), db.withStudentRelations(db.get('students'))));
 });
@@ -3676,9 +3637,10 @@ app.put('/api/equipment-settings', requireOwner, async (req, res) => {
 
 app.get('/api/students/:id/equipment', async (req, res) => {
   try {
-    await refreshStudentEquipmentCache();
+    await readTable('student_equipment');
     let student = db.getOne('students', req.params.id);
     if (!student && supa.isEnabled()) {
+      // Only a card we have never seen justifies waiting for a durable read.
       const remote = await supa.getAll('students');
       if (remote && typeof db.set === 'function') db.set('students', remote);
       student = db.getOne('students', req.params.id);
@@ -3704,37 +3666,17 @@ app.get('/api/students/:id/equipment', async (req, res) => {
 
 app.get('/api/equipment', async (req, res) => {
   try {
-    await refreshStudentEquipmentCache();
+    await readTable('student_equipment');
     const settings = await loadEquipmentSettings();
-    let students = db.get('students') || [];
-    let parents = db.get('parents') || [];
-    let groups = db.get('groups') || [];
-    if (supa.isEnabled()) {
-      const [remoteStudents, remoteParents, remoteGroups, remoteEnrollments] = await Promise.all([
-        supa.getAll('students'),
-        supa.getAll('parents'),
-        supa.getAll('groups'),
-        supa.getAll('enrollments'),
-      ]);
-      if (remoteStudents) {
-        students = remoteStudents;
-        if (typeof db.set === 'function') db.set('students', remoteStudents);
-      }
-      if (remoteParents) {
-        parents = remoteParents;
-        if (typeof db.set === 'function') db.set('parents', remoteParents);
-      }
-      if (remoteGroups) {
-        groups = remoteGroups;
-        if (typeof db.set === 'function') db.set('groups', remoteGroups);
-      }
-      if (remoteEnrollments && typeof db.set === 'function') {
-        db.set('enrollments', remoteEnrollments);
-      }
-      students = enrichStudentsWithGroupIds(students, remoteEnrollments || db.get('enrollments') || []);
-    } else {
-      students = db.withStudentRelations(students);
-    }
+    let [students, parents, groups, enrollments] = await readTables(
+      'students',
+      'parents',
+      'groups',
+      'enrollments'
+    );
+    students = supa.isEnabled()
+      ? enrichStudentsWithGroupIds(students, enrollments)
+      : db.withStudentRelations(students);
 
     const groupId = req.query.groupId ? String(req.query.groupId) : '';
     const filter = String(req.query.filter || 'gaps'); // gaps | unpaid | awaiting | all
@@ -4137,7 +4079,10 @@ app.get('/api/public/equipment/:token', publicFormRateLimit, async (req, res) =>
       return res.status(410).json({ error: 'פג תוקף הקישור — בקשו קישור חדש מהצוות' });
     }
 
-    await refreshStudentEquipmentCache();
+    // The family's page re-asks every couple of seconds while it waits for a
+    // payment to land; that payment is written by this same process, so the
+    // in-memory copy is already current and a durable read would only add lag.
+    await readTable('student_equipment');
     const payload = await buildPublicEquipmentPayload(checkout);
     if (!payload) return res.status(404).json({ error: 'לא נמצאו מתאמנים פעילים בתיק המשפחה' });
     res.json(payload);
@@ -4782,15 +4727,10 @@ function rejectActivitySensitiveChanges(req, body = {}, existing = {}) {
 
 app.get('/api/activities', async (req, res) => {
   try {
-    if (supa.isEnabled()) {
-      const rows = await supa.getAll('activities');
-      if (rows) {
-        if (typeof db.set === 'function') db.set('activities', rows);
-        return res.json(rows.map((row) => activityForRequest(req, row)));
-      }
-    }
+    const rows = await readTable('activities');
+    return res.json(rows.map((row) => activityForRequest(req, row)));
   } catch (err) {
-    console.error('activities refresh failed:', err.message);
+    console.error('activities read failed:', err.message);
   }
   res.json((db.get('activities') || []).map((row) => activityForRequest(req, row)));
 });
@@ -6982,13 +6922,19 @@ app.post('/api/public/activities/:slug/register', publicFormRateLimit, async (re
 // ─── Public shop: self-serve purchase of a pass ──────────────────────────────
 
 /** Catalog edits must be visible on the public link even with a stale cache. */
+/**
+ * The shop must not sell while the durable store is unreachable, so this still
+ * proves the store answers before every purchase page. It used to prove that by
+ * re-downloading the whole pricelist — 1.7 MB and ~2.3s, on every page view,
+ * mostly product photos. A head-only probe answers the same question in a
+ * fraction of the time, and the rows come from the read-through cache.
+ */
 async function refreshPublicPricelist() {
   if (!supa.isEnabled()) {
     return { storeAvailable: !requiresDurableStore(), rows: null };
   }
-  const rows = await supa.getAll('pricelist');
-  if (rows === null) return { storeAvailable: false, rows: null };
-  db.set('pricelist', rows);
+  const [alive, rows] = await Promise.all([supa.ping(), readTable('pricelist')]);
+  if (!alive.ok) return { storeAvailable: false, rows: null };
   return { storeAvailable: true, rows };
 }
 
@@ -7733,9 +7679,15 @@ app.delete('/api/attendance/:id', (req, res) => {
 
 // Get all pricelist items
 app.get('/api/pricelist', (req, res) => {
+  // Product photos are stored inline as base64 and come to 1.7 MB — more than
+  // the entire customer list. Screens that only need names and prices ask for
+  // `?images=0` and skip it.
+  const withImages = req.query.images !== '0';
   const items = (db.get('pricelist') || []).map((raw) => {
     const item = enrichPricelistItem(raw);
-    return { ...item, cancellation_policy: resolvePolicyFor(db, item)?.snapshot || null };
+    const payload = { ...item, cancellation_policy: resolvePolicyFor(db, item)?.snapshot || null };
+    if (!withImages) delete payload.image;
+    return payload;
   });
   res.json(items);
 });
@@ -10844,7 +10796,7 @@ app.get('/api/level-tests', (req, res) => {
 app.get('/api/groups/:id/training-brief', async (req, res) => {
   try {
     const groupId = req.params.id;
-    await refreshStudentEquipmentCache();
+    await readTable('student_equipment');
     const students = db
       .withStudentRelations(db.get('students') || [])
       .filter((s) => studentInGroup(s, groupId) && s.status !== 'archived');
@@ -10854,7 +10806,7 @@ app.get('/api/groups/:id/training-brief', async (req, res) => {
 
     // רצף ההיעדרויות נספר על פני כל הקבוצות של המתאמן, ולכן צריך את
     // כל הנוכחות ולא רק את זו של הקבוצה הנוכחית.
-    await refreshAttendanceCache();
+    await readTable('attendance');
     const attendance = db.get('attendance') || [];
     const attendanceByStudent = new Map();
     for (const row of attendance) {
@@ -15333,6 +15285,9 @@ async function runParticipationRemindersSafely() {
 
 // Start Server (after loading CRM-core data from Supabase)
 initDb({ requireDurable: requiresDurableStore() }).then(() => {
+  // Boot just read every core table — the first screen to open should serve
+  // that snapshot, not queue a fresh download of everything it touches.
+  markFreshlyLoaded(CORE_TABLES);
   try {
     const equipmentBackfill = backfillAdultEquipment({ db, persist: persistCore });
     if (equipmentBackfill.created > 0) {

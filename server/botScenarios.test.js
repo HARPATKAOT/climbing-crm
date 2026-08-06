@@ -613,6 +613,31 @@ test('המודל אומר «שיבצתי» בלי לקרוא לכלי — הלק
   });
 });
 
+// ─── קישורים ─────────────────────────────────────────────────────────────────
+
+test('קישור שהולך ללקוח יושב על הדומיין שהוא מכיר', async () => {
+  const { buildRedirectUrl, buildApiRedirectUrl } = await import('./publicLinks.js');
+  const front = process.env.FRONTEND_URL;
+  process.env.FRONTEND_URL = 'https://app.example';
+  try {
+    // «climbing-crm-api.onrender.com» ליד בקשה למלא טופס בריאות נראה חשוד.
+    assert.equal(buildRedirectUrl('fp', '972500000000'), 'https://app.example/api/fp/972500000000');
+    assert.equal(buildRedirectUrl('s', 'g-1', 2), 'https://app.example/api/s/g-1/2');
+    // כפתור בתבנית מאושרת של מטא קפוא — הוא נשאר על הדומיין של ה-API.
+    assert.match(buildApiRedirectUrl('fp', '972500000000'), /^https:\/\/climbing-crm-api\./);
+  } finally {
+    if (front === undefined) delete process.env.FRONTEND_URL;
+    else process.env.FRONTEND_URL = front;
+  }
+});
+
+test('הכללים אוסרים לחזור על אותו קישור ועל אותו הסבר', async () => {
+  const { CUSTOMER_TOOL_RULES } = await import('./botToolTurn.js');
+  // שלוש הודעות ברצף שפתחו ב«📋 טופס השתתפות» עם אותו קישור — 6.8.2026.
+  assert.match(CUSTOMER_TOOL_RULES, /אל תשלח שוב ואל תחזור על ההסבר/);
+  assert.match(CUSTOMER_TOOL_RULES, /ענה על מה שנשאלת/);
+});
+
 // ─── כשהמודל לא זמין ─────────────────────────────────────────────────────────
 
 test('מודל שנופל אינו הופך לניחוש — הבוט אומר שהוא מעביר, ומעביר', async () => {

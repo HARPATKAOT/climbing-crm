@@ -67,5 +67,25 @@ export function buildRedirectUrl(path, ...segments) {
     .filter(Boolean)
     .map((s) => encodeURIComponent(s));
   if (!parts.length) return '';
+  // On the customer's own domain. The resolving still happens at the API — the
+  // site proxies `/api/*` there — but a parent reading the message sees the
+  // address they know. It used to read climbing-crm-api.onrender.com, which
+  // beside a request for a health form looks like something to be careful of.
+  // Every one of these paths has an `/api/<path>` twin on the API, and the old
+  // bare-host links keep resolving, so nothing already sent breaks.
+  return `${appPublicBase()}/api/${path}/${parts.join('/')}`;
+}
+
+/**
+ * The same link on the API host itself, for a button frozen inside an approved
+ * Meta template: the site domain may move, the API host may not.
+ */
+export function buildApiRedirectUrl(path, ...segments) {
+  const parts = segments
+    .flat()
+    .map((s) => String(s ?? '').trim())
+    .filter(Boolean)
+    .map((s) => encodeURIComponent(s));
+  if (!parts.length) return '';
   return `${apiRedirectBase()}/${path}/${parts.join('/')}`;
 }
