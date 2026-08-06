@@ -1094,7 +1094,7 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
       };
     }
 
-    const step = existing.firstName ? 'tools_parent_last_name' : 'tools_parent_full_name';
+    const step = existing.firstName ? 'tools_parent_last_name' : 'tools_parent_first_name';
     await setIntake(phone, {
       step,
       asked: true,
@@ -1105,25 +1105,33 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
       done: false,
       reply: existing.firstName
         ? `לפני שממשיכים, מה שם המשפחה שלך? יש לי כרגע רק את השם ${existing.firstName}.`
-        : 'לפני שממשיכים, מה השם הפרטי ושם המשפחה שלך?',
+        : 'לפני שממשיכים, מה השם הפרטי שלך?',
     };
   }
 
-  if (prior.step === 'tools_parent_full_name') {
-    const full = parseCustomerFullName(text);
-    if (!full) {
-      const words = customerNameWords(text);
-      if (words.length === 1) {
-        await setIntake(phone, {
-          ...prior,
-          step: 'tools_parent_last_name',
-          parentFirstName: words[0],
-        });
-        return { done: false, reply: `תודה ${words[0]}. ומה שם המשפחה?` };
-      }
-      return { done: false, reply: 'צריך בבקשה שם פרטי ושם משפחה בלבד.' };
+  // One field per question. Asking for both in one breath came back as a single
+  // line the system then had to split — and a customer who writes "כהן דנה",
+  // or a family name of two words, gets filed the wrong way round with nothing
+  // to show that it happened. `tools_parent_full_name` is the old step name,
+  // still answered here so a conversation caught mid-flow does not restart.
+  if (prior.step !== 'tools_parent_last_name') {
+    const words = customerNameWords(text);
+    if (!words.length) {
+      return { done: false, reply: 'רשמו בבקשה את השם הפרטי בלבד.' };
     }
-    const saved = await updateCustomerFullName(parent, full);
+    if (words.length === 1) {
+      await setIntake(phone, {
+        ...prior,
+        step: 'tools_parent_last_name',
+        parentFirstName: words[0],
+      });
+      return { done: false, reply: `תודה ${words[0]}. ומה שם המשפחה?` };
+    }
+    // Both names in one answer anyway — nobody is asked to repeat themselves.
+    const saved = await updateCustomerFullName(parent, {
+      firstName: words[0],
+      lastName: words.slice(1).join(' '),
+    });
     if (saved.error) return { done: false, reply: saved.error };
     await setIntake(phone, { step: 'done', name_capture: true });
     return {
@@ -1137,8 +1145,8 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
   if (!lastWords.length) return { done: false, reply: 'רשמו בבקשה את שם המשפחה בלבד.' };
   const firstName = String(prior.parentFirstName || existing.firstName || '').trim();
   if (!firstName) {
-    await setIntake(phone, { ...prior, step: 'tools_parent_full_name' });
-    return { done: false, reply: 'צריך בבקשה שם פרטי ושם משפחה.' };
+    await setIntake(phone, { ...prior, step: 'tools_parent_first_name' });
+    return { done: false, reply: 'מה השם הפרטי שלך?' };
   }
   const saved = await updateCustomerFullName(parent, {
     firstName,

@@ -20,7 +20,6 @@ import {
   newCheckoutToken,
   unpaidEquipmentItems,
   describeEquipmentItems,
-  computeEquipmentTotal,
 } from './equipmentService.js';
 import { upcomingPublicActivities, activityPublicSlug } from './publicSite.js';
 import {
@@ -1451,8 +1450,10 @@ export function buildCustomerTools({
       pack.שלב_3_תשלום_ציוד = equipment.קישור
         ? {
           קישור: equipment.קישור,
-          סכום: equipment.סכום,
           פריטים: equipment.פריטים,
+          // No sum here either — see getEquipmentPaymentLink. The key stayed
+          // behind after the amount was dropped, handing the model an empty
+          // field where a price used to be.
           הסבר: 'אפשר לשלם מראש, ולקבל את הציוד באימון הראשון',
         }
         : { מצב: 'אין חוב ציוד', הערה: equipment.הערה || '' };
