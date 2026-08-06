@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
-import { Send, Hash, History, Bot, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2, FileText, Bookmark, RotateCcw, Target } from 'lucide-react';
+import { Send, Hash, History, Bot, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2, FileText, Bookmark, RotateCcw, Target, Wrench, MessageSquareText, Clock, Headset, GraduationCap, ClipboardList } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { Modal } from './UI.jsx';
 import SegmentBuilder from './SegmentBuilder.jsx';
@@ -866,20 +866,22 @@ export default function Broadcasts({ parents, students, groups = [] }) {
             there for months without anybody noticing. */}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 4 }}>
           {[
-            { key: 'tools', label: 'כלים' },
-            { key: 'tone', label: 'טון וידע' },
-            { key: 'schedule', label: 'מתי עונה' },
-            { key: 'handoff', label: 'העברה לצוות' },
-            { key: 'sandbox', label: 'ארגז חול' },
-            { key: 'learning', label: 'אימון ולמידה' },
-            { key: 'journal', label: 'יומן פעולות' },
+            { key: 'tools', label: 'כלים', icon: Wrench },
+            { key: 'tone', label: 'טון וידע', icon: MessageSquareText },
+            { key: 'schedule', label: 'מתי עונה', icon: Clock },
+            { key: 'handoff', label: 'העברה לצוות', icon: Headset },
+            { key: 'sandbox', label: 'ארגז חול', icon: Sparkles },
+            { key: 'learning', label: 'אימון ולמידה', icon: GraduationCap },
+            { key: 'journal', label: 'יומן פעולות', icon: ClipboardList },
           ].map((t) => (
             <button
               key={t.key}
               type="button"
               className={`btn btn-sm ${botTab === t.key ? 'btn-primary' : 'btn-ghost'}`}
               onClick={() => setBotTab(t.key)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
             >
+              <t.icon size={14} />
               {t.label}
             </button>
           ))}
