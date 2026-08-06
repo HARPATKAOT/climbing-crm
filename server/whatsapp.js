@@ -48,7 +48,7 @@ import {
   asksAboutTrainer,
   buildPriceReply,
   formatEntryPricesReply,
-  enrichmentFeeFromSettings,
+  resolveEnrichmentFee,
   formatGroupChatReply,
   formatGroupDetailsReply,
   formatOpeningHoursReply,
@@ -829,7 +829,7 @@ async function buildHeuristicReply(incomingText, settings = {}, { phone = '', st
     const priceReply = buildPriceReply({
       groups: exactGroups,
       equipmentPrices: await loadEquipmentPrices(),
-      enrichmentFee: enrichmentFeeFromSettings(s),
+      enrichmentFee: await resolveEnrichmentFee(s),
       text: raw,
       pricelist: db.get('pricelist') || [],
     });

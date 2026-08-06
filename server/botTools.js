@@ -40,7 +40,7 @@ import {
 import {
   loadEquipmentPrices,
   loadEquipmentInfo,
-  enrichmentFeeFromSettings,
+  resolveEnrichmentFee,
   entryProductsFromPricelist,
   formatOpeningHoursReply,
   formatPublicEventsReply,
@@ -860,7 +860,7 @@ export function buildCustomerTools({
           ? entries
           : { הערה: 'מחיר כניסה בודדת אינו מוגדר במחירון — אין לנקוב בסכום, יש להעביר לצוות' };
       }
-      const fee = enrichmentFeeFromSettings(settings);
+      const fee = await resolveEnrichmentFee(settings);
       payload.דמי_העשרה = fee > 0
         ? fee
         : { הערה: 'דמי ההעשרה אינם מוגדרים — אין לנקוב בסכום' };

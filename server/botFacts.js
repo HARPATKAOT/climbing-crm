@@ -383,8 +383,6 @@ export function buildPriceReply({
  * that has not filled the field in yet.
  */
 export function enrichmentFeeFromSettings(settings = {}) {
-  // The owner-facing field lives with the equipment settings, where the
-  // explanation of what the fee buys sits beside it.
   const field = Number(settings.enrichment_fee ?? settings.aiEnrichmentFee);
   if (Number.isFinite(field) && field >= 0) return field;
 
@@ -392,6 +390,22 @@ export function enrichmentFeeFromSettings(settings = {}) {
   // Thousands separators first: "1,100" must not be read as "100".
   const match = facts.match(/דמי\s*העשרה[^0-9]{0,20}(\d{1,3}(?:,\d{3})+|\d{2,5})/);
   return match ? Number(String(match[1]).replace(/,/g, '')) : 0;
+}
+
+/**
+ * The fee as the owner sees it: the field on the Equipment screen first.
+ *
+ * That field is saved with the equipment settings, not with the bot settings —
+ * so reading `settings.enrichment_fee` off the bot settings never found it, and
+ * the amount kept coming from the prose line in the business facts. The moment
+ * that line was deleted (it is already stated on the Equipment screen), one
+ * tool still answered with the fee and the other answered "not configured".
+ */
+export async function resolveEnrichmentFee(settings = {}) {
+  const info = await loadEquipmentInfo().catch(() => null);
+  const field = Number(info?.enrichment_fee);
+  if (Number.isFinite(field) && field > 0) return field;
+  return enrichmentFeeFromSettings(settings);
 }
 
 // ─── קישורים לקבוצה ──────────────────────────────────────────────────────────

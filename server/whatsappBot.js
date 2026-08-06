@@ -1103,9 +1103,12 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
     });
     return {
       done: false,
+      // These lines run before the model, so the system prompt cannot set their
+      // tone — it has to be written here. Somebody who just said hello is being
+      // asked a question, not filling in a form.
       reply: existing.firstName
-        ? `לפני שממשיכים, מה שם המשפחה שלך? יש לי כרגע רק את השם ${existing.firstName}.`
-        : 'לפני שממשיכים, מה השם הפרטי שלך?',
+        ? `היי ${existing.firstName} 🙂 מה שם המשפחה שלך?`
+        : 'היי 🙂 מה השם הפרטי שלך?',
     };
   }
 
@@ -1117,7 +1120,7 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
   if (prior.step !== 'tools_parent_last_name') {
     const words = customerNameWords(text);
     if (!words.length) {
-      return { done: false, reply: 'רשמו בבקשה את השם הפרטי בלבד.' };
+      return { done: false, reply: 'סליחה, לא הבנתי 🙂 מה השם הפרטי שלך?' };
     }
     if (words.length === 1) {
       await setIntake(phone, {
@@ -1125,7 +1128,7 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
         step: 'tools_parent_last_name',
         parentFirstName: words[0],
       });
-      return { done: false, reply: `תודה ${words[0]}. ומה שם המשפחה?` };
+      return { done: false, reply: `נעים מאוד ${words[0]} 🙂 ומה שם המשפחה?` };
     }
     // Both names in one answer anyway — nobody is asked to repeat themselves.
     const saved = await updateCustomerFullName(parent, {
@@ -1142,11 +1145,11 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
   }
 
   const lastWords = customerNameWords(text);
-  if (!lastWords.length) return { done: false, reply: 'רשמו בבקשה את שם המשפחה בלבד.' };
+  if (!lastWords.length) return { done: false, reply: 'סליחה, לא הבנתי 🙂 מה שם המשפחה?' };
   const firstName = String(prior.parentFirstName || existing.firstName || '').trim();
   if (!firstName) {
     await setIntake(phone, { ...prior, step: 'tools_parent_first_name' });
-    return { done: false, reply: 'מה השם הפרטי שלך?' };
+    return { done: false, reply: 'היי 🙂 מה השם הפרטי שלך?' };
   }
   const saved = await updateCustomerFullName(parent, {
     firstName,

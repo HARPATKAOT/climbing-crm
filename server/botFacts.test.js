@@ -10,6 +10,7 @@ import {
   asksAboutPrices,
   buildPriceReply,
   enrichmentFeeFromSettings,
+  resolveEnrichmentFee,
   formatGroupChatReply,
   formatGroupDetailsReply,
   formatOpeningHoursReply,
@@ -151,6 +152,18 @@ test('the enrichment fee is read from the business facts the owner edits', () =>
     110
   );
   assert.equal(enrichmentFeeFromSettings({ aiBusinessFacts: 'כתובת: השקד 1' }), 0);
+});
+
+test('the fee comes from the equipment screen, and the prose is only a fallback', async () => {
+  // No equipment settings to read here, which is exactly the fallback case:
+  // an account that still keeps the number inside the business facts.
+  assert.equal(
+    await resolveEnrichmentFee({ aiBusinessFacts: 'דמי העשרה: 110 ₪' }),
+    110
+  );
+  // The line was deleted because the amount is on the equipment screen — and
+  // with nothing to read there either, the bot says nothing rather than 0 ₪.
+  assert.equal(await resolveEnrichmentFee({ aiBusinessFacts: 'כתובת: השקד 1' }), 0);
 });
 
 // ─── מדריך וגודל קבוצה ───────────────────────────────────────────────────────
