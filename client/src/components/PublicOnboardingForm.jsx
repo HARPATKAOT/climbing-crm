@@ -2150,7 +2150,12 @@ export default function PublicOnboardingForm() {
     : 0;
   // הכפתור אומר על מי ההצהרה. "המשך להצהרת בריאות" השאיר את ההורה לנחש על מי
   // מהילדים שמילא עומדים לשאול — השמות הם התשובה.
-  const healthChildNames = kids.map((kid) => String(kid.name || '').trim()).filter(Boolean);
+  // First names on the button: „דלק איל וראם איל” is a list of records, and the
+  // question it answers — whose declaration comes next — is answered by „דלק
+  // וראם”.
+  const healthChildNames = kids
+    .map((kid) => String(kid.name || '').trim().split(/\s+/)[0])
+    .filter(Boolean);
   const healthNamesText = healthChildNames.length > 1
     ? `${healthChildNames.slice(0, -1).join(', ')} ו${healthChildNames[healthChildNames.length - 1]}`
     : (healthChildNames[0] || '');
@@ -2699,8 +2704,7 @@ export default function PublicOnboardingForm() {
                           {child.onFileHealthSignedAt
                             ? `ההצהרה מ-${formatSignedDay(child.onFileHealthSignedAt)} כבר אינה בתוקף. `
                             : `ל${child.name?.trim() || 'משתתף/ת זה'} עדיין אין ${declarationContextLabel} חתומה. `}
-                          הפרטים כבר קיימים במערכת — אפשר למלא עכשיו.
-                          {' '}אם {child.name?.trim() || 'המשתתף/ת'} כבר לא מטפס/ת, אפשר לדלג — בלי הצהרה בתוקף לא נכנסים לפעילות.
+                          אם {child.name?.trim() || 'המשתתף/ת'} כבר לא מטפס/ת, אפשר לדלג — בלי הצהרה בתוקף לא נכנסים לפעילות.
                         </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                           <button
@@ -3186,7 +3190,7 @@ export default function PublicOnboardingForm() {
                 {error && <ErrorBox message={error} />}
                 <button type="button" className="event-primary" style={{ marginTop: 16 }} onClick={advanceHealthOrSubmit}>
                   {childHealthIndex < kids.length - 1
-                    ? `המשך להצהרת הבריאות של ${kids[childHealthIndex + 1]?.name || 'המשתתף/ת הבא/ה'}`
+                    ? `המשך להצהרת הבריאות של ${String(kids[childHealthIndex + 1]?.name || '').trim().split(/\s+/)[0] || 'המשתתף/ת הבא/ה'}`
                     : (sharedConfirmations.length
                       ? `המשך ל${sectionTitles.confirm}`
                       : 'המשך לאישור וחתימה')}
