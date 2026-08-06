@@ -12,6 +12,7 @@ import { groupMatchesGradeLetter } from './groupBands.js';
 import { getSortedGroupDays, groupMeetsOnDay } from './attendanceUtils.js';
 import { studentsForParent, updateCustomerFullName } from './whatsappBot.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
+import { participationEligibility } from './participationEligibility.js';
 import { healthExpiryDate, declarationSignedAt } from './healthValidity.js';
 import { appPublicBase, buildRedirectUrl } from './publicLinks.js';
 import { persistCore } from './db.js';
@@ -729,10 +730,22 @@ function requireDeclaredChild(parent, childName) {
       error: `${student.name || 'המתאמן'} כבר רשום לחוג — הוספה או העברה בין קבוצות נעשית מול הצוות`,
     };
   }
-  if (!findLatestValidDeclaration(db, { studentId: student.id })) {
+  // Which document is missing decides what the customer is asked to do: a
+  // health renewal is a short form, the full intake is not. Saying "the
+  // participation form was not received" to somebody whose approval is signed
+  // sends them back through everything they already did.
+  const documents = participationEligibility(db, { studentId: student.id });
+  if (!documents.eligible) {
+    const healthOnly = documents.waiver.state === 'valid';
     return {
-      error: `ל${student.name || 'מתאמן'} אין ${FORM_SHORT} בתוקף — קודם חותמים, ורק אז משבצים`,
+      error: healthOnly
+        ? `ל${student.name || 'מתאמן'} חסרה הצהרת בריאות בתוקף — אישור ההשתתפות כבר חתום. קודם מחדשים את הצהרת הבריאות, ורק אז משבצים`
+        : `ל${student.name || 'מתאמן'} אין ${FORM_SHORT} בתוקף — קודם חותמים, ורק אז משבצים`,
       צריך_הצהרה: true,
+      חסר: healthOnly ? 'הצהרת בריאות' : FORM_SHORT,
+      ...(documents.health.state === 'blocked'
+        ? { הערה: 'ההשתתפות מוקפאת עד אישור רפואי — יש להעביר לצוות' }
+        : {}),
     };
   }
   return { student };
@@ -1128,6 +1141,15 @@ export function buildCustomerTools({
       };
     },
 
+    /**
+     * The form is two documents, and they expire apart: the health declaration
+     * runs out every August, the participation approval is signed once.
+     *
+     * This used to answer with one flag read off the health record alone, so a
+     * trainee whose approval was signed and whose health declaration had been
+     * removed was told "no signed participation form has been received" — the
+     * wrong document, and a link to fill in everything again.
+     */
     getHealthDeclarations: async () => {
       const link = healthFormUrl(phone);
       if (!parent) return { מתאמנים: [], קישור_למילוי: link, הערה: 'אין כרטיס לקוח' };
@@ -1136,21 +1158,36 @@ export function buildCustomerTools({
         return { מתאמנים: [], קישור_למילוי: link, הערה: 'אין מתאמנים בכרטיס' };
       }
       const rows = kids.map((student) => {
-        const declaration = findLatestValidDeclaration(db, { studentId: student.id });
-        const expiry = declaration ? healthExpiryDate(declarationSignedAt(declaration)) : null;
+        const state = participationEligibility(db, { studentId: student.id });
+        const expiry = state.health.expires_at ? new Date(state.health.expires_at) : null;
         return {
           שם: student.name || '',
-          טופס_השתתפות_בתוקף: !!declaration,
+          הצהרת_בריאות_בתוקף: state.health.state === 'valid',
           בתוקף_עד: expiry ? expiry.toLocaleDateString('he-IL') : '',
+          אישור_השתתפות_חתום: state.waiver.state === 'valid',
+          // Only the health part is missing: renewing it is a short form, not
+          // the whole intake again.
+          קישור_למילוי: state.eligible
+            ? ''
+            : (state.waiver.state === 'valid'
+              ? healthFormUrl(phone, student.id, 'health-renewal')
+              : link),
+          ...(state.health.state === 'blocked'
+            ? { הערת_בריאות: 'ההשתתפות מוקפאת עד אישור רפואי — יש להעביר לצוות' }
+            : {}),
         };
       });
-      return {
-        מתאמנים: rows,
-        קישור_למילוי: link,
-        הערה: rows.every((r) => r.טופס_השתתפות_בתוקף)
-          ? 'לכולם יש הצהרה בתוקף — אין צורך לשלוח קישור'
-          : 'יש מתאמן בלי הצהרה בתוקף — יש לשלוח לו את הקישור',
-      };
+      const missingHealthOnly = rows.filter((r) => !r.הצהרת_בריאות_בתוקף && r.אישור_השתתפות_חתום);
+      const missingBoth = rows.filter((r) => !r.אישור_השתתפות_חתום);
+      const note = [];
+      if (missingHealthOnly.length) {
+        note.push(`ל${missingHealthOnly.map((r) => r.שם).join(', ')} חסרה הצהרת בריאות בלבד — אישור ההשתתפות כבר חתום. יש לומר בדיוק מה חסר ולשלוח את קישור חידוש הבריאות שלו.`);
+      }
+      if (missingBoth.length) {
+        note.push(`ל${missingBoth.map((r) => r.שם).join(', ')} חסר ${FORM_SHORT} — יש לשלוח את הקישור שלו.`);
+      }
+      if (!note.length) note.push('לכולם יש מסמכים בתוקף — אין צורך לשלוח קישור');
+      return { מתאמנים: rows, הערה: note.join(' ') };
     },
 
     getEquipmentPaymentLink: async ({ childName } = {}) => {
@@ -1401,17 +1438,24 @@ export function buildCustomerTools({
       const student = named
         ? kids.find((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
         : (kids.length === 1 ? kids[0] : null);
-      const declaration = student
-        ? findLatestValidDeclaration(db, { studentId: student.id })
+      const documents = student
+        ? participationEligibility(db, { studentId: student.id })
         : null;
+      // Same split as getHealthDeclarations: a missing health declaration
+      // beside a signed approval is a renewal, not the whole intake again.
+      const healthOnly = !!documents && !documents.eligible && documents.waiver.state === 'valid';
 
       const pack = {
-        שלב_1_הצהרת_בריאות: declaration
+        שלב_1_הצהרת_בריאות: documents?.eligible
           ? { מצב: 'נחתמה' }
           : {
-            מצב: 'חסרה',
-            קישור: healthFormUrl(phone),
-            הסבר: `זה השלב הראשון. ${FORM_FULL}. ${FORM_PURPOSE}`,
+            מצב: healthOnly ? 'הצהרת הבריאות פגה או הוסרה' : 'חסרה',
+            קישור: healthOnly
+              ? healthFormUrl(phone, student.id, 'health-renewal')
+              : healthFormUrl(phone),
+            הסבר: healthOnly
+              ? 'אישור ההשתתפות כבר חתום — צריך רק לחדש את הצהרת הבריאות.'
+              : `זה השלב הראשון. ${FORM_FULL}. ${FORM_PURPOSE}`,
           },
       };
 

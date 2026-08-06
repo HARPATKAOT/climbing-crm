@@ -28,6 +28,7 @@ const SCENARIO_COLLECTIONS = [
   'groups',
   'students',
   'health_declarations',
+  'participation_waivers',
   'activities',
   'activity_registrations',
   INTEREST_COLLECTION,
@@ -104,12 +105,40 @@ function childYotam(patch = {}) {
   };
 }
 
+/**
+ * A signed health declaration. It only counts once it carries a signature —
+ * the same rule the CRM screens read it by.
+ */
 function declarationFor(studentId, patch = {}) {
   return {
     id: `hd-${studentId}`,
     studentId,
     signedDate: SIGNED_TODAY,
+    signature_url: 'https://example.com/sig.png',
     ...patch,
+  };
+}
+
+/**
+ * The other half of the form. Health expires every year and the approval does
+ * not, so "has a form" means both of these — see the two-document tests below.
+ */
+function waiverFor(studentId, patch = {}) {
+  return {
+    id: `pw-${studentId}`,
+    studentId,
+    scope: 'wall',
+    signedDate: SIGNED_TODAY,
+    signature_url: 'https://example.com/sig.png',
+    ...patch,
+  };
+}
+
+/** Both documents in force, which is what "signed the form" means. */
+function signedFormFor(studentIds = []) {
+  return {
+    health_declarations: studentIds.map((id) => declarationFor(id)),
+    participation_waivers: studentIds.map((id) => waiverFor(id)),
   };
 }
 
@@ -250,8 +279,8 @@ test('טופס שנחתם ב-2023 אינו טופס בתוקף — אותה תש
 
     // ואותה עובדה נמסרת גם כשהמודל שואל ישירות מי חתום.
     const declarations = await tools.getHealthDeclarations();
-    assert.equal(declarations.מתאמנים[0].טופס_השתתפות_בתוקף, false);
-    assert.match(declarations.הערה, /לשלוח לו את הקישור/);
+    assert.equal(declarations.מתאמנים[0].הצהרת_בריאות_בתוקף, false);
+    assert.match(declarations.הערה, /חסר/);
   });
 });
 
@@ -261,7 +290,7 @@ test('ההורה אומר כיתה ה׳ והכרטיס אומר בן 5 — לא 
   await withSeed({
     groups: [GROUP_HV],
     students: [childYotam({ birthDate: '2021-03-01' })],
-    health_declarations: [declarationFor('s-yotam')],
+    ...signedFormFor(['s-yotam']),
   }, async () => {
     const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
     const result = await tools.startSignup({ childName: 'יותם', grade: 'ה' });
@@ -279,7 +308,7 @@ test('מתאמן רשום — לא מעבירים קבוצה ולא מבטלים
   await withSeed({
     groups: [GROUP_GD, GROUP_HV],
     students: [childYotam({ status: 'registered', groupId: GROUP_GD.id })],
-    health_declarations: [declarationFor('s-yotam')],
+    ...signedFormFor(['s-yotam']),
   }, async () => {
     assert.equal(isRegisteredTrainee(student('s-yotam')), true);
     const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
@@ -302,7 +331,7 @@ test('שיבוץ רך: הכרטיס עובר לממתין להרשמה, נקבע
   await withSeed({
     groups: [GROUP_GD],
     students: [childYotam()],
-    health_declarations: [declarationFor('s-yotam')],
+    ...signedFormFor(['s-yotam']),
   }, async () => {
     const notices = [];
     const tools = buildCustomerTools({
@@ -343,7 +372,7 @@ test('שיבוץ פעמיים באותה שיחה אינו יוצר שתי תז�
       birthDate: '2015-04-01',
       groupId: null,
     }],
-    health_declarations: [declarationFor('s-yotam'), declarationFor('s-alma')],
+    ...signedFormFor(['s-yotam', 's-alma']),
   }, async () => {
     const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
     await tools.startSignup({ childName: 'יותם', grade: 'ג' });
@@ -359,7 +388,7 @@ test('«תוציאו אותו מהקבוצה» — השיבוץ מוסר, והט
   await withSeed({
     groups: [GROUP_GD],
     students: [childYotam({ status: 'pending_signup', groupId: GROUP_GD.id })],
-    health_declarations: [declarationFor('s-yotam')],
+    ...signedFormFor(['s-yotam']),
   }, async () => {
     const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
     const result = await tools.cancelSignup({ childName: 'יותם' });
@@ -386,7 +415,7 @@ test('«תוציאו את הילד» כששני ילדים משובצים — ה
         birthDate: '2015-04-01',
       },
     ],
-    health_declarations: [declarationFor('s-yotam'), declarationFor('s-alma')],
+    ...signedFormFor(['s-yotam', 's-alma']),
   }, async () => {
     const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
     const result = await tools.cancelSignup({});
@@ -418,7 +447,7 @@ test('«תרשמו אותנו לטיול» פעמיים — מתעניין אח�
   await withSeed({
     activities: [TRIP],
     students: [childYotam()],
-    health_declarations: [declarationFor('s-yotam')],
+    ...signedFormFor(['s-yotam']),
   }, async () => {
     const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
 
@@ -484,7 +513,7 @@ test('קישור תשלום ציוד: אילו פריטים חסרים, בלי �
   await withSeed({
     groups: [GROUP_GD],
     students: [childYotam()],
-    health_declarations: [declarationFor('s-yotam')],
+    ...signedFormFor(['s-yotam']),
     student_equipment: [
       { id: 'se-1', student_id: 's-yotam', item_type: 'shoes', payment_status: 'unpaid' },
       { id: 'se-2', student_id: 's-yotam', item_type: 'shirt', payment_status: 'unpaid', shirt_size: 'S' },
@@ -512,7 +541,7 @@ test('חבילת ההרשמה: שלושה שלבים בסדר, ושלב הציו
   await withSeed({
     groups: [GROUP_GD],
     students: [childYotam()],
-    health_declarations: [declarationFor('s-yotam')],
+    ...signedFormFor(['s-yotam']),
     student_equipment: [
       { id: 'se-1', student_id: 's-yotam', item_type: 'shoes', payment_status: 'unpaid' },
     ],
@@ -538,7 +567,7 @@ test('מתג השיבוץ כבוי — הכלי לא נמסר למודל, וגם
   await withSeed({
     groups: [GROUP_GD],
     students: [childYotam()],
-    health_declarations: [declarationFor('s-yotam')],
+    ...signedFormFor(['s-yotam']),
   }, async () => {
     const settings = { [capabilitySettingKey('placement')]: false };
     const seenDeclarations = [];
@@ -573,7 +602,7 @@ test('שיבוץ אמיתי דרך תור מלא: הכלי כותב, והתשו�
   await withSeed({
     groups: [GROUP_GD],
     students: [childYotam()],
-    health_declarations: [declarationFor('s-yotam')],
+    ...signedFormFor(['s-yotam']),
   }, async () => {
     const turn = await runCustomerToolTurn({
       incomingText: 'אפשר לשבץ את יותם לקבוצה של יום א׳?',
@@ -597,7 +626,7 @@ test('המודל אומר «שיבצתי» בלי לקרוא לכלי — הלק
   await withSeed({
     groups: [GROUP_GD],
     students: [childYotam()],
-    health_declarations: [declarationFor('s-yotam')],
+    ...signedFormFor(['s-yotam']),
   }, async () => {
     const turn = await runCustomerToolTurn({
       incomingText: 'תשבצו את יותם',
@@ -610,6 +639,62 @@ test('המודל אומר «שיבצתי» בלי לקרוא לכלי — הלק
     assert.equal(turn.reason, 'unverified_action');
     assert.doesNotMatch(turn.text, /שיבצתי/);
     assert.equal(student('s-yotam').status, 'health_signed');
+  });
+});
+
+// ─── שני המסמכים ─────────────────────────────────────────────────────────────
+
+/** אישור השתתפות חתום — הצהרת הבריאות היא זו שנמחקה. */
+function signedWaiver(studentId) {
+  return {
+    id: `pw-${studentId}`,
+    studentId,
+    scope: 'wall',
+    signedDate: SIGNED_TODAY,
+    signature_url: 'https://example.com/sig.png',
+  };
+}
+
+test('חסרה רק הצהרת בריאות — לא אומרים «לא התקבל טופס השתתפות»', async () => {
+  await withSeed({
+    groups: [GROUP_GD],
+    students: [childYotam()],
+    health_declarations: [],
+    participation_waivers: [signedWaiver('s-yotam')],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const docs = await tools.getHealthDeclarations();
+    const [row] = docs.מתאמנים;
+
+    assert.equal(row.אישור_השתתפות_חתום, true);
+    assert.equal(row.הצהרת_בריאות_בתוקף, false);
+    assert.match(docs.הערה, /חסרה הצהרת בריאות בלבד/);
+    // חידוש בריאות הוא טופס קצר, לא כל תהליך הקליטה מחדש.
+    assert.match(row.קישור_למילוי, /health-renewal$/);
+
+    // וגם השיבוץ אומר בדיוק מה חסר.
+    const blocked = await tools.startSignup({ childName: 'יותם', grade: 'ג' });
+    assert.equal(blocked.חסר, 'הצהרת בריאות');
+    assert.match(blocked.error, /אישור ההשתתפות כבר חתום/);
+    assert.equal(student('s-yotam').groupId, null);
+  });
+});
+
+test('אין אף מסמך — זה טופס ההשתתפות המלא, עם הקישור המלא', async () => {
+  await withSeed({
+    groups: [GROUP_GD],
+    students: [childYotam({ status: 'lead_new' })],
+    health_declarations: [],
+    participation_waivers: [],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const docs = await tools.getHealthDeclarations();
+    const [row] = docs.מתאמנים;
+
+    assert.equal(row.אישור_השתתפות_חתום, false);
+    assert.equal(row.הצהרת_בריאות_בתוקף, false);
+    assert.doesNotMatch(row.קישור_למילוי, /health-renewal/);
+    assert.match(docs.הערה, /חסר טופס/);
   });
 });
 
@@ -682,7 +767,7 @@ test('כרטיס המשפחה מוסר גיל מחושב, ולא מציג ממת
         birthDate: '2015-04-01',
       },
     ],
-    health_declarations: [declarationFor('s-yotam')],
+    ...signedFormFor(['s-yotam']),
   }, async () => {
     const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
     const card = await tools.getFamilyCard();
