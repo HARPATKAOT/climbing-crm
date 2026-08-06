@@ -3762,6 +3762,42 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 // a family may still need the trip or activity form.
                 const canSendForm = !!parent?.phone;
 
+                /**
+                 * The sealed evidence chain of one signed document.
+                 *
+                 * The PDF shows what was signed; this shows that the signing
+                 * happened — which screens were open and for how long, when each
+                 * box was ticked, when the end of the waiver was on screen, the
+                 * phone verification, the address it came from, and a seal over
+                 * all of it. It is what answers a challenge to the signature.
+                 */
+                const downloadEvidenceChain = async (documentId, label) => {
+                  if (!documentId) return;
+                  setHealthSendMsg('');
+                  try {
+                    const res = await fetch(`/api/signature-evidence?documentId=${encodeURIComponent(documentId)}`);
+                    if (!res.ok) throw new Error('evidence fetch failed');
+                    const data = await res.json();
+                    if (!data?.events?.length) {
+                      setHealthSendMsg('אין רשומת ראיות למסמך הזה — הוא נחתם לפני שהתיעוד הופעל');
+                      return;
+                    }
+                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `evidence-${label || documentId}.json`;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    URL.revokeObjectURL(url);
+                    setHealthSendMsg('קובץ הראיות הורד למחשב');
+                  } catch (err) {
+                    console.error(err);
+                    setHealthSendMsg('שגיאה בהורדת רשומת הראיות');
+                  }
+                };
+
                 const handleDownloadDoc = async (doc) => {
                   const source = doc.virtualData || healthDecl;
                   if (doc.isVirtual || (!doc.id || String(doc.id).startsWith('virtual_'))) {
@@ -4160,6 +4196,26 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                     >
                                       <Download size={13} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
                                     </button>
+                                    {!clearanceRow && (
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-xs"
+                                        style={{
+                                          width: 32, height: 32, padding: 0, boxSizing: 'border-box',
+                                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                        }}
+                                        title="הורדת רשומת הראיות של החתימה"
+                                        disabled={busy}
+                                        onClick={() => downloadEvidenceChain(
+                                          participationRow
+                                            ? (waiver?.id || doc.waiverId || doc.id)
+                                            : (sourceDeclaration?.id || doc.declarationId || doc.id),
+                                          `${student?.name || ''}-${title}`.trim().replace(/\s+/g, '-')
+                                        )}
+                                      >
+                                        <ShieldCheck size={13} />
+                                      </button>
+                                    )}
                                     <button
                                       type="button"
                                       className="btn btn-ghost btn-xs"

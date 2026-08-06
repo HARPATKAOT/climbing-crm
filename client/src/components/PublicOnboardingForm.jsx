@@ -452,6 +452,14 @@ function ExistingDeclarationSummary({ participant, questions, templateSlug, vari
  */
 function PhoneCodeGate({ otp, phone, onCodeChange, onVerify, onResend, onEditPhone }) {
   const waitSeconds = Math.max(0, Math.ceil((otp.cooldownUntil - Date.now()) / 1000));
+  // The code screen opens because the signer pressed "send me a code". Typing it
+  // is the only thing left to do here, so the cursor is already in the field
+  // rather than waiting to be put there.
+  const codeRef = useRef(null);
+  useEffect(() => {
+    if (otp.sendFailed) return;
+    codeRef.current?.focus();
+  }, [otp.sendFailed]);
   return (
     <div style={{
       background: 'var(--form-accent-soft, rgba(249,115,22,.1))',
@@ -470,7 +478,9 @@ function PhoneCodeGate({ otp, phone, onCodeChange, onVerify, onResend, onEditPho
 
       {!otp.sendFailed && (
         <input
+          ref={codeRef}
           value={otp.code}
+          autoFocus
           onChange={(e) => onCodeChange(e.target.value.replace(/\D/g, '').slice(0, 6))}
           inputMode="numeric"
           autoComplete="one-time-code"
@@ -2276,11 +2286,16 @@ export default function PublicOnboardingForm() {
               ? ` — ${currentChild.name}`
               : ''}
           </h2>
+          {step === 1 && !identityReady && (
+            <p style={{ fontSize: 13.5, lineHeight: 1.7 }}>
+              טופס זה נדרש להשתתפות בפעילות טיפוס בקיר בועז
+            </p>
+          )}
           {step === 2 && <p>בני המשפחה המשתתפים</p>}
-          {/* Same progress strip as the event and shop pages. */}
-          <div className="event-progress-label">
-            שלב {displayStep} מתוך {totalStepsLabel}
-          </div>
+          {/* A bar, and no number. How many screens there are depends on how
+              many participants are added and on which of them already hold a
+              declaration in force — neither is known on the first screen, so a
+              total printed there is a guess that later turns out wrong. */}
           <div
             className="event-progress"
             style={{
@@ -2299,11 +2314,13 @@ export default function PublicOnboardingForm() {
               />
             ) : (
               <>
-                <p style={{ fontSize: 13, color: 'var(--text-3)', marginTop: -6, marginBottom: 12, lineHeight: 1.45 }}>
-                  {identityReady
-                    ? 'אפשר לעדכן את הפרטים. שינוי תעודת הזהות או הטלפון יחייב אימות מחדש.'
-                    : 'נזהה את התיק רק לאחר אימות הטלפון. לפני האימות לא יוצגו פרטי משפחה.'}
-                </p>
+                {/* לפני האימות אין מה להסביר — יש שני שדות וכפתור שאומר מה הוא
+                    עושה. ההסבר נשאר רק אחרי האימות, כשיש פרטים שאפשר לשנות. */}
+                {identityReady && (
+                  <p style={{ fontSize: 13, color: 'var(--text-3)', marginTop: -6, marginBottom: 12, lineHeight: 1.45 }}>
+                    אפשר לעדכן את הפרטים. שינוי תעודת הזהות או הטלפון יחייב אימות מחדש.
+                  </p>
+                )}
                 <div className="form-group">
                   <label>תעודת זהות *</label>
                   <input
