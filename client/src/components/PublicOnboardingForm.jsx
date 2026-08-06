@@ -2477,7 +2477,17 @@ export default function PublicOnboardingForm() {
               </div>
             )}
 
-            <div className="section-title" style={{ marginTop: 22 }}>הזדמנות לערוך את העדפות הדיוור שלך</div>
+            {/* אוויר וקו מפריד: מכאן ואילך זה כבר לא מילוי פרטים אלא בחירה
+                שאפשר גם לא לעשות. */}
+            <div
+              className="section-title"
+              style={{
+                marginTop: 38, paddingTop: 26,
+                borderTop: '1px solid rgba(255,255,255,0.1)',
+              }}
+            >
+              הזדמנות לערוך את העדפות הדיוור שלך
+            </div>
             <p style={{ fontSize: 13, color: 'var(--text-3)', marginTop: -6, marginBottom: 12, lineHeight: 1.45 }}>
               ההרשמה לדיוור היא פר משפחה
             </p>
