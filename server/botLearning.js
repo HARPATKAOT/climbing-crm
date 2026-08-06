@@ -241,6 +241,40 @@ export function formatLearnedRepliesForPrompt(examples = []) {
   ].join('\n');
 }
 
+const MEDIA_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker', 'reaction']);
+
+/**
+ * Is this inbound message a question a reply could ever be learned from?
+ *
+ * A 🙏 reaction reached the queue as "the customer's question", next to a staff
+ * reply of "אוי, שירגיש טוב ❤️" — approving that would teach the bot to answer
+ * an emoji with a get-well message. Reactions are conversation metadata, and a
+ * photo is something the model never even sees.
+ */
+function isAnswerableQuestion(message) {
+  const type = String(message?.message_type || '').toLowerCase();
+  if (MEDIA_TYPES.has(type)) return false;
+  const text = String(message?.message || message?.body || '').trim();
+  if (!text) return false;
+  if (/^ריאקציה:/u.test(text)) return false;
+  // The stored placeholder for media that arrived with no caption.
+  if (/^\[[^\]\r\n]+\]$/u.test(text)) return false;
+  return true;
+}
+
+/**
+ * The last thing the bot actually answered before it handed over. The handoff
+ * acknowledgement itself ("מעבירים אתכם לצוות") is not an answer — it is the
+ * bot saying it has none, and it is written with `source: 'bot_control'`.
+ */
+function lastBotAnswer(messages, handoffAt) {
+  const answer = [...messages].reverse().find((m) => m.direction === 'outbound'
+    && m.is_ai
+    && String(m.source || '') !== 'bot_control'
+    && Date.parse(m.created_at || '') <= handoffAt + 60_000);
+  return answer ? String(answer.message || answer.body || '') : '';
+}
+
 /**
  * After a handoff, when staff sends a free-text reply, propose that Q→A pair
  * into the learning queue (still needs approval).
@@ -269,7 +303,9 @@ export async function proposeFromHandoffStaffReply({
 
   const inbound = [...messages]
     .reverse()
-    .find((m) => m.direction === 'inbound' && Date.parse(m.created_at || '') <= handoffAt + 60_000);
+    .find((m) => m.direction === 'inbound'
+      && Date.parse(m.created_at || '') <= handoffAt + 60_000
+      && isAnswerableQuestion(m));
   if (!inbound) return { ok: false, skipped: true, reason: 'no_inbound' };
 
   return recordFeedback({
@@ -280,7 +316,10 @@ export async function proposeFromHandoffStaffReply({
     phone: normalized,
     rating: 'down',
     alternative: staffText,
-    replyExcerpt: '',
+    // What the bot said before it gave up, so the approval screen can show
+    // "instead of this — say that". Without it the card asked staff to judge a
+    // replacement for an answer they could not see.
+    replyExcerpt: lastBotAnswer(messages, handoffAt),
     inboundExcerpt: inbound.message || inbound.body || '',
     note: 'הוצע אוטומטית מתשובת צוות אחרי העברה',
     createdBy,
