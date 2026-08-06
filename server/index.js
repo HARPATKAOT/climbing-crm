@@ -216,6 +216,7 @@ import {
   questionLabel,
   questionsForSigner,
   requiresClearance,
+  signsAsAdultFemale,
 } from './healthQuestions.js';
 import { EVENT_KINDS, normalizeActivityType } from './eventKinds.js';
 import { declarationTemplateForActivity, templateActivityTypes } from './activityDeclaration.js';
@@ -258,6 +259,7 @@ import {
 } from './cancellationPolicies.js';
 import { passPunchBlockReason } from './passPunchEligibility.js';
 import { runHealthExpiryReminders, runParticipationDocumentReminders } from './participationReminders.js';
+import { OPERATIONAL_LIST, migrateToTwoBroadcastLists } from './broadcastListMigration.js';
 import {
   enrichPricelistItem,
   buildPassFromItem,
@@ -13439,7 +13441,10 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
   res.status(201).json({ success: true, record, student, parent });
 });
 
-const REQUIRED_BROADCAST_LIST = 'classes';
+// The operational list is what a customer must be on to be served at all —
+// schedule changes, cancellations, reminders. Marketing is the other list, and
+// it is never forced.
+const REQUIRED_BROADCAST_LIST = OPERATIONAL_LIST;
 
 function findParentForOnboard({ parentId, phone, studentId, idNumber }) {
   const parents = db.get('parents') || [];
@@ -14157,6 +14162,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
         ? (templateHealthQuestions.length ? templateHealthQuestions : CANONICAL_HEALTH_QUESTIONS)
         : (template?.healthQuestions || []), {
       isAdultSelf: child.type === 'adult',
+      isAdultFemale: signsAsAdultFemale(child),
       }
     );
     const gap = declarationGap(asked, child.answers, child.name);
@@ -15432,6 +15438,13 @@ initDb({ requireDurable: requiresDurableStore() }).then(() => {
   } catch (err) {
     console.warn('participation form template seed skipped:', err.message);
   }
+  Promise.resolve(migrateToTwoBroadcastLists({ database: db, persist: persistCore }))
+    .then((result) => {
+      if (result?.defs) {
+        console.log(`📬 Broadcast lists: ${result.parents} parent(s) moved onto תפעולי / שיווקי`);
+      }
+    })
+    .catch((err) => console.warn('broadcast list migration skipped:', err.message));
   Promise.resolve(migrateUnifiedWallWaiver({ database: db, persist: persistCore }))
     .then(({ updated, retired }) => {
       if (updated || retired) {

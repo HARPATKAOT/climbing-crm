@@ -25,6 +25,7 @@ import {
   needsMedicalClearance,
   questionLabel,
   questionsForSigner,
+  signsAsAdultFemale,
   unansweredQuestions,
 } from '../utils/healthQuestions.js';
 import MedicalClearanceField from './MedicalClearanceField.jsx';
@@ -448,7 +449,10 @@ export default function PublicActivityRegistration() {
       const current = resolvedHealthParticipant(currentParticipant);
       // A screening question is unanswered until it is a real yes or no, so a
       // medical question nobody touched can never be filed as "no".
-      const asked = questionsForSigner(questions, { isAdultSelf: current.type === 'adult' });
+      const asked = questionsForSigner(questions, {
+        isAdultSelf: current.type === 'adult',
+        isAdultFemale: signsAsAdultFemale(current),
+      });
       const missing = unansweredQuestions(asked, current.answers || {});
       if (missing.length) {
         setError(
@@ -909,7 +913,10 @@ export default function PublicActivityRegistration() {
               // and the safety undertakings were lost among the questions.
               const asked = questionsForSigner(
                 activity.form_template?.healthQuestions || [],
-                { isAdultSelf: healthCurrent.type === 'adult' }
+                {
+                  isAdultSelf: healthCurrent.type === 'adult',
+                  isAdultFemale: signsAsAdultFemale(healthCurrent),
+                }
               );
               const screening = asked.filter(isScreeningQuestion);
               const confirmations = asked.filter((q) => !isScreeningQuestion(q));

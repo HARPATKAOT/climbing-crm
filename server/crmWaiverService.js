@@ -18,6 +18,7 @@ import {
   isScreeningQuestion,
   needsMedicalClearance,
   questionsForSigner,
+  signsAsAdultFemale,
 } from './healthQuestions.js';
 import { CANONICAL_HEALTH_QUESTIONS, normalizeParticipationScope } from './participationDocuments.js';
 import { healthDocumentState, waiverDocumentState } from './participationEligibility.js';
@@ -296,7 +297,10 @@ export function validateParticipantDeclarations(participants, template, { health
     // Parent-only clauses are excluded for an adult signing for themselves —
     // the form does not show them, so demanding them here would reject a
     // submission that is in fact complete.
-    const asked = questionsForSigner(questions, { isAdultSelf: participant.type === 'adult' });
+    const asked = questionsForSigner(questions, {
+      isAdultSelf: participant.type === 'adult',
+      isAdultFemale: signsAsAdultFemale(participant),
+    });
     if (!reuseHealth) {
       const gap = declarationGap(asked, participant.answers, name);
       if (gap) throw Object.assign(new Error(gap), { status: 400 });

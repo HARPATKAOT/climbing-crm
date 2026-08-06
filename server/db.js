@@ -292,11 +292,13 @@ const SEED_DATA = {
   },
   whatsapp_logs: [],
   broadcast_campaigns: [],
+  // Two lists, because there are only two kinds of message: one the customer
+  // must get in order to be served, and one they may choose to get. Four
+  // topic-shaped lists asked a parent to sort our content for us, and the law
+  // draws its line here too — an operational notice is not an advertisement.
   broadcast_list_defs: [
-    { key: 'general', label: 'כללי', description: 'עדכונים שוטפים', color: 'var(--blue)', sortOrder: 0 },
-    { key: 'classes', label: 'חוגים', description: 'שינויי שעות וכדומה', color: 'var(--green)', sortOrder: 1 },
-    { key: 'trips', label: 'טיולים', description: 'טיולי סנפלינג/חוץ', color: 'var(--amber)', sortOrder: 2 },
-    { key: 'events', label: 'אירועים', description: 'אירועים ותחרויות מועדון', color: 'var(--purple)', sortOrder: 3 },
+    { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים, תזכורות, מידע קריטי לפעילות שנרשמת אליה', color: 'var(--green)', sortOrder: 0 },
+    { key: 'marketing', label: 'שיווקי', description: 'טיולים חדשים, טיפים, מבצעים, עדכונים כלליים', color: 'var(--amber)', sortOrder: 1 },
   ],
 };
 

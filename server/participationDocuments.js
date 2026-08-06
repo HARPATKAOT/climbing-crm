@@ -24,7 +24,7 @@ export const CANONICAL_HEALTH_QUESTIONS = Object.freeze([
   // The id skips m10: that number belonged to a claustrophobia question the
   // trip templates carried and the unified migration removed, and reusing it
   // would let an old answer be re-labelled as this one.
-  { id: 'm11', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם המשתתפת בהריון?' },
+  { id: 'm11', kind: 'screen', requireYes: false, audience: 'adult_female', requiresClearance: false, label: 'האם המשתתפת בהריון?' },
   { id: 'm9', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש מגבלה רפואית, אבחנה או מידע אחר שחשוב שנדע ולא נשאלנו עליו כאן?' },
 ]);
 

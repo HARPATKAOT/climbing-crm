@@ -30,6 +30,7 @@ import {
   needsMedicalClearance,
   questionLabel,
   questionsForSigner,
+  signsAsAdultFemale,
   unansweredQuestions,
 } from '../utils/healthQuestions.js';
 import { clearanceBudgetError } from '../utils/medicalClearanceFile.js';
@@ -599,7 +600,7 @@ export default function PublicOnboardingForm() {
   const [waiverAccepted, setWaiverAccepted] = useState(false);
   const [healthDeclarationAccepted, setHealthDeclarationAccepted] = useState(false);
   const [listDefs, setListDefs] = useState([]);
-  const [requiredListKey, setRequiredListKey] = useState('classes');
+  const [requiredListKey, setRequiredListKey] = useState('operational');
   const [subscriptions, setSubscriptions] = useState({ classes: true });
   // No interest picker on this form any more — staff set it in the CRM. Kept as
   // state only so a prefilled link (?interest=) still passes it through.
@@ -664,6 +665,7 @@ export default function PublicOnboardingForm() {
   const questionsForParticipant = (participant) => questionsForSigner(
     healthOnlyMode ? healthOnlyQuestions : allQuestions, {
     isAdultSelf: participant?.type === 'adult',
+    isAdultFemale: signsAsAdultFemale(participant),
     }
   );
   /** The medical questions and the activity clauses, as two separate screens. */
@@ -993,15 +995,13 @@ export default function PublicOnboardingForm() {
         }
         if (!defs.length) {
           defs = [
-            { key: 'general', label: 'כללי', description: 'עדכונים שוטפים' },
-            { key: 'classes', label: 'חוגים', description: 'שינויי שעות וכדומה' },
-            { key: 'trips', label: 'טיולים', description: 'טיולי סנפלינג/חוץ' },
-            { key: 'events', label: 'אירועים', description: 'אירועים ותחרויות מועדון' },
+            { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים, תזכורות, מידע קריטי לפעילות שנרשמת אליה' },
+            { key: 'marketing', label: 'שיווקי', description: 'טיולים חדשים, טיפים, מבצעים, עדכונים כלליים' },
           ];
         }
         setListDefs(defs);
 
-        const reqKey = data.requiredListKey || 'classes';
+        const reqKey = typeof data.requiredListKey === 'string' ? data.requiredListKey : 'operational';
         setRequiredListKey(reqKey);
         const subs = { ...(data.subscriptions || {}) };
         // Ensure every known list has a boolean; only classes forced on
@@ -2305,8 +2305,8 @@ export default function PublicOnboardingForm() {
                 שאר הרשימות הן דיוור שיווקי, ולכן סימון בלבד, ואפשר להסיר בכל עת. */}
             <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', margin: '0 0 12px', lineHeight: 1.6 }}>
               {effectiveRequiredListKey
-                ? 'רשימת החוגים היא רשימת עדכונים תפעוליים בלבד — שינויי שעות, ביטולים והודעות על החוג שנרשמתם אליו — והיא חלק מהשירות. סימון רשימה נוספת הוא הסכמה לקבל דיוור פרסומי, ואפשר להסיר אותה בכל עת בלי לפגוע בהרשמה.'
-                : 'כל הרשימות כאן אופציונליות. סימון רשימה הוא הסכמה לקבל ממנה דיוור, ואפשר להסיר אותה בכל עת בלי לפגוע בהרשמה.'}
+                ? 'הרשימה התפעולית היא חלק מהשירות ולא נשלח אליה תכנים פרסומיים. הרשימה השיווקית היא רשות — סימון שלה הוא הסכמה לקבל דיוור פרסומי, ואפשר להסיר אותה בכל עת בלי לפגוע בהרשמה.'
+                : 'שתי הרשימות כאן אופציונליות. סימון רשימה הוא הסכמה לקבל ממנה דיוור, ואפשר להסיר אותה בכל עת בלי לפגוע בהרשמה.'}
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
               {listDefs.map((list) => {
@@ -2338,7 +2338,7 @@ export default function PublicOnboardingForm() {
                     <span>
                       <strong>{list.label || list.key}</strong>
                       {list.description ? ` — ${list.description}` : ''}
-                      {isRequired ? ' (עדכונים תפעוליים — חלק מהשירות)' : ''}
+                      {isRequired ? ' (חובה — חלק מהשירות)' : ''}
                     </span>
                   </label>
                 );

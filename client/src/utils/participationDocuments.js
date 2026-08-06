@@ -14,7 +14,7 @@ export const CANONICAL_HEALTH_QUESTIONS = Object.freeze([
   { id: 'm8', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם רופא הגביל פעילות גופנית בשנה האחרונה?' },
   // Mirrors server/participationDocuments.js — including the skipped m10, which
   // belonged to a question the unified-waiver migration removed.
-  { id: 'm11', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם המשתתפת בהריון?' },
+  { id: 'm11', kind: 'screen', requireYes: false, audience: 'adult_female', requiresClearance: false, label: 'האם המשתתפת בהריון?' },
   { id: 'm9', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש מגבלה רפואית, אבחנה או מידע אחר שחשוב שנדע ולא נשאלנו עליו כאן?' },
 ]);
 
