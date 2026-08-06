@@ -781,44 +781,31 @@ export default function PublicOnboardingForm() {
     return () => clearInterval(id);
   }, [otp.stage]);
 
-  // The acceptance box opens only after the binding text was scrolled through.
-  // A tick on a contract nobody scrolled past is exactly the signature that
-  // does not hold up later.
-  const [waiverRead, setWaiverRead] = useState(false);
-  const waiverBoxRef = useRef(null);
-  const waiverScrollGate = useRef({ top: 0, time: 0 });
-
   /**
-   * Downward scrolling inside the waiver box is capped to reading pace —
-   * a flick that would jump to the bottom is walked there instead. Scrolling
-   * back up is free. The cap only slows the box, it never blocks it, so the
-   * bottom is always reachable.
+   * The acceptance box opens once the end of the binding text has been on the
+   * screen. A tick on a contract nobody reached the bottom of is exactly the
+   * signature that does not hold up later — and now that the text flows on the
+   * page rather than sitting in a box of its own, what proves it is the page's
+   * own scroll reaching the last line.
    */
-  const handleWaiverScroll = (e) => {
-    const el = e.currentTarget;
-    const gate = waiverScrollGate.current;
-    const now = performance.now();
-    const elapsed = gate.time ? now - gate.time : 0;
-    // ~0.6px per ms ≈ a screenful of legal text in a couple of seconds.
-    const allowed = gate.top + Math.max(20, elapsed * 0.6);
-    if (el.scrollTop > allowed) el.scrollTop = allowed;
-    gate.top = el.scrollTop;
-    gate.time = now;
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 8) setWaiverRead(true);
-  };
+  const [waiverRead, setWaiverRead] = useState(false);
+  const waiverEndRef = useRef(null);
 
-  // Each participant reads for themselves: entering the waiver screen resets
-  // the gate. A short text that fits without scrolling counts as read once it
-  // is on screen.
+  // Each participant reads for themselves: entering the screen resets the gate.
   useEffect(() => {
-    if (healthSubStep !== SUB_WAIVER) return;
+    if (healthSubStep !== SUB_WAIVER) return undefined;
     setWaiverRead(false);
-    waiverScrollGate.current = { top: 0, time: 0 };
-    const id = requestAnimationFrame(() => {
-      const el = waiverBoxRef.current;
-      if (el && el.scrollHeight <= el.clientHeight + 8) setWaiverRead(true);
-    });
-    return () => cancelAnimationFrame(id);
+    const el = waiverEndRef.current;
+    if (!el || typeof IntersectionObserver !== 'function') {
+      // No observer to lean on — do not lock a signer out of their own form.
+      setWaiverRead(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) setWaiverRead(true);
+    }, { root: null, threshold: 0 });
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [healthSubStep, childHealthIndex]);
 
   // participant key -> { match, student_id, guardian_first_name, health_valid, linked }
@@ -3231,42 +3218,36 @@ export default function PublicOnboardingForm() {
                     responsibility for themselves and for the minors listed
                     above the signature field, so the same document serves a
                     whole family and is signed once. */}
-                <div style={{
-                  background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: 12, padding: 14, marginBottom: 16,
-                }}>
-                  {/* „המפורטים לעיל” — ולכן הרשימה היא חלק מהחוזה, בתוך אותה
-                      חלונית ומעל הנוסח שמפנה אליה, ולא הערה לידו. */}
-                  {signingNames.length > 0 && (
-                    <div style={{
-                      marginBottom: 12, paddingBottom: 12,
-                      borderBottom: '1px solid rgba(255,255,255,0.12)',
-                      fontSize: 13, lineHeight: 1.7, color: 'rgba(255,255,255,0.85)',
-                    }}>
-                      <div style={{ color: 'rgba(255,255,255,0.6)', marginBottom: 4 }}>
-                        המסמך נחתם על ידי {parentFullName()} וחל על:
-                      </div>
-                      {coveredNames.map((name) => (
-                        <div key={name} style={{ fontWeight: 700 }}>• {name}</div>
-                      ))}
+                {/* „המפורטים לעיל” — הרשימה היא חלק מהמסמך ולכן היא פותחת אותו. */}
+                {signingNames.length > 0 && (
+                  <div style={{
+                    marginBottom: 14, paddingBottom: 12,
+                    borderBottom: '1px solid rgba(255,255,255,0.12)',
+                    fontSize: 13.5, lineHeight: 1.7, color: 'rgba(255,255,255,0.85)',
+                  }}>
+                    <div style={{ color: 'rgba(255,255,255,0.6)', marginBottom: 4 }}>
+                      המסמך נחתם על ידי {parentFullName()} וחל על:
                     </div>
-                  )}
-                  <div
-                    ref={waiverBoxRef}
-                    onScroll={handleWaiverScroll}
-                    style={{
-                      fontSize: 13, lineHeight: 1.75, color: 'rgba(255,255,255,0.85)',
-                      whiteSpace: 'pre-wrap', maxHeight: 300, overflowY: 'auto',
-                      background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.08)',
-                      borderRadius: 10, padding: 12,
-                    }}
-                  >
-                    {withMinorsClauses(
-                      waiverBody,
-                      kids.some((kid) => kid.type !== 'adult')
-                    )}
+                    {coveredNames.map((name) => (
+                      <div key={name} style={{ fontWeight: 700 }}>• {name}</div>
+                    ))}
                   </div>
+                )}
+                {/* הנוסח זורם על הדף כמו כל השאר. בתוך חלונית עם גלילה משלה הוא
+                    נראה כמו נספח שהחתימה שמתחתיו שייכת רק לו — והחתימה חלה על
+                    כל מה שנמסר בטופס, לא רק עליו. */}
+                <div style={{
+                  fontSize: 13.5, lineHeight: 1.85, color: 'rgba(255,255,255,0.85)',
+                  whiteSpace: 'pre-wrap', marginBottom: 16,
+                }}>
+                  {withMinorsClauses(
+                    waiverBody,
+                    kids.some((kid) => kid.type !== 'adult')
+                  )}
                 </div>
+                {/* סוף הנוסח. תיבת האישור נפתחת כשהוא נראה על המסך — אותה ראיה
+                    שהגלילה נתנה, בלי לכלוא את הטקסט בחלונית. */}
+                <div ref={waiverEndRef} style={{ height: 1 }} />
                 {fitnessDeclarations.map((q) => (
                   <label key={q.id} className="event-check" style={{ marginBottom: 10 }}>
                     <input
@@ -3305,6 +3286,18 @@ export default function PublicOnboardingForm() {
                 <div className="section-title" style={{ marginTop: 20 }}>
                   {healthOnlyMode ? 'חתימה על הצהרת הבריאות' : 'חתימה על הצהרת בריאות והסרת אחריות'}
                 </div>
+                {/* על מה החתימה חלה. היא נרשמת על שתי הרשומות — הצהרת הבריאות
+                    ואישור ההשתתפות — ובלי המשפט הזה המסך נראה כאילו חותמים רק
+                    על הנוסח שמעליו. */}
+                {!healthOnlyMode && (
+                  <p style={{
+                    fontSize: 13, lineHeight: 1.8, color: 'rgba(255,255,255,0.72)',
+                    margin: '0 2px 12px',
+                  }}>
+                    החתימה חלה על הצהרת הבריאות שמילאתי, על כללי הבטיחות שסימנתי ועל כתב
+                    הוויתור שלמעלה — עבור {coveredNames.join(', ')}.
+                  </p>
+                )}
                 <div className="canvas-container">
                   <div className="canvas-toolbar">
                     <span style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
