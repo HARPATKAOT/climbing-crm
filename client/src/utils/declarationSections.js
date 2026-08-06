@@ -26,7 +26,9 @@ export function withSignerName(text, signerName = '') {
 
 const CONFIRM_TITLES = {
   trip: 'הבנת אופי הטיול',
-  wall: 'הבנת אופי הפעילות',
+  // At the wall this part is a list of rules, and calling it anything else made
+  // the page sound like an introduction to something.
+  wall: 'כללי בטיחות',
 };
 
 const WAIVER_FALLBACK_TITLE = 'כתב הצהרה, ויתור והסרת אחריות';
@@ -51,7 +53,7 @@ export function declarationSectionTitles(template) {
   const slug = ['event', 'birthday'].includes(rawSlug) ? 'wall' : rawSlug;
   return {
     health: 'הצהרת בריאות',
-    confirm: CONFIRM_TITLES[slug] || 'הבנת אופי הפעילות',
+    confirm: CONFIRM_TITLES[slug] || 'כללי בטיחות',
     waiver: splitWaiverText(template?.waiverText).title,
   };
 }
