@@ -297,8 +297,8 @@ const SEED_DATA = {
   // topic-shaped lists asked a parent to sort our content for us, and the law
   // draws its line here too — an operational notice is not an advertisement.
   broadcast_list_defs: [
-    { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים, תזכורות, מידע קריטי לפעילות שנרשמת אליה', color: 'var(--green)', sortOrder: 0 },
-    { key: 'marketing', label: 'שיווקי', description: 'טיולים חדשים, טיפים, מבצעים, עדכונים כלליים', color: 'var(--amber)', sortOrder: 1 },
+    { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים ותזכורות', color: 'var(--green)', sortOrder: 0 },
+    { key: 'marketing', label: 'שיווקי', description: 'טיולים חדשים, מבצעים ועדכונים כלליים', color: 'var(--amber)', sortOrder: 1 },
   ],
 };
 

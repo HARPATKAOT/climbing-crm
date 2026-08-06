@@ -26,14 +26,14 @@ export const TWO_LIST_DEFS = Object.freeze([
   {
     key: OPERATIONAL_LIST,
     label: 'תפעולי',
-    description: 'שינויי שעות, ביטולים, תזכורות, מידע קריטי לפעילות שנרשמת אליה',
+    description: 'שינויי שעות, ביטולים ותזכורות',
     color: 'var(--green)',
     sortOrder: 0,
   },
   {
     key: MARKETING_LIST,
     label: 'שיווקי',
-    description: 'טיולים חדשים, טיפים, מבצעים, עדכונים כלליים',
+    description: 'טיולים חדשים, מבצעים ועדכונים כלליים',
     color: 'var(--amber)',
     sortOrder: 1,
   },
@@ -46,10 +46,16 @@ export const TWO_LIST_DEFS = Object.freeze([
 export async function migrateToTwoBroadcastLists({ database, persist = null } = {}) {
   const defs = database.get('broadcast_list_defs') || [];
   const legacyDefs = defs.filter((row) => Object.hasOwn(LEGACY_LIST_MAP, String(row?.key || '')));
-  const missingNew = TWO_LIST_DEFS.filter((wanted) => (
-    !defs.some((row) => String(row?.key || '') === wanted.key)
-  ));
-  if (!legacyDefs.length && !missingNew.length) return { defs: 0, parents: 0 };
+  // Also runs when the wording of the two lists has changed: the descriptions
+  // live in a row a customer reads, and a row written by an earlier deploy would
+  // otherwise keep serving the old text forever.
+  const staleText = TWO_LIST_DEFS.filter((wanted) => {
+    const existing = defs.find((row) => String(row?.key || '') === wanted.key);
+    return !existing
+      || existing.label !== wanted.label
+      || (existing.description || '') !== wanted.description;
+  });
+  if (!legacyDefs.length && !staleText.length) return { defs: 0, parents: 0 };
 
   // Definitions are keyed by `key`, not `id`, so they go through their own
   // helpers — the generic update/delete match on an id these rows do not have.

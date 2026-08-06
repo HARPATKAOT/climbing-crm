@@ -517,8 +517,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const navigate = useNavigate();
 
   const [broadcastListDefs, setBroadcastListDefs] = useState([
-    { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים, תזכורות, מידע קריטי לפעילות שנרשמת אליה' },
-    { key: 'marketing', label: 'שיווקי', description: 'טיולים חדשים, טיפים, מבצעים, עדכונים כלליים' },
+    { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים ותזכורות' },
+    { key: 'marketing', label: 'שיווקי', description: 'טיולים חדשים, מבצעים ועדכונים כלליים' },
   ]);
   const [broadcastLists, setBroadcastLists] = useState({});
   const [loadingLists, setLoadingLists] = useState(false);

@@ -1047,8 +1047,8 @@ export default function PublicOnboardingForm() {
         }
         if (!defs.length) {
           defs = [
-            { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים, תזכורות, מידע קריטי לפעילות שנרשמת אליה' },
-            { key: 'marketing', label: 'שיווקי', description: 'טיולים חדשים, טיפים, מבצעים, עדכונים כלליים' },
+            { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים ותזכורות' },
+            { key: 'marketing', label: 'שיווקי', description: 'טיולים חדשים, מבצעים ועדכונים כלליים' },
           ];
         }
         setListDefs(defs);
@@ -2360,16 +2360,7 @@ export default function PublicOnboardingForm() {
 
             <div className="section-title" style={{ marginTop: 22 }}>הזדמנות לערוך את העדפות הדיוור שלך</div>
             <p style={{ fontSize: 13, color: 'var(--text-3)', marginTop: -6, marginBottom: 12, lineHeight: 1.45 }}>
-              ההרשמה לדיוור היא פר משפחה — היא חלה על כל הילדים בתיק, לא על ילד בודד.
-            </p>
-            {/* חוק התקשורת מבחין בין הודעה תפעולית ובין דבר פרסומת: הודעה על
-                שינוי שעה בחוג שנרשמתם אליו היא חלק מהשירות, ולכן הרשימה
-                התפעולית מסומנת ואינה ניתנת לביטול — אבל היא לא הסכמה לפרסומת.
-                שאר הרשימות הן דיוור שיווקי, ולכן סימון בלבד, ואפשר להסיר בכל עת. */}
-            <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', margin: '0 0 12px', lineHeight: 1.6 }}>
-              {effectiveRequiredListKey
-                ? 'הרשימה התפעולית היא חלק מהשירות ולא נשלח אליה תכנים פרסומיים. הרשימה השיווקית היא רשות — סימון שלה הוא הסכמה לקבל דיוור פרסומי, ואפשר להסיר אותה בכל עת בלי לפגוע בהרשמה.'
-                : 'שתי הרשימות כאן אופציונליות. סימון רשימה הוא הסכמה לקבל ממנה דיוור, ואפשר להסיר אותה בכל עת בלי לפגוע בהרשמה.'}
+              ההרשמה לדיוור היא פר משפחה
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
               {listDefs.map((list) => {

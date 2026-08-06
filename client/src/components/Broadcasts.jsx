@@ -22,8 +22,8 @@ const Campaigns = lazy(() => import('./Campaigns.jsx'));
 const PLAYGROUND_PHONE = '0599111000';
 
 const DEFAULT_LISTS = [
-  { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים, תזכורות, מידע קריטי לפעילות שנרשמת אליה', color: 'var(--green)' },
-  { key: 'marketing', label: 'שיווקי', description: 'טיולים חדשים, טיפים, מבצעים, עדכונים כלליים', color: 'var(--amber)' },
+  { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים ותזכורות', color: 'var(--green)' },
+  { key: 'marketing', label: 'שיווקי', description: 'טיולים חדשים, מבצעים ועדכונים כלליים', color: 'var(--amber)' },
 ];
 
 const LIST_COLORS = [
