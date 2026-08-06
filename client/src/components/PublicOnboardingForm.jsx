@@ -862,15 +862,18 @@ export default function PublicOnboardingForm() {
   const missingStyle = (field) => (isMissing(field)
     ? { borderColor: 'rgba(252,211,77,.55)', background: 'rgba(251,191,36,.07)' }
     : undefined);
+  // The same test `goNextFromParent` applies before it sends a code, so the
+  // button can say which of the two things the next press actually does.
+  const needsPhoneVerification = !otp.token || otp.verifiedPhone !== parent.phone.trim();
+  const parentProfileLocked = identityReady && !!prefilledParentId && !editingParentProfile;
+  // Below `parentProfileLocked`, and it has to stay there: a dependency array is
+  // read while the component renders, so naming a const declared further down
+  // throws before the first screen is painted.
   useEffect(() => {
     if (!identityReady || healthOnlyMode) return;
     if (parentProfileLocked && missingParentFields.length) setEditingParentProfile(true);
   }, [identityReady, healthOnlyMode, parentProfileLocked, missingParentFields.length]);
 
-  // The same test `goNextFromParent` applies before it sends a code, so the
-  // button can say which of the two things the next press actually does.
-  const needsPhoneVerification = !otp.token || otp.verifiedPhone !== parent.phone.trim();
-  const parentProfileLocked = identityReady && !!prefilledParentId && !editingParentProfile;
   // Which participant has already been told their ID looks wrong, so the
   // warning is a warning and not a wall.
   const [idWarnedFor, setIdWarnedFor] = useState('');
