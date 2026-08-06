@@ -792,6 +792,31 @@ export default function PublicOnboardingForm() {
   const [waiverRead, setWaiverRead] = useState(false);
   const waiverEndRef = useRef(null);
 
+  /**
+   * What the signing session looked like, for the sealed evidence record.
+   *
+   * Three things a signature alone cannot show: how long each screen was open,
+   * when each box was ticked, and the moment the end of the binding text was
+   * actually on the screen — which is what separates "ticked" from "read".
+   * Kept in a ref, because recording it must never cause a re-render.
+   */
+  const sessionEvidence = useRef({ screens: [], ticks: {}, waiverEndSeenAt: null });
+
+  const recordTick = (id, checked) => {
+    const at = new Date().toISOString();
+    const log = sessionEvidence.current.ticks;
+    log[id] = checked === false
+      ? { ...(log[id] || {}), clearedAt: at }
+      : { ...(log[id] || {}), tickedAt: at };
+  };
+
+  const screenKey = () => {
+    if (step !== 3) return `step-${step}`;
+    if (healthSubStep === SUB_HEALTH) return `health:${childHealthIndex + 1}`;
+    if (healthSubStep === SUB_ACTIVITY) return 'safety-rules';
+    return 'waiver-and-signature';
+  };
+
   // Each participant reads for themselves: entering the screen resets the gate.
   useEffect(() => {
     if (healthSubStep !== SUB_WAIVER) return undefined;
@@ -803,11 +828,21 @@ export default function PublicOnboardingForm() {
       return undefined;
     }
     const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) setWaiverRead(true);
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      sessionEvidence.current.waiverEndSeenAt ||= new Date().toISOString();
+      setWaiverRead(true);
     }, { root: null, threshold: 0 });
     observer.observe(el);
     return () => observer.disconnect();
   }, [healthSubStep, childHealthIndex]);
+
+  useEffect(() => {
+    if (loading || isSuccess) return undefined;
+    const key = screenKey();
+    const entry = { screen: key, enteredAt: new Date().toISOString(), leftAt: null };
+    sessionEvidence.current.screens.push(entry);
+    return () => { entry.leftAt = new Date().toISOString(); };
+  }, [step, healthSubStep, childHealthIndex, loading, isSuccess]);
 
   // participant key -> { match, student_id, guardian_first_name, health_valid, linked }
   const [knownChildren, setKnownChildren] = useState({});
@@ -1878,9 +1913,21 @@ export default function PublicOnboardingForm() {
         signatureEvidenceTimeline: {
           ...(c.signatureEvidenceTimeline || {}),
           termsPresentedAt: c.signatureEvidenceTimeline?.termsPresentedAt || capturedAt,
-          termsReadAt: capturedAt,
+          termsReadAt: sessionEvidence.current.waiverEndSeenAt || capturedAt,
           termsAcceptedAt: c.signatureEvidenceTimeline?.termsAcceptedAt || capturedAt,
           signatureCapturedAt: capturedAt,
+          // The session itself: every screen with how long it was open, every
+          // box with when it was ticked, and when the end of the binding text
+          // was on the screen.
+          screens: sessionEvidence.current.screens.map((entry) => ({
+            ...entry,
+            leftAt: entry.leftAt || capturedAt,
+            secondsOnScreen: Math.max(0, Math.round(
+              (new Date(entry.leftAt || capturedAt) - new Date(entry.enteredAt)) / 1000
+            )),
+          })),
+          ticks: { ...sessionEvidence.current.ticks },
+          waiverEndSeenAt: sessionEvidence.current.waiverEndSeenAt,
         },
       };
     });
@@ -3033,10 +3080,19 @@ export default function PublicOnboardingForm() {
           <div className="fade-in">
             {healthSubStep === SUB_HEALTH && (
               <>
-                {hasLockedParticipantProfile(currentChild) && (
+                {/* Whose declaration this is. It was shown only to a participant
+                    on file, so the parent — who is on the same screen answering
+                    about themselves — had nothing but the heading to go by. */}
+                {hasCompleteParticipantProfile(currentChild) && !currentChild.editProfile && (
                   <ParticipantProfileSummary
                     participant={currentChild}
                     onEdit={() => {
+                      if (currentChild.type === 'adult') {
+                        setEditingParentProfile(true);
+                        setError('');
+                        setStep(1);
+                        return;
+                      }
                       updateChild(currentFullIndex, { editProfile: true });
                       setError('');
                       setStep(2);
@@ -3120,7 +3176,10 @@ export default function PublicOnboardingForm() {
                             <button
                               key={text}
                               type="button"
-                              onClick={() => setCurrentAnswer(q.id, value)}
+                              onClick={() => {
+                                recordTick(`${q.id}:${value ? 'yes' : 'no'}`, true);
+                                setCurrentAnswer(q.id, value);
+                              }}
                               style={{
                                 flex: 1, padding: '9px 0', borderRadius: 10, font: 'inherit',
                                 fontWeight: 700, fontSize: 14, cursor: 'pointer',
@@ -3227,10 +3286,10 @@ export default function PublicOnboardingForm() {
                     <input
                       type="checkbox"
                       checked={activityConfirmed[q.id] === true}
-                      onChange={(e) => setActivityConfirmed((current) => ({
-                        ...current,
-                        [q.id]: e.target.checked,
-                      }))}
+                      onChange={(e) => {
+                        recordTick(q.id, e.target.checked);
+                        setActivityConfirmed((current) => ({ ...current, [q.id]: e.target.checked }));
+                      }}
                     />
                     <span>{questionLabel(q)}</span>
                   </label>
@@ -3306,10 +3365,10 @@ export default function PublicOnboardingForm() {
                     <input
                       type="checkbox"
                       checked={activityConfirmed[q.id] === true}
-                      onChange={(e) => setActivityConfirmed((current) => ({
-                        ...current,
-                        [q.id]: e.target.checked,
-                      }))}
+                      onChange={(e) => {
+                        recordTick(q.id, e.target.checked);
+                        setActivityConfirmed((current) => ({ ...current, [q.id]: e.target.checked }));
+                      }}
                     />
                     <span>{questionLabel(q)}</span>
                   </label>
@@ -3319,7 +3378,10 @@ export default function PublicOnboardingForm() {
                     type="checkbox"
                     disabled={!waiverRead}
                     checked={waiverAccepted}
-                    onChange={(e) => setWaiverAccepted(e.target.checked)}
+                    onChange={(e) => {
+                      recordTick('waiver_accepted', e.target.checked);
+                      setWaiverAccepted(e.target.checked);
+                    }}
                   />
                   {/* מי שהאישור חל עליו, בתוך המשפט שמאשרים — לא רק ברשימה
                       שמעליו. זה מה שהחתימה למטה אומרת. */}
