@@ -1449,6 +1449,9 @@ export default function PublicOnboardingForm() {
   const fitnessDeclarations = allSharedConfirmations.filter(isFitnessDeclaration);
   const sharedSubSteps = () => (sharedConfirmations.length ? [SUB_ACTIVITY, SUB_WAIVER] : [SUB_WAIVER]);
   const signingNames = healthChildren().map((kid) => String(kid.name || '').trim()).filter(Boolean);
+  // The signer is one of the participants when they ticked "I am participating
+  // too", and the list then named them twice.
+  const coveredNames = [...new Set([parentFullName(), ...signingNames].filter(Boolean))];
 
   const goNextFromParent = async () => {
     setError('');
@@ -3240,9 +3243,9 @@ export default function PublicOnboardingForm() {
                       fontSize: 13, lineHeight: 1.7, color: 'rgba(255,255,255,0.85)',
                     }}>
                       <div style={{ color: 'rgba(255,255,255,0.6)', marginBottom: 4 }}>
-                        המסמך נחתם על ידי {parentFullName()} עבור המשתתפים הבאים:
+                        המסמך נחתם על ידי {parentFullName()} וחל על:
                       </div>
-                      {signingNames.map((name) => (
+                      {coveredNames.map((name) => (
                         <div key={name} style={{ fontWeight: 700 }}>• {name}</div>
                       ))}
                     </div>
@@ -3287,7 +3290,7 @@ export default function PublicOnboardingForm() {
                       שמעליו. זה מה שהחתימה למטה אומרת. */}
                   <span>
                     קראתי ואני מאשר/ת את הסרת האחריות וכללי הבטיחות החלים על:{' '}
-                    {[parentFullName(), ...signingNames].filter(Boolean).join(', ')}
+                    {coveredNames.join(', ')}
                   </span>
                 </label>
                 {!waiverRead && (
