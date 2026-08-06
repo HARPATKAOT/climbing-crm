@@ -1,12 +1,16 @@
 import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
-import { Send, Hash, History, Settings, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2, FileText, Bookmark, RotateCcw, Target } from 'lucide-react';
+import { Send, Hash, History, Bot, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2, FileText, Bookmark, RotateCcw, Target } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { Modal } from './UI.jsx';
 import SegmentBuilder from './SegmentBuilder.jsx';
 import { EMPTY_FILTERS } from './segmentFilters.js';
 import TemplatesManager, { TemplatePreview } from './TemplatesManager.jsx';
 import SavedRepliesManager from './SavedRepliesManager.jsx';
-import BotSettingsPanel from './BotSettingsPanel.jsx';
+import BotMasterSwitch from './BotMasterSwitch.jsx';
+import BotCapabilitiesPanel from './BotCapabilitiesPanel.jsx';
+import BotToneSettings from './BotToneSettings.jsx';
+import BotScheduleSettings from './BotScheduleSettings.jsx';
+import BotHandoffSettings from './BotHandoffSettings.jsx';
 import BotLearningPanel from './BotLearningPanel.jsx';
 import BotActivityPanel from './BotActivityPanel.jsx';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
@@ -42,7 +46,8 @@ const TABS = [
   { key: 'history',   label: 'היסטוריית שידורים',  icon: History },
   // Channel connections moved to הגדרות עסק ← חיבורים, next to every other
   // external service.
-  { key: 'settings',  label: 'הגדרות ואימון AI',    icon: Settings },
+  // The key stays `settings` so existing links into this tab keep working.
+  { key: 'settings',  label: 'בוט AI',              icon: Bot },
 ];
 
 export default function Broadcasts({ parents, students, groups = [] }) {
@@ -58,7 +63,8 @@ export default function Broadcasts({ parents, students, groups = [] }) {
   // a sandbox, the learning queue and the journal — so the capability list was
   // squeezed into half a column while the sandbox took the other half. Each is
   // its own job, so each gets its own tab and the full width.
-  const [botTab, setBotTab] = useState('settings'); // settings | sandbox | learning | journal
+  // tools | tone | schedule | handoff | sandbox | learning | journal
+  const [botTab, setBotTab] = useState('tools');
   
   // Compose / Send State
   const [lists, setLists] = useState(DEFAULT_LISTS);
@@ -92,8 +98,6 @@ export default function Broadcasts({ parents, students, groups = [] }) {
     aiActiveDays: [0, 1, 2, 3, 4, 5, 6],
     aiSystemPrompt: `אתה עוזר שירות לקוחות אינטליגנטי עבור קיר הטיפוס ${brandName}. ענה בעברית מנומסת וקצרה.`,
   });
-  const [savingSettings, setSavingSettings] = useState(false);
-  const [saveSettingsSuccess, setSaveSettingsSuccess] = useState(false);
   const [savingBotToggle, setSavingBotToggle] = useState(false);
   const [botToggleError, setBotToggleError] = useState('');
 
@@ -343,32 +347,6 @@ export default function Broadcasts({ parents, students, groups = [] }) {
     }
     : { header: '', body: customMessage, footer: '', buttons: [] };
   const previewVarMeta = Array.isArray(selectedTemplate?.variables) ? selectedTemplate.variables : [];
-
-  const handleSaveSettings = async (e) => {
-    e.preventDefault();
-    setSavingSettings(true);
-    setSaveSettingsSuccess(false);
-    try {
-      // Master switch is saved only via /bot-enabled — never clobber it from this form.
-      const { aiResponderEnabled: _ignoreBotFlag, ...settingsToSave } = settings;
-      const response = await fetch('/api/whatsapp/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settingsToSave)
-      });
-      if (response.ok) {
-        setSaveSettingsSuccess(true);
-        setTimeout(() => setSaveSettingsSuccess(false), 3000);
-      } else {
-        const data = await response.json().catch(() => ({}));
-        alert(data.error || 'שמירת ההגדרות נכשלה');
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setSavingSettings(false);
-    }
-  };
 
   const handleBotToggle = async (enabled) => {
     const previous = !!settings.aiResponderEnabled;
@@ -877,9 +855,21 @@ export default function Broadcasts({ parents, students, groups = [] }) {
       {/* SETTINGS & AI WORKBENCH */}
       {activeTab === 'settings' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <BotMasterSwitch
+          enabled={!!settings.aiResponderEnabled}
+          saving={savingBotToggle}
+          error={botToggleError}
+          onToggle={handleBotToggle}
+        />
+        {/* One question per tab. The settings used to be a single form of 27
+            fields, which is how a setting that no longer does anything can sit
+            there for months without anybody noticing. */}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 4 }}>
           {[
-            { key: 'settings', label: 'הגדרות הבוט' },
+            { key: 'tools', label: 'כלים' },
+            { key: 'tone', label: 'טון וידע' },
+            { key: 'schedule', label: 'מתי עונה' },
+            { key: 'handoff', label: 'העברה לצוות' },
             { key: 'sandbox', label: 'ארגז חול' },
             { key: 'learning', label: 'אימון ולמידה' },
             { key: 'journal', label: 'יומן פעולות' },
@@ -894,36 +884,32 @@ export default function Broadcasts({ parents, students, groups = [] }) {
             </button>
           ))}
         </div>
-        {botTab === 'settings' && (
-          <>
-          {/* Bot training settings */}
+        {botTab === 'tools' && (
           <div className="card card-p">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-              <Settings size={18} style={{ color: 'var(--blue)' }} />
-              <span className="section-title">אימון בוט ה-AI</span>
-            </div>
-
-            {saveSettingsSuccess && (
-              <div className="alert alert-success" style={{ marginBottom: 16 }}>
-                <span>ההגדרות נשמרו בהצלחה! ✓</span>
-              </div>
-            )}
-
-            <form onSubmit={handleSaveSettings} className="form-grid" style={{ gap: 14 }}>
-              <BotSettingsPanel
-                settings={settings}
-                setSettings={setSettings}
-                savingBotToggle={savingBotToggle}
-                botToggleError={botToggleError}
-                handleBotToggle={handleBotToggle}
-              />
-
-              <button type="submit" className="btn btn-primary btn-full" disabled={savingSettings}>
-                {savingSettings ? 'שומר...' : 'שמור הגדרות בוט'}
-              </button>
-            </form>
+            <BotCapabilitiesPanel disabled={!settings.aiResponderEnabled} />
           </div>
-          </>
+        )}
+
+        {botTab === 'tone' && (
+          <div className="card card-p">
+            <BotToneSettings settings={settings} setSettings={setSettings} />
+          </div>
+        )}
+
+        {botTab === 'schedule' && (
+          <div className="card card-p">
+            <BotScheduleSettings
+              settings={settings}
+              setSettings={setSettings}
+              disabled={!settings.aiResponderEnabled}
+            />
+          </div>
+        )}
+
+        {botTab === 'handoff' && (
+          <div className="card card-p">
+            <BotHandoffSettings settings={settings} setSettings={setSettings} />
+          </div>
         )}
 
         {botTab === 'sandbox' && (
