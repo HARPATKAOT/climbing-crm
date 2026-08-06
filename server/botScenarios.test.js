@@ -16,7 +16,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { db } from './db.js';
 import { buildCustomerTools, isRegisteredTrainee } from './botTools.js';
-import { advanceCustomerNameCapture, getIntake } from './whatsappBot.js';
+import { advanceCustomerNameCapture, customerNameWords, getIntake } from './whatsappBot.js';
 import { runCustomerToolTurn } from './botToolTurn.js';
 import { capabilitySettingKey } from './botCapabilities.js';
 import { FOLLOWUP_COLLECTION } from './botFollowUps.js';
@@ -229,6 +229,34 @@ test('כרטיס עם שם פרטי בלבד נשאל רק על שם המשפח�
     assert.equal(done.done, true);
     assert.equal(done.parent.name, 'דנה כהן');
   });
+});
+
+test('שאלה של הלקוח אינה שם — «מזה ai?» לא נשמר כשם משפחה', async () => {
+  await withSeed({ parents: [NEW_CARD] }, async () => {
+    const phone = NEW_CARD.phone;
+    await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'היי');
+    await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'יהודה');
+
+    // כך נוצר בכרטיס אמיתי השם «יהודה מזה ai» — 6.8.2026.
+    const asked = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'מזה ai?');
+    assert.equal(asked.done, false);
+    assert.equal(cardById('p-fresh').name, 'לקוח וואטסאפ');
+    assert.equal(cardById('p-fresh').lastName || '', '');
+
+    // ובפעם השנייה שהוא לא עונה על השאלה — מעבירים לאדם, לא שואלים שוב.
+    const again = await advanceCustomerNameCapture(phone, cardById('p-fresh'), 'אתה בוט?');
+    assert.equal(again.handoff, true);
+    assert.match(again.reply, /לצוות/);
+    assert.equal(cardById('p-fresh').lastName || '', '');
+  });
+});
+
+test('מילים שאינן שם נדחות, ושם אמיתי עובר', () => {
+  for (const notAName of ['מזה ai?', 'אתה בוט?', 'מה זה', 'AI', 'כמה עולה', 'מזה ai']) {
+    assert.deepEqual(customerNameWords(notAName), [], notAName);
+  }
+  assert.deepEqual(customerNameWords('גלאס'), ['גלאס']);
+  assert.deepEqual(customerNameWords('בן דוד'), ['בן', 'דוד']);
 });
 
 test('שיחה שנתפסה באמצע השאלה הישנה ממשיכה משם, ולא מתחילה מחדש', async () => {

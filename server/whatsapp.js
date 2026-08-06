@@ -1098,14 +1098,30 @@ export const whatsappService = {
       && !hasCustomerFullName(parent)) {
       const nameCapture = await advanceCustomerNameCapture(normalizedPhone, parent, text);
       if (!nameCapture.done) {
-        await whatsappService.sendBotReply(normalizedPhone, nameCapture.reply, { isSimulator });
+        await whatsappService.sendBotReply(normalizedPhone, nameCapture.reply, {
+          isSimulator,
+          ...(nameCapture.handoff ? { source: 'bot_control' } : {}),
+        });
+        // Asked twice and still not a name: the customer is asking us
+        // something, and a third identical question is a wall.
+        if (nameCapture.handoff) {
+          await recordBotHandoff(normalizedPhone);
+          await notifyStaffOfHandoff({
+            settings,
+            parent,
+            phone: normalizedPhone,
+            customerText: text,
+            reason: 'handoff',
+            isSimulator,
+          });
+        }
         return {
           parent: findPrimaryParent(normalizedPhone) || parent,
           student,
           isNew,
           replied: true,
           reply: nameCapture.reply,
-          reason: 'name_capture',
+          reason: nameCapture.handoff ? 'handoff' : 'name_capture',
         };
       }
       parent = nameCapture.parent || findPrimaryParent(normalizedPhone) || parent;

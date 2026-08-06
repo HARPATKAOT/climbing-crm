@@ -756,12 +756,24 @@ export function hasCustomerFullName(parent) {
 const NON_NAME_WORDS = new Set([
   'כמה', 'מתי', 'איפה', 'האם', 'למה', 'רוצה', 'רוצים', 'צריך', 'צריכה',
   'חוג', 'חוגים', 'מחיר', 'מחירים', 'שעות', 'הרשמה', 'שלום', 'היי', 'אפשר',
+  // A customer answering the name question with a question of their own.
+  // «מזה ai?» was filed as a family name, and the card read "יהודה מזה ai".
+  'מה', 'מזה', 'זה', 'זהו', 'מי', 'איך', 'אתה', 'את', 'אתם', 'בוט', 'רובוט',
+  'ai', 'בינה', 'מלאכותית', 'אדם', 'נציג', 'תודה', 'סליחה', 'רגע', 'כן', 'לא',
 ]);
 
-/** Words accepted only while answering the explicit name question. */
+/**
+ * Words accepted only while answering the explicit name question.
+ *
+ * The bar is deliberately high: whatever comes back here is written into the
+ * customer's card, and a wrong name is read out in every later greeting.
+ */
 export function customerNameWords(input) {
-  const cleaned = String(input || '')
-    .trim()
+  const raw = String(input || '').trim();
+  // A question is not an answer. Somebody who asks something instead of giving
+  // their name is asking, and that message belongs to the model, not the card.
+  if (/[?؟]/.test(raw)) return [];
+  const cleaned = raw
     .replace(/^(?:קוראים\s+לי|שמי|אני|מדבר(?:ת)?|זה)\s*[:,-]?\s*/u, '')
     .replace(/[^\p{L}\p{M}'׳״\-\s]/gu, ' ')
     .replace(/\s+/g, ' ')
@@ -769,7 +781,10 @@ export function customerNameWords(input) {
   if (!cleaned) return [];
   const words = cleaned.split(' ').filter(Boolean);
   if (words.length > 4) return [];
-  if (words.some((word) => word.length < 2 || NON_NAME_WORDS.has(word))) return [];
+  if (words.some((word) => word.length < 2 || NON_NAME_WORDS.has(word.toLowerCase()))) return [];
+  // The question is asked in Hebrew and answered in Hebrew. A Latin word mixed
+  // into the answer is a sign it is not a name at all («מזה ai»).
+  if (/\p{Script=Hebrew}/u.test(cleaned) && /[A-Za-z]/.test(cleaned)) return [];
   return words;
 }
 
@@ -799,6 +814,24 @@ export async function updateCustomerFullName(parent, { firstName, lastName } = {
   if (!updated) return { error: 'שמירת השם נכשלה' };
   await persistCore('parents', updated);
   return { saved: true, parent: updated, name: updated.name };
+}
+
+/**
+ * Asking a second time is fair; a third time is a loop the customer cannot get
+ * out of. Somebody who answers the name question with something else twice —
+ * usually because they are asking us something — gets a person instead.
+ */
+async function askAgainOrHandOff(phone, prior, question) {
+  const attempts = Number(prior.nameAttempts || 0) + 1;
+  await setIntake(phone, { ...prior, nameAttempts: attempts });
+  if (attempts >= 2) {
+    return {
+      done: false,
+      handoff: true,
+      reply: 'רגע — אני מעביר אתכם לצוות שלנו, מישהו יחזור אליכם ממש בקרוב 🙏',
+    };
+  }
+  return { done: false, reply: `סליחה, לא הבנתי 🙂 ${question}` };
 }
 
 /**
@@ -855,7 +888,7 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
   if (prior.step !== 'tools_parent_last_name') {
     const words = customerNameWords(text);
     if (!words.length) {
-      return { done: false, reply: 'סליחה, לא הבנתי 🙂 מה השם הפרטי שלך?' };
+      return askAgainOrHandOff(phone, prior, 'מה השם הפרטי שלך?');
     }
     if (words.length === 1) {
       await setIntake(phone, {
@@ -880,7 +913,7 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
   }
 
   const lastWords = customerNameWords(text);
-  if (!lastWords.length) return { done: false, reply: 'סליחה, לא הבנתי 🙂 מה שם המשפחה?' };
+  if (!lastWords.length) return askAgainOrHandOff(phone, prior, 'מה שם המשפחה?');
   const firstName = String(prior.parentFirstName || existing.firstName || '').trim();
   if (!firstName) {
     await setIntake(phone, { ...prior, step: 'tools_parent_first_name' });
