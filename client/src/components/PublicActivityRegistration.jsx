@@ -808,11 +808,10 @@ export default function PublicActivityRegistration() {
                   {participants.filter((item) => item.type !== 'adult').length > 1 && (
                     <button
                       type="button"
-                      className="event-icon-button"
-                      aria-label="הסרת משתתף"
+                      className="event-remove-button"
                       onClick={() => setParticipants((items) => items.filter((item) => item.key !== participant.key))}
                     >
-                      <Trash2 size={16} />
+                      <Trash2 size={13} /> הסר ילד/ה
                     </button>
                   )}
                 </div>
@@ -855,7 +854,7 @@ export default function PublicActivityRegistration() {
                 emptyParticipant(questions),
               ])}
             >
-              <Plus size={17} /> הוספת ילד/ה למשפחה
+              <Plus size={17} /> הוספת ילד/ה נוסף/ת
             </button>
             <p className="event-hint" style={{ marginTop: 8 }}>
               הוספת ילד/ה מיועדת רק לילד שאתם הורה או אפוטרופוס שלו. ילד ממשפחה אחרת נרשם בקישור נפרד על ידי הורהו.

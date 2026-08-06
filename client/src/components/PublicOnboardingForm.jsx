@@ -1274,7 +1274,12 @@ export default function PublicOnboardingForm() {
     // Existing customers get these values from their file immediately after
     // OTP. New customers fill only the values that are genuinely missing.
     if (!parent.email.trim()) {
-      setError('יש למלא אימייל');
+      setError('יש למלא כתובת אימייל — זהו שדה חובה');
+      return;
+    }
+    // כתובת עם שגיאת הקלדה גרועה משדה ריק: הטופס נשלח, והקבלה לא מגיעה לאיש.
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(parent.email.trim())) {
+      setError('כתובת האימייל לא תקינה — בדקו שיש @ וסיומת (למשל name@gmail.com)');
       return;
     }
     if (!parent.city.trim()) {
@@ -1815,6 +1820,12 @@ export default function PublicOnboardingForm() {
   const currentFullIndex = currentChild
     ? children.findIndex((c) => c === currentChild || (c.name === currentChild.name && c.id === currentChild.id))
     : 0;
+  // הכפתור אומר על מי ההצהרה. "המשך להצהרת בריאות" השאיר את ההורה לנחש על מי
+  // מהילדים שמילא עומדים לשאול — השמות הם התשובה.
+  const healthChildNames = kids.map((kid) => String(kid.name || '').trim()).filter(Boolean);
+  const healthNamesText = healthChildNames.length > 1
+    ? `${healthChildNames.slice(0, -1).join(', ')} ו${healthChildNames[healthChildNames.length - 1]}`
+    : (healthChildNames[0] || '');
   // Steps 1 and 2 are fixed; step 3 repeats once per child who still has to sign.
   const displayStep = healthOnlyMode && step === 3
     ? 2
@@ -1948,6 +1959,11 @@ export default function PublicOnboardingForm() {
             <div className="section-title">
               פרטי ממלא/ת הטופס
             </div>
+            {/* הכוכבית לבדה לא אומרת כלום למי שלא מכיר את המוסכמה. שורה אחת
+                בראש הסעיף מסבירה אותה פעם אחת, במקום להסביר ליד כל שדה. */}
+            <div className="required-legend">
+              שדות המסומנים ב־<span className="req-star">*</span> הם שדות חובה
+            </div>
             {/* First name and surname are separate on purpose: the surname is
                 what recognises a second parent of a household we already know,
                 and it also reaches the invoice. Guessing it from the last word
@@ -1973,13 +1989,14 @@ export default function PublicOnboardingForm() {
               </div>
             </div>
             <div className="form-group">
-              <label>Email *</label>
+              <label>אימייל <span className="req-star">*</span></label>
               <input
                 type="email"
                 value={parent.email}
                 onChange={(e) => setParent((p) => ({ ...p, email: e.target.value }))}
                 placeholder="name@email.com"
               />
+              <small className="field-hint">שדה חובה — לכתובת הזו נשלחות הקבלות והחשבוניות</small>
             </div>
             <div className="form-group">
               <label>מקום מגורים *</label>
@@ -2178,8 +2195,8 @@ export default function PublicOnboardingForm() {
                     )}
                   </div>
                   {child.type !== 'adult' && children.length > 1 && !child.onFileHealthValid && (
-                    <button type="button" className="clear-btn" onClick={() => removeChild(index)}>
-                      <Trash2 size={12} style={{ display: 'inline', verticalAlign: 'middle' }} /> הסר
+                    <button type="button" className="clear-btn is-danger" onClick={() => removeChild(index)}>
+                      <Trash2 size={13} style={{ display: 'inline', verticalAlign: 'middle' }} /> הסר ילד/ה
                     </button>
                   )}
                 </div>
@@ -2565,11 +2582,14 @@ export default function PublicOnboardingForm() {
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16,
                 }}
               >
-                <Plus size={16} /> הוספת ילד/ה למשפחה
+                <Plus size={16} /> הוספת ילד/ה נוסף/ת
               </button>}
             {error && <ErrorBox message={error} />}
             <button type="button" className="event-primary" onClick={goNextFromChildren}>
-              {healthOnlyMode ? 'שמירת הפרטים וחזרה להצהרת הבריאות' : 'המשך להצהרת בריאות'} <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} />
+              {healthOnlyMode
+                ? 'שמירת הפרטים וחזרה להצהרת הבריאות'
+                : (healthNamesText ? `המשך להצהרת הבריאות של ${healthNamesText}` : 'המשך להצהרת בריאות')}
+              {' '}<ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} />
             </button>
           </div>
         )}
@@ -2916,6 +2936,9 @@ function FormStyles() {
         .form-row { display: flex; gap: 12px; flex-wrap: wrap; }
         .form-row .form-group { flex: 1 1 140px; margin-bottom: 14px; }
         .form-group label { display: block; margin-bottom: 6px; font-size: 14px; color: #cbd5e1; }
+        .req-star { color: #f87171; font-weight: 800; }
+        .required-legend { margin: -10px 0 16px; font-size: 12px; color: #94a3b8; }
+        .field-hint { display: block; margin-top: 6px; font-size: 12px; color: #94a3b8; line-height: 1.5; }
         .form-group input, .form-group select, .form-group textarea {
           width: 100%; padding: 12px 14px; border-radius: 11px;
           border: 1px solid rgba(255,255,255,.15); background: #0b1220;
@@ -2948,6 +2971,14 @@ function FormStyles() {
           color: #cbd5e1; border-radius: 6px; padding: 2px 8px;
           font-size: 11px; cursor: pointer;
         }
+        /* מחיקת משתתף היא פעולה הרסנית — היא נראית ככזאת, ולא ככפתור עזר אפור. */
+        .clear-btn.is-danger {
+          color: #fca5a5; border-color: rgba(248,113,113,.55);
+          background: rgba(248,113,113,.12); font-size: 12px;
+          font-weight: 700; padding: 5px 11px; border-radius: 8px;
+          display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+        }
+        .clear-btn.is-danger:hover { background: rgba(248,113,113,.2); color: #fecaca; }
         .event-signature { border: 0; border-radius: 0; height: 150px; cursor: crosshair; }
         .onboard-page .event-primary {
           width: 100%;
