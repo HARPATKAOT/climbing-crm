@@ -2873,19 +2873,10 @@ export default function PublicOnboardingForm() {
                     canonical details travel unchanged in the submission and
                     are shown read-only beside the declaration on the next
                     screen. Only an incomplete old profile opens fields. */}
-                {/* The signer answered all of this one screen ago, on their own
-                    details. Asking for it again here — in fields that are read
-                    only anyway — made the same form appear twice. */}
-                {selfCardFromDetails(child) && (
-                  <ParticipantProfileSummary
-                    participant={child}
-                    onEdit={() => {
-                      setEditingParentProfile(true);
-                      setError('');
-                      setStep(1);
-                    }}
-                  />
-                )}
+                {/* Nothing is repeated back here. The signer's own details were
+                    filled one screen ago, so their card carries what every other
+                    participant's carries: their name, and where their health
+                    declaration stands. */}
                 {fillsOwnDetails(child) && !hasLockedParticipantProfile(child)
                   && !selfCardFromDetails(child) && (
                 <>
