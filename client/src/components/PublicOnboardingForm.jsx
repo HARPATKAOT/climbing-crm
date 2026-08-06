@@ -216,19 +216,24 @@ function ParticipantProfileSummary({ participant, onEdit }) {
             {participant?.name || '—'}
           </div>
         </div>
-        <button
-          type="button"
-          onClick={onEdit}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            background: 'rgba(255,255,255,.06)',
-            border: '1px solid rgba(255,255,255,.2)', borderRadius: 11,
-            color: '#fff', padding: '9px 12px', cursor: 'pointer',
-            fontFamily: 'inherit', fontSize: 13, fontWeight: 700,
-          }}
-        >
-          <Pencil size={14} /> עריכת פרטים
-        </button>
+        {/* Only where the details are still being collected. On the declaration
+            screen they are what is about to be signed, and a form does not offer
+            to change the document while it is being signed. */}
+        {onEdit && (
+          <button
+            type="button"
+            onClick={onEdit}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              background: 'rgba(255,255,255,.06)',
+              border: '1px solid rgba(255,255,255,.2)', borderRadius: 11,
+              color: '#fff', padding: '9px 12px', cursor: 'pointer',
+              fontFamily: 'inherit', fontSize: 13, fontWeight: 700,
+            }}
+          >
+            <Pencil size={14} /> עריכת פרטים
+          </button>
+        )}
       </div>
       <dl style={{
         display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
@@ -3084,20 +3089,7 @@ export default function PublicOnboardingForm() {
                     on file, so the parent — who is on the same screen answering
                     about themselves — had nothing but the heading to go by. */}
                 {hasCompleteParticipantProfile(currentChild) && !currentChild.editProfile && (
-                  <ParticipantProfileSummary
-                    participant={currentChild}
-                    onEdit={() => {
-                      if (currentChild.type === 'adult') {
-                        setEditingParentProfile(true);
-                        setError('');
-                        setStep(1);
-                        return;
-                      }
-                      updateChild(currentFullIndex, { editProfile: true });
-                      setError('');
-                      setStep(2);
-                    }}
-                  />
+                  <ParticipantProfileSummary participant={currentChild} />
                 )}
                 {/* Screening first: what we need to know before anyone climbs,
                     and answered כן/לא rather than ticked — a blank box would
@@ -3266,21 +3258,19 @@ export default function PublicOnboardingForm() {
                     </div>
                   </>
                 )}
-                <div className="section-title">כללי בטיחות</div>
+                {/* בקשה אחת בכותרת, במקום כותרת ואחריה שורה אדומה שאומרת
+                    כמעט את אותו הדבר. */}
+                <div className="section-title">
+                  כללי בטיחות
+                  {kids.some((kid) => kid.type !== 'adult')
+                    ? ' — אנא הסבירו אותם גם לילדיכם'
+                    : ''}
+                </div>
                 <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
                   {signingNames.length > 1
                     ? `הכללים חלים על כל המשתתפים: ${signingFirstNames.join(', ')}. יש לסמן את כולם לאחר שקראתם אותם.`
                     : 'יש לסמן את כל הכללים לאחר שקראתם אותם.'}
                 </p>
-                {/* למי שחותם רק על עצמו אין למי להסביר, ולמי שחותם גם על עצמו
-                    וגם על ילדו הכללים חלים על שניהם — ומכאן ה„גם”. */}
-                {kids.some((kid) => kid.type !== 'adult') && (
-                  <p className="child-safety-notice">
-                    {kids.some((kid) => kid.type === 'adult')
-                      ? 'אנא הסבירו גם לילדכם את כללי הבטיחות.'
-                      : 'אנא הסבירו לילדכם את כללי הבטיחות.'}
-                  </p>
-                )}
                 {sharedConfirmations.map((q) => (
                   <label key={q.id} className="event-check" style={{ marginBottom: 10 }}>
                     <input
