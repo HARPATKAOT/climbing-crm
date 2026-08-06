@@ -3071,6 +3071,22 @@ export default function PublicOnboardingForm() {
                   background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.1)',
                   borderRadius: 12, padding: 14, marginBottom: 16,
                 }}>
+                  {/* „המפורטים לעיל” — ולכן הרשימה היא חלק מהחוזה, בתוך אותה
+                      חלונית ומעל הנוסח שמפנה אליה, ולא הערה לידו. */}
+                  {signingNames.length > 0 && (
+                    <div style={{
+                      marginBottom: 12, paddingBottom: 12,
+                      borderBottom: '1px solid rgba(255,255,255,0.12)',
+                      fontSize: 13, lineHeight: 1.7, color: 'rgba(255,255,255,0.85)',
+                    }}>
+                      <div style={{ color: 'rgba(255,255,255,0.6)', marginBottom: 4 }}>
+                        המסמך נחתם על ידי {parentFullName()} עבור המשתתפים הבאים:
+                      </div>
+                      {signingNames.map((name) => (
+                        <div key={name} style={{ fontWeight: 700 }}>• {name}</div>
+                      ))}
+                    </div>
+                  )}
                   <div
                     ref={waiverBoxRef}
                     onScroll={handleWaiverScroll}
@@ -3104,22 +3120,6 @@ export default function PublicOnboardingForm() {
                 <div className="section-title" style={{ marginTop: 20 }}>
                   {healthOnlyMode ? 'חתימה על הצהרת הבריאות' : 'חתימה על הצהרת בריאות והסרת אחריות'}
                 </div>
-                {/* המסמך אומר „המפורטים לעיל”, ולכן הרשימה הזאת היא חלק ממנו ולא
-                    כותרת: היא מה שקובע על מי החתימה חלה. */}
-                {!healthOnlyMode && signingNames.length > 0 && (
-                  <div style={{
-                    background: 'rgba(0,0,0,0.22)', border: '1px solid rgba(255,255,255,0.1)',
-                    borderRadius: 12, padding: 12, marginBottom: 12,
-                    fontSize: 13, lineHeight: 1.7, color: 'rgba(255,255,255,0.85)',
-                  }}>
-                    <div style={{ color: 'rgba(255,255,255,0.6)', marginBottom: 6 }}>
-                      החתימה חלה על {parentFullName()} ועל המשתתפים הבאים:
-                    </div>
-                    {signingNames.map((name) => (
-                      <div key={name} style={{ fontWeight: 700 }}>• {name}</div>
-                    ))}
-                  </div>
-                )}
                 <div className="canvas-container">
                   <div className="canvas-toolbar">
                     <span style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
