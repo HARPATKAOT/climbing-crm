@@ -1441,7 +1441,12 @@ export default function PublicOnboardingForm() {
   const healthChildren = () => namedChildren().filter((child) => fillsDeclaration(child));
 
   // Presented once, after the last participant's medical questions.
-  const sharedConfirmations = sharedConfirmationList(healthChildren());
+  const allSharedConfirmations = sharedConfirmationList(healthChildren());
+  // The fitness declaration is not a safety rule — it is what the signer states
+  // about the people they are signing for, so it is read where they sign.
+  const isFitnessDeclaration = (q) => String(q?.id || '').toLowerCase() === 'h1';
+  const sharedConfirmations = allSharedConfirmations.filter((q) => !isFitnessDeclaration(q));
+  const fitnessDeclarations = allSharedConfirmations.filter(isFitnessDeclaration);
   const sharedSubSteps = () => (sharedConfirmations.length ? [SUB_ACTIVITY, SUB_WAIVER] : [SUB_WAIVER]);
   const signingNames = healthChildren().map((kid) => String(kid.name || '').trim()).filter(Boolean);
 
@@ -1803,7 +1808,7 @@ export default function PublicOnboardingForm() {
       }
       setChildren((current) => current.map((child) => {
         if (!kids.some((kid) => kid === child || (kid.name === child.name && kid.id === child.id))) return child;
-        const own = confirmationsFor(child);
+        const own = confirmationsFor(child).filter((q) => !isFitnessDeclaration(q));
         return {
           ...child,
           answers: {
@@ -1819,6 +1824,10 @@ export default function PublicOnboardingForm() {
 
     if (healthOnlyMode && !healthDeclarationAccepted) {
       setError('יש לאשר שהמידע בהצהרת הבריאות מלא, נכון ומעודכן');
+      return;
+    }
+    if (!healthOnlyMode && fitnessDeclarations.some((q) => activityConfirmed[q.id] !== true)) {
+      setError('יש לאשר את הצהרת הכשירות');
       return;
     }
     if (!healthOnlyMode && !waiverAccepted) {
@@ -1838,8 +1847,13 @@ export default function PublicOnboardingForm() {
     const withSig = children.map((c) => {
       const signing = kids.some((kid) => kid === c || (kid.name === c.name && kid.id === c.id));
       if (!signing) return c;
+      const ownFitness = confirmationsFor(c).filter(isFitnessDeclaration);
       return {
         ...c,
+        answers: {
+          ...(c.answers || {}),
+          ...Object.fromEntries(ownFitness.map((q) => [q.id, activityConfirmed[q.id] === true])),
+        },
         signature,
         healthAccepted: healthOnlyMode ? true : c.healthAccepted,
         waiverAccepted: !healthOnlyMode,
@@ -3249,6 +3263,19 @@ export default function PublicOnboardingForm() {
                     )}
                   </div>
                 </div>
+                {fitnessDeclarations.map((q) => (
+                  <label key={q.id} className="event-check" style={{ marginBottom: 10 }}>
+                    <input
+                      type="checkbox"
+                      checked={activityConfirmed[q.id] === true}
+                      onChange={(e) => setActivityConfirmed((current) => ({
+                        ...current,
+                        [q.id]: e.target.checked,
+                      }))}
+                    />
+                    <span>{questionLabel(q)}</span>
+                  </label>
+                ))}
                 <label className="event-check" style={{ opacity: waiverRead ? 1 : 0.55 }}>
                   <input
                     type="checkbox"
