@@ -39,6 +39,8 @@ export const CUSTOMER_TOOL_RULES = [
   'קישור הרשמה לחוג כן מותר לשלוח — קרא ל-getSignupLink עם הכיתה או השכבה, ואם צריך גם יום ושעה. אם חזרו כמה קבוצות, שאל לאיזו מהן ואל תשלח קישור.',
   `שאלה על הצהרת בריאות, הסרת אחריות או טפסים: בדוק ב-getHealthDeclarations. למי שאין ${FORM_SHORT} בתוקף — שלח את הקישור למילוי וציין את שם המתאמן. למי שיש — אמור עד מתי הוא בתוקף, בלי לשלוח קישור.`,
   `שם הטופס הוא «${FORM_SHORT}», ובפעם הראשונה שמזכירים אותו בשיחה יש לפרט: ${FORM_FULL}. לעולם אל תקרא לו «הצהרת בריאות» בלבד — גם לא כשמדובר בטופס שכבר נחתם — כי זה מבטיח ללקוח פחות ממה שהוא באמת ממלא.`,
+  'הודעה שמתחילה ב-[מערכת] היא עדכון מהמערכת ולא דברי הלקוח: אל תצטט אותה, אל תודה עליה, ואל תתייחס אליה כאילו הלקוח כתב אותה. קרא את ההיסטוריה והמשך מהמקום שבו השיחה נעצרה.',
+  `כשמתקבל עדכון ש${FORM_SHORT} של מתאמן נחתם: בדוק ב-getHealthDeclarations שהוא אכן בתוקף, ואם בשיחה כבר סוכמו קבוצה, יום ושעה — אמור שהטופס התקבל ושאל אישור לשבץ אליהם עכשיו («לשבץ את X ליום ג׳ 17:10?»). אל תשבץ לפני שהלקוח אישר. אם לא סוכמה קבוצה — שאל לאיזו קבוצה לשבץ.`,
   'קישור ששלחת כבר בשיחה הזאת — אל תשלח שוב ואל תחזור על ההסבר שלו. הזכר אותו במשפט קצר («הקישור למעלה») רק אם הלקוח שאל עליו או אמר שלא קיבל. שלוש הודעות ברצף שפותחות באותה כותרת ובאותו קישור נקראות כמו נדנוד.',
   'ענה על מה שנשאלת. אם הלקוח בחר שעה או מסר שם — אשר את מה שהוא אמר והמשך משם, במקום לפתוח מחדש את אותו הסבר על הטופס.',
   'שאלה «למה צריך X» או «מה זה» על ציוד, או «על מה משלמים דמי העשרה» — קרא ל-getEquipmentInfo וענה ממה שכתוב שם. אם ההסבר חסר — אל תמציא אותו מהידע הכללי שלך.',
@@ -311,11 +313,16 @@ export async function runCustomerToolTurn({
           reason: 'invalid_grade_question',
         };
       }
+      // Both of these are the bot about to tell a customer that something was
+      // done. The claim is dropped — but the customer is left mid-task, so the
+      // turn ends with a person, not with a dead end. "לא הצלחתי לאמת שהפעולה
+      // בוצעה… אפשר לנסות שוב" was sent to a parent asking how to continue
+      // after signing the form: nothing to try again, and nobody told.
       if (unbacked.includes('registered_status')) {
         console.error('bot claimed a completed registration without a registered CRM status');
         return {
-          text: 'אין לי אישור שההרשמה הושלמה, ולכן אני לא יכול לומר שהילד/ה כבר רשום/ה. צריך להסתמך על אישור ההרשמה או על הצוות.',
-          handoff: false,
+          text: 'רגע — אני רוצה לוודא את מצב ההרשמה מול הצוות כדי לא למסור לכם מידע שגוי 🙏\nמישהו יחזור אליכם.',
+          handoff: true,
           unsure: false,
           toolsUsed,
           reason: 'unverified_registration',
@@ -324,8 +331,8 @@ export async function runCustomerToolTurn({
       if (unbacked.length) {
         console.error(`bot claimed an action without a successful tool: ${unbacked.join(', ')}`);
         return {
-          text: 'לא הצלחתי לאמת שהפעולה בוצעה במערכת, ולכן אני לא מאשר שבוצע שינוי. אפשר לנסות שוב.',
-          handoff: false,
+          text: 'רגע — אני לא רואה שהפעולה נקלטה במערכת, ואני לא רוצה לאשר משהו שלא קרה 🙏\nמעביר לצוות ומישהו יחזור אליכם.',
+          handoff: true,
           unsure: false,
           toolsUsed,
           reason: 'unverified_action',

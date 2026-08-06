@@ -20,6 +20,7 @@ import {
 } from './whatsapp.js';
 import { whatsappConnectService } from './whatsappConnect.js';
 import { automationsService, runScheduledAutomationsIfDue } from './automations.js';
+import { resumeConversationAfterForm } from './botFormResume.js';
 import { israelTimeToEpoch, runShiftRemindersIfDue, notifyShiftAssigned } from './shiftAlerts.js';
 import {
   DENOMINATIONS,
@@ -14314,6 +14315,17 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   // meant a submission refused for a missing birth date burned the
   // verification, and the correction came back "אימות הטלפון פג".
   otpService.consumeToken(otpToken, verified.phone);
+
+  // The bot was waiting for exactly this. It reads the conversation it was
+  // having and asks whether to place the trainee in the class already agreed —
+  // it never places anyone by itself. A failure here must not fail the form.
+  if (!healthOnly) {
+    resumeConversationAfterForm({
+      phone: parent?.phone || verified.phone,
+      studentNames: savedStudents.map((student) => student?.name).filter(Boolean),
+      whatsappService,
+    }).catch((err) => console.error('bot resume after form failed:', err.message));
+  }
 
   res.status(201).json({
     success: true,

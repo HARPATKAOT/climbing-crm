@@ -174,7 +174,10 @@ test('a completed action claim is blocked unless a write tool succeeded this tur
     callModel: scriptedModel([textReply('העברתי את שקד לקבוצה של יום שלישי בשעה 16:00')]),
   });
   assert.equal(turn.reason, 'unverified_action');
-  assert.equal(turn.handoff, false);
+  // The claim is dropped, and the turn ends with a person. A customer in the
+  // middle of registering was told "I could not verify the action, try again" —
+  // nothing to try, and nobody on the team heard about it.
+  assert.equal(turn.handoff, true);
   assert.doesNotMatch(turn.text, /העברתי/);
 
   assert.deepEqual(
@@ -194,7 +197,8 @@ test('the bot cannot call a pending trainee registered without registered CRM ev
     callModel: scriptedModel([textReply('ראם כבר רשום לחוג')]),
   });
   assert.equal(turn.reason, 'unverified_registration');
-  assert.match(turn.text, /אין לי אישור/);
+  assert.equal(turn.handoff, true);
+  assert.match(turn.text, /לוודא את מצב ההרשמה/);
 
   assert.deepEqual(
     unbackedReplyClaims('ראם כבר רשום לחוג', [
