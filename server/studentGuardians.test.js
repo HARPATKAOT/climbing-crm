@@ -20,6 +20,7 @@ import {
   unlinkGuardian,
 } from './studentGuardians.js';
 import { saveCrmParticipants } from './crmWaiverService.js';
+import { CANONICAL_HEALTH_QUESTIONS } from './participationDocuments.js';
 import { declarationGap, mustConfirm } from './healthQuestions.js';
 import { addPendingSpouse, ensureHouseholdForParent, splitExplicitHousehold } from './households.js';
 
@@ -83,16 +84,10 @@ function createDb(seed = {}) {
 
 const persist = async () => ({ ok: true });
 const mum = { name: 'רותם לוי', phone: '0539998888', email: 'rotem@example.com' };
+// Derived from the canonical list, not spelled out: a question added to the
+// declaration must not turn every fixture here into "unanswered".
 const healthyAnswers = {
-  m1: false,
-  m2: false,
-  m3: false,
-  m4: false,
-  m5: false,
-  m6: false,
-  m7: false,
-  m8: false,
-  m9: false,
+  ...Object.fromEntries(CANONICAL_HEALTH_QUESTIONS.map((question) => [question.id, false])),
   required: true,
 };
 const signedNoam = {

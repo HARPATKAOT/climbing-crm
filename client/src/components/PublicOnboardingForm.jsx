@@ -24,6 +24,7 @@ import { joinParentName, splitParentName } from '../utils/parentName.js';
 import {
   blankAnswers,
   clearanceTriggers,
+  detailPrompt,
   hasPositiveScreening,
   isScreeningQuestion,
   needsMedicalClearance,
@@ -328,7 +329,16 @@ function ParentProfileSummary({ parent, onEdit }) {
   );
 }
 
-function ExistingDeclarationSummary({ participant, questions, templateSlug }) {
+/**
+ * The declaration already on file, in one of two voices.
+ *
+ * `renewal` answers "what stays in force if we do not renew", beside the offer
+ * to re-sign. `inForce` answers a different question — "this is what we hold
+ * for you" — and is what the medical screen shows before asking whether
+ * anything has changed since. The same facts, but a summary that reads as a
+ * warning about losing something is the wrong thing to put above that question.
+ */
+function ExistingDeclarationSummary({ participant, questions, templateSlug, variant = 'renewal' }) {
   const summary = participant?.onFileDeclarationSummary || {};
   const health = summary.health || null;
   const waiver = summary.waiver || null;
@@ -342,13 +352,44 @@ function ExistingDeclarationSummary({ participant, questions, templateSlug }) {
     : 'אישור פעילות בקיר';
   const signedAt = health?.signedAt || participant?.onFileHealthSignedAt || '';
   const waiverSignedAt = waiver?.signedAt || participant?.onFileWaiverSignedAt || '';
+  const boxStyle = {
+    margin: '10px 0', padding: '10px 12px', borderRadius: 9,
+    background: 'rgba(2,6,23,.28)', border: '1px solid rgba(255,255,255,.1)',
+    color: 'rgba(255,255,255,.66)', fontSize: 11.5, lineHeight: 1.6,
+  };
+
+  if (variant === 'inForce') {
+    const forSelf = participant?.type === 'adult';
+    const name = String(participant?.name || '').trim();
+    // The detail that was written under each "yes" is kept as "question — what
+    // was said", so it can be shown back as the sentence it was answered as.
+    const reportedLines = String(health?.notes || '').trim()
+      ? String(health.notes).split('\n').map((line) => line.trim()).filter(Boolean)
+      : positiveQuestions.map((question) => questionLabel(question));
+
+    return (
+      <div style={{ ...boxStyle, fontSize: 13 }}>
+        <div style={{ color: 'rgba(255,255,255,.85)' }}>
+          {forSelf || !name ? 'יש לך הצהרת בריאות בתוקף' : `ל${name} יש הצהרת בריאות בתוקף`}
+          {signedAt ? `, ${forSelf || !name ? 'שחתמת עליה' : 'שנחתמה'} ב-${formatSignedDay(signedAt)}` : ''}
+          {health?.expiresAt ? ` (בתוקף עד ${formatSignedDay(health.expiresAt)})` : ''}.
+        </div>
+        <div style={{ marginTop: 4 }}>
+          {!answeredQuestions.length && !reportedLines.length
+            ? 'התשובות עצמן לא נשמרו ברשומה הישנה, ולכן אין מה להציג מתוכה כאן.'
+            : reportedLines.length
+              ? `בהצהרה הזאת ${forSelf ? 'דיווחת' : 'דיווחתם'} על:`
+              : `בהצהרה הזאת לא ${forSelf ? 'דיווחת' : 'דיווחתם'} לנו על מגבלות רפואיות.`}
+        </div>
+        {reportedLines.map((line) => (
+          <div key={line} style={{ marginTop: 2, paddingInlineStart: 10 }}>· {line}</div>
+        ))}
+      </div>
+    );
+  }
 
   return (
-    <div style={{
-      margin: '10px 0', padding: '10px 12px', borderRadius: 9,
-      background: 'rgba(2,6,23,.28)', border: '1px solid rgba(255,255,255,.1)',
-      color: 'rgba(255,255,255,.66)', fontSize: 11.5, lineHeight: 1.6,
-    }}>
+    <div style={boxStyle}>
       <div style={{ color: 'rgba(255,255,255,.82)', fontWeight: 800, marginBottom: 3 }}>
         מה יישאר בתוקף אם לא מחדשים
       </div>
@@ -474,6 +515,9 @@ const emptyChild = (questions = []) => {
     answers,
     // Free-text detail per screening question answered "yes", keyed by q.id.
     answerNotes: {},
+    // Only asked of someone whose declaration is already in force: null until
+    // they answer, and there is no way past the screen while it is null.
+    healthChanged: null,
     healthAccepted: false,
     waiverAccepted: false,
     signature: '',
@@ -499,6 +543,9 @@ function participantFromExistingStudent(student, questions = [], {
     onFileDeclarationSummary: student?.declarationSummary || null,
     renewOptIn: forceHealthRenewal,
     resignHealth: forceHealthRenewal,
+    // Arriving on a renewal link is itself the answer, so the question is not
+    // put again to someone who came to re-sign.
+    healthChanged: forceHealthRenewal ? true : null,
   };
 }
 
@@ -536,6 +583,12 @@ export default function PublicOnboardingForm() {
   const [step, setStep] = useState(1);
   const [childHealthIndex, setChildHealthIndex] = useState(0);
   const [healthSubStep, setHealthSubStep] = useState(SUB_HEALTH);
+  // The activity clauses and the waiver are agreed to once, by the signer, for
+  // everyone they are signing for — so their state lives on the form and not on
+  // a participant. Each participant's record still receives its own copy.
+  const [activityConfirmed, setActivityConfirmed] = useState({});
+  const [waiverAccepted, setWaiverAccepted] = useState(false);
+  const [healthDeclarationAccepted, setHealthDeclarationAccepted] = useState(false);
   const [listDefs, setListDefs] = useState([]);
   const [requiredListKey, setRequiredListKey] = useState('classes');
   const [subscriptions, setSubscriptions] = useState({ classes: true });
@@ -608,13 +661,20 @@ export default function PublicOnboardingForm() {
   const confirmationsFor = (participant) => questionsForParticipant(participant)
     .filter((q) => !isScreeningQuestion(q));
   /**
-   * Which screens this participant actually has. A health renewal has no
-   * activity clauses at all, and navigating by ±1 would walk the signer into an
-   * empty screen — so both directions step through this list instead.
+   * The clauses to present once for the whole family: every clause that applies
+   * to at least one of the participants being signed for. A clause aimed at a
+   * child is still not written onto an adult's record — that happens when the
+   * tick is copied out, per participant.
    */
-  const subStepsFor = (participant) => (confirmationsFor(participant).length
-    ? [SUB_HEALTH, SUB_ACTIVITY, SUB_WAIVER]
-    : [SUB_HEALTH, SUB_WAIVER]);
+  const sharedConfirmationList = (participants) => {
+    const seen = new Map();
+    (participants || []).forEach((participant) => {
+      confirmationsFor(participant).forEach((q) => {
+        if (q?.id && !seen.has(q.id)) seen.set(q.id, q);
+      });
+    });
+    return [...seen.values()];
+  };
   // The signer's own name goes into the summary they read, and into a template
   // written with {{שם החותם}} — the same person either way.
   const signerName = joinParentName(parent.name, parent.lastName);
@@ -791,14 +851,20 @@ export default function PublicOnboardingForm() {
    * and someone already on this file — including the parent themselves, who
    * would otherwise be handed their own whole form again on the next visit.
    */
+  // `resignHealth` is answered on the medical screen and has to end the reuse
+  // on every route into it. Guarding only the on-file branch left a child
+  // matched to another parent's file reusing a declaration they had just told
+  // us was out of date.
   const reusesDeclaration = (child) => {
-    if (child?.onFileHealthValid && !child?.resignHealth) return true;
+    if (child?.resignHealth) return false;
+    if (child?.onFileHealthValid) return true;
     const known = knownChildren[childKey(child)];
     return !!(known?.linked && known.health_valid);
   };
 
   const reusesHealthDocument = (child) => {
-    if (child?.onFileHealthDocumentValid && !child?.resignHealth) return true;
+    if (child?.resignHealth) return false;
+    if (child?.onFileHealthDocumentValid) return true;
     const known = knownChildren[childKey(child)];
     return !!(known?.linked && (known.health_document_valid ?? known.health_valid));
   };
@@ -839,14 +905,34 @@ export default function PublicOnboardingForm() {
     && !child?.renewOptIn
     && !skipsThisRound(child);
 
-  /** Whether this card's own fields and declaration are being asked for now. */
+  /**
+   * Whether this participant gets a medical screen at all.
+   *
+   * Everyone in the submission does. A declaration in force used to skip the
+   * screen entirely, so a family whose child had developed asthma since signing
+   * was never asked — the form simply carried the old answers forward in
+   * silence. Now the screen is reached either way; what it asks is the
+   * difference, and the reuse decision stays where it already lives, in the
+   * per-participant `reuse_health` / `reuse_waiver` flags sent to the server.
+   */
   const fillsDeclaration = (child) => !skipsThisRound(child)
-    && !awaitingRenewChoice(child)
-    && !reusesDeclaration(child);
+    && !awaitingRenewChoice(child);
 
+  /**
+   * Shown the "has anything changed since?" question instead of the
+   * questionnaire: this participant is covered by a declaration in force and
+   * has not said otherwise.
+   */
+  const asksHealthChange = (child) => reusesDeclaration(child);
+
+  /** Whether this card's own identity fields are asked for on the participants step. */
+  const fillsOwnDetails = (child) => fillsDeclaration(child) && !reusesDeclaration(child);
+
+  // Parent, participants, one medical screen per participant, and one last step
+  // for the shared clauses and the single signature.
   const totalStepsLabel = healthOnlyMode
-    ? 2
-    : 2 + Math.max(
+    ? 3
+    : 3 + Math.max(
         children.filter((c) => c.name.trim() && fillsDeclaration(c)).length,
         1
       );
@@ -953,6 +1039,7 @@ export default function PublicOnboardingForm() {
               onFileWaiverSignedAt: s.waiverSignedAt || s.waiver_signed_at || '',
               onFileDeclarationSummary: s.declarationSummary || null,
               resignHealth: false,
+              healthChanged: null,
               waiverAccepted: false,
               signature: '',
             };
@@ -1245,6 +1332,11 @@ export default function PublicOnboardingForm() {
 
   const healthChildren = () => namedChildren().filter((child) => fillsDeclaration(child));
 
+  // Presented once, after the last participant's medical questions.
+  const sharedConfirmations = sharedConfirmationList(healthChildren());
+  const sharedSubSteps = () => (sharedConfirmations.length ? [SUB_ACTIVITY, SUB_WAIVER] : [SUB_WAIVER]);
+  const signingNames = healthChildren().map((kid) => String(kid.name || '').trim()).filter(Boolean);
+
   const goNextFromParent = async () => {
     setError('');
     if (String(parent.idNumber || '').replace(/\D/g, '').length < 5 || !parent.phone.trim()) {
@@ -1520,16 +1612,24 @@ export default function PublicOnboardingForm() {
       (c) => c === current || (c.name.trim() === current.name.trim() && c.id === current.id)
     );
 
-    // Each screen answers for its own content only: a missing tick on the
-    // activity clauses must not be reported while the medical questions are up.
-    const subSteps = subStepsFor(current);
-    const goToNextSubStep = () => {
-      const next = subSteps[subSteps.indexOf(healthSubStep) + 1];
-      setHealthSubStep(next);
-      if (next === SUB_WAIVER) initCanvas();
-    };
-
     if (healthSubStep === SUB_HEALTH) {
+      // A declaration in force is reused only after someone said it is still
+      // true. Silence is not that answer, so the screen cannot be passed by
+      // ignoring the question.
+      if (asksHealthChange(current)) {
+        if (children[fullIndex]?.healthChanged !== false) {
+          setError(`יש לענות אם חל שינוי במצב הבריאותי של ${current.name || 'המשתתף/ת'} מאז ההצהרה הקודמת`);
+          return;
+        }
+        if (childHealthIndex < kids.length - 1) {
+          setChildHealthIndex((i) => i + 1);
+          return;
+        }
+        const nextShared = sharedSubSteps();
+        setHealthSubStep(nextShared[0]);
+        if (nextShared[0] === SUB_WAIVER) initCanvas();
+        return;
+      }
       const answers = children[fullIndex]?.answers || {};
       const screening = screeningFor(current);
       if (unansweredQuestions(screening, answers).length) {
@@ -1559,25 +1659,50 @@ export default function PublicOnboardingForm() {
         setError(overBudget);
         return;
       }
-      goToNextSubStep();
+      // The medical half is per person — asthma is a fact about one body. What
+      // follows is not: the activity is the same activity for the whole family,
+      // and the waiver is one undertaking by one signer. So the health screen
+      // walks the participants, and only the last one opens the shared screens.
+      if (childHealthIndex < kids.length - 1) {
+        setChildHealthIndex((i) => i + 1);
+        return;
+      }
+      const shared = sharedSubSteps();
+      setHealthSubStep(shared[0]);
+      if (shared[0] === SUB_WAIVER) initCanvas();
       return;
     }
 
     if (healthSubStep === SUB_ACTIVITY) {
-      const answers = children[fullIndex]?.answers || {};
-      if (unansweredQuestions(confirmationsFor(current), answers).length) {
+      // Ticked once, recorded for everyone: each participant's own record must
+      // still say which clauses were agreed to for them, and a clause that
+      // does not apply to a participant is never written onto their record.
+      const missing = sharedConfirmations.filter((q) => activityConfirmed[q.id] !== true);
+      if (missing.length) {
         setError('יש לסמן את כל סעיפי ההצהרה והבטיחות');
         return;
       }
-      goToNextSubStep();
+      setChildren((current) => current.map((child) => {
+        if (!kids.some((kid) => kid === child || (kid.name === child.name && kid.id === child.id))) return child;
+        const own = confirmationsFor(child);
+        return {
+          ...child,
+          answers: {
+            ...(child.answers || {}),
+            ...Object.fromEntries(own.map((q) => [q.id, activityConfirmed[q.id] === true])),
+          },
+        };
+      }));
+      setHealthSubStep(SUB_WAIVER);
+      initCanvas();
       return;
     }
 
-    if (healthOnlyMode && !children[fullIndex]?.healthAccepted) {
+    if (healthOnlyMode && !healthDeclarationAccepted) {
       setError('יש לאשר שהמידע בהצהרת הבריאות מלא, נכון ומעודכן');
       return;
     }
-    if (!healthOnlyMode && !(children[fullIndex]?.waiverAccepted)) {
+    if (!healthOnlyMode && !waiverAccepted) {
       setError('יש לאשר את כתב הוויתור / הסרת האחריות');
       return;
     }
@@ -1586,14 +1711,19 @@ export default function PublicOnboardingForm() {
       setError('יש לחתום על הטופס');
       return;
     }
+    // One signature, drawn once, recorded on every participant it covers — the
+    // document itself now says whom it covers, and the names are printed above
+    // the field the signer signs in.
     const signature = canvas.toDataURL();
     const capturedAt = new Date().toISOString();
-    const withSig = children.map((c, i) =>
-      i === fullIndex ? {
+    const withSig = children.map((c) => {
+      const signing = kids.some((kid) => kid === c || (kid.name === c.name && kid.id === c.id));
+      if (!signing) return c;
+      return {
         ...c,
         signature,
         healthAccepted: healthOnlyMode ? true : c.healthAccepted,
-        waiverAccepted: healthOnlyMode ? false : true,
+        waiverAccepted: !healthOnlyMode,
         signatureEvidenceTimeline: {
           ...(c.signatureEvidenceTimeline || {}),
           termsPresentedAt: c.signatureEvidenceTimeline?.termsPresentedAt || capturedAt,
@@ -1601,16 +1731,9 @@ export default function PublicOnboardingForm() {
           termsAcceptedAt: c.signatureEvidenceTimeline?.termsAcceptedAt || capturedAt,
           signatureCapturedAt: capturedAt,
         },
-      } : c
-    );
+      };
+    });
     setChildren(withSig);
-
-    if (childHealthIndex < kids.length - 1) {
-      setChildHealthIndex((i) => i + 1);
-      setHealthSubStep(SUB_HEALTH);
-      return;
-    }
-
     await submitAll(withSig);
   };
 
@@ -1869,14 +1992,16 @@ export default function PublicOnboardingForm() {
   const healthNamesText = healthChildNames.length > 1
     ? `${healthChildNames.slice(0, -1).join(', ')} ו${healthChildNames[healthChildNames.length - 1]}`
     : (healthChildNames[0] || '');
-  // Steps 1 and 2 are fixed; step 3 repeats once per child who still has to sign.
+  // Steps 1 and 2 are fixed. The medical screen repeats once per participant;
+  // the activity clauses and the waiver come once, after the last of them.
   const displayStep = healthOnlyMode && step === 3
-    ? 2
-    : (step === 3 ? 2 + childHealthIndex + 1 : step);
-  // The three signing screens are one numbered step, not three: a family with
-  // three children would otherwise be told it is on "step 8 of 12" and give up.
-  // The bar still moves on every screen, by a fraction of the step.
-  const currentSubSteps = subStepsFor(currentChild);
+    ? (healthSubStep === SUB_HEALTH ? 2 : 3)
+    : (step === 3
+      ? 2 + (healthSubStep === SUB_HEALTH ? childHealthIndex + 1 : kids.length + 1)
+      : step);
+  // The signing screens after the medical ones are one numbered step, not two:
+  // the bar still moves on every screen, by a fraction of that step.
+  const sharedScreens = sharedSubSteps();
   // The answers of whoever is signing right now. Both signing screens write
   // into the same per-participant `answers` object; only the questions differ.
   const currentAnswers = children[currentFullIndex]?.answers || {};
@@ -1884,15 +2009,14 @@ export default function PublicOnboardingForm() {
     answers: { ...(child.answers || {}), [id]: value },
   }));
   const currentScreening = screeningFor(currentChild);
-  const currentConfirmations = confirmationsFor(currentChild);
   const documentTitle = healthOnlyMode ? 'חידוש הצהרת בריאות' : 'הצהרת בריאות והסרת אחריות';
   const signingScreenTitle = {
     [SUB_HEALTH]: sectionTitles.health,
     [SUB_ACTIVITY]: sectionTitles.confirm,
     [SUB_WAIVER]: healthOnlyMode ? 'אישור הצהרת הבריאות' : 'אישור השתתפות והסרת אחריות',
   }[healthSubStep] || documentTitle;
-  const subStepFraction = step === 3
-    ? (currentSubSteps.indexOf(healthSubStep) + 1) / currentSubSteps.length
+  const subStepFraction = step === 3 && healthSubStep !== SUB_HEALTH
+    ? (sharedScreens.indexOf(healthSubStep) + 1) / sharedScreens.length
     : 1;
   const progressPercent = Math.round(
     ((displayStep - 1 + subStepFraction) / totalStepsLabel) * 100
@@ -1907,15 +2031,16 @@ export default function PublicOnboardingForm() {
             className="event-secondary onboard-back"
             onClick={() => {
               setError('');
-              const back = currentSubSteps[currentSubSteps.indexOf(healthSubStep) - 1];
-              if (step === 3 && back) setHealthSubStep(back);
-              else if (step === 3 && childHealthIndex > 0) {
-                // Back into the previous participant lands on their last
-                // screen — the one they were sent forward from.
-                const previous = subStepsFor(kids[childHealthIndex - 1]);
+              const backShared = sharedScreens[sharedScreens.indexOf(healthSubStep) - 1];
+              if (step === 3 && healthSubStep !== SUB_HEALTH && backShared) {
+                setHealthSubStep(backShared);
+              } else if (step === 3 && healthSubStep !== SUB_HEALTH) {
+                // Out of the shared screens and back into the medical ones lands
+                // on the last participant — the one it was reached from.
+                setHealthSubStep(SUB_HEALTH);
+                setChildHealthIndex(Math.max(kids.length - 1, 0));
+              } else if (step === 3 && childHealthIndex > 0) {
                 setChildHealthIndex((i) => i - 1);
-                setHealthSubStep(previous[previous.length - 1]);
-                initCanvas();
               } else if (step === 3) setStep(healthOnlyMode ? 1 : 2);
               else setStep(1);
             }}
@@ -1933,7 +2058,12 @@ export default function PublicOnboardingForm() {
               שנקרא „הצהרת בריאות” לא יכול להכיל גם את סעיפי אופי הפעילות. */}
           <h2 className={step === 3 ? 'signing-document-title' : ''}>
             {step === 3 ? signingScreenTitle : documentTitle}
-            {step === 3 && currentChild?.name ? ` — ${currentChild.name}` : ''}
+            {/* The medical screen is about one person and says whose it is. The
+                shared screens are about everyone, and naming one of them there
+                would claim the waiver covers only that participant. */}
+            {step === 3 && healthSubStep === SUB_HEALTH && currentChild?.name
+              ? ` — ${currentChild.name}`
+              : ''}
           </h2>
           {step === 2 && <p>בני המשפחה המשתתפים</p>}
           {/* Same progress strip as the event and shop pages. */}
@@ -2128,12 +2258,18 @@ export default function PublicOnboardingForm() {
               </div>
             )}
 
-            <div className="section-title" style={{ marginTop: 22 }}>רשימות דיוור של ההורה</div>
+            <div className="section-title" style={{ marginTop: 22 }}>הזדמנות לערוך את העדפות הדיוור שלך</div>
             <p style={{ fontSize: 13, color: 'var(--text-3)', marginTop: -6, marginBottom: 12, lineHeight: 1.45 }}>
               ההרשמה חלה על כל הילדים במשפחה, לא על ילד בודד.
             </p>
-            <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', margin: '0 0 12px' }}>
-              רשימת החוגים חובה. אפשר לסמן גם טיולים, אירועים ועוד.
+            {/* חוק התקשורת מבחין בין הודעה תפעולית ובין דבר פרסומת: הודעה על
+                שינוי שעה בחוג שנרשמתם אליו היא חלק מהשירות, ולכן הרשימה
+                התפעולית מסומנת ואינה ניתנת לביטול — אבל היא לא הסכמה לפרסומת.
+                שאר הרשימות הן דיוור שיווקי, ולכן סימון בלבד, ואפשר להסיר בכל עת. */}
+            <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', margin: '0 0 12px', lineHeight: 1.6 }}>
+              רשימת החוגים היא רשימת עדכונים תפעוליים בלבד — שינויי שעות, ביטולים והודעות על
+              הפעילות שנרשמתם אליה — והיא חלק מהשירות. סימון רשימה נוספת הוא הסכמה לקבל
+              דיוור פרסומי, ואפשר להסיר אותה בכל עת בלי לפגוע בהרשמה.
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
               {listDefs.map((list) => {
@@ -2165,7 +2301,7 @@ export default function PublicOnboardingForm() {
                     <span>
                       <strong>{list.label || list.key}</strong>
                       {list.description ? ` — ${list.description}` : ''}
-                      {isRequired ? ' (חובה)' : ''}
+                      {isRequired ? ' (עדכונים תפעוליים — חלק מהשירות)' : ''}
                     </span>
                   </label>
                 );
@@ -2509,7 +2645,7 @@ export default function PublicOnboardingForm() {
                     canonical details travel unchanged in the submission and
                     are shown read-only beside the declaration on the next
                     screen. Only an incomplete old profile opens fields. */}
-                {fillsDeclaration(child) && !hasLockedParticipantProfile(child) && (
+                {fillsOwnDetails(child) && !hasLockedParticipantProfile(child) && (
                 <>
                 <div className="form-group">
                   <label>{child.type === 'adult' ? 'שם מלא *' : 'שם פרטי של הילד/ה *'}</label>
@@ -2683,7 +2819,53 @@ export default function PublicOnboardingForm() {
                     and answered כן/לא rather than ticked — a blank box would
                     file "nobody asked" as "no". The heading is the page title
                     above; repeating it here said the same thing twice. */}
-                {currentScreening.length > 0 && (
+                {asksHealthChange(currentChild) ? (
+                  <>
+                    <ExistingDeclarationSummary
+                      participant={currentChild}
+                      questions={allQuestions}
+                      templateSlug={template?.slug || routeSlug || 'wall'}
+                      variant="inForce"
+                    />
+                    <p style={{ fontSize: 14, fontWeight: 700, margin: '16px 2px 10px' }}>
+                      האם משהו השתנה מאז?
+                    </p>
+                    {/* שאלה, לא תיבת סימון: „לא סומן” ו„לא השתנה” הם שתי תשובות
+                        שונות, ורק אחת מהן נמסרה. */}
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      {[['כן, חל שינוי', true], ['לא, שום דבר לא השתנה', false]].map(([text, value]) => (
+                        <button
+                          key={text}
+                          type="button"
+                          onClick={() => {
+                            setError('');
+                            updateChild(currentFullIndex, value
+                              ? { healthChanged: true, resignHealth: true }
+                              : { healthChanged: false, resignHealth: false });
+                          }}
+                          style={{
+                            flex: 1, padding: '11px 0', borderRadius: 10, font: 'inherit',
+                            fontWeight: 700, fontSize: 14, cursor: 'pointer',
+                            border: children[currentFullIndex]?.healthChanged === value
+                              ? '1px solid var(--form-accent-solid, #f97316)'
+                              : '1px solid rgba(255,255,255,.15)',
+                            background: children[currentFullIndex]?.healthChanged === value
+                              ? 'var(--form-accent-soft-strong, rgba(249,115,22,.18))'
+                              : 'rgba(255,255,255,.05)',
+                            color: children[currentFullIndex]?.healthChanged === value
+                              ? 'var(--form-accent-text, #fdba74)'
+                              : '#e2e8f0',
+                          }}
+                        >
+                          {text}
+                        </button>
+                      ))}
+                    </div>
+                    <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', margin: '10px 2px 0', lineHeight: 1.6 }}>
+                      „כן” פותח את שאלות הבריאות מחדש, וההצהרה הקודמת תוחלף בחדשה.
+                    </p>
+                  </>
+                ) : currentScreening.length > 0 && (
                   <>
                     <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
                       תשובה „כן” לא מונעת השתתפות. היא רק מאפשרת לצוות לדעת ולהיערך.
@@ -2731,7 +2913,7 @@ export default function PublicOnboardingForm() {
                               onChange={(e) => updateChild(currentFullIndex, (child) => ({
                                 answerNotes: { ...(child.answerNotes || {}), [q.id]: e.target.value },
                               }))}
-                              placeholder="מה המצב, ממתי, והאם נקבעה הגבלה"
+                              placeholder={detailPrompt(q)}
                               style={{ resize: 'vertical' }}
                             />
                           </div>
@@ -2758,9 +2940,11 @@ export default function PublicOnboardingForm() {
                 )}
                 {error && <ErrorBox message={error} />}
                 <button type="button" className="event-primary" style={{ marginTop: 16 }} onClick={advanceHealthOrSubmit}>
-                  {currentConfirmations.length
-                    ? `המשך ל${sectionTitles.confirm}`
-                    : 'המשך לאישור וחתימה'}
+                  {childHealthIndex < kids.length - 1
+                    ? `המשך להצהרת הבריאות של ${kids[childHealthIndex + 1]?.name || 'המשתתף/ת הבא/ה'}`
+                    : (sharedConfirmations.length
+                      ? `המשך ל${sectionTitles.confirm}`
+                      : 'המשך לאישור וחתימה')}
                   {' '}<ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} />
                 </button>
               </>
@@ -2769,19 +2953,24 @@ export default function PublicOnboardingForm() {
             {healthSubStep === SUB_ACTIVITY && (
               <>
                 <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
-                  יש לסמן את כל הסעיפים לאחר שקראתם אותם.
+                  {signingNames.length > 1
+                    ? `הסעיפים חלים על כל המשתתפים: ${signingNames.join(', ')}. יש לסמן את כולם לאחר שקראתם אותם.`
+                    : 'יש לסמן את כל הסעיפים לאחר שקראתם אותם.'}
                 </p>
-                {currentChild.type !== 'adult' && (
+                {kids.some((kid) => kid.type !== 'adult') && (
                   <p className="child-safety-notice">
                     אנא הסבירו לילדכם את כללי הבטיחות.
                   </p>
                 )}
-                {currentConfirmations.map((q) => (
+                {sharedConfirmations.map((q) => (
                   <label key={q.id} className="event-check" style={{ marginBottom: 10 }}>
                     <input
                       type="checkbox"
-                      checked={currentAnswers[q.id] === true}
-                      onChange={(e) => setCurrentAnswer(q.id, e.target.checked)}
+                      checked={activityConfirmed[q.id] === true}
+                      onChange={(e) => setActivityConfirmed((current) => ({
+                        ...current,
+                        [q.id]: e.target.checked,
+                      }))}
                     />
                     <span>{questionLabel(q)}</span>
                   </label>
@@ -2810,8 +2999,8 @@ export default function PublicOnboardingForm() {
                     <label className="event-check">
                       <input
                         type="checkbox"
-                        checked={!!children[currentFullIndex]?.healthAccepted}
-                        onChange={(e) => updateChild(currentFullIndex, { healthAccepted: e.target.checked })}
+                        checked={healthDeclarationAccepted}
+                        onChange={(e) => setHealthDeclarationAccepted(e.target.checked)}
                       />
                       <span>קראתי ואני מאשר/ת את הצהרת הבריאות</span>
                     </label>
@@ -2821,9 +3010,10 @@ export default function PublicOnboardingForm() {
                     {/* The waiver's own legal title, which is not the name of
                         the screen — the screen is named in the header above. */}
                     <div className="section-title">{sectionTitles.waiver}</div>
-                {/* One text, the binding one, with the signer's own name inside
-                    it. A summary layer above it repeated the same clauses and
-                    made the page say everything twice. */}
+                {/* One text, the binding one. It names nobody: the signer takes
+                    responsibility for themselves and for the minors listed
+                    above the signature field, so the same document serves a
+                    whole family and is signed once. */}
                 <div style={{
                   background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.1)',
                   borderRadius: 12, padding: 14, marginBottom: 16,
@@ -2845,8 +3035,8 @@ export default function PublicOnboardingForm() {
                   <input
                     type="checkbox"
                     disabled={!waiverRead}
-                    checked={!!children[currentFullIndex]?.waiverAccepted}
-                    onChange={(e) => updateChild(currentFullIndex, { waiverAccepted: e.target.checked })}
+                    checked={waiverAccepted}
+                    onChange={(e) => setWaiverAccepted(e.target.checked)}
                   />
                   <span>קראתי ואני מאשר/ת את הסרת האחריות והוראות הבטיחות</span>
                 </label>
@@ -2861,6 +3051,22 @@ export default function PublicOnboardingForm() {
                 <div className="section-title" style={{ marginTop: 20 }}>
                   {healthOnlyMode ? 'חתימה על הצהרת הבריאות' : 'חתימה על הצהרת בריאות והסרת אחריות'}
                 </div>
+                {/* המסמך אומר „המפורטים לעיל”, ולכן הרשימה הזאת היא חלק ממנו ולא
+                    כותרת: היא מה שקובע על מי החתימה חלה. */}
+                {!healthOnlyMode && signingNames.length > 0 && (
+                  <div style={{
+                    background: 'rgba(0,0,0,0.22)', border: '1px solid rgba(255,255,255,0.1)',
+                    borderRadius: 12, padding: 12, marginBottom: 12,
+                    fontSize: 13, lineHeight: 1.7, color: 'rgba(255,255,255,0.85)',
+                  }}>
+                    <div style={{ color: 'rgba(255,255,255,0.6)', marginBottom: 6 }}>
+                      החתימה חלה על {parentFullName()} ועל המשתתפים הבאים:
+                    </div>
+                    {signingNames.map((name) => (
+                      <div key={name} style={{ fontWeight: 700 }}>• {name}</div>
+                    ))}
+                  </div>
+                )}
                 <div className="canvas-container">
                   <div className="canvas-toolbar">
                     <span style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>

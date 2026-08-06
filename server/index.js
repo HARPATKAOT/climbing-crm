@@ -257,7 +257,7 @@ import {
   suggestedRefund,
 } from './cancellationPolicies.js';
 import { passPunchBlockReason } from './passPunchEligibility.js';
-import { runParticipationDocumentReminders } from './participationReminders.js';
+import { runHealthExpiryReminders, runParticipationDocumentReminders } from './participationReminders.js';
 import {
   enrichPricelistItem,
   buildPassFromItem,
@@ -13521,8 +13521,11 @@ function publicDeclarationSummary(eligibility) {
   const record = eligibility?.health?.record || null;
   const rawAnswers = record?.answers || record?.formSnapshot?.answers || {};
   const answers = {};
-  for (let index = 1; index <= 9; index += 1) {
-    const id = `m${index}`;
+  // Read off the canonical list rather than counting m1..m9. The pregnancy
+  // question is m11 — a number chosen deliberately, because m10 belonged to a
+  // question that was removed — and a numeric loop would drop it from every
+  // summary while looking like it covered everything.
+  for (const { id } of CANONICAL_HEALTH_QUESTIONS) {
     const value = rawAnswers?.[id];
     if (typeof value === 'boolean') answers[id] = value;
     else if (['true', 'yes', 'כן', '1'].includes(String(value || '').trim().toLowerCase())) answers[id] = true;
@@ -15011,6 +15014,67 @@ async function sendActivityRegistrationDocumentMessage({
   return { ...result, url, recipient, student, kind };
 }
 
+/**
+ * "Your health declaration lapses at the end of August — here is the form."
+ *
+ * Sent while the declaration is still valid, on the same approved template the
+ * staff-side "send form" button uses, so no new Meta template is needed and the
+ * parent gets a link that opens their own renewal.
+ */
+async function sendHealthExpiryMessage({ student, expiresAt, origin = PUBLIC_APP_FALLBACK } = {}) {
+  const recipient = student ? db.getOne('parents', student.parentId) : null;
+  if (!student || !recipient?.phone) {
+    return { sent: false, error: 'לא נמצא טלפון של המשתתף לחידוש ההצהרה' };
+  }
+  const params = new URLSearchParams({
+    studentId: student.id,
+    phone: recipient.phone,
+    mode: 'health-renewal',
+  });
+  const url = `${resolvePublicAppOrigin(origin)}/health?${params.toString()}`;
+  const settings = db.getSettings() || {};
+  const expiryText = String(expiresAt || '').slice(0, 10).split('-').reverse().join('.');
+  try {
+    const result = await sendWhatsAppWithOptionalTemplate(recipient.phone, {
+      templateCandidates: [settings.waOnboardTemplate, process.env.WA_ONBOARD_TEMPLATE].filter(Boolean),
+      variables: [recipient.name || student.name || 'לקוח'],
+      freeformText:
+        `שלום ${recipient.name || ''}, הצהרת הבריאות של ${student.name || 'המשתתף/ת'} בתוקף עד ${expiryText}. `
+        + `אפשר לחדש אותה כבר עכשיו, בדקה אחת:\n\n${url}`,
+      parentId: recipient.id,
+    });
+    return { ...result, url, recipient, student };
+  } catch (error) {
+    return { sent: false, error: error.message, url, recipient, student };
+  }
+}
+
+async function runHealthExpiryRemindersSafely() {
+  try {
+    const summary = await runHealthExpiryReminders({
+      db,
+      persist: persistCore,
+      healthState: (student) => {
+        const eligibility = participationEligibility(db, { studentId: student.id });
+        return {
+          valid: eligibility?.health?.state === 'valid',
+          expiresAt: eligibility?.health?.expires_at || '',
+        };
+      },
+      send: ({ student, expiresAt }) => sendHealthExpiryMessage({
+        student,
+        expiresAt,
+        origin: process.env.PUBLIC_APP_URL || PUBLIC_APP_FALLBACK,
+      }),
+    });
+    if (summary.sent || summary.failed) {
+      console.log(`🩺 Health expiry reminders: sent=${summary.sent} failed=${summary.failed} skipped=${summary.skipped}`);
+    }
+  } catch (error) {
+    console.error('Health expiry reminder scan failed:', error.message);
+  }
+}
+
 app.post('/api/activity-registrations/:id/send-document-reminder', async (req, res) => {
   const registration = db.getOne('activity_registrations', req.params.id);
   const activity = registration ? db.getOne('activities', registration.activity_id) : null;
@@ -15463,6 +15527,11 @@ app.listen(PORT, () => {
   // before. Durable send markers make the hourly scan restart-safe.
   setTimeout(() => { runParticipationRemindersSafely(); }, 50_000);
   setInterval(() => { runParticipationRemindersSafely(); }, 60 * 60 * 1000);
+  // A month's notice before the health declaration lapses. Hourly like the scan
+  // above rather than once a day: one row per student per season is what stops a
+  // second send, so a restart cannot skip the day or repeat it.
+  setTimeout(() => { runHealthExpiryRemindersSafely(); }, 65_000);
+  setInterval(() => { runHealthExpiryRemindersSafely(); }, 60 * 60 * 1000);
   // Follow-ups are not a once-a-day job: a short one is aimed 23 hours after
   // the customer's last message so it lands while free text is still allowed,
   // and a morning-only run would miss that hour on most conversations.

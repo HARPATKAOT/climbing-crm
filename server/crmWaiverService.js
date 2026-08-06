@@ -396,6 +396,23 @@ export async function saveCrmParticipants({
 
   const signedAt = new Date().toISOString();
   const signedDate = signedAt.slice(0, 10);
+  // Named here so the approval can say what it approves. Taken from the row
+  // rather than from the request: the signer's browser is not the authority on
+  // when the outing is.
+  const signedActivityRow = activityId ? (db.getOne?.('activities', activityId) || null) : null;
+  const signedActivity = signedActivityRow
+    ? {
+        id: signedActivityRow.id,
+        name: String(
+          signedActivityRow.registration_page_title
+          || signedActivityRow.registrationPageTitle
+          || signedActivityRow.name
+          || ''
+        ).trim(),
+        date: signedActivityRow.date || '',
+        endDate: signedActivityRow.end_date || signedActivityRow.endDate || '',
+      }
+    : null;
   const savedParticipants = [];
   const declarations = [];
   const waivers = [];
@@ -754,6 +771,11 @@ export async function saveCrmParticipants({
         answers: waiverAnswers,
         signer: signerSnapshot,
         participant: participantSnapshot,
+        // Which outing this approval was given for. The row already carried
+        // `activity_id`, but a foreign key is not a document: without the name
+        // and the dates inside the snapshot, the signed copy cannot say what
+        // was approved, and the id points at a row staff may later rename.
+        ...(signedActivity ? { activity: signedActivity } : {}),
         signedAt,
       };
       const waiverEvidence = evidenceContext ? createSignatureEvidenceEvent({

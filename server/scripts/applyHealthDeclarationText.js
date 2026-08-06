@@ -14,9 +14,10 @@
  * because there is no reason for it not to be.
  *
  * What every template gets:
- *   • the waiver as numbered clauses, naming the signer, with liability limited
- *     to negligence proved beyond doubt
- *   • the plain-language summary, addressed to the signer by name
+ *   • the waiver as numbered clauses, naming nobody — one signature covers the
+ *     signer and the minors listed above the signature field — with liability
+ *     limited to negligence proved beyond doubt
+ *   • the plain-language summary, in the same collective voice
  *   • "@" on clauses that only apply when a parent signs for a child
  *   • "!" on questions where a "yes" requires a doctor's written approval
  *
@@ -40,15 +41,15 @@ const LEGAL_NAME = 'הרפתקאות (קיר בועז)';
 function buildWaiver({ activityPhrase, riskClause }) {
   return `כתב הצהרה, ויתור והסרת אחריות — ${activityPhrase}
 
-1. אני החתום/ה מטה, {{שם החותם}}, מצהיר/ה כי קראתי מסמך זה במלואו, הבנתי את תוכנו, וכי אני חותם/ת עליו מרצוני החופשי ומתוך הבנה שמדובר בחוזה מחייב לכל דבר ועניין.
+1. אני החותם/ת מטה נוטל/ת אחריות עבור עצמי ועבור ילדי הקטינים המפורטים לעיל, ומצהיר/ה כי קראתי מסמך זה במלואו, הבנתי את תוכנו, וכי אני חותם/ת עליו מרצוני החופשי ומתוך הבנה שמדובר בחוזה מחייב לכל דבר ועניין.
 
 2. ${riskClause}
 
-3. אני מצהיר/ה כי מסרתי בהצהרת הבריאות מידע מלא, נכון ומעודכן ביחס אליי או ביחס למשתתף/ת שעליו/ה אני חותם/ת, וכי לא ידועה לי מגבלה רפואית שלא פורטה בה. אני מתחייב/ת לעדכן את הצוות בכל שינוי במצב הבריאותי.
+3. אני מצהיר/ה כי מסרתי בהצהרת הבריאות מידע מלא, נכון ומעודכן ביחס אליי וביחס לכל אחד מהמשתתפים המפורטים לעיל, וכי לא ידועה לי מגבלה רפואית שלא פורטה בה. אני מתחייב/ת להודיע לצוות באופן מיידי על כל שינוי רפואי משמעותי.
 
 4. בחינת התאמת הפעילות למצב הבריאותי היא באחריותי בלבד, ובמקרה הצורך לאחר היוועצות ברופא. "${LEGAL_NAME}" אינו גורם רפואי ואינו בוחן כשירות רפואית להשתתפות.
 
-5. אני, {{שם החותם}}, נוטל/ת על עצמי את הסיכון הרגיל הכרוך בפעילות, ומוותר/ת על כל טענה, דרישה או תביעה כלפי "${LEGAL_NAME}", בעליו, מנהליו, עובדיו ומי מטעמו, בגין נזק גוף או רכוש שייגרם במסגרת אותו סיכון.
+5. אני נוטל/ת על עצמי, ועבור המשתתפים הקטינים המפורטים לעיל, את הסיכון הרגיל הכרוך בפעילות, ומוותר/ת על כל טענה, דרישה או תביעה כלפי "${LEGAL_NAME}", בעליו, מנהליו, עובדיו ומי מטעמו, בגין נזק גוף או רכוש שייגרם במסגרת אותו סיכון.
 
 6. אין בוויתור שבסעיף 5 כדי לגרוע מאחריות "${LEGAL_NAME}" לפי דין, לרבות בשל רשלנות של "${LEGAL_NAME}" או של מי שפעל מטעמה.
 
@@ -56,13 +57,17 @@ function buildWaiver({ activityPhrase, riskClause }) {
 
 8. ידוע לי כי הצוות רשאי להפסיק את ההשתתפות בכל עת, אם לדעתו היא מסכנת את המשתתף/ת או אחרים.
 
-9. חתימת הורה או אפוטרופוס על מסמך זה מחייבת גם את המשתתף/ת הקטין/ה שעליו/ה נחתם, ומהווה הסכמה להשתתפותו/ה בפעילות.`;
+9. חתימת הורה או אפוטרופוס על מסמך זה מחייבת גם את המשתתפים הקטינים המפורטים לעיל, ומהווה הסכמה להשתתפותם בפעילות.`;
 }
 
-/** {{שם החותם}} is filled in by the form with the name typed into it. */
+/**
+ * The plain-language summary. Like the waiver itself it names nobody: one
+ * signature now covers the signer and every minor listed above it, and those
+ * names are printed above the signature field rather than woven into the text.
+ */
 function buildSummary({ riskBullet }) {
   return `• ${riskBullet}
-• את הסיכון הרגיל של הפעילות אני, {{שם החותם}}, לוקח/ת על עצמי.
+• את הסיכון הרגיל של הפעילות אני לוקח/ת על עצמי, ועבור ילדי הקטינים המפורטים לעיל.
 • אין במסמך כדי לגרוע מאחריות "${LEGAL_NAME}" לפי דין, לרבות בשל רשלנות שלה או של מי שפעל מטעמה.
 • מסרתי מידע רפואי מלא ונכון, ואין מגבלה רפואית שלא סיפרתי עליה.
 • ההחלטה שהפעילות מתאימה למצב הבריאותי היא שלי, ובמקרה הצורך לאחר התייעצות עם רופא.
@@ -92,6 +97,10 @@ const MEDICAL_QUESTIONS = [
   // mention a small thing nobody asked about was blocked until they produced a
   // certificate — and the safest answer became saying nothing.
   { id: 'm8', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם רופא הגביל פעילות גופנית בשנה האחרונה?' },
+  // Before the catch-all, so m9 stays last on the screen. The id skips m10 on
+  // purpose: that number was a claustrophobia question the trip templates
+  // carried and the unified migration removed.
+  { id: 'm11', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם המשתתפת בהריון?' },
   { id: 'm9', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש מגבלה רפואית, אבחנה או מידע אחר שחשוב שנדע ולא נשאלנו עליו כאן?' },
 ];
 

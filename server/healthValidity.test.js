@@ -19,20 +19,23 @@ test('a health signature in August is valid through next 31 August', () => {
   assert.equal(isHealthDeclarationValid('2026-08-02', day('2026-08-04')), true);
 });
 
-test('a health signature in January through July ends on 31 August that year', () => {
+test('a signature earlier in the year runs to 31 August of the next one', () => {
   const expiry = healthExpiryDate('2026-06-01');
-  assert.equal(expiry.getFullYear(), 2026);
+  assert.equal(expiry.getFullYear(), 2027);
   assert.equal(expiry.getMonth(), 7);
   assert.equal(expiry.getDate(), 31);
-  assert.equal(isHealthDeclarationValid('2026-06-01', day('2026-08-04')), true);
-  assert.equal(isHealthDeclarationValid('2026-06-01', day('2026-07-31')), true);
-  assert.equal(isHealthDeclarationValid('2026-06-01', day('2026-09-01')), false);
+  assert.equal(isHealthDeclarationValid('2026-06-01', day('2026-09-01')), true);
+  assert.equal(isHealthDeclarationValid('2026-06-01', day('2027-08-31')), true);
+  assert.equal(isHealthDeclarationValid('2026-06-01', day('2027-09-01')), false);
 });
 
-test('a July signature does not spill into the following season', () => {
-  const expiry = healthExpiryDate('2026-07-15');
-  assert.equal(expiry.getFullYear(), 2026);
-  assert.equal(isHealthDeclarationValid('2026-07-15', day('2026-08-04')), true);
+// The month must not matter any more: a July signature used to be asked for
+// again weeks later, at the end of that same August.
+test('the month signed in does not change the expiry year', () => {
+  ['2026-01-01', '2026-07-15', '2026-07-31', '2026-08-01', '2026-12-31'].forEach((signedAt) => {
+    assert.equal(healthExpiryDate(signedAt).getFullYear(), 2027, signedAt);
+  });
+  assert.equal(isHealthDeclarationValid('2026-07-15', day('2026-09-01')), true);
 });
 
 test('participation waivers expire on 31 August two years after signing', () => {

@@ -20,6 +20,11 @@ export const CANONICAL_HEALTH_QUESTIONS = Object.freeze([
   { id: 'm6', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש נטילת תרופות קבועות?' },
   { id: 'm7', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש אלרגיה שהצוות צריך להכיר (מזון, תרופות, עקיצות)?' },
   { id: 'm8', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם רופא הגביל פעילות גופנית בשנה האחרונה?' },
+  // Asked before the catch-all so m9 stays the last question on the screen.
+  // The id skips m10: that number belonged to a claustrophobia question the
+  // trip templates carried and the unified migration removed, and reusing it
+  // would let an old answer be re-labelled as this one.
+  { id: 'm11', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם המשתתפת בהריון?' },
   { id: 'm9', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש מגבלה רפואית, אבחנה או מידע אחר שחשוב שנדע ולא נשאלנו עליו כאן?' },
 ]);
 

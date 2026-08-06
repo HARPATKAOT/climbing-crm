@@ -20,6 +20,7 @@ import { checkKnownChild, linkFieldsFor } from '../utils/childCheck.js';
 import {
   blankAnswers,
   clearanceTriggers,
+  detailPrompt,
   isScreeningQuestion,
   needsMedicalClearance,
   questionLabel,
@@ -606,6 +607,13 @@ export default function PublicActivityRegistration() {
     ? 3
     : (step === 4 ? totalSteps : Math.min(step, totalSteps));
   const healthCurrent = currentParticipant ? resolvedHealthParticipant(currentParticipant) : null;
+  // The name and dates the approval sentence quotes — the same ones printed at
+  // the top of the page, so the signer confirms what they were shown.
+  const activityTitle = activity?.page_title || activity?.name || '';
+  const activityDatesText = [
+    formatDate(activity?.date),
+    activity?.end_date && activity.end_date !== activity.date ? formatDate(activity.end_date) : '',
+  ].filter(Boolean).join(' – ');
 
   return (
     <div className="event-page" ref={pageTopRef}>
@@ -730,8 +738,12 @@ export default function PublicActivityRegistration() {
                   </>
                 )}
 
-                <h2 style={{ marginTop: 28 }}>רשימות דיוור</h2>
-                <p className="event-hint">אפשר לסמן רשימות שמעניינות אתכם — חוגים, טיולים, אירועים ועוד.</p>
+                <h2 style={{ marginTop: 28 }}>הזדמנות לערוך את העדפות הדיוור שלך</h2>
+                {/* כאן כל הרשימות אופציונליות, ולכן סימון הוא הסכמה לדבר
+                    פרסומת כמשמעותו בחוק התקשורת — ואפשר להסיר בכל עת. */}
+                <p className="event-hint">
+                  סימון רשימה הוא הסכמה לקבל ממנו דיוור, ואפשר להסיר אותה בכל עת בלי לפגוע בהרשמה.
+                </p>
                 <div className="event-lists">
                   {listDefs.map((list) => {
                     const checked = subscriptions[list.key] === true;
@@ -940,7 +952,7 @@ export default function PublicActivityRegistration() {
                                     [question.id]: e.target.value,
                                   },
                                 }))}
-                                placeholder="מה המצב, ממתי, והאם נקבעה הגבלה"
+                                placeholder={detailPrompt(question)}
                               />
                             </div>
                           )}
@@ -986,6 +998,12 @@ export default function PublicActivityRegistration() {
                 splitWaiverText(activity.form_template?.waiverText).body,
                 joinParentName(parent.name, parent.lastName)
               )}
+            </div>
+            {/* איזו יציאה מאושרת כאן. הוויתור עצמו כללי, ולכן בלי המשפט הזה
+                החתימה לא אומרת על איזו פעילות ובאילו תאריכים היא ניתנה. */}
+            <div className="event-waiver-activity">
+              אני מאשר/ת את השתתפות {healthCurrent.name} ב„{activityTitle}”
+              {activityDatesText ? ` בתאריך ${activityDatesText}` : ''}.
             </div>
             <label className="event-check">
               <input

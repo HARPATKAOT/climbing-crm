@@ -138,6 +138,24 @@ export function hasPositiveScreening(questions = [], answers = {}) {
   return (questions || []).some((q) => isScreeningQuestion(q) && answers?.[q.id] === true);
 }
 
+/**
+ * What to write in the detail box under a question answered "yes".
+ *
+ * One generic prompt ("מה המצב, ממתי, והאם נקבעה הגבלה") asked the wrong thing
+ * of half the questions: the answer to a medication question is a list of
+ * medicines, and the answer to an allergy question is what happens on contact.
+ * Asking precisely is what makes the detail usable by an instructor.
+ */
+const DETAIL_PROMPTS = {
+  m6: 'אילו תרופות, במה הן מטפלות, והאם יש מגבלה או תופעה שחשוב שנדע',
+  m7: 'למה האלרגיה, מה קורה בחשיפה, והאם יש מזרק אפינפרין (אפיפן)',
+  m11: 'באיזה שבוע, והאם רופא/ה נתן/ה הנחיה לגבי פעילות גופנית',
+};
+
+export function detailPrompt(question) {
+  return DETAIL_PROMPTS[String(question?.id || '')] || 'מה המצב, ממתי, והאם נקבעה הגבלה';
+}
+
 /** Fresh answers for a participant: confirmations unticked, screening unanswered. */
 export function blankAnswers(questions = []) {
   const answers = {};

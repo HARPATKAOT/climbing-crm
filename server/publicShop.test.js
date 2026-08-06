@@ -7,6 +7,7 @@ import {
   publicShopItems,
   shopItemPayload,
 } from './publicShop.js';
+import { CANONICAL_HEALTH_QUESTIONS } from './participationDocuments.js';
 
 /**
  * Health declarations do not expire a year after signing — they expire
@@ -17,10 +18,10 @@ import {
  * always past.
  */
 const IN_FORCE_SIGNED_DATE = new Date().toISOString().slice(0, 10);
+// Derived from the canonical list, not counted: a question added to the
+// declaration must not turn every fixture here into "unanswered".
 const HEALTHY_ANSWERS = {
-  ...Object.fromEntries(
-    Array.from({ length: 9 }, (_unused, index) => [`m${index + 1}`, false])
-  ),
+  ...Object.fromEntries(CANONICAL_HEALTH_QUESTIONS.map((question) => [question.id, false])),
   required: true,
 };
 
