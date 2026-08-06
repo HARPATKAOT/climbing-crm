@@ -1579,7 +1579,16 @@ export const db = {
       writeDb(data);
       for (const record of data.broadcast_list_defs) syncUpsert('broadcast_list_defs', record);
     }
-    return [...data.broadcast_list_defs].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    // One row per key. The two-list migration ran on more than one instance and
+    // the durable store came back with a second copy of each list, which the
+    // public form rendered as four checkboxes — two of them the same list.
+    const byKey = new Map();
+    for (const row of data.broadcast_list_defs) {
+      const key = String(row?.key || '');
+      if (!key || byKey.has(key)) continue;
+      byKey.set(key, row);
+    }
+    return [...byKey.values()].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
   },
 
   createBroadcastListDef: ({ label, description = '', color = 'var(--blue)' }) => {

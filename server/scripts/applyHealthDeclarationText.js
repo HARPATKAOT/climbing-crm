@@ -100,7 +100,7 @@ const MEDICAL_QUESTIONS = [
   // Before the catch-all, so m9 stays last on the screen. The id skips m10 on
   // purpose: that number was a claustrophobia question the trip templates
   // carried and the unified migration removed.
-  { id: 'm11', kind: 'screen', requireYes: false, audience: 'adult_female', requiresClearance: false, label: 'האם המשתתפת בהריון?' },
+  { id: 'm11', kind: 'screen', requireYes: false, audience: 'adult_female', requiresClearance: true, label: 'האם המשתתפת בהריון?' },
   { id: 'm9', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש מגבלה רפואית, אבחנה או מידע אחר שחשוב שנדע ולא נשאלנו עליו כאן?' },
 ];
 

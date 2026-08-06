@@ -55,8 +55,11 @@ export async function migrateToTwoBroadcastLists({ database, persist = null } = 
   // helpers — the generic update/delete match on an id these rows do not have.
   let defsWritten = 0;
   for (const wanted of TWO_LIST_DEFS) {
-    const existing = defs.find((row) => String(row?.key || '') === wanted.key);
-    if (existing) {
+    // `some`, not `find`, because a second instance running this may already
+    // have written the row: inserting again is what put each list on the screen
+    // twice.
+    const exists = defs.some((row) => String(row?.key || '') === wanted.key);
+    if (exists) {
       database.updateBroadcastListDef?.(wanted.key, wanted);
     } else {
       database.insert('broadcast_list_defs', { ...wanted });
