@@ -21,6 +21,7 @@ import { healthExpiryDate } from '../utils/healthValidity.js';
 import {
   DECLARATION_KINDS,
   declarationKind,
+  documentRowKind,
   templateKind,
   templateShortLabel,
 } from '../utils/declarationKinds.js';
@@ -3700,12 +3701,28 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   ...clientDocuments.filter(isClearanceDoc),
                 ];
                 const hasHealthDoc = combinedDocuments.some(isHealthDoc);
-                const physicalParticipationDocs = clientDocuments.filter((doc) => doc.type === 'participation_waiver_pdf');
-                const participationDocsByWaiverId = new Map(
-                  physicalParticipationDocs
-                    .filter((doc) => doc.waiverId)
-                    .map((doc) => [String(doc.waiverId), doc])
-                );
+                // One row per approval, newest file wins — the same rule the
+                // health rows above already follow. Two PDFs saved under one
+                // approval (a retried upload) used to stack as two identical
+                // lines that both claimed the same signature and expiry.
+                const participationDocsByWaiverId = new Map();
+                const unlinkedParticipationDocs = [];
+                for (const doc of clientDocuments) {
+                  if (doc.type !== 'participation_waiver_pdf') continue;
+                  const waiverId = String(doc.waiverId || doc.waiver_id || '');
+                  if (!waiverId) {
+                    unlinkedParticipationDocs.push(doc);
+                    continue;
+                  }
+                  const prev = participationDocsByWaiverId.get(waiverId);
+                  if (!prev || String(doc.created_at || '') > String(prev.created_at || '')) {
+                    participationDocsByWaiverId.set(waiverId, doc);
+                  }
+                }
+                const physicalParticipationDocs = [
+                  ...participationDocsByWaiverId.values(),
+                  ...unlinkedParticipationDocs,
+                ];
                 const participationRows = [
                   ...physicalParticipationDocs.map((doc) => {
                     const waiver = participationWaivers.find((row) => String(row.id) === String(doc.waiverId || '')) || null;
@@ -3833,6 +3850,46 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   } finally {
                     setDeletingDocId('');
                   }
+                };
+
+                // A participation approval is its own legal record, so removing
+                // it takes the approval row with the PDF. Dropping only the file
+                // would leave the approval standing, and the folder would draw
+                // the line again from it a moment later.
+                const handleDeleteParticipation = async (doc, waiver) => {
+                  const waiverId = waiver?.id || doc.waiverId || '';
+                  setPendingDocDelete(null);
+                  setDeleteConfirmText('');
+                  setDeletingDocId(doc.id);
+                  setHealthSendMsg('');
+                  try {
+                    const url = waiverId
+                      ? `/api/students/${encodeURIComponent(student.id)}/participation-waiver?waiverId=${encodeURIComponent(waiverId)}`
+                      : `/api/documents/${encodeURIComponent(doc.id)}`;
+                    const res = await fetch(url, { method: 'DELETE' });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(data.error || 'delete failed');
+                    if (waiverId) {
+                      setParticipationWaivers((prev) => prev.filter((row) => String(row.id) !== String(waiverId)));
+                    }
+                    const docsRes = await fetch(`/api/students/${encodeURIComponent(student.id)}/documents`);
+                    setClientDocuments(docsRes.ok ? await docsRes.json() : []);
+                    setHealthSendMsg('אישור ההשתתפות נמחק מהתיק');
+                  } catch (err) {
+                    console.error(err);
+                    setHealthSendMsg(err.message === 'delete failed' ? 'מחיקת אישור ההשתתפות נכשלה' : (err.message || 'מחיקת אישור ההשתתפות נכשלה'));
+                  } finally {
+                    setDeletingDocId('');
+                  }
+                };
+
+                const runPendingDelete = () => {
+                  if (!pendingDocDelete) return;
+                  if (pendingDocDelete.participationRow) {
+                    handleDeleteParticipation(pendingDocDelete.doc, pendingDocDelete.waiver);
+                    return;
+                  }
+                  handleDeleteDoc(pendingDocDelete.doc);
                 };
 
                 const downloadParticipationDoc = async (doc, waiver) => {
@@ -4043,11 +4100,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                               const clearanceRow = isClearanceDoc(doc);
                               const busy = deletingDocId === doc.id;
                               const scope = participationRow ? participationDocumentScope(doc, waiver) : '';
-                              const kind = participationRow ? declarationKind(scope) : null;
-                              const KindIcon = kind?.Icon || FileCheck2;
-                              const title = participationRow
-                                ? `אישור השתתפות — ${kind.label}`
-                                : clearanceRow ? 'אישור רופא' : 'הצהרת בריאות';
+                              const kind = documentRowKind({ category, scope, clearance: clearanceRow });
+                              const KindIcon = kind.Icon;
+                              const title = kind.title;
                               const stamp = doc.created_at ? new Date(doc.created_at) : null;
                               const sourceDeclaration = doc.virtualData
                                 || studentDeclarations.find((decl) => String(decl.id) === String(doc.declarationId || ''))
@@ -4067,44 +4122,28 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                 <div
                                   key={doc.id}
                                   style={{
-                                    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                                    display: 'flex', flexDirection: 'column', gap: 6,
                                     padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)',
+                                    borderInlineStartWidth: 3, borderInlineStartColor: kind.color,
                                     background: 'rgba(255,255,255,0.03)', opacity: busy ? 0.5 : 1,
                                   }}
                                 >
+                                  {/* Name and buttons on one line, the dates under them: with
+                                      everything in a single wrapping row a long approval name
+                                      pushed the buttons onto a line of their own. */}
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                   <span
-                                    className={participationRow ? `badge ${kind?.badge || 'badge-gray'}` : undefined}
+                                    className={`badge ${kind.badge}`}
                                     title={doc.fileName || title}
                                     style={{
-                                      height: 32, padding: participationRow ? '0 10px' : 0,
+                                      height: 32, padding: '0 10px',
                                       fontSize: 12, fontWeight: 600, lineHeight: 1,
-                                      color: 'var(--text-1)', whiteSpace: 'nowrap', flexShrink: 0,
+                                      whiteSpace: 'nowrap', minWidth: 0, overflow: 'hidden',
                                       display: 'inline-flex', alignItems: 'center', gap: 5,
                                     }}
                                   >
-                                    {participationRow
-                                      ? <KindIcon size={13} style={{ flexShrink: 0 }} />
-                                      : clearanceRow
-                                        ? <ShieldCheck size={13} style={{ color: '#74B9FF', flexShrink: 0 }} />
-                                        : <span aria-hidden="true" style={{ color: '#74B9FF', fontSize: 17, fontFamily: 'Arial, sans-serif' }}>⚕</span>}
+                                    <KindIcon size={13} style={{ flexShrink: 0 }} />
                                     {title}
-                                  </span>
-                                  {hasExpiry && (
-                                    <span
-                                      className={expired ? 'badge badge-amber' : undefined}
-                                      style={{ height: 32, fontSize: 11, lineHeight: 1, flexShrink: 0, display: 'inline-flex', alignItems: 'center', color: expired ? undefined : 'var(--text-2)' }}
-                                    >
-                                      {expired ? 'פג תוקף' : 'בתוקף עד'} {expiry.toLocaleDateString('he-IL')}
-                                    </span>
-                                  )}
-                                  <span style={{
-                                    height: 32, fontSize: 12, fontWeight: 500, lineHeight: 1,
-                                    color: 'var(--text-2)', whiteSpace: 'nowrap', flexShrink: 0,
-                                    display: 'inline-flex', alignItems: 'center',
-                                  }}>
-                                    {stamp
-                                      ? `${stamp.toLocaleDateString('he-IL')} · ${stamp.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`
-                                      : ''}
                                   </span>
                                   <div style={{ display: 'flex', gap: 4, flexShrink: 0, alignItems: 'center', marginInlineStart: 'auto' }}>
                                     <button
@@ -4123,24 +4162,38 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                     >
                                       <Download size={13} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
                                     </button>
-                                    {!participationRow && (
-                                      <button
-                                        type="button"
-                                        className="btn btn-ghost btn-xs"
-                                        style={{
-                                          width: 32, height: 32, padding: 0, boxSizing: 'border-box',
-                                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                                          color: 'var(--red, #F87171)',
-                                        }}
-                                        title={healthRow ? 'מחיקת הצהרת הבריאות מהתיק' : 'מחיקת המסמך מהתיק'}
-                                        disabled={busy || !!deletingDocId}
-                                        onClick={() => {
-                                          setDeleteConfirmText('');
-                                          setPendingDocDelete({ doc, healthRow });
-                                        }}
-                                      >
-                                        <Trash2 size={13} />
-                                      </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-xs"
+                                      style={{
+                                        width: 32, height: 32, padding: 0, boxSizing: 'border-box',
+                                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                        color: 'var(--red, #F87171)',
+                                      }}
+                                      title={`מחיקת ${kind.title} מהתיק`}
+                                      disabled={busy || !!deletingDocId}
+                                      onClick={() => {
+                                        setDeleteConfirmText('');
+                                        setPendingDocDelete({ doc, healthRow, participationRow, waiver, kind });
+                                      }}
+                                    >
+                                      <Trash2 size={13} />
+                                    </button>
+                                  </div>
+                                  </div>
+                                  <div style={{
+                                    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                                    fontSize: 11, lineHeight: 1.4, color: 'var(--text-2)',
+                                  }}>
+                                    {hasExpiry && (
+                                      <span className={expired ? 'badge badge-red' : undefined}>
+                                        {expired ? 'פג תוקף' : 'בתוקף עד'} {expiry.toLocaleDateString('he-IL')}
+                                      </span>
+                                    )}
+                                    {stamp && (
+                                      <span style={{ color: 'var(--text-3)' }}>
+                                        נחתם {stamp.toLocaleDateString('he-IL')} · {stamp.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}
+                                      </span>
                                     )}
                                   </div>
                                 </div>
@@ -4160,7 +4213,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         <div className="modal slide-up" style={{ maxWidth: 420 }}>
                           <div className="modal-header">
                             <div className="modal-title">
-                              {pendingDocDelete.healthRow ? 'מחיקת הצהרת בריאות' : 'מחיקת מסמך'}
+                              {pendingDocDelete.kind ? `מחיקת ${pendingDocDelete.kind.title}` : 'מחיקת מסמך'}
                             </div>
                             <button
                               type="button"
@@ -4174,7 +4227,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                             <div style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.6 }}>
                               {pendingDocDelete.healthRow
                                 ? `הצהרת הבריאות של ${student.name || 'המתאמן'} תימחק מהתיק יחד עם הקבצים ששמורים תחתיה, והמתאמן יסומן שוב כמי שטרם חתם.`
-                                : 'המסמך יימחק מהתיק ולא ניתן יהיה לשחזר אותו.'}
+                                : pendingDocDelete.participationRow
+                                  ? `${pendingDocDelete.kind.title} של ${student.name || 'המתאמן'} יימחק מהתיק יחד עם הקובץ החתום, והמתאמן יסומן שוב כמי שאין לו אישור לפעילות הזו.`
+                                  : 'המסמך יימחק מהתיק ולא ניתן יהיה לשחזר אותו.'}
                             </div>
                             <div className="form-group" style={{ marginBottom: 0 }}>
                               <label className="form-label" style={{ fontSize: 12 }}>
@@ -4188,7 +4243,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                 onChange={(e) => setDeleteConfirmText(e.target.value)}
                                 onKeyDown={(e) => {
                                   if (e.key === 'Enter' && deleteConfirmText.trim() === 'מחק') {
-                                    handleDeleteDoc(pendingDocDelete.doc);
+                                    runPendingDelete();
                                   }
                                 }}
                               />
@@ -4199,7 +4254,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                               type="button"
                               className="btn btn-danger btn-sm"
                               disabled={deleteConfirmText.trim() !== 'מחק' || !!deletingDocId}
-                              onClick={() => handleDeleteDoc(pendingDocDelete.doc)}
+                              onClick={runPendingDelete}
                             >
                               <Trash2 size={14} /> מחיקה
                             </button>

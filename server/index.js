@@ -14669,6 +14669,43 @@ app.delete('/api/documents/:id', async (req, res) => {
   res.json({ success: true });
 });
 
+// Staff: remove a participation approval from the file — the approval row and
+// the PDF stored under it. Deleting only the file is not enough: the approval
+// would still stand, and the folder would draw the line again from it.
+app.delete('/api/students/:id/participation-waiver', async (req, res) => {
+  const studentId = String(req.params.id || '');
+  const waiverId = String(req.query.waiverId || req.body?.waiverId || '').trim();
+  if (!waiverId) return res.status(400).json({ error: 'חסר מזהה אישור השתתפות' });
+  const waiver = (db.get('participation_waivers') || []).find((row) => (
+    row.id === waiverId
+    && String(row.student_id || row.studentId || '') === studentId
+  ));
+  if (!waiver) return res.status(404).json({ error: 'אישור ההשתתפות לא נמצא' });
+
+  const docs = (db.get('client_documents') || []).filter((d) => (
+    d.type === 'participation_waiver_pdf'
+    && String(d.waiverId || d.waiver_id || '') === waiverId
+  ));
+  for (const doc of docs) {
+    const removed = await removeClientDocumentRecord(doc);
+    if (!removed.ok) {
+      return res.status(409).json({ error: removed.error || 'מחיקת הקובץ נכשלה' });
+    }
+  }
+
+  const removed = await db.deleteDurable('participation_waivers', waiverId);
+  if (removed?.notFound) {
+    const remote = await supa.remove('participation_waivers', waiverId);
+    if (remote?.ok === false) {
+      return res.status(409).json({ error: remote.error || 'מחיקת אישור ההשתתפות נכשלה' });
+    }
+  } else if (removed?.ok === false) {
+    return res.status(409).json({ error: removed.error || 'מחיקת אישור ההשתתפות נכשלה' });
+  }
+
+  res.json({ success: true, removedDocuments: docs.length });
+});
+
 // Staff: remove a health declaration from the file — the record, the PDFs saved
 // under it, and the signed marks on the student. Deleting only the file is not
 // enough: the card would still read "signed", and the client re-uploads the same

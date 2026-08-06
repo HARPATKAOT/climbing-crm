@@ -13,7 +13,7 @@
  * customer file.
  */
 
-import { Footprints, FileText, createLucideIcon } from 'lucide-react';
+import { Footprints, FileText, HeartPulse, Stethoscope, createLucideIcon } from 'lucide-react';
 
 /** A simple front-facing climber on Lucide's 24×24 grid. */
 export const WallClimber = createLucideIcon('WallClimber', [
@@ -84,3 +84,37 @@ export function isSpecialActivity(source) {
 }
 
 export const DECLARATION_KINDS = KINDS;
+
+/**
+ * Everything that can sit in the customer's approvals folder.
+ *
+ * A participation approval, a health declaration and a doctor's note are three
+ * different papers with three different expiry rules, and the folder lists them
+ * side by side. Each one therefore carries its own icon and its own colour, so
+ * a line can be told apart without reading it. `title` is the full name on the
+ * tag; `label` is the short word used by the filter buttons.
+ */
+const FILE_KINDS = {
+  wall: { ...KINDS.wall, title: 'אישור השתתפות — קיר', label: 'קיר' },
+  trip: { ...KINDS.trip, title: 'אישור השתתפות — טיול', label: 'טיול' },
+  health: {
+    key: 'health', title: 'הצהרת בריאות', label: 'בריאות',
+    Icon: HeartPulse, badge: 'badge-blue', color: '#7DD3FC',
+  },
+  clearance: {
+    key: 'clearance', title: 'אישור רופא', label: 'רופא',
+    Icon: Stethoscope, badge: 'badge-purple', color: '#C4B5FD',
+  },
+};
+
+/**
+ * The kind of a single line in the approvals folder.
+ * @param {{category?: string, scope?: string, clearance?: boolean}} row
+ */
+export function documentRowKind(row = {}) {
+  if (row.clearance) return FILE_KINDS.clearance;
+  if (row.category !== 'participation') return FILE_KINDS.health;
+  return FILE_KINDS[declarationKind(row.scope).key] || FILE_KINDS.wall;
+}
+
+export const DOCUMENT_FILE_KINDS = FILE_KINDS;
