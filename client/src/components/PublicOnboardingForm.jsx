@@ -2980,6 +2980,17 @@ export default function PublicOnboardingForm() {
                     )}
                   </>
                 )}
+                {/* למטה, אחרי השאלות: מה שנמסר נכון להיום, וההתחייבות היא
+                    להודיע כשזה משתנה. בלי המשפט הזה ההצהרה נקראת כאילו היא
+                    מתארת מצב קבוע. */}
+                <div style={{
+                  background: 'rgba(0,0,0,0.22)', border: '1px solid rgba(255,255,255,0.12)',
+                  borderRadius: 12, padding: 12, marginTop: 14,
+                  fontSize: 12.5, lineHeight: 1.7, color: 'rgba(255,255,255,0.72)',
+                }}>
+                  התשובות נמסרות נכון למועד החתימה. אם יחול שינוי במצב הבריאותי של מי
+                  מהמשתתפים — האחריות להודיע לצוות באופן מיידי היא של החותם/ת על ההצהרה.
+                </div>
                 {error && <ErrorBox message={error} />}
                 <button type="button" className="event-primary" style={{ marginTop: 16 }} onClick={advanceHealthOrSubmit}>
                   {childHealthIndex < kids.length - 1

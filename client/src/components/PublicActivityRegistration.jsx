@@ -976,6 +976,12 @@ export default function PublicActivityRegistration() {
                           onError={setError}
                         />
                       )}
+                      {/* התשובות נכונות למועד החתימה; ההתחייבות שאחריהן היא
+                          להודיע כשמשהו משתנה. */}
+                      <p className="event-hint" style={{ marginTop: 12 }}>
+                        התשובות נמסרות נכון למועד החתימה. אם יחול שינוי במצב הבריאותי של מי
+                        מהמשתתפים — האחריות להודיע לצוות באופן מיידי היא של החותם/ת על ההצהרה.
+                      </p>
                     </>
                   )}
                   {confirmations.length > 0 && (
