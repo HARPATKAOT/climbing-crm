@@ -1055,15 +1055,6 @@ export default function PublicOnboardingForm() {
   /** Whether this card's own identity fields are asked for on the participants step. */
   const fillsOwnDetails = (child) => fillsDeclaration(child) && !reusesDeclaration(child);
 
-  // Parent, participants, one medical screen per participant, and one last step
-  // for the shared clauses and the single signature.
-  const totalStepsLabel = healthOnlyMode
-    ? 3
-    : 3 + Math.max(
-        children.filter((c) => c.name.trim() && fillsDeclaration(c)).length,
-        1
-      );
-
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -1469,6 +1460,7 @@ export default function PublicOnboardingForm() {
   // The signer is one of the participants when they ticked "I am participating
   // too", and the list then named them twice.
   const coveredNames = [...new Set([parentFullName(), ...signingNames].filter(Boolean))];
+  const signingFirstNames = signingNames.map((name) => name.split(/\s+/)[0]).filter(Boolean);
 
   const goNextFromParent = async () => {
     setError('');
@@ -2159,16 +2151,20 @@ export default function PublicOnboardingForm() {
   const healthNamesText = healthChildNames.length > 1
     ? `${healthChildNames.slice(0, -1).join(', ')} ו${healthChildNames[healthChildNames.length - 1]}`
     : (healthChildNames[0] || '');
-  // Steps 1 and 2 are fixed. The medical screen repeats once per participant;
-  // the activity clauses and the waiver come once, after the last of them.
-  const displayStep = healthOnlyMode && step === 3
-    ? (healthSubStep === SUB_HEALTH ? 2 : 3)
-    : (step === 3
-      ? 2 + (healthSubStep === SUB_HEALTH ? childHealthIndex + 1 : kids.length + 1)
-      : step);
-  // The signing screens after the medical ones are one numbered step, not two:
-  // the bar still moves on every screen, by a fraction of that step.
+  // Every screen is a step, and the count says so. Details, participants, one
+  // medical screen per participant, and then the shared screens — the rules and
+  // the signature, or only the signature when there are no rules to tick.
   const sharedScreens = sharedSubSteps();
+  const totalStepsLabel = healthOnlyMode
+    ? 2 + sharedScreens.length
+    : 2 + Math.max(kids.length, 1) + sharedScreens.length;
+  const displayStep = healthOnlyMode && step === 3
+    ? (healthSubStep === SUB_HEALTH ? 2 : 2 + sharedScreens.indexOf(healthSubStep) + 1)
+    : (step === 3
+      ? 2 + (healthSubStep === SUB_HEALTH
+        ? childHealthIndex + 1
+        : Math.max(kids.length, 1) + sharedScreens.indexOf(healthSubStep) + 1)
+      : step);
   // The answers of whoever is signing right now. Both signing screens write
   // into the same per-participant `answers` object; only the questions differ.
   const currentAnswers = children[currentFullIndex]?.answers || {};
@@ -2183,12 +2179,7 @@ export default function PublicOnboardingForm() {
     [SUB_ACTIVITY]: sectionTitles.confirm,
     [SUB_WAIVER]: healthOnlyMode ? 'אישור הצהרת הבריאות' : 'אישור השתתפות והסרת אחריות',
   }[healthSubStep] || documentTitle;
-  const subStepFraction = step === 3 && healthSubStep !== SUB_HEALTH
-    ? (sharedScreens.indexOf(healthSubStep) + 1) / sharedScreens.length
-    : 1;
-  const progressPercent = Math.round(
-    ((displayStep - 1 + subStepFraction) / totalStepsLabel) * 100
-  );
+  const progressPercent = Math.round((displayStep / totalStepsLabel) * 100);
 
   return (
     <div className="event-page onboard-page" ref={pageTopRef}>
@@ -3219,12 +3210,16 @@ export default function PublicOnboardingForm() {
                 <div className="section-title">כללי בטיחות</div>
                 <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
                   {signingNames.length > 1
-                    ? `הכללים חלים על כל המשתתפים: ${signingNames.join(', ')}. יש לסמן את כולם לאחר שקראתם אותם.`
+                    ? `הכללים חלים על כל המשתתפים: ${signingFirstNames.join(', ')}. יש לסמן את כולם לאחר שקראתם אותם.`
                     : 'יש לסמן את כל הכללים לאחר שקראתם אותם.'}
                 </p>
+                {/* למי שחותם רק על עצמו אין למי להסביר, ולמי שחותם גם על עצמו
+                    וגם על ילדו הכללים חלים על שניהם — ומכאן ה„גם”. */}
                 {kids.some((kid) => kid.type !== 'adult') && (
                   <p className="child-safety-notice">
-                    אנא הסבירו לילדכם את כללי הבטיחות.
+                    {kids.some((kid) => kid.type === 'adult')
+                      ? 'אנא הסבירו גם לילדכם את כללי הבטיחות.'
+                      : 'אנא הסבירו לילדכם את כללי הבטיחות.'}
                   </p>
                 )}
                 {sharedConfirmations.map((q) => (
