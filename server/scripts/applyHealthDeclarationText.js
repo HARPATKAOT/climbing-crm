@@ -45,7 +45,7 @@ function buildWaiver({ activityPhrase, riskClause }) {
 
 2. ${riskClause}
 
-3. אני מצהיר/ה כי מסרתי בהצהרת הבריאות מידע מלא, נכון ומעודכן ביחס אליי[[ וביחס לכל אחד מהמשתתפים המפורטים לעיל]], וכי לא ידועה לי מגבלה רפואית שלא פורטה בה. אני מתחייב/ת להודיע לצוות באופן מיידי על כל שינוי רפואי משמעותי.
+3. אני מצהיר/ה כי אני[[, וכל אחד מהמשתתפים המפורטים לעיל,]] בריא/ה וכשיר/ה פיזית, נפשית וקוגניטיבית להשתתף בפעילות, כי מסרתי בהצהרת הבריאות מידע מלא, נכון ומעודכן, וכי לא ידועה לי מגבלה רפואית שלא פורטה בה. אני מתחייב/ת להודיע לצוות באופן מיידי על כל שינוי רפואי משמעותי.
 
 4. בחינת התאמת הפעילות למצב הבריאותי היא באחריותי בלבד, ובמקרה הצורך לאחר היוועצות ברופא. "${LEGAL_NAME}" אינו גורם רפואי ואינו בוחן כשירות רפואית להשתתפות.
 
@@ -102,17 +102,6 @@ const MEDICAL_QUESTIONS = [
   { id: 'm9', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש מגבלה רפואית, אבחנה או מידע אחר שחשוב שנדע ולא נשאלנו עליו כאן?' },
 ];
 
-/** The fitness declaration, which names the activity it is made about. */
-function fitnessConfirmation(activityPhrase) {
-  return {
-    id: 'h1',
-    kind: 'confirm',
-    requireYes: true,
-    audience: 'all',
-    requiresClearance: false,
-    label: `אני החתום/ה מטה מצהיר/ה בזאת שאני, או האדם שאני רושם/ת ל${activityPhrase}, בריא/ה וכשיר/ה פיזית, נפשית וקוגניטיבית להשתתף בפעילות המתקיימת מטעם "${LEGAL_NAME}", וכי מסרתי מידע רפואי מלא ומעודכן. אני מתחייב/ת לעדכן את הצוות בכל שינוי במצב הבריאותי.`,
-  };
-}
 
 function safety(id, label, { childOnly = false } = {}) {
   return {
@@ -181,9 +170,11 @@ export function declarationFor(activity) {
     title: activity.title,
     waiverText: buildWaiver(activity),
     waiverSummary: buildSummary(activity),
+    // The fitness declaration is not a tick box any more: it is clause 3 of the
+    // waiver, next to the undertaking to report a change — one statement about
+    // the medical state instead of the same thing said in two places.
     healthQuestions: [
       ...MEDICAL_QUESTIONS,
-      fitnessConfirmation(activity.activityPhrase),
       ...activity.safety,
     ],
   };
