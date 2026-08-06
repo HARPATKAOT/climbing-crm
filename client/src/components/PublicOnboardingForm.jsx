@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertTriangle, ArrowLeft, CheckCircle, Download, Lock, Pencil, PenTool, Plus, ShieldCheck, Trash2,
+  AlertTriangle, ArrowLeft, Baby, BellRing, Bone, Brain, CheckCircle, Download, FileWarning,
+  HeartPulse, HelpCircle, Lock, Megaphone, Pencil, PenTool, Pill, Plus, ShieldAlert, ShieldCheck,
+  Stethoscope, Trash2, Wind,
 } from 'lucide-react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
@@ -571,6 +573,51 @@ function participantFromExistingStudent(student, questions = [], {
  *
  * The signature sits on the last screen and covers all of them.
  */
+/**
+ * An icon per medical question, in the house colours.
+ *
+ * Nine questions in identical grey cards read as one wall of text, and a parent
+ * scrolling for the one about medication had nothing to aim at. The icon is a
+ * landmark, not decoration, so each question gets its own — and a question with
+ * no icon simply gets none rather than a shared placeholder that means nothing.
+ */
+const QUESTION_ICONS = {
+  m1: [Wind, '#7DD3FC'],
+  m2: [HeartPulse, '#FCA5A5'],
+  m3: [Brain, '#C4B5FD'],
+  m4: [Bone, '#FCD34D'],
+  m5: [Stethoscope, '#5EEAD4'],
+  m6: [Pill, '#6EE7B7'],
+  m7: [ShieldAlert, '#FDBA74'],
+  m8: [FileWarning, '#FCD34D'],
+  m11: [Baby, '#F9A8D4'],
+  m9: [HelpCircle, '#94A3B8'],
+};
+
+/**
+ * What the activity is, before the rules that follow from it.
+ *
+ * Prose rather than tick boxes on purpose: this part is read, not agreed to —
+ * what is agreed to is the list under it and the waiver after it. Kept per
+ * scope, because a trip's risks are not a wall's.
+ */
+const ACTIVITY_NATURE = {
+  wall: [
+    'טיפוס ספורטיבי הוא פעילות אתגרית מהנה, אבל היא גם כרוכה בסיכונים גופניים.',
+    'הפעילות כוללת עלייה לגובה, עבודה עם ציוד בטיחות והסתמכות על בן זוג מאבטח. הסיכונים העיקריים הם:',
+    '• נפילה מגובה — עלולה לגרום לפציעה חמורה, נכות או מוות',
+    '• עומס חוזר על הידיים והמפרקים — עלול לגרום לפגיעה ברקמות רכות',
+    '• פגיעה ממטפסים אחרים — נפילת ציוד או מטפס מגובה עלולה לגרום לפציעה',
+    'סיכונים אלו קיימים גם בהקפדה מלאה על כללי הבטיחות.',
+  ].join('\n\n'),
+};
+
+/** The two mailing lists: one that is part of the service, one that is not. */
+const LIST_ICONS = {
+  operational: [BellRing, '#6EE7B7'],
+  marketing: [Megaphone, '#FCD34D'],
+};
+
 const SUB_HEALTH = 1;
 const SUB_ACTIVITY = 2;
 const SUB_WAIVER = 3;
@@ -1433,6 +1480,16 @@ export default function PublicOnboardingForm() {
       setError('יש למלא מקום מגורים');
       return;
     }
+    // Asked once, and only where the file does not already hold them. Letting
+    // them through empty is what left "מין: לא צוין" and "קשר: לא צוין" on the
+    // card of everyone who registered through the public form. A locked profile
+    // missing one of them opens for editing rather than blocking with no field
+    // in sight.
+    if (!parent.gender || !parent.relation) {
+      if (parentProfileLocked) setEditingParentProfile(true);
+      setError(!parent.gender ? 'יש לבחור זכר או נקבה' : 'יש לבחור את הקשר למשתתפים');
+      return;
+    }
 
     if (waitingForFamily || !familyCheckComplete) return;
     // A real no-match is shown as a confirmation in future tense. No record
@@ -2036,6 +2093,7 @@ export default function PublicOnboardingForm() {
     answers: { ...(child.answers || {}), [id]: value },
   }));
   const currentScreening = screeningFor(currentChild);
+  const activityNatureText = ACTIVITY_NATURE[String(template?.slug || routeSlug || 'wall').trim().toLowerCase()] || '';
   const documentTitle = healthOnlyMode ? 'חידוש הצהרת בריאות' : 'הצהרת בריאות והסרת אחריות';
   const signingScreenTitle = {
     [SUB_HEALTH]: sectionTitles.health,
@@ -2219,7 +2277,7 @@ export default function PublicOnboardingForm() {
             {/* מין ממלא/ת הטופס — הכרטיס בתיק מציג „זכר / נקבה”, ובלי השדה כאן
                 הוא נשאר „לא צוין” לכל מי שנרשם דרך הטופס הציבורי. */}
             <div className="form-group">
-              <label>מין</label>
+              <label>מין <span className="req-star">*</span></label>
               <GenderPicker
                 value={parent.gender}
                 onChange={(value) => setParent((p) => ({ ...p, gender: value }))}
@@ -2248,7 +2306,7 @@ export default function PublicOnboardingForm() {
               <div className="form-group">
                 {/* Buttons for the same reason as בן / בת below: a native list
                     paints its own highlight and ignores the page. */}
-                <label>קשר למשתתפים</label>
+                <label>קשר למשתתפים <span className="req-star">*</span></label>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   {[['אב', 'father'], ['אם', 'mother'], ['אפוטרופוס', 'guardian'], ['אחר', 'other']]
                     .map(([text, value]) => (
@@ -2335,10 +2393,18 @@ export default function PublicOnboardingForm() {
                         }));
                       }}
                     />
-                    <span>
-                      <strong>{list.label || list.key}</strong>
-                      {list.description ? ` — ${list.description}` : ''}
-                      {isRequired ? ' (חובה — חלק מהשירות)' : ''}
+                    <span style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                      {(() => {
+                        const [Icon, color] = LIST_ICONS[list.key] || [];
+                        return Icon
+                          ? <Icon size={17} color={color} style={{ flexShrink: 0, marginTop: 3 }} />
+                          : null;
+                      })()}
+                      <span>
+                        <strong>{list.label || list.key}</strong>
+                        {list.description ? ` — ${list.description}` : ''}
+                        {isRequired ? ' (חובה — חלק מהשירות)' : ''}
+                      </span>
                     </span>
                   </label>
                 );
@@ -2917,8 +2983,17 @@ export default function PublicOnboardingForm() {
                         background: 'rgba(0,0,0,0.18)', borderRadius: 12, padding: 12,
                         marginBottom: 10,
                       }}>
-                        <div style={{ fontSize: 14, lineHeight: 1.5, marginBottom: 10 }}>
-                          {questionLabel(q)}
+                        <div style={{
+                          fontSize: 14, lineHeight: 1.5, marginBottom: 10,
+                          display: 'flex', alignItems: 'flex-start', gap: 8,
+                        }}>
+                          {(() => {
+                            const [Icon, color] = QUESTION_ICONS[q.id] || [];
+                            return Icon
+                              ? <Icon size={17} color={color} style={{ flexShrink: 0, marginTop: 2 }} />
+                              : null;
+                          })()}
+                          <span>{questionLabel(q)}</span>
                         </div>
                         <div style={{ display: 'flex', gap: 8 }}>
                           {[['כן', true], ['לא', false]].map(([text, value]) => (
@@ -3005,10 +3080,26 @@ export default function PublicOnboardingForm() {
 
             {healthSubStep === SUB_ACTIVITY && (
               <>
+                {/* קודם מה הפעילות היא — זה נקרא, לא מסומן — ורק אחריה הכללים
+                    שנובעים ממנה, שאותם מסמנים אחד אחד. */}
+                {activityNatureText && (
+                  <>
+                    <div className="section-title">אופי הפעילות</div>
+                    <div style={{
+                      background: 'rgba(0,0,0,0.22)', border: '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: 12, padding: 14, marginBottom: 22,
+                      fontSize: 13.5, lineHeight: 1.8, color: 'rgba(255,255,255,0.85)',
+                      whiteSpace: 'pre-wrap',
+                    }}>
+                      {activityNatureText}
+                    </div>
+                  </>
+                )}
+                <div className="section-title">כללי בטיחות</div>
                 <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
                   {signingNames.length > 1
-                    ? `הסעיפים חלים על כל המשתתפים: ${signingNames.join(', ')}. יש לסמן את כולם לאחר שקראתם אותם.`
-                    : 'יש לסמן את כל הסעיפים לאחר שקראתם אותם.'}
+                    ? `הכללים חלים על כל המשתתפים: ${signingNames.join(', ')}. יש לסמן את כולם לאחר שקראתם אותם.`
+                    : 'יש לסמן את כל הכללים לאחר שקראתם אותם.'}
                 </p>
                 {kids.some((kid) => kid.type !== 'adult') && (
                   <p className="child-safety-notice">
@@ -3060,9 +3151,6 @@ export default function PublicOnboardingForm() {
                   </>
                 ) : (
                   <>
-                    {/* The waiver's own legal title, which is not the name of
-                        the screen — the screen is named in the header above. */}
-                    <div className="section-title">{sectionTitles.waiver}</div>
                 {/* One text, the binding one. It names nobody: the signer takes
                     responsibility for themselves and for the minors listed
                     above the signature field, so the same document serves a
@@ -3107,7 +3195,12 @@ export default function PublicOnboardingForm() {
                     checked={waiverAccepted}
                     onChange={(e) => setWaiverAccepted(e.target.checked)}
                   />
-                  <span>קראתי ואני מאשר/ת את הסרת האחריות והוראות הבטיחות</span>
+                  {/* מי שהאישור חל עליו, בתוך המשפט שמאשרים — לא רק ברשימה
+                      שמעליו. זה מה שהחתימה למטה אומרת. */}
+                  <span>
+                    קראתי ואני מאשר/ת את הסרת האחריות וכללי הבטיחות החלים על:{' '}
+                    {[parentFullName(), ...signingNames].filter(Boolean).join(', ')}
+                  </span>
                 </label>
                 {!waiverRead && (
                   <p style={{ fontSize: 12, color: '#FCD34D', margin: '6px 2px 0' }}>

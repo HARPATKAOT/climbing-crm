@@ -26,9 +26,9 @@ export function withSignerName(text, signerName = '') {
 
 const CONFIRM_TITLES = {
   trip: 'הבנת אופי הטיול',
-  // At the wall this part is a list of rules, and calling it anything else made
-  // the page sound like an introduction to something.
-  wall: 'כללי בטיחות',
+  // Two things on one screen: what the activity is, and the rules that follow
+  // from it. The title says both, in the order they are read.
+  wall: 'אופי הפעילות וכללי הבטיחות',
 };
 
 const WAIVER_FALLBACK_TITLE = 'כתב הצהרה, ויתור והסרת אחריות';
