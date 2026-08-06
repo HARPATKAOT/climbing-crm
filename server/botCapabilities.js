@@ -10,30 +10,42 @@
  * קיימת. היוצא מן הכלל היחיד הוא יכולת שנולדה כבויה בכוונה.
  */
 
-/** Every switch, in the order the screen shows them. */
+/**
+ * Every switch, in the order the screen shows them.
+ *
+ * `source` names the screen that owns the data behind the capability. It is
+ * there because the bot settings screen kept filling up with business facts
+ * typed by hand — a price in prose beside a price in a field, and no way to
+ * tell which one the bot would say. Nothing here is edited on the bot screen:
+ * the switch decides whether the bot may look, the source decides what it sees.
+ */
 export const BOT_CAPABILITIES = [
   {
     key: 'classes',
     label: 'מידע על חוגים',
     hint: 'ימים, שעות, מקומות פנויים ומדריכים',
+    source: 'מסך הקבוצות · ומחיר כניסה בודדת מהמחירון',
     tools: ['listClasses', 'getPrices'],
   },
   {
     key: 'hours',
     label: 'שעות פתיחה ומיקום',
     hint: 'לפי מה שמסומן ביומן',
+    source: 'יומן המערכת — רשומות «שעות פתיחה»',
     tools: ['getOpeningHours'],
   },
   {
     key: 'events',
     label: 'אירועים וטיולים',
     hint: 'מוסר פרטים על פעילויות שסומנו לפרסום',
+    source: 'מסך הפעילויות — רק «הצג באתר» + «הרשמה פתוחה»',
     tools: ['getEvents'],
   },
   {
     key: 'event_interest',
     label: 'רישום מתעניינים לטיול',
     hint: 'רושם לקוח כמתעניין בפעילות. לא הרשמה ולא חיוב',
+    source: 'נכתב לרשימת המתעניינים של אותה פעילות',
     tools: ['addActivityInterest'],
     requires: 'events',
   },
@@ -41,42 +53,49 @@ export const BOT_CAPABILITIES = [
     key: 'health',
     label: 'הצהרות בריאות',
     hint: 'בודק מי חתם ושולח קישור למי שחסר',
+    source: 'טופסי ההשתתפות שנחתמו — אין מה להגדיר',
     tools: ['getHealthDeclarations'],
   },
   {
     key: 'signup_links',
     label: 'שליחת קישורי הרשמה',
     hint: 'קישור ההרשמה של קבוצה מסוימת',
+    source: 'מסך הקבוצות — קישור פעם/פעמיים בשבוע',
     tools: ['getSignupLink', 'getRegistrationPack'],
   },
   {
     key: 'placement',
     label: 'שיבוץ לקבוצה',
     hint: 'שיבוץ רך «ממתין להרשמה», רשימת המתנה, והוצאה מקבוצה',
+    source: 'כותב לכרטיס המתאמן; מתאמן רשום לא זז',
     tools: ['startSignup', 'joinWaitlist', 'cancelSignup'],
   },
   {
     key: 'equipment',
     label: 'ציוד ודמי העשרה',
-    hint: 'קישור תשלום, ומה כל פריט ולמה — לפי מה שכתוב במסך הציוד',
+    hint: 'קישור תשלום, ומה כל פריט ולמה',
+    source: 'מסך הציוד — מחירים, דמי העשרה וטקסט ההסבר',
     tools: ['getEquipmentPaymentLink', 'getEquipmentInfo'],
   },
   {
     key: 'follow_ups',
     label: 'הודעות מעקב',
     hint: 'חוזר ללקוח יום אחרי, וגם אחרי שיבוץ שממתין להרשמה',
+    source: 'נקבע בשיחה עצמה; נשלח בתבנית bot_followup_v1',
     tools: ['scheduleFollowUp'],
   },
   {
     key: 'save_name',
     label: 'עדכון פרטים בכרטיס',
     hint: 'שם פרטי ושם משפחה בלבד; יתר הפרטים נאספים בטופס ההרשמה',
+    source: 'כותב לכרטיס הלקוח',
     tools: ['updateCustomerDetails'],
   },
   {
     key: 'family_card',
     label: 'קריאת כרטיס המשפחה',
     hint: 'רואה את הילדים כדי לשאול «בשביל מי מהם?»',
+    source: 'כרטיס הלקוח והמתאמנים שלו',
     tools: ['getFamilyCard'],
   },
   {
@@ -84,6 +103,7 @@ export const BOT_CAPABILITIES = [
     label: 'דיווח למתנ״ס',
     hint: 'המתנ״ס כותב שם של ילד, והבוט עונה ממתי הוא מתאמן (בלי אימון ההיכרות) '
       + 'ומסמן אותו כרשום',
+    source: 'נוכחות המתאמן — האימון הראשון שאינו היכרות',
     // Not a model tool: a fixed exchange with one right answer, handled in code
     // before the model is reached. The switch gates that branch instead.
     tools: [],
@@ -161,6 +181,7 @@ export function capabilityState(settings) {
     key: capability.key,
     label: capability.label,
     hint: capability.hint,
+    source: capability.source || '',
     requires: capability.requires || null,
     enabled: isCapabilityEnabled(settings, capability.key),
     input: capability.input

@@ -93,6 +93,9 @@ export default function BotCapabilitiesPanel({ disabled = false }) {
       <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.6 }}>
         כל שורה נשמרת מיד. יכולת כבויה לא נמסרת לבוט בכלל, ולכן הוא לא יציע
         אותה ולא ישתמש בה — גם אם הלקוח יבקש.
+        <br />
+        השורה הקטנה מתחת לכל יכולת היא המסך שממנו הנתון נקרא. שם עורכים אותו —
+        לא כאן.
       </div>
 
       {error && (
@@ -144,6 +147,13 @@ export default function BotCapabilitiesPanel({ disabled = false }) {
                       {c.hint}
                       {parentOff ? ' · כבוי כי היכולת שמעליו כבויה' : ''}
                     </div>
+                    {/* Where the answer comes from, so nobody types a price
+                        here that already lives on a screen of its own. */}
+                    {c.source && (
+                      <div style={{ fontSize: 10.5, color: 'var(--text-3)', opacity: 0.75, marginTop: 2 }}>
+                        📄 {c.source}
+                      </div>
+                    )}
                   </div>
                 </label>
 

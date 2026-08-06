@@ -224,30 +224,49 @@ export default function BotSettingsPanel({
             איסוף ליד מדורג (שם הורה ← ילד ← כיתה ← יום)
           </label>
         )}
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
-          <input
-            type="checkbox"
-            checked={settings.aiInteractiveMenuEnabled !== false}
-            onChange={(e) => patch('aiInteractiveMenuEnabled', e.target.checked)}
-            style={{ width: 18, height: 18 }}
-          />
-          תפריט אינטראקטיבי לליד חדש (עם נפילה לטקסט)
-        </label>
-        <div className="form-group" style={{ marginBottom: 0 }}>
-          <label className="form-label" style={{ fontSize: 11 }}>טקסט תפריט פתיחה</label>
-          <textarea
-            className="input textarea"
-            rows={5}
-            style={{ fontSize: 12 }}
-            value={settings.aiGreetingMenu || ''}
-            onChange={(e) => patch('aiGreetingMenu', e.target.value)}
-          />
-        </div>
+        {/* The numbered menu belongs to the keyword engine. In tools mode a new
+            writer is asked for their name first, and every later message is
+            answered by the model — the menu never fires, so showing a switch
+            for it would be a setting that does nothing. */}
+        {settings.aiToolsEnabled ? (
+          <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+            תפריט הפתיחה הממוספר שייך גם הוא למנוע הישן. במצב כלים לקוח חדש
+            נשאל לשמו ואז המודל עונה לשאלה עצמה.
+          </div>
+        ) : (
+          <>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
+              <input
+                type="checkbox"
+                checked={settings.aiInteractiveMenuEnabled !== false}
+                onChange={(e) => patch('aiInteractiveMenuEnabled', e.target.checked)}
+                style={{ width: 18, height: 18 }}
+              />
+              תפריט אינטראקטיבי לליד חדש (עם נפילה לטקסט)
+            </label>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label" style={{ fontSize: 11 }}>טקסט תפריט פתיחה</label>
+              <textarea
+                className="input textarea"
+                rows={5}
+                style={{ fontSize: 12 }}
+                value={settings.aiGreetingMenu || ''}
+                onChange={(e) => patch('aiGreetingMenu', e.target.value)}
+              />
+            </div>
+          </>
+        )}
       </Section>
 
       <Section title="ידע עסקי ושאלות נפוצות">
+        {/* Two prices for one thing is how a customer gets the wrong one. */}
+        <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 10, lineHeight: 1.6 }}>
+          כאן רק מה שאין לו מסך משלו — כתובת, חניה, נהלים. מחירי חוגים, ציוד,
+          דמי העשרה, שעות פתיחה ואירועים נקראים מהמסכים שלהם; אם כותבים אותם גם
+          כאן, הבוט עלול לצטט את הישן מבין השניים.
+        </div>
         <div className="form-group">
-          <label className="form-label" style={{ fontSize: 11 }}>פרטי עסק (כתובת / שעות / קישורים)</label>
+          <label className="form-label" style={{ fontSize: 11 }}>פרטי עסק (כתובת / חניה / קישורים)</label>
           <textarea
             className="input textarea"
             rows={3}
@@ -368,37 +387,44 @@ export default function BotSettingsPanel({
         </div>
       </Section>
 
-      <Section title="סף ביטחון והנחיות בינה">
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
-          <input
-            type="checkbox"
-            checked={settings.aiEscalateWhenUnsure !== false}
-            onChange={(e) => patch('aiEscalateWhenUnsure', e.target.checked)}
-            style={{ width: 18, height: 18 }}
-          />
-          אחרי בקשת הבהרה — העברה לצוות אם עדיין לא ברור
-        </label>
-        <div className="form-group">
-          <label className="form-label" style={{ fontSize: 11 }}>הודעה כשלא מבינים (בקשת הבהרה)</label>
-          <textarea
-            className="input textarea"
-            rows={2}
-            style={{ fontSize: 12 }}
-            value={settings.aiClarifyReply || ''}
-            onChange={(e) => patch('aiClarifyReply', e.target.value)}
-            placeholder="לא הבנתי 🙏 יכולים להסביר קצת יותר?"
-          />
-        </div>
-        <div className="form-group">
-          <label className="form-label" style={{ fontSize: 11 }}>הודעה בהעברה לצוות אחרי הבהרה שנכשלה</label>
-          <textarea
-            className="input textarea"
-            rows={2}
-            style={{ fontSize: 12 }}
-            value={settings.aiUnsureReply || ''}
-            onChange={(e) => patch('aiUnsureReply', e.target.value)}
-          />
-        </div>
+      <Section title={settings.aiToolsEnabled ? 'טון ואופן המענה' : 'סף ביטחון והנחיות בינה'}>
+        {/* The clarify-then-handoff ladder is the keyword engine's: it fires on
+            a reply the model did not write. In tools mode the model phrases the
+            clarification itself, so these two texts never reach a customer. */}
+        {!settings.aiToolsEnabled && (
+          <>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
+              <input
+                type="checkbox"
+                checked={settings.aiEscalateWhenUnsure !== false}
+                onChange={(e) => patch('aiEscalateWhenUnsure', e.target.checked)}
+                style={{ width: 18, height: 18 }}
+              />
+              אחרי בקשת הבהרה — העברה לצוות אם עדיין לא ברור
+            </label>
+            <div className="form-group">
+              <label className="form-label" style={{ fontSize: 11 }}>הודעה כשלא מבינים (בקשת הבהרה)</label>
+              <textarea
+                className="input textarea"
+                rows={2}
+                style={{ fontSize: 12 }}
+                value={settings.aiClarifyReply || ''}
+                onChange={(e) => patch('aiClarifyReply', e.target.value)}
+                placeholder="לא הבנתי 🙏 יכולים להסביר קצת יותר?"
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label" style={{ fontSize: 11 }}>הודעה בהעברה לצוות אחרי הבהרה שנכשלה</label>
+              <textarea
+                className="input textarea"
+                rows={2}
+                style={{ fontSize: 12 }}
+                value={settings.aiUnsureReply || ''}
+                onChange={(e) => patch('aiUnsureReply', e.target.value)}
+              />
+            </div>
+          </>
+        )}
         <div className="form-group" style={{ marginBottom: 0 }}>
           <label className="form-label">הנחיות אימון למענה (System Prompt)</label>
           <textarea
@@ -408,9 +434,10 @@ export default function BotSettingsPanel({
             value={settings.aiSystemPrompt || ''}
             onChange={(e) => patch('aiSystemPrompt', e.target.value)}
           />
-          <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4 }}>
-            הסבר לבינה איך להציג את הקיר, אילו מחירים לתת, ואיך להתנסח.
-            שם העסק נלקח אוטומטית ממסך הגדרות העסק — אין צורך לכתוב אותו כאן.
+          <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4, lineHeight: 1.6 }}>
+            כאן נקבע איך הבוט מדבר — טון, אורך, רמת פורמליות. זה השדה שמשפיע על
+            כל תשובה. עובדות אין לכתוב כאן: הן נקראות מהמסכים שלהן.
+            שם העסק נלקח אוטומטית ממסך הגדרות העסק.
           </div>
         </div>
       </Section>

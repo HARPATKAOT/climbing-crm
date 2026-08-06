@@ -20,6 +20,19 @@ test('every tool the model can be offered belongs to exactly one switch', () => 
   assert.equal(new Set(owned).size, owned.length, 'a tool is listed twice');
 });
 
+test('every capability says which screen its answer comes from', () => {
+  // The bot screen is not a place to type business facts. Naming the owning
+  // screen on every row is what keeps a price from being written in two places.
+  for (const capability of BOT_CAPABILITIES) {
+    assert.ok(
+      String(capability.source || '').trim(),
+      `${capability.key} does not say where its data comes from`
+    );
+  }
+  const state = capabilityState({});
+  assert.equal(state.every((c) => c.source), true);
+});
+
 test('a capability is on until it is explicitly turned off', () => {
   // Adding a switch must not quietly change what the bot already does.
   for (const key of CAPABILITY_KEYS) {
