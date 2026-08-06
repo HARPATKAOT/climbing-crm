@@ -252,12 +252,17 @@ function ParentProfileSummary({ parent, onEdit }) {
     other: 'אחר',
   };
   const fullName = joinParentName(parent?.name, parent?.lastName) || '—';
+  const genderLabels = { male: 'זכר', female: 'נקבה' };
+  // The email is the one value that does not survive a narrow column: broken
+  // across two lines it reads as two addresses. It gets the whole row, and
+  // shrinks to fit rather than wrapping.
   const rows = [
-    ['תעודת זהות', parent?.idNumber || '—', true],
-    ['טלפון', parent?.phone || '—', true],
-    ['אימייל', parent?.email || '—', true],
-    ['מקום מגורים', parent?.city || '—', false],
-    ['קשר למשפחה', relationLabels[parent?.relation] || 'לא צוין', false],
+    ['תעודת זהות', parent?.idNumber || '—', { ltr: true }],
+    ['טלפון', parent?.phone || '—', { ltr: true }],
+    ['מין', genderLabels[parent?.gender] || 'לא צוין', {}],
+    ['מקום מגורים', parent?.city || '—', {}],
+    ['קשר למשפחה', relationLabels[parent?.relation] || 'לא צוין', {}],
+    ['אימייל', parent?.email || '—', { ltr: true, fullRow: true, oneLine: true }],
   ];
 
   return (
@@ -307,17 +312,21 @@ function ParentProfileSummary({ parent, onEdit }) {
         display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
         gap: 12, margin: 0,
       }}>
-        {rows.map(([label, value, leftToRight]) => (
+        {rows.map(([label, value, { ltr, fullRow, oneLine } = {}]) => (
           <div key={label} style={{
             minWidth: 0, paddingTop: 11, borderTop: '1px solid rgba(255,255,255,.1)',
+            ...(fullRow ? { gridColumn: '1 / -1' } : null),
           }}>
             <dt style={{ fontSize: 12, color: 'rgba(255,255,255,.55)', marginBottom: 5 }}>{label}</dt>
             <dd
-              dir={leftToRight ? 'ltr' : undefined}
+              dir={ltr ? 'ltr' : undefined}
               style={{
-                margin: 0, fontSize: 'clamp(15px, 2.7vw, 19px)', color: '#fff', fontWeight: 800,
-                textAlign: leftToRight ? 'right' : undefined,
-                overflowWrap: 'anywhere',
+                margin: 0, color: '#fff', fontWeight: 800,
+                fontSize: oneLine ? 'clamp(13px, 2.2vw, 17px)' : 'clamp(15px, 2.7vw, 19px)',
+                textAlign: ltr ? 'right' : undefined,
+                ...(oneLine
+                  ? { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
+                  : { overflowWrap: 'anywhere' }),
               }}
             >
               {value}
@@ -606,6 +615,7 @@ export default function PublicOnboardingForm() {
     phone: searchParams.get('phone') || '',
     email: '',
     city: '',
+    gender: '',
   });
   const [children, setChildren] = useState([emptyChild()]);
   const [selfStudent, setSelfStudent] = useState(null);
@@ -762,6 +772,16 @@ export default function PublicOnboardingForm() {
     skip: identityStatus !== 'new',
     verificationToken: otp.token,
   });
+  /**
+   * The classes list is forced only when the form was opened in order to join a
+   * class — there the schedule updates are part of the service. A trip form or a
+   * medical renewal is a different errand, and forcing a subscription through
+   * them would be signing someone up to a list they never came for.
+   */
+  const isTripForm = String(template?.slug || routeSlug || '').trim().toLowerCase() === 'trip';
+  const classSignupForm = !healthOnlyMode && !isTripForm;
+  const effectiveRequiredListKey = classSignupForm ? requiredListKey : '';
+
   const identityReady = !!otp.token && ['found', 'new'].includes(identityStatus);
   // The same test `goNextFromParent` applies before it sends a code, so the
   // button can say which of the two things the next press actually does.
@@ -1262,6 +1282,7 @@ export default function PublicOnboardingForm() {
         relation: current.relation || data.parent.relation || '',
         email: current.email.trim() || data.parent.email || '',
         city: current.city.trim() || data.parent.city || '',
+        gender: current.gender || data.parent.gender || '',
         // Keep the exact number that earned the active OTP token.
         phone: current.phone,
       }));
@@ -1806,12 +1827,15 @@ export default function PublicOnboardingForm() {
             phone: parent.phone.trim(),
             email: parent.email.trim(),
             city: parent.city.trim(),
+            gender: parent.gender || '',
             source: 'form',
             family_parent_id: familyParentId || null,
           },
           interest,
           children: kids,
-          subscriptions: { ...subscriptions, [requiredListKey]: true },
+          subscriptions: effectiveRequiredListKey
+            ? { ...subscriptions, [effectiveRequiredListKey]: true }
+            : { ...subscriptions },
           templateSlug: template?.slug || 'wall',
           templateId: template?.id || null,
           completionRegistrationId: searchParams.get('registrationId') || null,
@@ -2192,6 +2216,16 @@ export default function PublicOnboardingForm() {
                 />
               </div>
             </div>
+            {/* מין ממלא/ת הטופס — הכרטיס בתיק מציג „זכר / נקבה”, ובלי השדה כאן
+                הוא נשאר „לא צוין” לכל מי שנרשם דרך הטופס הציבורי. */}
+            <div className="form-group">
+              <label>מין</label>
+              <GenderPicker
+                value={parent.gender}
+                onChange={(value) => setParent((p) => ({ ...p, gender: value }))}
+                options={[['זכר', 'male'], ['נקבה', 'female']]}
+              />
+            </div>
             <div className="form-group">
               <label>אימייל <span className="req-star">*</span></label>
               <input
@@ -2263,20 +2297,20 @@ export default function PublicOnboardingForm() {
 
             <div className="section-title" style={{ marginTop: 22 }}>הזדמנות לערוך את העדפות הדיוור שלך</div>
             <p style={{ fontSize: 13, color: 'var(--text-3)', marginTop: -6, marginBottom: 12, lineHeight: 1.45 }}>
-              ההרשמה חלה על כל הילדים במשפחה, לא על ילד בודד.
+              ההרשמה לדיוור היא פר משפחה — היא חלה על כל הילדים בתיק, לא על ילד בודד.
             </p>
             {/* חוק התקשורת מבחין בין הודעה תפעולית ובין דבר פרסומת: הודעה על
                 שינוי שעה בחוג שנרשמתם אליו היא חלק מהשירות, ולכן הרשימה
                 התפעולית מסומנת ואינה ניתנת לביטול — אבל היא לא הסכמה לפרסומת.
                 שאר הרשימות הן דיוור שיווקי, ולכן סימון בלבד, ואפשר להסיר בכל עת. */}
             <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', margin: '0 0 12px', lineHeight: 1.6 }}>
-              רשימת החוגים היא רשימת עדכונים תפעוליים בלבד — שינויי שעות, ביטולים והודעות על
-              הפעילות שנרשמתם אליה — והיא חלק מהשירות. סימון רשימה נוספת הוא הסכמה לקבל
-              דיוור פרסומי, ואפשר להסיר אותה בכל עת בלי לפגוע בהרשמה.
+              {effectiveRequiredListKey
+                ? 'רשימת החוגים היא רשימת עדכונים תפעוליים בלבד — שינויי שעות, ביטולים והודעות על החוג שנרשמתם אליו — והיא חלק מהשירות. סימון רשימה נוספת הוא הסכמה לקבל דיוור פרסומי, ואפשר להסיר אותה בכל עת בלי לפגוע בהרשמה.'
+                : 'כל הרשימות כאן אופציונליות. סימון רשימה הוא הסכמה לקבל ממנה דיוור, ואפשר להסיר אותה בכל עת בלי לפגוע בהרשמה.'}
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
               {listDefs.map((list) => {
-                const isRequired = list.key === requiredListKey;
+                const isRequired = !!effectiveRequiredListKey && list.key === effectiveRequiredListKey;
                 const checked = isRequired ? true : subscriptions[list.key] === true;
                 return (
                   <label
@@ -2297,7 +2331,7 @@ export default function PublicOnboardingForm() {
                         setSubscriptions((prev) => ({
                           ...prev,
                           [list.key]: !prev[list.key],
-                          [requiredListKey]: true,
+                          ...(effectiveRequiredListKey ? { [effectiveRequiredListKey]: true } : null),
                         }));
                       }}
                     />

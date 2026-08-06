@@ -14299,12 +14299,17 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     ? db.getParentBroadcastLists(parent.id)
     : {};
   if (!healthOnly) {
-    // Mailing lists — force classes subscribed only during the full onboarding
-    // flow. A medical renewal must not silently change marketing preferences.
+    // Mailing lists — the classes list is forced only for someone who came here
+    // to join a class, where schedule changes are part of the service. A trip
+    // form is a different errand, and a medical renewal must not silently
+    // change marketing preferences at all.
+    const classSignup = normalizeParticipationScope(
+      req.body?.templateSlug || req.body?.template_slug || 'wall'
+    ) !== 'trip';
     const listKeys = (db.getBroadcastListDefs() || []).map((l) => l.key);
     const nextSubs = {};
     for (const key of listKeys) {
-      if (key === REQUIRED_BROADCAST_LIST) {
+      if (key === REQUIRED_BROADCAST_LIST && classSignup) {
         nextSubs[key] = true;
       } else {
         nextSubs[key] = subscriptions[key] === true || subscriptions[key] === 'true';
