@@ -8,7 +8,9 @@ export const PARTICIPATION_SCOPE_LABELS = Object.freeze({
   trip: 'יציאה לטיול הליכה / סנפלינג / טיפוס / מערנות',
 });
 
-export const DOCTOR_CLEARANCE_QUESTION_IDS = Object.freeze(['m2', 'm3', 'm4', 'm5', 'm8']);
+// m8 asked the second half of m5 — a doctor's limitation in the last year —
+// and both demanded the same certificate. It is one question now.
+export const DOCTOR_CLEARANCE_QUESTION_IDS = Object.freeze(['m2', 'm3', 'm4', 'm5', 'm11']);
 
 /** The health declaration is global and identical in every participation flow. */
 export const CANONICAL_HEALTH_QUESTIONS = Object.freeze([
@@ -16,10 +18,9 @@ export const CANONICAL_HEALTH_QUESTIONS = Object.freeze([
   { id: 'm2', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם יש בעיות לב, לחץ דם, סחרחורות או התעלפויות?' },
   { id: 'm3', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם יש אפילפסיה או אירועי אובדן הכרה?' },
   { id: 'm4', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם יש בעיה אורתופדית (גב, פרקים, שברים, פריקות חוזרות) שמגבילה פעילות מאומצת?' },
-  { id: 'm5', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם עברתם ניתוח, אשפוז או פציעה משמעותית בשנה האחרונה?' },
+  { id: 'm5', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם עברתם ניתוח, אשפוז או פציעה משמעותית בשנה האחרונה, או שרופא הגביל פעילות גופנית?' },
   { id: 'm6', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש נטילת תרופות קבועות?' },
   { id: 'm7', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש אלרגיה שהצוות צריך להכיר (מזון, תרופות, עקיצות)?' },
-  { id: 'm8', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם רופא הגביל פעילות גופנית בשנה האחרונה?' },
   // Asked before the catch-all so m9 stays the last question on the screen.
   // The id skips m10: that number belonged to a claustrophobia question the
   // trip templates carried and the unified migration removed, and reusing it

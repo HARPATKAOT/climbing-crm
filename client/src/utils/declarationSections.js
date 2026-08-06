@@ -46,7 +46,7 @@ export function withMinorsClauses(text, hasMinors) {
 }
 
 const CONFIRM_TITLES = {
-  trip: 'הבנת אופי הטיול',
+  trip: 'אופי הטיול וכללי הבטיחות',
   // Two things on one screen: what the activity is, and the rules that follow
   // from it. The title says both, in the order they are read.
   wall: 'אופי הפעילות וכללי הבטיחות',

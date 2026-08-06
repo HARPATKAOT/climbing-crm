@@ -87,14 +87,13 @@ const MEDICAL_QUESTIONS = [
   // The question already says the problem limits strenuous activity — the wall
   // is not the one to decide it does not limit this one.
   { id: 'm4', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם יש בעיה אורתופדית (גב, פרקים, שברים, פריקות חוזרות) שמגבילה פעילות מאומצת?' },
-  { id: 'm5', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם עברתם ניתוח, אשפוז או פציעה משמעותית בשנה האחרונה?' },
+  { id: 'm5', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם עברתם ניתוח, אשפוז או פציעה משמעותית בשנה האחרונה, או שרופא הגביל פעילות גופנית?' },
   { id: 'm6', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש נטילת תרופות קבועות?' },
   { id: 'm7', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש אלרגיה שהצוות צריך להכיר (מזון, תרופות, עקיצות)?' },
   // Split in two. Asked together, the catch-all inherited the doctor's-approval
   // requirement that belongs only to the first half, so someone wanting to
   // mention a small thing nobody asked about was blocked until they produced a
   // certificate — and the safest answer became saying nothing.
-  { id: 'm8', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם רופא הגביל פעילות גופנית בשנה האחרונה?' },
   // Before the catch-all, so m9 stays last on the screen. The id skips m10 on
   // purpose: that number was a claustrophobia question the trip templates
   // carried and the unified migration removed.
@@ -130,9 +129,8 @@ const ACTIVITIES = [
     // wording in its snapshot, and a rule that says something else under the
     // same id would let a re-rendered copy claim it was agreed to.
     safety: [
-      safety('w1', 'יש לפעול בכל עת לפי הוראות הצוות המקצועי — שימוש בציוד ובמתקנים מותר רק באישורם'),
+      safety('w1', 'יש לפעול בכל עת לפי הוראות הצוות המקצועי, וטיפוס, אבטוח ושימוש בציוד ובמתקנים מותרים רק לאחר תדריך ומעבר מבחן בטיחות ובאישור הצוות'),
       safety('w2', 'אין לרוץ או להשתולל בכל מתחם הקיר', { childOnly: true }),
-      safety('w3', 'אין לטפס או לאבטח ללא קבלת תדריך ומעבר של מבחן בטיחות'),
       safety('w4', 'אבטוח הוא אחריות על חיי המטפס — יש להתייחס אליו ברצינות מוחלטת ולבצע אותו בהתאם לתדריך שתקבלו'),
       safety('w5', 'יש לדווח מיידית על כל מפגע, תקלה, פציעה או תחושה חריגה'),
       // Asked of a parent only, and last: it is a statement about what they did
@@ -148,14 +146,17 @@ const ACTIVITIES = [
     // wording must not claim that every outing necessarily includes all three.
     riskClause: 'ידוע לי כי היציאה כוללת פעילות אתגרית בשטח — טיפוס / סנפלינג / מערנות, בהתאם לפעילות שנבחרה — הכרוכה מטבעה בסיכון לפגיעה גופנית, לרבות נפילה, החלקה, התדרדרות אבנים, פגיעה מציוד ומאמץ יתר. אם הפעילות כוללת כניסה למערה, ידוע לי כי היא מוסיפה סיכונים משלה: חללים צרים וחשוכים, רטיבות והחלקה, קור, ותלות בתאורה ובציוד. ידוע לי כי ליציאה לשטח נלווים סיכונים שאינם קיימים במתקן סגור — תנאי מזג אוויר ושטח, בעלי חיים, הנסיעה אל אתר הפעילות וממנו, וריחוק ממענה רפואי מיידי. הסיכון קיים גם בהקפדה מלאה על הוראות הבטיחות.',
     riskBullet: 'היציאה כוללת טיפוס / סנפלינג / מערנות, בהתאם לפעילות שנבחרה, וכרוכה בסיכוני שטח, מזג אוויר, נסיעה וריחוק מעזרה רפואית.',
+    // Same shape as the wall: new ids, because these say something the old
+    // s2..s8 did not, and an old signature must keep meaning what it meant.
     safety: [
-      safety('s2', 'יש להישמע להוראות המדריך האחראי בכל עת, ואין להתרחק מהקבוצה'),
-      safety('s3', 'חובה להגיע עם הציוד, הביגוד והנעליים המתאימים כפי שנדרש ליציאה'),
-      safety('s4', 'כל אחת מהפעילויות טיפוס / סנפלינג / כניסה למערה תתאפשר רק למי שקיבל/ה תדריך מסודר ורק בהשגחת מדריך'),
-      safety('s5', 'אין לגעת בציוד, בחבלים או בעיגונים ללא הוראת מדריך'),
-      safety('s6', 'אם הפעילות כוללת כניסה למערה, חובה לחבוש קסדה ולהשתמש בתאורה, ואין להיכנס, להתפצל או לצאת ללא הוראת מדריך'),
-      safety('s7', 'יש להצטייד במים בכמות מתאימה ולדווח מיד על תשישות, סחרחורת, קוצר נשימה או תחושה לא טובה'),
-      safety('s8', 'ידוע לי כי הצוות רשאי לשנות או לבטל את מסלול הפעילות משיקולי בטיחות ומזג אוויר'),
+      safety('t1', 'יש לפעול בכל עת לפי הוראות המדריך האחראי, ואין להתרחק מהקבוצה'),
+      safety('t2', 'חובה להגיע עם הציוד, הביגוד והנעליים המתאימים ליציאה'),
+      safety('t3', 'טיפוס, סנפלינג או כניסה למערה יתאפשרו רק לאחר תדריך ורק בהשגחת מדריך'),
+      safety('t4', 'אין לגעת בציוד, בחבלים או בעיגונים ללא הוראת מדריך'),
+      safety('t5', 'במערה חובה קסדה ותאורה, ואין להיכנס, להתפצל או לצאת ללא הוראת מדריך'),
+      safety('t6', 'יש להצטייד במים ולדווח מיידית על כל מפגע, פציעה, תשישות או תחושה חריגה'),
+      safety('t7', 'ידוע לי כי הצוות רשאי לשנות או לבטל את מסלול הפעילות משיקולי בטיחות ומזג אוויר'),
+      safety('t8', 'אני מאשר/ת שהסברתי לילדי את הכללים הללו', { childOnly: true }),
     ],
   },
 ];
