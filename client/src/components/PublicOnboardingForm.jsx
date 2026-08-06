@@ -36,7 +36,12 @@ import {
   unansweredQuestions,
 } from '../utils/healthQuestions.js';
 import { clearanceBudgetError } from '../utils/medicalClearanceFile.js';
-import { declarationSectionTitles, splitWaiverText, withSignerName } from '../utils/declarationSections.js';
+import {
+  declarationSectionTitles,
+  splitWaiverText,
+  withMinorsClauses,
+  withSignerName,
+} from '../utils/declarationSections.js';
 import MedicalClearanceField from './MedicalClearanceField.jsx';
 import GenderPicker, { GenderMark } from './GenderPicker.jsx';
 import {
@@ -3185,7 +3190,10 @@ export default function PublicOnboardingForm() {
                       borderRadius: 10, padding: 12,
                     }}
                   >
-                    {waiverBody}
+                    {withMinorsClauses(
+                      waiverBody,
+                      kids.some((kid) => kid.type !== 'adult')
+                    )}
                   </div>
                 </div>
                 <label className="event-check" style={{ opacity: waiverRead ? 1 : 0.55 }}>

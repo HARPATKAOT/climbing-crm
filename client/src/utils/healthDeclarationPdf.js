@@ -63,6 +63,15 @@ function toPrintableSignature(dataUrl) {
   });
 }
 
+/**
+ * Whatever reaches the certificate, the `[[…]]` markers never do. The snapshot
+ * is written with them already resolved; this is the guard for a record saved
+ * before that, which would otherwise print the brackets on a signed document.
+ */
+function unwrapMinorMarkers(text) {
+  return String(text || '').replace(/\[\[([\s\S]*?)\]\]/g, '$1');
+}
+
 function answerRows(answers = {}, questionLabels = {}, questionKinds = {}) {
   const keys = Object.keys(answers);
   if (!keys.length) {
@@ -87,7 +96,7 @@ function answerRows(answers = {}, questionLabels = {}, questionKinds = {}) {
 
 async function resolveWaiverAndQuestions(decl) {
   const snapshot = decl.formSnapshot || decl.form_snapshot || {};
-  let waiverText = snapshot.waiverText || '';
+  let waiverText = unwrapMinorMarkers(snapshot.waiverText || '');
   const questionLabels = { ...DEFAULT_QUESTIONS };
   const questionKinds = {};
   (snapshot.healthQuestions || []).forEach((q) => {
@@ -107,7 +116,7 @@ async function resolveWaiverAndQuestions(decl) {
     const res = await fetch(`/api/public/form-templates/${encodeURIComponent(slug)}`);
     if (res.ok) {
       const t = await res.json();
-      waiverText = t.waiverText || '';
+      waiverText = unwrapMinorMarkers(t.waiverText || '');
       (t.healthQuestions || []).forEach((q) => {
         if (q?.id && q?.label) questionLabels[q.id] = q.label;
         if (q?.id && q?.kind) questionKinds[q.id] = q.kind;

@@ -129,6 +129,23 @@ function normalizeLiabilityPartyText(text) {
     );
 }
 
+/**
+ * `[[…]]` marks the part of a waiver that only applies when a minor is being
+ * signed for. An adult signing for themselves must not read a clause about
+ * children who are not on the document.
+ */
+export function waiverTextForSigner(text, hasMinors) {
+  const full = String(text || '');
+  if (hasMinors) return full.replace(/\[\[([\s\S]*?)\]\]/g, '$1');
+  return full
+    .replace(/\[\[[\s\S]*?\]\]/g, '')
+    // A dropped fragment leaves the punctuation that framed it, and a dropped
+    // whole clause leaves the blank line it sat on.
+    .replace(/[ \t]+([,.])/g, '$1')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export function resolveDeclarationTemplate(db, { templateId, templateSlug } = {}) {
   const templates = db.get('form_templates') || [];
   const idCandidate = templateId
@@ -771,6 +788,10 @@ export async function saveCrmParticipants({
       const waiverId = `pw_${crypto.randomUUID()}`;
       const waiverContentSnapshot = {
         ...waiverSnapshot,
+        // Resolved per participant: the same template serves an adult signing
+        // for themselves and a parent signing for a child, and only one of them
+        // has minors on the document.
+        waiverText: waiverTextForSigner(waiverSnapshot.waiverText, participantType !== 'adult'),
         scope,
         answers: waiverAnswers,
         signer: signerSnapshot,
