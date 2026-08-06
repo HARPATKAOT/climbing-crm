@@ -16,6 +16,14 @@ export const GENDER_COLORS = {
   female: '#F472B6',
 };
 
+/**
+ * The words, in one place. „זכר / נקבה” is how a form fills a database field;
+ * a person is a גבר or an אישה, and a child is a ילד or a ילדה. The stored
+ * value is the same either way — only what the signer reads changes.
+ */
+export const ADULT_GENDER_OPTIONS = [['גבר', 'male'], ['אישה', 'female']];
+export const CHILD_GENDER_OPTIONS = [['ילד', 'male'], ['ילדה', 'female']];
+
 export function MaleIcon({ size = 16 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -96,7 +104,7 @@ export function AdultMark({ size = 12, style }) {
 export default function GenderPicker({
   value,
   onChange,
-  options = [['בן', 'male'], ['בת', 'female']],
+  options = CHILD_GENDER_OPTIONS,
   clearable = true,
   disabled = false,
 }) {

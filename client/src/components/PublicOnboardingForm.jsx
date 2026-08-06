@@ -43,7 +43,11 @@ import {
   withSignerName,
 } from '../utils/declarationSections.js';
 import MedicalClearanceField from './MedicalClearanceField.jsx';
-import GenderPicker, { GenderMark } from './GenderPicker.jsx';
+import GenderPicker, {
+  ADULT_GENDER_OPTIONS,
+  CHILD_GENDER_OPTIONS,
+  GenderMark,
+} from './GenderPicker.jsx';
 import {
   adultParticipantFromContext,
   participationGenderValue,
@@ -2336,7 +2340,7 @@ export default function PublicOnboardingForm() {
                 <GenderPicker
                   value={parent.gender}
                   onChange={(value) => setParent((p) => ({ ...p, gender: value }))}
-                  options={[['זכר', 'male'], ['נקבה', 'female']]}
+                  options={ADULT_GENDER_OPTIONS}
                 />
               </div>
             </div>
@@ -2900,8 +2904,8 @@ export default function PublicOnboardingForm() {
                     value={child.gender}
                     onChange={(gender) => updateChild(index, { gender })}
                     options={child.type === 'adult'
-                      ? [['גבר', 'male'], ['אישה', 'female']]
-                      : [['בן', 'male'], ['בת', 'female']]}
+                      ? ADULT_GENDER_OPTIONS
+                      : CHILD_GENDER_OPTIONS}
                   />
                 </div>
                 {/* The child's own phone. An adult already gave theirs on the
