@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, ArrowLeft, Baby, BellRing, Bone, Brain, CheckCircle, Download, FileWarning,
   HeartPulse, HelpCircle, Lock, Megaphone, Pencil, PenTool, Pill, Plus, ShieldAlert, ShieldCheck,
-  Stethoscope, Trash2, Wind,
+  Stethoscope, Wind,
 } from 'lucide-react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
@@ -837,6 +837,36 @@ export default function PublicOnboardingForm() {
   const effectiveRequiredListKey = classSignupForm ? requiredListKey : '';
 
   const identityReady = !!otp.token && ['found', 'new'].includes(identityStatus);
+  /**
+   * What the file does not hold yet. A returning parent whose card predates a
+   * field was shown a locked summary and a "continue" button that refused —
+   * with no field in sight. Now the editor opens on identification and the gaps
+   * are the only things marked.
+   */
+  const MISSING_LABELS = {
+    name: 'שם פרטי',
+    lastName: 'שם משפחה',
+    email: 'אימייל',
+    city: 'מקום מגורים',
+    gender: 'מין',
+    relation: 'קשר למשתתפים',
+  };
+  // „קשר למשתתפים” is a question about somebody else. Asked of an adult who
+  // ticked "I am the participant", it has no answer — and demanding one stopped
+  // the form on a field that did not apply.
+  const relationRequired = !isAdultSelf;
+  const missingParentFields = Object.keys(MISSING_LABELS)
+    .filter((field) => (field === 'relation' ? relationRequired : true))
+    .filter((field) => !String(parent[field] || '').trim());
+  const isMissing = (field) => missingParentFields.includes(field);
+  const missingStyle = (field) => (isMissing(field)
+    ? { borderColor: 'rgba(252,211,77,.55)', background: 'rgba(251,191,36,.07)' }
+    : undefined);
+  useEffect(() => {
+    if (!identityReady || healthOnlyMode) return;
+    if (parentProfileLocked && missingParentFields.length) setEditingParentProfile(true);
+  }, [identityReady, healthOnlyMode, parentProfileLocked, missingParentFields.length]);
+
   // The same test `goNextFromParent` applies before it sends a code, so the
   // button can say which of the two things the next press actually does.
   const needsPhoneVerification = !otp.token || otp.verifiedPhone !== parent.phone.trim();
@@ -1253,9 +1283,6 @@ export default function PublicOnboardingForm() {
     setChildren((prev) => [...prev, emptyChild(allQuestions)]);
   };
 
-  const removeChild = (index) => {
-    setChildren((prev) => prev.filter((_, i) => i !== index));
-  };
 
   const setAdultSelfMode = (enabled) => {
     setIsAdultSelf(enabled);
@@ -1265,6 +1292,7 @@ export default function PublicOnboardingForm() {
         ...emptyChild(allQuestions),
         ...adultParticipantFromContext(selfStudent, {
           fullName: parentFullName(),
+          gender: parent.gender,
           idNumber: parent.idNumber,
         }),
         onFileHealthValid: !!selfStudent?.healthValid,
@@ -1490,7 +1518,7 @@ export default function PublicOnboardingForm() {
     // card of everyone who registered through the public form. A locked profile
     // missing one of them opens for editing rather than blocking with no field
     // in sight.
-    if (!parent.gender || !parent.relation) {
+    if (!parent.gender || (relationRequired && !parent.relation)) {
       if (parentProfileLocked) setEditingParentProfile(true);
       setError(!parent.gender ? 'יש לבחור זכר או נקבה' : 'יש לבחור את הקשר למשתתפים');
       return;
@@ -1515,6 +1543,7 @@ export default function PublicOnboardingForm() {
           ...emptyChild(allQuestions),
           ...adultParticipantFromContext(adult || selfStudent, {
             fullName: parentFullName(),
+            gender: parent.gender,
             idNumber: parent.idNumber.trim() || adult?.idNumber || '',
           }),
         };
@@ -2255,6 +2284,18 @@ export default function PublicOnboardingForm() {
             <div className="required-legend">
               שדות המסומנים ב־<span className="req-star">*</span> הם שדות חובה
             </div>
+            {/* מה שחסר, בשמו. „יש למלא את כל שדות החובה” מול טופס שנראה מלא
+                שולח אדם לחפש מה הוא פספס. */}
+            {identityReady && missingParentFields.length > 0 && (
+              <div style={{
+                background: 'rgba(251,191,36,.1)', border: '1px solid rgba(252,211,77,.45)',
+                borderRadius: 12, padding: 12, marginBottom: 14,
+                fontSize: 13, lineHeight: 1.7, color: '#FCD34D',
+              }}>
+                חסרים בתיק: {missingParentFields.map((field) => MISSING_LABELS[field]).join(', ')} —
+                {' '}השדות מסומנים למטה.
+              </div>
+            )}
             {/* First name and surname are separate on purpose: the surname is
                 what recognises a second parent of a household we already know,
                 and it also reaches the invoice. Guessing it from the last word
@@ -2268,6 +2309,7 @@ export default function PublicOnboardingForm() {
                   value={parent.name}
                   onChange={(e) => setParent((p) => ({ ...p, name: e.target.value }))}
                   placeholder="ישראל"
+                  style={missingStyle('name')}
                 />
               </div>
               <div className="form-group">
@@ -2276,6 +2318,7 @@ export default function PublicOnboardingForm() {
                   value={parent.lastName}
                   onChange={(e) => setParent((p) => ({ ...p, lastName: e.target.value }))}
                   placeholder="ישראלי"
+                  style={missingStyle('lastName')}
                 />
               </div>
             </div>
@@ -2283,11 +2326,19 @@ export default function PublicOnboardingForm() {
                 הוא נשאר „לא צוין” לכל מי שנרשם דרך הטופס הציבורי. */}
             <div className="form-group">
               <label>מין <span className="req-star">*</span></label>
-              <GenderPicker
-                value={parent.gender}
-                onChange={(value) => setParent((p) => ({ ...p, gender: value }))}
-                options={[['זכר', 'male'], ['נקבה', 'female']]}
-              />
+              <div style={isMissing('gender')
+                ? {
+                    border: '1px solid rgba(252,211,77,.55)', background: 'rgba(251,191,36,.07)',
+                    borderRadius: 12, padding: 6,
+                  }
+                : undefined}
+              >
+                <GenderPicker
+                  value={parent.gender}
+                  onChange={(value) => setParent((p) => ({ ...p, gender: value }))}
+                  options={[['זכר', 'male'], ['נקבה', 'female']]}
+                />
+              </div>
             </div>
             <div className="form-group">
               <label>אימייל <span className="req-star">*</span></label>
@@ -2296,6 +2347,7 @@ export default function PublicOnboardingForm() {
                 value={parent.email}
                 onChange={(e) => setParent((p) => ({ ...p, email: e.target.value }))}
                 placeholder="name@email.com"
+                style={missingStyle('email')}
               />
               <small className="field-hint">שדה חובה — לכתובת הזו נשלחות הקבלות והחשבוניות</small>
             </div>
@@ -2305,14 +2357,25 @@ export default function PublicOnboardingForm() {
                 value={parent.city}
                 onChange={(e) => setParent((p) => ({ ...p, city: e.target.value }))}
                 placeholder="עיר / יישוב"
+                style={missingStyle('city')}
               />
             </div>
             <div className="form-row">
               <div className="form-group">
                 {/* Buttons for the same reason as בן / בת below: a native list
                     paints its own highlight and ignores the page. */}
-                <label>קשר למשתתפים <span className="req-star">*</span></label>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <label>
+                  קשר למשתתפים {relationRequired && <span className="req-star">*</span>}
+                </label>
+                <div style={{
+                  display: 'flex', gap: 6, flexWrap: 'wrap',
+                  ...(isMissing('relation')
+                    ? {
+                        border: '1px solid rgba(252,211,77,.55)', background: 'rgba(251,191,36,.07)',
+                        borderRadius: 12, padding: 6,
+                      }
+                    : null),
+                }}>
                   {[['אב', 'father'], ['אם', 'mother'], ['אפוטרופוס', 'guardian'], ['אחר', 'other']]
                     .map(([text, value]) => (
                       <button
@@ -2505,11 +2568,6 @@ export default function PublicOnboardingForm() {
                       </div>
                     )}
                   </div>
-                  {child.type !== 'adult' && children.length > 1 && !child.onFileHealthValid && (
-                    <button type="button" className="clear-btn is-danger" onClick={() => removeChild(index)}>
-                      <Trash2 size={13} style={{ display: 'inline', verticalAlign: 'middle' }} /> הסר ילד/ה
-                    </button>
-                  )}
                 </div>
 
                 {/* בגר — הורה חותם רק על ילדיו הקטינים. הכרטיס יוצא מהטופס
