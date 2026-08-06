@@ -682,6 +682,7 @@ export default function PublicOnboardingForm() {
     email: '',
     city: '',
     gender: '',
+    birthDate: '',
   });
   const [children, setChildren] = useState([emptyChild()]);
   const [selfStudent, setSelfStudent] = useState(null);
@@ -845,6 +846,7 @@ export default function PublicOnboardingForm() {
    */
   const MISSING_LABELS = {
     name: 'שם פרטי',
+    birthDate: 'תאריך לידה',
     lastName: 'שם משפחה',
     email: 'אימייל',
     city: 'מקום מגורים',
@@ -857,6 +859,9 @@ export default function PublicOnboardingForm() {
   const relationRequired = !isAdultSelf;
   const missingParentFields = Object.keys(MISSING_LABELS)
     .filter((field) => (field === 'relation' ? relationRequired : true))
+    // A date of birth is asked of a participant, not of a parent who is only
+    // signing: it is what decides whether they sign for themselves.
+    .filter((field) => (field === 'birthDate' ? isAdultSelf : true))
     .filter((field) => !String(parent[field] || '').trim());
   const isMissing = (field) => missingParentFields.includes(field);
   const missingStyle = (field) => (isMissing(field)
@@ -1034,6 +1039,18 @@ export default function PublicOnboardingForm() {
    * has not said otherwise.
    */
   const asksHealthChange = (child) => reusesDeclaration(child);
+
+  /**
+   * The signer's own card, already answered on the details step: name, id,
+   * date of birth and gender all came from there, so the card shows them back
+   * instead of asking a second time.
+   */
+  const selfCardFromDetails = (child) => child?.type === 'adult'
+    && !child?.editProfile
+    && !!String(child?.name || '').trim()
+    && !!String(child?.idNumber || '').trim()
+    && !!String(child?.birthDate || '').trim()
+    && !!String(child?.gender || '').trim();
 
   /** Whether this card's own identity fields are asked for on the participants step. */
   const fillsOwnDetails = (child) => fillsDeclaration(child) && !reusesDeclaration(child);
@@ -1296,6 +1313,7 @@ export default function PublicOnboardingForm() {
         ...adultParticipantFromContext(selfStudent, {
           fullName: parentFullName(),
           gender: parent.gender,
+          birthDate: parent.birthDate,
           idNumber: parent.idNumber,
         }),
         onFileHealthValid: !!selfStudent?.healthValid,
@@ -1529,6 +1547,11 @@ export default function PublicOnboardingForm() {
     // card of everyone who registered through the public form. A locked profile
     // missing one of them opens for editing rather than blocking with no field
     // in sight.
+    if (isAdultSelf && !parent.birthDate) {
+      if (parentProfileLocked) setEditingParentProfile(true);
+      setError('יש למלא תאריך לידה — הוא נדרש להשתתפות שלך');
+      return;
+    }
     if (!parent.gender || (relationRequired && !parent.relation)) {
       if (parentProfileLocked) setEditingParentProfile(true);
       setError(!parent.gender ? 'יש לבחור זכר או נקבה' : 'יש לבחור את הקשר למשתתפים');
@@ -1555,6 +1578,7 @@ export default function PublicOnboardingForm() {
           ...adultParticipantFromContext(adult || selfStudent, {
             fullName: parentFullName(),
             gender: parent.gender,
+            birthDate: parent.birthDate,
             idNumber: parent.idNumber.trim() || adult?.idNumber || '',
           }),
         };
@@ -2344,6 +2368,18 @@ export default function PublicOnboardingForm() {
             </div>
             {/* מין ממלא/ת הטופס — הכרטיס בתיק מציג „זכר / נקבה”, ובלי השדה כאן
                 הוא נשאר „לא צוין” לכל מי שנרשם דרך הטופס הציבורי. */}
+            {isAdultSelf && (
+              <div className="form-group">
+                <label>תאריך לידה <span className="req-star">*</span></label>
+                <input
+                  type="date"
+                  value={parent.birthDate}
+                  onChange={(e) => setParent((p) => ({ ...p, birthDate: e.target.value }))}
+                  style={missingStyle('birthDate')}
+                />
+                <small className="field-hint">נדרש כיוון שסימנת שגם את/ה משתתף/ת</small>
+              </div>
+            )}
             <div className="form-group">
               <label>מין <span className="req-star">*</span></label>
               <div style={isMissing('gender')
@@ -2827,7 +2863,21 @@ export default function PublicOnboardingForm() {
                     canonical details travel unchanged in the submission and
                     are shown read-only beside the declaration on the next
                     screen. Only an incomplete old profile opens fields. */}
-                {fillsOwnDetails(child) && !hasLockedParticipantProfile(child) && (
+                {/* The signer answered all of this one screen ago, on their own
+                    details. Asking for it again here — in fields that are read
+                    only anyway — made the same form appear twice. */}
+                {selfCardFromDetails(child) && (
+                  <ParticipantProfileSummary
+                    participant={child}
+                    onEdit={() => {
+                      setEditingParentProfile(true);
+                      setError('');
+                      setStep(1);
+                    }}
+                  />
+                )}
+                {fillsOwnDetails(child) && !hasLockedParticipantProfile(child)
+                  && !selfCardFromDetails(child) && (
                 <>
                 <div className="form-group">
                   <label>{child.type === 'adult' ? 'שם מלא *' : 'שם פרטי של הילד/ה *'}</label>
