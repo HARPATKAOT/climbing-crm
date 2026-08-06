@@ -763,6 +763,9 @@ export default function PublicOnboardingForm() {
     verificationToken: otp.token,
   });
   const identityReady = !!otp.token && ['found', 'new'].includes(identityStatus);
+  // The same test `goNextFromParent` applies before it sends a code, so the
+  // button can say which of the two things the next press actually does.
+  const needsPhoneVerification = !otp.token || otp.verifiedPhone !== parent.phone.trim();
   const parentProfileLocked = identityReady && !!prefilledParentId && !editingParentProfile;
   // Which participant has already been told their ID looks wrong, so the
   // warning is a warning and not a wall.
@@ -2348,9 +2351,14 @@ export default function PublicOnboardingForm() {
                 onClick={goNextFromParent}
                 disabled={otp.sending}
               >
+                {/* הכפתור אומר מה הוא עושה עכשיו. לפני האימות הלחיצה שולחת קוד
+                    ולא ממשיכה לשום מקום, ו„המשך לפרטי משתתפים” הבטיח מסך שלא
+                    מגיע. */}
                 {otp.sending
                   ? 'שולח קוד אימות בוואטסאפ…'
-                  : <>{healthOnlyMode ? 'המשך להצהרת הבריאות' : 'המשך לפרטי משתתפים'} <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} /></>}
+                  : (needsPhoneVerification
+                    ? 'שלח קוד אימות'
+                    : <>{healthOnlyMode ? 'המשך להצהרת הבריאות' : 'המשך לפרטי משתתפים'} <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} /></>)}
               </button>
             )}
           </div>
