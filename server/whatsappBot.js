@@ -1,6 +1,5 @@
 import { db, persistCore } from './db.js';
 import {
-  linkHouseholdGuardians,
   enrichStudentsWithGuardians,
   guardianRows,
   isChildOfParent,
@@ -25,7 +24,6 @@ export const CUSTOMER_STATUSES = new Set([
 const LEGACY_BRAND_RE = /My Wall/gi;
 const BRAND_NAME = DEFAULT_BUSINESS_PROFILE.display_name;
 
-/** Prices are allowed, invented prices are not. Stamped onto every system prompt. */
 /**
  * Every automatic reply opens with this, so a customer can tell at a glance
  * whether they are reading a person or the bot — the same answer the bot gives
@@ -38,17 +36,18 @@ const BRAND_NAME = DEFAULT_BUSINESS_PROFILE.display_name;
  */
 export const BOT_MARK = '🧗';
 
+/** Prices are allowed, invented prices are not. Stamped onto every system prompt. */
+export const PRICE_SOURCE_RULE =
+  'כלל קשיח: מסור רק מחירים שמופיעים בנתוני המערכת — מחיר הקבוצה, מחירי הציוד, דמי ההעשרה וכניסה בודדת מהמחירון. '
+    + 'כל שאלת תשלום אחרת (מנוי, כרטיסייה, יום הולדת, הנחה, החזר, חשבונית, שכר) — הפנה לצוות בלי לנקוב בסכום. '
+    + 'אם הכותב מתחת לגיל 18: מותר רק מחיר כניסה לקיר; אל תמסור מחירי חוגים, ציוד או דמי העשרה — הפנה להורה או לצוות.';
+
 export function withBotMark(text) {
   const body = String(text || '').trim();
   if (!body) return body;
   // A reply that passes through here twice must not stack the mark.
   return body.startsWith(BOT_MARK) ? body : `${BOT_MARK} ${body}`;
 }
-
-export const PRICE_SOURCE_RULE =
-  'כלל קשיח: מסור רק מחירים שמופיעים בנתוני המערכת — מחיר הקבוצה, מחירי הציוד, דמי ההעשרה וכניסה בודדת מהמחירון. '
-    + 'כל שאלת תשלום אחרת (מנוי, כרטיסייה, יום הולדת, הנחה, החזר, חשבונית, שכר) — הפנה לצוות בלי לנקוב בסכום. '
-    + 'אם הכותב מתחת לגיל 18: מותר רק מחיר כניסה לקיר; אל תמסור מחירי חוגים, ציוד או דמי העשרה — הפנה להורה או לצוות.';
 
 /** Runtime allow/forbid — short bounds, no conversation script. */
 export const BOT_BOUNDS_RULES = [
@@ -103,18 +102,10 @@ export const DEFAULT_BOT_SETTINGS = {
     + 'שעות פתיחה: לפי הרשומות שמסומנות «שעות פתיחה» ביומן המערכת\n'
     + 'דמי העשרה: 110 ₪\n'
     + 'הצהרת בריאות: https://app.kirboaz.co.il/health',
-  aiEscalateWhenUnsure: true,
-  // First unclear turn — ask to rephrase. Second unclear turn uses aiUnsureReply + handoff.
-  aiClarifyReply: 'לא הבנתי 🙏\nיכולים להסביר קצת יותר? במה אפשר לעזור?',
-  aiUnsureReply: 'רגע — כדי לא לטעות אני מעביר את זה לצוות 🙏\nמישהו יחזור אליכם עם תשובה מדויקת.',
-  // Model-with-tools instead of the keyword layer. Off until it has been
-  // watched on real conversations; the old path stays as the fallback.
-  aiToolsEnabled: false,
-  aiLeadCaptureEnabled: true,
-  aiInteractiveMenuEnabled: true,
-  // Health declaration is sent by staff when registering — not an opening-menu item.
-  aiGreetingMenu:
-    `היי! אני הבוט של ${BRAND_NAME}\n\nבמה אפשר לעזור?\n1️⃣ חוגים, מחירים ורישום 🤸\n2️⃣ שעות פתיחה ומיקום 🗺️\n3️⃣ לדבר עם צוות 👤\n4️⃣ אירועים וטיולים 🎒\n\nכתבו מספר או שאלה קצרה 😊`,
+  // The settings of the retired keyword engine — a numbered opening menu, the
+  // staged lead capture, and the clarify-then-handoff pair — are gone with it.
+  // The model phrases its own clarification, and the only thing it may not do
+  // is answer without a tool.
   aiReactivateKeywords: 'הפעל בוט,הפעל,activate',
   // מספרי צוות שמקבלים התראת העברה + סוכן CRM. ריק = אין התראות.
   aiStaffPhones: '',
@@ -155,97 +146,7 @@ export function greetingFirstName(parent, speaker = null) {
   return parentFirstName(parent);
 }
 
-export function knownParentGreeting(parent, speaker = null) {
-  const first = greetingFirstName(parent, speaker);
-  return first
-    ? `בסדר גמור 🙂\nמה נשמע ${first}?`
-    : 'בסדר גמור 🙂\nמה נשמע?';
-}
 
-/**
- * When the model is down, never spam the same greeting on a real message.
- * Greeting template only for low-intent hellos; otherwise ask to rephrase.
- */
-export function resolveIdentifiedParentFallback(parent, incomingText, settings = {}, { speaker = null } = {}) {
-  if (isLowIntentGreeting(incomingText)) {
-    return { text: knownParentGreeting(parent, speaker), skipMenu: true };
-  }
-  const clarify = String(settings?.aiClarifyReply || DEFAULT_BOT_SETTINGS.aiClarifyReply || '').trim();
-  return {
-    text: clarify || 'לא הצלחתי לענות על זה רגע 🙏\nאפשר לנסח שוב, או לכתוב 3 לשיחה עם הצוות.',
-    skipMenu: true,
-  };
-}
-
-/** Pull visible answer text from a Gemini generateContent payload. */
-export function extractGeminiResponseText(data) {
-  const parts = data?.candidates?.[0]?.content?.parts;
-  if (!Array.isArray(parts) || !parts.length) return '';
-  const visible = parts
-    .filter((part) => part && typeof part.text === 'string' && !part.thought)
-    .map((part) => part.text.trim())
-    .filter(Boolean);
-  if (visible.length) return visible.join('\n').trim();
-  return parts
-    .map((part) => String(part?.text || '').trim())
-    .filter(Boolean)
-    .join('\n')
-    .trim();
-}
-
-/**
- * Build multi-turn contents for Gemini. History may already include the
- * current inbound message (recorded before the bot answers).
- */
-export function buildGeminiChatContents(history = [], incomingText = '') {
-  const contents = [];
-  for (const message of history || []) {
-    const role = (message?.role === 'assistant' || message?.role === 'model') ? 'model' : 'user';
-    const text = String(message?.content || '').trim();
-    if (!text) continue;
-    if (contents.length && contents[contents.length - 1].role === role) {
-      contents[contents.length - 1].parts[0].text += `\n${text}`;
-    } else {
-      contents.push({ role, parts: [{ text }] });
-    }
-  }
-  const incoming = String(incomingText || '').trim();
-  if (incoming) {
-    const last = contents[contents.length - 1];
-    if (!(last?.role === 'user' && last.parts[0].text === incoming)) {
-      if (last?.role === 'user') last.parts[0].text += `\n${incoming}`;
-      else contents.push({ role: 'user', parts: [{ text: incoming }] });
-    }
-  }
-  if (contents.length && contents[0].role !== 'user') {
-    contents.unshift({ role: 'user', parts: [{ text: '.' }] });
-  }
-  return contents;
-}
-
-export function isLowIntentGreeting(text) {
-  const t = String(text || '').trim();
-  if (!t || t.length > 50) return false;
-  if (!/(?:היי+|הי+|שלום|\bhey\b|\bhi\b|\bhello\b|מה\s*קורה|מה\s*נשמע|בוקר\s*טוב|ערב\s*טוב|צהריים\s*טובים)/i.test(t)) {
-    return false;
-  }
-  // After stripping greetings + punctuation, nothing of substance may remain.
-  // Allows "היי, מה קורה ?" / "שלום מה נשמע".
-  const leftover = t
-    .replace(/מה\s*קורה/gi, ' ')
-    .replace(/מה\s*נשמע/gi, ' ')
-    .replace(/בוקר\s*טוב/gi, ' ')
-    .replace(/ערב\s*טוב/gi, ' ')
-    .replace(/צהריים\s*טובים/gi, ' ')
-    .replace(/\bhello\b/gi, ' ')
-    .replace(/\bhey\b/gi, ' ')
-    .replace(/\bhi\b/gi, ' ')
-    .replace(/שלום/gi, ' ')
-    .replace(/היי+/gi, ' ')
-    .replace(/הי+/gi, ' ')
-    .replace(/[\s,!?.׃…]+/g, '');
-  return leftover.length === 0;
-}
 
 const BRANDED_TEXT_KEYS = [
   'aiSystemPrompt',
@@ -288,18 +189,10 @@ export async function loadBrandedBotSettings() {
   const branded = applyBusinessBrand(db.getSettings(), brand);
   const prompt = String(branded.aiSystemPrompt || '').trim();
   // The bot may quote a price, but only one the CRM holds — a figure it made up
-  // reaches the customer as a promise the gym has to honour.
-  const priceRule = PRICE_SOURCE_RULE;
+  // reaches the customer as a promise the gym has to honour. Stamped onto the
+  // owner's prompt rather than left to it, so editing the prompt cannot drop it.
   if (!prompt.includes('רק מחירים שמופיעים בנתוני המערכת')) {
-    branded.aiSystemPrompt = prompt ? `${prompt}\n\n${priceRule}` : priceRule;
-  }
-  // Drop the retired health-declaration row from menus saved before this change.
-  const menu = String(branded.aiGreetingMenu || '');
-  if (/1️⃣\s*הצהרת\s*בריאות|1\s*[).:]\s*הצהרת\s*בריאות/.test(menu)) {
-    branded.aiGreetingMenu = String(DEFAULT_BOT_SETTINGS.aiGreetingMenu).replace(
-      new RegExp(String(BRAND_NAME).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'),
-      brand
-    );
+    branded.aiSystemPrompt = prompt ? `${prompt}\n\n${PRICE_SOURCE_RULE}` : PRICE_SOURCE_RULE;
   }
   return branded;
 }
@@ -338,12 +231,14 @@ export function textMatchesStandaloneKeywords(text, keywords) {
   });
 }
 
-/** Explicit request for a human / hard topics — not «בצוות» in an info question. */
-/** Words that only mean "get me a human" inside a request, never on their own. */
+/**
+ * Explicit request for a human / hard topics — not «בצוות» in an info question.
+ *
+ * Words that only mean "get me a human" inside a request, never on their own.
+ */
 const AMBIGUOUS_HUMAN_WORDS = new Set(['אדם', 'בן אדם']);
 
 export function wantsExplicitHumanStaff(text, settings = {}) {
-  if (normalizeMenuChoice(text) === '3') return true;
   const t = String(text || '');
   if (/(?:לדבר עם|רוצה(?:\s+לדבר)?(?:\s+עם)?)\s*(?:את\s*)?(?:ה)?(?:צוות|נציג|אדם)/.test(t)) {
     return true;
@@ -379,34 +274,6 @@ export function sleep(ms) {
  * 1 = classes · 2 = hours/location · 3 = staff · 4 = events
  * `health` is keyword-only (not a menu number).
  */
-export function normalizeMenuChoice(text) {
-  const raw = String(text || '').trim();
-  const lower = raw.toLowerCase();
-  if (/^[1-4]$/.test(raw)) return raw;
-  const numbered = lower.match(/^(?:אופציה|אפשרות|מספר)?\s*([1-4])\b/);
-  if (numbered) return numbered[1];
-
-  if (/הצהר|בריאות|טופס|חתמ/.test(raw)) return 'health';
-  if (/טיול|אירוע|קייטנ/.test(raw)) return '4';
-  if (/חוג|רישום|אימון|כית/.test(raw) && !/שע|מיקום|כתובת|מחיר|עלות|כסף|שקל/.test(raw)) return '1';
-  if (/שע|מיקום|כתובת|פתוח|הגע/.test(raw)) return '2';
-  // Explicit ask for a human — not «בצוות» inside an info question.
-  // A bare «נציג» is a request for a person. A bare «אדם» is not — it is an
-  // ordinary Hebrew noun, and "יש אדם שאחראי על החוג?" was being answered with
-  // a handoff instead of an answer. «אדם» counts only in the asking form
-  // above ("לדבר עם אדם").
-  if (/(?:לדבר עם|רוצה(?:\s+לדבר)?(?:\s+עם)?)\s*(?:את\s*)?(?:ה)?(?:צוות|נציג|אדם)|(?:^|\s)נציג(?:\s|$|[?؟])/.test(raw)) {
-    return '3';
-  }
-
-  // Interactive list / button titles
-  if (/הצהרת בריאות/.test(raw)) return 'health';
-  if (/חוגים ורישום|חוגים ומחירים|חוגים/.test(raw)) return '1';
-  if (/שעות ומיקום|שעות פתיחה ומיקום/.test(raw)) return '2';
-  if (/לדבר עם צוות|עם צוות/.test(raw)) return '3';
-  if (/אירועים וטיולים/.test(raw)) return '4';
-  return null;
-}
 
 function parentsForPhone(phone) {
   const normalized = normalizeWaPhone(phone) || phone;
@@ -844,156 +711,24 @@ export function buildParentCardContext(parent, students = [], { speaker = null }
   return lines.join('\n');
 }
 
-export function buildAiExtraContext(settings, phone, parent, students, { speaker = null } = {}) {
-  const s = mergeBotSettings(settings);
-  const brand = s.brandName || DEFAULT_BUSINESS_PROFILE.display_name;
-  const history = getConversationHistory(phone, s.aiHistoryCount);
-  const parts = [
-    '## שם העסק',
-    brand,
-    'השתמש רק בשם הזה כשאתה מזכיר את העסק.',
-    '',
-    '## פרטי עסק',
-    s.aiBusinessFacts || '',
-    '',
-    '## בסיס ידע / שאלות נפוצות',
-    s.aiKnowledgeBase || '',
-    '',
-    '## נושאים אסורים',
-    s.aiForbiddenTopics || '',
-    '',
-    '## כרטיס לקוח',
-    buildParentCardContext(parent, students, { speaker }),
-  ];
-  if (history.length) {
-    parts.push('', '## היסטוריית שיחה אחרונה', history.join('\n'));
-  }
-  parts.push(
-    '',
-    BOT_BOUNDS_RULES,
-    '',
-    PRICE_SOURCE_RULE,
-  );
-  return parts.join('\n');
-}
 
-export function parseAiReply(rawText, settings = {}) {
-  const s = mergeBotSettings(settings);
-  let text = String(rawText || '').trim();
-  let unsure = false;
-  let handoff = false;
-  if (/^HANDOFF\b/i.test(text)) {
-    handoff = true;
-    text = text.replace(/^HANDOFF\b[:\-\s]*/i, '').trim();
-  }
-  if (/^UNSURE\b/i.test(text)) {
-    unsure = true;
-    text = text.replace(/^UNSURE\b[:\-\s]*/i, '').trim();
-  }
-  if (!text && unsure) text = s.aiClarifyReply || s.aiUnsureReply;
-  if (!text && handoff) text = s.aiHandoffAckMessage;
-  return { text: clipReply(text, s.aiMaxReplyChars), unsure, handoff };
-}
 
-/** Model already wrote a natural “I don’t know — transferring” reply. */
-export function detectNaturalHandoff(text) {
-  const t = String(text || '');
-  if (/(?:לא יודע|אין לי(?:\s+את)?(?:\s+ה)?(?:מידע|פרט)|לא מופיע אצלי)/.test(t)
-    && /(?:מעביר|אעביר|לצוות|נציג)/.test(t)) {
-    return true;
-  }
-  return false;
-}
-
-export function detectUnsureHeuristic(text) {
-  const t = String(text || '');
-  // Natural handoff sentences are not “unsure clarify” — keep the model’s wording.
-  if (detectNaturalHandoff(t)) return false;
-  return /לא בטוח|אינני בטוח|אין לי מידע|צריך לבדוק/.test(t);
-}
-
-/** True when this outbound text is our “didn’t understand” ask. */
-export function isClarifyReplyText(text, settings = {}) {
-  const t = String(text || '');
-  if (/לא\s*הבנתי/.test(t)) return true;
-  const s = mergeBotSettings(settings);
-  const clarify = String(s.aiClarifyReply || '').trim();
-  if (!clarify) return false;
-  const needle = clarify.split(/\n/)[0].trim().slice(0, 24);
-  return needle.length >= 4 && t.includes(needle);
-}
 
 /**
  * Gibberish / keyboard mash — not a real question.
  * Used so we only escalate after clarify when the follow-up is still noise.
  */
-export function looksLikeLowSignalMessage(text) {
-  const t = String(text || '').trim();
-  if (!t) return true;
-  const compact = t.replace(/[\s\p{P}\p{S}0-9]+/gu, '');
-  if (compact.length <= 2) return true;
-  if (/^[a-zA-Z]+$/.test(compact) && compact.length <= 12) return true;
-  // Real Hebrew intent / business words → not noise.
-  if (/(?:מה|מי|איך|למה|כמה|מתי|איפה|האם|יש|רוצה|צריך|אפשר|קיר|טיפוס|חוג|כית|מחיר|שעה|רישום|מקום|פתוח|כתובת|חניה|אירוע|יום|ילד|ילדה|\bבן\b|\bבת\b|שלום|היי|תודה)/.test(t)) {
-    return false;
-  }
-  if (/[?？]/.test(t)) return false;
-  // Short single token with no intent words (e.g. לחנלח / vhh).
-  if (!/\s/.test(t) && compact.length <= 8) return true;
-  return false;
-}
 
-/** “Is this a climbing wall?” / “what is this place?” */
-export function asksAboutBusinessIdentity(text) {
-  const t = String(text || '');
-  if (/קיר\s*טיפוס|טיפוס\s*קיר/.test(t)) return true;
-  if (/(?:מה\s*זה(?:\s*המקום)?|איזה\s*מקום|מי\s*אתם|מה\s*אתם|זה\s*הקיר|אתם\s*(?:קיר|טיפוס)|זה\s*קיר)/.test(t)) {
-    return true;
-  }
-  return /climbing\s*wall|bouldering/i.test(t);
-}
-
-export function formatBusinessIdentityReply(settings = {}) {
-  const s = mergeBotSettings(settings);
-  const brand = s.brandName || DEFAULT_BUSINESS_PROFILE.display_name;
-  return (
-    `כן! 🙂 אנחנו קיר הטיפוס ${brand}.\n`
-    + 'יש חוגים לילדים, אימונים ואירועים על הקיר.\n'
-    + 'במה אפשר לעזור?'
-  );
-}
 
 /**
  * Last bot turn (before the current inbound already in the log) asked for clarification.
  */
-export function recentlyAskedClarify(phone, settings = {}, historyLimit = 8) {
-  if (!phone) return false;
-  const history = getConversationHistory(phone, historyLimit);
-  let i = history.length - 1;
-  while (i >= 0 && history[i].startsWith('לקוח:')) i -= 1;
-  if (i < 0 || !history[i].startsWith('בוט:')) return false;
-  return isClarifyReplyText(history[i].slice('בוט:'.length).trim(), settings);
-}
 
 /**
  * Unsure once → ask to rephrase.
  * Unsure again only hands off when the new message is still gibberish.
  * A real follow-up question stays in the chat (ask again / let heuristics answer).
  */
-export function resolveUnsureReply(phone, settings = {}, { incomingText = '' } = {}) {
-  const s = mergeBotSettings(settings);
-  const clarifyText = s.aiClarifyReply
-    || 'לא הבנתי 🙏\nיכולים להסביר קצת יותר? במה אפשר לעזור?';
-  const handoffText = s.aiUnsureReply || s.aiHandoffAckMessage;
-
-  if (!s.aiEscalateWhenUnsure) {
-    return { text: clarifyText, handoff: false, unsure: true, clarify: true };
-  }
-  if (recentlyAskedClarify(phone, s) && looksLikeLowSignalMessage(incomingText)) {
-    return { text: handoffText, handoff: true, unsure: true, clarify: false };
-  }
-  return { text: clarifyText, handoff: false, unsure: true, clarify: true };
-}
 
 /** Lead intake state machine */
 export function getIntake(parent) {
@@ -1190,159 +925,6 @@ export async function resetPlaygroundConversation(phone) {
   return { phone: normalized, cleared: true };
 }
 
-export function shouldStartLeadCapture(settings, parent, students, incomingText, { isNew } = {}) {
-  const s = mergeBotSettings(settings);
-  if (!s.aiLeadCaptureEnabled) return false;
-  if (getIntake(parent)?.step && getIntake(parent).step !== 'done') return false;
-  const choice = normalizeMenuChoice(incomingText);
-  if (choice === '1') return true;
-  const raw = String(incomingText || '');
-  if (/רישום|להירשם|רוצה להצטרף|תיאום אימון/.test(raw)) return true;
-  // Unknown writer: collect name before anything else (including the menu).
-  if (!isIdentifiedParent(parent) && (isNew || isLowIntentGreeting(raw))) return true;
-  return false;
-}
-
-export async function advanceLeadCapture(phone, parent, incomingText, helpers = {}) {
-  const text = String(incomingText || '').trim();
-  let intake = { ...(getIntake(parent) || {}) };
-  // Migrate the old single full-name step if a conversation was mid-flow.
-  if (intake.step === 'parent_name') {
-    intake = { ...intake, step: isIdentifiedParent(parent) ? 'interest' : 'parent_first_name', asked: false };
-  }
-  // Known parent who picked classes — skip straight to the child.
-  if (!intake.step || intake.step === 'parent_first_name') {
-    if (isIdentifiedParent(parent) && normalizeMenuChoice(text) === '1') {
-      intake = { step: 'child_name', asked: false, parentName: parent.name };
-    }
-  }
-  const step = intake.step || 'parent_first_name';
-
-  if (step === 'parent_first_name') {
-    if (!intake.asked) {
-      await setIntake(phone, { step: 'parent_first_name', asked: true });
-      return { reply: 'שמחים שפניתם! 🙂\nמה השם הפרטי שלך?', done: false, started: true };
-    }
-    if (text.length < 2) return { reply: 'רשמו בבקשה את השם הפרטי.', done: false };
-    intake.parentFirstName = text.split(/\s+/)[0];
-    intake.step = 'parent_last_name';
-    intake.asked = true;
-    await setIntake(phone, intake);
-    const matches = parentsForPhone(phone);
-    for (const m of matches) {
-      const row = db.update('parents', m.id, { name: intake.parentFirstName });
-      if (row) await persistCore('parents', row);
-    }
-    return { reply: 'תודה! ומה שם המשפחה?', done: false };
-  }
-
-  if (step === 'parent_last_name') {
-    if (text.length < 2) return { reply: 'רשמו בבקשה את שם המשפחה.', done: false };
-    intake.parentLastName = text.split(/\s+/)[0];
-    const fullName = [intake.parentFirstName, intake.parentLastName].filter(Boolean).join(' ');
-    intake.parentName = fullName;
-    intake.step = 'interest';
-    intake.asked = true;
-    await setIntake(phone, intake);
-    const matches = parentsForPhone(phone);
-    for (const m of matches) {
-      const row = db.update('parents', m.id, { name: fullName, lastName: intake.parentLastName });
-      if (row) await persistCore('parents', row);
-    }
-    return { reply: 'מעולה. במה אתם מתעניינים? (חוגים, שעות, אירועים או משהו אחר)', done: false };
-  }
-
-  if (step === 'interest') {
-    if (!intake.asked) {
-      await setIntake(phone, { ...intake, step: 'interest', asked: true });
-      return { reply: 'במה אתם מתעניינים? (חוגים, שעות, אירועים או משהו אחר)', done: false };
-    }
-    intake.interest = text || '';
-    const choice = normalizeMenuChoice(text);
-    // Classes interest → continue gathering the child / grade.
-    if (choice === '1' || /חוג|רישום|אימון|כית/.test(text)) {
-      intake.step = 'child_name';
-      intake.asked = true;
-      await setIntake(phone, intake);
-      return { reply: 'מעולה! ומה שם הילד/ה?', done: false };
-    }
-    intake.step = 'done';
-    await setIntake(phone, intake);
-    const s = mergeBotSettings(helpers.settings || {});
-    const menu = s.aiGreetingMenu || DEFAULT_BOT_SETTINGS.aiGreetingMenu;
-    return {
-      reply: `תודה${intake.parentFirstName ? ` ${intake.parentFirstName}` : ''}!\n\n${menu}`,
-      done: true,
-      intake,
-    };
-  }
-
-  if (step === 'child_name') {
-    if (!intake.asked) {
-      await setIntake(phone, { ...intake, step: 'child_name', asked: true });
-      return { reply: 'מעולה! ומה שם הילד/ה?', done: false };
-    }
-    if (text.length < 2) return { reply: 'רשמו בבקשה את שם הילד/ה.', done: false };
-    intake.childName = text;
-    intake.step = 'grade';
-    await setIntake(phone, intake);
-    const matches = parentsForPhone(phone);
-    for (const m of matches) {
-      const students = studentsForParent(m);
-      if (students[0]) {
-        const row = db.update('students', students[0].id, { name: text });
-        if (row) await persistCore('students', row);
-      } else if (typeof helpers.ensureStudent === 'function') {
-        await helpers.ensureStudent(m.id, text);
-      } else {
-        const created = db.insert('students', {
-          name: text,
-          parentId: m.id,
-          status: 'lead_new',
-          source: 'whatsapp',
-        });
-        await persistCore('students', created);
-        for (const link of linkHouseholdGuardians(db, { studentId: created.id, source: 'whatsapp' })) {
-          await persistCore('student_guardians', link);
-        }
-      }
-    }
-    return { reply: 'מעולה. באיזו כיתה הילד/ה? (לדוגמה: ג׳)', done: false };
-  }
-
-  if (step === 'grade') {
-    if (text.length < 1) return { reply: 'רשמו בבקשה את הכיתה (א׳–ו׳ או אחר).', done: false };
-    intake.grade = text;
-    intake.step = 'preferred_day';
-    await setIntake(phone, intake);
-    return { reply: 'תודה! איזה יום נוח לכם לאימון? (א׳–ו׳ / גמיש)', done: false };
-  }
-
-  if (step === 'preferred_day') {
-    intake.preferredDay = text || 'גמיש';
-    intake.step = 'done';
-    await setIntake(phone, intake);
-    const grade = intake.grade || '';
-    const summary = `נרשם אצלנו:\nהורה: ${intake.parentName || parent?.name || ''}\nילד/ה: ${intake.childName || ''}\nכיתה: ${grade}\nיום מועדף: ${intake.preferredDay}`;
-    let classesHint = '';
-    if (typeof helpers.formatClassesForGrade === 'function') {
-      classesHint = helpers.formatClassesForGrade(grade) || '';
-    }
-    let waitlistNote = '';
-    if (typeof helpers.assignWaitlistIfFull === 'function') {
-      waitlistNote = (await helpers.assignWaitlistIfFull(phone, parent, intake)) || '';
-    }
-    let reply = classesHint
-      ? `${summary}\n\n${classesHint}\n\nרוצים שנקבע אימון היכרות? אפשר גם לכתוב 3 לדבר עם צוות.`
-      : `${summary}\n\nצוות יחזור אליכם לתיאום אימון היכרות`;
-    if (waitlistNote) {
-      reply = `${summary}\n\n${waitlistNote}`;
-    }
-    return { reply, done: true, intake };
-  }
-
-  return { reply: null, done: true };
-}
 
 /**
  * Decide what the bot should do before generating a normal AI/heuristic reply.
@@ -1415,40 +997,11 @@ export function decideBotGate(settings, parent, students, text, { isSimulator = 
     };
   }
 
-  if (getIntake(parent)?.step && getIntake(parent).step !== 'done') {
-    return { action: 'intake' };
-  }
-
+  // There used to be an `intake` action here, for the staged lead capture that
+  // asked for a parent name, then a child, then a grade. The only thing still
+  // collected before the model is the customer's name, and that runs on its own
+  // in handleIncomingMessage — the gate has nothing left to say about it.
   return { action: 'reply' };
-}
-
-export function interactiveMenuPayload(settings) {
-  const s = mergeBotSettings(settings);
-  const body = withBotMark(
-    (s.aiGreetingMenu || DEFAULT_BOT_SETTINGS.aiGreetingMenu).split('\n').slice(0, 4).join('\n')
-    || 'היי! במה אפשר לעזור?'
-  );
-  return {
-    type: 'interactive',
-    interactive: {
-      type: 'list',
-      body: { text: clipReply(body, 900) },
-      action: {
-        button: 'בחרו אפשרות',
-        sections: [
-          {
-            title: 'תפריט',
-            rows: [
-              { id: 'menu_1', title: 'חוגים ורישום', description: 'זמנים, מקומות ומחיר' },
-              { id: 'menu_2', title: 'שעות ומיקום', description: 'כתובת ושעות פתיחה' },
-              { id: 'menu_3', title: 'לדבר עם צוות', description: 'העברה לנציג' },
-              { id: 'menu_4', title: 'אירועים וטיולים', description: 'מה קרוב וקישור הרשמה' },
-            ],
-          },
-        ],
-      },
-    },
-  };
 }
 
 export { isBotEnabled, shouldAiAutoReply, israelClockParts };

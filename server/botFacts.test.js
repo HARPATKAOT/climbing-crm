@@ -2,27 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  NO_OPENING_HOURS_REPLY,
-  PRICE_HANDOFF_REPLY,
-  asksAboutAssistants,
-  asksAboutEvents,
-  asksAboutOpeningHours,
-  asksAboutPrices,
-  buildPriceReply,
   enrichmentFeeFromSettings,
   resolveEnrichmentFee,
-  formatGroupChatReply,
-  formatGroupDetailsReply,
   formatOpeningHoursReply,
   formatPublicEventsReply,
-  formatSignupLinkReply,
-  groupSignupUrl,
   inviteLink,
-  asksAboutNonClassPayment,
-  asksAboutWallEntry,
   entryProductsFromPricelist,
-  formatEntryPricesReply,
-  soundsLikeComplaint,
   trainerNameForGroup,
 } from './botFacts.js';
 
@@ -41,8 +26,6 @@ function futureDate(daysAhead) {
 
 test('an empty calendar yields no opening hours to quote', () => {
   assert.equal(formatOpeningHoursReply(fakeDb({ activities: [] })), '');
-  // The caller is what turns that into a customer-facing sentence.
-  assert.match(NO_OPENING_HOURS_REPLY, /לא עודכנו ביומן/);
 });
 
 test('opening hours are read from the calendar entries', () => {
@@ -111,41 +94,6 @@ test('no published activities means no events reply at all', () => {
 
 const EQUIPMENT = { shoes: 150, shirt: 120, chalk_bag: 80 };
 
-test('class prices come from the matched group', () => {
-  const reply = buildPriceReply({
-    groups: [{ ageCategory: 'ג׳-ד׳', day: 2, time: '15:00', priceWeek: 280, priceTwice: 360 }],
-    equipmentPrices: EQUIPMENT,
-    enrichmentFee: 110,
-    text: 'כמה עולה החוג לכיתה ג׳?',
-  });
-  assert.equal(reply.handoff, false);
-  assert.match(reply.text, /פעם בשבוע 280 ₪/);
-  assert.match(reply.text, /פעמיים בשבוע 360 ₪/);
-  assert.match(reply.text, /110 ₪/);
-});
-
-test('a group with no price recorded is skipped rather than guessed', () => {
-  const reply = buildPriceReply({
-    groups: [{ ageCategory: 'ה׳-ו׳', day: 4, time: '15:30', priceWeek: 0, priceTwice: 0 }],
-    equipmentPrices: null,
-    enrichmentFee: 0,
-    text: 'כמה עולה החוג?',
-  });
-  assert.equal(reply.handoff, true);
-  assert.equal(reply.text, PRICE_HANDOFF_REPLY);
-});
-
-test('equipment questions answer with equipment only', () => {
-  const reply = buildPriceReply({
-    groups: [{ ageCategory: 'ג׳-ד׳', day: 2, time: '15:00', priceWeek: 280, priceTwice: 360 }],
-    equipmentPrices: EQUIPMENT,
-    enrichmentFee: 110,
-    text: 'כמה עולות הנעליים?',
-  });
-  assert.match(reply.text, /150 ₪ להשכרה לחצי עונה/);
-  assert.doesNotMatch(reply.text, /280/);
-});
-
 test('the enrichment fee is read from the business facts the owner edits', () => {
   assert.equal(
     enrichmentFeeFromSettings({ aiBusinessFacts: 'כתובת: השקד 1\nדמי העשרה: 110 ₪' }),
@@ -175,35 +123,6 @@ test('the trainer id resolves to the employee name', () => {
   assert.equal(trainerNameForGroup(db, { trainer: 'e-99' }), '');
 });
 
-test('trainer and group size are answered for a single matched group', () => {
-  const db = fakeDb({ employees: [{ id: 'e-7', name: 'נועה' }] });
-  const group = { ageCategory: 'ג׳-ד׳', day: 2, time: '15:00', trainer: 'e-7', maxSlots: 12 };
-  const trainer = formatGroupDetailsReply(db, [group], 'מי המדריך של הקבוצה?');
-  assert.match(trainer.text, /נועה/);
-  assert.equal(trainer.handoff, false);
-
-  const size = formatGroupDetailsReply(db, [group], 'כמה ילדים יש בקבוצה?');
-  assert.match(size.text, /עד 12 מתאמנים/);
-});
-
-test('assistant trainers are not in the CRM, so the question goes to a human', () => {
-  const db = fakeDb({ employees: [{ id: 'e-7', name: 'נועה' }] });
-  const reply = formatGroupDetailsReply(
-    db,
-    [{ ageCategory: 'ג׳-ד׳', day: 2, time: '15:00', trainer: 'e-7' }],
-    'מי עוזרי המדריך?'
-  );
-  assert.equal(reply.handoff, true);
-  assert.doesNotMatch(reply.text, /נועה/);
-});
-
-test('an ambiguous group question asks which class instead of listing everything', () => {
-  const db = fakeDb({ employees: [] });
-  const reply = formatGroupDetailsReply(db, [], 'מי המדריך?');
-  assert.match(reply.text, /לאיזו קבוצה/);
-  assert.equal(reply.handoff, false);
-});
-
 // ─── קישורים לקבוצה ──────────────────────────────────────────────────────────
 
 test('only a real invite link is sendable, never a group JID', () => {
@@ -215,103 +134,7 @@ test('only a real invite link is sendable, never a group JID', () => {
   assert.equal(inviteLink(''), '');
 });
 
-test('group chat links are sent only for the class the child is enrolled in', () => {
-  const db = fakeDb({
-    groups: [
-      {
-        id: 'g1',
-        ageCategory: 'ג׳-ד׳',
-        day: 2,
-        time: '15:00',
-        waParents: 'https://chat.whatsapp.com/AAA111',
-        waClimbers: 'https://chat.whatsapp.com/BBB222',
-      },
-      {
-        id: 'g2',
-        ageCategory: 'ה׳-ו׳',
-        day: 3,
-        time: '16:30',
-        waParents: 'https://chat.whatsapp.com/CCC333',
-      },
-    ],
-  });
-  const reply = formatGroupChatReply(db, [{ name: 'עומרי', groupId: 'g1' }], 'תשלח לי את קבוצת הוואטסאפ');
-  assert.match(reply.text, /AAA111/);
-  assert.match(reply.text, /BBB222/);
-  // The class the child is not in stays private.
-  assert.doesNotMatch(reply.text, /CCC333/);
-  assert.equal(reply.handoff, false);
-});
-
-test('a child with no class placement goes to staff instead of a guessed link', () => {
-  const db = fakeDb({ groups: [{ id: 'g1', waParents: 'https://chat.whatsapp.com/AAA111' }] });
-  const reply = formatGroupChatReply(db, [{ name: 'עומרי', groupId: null }], 'קישור לקבוצה');
-  assert.equal(reply.handoff, true);
-  assert.doesNotMatch(reply.text, /chat\.whatsapp\.com/);
-});
-
-test('a group whose link is only a JID hands off rather than sending it', () => {
-  const db = fakeDb({ groups: [{ id: 'g1', waParents: '120363025390759859@g.us', waClimbers: '' }] });
-  const reply = formatGroupChatReply(db, [{ name: 'עומרי', groupId: 'g1' }], 'קישור לקבוצה');
-  assert.equal(reply.handoff, true);
-  assert.doesNotMatch(reply.text, /@g\.us/);
-});
-
-test('the signup link carries the specific class as the interest', () => {
-  // A group from the CRM has an id, so the link is short and the class is
-  // resolved at click time — renaming the group cannot strand a sent link.
-  const short = groupSignupUrl({ id: 'g-42', ageCategory: 'ג׳-ד׳' }, { phone: '972501234567' });
-  assert.match(short, /\/g\/g-42\/972501234567$/);
-
-  // Without an id there is nothing to look up, so the label still travels.
-  const url = groupSignupUrl({ ageCategory: 'ג׳-ד׳', day: 2, time: '15:00' }, { phone: '972501234567' });
-  assert.match(url, /\/onboard\?/);
-  const interest = new URL(url).searchParams.get('interest');
-  assert.equal(interest, 'ג׳-ד׳ · יום ג׳ 15:00');
-  assert.match(url, /phone=972501234567/);
-
-  const ask = formatSignupLinkReply([], { phone: '972501234567' });
-  assert.match(ask, /לאיזו כיתה ויום/);
-});
-
 // ─── גילוי כוונה ─────────────────────────────────────────────────────────────
-
-test('intent detectors keep the branches apart', () => {
-  assert.equal(asksAboutPrices('כמה עולה החוג?'), true);
-  assert.equal(asksAboutPrices('כמה כסף דלק מקבל לשעה?'), false);
-  assert.equal(asksAboutEvents('יש טיולים קרובים?'), true);
-  assert.equal(asksAboutEvents('אני במחנה של הנבחרת'), false);
-  assert.equal(asksAboutEvents('יש מחנה קיץ להרשמה?'), true);
-  assert.equal(asksAboutOpeningHours('מתי אתם פתוחים?'), true);
-  assert.equal(asksAboutAssistants('מי עוזרי המדריך?'), true);
-  assert.equal(asksAboutPrices('באיזה יום יש חוג?'), false);
-});
-
-test('a complaint is recognised even without the word תלונה', () => {
-  assert.equal(soundsLikeComplaint('אני רוצה להתלונן על המדריך'), true);
-  assert.equal(soundsLikeComplaint('אנחנו ממש לא מרוצים מהיחס'), true);
-  assert.equal(soundsLikeComplaint('יש בעיה עם המדריך של יום ג'), true);
-  assert.equal(soundsLikeComplaint('מי המדריך של כיתה ג?'), false);
-  assert.equal(soundsLikeComplaint('כמה עולה חוג?'), false);
-});
-
-test('membership and punch-card pricing is not a class question', () => {
-  assert.equal(asksAboutNonClassPayment('כמה עולה מנוי חודשי למבוגר?'), true);
-  assert.equal(asksAboutNonClassPayment('יש כרטisiה של 10 כניסות?'.replace('כרטisiה', 'כרטיסייה')), true);
-  assert.equal(asksAboutNonClassPayment('כמה עולה יום הולדת?'), true);
-  assert.equal(asksAboutNonClassPayment('כמה עולה חוג לכיתה ג?'), false);
-  assert.equal(asksAboutNonClassPayment('כמה עולות נעליים?'), false);
-  // Single wall entry is priced from the pricelist — not a staff handoff.
-  assert.equal(asksAboutNonClassPayment('כמה עולה כניסה לאדם?'), false);
-  assert.equal(asksAboutNonClassPayment('כמה עולה כניסה בודדת?'), false);
-});
-
-test('wall entry questions are recognised separately from memberships', () => {
-  assert.equal(asksAboutWallEntry('כמה עולה כניסה לאדם?'), true);
-  assert.equal(asksAboutWallEntry('כמה עולה כניסה בודדת לקיר?'), true);
-  assert.equal(asksAboutWallEntry('כמה עולה מנוי עם 4 כניסות?'), false);
-  assert.equal(asksAboutWallEntry('כמה עולה חוג?'), false);
-});
 
 test('entry products come only from the כניסה category with a real price', () => {
   const list = [
@@ -323,16 +146,4 @@ test('entry products come only from the כניסה category with a real price', 
   assert.deepEqual(entryProductsFromPricelist(list), [
     { שם: 'כניסה לקיר', מחיר: 70, הערה: '' },
   ]);
-  assert.match(formatEntryPricesReply(list), /70/);
-  assert.equal(formatEntryPricesReply([]), '');
-});
-
-test('buildPriceReply answers wall entry from the pricelist', () => {
-  const reply = buildPriceReply({
-    text: 'כמה עולה כניסה לאדם?',
-    pricelist: [{ name: 'כניסה לקיר', price: 70, category: 'כניסה', active: true }],
-  });
-  assert.equal(reply.handoff, false);
-  assert.match(reply.text, /70/);
-  assert.match(reply.text, /כניסה/);
 });

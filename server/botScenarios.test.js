@@ -613,6 +613,33 @@ test('המודל אומר «שיבצתי» בלי לקרוא לכלי — הלק
   });
 });
 
+// ─── כשהמודל לא זמין ─────────────────────────────────────────────────────────
+
+test('מודל שנופל אינו הופך לניחוש — הבוט אומר שהוא מעביר, ומעביר', async () => {
+  await withSeed({ groups: [GROUP_GD], students: [childYotam()] }, async () => {
+    const { whatsappService } = await import('./whatsapp.js');
+    const key = process.env.GEMINI_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    try {
+      // Before, a keyword layer answered here: «כמה עולה» matched the price
+      // branch and the customer got a number nobody had checked this turn.
+      const result = await whatsappService.generateAIResponse('כמה עולה החוג לכיתה ג?', {
+        phone: PARENT.phone,
+        parent: PARENT,
+        students: [],
+      });
+      assert.equal(result.handoff, true);
+      assert.equal(result.reason, 'no_model');
+      assert.match(result.text, /לצוות/);
+      // No price, no group, no schedule — nothing that would need a source.
+      assert.doesNotMatch(result.text, /\d{2,}/);
+    } finally {
+      if (key === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = key;
+    }
+  });
+});
+
 // ─── כרטיס המשפחה ────────────────────────────────────────────────────────────
 
 test('כרטיס המשפחה מוסר גיל מחושב, ולא מציג ממתין להרשמה בלי קבוצה', async () => {

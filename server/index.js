@@ -154,6 +154,7 @@ import {
   recordFeedback,
   rejectFeedback,
   setLearnedActive,
+  withBotReplies,
 } from './botLearning.js';
 import {
   INTEREST_COLLECTION,
@@ -1662,13 +1663,6 @@ app.post('/api/whatsapp/settings', requireOwner, async (req, res) => {
     'aiKnowledgeBase',
     'aiForbiddenTopics',
     'aiBusinessFacts',
-    'aiEscalateWhenUnsure',
-    'aiClarifyReply',
-    'aiUnsureReply',
-    'aiToolsEnabled',
-    'aiLeadCaptureEnabled',
-    'aiInteractiveMenuEnabled',
-    'aiGreetingMenu',
     'aiReactivateKeywords',
     'aiStaffPhones',
     'metaIgAccountId',
@@ -1699,18 +1693,6 @@ app.post('/api/whatsapp/settings', requireOwner, async (req, res) => {
   }
   if (payload.aiPauseOnHumanReply !== undefined) {
     payload.aiPauseOnHumanReply = !!payload.aiPauseOnHumanReply;
-  }
-  if (payload.aiEscalateWhenUnsure !== undefined) {
-    payload.aiEscalateWhenUnsure = !!payload.aiEscalateWhenUnsure;
-  }
-  if (payload.aiLeadCaptureEnabled !== undefined) {
-    payload.aiLeadCaptureEnabled = !!payload.aiLeadCaptureEnabled;
-  }
-  if (payload.aiToolsEnabled !== undefined) {
-    payload.aiToolsEnabled = !!payload.aiToolsEnabled;
-  }
-  if (payload.aiInteractiveMenuEnabled !== undefined) {
-    payload.aiInteractiveMenuEnabled = !!payload.aiInteractiveMenuEnabled;
   }
   if (payload.aiAudienceMode !== undefined) {
     const mode = String(payload.aiAudienceMode);
@@ -3001,7 +2983,7 @@ app.get('/api/bot-learning/feedback', (req, res) => {
   try {
     const status = req.query.status || '';
     res.json({
-      items: listFeedback(db, status ? { status } : {}),
+      items: withBotReplies(db, listFeedback(db, status ? { status } : {})),
       stats: feedbackStats(db, { days: 7 }),
     });
   } catch (err) {

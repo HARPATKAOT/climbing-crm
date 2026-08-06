@@ -1,5 +1,4 @@
 import { db, persistCore, syncBotFlagFromRemote } from './db.js';
-import { linkHouseholdGuardians } from './studentGuardians.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { buildTemplateParameters } from './channels/templates.js';
 import {
@@ -11,7 +10,6 @@ import {
 } from './channels/messageStore.js';
 import {
   getSortedGroupDays,
-  groupMeetsOnDay,
   israelDateStr,
   israelHour,
 } from './attendanceUtils.js';
@@ -26,53 +24,12 @@ import {
 import { israelClockParts, isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 import { DEFAULT_BUSINESS_PROFILE, getBusinessProfile } from './businessProfile.js';
 import { READ_TOOLS, runChatTurn } from './aiChat.js';
-import { EQUIPMENT_ITEM_LABELS as EQUIPMENT_LABELS } from './equipmentService.js';
-import {
-  NO_EVENTS_REPLY,
-  NO_OPENING_HOURS_REPLY,
-  asksAboutAssistants,
-  asksAboutEvents,
-  asksAboutGroupChat,
-  asksAboutGroupSize,
-  asksAboutSignupLink,
-  asksAboutOpeningHours,
-  asksAboutPrices,
-  asksAboutSalary,
-  asksAboutStaffHeadcount,
-  asksAboutNonClassPayment,
-  asksAboutWallEntry,
-  soundsLikeComplaint,
-  PRICE_HANDOFF_REPLY,
-  asksAboutEquipment,
-  asksAboutEnrichment,
-  asksAboutTrainer,
-  buildPriceReply,
-  formatEntryPricesReply,
-  resolveEnrichmentFee,
-  formatGroupChatReply,
-  formatGroupDetailsReply,
-  formatOpeningHoursReply,
-  formatPublicEventsReply,
-  formatSignupLinkReply,
-  groupSignupUrl,
-  loadEquipmentPrices,
-  trainerNameForGroup,
-} from './botFacts.js';
-import {
-  enrichGroupsWithCapacity,
-  spotsLeft,
-  wantsWaitlist,
-  pickGroupForWaitlist,
-  extractPreferredDayIndex,
-  extractTimeHint,
-} from './groupCapacity.js';
 import {
   mergeBotSettings,
   withBotMark,
   isCentrePhone,
   CUSTOMER_STATUSES,
   loadBrandedBotSettings,
-  normalizeMenuChoice,
   decideBotGate,
   pauseBotForPhone,
   recordBotHandoff,
@@ -80,36 +37,19 @@ import {
   clearBotPause,
   markOutsideHoursSent,
   shouldSendOutsideHoursMessage,
-  advanceLeadCapture,
-  shouldStartLeadCapture,
-  getIntake,
-  setIntake,
   clipReply,
   sleep,
-  buildAiExtraContext,
   buildParentCardContext,
   getConversationHistory,
   getChatHistoryMessages,
   normalizeHistoryLimit,
   isStaffPhone,
-  parseAiReply,
-  detectUnsureHeuristic,
-  detectNaturalHandoff,
-  resolveUnsureReply,
-  looksLikeLowSignalMessage,
-  asksAboutBusinessIdentity,
-  formatBusinessIdentityReply,
   BOT_BOUNDS_RULES,
-  interactiveMenuPayload,
   studentsForParent,
   findPrimaryParent,
   isIdentifiedParent,
   hasCustomerFullName,
   advanceCustomerNameCapture,
-  isLowIntentGreeting,
-  resolveIdentifiedParentFallback,
-  extractGeminiResponseText,
-  buildGeminiChatContents,
   DEFAULT_BOT_SETTINGS,
 } from './whatsappBot.js';
 import {
@@ -118,16 +58,20 @@ import {
   proposeFromHandoffStaffReply,
 } from './botLearning.js';
 import { runCustomerToolTurn, historyToContents } from './botToolTurn.js';
-import { shouldHideYouthPrices } from './botTools.js';
 import { alertRecipients } from './staffAlerts.js';
 import { recordBotAction } from './botActivityLog.js';
 import { isCapabilityEnabled } from './botCapabilities.js';
 import { buildCentreReport, formatReportDate } from './centreReport.js';
-import { groupMatchesGradeLetter } from './groupBands.js';
 
-const YOUTH_PRICE_REPLY =
-  'לגבי מחירי חוגים, ציוד ודמי העשרה כדאי שההורה יפנה אלינו 🙏\n'
-  + 'על מחיר כניסה לקיר אפשר לשאול אותי ישירות.';
+/**
+ * What the bot says when it cannot answer at all — no model key, a model error,
+ * or a turn that ran out of steps.
+ *
+ * A keyword engine used to answer here from guessed intent. It is gone: a wrong
+ * confident sentence costs more than a customer waiting for a person, and this
+ * path always alerts the team, so nobody is left waiting silently.
+ */
+const MODEL_UNAVAILABLE_REPLY = 'קיבלנו 🙏\nמעביר לצוות שלנו — מישהו יחזור אליכם בהקדם.';
 
 export { israelClockParts, isBotEnabled, shouldAiAutoReply };
 
@@ -193,112 +137,6 @@ const HEBREW_LETTER = /[֐-׿]/;
 
 
 /** Strip day/time suffixes already shown separately (e.g. "— יום א׳ 15:30"). */
-function cleanGroupTitle(group) {
-  let name = String(group.name || '').trim();
-  name = name.replace(/\s*[—–\-]\s*יום\s*[א-ו]['׳']?\s*\d{1,2}:\d{2}.*$/u, '');
-  name = name.replace(/\s*[—–\-]\s*[א-ו]['׳’]?\s*\+\s*[א-ו]['׳’]?\s*\d{1,2}:\d{2}.*$/u, '');
-  name = name.replace(/\s+יום\s*[א-ו]['׳']?\s*\d{1,2}:\d{2}.*$/u, '');
-  name = name.replace(/\s+/g, ' ').trim();
-  return name || String(group.ageCategory || '').trim() || 'חוג טיפוס';
-}
-
-/** Compact line for AI/CRM context (not WhatsApp customers). */
-function formatGroupLine(group, { hidePrices = false } = {}) {
-  const free = Number.isFinite(group.freeSlots)
-    ? group.freeSlots
-    : spotsLeft(group, db.get('students') || []);
-  // No configured capacity: say nothing about places rather than invent one.
-  const seat = free === null ? '' : (free > 0 ? `${free} פנויים` : 'מלאה');
-  const week = Number(group.priceWeek) || 0;
-  const twice = Number(group.priceTwice) || 0;
-  const price = hidePrices
-    ? ''
-    : ([
-      week ? `פעם בשבוע ${week} ₪` : '',
-      twice ? `פעמיים בשבוע ${twice} ₪` : '',
-    ].filter(Boolean).join(' / ') || 'מחיר לא מעודכן');
-  const trainer = trainerNameForGroup(db, group);
-  const max = Number(group.maxSlots) || 0;
-  return `• ${cleanGroupTitle(group)} | ${groupDaysPhrase(group)} ${group.time || ''} | ${group.ageCategory || ''} | ${seat}`
-    + `${price ? ` | ${price}` : ''}${trainer ? ` | מדריך: ${trainer}` : ''}${max ? ` | עד ${max} מתאמנים` : ''}`;
-}
-
-function extractGradeLetter(text) {
-  // The letter must end the word: «כיתה ה׳» is a grade, «כיתה הילד/ה» is not —
-  // and the bot's own "באיזו כיתה הילד/ה?" used to read back as grade ה.
-  // \s+ (not \s*) so the ה of «כיתה» can never be backtracked into the grade
-  // slot, which is how «כיתה הילד/ה» produced grade ה.
-  const m = String(text || '').match(/כית(?:ה|ות)?\s+([א-ו])(?:['׳])?(?![א-ת])/i);
-  return m?.[1] || '';
-}
-
-/** Age mentioned in free text — "בן 7", "בת 8", "גיל 6". */
-export function extractAgeYears(text) {
-  const m = String(text || '').match(/(?:בן|בת|גיל)\s*(\d{1,2})|(\d{1,2})\s*שנ/);
-  if (!m) return null;
-  const age = Number(m[1] || m[2]);
-  return Number.isFinite(age) && age >= 3 && age <= 18 ? age : null;
-}
-
-/** Rough Israeli grade bands for climbing classes. */
-export function gradeLettersFromAge(age) {
-  const n = Number(age);
-  if (!Number.isFinite(n)) return [];
-  // Below first grade there is no band to guess. A toddler on the family card
-  // used to resolve to כיתה א׳, so "יש לכם חוג לילדים?" was answered with the
-  // first-grade schedule instead of asking which grade.
-  if (n < 6) return [];
-  if (n <= 7) return ['א', 'ב'];
-  if (n <= 9) return ['ג', 'ד'];
-  if (n <= 12) return ['ה', 'ו'];
-  return [];
-}
-
-export const ASK_GRADE_REPLY =
-  'בשמחה! 🙂\nבאיזו כיתה הילד/ה? (א׳–ו׳)\nאו גיל — למשל «בן 7» — ואציע רק את מה שרלוונטי.';
-
-// Moved to its own module so the model's tools can match grades too.
-export { groupMatchesGradeLetter } from './groupBands.js';
-
-/**
- * Not every class question is about a primary-school child: the wall also runs
- * חטיבה / תיכון / בוגרים groups, and "יש לכם חוגים למבוגרים?" was answered with
- * "באיזו כיתה הילד/ה?".
- */
-export function ageBandFromText(text) {
-  const t = String(text || '');
-  if (/מבוגר|לעצמי|בשבילי|בשביל עצמי|הורים\s*שרוצים|אני\s*רוצה\s*להתאמן/.test(t)) return 'בוגרים';
-  if (/תיכון|נוער/.test(t)) return 'תיכון';
-  if (/חטיב/.test(t)) return 'חטיבה';
-  return '';
-}
-
-/** Groups whose age category is that non-grade band. */
-export function groupsForAgeBand(groups, band) {
-  if (!band) return [];
-  const wanted = band === 'תיכון' ? /תיכון|חטיב/ : new RegExp(band);
-  return (groups || []).filter((g) => wanted.test(String(g.ageCategory || '')));
-}
-
-/** Grade band for one child on the card — from their class, grade or birth date. */
-export function gradeLettersForStudent(student) {
-  if (!student) return [];
-  // Categories are written «ג'-ד'»; the apostrophe is what separates a grade
-  // letter from an ordinary letter inside a word like «בוגרים».
-  const band = String(student.ageCategory || '').match(/[א-ו](?=['׳])/g) || [];
-  if (band.length) return [...new Set(band)];
-  const letter = extractGradeLetter(`כיתה ${student.grade || ''}`);
-  if (letter) return [letter];
-  const birth = Date.parse(student.birthDate || student.birth_date || '');
-  if (!Number.isFinite(birth)) return [];
-  const years = Math.floor((Date.now() - birth) / (365.25 * 24 * 60 * 60 * 1000));
-  return gradeLettersFromAge(years);
-}
-
-/**
- * Cards carry placeholder children ("ילד/ה של לקוח וואטסאפ") created when the
- * name is still unknown. Offering that back to the parent reads as broken.
- */
 function isRealChildName(name) {
   const n = String(name || '').trim();
   if (n.length < 2) return false;
@@ -337,669 +175,6 @@ export function askWhichChildReply(students = []) {
   return `בשמחה! 🙂\nבשביל מי מהילדים? ${unique.join(' / ')}\nאו כתבו «ילד אחר» ונמשיך משם.`;
 }
 
-function groupsMatchingLetters(groups, letters) {
-  const list = Array.isArray(letters) ? letters.filter(Boolean) : [];
-  if (!list.length) return [];
-  return (groups || []).filter((g) => list.some((letter) => groupMatchesGradeLetter(g, letter)));
-}
-
-/**
- * Resolve which class bands the customer is asking about — from explicit grade,
- * stated age, kids already on the card, or (when phone is set) recent messages.
- */
-export function resolveAudienceFilter(text, students = [], { namedChildOnly = false } = {}) {
-  const grade = extractGradeLetter(text);
-  if (grade) return { letters: [grade], source: 'grade', grade, age: null };
-
-  const age = extractAgeYears(text);
-  if (age != null) {
-    const letters = gradeLettersFromAge(age);
-    if (letters.length) return { letters, source: 'age', grade: '', age };
-  }
-
-  // "בשביל שקד" — the parent named a child on the card, so that child's band is
-  // the answer and the other kids are irrelevant.
-  const named = matchStudentByName(text, students);
-  if (named) {
-    const letters = gradeLettersForStudent(named);
-    if (letters.length) {
-      return { letters, source: 'child', grade: letters[0], age: null, student: named };
-    }
-    return { letters: [], source: 'child', grade: '', age: null, student: named };
-  }
-  if (namedChildOnly) return { letters: [], source: null, grade: '', age: null };
-
-  const kids = Array.isArray(students) ? students : [];
-  const fromKids = [];
-  for (const s of kids) {
-    const hay = `${s.ageCategory || ''} ${s.grade || ''} ${s.name || ''}`;
-    const letter = extractGradeLetter(hay) || extractGradeLetter(`כיתה ${s.grade || ''}`);
-    if (letter) fromKids.push(letter);
-    const birth = Date.parse(s.birthDate || s.birth_date || '');
-    if (Number.isFinite(birth)) {
-      const years = Math.floor((Date.now() - birth) / (365.25 * 24 * 60 * 60 * 1000));
-      fromKids.push(...gradeLettersFromAge(years));
-    }
-  }
-  const unique = [...new Set(fromKids)];
-  if (unique.length) return { letters: unique, source: 'card', grade: unique[0], age: null };
-
-  return { letters: [], source: null, grade: '', age: null };
-}
-
-/**
- * Same as resolveAudienceFilter, but if this turn has no grade/age, reuse the
- * one from recent turns ("כיתה ג׳?" then "מה העלות?").
- */
-export function resolveAudienceWithMemory(text, students = [], phone = '') {
-  const direct = resolveAudienceFilter(text, students);
-  if (direct.letters.length) return direct;
-  if (!phone) return direct;
-  // Only what the customer said counts. The bot's own questions mention grades
-  // ("א׳–ו׳") and would answer the question on the customer's behalf.
-  const history = getConversationHistory(phone, 10)
-    .filter((line) => line.startsWith('לקוח:'))
-    .join('\n');
-  if (!history.trim()) return direct;
-  // Do not re-apply the card here — that would hide a missing follow-up grade
-  // with unrelated kids on the family file. A child the parent named by hand is
-  // a deliberate answer, so that one does carry over.
-  const fromHistory = resolveAudienceFilter(history, students, { namedChildOnly: true });
-  if (fromHistory.letters.length) {
-    return { ...fromHistory, source: 'history' };
-  }
-  return direct;
-}
-
-/**
- * "כמה עולה חוג?" → "באיזו כיתה?" → "כיתה ג" used to answer with free slots and
- * no price at all: the grade carried over between turns but the question did
- * not. A bare grade/age answer therefore inherits the price question.
- */
-export function isBareAudienceAnswer(text) {
-  const t = String(text || '').trim();
-  if (!t || t.length > 25) return false;
-  if (!extractGradeLetter(t) && extractAgeYears(t) == null) return false;
-  // Anything that carries its own question is not a plain answer.
-  return !/[?？]|מקום|פנוי|מלא|המתנה|שעה|מתי|איפה|מדריך|רישום|להירשם/.test(t);
-}
-
-function customerAskedAboutPrices(phone) {
-  if (!phone) return false;
-  return getConversationHistory(phone, 6)
-    .filter((line) => line.startsWith('לקוח:'))
-    .some((line) => asksAboutPrices(line));
-}
-
-function asksAboutAvailability(text) {
-  const t = String(text || '');
-  return /מקום\s*פנוי|יש\s*מקום|מקומות\s*פנויים|תפוסה|מלאה|יש\s*מקומות/.test(t);
-}
-
-/** Explicit request for seat counts (not just “where is there room”). */
-function asksAboutSpotCount(text) {
-  const t = String(text || '');
-  return /כמה\s*מקומות|מקומות\s*פנויים|כמה\s*פנויים|מה\s*התפוסה|כמה\s*יש\s*מקום|מספר\s*מקומות|כמה\s*נשארו/.test(t);
-}
-
-function isScheduleQuestion(text) {
-  const t = String(text || '');
-  if (wantsWaitlist(t)) return true;
-  if (asksAboutAvailability(t) || asksAboutSpotCount(t)) return true;
-  if (/כית(?:ה|ות)?\s*[א-ו]/.test(t)) return true;
-  if (extractAgeYears(t) != null) return true;
-  return /קבוצ|חוג|שיעור|אימון|שעות|מתי/.test(t);
-}
-
-/** Customer-facing schedule: where there is room; counts only if asked explicitly. Never includes prices. */
-function formatClassesWhatsAppReply(groups, incomingText = '', { grade: knownGrade = '' } = {}) {
-  const question = typeof incomingText === 'string' ? incomingText : '';
-  const students = db.get('students') || [];
-  const enriched = enrichGroupsWithCapacity(groups || [], students);
-  const showCounts = asksAboutSpotCount(question);
-  const sorted = [...enriched].sort(
-    (a, b) => firstGroupDay(a) - firstGroupDay(b) || String(a.time || '').localeCompare(String(b.time || ''))
-  );
-  if (!sorted.length) {
-    return 'כן, בטח! 🧗 כרגע אין לי קבוצות מתאימות במערכת.\nכתבו את כיתת הילד/ה ונחזור אליכם 📱';
-  }
-
-  const anyFull = sorted.some((g) => g.isFull);
-  const anyOpen = sorted.some((g) => !g.isFull);
-  const visible = showCounts ? sorted : sorted.filter((g) => !g.isFull);
-
-  if (!visible.length) {
-    return (
-      'כן, בטח! 🧗 כרגע כל הקבוצות הרלוונטיות מלאות.\n' +
-      'אפשר לכתוב «רשימת המתנה» עם כיתה ויום/שעה ונשבץ אתכם.'
-    );
-  }
-
-  const byDay = new Map();
-  for (const g of visible) {
-    const time = String(g.time || '').trim();
-    if (!time) continue;
-    for (const day of getSortedGroupDays(g)) {
-      if (!byDay.has(day)) byDay.set(day, []);
-      byDay.get(day).push(g);
-    }
-  }
-
-  const dayBlocks = [...byDay.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([day, dayGroups]) => {
-      const dayLabel = DAY_NAMES[day] || String(day);
-      const lines = dayGroups
-        .sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')))
-        .map((g) => {
-          if (showCounts) {
-            return g.freeSlots > 0 ? `${g.time} · ${g.freeSlots} פנויים` : `${g.time} · מלאה`;
-          }
-          return `${g.time} · יש מקום`;
-        });
-      return `📅 יום ${dayLabel}\n${lines.join('\n')}`;
-    });
-
-  if (!dayBlocks.length) {
-    return 'כן, בטח! 🧗 כרגע אין שעות מתאימות במערכת.\nכתבו את כיתת הילד/ה ונחזור אליכם 📱';
-  }
-
-  // On a follow-up ("ויש מקום פנוי?") the grade is only in the earlier turn —
-  // without it the list looks like every group in the wall.
-  const grade = extractGradeLetter(question) || knownGrade;
-  const header = grade
-    ? (showCounts
-      ? `כן, בטח! 🧗 לכיתה ${grade}׳ — מצב מקומות:`
-      : `כן, בטח! 🧗 לכיתה ${grade}׳ יש מקום ב:`)
-    : (showCounts ? 'כן, בטח! 🧗 מצב מקומות:' : 'כן, בטח! 🧗 יש מקום ב:');
-
-  let reply = `${header}\n\n${dayBlocks.join('\n\n')}`;
-  if (anyFull && anyOpen && !showCounts) {
-    reply += '\n\nיש גם קבוצות מלאות — אפשר לבקש שיבוץ לרשימת המתנה.';
-  } else if (anyFull && anyOpen && showCounts) {
-    reply += '\n\nלקבוצה מלאה אפשר לבקש שיבוץ לרשימת המתנה.';
-  } else if (!anyOpen) {
-    reply += '\n\nאפשר לכתוב «רשימת המתנה» ונשבץ אתכם.';
-  } else {
-    // An adult asking for themselves has no "שם הילד" to give.
-    const adultBand = (visible || []).every((g) => /בוגר/.test(String(g.ageCategory || '')));
-    reply += adultBand
-      ? '\n\nרוצים שנשמור מקום או שנחזור אליכם?\nכתבו שם ומספר טלפון 📱'
-      : '\n\nרוצים שנשמור מקום או שנחזור אליכם?\nכתבו שם הילד ומספר טלפון 📱';
-  }
-  return reply;
-}
-
-/** Live CRM snapshot injected into the AI prompt / heuristic replies */
-function buildCrmBotContext(settings = {}, { phone, parent, students, equipmentPrices = null, speaker = null } = {}) {
-  const s = mergeBotSettings(settings);
-  const brand = s.brandName || 'הרפתקאות';
-  const allStudents = db.get('students') || [];
-  const groups = enrichGroupsWithCapacity(
-    (db.get('groups') || [])
-      .slice()
-      .sort((a, b) => String(a.ageCategory || '').localeCompare(String(b.ageCategory || ''), 'he')
-        || firstGroupDay(a) - firstGroupDay(b)
-        || String(a.time || '').localeCompare(String(b.time || ''))),
-    allStudents
-  );
-
-  const hideYouthPrices = shouldHideYouthPrices(speaker);
-  const groupLines = groups.length
-    ? groups.map((g) => formatGroupLine(g, { hidePrices: hideYouthPrices })).join('\n')
-    : 'אין כרגע קבוצות במערכת.';
-
-  const extra = phone
-    ? buildAiExtraContext(s, phone, parent, students || [], { speaker })
-    : [
-      '## שם העסק',
-      brand,
-      'השתמש רק בשם הזה כשאתה מזכיר את העסק.',
-      '',
-      '## פרטי עסק',
-      s.aiBusinessFacts || '',
-      '',
-      '## בסיס ידע / שאלות נפוצות',
-      s.aiKnowledgeBase || '',
-      '',
-      '## נושאים אסורים',
-      s.aiForbiddenTopics || '',
-    ].join('\n');
-
-  const hoursText = formatOpeningHoursReply(db) || 'אין שעות פתיחה מעודכנות ביומן.';
-  const eventsText = formatPublicEventsReply(db) || 'אין אירועים פתוחים להרשמה כרגע.';
-  const signupBase = groupSignupUrl(null);
-  const chatLinks = formatGroupChatReply(db, students || [], '');
-  const chatLinksText = chatLinks.handoff || !chatLinks.text
-    ? 'אין קישור לקבוצת וואטסאפ עבור הלקוח הזה.'
-    : chatLinks.text;
-  const equipmentText = hideYouthPrices
-    ? 'הכותב מתחת לגיל 18 — אין למסור מחירי ציוד. הפנה להורה או לצוות.'
-    : (equipmentPrices
-      ? Object.entries(equipmentPrices)
-        .filter(([, price]) => Number(price) > 0)
-        .map(([item, price]) => `${EQUIPMENT_LABELS[item] || item}: ${price} ₪`)
-        .join(' | ')
-      : 'מחירי ציוד לא נטענו — אל תנקוב בהם.');
-
-  return {
-    groups,
-    text: `## נתונים חיים ממערכת ה-CRM (השתמש רק בהם לתשובות על חוגים/זמנים/מחירים)
-שם העסק הרשמי: ${brand}
-
-${s.aiBusinessFacts || ''}
-
-### קבוצות חוגים פעילות (${groups.length}):
-${groupLines}
-
-### שעות פתיחה (מהיומן)
-${hoursText}
-
-### אירועים פתוחים להרשמה
-${eventsText}
-
-### קבוצות וואטסאפ של הלקוח הזה
-${chatLinksText}
-
-### מחירי ציוד
-${equipmentText}
-${hideYouthPrices ? '' : '(נעליים מושכרות לחצי עונה; מי שמצטרף באמצע משלם יחסית.)'}
-
-### כללים לתשובה לפי נתונים
-- אם שאלו על כיתה/גיל — הצג רק קבוצות רלוונטיות מהרשימה.
-- אם בהודעה קודמת בשיחה כבר צוינה כיתה או גיל, וההודעה הנוכחית ממשיכה (מחיר, מקום, יום) — המשך עם אותה כיתה. אל תציג את כל הקטלוג.
-- כברירת מחדל ציין רק איפה יש מקום (בלי מספרים). דוגמה: «15:30 · יש מקום».
-- פתח תשובות על חוגים ב־«כן, בטח!» והצג כל יום/שעה בשורה נפרדת.
-- מספר מקומות פנויים — רק אם הלקוח שאל במפורש כמה מקומות / תפוסה.
-- כשקבוצה מלאה — הצע שיבוץ לרשימת המתנה.
-- מחיר: רק מהרשימות שלמעלה (מחיר קבוצה, מחירי ציוד, דמי העשרה, כניסה בודדת). כל מחיר אחר — מנוי, כרטיסייה, יום הולדת, הנחה, החזר — הפנה לצוות ואל תנקוב בסכום.
-- אם הכותב מתחת לגיל 18: מותר רק מחיר כניסה לקיר; אל תמסור מחירי חוגים, ציוד או דמי העשרה.
-- שעות פתיחה: רק מהרשימה שלמעלה. אם אין — אמור שהשעות לא עודכנו והפנה לצוות.
-- אירועים: רק מהרשימה שלמעלה, כולל קישור ההרשמה. אל תזכיר אירועים אחרים.
-- מדריך וגודל קבוצה: רק מהרשימה. עוזרי מדריך אינם במערכת — הפנה לצוות.
-- קישורים: השתמש רק בכתובות שמופיעות בנתונים שלמעלה. אל תמציא כתובת, ואל תשלח קישור לקבוצת וואטסאפ של חוג שהילד לא רשום אליו.
-- טופס הרשמה לחוג מסוים: ${signupBase}?interest=<כיתה ויום>.
-- ביטול, החזר כספי, שינוי תשלום, חשבונית, תלונה או פציעה — העבר לצוות מיד.
-- בלי שם קבוצה פנימי ארוך; אפשר כיתה/גיל קצר.
-- אל תמציא קבוצות, שעות או אירועים שלא מופיעים.
-- אם אין התאמה מדויקת — אמור זאת + בקש שם וטלפון לחזרה.
-
-${extra}`,
-  };
-}
-
-function findGroupsForText(text, students = [], phone = '') {
-  const groups = db.get('groups') || [];
-  const filter = resolveAudienceWithMemory(text, students, phone);
-  if (filter.letters.length) {
-    const matched = groupsMatchingLetters(groups, filter.letters);
-    if (matched.length) return matched;
-  }
-  // No grade/age yet — never dump the whole catalog.
-  return [];
-}
-
-/** Street address as the owner wrote it in the bot settings. */
-function addressFromSettings(settings = {}) {
-  const facts = String(settings.aiBusinessFacts || '');
-  const line = facts.split('\n').find((l) => /^\s*כתובת\s*:/.test(l));
-  return line ? line.replace(/^\s*כתובת\s*:\s*/, '').trim() : '';
-}
-
-async function buildHeuristicReply(incomingText, settings = {}, { phone = '', students = [], parent = null, speaker = null } = {}) {
-  const s = mergeBotSettings(settings);
-  const raw = String(incomingText || '').trim();
-  const text = raw.toLowerCase();
-  const menuPick = normalizeMenuChoice(raw);
-
-  const healthUrl = (s.aiBusinessFacts || '').match(/https?:\/\/\S+health\S*/i)?.[0]
-    || 'https://app.kirboaz.co.il/register';
-  const healthReply = `היי! ✍️\nהנה קישור להצהרת הבריאות:\n${healthUrl}\n\nאחרי החתימה המערכת מתעדכנת אוטומטית 🧗`;
-  const audience = resolveAudienceWithMemory(raw, students, phone);
-  const matchedGroups = findGroupsForText(raw, students, phone);
-  // A named weekday narrows "כיתה ה׳" down to the one class they mean.
-  const dayHint = extractPreferredDayIndex(raw);
-  const sameDay = dayHint == null
-    ? matchedGroups
-    : matchedGroups.filter((g) => groupMeetsOnDay(g, dayHint));
-  const exactGroups = sameDay.length ? sameDay : matchedGroups;
-  const needsAudience = !audience.letters.length;
-  // With kids on the card, asking "באיזו כיתה?" ignores what we already know —
-  // ask which of their children instead.
-  const askAudience = (students.length && askWhichChildReply(students)) || ASK_GRADE_REPLY;
-  const classesReply = needsAudience
-    ? askAudience
-    : formatClassesWhatsAppReply(exactGroups, raw, { grade: audience.grade });
-  const address = addressFromSettings(s);
-  const hoursReply = formatOpeningHoursReply(db) || NO_OPENING_HOURS_REPLY;
-  const locationReply = address
-    ? `📍 אנחנו ב${address}\n🅿️ יש חניה בחזית\nנתראה על הקיר! 🧗`
-    : 'הכתובת שלנו לא מעודכנת אצלי כרגע 🙏\nכתבו 3 והצוות ישלח לכם הוראות הגעה.';
-  const defaultMenu = s.aiGreetingMenu || DEFAULT_BOT_SETTINGS.aiGreetingMenu;
-
-  if (menuPick === '3') {
-    // A bare «נציג» or «אדם» anywhere in a sentence lands here, so "יש אדם
-    // שאחראי על החוג?" became a handoff instead of an answer. The gate's
-    // wantsExplicitHumanStaff already catches a genuine request before this;
-    // in tools mode the model gets to read the rest.
-    return { text: s.aiHandoffAckMessage, confidence: 'high', handoff: true, softHandoff: true };
-  }
-
-  // “Is this a climbing wall?” — never escalate; answer from brand facts.
-  if (asksAboutBusinessIdentity(raw)) {
-    return { text: formatBusinessIdentityReply(s), confidence: 'high' };
-  }
-
-  // Health is never on the opening menu — only if they asked for it.
-  if (menuPick === 'health' || text.includes('צהר') || text.includes('טופס') || text.includes('בריאות') || text.includes('חתמ')) {
-    return { text: healthReply, confidence: 'high' };
-  }
-
-  if (asksAboutGroupChat(raw)) {
-    // Its handoff is guessed from a raw groupId, without the family card the
-    // model would read — and listClasses now carries the invite links, so the
-    // model can answer this properly.
-    const chat = formatGroupChatReply(db, students, raw);
-    if (chat.text) {
-      return { text: chat.text, confidence: 'high', handoff: chat.handoff, softHandoff: true };
-    }
-  }
-
-  if (asksAboutSignupLink(raw)) {
-    if (needsAudience) return { text: askAudience, confidence: 'high' };
-    return {
-      text: formatSignupLinkReply(exactGroups, { phone }),
-      confidence: 'high',
-    };
-  }
-
-  // Trainer / group size come before the schedule branch — "כמה ילדים בקבוצה"
-  // reads as a schedule question otherwise.
-  // Staff headcount ("כמה מדריכים בצוות") is not in the CRM — leave to the model.
-  // Teen / adult groups exist and have no grade letter — never ask such a
-  // customer which grade their child is in.
-  const askedBand = ageBandFromText(raw);
-  if (askedBand && isScheduleQuestion(raw)) {
-    const bandGroups = groupsForAgeBand(db.get('groups') || [], askedBand);
-    if (bandGroups.length) {
-      return { text: formatClassesWhatsAppReply(bandGroups, raw), confidence: 'high' };
-    }
-    return {
-      text: 'אין לי קבוצה מתאימה לגיל הזה במערכת 🙏\nמעביר לצוות שיבדוק מה מתאים.',
-      confidence: 'high',
-      handoff: true,
-      softHandoff: true,
-    };
-  }
-
-  // The parent named a child who has no class band on file (too young, or no
-  // grade recorded) — the team can say what fits better than a guess.
-  if (audience.source === 'child' && !audience.letters.length) {
-    const childName = String(audience.student?.name || '').trim().split(/\s+/)[0];
-    return {
-      text: `אין לי קבוצה מתאימה ל${childName ? childName : 'ילד/ה'} במערכת 🙏\nמעביר לצוות שיבדוק מה מתאים.`,
-      confidence: 'high',
-      handoff: true,
-      softHandoff: true,
-    };
-  }
-
-  // An age with no matching band would otherwise loop: the bot asks for a grade
-  // or age, the parent repeats the age, and nothing moves.
-  const statedAge = extractAgeYears(raw);
-  if (statedAge != null && statedAge < 6) {
-    return {
-      text: 'לגיל הזה אין לי קבוצה מתאימה במערכת 🙏\nמעביר לצוות שיבדוק מה מתאים.',
-      confidence: 'high',
-      handoff: true,
-      softHandoff: true,
-    };
-  }
-
-  // A complaint must never be answered with a class question — hand it to the
-  // model, whose rules send complaints to the team.
-  if (soundsLikeComplaint(raw)) {
-    return { text: '', confidence: 'low', skipMenu: true };
-  }
-
-  if (asksAboutStaffHeadcount(raw) || asksAboutSalary(raw)) {
-    return { text: '', confidence: 'low', skipMenu: true };
-  }
-
-  if (asksAboutAssistants(raw) || asksAboutTrainer(raw) || asksAboutGroupSize(raw)) {
-    if (needsAudience && !asksAboutGroupSize(raw)) {
-      return { text: askAudience, confidence: 'high' };
-    }
-    // Size questions can use all matching groups or any groups with maxSlots.
-    const detailGroups = exactGroups.length
-      ? exactGroups
-      : (asksAboutGroupSize(raw) ? (db.get('groups') || []) : []);
-    // «עוזר» or «סייע» anywhere in the message reaches here. Group size and
-    // the trainer are both in the listClasses payload now, so the model can
-    // answer without this guessing first.
-    const details = formatGroupDetailsReply(db, detailGroups, raw);
-    if (details.text) {
-      return { text: details.text, confidence: 'high', handoff: details.handoff, softHandoff: true };
-    }
-  }
-
-  if (menuPick === '4' || asksAboutEvents(raw)) {
-    return { text: formatPublicEventsReply(db) || NO_EVENTS_REPLY, confidence: 'high' };
-  }
-
-  // Prices come from the CRM; anything the CRM does not price goes to staff.
-  const priceIntent = asksAboutPrices(raw)
-    || (isBareAudienceAnswer(raw) && customerAskedAboutPrices(phone));
-  if (priceIntent) {
-    // Single wall entry is a pricelist fact — never ask which grade first.
-    if (asksAboutWallEntry(raw)) {
-      const entryText = formatEntryPricesReply(db.get('pricelist') || []);
-      return {
-        text: entryText || PRICE_HANDOFF_REPLY,
-        confidence: 'high',
-        handoff: !entryText,
-        softHandoff: true,
-      };
-    }
-    // A trainee under 18 writing themselves: class / equipment / enrichment
-    // prices stay with the parent. Entry was handled above.
-    if (shouldHideYouthPrices(speaker)) {
-      return {
-        text: YOUTH_PRICE_REPLY,
-        confidence: 'high',
-        handoff: false,
-        softHandoff: true,
-      };
-    }
-    // Membership / punch card / birthday pricing is not in the CRM — asking
-    // which grade the child is in would only stall the customer.
-    if (asksAboutNonClassPayment(raw)) {
-      // The right outcome — the CRM does not price these — but the model
-      // reaches it too, and phrases it as part of the conversation instead of
-      // dropping a fixed sentence on top of whatever else was asked.
-      return { text: PRICE_HANDOFF_REPLY, confidence: 'high', handoff: true, softHandoff: true };
-    }
-    if (!asksAboutEquipment(raw) && !asksAboutEnrichment(raw)) {
-      // Never dump the whole catalog on a vague "מה העלות?" — need a grade
-      // (from this turn or recent history) and matching groups.
-      if (!audience.letters.length || !exactGroups.length) {
-        return { text: askAudience, confidence: 'high' };
-      }
-    }
-    const priceReply = buildPriceReply({
-      groups: exactGroups,
-      equipmentPrices: await loadEquipmentPrices(),
-      enrichmentFee: await resolveEnrichmentFee(s),
-      text: raw,
-      pricelist: db.get('pricelist') || [],
-    });
-    // buildPriceReply hands off simply because it could not assemble a price —
-    // a case the model, with getPrices in front of it, handles better.
-    return {
-      text: priceReply.text,
-      confidence: 'high',
-      handoff: priceReply.handoff,
-      softHandoff: true,
-    };
-  }
-
-  // "מתי אתם פתוחים" is an opening-hours question, and «מתי» alone would drag
-  // it into the class-schedule branch below.
-  if (asksAboutOpeningHours(raw)) {
-    return { text: `${hoursReply}\n\n${locationReply}`, confidence: 'high' };
-  }
-
-  // Clear signup / availability intent only — bare «קבוצה» or «ילדים» is not enough.
-  const scheduleIntent =
-    menuPick === '1'
-    || /כית/.test(raw)
-    || extractAgeYears(raw) != null
-    || asksAboutAvailability(raw)
-    || asksAboutSpotCount(raw)
-    || wantsWaitlist(raw)
-    || /(?:איזה יום|באיזה יום|מתי יש|מתי החוג)/.test(raw)
-    || /(?:רישום|להירשם)/.test(raw)
-    || (/(?:שיעור|אימון|חוג)/.test(raw) && /(?:יש|מתי|כית|גיל|מקום|פנוי)/.test(raw));
-
-  if (scheduleIntent) {
-    return { text: classesReply, confidence: 'high', startIntake: menuPick === '1' };
-  }
-
-  if (
-    menuPick === '2'
-    || asksAboutOpeningHours(raw)
-    || text.includes('שע')
-    || text.includes('פתיח')
-  ) {
-    return { text: `${hoursReply}\n\n${locationReply}`, confidence: 'high' };
-  }
-
-  if (text.includes('מיקום') || text.includes('איפה') || text.includes('כתובת') || text.includes('הוראות הגעה')) {
-    return { text: locationReply, confidence: 'high' };
-  }
-
-  // Known customer: natural chat via the model — no canned greeting list.
-  if (isIdentifiedParent(parent)) {
-    return { text: '', confidence: 'low', skipMenu: true };
-  }
-
-  return { text: defaultMenu, confidence: 'low' };
-}
-
-function formatClassesForGrade(gradeText) {
-  const groups = findGroupsForText(`כיתה ${gradeText}`);
-  if (!groups.length) return '';
-  return formatClassesWhatsAppReply(groups, `כיתה ${gradeText}`);
-}
-
-async function ensureStudentForParent(parent, nameHint = '') {
-  if (!parent?.id) return null;
-  const existing = studentsForParent(parent);
-  if (existing[0]) return existing[0];
-  const created = db.insert('students', {
-    name: nameHint || (parent.name ? `ילד/ה של ${parent.name}` : 'לקוח וואטסאפ'),
-    parentId: parent.id,
-    status: 'lead_new',
-    source: 'whatsapp',
-  });
-  await persistCore('students', created);
-  for (const link of linkHouseholdGuardians(db, { studentId: created.id, source: 'whatsapp' })) {
-    await persistCore('student_guardians', link);
-  }
-  return created;
-}
-
-async function assignStudentToWaitlist(parent, group, { childName = '' } = {}) {
-  const student = await ensureStudentForParent(parent, childName);
-  if (!student || !group?.id) {
-    return { ok: false, reply: 'לא הצלחתי לשבץ להמתנה. כתבו 4 ונעביר לצוות.' };
-  }
-  const row = db.update('students', student.id, {
-    status: 'waitlist',
-    groupId: group.id,
-    ...(childName ? { name: childName } : {}),
-  });
-  if (row) await persistCore('students', row);
-  const age = group.ageCategory || cleanGroupTitle(group);
-  return {
-    ok: true,
-    student: row || student,
-    group,
-    reply:
-      `נרשמתם לרשימת ההמתנה 🙌\n` +
-      `${age}\n` +
-      `${groupDaysPhrase(group)} · ${group.time || ''}\n\n` +
-      `נעדכן כשיתפנה מקום.`,
-  };
-}
-
-async function handleWaitlistRequest(phone, parent, students, text) {
-  const matched = findGroupsForText(text);
-  const grade = extractGradeLetter(text);
-  const pool = matched.length
-    ? matched
-    : (grade ? findGroupsForText(`כיתה ${grade}`) : (db.get('groups') || []));
-  const dayIndex = extractPreferredDayIndex(text);
-  const timeHint = extractTimeHint(text);
-
-  if (!pool.length) {
-    return {
-      ok: false,
-      reply: 'לא מצאתי קבוצה מתאימה.\nכתבו כיתה ויום/שעה, למשל:\nרשימת המתנה לכיתה ג׳ יום א׳ 15:30',
-    };
-  }
-
-  if (dayIndex == null && !timeHint && pool.length > 1 && !grade) {
-    return {
-      ok: false,
-      reply: 'לאיזו כיתה ויום לשבץ להמתנה?\nלדוגמה: רשימת המתנה לכיתה ג׳ יום א׳ 15:30',
-    };
-  }
-
-  const group = pickGroupForWaitlist(pool, db.get('students') || [], {
-    dayIndex,
-    timeHint,
-    preferFull: true,
-  });
-  if (!group) {
-    return {
-      ok: false,
-      reply: 'לא מצאתי קבוצה מתאימה.\nכתבו כיתה ויום/שעה ונשבץ להמתנה.',
-    };
-  }
-
-  return assignStudentToWaitlist(parent, group);
-}
-
-async function assignWaitlistIfFull(phone, parent, intake = {}) {
-  const grade = intake.grade || '';
-  const groups = findGroupsForText(grade ? `כיתה ${grade}` : '') || [];
-  if (!groups.length) return '';
-  const students = db.get('students') || [];
-  const enriched = enrichGroupsWithCapacity(groups, students);
-  const dayIndex = extractPreferredDayIndex(intake.preferredDay || '');
-  const relevant = dayIndex == null
-    ? enriched
-    : enriched.filter((g) => groupMeetsOnDay(g, dayIndex));
-  const open = (relevant.length ? relevant : enriched).filter((g) => !g.isFull);
-  if (open.length) return '';
-
-  const group = pickGroupForWaitlist(groups, students, { dayIndex, preferFull: true });
-  if (!group) return '';
-  const result = await assignStudentToWaitlist(parent, group, {
-    childName: intake.childName || '',
-  });
-  return result.ok ? result.reply : '';
-}
-
-
-/**
- * One name from the community centre, answered end to end.
- *
- * Returns null when the message is not a name we can act on, so an ordinary
- * "תודה" from the same number still falls through to the normal path rather
- * than being answered with a billing report.
- */
 async function handleCentreMessage({ text, phone, isSimulator = false }) {
   const typed = String(text || '').trim();
   // A name, not a sentence: the exchange is "יונתן כהן" and nothing else, so a
@@ -1159,100 +334,6 @@ export async function notifyStaffOfPlacement({
   return { sent };
 }
 
-/** Tool mode: the durable setting, or the server-side switch for a staged rollout. */
-export function botToolsEnabled(settings = {}) {
-  return !!settings.aiToolsEnabled || process.env.BOT_TOOLS_ENABLED === 'true';
-}
-
-async function callGeminiReply(
-  systemPrompt,
-  crmText,
-  incomingText,
-  apiKey,
-  settings = {},
-  { history = [] } = {},
-) {
-  const s = mergeBotSettings(settings);
-  const brand = s.brandName || 'הרפתקאות';
-  // ראה ההערה ב-aiActions.js: גרסאות נעוצות נסגרות בלי התראה ושורפות בקשות.
-  const models = [
-    process.env.GEMINI_MODEL || 'gemini-flash-latest',
-    'gemini-3.6-flash',
-    'gemini-3.5-flash',
-  ];
-  const systemInstruction = [
-    `שם העסק הרשמי: ${brand}`,
-    'הזכר את העסק רק בשם הרשמי הזה. אל תשתמש בשם ישן אם הוא שונה מהשם הרשמי.',
-    '',
-    systemPrompt,
-    '',
-    crmText,
-    '',
-    BOT_BOUNDS_RULES,
-    '',
-    'תפריט (רק אם הלקוח כותב מספר בודד 1–4):',
-    '1 = הרשמה וחוגים',
-    '2 = שעות פתיחה ומיקום',
-    '3 = העברה לצוות אנושי',
-    '4 = אירועים וטיולים',
-    '',
-    'אם שאלו על חוג/מחיר/מקום בלי כיתה או גיל — שאלו קודם באיזו כיתה.',
-    `מגבלת אורך תשובה: עד ${s.aiMaxReplyChars || 700} תווים.`,
-    'ענה לפי היסטוריית השיחה כשיש אחת — אל תחזור על ברכת פתיחה אם כבר בירכת.',
-  ].join('\n');
-  const contents = buildGeminiChatContents(history, incomingText);
-  if (!contents.length) return null;
-
-  let lastError = '';
-  for (const model of models) {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: systemInstruction }] },
-            contents,
-            generationConfig: { temperature: 0.7 },
-          }),
-        });
-        if (response.status === 503 || response.status === 429) {
-          lastError = `${model}: HTTP ${response.status}`;
-          if (attempt === 0) {
-            await sleep(400);
-            continue;
-          }
-          if (response.status === 429) {
-            console.error('Gemini API call failed, falling back to heuristics:', lastError);
-            return null;
-          }
-          break;
-        }
-        if (!response.ok) {
-          const errBody = await response.text().catch(() => '');
-          lastError = `${model}: HTTP ${response.status} ${errBody.slice(0, 160)}`;
-          break;
-        }
-        const data = await response.json();
-        const responseText = extractGeminiResponseText(data);
-        if (responseText) return responseText;
-        lastError = `${model}: empty candidates`;
-        break;
-      } catch (err) {
-        lastError = `${model}: ${err.message}`;
-        break;
-      }
-    }
-  }
-  if (lastError) console.error('Gemini API call failed, falling back to heuristics:', lastError);
-  return null;
-}
-
-/**
- * מנתח שיחה ומייצר הצעות פעולה לצוות (תור אישורים, לא ביצוע).
- * `auto` = הפעלה אוטומטית מהודעה נכנסת; היא כפופה לדגל הסביבה ולקירור.
- */
 export async function runConversationAnalysis(phone, { parent, students, auto = false } = {}) {
   try {
     const normalizedPhone = formatWaPhone(phone) || phone;
@@ -1425,31 +506,6 @@ export const whatsappService = {
         parent_id: options.parentId || null,
         student_id: options.studentId || null,
       });
-      return { success: false, error: error.message };
-    }
-  },
-
-  sendInteractiveMenu: async (phone, settings) => {
-    const payload = interactiveMenuPayload(settings);
-    try {
-      const result = await callMetaWhatsAppAPI(phone, payload);
-      const preview = withBotMark(
-        mergeBotSettings(settings).aiGreetingMenu || DEFAULT_BOT_SETTINGS.aiGreetingMenu
-      );
-      recordMessage({
-        phone: formatWaPhone(phone) || phone,
-        channel: 'whatsapp',
-        direction: 'outbound',
-        message: preview,
-        status: result.mock ? 'sent' : 'delivered',
-        is_ai: true,
-        source: 'ai',
-        message_type: 'interactive',
-        meta_message_id: result.messageId || null,
-      });
-      return { success: true, messageId: result.messageId };
-    } catch (error) {
-      console.error('Interactive menu failed, falling back to text:', error.message);
       return { success: false, error: error.message };
     }
   },
@@ -1671,31 +727,18 @@ export const whatsappService = {
     // the parent whose card the thread is filed under.
     const speaker = context.speaker || null;
 
-    const systemPrompt = settings.aiSystemPrompt;
     const apiKey = process.env.GEMINI_API_KEY;
     const hasModel = !!apiKey && apiKey !== 'YOUR_GEMINI_API_KEY_HERE';
 
-    const toolsEnabled = botToolsEnabled(settings);
-    const quick = await buildHeuristicReply(incomingText, settings, { phone, students, parent, speaker });
-    // A `softHandoff` is the keyword layer guessing "I found no group for this
-    // child" — the very guess the tools replace, and it is answering the wrong
-    // question when the customer asked to *remove* a child from a group. It
-    // used to run first and end the turn, so the model never saw the message.
-    // Real hard topics (money, injury, "let me talk to a person") are stopped
-    // by decideBotGate long before this, and the ones raised here — an explicit
-    // menu pick 3, non-class pricing — are not soft and still short-circuit.
-    if (quick.handoff && !(toolsEnabled && hasModel && quick.softHandoff)) {
-      return { text: quick.text, handoff: true, confidence: 'high' };
-    }
-    // Tool mode: the model reads the message and asks the CRM for the facts it
-    // needs, instead of the keyword layer below guessing the intent. A failed
-    // turn falls through to the old path — so switching this off is safe.
-    if (toolsEnabled && hasModel) {
+    // The model reads the message and asks the CRM for the facts it needs.
+    // There is no second engine behind this one: a keyword layer used to guess
+    // the intent here and answer from that guess, which is how a customer got a
+    // confident sentence nobody had checked.
+    if (hasModel) {
       const historyLimit = normalizeHistoryLimit(settings.aiHistoryCount, 8);
-      // The old path fed the model the knowledge base, the bounds rules and the
-      // approved learned examples; the tools path launched without them, so a
-      // parking question — answered plainly in the knowledge base — came back
-      // as a handoff, and the learning loop simply did not reach tools mode.
+      // The knowledge base, the bounds rules and the approved learned examples
+      // all reach the model — a parking question is answered from the knowledge
+      // base, and the learning loop feeds back in here.
       const learnedBlock = formatLearnedRepliesForPrompt(matchLearnedReplies(db, incomingText));
       const turn = await runCustomerToolTurn({
         systemInstruction: [
@@ -1728,9 +771,6 @@ export const whatsappService = {
         apiKey,
       });
       if (turn.text) {
-        // `unsure` was computed and then dropped here, so the clarify-then-
-        // handoff ladder — ask once, hand over if the next message is still
-        // noise — did not exist in tools mode at all.
         return {
           text: clipReply(turn.text, settings.aiMaxReplyChars),
           handoff: turn.handoff,
@@ -1739,96 +779,26 @@ export const whatsappService = {
           toolsUsed: turn.toolsUsed,
         };
       }
-      console.error(`bot tool turn produced nothing (${turn.reason}) — falling back`);
-    }
-
-    // A canned answer is a fair trade for an autonomous reply, but a human who
-    // asked for a draft wants the model to actually read the question.
-    const skipCanned = !!context.preferModel && hasModel;
-    if (quick.confidence === 'high' && quick.text && !skipCanned) {
-      return { text: clipReply(quick.text, settings.aiMaxReplyChars), confidence: 'high', startIntake: !!quick.startIntake };
-    }
-
-    const learned = matchLearnedReplies(db, incomingText);
-    const learnedBlock = formatLearnedRepliesForPrompt(learned);
-    const crm = buildCrmBotContext(settings, {
-      phone,
-      parent,
-      students,
-      speaker,
-      equipmentPrices: await loadEquipmentPrices(),
-    });
-    const crmText = learnedBlock ? `${crm.text}\n\n${learnedBlock}` : crm.text;
-
-    if (hasModel) {
-      const historyLimit = normalizeHistoryLimit(settings.aiHistoryCount, 8);
-      const history = phone ? getChatHistoryMessages(phone, historyLimit) : [];
-      const geminiText = await callGeminiReply(
-        systemPrompt,
-        crmText,
-        incomingText,
-        apiKey,
-        settings,
-        { history },
-      );
-      if (geminiText) {
-        const parsed = parseAiReply(geminiText, settings);
-        const naturalHandoff = parsed.handoff || detectNaturalHandoff(parsed.text);
-        if (naturalHandoff) {
-          return {
-            text: clipReply(parsed.text || settings.aiHandoffAckMessage, settings.aiMaxReplyChars),
-            handoff: true,
-            unsure: false,
-            confidence: 'medium',
-          };
-        }
-        const unsure = parsed.unsure || detectUnsureHeuristic(parsed.text);
-        if (unsure) {
-          const resolved = resolveUnsureReply(phone, settings, { incomingText });
-          return {
-            text: clipReply(resolved.text, settings.aiMaxReplyChars),
-            handoff: resolved.handoff,
-            unsure: true,
-            clarify: !!resolved.clarify,
-            confidence: 'low',
-          };
-        }
-        return { text: parsed.text, confidence: 'medium', unsure: false };
-      }
-    } else {
-      console.error('Gemini API key missing — bot falling back without model');
-    }
-
-    if (quick.skipMenu && isIdentifiedParent(parent)) {
-      const fallback = resolveIdentifiedParentFallback(parent, incomingText, settings, { speaker });
+      // Out of steps, a model error, or an empty answer.
+      console.error(`bot tool turn produced nothing (${turn.reason}) — handing over`);
       return {
-        text: clipReply(fallback.text, settings.aiMaxReplyChars),
+        text: MODEL_UNAVAILABLE_REPLY,
+        handoff: true,
+        unsure: false,
         confidence: 'low',
-        skipMenu: true,
+        reason: turn.reason,
       };
     }
 
-    // Noise with no model answer used to repeat the same greeting menu forever.
-    // Nonsense gets the clarify-then-handoff ladder; ordinary small talk still
-    // gets the menu.
-    if (looksLikeLowSignalMessage(incomingText)) {
-      const resolved = resolveUnsureReply(phone, settings, { incomingText });
-      return {
-        text: clipReply(resolved.text, settings.aiMaxReplyChars),
-        handoff: resolved.handoff,
-        unsure: true,
-        clarify: !!resolved.clarify,
-        confidence: 'low',
-        skipMenu: true,
-      };
-    }
-
-    if (settings.aiEscalateWhenUnsure && quick.confidence === 'low') {
-      // Still return the greeting menu — not an escalation for unknown small talk
-      return { text: clipReply(quick.text, settings.aiMaxReplyChars), confidence: 'low', skipMenu: !!quick.skipMenu };
-    }
-
-    return { text: clipReply(quick.text, settings.aiMaxReplyChars), confidence: quick.confidence || 'low', skipMenu: !!quick.skipMenu };
+    // A bot with no model does not improvise. It says so, and fetches a person.
+    console.error('Gemini API key missing — the bot has no reply engine');
+    return {
+      text: MODEL_UNAVAILABLE_REPLY,
+      handoff: true,
+      unsure: false,
+      confidence: 'low',
+      reason: 'no_model',
+    };
   },
 
   /**
@@ -2119,12 +1089,9 @@ export const whatsappService = {
       return { parent, student, isNew, replied: true, reply: gate.reply, reason: 'handoff' };
     }
 
-    // With tools on, the model runs the conversation and the health declaration
-    // collects the names — the scripted lead capture would only talk over it.
-    const toolsRunTheConversation = botToolsEnabled(settings);
     let aiIncomingText = text;
 
-    // Whichever reply engine is active, identity collection is not optional.
+    // Identity collection is not optional, and it runs before the model.
     // A trainee writing from their known personal phone is already identified;
     // every other incomplete card must supply first + family name first.
     if (matchedVia !== 'child_phone'
@@ -2146,72 +1113,6 @@ export const whatsappService = {
       aiIncomingText = nameCapture.pendingMessage || text;
     }
 
-    // Active intake — schedule / waitlist questions may interrupt to answer first
-    const intakeActive = !toolsRunTheConversation
-      && !!(getIntake(parent)?.step && getIntake(parent).step !== 'done');
-    // In tools mode joinWaitlist checks the declaration before placing anyone;
-    // the keyword shortcut checks nothing, so it must not steal the message.
-    if (!toolsRunTheConversation && wantsWaitlist(text)) {
-      const waitlist = await handleWaitlistRequest(normalizedPhone, parent, students, text);
-      await whatsappService.sendBotReply(normalizedPhone, waitlist.reply, { isSimulator });
-      return {
-        parent: findPrimaryParent(normalizedPhone) || parent,
-        student: waitlist.student || student,
-        isNew,
-        replied: true,
-        reply: waitlist.reply,
-        reason: 'waitlist',
-      };
-    }
-
-    // gate.action 'intake' can arrive from a stale bot_intake step written
-    // before tools mode existed; in tools mode the model owns the conversation.
-    if (!toolsRunTheConversation && (gate.action === 'intake' || intakeActive) && !isScheduleQuestion(text)) {
-      const intakeResult = await advanceLeadCapture(normalizedPhone, parent, text, {
-        formatClassesForGrade,
-        assignWaitlistIfFull,
-        settings,
-      });
-      if (intakeResult.reply) {
-        await whatsappService.sendBotReply(normalizedPhone, intakeResult.reply, { isSimulator });
-        return { parent: findPrimaryParent(normalizedPhone) || parent, student, isNew, replied: true, reply: intakeResult.reply, reason: 'intake' };
-      }
-    }
-
-    // Start intake for new/incomplete leads (after menu 1 or missing details)
-    if (!toolsRunTheConversation
-      && shouldStartLeadCapture(settings, parent, students, text, { isNew })
-      && !isScheduleQuestion(text)) {
-      const choice = normalizeMenuChoice(text);
-      // If they just picked classes, acknowledge briefly then start intake
-      if (choice === '1') {
-        const quick = await buildHeuristicReply(text, settings, { phone: normalizedPhone, students, parent });
-        if (quick.text && !quick.startIntake) {
-          await whatsappService.sendBotReply(normalizedPhone, quick.text, { isSimulator });
-        }
-      }
-      const startStep = isIdentifiedParent(parent) ? 'child_name' : 'parent_first_name';
-      await setIntake(normalizedPhone, { step: startStep, asked: false, parentName: parent?.name || '' });
-      parent = findPrimaryParent(normalizedPhone) || parent;
-      const intakeResult = await advanceLeadCapture(normalizedPhone, parent, '', {
-        formatClassesForGrade,
-        assignWaitlistIfFull,
-        settings,
-      });
-      if (intakeResult.reply) {
-        await whatsappService.sendBotReply(normalizedPhone, intakeResult.reply, { isSimulator });
-        return {
-          parent: findPrimaryParent(normalizedPhone) || parent,
-          student,
-          isNew,
-          replied: true,
-          reply: intakeResult.reply,
-          reason: 'intake_start',
-        };
-      }
-    }
-
-    // Interactive greeting for brand-new leads with low-intent first message
     const speaker = matchedVia === 'child_phone' ? student : null;
     const aiResult = await whatsappService.generateAIResponse(aiIncomingText, {
       phone: normalizedPhone,
@@ -2239,24 +1140,8 @@ export const whatsappService = {
       return { parent, student, isNew, replied: true, reply: handoffText, reason: 'handoff' };
     }
 
-    let replyText = aiResult.text;
-    if (
-      !isIdentifiedParent(parent)
-      && !aiResult.skipMenu
-      && isNew
-      && settings.aiInteractiveMenuEnabled
-      && !isSimulator
-      && aiResult.confidence === 'low'
-    ) {
-      const interactive = await whatsappService.sendInteractiveMenu(normalizedPhone, settings);
-      if (interactive.success) {
-        return { parent, student, isNew, replied: true, reply: settings.aiGreetingMenu, reason: 'interactive_menu' };
-      }
-      replyText = settings.aiGreetingMenu || replyText;
-    }
-
-    await whatsappService.sendBotReply(normalizedPhone, replyText, { isSimulator });
-    return { parent, student, isNew, replied: true, reply: replyText };
+    await whatsappService.sendBotReply(normalizedPhone, aiResult.text, { isSimulator });
+    return { parent, student, isNew, replied: true, reply: aiResult.text };
     } finally {
       releaseInboundMetaId(metaMessageId);
     }

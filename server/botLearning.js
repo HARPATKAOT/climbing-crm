@@ -263,6 +263,26 @@ function isAnswerableQuestion(message) {
 }
 
 /**
+ * Fill in what the bot said, for rows that were written before it was stored.
+ *
+ * A queue where the answer is blank cannot be judged: approving a replacement
+ * means seeing what it replaces. The reply is still in the conversation, so it
+ * is looked up at read time rather than left as an empty line on the screen.
+ */
+export function withBotReplies(db, rows = []) {
+  const messages = db.get('messages') || [];
+  return rows.map((row) => {
+    if (String(row.reply_excerpt || '').trim()) return row;
+    const at = Date.parse(row.created_at || '');
+    if (!Number.isFinite(at) || !row.phone) return row;
+    const thread = messages
+      .filter((m) => phonesMatch(m.phone || '', row.phone))
+      .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+    return { ...row, reply_excerpt: clip(lastBotAnswer(thread, at), MAX_EXCERPT) };
+  });
+}
+
+/**
  * The last thing the bot actually answered before it handed over. The handoff
  * acknowledgement itself ("מעבירים אתכם לצוות") is not an answer — it is the
  * bot saying it has none, and it is written with `source: 'bot_control'`.

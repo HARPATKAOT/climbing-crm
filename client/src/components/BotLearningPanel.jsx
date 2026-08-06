@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Check, X, ThumbsUp, ThumbsDown, BookOpen } from 'lucide-react';
+import { Check, X, ThumbsUp, ThumbsDown, BookOpen, MessageSquare } from 'lucide-react';
+import { entityHref } from '../utils/entityLinks.jsx';
 
 export default function BotLearningPanel() {
   const [pending, setPending] = useState([]);
@@ -116,20 +117,27 @@ export default function BotLearningPanel() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {pending.map((item) => (
           <div key={item.id} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12 }}>
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 6 }}>
-              שאלת לקוח
+            {/* Judging a replacement means seeing what it replaces. The card
+                carries both sides, and a way into the conversation itself for
+                everything a two-line excerpt cannot show. */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-3)' }}>שאלת לקוח</div>
+              {item.parent_id && (
+                <a
+                  href={entityHref('customer', item.parent_id)}
+                  style={{ fontSize: 11, color: 'var(--blue)', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                >
+                  <MessageSquare size={12} /> פתיחת השיחה
+                </a>
+              )}
             </div>
             <div style={{ fontSize: 13, whiteSpace: 'pre-wrap', marginBottom: 8 }}>
               {item.inbound_excerpt || '—'}
             </div>
-            {item.reply_excerpt && (
-              <>
-                <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>תשובת הבוט</div>
-                <div style={{ fontSize: 12, whiteSpace: 'pre-wrap', marginBottom: 8, color: 'var(--text-2)' }}>
-                  {item.reply_excerpt}
-                </div>
-              </>
-            )}
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>תשובת הבוט</div>
+            <div style={{ fontSize: 12, whiteSpace: 'pre-wrap', marginBottom: 8, color: item.reply_excerpt ? 'var(--text-2)' : 'var(--text-3)' }}>
+              {item.reply_excerpt || 'לא נשמרה — פתחו את השיחה כדי לראות מה הבוט ענה.'}
+            </div>
             <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>חלופה מהצוות</div>
             <textarea
               className="input textarea"

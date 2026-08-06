@@ -50,6 +50,17 @@ const TABS = [
   { key: 'settings',  label: 'בוט AI',              icon: Bot },
 ];
 
+/** One tab per question the bot screen answers, then its three workbenches. */
+const BOT_TABS = [
+  { key: 'tools',    label: 'כלים',          icon: Wrench },
+  { key: 'tone',     label: 'טון וידע',      icon: MessageSquareText },
+  { key: 'schedule', label: 'מתי עונה',      icon: Clock },
+  { key: 'handoff',  label: 'העברה לצוות',   icon: Headset },
+  { key: 'sandbox',  label: 'ארגז חול',      icon: Sparkles },
+  { key: 'learning', label: 'אימון ולמידה',  icon: GraduationCap },
+  { key: 'journal',  label: 'יומן פעולות',   icon: ClipboardList },
+];
+
 export default function Broadcasts({ parents, students, groups = [] }) {
   const { profile } = useBusinessProfile();
   const brandName = profile.display_name || 'הרפתקאות';
@@ -864,25 +875,17 @@ export default function Broadcasts({ parents, students, groups = [] }) {
         {/* One question per tab. The settings used to be a single form of 27
             fields, which is how a setting that no longer does anything can sit
             there for months without anybody noticing. */}
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 4 }}>
-          {[
-            { key: 'tools', label: 'כלים', icon: Wrench },
-            { key: 'tone', label: 'טון וידע', icon: MessageSquareText },
-            { key: 'schedule', label: 'מתי עונה', icon: Clock },
-            { key: 'handoff', label: 'העברה לצוות', icon: Headset },
-            { key: 'sandbox', label: 'ארגז חול', icon: Sparkles },
-            { key: 'learning', label: 'אימון ולמידה', icon: GraduationCap },
-            { key: 'journal', label: 'יומן פעולות', icon: ClipboardList },
-          ].map((t) => (
+        {/* Same pill and the same seven-colour accent cycle as the tab bar
+            above — exactly seven tabs, so each one gets its own colour. */}
+        <div className="tab-bar tab-bar-inline">
+          {BOT_TABS.map(({ key, label, icon: Icon }) => (
             <button
-              key={t.key}
+              key={key}
               type="button"
-              className={`btn btn-sm ${botTab === t.key ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setBotTab(t.key)}
-              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+              className={`tab-pill ${botTab === key ? 'active' : ''}`}
+              onClick={() => setBotTab(key)}
             >
-              <t.icon size={14} />
-              {t.label}
+              <Icon size={14} /> {label}
             </button>
           ))}
         </div>

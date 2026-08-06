@@ -4,16 +4,11 @@ import {
   clipReply,
   textMatchesKeywords,
   textMatchesStandaloneKeywords,
-  normalizeMenuChoice,
   audienceAllows,
   isBotPaused,
   isOptedOut,
   describeBotState,
   decideBotGate,
-  parseAiReply,
-  resolveUnsureReply,
-  recentlyAskedClarify,
-  isClarifyReplyText,
   classifyAudience,
   mergeBotSettings,
   applyBusinessBrand,
@@ -90,74 +85,6 @@ test('history limit zero is a real off switch', () => {
   assert.equal(normalizeHistoryLimit('0', 8), 0);
   assert.equal(normalizeHistoryLimit(50, 8), 30);
   assert.equal(normalizeHistoryLimit('', 8), 8);
-});
-
-test('normalizeMenuChoice maps numbers and titles', () => {
-  assert.equal(normalizeMenuChoice('1'), '1');
-  assert.equal(normalizeMenuChoice('3'), '3');
-  assert.equal(normalizeMenuChoice('4'), '4');
-  assert.equal(normalizeMenuChoice('הצהרת בריאות'), 'health');
-  assert.equal(normalizeMenuChoice('לדבר עם צוות'), '3');
-  assert.equal(normalizeMenuChoice('כמה מדריכים יש לכם בצוות ?'), null);
-  assert.equal(normalizeMenuChoice('אירועים וטיולים'), '4');
-  assert.equal(normalizeMenuChoice('חוגים ומחירים'), '1');
-  // "יש טיול בקרוב?" is an events question, not a classes one
-  assert.equal(normalizeMenuChoice('יש טיול בקרוב?'), '4');
-});
-
-test('known parent greeting uses first name only', async () => {
-  const {
-    isIdentifiedParent,
-    parentFirstName,
-    knownParentGreeting,
-    isLowIntentGreeting,
-    resolveIdentifiedParentFallback,
-    extractGeminiResponseText,
-    buildGeminiChatContents,
-  } = await import('./whatsappBot.js');
-  assert.equal(isIdentifiedParent({ name: 'דלק איל' }), true);
-  assert.equal(isIdentifiedParent({ name: 'לקוח וואטסאפ' }), false);
-  assert.equal(parentFirstName({ name: 'דלק איל' }), 'דלק');
-  assert.match(knownParentGreeting({ name: 'דלק איל' }), /בסדר גמור/);
-  assert.match(knownParentGreeting({ name: 'דלק איל' }), /מה נשמע דלק/);
-  assert.doesNotMatch(knownParentGreeting({ name: 'דלק איל' }), /איל/);
-  assert.equal(isLowIntentGreeting('מה קורה ?'), true);
-  assert.equal(isLowIntentGreeting('היי, מה קורה ?'), true);
-  assert.equal(isLowIntentGreeting('היי מה נשמע'), true);
-  assert.equal(isLowIntentGreeting('שלום!'), true);
-  assert.equal(isLowIntentGreeting('יש מקום בחוג?'), false);
-
-  const greetFallback = resolveIdentifiedParentFallback(
-    { name: 'דלק איל' },
-    'היי מה נשמע',
-  );
-  assert.match(greetFallback.text, /מה נשמע דלק/);
-
-  const chatFallback = resolveIdentifiedParentFallback(
-    { name: 'דלק איל' },
-    'אתה עונה ממש כמו בוט אמיתי',
-  );
-  assert.doesNotMatch(chatFallback.text, /מה נשמע דלק/);
-  assert.match(chatFallback.text, /לא הבנתי|לנסח|צוות/);
-
-  assert.equal(
-    extractGeminiResponseText({
-      candidates: [{ content: { parts: [{ thought: true, text: 'thinking' }, { text: ' תשובה ' }] } }],
-    }),
-    'תשובה',
-  );
-
-  const contents = buildGeminiChatContents(
-    [
-      { role: 'user', content: 'היי' },
-      { role: 'assistant', content: 'בסדר גמור מה נשמע דלק?' },
-      { role: 'user', content: 'אתה עונה כמו בוט' },
-    ],
-    'אתה עונה כמו בוט',
-  );
-  assert.equal(contents.length, 3);
-  assert.equal(contents[0].role, 'user');
-  assert.equal(contents[2].parts[0].text, 'אתה עונה כמו בוט');
 });
 
 test('money and injury words reach a human', () => {
@@ -344,7 +271,9 @@ test('decideBotGate: disabled / opted out / handoff / outside hours', () => {
   );
   assert.equal(decideBotGate(base, { bot_opted_out: true }, [], 'שלום').action, 'silence');
   assert.equal(decideBotGate(base, {}, [], 'רוצה נציג').action, 'handoff');
-  assert.equal(decideBotGate(base, {}, [], '3').action, 'handoff');
+  // A bare «3» used to be the menu's "talk to staff". With no menu it is just a
+  // number, and the model is the one that should read it in context.
+  assert.equal(decideBotGate(base, {}, [], '3').action, 'reply');
   assert.equal(decideBotGate(base, {}, [], 'עצור').action, 'opt_out');
 
   const outside = decideBotGate(
@@ -377,103 +306,10 @@ test('decideBotGate: disabled / opted out / handoff / outside hours', () => {
   assert.ok(['outside_hours', 'reply', 'silence'].includes(outside.action));
 });
 
-test('parseAiReply detects UNSURE and HANDOFF prefixes', () => {
-  const parsed = parseAiReply('UNSURE\nלא בטוח לגבי המחיר', { aiUnsureReply: 'מעביר לצוות', aiMaxReplyChars: 700 });
-  assert.equal(parsed.unsure, true);
-  assert.match(parsed.text, /לא בטוח|מעביר|לא הבנתי/);
-
-  const handoff = parseAiReply('HANDOFF\nוואי, אין לי את הפרט — מעביר לצוות 🙂', { aiMaxReplyChars: 700 });
-  assert.equal(handoff.handoff, true);
-  assert.equal(handoff.unsure, false);
-  assert.match(handoff.text, /אין לי את הפרט/);
-});
-
 test('staff-in-team questions do not hard-handoff via keywords', () => {
   const settings = mergeBotSettings({ aiResponderEnabled: true });
   assert.equal(decideBotGate(settings, { status: 'active' }, [], 'כמה מדריכים יש לכם בצוות ?').action, 'reply');
   assert.equal(decideBotGate(settings, { status: 'active' }, [], 'רוצה נציג').action, 'handoff');
-});
-
-test('first unsure asks for clarification; second gibberish hands off', () => {
-  const phone = '972500000099';
-  const clarify = 'לא הבנתי 🙏\nיכולים להסביר?';
-  const handoff = 'מעביר לצוות עכשיו';
-  const settings = {
-    aiEscalateWhenUnsure: true,
-    aiClarifyReply: clarify,
-    aiUnsureReply: handoff,
-  };
-
-  const previous = (db.get('whatsapp_logs') || []).filter((l) => l.phone !== phone);
-  db.set('whatsapp_logs', [
-    ...previous,
-    {
-      id: 't-in-1',
-      phone,
-      channel: 'whatsapp',
-      direction: 'inbound',
-      message: 'vhh',
-      created_at: '2026-08-01T10:00:00.000Z',
-    },
-  ]);
-
-  const first = resolveUnsureReply(phone, settings, { incomingText: 'vhh' });
-  assert.equal(first.handoff, false);
-  assert.equal(first.clarify, true);
-  assert.match(first.text, /לא הבנתי/);
-
-  db.set('whatsapp_logs', [
-    ...previous,
-    {
-      id: 't-bot-1',
-      phone,
-      channel: 'whatsapp',
-      direction: 'outbound',
-      message: clarify,
-      is_ai: true,
-      source: 'ai',
-      created_at: '2026-08-01T10:00:01.000Z',
-    },
-    {
-      id: 't-in-2',
-      phone,
-      channel: 'whatsapp',
-      direction: 'inbound',
-      message: 'asdf',
-      created_at: '2026-08-01T10:00:30.000Z',
-    },
-  ]);
-
-  assert.equal(recentlyAskedClarify(phone, settings), true);
-  const second = resolveUnsureReply(phone, settings, { incomingText: 'asdf' });
-  assert.equal(second.handoff, true);
-  assert.equal(second.text, handoff);
-
-  // A real question after clarify must NOT escalate just because the model was unsure.
-  const realQ = resolveUnsureReply(phone, settings, { incomingText: 'זה קיר טיפוס ?' });
-  assert.equal(realQ.handoff, false);
-  assert.equal(realQ.clarify, true);
-
-  db.set('whatsapp_logs', previous);
-});
-
-test('isClarifyReplyText recognizes the default ask', () => {
-  assert.equal(isClarifyReplyText('לא הבנתי 🙏\nיכולים להסביר?'), true);
-  assert.equal(isClarifyReplyText('כן, יש מקום ביום ג׳'), false);
-});
-
-test('business identity and low-signal helpers', async () => {
-  const {
-    asksAboutBusinessIdentity,
-    formatBusinessIdentityReply,
-    looksLikeLowSignalMessage,
-  } = await import('./whatsappBot.js');
-  assert.equal(asksAboutBusinessIdentity('זה קיר טיפוס ?'), true);
-  assert.equal(asksAboutBusinessIdentity('יש מקום בכיתה ב׳?'), false);
-  assert.match(formatBusinessIdentityReply({ brandName: 'קיר בועז' }), /קיר הטיפוס קיר בועז/);
-  assert.equal(looksLikeLowSignalMessage('לחנלח'), true);
-  assert.equal(looksLikeLowSignalMessage('vhh'), true);
-  assert.equal(looksLikeLowSignalMessage('זה קיר טיפוס ?'), false);
 });
 
 test('a named card hands the model a first name to greet with', async () => {
@@ -481,7 +317,6 @@ test('a named card hands the model a first name to greet with', async () => {
     buildParentCardContext,
     BOT_BOUNDS_RULES,
     greetingFirstName,
-    knownParentGreeting,
   } = await import('./whatsappBot.js');
   const named = buildParentCardContext({ name: 'דלק כהן', phone: '0500000000' }, []);
   assert.match(named, /שם פרטי לפנייה: דלק/);
@@ -502,7 +337,6 @@ test('a named card hands the model a first name to greet with', async () => {
   assert.match(fromChild, /שם פרטי לפנייה: עומר/);
   assert.doesNotMatch(fromChild, /שם פרטי לפנייה: מירית/);
   assert.match(fromChild, /הכותב הוא המתאמן עומר בזר/);
-  assert.match(knownParentGreeting(parent, speaker), /מה נשמע עומר/);
 });
 
 test('schedule helpers still work', () => {
@@ -532,5 +366,6 @@ test('a bare «אדם» is a noun, not a request for a person', () => {
   assert.equal(wantsExplicitHumanStaff('נציג', settings), true);
   assert.equal(wantsExplicitHumanStaff('אני רוצה החזר', settings), true);
   assert.equal(wantsExplicitHumanStaff('הילד נפצע באימון', settings), true);
-  assert.equal(wantsExplicitHumanStaff('3', settings), true);
+  // «3» was a menu row. The menu is gone, and a lone digit is not a request.
+  assert.equal(wantsExplicitHumanStaff('3', settings), false);
 });

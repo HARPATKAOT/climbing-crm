@@ -7,6 +7,7 @@ import {
   recordFeedback,
   approveFeedback,
   proposeFromHandoffStaffReply,
+  withBotReplies,
   FEEDBACK_PENDING,
   LEARNED_COLLECTION,
   FEEDBACK_COLLECTION,
@@ -157,6 +158,43 @@ test('a reaction is not a question, and never becomes a learned example', async 
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'no_inbound');
   assert.equal((db.get(FEEDBACK_COLLECTION) || []).length, 0);
+});
+
+test('an older proposal gets its bot reply filled in from the conversation', () => {
+  const db = threadDb([
+    {
+      id: 'out-1',
+      phone: '0599111000',
+      direction: 'outbound',
+      is_ai: true,
+      source: 'ai',
+      message: 'אין לי את המחיר הזה',
+      created_at: '2026-08-06T08:59:00.000Z',
+    },
+    {
+      id: 'out-2',
+      phone: '0599111000',
+      direction: 'outbound',
+      is_ai: true,
+      source: 'bot_control',
+      message: 'מעבירים אתכם לצוות',
+      created_at: HANDOFF_AT,
+    },
+  ]);
+  // Written before the reply was stored: the screen showed an empty line, and
+  // there was nothing to judge the staff alternative against.
+  const [filled] = withBotReplies(db, [{
+    id: 'f-1',
+    phone: '0599111000',
+    reply_excerpt: '',
+    inbound_excerpt: 'כמה עולה יום הולדת?',
+    created_at: HANDOFF_AT,
+  }]);
+  assert.equal(filled.reply_excerpt, 'אין לי את המחיר הזה');
+
+  // A row that already carries one is left exactly as it is.
+  const [kept] = withBotReplies(db, [{ id: 'f-2', phone: '0599111000', reply_excerpt: 'כבר שמור', created_at: HANDOFF_AT }]);
+  assert.equal(kept.reply_excerpt, 'כבר שמור');
 });
 
 test('a photo with no caption is not a question either', async () => {
