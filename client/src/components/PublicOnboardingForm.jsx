@@ -863,6 +863,10 @@ export default function PublicOnboardingForm() {
   const [knownChildren, setKnownChildren] = useState({});
   const [prefilledParentId, setPrefilledParentId] = useState('');
   const [editingParentProfile, setEditingParentProfile] = useState(false);
+  // A file was recognised from a phone number. Saying "this is me" is what turns
+  // that into an identification the signer stands behind.
+  const [identityConfirmed, setIdentityConfirmed] = useState(false);
+  const [editingIdentity, setEditingIdentity] = useState(false);
   // Set once the typed phone turns out to be on a file already: { name, children }.
   const [knownFile, setKnownFile] = useState(null);
   const [identityStatus, setIdentityStatus] = useState('unverified');
@@ -1603,6 +1607,10 @@ export default function PublicOnboardingForm() {
     // card of everyone who registered through the public form. A locked profile
     // missing one of them opens for editing rather than blocking with no field
     // in sight.
+    if (parentProfileLocked && !identityConfirmed) {
+      setError('יש לאשר שאלה הפרטים שלך — או לתקן אותם');
+      return;
+    }
     if (isAdultSelf && !parent.birthDate) {
       if (parentProfileLocked) setEditingParentProfile(true);
       setError('יש למלא תאריך לידה — הוא נדרש להשתתפות שלך');
@@ -2320,12 +2328,48 @@ export default function PublicOnboardingForm() {
 
         {step === 1 && (
           <div className="fade-in">
-            <div className="section-title">זיהוי ממלא/ת הטופס</div>
+            {/* הכותרת שייכת לשלב הזיהוי עצמו. אחרי האימות הפרטים כבר בכרטיס,
+                והכותרת נשארה ככותרת של שדות שאינם על המסך. */}
+            {!identityReady && <div className="section-title">זיהוי ממלא/ת הטופס</div>}
             {parentProfileLocked ? (
-              <ParentProfileSummary
-                parent={parent}
-                onEdit={() => setEditingParentProfile(true)}
-              />
+              <>
+                <ParentProfileSummary
+                  parent={parent}
+                  onEdit={() => setEditingParentProfile(true)}
+                />
+                {/* שתי שאלות על אותו כרטיס: שזה באמת אתה, ואם גם אתה משתתף.
+                    בלי הראשונה אנחנו מניחים שמי שהחזיק בטלפון הוא בעל התיק. */}
+                <label
+                  className="event-check"
+                  style={{
+                    cursor: 'pointer', marginBottom: 10,
+                    borderColor: identityConfirmed ? 'var(--form-accent-border, rgba(249,115,22,0.45))' : 'rgba(255,255,255,0.08)',
+                    background: identityConfirmed ? 'var(--form-accent-soft, rgba(249,115,22,0.08))' : 'rgba(255,255,255,0.03)',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={identityConfirmed}
+                    onChange={(e) => setIdentityConfirmed(e.target.checked)}
+                  />
+                  <span>זה אני</span>
+                </label>
+                <label
+                  className="event-check"
+                  style={{
+                    cursor: 'pointer', marginBottom: 18,
+                    borderColor: isAdultSelf ? 'var(--form-accent-border, rgba(249,115,22,0.45))' : 'rgba(255,255,255,0.08)',
+                    background: isAdultSelf ? 'var(--form-accent-soft, rgba(249,115,22,0.08))' : 'rgba(255,255,255,0.03)',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isAdultSelf}
+                    onChange={(e) => setAdultSelfMode(e.target.checked)}
+                  />
+                  <span>גם אני משתתף/ת בפעילות</span>
+                </label>
+              </>
             ) : (
               <>
                 {/* לפני האימות אין מה להסביר — יש שני שדות וכפתור שאומר מה הוא
@@ -2335,24 +2379,52 @@ export default function PublicOnboardingForm() {
                     אפשר לעדכן את הפרטים. שינוי תעודת הזהות או הטלפון יחייב אימות מחדש.
                   </p>
                 )}
-                <div className="form-group">
-                  <label>תעודת זהות *</label>
-                  <input
-                    inputMode="numeric"
-                    value={parent.idNumber}
-                    onChange={(e) => changeParentIdNumber(e.target.value)}
-                    placeholder="9 ספרות"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>טלפון *</label>
-                  <input
-                    type="tel"
-                    value={parent.phone}
-                    onChange={(e) => changeParentPhone(e.target.value)}
-                    placeholder="מספר לקבלת קוד בוואטסאפ"
-                  />
-                </div>
+                {(!identityReady || editingIdentity) ? (
+                  <>
+                    <div className="form-group">
+                      <label>תעודת זהות *</label>
+                      <input
+                        inputMode="numeric"
+                        value={parent.idNumber}
+                        onChange={(e) => changeParentIdNumber(e.target.value)}
+                        placeholder="9 ספרות"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>טלפון *</label>
+                      <input
+                        type="tel"
+                        value={parent.phone}
+                        onChange={(e) => changeParentPhone(e.target.value)}
+                        placeholder="מספר לקבלת קוד בוואטסאפ"
+                      />
+                    </div>
+                  </>
+                ) : (
+                  /* מזוהה — שתי השורות האלה הן כבר עובדה, לא שדות למילוי. */
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+                    background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.12)',
+                    borderRadius: 12, padding: '10px 12px', marginBottom: 16,
+                    fontSize: 13, color: 'rgba(255,255,255,.75)',
+                  }}>
+                    <span dir="ltr" style={{ fontWeight: 700 }}>{parent.idNumber}</span>
+                    <span style={{ opacity: .4 }}>·</span>
+                    <span dir="ltr" style={{ fontWeight: 700 }}>{parent.phone}</span>
+                    <button
+                      type="button"
+                      onClick={() => setEditingIdentity(true)}
+                      style={{
+                        marginInlineStart: 'auto', background: 'transparent',
+                        border: '1px solid rgba(255,255,255,0.18)', borderRadius: 10,
+                        color: 'rgba(255,255,255,0.7)', fontFamily: 'inherit',
+                        fontSize: 12, padding: '6px 10px', cursor: 'pointer',
+                      }}
+                    >
+                      שינוי
+                    </button>
+                  </div>
+                )}
                 {otp.stage === 'code' && (
                   <PhoneCodeGate
                     otp={otp}
