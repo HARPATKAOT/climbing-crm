@@ -28,7 +28,8 @@ export default function StudentFilePanel({
   useEffect(() => {
     if (!canManageBilling) return;
     let cancelled = false;
-    fetch('/api/pricelist')
+    // Names and prices only — the product photos are 1.7 MB and nothing here shows them.
+    fetch('/api/pricelist?images=0')
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => { if (!cancelled) setPricelist(Array.isArray(data) ? data : []); })
       .catch((err) => console.error(err));

@@ -40,6 +40,21 @@ const isConfigured =
   SUPABASE_SERVICE_KEY !== 'YOUR_SUPABASE_ANON_KEY_HERE' &&
   isServiceRoleKey(SUPABASE_SERVICE_KEY);
 
+/**
+ * Catalog photos, public on purpose: they are already shown to anyone who opens
+ * the shop link, and an `<img src>` cannot carry a signed URL.
+ */
+export const PRODUCT_IMAGE_BUCKET = 'product-images';
+const PRODUCT_IMAGE_URL_MARK = `/storage/v1/object/public/${PRODUCT_IMAGE_BUCKET}/`;
+
+/** The path inside our bucket, or '' for anything we did not upload. */
+export function productImageStoragePath(imageUrl) {
+  const url = String(imageUrl || '');
+  const at = url.indexOf(PRODUCT_IMAGE_URL_MARK);
+  if (at === -1) return '';
+  return decodeURIComponent(url.slice(at + PRODUCT_IMAGE_URL_MARK.length).split('?')[0]);
+}
+
 const localDocumentStorageEnabled =
   process.env.NODE_ENV !== 'production' && process.env.LOCAL_DOCUMENT_STORAGE === '1';
 const localDocumentRoot = path.resolve(
@@ -191,6 +206,7 @@ export const parentFromRow = (r) => ({
   lastName: r.last_name || '',
   idNumber: r.id_number || '',
   relation: r.relation || '',
+  birthDate: r.birth_date || '',
   icount_client_id: r.icount_client_id || undefined,
   bot_paused_until: r.bot_paused_until || null,
   bot_pause_reason: r.bot_pause_reason || null,
@@ -224,6 +240,7 @@ export const parentToRow = (o) => ({
   last_name: emptyToNull(o.lastName || o.last_name),
   id_number: emptyToNull(o.idNumber || o.id_number),
   relation: emptyToNull(o.relation),
+  birth_date: emptyToNull(o.birthDate || o.birth_date),
   icount_client_id: emptyToNull(o.icount_client_id),
   bot_paused_until: emptyToNull(o.bot_paused_until),
   bot_pause_reason: emptyToNull(o.bot_pause_reason),
@@ -245,6 +262,7 @@ const mappers = {
     fromRow: (r) => ({
       id: r.id,
       name: r.name || '',
+      lastName: r.last_name || '',
       parentId: r.parent_id || null,
       groupId: r.group_id || null,
       status: r.status || 'lead_new',
@@ -267,6 +285,7 @@ const mappers = {
     toRow: (o) => ({
       id: o.id,
       name: o.name || '',
+      last_name: emptyToNull(o.lastName || o.last_name),
       parent_id: emptyToNull(o.parentId),
       group_id: emptyToNull(o.groupId),
       status: o.status || 'lead_new',
@@ -1031,6 +1050,39 @@ export const supa = {
       .remove([storagePath]);
     if (error) {
       console.error('Supabase storage remove failed:', error.message);
+      return { ok: false, error: error.message };
+    }
+    return { ok: true };
+  },
+
+  /**
+   * Catalog photos live in their own public bucket, not inside the row.
+   * Held as base64 in `pricelist.image` they came to 1.7 MB — bigger than the
+   * whole customer list — and every screen that read the catalog paid for them
+   * again, uncompressed, because base64 JPEG does not gzip.
+   * @returns {Promise<{ok: true, url: string}|{ok: false, error: string}>}
+   */
+  async uploadProductImage(storagePath, buffer, mimeType = 'image/jpeg') {
+    if (!client) return { ok: false, error: 'Supabase not configured' };
+    const { error } = await client.storage
+      .from(PRODUCT_IMAGE_BUCKET)
+      .upload(storagePath, buffer, { contentType: mimeType, upsert: true, cacheControl: '31536000' });
+    if (error) {
+      console.error('Supabase product image upload failed:', error.message);
+      return { ok: false, error: error.message };
+    }
+    const { data } = client.storage.from(PRODUCT_IMAGE_BUCKET).getPublicUrl(storagePath);
+    if (!data?.publicUrl) return { ok: false, error: 'no public url for uploaded image' };
+    return { ok: true, url: data.publicUrl };
+  },
+
+  /** Drop a catalog photo. A URL from another host is not ours to remove. */
+  async removeProductImage(imageUrl) {
+    const storagePath = productImageStoragePath(imageUrl);
+    if (!client || !storagePath) return { ok: true };
+    const { error } = await client.storage.from(PRODUCT_IMAGE_BUCKET).remove([storagePath]);
+    if (error) {
+      console.error('Supabase product image remove failed:', error.message);
       return { ok: false, error: error.message };
     }
     return { ok: true };

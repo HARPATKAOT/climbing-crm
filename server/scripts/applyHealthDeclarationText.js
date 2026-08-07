@@ -14,9 +14,10 @@
  * because there is no reason for it not to be.
  *
  * What every template gets:
- *   • the waiver as numbered clauses, naming the signer, with liability limited
- *     to negligence proved beyond doubt
- *   • the plain-language summary, addressed to the signer by name
+ *   • the waiver as numbered clauses, naming nobody — one signature covers the
+ *     signer and the minors listed above the signature field — with liability
+ *     limited to negligence proved beyond doubt
+ *   • the plain-language summary, in the same collective voice
  *   • "@" on clauses that only apply when a parent signs for a child
  *   • "!" on questions where a "yes" requires a doctor's written approval
  *
@@ -40,35 +41,37 @@ const LEGAL_NAME = 'הרפתקאות (קיר בועז)';
 function buildWaiver({ activityPhrase, riskClause }) {
   return `כתב הצהרה, ויתור והסרת אחריות — ${activityPhrase}
 
-1. אני החתום/ה מטה, {{שם החותם}}, מצהיר/ה כי קראתי מסמך זה במלואו, הבנתי את תוכנו, וכי אני חותם/ת עליו מרצוני החופשי ומתוך הבנה שמדובר בחוזה מחייב לכל דבר ועניין.
+1. אני החותם/ת מטה נוטל/ת אחריות עבור עצמי[[ ועבור ילדי הקטינים המפורטים לעיל]], ומצהיר/ה כי קראתי מסמך זה במלואו, הבנתי את תוכנו, וכי אני חותם/ת עליו מרצוני החופשי ומתוך הבנה שמדובר בחוזה מחייב לכל דבר ועניין.
 
 2. ${riskClause}
 
-3. אני מצהיר/ה כי מסרתי בהצהרת הבריאות מידע מלא, נכון ומעודכן ביחס אליי או ביחס למשתתף/ת שעליו/ה אני חותם/ת, וכי לא ידועה לי מגבלה רפואית שלא פורטה בה. אני מתחייב/ת לעדכן את הצוות בכל שינוי במצב הבריאותי.
+3. אני מצהיר/ה כי אני[[, וכל אחד מהמשתתפים המפורטים לעיל,]] בריא/ה וכשיר/ה פיזית, נפשית וקוגניטיבית להשתתף בפעילות, כי מסרתי בהצהרת הבריאות מידע מלא, נכון ומעודכן, וכי לא ידועה לי מגבלה רפואית שלא פורטה בה. אני מתחייב/ת להודיע לצוות באופן מיידי על כל שינוי רפואי משמעותי.
 
 4. בחינת התאמת הפעילות למצב הבריאותי היא באחריותי בלבד, ובמקרה הצורך לאחר היוועצות ברופא. "${LEGAL_NAME}" אינו גורם רפואי ואינו בוחן כשירות רפואית להשתתפות.
 
-5. אני, {{שם החותם}}, נוטל/ת על עצמי את הסיכון הרגיל הכרוך בפעילות, ומוותר/ת על כל טענה, דרישה או תביעה כלפי "${LEGAL_NAME}", בעליו, מנהליו, עובדיו ומי מטעמו, בגין נזק גוף או רכוש שייגרם במסגרת אותו סיכון.
+5. אני נוטל/ת על עצמי[[, ועבור המשתתפים הקטינים המפורטים לעיל,]] את הסיכון הרגיל הכרוך בפעילות, ומוותר/ת על כל טענה, דרישה או תביעה כלפי "${LEGAL_NAME}", בעליו, מנהליו, עובדיו ומי מטעמו, בגין נזק גוף או רכוש שייגרם במסגרת אותו סיכון.
 
 6. אין בוויתור שבסעיף 5 כדי לגרוע מאחריות "${LEGAL_NAME}" לפי דין, לרבות בשל רשלנות של "${LEGAL_NAME}" או של מי שפעל מטעמה.
 
-7. אני מתחייב/ת לפעול לפי כל הוראות הבטיחות שסימנתי בשלב הקודם ולפי הוראות הצוות, ולדווח לצוות באופן מיידי על כל מפגע, תקלה, פציעה או תחושה גופנית חריגה.
+7. ידוע לי כי הצוות רשאי להפסיק את ההשתתפות בכל עת, אם לדעתו היא מסכנת את המשתתף/ת או אחרים.
 
-8. ידוע לי כי הצוות רשאי להפסיק את ההשתתפות בכל עת, אם לדעתו היא מסכנת את המשתתף/ת או אחרים.
-
-9. חתימת הורה או אפוטרופוס על מסמך זה מחייבת גם את המשתתף/ת הקטין/ה שעליו/ה נחתם, ומהווה הסכמה להשתתפותו/ה בפעילות.`;
+[[8. חתימת הורה או אפוטרופוס על מסמך זה מחייבת גם את המשתתפים הקטינים המפורטים לעיל, ומהווה הסכמה להשתתפותם בפעילות.]]`;
 }
 
-/** {{שם החותם}} is filled in by the form with the name typed into it. */
+/**
+ * The plain-language summary. Like the waiver itself it names nobody: one
+ * signature now covers the signer and every minor listed above it, and those
+ * names are printed above the signature field rather than woven into the text.
+ */
 function buildSummary({ riskBullet }) {
   return `• ${riskBullet}
-• את הסיכון הרגיל של הפעילות אני, {{שם החותם}}, לוקח/ת על עצמי.
+• את הסיכון הרגיל של הפעילות אני לוקח/ת על עצמי[[, ועבור ילדי הקטינים המפורטים לעיל]].
 • אין במסמך כדי לגרוע מאחריות "${LEGAL_NAME}" לפי דין, לרבות בשל רשלנות שלה או של מי שפעל מטעמה.
 • מסרתי מידע רפואי מלא ונכון, ואין מגבלה רפואית שלא סיפרתי עליה.
 • ההחלטה שהפעילות מתאימה למצב הבריאותי היא שלי, ובמקרה הצורך לאחר התייעצות עם רופא.
 • אני מתחייב/ת לפעול לפי הוראות הבטיחות והצוות, ולדווח מיד על פציעה או תחושה לא טובה.
 • הצוות רשאי להפסיק את ההשתתפות אם היא מסכנת את המשתתף/ת או אחרים.
-• הורה שחותם — חותם גם בשם הילד/ה.
+[[• הורה שחותם — חותם גם בשם הילד/ה.]]
 • זהו חוזה מחייב, לא טופס.`;
 }
 
@@ -84,28 +87,20 @@ const MEDICAL_QUESTIONS = [
   // The question already says the problem limits strenuous activity — the wall
   // is not the one to decide it does not limit this one.
   { id: 'm4', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם יש בעיה אורתופדית (גב, פרקים, שברים, פריקות חוזרות) שמגבילה פעילות מאומצת?' },
-  { id: 'm5', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם עברתם ניתוח, אשפוז או פציעה משמעותית בשנה האחרונה?' },
+  { id: 'm5', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם עברתם ניתוח, אשפוז או פציעה משמעותית בשנה האחרונה, או שרופא הגביל פעילות גופנית?' },
   { id: 'm6', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש נטילת תרופות קבועות?' },
   { id: 'm7', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש אלרגיה שהצוות צריך להכיר (מזון, תרופות, עקיצות)?' },
   // Split in two. Asked together, the catch-all inherited the doctor's-approval
   // requirement that belongs only to the first half, so someone wanting to
   // mention a small thing nobody asked about was blocked until they produced a
   // certificate — and the safest answer became saying nothing.
-  { id: 'm8', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: true, label: 'האם רופא הגביל פעילות גופנית בשנה האחרונה?' },
+  // Before the catch-all, so m9 stays last on the screen. The id skips m10 on
+  // purpose: that number was a claustrophobia question the trip templates
+  // carried and the unified migration removed.
+  { id: 'm11', kind: 'screen', requireYes: false, audience: 'adult_female', requiresClearance: true, label: 'האם המשתתפת בהריון?' },
   { id: 'm9', kind: 'screen', requireYes: false, audience: 'all', requiresClearance: false, label: 'האם יש מגבלה רפואית, אבחנה או מידע אחר שחשוב שנדע ולא נשאלנו עליו כאן?' },
 ];
 
-/** The fitness declaration, which names the activity it is made about. */
-function fitnessConfirmation(activityPhrase) {
-  return {
-    id: 'h1',
-    kind: 'confirm',
-    requireYes: true,
-    audience: 'all',
-    requiresClearance: false,
-    label: `אני החתום/ה מטה מצהיר/ה בזאת שאני, או האדם שאני רושם/ת ל${activityPhrase}, בריא/ה וכשיר/ה פיזית, נפשית וקוגניטיבית להשתתף בפעילות המתקיימת מטעם "${LEGAL_NAME}", וכי מסרתי מידע רפואי מלא ומעודכן. אני מתחייב/ת לעדכן את הצוות בכל שינוי במצב הבריאותי.`,
-  };
-}
 
 function safety(id, label, { childOnly = false } = {}) {
   return {
@@ -130,11 +125,19 @@ const ACTIVITIES = [
     activityPhrase: 'פעילות וטיפוס בקיר — לרבות חוג, אימון, כניסה חד־פעמית ואירוע',
     riskClause: 'ידוע לי כי טיפוס ספורטיבי, על כל צורותיו, הוא פעילות אתגרית הכרוכה מטבעה בסיכון לפגיעה גופנית — לרבות נפילה, החלקה, פגיעה מציוד, מאמץ יתר ופציעה — וכי סיכון זה קיים גם בהקפדה מלאה על הוראות הבטיחות.',
     riskBullet: 'טיפוס הוא פעילות אתגרית. גם כשמקפידים על כל כללי הבטיחות אפשר להיפצע.',
+    // New ids rather than reworded s2..s5: an old signature keeps its own
+    // wording in its snapshot, and a rule that says something else under the
+    // same id would let a re-rendered copy claim it was agreed to.
     safety: [
-      safety('s2', 'נא להימנע מריצה והשתוללות בכל מתחם הקיר'),
-      safety('s3', 'יש להישמע להוראות המדריכים'),
-      safety('s4', 'הטיפוס יתאפשר רק לאחר קבלת תדריך בטיחות מלא ומעבר מבחן בטיחות בפני מדריך מטעם הקיר.'),
-      safety('s5', 'אין להשתמש במתקנים השונים ללא קבלת אישור ממדריך'),
+      // w8 replaced w1: the one-breath sentence became two. New id, per the
+      // rule above — an old signature keeps meaning what it meant.
+      safety('w8', 'יש לפעול בכל עת לפי הוראות הצוות המקצועי. טיפוס, אבטוח ושימוש בציוד ובמתקנים מותרים רק לאחר תדריך ומעבר מבחן בטיחות ובאישור הצוות'),
+      safety('w2', 'אין לרוץ או להשתולל בכל מתחם הקיר', { childOnly: true }),
+      safety('w4', 'אבטוח הוא אחריות על חיי המטפס — יש להתייחס אליו ברצינות מוחלטת ולבצע אותו בהתאם לתדריך שתקבלו'),
+      safety('w5', 'יש לדווח מיידית על כל מפגע, תקלה, פציעה או תחושה חריגה'),
+      // Asked of a parent only, and last: it is a statement about what they did
+      // before signing, not another rule to read.
+      safety('w7', 'אני מאשר/ת שהסברתי לילדי את הכללים הללו', { childOnly: true }),
     ],
   },
   {
@@ -145,14 +148,17 @@ const ACTIVITIES = [
     // wording must not claim that every outing necessarily includes all three.
     riskClause: 'ידוע לי כי היציאה כוללת פעילות אתגרית בשטח — טיפוס / סנפלינג / מערנות, בהתאם לפעילות שנבחרה — הכרוכה מטבעה בסיכון לפגיעה גופנית, לרבות נפילה, החלקה, התדרדרות אבנים, פגיעה מציוד ומאמץ יתר. אם הפעילות כוללת כניסה למערה, ידוע לי כי היא מוסיפה סיכונים משלה: חללים צרים וחשוכים, רטיבות והחלקה, קור, ותלות בתאורה ובציוד. ידוע לי כי ליציאה לשטח נלווים סיכונים שאינם קיימים במתקן סגור — תנאי מזג אוויר ושטח, בעלי חיים, הנסיעה אל אתר הפעילות וממנו, וריחוק ממענה רפואי מיידי. הסיכון קיים גם בהקפדה מלאה על הוראות הבטיחות.',
     riskBullet: 'היציאה כוללת טיפוס / סנפלינג / מערנות, בהתאם לפעילות שנבחרה, וכרוכה בסיכוני שטח, מזג אוויר, נסיעה וריחוק מעזרה רפואית.',
+    // Same shape as the wall: new ids, because these say something the old
+    // s2..s8 did not, and an old signature must keep meaning what it meant.
     safety: [
-      safety('s2', 'יש להישמע להוראות המדריך האחראי בכל עת, ואין להתרחק מהקבוצה'),
-      safety('s3', 'חובה להגיע עם הציוד, הביגוד והנעליים המתאימים כפי שנדרש ליציאה'),
-      safety('s4', 'כל אחת מהפעילויות טיפוס / סנפלינג / כניסה למערה תתאפשר רק למי שקיבל/ה תדריך מסודר ורק בהשגחת מדריך'),
-      safety('s5', 'אין לגעת בציוד, בחבלים או בעיגונים ללא הוראת מדריך'),
-      safety('s6', 'אם הפעילות כוללת כניסה למערה, חובה לחבוש קסדה ולהשתמש בתאורה, ואין להיכנס, להתפצל או לצאת ללא הוראת מדריך'),
-      safety('s7', 'יש להצטייד במים בכמות מתאימה ולדווח מיד על תשישות, סחרחורת, קוצר נשימה או תחושה לא טובה'),
-      safety('s8', 'ידוע לי כי הצוות רשאי לשנות או לבטל את מסלול הפעילות משיקולי בטיחות ומזג אוויר'),
+      safety('t1', 'יש לפעול בכל עת לפי הוראות המדריך האחראי, ואין להתרחק מהקבוצה'),
+      safety('t2', 'חובה להגיע עם הציוד, הביגוד והנעליים המתאימים ליציאה'),
+      safety('t3', 'טיפוס, סנפלינג או כניסה למערה יתאפשרו רק לאחר תדריך ורק בהשגחת מדריך'),
+      safety('t4', 'אין לגעת בציוד, בחבלים או בעיגונים ללא הוראת מדריך'),
+      safety('t5', 'במערה חובה קסדה ותאורה, ואין להיכנס, להתפצל או לצאת ללא הוראת מדריך'),
+      safety('t6', 'יש להצטייד במים ולדווח מיידית על כל מפגע, פציעה, תשישות או תחושה חריגה'),
+      safety('t7', 'ידוע לי כי הצוות רשאי לשנות או לבטל את מסלול הפעילות משיקולי בטיחות ומזג אוויר'),
+      safety('t8', 'אני מאשר/ת שהסברתי לילדי את הכללים הללו', { childOnly: true }),
     ],
   },
 ];
@@ -167,9 +173,11 @@ export function declarationFor(activity) {
     title: activity.title,
     waiverText: buildWaiver(activity),
     waiverSummary: buildSummary(activity),
+    // The fitness declaration is not a tick box any more: it is clause 3 of the
+    // waiver, next to the undertaking to report a change — one statement about
+    // the medical state instead of the same thing said in two places.
     healthQuestions: [
       ...MEDICAL_QUESTIONS,
-      fitnessConfirmation(activity.activityPhrase),
       ...activity.safety,
     ],
   };

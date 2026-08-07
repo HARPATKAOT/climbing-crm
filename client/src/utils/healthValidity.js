@@ -1,4 +1,7 @@
-/** Activity season validity. Keep in sync with server/healthValidity.js. */
+/**
+ * In force until 31 August of the year after signing, whatever month it was
+ * signed in. Keep in sync with server/healthValidity.js.
+ */
 const endOfAugust = (year) => new Date(`${year}-08-31T23:59:59.999+03:00`);
 
 function toDate(value) {
@@ -12,11 +15,10 @@ export function healthExpiryDate(signedAt) {
   const signed = toDate(signedAt);
   if (!signed) return null;
   const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Jerusalem', year: 'numeric', month: '2-digit',
+    timeZone: 'Asia/Jerusalem', year: 'numeric',
   }).formatToParts(signed);
   const year = Number(parts.find((part) => part.type === 'year')?.value);
-  const month = Number(parts.find((part) => part.type === 'month')?.value);
-  return endOfAugust(month >= 8 ? year + 1 : year);
+  return endOfAugust(year + 1);
 }
 
 /** Unknown signature date is treated as valid so old records are not flagged by mistake. */

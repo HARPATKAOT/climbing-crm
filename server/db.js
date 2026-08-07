@@ -292,11 +292,13 @@ const SEED_DATA = {
   },
   whatsapp_logs: [],
   broadcast_campaigns: [],
+  // Two lists, because there are only two kinds of message: one the customer
+  // must get in order to be served, and one they may choose to get. Four
+  // topic-shaped lists asked a parent to sort our content for us, and the law
+  // draws its line here too — an operational notice is not an advertisement.
   broadcast_list_defs: [
-    { key: 'general', label: 'כללי', description: 'עדכונים שוטפים', color: 'var(--blue)', sortOrder: 0 },
-    { key: 'classes', label: 'חוגים', description: 'שינויי שעות וכדומה', color: 'var(--green)', sortOrder: 1 },
-    { key: 'trips', label: 'טיולים', description: 'טיולי סנפלינג/חוץ', color: 'var(--amber)', sortOrder: 2 },
-    { key: 'events', label: 'אירועים', description: 'אירועים ותחרויות מועדון', color: 'var(--purple)', sortOrder: 3 },
+    { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים ותזכורות', color: 'var(--green)', sortOrder: 0 },
+    { key: 'marketing', label: 'שיווקי', description: 'טיולים חדשים, מבצעים ועדכונים כלליים', color: 'var(--amber)', sortOrder: 1 },
   ],
 };
 
@@ -1150,6 +1152,7 @@ export const db = {
       if (extras.city && !parent.city) parent.city = extras.city;
       if (extras.lastName) parent.lastName = extras.lastName;
       if (extras.idNumber) parent.idNumber = extras.idNumber;
+      if (extras.gender) parent.gender = extras.gender;
       if (extras.source && (!parent.source || parent.source === 'unknown')) parent.source = extras.source;
       if (extras.channel && !parent.channel) parent.channel = extras.channel;
       if (extras.status) parent.status = extras.status;
@@ -1577,7 +1580,16 @@ export const db = {
       writeDb(data);
       for (const record of data.broadcast_list_defs) syncUpsert('broadcast_list_defs', record);
     }
-    return [...data.broadcast_list_defs].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    // One row per key. The two-list migration ran on more than one instance and
+    // the durable store came back with a second copy of each list, which the
+    // public form rendered as four checkboxes — two of them the same list.
+    const byKey = new Map();
+    for (const row of data.broadcast_list_defs) {
+      const key = String(row?.key || '');
+      if (!key || byKey.has(key)) continue;
+      byKey.set(key, row);
+    }
+    return [...byKey.values()].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
   },
 
   createBroadcastListDef: ({ label, description = '', color = 'var(--blue)' }) => {

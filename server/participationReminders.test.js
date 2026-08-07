@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   daysUntilActivity,
+  healthExpiryReminderKind,
+  runHealthExpiryReminders,
   runParticipationDocumentReminders,
   scheduledReminderKind,
 } from './participationReminders.js';
@@ -74,6 +76,44 @@ test('eligible, cancelled and completed registrations receive no reminder', asyn
     db,
     send: async () => ({ sent: true }),
     now: new Date('2026-08-05T09:00:00+03:00'),
+  });
+  assert.deepEqual(result, { candidates: 0, sent: 0, skipped: 0, failed: 0 });
+});
+
+// A month's notice before 31 August, and only while the declaration still holds.
+test('the health expiry window opens 30 days before, not earlier', () => {
+  const at = (iso) => new Date(`${iso}T09:00:00+03:00`);
+  assert.equal(healthExpiryReminderKind('2026-08-31', at('2026-07-31')), null);
+  assert.equal(healthExpiryReminderKind('2026-08-31', at('2026-08-01')), 'health_expiry_2026-08-31');
+  assert.equal(healthExpiryReminderKind('2026-08-31', at('2026-08-31')), 'health_expiry_2026-08-31');
+  // The day after it lapsed is somebody else's problem: registration and
+  // check-in already refuse an expired declaration.
+  assert.equal(healthExpiryReminderKind('2026-08-31', at('2026-09-01')), null);
+});
+
+test('a student is told once per season, however often the scan runs', async () => {
+  const db = testDb({
+    students: [{ id: 'student-1', name: 'יעל', parentId: 'parent-1', status: 'active' }],
+    participation_reminders: [],
+  });
+  const healthState = () => ({ valid: true, expiresAt: '2026-08-31' });
+  const send = async () => ({ sent: true, via: 'whatsapp' });
+  const now = new Date('2026-08-10T09:00:00+03:00');
+  const first = await runHealthExpiryReminders({ db, send, healthState, now });
+  const second = await runHealthExpiryReminders({ db, send, healthState, now });
+  assert.deepEqual(first, { candidates: 1, sent: 1, skipped: 0, failed: 0 });
+  assert.deepEqual(second, { candidates: 1, sent: 0, skipped: 1, failed: 0 });
+  assert.equal(db.store.participation_reminders.length, 1);
+  assert.equal(db.store.participation_reminders[0].kind, 'health_expiry_2026-08-31');
+});
+
+test('nothing is sent for a declaration that is not in force', async () => {
+  const db = testDb({ students: [{ id: 'student-1', name: 'יעל', parentId: 'parent-1' }] });
+  const result = await runHealthExpiryReminders({
+    db,
+    send: async () => ({ sent: true }),
+    healthState: () => ({ valid: false, expiresAt: '2026-08-31' }),
+    now: new Date('2026-08-10T09:00:00+03:00'),
   });
   assert.deepEqual(result, { candidates: 0, sent: 0, skipped: 0, failed: 0 });
 });

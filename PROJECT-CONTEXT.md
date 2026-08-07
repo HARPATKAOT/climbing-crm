@@ -176,6 +176,8 @@
 | פריסת API | Render |
 | פריסת אתר | Vercel |
 
+פריסת האתר ל-Vercel קורית **אוטומטית בכל push ל-main** (אינטגרציית GitHub). אין להריץ `vercel deploy` / `vercel --prod` מה-CLI: פריסות CLI נחסמות (BLOCKED, קוד TEAM_ACCESS_REQUIRED — Vercel לא מצליח לאמת את מחבר הקומיט `HARPATKAOT@users.noreply.github.com` מול חברי הצוות) וכל ניסיון כזה שולח לבעלים מייל התראה. כדי לפרוס — פשוט לדחוף ל-main.
+
 כתובת האתר החי:
 `https://app.kirboaz.co.il`
 

@@ -9,6 +9,7 @@ import {
   questionLabel,
   questionsForSigner,
   requiresClearance,
+  signsAsAdultFemale,
 } from './healthQuestions.js';
 
 test('markers are read from the label in any order', () => {
@@ -72,4 +73,26 @@ test('an unanswered screening question is never filed as "no"', () => {
   const questions = [{ id: 'm1', kind: 'screen', label: 'האם יש אסתמה?' }];
   assert.equal(declarationGap(questions, {}, 'יואב'), 'יש לענות על כל שאלות הבריאות עבור יואב');
   assert.equal(declarationGap(questions, { m1: false }, 'יואב'), '');
+});
+
+// The pregnancy question is for an adult woman. Asked of a child, of a man or of
+// a girl it is noise at best, and a form that asks it of everyone teaches people
+// to answer without reading.
+test('only an adult woman is asked the pregnancy question', () => {
+  const questions = [
+    { id: 'm1', kind: 'screen', audience: 'all', label: 'האם יש אסתמה?' },
+    { id: 'm11', kind: 'screen', audience: 'adult_female', label: 'האם המשתתפת בהריון?' },
+  ];
+  const idsFor = (participant) => questionsForSigner(questions, {
+    isAdultSelf: participant.type === 'adult',
+    isAdultFemale: signsAsAdultFemale(participant),
+  }).map((question) => question.id);
+
+  assert.deepEqual(idsFor({ type: 'adult', gender: 'female' }), ['m1', 'm11']);
+  assert.deepEqual(idsFor({ type: 'adult', gender: 'נקבה' }), ['m1', 'm11']);
+  assert.deepEqual(idsFor({ type: 'child', gender: 'female', birthDate: '1988-05-04' }), ['m1', 'm11']);
+  assert.deepEqual(idsFor({ type: 'adult', gender: 'male' }), ['m1']);
+  assert.deepEqual(idsFor({ type: 'child', gender: 'female', birthDate: '2015-04-10' }), ['m1']);
+  assert.deepEqual(idsFor({ type: 'child', gender: 'male', birthDate: '2015-04-10' }), ['m1']);
+  assert.deepEqual(idsFor({ type: 'child', gender: '' }), ['m1']);
 });

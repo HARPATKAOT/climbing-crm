@@ -20,10 +20,12 @@ import { checkKnownChild, linkFieldsFor } from '../utils/childCheck.js';
 import {
   blankAnswers,
   clearanceTriggers,
+  detailPrompt,
   isScreeningQuestion,
   needsMedicalClearance,
   questionLabel,
   questionsForSigner,
+  signsAsAdultFemale,
   unansweredQuestions,
 } from '../utils/healthQuestions.js';
 import MedicalClearanceField from './MedicalClearanceField.jsx';
@@ -447,7 +449,10 @@ export default function PublicActivityRegistration() {
       const current = resolvedHealthParticipant(currentParticipant);
       // A screening question is unanswered until it is a real yes or no, so a
       // medical question nobody touched can never be filed as "no".
-      const asked = questionsForSigner(questions, { isAdultSelf: current.type === 'adult' });
+      const asked = questionsForSigner(questions, {
+        isAdultSelf: current.type === 'adult',
+        isAdultFemale: signsAsAdultFemale(current),
+      });
       const missing = unansweredQuestions(asked, current.answers || {});
       if (missing.length) {
         setError(
@@ -606,6 +611,13 @@ export default function PublicActivityRegistration() {
     ? 3
     : (step === 4 ? totalSteps : Math.min(step, totalSteps));
   const healthCurrent = currentParticipant ? resolvedHealthParticipant(currentParticipant) : null;
+  // The name and dates the approval sentence quotes — the same ones printed at
+  // the top of the page, so the signer confirms what they were shown.
+  const activityTitle = activity?.page_title || activity?.name || '';
+  const activityDatesText = [
+    formatDate(activity?.date),
+    activity?.end_date && activity.end_date !== activity.date ? formatDate(activity.end_date) : '',
+  ].filter(Boolean).join(' – ');
 
   return (
     <div className="event-page" ref={pageTopRef}>
@@ -730,8 +742,12 @@ export default function PublicActivityRegistration() {
                   </>
                 )}
 
-                <h2 style={{ marginTop: 28 }}>רשימות דיוור</h2>
-                <p className="event-hint">אפשר לסמן רשימות שמעניינות אתכם — חוגים, טיולים, אירועים ועוד.</p>
+                <h2 style={{ marginTop: 28 }}>הזדמנות לערוך את העדפות הדיוור שלך</h2>
+                {/* כאן כל הרשימות אופציונליות, ולכן סימון הוא הסכמה לדבר
+                    פרסומת כמשמעותו בחוק התקשורת — ואפשר להסיר בכל עת. */}
+                <p className="event-hint">
+                  סימון רשימה הוא הסכמה לקבל ממנו דיוור, ואפשר להסיר אותה בכל עת בלי לפגוע בהרשמה.
+                </p>
                 <div className="event-lists">
                   {listDefs.map((list) => {
                     const checked = subscriptions[list.key] === true;
@@ -897,7 +913,10 @@ export default function PublicActivityRegistration() {
               // and the safety undertakings were lost among the questions.
               const asked = questionsForSigner(
                 activity.form_template?.healthQuestions || [],
-                { isAdultSelf: healthCurrent.type === 'adult' }
+                {
+                  isAdultSelf: healthCurrent.type === 'adult',
+                  isAdultFemale: signsAsAdultFemale(healthCurrent),
+                }
               );
               const screening = asked.filter(isScreeningQuestion);
               const confirmations = asked.filter((q) => !isScreeningQuestion(q));
@@ -940,7 +959,7 @@ export default function PublicActivityRegistration() {
                                     [question.id]: e.target.value,
                                   },
                                 }))}
-                                placeholder="מה המצב, ממתי, והאם נקבעה הגבלה"
+                                placeholder={detailPrompt(question)}
                               />
                             </div>
                           )}
@@ -957,6 +976,12 @@ export default function PublicActivityRegistration() {
                           onError={setError}
                         />
                       )}
+                      {/* התשובות נכונות למועד החתימה; ההתחייבות שאחריהן היא
+                          להודיע כשמשהו משתנה. */}
+                      <p className="event-hint" style={{ marginTop: 12 }}>
+                        התשובות נמסרות נכון למועד החתימה. אם יחול שינוי במצב הבריאותי של מי
+                        מהמשתתפים — האחריות להודיע לצוות באופן מיידי היא של החותם/ת על ההצהרה.
+                      </p>
                     </>
                   )}
                   {confirmations.length > 0 && (
@@ -986,6 +1011,12 @@ export default function PublicActivityRegistration() {
                 splitWaiverText(activity.form_template?.waiverText).body,
                 joinParentName(parent.name, parent.lastName)
               )}
+            </div>
+            {/* איזו יציאה מאושרת כאן. הוויתור עצמו כללי, ולכן בלי המשפט הזה
+                החתימה לא אומרת על איזו פעילות ובאילו תאריכים היא ניתנה. */}
+            <div className="event-waiver-activity">
+              אני מאשר/ת את השתתפות {healthCurrent.name} ב„{activityTitle}”
+              {activityDatesText ? ` בתאריך ${activityDatesText}` : ''}.
             </div>
             <label className="event-check">
               <input

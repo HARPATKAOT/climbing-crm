@@ -7,6 +7,7 @@ import {
   normalizeSubscriptions,
   registerActivityGroup,
 } from './activityRegistrationOrderService.js';
+import { CANONICAL_HEALTH_QUESTIONS } from './participationDocuments.js';
 
 /**
  * Health declarations do not expire a year after signing — they expire
@@ -16,10 +17,10 @@ import {
  * true.
  */
 const IN_FORCE_SIGNED_DATE = new Date().toISOString().slice(0, 10);
+// Derived from the canonical list, not counted: a question added to the
+// declaration must not turn every fixture here into "unanswered".
 const HEALTHY_ANSWERS = {
-  ...Object.fromEntries(
-    Array.from({ length: 9 }, (_unused, index) => [`m${index + 1}`, false])
-  ),
+  ...Object.fromEntries(CANONICAL_HEALTH_QUESTIONS.map((question) => [question.id, false])),
   required: true,
 };
 
@@ -107,6 +108,8 @@ test('paid parent and two children reserve three slots and price units', async (
   const activity = {
     id: 'activity-paid',
     name: 'טיול',
+    date: '2026-09-04',
+    end_date: '2026-09-05',
     price: 100,
     price_includes_vat: true,
     max_participants: 10,
@@ -134,11 +137,24 @@ test('paid parent and two children reserve three slots and price units', async (
   assert.ok(result.registrations.every((row) => row.participation_waiver_id));
   assert.ok(db.store.health_declarations.every((row) => row.signed && row.signature_url));
   assert.ok(db.store.health_declarations.every((row) => !Object.hasOwn(row.answers, 'required')));
-  assert.ok(db.store.health_declarations.every((row) => (
-    row.formSnapshot.healthQuestions.map((question) => question.id).join(',')
-      === 'm1,m2,m3,m4,m5,m6,m7,m8,m9'
-  )));
+  // The snapshot starts with the canonical medical list and may carry the
+  // safety confirmations after it — everything the answers reference, so the
+  // signed copy can print their wording instead of bare ids.
+  assert.ok(db.store.health_declarations.every((row) => {
+    const ids = row.formSnapshot.healthQuestions.map((question) => question.id);
+    const canonical = CANONICAL_HEALTH_QUESTIONS.map((question) => question.id);
+    return ids.slice(0, canonical.length).join(',') === canonical.join(',')
+      && row.formSnapshot.healthQuestions.slice(canonical.length)
+        .every((question) => question.kind !== 'screen');
+  }));
   assert.ok(db.store.participation_waivers.every((row) => row.form_snapshot.answers.required === true));
+  // The signed copy has to say which outing was approved: an activity id alone
+  // points at a row staff can rename after the signature.
+  assert.ok(db.store.participation_waivers.every((row) => (
+    row.form_snapshot.activity?.name === 'טיול'
+    && row.form_snapshot.activity?.date === '2026-09-04'
+    && row.form_snapshot.activity?.endDate === '2026-09-05'
+  )));
   assert.equal(result.registrations[0].student_id, db.store.students.find((s) => s.isAdult)?.id);
   assert.equal(db.store.students.filter((s) => s.isAdult).length, 1);
   assert.equal(db.store.students.length, 3);

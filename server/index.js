@@ -216,6 +216,7 @@ import {
   questionLabel,
   questionsForSigner,
   requiresClearance,
+  signsAsAdultFemale,
 } from './healthQuestions.js';
 import { EVENT_KINDS, normalizeActivityType } from './eventKinds.js';
 import { declarationTemplateForActivity, templateActivityTypes } from './activityDeclaration.js';
@@ -257,7 +258,8 @@ import {
   suggestedRefund,
 } from './cancellationPolicies.js';
 import { passPunchBlockReason } from './passPunchEligibility.js';
-import { runParticipationDocumentReminders } from './participationReminders.js';
+import { runHealthExpiryReminders, runParticipationDocumentReminders } from './participationReminders.js';
+import { OPERATIONAL_LIST, migrateToTwoBroadcastLists } from './broadcastListMigration.js';
 import {
   enrichPricelistItem,
   buildPassFromItem,
@@ -357,6 +359,7 @@ import {
   backfillWallClimbingProducts,
   clampImage,
 } from './productCategories.js';
+import { storeImageValue, forgetImageValue } from './productImages.js';
 import {
   DEFAULT_BUSINESS_PROFILE,
   getBusinessProfile,
@@ -1276,6 +1279,7 @@ app.put('/api/parents/:id', async (req, res) => {
     'phone',
     'email',
     'city',
+    'gender',
     'source',
     'notes',
     'icount_client_id',
@@ -1303,6 +1307,7 @@ app.put('/api/parents/:id', async (req, res) => {
           city: updates.city,
           lastName: updates.lastName,
           idNumber: updates.idNumber,
+          gender: updates.gender,
           source: updates.source,
           status: updates.status,
           nextFollowup: updates.nextFollowup,
@@ -7717,11 +7722,24 @@ function applySelfServeFields(body, current = {}, user) {
   return null;
 }
 
+/**
+ * Whether any product or category still shows this picture. Files are named
+ * after their own bytes, so the same photo on two products is one file — and
+ * removing it because one of them changed would blank out the other.
+ */
+function catalogImageStillInUse(imageUrl) {
+  if (!imageUrl) return true;
+  const rows = [...(db.get('pricelist') || []), ...(db.get('product_categories') || [])];
+  return rows.some((row) => row?.image === imageUrl);
+}
+
 // Create pricelist item
-app.post('/api/pricelist', (req, res) => {
+app.post('/api/pricelist', async (req, res) => {
   try {
     const body = { ...req.body };
-    if (body.image !== undefined) body.image = body.image ? clampImage(body.image) : '';
+    if (body.image !== undefined) {
+      body.image = body.image ? await storeImageValue(clampImage(body.image)) : '';
+    }
     body.categories = normalizeProductCategories(body);
     body.category = body.categories[0];
     const denied = applySelfServeFields(body, {}, req.crmUser);
@@ -7734,12 +7752,14 @@ app.post('/api/pricelist', (req, res) => {
 });
 
 // Update pricelist item
-app.put('/api/pricelist/:id', (req, res) => {
+app.put('/api/pricelist/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const body = { ...req.body };
     const current = db.getOne('pricelist', id) || {};
-    if (body.image !== undefined) body.image = body.image ? clampImage(body.image) : '';
+    if (body.image !== undefined) {
+      body.image = body.image ? await storeImageValue(clampImage(body.image)) : '';
+    }
     // Only touch categories when the caller actually sent them — partial patches
     // (stock, active flag) must not be re-labelled as 'שונות'.
     if (body.categories !== undefined || body.category !== undefined) {
@@ -7751,6 +7771,9 @@ app.put('/api/pricelist/:id', (req, res) => {
     const updated = db.update('pricelist', id, body);
     if (!updated) return res.status(404).json({ error: 'Pricelist item not found' });
     res.json(enrichPricelistItem(updated));
+    if (body.image !== undefined) {
+      forgetImageValue(current.image, body.image, catalogImageStillInUse);
+    }
   } catch (err) {
     res.status(400).json({ error: err.message || 'שגיאה' });
   }
@@ -7769,7 +7792,7 @@ app.get('/api/product-categories', (req, res) => {
   res.json(ensureProductCategories(db));
 });
 
-app.post('/api/product-categories', requireOwner, (req, res) => {
+app.post('/api/product-categories', requireOwner, async (req, res) => {
   try {
     const name = String(req.body?.name || '').trim();
     if (!name) return res.status(400).json({ error: 'שם קטגוריה חובה' });
@@ -7778,7 +7801,7 @@ app.post('/api/product-categories', requireOwner, (req, res) => {
       return res.status(400).json({ error: 'קטגוריה בשם הזה כבר קיימת' });
     }
     let image = '';
-    if (req.body?.image) image = clampImage(req.body.image);
+    if (req.body?.image) image = await storeImageValue(clampImage(req.body.image), 'categories');
     const record = db.insert('product_categories', {
       name,
       image,
@@ -7793,7 +7816,7 @@ app.post('/api/product-categories', requireOwner, (req, res) => {
   }
 });
 
-app.put('/api/product-categories/:id', requireOwner, (req, res) => {
+app.put('/api/product-categories/:id', requireOwner, async (req, res) => {
   try {
     const { id } = req.params;
     const current = (db.get('product_categories') || []).find((c) => c.id === id);
@@ -7817,7 +7840,9 @@ app.put('/api/product-categories/:id', requireOwner, (req, res) => {
     }
     if (req.body?.active != null) updates.active = !!req.body.active;
     if (req.body?.image !== undefined) {
-      updates.image = req.body.image ? clampImage(req.body.image) : '';
+      updates.image = req.body.image
+        ? await storeImageValue(clampImage(req.body.image), 'categories')
+        : '';
     }
     if (req.body?.image_fit !== undefined) {
       updates.image_fit = req.body.image_fit === 'contain' ? 'contain' : 'cover';
@@ -7828,6 +7853,9 @@ app.put('/api/product-categories/:id', requireOwner, (req, res) => {
       renameCategoryOnProducts(db, current.name, updates.name);
     }
     res.json(updated);
+    if (updates.image !== undefined) {
+      forgetImageValue(current.image, updates.image, catalogImageStillInUse);
+    }
   } catch (err) {
     res.status(400).json({ error: err.message || 'שגיאה' });
   }
@@ -13439,7 +13467,10 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
   res.status(201).json({ success: true, record, student, parent });
 });
 
-const REQUIRED_BROADCAST_LIST = 'classes';
+// The operational list is what a customer must be on to be served at all —
+// schedule changes, cancellations, reminders. Marketing is the other list, and
+// it is never forced.
+const REQUIRED_BROADCAST_LIST = OPERATIONAL_LIST;
 
 function findParentForOnboard({ parentId, phone, studentId, idNumber }) {
   const parents = db.get('parents') || [];
@@ -13521,8 +13552,11 @@ function publicDeclarationSummary(eligibility) {
   const record = eligibility?.health?.record || null;
   const rawAnswers = record?.answers || record?.formSnapshot?.answers || {};
   const answers = {};
-  for (let index = 1; index <= 9; index += 1) {
-    const id = `m${index}`;
+  // Read off the canonical list rather than counting m1..m9. The pregnancy
+  // question is m11 — a number chosen deliberately, because m10 belonged to a
+  // question that was removed — and a numeric loop would drop it from every
+  // summary while looking like it covered everything.
+  for (const { id } of CANONICAL_HEALTH_QUESTIONS) {
     const value = rawAnswers?.[id];
     if (typeof value === 'boolean') answers[id] = value;
     else if (['true', 'yes', 'כן', '1'].includes(String(value || '').trim().toLowerCase())) answers[id] = true;
@@ -13688,6 +13722,11 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
           email: parent.email || '',
           city: parent.city || '',
           idNumber: parent.idNumber || '',
+          // בלעדיהם הטופס פותח בכל ביקור מחדש את "השלמת הפרטים" — למרות
+          // שהכול כבר מולא. תאריך לידה של תיקים ישנים חי רק על כרטיס
+          // המתאמן של ההורה, ולכן הנפילה אליו.
+          gender: parent.gender || selfStudent?.gender || '',
+          birthDate: parent.birthDate || selfStudent?.birthDate || '',
         }
       : null,
     selfStudent: selfStudent
@@ -13725,6 +13764,7 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
       return {
         id: s.id,
         name: s.name || '',
+        lastName: s.lastName || '',
         birthDate: s.birthDate || '',
         gender: s.gender || '',
         idNumber: s.idNumber || '',
@@ -13745,6 +13785,9 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
     listDefs,
     subscriptions,
     requiredListKey: REQUIRED_BROADCAST_LIST,
+    // How many adults the household already holds: a second parent cannot be
+    // added to a family that has two.
+    householdParentCount: householdParents.length,
     interestOptions: INTEREST_OPTIONS,
     template: template
       ? {
@@ -14065,6 +14108,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
       return {
         id: c.id || null,
         name,
+        lastName: String(c.lastName || '').trim(),
         type: asAdult ? 'adult' : 'child',
         birthDate: String(c.birthDate || '').trim(),
         gender: String(c.gender || '').trim(),
@@ -14154,6 +14198,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
         ? (templateHealthQuestions.length ? templateHealthQuestions : CANONICAL_HEALTH_QUESTIONS)
         : (template?.healthQuestions || []), {
       isAdultSelf: child.type === 'adult',
+      isAdultFemale: signsAsAdultFemale(child),
       }
     );
     const gap = declarationGap(asked, child.answers, child.name);
@@ -14296,12 +14341,17 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
     ? db.getParentBroadcastLists(parent.id)
     : {};
   if (!healthOnly) {
-    // Mailing lists — force classes subscribed only during the full onboarding
-    // flow. A medical renewal must not silently change marketing preferences.
+    // Mailing lists — the classes list is forced only for someone who came here
+    // to join a class, where schedule changes are part of the service. A trip
+    // form is a different errand, and a medical renewal must not silently
+    // change marketing preferences at all.
+    const classSignup = normalizeParticipationScope(
+      req.body?.templateSlug || req.body?.template_slug || 'wall'
+    ) !== 'trip';
     const listKeys = (db.getBroadcastListDefs() || []).map((l) => l.key);
     const nextSubs = {};
     for (const key of listKeys) {
-      if (key === REQUIRED_BROADCAST_LIST) {
+      if (key === REQUIRED_BROADCAST_LIST && classSignup) {
         nextSubs[key] = true;
       } else {
         nextSubs[key] = subscriptions[key] === true || subscriptions[key] === 'true';
@@ -15011,6 +15061,67 @@ async function sendActivityRegistrationDocumentMessage({
   return { ...result, url, recipient, student, kind };
 }
 
+/**
+ * "Your health declaration lapses at the end of August — here is the form."
+ *
+ * Sent while the declaration is still valid, on the same approved template the
+ * staff-side "send form" button uses, so no new Meta template is needed and the
+ * parent gets a link that opens their own renewal.
+ */
+async function sendHealthExpiryMessage({ student, expiresAt, origin = PUBLIC_APP_FALLBACK } = {}) {
+  const recipient = student ? db.getOne('parents', student.parentId) : null;
+  if (!student || !recipient?.phone) {
+    return { sent: false, error: 'לא נמצא טלפון של המשתתף לחידוש ההצהרה' };
+  }
+  const params = new URLSearchParams({
+    studentId: student.id,
+    phone: recipient.phone,
+    mode: 'health-renewal',
+  });
+  const url = `${resolvePublicAppOrigin(origin)}/health?${params.toString()}`;
+  const settings = db.getSettings() || {};
+  const expiryText = String(expiresAt || '').slice(0, 10).split('-').reverse().join('.');
+  try {
+    const result = await sendWhatsAppWithOptionalTemplate(recipient.phone, {
+      templateCandidates: [settings.waOnboardTemplate, process.env.WA_ONBOARD_TEMPLATE].filter(Boolean),
+      variables: [recipient.name || student.name || 'לקוח'],
+      freeformText:
+        `שלום ${recipient.name || ''}, הצהרת הבריאות של ${student.name || 'המשתתף/ת'} בתוקף עד ${expiryText}. `
+        + `אפשר לחדש אותה כבר עכשיו, בדקה אחת:\n\n${url}`,
+      parentId: recipient.id,
+    });
+    return { ...result, url, recipient, student };
+  } catch (error) {
+    return { sent: false, error: error.message, url, recipient, student };
+  }
+}
+
+async function runHealthExpiryRemindersSafely() {
+  try {
+    const summary = await runHealthExpiryReminders({
+      db,
+      persist: persistCore,
+      healthState: (student) => {
+        const eligibility = participationEligibility(db, { studentId: student.id });
+        return {
+          valid: eligibility?.health?.state === 'valid',
+          expiresAt: eligibility?.health?.expires_at || '',
+        };
+      },
+      send: ({ student, expiresAt }) => sendHealthExpiryMessage({
+        student,
+        expiresAt,
+        origin: process.env.PUBLIC_APP_URL || PUBLIC_APP_FALLBACK,
+      }),
+    });
+    if (summary.sent || summary.failed) {
+      console.log(`🩺 Health expiry reminders: sent=${summary.sent} failed=${summary.failed} skipped=${summary.skipped}`);
+    }
+  } catch (error) {
+    console.error('Health expiry reminder scan failed:', error.message);
+  }
+}
+
 app.post('/api/activity-registrations/:id/send-document-reminder', async (req, res) => {
   const registration = db.getOne('activity_registrations', req.params.id);
   const activity = registration ? db.getOne('activities', registration.activity_id) : null;
@@ -15363,6 +15474,13 @@ initDb({ requireDurable: requiresDurableStore() }).then(() => {
   } catch (err) {
     console.warn('participation form template seed skipped:', err.message);
   }
+  Promise.resolve(migrateToTwoBroadcastLists({ database: db, persist: persistCore }))
+    .then((result) => {
+      if (result?.defs) {
+        console.log(`📬 Broadcast lists: ${result.parents} parent(s) moved onto תפעולי / שיווקי`);
+      }
+    })
+    .catch((err) => console.warn('broadcast list migration skipped:', err.message));
   Promise.resolve(migrateUnifiedWallWaiver({ database: db, persist: persistCore }))
     .then(({ updated, retired }) => {
       if (updated || retired) {
@@ -15463,6 +15581,11 @@ app.listen(PORT, () => {
   // before. Durable send markers make the hourly scan restart-safe.
   setTimeout(() => { runParticipationRemindersSafely(); }, 50_000);
   setInterval(() => { runParticipationRemindersSafely(); }, 60 * 60 * 1000);
+  // A month's notice before the health declaration lapses. Hourly like the scan
+  // above rather than once a day: one row per student per season is what stops a
+  // second send, so a restart cannot skip the day or repeat it.
+  setTimeout(() => { runHealthExpiryRemindersSafely(); }, 65_000);
+  setInterval(() => { runHealthExpiryRemindersSafely(); }, 60 * 60 * 1000);
   // Follow-ups are not a once-a-day job: a short one is aimed 23 hours after
   // the customer's last message so it lands while free text is still allowed,
   // and a morning-only run would miss that hour on most conversations.

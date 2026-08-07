@@ -18,10 +18,11 @@ import {
   isScreeningQuestion,
   needsMedicalClearance,
   questionsForSigner,
+  signsAsAdultFemale,
 } from './healthQuestions.js';
 import { CANONICAL_HEALTH_QUESTIONS, normalizeParticipationScope } from './participationDocuments.js';
 import { healthDocumentState, waiverDocumentState } from './participationEligibility.js';
-import { ensureHouseholdForParent } from './households.js';
+import { addPendingSpouse, ensureHouseholdForParent } from './households.js';
 import {
   appendSignatureEvidence,
   createSignatureEvidenceEvent,
@@ -126,6 +127,23 @@ function normalizeLiabilityPartyText(text) {
       'וזאת אלא אם יוכח כי הינה תוצאה של רשלנות המקום.',
       'למעט אחריות המוטלת לפי דין בשל רשלנות של "הרפתקאות" או של מי שפעל מטעמה.'
     );
+}
+
+/**
+ * `[[…]]` marks the part of a waiver that only applies when a minor is being
+ * signed for. An adult signing for themselves must not read a clause about
+ * children who are not on the document.
+ */
+export function waiverTextForSigner(text, hasMinors) {
+  const full = String(text || '');
+  if (hasMinors) return full.replace(/\[\[([\s\S]*?)\]\]/g, '$1');
+  return full
+    .replace(/\[\[[\s\S]*?\]\]/g, '')
+    // A dropped fragment leaves the punctuation that framed it, and a dropped
+    // whole clause leaves the blank line it sat on.
+    .replace(/[ \t]+([,.])/g, '$1')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 export function resolveDeclarationTemplate(db, { templateId, templateSlug } = {}) {
@@ -296,7 +314,10 @@ export function validateParticipantDeclarations(participants, template, { health
     // Parent-only clauses are excluded for an adult signing for themselves —
     // the form does not show them, so demanding them here would reject a
     // submission that is in fact complete.
-    const asked = questionsForSigner(questions, { isAdultSelf: participant.type === 'adult' });
+    const asked = questionsForSigner(questions, {
+      isAdultSelf: participant.type === 'adult',
+      isAdultFemale: signsAsAdultFemale(participant),
+    });
     if (!reuseHealth) {
       const gap = declarationGap(asked, participant.answers, name);
       if (gap) throw Object.assign(new Error(gap), { status: 400 });
@@ -388,6 +409,10 @@ export async function saveCrmParticipants({
     email: email || parent.email || '',
     city: clean(parentInput?.city) || parent.city || '',
     idNumber: idNumber || parent.idNumber || '',
+    // מין ותאריך לידה נאספים בטופס הציבורי. בלי לשמור אותם, כל ביקור חוזר
+    // פתח מחדש את חלונית "השלמת הפרטים" במקום כרטיס הסיכום.
+    gender: clean(parentInput?.gender) || parent.gender || '',
+    birthDate: clean(parentInput?.birthDate || parentInput?.birth_date) || parent.birthDate || '',
     // Reached through the ID from a number the card does not carry: record it,
     // so the next visit is recognised by phone like everyone else.
     phone: existingById ? (phone || parent.phone || '') : parent.phone,
@@ -396,6 +421,23 @@ export async function saveCrmParticipants({
 
   const signedAt = new Date().toISOString();
   const signedDate = signedAt.slice(0, 10);
+  // Named here so the approval can say what it approves. Taken from the row
+  // rather than from the request: the signer's browser is not the authority on
+  // when the outing is.
+  const signedActivityRow = activityId ? (db.getOne?.('activities', activityId) || null) : null;
+  const signedActivity = signedActivityRow
+    ? {
+        id: signedActivityRow.id,
+        name: String(
+          signedActivityRow.registration_page_title
+          || signedActivityRow.registrationPageTitle
+          || signedActivityRow.name
+          || ''
+        ).trim(),
+        date: signedActivityRow.date || '',
+        endDate: signedActivityRow.end_date || signedActivityRow.endDate || '',
+      }
+    : null;
   const savedParticipants = [];
   const declarations = [];
   const waivers = [];
@@ -410,7 +452,10 @@ export async function saveCrmParticipants({
     templateId: template.id,
     templateSlug: template.slug,
     templateVersion: template.version || template.updated_at || template.updatedAt || null,
-    healthQuestions: medicalQuestions,
+    // כל מה שנשאל ונענה — גם אישורי הבטיחות. התשובות בהצהרה כוללות אותם,
+    // ו-snapshot שמחזיק רק את השאלות הרפואיות השאיר אותם בלי נוסח בעותק
+    // החתום ("w1 ✓").
+    healthQuestions: [...medicalQuestions, ...waiverQuestions],
     ...(phoneVerification ? { phoneVerification } : {}),
   };
   const waiverSnapshot = {
@@ -527,6 +572,8 @@ export async function saveCrmParticipants({
     const childPhone = clean(input.childPhone || input.phone);
     const patch = {
       name,
+      // שם המשפחה בשדה משלו, כמו על תיק ההורה — לא ניחוש מהמילה האחרונה.
+      lastName: clean(input.lastName || input.last_name) || student?.lastName || '',
       // A second parent joins the child's file; they do not take it over.
       parentId: linkedFromOtherFamily ? student.parentId : parent.id,
       isAdult: participantType === 'adult',
@@ -750,10 +797,19 @@ export async function saveCrmParticipants({
       const waiverId = `pw_${crypto.randomUUID()}`;
       const waiverContentSnapshot = {
         ...waiverSnapshot,
+        // Resolved per participant: the same template serves an adult signing
+        // for themselves and a parent signing for a child, and only one of them
+        // has minors on the document.
+        waiverText: waiverTextForSigner(waiverSnapshot.waiverText, participantType !== 'adult'),
         scope,
         answers: waiverAnswers,
         signer: signerSnapshot,
         participant: participantSnapshot,
+        // Which outing this approval was given for. The row already carried
+        // `activity_id`, but a foreign key is not a document: without the name
+        // and the dates inside the snapshot, the signed copy cannot say what
+        // was approved, and the id points at a row staff may later rename.
+        ...(signedActivity ? { activity: signedActivity } : {}),
         signedAt,
       };
       const waiverEvidence = evidenceContext ? createSignatureEvidenceEvent({
@@ -828,6 +884,26 @@ export async function saveCrmParticipants({
   // Materialise the explicit household after guardian linking/merging, so
   // future orders validate every participant against one durable household.
   const household = await ensureHouseholdForParent(db, persist, parent.id);
+
+  // A spouse is a participant and a second adult of the same household. The
+  // declarations above already treated them as a participant; this is what puts
+  // them on the family file, so the next form recognises them instead of opening
+  // a second one. A bad number must not undo signatures that were just filed.
+  const spouseInputs = (participants || []).filter((input) => (
+    String(input?.spouse_phone || input?.spousePhone || '').replace(/\D/g, '').length >= 9
+  ));
+  for (const input of spouseInputs) {
+    try {
+      await addPendingSpouse(db, persist, {
+        householdId: household.id,
+        name: clean(input.name),
+        phone: String(input.spouse_phone || input.spousePhone || ''),
+        source,
+      });
+    } catch (error) {
+      console.warn('spouse not added to household:', error.message);
+    }
+  }
 
   return { parent, participants: savedParticipants, declarations, waivers, template, familyLinks, household };
 }

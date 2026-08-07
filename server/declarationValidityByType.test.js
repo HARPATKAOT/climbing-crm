@@ -5,6 +5,7 @@ import {
   findLatestValidDeclaration,
   resolveDeclarationTemplate,
 } from './crmWaiverService.js';
+import { CANONICAL_HEALTH_QUESTIONS } from './participationDocuments.js';
 
 /** Signed today, so it is in force whenever the suite runs. */
 const TODAY = new Date().toISOString().slice(0, 10);
@@ -79,7 +80,7 @@ test('the latest declaration shown for a trip never falls back to a wall form', 
   assert.equal(findLatestDeclaration(db, { studentId: 's1', templateSlug: 'trip' }), null);
 });
 
-test('legacy templates expose only canonical m1-m9 medical questions', () => {
+test('legacy templates expose only the canonical medical questions', () => {
   const legacyTrip = {
     id: 'ft_trip',
     slug: 'trip',
@@ -102,9 +103,10 @@ test('legacy templates expose only canonical m1-m9 medical questions', () => {
   };
   const resolved = resolveDeclarationTemplate(templateDb, { templateSlug: 'trip' });
 
-  assert.deepEqual(resolved.medicalQuestions.map((question) => question.id), [
-    'm1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9',
-  ]);
+  assert.deepEqual(
+    resolved.medicalQuestions.map((question) => question.id),
+    CANONICAL_HEALTH_QUESTIONS.map((question) => question.id)
+  );
   assert.deepEqual(resolved.waiverQuestions.map((question) => question.id), ['h1', 's2', 's4', 's6', 's7']);
   assert.match(resolved.waiverText, /טיפוס \/ סנפלינג \/ מערנות, בהתאם לפעילות שנבחרה/);
   assert.doesNotMatch(resolved.waiverText, /סנפלינג\), טיפוס, מערנות/);

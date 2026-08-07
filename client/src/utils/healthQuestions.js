@@ -89,15 +89,50 @@ export function needsMedicalClearance(questions = [], answers = {}) {
 }
 
 /**
+ * A question that only applies to an adult woman — the pregnancy question.
+ *
+ * Asked of a child, of a man, or of a girl it is at best noise and at worst
+ * offensive, and a form that asks it of everyone teaches people to answer
+ * without reading.
+ */
+export function isAdultFemaleQuestion(question) {
+  if (!question) return false;
+  return question.audience === 'adult_female';
+}
+
+/**
+ * Whether this participant is the one the pregnancy question is for: an adult
+ * woman. A girl is not asked it either — 18 is the line, and a participant who
+ * signs for themselves counts as an adult even without a birth date on file.
+ */
+export function signsAsAdultFemale(participant) {
+  const gender = String(participant?.gender || '').trim().toLowerCase();
+  if (!['female', 'f', 'נקבה', 'בת'].includes(gender)) return false;
+  if (participant?.type === 'adult' || participant?.isAdult === true) return true;
+  const birth = String(participant?.birthDate || participant?.birth_date || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(birth)) return false;
+  const [year, month, day] = birth.split('-').map(Number);
+  const now = new Date();
+  let age = now.getFullYear() - year;
+  const hadBirthday = (now.getMonth() + 1) > month
+    || ((now.getMonth() + 1) === month && now.getDate() >= day);
+  if (!hadBirthday) age -= 1;
+  return age >= 18;
+}
+
+
+/**
  * The questions that actually apply to this signer.
  *
  * Everything downstream — what is rendered, what counts as unanswered, and what
  * is written into the signed PDF — runs off this one list, so a clause that is
  * not shown can never end up recorded as agreed to.
  */
-export function questionsForSigner(questions = [], { isAdultSelf = false } = {}) {
-  if (!isAdultSelf) return questions || [];
-  return (questions || []).filter((q) => !isChildOnlyQuestion(q));
+export function questionsForSigner(questions = [], { isAdultSelf = false, isAdultFemale = false } = {}) {
+  return (questions || []).filter((q) => {
+    if (isAdultFemaleQuestion(q)) return isAdultFemale;
+    return !(isAdultSelf && isChildOnlyQuestion(q));
+  });
 }
 
 /** The label without the markers that classified it. */
@@ -136,6 +171,24 @@ export function unansweredQuestions(questions = [], answers = {}) {
 /** True when anything was answered "yes, this applies" and needs describing. */
 export function hasPositiveScreening(questions = [], answers = {}) {
   return (questions || []).some((q) => isScreeningQuestion(q) && answers?.[q.id] === true);
+}
+
+/**
+ * What to write in the detail box under a question answered "yes".
+ *
+ * One generic prompt ("מה המצב, ממתי, והאם נקבעה הגבלה") asked the wrong thing
+ * of half the questions: the answer to a medication question is a list of
+ * medicines, and the answer to an allergy question is what happens on contact.
+ * Asking precisely is what makes the detail usable by an instructor.
+ */
+const DETAIL_PROMPTS = {
+  m6: 'אילו תרופות, במה הן מטפלות, והאם יש מגבלה או תופעה שחשוב שנדע',
+  m7: 'למה האלרגיה, מה קורה בחשיפה, והאם יש מזרק אפינפרין (אפיפן)',
+  m11: 'באיזה שבוע, והאם רופא/ה נתן/ה הנחיה לגבי פעילות גופנית',
+};
+
+export function detailPrompt(question) {
+  return DETAIL_PROMPTS[String(question?.id || '')] || 'מה המצב, ממתי, והאם נקבעה הגבלה';
 }
 
 /** Fresh answers for a participant: confirmations unticked, screening unanswered. */

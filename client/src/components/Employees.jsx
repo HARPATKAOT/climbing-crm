@@ -2337,6 +2337,29 @@ function EmployeeOnboardingLinkPanel() {
   );
 }
 
+/**
+ * How long someone has been clocked in, ticking on its own.
+ *
+ * The screen used to hold the clock in its own state and advance it every
+ * second, which re-rendered all of «עובדים ומשמרות» — thousands of elements —
+ * sixty times a minute to move a number that only changes once a minute. Here
+ * the timer lives with the badge, so nothing else repaints.
+ */
+function ShiftDuration({ clockIn }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    // Half a minute: the reading is never more than 30s behind.
+    const timer = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, []);
+  const diffMs = Math.max(0, now - new Date(clockIn).getTime());
+  const hrs = Math.floor(diffMs / 3600000);
+  const mins = Math.floor((diffMs % 3600000) / 60000);
+  return (
+    <span style={{ color: 'var(--green)', fontWeight: 800, fontSize: 13 }}>{hrs}ש׳ {mins}ד׳</span>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function Employees({ canViewHr = true, canEditEmployees = true, canViewShifts = true }) {
   const navigate = useNavigate();
@@ -2420,7 +2443,6 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
   const [empSortConfig, setEmpSortConfig] = useState({ key: 'name', direction: 'asc' });
 
   // Shift logging quick state
-  const [currentTime, setCurrentTime]     = useState(new Date());
   const [clockActivity, setClockActivity] = useState({});
   const [clockInEmployee, setClockInEmployee] = useState('');
 
@@ -2523,8 +2545,6 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
 
   useEffect(() => {
     refreshData();
-    const t = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(t);
   }, [payrollMonth]);
 
   useEffect(() => { setPayrollEmpFilter(''); }, [payrollMonth]);
@@ -3690,9 +3710,6 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
             ) : (
               <div className="grid-3" style={{ gap: 12 }}>
                 {openShifts.map(({ shift, emp }) => {
-                  const diffMs = currentTime - new Date(shift.clock_in);
-                  const hrs = Math.floor(diffMs / (1000 * 60 * 60));
-                  const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
                   return (
                     <div key={shift.id} className="card card-p" style={{
                       borderColor: 'rgba(16,185,129,0.3)', background: 'rgba(16,185,129,0.03)',
@@ -3706,7 +3723,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
                             {workTypeLabel(shift.activity_type)} · נכנס ב-{new Date(shift.clock_in).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}
                           </div>
                         </div>
-                        <span style={{ color: 'var(--green)', fontWeight: 800, fontSize: 13 }}>{hrs}ש׳ {mins}ד׳</span>
+                        <ShiftDuration clockIn={shift.clock_in} />
                       </div>
                       <button className="btn btn-danger btn-full btn-xs" onClick={() => handleClock(shift.employee_id)}>
                         <LogOut size={13} /> יציאה מהמשמרת

@@ -26,14 +26,16 @@ export function participationGenderValue(value) {
  * themselves. Birth date and gender belong to the adult's student card, while
  * the legal name / ID may be more complete on the parent card.
  */
-export function adultParticipantFromContext(selfStudent, { fullName = '', idNumber = '' } = {}) {
+export function adultParticipantFromContext(selfStudent, { fullName = '', idNumber = '', gender = '', birthDate = '' } = {}) {
   const student = selfStudent || {};
   return {
     ...student,
     name: String(fullName || student.name || '').trim(),
     idNumber: String(idNumber || student.idNumber || student.id_number || '').trim(),
-    birthDate: student.birthDate || student.birth_date || '',
-    gender: participationGenderValue(student.gender),
+    birthDate: birthDate || student.birthDate || student.birth_date || '',
+    // Carried from the details step rather than asked twice: the signer just
+    // answered this about themselves one screen ago.
+    gender: participationGenderValue(gender || student.gender),
     type: 'adult',
   };
 }

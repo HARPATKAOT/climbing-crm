@@ -95,15 +95,23 @@ export const DECLARATION_KINDS = KINDS;
  * tag; `label` is the short word used by the filter buttons.
  */
 const FILE_KINDS = {
-  wall: { ...KINDS.wall, title: 'אישור השתתפות — קיר', label: 'קיר' },
-  trip: { ...KINDS.trip, title: 'אישור השתתפות — טיול', label: 'טיול' },
+  wall: {
+    ...KINDS.wall, title: 'אישור השתתפות — קיר טיפוס', label: 'קיר',
+    bg: 'rgba(252,211,77,0.12)', border: 'rgba(252,211,77,0.32)',
+  },
+  trip: {
+    ...KINDS.trip, title: 'אישור השתתפות — טיול', label: 'טיול',
+    bg: 'rgba(94,234,212,0.12)', border: 'rgba(94,234,212,0.32)',
+  },
   health: {
     key: 'health', title: 'הצהרת בריאות', label: 'בריאות',
     Icon: HeartPulse, badge: 'badge-blue', color: '#7DD3FC',
+    bg: 'rgba(125,211,252,0.12)', border: 'rgba(125,211,252,0.32)',
   },
   clearance: {
     key: 'clearance', title: 'אישור רופא', label: 'רופא',
     Icon: Stethoscope, badge: 'badge-purple', color: '#C4B5FD',
+    bg: 'rgba(196,181,253,0.12)', border: 'rgba(196,181,253,0.32)',
   },
 };
 

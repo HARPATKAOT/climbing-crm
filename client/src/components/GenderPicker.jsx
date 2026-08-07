@@ -16,6 +16,14 @@ export const GENDER_COLORS = {
   female: '#F472B6',
 };
 
+/**
+ * The words, in one place. „זכר / נקבה” is how a form fills a database field;
+ * a person is a גבר or an אישה, and a child is a ילד or a ילדה. The stored
+ * value is the same either way — only what the signer reads changes.
+ */
+export const ADULT_GENDER_OPTIONS = [['גבר', 'male'], ['אישה', 'female']];
+export const CHILD_GENDER_OPTIONS = [['ילד', 'male'], ['ילדה', 'female']];
+
 export function MaleIcon({ size = 16 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -54,12 +62,15 @@ export function genderKind(gender) {
   return null;
 }
 
-/** Compact icon for trainee chips — nothing when gender is unknown. */
-export function GenderMark({ gender, size = 12, style }) {
+/**
+ * Compact icon for trainee chips — nothing when gender is unknown.
+ * `labels` is [male, female]: a grown-up is a גבר, not a בן.
+ */
+export function GenderMark({ gender, size = 12, style, labels = ['בן', 'בת'] }) {
   const kind = genderKind(gender);
   if (!kind) return null;
   const Icon = kind === 'male' ? MaleIcon : FemaleIcon;
-  const label = kind === 'male' ? 'בן' : 'בת';
+  const label = kind === 'male' ? labels[0] : labels[1];
   const color = GENDER_COLORS[kind];
   return (
     <span
@@ -96,7 +107,7 @@ export function AdultMark({ size = 12, style }) {
 export default function GenderPicker({
   value,
   onChange,
-  options = [['בן', 'male'], ['בת', 'female']],
+  options = CHILD_GENDER_OPTIONS,
   clearable = true,
   disabled = false,
 }) {

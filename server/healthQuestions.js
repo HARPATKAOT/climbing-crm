@@ -44,6 +44,39 @@ export function isScreeningQuestion(question) {
   return parseMarkers(question.label).screening;
 }
 
+/**
+ * A question that only applies to an adult woman — the pregnancy question.
+ *
+ * Asked of a child, of a man, or of a girl it is at best noise and at worst
+ * offensive, and a form that asks it of everyone teaches people to answer
+ * without reading.
+ */
+export function isAdultFemaleQuestion(question) {
+  if (!question) return false;
+  return question.audience === 'adult_female';
+}
+
+/**
+ * Whether this participant is the one the pregnancy question is for: an adult
+ * woman. A girl is not asked it either — 18 is the line, and a participant who
+ * signs for themselves counts as an adult even without a birth date on file.
+ */
+export function signsAsAdultFemale(participant) {
+  const gender = String(participant?.gender || '').trim().toLowerCase();
+  if (!['female', 'f', 'נקבה', 'בת'].includes(gender)) return false;
+  if (participant?.type === 'adult' || participant?.isAdult === true) return true;
+  const birth = String(participant?.birthDate || participant?.birth_date || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(birth)) return false;
+  const [year, month, day] = birth.split('-').map(Number);
+  const now = new Date();
+  let age = now.getFullYear() - year;
+  const hadBirthday = (now.getMonth() + 1) > month
+    || ((now.getMonth() + 1) === month && now.getDate() >= day);
+  if (!hadBirthday) age -= 1;
+  return age >= 18;
+}
+
+
 /** True for a clause that only makes sense when signing for someone else. */
 export function isChildOnlyQuestion(question) {
   if (!question) return false;
@@ -70,9 +103,11 @@ export function questionLabel(question) {
  * Demanding an answer to a parent-only clause from an adult who signed for
  * themselves would reject a submission that is complete.
  */
-export function questionsForSigner(questions = [], { isAdultSelf = false } = {}) {
-  if (!isAdultSelf) return questions || [];
-  return (questions || []).filter((question) => !isChildOnlyQuestion(question));
+export function questionsForSigner(questions = [], { isAdultSelf = false, isAdultFemale = false } = {}) {
+  return (questions || []).filter((question) => {
+    if (isAdultFemaleQuestion(question)) return isAdultFemale;
+    return !(isAdultSelf && isChildOnlyQuestion(question));
+  });
 }
 
 /**

@@ -1,8 +1,11 @@
 /**
- * Health declarations follow the activity season, which starts on 1 September.
- * A declaration signed January-July closes on 31 August of that year; one
- * signed August-December already belongs to the following season. Keep this in
- * sync with client/src/utils/healthValidity.js.
+ * A health declaration is in force until 31 August of the year after it was
+ * signed — always, whatever month it was signed in. So a signature from July
+ * 2025 holds through 31 August 2026.
+ *
+ * The earlier rule closed a January-July signature at the end of that same
+ * August, which meant a family that signed in July was asked again weeks later.
+ * Keep this in sync with client/src/utils/healthValidity.js.
  */
 
 // 31 August 23:59:59.999 Israel daylight time (UTC+03:00). Keeping the instant
@@ -21,11 +24,9 @@ export function healthExpiryDate(signedAt) {
   const israelParts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Jerusalem',
     year: 'numeric',
-    month: '2-digit',
   }).formatToParts(signed);
   const year = Number(israelParts.find((part) => part.type === 'year')?.value);
-  const month = Number(israelParts.find((part) => part.type === 'month')?.value);
-  return endOfAugust(month >= 8 ? year + 1 : year);
+  return endOfAugust(year + 1);
 }
 
 /** Unknown signature date is treated as valid so old records are not flagged by mistake. */

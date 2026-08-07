@@ -27,6 +27,73 @@ export function scheduledReminderKind(activity, now = new Date()) {
   return null;
 }
 
+/**
+ * A health declaration expires on 31 August, so the month's notice is a window
+ * and not a date: any run from 1 August finds the same families. One row per
+ * student per season keeps a restart, or a second run the same day, from
+ * sending twice.
+ */
+export function healthExpiryReminderKind(expiresAt, now = new Date()) {
+  const expiryKey = String(expiresAt || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(expiryKey)) return null;
+  const days = calendarDayNumber(expiryKey) - calendarDayNumber(dateKey(now));
+  if (days < 0 || days > 30) return null;
+  return `health_expiry_${expiryKey}`;
+}
+
+/**
+ * Tells families whose declaration is about to lapse, while it is still valid.
+ *
+ * Deliberately not a warning about documents that already expired — those are
+ * caught at registration and at check-in. This pass exists so a family renews
+ * before a class is refused, not after.
+ */
+export async function runHealthExpiryReminders({
+  db, persist, send, healthState, now = new Date(),
+} = {}) {
+  const students = db.get('students') || [];
+  const sentRows = db.get('participation_reminders') || [];
+  const summary = { candidates: 0, sent: 0, skipped: 0, failed: 0 };
+
+  for (const student of students) {
+    if (student?.status && ['inactive', 'archived', 'left'].includes(String(student.status))) continue;
+    const state = healthState(student);
+    if (!state?.valid || !state.expiresAt) continue;
+    const kind = healthExpiryReminderKind(state.expiresAt, now);
+    if (!kind) continue;
+    summary.candidates += 1;
+    const duplicate = sentRows.find((row) => (
+      String(row.student_id) === String(student.id) && row.kind === kind && row.status === 'sent'
+    ));
+    if (duplicate) {
+      summary.skipped += 1;
+      continue;
+    }
+    try {
+      const result = await send({ student, expiresAt: state.expiresAt, kind });
+      if (!result?.sent) {
+        summary.failed += 1;
+        continue;
+      }
+      const row = db.insert('participation_reminders', {
+        id: `pr_${crypto.randomUUID()}`,
+        registration_id: null,
+        activity_id: null,
+        student_id: student.id,
+        kind,
+        status: 'sent',
+        sent_via: result.via || null,
+        sent_at: new Date().toISOString(),
+      });
+      if (persist) await persist('participation_reminders', row);
+      summary.sent += 1;
+    } catch {
+      summary.failed += 1;
+    }
+  }
+  return summary;
+}
+
 export async function runParticipationDocumentReminders({ db, persist, send, now = new Date() } = {}) {
   const registrations = db.get('activity_registrations') || [];
   const activities = db.get('activities') || [];

@@ -24,9 +24,32 @@ export function withSignerName(text, signerName = '') {
   return String(text || '').replace(/\{\{\s*(שם החותם|signer)\s*\}\}/g, signer);
 }
 
+/**
+ * `[[…]]` in a template's text is the part that only applies when a minor is
+ * being signed for.
+ *
+ * An adult signing for themselves was reading "and for my minor children listed
+ * above" in a contract that listed nobody but them — a clause about people who
+ * are not there. The wording is one text with the minors' part marked, rather
+ * than two texts to keep in step.
+ */
+export function withMinorsClauses(text, hasMinors) {
+  const full = String(text || '');
+  if (hasMinors) return full.replace(/\[\[([\s\S]*?)\]\]/g, '$1');
+  return full
+    .replace(/\[\[[\s\S]*?\]\]/g, '')
+    // A dropped fragment leaves the punctuation that framed it — "עצמי ," — and
+    // a dropped whole clause leaves the blank line it sat on.
+    .replace(/[ \t]+([,.])/g, '$1')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 const CONFIRM_TITLES = {
-  trip: 'הבנת אופי הטיול',
-  wall: 'הבנת אופי הפעילות',
+  trip: 'אופי הטיול וכללי הבטיחות',
+  // Two things on one screen: what the activity is, and the rules that follow
+  // from it. The title says both, in the order they are read.
+  wall: 'אופי הפעילות וכללי הבטיחות',
 };
 
 const WAIVER_FALLBACK_TITLE = 'כתב הצהרה, ויתור והסרת אחריות';
@@ -51,7 +74,7 @@ export function declarationSectionTitles(template) {
   const slug = ['event', 'birthday'].includes(rawSlug) ? 'wall' : rawSlug;
   return {
     health: 'הצהרת בריאות',
-    confirm: CONFIRM_TITLES[slug] || 'הבנת אופי הפעילות',
+    confirm: CONFIRM_TITLES[slug] || 'כללי בטיחות',
     waiver: splitWaiverText(template?.waiverText).title,
   };
 }

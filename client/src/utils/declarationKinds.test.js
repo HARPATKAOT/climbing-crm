@@ -11,7 +11,7 @@ test('every line in the approvals folder gets its own name, icon and colour', ()
   ];
 
   assert.deepEqual(rows.map((k) => k.title), [
-    'אישור השתתפות — קיר',
+    'אישור השתתפות — קיר טיפוס',
     'אישור השתתפות — טיול',
     'הצהרת בריאות',
     'אישור רופא',

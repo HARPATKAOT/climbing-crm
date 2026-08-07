@@ -20,6 +20,7 @@ import {
 import { healthExpiryDate } from '../utils/healthValidity.js';
 import {
   DECLARATION_KINDS,
+  DOCUMENT_FILE_KINDS,
   declarationKind,
   documentRowKind,
   templateKind,
@@ -517,10 +518,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const navigate = useNavigate();
 
   const [broadcastListDefs, setBroadcastListDefs] = useState([
-    { key: 'general', label: 'כללי', description: 'עדכונים שוטפים' },
-    { key: 'classes', label: 'חוגים', description: 'שינויי שעות וכדומה' },
-    { key: 'trips', label: 'טיולים', description: 'טיולי סנפלינג/חוץ' },
-    { key: 'events', label: 'אירועים', description: 'אירועים ותחרויות מועדון' },
+    { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים ותזכורות' },
+    { key: 'marketing', label: 'שיווקי', description: 'טיולים חדשים, מבצעים ועדכונים כלליים' },
   ]);
   const [broadcastLists, setBroadcastLists] = useState({});
   const [loadingLists, setLoadingLists] = useState(false);
@@ -535,7 +534,14 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [savingFollowup, setSavingFollowup] = useState(false);
   
   // Edit Form Fields (student)
-  const [editStudentName, setEditStudentName] = useState(student.name || '');
+  // שם פרטי ושם משפחה בשני שדות, כמו אצל ההורה. תיק שקדם לפיצול נפתח עם
+  // אותו ניחוש שהמערכת עשתה תמיד — המילה האחרונה — אבל מכאן הוא נשמר בנפרד.
+  const [editStudentFirstName, setEditStudentFirstName] = useState(
+    () => splitParentName({ name: student.name, lastName: student.lastName }).first,
+  );
+  const [editStudentLastName, setEditStudentLastName] = useState(
+    () => splitParentName({ name: student.name, lastName: student.lastName }).lastName,
+  );
   const [editBirthDate, setEditBirthDate] = useState(student.birthDate || '');
   const [editStudentPhone, setEditStudentPhone] = useState(student.phone || '');
   const [editGender, setEditGender] = useState(student.gender || '');
@@ -551,6 +557,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [editPhone, setEditPhone] = useState(parent?.phone || '');
   const [editEmail, setEditEmail] = useState(parent?.email || '');
   const [editCity, setEditCity] = useState(parent?.city || '');
+  const [editParentGender, setEditParentGender] = useState(parent?.gender || '');
   const [editParentNotes, setEditParentNotes] = useState(parent?.notes || '');
   const [editSource, setEditSource] = useState(parent?.source || student.source || 'unknown');
   const [editFocus, setEditFocus] = useState('student'); // student | parent
@@ -567,7 +574,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [formTemplates, setFormTemplates] = useState([]);
   const [selectedFormSlug, setSelectedFormSlug] = useState('');
   const [showHealthSendModal, setShowHealthSendModal] = useState(false);
-  const [downloadingPdf, setDownloadingPdf] = useState(false);
+  // מזהה המסמך שנבנה כרגע, לא בוליאני: דגל אחד סימן „מכין…” על כל כפתורי
+  // ההורדה בתיקייה יחד, ואי אפשר היה לדעת איזו הורדה בכלל התחילה.
+  const [downloadingPdf, setDownloadingPdf] = useState('');
   const [clientDocuments, setClientDocuments] = useState([]);
   const [docsLoading, setDocsLoading] = useState(false);
   const [deletingDocId, setDeletingDocId] = useState('');
@@ -595,7 +604,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [addContactError, setAddContactError] = useState('');
 
   useEffect(() => {
-    setEditStudentName(student.name || '');
+    {
+      // איפוס לשני השדות המפוצלים — הקריאה לסטר הישן הפילה את כל המסך.
+      const split = splitParentName({ name: student.name, lastName: student.lastName });
+      setEditStudentFirstName(split.first);
+      setEditStudentLastName(split.lastName);
+    }
     setEditBirthDate(student.birthDate || '');
     setEditStudentPhone(student.phone || '');
     setEditGender(student.gender || '');
@@ -610,6 +624,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     setEditPhone(parent?.phone || '');
     setEditEmail(parent?.email || '');
     setEditCity(parent?.city || '');
+    setEditParentGender(parent?.gender || '');
     setEditParentNotes(parent?.notes || '');
     setEditSource(parent?.source || student.source || 'unknown');
     setIsEditing(false);
@@ -744,7 +759,10 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         if (!cancelled) setParticipationWaivers([]);
       });
     return () => { cancelled = true; };
-  }, [parentOnly, student.id]);
+    // knownDeclarations only changes when the server feed actually changed
+    // (the page-level refresh compares bytes) — a form signed while this card
+    // is open lands here without closing and reopening the file.
+  }, [parentOnly, student.id, knownDeclarations]);
 
   const healthOnlySelected = selectedFormSlug === 'health-renewal';
   const selectedTemplate = healthOnlySelected
@@ -791,7 +809,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         if (!cancelled) setDocsLoading(false);
       });
     return () => { cancelled = true; };
-  }, [parentOnly, student.id]);
+    // Refetched when the declarations feed changes so a PDF created for a
+    // just-signed form shows up in the open folder on its own.
+  }, [parentOnly, student.id, knownDeclarations]);
 
   // Backfill a personal-file PDF for every signed declaration that still has
   // none. The old check stopped at "any health PDF on the file", so a trip
@@ -1724,8 +1744,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     setEditError('');
     try {
       if (!parentOnly) {
-        const trimmedStudentName = editStudentName.trim();
-        if (!trimmedStudentName) {
+        const studentFirst = editStudentFirstName.trim();
+        const studentLast = editStudentLastName.trim();
+        if (!studentFirst && !studentLast) {
           setEditError('יש למלא שם למתאמן');
           return;
         }
@@ -1733,7 +1754,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            name: trimmedStudentName,
+            // name המלא נשאר ליד השדה הנפרד — כל מה שמכיר רק אותו ממשיך לעבוד.
+            name: joinParentName(studentFirst, studentLast),
+            lastName: studentLast,
             birthDate: editBirthDate,
             phone: editStudentPhone.trim(),
             gender: editGender || null,
@@ -1770,6 +1793,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             phone: editPhone,
             email: editEmail,
             city: editCity,
+            gender: editParentGender || null,
             source: editSource,
             notes: editParentNotes,
             status: parentOnly ? student.status : undefined,
@@ -2385,8 +2409,13 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
 
   const openUnifiedEditor = () => {
     const nextParentName = parentNameParts(parent);
-    setEditFocus(parentOnly ? 'parent' : 'student');
-    setEditStudentName(student.name || '');
+    setEditFocus(showStudentProfile ? 'student' : 'parent');
+    {
+      // איפוס לשני השדות המפוצלים — הקריאה לסטר הישן הפילה את כל המסך.
+      const split = splitParentName({ name: student.name, lastName: student.lastName });
+      setEditStudentFirstName(split.first);
+      setEditStudentLastName(split.lastName);
+    }
     setEditBirthDate(student.birthDate || '');
     setEditStudentPhone(student.phone || '');
     setEditGender(student.gender || '');
@@ -2399,6 +2428,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     setEditPhone(parent?.phone || '');
     setEditEmail(parent?.email || '');
     setEditCity(parent?.city || '');
+    setEditParentGender(parent?.gender || '');
     setEditParentNotes(parent?.notes || '');
     setEditSource(parent?.source || student.source || 'unknown');
     setEditError('');
@@ -2826,7 +2856,13 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, fontWeight: 700, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {name}
                         </span>
-                        {tab.student && <GenderMark gender={tab.student.gender} size={13} />}
+                        {/* אצל הילד הסימן יושב על כרטיס המתאמן, אצל ההורה על
+                            כרטיס ההורה — ולמבוגר המילים הן גבר / אישה. */}
+                        <GenderMark
+                          gender={tab.student?.gender || tab.parent?.gender}
+                          size={13}
+                          labels={tab.student && !tab.student.isAdult ? ['בן', 'בת'] : ['גבר', 'אישה']}
+                        />
                         <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
                           <button
                             type="button"
@@ -3764,26 +3800,65 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 // a family may still need the trip or activity form.
                 const canSendForm = !!parent?.phone;
 
+                /**
+                 * The sealed evidence chain of one signed document.
+                 *
+                 * The PDF shows what was signed; this shows that the signing
+                 * happened — which screens were open and for how long, when each
+                 * box was ticked, when the end of the waiver was on screen, the
+                 * phone verification, the address it came from, and a seal over
+                 * all of it. It is what answers a challenge to the signature.
+                 */
+                const downloadEvidenceChain = async (documentId, label) => {
+                  if (!documentId) return;
+                  setHealthSendMsg('');
+                  try {
+                    const res = await fetch(`/api/signature-evidence?documentId=${encodeURIComponent(documentId)}`);
+                    if (!res.ok) throw new Error('evidence fetch failed');
+                    const data = await res.json();
+                    if (!data?.events?.length) {
+                      setHealthSendMsg('אין רשומת ראיות למסמך הזה — הוא נחתם לפני שהתיעוד הופעל');
+                      return;
+                    }
+                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `evidence-${label || documentId}.json`;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    URL.revokeObjectURL(url);
+                    setHealthSendMsg('קובץ הראיות הורד למחשב');
+                  } catch (err) {
+                    console.error(err);
+                    setHealthSendMsg('שגיאה בהורדת רשומת הראיות');
+                  }
+                };
+
                 const handleDownloadDoc = async (doc) => {
                   const source = doc.virtualData || healthDecl;
+                  const busyKey = doc.id || 'virtual-health';
                   if (doc.isVirtual || (!doc.id || String(doc.id).startsWith('virtual_'))) {
                     if (!source) {
                       setHealthSendMsg('האישור עדיין נטען — נסו שוב בעוד רגע');
                       return;
                     }
-                    setDownloadingPdf(true);
+                    setDownloadingPdf(busyKey);
                     setHealthSendMsg('');
                     try {
                       await downloadHealthDeclarationPdf(source);
-                      setHealthSendMsg('קובץ האישור החתום הורד למחשב');
+                      setHealthSendMsg('הקובץ ירד למחשב — בדקו בתיקיית ההורדות');
                     } catch (err) {
                       console.error(err);
                       setHealthSendMsg('שגיאה בהורדת האישור');
                     } finally {
-                      setDownloadingPdf(false);
+                      setDownloadingPdf('');
                     }
                     return;
                   }
+                  setDownloadingPdf(busyKey);
+                  setHealthSendMsg('');
                   try {
                     const res = await fetch(`/api/documents/${encodeURIComponent(doc.id)}/download`);
                     if (!res.ok) throw new Error('download failed');
@@ -3796,10 +3871,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     a.click();
                     a.remove();
                     URL.revokeObjectURL(url);
-                    setHealthSendMsg('קובץ האישור החתום הורד למחשב');
+                    setHealthSendMsg('הקובץ ירד למחשב — בדקו בתיקיית ההורדות');
                   } catch (err) {
                     console.error(err);
                     setHealthSendMsg('שגיאה בהורדת המסמך מהתיק');
+                  } finally {
+                    setDownloadingPdf('');
                   }
                 };
 
@@ -3893,7 +3970,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 };
 
                 const downloadParticipationDoc = async (doc, waiver) => {
-                  setDownloadingPdf(true);
+                  setDownloadingPdf(doc.id || 'virtual-participation');
                   setHealthSendMsg('');
                   try {
                     if (!doc.isVirtual) {
@@ -3926,12 +4003,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         signedDate: waiver?.signed_at || waiver?.signedAt || '',
                       });
                     }
-                    setHealthSendMsg('קובץ אישור ההשתתפות הורד למחשב');
+                    setHealthSendMsg('קובץ אישור ההשתתפות ירד למחשב — בדקו בתיקיית ההורדות');
                   } catch (err) {
                     console.error(err);
                     setHealthSendMsg('שגיאה בהורדת אישור ההשתתפות');
                   } finally {
-                    setDownloadingPdf(false);
+                    setDownloadingPdf('');
                   }
                 };
 
@@ -3954,22 +4031,40 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                           display: 'flex', gap: 4, flexWrap: 'nowrap',
                           alignItems: 'center', overflowX: 'auto',
                         }}>
+                          {/* Each button wears the mark and the colour its own lines
+                              wear below, so the filter reads as the same language as
+                              the folder it filters. */}
                           {[
-                            { key: 'all', label: 'הכול' },
-                            { key: 'health', label: 'בריאות' },
-                            { key: 'participation:wall', label: 'קיר' },
-                            { key: 'participation:trip', label: 'טיולים' },
+                            {
+                              key: 'all', label: 'הכול', Icon: LayoutGrid,
+                              color: 'var(--text-2)',
+                              bg: 'rgba(148,163,184,0.14)', border: 'rgba(148,163,184,0.35)',
+                            },
+                            { ...DOCUMENT_FILE_KINDS.health, key: 'health' },
+                            { ...DOCUMENT_FILE_KINDS.wall, key: 'participation:wall' },
+                            { ...DOCUMENT_FILE_KINDS.trip, key: 'participation:trip', label: 'טיולים' },
                           ].map((filter) => {
                             const active = documentKindFilter === filter.key;
+                            const FilterIcon = filter.Icon;
                             return (
                               <button
                                 key={filter.key}
                                 type="button"
                                 className={`btn btn-xs ${active ? 'btn-primary' : 'btn-ghost'}`}
                                 aria-pressed={active}
+                                title={filter.title || filter.label}
                                 onClick={() => setDocumentKindFilter(filter.key)}
-                                style={{ flexShrink: 0, minWidth: 54, fontWeight: 700 }}
+                                style={{
+                                  flexShrink: 0, minWidth: 54, fontWeight: 700,
+                                  display: 'inline-flex', alignItems: 'center',
+                                  justifyContent: 'center', gap: 4,
+                                  color: filter.color,
+                                  ...(active
+                                    ? { background: filter.bg, borderColor: filter.border }
+                                    : null),
+                                }}
                               >
+                                <FilterIcon size={13} strokeWidth={2.3} style={{ flexShrink: 0 }} />
                                 {filter.label}
                               </button>
                             );
@@ -4002,10 +4097,10 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                             <button
                               type="button"
                               className="btn btn-primary btn-xs"
-                              disabled={downloadingPdf}
+                              disabled={!!downloadingPdf}
                               onClick={() => handleDownloadDoc({ isVirtual: true, virtualData: healthDecl })}
                             >
-                              <Download size={12} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
+                              <Download size={12} /> {downloadingPdf === 'virtual-health' ? 'מכין...' : 'הורדה'}
                             </button>
                           )}
                         </div>
@@ -4019,23 +4114,23 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                             <button
                               type="button"
                               className="btn btn-primary btn-xs"
-                              disabled={downloadingPdf || !healthDecl}
+                              disabled={!!downloadingPdf || !healthDecl}
                               onClick={async () => {
                                 if (!healthDecl) return;
-                                setDownloadingPdf(true);
+                                setDownloadingPdf('virtual-health');
                                 setHealthSendMsg('');
                                 try {
                                   await downloadHealthDeclarationPdf(healthDecl);
-                                  setHealthSendMsg('קובץ האישור החתום הורד למחשב');
+                                  setHealthSendMsg('הקובץ ירד למחשב — בדקו בתיקיית ההורדות');
                                 } catch (err) {
                                   console.error(err);
                                   setHealthSendMsg('שגיאה בהורדת האישור');
                                 } finally {
-                                  setDownloadingPdf(false);
+                                  setDownloadingPdf('');
                                 }
                               }}
                             >
-                              <Download size={12} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
+                              <Download size={12} /> {downloadingPdf === 'virtual-health' ? 'מכין...' : 'הורדה'}
                             </button>
                           )}
                         </div>
@@ -4136,9 +4231,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                     className={`badge ${kind.badge}`}
                                     title={doc.fileName || title}
                                     style={{
-                                      height: 32, padding: '0 10px',
-                                      fontSize: 12, fontWeight: 600, lineHeight: 1,
-                                      whiteSpace: 'nowrap', minWidth: 0, overflow: 'hidden',
+                                      minHeight: 32, padding: '5px 10px', boxSizing: 'border-box',
+                                      fontSize: 12, fontWeight: 600, lineHeight: 1.25,
+                                      whiteSpace: 'normal', minWidth: 0, textAlign: 'start',
                                       display: 'inline-flex', alignItems: 'center', gap: 5,
                                     }}
                                   >
@@ -4155,13 +4250,35 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                         fontSize: 12, lineHeight: 1,
                                       }}
                                       title="הורדת הקובץ"
-                                      disabled={busy || downloadingPdf || (!participationRow && doc.isVirtual && !(doc.virtualData || healthDecl))}
+                                      disabled={busy || !!downloadingPdf || (!participationRow && doc.isVirtual && !(doc.virtualData || healthDecl))}
                                       onClick={() => participationRow
                                         ? downloadParticipationDoc(doc, waiver)
                                         : handleDownloadDoc(doc)}
                                     >
-                                      <Download size={13} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
+                                      {/* „מכין…” רק על הכפתור שנלחץ — דגל משותף
+                                          סימן את כל התיקייה כעסוקה יחד. */}
+                                      <Download size={13} /> {downloadingPdf === (doc.id || (participationRow ? 'virtual-participation' : 'virtual-health')) ? 'מכין...' : 'הורדה'}
                                     </button>
+                                    {!clearanceRow && (
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-xs"
+                                        style={{
+                                          width: 32, height: 32, padding: 0, boxSizing: 'border-box',
+                                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                        }}
+                                        title="הורדת רשומת הראיות של החתימה"
+                                        disabled={busy}
+                                        onClick={() => downloadEvidenceChain(
+                                          participationRow
+                                            ? (waiver?.id || doc.waiverId || doc.id)
+                                            : (sourceDeclaration?.id || doc.declarationId || doc.id),
+                                          `${student?.name || ''}-${title}`.trim().replace(/\s+/g, '-')
+                                        )}
+                                      >
+                                        <ShieldCheck size={13} />
+                                      </button>
+                                    )}
                                     <button
                                       type="button"
                                       className="btn btn-ghost btn-xs"
@@ -5748,14 +5865,24 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             {(editFocus === 'student' && !parentOnly) && (
               <>
                 <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', marginBottom: 4 }}>פרטי המתאמן</div>
-                <div className="form-group">
-                  <label className="form-label">שם</label>
-                  <input
-                    className="input"
-                    autoFocus
-                    value={editStudentName}
-                    onChange={(e) => setEditStudentName(e.target.value)}
-                  />
+                <div className="form-grid-2">
+                  <div className="form-group">
+                    <label className="form-label">שם פרטי</label>
+                    <input
+                      className="input"
+                      autoFocus
+                      value={editStudentFirstName}
+                      onChange={(e) => setEditStudentFirstName(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">שם משפחה</label>
+                    <input
+                      className="input"
+                      value={editStudentLastName}
+                      onChange={(e) => setEditStudentLastName(e.target.value)}
+                    />
+                  </div>
                 </div>
                 <div className="form-grid-2">
                   <div className="form-group">
@@ -5840,6 +5967,17 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
               <div className="form-group">
                 <label className="form-label">עיר</label>
                 <input className="input" value={editCity} onChange={e => setEditCity(e.target.value)} />
+              </div>
+            </div>
+            <div className="form-grid-2">
+              <div className="form-group">
+                <label className="form-label">גבר / אישה</label>
+                {/* אותה בחירה כמו אצל המתאמן, במילים של מבוגר. */}
+                <GenderPicker
+                  value={editParentGender}
+                  onChange={setEditParentGender}
+                  options={[['גבר', 'male'], ['אישה', 'female']]}
+                />
               </div>
             </div>
             <div className="form-group">
@@ -6337,8 +6475,15 @@ export default function Leads({
 
   useEffect(() => {
     fetch('/api/health-declarations')
-      .then(res => res.ok ? res.json() : [])
-      .then(list => setDeclarations(Array.isArray(list) ? list : []))
+      .then(res => res.ok ? res.text() : '[]')
+      .then(text => {
+        const list = JSON.parse(text);
+        if (!Array.isArray(list)) return;
+        // Remembered so the first background refresh doesn't re-set an
+        // identical feed and refetch every open card's folders for nothing.
+        lastRefreshRef.current.declarations = text;
+        setDeclarations(list);
+      })
       .catch(() => setDeclarations([]));
   }, []);
 
@@ -6401,20 +6546,51 @@ export default function Leads({
       .catch(err => console.error(err));
   }, [canManageBilling]);
 
+  // What the last background refresh returned, so an unchanged answer can be
+  // dropped before it becomes new state. Most minutes nothing changed, and
+  // replacing the arrays anyway rebuilt every household row and every status
+  // count for nothing — which the desk felt as the screen stuttering under them.
+  const lastRefreshRef = useRef({ students: null, parents: null, declarations: null });
+
   const refreshData = async () => {
     try {
-      const [studentsResponse, parentsResponse] = await Promise.all([
+      const [studentsResponse, parentsResponse, declarationsResponse] = await Promise.all([
         fetch('/api/students'),
         fetch('/api/parents'),
+        fetch('/api/health-declarations'),
       ]);
       if (!studentsResponse.ok || !parentsResponse.ok) return;
-      const [freshStudents, freshParents] = await Promise.all([
-        studentsResponse.json(),
-        parentsResponse.json(),
+      // Compared as text: byte-exact, and cheaper than re-serialising the state.
+      const [studentsText, parentsText] = await Promise.all([
+        studentsResponse.text(),
+        parentsResponse.text(),
       ]);
-      if (!Array.isArray(freshStudents) || !Array.isArray(freshParents)) return;
-      setStudents(freshStudents);
-      setParents(freshParents);
+      // A declaration signed while a customer file is open has to reach that
+      // open card — the card derives its approvals from this feed.
+      if (declarationsResponse.ok) {
+        const declarationsText = await declarationsResponse.text();
+        if (declarationsText !== lastRefreshRef.current.declarations) {
+          const freshDeclarations = JSON.parse(declarationsText);
+          if (Array.isArray(freshDeclarations)) {
+            lastRefreshRef.current.declarations = declarationsText;
+            setDeclarations(freshDeclarations);
+          }
+        }
+      }
+      if (studentsText !== lastRefreshRef.current.students) {
+        const freshStudents = JSON.parse(studentsText);
+        if (Array.isArray(freshStudents)) {
+          lastRefreshRef.current.students = studentsText;
+          setStudents(freshStudents);
+        }
+      }
+      if (parentsText !== lastRefreshRef.current.parents) {
+        const freshParents = JSON.parse(parentsText);
+        if (Array.isArray(freshParents)) {
+          lastRefreshRef.current.parents = parentsText;
+          setParents(freshParents);
+        }
+      }
     } catch (e) {
       console.error(e);
     }
@@ -6481,6 +6657,30 @@ export default function Leads({
     }
     return rows;
   }, [filtered, parents, students, filterStatus]);
+
+  // The customer table is a thousand-odd households, and drawing every row cost
+  // roughly a second of frozen screen on each visit and each keystroke in
+  // search. Rows are added as they are scrolled towards instead. Filtering or
+  // searching starts over from the top, which is where the answer is anyway.
+  const ROWS_PER_PAGE = 60;
+  const [visibleRowCount, setVisibleRowCount] = useState(ROWS_PER_PAGE);
+  const moreRowsRef = useRef(null);
+  useEffect(() => { setVisibleRowCount(ROWS_PER_PAGE); }, [search, filterStatus]);
+  const visibleFamilyRows = useMemo(
+    () => familyRows.slice(0, visibleRowCount),
+    [familyRows, visibleRowCount]
+  );
+  useEffect(() => {
+    const sentinel = moreRowsRef.current;
+    if (!sentinel) return undefined;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setVisibleRowCount((count) => count + ROWS_PER_PAGE);
+      }
+    }, { rootMargin: '400px' });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [visibleFamilyRows.length, familyRows.length]);
 
   const familyCountByStatus = useMemo(() => {
     const map = {
@@ -6958,7 +7158,7 @@ export default function Leads({
               {familyRows.length === 0 && (
                 <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>אין תוצאות</td></tr>
               )}
-              {familyRows.map((family) => {
+              {visibleFamilyRows.map((family) => {
                 const parent = family.parent;
                 const primary = family.primaryStudent;
                 const isIg = parent?.instagram_id || parent?.channel === 'instagram'
@@ -7093,6 +7293,13 @@ export default function Leads({
                   </tr>
                 );
               })}
+              {visibleFamilyRows.length < familyRows.length && (
+                <tr ref={moreRowsRef}>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: 16, color: 'var(--text-3)', fontSize: 12 }}>
+                    מציג {visibleFamilyRows.length} מתוך {familyRows.length} — גוללים כדי לראות עוד
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
