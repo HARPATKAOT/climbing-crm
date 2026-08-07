@@ -13753,6 +13753,9 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
     listDefs,
     subscriptions,
     requiredListKey: REQUIRED_BROADCAST_LIST,
+    // How many adults the household already holds: a second parent cannot be
+    // added to a family that has two.
+    householdParentCount: householdParents.length,
     interestOptions: INTEREST_OPTIONS,
     template: template
       ? {

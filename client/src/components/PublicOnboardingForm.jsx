@@ -862,6 +862,8 @@ export default function PublicOnboardingForm() {
   // participant key -> { match, student_id, guardian_first_name, health_valid, linked }
   const [knownChildren, setKnownChildren] = useState({});
   const [prefilledParentId, setPrefilledParentId] = useState('');
+  // Two adults are a household's limit here: a third is a staff-side change.
+  const [householdParentCount, setHouseholdParentCount] = useState(0);
   const [editingParentProfile, setEditingParentProfile] = useState(false);
   // A file was recognised from a phone number. Saying "this is me" is what turns
   // that into an identification the signer stands behind.
@@ -1450,6 +1452,7 @@ export default function PublicOnboardingForm() {
       setSelfStudent(data.selfStudent || null);
 
       setPrefilledParentId(data.parent.id);
+      setHouseholdParentCount(Number(data.householdParentCount) || 0);
       setEditingParentProfile(false);
       setIdentityStatus('found');
       setFamilyParentId(null);
@@ -3082,7 +3085,7 @@ export default function PublicOnboardingForm() {
                   && !selfCardFromDetails(child) && (
                 <>
                 <div className="form-group">
-                  <label>{child.type === 'adult' ? 'שם מלא *' : 'שם פרטי של הילד/ה *'}</label>
+                  <label>{child.type === 'adult' ? 'שם פרטי *' : 'שם פרטי של הילד/ה *'}</label>
                   <input
                     value={child.name}
                     onChange={(e) => updateChild(index, { name: e.target.value })}
