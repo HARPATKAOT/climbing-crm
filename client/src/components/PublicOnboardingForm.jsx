@@ -913,9 +913,6 @@ export default function PublicOnboardingForm() {
   const relationRequired = !isAdultSelf;
   const missingParentFields = Object.keys(MISSING_LABELS)
     .filter((field) => (field === 'relation' ? relationRequired : true))
-    // A date of birth is asked of a participant, not of a parent who is only
-    // signing: it is what decides whether they sign for themselves.
-    .filter((field) => (field === 'birthDate' ? isAdultSelf : true))
     .filter((field) => !String(parent[field] || '').trim());
   const isMissing = (field) => missingParentFields.includes(field);
   const missingStyle = (field) => (isMissing(field)
@@ -1611,9 +1608,9 @@ export default function PublicOnboardingForm() {
       setError('יש לאשר שאלה הפרטים שלך — או לתקן אותם');
       return;
     }
-    if (isAdultSelf && !parent.birthDate) {
+    if (!parent.birthDate) {
       if (parentProfileLocked) setEditingParentProfile(true);
-      setError('יש למלא תאריך לידה — הוא נדרש להשתתפות שלך');
+      setError('יש למלא תאריך לידה');
       return;
     }
     if (!parent.gender || (relationRequired && !parent.relation)) {
@@ -2500,7 +2497,7 @@ export default function PublicOnboardingForm() {
             {/* מין ממלא/ת הטופס — הכרטיס בתיק מציג „זכר / נקבה”, ובלי השדה כאן
                 הוא נשאר „לא צוין” לכל מי שנרשם דרך הטופס הציבורי. */}
             <div className="form-group">
-              <label>תאריך לידה {isAdultSelf && <span className="req-star">*</span>}</label>
+              <label>תאריך לידה <span className="req-star">*</span></label>
               <input
                 type="date"
                 value={parent.birthDate}
