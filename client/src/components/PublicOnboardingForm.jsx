@@ -2377,26 +2377,6 @@ export default function PublicOnboardingForm() {
                     לא נמצא תיק תואם. תיק משפחה חדש ייפתח רק לאחר שליחת הטופס.
                   </div>
                 )}
-            {/* First question on the form, because the answer decides what the
-                rest of it is asking for: a parent filling in for children, or
-                an adult filling in for themselves. Asked later, the parent
-                section reads as if it were about someone else. */}
-            <label
-              className="event-check"
-              style={{
-                cursor: 'pointer',
-                marginBottom: 18,
-                borderColor: isAdultSelf ? 'var(--form-accent-border, rgba(249,115,22,0.45))' : 'rgba(255,255,255,0.08)',
-                background: isAdultSelf ? 'var(--form-accent-soft, rgba(249,115,22,0.08))' : 'rgba(255,255,255,0.03)',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={isAdultSelf}
-                onChange={(e) => setAdultSelfMode(e.target.checked)}
-              />
-              <span>גם אני משתתף/ת וממלא/ת עבור עצמי</span>
-            </label>
             {!parentProfileLocked && (
               <>
             <div className="section-title">
@@ -2447,17 +2427,15 @@ export default function PublicOnboardingForm() {
             </div>
             {/* מין ממלא/ת הטופס — הכרטיס בתיק מציג „זכר / נקבה”, ובלי השדה כאן
                 הוא נשאר „לא צוין” לכל מי שנרשם דרך הטופס הציבורי. */}
-            {isAdultSelf && (
-              <div className="form-group">
-                <label>תאריך לידה <span className="req-star">*</span></label>
-                <input
-                  type="date"
-                  value={parent.birthDate}
-                  onChange={(e) => setParent((p) => ({ ...p, birthDate: e.target.value }))}
-                  style={missingStyle('birthDate')}
-                />
-              </div>
-            )}
+            <div className="form-group">
+              <label>תאריך לידה {isAdultSelf && <span className="req-star">*</span>}</label>
+              <input
+                type="date"
+                value={parent.birthDate}
+                onChange={(e) => setParent((p) => ({ ...p, birthDate: e.target.value }))}
+                style={missingStyle('birthDate')}
+              />
+            </div>
             <div className="form-group">
               <label>מין <span className="req-star">*</span></label>
               <div style={isMissing('gender')
@@ -2540,6 +2518,24 @@ export default function PublicOnboardingForm() {
                 </div>
               </div>
             </div>
+            {/* אחרי הפרטים, לא לפניהם: הם נשאלים ממילא, והשאלה כאן היא רק אם
+                מי שממלא אותם גם משתתף בעצמו. */}
+            <label
+              className="event-check"
+              style={{
+                cursor: 'pointer',
+                marginBottom: 18,
+                borderColor: isAdultSelf ? 'var(--form-accent-border, rgba(249,115,22,0.45))' : 'rgba(255,255,255,0.08)',
+                background: isAdultSelf ? 'var(--form-accent-soft, rgba(249,115,22,0.08))' : 'rgba(255,255,255,0.03)',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={isAdultSelf}
+                onChange={(e) => setAdultSelfMode(e.target.checked)}
+              />
+              <span>גם אני משתתף/ת וממלא/ת עבור עצמי</span>
+            </label>
               </>
             )}
             {knownFile && (
