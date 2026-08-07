@@ -2882,24 +2882,9 @@ export default function PublicOnboardingForm() {
                     borderRadius: 12, padding: 12, marginBottom: 0,
                   }}>
                     {child.skipThisTime ? (
-                      <div style={{
-                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                        gap: 10, flexWrap: 'wrap',
-                      }}>
-                        <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>
-                          לא ימולא הפעם — לא ייכלל בשליחה
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => updateChild(index, { skipThisTime: false })}
-                          style={{
-                            background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
-                            borderRadius: 10, color: 'rgba(255,255,255,0.7)',
-                            fontFamily: 'inherit', fontSize: 12, padding: '7px 12px', cursor: 'pointer',
-                          }}
-                        >
-                          בעצם כן, נמלא
-                        </button>
+                      /* הדרך חזרה היא הכפתור שבראש הכרטיס. כאן נשארת רק העובדה. */
+                      <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>
+                        לא ימולא הפעם — לא ייכלל בשליחה
                       </div>
                     ) : (
                       <>
