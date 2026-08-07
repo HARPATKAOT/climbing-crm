@@ -1891,6 +1891,14 @@ export default function PublicOnboardingForm() {
       }
       // Said here rather than after the signature: the fix is to attach a
       // different file, and the last screen is the worst place to learn that.
+      const spouseWithoutPhone = children.find((c) => c.relationToSigner === 'spouse'
+        && c.name?.trim()
+        && !skipsThisRound(c)
+        && String(c.spousePhone || '').replace(/\D/g, '').length < 9);
+      if (spouseWithoutPhone) {
+        setError(`יש למלא מספר טלפון של ${spouseWithoutPhone.name.trim()} — הוא נדרש כדי לצרף אותו/ה לתיק המשפחה`);
+        return;
+      }
       const overBudget = clearanceBudgetError(children);
       if (overBudget) {
         setError(overBudget);
@@ -2046,6 +2054,9 @@ export default function PublicOnboardingForm() {
             // server asks for a signature the form deliberately never showed.
             reuse_health_document: reuseHealth,
             reuse_waiver: healthOnlyMode ? false : reuseActivityWaiver,
+            // A spouse is a parent of this household as well as a participant.
+            // The phone is what the server needs to create — or recognise — them.
+            spouse_phone: c.relationToSigner === 'spouse' ? String(c.spousePhone || '').trim() : '',
           };
         });
 
@@ -2759,7 +2770,7 @@ export default function PublicOnboardingForm() {
                       </div>
                     ) : (
                       <div style={{ fontSize: 18, fontWeight: 800, color: 'rgba(255,255,255,0.45)', lineHeight: 1.25 }}>
-                        {child.type === 'adult' ? 'משתתף/ת מבוגר/ת' : `ילד/ה ${index + 1}`}
+                        {child.type === 'adult' ? 'משתתף/ת מבוגר/ת' : 'משתתף/ת חדש/ה'}
                       </div>
                     )}
                     {/* מי זה ביחס למי שממלא: „אב”, „ילדה”. בכרטיס שמכיל שם בלבד
@@ -2826,42 +2837,6 @@ export default function PublicOnboardingForm() {
                     </button>
                   )}
                 </div>
-                {child.confirmSkip && !child.skipThisTime && (
-                  <div style={{
-                    background: 'rgba(248,113,113,.1)', border: '1px solid rgba(248,113,113,.45)',
-                    borderRadius: 12, padding: 12, marginBottom: 14,
-                    fontSize: 13, lineHeight: 1.6, color: '#FCA5A5',
-                  }}>
-                    <div style={{ fontWeight: 700, marginBottom: 8 }}>
-                      בטוח? {child.name?.trim() || 'אותו אדם'} לא יוכל/תוכל להשתתף בפעילות.
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <button
-                        type="button"
-                        onClick={() => updateChild(index, { skipThisTime: true, confirmSkip: false })}
-                        style={{
-                          background: 'rgba(248,113,113,.18)', border: '1px solid rgba(248,113,113,.5)',
-                          borderRadius: 10, color: '#FCA5A5',
-                          fontFamily: 'inherit', fontSize: 12, fontWeight: 700,
-                          padding: '7px 12px', cursor: 'pointer',
-                        }}
-                      >
-                        כן, לא משתתף
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => updateChild(index, { confirmSkip: false })}
-                        style={{
-                          background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
-                          borderRadius: 10, color: 'rgba(255,255,255,0.7)',
-                          fontFamily: 'inherit', fontSize: 12, padding: '7px 12px', cursor: 'pointer',
-                        }}
-                      >
-                        ביטול
-                      </button>
-                    </div>
-                  </div>
-                )}
 
                 {/* בגר — הורה חותם רק על ילדיו הקטינים. הכרטיס יוצא מהטופס
                     ואומר למה, במקום להעלים משתתף בלי הסבר. */}
@@ -2909,6 +2884,41 @@ export default function PublicOnboardingForm() {
                             : `ל${child.name?.trim() || 'משתתף/ת זה'} עדיין אין ${declarationContextLabel} חתומה. `}
                           אם {child.name?.trim() || 'המשתתף/ת'} כבר לא מטפס/ת, אפשר לדלג — בלי הצהרה בתוקף לא נכנסים לפעילות.
                         </div>
+                        {/* השאלה מחליפה את הכפתורים שפתחו אותה, באותו מקום.
+                            חלונית שנפתחת מעל הכפתור שנלחץ שולחת אדם לחפש מה
+                            השתנה. */}
+                        {child.confirmSkip ? (
+                          <>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: '#FCA5A5', marginBottom: 8 }}>
+                              בטוח? {child.name?.trim() || 'אותו אדם'} לא יוכל/תוכל להשתתף בפעילות.
+                            </div>
+                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                              <button
+                                type="button"
+                                onClick={() => updateChild(index, { skipThisTime: true, confirmSkip: false })}
+                                style={{
+                                  background: 'rgba(248,113,113,.18)', border: '1px solid rgba(248,113,113,.5)',
+                                  borderRadius: 10, color: '#FCA5A5',
+                                  fontFamily: 'inherit', fontSize: 13, fontWeight: 700,
+                                  padding: '9px 14px', cursor: 'pointer',
+                                }}
+                              >
+                                כן, לא משתתף
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => updateChild(index, { confirmSkip: false })}
+                                style={{
+                                  background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
+                                  borderRadius: 10, color: 'rgba(255,255,255,0.7)',
+                                  fontFamily: 'inherit', fontSize: 13, padding: '9px 14px', cursor: 'pointer',
+                                }}
+                              >
+                                ביטול
+                              </button>
+                            </div>
+                          </>
+                        ) : (
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                           <button
                             type="button"
@@ -2933,6 +2943,7 @@ export default function PublicOnboardingForm() {
                             לא משתתף
                           </button>
                         </div>
+                        )}
                       </>
                     )}
                   </div>
@@ -3179,6 +3190,22 @@ export default function PublicOnboardingForm() {
                       : CHILD_GENDER_OPTIONS}
                   />
                 </div>
+                {/* בן/בת זוג נכנס/ת לתיק כהורה נוסף, וזה דורש מספר טלפון —
+                    אין דרך אחרת לזהות אדם ולא ליצור לו תיק כפול. */}
+                {child.relationToSigner === 'spouse' && (
+                  <div className="form-group">
+                    <label>טלפון <span className="req-star">*</span></label>
+                    <input
+                      type="tel"
+                      value={child.spousePhone || ''}
+                      onChange={(e) => updateChild(index, { spousePhone: e.target.value })}
+                      placeholder="מספר הטלפון של בן/בת הזוג"
+                    />
+                    <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', marginTop: 6, lineHeight: 1.5 }}>
+                      יתווסף לתיק המשפחה כהורה נוסף
+                    </div>
+                  </div>
+                )}
                 {/* The child's own phone. An adult already gave theirs on the
                     first step, so asking again would be asking twice. */}
                 {child.type !== 'adult' && (

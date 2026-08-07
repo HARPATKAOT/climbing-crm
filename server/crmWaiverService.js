@@ -22,7 +22,7 @@ import {
 } from './healthQuestions.js';
 import { CANONICAL_HEALTH_QUESTIONS, normalizeParticipationScope } from './participationDocuments.js';
 import { healthDocumentState, waiverDocumentState } from './participationEligibility.js';
-import { ensureHouseholdForParent } from './households.js';
+import { addPendingSpouse, ensureHouseholdForParent } from './households.js';
 import {
   appendSignatureEvidence,
   createSignatureEvidenceEvent,
@@ -875,6 +875,26 @@ export async function saveCrmParticipants({
   // Materialise the explicit household after guardian linking/merging, so
   // future orders validate every participant against one durable household.
   const household = await ensureHouseholdForParent(db, persist, parent.id);
+
+  // A spouse is a participant and a second adult of the same household. The
+  // declarations above already treated them as a participant; this is what puts
+  // them on the family file, so the next form recognises them instead of opening
+  // a second one. A bad number must not undo signatures that were just filed.
+  const spouseInputs = (participants || []).filter((input) => (
+    String(input?.spouse_phone || input?.spousePhone || '').replace(/\D/g, '').length >= 9
+  ));
+  for (const input of spouseInputs) {
+    try {
+      await addPendingSpouse(db, persist, {
+        householdId: household.id,
+        name: clean(input.name),
+        phone: String(input.spouse_phone || input.spousePhone || ''),
+        source,
+      });
+    } catch (error) {
+      console.warn('spouse not added to household:', error.message);
+    }
+  }
 
   return { parent, participants: savedParticipants, declarations, waivers, template, familyLinks, household };
 }
