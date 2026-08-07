@@ -4540,6 +4540,11 @@ function normalizeActivityPayload(body = {}) {
     participant_registration_slug:
       isOps ? null : (body.participant_registration_slug || body.registration_slug || null),
     registration_enabled: isOps ? false : !!body.registration_enabled,
+    // Whether the activity is advertised at all. This list is rebuilt from
+    // scratch on every save, so a field missing from it is not merely ignored —
+    // it is erased. That is why an activity saved as published came back
+    // private, however it had been set: the flag never survived the next save.
+    show_on_site: !isOps && !!body.registration_enabled && !!body.show_on_site,
     registration_closes_at: body.registration_closes_at || null,
     collect_registration_payment:
       !isOps && registrationMode === 'paid_per_participant' && Number(body.price || 0) > 0,
