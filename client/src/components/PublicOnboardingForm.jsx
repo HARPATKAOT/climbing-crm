@@ -2889,29 +2889,21 @@ export default function PublicOnboardingForm() {
                     השתנה” עלה בבלבול יותר משחסך בזמן. הצבע עדיין מספר מה יש
                     בתיק: כחול — יש הצהרה והיא תרוענן; צהוב — אין או שפגה. */}
                 {cardState === 'participating' && (child.onFileHealthValid ? (
+                  /* שורה אחת ובלי תאריך — ההצהרה מתרעננת ממילא, אז מתי נחתמה
+                     הקודמת לא משנה לאף החלטה כאן. */
                   <CardStatus
                     tone="info"
                     icon={<ShieldCheck size={15} />}
-                    title="נמצאה הצהרת בריאות בתוקף"
-                  >
-                    {child.onFileHealthSignedAt
-                      ? `נחתמה ב-${formatSignedDay(child.onFileHealthSignedAt)}. `
-                      : ''}
-                    במסך הבא נרענן אותה במקום — כמה שאלות קצרות וחתימה.
-                  </CardStatus>
+                    title="יש לנו הצהרת בריאות קודמת שלכם — היום נרענן אותה"
+                  />
                 ) : child.id ? (
                   <CardStatus
                     tone="warn"
                     icon={<AlertTriangle size={15} />}
                     title={child.onFileHealthSignedAt
-                      ? `${declarationContextLabel} אינה בתוקף`
-                      : `לא נמצאה ${declarationContextLabel}`}
-                  >
-                    {child.onFileHealthSignedAt
-                      ? `ההצהרה מ-${formatSignedDay(child.onFileHealthSignedAt)} כבר אינה בתוקף. `
-                      : ''}
-                    הצהרת הבריאות של {namePhrase} תמולא במסך הבא.
-                  </CardStatus>
+                      ? `${declarationContextLabel} אינה בתוקף — נמלא אותה במסך הבא`
+                      : `אין ${declarationContextLabel} — נמלא אותה במסך הבא`}
+                  />
                 ) : (
                   /* כרטיס שהוקלד עכשיו: אין תיק שאפשר „לא למצוא” בו כלום. */
                   <CardStatus
