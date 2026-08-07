@@ -13696,6 +13696,11 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
           email: parent.email || '',
           city: parent.city || '',
           idNumber: parent.idNumber || '',
+          // בלעדיהם הטופס פותח בכל ביקור מחדש את "השלמת הפרטים" — למרות
+          // שהכול כבר מולא. תאריך לידה של תיקים ישנים חי רק על כרטיס
+          // המתאמן של ההורה, ולכן הנפילה אליו.
+          gender: parent.gender || selfStudent?.gender || '',
+          birthDate: parent.birthDate || selfStudent?.birthDate || '',
         }
       : null,
     selfStudent: selfStudent
@@ -13733,6 +13738,7 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
       return {
         id: s.id,
         name: s.name || '',
+        lastName: s.lastName || '',
         birthDate: s.birthDate || '',
         gender: s.gender || '',
         idNumber: s.idNumber || '',
@@ -14076,6 +14082,7 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
       return {
         id: c.id || null,
         name,
+        lastName: String(c.lastName || '').trim(),
         type: asAdult ? 'adult' : 'child',
         birthDate: String(c.birthDate || '').trim(),
         gender: String(c.gender || '').trim(),

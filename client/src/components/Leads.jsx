@@ -533,7 +533,14 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [savingFollowup, setSavingFollowup] = useState(false);
   
   // Edit Form Fields (student)
-  const [editStudentName, setEditStudentName] = useState(student.name || '');
+  // שם פרטי ושם משפחה בשני שדות, כמו אצל ההורה. תיק שקדם לפיצול נפתח עם
+  // אותו ניחוש שהמערכת עשתה תמיד — המילה האחרונה — אבל מכאן הוא נשמר בנפרד.
+  const [editStudentFirstName, setEditStudentFirstName] = useState(
+    () => splitParentName({ name: student.name, lastName: student.lastName }).first,
+  );
+  const [editStudentLastName, setEditStudentLastName] = useState(
+    () => splitParentName({ name: student.name, lastName: student.lastName }).lastName,
+  );
   const [editBirthDate, setEditBirthDate] = useState(student.birthDate || '');
   const [editStudentPhone, setEditStudentPhone] = useState(student.phone || '');
   const [editGender, setEditGender] = useState(student.gender || '');
@@ -1722,8 +1729,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     setEditError('');
     try {
       if (!parentOnly) {
-        const trimmedStudentName = editStudentName.trim();
-        if (!trimmedStudentName) {
+        const studentFirst = editStudentFirstName.trim();
+        const studentLast = editStudentLastName.trim();
+        if (!studentFirst && !studentLast) {
           setEditError('יש למלא שם למתאמן');
           return;
         }
@@ -1731,7 +1739,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            name: trimmedStudentName,
+            // name המלא נשאר ליד השדה הנפרד — כל מה שמכיר רק אותו ממשיך לעבוד.
+            name: joinParentName(studentFirst, studentLast),
+            lastName: studentLast,
             birthDate: editBirthDate,
             phone: editStudentPhone.trim(),
             gender: editGender || null,
@@ -5802,14 +5812,24 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
             {(editFocus === 'student' && !parentOnly) && (
               <>
                 <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', marginBottom: 4 }}>פרטי המתאמן</div>
-                <div className="form-group">
-                  <label className="form-label">שם</label>
-                  <input
-                    className="input"
-                    autoFocus
-                    value={editStudentName}
-                    onChange={(e) => setEditStudentName(e.target.value)}
-                  />
+                <div className="form-grid-2">
+                  <div className="form-group">
+                    <label className="form-label">שם פרטי</label>
+                    <input
+                      className="input"
+                      autoFocus
+                      value={editStudentFirstName}
+                      onChange={(e) => setEditStudentFirstName(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">שם משפחה</label>
+                    <input
+                      className="input"
+                      value={editStudentLastName}
+                      onChange={(e) => setEditStudentLastName(e.target.value)}
+                    />
+                  </div>
                 </div>
                 <div className="form-grid-2">
                   <div className="form-group">

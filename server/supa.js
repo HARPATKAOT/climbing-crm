@@ -191,6 +191,7 @@ export const parentFromRow = (r) => ({
   lastName: r.last_name || '',
   idNumber: r.id_number || '',
   relation: r.relation || '',
+  birthDate: r.birth_date || '',
   icount_client_id: r.icount_client_id || undefined,
   bot_paused_until: r.bot_paused_until || null,
   bot_pause_reason: r.bot_pause_reason || null,
@@ -224,6 +225,7 @@ export const parentToRow = (o) => ({
   last_name: emptyToNull(o.lastName || o.last_name),
   id_number: emptyToNull(o.idNumber || o.id_number),
   relation: emptyToNull(o.relation),
+  birth_date: emptyToNull(o.birthDate || o.birth_date),
   icount_client_id: emptyToNull(o.icount_client_id),
   bot_paused_until: emptyToNull(o.bot_paused_until),
   bot_pause_reason: emptyToNull(o.bot_pause_reason),
@@ -245,6 +247,7 @@ const mappers = {
     fromRow: (r) => ({
       id: r.id,
       name: r.name || '',
+      lastName: r.last_name || '',
       parentId: r.parent_id || null,
       groupId: r.group_id || null,
       status: r.status || 'lead_new',
@@ -267,6 +270,7 @@ const mappers = {
     toRow: (o) => ({
       id: o.id,
       name: o.name || '',
+      last_name: emptyToNull(o.lastName || o.last_name),
       parent_id: emptyToNull(o.parentId),
       group_id: emptyToNull(o.groupId),
       status: o.status || 'lead_new',

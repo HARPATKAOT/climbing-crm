@@ -409,6 +409,10 @@ export async function saveCrmParticipants({
     email: email || parent.email || '',
     city: clean(parentInput?.city) || parent.city || '',
     idNumber: idNumber || parent.idNumber || '',
+    // מין ותאריך לידה נאספים בטופס הציבורי. בלי לשמור אותם, כל ביקור חוזר
+    // פתח מחדש את חלונית "השלמת הפרטים" במקום כרטיס הסיכום.
+    gender: clean(parentInput?.gender) || parent.gender || '',
+    birthDate: clean(parentInput?.birthDate || parentInput?.birth_date) || parent.birthDate || '',
     // Reached through the ID from a number the card does not carry: record it,
     // so the next visit is recognised by phone like everyone else.
     phone: existingById ? (phone || parent.phone || '') : parent.phone,
@@ -565,6 +569,8 @@ export async function saveCrmParticipants({
     const childPhone = clean(input.childPhone || input.phone);
     const patch = {
       name,
+      // שם המשפחה בשדה משלו, כמו על תיק ההורה — לא ניחוש מהמילה האחרונה.
+      lastName: clean(input.lastName || input.last_name) || student?.lastName || '',
       // A second parent joins the child's file; they do not take it over.
       parentId: linkedFromOtherFamily ? student.parentId : parent.id,
       isAdult: participantType === 'adult',

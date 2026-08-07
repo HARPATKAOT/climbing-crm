@@ -395,6 +395,7 @@ function ParentProfileSummary({ parent, onEdit }) {
   const rows = [
     ['תעודת זהות', parent?.idNumber || '—', { ltr: true }],
     ['טלפון', parent?.phone || '—', { ltr: true }],
+    ['תאריך לידה', formatSignedDay(parent?.birthDate) || '—', { ltr: true }],
     ['מין', genderLabels[parent?.gender] || 'לא צוין', {}],
     ['מקום מגורים', parent?.city || '—', {}],
     ['קשר למשפחה', relationLabels[parent?.relation] || 'לא צוין', {}],
@@ -662,6 +663,7 @@ const emptyChild = (questions = []) => {
   return {
     id: null,
     name: '',
+    lastName: '',
     // "האם משתתף/ת בפעילות?" — עדיין לא נשאל. הכרטיס נפתח בשאלה הזאת,
     // ומצב ההצהרה מתגלה רק אחרי "כן".
     participates: null,
@@ -689,6 +691,7 @@ function participantFromExistingStudent(student, questions = [], {
     ...emptyChild(questions),
     id: student?.id || null,
     name: student?.name || '',
+    lastName: student?.lastName || '',
     idNumber: student?.idNumber || '',
     birthDate: student?.birthDate || '',
     gender: participationGenderValue(student?.gender),
@@ -1147,7 +1150,23 @@ export default function PublicOnboardingForm() {
   const childFullName = (child) => {
     const typed = String(child?.name || '').trim().replace(/\s+/g, ' ');
     if (!typed || typed.includes(' ')) return typed;
-    return joinParentName(typed, parent.lastName);
+    const surname = String(child?.lastName || '').trim()
+      || (child?.type !== 'adult' ? String(parent.lastName || '').trim() : '');
+    return joinParentName(typed, surname);
+  };
+
+  /**
+   * שם המשפחה שנשלח לתיק: מה שהוקלד בשדה; לילד בלי שדה מלא — של ההורה;
+   * לשם מלא מהתיק — אותו ניחוש שהמערכת עשתה תמיד (המילה האחרונה), כדי
+   * שהשדה החדש יתמלא גם לרשומות ותיקות.
+   */
+  const participantLastName = (child) => {
+    const typed = String(child?.lastName || '').trim();
+    if (typed) return typed;
+    if (child?.relationToSigner === 'self') return String(parent.lastName || '').trim();
+    const name = String(child?.name || '').trim();
+    if (name.includes(' ')) return splitParentName({ name }).lastName;
+    return child?.type !== 'adult' ? String(parent.lastName || '').trim() : '';
   };
 
   /** Children have no stable id until they are saved — identify them by what was typed. */
@@ -1378,7 +1397,7 @@ export default function PublicOnboardingForm() {
             phone: data.parent.phone || searchParams.get('phone') || '',
             email: data.parent.email || '',
             city: data.parent.city || '',
-            gender: data.parent.gender || '',
+            gender: participationGenderValue(data.parent.gender) || '',
             birthDate: data.parent.birthDate || '',
           });
         }
@@ -1652,7 +1671,10 @@ export default function PublicOnboardingForm() {
         relation: current.relation || data.parent.relation || '',
         email: current.email.trim() || data.parent.email || '',
         city: current.city.trim() || data.parent.city || '',
-        gender: current.gender || data.parent.gender || '',
+        // מנורמל: תיק שנפתח בצוות יכול לשאת 'זכר'/'נקבה', והכפתורים בטופס
+        // מכירים רק male/female — ערך לא מנורמל נראה כמו שדה ריק.
+        gender: current.gender || participationGenderValue(data.parent.gender) || '',
+        birthDate: current.birthDate || data.parent.birthDate || '',
         // Keep the exact number that earned the active OTP token.
         phone: current.phone,
       }));
@@ -1693,6 +1715,7 @@ export default function PublicOnboardingForm() {
               ...emptyChild(allQuestions),
               id: s.id,
               name: s.name || '',
+              lastName: s.lastName || '',
               idNumber: s.idNumber || '',
               birthDate: s.birthDate || '',
               gender: participationGenderValue(s.gender),
@@ -1992,6 +2015,13 @@ export default function PublicOnboardingForm() {
           return;
         }
       }
+      // לילד יש נפילה לשם המשפחה של ההורה; למבוגר שנוסף אין — בלעדיו התיק
+      // ייפתח עם שם של מילה אחת.
+      if (kid.type === 'adult' && kid.relationToSigner !== 'self'
+        && !String(kid.lastName || '').trim() && !kid.name.trim().includes(' ')) {
+        setError(`חסר שם משפחה עבור ${kid.name.trim()}`);
+        return;
+      }
       if (!String(kid.idNumber || '').trim()) {
         setError(`חסרה תעודת זהות עבור ${kid.name}`);
         return;
@@ -2248,6 +2278,7 @@ export default function PublicOnboardingForm() {
           return {
             id: c.id,
             name: childFullName(c),
+            lastName: participantLastName(c),
             idNumber: (c.idNumber || '').trim(),
             type: c.type === 'adult' ? 'adult' : 'child',
             birthDate: c.birthDate,
@@ -2294,6 +2325,9 @@ export default function PublicOnboardingForm() {
             email: parent.email.trim(),
             city: parent.city.trim(),
             gender: parent.gender || '',
+            // נשמר על תיק ההורה, לא רק על כרטיס מתאמן: הורה שרק חותם על
+            // ילדיו איבד אותו, ונשאל מחדש בכל ביקור.
+            birthDate: parent.birthDate || '',
             source: 'form',
             family_parent_id: familyParentId || null,
           },
@@ -3112,24 +3146,44 @@ export default function PublicOnboardingForm() {
                 {/* הפרטים עצמם, כשהכרטיס אוסף אותם. */}
                 {asksDetails && (
                 <div style={{ marginTop: 14 }}>
+                {/* שם פרטי ושם משפחה בשני שדות — כמו על תיק ההורה, ולא ניחוש
+                    מהמילה האחרונה. הכרטיס של החותם מציג את שמו המלא כמו
+                    שהוקלד במסך הקודם. */}
+                {child.relationToSigner === 'self' ? (
                 <div className="form-group">
-                  <label>{child.type === 'adult' ? 'שם מלא *' : 'שם פרטי של הילד/ה *'}</label>
-                  <input
-                    value={child.name}
-                    onChange={(e) => updateChild(index, { name: e.target.value })}
-                    placeholder={child.type === 'adult' ? 'שם פרטי ושם משפחה' : 'שם פרטי'}
-                    readOnly={child.relationToSigner === 'self'}
-                    style={emptyStyle(child.name)}
-                  />
-                  {/* Shown rather than assumed: the surname is completed from
-                      the parent, and anyone whose child carries a different one
-                      can type it here in full. */}
-                  {child.type !== 'adult' && childFullName(child) !== child.name.trim() && (
-                    <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', marginTop: 6 }}>
-                      ייכנס למערכת כ־{childFullName(child)} — אפשר להקליד שם משפחה אחר במידת הצורך
-                    </div>
-                  )}
+                  <label>שם מלא *</label>
+                  <input value={child.name} readOnly style={emptyStyle(child.name)} />
                 </div>
+                ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div className="form-group">
+                    <label>{child.type === 'adult' ? 'שם פרטי *' : 'שם פרטי של הילד/ה *'}</label>
+                    <input
+                      value={child.name}
+                      onChange={(e) => updateChild(index, { name: e.target.value })}
+                      placeholder="שם פרטי"
+                      style={emptyStyle(child.name)}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>{`שם משפחה${child.type === 'adult' ? ' *' : ''}`}</label>
+                    <input
+                      value={child.lastName || ''}
+                      onChange={(e) => updateChild(index, { lastName: e.target.value })}
+                      placeholder={child.type !== 'adult' && parent.lastName.trim()
+                        ? parent.lastName.trim()
+                        : 'שם משפחה'}
+                      style={child.type === 'adult' ? emptyStyle(child.lastName) : undefined}
+                    />
+                    {/* ריק אצל ילד — שם המשפחה של ההורה מושלם מעצמו. */}
+                    {child.type !== 'adult' && !String(child.lastName || '').trim() && parent.lastName.trim() && (
+                      <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', marginTop: 6 }}>
+                        אם נשאר ריק: {parent.lastName.trim()}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                )}
                 <div className="form-group">
                   <label>תעודת זהות *</label>
                   <input
