@@ -271,6 +271,18 @@ const CARD_TONES = {
     border: 'rgba(52,211,153,.3)',
     text: '#6ee7b7',
   },
+  // צהוב וכחול קבועים, במכוון לא צבע-הנושא של הטופס: "חסרה הצהרה" חייב
+  // להיראות צהוב גם בטופס שצבעו כחול, אחרת האזהרה נראית כמו עוד כותרת.
+  warn: {
+    bg: 'rgba(252,211,77,.09)',
+    border: 'rgba(252,211,77,.45)',
+    text: '#FCD34D',
+  },
+  info: {
+    bg: 'rgba(56,189,248,.08)',
+    border: 'rgba(56,189,248,.35)',
+    text: '#7dd3fc',
+  },
   attention: {
     bg: 'var(--form-accent-soft, rgba(249,115,22,.1))',
     border: 'var(--form-accent-border, rgba(249,115,22,.35))',
@@ -650,6 +662,9 @@ const emptyChild = (questions = []) => {
   return {
     id: null,
     name: '',
+    // "האם משתתף/ת בפעילות?" — עדיין לא נשאל. הכרטיס נפתח בשאלה הזאת,
+    // ומצב ההצהרה מתגלה רק אחרי "כן".
+    participates: null,
     idNumber: '',
     birthDate: '',
     gender: '',
@@ -689,6 +704,7 @@ function participantFromExistingStudent(student, questions = [], {
     // Arriving on a renewal link is itself the answer, so the question is not
     // put again to someone who came to re-sign.
     healthChanged: forceHealthRenewal ? true : null,
+    participates: forceHealthRenewal ? true : null,
   };
 }
 
@@ -1180,21 +1196,20 @@ export default function PublicOnboardingForm() {
   };
 
   /**
-   * Left out of this submission: either the parent declined the renewal for
-   * now — a participant who moved abroad or stopped climbing is a real answer
-   * — or they are an adult who has to sign for themselves.
+   * Left out of this submission: either the parent said this person is not
+   * participating — someone who moved abroad or stopped climbing is a real
+   * answer — or they are an adult who has to sign for themselves.
    */
-  const skipsThisRound = (child) => !!child?.skipThisTime
+  const skipsThisRound = (child) => child?.participates === false
     || (!!child?.id && needsOwnSignature(child));
 
   /**
-   * On the file, nothing in force, and the parent has not answered the offer
-   * yet. Renewing is offered, never demanded, so an untouched card is simply
-   * not part of the submission.
+   * "האם משתתף/ת בפעילות?" has not been answered yet. Every card opens with
+   * that question — a declaration in force included, because being covered
+   * says nothing about whether this person is coming. An unanswered card is
+   * simply not part of the submission.
    */
-  const awaitingRenewChoice = (child) => !!child?.id
-    && !child?.onFileHealthValid
-    && !child?.renewOptIn
+  const awaitingParticipationChoice = (child) => child?.participates == null
     && !skipsThisRound(child);
 
   /**
@@ -1208,7 +1223,7 @@ export default function PublicOnboardingForm() {
    * per-participant `reuse_health` / `reuse_waiver` flags sent to the server.
    */
   const fillsDeclaration = (child) => !skipsThisRound(child)
-    && !awaitingRenewChoice(child);
+    && !awaitingParticipationChoice(child);
 
   /**
    * Shown the "has anything changed since?" question instead of the
@@ -1260,22 +1275,34 @@ export default function PublicOnboardingForm() {
    * עכשיו” נענית פעם אחת:
    *
    *   blocked   — בגר, וההורה לא יכול לחתום עליו
-   *   skipped   — נאמר עליו „לא הפעם”
-   *   covered   — יש הצהרה בתוקף, ואין מה למלא
+   *   skipped   — נאמר עליו „לא משתתף”
+   *   undecided — „האם משתתף/ת בפעילות?” עוד לא נענתה — גם למי שיש הצהרה
+   *               בתוקף; מצב ההצהרה מתגלה רק אחרי „כן”
+   *   covered   — משתתף, ויש הצהרה בתוקף
    *   reported  — דווח שינוי בריאותי על מי שהיה בתוקף
-   *   renewing  — נבחר לחדש, וההצהרה תמולא בשלבים הבאים
-   *   undecided — בתיק, בלי הצהרה בתוקף, ועוד לא נענתה ההצעה לחדש
+   *   renewing  — משתתף מהתיק בלי הצהרה בתוקף; תמולא במסך הבא
    *   new       — כרטיס שנוסף עכשיו ופרטיו נמסרים כאן
    */
   const participantCardState = (child) => {
     if (child?.id && needsOwnSignature(child)) return 'blocked';
-    if (child?.skipThisTime) return 'skipped';
+    if (child?.participates === false) return 'skipped';
+    if (child?.participates !== true) return 'undecided';
     if (child?.onFileHealthValid) return child?.resignHealth ? 'reported' : 'covered';
-    if (child?.id || child?.relationToSigner === 'self') {
-      return child?.renewOptIn ? 'renewing' : 'undecided';
-    }
+    if (child?.id || child?.relationToSigner === 'self') return 'renewing';
     return 'new';
   };
+
+  /**
+   * התשובה לשאלת ההשתתפות. „כן” על מי שאין לו הצהרה בתוקף מדליק גם את
+   * renewOptIn — זה מה שמכניס אותו למסכי ההצהרה, כמו קודם.
+   */
+  const answerParticipation = (index, yes) => updateChild(index, (c) => (yes
+    ? {
+      participates: true,
+      confirmSkip: false,
+      renewOptIn: !c.onFileHealthValid,
+    }
+    : { participates: false, confirmSkip: false }));
 
   useEffect(() => {
     let cancelled = false;
@@ -1525,6 +1552,9 @@ export default function PublicOnboardingForm() {
       const confirmed = kids.length > 0 && kids.every((c) => c.relationToSigner === 'child');
       return [...prev, {
         ...emptyChild(allQuestions),
+        // הוספה ידנית היא עצמה התשובה "משתתף" — אף אחד לא מוסיף כרטיס
+        // בשביל מי שלא בא לטפס.
+        participates: true,
         ...(confirmed ? { relationToSigner: 'child' } : null),
       }];
     });
@@ -1536,6 +1566,7 @@ export default function PublicOnboardingForm() {
       ...emptyChild(allQuestions),
       type: 'adult',
       relationToSigner: 'spouse',
+      participates: true,
     }]);
   };
 
@@ -1691,7 +1722,7 @@ export default function PublicOnboardingForm() {
    * offer the parent declined, or a participant who has to sign for themselves
    * — is neither validated nor sent.
    */
-  const namedChildren = () => children.filter((c) => c.name.trim() && !skipsThisRound(c) && !awaitingRenewChoice(c));
+  const namedChildren = () => children.filter((c) => c.name.trim() && !skipsThisRound(c) && !awaitingParticipationChoice(c));
 
   const healthChildren = () => namedChildren().filter((child) => fillsDeclaration(child));
 
@@ -1751,6 +1782,7 @@ export default function PublicOnboardingForm() {
       }
       setChildren((current) => current.map((child) => ({
         ...child,
+        participates: true,
         renewOptIn: true,
         resignHealth: true,
         editProfile: false,
@@ -1838,6 +1870,8 @@ export default function PublicOnboardingForm() {
           onFileHealthSignedAt: selfStudent?.healthSignedAt || '',
           onFileWaiverSignedAt: selfStudent?.waiverSignedAt || '',
           onFileDeclarationSummary: selfStudent?.declarationSummary || null,
+          // חוזרים אחורה וקדימה — התשובה "האם משתתף/ת?" שכבר ניתנה נשארת.
+          participates: adult?.participates ?? null,
         };
         return adult
           ? current.map((child) => (child === adult ? { ...child, ...nextAdult } : child))
@@ -1933,15 +1967,8 @@ export default function PublicOnboardingForm() {
       setError('יש לסמן בתחתית רשימת הילדים את האישור „אלו הם ילדיי" — או להסיר כרטיס של מי שאינו/ה ילד/ה שלך');
       return;
     }
-    // Every card is a question, and an unanswered one is not a "no". Left blank
-    // it carried the participant forward without anyone having decided. Asked
-    // only of cards that actually show the offer — a participant typed in just
-    // now was never asked, and blocking on them locked every new registration.
-    const undecided = kids.find((kid) => participantCardState(kid) === 'undecided');
-    if (undecided) {
-      setError(`יש לבחור עבור ${undecided.name?.trim() || 'כל משתתף'} — למלא הצהרה עכשיו, או לסמן שאינו/ה משתתף/ת`);
-      return;
-    }
+    // כרטיס שלא נענתה עליו שאלת ההשתתפות לא נכנס ל-kids בכלל; העצירה הרכה
+    // שממנה אפשר להמשיך בלחיצה שנייה נמצאת בהמשך הפונקציה.
     for (const kid of kids) {
       // A participant typed in by hand who turns out to be an adult: the form
       // says so here rather than dropping the card without a word.
@@ -1998,15 +2025,16 @@ export default function PublicOnboardingForm() {
         if (checked.some(([, match]) => match.match)) return;
       }
     }
-    // Renewing is optional, but leaving without it must not happen by accident:
-    // a parent who came for exactly that and walked past the offer would have
-    // finished with nothing renewed. So the first press names who is being left
-    // out and the second one goes ahead — the same soft stop the ID check uses.
-    const unofferedAnswer = children.filter((c) => c.name.trim() && awaitingRenewChoice(c));
+    // Leaving someone unanswered must not happen by accident: a card whose
+    // "האם משתתף/ת?" was never answered is not in the submission, and a parent
+    // who walked past it would finish with that person left out. So the first
+    // press names who is being left out and the second one goes ahead — the
+    // same soft stop the ID check uses.
+    const unofferedAnswer = children.filter((c) => c.name.trim() && awaitingParticipationChoice(c));
     const unofferedKey = unofferedAnswer.map((c) => c.name.trim()).join('|');
     if (unofferedKey && skipWarnedFor !== unofferedKey) {
       setSkipWarnedFor(unofferedKey);
-      setError(`לא בחרתם אם לחדש את הצהרת הבריאות של ${unofferedAnswer.map((c) => c.name.trim()).join(', ')} — לחצו „המשך” שוב כדי להמשיך בלי לחדש.`);
+      setError(`לא בחרתם אם ${unofferedAnswer.map((c) => c.name.trim()).join(', ')} משתתפ/ים בפעילות — לחצו „המשך” שוב כדי להמשיך בלעדיהם.`);
       return;
     }
 
@@ -2194,9 +2222,9 @@ export default function PublicOnboardingForm() {
     setError('');
     try {
       const kids = (childrenSnapshot || children)
-        // Same rule as the screen: a declined offer, or an adult who signs for
-        // themselves, is not part of what this parent submits.
-        .filter((c) => c.name.trim() && !skipsThisRound(c) && !awaitingRenewChoice(c))
+        // Same rule as the screen: a "not participating", an unanswered card,
+        // or an adult who signs for themselves, is not part of the submission.
+        .filter((c) => c.name.trim() && !skipsThisRound(c) && !awaitingParticipationChoice(c))
         .map((c) => {
           const participantQuestions = questionsForParticipant(c);
           const asked = new Set(participantQuestions.map((q) => q.id));
@@ -2540,7 +2568,7 @@ export default function PublicOnboardingForm() {
               טופס זה נדרש להשתתפות בפעילות טיפוס בקיר בועז
             </p>
           )}
-          {step === 2 && <p>בני המשפחה המשתתפים</p>}
+          {step === 2 && <p>בני המשפחה המשתתפים בפעילות</p>}
           {/* A bar, and no number. How many screens there are depends on how
               many participants are added and on which of them already hold a
               declaration in force — neither is known on the first screen, so a
@@ -2884,7 +2912,7 @@ export default function PublicOnboardingForm() {
         {step === 2 && (
           <div className="fade-in">
             <div className="section-title">
-              {healthOnlyMode ? `עדכון פרטי ${children[0]?.name || 'המשתתף/ת'}` : 'בני המשפחה המשתתפים'}
+              {healthOnlyMode ? `עדכון פרטי ${children[0]?.name || 'המשתתף/ת'}` : 'בני המשפחה המשתתפים בפעילות'}
             </div>
             {!healthOnlyMode && (
               <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.55)', margin: '0 0 14px' }}>
@@ -2954,6 +2982,30 @@ export default function PublicOnboardingForm() {
                       </>
                     )}
                   </div>
+                  {/* ממלא הטופס רואה בכרטיס שלו את סיכום הפרטים שמסר במסך
+                      הקודם — עליהם הוא עונה „משתתף” או „לא”. */}
+                  {child.relationToSigner === 'self' && (
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 3,
+                      fontSize: 12, color: 'rgba(255,255,255,0.6)', fontWeight: 700,
+                    }}>
+                      {(child.idNumber || '').trim() && (
+                        <span>ת״ז <span dir="ltr">{child.idNumber.trim()}</span></span>
+                      )}
+                      {(parent.phone || '').trim() && (
+                        <>
+                          <span style={{ opacity: .4 }}>·</span>
+                          <span dir="ltr">{parent.phone.trim()}</span>
+                        </>
+                      )}
+                      {(parent.email || '').trim() && (
+                        <>
+                          <span style={{ opacity: .4 }}>·</span>
+                          <span dir="ltr" style={{ overflowWrap: 'anywhere' }}>{parent.email.trim()}</span>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* איפה עומדת ההצהרה. פס אחד, אותו מקום בכל כרטיס. */}
@@ -2977,9 +3029,9 @@ export default function PublicOnboardingForm() {
                 {cardState === 'covered' && (
                   <>
                     <CardStatus
-                      tone="ok"
+                      tone="info"
                       icon={<ShieldCheck size={16} />}
-                      title="הצהרת בריאות והסרת אחריות בתוקף"
+                      title="נמצאה הצהרת בריאות והסרת אחריות בתוקף"
                     >
                       {child.onFileHealthSignedAt
                         ? `נחתם ב-${formatSignedDay(child.onFileHealthSignedAt)}. `
@@ -3022,22 +3074,11 @@ export default function PublicOnboardingForm() {
                   </CardStatus>
                 )}
 
+                {/* אחרי „כן, משתתף” בלי הצהרה בתוקף: מצב ההצהרה מתגלה — צהוב,
+                    כי חסר משהו — ונאמר איפה הוא יושלם. */}
                 {cardState === 'renewing' && (
                   <CardStatus
-                    tone="attention"
-                    icon={<ShieldAlert size={15} />}
-                    title={asksDetails
-                      ? `חידוש ההצהרה עבור ${namePhrase} — יש להשלים את הפרטים שחסרים`
-                      : `חידוש ההצהרה עבור ${namePhrase} יופיע בשלבים הבאים`}
-                  />
-                )}
-
-                {/* על הפרק, לא על החובה: מי שרשום בתיק ואין לו הצהרה בתוקף
-                    מקבל הצעה לחדש. אולי הוא כבר לא מטפס, ולכן „לא הפעם” הוא
-                    תשובה לגיטימית — אבל השאלה חייבת להישאל. */}
-                {cardState === 'undecided' && (
-                  <CardStatus
-                    tone="attention"
+                    tone="warn"
                     icon={<AlertTriangle size={15} />}
                     title={child.onFileHealthSignedAt
                       ? `${declarationContextLabel} אינה בתוקף`
@@ -3045,10 +3086,20 @@ export default function PublicOnboardingForm() {
                   >
                     {child.onFileHealthSignedAt
                       ? `ההצהרה מ-${formatSignedDay(child.onFileHealthSignedAt)} כבר אינה בתוקף. `
-                      : `ל${namePhrase} עדיין אין ${declarationContextLabel} חתומה. `}
-                    אם {typedName || 'המשתתף/ת'} כבר לא מטפס/ת, אפשר לדלג — בלי הצהרה בתוקף
-                    לא נכנסים לפעילות.
+                      : ''}
+                    הצהרת הבריאות של {namePhrase} תמולא במסך הבא.
+                    {asksDetails ? ' יש להשלים קודם את הפרטים שחסרים.' : ''}
                   </CardStatus>
+                )}
+
+                {/* קודם בוחרים מי משתתף; מצב ההצהרה — בתוקף או חסרה — מתגלה
+                    רק אחרי „כן”. כרטיס שלא נענה פשוט לא נכנס לשליחה. */}
+                {cardState === 'undecided' && (
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: 'rgba(255,255,255,0.85)' }}>
+                    {child.relationToSigner === 'self'
+                      ? `האם ${cg('אתה משתתף', 'את משתתפת')} בפעילות?`
+                      : `האם ${typedName || 'המשתתף/ת'} ${cg('משתתף', 'משתתפת')} בפעילות?`}
+                  </div>
                 )}
 
                 {cardState === 'new' && (
@@ -3211,7 +3262,7 @@ export default function PublicOnboardingForm() {
                     לחפש. השאלה המאשרת מחליפה את הכפתורים באותו מקום. */}
                 {cardState === 'skipped' && (
                   <CardActions>
-                    <CardButton onClick={() => updateChild(index, { skipThisTime: false, confirmSkip: false })}>
+                    <CardButton onClick={() => updateChild(index, { participates: null, confirmSkip: false })}>
                       {cg('בעצם כן, משתתף', 'בעצם כן, משתתפת')}
                     </CardButton>
                   </CardActions>
@@ -3225,7 +3276,7 @@ export default function PublicOnboardingForm() {
                     <CardActions>
                       <CardButton
                         variant="danger"
-                        onClick={() => updateChild(index, { skipThisTime: true, confirmSkip: false })}
+                        onClick={() => answerParticipation(index, false)}
                       >
                         {cg('כן, לא משתתף', 'כן, לא משתתפת')}
                       </CardButton>
@@ -3241,9 +3292,9 @@ export default function PublicOnboardingForm() {
                         השאלה. */}
                     <CardButton
                       variant="offer"
-                      onClick={() => updateChild(index, { renewOptIn: true, skipThisTime: false })}
+                      onClick={() => answerParticipation(index, true)}
                     >
-                      {child.onFileHealthSignedAt ? 'כן, לחדש עכשיו' : 'כן, למלא עכשיו'}
+                      {cg('כן, משתתף', 'כן, משתתפת')}
                     </CardButton>
                     <CardButton variant="offer" onClick={() => updateChild(index, { confirmSkip: true })}>
                       {cg('לא משתתף', 'לא משתתפת')}
@@ -3260,9 +3311,13 @@ export default function PublicOnboardingForm() {
                         עריכת פרטים
                       </CardButton>
                     )}
-                    <CardButton onClick={() => updateChild(index, { renewOptIn: false, editProfile: false })}>
-                      ביטול החידוש
-                    </CardButton>
+                    {/* חזרה לשאלת ההשתתפות — רק למי שנשאל אותה; כרטיס שנוסף
+                        ידנית חוזר ב„ביטול ההוספה”. */}
+                    {(child.id || child.relationToSigner === 'self') && (
+                      <CardButton onClick={() => updateChild(index, { participates: null, renewOptIn: false, editProfile: false })}>
+                        ביטול
+                      </CardButton>
+                    )}
                   </CardActions>
                 )}
 
@@ -3279,6 +3334,10 @@ export default function PublicOnboardingForm() {
                   <CardActions>
                     <CardButton onClick={() => updateChild(index, { resignAsk: true })}>
                       משהו השתנה במצב הבריאותי?
+                    </CardButton>
+                    {/* התחרטות על „כן, משתתף” — היישר אל אותו אישור דו-שלבי. */}
+                    <CardButton onClick={() => updateChild(index, { participates: null, confirmSkip: true, resignAsk: false })}>
+                      {cg('לא משתתף', 'לא משתתפת')}
                     </CardButton>
                   </CardActions>
                 ))}
