@@ -2454,7 +2454,7 @@ export default function PublicOnboardingForm() {
           </h2>
           {/* לאילו פעילויות הטופס נדרש, ומה הוא כולל — בדף הראשון בלבד. */}
           {step === 1 && !identityReady && (
-            <p style={{ fontSize: 13.5, lineHeight: 1.7 }}>{formIntro.sub}</p>
+            <p className="form-intro-sub">{formIntro.sub}</p>
           )}
           {step === 2 && <p>בחירת בני המשפחה המשתתפים בפעילות</p>}
           {/* A bar, and no number. How many screens there are depends on how
@@ -3662,6 +3662,15 @@ function FormStyles() {
           white-space: nowrap;
         }
         .form-header p { margin: 0; font-size: 13px; color: #94a3b8; }
+        /* שורת הפעילויות בדף הראשון היא חלק מההסבר מה הטופס, לא הערת שוליים
+           מתחתיו — ולכן היא גדולה ובהירה יותר משאר משפטי הכותרת. */
+        .form-header p.form-intro-sub {
+          font-size: clamp(14px, 3.2vw, 16.5px);
+          line-height: 1.65;
+          color: #cbd5e1;
+          margin-top: 4px;
+          text-wrap: balance;
+        }
         .section-title {
           font-size: clamp(24px, 4vw, 34px);
           line-height: 1.2;
