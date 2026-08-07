@@ -28,6 +28,7 @@ export const BOT_ACTION_TYPES = [
   { type: 'placement_cancelled', kind: ACTION_KIND, label: 'הסרה מקבוצה', icon: '↩️' },
   { type: 'status_changed', kind: ACTION_KIND, label: 'שינוי סטטוס מתאמן', icon: '🔁' },
   { type: 'interest_added', kind: ACTION_KIND, label: 'רישום מתעניין לפעילות', icon: '🎒' },
+  { type: 'interest_removed', kind: ACTION_KIND, label: 'הסרה מרשימת מתעניינים', icon: '🚫' },
   { type: 'details_saved', kind: ACTION_KIND, label: 'איסוף פרטים', icon: '📝' },
   { type: 'followup_scheduled', kind: ACTION_KIND, label: 'תזכורת מעקב נקבעה', icon: '📌' },
   { type: 'centre_report', kind: ACTION_KIND, label: 'דיווח למתנ״ס', icon: '🏛️' },

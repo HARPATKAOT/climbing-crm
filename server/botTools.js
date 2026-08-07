@@ -30,6 +30,7 @@ import {
   interestRows,
   normalizeInterestInput,
   normalizedName,
+  updateInterest,
 } from './activityInterest.js';
 import { recordBotAction } from './botActivityLog.js';
 import { FORM_SHORT, FORM_FULL, FORM_PURPOSE } from './participationForm.js';
@@ -279,8 +280,9 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
     name: 'addActivityInterest',
     description:
       'רושם את הלקוח כמתעניין באירוע או בטיול. שיבוץ רך: אינו תופס מקום, אינו '
-      + 'הרשמה ואינו חיוב — הצוות חוזר אליו כדי להשלים. להשתמש כשהלקוח מביע '
-      + 'עניין באירוע מסוים, גם בלי שביקש במפורש להירשם. חובה «מזהה» מ-getEvents.',
+      + 'הרשמה ואינו חיוב — הצוות חוזר אליו כדי להשלים. חובה «מזהה» מ-getEvents. '
+      + 'להשתמש רק אחרי שהלקוח אמר שהוא מעוניין. שאלה על אירועים היא שאלה, לא '
+      + 'בקשה להירשם — קודם מוסרים פרטים ושואלים אם זה מעניין.',
     parameters: {
       type: 'object',
       properties: {
@@ -290,6 +292,24 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
           description: 'שם המשתתף — ילד מהכרטיס, או שם שהלקוח מסר. ריק = הלקוח עצמו',
         },
         notes: { type: 'string', description: 'מה הלקוח ביקש לציין, אם ציין' },
+      },
+      required: ['eventId'],
+    },
+  },
+  {
+    name: 'removeActivityInterest',
+    description:
+      'מסיר את הלקוח מרשימת המתעניינים של אירוע. להשתמש כשהוא אומר שהוא לא '
+      + 'מעוניין, לא יכול בתאריך הזה, או מבקש להוריד אותו מהרשימה. חובה «מזהה» '
+      + 'מ-getEvents. אינו מבטל הרשמה בתשלום — זו פנייה לצוות.',
+    parameters: {
+      type: 'object',
+      properties: {
+        eventId: { type: 'string', description: 'ה«מזהה» של האירוע כפי שחזר מ-getEvents' },
+        participantName: {
+          type: 'string',
+          description: 'שם המשתתף שהוסר. ריק = הלקוח עצמו או המתעניין היחיד בכרטיס',
+        },
       },
       required: ['eventId'],
     },
@@ -1045,6 +1065,72 @@ export function buildCustomerTools({
         תאריך: eventDateLabel(activity),
         הערה: 'זהו שיבוץ רך שאינו תופס מקום ואינו הרשמה. יש לומר ללקוח שנרשם '
           + 'כמתעניין ושהצוות יחזור אליו להשלמת ההרשמה, ולציין מה המחיר אם יש.',
+      };
+    },
+
+    /**
+     * The other half of addActivityInterest.
+     *
+     * "תוריד אותי משם, אנחנו לא יכולים ביום הזה" went to the team, because the
+     * bot could put a name on the list and not take it off. A soft interest is
+     * the bot's to undo — a paid registration is not, and this never touches
+     * one.
+     */
+    removeActivityInterest: async ({ eventId, participantName } = {}) => {
+      const slug = String(eventId || '').trim();
+      if (!slug) return { error: 'חסר מזהה אירוע — יש לקרוא קודם ל-getEvents' };
+      if (!parent?.id) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
+
+      const activity = (db.get('activities') || []).find(
+        (a) => activityPublicSlug(a) === slug
+      );
+      if (!activity) return { error: 'אין אירוע עם המזהה הזה — יש לקרוא שוב ל-getEvents' };
+
+      const named = String(participantName || '').trim();
+      const mine = interestRows(db).filter(
+        (row) => String(row.activity_id || '') === String(activity.id)
+          && String(row.status || 'interested') === 'interested'
+          && String(row.parent_id || '') === String(parent.id)
+      );
+      if (!mine.length) {
+        return {
+          הוסר: false,
+          אירוע: activity.name || '',
+          הערה: 'הלקוח אינו רשום כמתעניין באירוע הזה — אין מה להסיר. יש לומר זאת בפשטות.',
+        };
+      }
+      const matches = named
+        ? mine.filter((row) => normalizedName(row.name) === normalizedName(named)
+          || String(row.name || '').includes(named.split(/\s+/)[0]))
+        : mine;
+      if (!matches.length) {
+        return { error: `אין מתעניין בשם ${named} באירוע הזה — יש לשאול את הלקוח` };
+      }
+      if (matches.length > 1) {
+        return {
+          error: 'יש כמה מתעניינים באירוע הזה — יש לשאול את מי להסיר',
+          מתעניינים: matches.map((row) => row.name || ''),
+        };
+      }
+
+      const row = matches[0];
+      await updateInterest({
+        db,
+        persist: persistCore,
+        row,
+        patch: { status: 'cancelled', cancelled_at: new Date().toISOString(), cancelled_by: 'bot' },
+      });
+
+      journal(
+        'interest_removed',
+        `${row.name || 'מתעניין'} הוסר מרשימת המתעניינים של ${activity.name || 'פעילות'}`,
+        { activity_id: activity.id, activity: activity.name || '' }
+      );
+
+      return {
+        הוסר: row.name || '',
+        אירוע: activity.name || '',
+        הערה: 'הוסר מרשימת המתעניינים. יש לאשר ללקוח בקצרה, בלי להציע לחזור לרשימה.',
       };
     },
 

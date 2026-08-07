@@ -491,6 +491,42 @@ test('«תרשמו אותנו לטיול» פעמיים — מתעניין אח�
   });
 });
 
+test('«תוריד אותי משם» — הבוט מסיר מרשימת המתעניינים בעצמו', async () => {
+  await withSeed({
+    activities: [TRIP],
+    students: [childYotam()],
+    ...signedFormFor(['s-yotam']),
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    await tools.addActivityInterest({ eventId: 'black-canyon', participantName: 'יותם' });
+
+    // «וואי, בטוח? תוריד אותי משם, אנחנו לא יכולים ביום הזה» — עבר לצוות
+    // כי לבוט הייתה דרך לרשום ולא הייתה דרך למחוק.
+    const removed = await tools.removeActivityInterest({ eventId: 'black-canyon' });
+    assert.equal(removed.הוסר, 'יותם כהן');
+    assert.match(removed.הערה, /הוסר/);
+
+    const rows = db.get(INTEREST_COLLECTION) || [];
+    assert.equal(rows.length, 1, 'השורה נשמרת ומסומנת, לא נמחקת');
+    assert.equal(rows[0].status, 'cancelled');
+    assert.equal(journal().at(-1).type, 'interest_removed');
+
+    // בקשה חוזרת אינה שגיאה — פשוט אין מה להסיר.
+    const again = await tools.removeActivityInterest({ eventId: 'black-canyon' });
+    assert.equal(again.הוסר, false);
+    assert.match(again.הערה, /אינו רשום/);
+  });
+});
+
+test('שאלה על אירועים אינה בקשה להירשם — הכללים מחייבים לשאול קודם', async () => {
+  const { CUSTOMER_TOOL_RULES } = await import('./botToolTurn.js');
+  assert.match(CUSTOMER_TOOL_RULES, /שאלה היא שאלה/);
+  assert.match(CUSTOMER_TOOL_RULES, /רק אחרי שהלקוח אמר שכן/);
+  assert.match(CUSTOMER_TOOL_RULES, /removeActivityInterest/);
+  // הכלל הישן אמר במפורש לרשום בלי לשאול — וזה מה שקרה בשיחה.
+  assert.doesNotMatch(CUSTOMER_TOOL_RULES, /בלי לשאול קודם אם לרשום/);
+});
+
 test('אירוע שאינו מפורסם אינו קיים בשביל הבוט — גם אם המודל נקב במזהה', async () => {
   await withSeed({
     activities: [{ ...TRIP, show_on_site: false }],

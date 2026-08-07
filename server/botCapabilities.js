@@ -46,7 +46,7 @@ export const BOT_CAPABILITIES = [
     label: 'רישום מתעניינים לטיול',
     hint: 'רושם לקוח כמתעניין בפעילות. לא הרשמה ולא חיוב',
     source: 'נכתב לרשימת המתעניינים של אותה פעילות',
-    tools: ['addActivityInterest'],
+    tools: ['addActivityInterest', 'removeActivityInterest'],
     requires: 'events',
   },
   {

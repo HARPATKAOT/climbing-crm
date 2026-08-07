@@ -264,6 +264,7 @@ test('the tools offered to the model are facts, links and placements — never s
     'getSignupLink',
     'joinWaitlist',
     'listClasses',
+    'removeActivityInterest',
     'scheduleFollowUp',
     'startSignup',
     'updateCustomerDetails',
@@ -274,12 +275,16 @@ test('the tools offered to the model are facts, links and placements — never s
     const decl = CUSTOMER_TOOL_DECLARATIONS.find((d) => d.name === name);
     assert.deepEqual(decl.parameters.required, ['childName']);
   }
-  // A tool may hand over a link and undo a placement, but never message
-  // anyone, delete data or take money — those stay with the team. cancelSignup
-  // is the one allowed reversal: it never touches a registered trainee, and it
-  // restores the pre-placement state rather than removing a record.
-  assert.equal(names.some((n) => /send|delete|remove|charge|refund/i.test(n)), false);
-  assert.deepEqual(names.filter((n) => /cancel/i.test(n)), ['cancelSignup']);
+  // A tool may hand over a link and undo something the bot itself did, but it
+  // may never message anyone, delete a record or take money — those stay with
+  // the team. The two reversals are exactly the two soft holds the bot can
+  // make: a placement, and an interest in a trip. Both restore the state from
+  // before rather than deleting anything.
+  assert.equal(names.some((n) => /send|charge|refund/i.test(n)), false);
+  assert.deepEqual(
+    names.filter((n) => /cancel|remove/i.test(n)),
+    ['cancelSignup', 'removeActivityInterest']
+  );
   const details = CUSTOMER_TOOL_DECLARATIONS.find((d) => d.name === 'updateCustomerDetails');
   assert.deepEqual(details.parameters.required, ['firstName', 'lastName']);
   assert.deepEqual(Object.keys(details.parameters.properties).sort(), ['firstName', 'lastName']);
