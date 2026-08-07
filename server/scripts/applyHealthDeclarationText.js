@@ -129,7 +129,9 @@ const ACTIVITIES = [
     // wording in its snapshot, and a rule that says something else under the
     // same id would let a re-rendered copy claim it was agreed to.
     safety: [
-      safety('w1', 'יש לפעול בכל עת לפי הוראות הצוות המקצועי, וטיפוס, אבטוח ושימוש בציוד ובמתקנים מותרים רק לאחר תדריך ומעבר מבחן בטיחות ובאישור הצוות'),
+      // w8 replaced w1: the one-breath sentence became two. New id, per the
+      // rule above — an old signature keeps meaning what it meant.
+      safety('w8', 'יש לפעול בכל עת לפי הוראות הצוות המקצועי. טיפוס, אבטוח ושימוש בציוד ובמתקנים מותרים רק לאחר תדריך ומעבר מבחן בטיחות ובאישור הצוות'),
       safety('w2', 'אין לרוץ או להשתולל בכל מתחם הקיר', { childOnly: true }),
       safety('w4', 'אבטוח הוא אחריות על חיי המטפס — יש להתייחס אליו ברצינות מוחלטת ולבצע אותו בהתאם לתדריך שתקבלו'),
       safety('w5', 'יש לדווח מיידית על כל מפגע, תקלה, פציעה או תחושה חריגה'),
