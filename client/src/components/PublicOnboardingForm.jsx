@@ -907,10 +907,7 @@ export default function PublicOnboardingForm() {
     gender: 'מין',
     relation: 'קשר למשתתפים',
   };
-  // „קשר למשתתפים” is a question about somebody else. Asked of an adult who
-  // ticked "I am the participant", it has no answer — and demanding one stopped
-  // the form on a field that did not apply.
-  const relationRequired = !isAdultSelf;
+  const relationRequired = false;
   const missingParentFields = Object.keys(MISSING_LABELS)
     .filter((field) => (field === 'relation' ? relationRequired : true))
     .filter((field) => !String(parent[field] || '').trim());
@@ -1108,10 +1105,14 @@ export default function PublicOnboardingForm() {
    * whatever they said their relation is, and everyone else is a child.
    */
   const participantRelationLabel = (child) => {
-    if (child?.type === 'adult') {
-      return { father: 'אב', mother: 'אם', guardian: 'אפוטרופוס', other: 'ממלא/ת הטופס' }[parent.relation]
-        || 'ממלא/ת הטופס';
+    if (child?.relationToSigner === 'self') return 'ממלא/ת הטופס';
+    if (child?.relationToSigner === 'spouse') return 'בן/בת זוג';
+    if (child?.relationToSigner === 'child') {
+      if (child?.gender === 'female') return 'הבת שלי';
+      if (child?.gender === 'male') return 'הבן שלי';
+      return 'הילד/ה שלי';
     }
+    if (child?.type === 'adult') return 'מבוגר/ת';
     if (child?.gender === 'female') return 'ילדה';
     if (child?.gender === 'male') return 'ילד';
     return 'ילד/ה';
@@ -2031,7 +2032,14 @@ export default function PublicOnboardingForm() {
             name: parentFullName(),
             lastName: parent.lastName.trim(),
             idNumber: parent.idNumber.trim(),
-            relation: parent.relation,
+            // Derived from the cards: someone who marked a participant as
+            // their child is that child's parent, and their own gender says
+            // which. The single "relation to participants" field could not
+            // describe a family with more than one kind of tie in it.
+            relation: parent.relation
+              || (children.some((c) => c.relationToSigner === 'child')
+                ? (parent.gender === 'female' ? 'mother' : 'father')
+                : 'other'),
             phone: parent.phone.trim(),
             email: parent.email.trim(),
             city: parent.city.trim(),
@@ -2544,49 +2552,6 @@ export default function PublicOnboardingForm() {
                 />
               </div>
             </div>
-            <div className="form-row">
-              <div className="form-group">
-                {/* Buttons for the same reason as בן / בת below: a native list
-                    paints its own highlight and ignores the page. */}
-                <label>
-                  קשר למשתתפים {relationRequired && <span className="req-star">*</span>}
-                </label>
-                <div style={{
-                  display: 'flex', gap: 6, flexWrap: 'wrap',
-                  ...(isMissing('relation')
-                    ? {
-                        border: '1px solid rgba(252,211,77,.55)', background: 'rgba(251,191,36,.07)',
-                        borderRadius: 12, padding: 6,
-                      }
-                    : null),
-                }}>
-                  {[['אב', 'father'], ['אם', 'mother'], ['אפוטרופוס', 'guardian'], ['אחר', 'other']]
-                    .map(([text, value]) => (
-                      <button
-                        key={value}
-                        type="button"
-                        onClick={() => setParent((p) => ({
-                          ...p,
-                          relation: p.relation === value ? '' : value,
-                        }))}
-                        style={{
-                          flex: '1 1 auto', padding: '11px 8px', borderRadius: 11, font: 'inherit',
-                          fontWeight: 700, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap',
-                          border: parent.relation === value
-                            ? '1px solid var(--form-accent-solid, #f97316)'
-                            : '1px solid rgba(255,255,255,.15)',
-                          background: parent.relation === value
-                            ? 'var(--form-accent-soft-strong, rgba(249,115,22,.18))'
-                            : '#0b1220',
-                          color: parent.relation === value ? 'var(--form-accent-text, #fdba74)' : '#e2e8f0',
-                        }}
-                      >
-                        {text}
-                      </button>
-                    ))}
-                </div>
-              </div>
-            </div>
             {/* אחרי הפרטים, לא לפניהם: הם נשאלים ממילא, והשאלה כאן היא רק אם
                 מי שממלא אותם גם משתתף בעצמו. */}
             <label
@@ -2749,11 +2714,11 @@ export default function PublicOnboardingForm() {
               <div
                 key={child.id || index}
                 style={{
-                  border: '1px solid rgba(255,255,255,0.08)',
+                  border: '1px solid var(--form-accent-border, rgba(56,189,248,.35))',
                   borderRadius: 14,
                   padding: 14,
                   marginBottom: 14,
-                  background: 'rgba(0,0,0,0.15)',
+                  background: 'var(--form-accent-soft, rgba(56,189,248,.07))',
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
@@ -2785,6 +2750,41 @@ export default function PublicOnboardingForm() {
                         labels={child.type === 'adult' ? ['גבר', 'אישה'] : ['ילד', 'ילדה']}
                       />
                       <span>{participantRelationLabel(child)}</span>
+                      {child.birthDate && (
+                        <>
+                          <span style={{ opacity: .4 }}>·</span>
+                          <span>{formatSignedDay(child.birthDate)}</span>
+                        </>
+                      )}
+                    </div>
+                    {/* מי זה ביחס לחותם. נשאל על הכרטיס של מי שהשאלה עליו, במקום
+                        שדה אחד בדף הקודם שניסה לתאר משפחה שלמה. */}
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                      {(child.type === 'adult'
+                        ? [['זה אני', 'self'], ['בן/בת זוג', 'spouse']]
+                        : [['הבן/בת שלי', 'child']]
+                      ).map(([text, value]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => updateChild(index, { relationToSigner: value })}
+                          style={{
+                            padding: '6px 12px', borderRadius: 10, font: 'inherit',
+                            fontWeight: 700, fontSize: 12, cursor: 'pointer',
+                            border: child.relationToSigner === value
+                              ? '1px solid var(--form-accent-solid, #38bdf8)'
+                              : '1px solid rgba(255,255,255,.15)',
+                            background: child.relationToSigner === value
+                              ? 'var(--form-accent-soft-strong, rgba(56,189,248,.18))'
+                              : 'rgba(255,255,255,.05)',
+                            color: child.relationToSigner === value
+                              ? 'var(--form-accent-text, #7dd3fc)'
+                              : '#e2e8f0',
+                          }}
+                        >
+                          {text}
+                        </button>
+                      ))}
                     </div>
                   </div>
                   {/* להוציא משתתף מההגשה — בשתי לחיצות, כי זה מונע ממנו להיכנס
@@ -2876,11 +2876,7 @@ export default function PublicOnboardingForm() {
                     מקבל הצעה לחדש. אולי הוא כבר לא מטפס, ולכן „לא הפעם” הוא
                     תשובה לגיטימית — אבל השאלה חייבת להישאל. */}
                 {!child.onFileHealthValid && !needsOwnSignature(child) && !child.renewOptIn && (child.id || child.type === 'adult') && (
-                  <div style={{
-                    background: child.skipThisTime ? 'rgba(255,255,255,.04)' : 'var(--form-accent-soft, rgba(249,115,22,.1))',
-                    border: `1px solid ${child.skipThisTime ? 'rgba(255,255,255,0.12)' : 'var(--form-accent-border, rgba(249,115,22,.4))'}`,
-                    borderRadius: 12, padding: 12, marginBottom: 0,
-                  }}>
+                  <div style={{ marginBottom: 0 }}>
                     {child.skipThisTime ? (
                       /* הדרך חזרה היא הכפתור שבראש הכרטיס. כאן נשארת רק העובדה. */
                       <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>
@@ -2924,7 +2920,7 @@ export default function PublicOnboardingForm() {
                               fontFamily: 'inherit', fontSize: 13, padding: '9px 14px', cursor: 'pointer',
                             }}
                           >
-                            לא הפעם
+                            לא משתתף
                           </button>
                         </div>
                       </>
