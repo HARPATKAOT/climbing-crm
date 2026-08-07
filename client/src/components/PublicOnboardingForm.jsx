@@ -2442,7 +2442,6 @@ export default function PublicOnboardingForm() {
                   onChange={(e) => setParent((p) => ({ ...p, birthDate: e.target.value }))}
                   style={missingStyle('birthDate')}
                 />
-                <small className="field-hint">נדרש כיוון שסימנת שגם את/ה משתתף/ת</small>
               </div>
             )}
             <div className="form-group">
