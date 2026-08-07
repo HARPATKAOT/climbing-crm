@@ -744,6 +744,14 @@ test('קישור שהולך ללקוח יושב על הדומיין שהוא מ�
   }
 });
 
+test('טופס בתוקף אינו נאמר ביוזמת הבוט; חסר או פג — כן, עם הצעה למלא מראש', async () => {
+  const { CUSTOMER_TOOL_RULES } = await import('./botToolTurn.js');
+  // «טופס ההשתתפות שלכם בתוקף, אז אפשר פשוט להגיע!» בסוף תשובה על שעות פתיחה.
+  assert.match(CUSTOMER_TOOL_RULES, /טופס בתוקף אינו חדשה/);
+  assert.match(CUSTOMER_TOOL_RULES, /רק כששאלו עליו, או כשהוא חסר או פג/);
+  assert.match(CUSTOMER_TOOL_RULES, /למלא אותו מראש/);
+});
+
 test('הכללים אוסרים לחזור על אותו קישור ועל אותו הסבר', async () => {
   const { CUSTOMER_TOOL_RULES } = await import('./botToolTurn.js');
   // שלוש הודעות ברצף שפתחו ב«📋 טופס השתתפות» עם אותו קישור — 6.8.2026.
