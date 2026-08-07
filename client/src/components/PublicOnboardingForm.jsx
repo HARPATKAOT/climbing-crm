@@ -2377,6 +2377,20 @@ export default function PublicOnboardingForm() {
    */
   const activityHeadline = String(template?.headline || '').trim()
     || (isTripForm ? 'יציאה / טיול' : `טיפוס ב${brandName}`);
+  /**
+   * מה הטופס הזה, במשפט אחד, בדף הראשון. „הצהרת בריאות והסרת אחריות” הוא שם
+   * המסמך; מי שפותח קישור צריך קודם לדעת שזה טופס ההשתתפות עצמו, ולאילו
+   * פעילויות הוא נדרש.
+   */
+  const formIntro = isTripForm
+    ? {
+      title: 'מילוי טופס השתתפות ביציאה / טיול',
+      sub: 'סנפלינג · טיפוס · מערנות · טיולי הליכה — כולל הצהרת בריאות והסרת אחריות',
+    }
+    : {
+      title: 'מילוי טופס השתתפות בפעילויות בקיר הטיפוס',
+      sub: 'חוגים · אימונים אישיים · כניסות · ימי הולדת · אירועים — כולל הצהרת בריאות והסרת אחריות',
+    };
   const signingScreenTitle = {
     [SUB_HEALTH]: sectionTitles.health,
     [SUB_ACTIVITY]: sectionTitles.confirm,
@@ -2428,7 +2442,9 @@ export default function PublicOnboardingForm() {
               המסמך שעל המסך — ובשלב החתימה זה שם החלק הנוכחי, כי דף אחד
               שנקרא „הצהרת בריאות” לא יכול להכיל גם את סעיפי אופי הפעילות. */}
           <h2 className={step === 3 ? 'signing-document-title' : ''}>
-            {step === 3 ? signingScreenTitle : documentTitle}
+            {step === 1 && !identityReady
+              ? formIntro.title
+              : (step === 3 ? signingScreenTitle : documentTitle)}
             {/* The medical screen is about one person and says whose it is. The
                 shared screens are about everyone, and naming one of them there
                 would claim the waiver covers only that participant. */}
@@ -2436,12 +2452,9 @@ export default function PublicOnboardingForm() {
               ? ` — ${currentChild.name}`
               : ''}
           </h2>
-          {/* שם הפעילות עלה לכותרת שמעל, ולכן המשפט הזה חזר עליה. מה שנשאר
-              הוא מה שהכותרת לא אומרת: בלי הטופס אין השתתפות. */}
+          {/* לאילו פעילויות הטופס נדרש, ומה הוא כולל — בדף הראשון בלבד. */}
           {step === 1 && !identityReady && (
-            <p style={{ fontSize: 13.5, lineHeight: 1.7 }}>
-              מילוי הטופס נדרש לפני ההשתתפות
-            </p>
+            <p style={{ fontSize: 13.5, lineHeight: 1.7 }}>{formIntro.sub}</p>
           )}
           {step === 2 && <p>בחירת בני המשפחה המשתתפים בפעילות</p>}
           {/* A bar, and no number. How many screens there are depends on how
@@ -3616,7 +3629,7 @@ function FormStyles() {
         }
         .form-header { text-align: center; padding: 22px 24px 0; }
         .form-cover {
-          margin: -22px -24px 16px; height: clamp(120px, 26vw, 190px);
+          margin: -22px -24px 16px; height: clamp(190px, 38vw, 300px);
           overflow: hidden; position: relative;
         }
         .form-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -3636,7 +3649,12 @@ function FormStyles() {
           filter: drop-shadow(0 10px 18px rgba(0,0,0,.32));
         }
         .logo-circle img { width: 100%; height: 100%; object-fit: contain; display: block; }
-        .form-header h2 { margin: 0 0 6px; padding: 0; font-size: 22px; font-weight: 800; }
+        /* clamp כדי שמשפט הפתיחה הארוך של הדף הראשון לא ישבור את הכותרת
+           לשלוש שורות במסך צר. */
+        .form-header h2 {
+          margin: 0 0 6px; padding: 0; font-weight: 800;
+          font-size: clamp(19px, 4.4vw, 24px); line-height: 1.3; text-wrap: balance;
+        }
         .form-header h2.signing-document-title {
           margin-bottom: 0;
           font-size: clamp(15px, 3.4vw, 28px);
