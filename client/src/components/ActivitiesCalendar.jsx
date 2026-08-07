@@ -1391,6 +1391,29 @@ function RegularActivityModal({
                       />
                       דף הרשמה ציבורי
                     </div>
+                    {/* Having a registration page is not the same as being
+                        advertised: a birthday has a page its host shares
+                        privately. This box was only reachable from the older
+                        editor, so two trips with an open page sat in the
+                        calendar while the bot answered "no open events". */}
+                    {form.registration_enabled && (
+                      <>
+                        <div className="activity-settings-toggle">
+                          <input
+                            type="checkbox"
+                            checked={!!form.show_on_site}
+                            onChange={(event) => set('show_on_site', event.target.checked)}
+                            disabled={readOnly}
+                          />
+                          לפרסם באתר ובבוט
+                        </div>
+                        <span style={{ display: 'block', fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
+                          {form.show_on_site
+                            ? 'הבוט יציע את הפעילות ללקוחות ששואלים על טיולים ואירועים.'
+                            : 'לא מפורסם — הקישור עובד, אבל הבוט לא יזכיר את הפעילות מיוזמתו. כך נשאר אירוע פרטי.'}
+                        </span>
+                      </>
+                    )}
                   </label>
                 )}
                 {/* על מה חותמים כשנרשמים לאירוע הזה. „לפי סוג הפעילות” הוא
@@ -1727,6 +1750,9 @@ function ActivityFormModal({
     host_parent_id: initial?.host_parent_id || null,
     payment_status: initial?.payment_status || 'unpaid',
     registration_enabled: !!initial?.registration_enabled,
+    // Whether the activity is advertised at all — the public site and the bot
+    // both read this, and it is separate from having a registration page.
+    show_on_site: !!initial?.show_on_site,
     collect_registration_payment: !!initial?.collect_registration_payment,
     registration_mode: initial?.registration_mode || (
       initial?.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
@@ -1828,6 +1854,9 @@ function ActivityFormModal({
         staff_pay_mode: form.staff_pay_mode === 'flat' ? 'flat' : null,
         staff_flat_amount: form.staff_pay_mode === 'flat' ? (Number(form.staff_flat_amount) || 0) : null,
         registration_enabled: !!form.registration_enabled,
+        // A registration page that is never advertised stays private; without
+        // this in the payload the box on the screen saved nothing at all.
+        show_on_site: !!form.show_on_site && !!form.registration_enabled,
         collect_registration_payment: !!form.collect_registration_payment,
         registration_mode: form.registration_mode || (
           form.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
