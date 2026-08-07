@@ -1379,41 +1379,29 @@ function RegularActivityModal({
                     </AppSelect>
                   </label>
                 )}
+                {/* One decision, not two boxes where the second depends on the
+                    first. The pair behind it stays — a birthday has a working
+                    registration page that must never be advertised — but that
+                    is a consequence of the choice, not a second question. */}
                 {!isOps && (
                   <label>
-                    <span className="activity-settings-label">מצב תצוגה</span>
-                    <div className="activity-settings-toggle">
-                      <input
-                        type="checkbox"
-                        checked={!!form.registration_enabled}
-                        onChange={(event) => set('registration_enabled', event.target.checked)}
-                        disabled={readOnly}
-                      />
-                      דף הרשמה ציבורי
-                    </div>
-                    {/* Having a registration page is not the same as being
-                        advertised: a birthday has a page its host shares
-                        privately. This box was only reachable from the older
-                        editor, so two trips with an open page sat in the
-                        calendar while the bot answered "no open events". */}
-                    {form.registration_enabled && (
-                      <>
-                        <div className="activity-settings-toggle">
-                          <input
-                            type="checkbox"
-                            checked={!!form.show_on_site}
-                            onChange={(event) => set('show_on_site', event.target.checked)}
-                            disabled={readOnly}
-                          />
-                          לפרסם באתר ובבוט
-                        </div>
-                        <span style={{ display: 'block', fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
-                          {form.show_on_site
-                            ? 'הבוט יציע את הפעילות ללקוחות ששואלים על טיולים ואירועים.'
-                            : 'לא מפורסם — הקישור עובד, אבל הבוט לא יזכיר את הפעילות מיוזמתו. כך נשאר אירוע פרטי.'}
-                        </span>
-                      </>
-                    )}
+                    <span className="activity-settings-label">מי יכול להירשם</span>
+                    <AppSelect
+                      className="input input-sm"
+                      value={registrationVisibility(form)}
+                      disabled={readOnly}
+                      onChange={(event) => setForm((prev) => ({
+                        ...prev,
+                        ...visibilityFields(event.target.value),
+                      }))}
+                    >
+                      <option value="closed">סגור — אין דף הרשמה</option>
+                      <option value="link">קישור פרטי — נרשמים רק דרך הקישור</option>
+                      <option value="public">מפורסם — באתר, והבוט מציע אותו</option>
+                    </AppSelect>
+                    <span style={{ display: 'block', fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                      {VISIBILITY_HINTS[registrationVisibility(form)]}
+                    </span>
                   </label>
                 )}
                 {/* על מה חותמים כשנרשמים לאירוע הזה. „לפי סוג הפעילות” הוא
@@ -1716,6 +1704,33 @@ function RegularActivityModal({
     </div>
   );
 }
+
+/**
+ * Who may register, as one choice.
+ *
+ * Underneath are still two fields: `registration_enabled` (there is a page)
+ * and `show_on_site` (we advertise it). They are genuinely different — a
+ * birthday has a page whose link the host shares and which must never be
+ * advertised — but as two checkboxes, one of them conditional on the other,
+ * they read as a puzzle. Two trips were published with the first box ticked
+ * and the second one nowhere on the screen, and the bot never offered them.
+ */
+function registrationVisibility(form = {}) {
+  if (!form.registration_enabled) return 'closed';
+  return form.show_on_site ? 'public' : 'link';
+}
+
+function visibilityFields(value) {
+  if (value === 'public') return { registration_enabled: true, show_on_site: true };
+  if (value === 'link') return { registration_enabled: true, show_on_site: false };
+  return { registration_enabled: false, show_on_site: false };
+}
+
+const VISIBILITY_HINTS = {
+  closed: 'ההרשמה נעשית על ידי הצוות בלבד.',
+  link: 'הקישור עובד ומי שקיבל אותו יכול להירשם, אבל הפעילות לא מפורסמת והבוט לא מזכיר אותה. כך נשאר אירוע פרטי.',
+  public: 'הפעילות מופיעה באתר, והבוט מציע אותה ללקוחות ששואלים על טיולים ואירועים.',
+};
 
 function ActivityFormModal({
   initial,
@@ -2215,6 +2230,8 @@ function ActivityFormModal({
               setForm={setForm}
               readOnly={readOnly}
               canViewFinance={canViewFinance}
+              // The same decision is made once, above, by "מי יכול להירשם".
+              hideRegistrationToggle
             />
           )}
 
