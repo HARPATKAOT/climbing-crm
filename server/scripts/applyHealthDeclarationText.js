@@ -24,6 +24,13 @@
  *   node scripts/applyHealthDeclarationText.js --dry       # print the diff only
  *   node scripts/applyHealthDeclarationText.js             # local db.json only
  *   node scripts/applyHealthDeclarationText.js --remote    # the live CRM (Supabase)
+ *   node scripts/applyHealthDeclarationText.js --remote --force   # replace owner edits too
+ *
+ * **Wording edited in the CRM screen wins.** The declarations screen writes the
+ * same rows, so without `--force` this script fills only what is empty: it can
+ * seed a fresh template or repair a missing part without silently undoing a
+ * text somebody wrote there. `--force` is how a new legal wording is pushed,
+ * and it says so before it writes.
  */
 
 import 'dotenv/config';
@@ -311,10 +318,31 @@ function printDiff(current, desired) {
   removed.forEach((q) => console.log(`    - ${q.id} (הוסר) ${String(q.label).slice(0, 50)}`));
 }
 
-async function apply({ dry = false, remote = false } = {}) {
+/**
+ * שדות שהבעלים עורך במסך ההצהרות. בלי --force הסקריפט ממלא אותם רק כשהם
+ * ריקים — הוא זורע תבנית חדשה או משלים חסר, ולא דורס נוסח שמישהו כתב במסך.
+ * עם --force הוא מחזיר את הנוסח שבקובץ הזה, וזה מה שעושים כששולחים נוסח
+ * משפטי חדש.
+ */
+const OWNER_EDITABLE = ['title', 'headline', 'activityNature', 'waiverText', 'waiverSummary'];
+
+/** מה באמת ייכתב: הרצוי, פחות מה שהבעלים כבר כתב בעצמו. */
+function desiredFor(current, desired, force) {
+  if (force || !current) return desired;
+  const out = { ...desired };
+  for (const key of OWNER_EDITABLE) {
+    if (String(current[key] || '').trim()) out[key] = current[key];
+  }
+  return out;
+}
+
+async function apply({ dry = false, remote = false, force = false } = {}) {
   if (remote && !supa.isEnabled()) {
     throw new Error('אין חיבור ל-Supabase — בדוק SUPABASE_URL ו-SUPABASE_SERVICE_ROLE_KEY ב-.env');
   }
+  console.log(force
+    ? '\n⚠️  --force: נוסחי המסך יידרסו בנוסח שבסקריפט.'
+    : '\n(ללא --force: שדות שנערכו במסך יישארו כפי שהם; ריקים יושלמו.)');
 
   const templates = remote ? await supa.getAll('form_templates') : db.get('form_templates');
   const rows = Array.isArray(templates) ? templates : [];
@@ -329,7 +357,7 @@ async function apply({ dry = false, remote = false } = {}) {
     const current = rows.find((t) => t.slug === activity.slug)
       || (activity.formerSlug ? rows.find((t) => t.slug === activity.formerSlug) : null)
       || (activity.slug === 'wall' ? rows.find((t) => t.isDefault) : null);
-    const desired = DECLARATIONS[activity.slug];
+    const desired = desiredFor(current, DECLARATIONS[activity.slug], force);
     console.log(`\n=== ${activity.slug} — ${desired.title}`);
     if (!current) {
       console.log('  (לא קיימת תבנית כזאת — תיווצר)');
@@ -409,7 +437,11 @@ async function apply({ dry = false, remote = false } = {}) {
 }
 
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  apply({ dry: process.argv.includes('--dry'), remote: process.argv.includes('--remote') })
+  apply({
+    dry: process.argv.includes('--dry'),
+    remote: process.argv.includes('--remote'),
+    force: process.argv.includes('--force'),
+  })
     .catch((err) => {
       console.error(`❌ ${err.message}`);
       process.exit(1);

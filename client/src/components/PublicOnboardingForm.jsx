@@ -609,7 +609,7 @@ function participantFromExistingStudent(student, questions = [], {
     birthDate: student?.birthDate || '',
     gender: participationGenderValue(student?.gender),
     type,
-    onFileHealthValid: !!(student?.healthValid ?? student?.health_valid),
+    onFileHealthValid: !!(student?.healthDocumentValid ?? student?.health_document_valid),
     onFileHealthDocumentValid: !!(student?.healthDocumentValid ?? student?.health_document_valid),
     onFileWaiverValid: !!(student?.waiverValid ?? student?.waiver_valid),
     onFileHealthSignedAt: student?.healthSignedAt || student?.health_signed_at || '',
@@ -811,9 +811,9 @@ export default function PublicOnboardingForm() {
   // written with {{שם החותם}} — the same person either way.
   const signerName = joinParentName(parent.name, parent.lastName);
   const waiverText = withSignerName(template?.waiverText || fallbackWaiver, signerName);
-  const declarationContextLabel = template?.slug === 'trip'
-    ? 'הצהרת בריאות לטיול'
-    : 'הצהרת בריאות';
+  // הצהרת בריאות היא אחת לאדם ותקפה לכל הפעילויות. „הצהרת בריאות לטיול”
+  // תיארה מסמך שלא קיים — מה שנפרד לפי פעילות הוא הסרת האחריות בלבד.
+  const declarationContextLabel = 'הצהרת בריאות';
   // The three parts of the declaration, each named — the same headings the
   // activity page shows, so a family meets one document twice, not two.
   const sectionTitles = declarationSectionTitles({ ...(template || {}), waiverText });
@@ -1290,7 +1290,7 @@ export default function PublicOnboardingForm() {
               answerNotes: {},
               // Already on file with a declaration in force. The form shows
               // that rather than asking them to fill everything in again.
-              onFileHealthValid: !!(s.healthValid ?? s.health_valid),
+              onFileHealthValid: !!(s.healthDocumentValid ?? s.health_document_valid),
               onFileHealthDocumentValid: !!(s.healthDocumentValid ?? s.health_document_valid),
               onFileWaiverValid: !!(s.waiverValid ?? s.waiver_valid),
               onFileHealthSignedAt: s.healthSignedAt || s.health_signed_at || '',
@@ -1448,7 +1448,7 @@ export default function PublicOnboardingForm() {
           idNumber: parent.idNumber,
         }),
         relationToSigner: 'self',
-        onFileHealthValid: !!selfStudent?.healthValid,
+        onFileHealthValid: !!selfStudent?.healthDocumentValid,
         onFileHealthDocumentValid: !!selfStudent?.healthDocumentValid,
         onFileWaiverValid: !!selfStudent?.waiverValid,
         onFileHealthSignedAt: selfStudent?.healthSignedAt || '',
@@ -1527,6 +1527,16 @@ export default function PublicOnboardingForm() {
         name: data.parent.name || '',
         children: (data.students || []).map((s) => s.name).filter(Boolean),
       });
+      // העדפות הדיוור של התיק שזה עתה זוהה. הן נקראו רק בטעינה הראשונה —
+      // לפני שידענו מי זה — ולכן כל ביקור הציג את ברירת המחדל ("שיווקי" לא
+      // מסומן) גם למי שסימן אותו ונשמר לו.
+      if (data.subscriptions && typeof data.subscriptions === 'object') {
+        setSubscriptions((current) => {
+          const next = { ...current, ...data.subscriptions };
+          if (effectiveRequiredListKey) next[effectiveRequiredListKey] = true;
+          return next;
+        });
+      }
 
       if (healthOnlyMode) {
         const target = String(data.selfStudent?.id || '') === targetStudentId
@@ -1567,7 +1577,7 @@ export default function PublicOnboardingForm() {
               // The same two fields the first load sets. Without them this
               // path — the one that runs when a returning parent types their
               // phone — handed them their own declaration to sign again.
-              onFileHealthValid: !!(s.healthValid ?? s.health_valid),
+              onFileHealthValid: !!(s.healthDocumentValid ?? s.health_document_valid),
               onFileHealthDocumentValid: !!(s.healthDocumentValid ?? s.health_document_valid),
               onFileWaiverValid: !!(s.waiverValid ?? s.waiver_valid),
               onFileHealthSignedAt: s.healthSignedAt || s.health_signed_at || '',
@@ -1733,7 +1743,7 @@ export default function PublicOnboardingForm() {
           // "מי X ביחס אליך?", and without the on-file flags a signer whose
           // declaration is in force was offered their whole form again.
           relationToSigner: 'self',
-          onFileHealthValid: !!selfStudent?.healthValid,
+          onFileHealthValid: !!selfStudent?.healthDocumentValid,
           onFileHealthDocumentValid: !!selfStudent?.healthDocumentValid,
           onFileWaiverValid: !!selfStudent?.waiverValid,
           onFileHealthSignedAt: selfStudent?.healthSignedAt || '',
@@ -3207,11 +3217,19 @@ export default function PublicOnboardingForm() {
             const indexed = children.map((child, index) => [child, index]);
             const adultCards = indexed.filter(([child]) => child.type === 'adult');
             const childCards = indexed.filter(([child]) => child.type !== 'adult');
-            const namedKids = childCards.filter(([child]) => String(child.name || '').trim());
+            // האישור נדרש רק על ילדים שנבחרו להשתתף. כשאף אחד מהם לא משתתף
+            // אין טענה על קרבה שצריך לאשר, והתיבה רק הוסיפה שלב.
+            const namedKids = childCards.filter(([child]) => (
+              String(child.name || '').trim() && child.participates === true
+            ));
             const childrenConfirmed = namedKids.length > 0
               && namedKids.every(([child]) => child.relationToSigner === 'child');
+            // מסמן רק את מי שהאישור מדבר עליו — ילד שנאמר עליו „לא משתתף”
+            // אינו חלק מהטענה, ואיפוס הקרבה שלו רק החזיר שאלה שכבר נענתה.
             const setChildrenConfirmed = (on) => setChildren((prev) => prev.map((c) => (
-              c.type === 'adult' ? c : { ...c, relationToSigner: on ? 'child' : '' }
+              c.type === 'adult' || c.participates !== true
+                ? c
+                : { ...c, relationToSigner: on ? 'child' : '' }
             )));
             return (
               <>
