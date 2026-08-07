@@ -907,6 +907,18 @@ export default function PublicOnboardingForm() {
     gender: 'מין',
     relation: 'קשר למשתתפים',
   };
+  /**
+   * The form talks to one person. Once they have said whether they are a man or
+   * a woman, "משתתף/ת" is a form that fits nobody — so every sentence addressed
+   * to them picks a side, and falls back to the slashed form only while their
+   * gender is still unknown.
+   */
+  const g = (male, female, unknown) => {
+    if (parent.gender === 'male') return male;
+    if (parent.gender === 'female') return female;
+    return unknown ?? `${male}/${female.slice(-1)}`;
+  };
+
   const relationRequired = false;
   const missingParentFields = Object.keys(MISSING_LABELS)
     .filter((field) => (field === 'relation' ? relationRequired : true))
@@ -1360,6 +1372,15 @@ export default function PublicOnboardingForm() {
     setChildren((prev) => [...prev, emptyChild(allQuestions)]);
   };
 
+  /** A second adult on the same submission — marked as the spouse from the start. */
+  const addSpouse = () => {
+    setChildren((prev) => [...prev, {
+      ...emptyChild(allQuestions),
+      type: 'adult',
+      relationToSigner: 'spouse',
+    }]);
+  };
+
 
   const setAdultSelfMode = (enabled) => {
     setIsAdultSelf(enabled);
@@ -1373,6 +1394,7 @@ export default function PublicOnboardingForm() {
           birthDate: parent.birthDate,
           idNumber: parent.idNumber,
         }),
+        relationToSigner: 'self',
         onFileHealthValid: !!selfStudent?.healthValid,
         onFileHealthDocumentValid: !!selfStudent?.healthDocumentValid,
         onFileWaiverValid: !!selfStudent?.waiverValid,
@@ -2335,7 +2357,11 @@ export default function PublicOnboardingForm() {
           <div className="fade-in">
             {/* הכותרת שייכת לשלב הזיהוי עצמו. אחרי האימות הפרטים כבר בכרטיס,
                 והכותרת נשארה ככותרת של שדות שאינם על המסך. */}
-            {!identityReady && <div className="section-title">זיהוי ממלא/ת הטופס</div>}
+            {!identityReady && (
+              <div className="section-title">
+                {g('זיהוי ממלא הטופס', 'זיהוי ממלאת הטופס', 'זיהוי ממלא/ת הטופס')}
+              </div>
+            )}
             {parentProfileLocked ? (
               <>
                 <ParentProfileSummary
@@ -2372,7 +2398,13 @@ export default function PublicOnboardingForm() {
                     checked={isAdultSelf}
                     onChange={(e) => setAdultSelfMode(e.target.checked)}
                   />
-                  <span>גם אני משתתף/ת בפעילות</span>
+                  <span>
+                    {g(
+                      'גם אני משתתף בפעילות וממלא את הטפסים עבור עצמי',
+                      'גם אני משתתפת בפעילות וממלאת את הטפסים עבור עצמי',
+                      'גם אני משתתף/ת בפעילות וממלא/ת את הטפסים עבור עצמי'
+                    )}
+                  </span>
                 </label>
               </>
             ) : (
@@ -2457,7 +2489,7 @@ export default function PublicOnboardingForm() {
             {!parentProfileLocked && (
               <>
             <div className="section-title">
-              פרטי ממלא/ת הטופס
+              {g('פרטי ממלא הטופס', 'פרטי ממלאת הטופס', 'פרטי ממלא/ת הטופס')}
             </div>
             {/* הכוכבית לבדה לא אומרת כלום למי שלא מכיר את המוסכמה. שורה אחת
                 בראש הסעיף מסבירה אותה פעם אחת, במקום להסביר ליד כל שדה. */}
@@ -2707,7 +2739,7 @@ export default function PublicOnboardingForm() {
             </div>
             {!healthOnlyMode && (
               <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.55)', margin: '0 0 14px' }}>
-                השיבוץ לקבוצה יבוצע על ידי הצוות בהמשך.
+                השיבוץ לפעילות יבוצע על ידי הצוות בהמשך.
               </p>
             )}
             {children.map((child, index) => (
@@ -2760,9 +2792,11 @@ export default function PublicOnboardingForm() {
                     {/* מי זה ביחס לחותם. נשאל על הכרטיס של מי שהשאלה עליו, במקום
                         שדה אחד בדף הקודם שניסה לתאר משפחה שלמה. */}
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
-                      {(child.type === 'adult'
-                        ? [['זה אני', 'self'], ['בן/בת זוג', 'spouse']]
-                        : [['הבן/בת שלי', 'child']]
+                      {(child.relationToSigner === 'self'
+                        ? []
+                        : child.type === 'adult'
+                          ? [['בן/בת זוג', 'spouse']]
+                          : [['הבן/בת שלי', 'child']]
                       ).map(([text, value]) => (
                         <button
                           key={value}
@@ -2787,21 +2821,6 @@ export default function PublicOnboardingForm() {
                       ))}
                     </div>
                   </div>
-                  {/* להוציא משתתף מההגשה — בשתי לחיצות, כי זה מונע ממנו להיכנס
-                      לפעילות, וזה בדיוק סוג הדבר שנלחץ בטעות. */}
-                  {!child.skipThisTime && !child.confirmSkip && (
-                    <button
-                      type="button"
-                      onClick={() => updateChild(index, { confirmSkip: true })}
-                      style={{
-                        background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
-                        borderRadius: 10, color: 'rgba(255,255,255,0.65)', flexShrink: 0,
-                        fontFamily: 'inherit', fontSize: 12, padding: '7px 12px', cursor: 'pointer',
-                      }}
-                    >
-                      לא משתתף
-                    </button>
-                  )}
                   {child.skipThisTime && (
                     <button
                       type="button"
@@ -2812,7 +2831,7 @@ export default function PublicOnboardingForm() {
                         fontFamily: 'inherit', fontSize: 12, padding: '7px 12px', cursor: 'pointer',
                       }}
                     >
-                      בעצם כן, משתתף/ת
+                      {g('בעצם כן, משתתף', 'בעצם כן, משתתפת', 'בעצם כן, משתתף/ת')}
                     </button>
                   )}
                 </div>
@@ -3218,6 +3237,18 @@ export default function PublicOnboardingForm() {
               >
                 <Plus size={16} /> הוספת ילד/ה נוסף/ת
               </button>}
+            {!healthOnlyMode && <button
+                type="button"
+                onClick={addSpouse}
+                style={{
+                  width: '100%', background: 'transparent', border: '1px dashed rgba(255,255,255,0.25)',
+                  color: 'rgba(255,255,255,0.72)', padding: 12, borderRadius: 12, cursor: 'pointer',
+                  fontFamily: 'inherit',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16,
+                }}
+              >
+                <Plus size={16} /> הוספת בן/בת זוג
+              </button>}
             {error && <ErrorBox message={error} />}
             <button type="button" className="event-primary" onClick={goNextFromChildren}>
               {healthOnlyMode
@@ -3449,8 +3480,10 @@ export default function PublicOnboardingForm() {
                       padding: 14, marginBottom: 14, fontSize: 14, lineHeight: 1.7,
                       color: 'rgba(255,255,255,.88)',
                     }}>
-                      אני מאשר/ת שהמידע שמסרתי בהצהרת הבריאות מלא, נכון ומעודכן,
-                      ומתחייב/ת לעדכן את הצוות בכל שינוי במצב הבריאותי.
+                      {g('אני מאשר', 'אני מאשרת', 'אני מאשר/ת')} שהמידע שמסרתי בהצהרת
+                      הבריאות מלא, נכון ומעודכן,
+                      {' '}{g('ומתחייב', 'ומתחייבת', 'ומתחייב/ת')} לעדכן את הצוות בכל שינוי
+                      במצב הבריאותי.
                     </div>
                     <label className="event-check">
                       <input
@@ -3458,7 +3491,7 @@ export default function PublicOnboardingForm() {
                         checked={healthDeclarationAccepted}
                         onChange={(e) => setHealthDeclarationAccepted(e.target.checked)}
                       />
-                      <span>קראתי ואני מאשר/ת את הצהרת הבריאות</span>
+                      <span>{g('קראתי ואני מאשר', 'קראתי ואני מאשרת', 'קראתי ואני מאשר/ת')} את הצהרת הבריאות</span>
                     </label>
                   </>
                 ) : (
@@ -3523,7 +3556,8 @@ export default function PublicOnboardingForm() {
                   {/* מי שהאישור חל עליו, בתוך המשפט שמאשרים — לא רק ברשימה
                       שמעליו. זה מה שהחתימה למטה אומרת. */}
                   <span>
-                    קראתי ואני מאשר/ת את הסרת האחריות וכללי הבטיחות החלים על:{' '}
+                    {g('קראתי ואני מאשר', 'קראתי ואני מאשרת', 'קראתי ואני מאשר/ת')}
+                    {' '}את הסרת האחריות וכללי הבטיחות החלים על:{' '}
                     {coveredNames.join(', ')}
                   </span>
                 </label>
