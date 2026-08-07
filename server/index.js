@@ -188,6 +188,11 @@ import {
   summarizeHostPayment,
 } from './activityRegistrationRefund.js';
 import {
+  summarizeActivityCancellation,
+  registrationsToRelease,
+  activityIsCancelled,
+} from './activityCancellation.js';
+import {
   paymentOwner,
   paymentDocRefs,
   paymentHasCardCharge,
@@ -4832,10 +4837,28 @@ app.put('/api/activities/:id', async (req, res) => {
   );
 });
 
+// Deleting an activity that people are registered to leaves their registrations
+// and payments behind with nothing to explain them. There is the same guard on
+// deleting a customer; here the alternative is offered instead — cancel, which
+// keeps the record and gives the money back.
 app.delete('/api/activities/:id', async (req, res) => {
   const { id } = req.params;
   const existing = db.getOne('activities', id);
   if (!existing) return res.status(404).json({ error: 'Activity not found' });
+  await refreshCancellationTables();
+  const fresh = db.getOne('activities', id) || existing;
+  const summary = summarizeActivityCancellation(db, fresh, organizerCancelReview(fresh));
+  if (!summary.deletable) {
+    return res.status(409).json({
+      error: summary.registrations_count
+        ? `יש ${summary.registrations_count} נרשמים לאירוע הזה`
+        : (summary.history_only
+          ? 'יש היסטוריית הרשמות לאירוע הזה'
+          : 'יש תשלום מזמין שולם לאירוע הזה'),
+      code: 'activity_has_registrations',
+      summary,
+    });
+  }
   const deleted = db.delete('activities', id);
   if (!deleted) return res.status(404).json({ error: 'Activity not found' });
   res.json({ success: true });
@@ -5780,6 +5803,295 @@ app.post('/api/activities/:id/host-payment/refund', async (req, res) => {
       error: details || err.message,
       code: err.code,
     });
+  }
+});
+
+/**
+ * Cancelling a whole activity.
+ *
+ * The money side is deliberately the same machinery as cancelling one
+ * participant — same policy review, same iCount document cancellation with a
+ * real credit-card refund — only driven once per payment document instead of
+ * once per click. What is different is who decided: `organizerCancelled` makes
+ * the policy return the full amount, because a trip called off because of
+ * weather is not a late cancellation by the customer.
+ */
+
+async function refreshCancellationTables() {
+  if (!supa.isEnabled()) return;
+  const [remoteActivities, remoteRegs, remoteOrders, remotePayments] = await Promise.all([
+    supa.getAll('activities'),
+    supa.getAll('activity_registrations'),
+    supa.getAll('activity_registration_orders'),
+    supa.getAll('payments'),
+  ]);
+  if (remoteActivities) db.set('activities', remoteActivities);
+  if (remoteRegs) db.set('activity_registrations', remoteRegs);
+  if (remoteOrders) db.set('activity_registration_orders', remoteOrders);
+  if (remotePayments) db.set('payments', remotePayments);
+}
+
+function organizerCancelReview(activity) {
+  return ({ payment, order, paidAmount, participantsCancelled }) =>
+    cancellationReviewForPayment({
+      activity,
+      payment,
+      order,
+      paidAmount,
+      participantsCancelled,
+      organizerCancelled: true,
+    });
+}
+
+app.get('/api/activities/:id/cancellation-preview', async (req, res) => {
+  const activity = db.getOne('activities', req.params.id);
+  if (!activity) return res.status(404).json({ error: 'Activity not found' });
+  await refreshCancellationTables();
+  const fresh = db.getOne('activities', req.params.id) || activity;
+  const summary = summarizeActivityCancellation(db, fresh, organizerCancelReview(fresh));
+  res.json({ ...summary, icount_configured: icount.isConfigured() });
+});
+
+app.post('/api/activities/:id/cancel', async (req, res) => {
+  try {
+    const activity = db.getOne('activities', req.params.id);
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+    await refreshCancellationTables();
+    const fresh = db.getOne('activities', req.params.id) || activity;
+    const summary = summarizeActivityCancellation(db, fresh, organizerCancelReview(fresh));
+
+    if (summary.refund_total > 0 && !icount.isConfigured()) {
+      return res.status(503).json({ error: 'מערכת החיוב לא מוגדרת בשרת' });
+    }
+    // The amount is approved against a number the screen actually showed. If a
+    // registration came in between opening the screen and confirming, the total
+    // no longer matches and the whole thing stops rather than refunding a
+    // figure nobody saw.
+    const approvedAmount = Number(req.body?.approved_amount);
+    if (!Number.isFinite(approvedAmount)
+      || Math.abs(approvedAmount - summary.refund_total) >= 0.005) {
+      return res.status(409).json({
+        error: 'יש לאשר את סכום הזיכוי המוצג לפני ביטול האירוע',
+        code: 'refund_amount_approval_required',
+        summary,
+      });
+    }
+
+    const reason =
+      String(req.body?.reason || '').trim() ||
+      `ביטול אירוע · ${fresh.name || ''}`.trim();
+    const refundedBy = req.crmUser?.email || req.crmUser?.name || null;
+    const now = new Date().toISOString();
+
+    // The event stops being an event first. Even if a refund below fails, it is
+    // already off the site, off the bot, and out of the wall's activity days.
+    let cancelledActivity = fresh;
+    if (!activityIsCancelled(fresh)) {
+      const updated = db.update('activities', fresh.id, {
+        status: 'cancelled',
+        registration_enabled: false,
+        show_on_site: false,
+        updated_at: now,
+      });
+      if (!updated) return res.status(404).json({ error: 'Activity not found' });
+      const durable = await persistCore('activities', updated);
+      if (durable?.ok === false) {
+        console.error('activity cancel persist failed:', durable.error);
+        return res.status(503).json({ error: durable.error || 'שמירת ביטול האירוע נכשלה' });
+      }
+      cancelledActivity = updated;
+    }
+
+    const refunded = [];
+    const failed = [];
+    const touched = [];
+
+    for (const group of summary.groups) {
+      const names = group.names.join(', ');
+      try {
+        const plan = group.kind === 'host'
+          ? buildHostRefundPlan(db, cancelledActivity)
+          : buildRegistrationRefundPlan(db, {
+            activity: cancelledActivity,
+            registration: db.getOne('activity_registrations', group.seed_registration_id),
+          });
+        if (!plan.ok) {
+          failed.push({ names, amount: group.amount, error: plan.error, code: plan.code || null });
+          continue;
+        }
+
+        let alreadyCancelled = false;
+        try {
+          const info = await icount.getDocInfo({ doctype: plan.doctype, docnum: plan.docnum });
+          const docInfo = info.doc_info || info;
+          if (docInfo?.is_cancelled) {
+            alreadyCancelled = true;
+          } else if (docInfo && docInfo.is_cancellable === false) {
+            failed.push({
+              names,
+              amount: group.amount,
+              error: 'המסמך במערכת החיוב לא ניתן לביטול',
+            });
+            continue;
+          }
+        } catch (err) {
+          console.warn('⚠️ [activity cancel] doc info check failed:', err.message);
+        }
+
+        const cancellation = alreadyCancelled
+          ? { doctype: plan.doctype, docnum: plan.docnum }
+          : await icount.cancelDoc({
+            doctype: plan.doctype,
+            docnum: plan.docnum,
+            reason,
+            refundCc: true,
+          });
+
+        if (group.kind === 'host') {
+          await applyHostRefundMarks({
+            db,
+            persist: persistCore,
+            activity: cancelledActivity,
+            payment: plan.payment,
+            reason,
+            cancellation,
+            refundedBy,
+          });
+        } else {
+          const marked = await applyRegistrationRefundMarks({
+            db,
+            persist: persistCore,
+            plan,
+            reason,
+            cancellation,
+            refundedBy,
+          });
+          for (const registration of marked.registrations) {
+            touched.push({
+              registration_id: registration.id,
+              name: registration.participant_name || 'משתתף',
+            });
+          }
+        }
+
+        refunded.push({
+          kind: group.kind,
+          names,
+          amount: group.amount,
+          docnum: cancellation?.docnum || plan.docnum,
+          already_cancelled: alreadyCancelled,
+        });
+      } catch (err) {
+        const details = Array.isArray(err.details?.error_details)
+          ? err.details.error_details.filter(Boolean).join(' · ')
+          : '';
+        console.error('activity cancel refund error:', names, err.message, details);
+        failed.push({ names, amount: group.amount, error: details || err.message });
+      }
+    }
+
+    // Places held without money behind them are simply released.
+    for (const registrationId of registrationsToRelease(summary)) {
+      const registration = db.getOne('activity_registrations', registrationId);
+      if (!registration) continue;
+      const updated = db.update('activity_registrations', registrationId, {
+        status: 'cancelled',
+        notes: [registration.notes, reason].filter(Boolean).join(' · '),
+        updated_at: now,
+      });
+      if (updated) {
+        await persistCore('activity_registrations', updated);
+        touched.push({
+          registration_id: updated.id,
+          name: updated.participant_name || 'משתתף',
+        });
+      }
+    }
+
+    const refundedAmount = refunded.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+    console.log(
+      `🚫 [activity] cancelled ${cancelledActivity.id} · refunded ${refunded.length}/${summary.groups.length} docs · ${refundedAmount} ₪`
+    );
+
+    res.json({
+      success: failed.length === 0,
+      activity: activityForRequest(req, cancelledActivity),
+      refunded,
+      failed,
+      refunded_amount: Math.round(refundedAmount * 100) / 100,
+      cancelled_registrations: touched,
+      notify_candidates: touched,
+    });
+
+    syncActivityToGoogle(cancelledActivity).catch((err) =>
+      console.error('Background Google push failed:', err.message)
+    );
+    applyVacationAttendanceForActivities(fresh, cancelledActivity).catch((err) =>
+      console.error('Vacation attendance sync failed:', err.message)
+    );
+  } catch (err) {
+    console.error('activity cancel error:', err.message);
+    res.status(500).json({ error: err.message || 'ביטול האירוע נכשל' });
+  }
+});
+
+/**
+ * Telling the registrants. Deliberately a separate call made after the refunds
+ * are visibly done — a message saying "you have been refunded" must not go out
+ * before the money actually moved.
+ */
+app.post('/api/activities/:id/notify-cancelled', async (req, res) => {
+  try {
+    const activity = db.getOne('activities', req.params.id);
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+    const ids = Array.isArray(req.body?.registration_ids) ? req.body.registration_ids : [];
+    if (!ids.length) return res.status(400).json({ error: 'לא נבחרו נרשמים' });
+
+    const message = String(req.body?.message || '').trim()
+      || `שלום, האירוע «${activity.name || ''}» בתאריך ${String(activity.date || '').slice(0, 10).split('-').reverse().join('.')} בוטל.`
+        + ' התשלום זוכה במלואו ויוחזר לאמצעי התשלום שבו שולם. מצטערים על אי הנוחות.';
+
+    const sent = [];
+    const skipped = [];
+    const seenPhones = new Set();
+
+    for (const registrationId of ids) {
+      const registration = db.getOne('activity_registrations', registrationId);
+      if (!registration) continue;
+      const name = registration.participant_name || 'משתתף';
+      const parent = registration.parent_id ? db.getOne('parents', registration.parent_id) : null;
+      const phone = registration.phone || parent?.phone || '';
+      if (!phone) {
+        skipped.push({ name, reason: 'אין מספר טלפון' });
+        continue;
+      }
+      const key = String(phone).replace(/\D/g, '');
+      if (seenPhones.has(key)) continue;
+      seenPhones.add(key);
+
+      // Free-form only travels inside Meta's 24-hour window. Saying so per
+      // person is the point: whoever is listed here did not get told.
+      if (parent && !canSendFreeform(parent, 'whatsapp')) {
+        skipped.push({ name, phone, reason: 'חלון 24 השעות סגור — צריך לפנות אליו ידנית' });
+        continue;
+      }
+      try {
+        const result = await whatsappService.sendTextMessage(phone, message, false, {
+          clip: false,
+          parentId: parent?.id || null,
+          source: 'activity_cancelled',
+        });
+        if (result?.success) sent.push({ name, phone });
+        else skipped.push({ name, phone, reason: result?.error || 'שליחה נכשלה' });
+      } catch (err) {
+        skipped.push({ name, phone, reason: err.message || 'שליחה נכשלה' });
+      }
+    }
+
+    res.json({ success: skipped.length === 0, sent, skipped, message });
+  } catch (err) {
+    console.error('activity cancel notify error:', err.message);
+    res.status(500).json({ error: err.message || 'שליחת ההודעות נכשלה' });
   }
 });
 

@@ -354,8 +354,13 @@ export function daysInclusive(startDate, endDate) {
 
 function activityToGoogleEvent(activity) {
   const type = activity.type || 'other';
-  const colorId = TYPE_COLOR[type] || TYPE_COLOR.other;
+  // A cancelled event stays on the calendar — deleting it would hide that the
+  // slot was ever taken — but turns graphite and says so in the first line.
+  // The title is left alone on purpose: Google's copy of it is what syncs back.
+  const isCancelled = String(activity.status || '').toLowerCase() === 'cancelled';
+  const colorId = isCancelled ? '8' : (TYPE_COLOR[type] || TYPE_COLOR.other);
   const descriptionParts = [];
+  if (isCancelled) descriptionParts.push('❌ האירוע בוטל');
   if (activity.description) descriptionParts.push(activity.description);
   if (activity.contact_name || activity.contact_phone) {
     descriptionParts.push(

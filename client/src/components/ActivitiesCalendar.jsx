@@ -3,12 +3,13 @@ import {
   Plus, ChevronLeft, ChevronRight, X, Save, Trash2, Link2, Unlink,
   RefreshCw, Loader2, CalendarDays, CalendarRange, Layers, List,
   CheckCircle, AlertCircle, Clock3, Check, Pencil, Undo2, Users,
-  Eye, EyeOff, Copy, SlidersHorizontal, Lock, Globe,
+  Eye, EyeOff, Copy, SlidersHorizontal, Lock, Globe, Ban, RotateCcw,
 } from 'lucide-react';
 import EntityLink from '../utils/entityLinks.jsx';
 import ActivityPageDesigner from './ActivityPageDesigner.jsx';
 import ActivityRegistrationPanel from './ActivityRegistrationPanel.jsx';
 import ActivityTemplatesMenu from './ActivityTemplatesMenu.jsx';
+import CancelActivityDialog from './CancelActivityDialog.jsx';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
 import {
   staffForRole, noStaffForRoleMessage, fetchRoleCatalog, activityRoleLabels, payableRolesOf,
@@ -1212,6 +1213,7 @@ function RegularActivityModal({
   const includesVat = normalizePriceIncludesVat(form.price_includes_vat);
   const priceVat = vatBreakdown(form.price, includesVat);
   const isOps = normalizeTemplateCategory(form.category) === 'ops';
+  const isCancelled = String(form.status || '').toLowerCase() === 'cancelled';
   const typeOptions = isOps
     ? activityTypes().filter((t) => ['opening_hours', 'route_building', 'other'].includes(t.id))
     : activityTypes();
@@ -1363,22 +1365,29 @@ function RegularActivityModal({
                   )}
                 </div>
               )}
-              <div className="activity-settings-grid">
-                {!isTemplateEdit && !isOps && (
-                  <label>
-                    <span className="activity-settings-label">מצב האירוע</span>
-                    <AppSelect
-                      className="input"
-                      value={form.status || 'open'}
-                      onChange={(event) => set('status', event.target.value)}
-                      disabled={readOnly}
+              {/* „מצב האירוע” כשדה לבחירה ירד. „הסתיים” נגזר מהתאריך ואיש לא
+                  צריך לסמן אותו, ו„בוטל” הוא תוצאה של פעולת הביטול — שם הוא גם
+                  מזכה את הנרשמים. מה שנשאר כאן הוא הצגה של המצב, לא בחירה בו. */}
+              {isCancelled && !isTemplateEdit && (
+                <div className="activity-cancelled-strip">
+                  <Ban size={15} />
+                  <div style={{ flex: 1 }}>
+                    <b>האירוע בוטל.</b> הוא לא מוצג באתר, הבוט לא מציע אותו, והוא לא
+                    נספר כיום פעילות של הקיר.
+                  </div>
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      className="btn activity-modal-btn activity-modal-btn--ghost"
+                      onClick={() => set('status', 'open')}
+                      title="מחזיר את האירוע לפעיל. זיכויים שכבר בוצעו לא מתבטלים."
                     >
-                      <option value="open">פעיל</option>
-                      <option value="completed">הסתיים</option>
-                      <option value="cancelled">בוטל</option>
-                    </AppSelect>
-                  </label>
-                )}
+                      <RotateCcw size={13} /> החזרה לפעיל
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="activity-settings-grid">
                 {/* One decision, not two boxes where the second depends on the
                     first. The pair behind it stays — a birthday has a working
                     registration page that must never be advertised — but that
@@ -3347,6 +3356,9 @@ export default function ActivitiesCalendar({
   // `null` = כל הסוגים מוצגים. מערך = בדיוק התגיות שנבחרו (ריק = הכל מוסתר).
   const [selectedTypes, setSelectedTypes] = useState(null);
   const [modal, setModal] = useState(null); // form initial or null
+  // Set when the delete button lands on an event that has registrations: the
+  // dialog offers cancelling with a refund instead of deleting.
+  const [cancelDialog, setCancelDialog] = useState(null); // { activity, summary }
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
   const [googleStatus, setGoogleStatus] = useState(null);
@@ -4400,11 +4412,14 @@ export default function ActivitiesCalendar({
     }
   };
 
+  // One button, two outcomes. An event nobody signed up to is deleted; an event
+  // with registrations behind it cannot be — deleting it would strand their
+  // registrations and payments — so the dialog offers cancelling with a refund.
   const handleDelete = async (activity) => {
-    if (!window.confirm(`למחוק את "${activity.name}"?`)) return;
-    setSaving(true);
-    try {
-      if (activity.overlay) {
+    if (activity.overlay) {
+      if (!window.confirm(`למחוק את "${activity.name}"?`)) return;
+      setSaving(true);
+      try {
         await deleteOverlayEvent(activity);
         pushUndo({
           type: 'overlay_delete',
@@ -4414,9 +4429,42 @@ export default function ActivitiesCalendar({
         setModal(null);
         await loadOverlayEvents(visibleRangeRef.current.from, visibleRangeRef.current.to);
         setBanner('האירוע נמחק מהיומן החיצוני');
-        return;
+      } catch (err) {
+        setBanner(err.message || 'מחיקה נכשלה');
+      } finally {
+        setSaving(false);
       }
+      return;
+    }
+
+    setSaving(true);
+    let summary = null;
+    try {
+      const previewRes = await fetch(`/api/activities/${activity.id}/cancellation-preview`);
+      if (previewRes.ok) summary = await previewRes.json();
+    } catch {
+      // The server decides anyway — a failed preview just means we ask plainly.
+    } finally {
+      setSaving(false);
+    }
+
+    if (summary && !summary.deletable) {
+      setCancelDialog({ activity, summary });
+      return;
+    }
+
+    if (!window.confirm(`למחוק את "${activity.name}"?`)) return;
+    setSaving(true);
+    try {
       const res = await fetch(`/api/activities/${activity.id}`, { method: 'DELETE' });
+      if (res.status === 409) {
+        const data = await res.json().catch(() => ({}));
+        if (data?.summary) {
+          setCancelDialog({ activity, summary: data.summary });
+          return;
+        }
+        throw new Error(data?.error || 'מחיקה נכשלה');
+      }
       if (!res.ok) throw new Error('מחיקה נכשלה');
       pushUndo({
         type: 'activity_delete',
@@ -5295,6 +5343,23 @@ export default function ActivitiesCalendar({
           canViewHr={canViewHr}
           externalCalendars={writableOverlayCalendars}
           onStaffChanged={refreshStaffNames}
+        />
+      )}
+
+      {cancelDialog && (
+        <CancelActivityDialog
+          activity={cancelDialog.activity}
+          summary={cancelDialog.summary}
+          onClose={() => setCancelDialog(null)}
+          onCancelled={async (result) => {
+            setModal(null);
+            await loadActivities();
+            setBanner(
+              result.failed?.length
+                ? `האירוע בוטל · ${result.failed.length} זיכויים נכשלו`
+                : `האירוע בוטל · ${result.refunded_amount || 0} ₪ זוכו`
+            );
+          }}
         />
       )}
 
