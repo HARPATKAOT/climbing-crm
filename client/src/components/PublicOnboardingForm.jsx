@@ -2536,8 +2536,8 @@ export default function PublicOnboardingForm() {
                 {knownFile.children.length
                   ? ` ${knownFile.children.join(', ')} ${knownFile.children.length > 1
                     ? 'כבר רשומים ומופיעים'
-                    : 'כבר רשום/ה ומופיע/ה'} בשלב הבא, ואפשר לבחור עבור מי להשלים מסמכים.`
-                  : ' אפשר לבחור בשלב הבא עבור מי להשלים מסמכים.'}
+                    : 'כבר רשום/ה ומופיע/ה'} בשלב הבא.`
+                  : ''}
               </div>
             )}
 
