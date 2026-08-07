@@ -3,7 +3,7 @@ import {
   Plus, ChevronLeft, ChevronRight, X, Save, Trash2, Link2, Unlink,
   RefreshCw, Loader2, CalendarDays, CalendarRange, Layers, List,
   CheckCircle, AlertCircle, Clock3, Check, Pencil, Undo2, Users,
-  Eye, EyeOff, Copy, SlidersHorizontal,
+  Eye, EyeOff, Copy, SlidersHorizontal, Lock, Globe,
 } from 'lucide-react';
 import EntityLink from '../utils/entityLinks.jsx';
 import ActivityPageDesigner from './ActivityPageDesigner.jsx';
@@ -1384,25 +1384,26 @@ function RegularActivityModal({
                     registration page that must never be advertised — but that
                     is a consequence of the choice, not a second question. */}
                 {!isOps && (
-                  <label>
+                  <div>
                     <span className="activity-settings-label">מי יכול להירשם</span>
-                    <AppSelect
-                      className="input input-sm"
-                      value={registrationVisibility(form)}
-                      disabled={readOnly}
-                      onChange={(event) => setForm((prev) => ({
-                        ...prev,
-                        ...visibilityFields(event.target.value),
-                      }))}
-                    >
-                      <option value="closed">סגור — אין דף הרשמה</option>
-                      <option value="link">קישור פרטי — נרשמים רק דרך הקישור</option>
-                      <option value="public">מפורסם — באתר, והבוט מציע אותו</option>
-                    </AppSelect>
-                    <span style={{ display: 'block', fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                    <div className="choice-row" style={{ marginTop: 4 }}>
+                      {VISIBILITY_CHOICES.map(({ value, label, icon: Icon, accent }) => (
+                        <button
+                          key={value}
+                          type="button"
+                          className={`choice-pill ${registrationVisibility(form) === value ? 'active' : ''}`}
+                          style={{ '--choice-accent': accent }}
+                          disabled={readOnly}
+                          onClick={() => setForm((prev) => ({ ...prev, ...visibilityFields(value) }))}
+                        >
+                          <Icon size={14} /> {label}
+                        </button>
+                      ))}
+                    </div>
+                    <span style={{ display: 'block', fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
                       {VISIBILITY_HINTS[registrationVisibility(form)]}
                     </span>
-                  </label>
+                  </div>
                 )}
                 {/* על מה חותמים כשנרשמים לאירוע הזה. „לפי סוג הפעילות” הוא
                     ברירת המחדל ונכון כמעט תמיד — טיול מחתים על הצהרת הטיול —
@@ -1725,6 +1726,13 @@ function visibilityFields(value) {
   if (value === 'link') return { registration_enabled: true, show_on_site: false };
   return { registration_enabled: false, show_on_site: false };
 }
+
+/** Grey is off, blue is a link you hand out, green is out in the world. */
+const VISIBILITY_CHOICES = [
+  { value: 'closed', label: 'סגור', icon: Lock, accent: 'var(--text-3)' },
+  { value: 'link', label: 'קישור פרטי', icon: Link2, accent: '#A78BFA' },
+  { value: 'public', label: 'מפורסם', icon: Globe, accent: '#34D399' },
+];
 
 const VISIBILITY_HINTS = {
   closed: 'ההרשמה נעשית על ידי הצוות בלבד.',

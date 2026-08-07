@@ -811,6 +811,46 @@ input, select, textarea { font-family: var(--font); }
   filter: none !important;
 }
 
+/* Pick one of a few states, in a row — the same pill language as the tabs, but
+   for a form field. The accent is per choice and says something (grey is off,
+   green is public), so it is set inline rather than cycled by position. */
+.choice-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.choice-pill {
+  --choice-accent: var(--text-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 9999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--choice-accent) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--choice-accent) 22%, transparent);
+  transition: all var(--t-fast);
+}
+.choice-pill svg { color: var(--choice-accent); transition: color var(--t-fast); }
+.choice-pill:hover:not(:disabled) {
+  color: var(--text-1);
+  background: color-mix(in srgb, var(--choice-accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--choice-accent) 42%, transparent);
+}
+.choice-pill.active,
+.choice-pill.active:hover {
+  color: #14172a;
+  background: var(--choice-accent);
+  border-color: var(--choice-accent);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--choice-accent) 32%, transparent);
+}
+.choice-pill.active svg { color: #14172a; }
+.choice-pill:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* === CARDS === */
 .card {
   background: var(--bg-card);
