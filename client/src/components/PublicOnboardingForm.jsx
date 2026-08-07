@@ -2693,7 +2693,7 @@ export default function PublicOnboardingForm() {
                 {otp.sending
                   ? 'שולח קוד אימות בוואטסאפ…'
                   : (needsPhoneVerification
-                    ? 'שלח קוד אימות'
+                    ? 'שלח קוד אימות בוואטסאפ'
                     : <>{healthOnlyMode ? 'המשך למילוי הצהרת הבריאות' : 'המשך לפרטי משתתפים'} <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} /></>)}
               </button>
             )}
