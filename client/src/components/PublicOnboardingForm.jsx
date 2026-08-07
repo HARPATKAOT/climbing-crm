@@ -475,93 +475,6 @@ function ParentProfileSummary({ parent, onEdit }) {
   );
 }
 
-/**
- * The declaration already on file, in one of two voices.
- *
- * `renewal` answers "what stays in force if we do not renew", beside the offer
- * to re-sign. `inForce` answers a different question — "this is what we hold
- * for you" — and is what the medical screen shows before asking whether
- * anything has changed since. The same facts, but a summary that reads as a
- * warning about losing something is the wrong thing to put above that question.
- */
-function ExistingDeclarationSummary({ participant, questions, templateSlug, variant = 'renewal' }) {
-  const summary = participant?.onFileDeclarationSummary || {};
-  const health = summary.health || null;
-  const waiver = summary.waiver || null;
-  const storedAnswers = health?.answers || {};
-  const answeredQuestions = (questions || []).filter((question) => (
-    Object.prototype.hasOwnProperty.call(storedAnswers, question.id)
-  ));
-  const positiveQuestions = answeredQuestions.filter((question) => storedAnswers[question.id] === true);
-  const activityLabel = templateSlug === 'trip'
-    ? 'אישור טיולים'
-    : 'אישור פעילות בקיר';
-  const signedAt = health?.signedAt || participant?.onFileHealthSignedAt || '';
-  const waiverSignedAt = waiver?.signedAt || participant?.onFileWaiverSignedAt || '';
-  const boxStyle = {
-    margin: '10px 0', padding: '10px 12px', borderRadius: 9,
-    background: 'rgba(2,6,23,.28)', border: '1px solid rgba(255,255,255,.1)',
-    color: 'rgba(255,255,255,.66)', fontSize: 11.5, lineHeight: 1.6,
-  };
-
-  if (variant === 'inForce') {
-    const forSelf = participant?.type === 'adult';
-    const name = String(participant?.name || '').trim();
-    // The detail that was written under each "yes" is kept as "question — what
-    // was said", so it can be shown back as the sentence it was answered as.
-    const reportedLines = String(health?.notes || '').trim()
-      ? String(health.notes).split('\n').map((line) => line.trim()).filter(Boolean)
-      : positiveQuestions.map((question) => questionLabel(question));
-
-    return (
-      <div style={{ ...boxStyle, fontSize: 13 }}>
-        <div style={{ color: 'rgba(255,255,255,.85)' }}>
-          {forSelf || !name ? 'יש לך הצהרת בריאות בתוקף' : `ל${name} יש הצהרת בריאות בתוקף`}
-          {signedAt ? `, ${forSelf || !name ? 'שחתמת עליה' : 'שנחתמה'} ב-${formatSignedDay(signedAt)}` : ''}
-          {health?.expiresAt ? ` (בתוקף עד ${formatSignedDay(health.expiresAt)})` : ''}.
-        </div>
-        <div style={{ marginTop: 4 }}>
-          {!answeredQuestions.length && !reportedLines.length
-            ? 'התשובות עצמן לא נשמרו ברשומה הישנה, ולכן אין מה להציג מתוכה כאן.'
-            : reportedLines.length
-              ? `בהצהרה הזאת ${forSelf ? 'דיווחת' : 'דיווחתם'} על:`
-              : `בהצהרה הזאת לא ${forSelf ? 'דיווחת' : 'דיווחתם'} לנו על מגבלות רפואיות.`}
-        </div>
-        {reportedLines.map((line) => (
-          <div key={line} style={{ marginTop: 2, paddingInlineStart: 10 }}>· {line}</div>
-        ))}
-      </div>
-    );
-  }
-
-  return (
-    <div style={boxStyle}>
-      <div style={{ color: 'rgba(255,255,255,.82)', fontWeight: 800, marginBottom: 3 }}>
-        מה יישאר בתוקף אם לא מחדשים
-      </div>
-      <div>
-        הצהרת בריאות
-        {signedAt ? `: נחתמה ב-${formatSignedDay(signedAt)}` : ''}
-        {health?.expiresAt ? ` · בתוקף עד ${formatSignedDay(health.expiresAt)}` : ''}
-      </div>
-      <div>
-        {answeredQuestions.length
-          ? positiveQuestions.length
-            ? `תשובות שסומנו „כן”: ${positiveQuestions.map((question) => questionLabel(question)).join(' · ')}`
-            : 'תשובות הבריאות: לא סומנו מצבים רפואיים.'
-          : 'תשובות הבריאות: לא נשמר תקציר זמין ברשומה הישנה.'}
-      </div>
-      {health?.notes && (
-        <div style={{ whiteSpace: 'pre-wrap' }}>פירוט שנשמר: {health.notes}</div>
-      )}
-      <div>
-        {activityLabel}
-        {waiverSignedAt ? `: נחתם ב-${formatSignedDay(waiverSignedAt)}` : ''}
-        {waiver?.expiresAt ? ` · בתוקף עד ${formatSignedDay(waiver.expiresAt)}` : ''}
-      </div>
-    </div>
-  );
-}
 
 /**
  * The code screen, shown in place of the continue button on step 1.
@@ -1173,36 +1086,6 @@ export default function PublicOnboardingForm() {
   const childKey = (child) => `${String(child?.name || '').trim()}|${child?.birthDate || ''}`;
 
   /**
-   * True when this participant already has a declaration in force and is not
-   * re-signing it. Covers both a child confirmed as belonging to another file
-   * and someone already on this file — including the parent themselves, who
-   * would otherwise be handed their own whole form again on the next visit.
-   */
-  // `resignHealth` is answered on the medical screen and has to end the reuse
-  // on every route into it. Guarding only the on-file branch left a child
-  // matched to another parent's file reusing a declaration they had just told
-  // us was out of date.
-  const reusesDeclaration = (child) => {
-    if (child?.resignHealth) return false;
-    if (child?.onFileHealthValid) return true;
-    const known = knownChildren[childKey(child)];
-    return !!(known?.linked && known.health_valid);
-  };
-
-  const reusesHealthDocument = (child) => {
-    if (child?.resignHealth) return false;
-    if (child?.onFileHealthDocumentValid) return true;
-    const known = knownChildren[childKey(child)];
-    return !!(known?.linked && (known.health_document_valid ?? known.health_valid));
-  };
-
-  const reusesWaiver = (child) => {
-    if (child?.onFileWaiverValid) return true;
-    const known = knownChildren[childKey(child)];
-    return !!(known?.linked && (known.waiver_valid ?? known.health_valid));
-  };
-
-  /**
    * A parent or guardian signs for their minors only — an adult signs for
    * themselves, whoever their parent is. So a participant on the file who has
    * reached 18 is not part of what this parent can submit, and the form says
@@ -1232,24 +1115,13 @@ export default function PublicOnboardingForm() {
     && !skipsThisRound(child);
 
   /**
-   * Whether this participant gets a medical screen at all.
-   *
-   * Everyone in the submission does. A declaration in force used to skip the
-   * screen entirely, so a family whose child had developed asthma since signing
-   * was never asked — the form simply carried the old answers forward in
-   * silence. Now the screen is reached either way; what it asks is the
-   * difference, and the reuse decision stays where it already lives, in the
-   * per-participant `reuse_health` / `reuse_waiver` flags sent to the server.
+   * Whether this participant gets a medical screen. Everyone in the submission
+   * does, and everyone answers it in full: the declaration is short, so it is
+   * simply filled afresh on every visit — a declaration in force only changes
+   * what the card says will happen, never what is asked.
    */
   const fillsDeclaration = (child) => !skipsThisRound(child)
     && !awaitingParticipationChoice(child);
-
-  /**
-   * Shown the "has anything changed since?" question instead of the
-   * questionnaire: this participant is covered by a declaration in force and
-   * has not said otherwise.
-   */
-  const asksHealthChange = (child) => reusesDeclaration(child);
 
   /**
    * The signer's own card, already answered on the details step: name, id,
@@ -1286,40 +1158,37 @@ export default function PublicOnboardingForm() {
   };
 
   /** Whether this card's own identity fields are asked for on the participants step. */
-  const fillsOwnDetails = (child) => fillsDeclaration(child) && !reusesDeclaration(child);
+  const fillsOwnDetails = (child) => fillsDeclaration(child);
 
   /**
    * מצב הכרטיס — עובדה אחת שממנה נגזרים פס המצב, הכפתורים והשדות. קודם כל
    * מצב היה תנאי נפרד ליד תנאי, וכל תיקון הוסיף עוד אחד; ככה השאלה „מה רואים
    * עכשיו” נענית פעם אחת:
    *
-   *   blocked   — בגר, וההורה לא יכול לחתום עליו
-   *   skipped   — נאמר עליו „לא משתתף”
-   *   undecided — „האם משתתף/ת בפעילות?” עוד לא נענתה — גם למי שיש הצהרה
-   *               בתוקף; מצב ההצהרה מתגלה רק אחרי „כן”
-   *   covered   — משתתף, ויש הצהרה בתוקף
-   *   reported  — דווח שינוי בריאותי על מי שהיה בתוקף
-   *   renewing  — משתתף מהתיק בלי הצהרה בתוקף; תמולא במסך הבא
-   *   new       — כרטיס שנוסף עכשיו ופרטיו נמסרים כאן
+   *   blocked       — בגר, וההורה לא יכול לחתום עליו
+   *   skipped       — נאמר עליו „לא משתתף”
+   *   undecided     — „האם משתתף/ת בפעילות?” עוד לא נענתה
+   *   participating — ענה „כן”: ההצהרה תמולא (או תרוענן) במסכים הבאים —
+   *                   תמיד מחדש; ההצהרה קצרה, ומנגנון שלם של „בתוקף / לחדש /
+   *                   משהו השתנה” עלה בבלבול יותר משחסך בזמן
    */
   const participantCardState = (child) => {
     if (child?.id && needsOwnSignature(child)) return 'blocked';
     if (child?.participates === false) return 'skipped';
     if (child?.participates !== true) return 'undecided';
-    if (child?.onFileHealthValid) return child?.resignHealth ? 'reported' : 'covered';
-    if (child?.id || child?.relationToSigner === 'self') return 'renewing';
-    return 'new';
+    return 'participating';
   };
 
   /**
-   * התשובה לשאלת ההשתתפות. „כן” על מי שאין לו הצהרה בתוקף מדליק גם את
-   * renewOptIn — זה מה שמכניס אותו למסכי ההצהרה, כמו קודם.
+   * התשובה לשאלת ההשתתפות. „כן” מדליק גם renewOptIn למי שכבר בתיק — זה מה
+   * שמשאיר את הפרופיל שלו נעול (isExistingDeclarationRenewal) במסך ההצהרה
+   * במקום לפתוח את השדות מחדש.
    */
-  const answerParticipation = (index, yes) => updateChild(index, (c) => (yes
+  const answerParticipation = (index, yes) => updateChild(index, () => (yes
     ? {
       participates: true,
       confirmSkip: false,
-      renewOptIn: !c.onFileHealthValid,
+      renewOptIn: true,
     }
     : { participates: false, confirmSkip: false }));
 
@@ -1539,30 +1408,6 @@ export default function PublicOnboardingForm() {
     )));
   };
 
-  const reportHealthChange = async (child, index) => {
-    if (!child?.id || !otp.token) {
-      updateChild(index, { resignHealth: true, resignAsk: false });
-      return;
-    }
-    setError('');
-    try {
-      const response = await fetch('/api/public/health-holds', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phone: parent.phone,
-          studentId: child.id,
-          phoneVerification: { token: otp.token },
-        }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || 'דיווח השינוי הרפואי נכשל');
-      updateChild(index, { resignHealth: true, resignAsk: false, healthBlocked: true });
-    } catch (reportError) {
-      setError(reportError.message);
-    }
-  };
-
   const addChild = () => {
     setChildren((prev) => {
       // כשהרשימה כבר אושרה כ"אלו הם ילדיי", ילד שנוסף עכשיו מכוסה באותו
@@ -1758,9 +1603,10 @@ export default function PublicOnboardingForm() {
   const fitnessDeclarations = allSharedConfirmations.filter(isFitnessDeclaration);
   const sharedSubSteps = () => (sharedConfirmations.length ? [SUB_ACTIVITY, SUB_WAIVER] : [SUB_WAIVER]);
   const signingNames = healthChildren().map((kid) => String(kid.name || '').trim()).filter(Boolean);
-  // The signer is one of the participants when they ticked "I am participating
-  // too", and the list then named them twice.
-  const coveredNames = [...new Set([parentFullName(), ...signingNames].filter(Boolean))];
+  // המסמך חל רק על מי שמשתתף. החותם שענה „לא משתתף” הוא חותם — לא מכוסה,
+  // והוספה אוטומטית של שמו רשמה אותו על ויתור שלא נועד לו. כשהוא כן משתתף,
+  // הכרטיס שלו נמצא ב-signingNames ממילא.
+  const coveredNames = [...new Set(signingNames)];
   const signingFirstNames = signingNames.map((name) => name.split(/\s+/)[0]).filter(Boolean);
 
   const goNextFromParent = async () => {
@@ -1999,9 +1845,6 @@ export default function PublicOnboardingForm() {
         setError(`${kid.name} מעל גיל 18 — הורה לא יכול לחתום עבורו/ה. יש למלא טופס נפרד בשמו/ה, או לתקן את תאריך הלידה`);
         return;
       }
-      // A participant whose card is collapsed behind "declaration in force" was
-      // never shown these fields, so they cannot be the thing blocking the form.
-      if (reusesDeclaration(kid)) continue;
       if (!kid.birthDate) {
         setError(`חסר תאריך לידה עבור ${kid.name}`);
         return;
@@ -2094,23 +1937,6 @@ export default function PublicOnboardingForm() {
     );
 
     if (healthSubStep === SUB_HEALTH) {
-      // A declaration in force is reused only after someone said it is still
-      // true. Silence is not that answer, so the screen cannot be passed by
-      // ignoring the question.
-      if (asksHealthChange(current)) {
-        if (children[fullIndex]?.healthChanged !== false) {
-          setError(`יש לענות אם חל שינוי במצב הבריאותי של ${current.name || 'המשתתף/ת'} מאז ההצהרה הקודמת`);
-          return;
-        }
-        if (childHealthIndex < kids.length - 1) {
-          setChildHealthIndex((i) => i + 1);
-          return;
-        }
-        const nextShared = sharedSubSteps();
-        setHealthSubStep(nextShared[0]);
-        if (nextShared[0] === SUB_WAIVER) initCanvas();
-        return;
-      }
       const answers = children[fullIndex]?.answers || {};
       const screening = screeningFor(current);
       if (unansweredQuestions(screening, answers).length) {
@@ -2258,8 +2084,6 @@ export default function PublicOnboardingForm() {
         .map((c) => {
           const participantQuestions = questionsForParticipant(c);
           const asked = new Set(participantQuestions.map((q) => q.id));
-          const reuseHealth = healthOnlyMode ? false : reusesHealthDocument(c);
-          const reuseActivityWaiver = healthOnlyMode ? false : reusesWaiver(c);
           const answers = Object.fromEntries(
             Object.entries(c.answers || {}).filter(([id]) => asked.has(id))
           );
@@ -2292,13 +2116,13 @@ export default function PublicOnboardingForm() {
             medicalClearance: c.medicalClearance || null,
             signature: c.signature,
             healthAccepted: healthOnlyMode ? c.healthAccepted === true : false,
-            waiverAccepted: healthOnlyMode ? false : !reuseActivityWaiver,
+            waiverAccepted: !healthOnlyMode,
             signatureEvidenceTimeline: c.signatureEvidenceTimeline || null,
             ...linkFieldsFor(knownChildren[childKey(c)]),
-            // Already on this file with a declaration in force: say so, or the
-            // server asks for a signature the form deliberately never showed.
-            reuse_health_document: reuseHealth,
-            reuse_waiver: healthOnlyMode ? false : reuseActivityWaiver,
+            // אין עוד שימוש חוזר: כל משתתף בשליחה חתם עכשיו על הצהרה ואישור
+            // טריים, והשרת שומר לו רשומות ו-PDF חדשים.
+            reuse_health_document: false,
+            reuse_waiver: false,
             // A spouse is a parent of this household as well as a participant.
             // The phone is what the server needs to create — or recognise — them.
             spouse_phone: c.relationToSigner === 'spouse' ? String(c.spousePhone || '').trim() : '',
@@ -3060,57 +2884,22 @@ export default function PublicOnboardingForm() {
                   <CardStatus tone="muted" title="לא ימולא הפעם — לא ייכלל בשליחה" />
                 )}
 
-                {cardState === 'covered' && (
-                  <>
-                    <CardStatus
-                      tone="info"
-                      icon={<ShieldCheck size={16} />}
-                      title="נמצאה הצהרת בריאות והסרת אחריות בתוקף"
-                    >
-                      {child.onFileHealthSignedAt
-                        ? `נחתם ב-${formatSignedDay(child.onFileHealthSignedAt)}. `
-                        : ''}
-                      אין צורך למלא שוב — הפרטים נשארים כפי שהם.
-                      <ExistingDeclarationSummary
-                        participant={child}
-                        questions={allQuestions}
-                        templateSlug={template?.slug || routeSlug || 'wall'}
-                      />
-                    </CardStatus>
-                    {/* שני קליקים במכוון: הצהרה קיימת נמחקה בטעות בסימון אחד
-                        בדרך אגב. הראשון רק פותח את השאלה, השני הוא זה שמוחק. */}
-                    {child.resignAsk && (
-                      <div style={{ marginTop: 10 }}>
-                        <CardStatus
-                          tone="attention"
-                          icon={<AlertTriangle size={14} />}
-                          title="למלא הצהרה חדשה?"
-                        >
-                          {/* בשמו, ובלי לאיים במחיקה: הצהרה לא מוחלפת אלא
-                              מצטרפת לתיק, והחדשה היא זו שתקפה מכאן. */}
-                          תתווסף ל{namePhrase} הצהרה חדשה שתצטרכו למלא ולחתום עליה.
-                          {' '}ההצהרה
-                          {child.onFileHealthSignedAt ? ` מ-${formatSignedDay(child.onFileHealthSignedAt)}` : ' הקודם'}
-                          {' '}נשמרת בתיק כמו שהיא, והחדשה היא שתהיה בתוקף.
-                        </CardStatus>
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {cardState === 'reported' && (
+                {/* ענה „כן”: פס אחד שאומר מה יקרה במסך הבא. ההצהרה ממולאת
+                    תמיד מחדש — היא קצרה, ומנגנון שלם של „בתוקף / לחדש / משהו
+                    השתנה” עלה בבלבול יותר משחסך בזמן. הצבע עדיין מספר מה יש
+                    בתיק: כחול — יש הצהרה והיא תרוענן; צהוב — אין או שפגה. */}
+                {cardState === 'participating' && (child.onFileHealthValid ? (
                   <CardStatus
-                    tone="attention"
-                    icon={<AlertTriangle size={15} />}
-                    title="דווח שינוי במצב הבריאותי"
+                    tone="info"
+                    icon={<ShieldCheck size={15} />}
+                    title="נמצאה הצהרת בריאות בתוקף"
                   >
-                    ההשתתפות חסומה עד להשלמת הצהרה חדשה, שתמולא בשלבים הבאים.
+                    {child.onFileHealthSignedAt
+                      ? `נחתמה ב-${formatSignedDay(child.onFileHealthSignedAt)}. `
+                      : ''}
+                    במסך הבא נרענן אותה במקום — כמה שאלות קצרות וחתימה.
                   </CardStatus>
-                )}
-
-                {/* אחרי „כן, משתתף” בלי הצהרה בתוקף: מצב ההצהרה מתגלה — צהוב,
-                    כי חסר משהו — ונאמר איפה הוא יושלם. */}
-                {cardState === 'renewing' && (
+                ) : child.id ? (
                   <CardStatus
                     tone="warn"
                     icon={<AlertTriangle size={15} />}
@@ -3122,25 +2911,23 @@ export default function PublicOnboardingForm() {
                       ? `ההצהרה מ-${formatSignedDay(child.onFileHealthSignedAt)} כבר אינה בתוקף. `
                       : ''}
                     הצהרת הבריאות של {namePhrase} תמולא במסך הבא.
-                    {asksDetails ? ' יש להשלים קודם את הפרטים שחסרים.' : ''}
                   </CardStatus>
-                )}
+                ) : (
+                  /* כרטיס שהוקלד עכשיו: אין תיק שאפשר „לא למצוא” בו כלום. */
+                  <CardStatus
+                    tone="muted"
+                    title={`הצהרת הבריאות של ${typedName || 'המשתתף/ת'} תמולא במסך הבא`}
+                  />
+                ))}
 
-                {/* קודם בוחרים מי משתתף; מצב ההצהרה — בתוקף או חסרה — מתגלה
-                    רק אחרי „כן”. כרטיס שלא נענה פשוט לא נכנס לשליחה. */}
+                {/* קודם בוחרים מי משתתף; מצב ההצהרה מתגלה רק אחרי „כן”.
+                    כרטיס שלא נענה פשוט לא נכנס לשליחה. */}
                 {cardState === 'undecided' && (
                   <div style={{ fontSize: 13.5, fontWeight: 700, color: 'rgba(255,255,255,0.85)' }}>
                     {child.relationToSigner === 'self'
                       ? `האם ${cg('אתה משתתף', 'את משתתפת')} בפעילות?`
                       : `האם ${typedName || 'המשתתף/ת'} ${cg('משתתף', 'משתתפת')} בפעילות?`}
                   </div>
-                )}
-
-                {cardState === 'new' && (
-                  <CardStatus
-                    tone="muted"
-                    title={`הצהרת הבריאות של ${typedName || 'המשתתף/ת'} תמולא בשלבים הבאים`}
-                  />
                 )}
 
                 {/* הפרטים עצמם, כשהכרטיס אוסף אותם. */}
@@ -3356,45 +3143,20 @@ export default function PublicOnboardingForm() {
                   </CardActions>
                 ))}
 
-                {cardState === 'renewing' && (
+                {cardState === 'participating' && (
                   <CardActions>
-                    {/* חזרה לשאלת ההשתתפות — רק למי שנשאל אותה; כרטיס שנוסף
-                        ידנית חוזר ב„ביטול ההוספה”. הפרטים עצמם מגיעים מהתיק
-                        ואינם נערכים כאן — טעות בהם מתקנים מול הצוות. */}
-                    {(child.id || child.relationToSigner === 'self') && (
+                    {/* התחרטות: מי שמהתיק חוזר לשאלת ההשתתפות; כרטיס שהוקלד
+                        ידנית פשוט יורד. הפרטים עצמם מגיעים מהתיק ואינם נערכים
+                        כאן — טעות בהם מתקנים מול הצוות. */}
+                    {(child.id || child.relationToSigner === 'self') ? (
                       <CardButton onClick={() => updateChild(index, { participates: null, renewOptIn: false, editProfile: false })}>
                         ביטול
                       </CardButton>
+                    ) : (
+                      <CardButton onClick={() => setChildren((prev) => prev.filter((_, i) => i !== index))}>
+                        ביטול ההוספה
+                      </CardButton>
                     )}
-                  </CardActions>
-                )}
-
-                {cardState === 'covered' && (child.resignAsk ? (
-                  <CardActions>
-                    <CardButton variant="solid" onClick={() => reportHealthChange(child, index)}>
-                      כן, למלא הצהרה חדשה
-                    </CardButton>
-                    <CardButton onClick={() => updateChild(index, { resignAsk: false })}>
-                      לא, השאירו כמו שזה
-                    </CardButton>
-                  </CardActions>
-                ) : (
-                  <CardActions>
-                    <CardButton onClick={() => updateChild(index, { resignAsk: true })}>
-                      משהו השתנה במצב הבריאותי?
-                    </CardButton>
-                    {/* התחרטות על „כן, משתתף” — היישר אל אותו אישור דו-שלבי. */}
-                    <CardButton onClick={() => updateChild(index, { participates: null, confirmSkip: true, resignAsk: false })}>
-                      {cg('לא משתתף', 'לא משתתפת')}
-                    </CardButton>
-                  </CardActions>
-                ))}
-
-                {cardState === 'new' && (
-                  <CardActions>
-                    <CardButton onClick={() => setChildren((prev) => prev.filter((_, i) => i !== index))}>
-                      ביטול ההוספה
-                    </CardButton>
                   </CardActions>
                 )}
               </div>
@@ -3485,53 +3247,7 @@ export default function PublicOnboardingForm() {
                     and answered כן/לא rather than ticked — a blank box would
                     file "nobody asked" as "no". The heading is the page title
                     above; repeating it here said the same thing twice. */}
-                {asksHealthChange(currentChild) ? (
-                  <>
-                    <ExistingDeclarationSummary
-                      participant={currentChild}
-                      questions={allQuestions}
-                      templateSlug={template?.slug || routeSlug || 'wall'}
-                      variant="inForce"
-                    />
-                    <p style={{ fontSize: 14, fontWeight: 700, margin: '16px 2px 10px' }}>
-                      האם משהו השתנה מאז?
-                    </p>
-                    {/* שאלה, לא תיבת סימון: „לא סומן” ו„לא השתנה” הם שתי תשובות
-                        שונות, ורק אחת מהן נמסרה. */}
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      {[['כן, חל שינוי', true], ['לא, שום דבר לא השתנה', false]].map(([text, value]) => (
-                        <button
-                          key={text}
-                          type="button"
-                          onClick={() => {
-                            setError('');
-                            updateChild(currentFullIndex, value
-                              ? { healthChanged: true, resignHealth: true }
-                              : { healthChanged: false, resignHealth: false });
-                          }}
-                          style={{
-                            flex: 1, padding: '11px 0', borderRadius: 10, font: 'inherit',
-                            fontWeight: 700, fontSize: 14, cursor: 'pointer',
-                            border: children[currentFullIndex]?.healthChanged === value
-                              ? '1px solid var(--form-accent-solid, #f97316)'
-                              : '1px solid rgba(255,255,255,.15)',
-                            background: children[currentFullIndex]?.healthChanged === value
-                              ? 'var(--form-accent-soft-strong, rgba(249,115,22,.18))'
-                              : 'rgba(255,255,255,.05)',
-                            color: children[currentFullIndex]?.healthChanged === value
-                              ? 'var(--form-accent-text, #fdba74)'
-                              : '#e2e8f0',
-                          }}
-                        >
-                          {text}
-                        </button>
-                      ))}
-                    </div>
-                    <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', margin: '10px 2px 0', lineHeight: 1.6 }}>
-                      „כן” פותח את שאלות הבריאות מחדש, וההצהרה הקודמת תוחלף בחדשה.
-                    </p>
-                  </>
-                ) : currentScreening.length > 0 && (
+                {currentScreening.length > 0 && (
                   <>
                     <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
                       תשובה „כן” לא מונעת השתתפות. היא רק מאפשרת לצוות לדעת ולהיערך.
