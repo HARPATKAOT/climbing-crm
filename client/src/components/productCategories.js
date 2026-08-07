@@ -60,7 +60,10 @@ export function imageBackground(record, fallback) {
   const image = record?.image;
   if (!image) return fallback;
   const fit = imageFitOf(record);
-  const layer = `center/${fit} no-repeat url(${image})`;
+  // Quoted: catalog photos are addresses now, not base64 blobs, and an address
+  // may carry a space or a bracket that would end the url() early.
+  const quoted = String(image).replace(/["\\]/g, '\\$&');
+  const layer = `center/${fit} no-repeat url("${quoted}")`;
   return fit === 'contain' && fallback ? `${layer}, ${fallback}` : layer;
 }
 
