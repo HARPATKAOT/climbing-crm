@@ -600,7 +600,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [addContactError, setAddContactError] = useState('');
 
   useEffect(() => {
-    setEditStudentName(student.name || '');
+    {
+      // איפוס לשני השדות המפוצלים — הקריאה לסטר הישן הפילה את כל המסך.
+      const split = splitParentName({ name: student.name, lastName: student.lastName });
+      setEditStudentFirstName(split.first);
+      setEditStudentLastName(split.lastName);
+    }
     setEditBirthDate(student.birthDate || '');
     setEditStudentPhone(student.phone || '');
     setEditGender(student.gender || '');
@@ -2394,7 +2399,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const openUnifiedEditor = () => {
     const nextParentName = parentNameParts(parent);
     setEditFocus(parentOnly ? 'parent' : 'student');
-    setEditStudentName(student.name || '');
+    {
+      // איפוס לשני השדות המפוצלים — הקריאה לסטר הישן הפילה את כל המסך.
+      const split = splitParentName({ name: student.name, lastName: student.lastName });
+      setEditStudentFirstName(split.first);
+      setEditStudentLastName(split.lastName);
+    }
     setEditBirthDate(student.birthDate || '');
     setEditStudentPhone(student.phone || '');
     setEditGender(student.gender || '');
