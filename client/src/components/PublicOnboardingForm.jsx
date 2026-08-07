@@ -2722,7 +2722,71 @@ export default function PublicOnboardingForm() {
                       <span>{participantRelationLabel(child)}</span>
                     </div>
                   </div>
+                  {/* להוציא משתתף מההגשה — בשתי לחיצות, כי זה מונע ממנו להיכנס
+                      לפעילות, וזה בדיוק סוג הדבר שנלחץ בטעות. */}
+                  {!child.skipThisTime && !child.confirmSkip && (
+                    <button
+                      type="button"
+                      onClick={() => updateChild(index, { confirmSkip: true })}
+                      style={{
+                        background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
+                        borderRadius: 10, color: 'rgba(255,255,255,0.65)', flexShrink: 0,
+                        fontFamily: 'inherit', fontSize: 12, padding: '7px 12px', cursor: 'pointer',
+                      }}
+                    >
+                      לא משתתף
+                    </button>
+                  )}
+                  {child.skipThisTime && (
+                    <button
+                      type="button"
+                      onClick={() => updateChild(index, { skipThisTime: false, confirmSkip: false })}
+                      style={{
+                        background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
+                        borderRadius: 10, color: 'rgba(255,255,255,0.65)', flexShrink: 0,
+                        fontFamily: 'inherit', fontSize: 12, padding: '7px 12px', cursor: 'pointer',
+                      }}
+                    >
+                      בעצם כן, משתתף/ת
+                    </button>
+                  )}
                 </div>
+                {child.confirmSkip && !child.skipThisTime && (
+                  <div style={{
+                    background: 'rgba(248,113,113,.1)', border: '1px solid rgba(248,113,113,.45)',
+                    borderRadius: 12, padding: 12, marginBottom: 14,
+                    fontSize: 13, lineHeight: 1.6, color: '#FCA5A5',
+                  }}>
+                    <div style={{ fontWeight: 700, marginBottom: 8 }}>
+                      בטוח? {child.name?.trim() || 'אותו אדם'} לא יוכל/תוכל להשתתף בפעילות.
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        onClick={() => updateChild(index, { skipThisTime: true, confirmSkip: false })}
+                        style={{
+                          background: 'rgba(248,113,113,.18)', border: '1px solid rgba(248,113,113,.5)',
+                          borderRadius: 10, color: '#FCA5A5',
+                          fontFamily: 'inherit', fontSize: 12, fontWeight: 700,
+                          padding: '7px 12px', cursor: 'pointer',
+                        }}
+                      >
+                        כן, לא משתתף
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateChild(index, { confirmSkip: false })}
+                        style={{
+                          background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
+                          borderRadius: 10, color: 'rgba(255,255,255,0.7)',
+                          fontFamily: 'inherit', fontSize: 12, padding: '7px 12px', cursor: 'pointer',
+                        }}
+                      >
+                        ביטול
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* בגר — הורה חותם רק על ילדיו הקטינים. הכרטיס יוצא מהטופס
                     ואומר למה, במקום להעלים משתתף בלי הסבר. */}
@@ -2746,7 +2810,7 @@ export default function PublicOnboardingForm() {
                 {/* על הפרק, לא על החובה: מי שרשום בתיק ואין לו הצהרה בתוקף
                     מקבל הצעה לחדש. אולי הוא כבר לא מטפס, ולכן „לא הפעם” הוא
                     תשובה לגיטימית — אבל השאלה חייבת להישאל. */}
-                {child.id && !child.onFileHealthValid && !needsOwnSignature(child) && !child.renewOptIn && (
+                {!child.onFileHealthValid && !needsOwnSignature(child) && !child.renewOptIn && (child.id || child.type === 'adult') && (
                   <div style={{
                     background: child.skipThisTime ? 'rgba(255,255,255,.04)' : 'var(--form-accent-soft, rgba(249,115,22,.1))',
                     border: `1px solid ${child.skipThisTime ? 'rgba(255,255,255,0.12)' : 'var(--form-accent-border, rgba(249,115,22,.4))'}`,
@@ -2819,7 +2883,7 @@ export default function PublicOnboardingForm() {
                 )}
 
                 {/* אחרי „כן, לחדש” — מה עוד נדרש, ודרך חזרה. */}
-                {child.id && !child.onFileHealthValid && !needsOwnSignature(child) && child.renewOptIn && (
+                {!child.onFileHealthValid && !needsOwnSignature(child) && child.renewOptIn && (child.id || child.type === 'adult') && (
                   <div style={{
                     background: 'var(--form-accent-soft, rgba(249,115,22,.1))',
                     border: '1px solid var(--form-accent-border, rgba(249,115,22,.35))',
