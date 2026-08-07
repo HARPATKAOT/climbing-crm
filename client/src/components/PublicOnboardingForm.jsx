@@ -926,6 +926,11 @@ export default function PublicOnboardingForm() {
     .filter((field) => (field === 'relation' ? relationRequired : true))
     .filter((field) => !String(parent[field] || '').trim());
   const isMissing = (field) => missingParentFields.includes(field);
+  /** The same yellow ring, for a participant card's own required fields. */
+  const emptyStyle = (value) => (String(value || '').trim()
+    ? undefined
+    : { borderColor: 'rgba(252,211,77,.55)', background: 'rgba(251,191,36,.07)' });
+
   const missingStyle = (field) => (isMissing(field)
     ? { borderColor: 'rgba(252,211,77,.55)', background: 'rgba(251,191,36,.07)' }
     : undefined);
@@ -1758,6 +1763,23 @@ export default function PublicOnboardingForm() {
     const kids = namedChildren();
     if (!kids.length) {
       setError('יש לבחור לפחות משתתף/ת אחד למילוי, או להוסיף משתתף/ת חדש');
+      return;
+    }
+    // Adding someone to a family file is a claim about a relationship, and it is
+    // made explicitly rather than assumed from the fact that they were typed in.
+    const unclaimed = kids.find((kid) => !kid.relationToSigner);
+    if (unclaimed) {
+      setError(`יש לאשר ש${unclaimed.name?.trim() || 'המשתתף/ת'} הוא/היא הילד/ה שלך — או להסיר את הכרטיס`);
+      return;
+    }
+    // Every card is a question, and an unanswered one is not a "no". Left blank
+    // it carried the participant forward without anyone having decided.
+    const undecided = kids.find((kid) => !kid.onFileHealthValid
+      && !needsOwnSignature(kid)
+      && !kid.renewOptIn
+      && !kid.skipThisTime);
+    if (undecided) {
+      setError(`יש לבחור עבור ${undecided.name?.trim() || 'כל משתתף'} — למלא הצהרה עכשיו, או לסמן שאינו/ה משתתף/ת`);
       return;
     }
     for (const kid of kids) {
@@ -2788,6 +2810,19 @@ export default function PublicOnboardingForm() {
                       ))}
                     </div>
                   </div>
+                  {!child.id && !child.skipThisTime && (
+                    <button
+                      type="button"
+                      onClick={() => setChildren((prev) => prev.filter((_, i) => i !== index))}
+                      style={{
+                        background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
+                        borderRadius: 10, color: 'rgba(255,255,255,0.6)', flexShrink: 0,
+                        fontFamily: 'inherit', fontSize: 12, padding: '7px 12px', cursor: 'pointer',
+                      }}
+                    >
+                      ביטול ההוספה
+                    </button>
+                  )}
                   {child.skipThisTime && (
                     <button
                       type="button"
@@ -2825,7 +2860,7 @@ export default function PublicOnboardingForm() {
                 {/* על הפרק, לא על החובה: מי שרשום בתיק ואין לו הצהרה בתוקף
                     מקבל הצעה לחדש. אולי הוא כבר לא מטפס, ולכן „לא הפעם” הוא
                     תשובה לגיטימית — אבל השאלה חייבת להישאל. */}
-                {!child.onFileHealthValid && !needsOwnSignature(child) && !child.renewOptIn && (child.id || child.type === 'adult') && (
+                {!child.onFileHealthValid && !needsOwnSignature(child) && !child.renewOptIn && (child.id || child.relationToSigner === 'self') && (
                   <div style={{ marginBottom: 0 }}>
                     {child.skipThisTime ? (
                       /* הדרך חזרה היא הכפתור שבראש הכרטיס. כאן נשארת רק העובדה. */
@@ -2889,7 +2924,7 @@ export default function PublicOnboardingForm() {
                             type="button"
                             onClick={() => updateChild(index, { renewOptIn: true, skipThisTime: false })}
                             style={{
-                              background: 'var(--form-accent-solid, #F97316)', border: 'none', borderRadius: 10, color: '#fff',
+                              background: 'transparent', border: '1px solid rgba(252,211,77,.6)', borderRadius: 10, color: '#FCD34D',
                               fontFamily: 'inherit', fontSize: 13, fontWeight: 700,
                               padding: '9px 14px', cursor: 'pointer',
                             }}
@@ -2915,7 +2950,7 @@ export default function PublicOnboardingForm() {
                 )}
 
                 {/* אחרי „כן, לחדש” — מה עוד נדרש, ודרך חזרה. */}
-                {!child.onFileHealthValid && !needsOwnSignature(child) && child.renewOptIn && (child.id || child.type === 'adult') && (
+                {!child.onFileHealthValid && !needsOwnSignature(child) && child.renewOptIn && (child.id || child.relationToSigner === 'self') && (
                   <div style={{
                     background: 'var(--form-accent-soft, rgba(249,115,22,.1))',
                     border: '1px solid var(--form-accent-border, rgba(249,115,22,.35))',
@@ -2929,7 +2964,7 @@ export default function PublicOnboardingForm() {
                           אותו הדבר פעמיים. */}
                       <div style={{ fontSize: 13.5, color: 'var(--form-accent-text, #fdba74)', fontWeight: 700 }}>
                         {hasCompleteParticipantProfile(child) && !child.editProfile
-                          ? `חידוש ההצהרה עבור ${child.name?.trim() || 'משתתף/ת זה'} יופיע בהמשך הטופס`
+                          ? `חידוש ההצהרה עבור ${child.name?.trim() || 'משתתף/ת זה'} יופיע בשלבים הבאים`
                           : `חידוש ההצהרה עבור ${child.name?.trim() || 'משתתף/ת זה'} — יש להשלים את הפרטים שחסרים`}
                       </div>
                       <button
@@ -3061,12 +3096,13 @@ export default function PublicOnboardingForm() {
                   && !selfCardFromDetails(child) && (
                 <>
                 <div className="form-group">
-                  <label>{child.type === 'adult' ? 'שם פרטי *' : 'שם פרטי של הילד/ה *'}</label>
+                  <label>{child.type === 'adult' ? 'שם מלא *' : 'שם פרטי של הילד/ה *'}</label>
                   <input
                     value={child.name}
                     onChange={(e) => updateChild(index, { name: e.target.value })}
-                    placeholder={child.type === 'adult' ? 'שם מלא' : 'שם פרטי'}
-                    readOnly={child.type === 'adult'}
+                    placeholder={child.type === 'adult' ? 'שם פרטי ושם משפחה' : 'שם פרטי'}
+                    readOnly={child.relationToSigner === 'self'}
+                    style={emptyStyle(child.name)}
                   />
                   {/* Shown rather than assumed: the surname is completed from
                       the parent, and anyone whose child carries a different one
