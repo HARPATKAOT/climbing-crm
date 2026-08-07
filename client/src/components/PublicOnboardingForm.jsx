@@ -701,7 +701,7 @@ export default function PublicOnboardingForm() {
   });
   const [children, setChildren] = useState([emptyChild()]);
   const [selfStudent, setSelfStudent] = useState(null);
-  const [isAdultSelf, setIsAdultSelf] = useState(false);
+  const [isAdultSelf, setIsAdultSelf] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [savedDeclarations, setSavedDeclarations] = useState([]);
@@ -1656,7 +1656,11 @@ export default function PublicOnboardingForm() {
   };
 
   const proceedToStep2 = () => {
-    if (isAdultSelf) {
+    // The person filling the form is always one of the cards on the next
+    // screen, with their details already in it. Whether they climb is answered
+    // there — "כן, למלא עכשיו" or "לא משתתף" — instead of by a checkbox here
+    // that decided it before they had seen what it meant.
+    if (true) {
       // Same person on both steps — carry the ID already typed, like the name.
       setChildren((current) => {
         const adult = current.find((child) => child.type === 'adult');
@@ -2399,27 +2403,6 @@ export default function PublicOnboardingForm() {
                   />
                   <span>זה אני</span>
                 </label>
-                <label
-                  className="event-check"
-                  style={{
-                    cursor: 'pointer', marginBottom: 18,
-                    borderColor: isAdultSelf ? 'var(--form-accent-border, rgba(249,115,22,0.45))' : 'rgba(255,255,255,0.08)',
-                    background: isAdultSelf ? 'var(--form-accent-soft, rgba(249,115,22,0.08))' : 'rgba(255,255,255,0.03)',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={isAdultSelf}
-                    onChange={(e) => setAdultSelfMode(e.target.checked)}
-                  />
-                  <span>
-                    {g(
-                      'גם אני משתתף בפעילות וממלא את הטפסים עבור עצמי',
-                      'גם אני משתתפת בפעילות וממלאת את הטפסים עבור עצמי',
-                      'גם אני משתתף/ת בפעילות וממלא/ת את הטפסים עבור עצמי'
-                    )}
-                  </span>
-                </label>
               </>
             ) : (
               <>
@@ -2586,24 +2569,6 @@ export default function PublicOnboardingForm() {
                 />
               </div>
             </div>
-            {/* אחרי הפרטים, לא לפניהם: הם נשאלים ממילא, והשאלה כאן היא רק אם
-                מי שממלא אותם גם משתתף בעצמו. */}
-            <label
-              className="event-check"
-              style={{
-                cursor: 'pointer',
-                marginBottom: 18,
-                borderColor: isAdultSelf ? 'var(--form-accent-border, rgba(249,115,22,0.45))' : 'rgba(255,255,255,0.08)',
-                background: isAdultSelf ? 'var(--form-accent-soft, rgba(249,115,22,0.08))' : 'rgba(255,255,255,0.03)',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={isAdultSelf}
-                onChange={(e) => setAdultSelfMode(e.target.checked)}
-              />
-              <span>גם אני משתתף/ת וממלא/ת עבור עצמי</span>
-            </label>
               </>
             )}
             {knownFile && (
@@ -3248,8 +3213,8 @@ export default function PublicOnboardingForm() {
                 type="button"
                 onClick={addChild}
                 style={{
-                  width: '100%', background: 'transparent', border: '1px dashed var(--form-accent-border, rgba(249,115,22,0.5))',
-                  color: 'var(--form-accent-text, #F97316)', padding: 12, borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
+                  width: '100%', background: 'transparent', border: '1px dashed rgba(255,255,255,0.25)',
+                  color: 'rgba(255,255,255,0.72)', padding: 12, borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16,
                 }}
               >
