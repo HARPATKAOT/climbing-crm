@@ -261,6 +261,113 @@ function ParticipantProfileSummary({ participant, onEdit }) {
   );
 }
 
+/**
+ * הצבעים של פס המצב בכרטיס משתתף. ארבעה מצבים, לא ארבעה עותקים של אותו
+ * style בתוך ארבעה בלוקים שנכתבו בזמנים שונים.
+ */
+const CARD_TONES = {
+  ok: {
+    bg: 'rgba(52,211,153,.08)',
+    border: 'rgba(52,211,153,.3)',
+    text: '#6ee7b7',
+  },
+  attention: {
+    bg: 'var(--form-accent-soft, rgba(249,115,22,.1))',
+    border: 'var(--form-accent-border, rgba(249,115,22,.35))',
+    text: 'var(--form-accent-text, #fdba74)',
+  },
+  stop: {
+    bg: 'rgba(248,113,113,.12)',
+    border: 'rgba(248,113,113,.35)',
+    text: '#fca5a5',
+  },
+  muted: {
+    bg: 'rgba(255,255,255,.04)',
+    border: 'rgba(255,255,255,0.12)',
+    text: 'rgba(255,255,255,0.8)',
+  },
+};
+
+/** פס המצב: איפה עומדת ההצהרה של המשתתף הזה. אותו מקום בכל כרטיס. */
+function CardStatus({ tone = 'muted', icon, title, children }) {
+  const look = CARD_TONES[tone] || CARD_TONES.muted;
+  return (
+    <div style={{
+      background: look.bg,
+      border: `1px solid ${look.border}`,
+      borderRadius: 12,
+      padding: 12,
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        fontSize: 14, fontWeight: 700, color: look.text,
+        marginBottom: children ? 5 : 0,
+      }}>
+        {icon}
+        <span>{title}</span>
+      </div>
+      {children ? (
+        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.62)', lineHeight: 1.55 }}>
+          {children}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const CARD_BUTTON_LOOKS = {
+  ghost: {
+    background: 'transparent',
+    border: '1px solid rgba(255,255,255,0.18)',
+    color: 'rgba(255,255,255,0.7)',
+    fontWeight: 400,
+  },
+  offer: {
+    background: 'transparent',
+    border: '1px solid rgba(252,211,77,.6)',
+    color: '#FCD34D',
+    fontWeight: 700,
+  },
+  solid: {
+    background: 'var(--form-accent-solid, #F97316)',
+    border: '1px solid transparent',
+    color: '#fff',
+    fontWeight: 700,
+  },
+  danger: {
+    background: 'rgba(248,113,113,.18)',
+    border: '1px solid rgba(248,113,113,.5)',
+    color: '#FCA5A5',
+    fontWeight: 700,
+  },
+};
+
+/** כפתור פעולה בכרטיס. הווריאנט אומר מה הכפתור עושה, לא איך הוא נראה. */
+function CardButton({ variant = 'ghost', onClick, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        borderRadius: 10, fontFamily: 'inherit', fontSize: 13,
+        padding: '9px 14px', cursor: 'pointer',
+        ...(CARD_BUTTON_LOOKS[variant] || CARD_BUTTON_LOOKS.ghost),
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** שורת הפעולות של הכרטיס — תמיד אחת, תמיד למטה. */
+function CardActions({ children }) {
+  return (
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+      {children}
+    </div>
+  );
+}
+
 function ParentProfileSummary({ parent, onEdit }) {
   const relationLabels = {
     father: 'אב',
@@ -948,7 +1055,10 @@ export default function PublicOnboardingForm() {
 
   // Which participant has already been told their ID looks wrong, so the
   // warning is a warning and not a wall.
-  const [idWarnedFor, setIdWarnedFor] = useState('');
+  // Everyone already warned about, not just the last one: with a single value,
+  // two foreign documents in one family alternated warnings forever and the
+  // form could never be passed.
+  const [idWarnedFor, setIdWarnedFor] = useState([]);
   // Which set of unanswered renewal offers has already been named on screen.
   // Keyed by the names themselves, so answering one and leaving another still
   // gets its own warning.
@@ -1124,7 +1234,11 @@ export default function PublicOnboardingForm() {
    * whatever they said their relation is, and everyone else is a child.
    */
   const participantRelationLabel = (child) => {
-    if (child?.relationToSigner === 'self') return 'ממלא/ת הטופס';
+    if (child?.relationToSigner === 'self') {
+      if (child?.gender === 'female') return 'ממלאת הטופס';
+      if (child?.gender === 'male') return 'ממלא הטופס';
+      return 'ממלא/ת הטופס';
+    }
     if (child?.relationToSigner === 'spouse') return 'בן/בת זוג';
     if (child?.relationToSigner === 'child') {
       if (child?.gender === 'female') return 'הבת שלי';
@@ -1139,6 +1253,29 @@ export default function PublicOnboardingForm() {
 
   /** Whether this card's own identity fields are asked for on the participants step. */
   const fillsOwnDetails = (child) => fillsDeclaration(child) && !reusesDeclaration(child);
+
+  /**
+   * מצב הכרטיס — עובדה אחת שממנה נגזרים פס המצב, הכפתורים והשדות. קודם כל
+   * מצב היה תנאי נפרד ליד תנאי, וכל תיקון הוסיף עוד אחד; ככה השאלה „מה רואים
+   * עכשיו” נענית פעם אחת:
+   *
+   *   blocked   — בגר, וההורה לא יכול לחתום עליו
+   *   skipped   — נאמר עליו „לא הפעם”
+   *   covered   — יש הצהרה בתוקף, ואין מה למלא
+   *   reported  — דווח שינוי בריאותי על מי שהיה בתוקף
+   *   renewing  — נבחר לחדש, וההצהרה תמולא בשלבים הבאים
+   *   undecided — בתיק, בלי הצהרה בתוקף, ועוד לא נענתה ההצעה לחדש
+   *   new       — כרטיס שנוסף עכשיו ופרטיו נמסרים כאן
+   */
+  const participantCardState = (child) => {
+    if (child?.id && needsOwnSignature(child)) return 'blocked';
+    if (child?.skipThisTime) return 'skipped';
+    if (child?.onFileHealthValid) return child?.resignHealth ? 'reported' : 'covered';
+    if (child?.id || child?.relationToSigner === 'self') {
+      return child?.renewOptIn ? 'renewing' : 'undecided';
+    }
+    return 'new';
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -1203,6 +1340,9 @@ export default function PublicOnboardingForm() {
           // question needed, we are on their file already.
           setPrefilledParentId(data.parent.id || '');
           const knownName = splitParentName(data.parent);
+          // Every key the inputs bind to, even when the file has no value —
+          // a missing key turns its input uncontrolled and React drops what
+          // gets typed into it.
           setParent({
             name: knownName.first,
             lastName: knownName.lastName,
@@ -1211,6 +1351,8 @@ export default function PublicOnboardingForm() {
             phone: data.parent.phone || searchParams.get('phone') || '',
             email: data.parent.email || '',
             city: data.parent.city || '',
+            gender: data.parent.gender || '',
+            birthDate: data.parent.birthDate || '',
           });
         }
         setSelfStudent(data.selfStudent || null);
@@ -1677,6 +1819,16 @@ export default function PublicOnboardingForm() {
             birthDate: parent.birthDate,
             idNumber: parent.idNumber.trim() || adult?.idNumber || '',
           }),
+          // This card is the signer. Without the relation their own card asked
+          // "מי X ביחס אליך?", and without the on-file flags a signer whose
+          // declaration is in force was offered their whole form again.
+          relationToSigner: 'self',
+          onFileHealthValid: !!selfStudent?.healthValid,
+          onFileHealthDocumentValid: !!selfStudent?.healthDocumentValid,
+          onFileWaiverValid: !!selfStudent?.waiverValid,
+          onFileHealthSignedAt: selfStudent?.healthSignedAt || '',
+          onFileWaiverSignedAt: selfStudent?.waiverSignedAt || '',
+          onFileDeclarationSummary: selfStudent?.declarationSummary || null,
         };
         return adult
           ? current.map((child) => (child === adult ? { ...child, ...nextAdult } : child))
@@ -1773,11 +1925,10 @@ export default function PublicOnboardingForm() {
       return;
     }
     // Every card is a question, and an unanswered one is not a "no". Left blank
-    // it carried the participant forward without anyone having decided.
-    const undecided = kids.find((kid) => !kid.onFileHealthValid
-      && !needsOwnSignature(kid)
-      && !kid.renewOptIn
-      && !kid.skipThisTime);
+    // it carried the participant forward without anyone having decided. Asked
+    // only of cards that actually show the offer — a participant typed in just
+    // now was never asked, and blocking on them locked every new registration.
+    const undecided = kids.find((kid) => participantCardState(kid) === 'undecided');
     if (undecided) {
       setError(`יש לבחור עבור ${undecided.name?.trim() || 'כל משתתף'} — למלא הצהרה עכשיו, או לסמן שאינו/ה משתתף/ת`);
       return;
@@ -1812,8 +1963,8 @@ export default function PublicOnboardingForm() {
       // A failed check digit is almost always a typo, but a passport or a
       // foreign document is not wrong — so it warns once and lets it through
       // on the second attempt rather than locking the family out.
-      if (!looksLikeIsraeliId(kid.idNumber) && idWarnedFor !== childKey(kid)) {
-        setIdWarnedFor(childKey(kid));
+      if (!looksLikeIsraeliId(kid.idNumber) && !idWarnedFor.includes(childKey(kid))) {
+        setIdWarnedFor((warned) => [...warned, childKey(kid)]);
         setError(`תעודת הזהות של ${kid.name} לא נראית תקינה — בדקו שוב. אם זה דרכון או מסמך אחר, לחצו „המשך” שוב.`);
         return;
       }
@@ -2731,7 +2882,24 @@ export default function PublicOnboardingForm() {
                 השיבוץ לפעילות יבוצע על ידי הצוות בהמשך.
               </p>
             )}
-            {children.map((child, index) => (
+            {/* כרטיס אחד לכל משתתף, ובכל כרטיס אותם שלושה חלקים באותו סדר:
+                מי זה, איפה עומדת ההצהרה שלו, ומה אפשר לעשות. השדות נפתחים
+                בתוך הכרטיס רק כשהוא באמת אוסף פרטים. */}
+            {children.map((child, index) => {
+              const cardState = participantCardState(child);
+              const typedName = (child.name || '').trim();
+              const namePhrase = typedName || 'משתתף/ת זה';
+              const age = ageFromBirthDate(child.birthDate);
+              // מגדר של מי שהכרטיס עליו — לא של מי שממלא את הטופס.
+              const cg = (male, female) => (child.gender === 'male'
+                ? male
+                : child.gender === 'female'
+                  ? female
+                  : `${male}/${female.slice(-1)}`);
+              const asksDetails = fillsOwnDetails(child)
+                && !hasLockedParticipantProfile(child)
+                && !selfCardFromDetails(child);
+              return (
               <div
                 key={child.id || index}
                 style={{
@@ -2740,361 +2908,167 @@ export default function PublicOnboardingForm() {
                   padding: 14,
                   marginBottom: 14,
                   background: 'var(--form-accent-soft, rgba(56,189,248,.07))',
+                  opacity: cardState === 'skipped' || cardState === 'blocked' ? .72 : 1,
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                  {/* The name is the card's title. An ordinal told the parent
-                      nothing about whose card they were about to change; the
-                      name is the only thing that does. Until it is typed the
-                      ordinal is all there is, so it stays as the fallback. */}
-                  <div style={{ minWidth: 0 }}>
-                    {(child.name || '').trim() ? (
-                      <div style={{
-                        fontSize: 20, fontWeight: 800, color: '#fff', lineHeight: 1.25,
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}>
-                        {child.name.trim()}
-                      </div>
-                    ) : (
-                      <div style={{ fontSize: 18, fontWeight: 800, color: 'rgba(255,255,255,0.45)', lineHeight: 1.25 }}>
-                        {child.type === 'adult' ? 'משתתף/ת מבוגר/ת' : 'משתתף/ת חדש/ה'}
-                      </div>
-                    )}
-                    {/* מי זה ביחס למי שממלא: „אב”, „ילדה”. בכרטיס שמכיל שם בלבד
-                        אי אפשר לדעת מי מהם ההורה ומי הילד. */}
+                {/* מי זה. השם הוא הכותרת — מספר סידורי לא אמר להורה על מי
+                    הוא עומד לשנות משהו. מתחתיו שורה אחת: מין, מי הוא ביחס
+                    לחותם, ותאריך הלידה עם הגיל. */}
+                <div style={{ minWidth: 0, marginBottom: 12 }}>
+                  {typedName ? (
                     <div style={{
-                      display: 'flex', alignItems: 'center', gap: 6, marginTop: 3,
-                      fontSize: 12, color: 'rgba(255,255,255,0.6)', fontWeight: 700,
+                      fontSize: 20, fontWeight: 800, color: '#fff', lineHeight: 1.25,
+                      overflowWrap: 'anywhere',
                     }}>
-                      <GenderMark
-                        gender={child.gender}
-                        labels={child.type === 'adult' ? ['גבר', 'אישה'] : ['ילד', 'ילדה']}
-                      />
-                      <span>{participantRelationLabel(child)}</span>
-                      {child.birthDate && (
-                        <>
-                          <span style={{ opacity: .4 }}>·</span>
-                          <span>{formatSignedDay(child.birthDate)}</span>
-                        </>
-                      )}
+                      {typedName}
                     </div>
-                    {/* מי זה ביחס לחותם. נשאל על הכרטיס של מי שהשאלה עליו, במקום
-                        שדה אחד בדף הקודם שניסה לתאר משפחה שלמה. */}
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
-                      {(child.relationToSigner === 'self'
-                        ? []
-                        : child.type === 'adult'
-                          ? [['בן/בת זוג', 'spouse']]
-                          : [['הבן/בת שלי', 'child']]
-                      ).map(([text, value]) => (
-                        <button
-                          key={value}
-                          type="button"
-                          onClick={() => updateChild(index, { relationToSigner: value })}
-                          style={{
-                            padding: '6px 12px', borderRadius: 10, font: 'inherit',
-                            fontWeight: 700, fontSize: 12, cursor: 'pointer',
-                            border: child.relationToSigner === value
-                              ? '1px solid var(--form-accent-solid, #38bdf8)'
-                              : '1px solid rgba(255,255,255,.15)',
-                            background: child.relationToSigner === value
-                              ? 'var(--form-accent-soft-strong, rgba(56,189,248,.18))'
-                              : 'rgba(255,255,255,.05)',
-                            color: child.relationToSigner === value
-                              ? 'var(--form-accent-text, #7dd3fc)'
-                              : '#e2e8f0',
-                          }}
-                        >
-                          {text}
-                        </button>
-                      ))}
+                  ) : (
+                    <div style={{ fontSize: 18, fontWeight: 800, color: 'rgba(255,255,255,0.45)', lineHeight: 1.25 }}>
+                      {child.type === 'adult' ? 'משתתף/ת מבוגר/ת' : 'משתתף/ת חדש/ה'}
                     </div>
-                  </div>
-                  {!child.id && !child.skipThisTime && (
-                    <button
-                      type="button"
-                      onClick={() => setChildren((prev) => prev.filter((_, i) => i !== index))}
-                      style={{
-                        background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
-                        borderRadius: 10, color: 'rgba(255,255,255,0.6)', flexShrink: 0,
-                        fontFamily: 'inherit', fontSize: 12, padding: '7px 12px', cursor: 'pointer',
-                      }}
-                    >
-                      ביטול ההוספה
-                    </button>
                   )}
-                  {child.skipThisTime && (
-                    <button
-                      type="button"
-                      onClick={() => updateChild(index, { skipThisTime: false, confirmSkip: false })}
-                      style={{
-                        background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
-                        borderRadius: 10, color: 'rgba(255,255,255,0.65)', flexShrink: 0,
-                        fontFamily: 'inherit', fontSize: 12, padding: '7px 12px', cursor: 'pointer',
-                      }}
-                    >
-                      {g('בעצם כן, משתתף', 'בעצם כן, משתתפת', 'בעצם כן, משתתף/ת')}
-                    </button>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 4,
+                    fontSize: 12, color: 'rgba(255,255,255,0.6)', fontWeight: 700,
+                  }}>
+                    <GenderMark
+                      gender={child.gender}
+                      labels={child.type === 'adult' ? ['גבר', 'אישה'] : ['ילד', 'ילדה']}
+                    />
+                    <span>{participantRelationLabel(child)}</span>
+                    {child.birthDate && (
+                      <>
+                        <span style={{ opacity: .4 }}>·</span>
+                        <span>{formatSignedDay(child.birthDate)}</span>
+                        {age !== null && <span style={{ opacity: .75 }}>{`(גיל ${age})`}</span>}
+                      </>
+                    )}
+                  </div>
+                  {/* קרבה שלא אושרה היא שאלה, לא תווית: בלעדיה הכרטיס לא
+                      נכנס לשליחה, ולכן היא נשאלת כאן ליד השם ולא בשדה אחד
+                      בדף הקודם שניסה לתאר משפחה שלמה. */}
+                  {!child.relationToSigner && (
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', marginBottom: 6 }}>
+                        מי {typedName || 'זה'} ביחס אליך?
+                      </div>
+                      <CardButton
+                        variant="offer"
+                        onClick={() => updateChild(index, {
+                          relationToSigner: child.type === 'adult' ? 'spouse' : 'child',
+                        })}
+                      >
+                        {child.type === 'adult' ? 'בן/בת זוג' : 'הבן/בת שלי'}
+                      </CardButton>
+                    </div>
                   )}
                 </div>
 
-                {/* בגר — הורה חותם רק על ילדיו הקטינים. הכרטיס יוצא מהטופס
-                    ואומר למה, במקום להעלים משתתף בלי הסבר. */}
-                {child.id && needsOwnSignature(child) && (
-                  <div style={{
-                    background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,0.12)',
-                    borderRadius: 12, padding: 12, marginBottom: 0,
-                  }}>
-                    <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)', fontWeight: 700, marginBottom: 4 }}>
-                      מעל גיל 18 — חותם/ת בעצמו/ה
-                    </div>
-                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', lineHeight: 1.55 }}>
-                      חתימת הורה תקפה רק עד גיל 18. {child.name?.trim() || 'משתתף/ת זה'}
-                      {' '}צריך/ה למלא את הטופס בעצמו/ה — העבירו לו/ה את הקישור לטופס,
-                      ושם יש לסמן „אני מעל גיל 18 ואני ממלא/ת עבור עצמי”.
-                      {' '}הכרטיס הזה לא ייכלל בשליחה.
-                    </div>
-                  </div>
+                {/* איפה עומדת ההצהרה. פס אחד, אותו מקום בכל כרטיס. */}
+                {cardState === 'blocked' && (
+                  <CardStatus
+                    tone="stop"
+                    icon={<AlertTriangle size={15} />}
+                    title="מעל גיל 18 — חותם/ת בעצמו/ה"
+                  >
+                    חתימת הורה תקפה רק עד גיל 18. {namePhrase}
+                    {' '}צריך/ה למלא את הטופס בעצמו/ה — העבירו לו/ה את הקישור לטופס,
+                    ושם יש לסמן „אני מעל גיל 18 ואני ממלא/ת עבור עצמי”.
+                    {' '}הכרטיס הזה לא ייכלל בשליחה.
+                  </CardStatus>
+                )}
+
+                {cardState === 'skipped' && (
+                  <CardStatus tone="muted" title="לא ימולא הפעם — לא ייכלל בשליחה" />
+                )}
+
+                {cardState === 'covered' && (
+                  <>
+                    <CardStatus
+                      tone="ok"
+                      icon={<ShieldCheck size={16} />}
+                      title="הצהרת בריאות והסרת אחריות בתוקף"
+                    >
+                      {child.onFileHealthSignedAt
+                        ? `נחתם ב-${formatSignedDay(child.onFileHealthSignedAt)}. `
+                        : ''}
+                      אין צורך למלא שוב — הפרטים נשארים כפי שהם.
+                      <ExistingDeclarationSummary
+                        participant={child}
+                        questions={allQuestions}
+                        templateSlug={template?.slug || routeSlug || 'wall'}
+                      />
+                    </CardStatus>
+                    {/* שני קליקים במכוון: הצהרה קיימת נמחקה בטעות בסימון אחד
+                        בדרך אגב. הראשון רק פותח את השאלה, השני הוא זה שמוחק. */}
+                    {child.resignAsk && (
+                      <div style={{ marginTop: 10 }}>
+                        <CardStatus
+                          tone="attention"
+                          icon={<AlertTriangle size={14} />}
+                          title="למלא הצהרה חדשה?"
+                        >
+                          {/* בשמו, ובלי לאיים במחיקה: הצהרה לא מוחלפת אלא
+                              מצטרפת לתיק, והחדשה היא זו שתקפה מכאן. */}
+                          תתווסף ל{namePhrase} הצהרה חדשה שתצטרכו למלא ולחתום עליה.
+                          {' '}ההצהרה
+                          {child.onFileHealthSignedAt ? ` מ-${formatSignedDay(child.onFileHealthSignedAt)}` : ' הקודם'}
+                          {' '}נשמרת בתיק כמו שהיא, והחדשה היא שתהיה בתוקף.
+                        </CardStatus>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {cardState === 'reported' && (
+                  <CardStatus
+                    tone="attention"
+                    icon={<AlertTriangle size={15} />}
+                    title="דווח שינוי במצב הבריאותי"
+                  >
+                    ההשתתפות חסומה עד להשלמת הצהרה חדשה, שתמולא בשלבים הבאים.
+                  </CardStatus>
+                )}
+
+                {cardState === 'renewing' && (
+                  <CardStatus
+                    tone="attention"
+                    icon={<ShieldAlert size={15} />}
+                    title={asksDetails
+                      ? `חידוש ההצהרה עבור ${namePhrase} — יש להשלים את הפרטים שחסרים`
+                      : `חידוש ההצהרה עבור ${namePhrase} יופיע בשלבים הבאים`}
+                  />
                 )}
 
                 {/* על הפרק, לא על החובה: מי שרשום בתיק ואין לו הצהרה בתוקף
                     מקבל הצעה לחדש. אולי הוא כבר לא מטפס, ולכן „לא הפעם” הוא
                     תשובה לגיטימית — אבל השאלה חייבת להישאל. */}
-                {!child.onFileHealthValid && !needsOwnSignature(child) && !child.renewOptIn && (child.id || child.relationToSigner === 'self') && (
-                  <div style={{ marginBottom: 0 }}>
-                    {child.skipThisTime ? (
-                      /* הדרך חזרה היא הכפתור שבראש הכרטיס. כאן נשארת רק העובדה. */
-                      <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)' }}>
-                        לא ימולא הפעם — לא ייכלל בשליחה
-                      </div>
-                    ) : (
-                      <>
-                        <div style={{
-                          display: 'flex', alignItems: 'center', gap: 6,
-                          fontSize: 14, color: 'var(--form-accent-text, #fdba74)', fontWeight: 700, marginBottom: 4,
-                        }}>
-                          <AlertTriangle size={15} />
-                          {child.onFileHealthSignedAt
-                            ? `${declarationContextLabel} אינה בתוקף`
-                            : `לא נמצאה ${declarationContextLabel}`}
-                        </div>
-                        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', lineHeight: 1.55, marginBottom: 10 }}>
-                          {child.onFileHealthSignedAt
-                            ? `ההצהרה מ-${formatSignedDay(child.onFileHealthSignedAt)} כבר אינה בתוקף. `
-                            : `ל${child.name?.trim() || 'משתתף/ת זה'} עדיין אין ${declarationContextLabel} חתומה. `}
-                          אם {child.name?.trim() || 'המשתתף/ת'} כבר לא מטפס/ת, אפשר לדלג — בלי הצהרה בתוקף לא נכנסים לפעילות.
-                        </div>
-                        {/* השאלה מחליפה את הכפתורים שפתחו אותה, באותו מקום.
-                            חלונית שנפתחת מעל הכפתור שנלחץ שולחת אדם לחפש מה
-                            השתנה. */}
-                        {child.confirmSkip ? (
-                          <>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: '#FCA5A5', marginBottom: 8 }}>
-                              בטוח? {child.name?.trim() || 'אותו אדם'} לא יוכל/תוכל להשתתף בפעילות.
-                            </div>
-                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                              <button
-                                type="button"
-                                onClick={() => updateChild(index, { skipThisTime: true, confirmSkip: false })}
-                                style={{
-                                  background: 'rgba(248,113,113,.18)', border: '1px solid rgba(248,113,113,.5)',
-                                  borderRadius: 10, color: '#FCA5A5',
-                                  fontFamily: 'inherit', fontSize: 13, fontWeight: 700,
-                                  padding: '9px 14px', cursor: 'pointer',
-                                }}
-                              >
-                                כן, לא משתתף
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => updateChild(index, { confirmSkip: false })}
-                                style={{
-                                  background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
-                                  borderRadius: 10, color: 'rgba(255,255,255,0.7)',
-                                  fontFamily: 'inherit', fontSize: 13, padding: '9px 14px', cursor: 'pointer',
-                                }}
-                              >
-                                ביטול
-                              </button>
-                            </div>
-                          </>
-                        ) : (
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          <button
-                            type="button"
-                            onClick={() => updateChild(index, { renewOptIn: true, skipThisTime: false })}
-                            style={{
-                              background: 'transparent', border: '1px solid rgba(252,211,77,.6)', borderRadius: 10, color: '#FCD34D',
-                              fontFamily: 'inherit', fontSize: 13, fontWeight: 700,
-                              padding: '9px 14px', cursor: 'pointer',
-                            }}
-                          >
-                            {child.onFileHealthSignedAt ? 'כן, לחדש עכשיו' : 'כן, למלא עכשיו'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => updateChild(index, { confirmSkip: true })}
-                            style={{
-                              background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
-                              borderRadius: 10, color: 'rgba(255,255,255,0.65)',
-                              fontFamily: 'inherit', fontSize: 13, padding: '9px 14px', cursor: 'pointer',
-                            }}
-                          >
-                            לא משתתף
-                          </button>
-                        </div>
-                        )}
-                      </>
-                    )}
-                  </div>
+                {cardState === 'undecided' && (
+                  <CardStatus
+                    tone="attention"
+                    icon={<AlertTriangle size={15} />}
+                    title={child.onFileHealthSignedAt
+                      ? `${declarationContextLabel} אינה בתוקף`
+                      : `לא נמצאה ${declarationContextLabel}`}
+                  >
+                    {child.onFileHealthSignedAt
+                      ? `ההצהרה מ-${formatSignedDay(child.onFileHealthSignedAt)} כבר אינה בתוקף. `
+                      : `ל${namePhrase} עדיין אין ${declarationContextLabel} חתומה. `}
+                    אם {typedName || 'המשתתף/ת'} כבר לא מטפס/ת, אפשר לדלג — בלי הצהרה בתוקף
+                    לא נכנסים לפעילות.
+                  </CardStatus>
                 )}
 
-                {/* אחרי „כן, לחדש” — מה עוד נדרש, ודרך חזרה. */}
-                {!child.onFileHealthValid && !needsOwnSignature(child) && child.renewOptIn && (child.id || child.relationToSigner === 'self') && (
-                  <div style={{
-                    background: 'var(--form-accent-soft, rgba(249,115,22,.1))',
-                    border: '1px solid var(--form-accent-border, rgba(249,115,22,.35))',
-                    borderRadius: 12, padding: 12, marginBottom: 14,
-                  }}>
-                    <div style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      gap: 10, flexWrap: 'wrap',
-                    }}>
-                      {/* שורה אחת: מה יקרה ולמי. הכותרת והמשפט שמתחתיה אמרו את
-                          אותו הדבר פעמיים. */}
-                      <div style={{ fontSize: 13.5, color: 'var(--form-accent-text, #fdba74)', fontWeight: 700 }}>
-                        {hasCompleteParticipantProfile(child) && !child.editProfile
-                          ? `חידוש ההצהרה עבור ${child.name?.trim() || 'משתתף/ת זה'} יופיע בשלבים הבאים`
-                          : `חידוש ההצהרה עבור ${child.name?.trim() || 'משתתף/ת זה'} — יש להשלים את הפרטים שחסרים`}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => updateChild(index, { renewOptIn: false, editProfile: false })}
-                        style={{
-                          background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
-                          borderRadius: 10, color: 'rgba(255,255,255,0.65)',
-                          fontFamily: 'inherit', fontSize: 12, padding: '7px 12px', cursor: 'pointer',
-                        }}
-                      >
-                        ביטול
-                      </button>
-                    </div>
-                  </div>
+                {cardState === 'new' && (
+                  <CardStatus
+                    tone="muted"
+                    title={`הצהרת הבריאות של ${typedName || 'המשתתף/ת'} תמולא בשלבים הבאים`}
+                  />
                 )}
 
-                {/* Someone already on file with a declaration in force is shown
-                    as settled, not handed their own form again. Reopening it is
-                    one tick, because a health change is the whole reason to. */}
-                {child.onFileHealthValid && !child.resignHealth && (
-                  <div style={{
-                    background: 'rgba(52,211,153,.08)', border: '1px solid rgba(52,211,153,.3)',
-                    borderRadius: 12, padding: 12, marginBottom: 0,
-                  }}>
-                    <div style={{
-                      display: 'flex', alignItems: 'center', gap: 6,
-                      fontSize: 14, color: '#6ee7b7', fontWeight: 700, marginBottom: 4,
-                    }}>
-                      <ShieldCheck size={16} /> הצהרת בריאות והסרת אחריות בתוקף
-                    </div>
-                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', lineHeight: 1.55 }}>
-                      {child.onFileHealthSignedAt
-                        ? `נחתם ב-${formatSignedDay(child.onFileHealthSignedAt)}. `
-                        : ''}
-                      אין צורך למלא שוב — הפרטים נשארים כפי שהם.
-                    </div>
-                    <ExistingDeclarationSummary
-                      participant={child}
-                      questions={allQuestions}
-                      templateSlug={template?.slug || routeSlug || 'wall'}
-                    />
-
-                    {/* שני קליקים במכוון: הצהרה קיימת נמחקה בטעות בסימון אחד
-                        בדרך אגב. הראשון רק פותח את השאלה, השני הוא זה שמוחק. */}
-                    {!child.resignAsk ? (
-                      <button
-                        type="button"
-                        onClick={() => updateChild(index, { resignAsk: true })}
-                        style={{
-                          marginTop: 12, background: 'transparent',
-                          border: '1px solid rgba(255,255,255,0.15)', borderRadius: 10,
-                          color: 'rgba(255,255,255,0.6)', fontFamily: 'inherit', fontSize: 12,
-                          padding: '8px 12px', cursor: 'pointer',
-                        }}
-                      >
-                        משהו השתנה במצב הבריאותי?
-                      </button>
-                    ) : (
-                      <div style={{
-                        marginTop: 12, background: 'var(--form-accent-soft, rgba(249,115,22,.1))',
-                        border: '1px solid var(--form-accent-border, rgba(249,115,22,.4))', borderRadius: 10, padding: 12,
-                      }}>
-                        <div style={{
-                          display: 'flex', alignItems: 'center', gap: 6,
-                          fontSize: 13, fontWeight: 700, color: 'var(--form-accent-text, #fdba74)', marginBottom: 6,
-                        }}>
-                          <AlertTriangle size={14} /> למלא הצהרה חדשה?
-                        </div>
-                        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)', lineHeight: 1.55, marginBottom: 10 }}>
-                          {/* בשמו, ובלי לאיים במחיקה: הצהרה לא מוחלפת אלא
-                              מצטרפת לתיק, והחדשה היא זו שתקפה מכאן. */}
-                          תתווסף ל{child.name?.trim() || 'משתתף/ת זה'} הצהרה חדשה שתצטרכו למלא ולחתום עליה.
-                          {' '}ההצהרה
-                          {child.onFileHealthSignedAt ? ` מ-${formatSignedDay(child.onFileHealthSignedAt)}` : ' הקודם'}
-                          {' '}נשמרת בתיק כמו שהיא, והחדשה היא שתהיה בתוקף.
-                        </div>
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          <button
-                            type="button"
-                            onClick={() => reportHealthChange(child, index)}
-                            style={{
-                              background: 'var(--form-accent-solid, #F97316)', border: 'none', borderRadius: 10, color: '#fff',
-                              fontFamily: 'inherit', fontSize: 13, fontWeight: 700,
-                              padding: '9px 14px', cursor: 'pointer',
-                            }}
-                          >
-                            כן, למלא הצהרה חדשה
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => updateChild(index, { resignAsk: false })}
-                            style={{
-                              background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
-                              borderRadius: 10, color: 'rgba(255,255,255,0.65)',
-                              fontFamily: 'inherit', fontSize: 13, padding: '9px 14px', cursor: 'pointer',
-                            }}
-                          >
-                            לא, השאירו כמו שזה
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {child.onFileHealthValid && child.resignHealth && (
-                  <div style={{
-                    background: 'var(--form-accent-soft, rgba(249,115,22,.1))',
-                    border: '1px solid var(--form-accent-border, rgba(249,115,22,.4))',
-                    borderRadius: 12, padding: 12, marginBottom: 14,
-                    display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
-                  }}>
-                    <div style={{ fontSize: 13, color: 'var(--form-accent-text, #fdba74)', fontWeight: 700 }}>
-                      דווח שינוי במצב הבריאותי. ההשתתפות חסומה עד להשלמת הצהרה חדשה.
-                    </div>
-                  </div>
-                )}
-
-                {/* A renewal is about health, not another profile intake. The
-                    canonical details travel unchanged in the submission and
-                    are shown read-only beside the declaration on the next
-                    screen. Only an incomplete old profile opens fields. */}
-                {/* Nothing is repeated back here. The signer's own details were
-                    filled one screen ago, so their card carries what every other
-                    participant's carries: their name, and where their health
-                    declaration stands. */}
-                {fillsOwnDetails(child) && !hasLockedParticipantProfile(child)
-                  && !selfCardFromDetails(child) && (
-                <>
+                {/* הפרטים עצמם, כשהכרטיס אוסף אותם. */}
+                {asksDetails && (
+                <div style={{ marginTop: 14 }}>
                 <div className="form-group">
                   <label>{child.type === 'adult' ? 'שם מלא *' : 'שם פרטי של הילד/ה *'}</label>
                   <input
@@ -3135,13 +3109,9 @@ export default function PublicOnboardingForm() {
                   <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.45)', marginTop: 6 }}>
                     {/* The age is here to be glanced at: a wrong year is obvious
                         as an age and invisible as a date. */}
-                    {ageFromBirthDate(child.birthDate) !== null
-                      ? `גיל: ${ageFromBirthDate(child.birthDate)}`
-                      : 'לבחירת שנה — לחצו על השנה עצמה בחלון שנפתח.'}
+                    {age !== null ? `גיל: ${age}` : 'לבחירת שנה — לחצו על השנה עצמה בחלון שנפתח.'}
                   </div>
-                  {child.type === 'adult'
-                    && ageFromBirthDate(child.birthDate) !== null
-                    && ageFromBirthDate(child.birthDate) < 18 && (
+                  {child.type === 'adult' && age !== null && age < 18 && (
                     <div style={{
                       background: 'rgba(248,113,113,.12)', border: '1px solid rgba(248,113,113,.35)',
                       borderRadius: 10, padding: 10, marginTop: 8,
@@ -3158,7 +3128,7 @@ export default function PublicOnboardingForm() {
                       borderRadius: 10, padding: 10, marginTop: 8,
                       fontSize: 12, lineHeight: 1.5, color: '#fca5a5',
                     }}>
-                      מגיל 18 ומעלה חתימת הורה אינה תקפה — {child.name?.trim() || 'המשתתף/ת'}
+                      מגיל 18 ומעלה חתימת הורה אינה תקפה — {typedName || 'המשתתף/ת'}
                       {' '}צריך/ה למלא טופס בעצמו/ה ולסמן בו „אני מעל גיל 18 ואני ממלא/ת עבור עצמי”.
                     </div>
                   )}
@@ -3241,10 +3211,93 @@ export default function PublicOnboardingForm() {
                     יום שמתאים, רוצים להירשם אחרי תאריך מסוים וכו׳
                   </div>
                 </div>
-                </>
+                </div>
+                )}
+
+                {/* מה אפשר לעשות עם הכרטיס. שורה אחת, תמיד בתחתיתו — קודם
+                    כל כפתור ישב ליד הבלוק שיצר אותו, ואף אחד לא ידע איפה
+                    לחפש. השאלה המאשרת מחליפה את הכפתורים באותו מקום. */}
+                {cardState === 'skipped' && (
+                  <CardActions>
+                    <CardButton onClick={() => updateChild(index, { skipThisTime: false, confirmSkip: false })}>
+                      {cg('בעצם כן, משתתף', 'בעצם כן, משתתפת')}
+                    </CardButton>
+                  </CardActions>
+                )}
+
+                {cardState === 'undecided' && (child.confirmSkip ? (
+                  <>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#FCA5A5', marginTop: 12 }}>
+                      בטוח? {typedName || 'אותו אדם'} לא יוכל/תוכל להשתתף בפעילות.
+                    </div>
+                    <CardActions>
+                      <CardButton
+                        variant="danger"
+                        onClick={() => updateChild(index, { skipThisTime: true, confirmSkip: false })}
+                      >
+                        {cg('כן, לא משתתף', 'כן, לא משתתפת')}
+                      </CardButton>
+                      <CardButton onClick={() => updateChild(index, { confirmSkip: false })}>
+                        ביטול
+                      </CardButton>
+                    </CardActions>
+                  </>
+                ) : (
+                  <CardActions>
+                    <CardButton
+                      variant="offer"
+                      onClick={() => updateChild(index, { renewOptIn: true, skipThisTime: false })}
+                    >
+                      {child.onFileHealthSignedAt ? 'כן, לחדש עכשיו' : 'כן, למלא עכשיו'}
+                    </CardButton>
+                    <CardButton onClick={() => updateChild(index, { confirmSkip: true })}>
+                      {cg('לא משתתף', 'לא משתתפת')}
+                    </CardButton>
+                  </CardActions>
+                ))}
+
+                {cardState === 'renewing' && (
+                  <CardActions>
+                    {/* פרטים שננעלו אחרי שהושלמו — אבל טעות בתאריך לידה או
+                        בתעודת זהות חייבת דרך לתקן, ולא הייתה כזו. */}
+                    {!asksDetails && (
+                      <CardButton onClick={() => updateChild(index, { editProfile: true })}>
+                        עריכת פרטים
+                      </CardButton>
+                    )}
+                    <CardButton onClick={() => updateChild(index, { renewOptIn: false, editProfile: false })}>
+                      ביטול החידוש
+                    </CardButton>
+                  </CardActions>
+                )}
+
+                {cardState === 'covered' && (child.resignAsk ? (
+                  <CardActions>
+                    <CardButton variant="solid" onClick={() => reportHealthChange(child, index)}>
+                      כן, למלא הצהרה חדשה
+                    </CardButton>
+                    <CardButton onClick={() => updateChild(index, { resignAsk: false })}>
+                      לא, השאירו כמו שזה
+                    </CardButton>
+                  </CardActions>
+                ) : (
+                  <CardActions>
+                    <CardButton onClick={() => updateChild(index, { resignAsk: true })}>
+                      משהו השתנה במצב הבריאותי?
+                    </CardButton>
+                  </CardActions>
+                ))}
+
+                {cardState === 'new' && (
+                  <CardActions>
+                    <CardButton onClick={() => setChildren((prev) => prev.filter((_, i) => i !== index))}>
+                      ביטול ההוספה
+                    </CardButton>
+                  </CardActions>
                 )}
               </div>
-            ))}
+              );
+            })}
             {!healthOnlyMode && <button
                 type="button"
                 onClick={addChild}
