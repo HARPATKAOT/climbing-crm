@@ -1102,6 +1102,20 @@ export default function PublicOnboardingForm() {
     && !!String(child?.birthDate || '').trim()
     && !!String(child?.gender || '').trim();
 
+  /**
+   * What this participant is to the person filling the form: the signer is
+   * whatever they said their relation is, and everyone else is a child.
+   */
+  const participantRelationLabel = (child) => {
+    if (child?.type === 'adult') {
+      return { father: 'אב', mother: 'אם', guardian: 'אפוטרופוס', other: 'ממלא/ת הטופס' }[parent.relation]
+        || 'ממלא/ת הטופס';
+    }
+    if (child?.gender === 'female') return 'ילדה';
+    if (child?.gender === 'male') return 'ילד';
+    return 'ילד/ה';
+  };
+
   /** Whether this card's own identity fields are asked for on the participants step. */
   const fillsOwnDetails = (child) => fillsDeclaration(child) && !reusesDeclaration(child);
 
@@ -2650,7 +2664,7 @@ export default function PublicOnboardingForm() {
                   ? 'שולח קוד אימות בוואטסאפ…'
                   : (needsPhoneVerification
                     ? 'שלח קוד אימות'
-                    : <>{healthOnlyMode ? 'המשך להצהרת הבריאות' : 'המשך לפרטי משתתפים'} <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} /></>)}
+                    : <>{healthOnlyMode ? 'המשך למילוי הצהרת הבריאות' : 'המשך לפרטי משתתפים'} <ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} /></>)}
               </button>
             )}
           </div>
@@ -2695,11 +2709,18 @@ export default function PublicOnboardingForm() {
                         {child.type === 'adult' ? 'משתתף/ת מבוגר/ת' : `ילד/ה ${index + 1}`}
                       </div>
                     )}
-                    {children.length > 1 && (
-                      <div style={{ fontSize: 11, color: 'var(--form-accent-text, #F97316)', fontWeight: 700, marginTop: 2 }}>
-                        משתתף/ת {index + 1} מתוך {children.length}
-                      </div>
-                    )}
+                    {/* מי זה ביחס למי שממלא: „אב”, „ילדה”. בכרטיס שמכיל שם בלבד
+                        אי אפשר לדעת מי מהם ההורה ומי הילד. */}
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 6, marginTop: 3,
+                      fontSize: 12, color: 'rgba(255,255,255,0.6)', fontWeight: 700,
+                    }}>
+                      <GenderMark
+                        gender={child.gender}
+                        labels={child.type === 'adult' ? ['גבר', 'אישה'] : ['ילד', 'ילדה']}
+                      />
+                      <span>{participantRelationLabel(child)}</span>
+                    </div>
                   </div>
                 </div>
 
@@ -2808,8 +2829,12 @@ export default function PublicOnboardingForm() {
                       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                       gap: 10, flexWrap: 'wrap',
                     }}>
-                      <div style={{ fontSize: 14, color: 'var(--form-accent-text, #fdba74)', fontWeight: 700 }}>
-                        חידוש ההצהרה עבור {child.name?.trim() || 'משתתף/ת זה'}
+                      {/* שורה אחת: מה יקרה ולמי. הכותרת והמשפט שמתחתיה אמרו את
+                          אותו הדבר פעמיים. */}
+                      <div style={{ fontSize: 13.5, color: 'var(--form-accent-text, #fdba74)', fontWeight: 700 }}>
+                        {hasCompleteParticipantProfile(child) && !child.editProfile
+                          ? `חידוש ההצהרה עבור ${child.name?.trim() || 'משתתף/ת זה'} יופיע בהמשך הטופס`
+                          : `חידוש ההצהרה עבור ${child.name?.trim() || 'משתתף/ת זה'} — יש להשלים את הפרטים שחסרים`}
                       </div>
                       <button
                         type="button"
@@ -2822,13 +2847,6 @@ export default function PublicOnboardingForm() {
                       >
                         ביטול
                       </button>
-                    </div>
-                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', lineHeight: 1.55, marginTop: 4 }}>
-                      {hasLockedParticipantProfile(child)
-                        ? `הצהרת הבריאות של ${child.name.trim()} תופיע במסך הבא.`
-                        : hasCompleteParticipantProfile(child)
-                          ? 'הפרטים פתוחים לעריכה. לאחר השמירה הם יוצגו בראש הצהרת הבריאות.'
-                          : 'חסרים בתיק פרטים הכרחיים. השלימו אותם פעם אחת והמשיכו להצהרת הבריאות.'}
                     </div>
                   </div>
                 )}
@@ -3094,7 +3112,7 @@ export default function PublicOnboardingForm() {
             <button type="button" className="event-primary" onClick={goNextFromChildren}>
               {healthOnlyMode
                 ? 'שמירת הפרטים וחזרה להצהרת הבריאות'
-                : (healthNamesText ? `המשך להצהרת הבריאות של ${healthNamesText}` : 'המשך להצהרת בריאות')}
+                : (healthNamesText ? `המשך למילוי הצהרת הבריאות של ${healthNamesText}` : 'המשך למילוי הצהרת בריאות')}
               {' '}<ArrowLeft size={18} style={{ transform: 'rotate(180deg)', marginRight: 8 }} />
             </button>
           </div>
@@ -3251,7 +3269,7 @@ export default function PublicOnboardingForm() {
                 {error && <ErrorBox message={error} />}
                 <button type="button" className="event-primary" style={{ marginTop: 16 }} onClick={advanceHealthOrSubmit}>
                   {childHealthIndex < kids.length - 1
-                    ? `המשך להצהרת הבריאות של ${String(kids[childHealthIndex + 1]?.name || '').trim().split(/\s+/)[0] || 'המשתתף/ת הבא/ה'}`
+                    ? `המשך למילוי הצהרת הבריאות של ${String(kids[childHealthIndex + 1]?.name || '').trim().split(/\s+/)[0] || 'המשתתף/ת הבא/ה'}`
                     : (sharedConfirmations.length
                       ? `המשך ל${sectionTitles.confirm}`
                       : 'המשך לאישור וחתימה')}
