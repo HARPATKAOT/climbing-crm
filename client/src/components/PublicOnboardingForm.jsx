@@ -2602,7 +2602,7 @@ export default function PublicOnboardingForm() {
               טופס זה נדרש להשתתפות בפעילות טיפוס בקיר בועז
             </p>
           )}
-          {step === 2 && <p>בני המשפחה המשתתפים בפעילות</p>}
+          {step === 2 && <p>בחירת בני המשפחה המשתתפים בפעילות</p>}
           {/* A bar, and no number. How many screens there are depends on how
               many participants are added and on which of them already hold a
               declaration in force — neither is known on the first screen, so a
@@ -2946,7 +2946,7 @@ export default function PublicOnboardingForm() {
         {step === 2 && (
           <div className="fade-in">
             <div className="section-title">
-              {healthOnlyMode ? `עדכון פרטי ${children[0]?.name || 'המשתתף/ת'}` : 'בני המשפחה המשתתפים בפעילות'}
+              {healthOnlyMode ? `עדכון פרטי ${children[0]?.name || 'המשתתף/ת'}` : 'בחירת בני המשפחה המשתתפים בפעילות'}
             </div>
             {!healthOnlyMode && (
               <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.55)', margin: '0 0 14px' }}>
