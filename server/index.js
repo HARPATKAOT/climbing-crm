@@ -13065,6 +13065,10 @@ function normalizeFormTemplatePayload(body, existing = null) {
     waiverText: body.waiverText ?? body.waiver_text ?? existing?.waiverText ?? '',
     // The plain-language layer shown in front of the legal text.
     waiverSummary: body.waiverSummary ?? body.waiver_summary ?? existing?.waiverSummary ?? '',
+    // What the activity is, above the name of the document being signed. The
+    // cover picture is stored as a URL by the caller before this runs.
+    headline: String(body.headline ?? existing?.headline ?? '').trim(),
+    coverImage: String(body.coverImage ?? body.cover_image ?? existing?.coverImage ?? '').trim(),
     // `kind` and `requireYes` used to be dropped here, so saving a template
     // from the CRM screen turned every mandatory clause into an optional one
     // and every screening question into a tick box. `audience` and
@@ -13086,8 +13090,12 @@ app.get('/api/form-templates', (req, res) => {
     .map(formTemplateForClient));
 });
 
-app.post('/api/form-templates', (req, res) => {
-  const normalized = normalizeFormTemplatePayload(req.body);
+app.post('/api/form-templates', async (req, res) => {
+  const body = { ...(req.body || {}) };
+  // התמונה מגיעה כ-data URI מהדפדפן ונשמרת כקובץ, כמו תמונות הקטלוג: שורה
+  // שנושאת תמונה בתוכה נקראת מחדש בכל טעינה של הטופס.
+  body.coverImage = await storeImageValue(body.coverImage ?? body.cover_image ?? '', 'form-covers');
+  const normalized = normalizeFormTemplatePayload(body);
   if (normalized.error) return res.status(400).json({ error: normalized.error });
   const duplicate = listFormTemplates().find((t) => t.slug === normalized.slug);
   if (duplicate) return res.status(400).json({ error: 'קיים כבר טופס עם אותו מזהה קישור' });
@@ -13104,11 +13112,15 @@ app.post('/api/form-templates', (req, res) => {
   res.status(201).json(record);
 });
 
-app.put('/api/form-templates/:id', (req, res) => {
+app.put('/api/form-templates/:id', async (req, res) => {
   const existing = listFormTemplates().find((t) => t.id === req.params.id);
   if (!existing) return res.status(404).json({ error: 'התבנית לא נמצאה' });
 
-  const normalized = normalizeFormTemplatePayload(req.body, existing);
+  const body = { ...(req.body || {}) };
+  if (body.coverImage !== undefined || body.cover_image !== undefined) {
+    body.coverImage = await storeImageValue(body.coverImage ?? body.cover_image ?? '', 'form-covers');
+  }
+  const normalized = normalizeFormTemplatePayload(body, existing);
   if (normalized.error) return res.status(400).json({ error: normalized.error });
   const duplicate = listFormTemplates().find((t) => t.slug === normalized.slug && t.id !== existing.id);
   if (duplicate) return res.status(400).json({ error: 'קיים כבר טופס עם אותו מזהה קישור' });
@@ -13794,6 +13806,9 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
           id: template.id,
           slug: template.slug,
           title: template.title,
+          // מה הפעילות, ותמונה שלה — הכותרת לבדה אמרה רק על מה חותמים.
+          headline: template.headline || '',
+          coverImage: template.coverImage || '',
           waiverText: template.waiverText,
           healthQuestions: template.healthQuestions,
         }

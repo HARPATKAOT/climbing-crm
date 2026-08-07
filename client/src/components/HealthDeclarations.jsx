@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { CheckCircle2, AlertCircle, FileText, Send, ClipboardCheck, Shield, Link2, Copy, Trash2, Plus, Download } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { CheckCircle2, AlertCircle, FileText, Send, ClipboardCheck, Shield, Link2, Copy, Trash2, Plus, Download, Image as ImageIcon, Upload, Loader2 } from 'lucide-react';
 import { downloadHealthDeclarationPdf } from '../utils/healthDeclarationPdf.js';
 import { templateKind } from '../utils/declarationKinds.js';
+import { compressImageFile } from './productCategories.js';
 import {
   isChildOnlyQuestion,
   isScreeningQuestion,
@@ -24,6 +25,8 @@ const EMPTY_TEMPLATE = {
   title: '',
   slug: '',
   activityTypes: ['wall'],
+  headline: '',
+  coverImage: '',
   waiverText: '',
   waiverSummary: '',
   healthQuestionsText: 'האם המתאמן סובל מאסתמה, קוצר נשימה או מחלת ריאות?\nהאם המתאמן סובל מבעיות לב, לחץ דם, או סחרחורות/התעלפויות?\nהאם יש בעיה אורתופדית (גב, פרקים, שברים) המגבילה פעילות מאומצת?',
@@ -81,6 +84,28 @@ function FormTemplatesPanel() {
   const [form, setForm] = useState(EMPTY_TEMPLATE);
   const [msg, setMsg] = useState('');
   const [saving, setSaving] = useState(false);
+  const coverFileRef = useRef(null);
+  const [coverBusy, setCoverBusy] = useState(false);
+
+  /**
+   * התמונה מוקטנת בדפדפן לפני השליחה. תמונה מהטלפון היא כמה מגה־בייט, וגוף
+   * בקשה בגודל כזה נדחה בשרת — הטופס היה נשמר בלי הקאוור בלי לומר למה.
+   */
+  const pickCover = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setCoverBusy(true);
+    setMsg('');
+    try {
+      const dataUrl = await compressImageFile(file, { maxSide: 1400, quality: 0.8 });
+      setForm((f) => ({ ...f, coverImage: dataUrl }));
+    } catch {
+      setMsg('טעינת התמונה נכשלה — נסו קובץ תמונה אחר');
+    } finally {
+      setCoverBusy(false);
+    }
+  };
   const activityTypeOptions = BASE_ACTIVITY_TYPES;
 
   const load = async () => {
@@ -109,6 +134,8 @@ function FormTemplatesPanel() {
       slug: t.slug || '',
       activityTypes: [...new Set((t.activityTypes || (t.activityType ? [t.activityType] : []))
         .map(normalizeParticipationScope))],
+      headline: t.headline || '',
+      coverImage: t.coverImage || '',
       waiverText: t.waiverText || '',
       waiverSummary: t.waiverSummary || '',
       healthQuestionsText: questionsToText(t.healthQuestions),
@@ -145,6 +172,8 @@ function FormTemplatesPanel() {
       title: form.title.trim(),
       slug: form.slug.trim().toLowerCase(),
       activityTypes: form.activityTypes || [],
+      headline: (form.headline || '').trim(),
+      coverImage: form.coverImage || '',
       waiverText: form.waiverText,
       waiverSummary: form.waiverSummary,
       healthQuestions: textToQuestions(form.healthQuestionsText),
@@ -244,6 +273,69 @@ function FormTemplatesPanel() {
               />
               <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }} dir="ltr">
                 {publicUrl(form.slug, form.isDefault)}
+              </div>
+            </div>
+          </div>
+
+          {/* מה שרואים בראש הטופס הציבורי. „כותרת” היא שם המסמך שחותמים עליו,
+              ולכן היא לא ענתה על השאלה הראשונה של מי שפותח את הקישור: לאיזו
+              פעילות זה. */}
+          <div className="form-group">
+            <label className="form-label">כותרת הפעילות בראש הטופס</label>
+            <input
+              className="input"
+              value={form.headline || ''}
+              onChange={(e) => setForm((f) => ({ ...f, headline: e.target.value }))}
+              placeholder="טיפוס בקיר בועז"
+            />
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+              מופיעה בגדול מעל שם המסמך, בכל שלבי הטופס. ריק — לא תוצג.
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">תמונת קאוור</label>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <div style={{
+                width: 220, height: 96, borderRadius: 10, overflow: 'hidden', flexShrink: 0,
+                border: '1px solid var(--border)', background: 'rgba(255,255,255,0.04)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: 'var(--text-3)',
+              }}>
+                {form.coverImage
+                  ? <img src={form.coverImage} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  : <ImageIcon size={22} />}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <input
+                  ref={coverFileRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                  hidden
+                  onChange={pickCover}
+                />
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => coverFileRef.current?.click()}
+                  disabled={coverBusy || saving}
+                >
+                  {coverBusy ? <Loader2 size={14} className="spin" /> : <Upload size={14} />}
+                  {form.coverImage ? 'החלפת התמונה' : 'העלאת תמונה'}
+                </button>
+                {form.coverImage && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setForm((f) => ({ ...f, coverImage: '' }))}
+                    disabled={coverBusy || saving}
+                  >
+                    <Trash2 size={14} /> הסרת התמונה
+                  </button>
+                )}
+                <div style={{ fontSize: 11, color: 'var(--text-3)', maxWidth: 260, lineHeight: 1.5 }}>
+                  רצועה רחבה בראש הטופס. תמונה לרוחב עובדת הכי טוב; היא מוקטנת אוטומטית לפני השמירה.
+                </div>
               </div>
             </div>
           </div>

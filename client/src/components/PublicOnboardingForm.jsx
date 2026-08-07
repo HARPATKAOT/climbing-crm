@@ -2371,6 +2371,12 @@ export default function PublicOnboardingForm() {
   const currentScreening = screeningFor(currentChild);
   const activityNatureText = ACTIVITY_NATURE[String(template?.slug || routeSlug || 'wall').trim().toLowerCase()] || '';
   const documentTitle = healthOnlyMode ? 'חידוש הצהרת בריאות' : 'הצהרת בריאות והסרת אחריות';
+  /**
+   * שם הפעילות שהטופס משרת. נערך בתבנית ב-CRM; עד שמגדירים אותו, נגזר מסוג
+   * הטופס — מי שפותח קישור צריך לדעת על מה הוא חותם עוד לפני שהוא קורא.
+   */
+  const activityHeadline = String(template?.headline || '').trim()
+    || (isTripForm ? 'יציאה / טיול' : `טיפוס ב${brandName}`);
   const signingScreenTitle = {
     [SUB_HEALTH]: sectionTitles.health,
     [SUB_ACTIVITY]: sectionTitles.confirm,
@@ -2406,9 +2412,18 @@ export default function PublicOnboardingForm() {
         )}
 
         <div className="form-header">
+          {/* תמונת הפעילות, כשהוגדרה בתבנית. היא אומרת בלי מילים לאיזו פעילות
+              הטופס הזה — מה שכותרת המסמך לבדה מעולם לא אמרה. */}
+          {template?.coverImage && (
+            <div className="form-cover">
+              <img src={template.coverImage} alt="" />
+            </div>
+          )}
           <div className="logo-circle">
             <img src={brandLogo} alt={brandName} />
           </div>
+          {/* מה הפעילות — מעל שם המסמך שחותמים עליו, ובכל שלבי הטופס. */}
+          {activityHeadline && <div className="form-activity">{activityHeadline}</div>}
           {/* „מילוי פרטים והרשמה” לא אמר למה חותמים. הכותרת נושאת את שם
               המסמך שעל המסך — ובשלב החתימה זה שם החלק הנוכחי, כי דף אחד
               שנקרא „הצהרת בריאות” לא יכול להכיל גם את סעיפי אופי הפעילות. */}
@@ -2421,9 +2436,11 @@ export default function PublicOnboardingForm() {
               ? ` — ${currentChild.name}`
               : ''}
           </h2>
+          {/* שם הפעילות עלה לכותרת שמעל, ולכן המשפט הזה חזר עליה. מה שנשאר
+              הוא מה שהכותרת לא אומרת: בלי הטופס אין השתתפות. */}
           {step === 1 && !identityReady && (
             <p style={{ fontSize: 13.5, lineHeight: 1.7 }}>
-              טופס זה נדרש להשתתפות בפעילות טיפוס בקיר בועז
+              מילוי הטופס נדרש לפני ההשתתפות
             </p>
           )}
           {step === 2 && <p>בחירת בני המשפחה המשתתפים בפעילות</p>}
@@ -3598,6 +3615,20 @@ function FormStyles() {
           to { opacity: 1; transform: translateY(0); }
         }
         .form-header { text-align: center; padding: 22px 24px 0; }
+        .form-cover {
+          margin: -22px -24px 16px; height: clamp(120px, 26vw, 190px);
+          overflow: hidden; position: relative;
+        }
+        .form-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        /* התמונה נמסכת אל רקע הכרטיס, כדי שהלוגו שמתחתיה לא יישב על קו חתוך. */
+        .form-cover::after {
+          content: ''; position: absolute; inset: 0;
+          background: linear-gradient(180deg, rgba(15,23,42,0) 40%, rgba(15,23,42,.94) 100%);
+        }
+        .form-activity {
+          font-size: clamp(15px, 3.4vw, 19px); font-weight: 800; letter-spacing: .01em;
+          color: var(--form-accent-text, #7dd3fc); margin: 0 0 6px;
+        }
         .logo-circle {
           width: 118px; height: 118px; border-radius: 0; background: transparent;
           display: flex; align-items: center; justify-content: center;

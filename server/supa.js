@@ -587,6 +587,10 @@ mappers.form_templates = {
       || 'wall',
     waiverText: r.waiver_text || '',
     waiverSummary: r.waiver_summary || '',
+    // מה הפעילות, ותמונה שאומרת אותה. `title` הוא שם המסמך שחותמים עליו,
+    // ולכן לא ענה על השאלה „לאיזו פעילות הטופס הזה”.
+    headline: r.headline || '',
+    coverImage: r.cover_image || '',
     healthQuestions: Array.isArray(r.health_questions) ? r.health_questions : [],
     isDefault: !!r.is_default,
     isActive: r.is_active !== false,
@@ -605,6 +609,8 @@ mappers.form_templates = {
       || o.activityType || o.activity_type || 'wall',
     waiver_text: o.waiverText || o.waiver_text || '',
     waiver_summary: o.waiverSummary || o.waiver_summary || '',
+    headline: emptyToNull(o.headline),
+    cover_image: emptyToNull(o.coverImage || o.cover_image),
     health_questions: Array.isArray(o.healthQuestions)
       ? o.healthQuestions
       : (Array.isArray(o.health_questions) ? o.health_questions : []),

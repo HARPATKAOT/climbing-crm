@@ -196,6 +196,10 @@ export function resolveDeclarationTemplate(db, { templateId, templateSlug } = {}
     id: selected?.id || null,
     slug: selectedSlug,
     title: selected?.title || 'הצהרת בריאות ובטיחות + הסרת אחריות',
+    // הכותרת של הפעילות והתמונה שלה נוסעות עם התבנית — הטופס הציבורי מציג
+    // אותן מעל שם המסמך.
+    headline: selected?.headline || '',
+    coverImage: selected?.coverImage || '',
     waiverText: selectedSlug === 'trip'
       ? normalizeTripWaiverText(normalizeLiabilityPartyText(selected?.waiverText || STANDARD_WAIVER_TEXT))
       : normalizeLiabilityPartyText(selected?.waiverText || STANDARD_WAIVER_TEXT),
