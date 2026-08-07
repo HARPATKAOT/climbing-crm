@@ -3304,15 +3304,9 @@ export default function PublicOnboardingForm() {
 
                 {cardState === 'renewing' && (
                   <CardActions>
-                    {/* פרטים שננעלו אחרי שהושלמו — אבל טעות בתאריך לידה או
-                        בתעודת זהות חייבת דרך לתקן, ולא הייתה כזו. */}
-                    {!asksDetails && (
-                      <CardButton onClick={() => updateChild(index, { editProfile: true })}>
-                        עריכת פרטים
-                      </CardButton>
-                    )}
                     {/* חזרה לשאלת ההשתתפות — רק למי שנשאל אותה; כרטיס שנוסף
-                        ידנית חוזר ב„ביטול ההוספה”. */}
+                        ידנית חוזר ב„ביטול ההוספה”. הפרטים עצמם מגיעים מהתיק
+                        ואינם נערכים כאן — טעות בהם מתקנים מול הצוות. */}
                     {(child.id || child.relationToSigner === 'self') && (
                       <CardButton onClick={() => updateChild(index, { participates: null, renewOptIn: false, editProfile: false })}>
                         ביטול
