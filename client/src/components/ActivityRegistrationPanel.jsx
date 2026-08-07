@@ -903,9 +903,17 @@ export default function ActivityRegistrationPanel({
             style={{ marginTop: 3 }}
           />
           <span>
-            להציג באתר הציבורי
+            להציג באתר הציבורי ולבוט
             <span style={{ display: 'block', fontSize: 11, color: 'var(--text-3)' }}>
               לפעילויות פתוחות לקהל בלבד. אירוע פרטי — להשאיר לא מסומן.
+              {/* Two trips sat in the calendar with registration open, and the
+                  bot never mentioned them: this box was the only thing missing,
+                  and nothing on the screen said so. */}
+              {!form.show_on_site && (
+                <span style={{ display: 'block', color: 'var(--orange, #FB923C)', marginTop: 2 }}>
+                  כרגע לא מסומן — הבוט לא יציע את הפעילות ללקוחות ששואלים על טיולים ואירועים.
+                </span>
+              )}
             </span>
           </span>
         </label>
