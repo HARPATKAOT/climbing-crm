@@ -1017,8 +1017,17 @@ export function decideBotGate(settings, parent, students, text, { isSimulator = 
     return { action: 'silence', reason: 'audience' };
   }
 
+  // The cap is there to stop a loop, not to stonewall a customer. Silence at
+  // this point is indistinguishable from a broken bot — a long conversation
+  // simply stopped getting answers, with nothing said and nobody told. It
+  // becomes a handoff, and the reply is sent once (`rate_limited` is only
+  // reached again after the hour rolls, because the notice itself is a reply).
   if (!isSimulator && isRateLimited(s, parent?.phone || '')) {
-    return { action: 'silence', reason: 'rate_limited' };
+    return {
+      action: 'handoff',
+      reason: 'rate_limited',
+      reply: 'רגע — אני מעביר את השיחה לצוות שלנו 🙏\nמישהו יחזור אליכם בהקדם.',
+    };
   }
 
   if (wantsExplicitHumanStaff(text, s)) {

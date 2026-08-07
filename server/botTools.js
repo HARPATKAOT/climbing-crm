@@ -21,6 +21,8 @@ import {
   newCheckoutToken,
   unpaidEquipmentItems,
   describeEquipmentItems,
+  resolveSeasonHalves,
+  DEFAULT_EQUIPMENT_SETTINGS,
 } from './equipmentService.js';
 import { upcomingPublicActivities, activityPublicSlug } from './publicSite.js';
 import {
@@ -438,6 +440,28 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
     parameters: { type: 'object', properties: {} },
   },
 ];
+
+/**
+ * The half-season the shoes are rented for, as dates a parent can read.
+ *
+ * The season and its halves are the CRM's own model (`resolveSeasonHalves`),
+ * the same one the payment page prices against — so the period the bot says
+ * out loud and the period the parent is charged for cannot drift apart.
+ */
+function seasonHalfFields(now = new Date()) {
+  try {
+    const season = resolveSeasonHalves(DEFAULT_EQUIPMENT_SETTINGS, now);
+    const half = season.current;
+    const endInclusive = new Date(half.endExclusive.getTime() - 24 * 60 * 60 * 1000);
+    return {
+      תקופת_ההשכרה: `${half.label} של עונת החוגים`,
+      מתאריך: spellOutDate(half.start.toISOString().slice(0, 10)),
+      עד_תאריך: spellOutDate(endInclusive.toISOString().slice(0, 10)),
+    };
+  } catch {
+    return {};
+  }
+}
 
 /**
  * The free-text note the staff wrote on the group card. Only included when it
@@ -861,7 +885,15 @@ export function buildCustomerTools({
         const prices = await loadEquipmentPrices();
         payload.ציוד = prices
           ? {
-            נעליים: Number(prices.shoes) || 0,
+            // The shoes are rented for half a season, not sold. A parent told
+            // only "נעלי טיפוס: 150 ₪" reads it as a purchase, and then hears
+            // about the period and the proration at the payment page.
+            נעליים: {
+              מחיר_לחצי_עונה: Number(prices.shoes) || 0,
+              תנאים: 'השכרה לחצי עונת חוגים, לא רכישה',
+              ...seasonHalfFields(),
+              הערה: 'מי שמצטרף באמצע החצי משלם חלק יחסי — הסכום המדויק מחושב בדף התשלום.',
+            },
             חולצה: Number(prices.shirt) || 0,
             שק_מגנזיום: Number(prices.chalk_bag) || 0,
           }
@@ -874,8 +906,9 @@ export function buildCustomerTools({
           : { הערה: 'מחיר כניסה בודדת אינו מוגדר במחירון — אין לנקוב בסכום, יש להעביר לצוות' };
       }
       const fee = await resolveEnrichmentFee(settings);
+      // A yearly charge quoted beside monthly class fees reads as monthly.
       payload.דמי_העשרה = fee > 0
-        ? fee
+        ? { סכום: fee, תדירות: 'תשלום שנתי, פעם בשנת חוגים' }
         : { הערה: 'דמי ההעשרה אינם מוגדרים — אין לנקוב בסכום' };
       return payload;
     },

@@ -726,6 +726,44 @@ test('אין אף מסמך — זה טופס ההשתתפות המלא, עם ה�
   });
 });
 
+// ─── ציוד ותשלומים חוזרים ────────────────────────────────────────────────────
+
+test('הנעליים הן השכרה לחצי עונה, ודמי ההעשרה הם תשלום שנתי', async () => {
+  await withSeed({ groups: [GROUP_GD], students: [] }, async () => {
+    const tools = buildCustomerTools({
+      parent: PARENT,
+      phone: PARENT.phone,
+      settings: { aiBusinessFacts: 'דמי העשרה: 110 ₪' },
+    });
+    const prices = await tools.getPrices({ equipment: true, entry: false });
+
+    // «נעלי טיפוס: 150 ₪» לבד נקרא כמו קנייה, וההורה שומע על התקופה
+    // ועל החלק היחסי רק בדף התשלום.
+    if (prices.ציוד?.נעליים) {
+      assert.match(prices.ציוד.נעליים.תנאים, /השכרה/);
+      assert.match(prices.ציוד.נעליים.תקופת_ההשכרה, /חצי/);
+      assert.ok(prices.ציוד.נעליים.מתאריך);
+      assert.ok(prices.ציוד.נעליים.עד_תאריך);
+      assert.match(prices.ציוד.נעליים.הערה, /חלק יחסי/);
+    }
+    // תשלום שנתי לצד מחיר חודשי של חוג נקרא כמו עוד תשלום חודשי.
+    assert.equal(prices.דמי_העשרה.סכום, 110);
+    assert.match(prices.דמי_העשרה.תדירות, /שנתי/);
+  });
+});
+
+test('מגבלת הקצב מעבירה לצוות במקום להשתיק את השיחה', async () => {
+  const { decideBotGate, mergeBotSettings } = await import('./whatsappBot.js');
+  const settings = mergeBotSettings({ aiResponderEnabled: true, aiRateLimitPerHour: 0 });
+  // 0 = בלי מגבלה, וזה עדיין חייב לענות.
+  assert.equal(decideBotGate(settings, {}, [], 'שלום').action, 'reply');
+
+  // לקוח שכתב הרבה בשעה אחת קיבל שקט מוחלט — נראה בדיוק כמו בוט שבור.
+  const capped = mergeBotSettings({ aiResponderEnabled: true, aiRateLimitPerHour: 1 });
+  const gate = decideBotGate(capped, { phone: '0599111000' }, [], 'בטוח? תבדוק שוב');
+  assert.notEqual(gate.action, 'silence');
+});
+
 // ─── קישורים ─────────────────────────────────────────────────────────────────
 
 test('קישור שהולך ללקוח יושב על הדומיין שהוא מכיר', async () => {
