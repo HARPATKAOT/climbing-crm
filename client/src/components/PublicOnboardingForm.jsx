@@ -2460,25 +2460,28 @@ export default function PublicOnboardingForm() {
                 />
               </div>
             </div>
-            <div className="form-group">
-              <label>אימייל <span className="req-star">*</span></label>
-              <input
-                type="email"
-                value={parent.email}
-                onChange={(e) => setParent((p) => ({ ...p, email: e.target.value }))}
-                placeholder="name@email.com"
-                style={missingStyle('email')}
-              />
-              <small className="field-hint">שדה חובה — לכתובת הזו נשלחות הקבלות והחשבוניות</small>
-            </div>
-            <div className="form-group">
-              <label>מקום מגורים *</label>
-              <input
-                value={parent.city}
-                onChange={(e) => setParent((p) => ({ ...p, city: e.target.value }))}
-                placeholder="עיר / יישוב"
-                style={missingStyle('city')}
-              />
+            {/* שתי שורות קצרות זו לצד זו, כמו השם והמשפחה שמעליהן. */}
+            <div className="form-row">
+              <div className="form-group">
+                <label>אימייל <span className="req-star">*</span></label>
+                <input
+                  type="email"
+                  value={parent.email}
+                  onChange={(e) => setParent((p) => ({ ...p, email: e.target.value }))}
+                  placeholder="name@email.com"
+                  style={missingStyle('email')}
+                />
+                <small className="field-hint">לכתובת הזו נשלחות הקבלות והחשבוניות</small>
+              </div>
+              <div className="form-group">
+                <label>מקום מגורים <span className="req-star">*</span></label>
+                <input
+                  value={parent.city}
+                  onChange={(e) => setParent((p) => ({ ...p, city: e.target.value }))}
+                  placeholder="עיר / יישוב"
+                  style={missingStyle('city')}
+                />
+              </div>
             </div>
             <div className="form-row">
               <div className="form-group">
