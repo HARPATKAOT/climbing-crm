@@ -1518,7 +1518,16 @@ export default function PublicOnboardingForm() {
   };
 
   const addChild = () => {
-    setChildren((prev) => [...prev, emptyChild(allQuestions)]);
+    setChildren((prev) => {
+      // כשהרשימה כבר אושרה כ"אלו הם ילדיי", ילד שנוסף עכשיו מכוסה באותו
+      // אישור — ההורה מקליד אותו בעצמו ברגע זה.
+      const kids = prev.filter((c) => c.type !== 'adult' && String(c.name || '').trim());
+      const confirmed = kids.length > 0 && kids.every((c) => c.relationToSigner === 'child');
+      return [...prev, {
+        ...emptyChild(allQuestions),
+        ...(confirmed ? { relationToSigner: 'child' } : null),
+      }];
+    });
   };
 
   /** A second adult on the same submission — marked as the spouse from the start. */
@@ -1921,7 +1930,7 @@ export default function PublicOnboardingForm() {
     // made explicitly rather than assumed from the fact that they were typed in.
     const unclaimed = kids.find((kid) => !kid.relationToSigner);
     if (unclaimed) {
-      setError(`יש לאשר ש${unclaimed.name?.trim() || 'המשתתף/ת'} הוא/היא הילד/ה שלך — או להסיר את הכרטיס`);
+      setError('יש לסמן בתחתית רשימת הילדים את האישור „אלו הם ילדיי" — או להסיר כרטיס של מי שאינו/ה ילד/ה שלך');
       return;
     }
     // Every card is a question, and an unanswered one is not a "no". Left blank
@@ -2885,7 +2894,8 @@ export default function PublicOnboardingForm() {
             {/* כרטיס אחד לכל משתתף, ובכל כרטיס אותם שלושה חלקים באותו סדר:
                 מי זה, איפה עומדת ההצהרה שלו, ומה אפשר לעשות. השדות נפתחים
                 בתוך הכרטיס רק כשהוא באמת אוסף פרטים. */}
-            {children.map((child, index) => {
+            {(() => {
+            const renderParticipantCard = (child, index) => {
               const cardState = participantCardState(child);
               const typedName = (child.name || '').trim();
               const namePhrase = typedName || 'משתתף/ת זה';
@@ -2944,24 +2954,6 @@ export default function PublicOnboardingForm() {
                       </>
                     )}
                   </div>
-                  {/* קרבה שלא אושרה היא שאלה, לא תווית: בלעדיה הכרטיס לא
-                      נכנס לשליחה, ולכן היא נשאלת כאן ליד השם ולא בשדה אחד
-                      בדף הקודם שניסה לתאר משפחה שלמה. */}
-                  {!child.relationToSigner && (
-                    <div style={{ marginTop: 10 }}>
-                      <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', marginBottom: 6 }}>
-                        מי {typedName || 'זה'} ביחס אליך?
-                      </div>
-                      <CardButton
-                        variant="offer"
-                        onClick={() => updateChild(index, {
-                          relationToSigner: child.type === 'adult' ? 'spouse' : 'child',
-                        })}
-                      >
-                        {child.type === 'adult' ? 'בן/בת זוג' : 'הבן/בת שלי'}
-                      </CardButton>
-                    </div>
-                  )}
                 </div>
 
                 {/* איפה עומדת ההצהרה. פס אחד, אותו מקום בכל כרטיס. */}
@@ -3244,13 +3236,16 @@ export default function PublicOnboardingForm() {
                   </>
                 ) : (
                   <CardActions>
+                    {/* שתי תשובות לאותה שאלה — שתיהן באותו מסגור. מסגור אחד
+                        צהוב ואחד אפור אמר שיש תשובה נכונה, וזו לא הייתה
+                        השאלה. */}
                     <CardButton
                       variant="offer"
                       onClick={() => updateChild(index, { renewOptIn: true, skipThisTime: false })}
                     >
                       {child.onFileHealthSignedAt ? 'כן, לחדש עכשיו' : 'כן, למלא עכשיו'}
                     </CardButton>
-                    <CardButton onClick={() => updateChild(index, { confirmSkip: true })}>
+                    <CardButton variant="offer" onClick={() => updateChild(index, { confirmSkip: true })}>
                       {cg('לא משתתף', 'לא משתתפת')}
                     </CardButton>
                   </CardActions>
@@ -3297,30 +3292,68 @@ export default function PublicOnboardingForm() {
                 )}
               </div>
               );
-            })}
-            {!healthOnlyMode && <button
-                type="button"
-                onClick={addChild}
-                style={{
-                  width: '100%', background: 'transparent', border: '1px dashed rgba(255,255,255,0.25)',
-                  color: 'rgba(255,255,255,0.72)', padding: 12, borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16,
-                }}
-              >
-                <Plus size={16} /> הוספת ילד/ה נוסף/ת
-              </button>}
-            {!healthOnlyMode && <button
-                type="button"
-                onClick={addSpouse}
-                style={{
-                  width: '100%', background: 'transparent', border: '1px dashed rgba(255,255,255,0.25)',
-                  color: 'rgba(255,255,255,0.72)', padding: 12, borderRadius: 12, cursor: 'pointer',
-                  fontFamily: 'inherit',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16,
-                }}
-              >
-                <Plus size={16} /> הוספת בן/בת זוג
-              </button>}
+            };
+
+            // מקשה אחת, שני חלקים: הורים למעלה, ילדים למטה. כפתור ההוספה של
+            // כל סוג יושב בחלק שלו, והקרבה של הילדים נענית באישור אחד על
+            // כל הרשימה במקום שאלה על כל כרטיס.
+            const addButtonStyle = {
+              width: '100%', background: 'transparent', border: '1px dashed rgba(255,255,255,0.25)',
+              color: 'rgba(255,255,255,0.72)', padding: 12, borderRadius: 12, cursor: 'pointer',
+              fontFamily: 'inherit',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16,
+            };
+            const sectionTitleStyle = {
+              fontSize: 15, fontWeight: 800, color: 'rgba(255,255,255,0.85)',
+              margin: '4px 0 12px', paddingBottom: 8,
+              borderBottom: '1px solid rgba(255,255,255,0.12)',
+            };
+            if (healthOnlyMode) return children.map(renderParticipantCard);
+            const indexed = children.map((child, index) => [child, index]);
+            const adultCards = indexed.filter(([child]) => child.type === 'adult');
+            const childCards = indexed.filter(([child]) => child.type !== 'adult');
+            const namedKids = childCards.filter(([child]) => String(child.name || '').trim());
+            const childrenConfirmed = namedKids.length > 0
+              && namedKids.every(([child]) => child.relationToSigner === 'child');
+            const setChildrenConfirmed = (on) => setChildren((prev) => prev.map((c) => (
+              c.type === 'adult' ? c : { ...c, relationToSigner: on ? 'child' : '' }
+            )));
+            return (
+              <>
+                <div style={sectionTitleStyle}>הורים</div>
+                {adultCards.map(([child, index]) => renderParticipantCard(child, index))}
+                <button type="button" onClick={addSpouse} style={addButtonStyle}>
+                  <Plus size={16} /> הוספת בן/בת זוג
+                </button>
+
+                <div style={sectionTitleStyle}>ילדים</div>
+                {childCards.map(([child, index]) => renderParticipantCard(child, index))}
+                {namedKids.length > 0 && (
+                  /* אישור אחד על הרשימה כולה. הוספה לתיק משפחה היא טענה על
+                     קרבה, והיא נטענת במפורש — אבל פעם אחת, לא שאלה נפרדת
+                     על כל כרטיס. */
+                  <label
+                    className="event-check"
+                    style={{
+                      cursor: 'pointer', marginBottom: 16,
+                      borderColor: childrenConfirmed ? 'var(--form-accent-border, rgba(249,115,22,0.45))' : 'rgba(252,211,77,.55)',
+                      background: childrenConfirmed ? 'var(--form-accent-soft, rgba(249,115,22,0.08))' : 'rgba(251,191,36,.07)',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={childrenConfirmed}
+                      onChange={() => setChildrenConfirmed(!childrenConfirmed)}
+                    />
+                    <span>{g('אני מאשר שאלו הם ילדיי', 'אני מאשרת שאלו הם ילדיי', 'אני מאשר/ת שאלו הם ילדיי')}</span>
+                  </label>
+                )}
+                <button type="button" onClick={addChild} style={addButtonStyle}>
+                  <Plus size={16} /> הוספת ילד/ה נוסף/ת
+                </button>
+              </>
+            );
+            })()}
             {error && <ErrorBox message={error} />}
             <button type="button" className="event-primary" onClick={goNextFromChildren}>
               {healthOnlyMode
