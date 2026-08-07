@@ -2369,7 +2369,11 @@ export default function PublicOnboardingForm() {
     answers: { ...(child.answers || {}), [id]: value },
   }));
   const currentScreening = screeningFor(currentChild);
-  const activityNatureText = ACTIVITY_NATURE[String(template?.slug || routeSlug || 'wall').trim().toLowerCase()] || '';
+  // נערך בתבנית ב-CRM; ריק — הנוסח שבקוד, כדי שטופס שלא נגעו בו לא יאבד
+  // את הפרק הזה.
+  const activityNatureText = String(template?.activityNature || '').trim()
+    || ACTIVITY_NATURE[String(template?.slug || routeSlug || 'wall').trim().toLowerCase()]
+    || '';
   const documentTitle = healthOnlyMode ? 'חידוש הצהרת בריאות' : 'הצהרת בריאות והסרת אחריות';
   /**
    * שם הפעילות שהטופס משרת. נערך בתבנית ב-CRM; עד שמגדירים אותו, נגזר מסוג

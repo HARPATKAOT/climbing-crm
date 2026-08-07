@@ -591,6 +591,7 @@ mappers.form_templates = {
     // ולכן לא ענה על השאלה „לאיזו פעילות הטופס הזה”.
     headline: r.headline || '',
     coverImage: r.cover_image || '',
+    activityNature: r.activity_nature || '',
     healthQuestions: Array.isArray(r.health_questions) ? r.health_questions : [],
     isDefault: !!r.is_default,
     isActive: r.is_active !== false,
@@ -611,6 +612,7 @@ mappers.form_templates = {
     waiver_summary: o.waiverSummary || o.waiver_summary || '',
     headline: emptyToNull(o.headline),
     cover_image: emptyToNull(o.coverImage || o.cover_image),
+    activity_nature: emptyToNull(o.activityNature || o.activity_nature),
     health_questions: Array.isArray(o.healthQuestions)
       ? o.healthQuestions
       : (Array.isArray(o.health_questions) ? o.health_questions : []),

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { CheckCircle2, AlertCircle, FileText, Send, ClipboardCheck, Shield, Link2, Copy, Trash2, Plus, Download, Image as ImageIcon, Upload, Loader2 } from 'lucide-react';
+import { CheckCircle2, AlertCircle, FileText, Send, ClipboardCheck, Shield, Link2, Copy, Trash2, Plus, Download, Image as ImageIcon, Upload, Loader2, Pencil, Lock } from 'lucide-react';
 import { downloadHealthDeclarationPdf } from '../utils/healthDeclarationPdf.js';
 import { templateKind } from '../utils/declarationKinds.js';
 import { compressImageFile } from './productCategories.js';
@@ -27,9 +27,10 @@ const EMPTY_TEMPLATE = {
   activityTypes: ['wall'],
   headline: '',
   coverImage: '',
+  activityNature: '',
   waiverText: '',
   waiverSummary: '',
-  healthQuestionsText: 'האם המתאמן סובל מאסתמה, קוצר נשימה או מחלת ריאות?\nהאם המתאמן סובל מבעיות לב, לחץ דם, או סחרחורות/התעלפויות?\nהאם יש בעיה אורתופדית (גב, פרקים, שברים) המגבילה פעילות מאומצת?',
+  safetyRulesText: '',
   isDefault: false,
   isActive: true,
 };
@@ -44,7 +45,7 @@ const EMPTY_TEMPLATE = {
  * leaving a child unaccompanied when there is no child.
  */
 function questionsToText(questions) {
-  if (!Array.isArray(questions) || !questions.length) return EMPTY_TEMPLATE.healthQuestionsText;
+  if (!Array.isArray(questions) || !questions.length) return '';
   return questions
     .map((q) => {
       const label = questionLabel(q);
@@ -56,7 +57,18 @@ function questionsToText(questions) {
     .join('\n');
 }
 
-function textToQuestions(text) {
+/**
+ * @param {string} text  שורה לכל סעיף
+ * @param {Array}  known הסעיפים כפי שהם שמורים היום — כדי לשמר מזהים
+ *
+ * סעיף ששורתו לא השתנתה שומר את המזהה שלו. בלי זה כל שמירה הייתה מחדשת
+ * q1..qn, ורשומה חתומה שמפנה למזהה ישן הייתה מאבדת את הנוסח שלו.
+ */
+function textToQuestions(text, known = []) {
+  const byLabel = new Map(
+    (known || []).filter((q) => q?.id && q?.label).map((q) => [String(q.label).trim(), q.id])
+  );
+  const used = new Set();
   return String(text || '')
     .split('\n')
     .map((line) => line.trim())
@@ -66,17 +78,39 @@ function textToQuestions(text) {
       const childOnly = isChildOnlyQuestion({ label: line });
       const clearance = requiresClearance({ label: line });
       const label = questionLabel({ label: line });
+      const keptId = byLabel.get(label);
+      let id = keptId && !used.has(keptId) ? keptId : `q${i + 1}`;
+      while (used.has(id)) id = `${id}_`;
+      used.add(id);
       // `requireYes` used to be dropped here, which quietly turned every
       // mandatory clause optional the first time a template was saved from
       // this screen. A confirmation is mandatory; a screening question is not,
       // because there "yes" is an answer rather than a signature.
       const audience = childOnly ? 'child' : 'all';
       return screening
-        ? { id: `q${i + 1}`, label, kind: 'screen', audience, requiresClearance: clearance, requireYes: false }
-        : { id: `q${i + 1}`, label, kind: 'confirm', audience, requiresClearance: false, requireYes: true };
+        ? { id, label, kind: 'screen', audience, requiresClearance: clearance, requireYes: false }
+        : { id, label, kind: 'confirm', audience, requiresClearance: false, requireYes: true };
     })
     .filter((q) => q.label);
 }
+
+/** הסעיפים שהמסך הזה באמת שולט בהם: אישורי בטיחות והצהרה, לא השאלון הרפואי. */
+function safetyRulesOf(questions) {
+  return (questions || []).filter((q) => q && !isScreeningQuestion(q) && !/^m\d+$/i.test(String(q.id || '')));
+}
+
+/** השאלון הרפואי — קבוע במערכת וזהה בכל הטפסים. */
+function medicalQuestionsOf(questions) {
+  return (questions || []).filter((q) => q && isScreeningQuestion(q));
+}
+
+/** ארבעת הדפים שהחותם עובר, בסדר שבו הם מוצגים בטופס. */
+const PREVIEW_PAGES = [
+  { key: 'health', short: 'בריאות', title: 'הצהרת בריאות' },
+  { key: 'nature', short: 'אופי הפעילות', title: 'אופי הפעילות והסיכונים' },
+  { key: 'safety', short: 'בטיחות', title: 'כללי בטיחות' },
+  { key: 'waiver', short: 'ההצהרה', title: 'אישור השתתפות והסרת אחריות' },
+];
 
 function FormTemplatesPanel() {
   const [templates, setTemplates] = useState([]);
@@ -86,6 +120,22 @@ function FormTemplatesPanel() {
   const [saving, setSaving] = useState(false);
   const coverFileRef = useRef(null);
   const [coverBusy, setCoverBusy] = useState(false);
+  /**
+   * הטופס נפתח נעול. מה שנערך כאן הוא המסמך שלקוחות חותמים עליו ברגע זה,
+   * ולחיצה מקרית על שדה לא אמורה להיות מסוגלת לשנות אותו.
+   */
+  const [unlocked, setUnlocked] = useState(false);
+  const [confirmSave, setConfirmSave] = useState(false);
+  const [previewPage, setPreviewPage] = useState(0);
+  const locked = !unlocked;
+  // השאלון הרפואי מגיע מהשרת עם התבנית; בהצהרה חדשה הוא עוד לא ידוע, ולכן
+  // נלקח מכל תבנית קיימת — הוא זהה בכולן ממילא.
+  const medicalQuestions = medicalQuestionsOf(
+    (editing && editing !== 'new' ? editing.healthQuestions : null)
+    || templates.find((t) => medicalQuestionsOf(t.healthQuestions).length)?.healthQuestions
+    || []
+  );
+  const previewSafetyRules = textToQuestions(form.safetyRulesText);
 
   /**
    * התמונה מוקטנת בדפדפן לפני השליחה. תמונה מהטלפון היא כמה מגה־בייט, וגוף
@@ -125,10 +175,17 @@ function FormTemplatesPanel() {
     setEditing('new');
     setForm(EMPTY_TEMPLATE);
     setMsg('');
+    // הצהרה חדשה עוד לא חיה בשום קישור — אין ממה להגן.
+    setUnlocked(true);
+    setConfirmSave(false);
+    setPreviewPage(0);
   };
 
   const openEdit = (t) => {
     setEditing(t);
+    setUnlocked(false);
+    setConfirmSave(false);
+    setPreviewPage(0);
     setForm({
       title: t.title || '',
       slug: t.slug || '',
@@ -136,9 +193,11 @@ function FormTemplatesPanel() {
         .map(normalizeParticipationScope))],
       headline: t.headline || '',
       coverImage: t.coverImage || '',
+      activityNature: t.activityNature || '',
       waiverText: t.waiverText || '',
       waiverSummary: t.waiverSummary || '',
-      healthQuestionsText: questionsToText(t.healthQuestions),
+      // רק מה שהמסך הזה שולט בו. השאלון הרפואי מוצג בנפרד, לקריאה בלבד.
+      safetyRulesText: questionsToText(safetyRulesOf(t.healthQuestions)),
       isDefault: !!t.isDefault,
       isActive: t.isActive !== false,
     });
@@ -166,6 +225,12 @@ function FormTemplatesPanel() {
 
   const handleSave = async (e) => {
     e.preventDefault();
+    // שתי לחיצות על מסמך חי: הראשונה אומרת מה עומד להשתנות ולמי, השנייה
+    // היא זו ששומרת.
+    if (editing !== 'new' && !confirmSave) {
+      setConfirmSave(true);
+      return;
+    }
     setSaving(true);
     setMsg('');
     const payload = {
@@ -174,9 +239,13 @@ function FormTemplatesPanel() {
       activityTypes: form.activityTypes || [],
       headline: (form.headline || '').trim(),
       coverImage: form.coverImage || '',
+      activityNature: (form.activityNature || '').trim(),
       waiverText: form.waiverText,
       waiverSummary: form.waiverSummary,
-      healthQuestions: textToQuestions(form.healthQuestionsText),
+      healthQuestions: textToQuestions(
+        form.safetyRulesText,
+        editing === 'new' ? [] : safetyRulesOf(editing?.healthQuestions)
+      ),
       isDefault: form.isDefault,
       isActive: form.isActive,
     };
@@ -193,7 +262,9 @@ function FormTemplatesPanel() {
         return;
       }
       setEditing(null);
-      setMsg('התבנית נשמרה');
+      setUnlocked(false);
+      setConfirmSave(false);
+      setMsg('התבנית נשמרה — הטופס הציבורי כבר מגיש את הנוסח החדש');
       await load();
     } catch {
       setMsg('שגיאת רשת');
@@ -241,213 +312,369 @@ function FormTemplatesPanel() {
       )}
 
       {editing && (
-        <form onSubmit={handleSave} className="card card-p" style={{ marginBottom: 20 }}>
-          <div className="section-title" style={{ marginBottom: 14 }}>
-            {editing === 'new' ? 'הצהרה חדשה לעריכה' : `עריכת הצהרה: ${editing.title}`}
-          </div>
-          <div className="form-grid-2">
-            <div className="form-group">
-              <label className="form-label">כותרת *</label>
-              <input
-                required
-                className="input"
-                value={form.title}
-                onChange={(e) => setForm((f) => ({
-                  ...f,
-                  title: e.target.value,
-                  slug: f.slug || e.target.value.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
-                }))}
-                placeholder="לדוגמה: הצהרת יום הולדת"
-              />
+        <form onSubmit={handleSave} className="card card-p decl-editor" style={{ marginBottom: 20 }}>
+          <div className="decl-editor-head">
+            <div className="section-title" style={{ margin: 0 }}>
+              {editing === 'new' ? 'הצהרה חדשה לעריכה' : `עריכת הצהרה: ${editing.title}`}
             </div>
-            <div className="form-group">
-              <label className="form-label">מזהה קישור (slug) *</label>
-              <input
-                required
-                className="input"
-                value={form.slug}
-                onChange={(e) => setForm((f) => ({ ...f, slug: e.target.value.toLowerCase().replace(/\s+/g, '-') }))}
-                placeholder="wall"
-                dir="ltr"
-                style={{ textAlign: 'left' }}
-              />
-              <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }} dir="ltr">
-                {publicUrl(form.slug, form.isDefault)}
-              </div>
-            </div>
-          </div>
-
-          {/* מה שרואים בראש הטופס הציבורי. „כותרת” היא שם המסמך שחותמים עליו,
-              ולכן היא לא ענתה על השאלה הראשונה של מי שפותח את הקישור: לאיזו
-              פעילות זה. */}
-          <div className="form-group">
-            <label className="form-label">כותרת הפעילות בראש הטופס</label>
-            <input
-              className="input"
-              value={form.headline || ''}
-              onChange={(e) => setForm((f) => ({ ...f, headline: e.target.value }))}
-              placeholder="טיפוס בקיר בועז"
-            />
-            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
-              מופיעה בגדול מעל שם המסמך, בכל שלבי הטופס. ריק — לא תוצג.
-            </div>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">תמונת קאוור</label>
-            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-              <div style={{
-                width: 220, height: 96, borderRadius: 10, overflow: 'hidden', flexShrink: 0,
-                border: '1px solid var(--border)', background: 'rgba(255,255,255,0.04)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: 'var(--text-3)',
-              }}>
-                {form.coverImage
-                  ? <img src={form.coverImage} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  : <ImageIcon size={22} />}
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <input
-                  ref={coverFileRef}
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
-                  hidden
-                  onChange={pickCover}
-                />
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => coverFileRef.current?.click()}
-                  disabled={coverBusy || saving}
-                >
-                  {coverBusy ? <Loader2 size={14} className="spin" /> : <Upload size={14} />}
-                  {form.coverImage ? 'החלפת התמונה' : 'העלאת תמונה'}
+            {/* מסמך חי. הטופס נפתח נעול, וכתוב עליו למה. */}
+            {editing !== 'new' && (
+              locked ? (
+                <button type="button" className="btn btn-primary btn-sm" onClick={() => setUnlocked(true)}>
+                  <Pencil size={14} /> עריכת הנוסח
                 </button>
-                {form.coverImage && (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => setForm((f) => ({ ...f, coverImage: '' }))}
-                    disabled={coverBusy || saving}
-                  >
-                    <Trash2 size={14} /> הסרת התמונה
-                  </button>
-                )}
-                <div style={{ fontSize: 11, color: 'var(--text-3)', maxWidth: 260, lineHeight: 1.5 }}>
-                  רצועה רחבה בראש הטופס. תמונה לרוחב עובדת הכי טוב; היא מוקטנת אוטומטית לפני השמירה.
-                </div>
-              </div>
-            </div>
+              ) : (
+                <span className="decl-live-warn">
+                  <AlertCircle size={14} /> במצב עריכה — שמירה משנה מיד את הטופס שהלקוחות ממלאים
+                </span>
+              )
+            )}
           </div>
-          <div className="form-grid-2">
-            <div className="form-group">
-              <label className="form-label">סוגי פעילות שההצהרה הזאת משרתת</label>
-              {/* הצהרה אחת יכולה לשרת כמה סוגים; סוג שייך להצהרה אחת בלבד, ולכן
-                  סימון סוג שתפוס מעביר אותו לכאן — וכתוב למי הוא שייך עכשיו. */}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {activityTypeOptions.map((a) => {
-                    const chosen = (form.activityTypes || []).includes(a.value);
-                    const ownerElsewhere = templates.find((t) => (
-                      t.id !== (editing === 'new' ? null : editing?.id)
-                      && (t.activityTypes || (t.activityType ? [t.activityType] : [])).includes(a.value)
-                    ));
-                    return (
-                      <button
-                        key={a.value}
-                        type="button"
-                        onClick={() => setForm((f) => {
-                          const list = f.activityTypes || [];
-                          return {
-                            ...f,
-                            activityTypes: chosen
-                              ? list.filter((v) => v !== a.value)
-                              : [...list, a.value],
-                          };
+          {editing !== 'new' && locked && (
+            <div className="decl-locked-note">
+              זהו הנוסח שהטופס הציבורי מגיש ברגע זה. הוא פתוח לקריאה; לשינוי — „עריכת הנוסח”.
+              מסמכים שכבר נחתמו לא ישתנו לעולם: כל חתימה שומרת עותק מוקפא של הנוסח שנחתם,
+              וה-PDF נבנה ממנו.
+            </div>
+          )}
+
+          <div className="decl-editor-body">
+            {/* fieldset אחד נועל את כל השדות יחד — אין שדה ששוכחים לנעול. */}
+            <fieldset className="decl-fields" disabled={locked}>
+
+              <section className="decl-panel">
+                <div className="decl-panel-title">זהות הטופס</div>
+                <div className="form-grid-2">
+                  <div className="form-group">
+                    <label className="form-label">כותרת *</label>
+                    <input
+                      required
+                      className="input"
+                      value={form.title}
+                      onChange={(e) => setForm((f) => ({
+                        ...f,
+                        title: e.target.value,
+                        slug: f.slug || e.target.value.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
+                      }))}
+                      placeholder="לדוגמה: הצהרת יום הולדת"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">מזהה קישור (slug) *</label>
+                    <input
+                      required
+                      className="input"
+                      value={form.slug}
+                      onChange={(e) => setForm((f) => ({ ...f, slug: e.target.value.toLowerCase().replace(/\s+/g, '-') }))}
+                      placeholder="wall"
+                      dir="ltr"
+                      style={{ textAlign: 'left' }}
+                    />
+                    <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }} dir="ltr">
+                      {publicUrl(form.slug, form.isDefault)}
+                    </div>
+                  </div>
+                </div>
+                <div className="form-grid-2">
+                  <div className="form-group">
+                    <label className="form-label">סוגי פעילות שההצהרה הזאת משרתת</label>
+                    {/* הצהרה אחת יכולה לשרת כמה סוגים; סוג שייך להצהרה אחת בלבד, ולכן
+                        סימון סוג שתפוס מעביר אותו לכאן — וכתוב למי הוא שייך עכשיו. */}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {activityTypeOptions.map((a) => {
+                          const chosen = (form.activityTypes || []).includes(a.value);
+                          const ownerElsewhere = templates.find((t) => (
+                            t.id !== (editing === 'new' ? null : editing?.id)
+                            && (t.activityTypes || (t.activityType ? [t.activityType] : [])).includes(a.value)
+                          ));
+                          return (
+                            <button
+                              key={a.value}
+                              type="button"
+                              className={`btn btn-xs ${chosen ? 'btn-primary' : 'btn-ghost'}`}
+                              title={ownerElsewhere ? `שייך כרגע ל„${ownerElsewhere.title}”` : undefined}
+                              onClick={() => setForm((f) => {
+                                const current = new Set(f.activityTypes || []);
+                                if (current.has(a.value)) current.delete(a.value);
+                                else current.add(a.value);
+                                return { ...f, activityTypes: [...current] };
+                              })}
+                            >
+                              {a.label}
+                              {ownerElsewhere && !chosen ? ' · תפוס' : ''}
+                            </button>
+                          );
                         })}
-                        title={!chosen && ownerElsewhere ? `כרגע שייך ל„${ownerElsewhere.title}” — סימון כאן יעביר אותו` : ''}
-                        style={{
-                          padding: '7px 11px', borderRadius: 999, font: 'inherit', fontSize: 12,
-                          fontWeight: 700, cursor: 'pointer',
-                          border: chosen ? '1px solid #f97316' : '1px solid var(--border)',
-                          background: chosen ? 'rgba(249,115,22,.18)' : 'transparent',
-                          color: chosen ? '#fdba74' : 'var(--text-2)',
-                        }}
-                      >
-                        {a.label}
-                        {!chosen && ownerElsewhere && (
-                          <span style={{ opacity: 0.6, fontWeight: 500 }}> · תפוס</span>
-                        )}
-                      </button>
-                    );
-                  })}
-              </div>
-              {!(form.activityTypes || []).length && (
-                <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
-                  ללא שיוך — מגיעים להצהרה הזאת רק בקישור ישיר.
+                    </div>
+                    {!(form.activityTypes || []).length && (
+                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
+                        ללא שיוך — מגיעים להצהרה הזאת רק בקישור ישיר.
+                      </div>
+                    )}
+                  </div>
+                  <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 10, justifyContent: 'flex-end', paddingBottom: 4 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
+                      <input type="checkbox" checked={form.isDefault} onChange={(e) => setForm((f) => ({ ...f, isDefault: e.target.checked }))} />
+                      תבנית ברירת מחדל (נפתחת ב־/register)
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
+                      <input type="checkbox" checked={form.isActive} onChange={(e) => setForm((f) => ({ ...f, isActive: e.target.checked }))} />
+                      פעילה
+                    </label>
+                  </div>
                 </div>
-              )}
-            </div>
-            <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 10, justifyContent: 'flex-end', paddingBottom: 4 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
-                <input type="checkbox" checked={form.isDefault} onChange={(e) => setForm((f) => ({ ...f, isDefault: e.target.checked }))} />
-                תבנית ברירת מחדל (נפתחת ב־/register)
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
-                <input type="checkbox" checked={form.isActive} onChange={(e) => setForm((f) => ({ ...f, isActive: e.target.checked }))} />
-                פעילה
-              </label>
-            </div>
+              </section>
+
+              <section className="decl-panel">
+                <div className="decl-panel-title">ראש הטופס</div>
+                {/* מה שרואים בראש הטופס הציבורי. „כותרת” היא שם המסמך שחותמים עליו,
+                    ולכן היא לא ענתה על השאלה הראשונה של מי שפותח את הקישור: לאיזו
+                    פעילות זה. */}
+                <div className="form-group">
+                  <label className="form-label">כותרת הפעילות</label>
+                  <input
+                    className="input"
+                    value={form.headline || ''}
+                    onChange={(e) => setForm((f) => ({ ...f, headline: e.target.value }))}
+                    placeholder="טיפוס בקיר בועז"
+                  />
+                  <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 4 }}>
+                    מופיעה מעל שם המסמך, בכל שלבי הטופס. ריק — תיגזר מסוג הטופס.
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">תמונת קאוור</label>
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                    <div className="decl-cover-preview">
+                      {form.coverImage
+                        ? <img src={form.coverImage} alt="" />
+                        : <ImageIcon size={22} />}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <input
+                        ref={coverFileRef}
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                        hidden
+                        onChange={pickCover}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => coverFileRef.current?.click()}
+                        disabled={coverBusy || saving}
+                      >
+                        {coverBusy ? <Loader2 size={14} className="spin" /> : <Upload size={14} />}
+                        {form.coverImage ? 'החלפת התמונה' : 'העלאת תמונה'}
+                      </button>
+                      {form.coverImage && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => setForm((f) => ({ ...f, coverImage: '' }))}
+                          disabled={coverBusy || saving}
+                        >
+                          <Trash2 size={14} /> הסרת התמונה
+                        </button>
+                      )}
+                      <div style={{ fontSize: 11, color: 'var(--text-3)', maxWidth: 260, lineHeight: 1.5 }}>
+                        רצועה רחבה בראש הטופס. תמונה לרוחב עובדת הכי טוב; היא מוקטנת אוטומטית לפני השמירה.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              {/* ‏1 מתוך 4 — ולא נערך כאן. */}
+              <section className="decl-panel is-readonly">
+                <div className="decl-panel-title">
+                  1 · הצהרת בריאות
+                  <span className="decl-panel-badge"><Lock size={11} /> קבוע במערכת</span>
+                </div>
+                <div className="decl-panel-note">
+                  השאלון הרפואי זהה בכל הטפסים, ולכן „יש הצהרת בריאות בתוקף” אומר אותו דבר
+                  בקיר ובטיול. הוא לא נערך כאן — שינוי בו הוא שינוי במערכת.
+                </div>
+                <ol className="decl-question-list">
+                  {medicalQuestions.map((q) => (
+                    <li key={q.id}>
+                      {questionLabel(q)}
+                      {requiresClearance(q) && (
+                        <span className="decl-question-flag">„כן” ⟵ נדרש אישור רופא</span>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              </section>
+
+              <section className="decl-panel">
+                <div className="decl-panel-title">2 · הבנת אופי הפעילות והסיכונים</div>
+                <div className="decl-panel-note">
+                  נקרא — לא מסומן — לפני כללי הבטיחות. שורה ריקה מפרידה בין פסקאות;
+                  שורה שמתחילה ב־• היא סעיף ברשימה. ריק — יוצג נוסח ברירת המחדל של המערכת.
+                </div>
+                <textarea
+                  className="textarea"
+                  rows={8}
+                  value={form.activityNature}
+                  onChange={(e) => setForm((f) => ({ ...f, activityNature: e.target.value }))}
+                  style={{ resize: 'vertical', fontFamily: 'inherit' }}
+                  placeholder={'טיפוס ספורטיבי הוא פעילות אתגרית מהנה, אבל היא גם כרוכה בסיכונים.\n\n• נפילה מגובה — עלולה לגרום לפציעה חמורה'}
+                />
+              </section>
+
+              <section className="decl-panel">
+                <div className="decl-panel-title">3 · כללי הבטיחות וההתחייבויות</div>
+                <div className="decl-panel-note">
+                  שורה לכל סעיף. כל סעיף מוצג כתיבת סימון שחובה לסמן.
+                  שורה שמתחילה ב־<strong>@</strong> מוצגת רק כשהורה ממלא עבור ילד, ונעלמת כשמבוגר ממלא עבור עצמו.
+                </div>
+                <textarea
+                  className="textarea"
+                  rows={7}
+                  value={form.safetyRulesText}
+                  onChange={(e) => setForm((f) => ({ ...f, safetyRulesText: e.target.value }))}
+                  style={{ resize: 'vertical', fontFamily: 'inherit' }}
+                />
+              </section>
+
+              <section className="decl-panel">
+                <div className="decl-panel-title">4 · ההצהרה וכתב הוויתור</div>
+                <div className="form-group">
+                  <label className="form-label">תקציר בשפה פשוטה — „מה זה בעצם?”</label>
+                  <div className="decl-panel-note">
+                    זה מה שההורה קורא בפועל. הנוסח המשפטי המלא נפתח מאחוריו בלחיצה.
+                    שורה לכל נקודה. ריק — יוצג נוסח ברירת מחדל.
+                  </div>
+                  <textarea
+                    className="textarea"
+                    rows={6}
+                    value={form.waiverSummary}
+                    onChange={(e) => setForm((f) => ({ ...f, waiverSummary: e.target.value }))}
+                    style={{ resize: 'vertical', fontFamily: 'inherit' }}
+                  />
+                </div>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">טקסט כתב ויתור / הסרת אחריות *</label>
+                  <div className="decl-panel-note">
+                    הנוסח המחייב. נשמר בהצהרה החתומה ובקובץ ה-PDF.
+                    השורה הראשונה משמשת ככותרת המסמך.
+                  </div>
+                  <textarea
+                    required
+                    className="textarea"
+                    rows={10}
+                    value={form.waiverText}
+                    onChange={(e) => setForm((f) => ({ ...f, waiverText: e.target.value }))}
+                    style={{ resize: 'vertical', fontFamily: 'inherit' }}
+                  />
+                </div>
+              </section>
+            </fieldset>
+
+            {/* מה שהחותם יראה, דף אחרי דף, מהערכים שעל המסך הזה. */}
+            <aside className="decl-preview">
+              <div className="decl-preview-head">
+                <span>תצוגה מקדימה</span>
+                <span className="decl-preview-count">{previewPage + 1} / {PREVIEW_PAGES.length}</span>
+              </div>
+              <div className="decl-preview-tabs">
+                {PREVIEW_PAGES.map((p, i) => (
+                  <button
+                    key={p.key}
+                    type="button"
+                    className={`decl-preview-tab${i === previewPage ? ' is-active' : ''}`}
+                    onClick={() => setPreviewPage(i)}
+                  >
+                    {p.short}
+                  </button>
+                ))}
+              </div>
+              <div className="decl-preview-screen">
+                {form.coverImage && previewPage === 0 && (
+                  <div className="decl-preview-cover"><img src={form.coverImage} alt="" /></div>
+                )}
+                <div className="decl-preview-activity">{form.headline || 'טיפוס בקיר בועז'}</div>
+                <div className="decl-preview-title">{PREVIEW_PAGES[previewPage].title}</div>
+
+                {previewPage === 0 && (
+                  <>
+                    <p className="decl-preview-lead">
+                      תשובה „כן” לא מונעת השתתפות. היא רק מאפשרת לצוות לדעת ולהיערך.
+                    </p>
+                    {medicalQuestions.map((q) => (
+                      <div key={q.id} className="decl-preview-q">
+                        <div>{questionLabel(q)}</div>
+                        <div className="decl-preview-yesno"><span>כן</span><span>לא</span></div>
+                      </div>
+                    ))}
+                  </>
+                )}
+
+                {previewPage === 1 && (
+                  <div className="decl-preview-prose">
+                    {(form.activityNature || '').trim()
+                      || 'ריק — הטופס יציג את נוסח ברירת המחדל של המערכת.'}
+                  </div>
+                )}
+
+                {previewPage === 2 && (
+                  previewSafetyRules.length ? previewSafetyRules.map((q) => (
+                    <label key={q.id} className="decl-preview-check">
+                      <input type="checkbox" disabled />
+                      <span>
+                        {questionLabel(q)}
+                        {isChildOnlyQuestion(q) && <em> · להורה בלבד</em>}
+                      </span>
+                    </label>
+                  )) : <div className="decl-preview-empty">אין סעיפי בטיחות</div>
+                )}
+
+                {previewPage === 3 && (
+                  <>
+                    {(form.waiverSummary || '').trim() && (
+                      <div className="decl-preview-prose">{form.waiverSummary}</div>
+                    )}
+                    <div className="decl-preview-legal">
+                      {(form.waiverText || '').trim() || 'טרם הוזן נוסח.'}
+                    </div>
+                    <div className="decl-preview-sign">חתימה דיגיטלית</div>
+                  </>
+                )}
+              </div>
+            </aside>
           </div>
-          <div className="form-group">
-            <label className="form-label">תקציר בשפה פשוטה — „מה זה בעצם?”</label>
-            <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, lineHeight: 1.5 }}>
-              זה מה שההורה קורא בפועל. הנוסח המשפטי המלא נפתח מאחוריו בלחיצה.
-              שורה לכל נקודה. ריק — יוצג נוסח ברירת מחדל.
+
+          {confirmSave && (
+            <div className="decl-confirm">
+              <div className="decl-confirm-title">
+                <AlertCircle size={15} /> לשמור את הנוסח החדש?
+              </div>
+              <div className="decl-confirm-body">
+                מרגע השמירה, כל מי שפותח את {publicUrl(form.slug, form.isDefault)} ממלא את הנוסח הזה.
+                הצהרות שכבר נחתמו והקבצים שלהן נשארים כפי שהם.
+              </div>
             </div>
-            <textarea
-              className="textarea"
-              rows={6}
-              value={form.waiverSummary}
-              onChange={(e) => setForm((f) => ({ ...f, waiverSummary: e.target.value }))}
-              style={{ resize: 'vertical', fontFamily: 'inherit' }}
-            />
-          </div>
-          <div className="form-group">
-            <label className="form-label">טקסט כתב ויתור / הסרת אחריות *</label>
-            <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6, lineHeight: 1.5 }}>
-              הנוסח המחייב. נשמר בהצהרה החתומה ובקובץ ה-PDF.
-            </div>
-            <textarea
-              required
-              className="textarea"
-              rows={8}
-              value={form.waiverText}
-              onChange={(e) => setForm((f) => ({ ...f, waiverText: e.target.value }))}
-              style={{ resize: 'vertical', fontFamily: 'inherit' }}
-            />
-          </div>
-          <div className="form-group">
-            <label className="form-label">שאלות רפואיות וסעיפי בטיחות (שורה לכל סעיף)</label>
-            <textarea
-              className="textarea"
-              rows={4}
-              value={form.healthQuestionsText}
-              onChange={(e) => setForm((f) => ({ ...f, healthQuestionsText: e.target.value }))}
-              style={{ resize: 'vertical', fontFamily: 'inherit' }}
-            />
-            <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6, lineHeight: 1.6 }}>
-              שורה שמתחילה ב־<strong>?</strong> היא שאלה רפואית (כן/לא), ותשובת „כן” לעולם לא חוסמת את הטופס.
-              שורה שמתחילה ב־<strong>@</strong> מוצגת רק כשהורה ממלא עבור ילד, ונעלמת כשמבוגר ממלא עבור עצמו.
-              שורה שמתחילה ב־<strong>?!</strong> היא שאלה רפואית שבתשובת „כן” עליה חובה לצרף אישור רופא
-              להשתתפות בפעילות ספורטיבית — בלעדיו הטופס לא נשלח, והאישור נשמר בתיק הלקוח.
-              כל שורה אחרת היא סעיף לאישור שחובה לסמן.
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button type="submit" className="btn btn-primary" disabled={saving}>
-              {saving ? 'שומר...' : 'שמור הצהרה'}
+          )}
+
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+            {!locked && (
+              <button type="submit" className="btn btn-primary" disabled={saving}>
+                {saving ? 'שומר...' : (confirmSave ? 'כן, לשמור ולפרסם' : 'שמור הצהרה')}
+              </button>
+            )}
+            {confirmSave && !saving && (
+              <button type="button" className="btn btn-ghost" onClick={() => setConfirmSave(false)}>
+                חזרה לעריכה
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => { setEditing(null); setUnlocked(false); setConfirmSave(false); }}
+            >
+              {locked ? 'סגירה' : 'ביטול'}
             </button>
-            <button type="button" className="btn btn-ghost" onClick={() => setEditing(null)}>ביטול</button>
             {form.slug && (
               <a
                 href={publicUrl(form.slug, form.isDefault)}
@@ -455,7 +682,7 @@ function FormTemplatesPanel() {
                 rel="noreferrer"
                 className="btn btn-ghost"
               >
-                <Link2 size={14} /> תצוגה מקדימה
+                <Link2 size={14} /> פתיחת הטופס החי
               </a>
             )}
           </div>

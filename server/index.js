@@ -13069,6 +13069,8 @@ function normalizeFormTemplatePayload(body, existing = null) {
     // cover picture is stored as a URL by the caller before this runs.
     headline: String(body.headline ?? existing?.headline ?? '').trim(),
     coverImage: String(body.coverImage ?? body.cover_image ?? existing?.coverImage ?? '').trim(),
+    // הטקסט שנקרא לפני כללי הבטיחות. ריק — הטופס נופל לנוסח שבקוד.
+    activityNature: String(body.activityNature ?? body.activity_nature ?? existing?.activityNature ?? '').trim(),
     // `kind` and `requireYes` used to be dropped here, so saving a template
     // from the CRM screen turned every mandatory clause into an optional one
     // and every screening question into a tick box. `audience` and
