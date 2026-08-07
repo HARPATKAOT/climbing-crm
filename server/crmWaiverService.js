@@ -452,7 +452,10 @@ export async function saveCrmParticipants({
     templateId: template.id,
     templateSlug: template.slug,
     templateVersion: template.version || template.updated_at || template.updatedAt || null,
-    healthQuestions: medicalQuestions,
+    // כל מה שנשאל ונענה — גם אישורי הבטיחות. התשובות בהצהרה כוללות אותם,
+    // ו-snapshot שמחזיק רק את השאלות הרפואיות השאיר אותם בלי נוסח בעותק
+    // החתום ("w1 ✓").
+    healthQuestions: [...medicalQuestions, ...waiverQuestions],
     ...(phoneVerification ? { phoneVerification } : {}),
   };
   const waiverSnapshot = {

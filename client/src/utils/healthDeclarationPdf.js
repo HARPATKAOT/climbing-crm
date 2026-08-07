@@ -12,6 +12,28 @@ const DEFAULT_QUESTIONS = {
   q7: 'האם ישנה רגישות לחגורות או ציוד מתכת?',
 };
 
+/**
+ * נוסחי כללי הבטיחות, לפי המזהה, כפי שהיו כשנחתמו. הצהרה נושאת את המזהים
+ * שנענו בה; כשכלל מנוסח מחדש הוא מקבל מזהה חדש בתבנית, והרשומות הישנות
+ * מפנות למזהה שכבר איננו שם — בלי הגיבוי הזה העותק החתום הדפיס "w1 ✓".
+ */
+const SAFETY_RULE_TEXTS = {
+  w1: 'יש לפעול בכל עת לפי הוראות הצוות המקצועי, וטיפוס, אבטוח ושימוש בציוד ובמתקנים מותרים רק לאחר תדריך ומעבר מבחן בטיחות ובאישור הצוות',
+  w2: 'אין לרוץ או להשתולל בכל מתחם הקיר',
+  w4: 'אבטוח הוא אחריות על חיי המטפס — יש להתייחס אליו ברצינות מוחלטת ולבצע אותו בהתאם לתדריך שתקבלו',
+  w5: 'יש לדווח מיידית על כל מפגע, תקלה, פציעה או תחושה חריגה',
+  w7: 'אני מאשר/ת שהסברתי לילדי את הכללים הללו',
+  w8: 'יש לפעול בכל עת לפי הוראות הצוות המקצועי. טיפוס, אבטוח ושימוש בציוד ובמתקנים מותרים רק לאחר תדריך ומעבר מבחן בטיחות ובאישור הצוות',
+  t1: 'יש לפעול בכל עת לפי הוראות המדריך האחראי, ואין להתרחק מהקבוצה',
+  t2: 'חובה להגיע עם הציוד, הביגוד והנעליים המתאימים ליציאה',
+  t3: 'טיפוס, סנפלינג או כניסה למערה יתאפשרו רק לאחר תדריך ורק בהשגחת מדריך',
+  t4: 'אין לגעת בציוד, בחבלים או בעיגונים ללא הוראת מדריך',
+  t5: 'במערה חובה קסדה ותאורה, ואין להיכנס, להתפצל או לצאת ללא הוראת מדריך',
+  t6: 'יש להצטייד במים ולדווח מיידית על כל מפגע, פציעה, תשישות או תחושה חריגה',
+  t7: 'ידוע לי כי הצוות רשאי לשנות או לבטל את מסלול הפעילות משיקולי בטיחות ומזג אוויר',
+  t8: 'אני מאשר/ת שהסברתי לילדי את הכללים הללו',
+};
+
 function escapeHtml(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
@@ -72,10 +94,10 @@ function unwrapMinorMarkers(text) {
   return String(text || '').replace(/\[\[([\s\S]*?)\]\]/g, '$1');
 }
 
-function answerRows(answers = {}, questionLabels = {}, questionKinds = {}) {
+function answerRows(answers = {}, questionLabels = {}, questionKinds = {}, { emptyText = 'לא נרשמו תשובות לשאלון הרפואי' } = {}) {
   const keys = Object.keys(answers);
   if (!keys.length) {
-    return '<div class="muted">לא נרשמו תשובות לשאלון הרפואי</div>';
+    return `<div class="muted">${escapeHtml(emptyText)}</div>`;
   }
   return keys.map((id) => {
     const value = answers[id];
@@ -97,15 +119,21 @@ function answerRows(answers = {}, questionLabels = {}, questionKinds = {}) {
 async function resolveWaiverAndQuestions(decl) {
   const snapshot = decl.formSnapshot || decl.form_snapshot || {};
   let waiverText = unwrapMinorMarkers(snapshot.waiverText || '');
-  const questionLabels = { ...DEFAULT_QUESTIONS };
+  const questionLabels = { ...DEFAULT_QUESTIONS, ...SAFETY_RULE_TEXTS };
   const questionKinds = {};
+  Object.keys(SAFETY_RULE_TEXTS).forEach((id) => { questionKinds[id] = 'confirm'; });
   (snapshot.healthQuestions || []).forEach((q) => {
     if (q?.id && q?.label) questionLabels[q.id] = q.label;
     if (q?.id && q?.kind) questionKinds[q.id] = q.kind;
   });
   // A stored snapshot is immutable evidence. Never replace its wording with a
-  // template that may have been edited after the signature.
-  if (waiverText || Array.isArray(snapshot.healthQuestions)) {
+  // template that may have been edited after the signature. But a snapshot that
+  // holds only the medical questions leaves the safety confirmations the signer
+  // also answered as bare ids ("w1 ✓") — those gaps, and only those, are filled
+  // from the template.
+  const answeredIds = Object.keys(decl.answers || {});
+  const missingLabels = answeredIds.some((id) => !questionLabels[id]);
+  if ((waiverText || Array.isArray(snapshot.healthQuestions)) && !missingLabels) {
     return { waiverText, questionLabels, questionKinds };
   }
   const slug = decl.templateSlug || decl.template_slug;
@@ -116,10 +144,10 @@ async function resolveWaiverAndQuestions(decl) {
     const res = await fetch(`/api/public/form-templates/${encodeURIComponent(slug)}`);
     if (res.ok) {
       const t = await res.json();
-      waiverText = unwrapMinorMarkers(t.waiverText || '');
+      if (!waiverText) waiverText = unwrapMinorMarkers(t.waiverText || '');
       (t.healthQuestions || []).forEach((q) => {
-        if (q?.id && q?.label) questionLabels[q.id] = q.label;
-        if (q?.id && q?.kind) questionKinds[q.id] = q.kind;
+        if (q?.id && q?.label && !questionLabels[q.id]) questionLabels[q.id] = q.label;
+        if (q?.id && q?.kind && !questionKinds[q.id]) questionKinds[q.id] = q.kind;
       });
     }
   } catch {
@@ -229,11 +257,25 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, questionKinds 
         ${includesWaiver ? `<div class="field"><div class="label">אישור כתב ויתור</div><div class="value">${decl.waiverAccepted ? 'אושר' : '—'}</div></div>` : ''}
       </div>
 
-      ${includesHealth ? `<h2>הצהרת בריאות</h2>
-      ${answerRows(decl.answers || {}, questionLabels, questionKinds)}
+      ${includesHealth ? (() => {
+        // שני פרקים, לא ערימה אחת: השאלות הרפואיות הן הצהרת הבריאות, ואישורי
+        // הבטיחות שנחתמו איתן הם פרק משלהם — קודם הם הודפסו כמזהים חשופים
+        // ("w1 ✓") בתוך השאלון הרפואי.
+        const allAnswers = decl.answers || {};
+        const confirmAnswers = Object.fromEntries(Object.entries(allAnswers)
+          .filter(([id]) => questionKinds[id] === 'confirm'));
+        const medicalAnswers = Object.fromEntries(Object.entries(allAnswers)
+          .filter(([id]) => questionKinds[id] !== 'confirm'));
+        return `<h2>הצהרת בריאות</h2>
+      ${answerRows(medicalAnswers, questionLabels, questionKinds)}
       ${decl.healthNotes
         ? `<div class="field" style="margin-top:10px"><div class="label">פירוט שנמסר</div><div class="value">${escapeHtml(decl.healthNotes)}</div></div>`
-        : ''}` : ''}
+        : ''}
+      ${Object.keys(confirmAnswers).length
+        ? `<h2>אופי הפעילות והוראות הבטיחות</h2>
+      ${answerRows(confirmAnswers, questionLabels, questionKinds)}`
+        : ''}`;
+      })() : ''}
 
       ${includesWaiver && waiverText
         ? `<h2>כתב ויתור / הסרת אחריות</h2><div class="waiver">${escapeHtml(withSignerName(waiverText, parentName))}</div>`

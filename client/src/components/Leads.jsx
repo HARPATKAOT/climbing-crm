@@ -572,7 +572,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [formTemplates, setFormTemplates] = useState([]);
   const [selectedFormSlug, setSelectedFormSlug] = useState('');
   const [showHealthSendModal, setShowHealthSendModal] = useState(false);
-  const [downloadingPdf, setDownloadingPdf] = useState(false);
+  // מזהה המסמך שנבנה כרגע, לא בוליאני: דגל אחד סימן „מכין…” על כל כפתורי
+  // ההורדה בתיקייה יחד, ואי אפשר היה לדעת איזו הורדה בכלל התחילה.
+  const [downloadingPdf, setDownloadingPdf] = useState('');
   const [clientDocuments, setClientDocuments] = useState([]);
   const [docsLoading, setDocsLoading] = useState(false);
   const [deletingDocId, setDeletingDocId] = useState('');
@@ -3820,24 +3822,27 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
 
                 const handleDownloadDoc = async (doc) => {
                   const source = doc.virtualData || healthDecl;
+                  const busyKey = doc.id || 'virtual-health';
                   if (doc.isVirtual || (!doc.id || String(doc.id).startsWith('virtual_'))) {
                     if (!source) {
                       setHealthSendMsg('האישור עדיין נטען — נסו שוב בעוד רגע');
                       return;
                     }
-                    setDownloadingPdf(true);
+                    setDownloadingPdf(busyKey);
                     setHealthSendMsg('');
                     try {
                       await downloadHealthDeclarationPdf(source);
-                      setHealthSendMsg('קובץ האישור החתום הורד למחשב');
+                      setHealthSendMsg('הקובץ ירד למחשב — בדקו בתיקיית ההורדות');
                     } catch (err) {
                       console.error(err);
                       setHealthSendMsg('שגיאה בהורדת האישור');
                     } finally {
-                      setDownloadingPdf(false);
+                      setDownloadingPdf('');
                     }
                     return;
                   }
+                  setDownloadingPdf(busyKey);
+                  setHealthSendMsg('');
                   try {
                     const res = await fetch(`/api/documents/${encodeURIComponent(doc.id)}/download`);
                     if (!res.ok) throw new Error('download failed');
@@ -3850,10 +3855,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     a.click();
                     a.remove();
                     URL.revokeObjectURL(url);
-                    setHealthSendMsg('קובץ האישור החתום הורד למחשב');
+                    setHealthSendMsg('הקובץ ירד למחשב — בדקו בתיקיית ההורדות');
                   } catch (err) {
                     console.error(err);
                     setHealthSendMsg('שגיאה בהורדת המסמך מהתיק');
+                  } finally {
+                    setDownloadingPdf('');
                   }
                 };
 
@@ -3947,7 +3954,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                 };
 
                 const downloadParticipationDoc = async (doc, waiver) => {
-                  setDownloadingPdf(true);
+                  setDownloadingPdf(doc.id || 'virtual-participation');
                   setHealthSendMsg('');
                   try {
                     if (!doc.isVirtual) {
@@ -3980,12 +3987,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         signedDate: waiver?.signed_at || waiver?.signedAt || '',
                       });
                     }
-                    setHealthSendMsg('קובץ אישור ההשתתפות הורד למחשב');
+                    setHealthSendMsg('קובץ אישור ההשתתפות ירד למחשב — בדקו בתיקיית ההורדות');
                   } catch (err) {
                     console.error(err);
                     setHealthSendMsg('שגיאה בהורדת אישור ההשתתפות');
                   } finally {
-                    setDownloadingPdf(false);
+                    setDownloadingPdf('');
                   }
                 };
 
@@ -4056,10 +4063,10 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                             <button
                               type="button"
                               className="btn btn-primary btn-xs"
-                              disabled={downloadingPdf}
+                              disabled={!!downloadingPdf}
                               onClick={() => handleDownloadDoc({ isVirtual: true, virtualData: healthDecl })}
                             >
-                              <Download size={12} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
+                              <Download size={12} /> {downloadingPdf === 'virtual-health' ? 'מכין...' : 'הורדה'}
                             </button>
                           )}
                         </div>
@@ -4073,23 +4080,23 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                             <button
                               type="button"
                               className="btn btn-primary btn-xs"
-                              disabled={downloadingPdf || !healthDecl}
+                              disabled={!!downloadingPdf || !healthDecl}
                               onClick={async () => {
                                 if (!healthDecl) return;
-                                setDownloadingPdf(true);
+                                setDownloadingPdf('virtual-health');
                                 setHealthSendMsg('');
                                 try {
                                   await downloadHealthDeclarationPdf(healthDecl);
-                                  setHealthSendMsg('קובץ האישור החתום הורד למחשב');
+                                  setHealthSendMsg('הקובץ ירד למחשב — בדקו בתיקיית ההורדות');
                                 } catch (err) {
                                   console.error(err);
                                   setHealthSendMsg('שגיאה בהורדת האישור');
                                 } finally {
-                                  setDownloadingPdf(false);
+                                  setDownloadingPdf('');
                                 }
                               }}
                             >
-                              <Download size={12} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
+                              <Download size={12} /> {downloadingPdf === 'virtual-health' ? 'מכין...' : 'הורדה'}
                             </button>
                           )}
                         </div>
@@ -4209,12 +4216,14 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                         fontSize: 12, lineHeight: 1,
                                       }}
                                       title="הורדת הקובץ"
-                                      disabled={busy || downloadingPdf || (!participationRow && doc.isVirtual && !(doc.virtualData || healthDecl))}
+                                      disabled={busy || !!downloadingPdf || (!participationRow && doc.isVirtual && !(doc.virtualData || healthDecl))}
                                       onClick={() => participationRow
                                         ? downloadParticipationDoc(doc, waiver)
                                         : handleDownloadDoc(doc)}
                                     >
-                                      <Download size={13} /> {downloadingPdf ? 'מכין...' : 'הורדה'}
+                                      {/* „מכין…” רק על הכפתור שנלחץ — דגל משותף
+                                          סימן את כל התיקייה כעסוקה יחד. */}
+                                      <Download size={13} /> {downloadingPdf === (doc.id || (participationRow ? 'virtual-participation' : 'virtual-health')) ? 'מכין...' : 'הורדה'}
                                     </button>
                                     {!clearanceRow && (
                                       <button

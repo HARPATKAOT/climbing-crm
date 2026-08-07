@@ -137,10 +137,16 @@ test('paid parent and two children reserve three slots and price units', async (
   assert.ok(result.registrations.every((row) => row.participation_waiver_id));
   assert.ok(db.store.health_declarations.every((row) => row.signed && row.signature_url));
   assert.ok(db.store.health_declarations.every((row) => !Object.hasOwn(row.answers, 'required')));
-  assert.ok(db.store.health_declarations.every((row) => (
-    row.formSnapshot.healthQuestions.map((question) => question.id).join(',')
-      === CANONICAL_HEALTH_QUESTIONS.map((question) => question.id).join(',')
-  )));
+  // The snapshot starts with the canonical medical list and may carry the
+  // safety confirmations after it — everything the answers reference, so the
+  // signed copy can print their wording instead of bare ids.
+  assert.ok(db.store.health_declarations.every((row) => {
+    const ids = row.formSnapshot.healthQuestions.map((question) => question.id);
+    const canonical = CANONICAL_HEALTH_QUESTIONS.map((question) => question.id);
+    return ids.slice(0, canonical.length).join(',') === canonical.join(',')
+      && row.formSnapshot.healthQuestions.slice(canonical.length)
+        .every((question) => question.kind !== 'screen');
+  }));
   assert.ok(db.store.participation_waivers.every((row) => row.form_snapshot.answers.required === true));
   // The signed copy has to say which outing was approved: an activity id alone
   // points at a row staff can rename after the signature.
