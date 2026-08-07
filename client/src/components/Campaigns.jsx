@@ -134,7 +134,8 @@ export default function Campaigns() {
     loadAll();
     loadTemplates();
     callApi('/api/campaigns/meta').then(setMeta).catch(() => {});
-    fetch('/api/pricelist')
+    // Names and prices only — the product photos are 1.7 MB and nothing here shows them.
+    fetch('/api/pricelist?images=0')
       .then((r) => (r.ok ? r.json() : []))
       .then((rows) => setPricelist(Array.isArray(rows) ? rows : []))
       .catch(() => {});

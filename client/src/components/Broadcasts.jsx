@@ -22,10 +22,8 @@ const Campaigns = lazy(() => import('./Campaigns.jsx'));
 const PLAYGROUND_PHONE = '0599111000';
 
 const DEFAULT_LISTS = [
-  { key: 'general', label: 'כללי', description: 'עדכונים שוטפים', color: 'var(--blue)' },
-  { key: 'classes', label: 'חוגים', description: 'שינויי שעות וכדומה', color: 'var(--green)' },
-  { key: 'trips',   label: 'טיולים', description: 'טיולי סנפלינג/חוץ', color: 'var(--amber)' },
-  { key: 'events',  label: 'אירועים', description: 'אירועים ותחרויות מועדון', color: 'var(--purple)' },
+  { key: 'operational', label: 'תפעולי', description: 'שינויי שעות, ביטולים ותזכורות', color: 'var(--green)' },
+  { key: 'marketing', label: 'שיווקי', description: 'טיולים חדשים, מבצעים ועדכונים כלליים', color: 'var(--amber)' },
 ];
 
 const LIST_COLORS = [
