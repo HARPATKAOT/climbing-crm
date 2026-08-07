@@ -286,26 +286,34 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
           />
         )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 12, marginTop: 16 }}>
+        {!readOnly && <div className="activity-designer-divider">מה יופיע בדף</div>}
+        <div className="activity-designer-fields">
           {[
-            ['audience', 'קהל יעד'],
-            ['included', 'מה כלול'],
-            ['what_to_bring', 'מה להביא / ציוד'],
-            ['important_info', 'מידע חשוב'],
-          ].map(([key, label]) => (
+            ['audience', 'קהל יעד', 'למי הפעילות מתאימה — גיל, ניסיון, כושר'],
+            ['included', 'מה כלול', 'ציוד, מדריך, הסעה, כיבוד'],
+            ['what_to_bring', 'מה להביא / ציוד', 'מה שהמשתתף מביא בעצמו'],
+            ['important_info', 'מידע חשוב', 'שעת מפגש, מזג אוויר, ביטול'],
+          ].map(([key, label, hint]) => (
             readOnly ? (
               form[key] ? <div key={key}><strong>{label}</strong><p style={{ whiteSpace: 'pre-wrap' }}>{form[key]}</p></div> : null
             ) : (
-              <label key={key} className="event-field" style={{ margin: 0 }}>
+              <label key={key} className="event-field">
                 <span>{label}</span>
-                <textarea rows={3} value={form[key] || ''} onChange={(event) => patch({ [key]: event.target.value })} />
+                <textarea
+                  rows={3}
+                  value={form[key] || ''}
+                  placeholder={hint}
+                  onChange={(event) => patch({ [key]: event.target.value })}
+                />
               </label>
             )
           ))}
         </div>
 
         {!readOnly && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 12, marginTop: 16 }}>
+          <>
+            <div className="activity-designer-divider">על מה חותמים</div>
+            <div className="activity-designer-fields">
             <label className="event-field" style={{ margin: 0 }}>
               <span>האישור הנדרש מהמשתתפים</span>
               <select
@@ -339,7 +347,8 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
                 ))}
               </select>
             </label>
-          </div>
+            </div>
+          </>
         )}
       </div>
     </section>
