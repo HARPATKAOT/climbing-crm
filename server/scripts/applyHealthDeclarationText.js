@@ -122,6 +122,15 @@ const ACTIVITIES = [
   {
     slug: 'wall',
     title: 'הצהרת בריאות ובטיחות + הסרת אחריות',
+    headline: 'טיפוס בקיר בועז',
+    nature: [
+      'טיפוס ספורטיבי הוא פעילות אתגרית מהנה, אבל היא גם כרוכה בסיכונים.',
+      'הפעילות כוללת עלייה לגובה, עבודה עם ציוד בטיחות והסתמכות על בן זוג מאבטח. הסיכונים העיקריים הם:',
+      '• נפילה מגובה — עלולה לגרום לפציעה חמורה, נכות או מוות',
+      '• עומס חוזר על הידיים והמפרקים — עלול לגרום לפגיעה ברקמות רכות',
+      '• פגיעה ממטפסים אחרים — נפילת ציוד או מטפס מגובה עלולה לגרום לפציעה',
+      'סיכונים אלו קיימים גם בהקפדה מלאה על כללי הבטיחות.',
+    ].join('\n\n'),
     activityPhrase: 'פעילות וטיפוס בקיר — לרבות חוג, אימון, כניסה חד־פעמית ואירוע',
     riskClause: 'ידוע לי כי טיפוס ספורטיבי, על כל צורותיו, הוא פעילות אתגרית הכרוכה מטבעה בסיכון לפגיעה גופנית — לרבות נפילה, החלקה, פגיעה מציוד, מאמץ יתר ופציעה — וכי סיכון זה קיים גם בהקפדה מלאה על הוראות הבטיחות.',
     riskBullet: 'טיפוס הוא פעילות אתגרית. גם כשמקפידים על כל כללי הבטיחות אפשר להיפצע.',
@@ -143,6 +152,16 @@ const ACTIVITIES = [
   {
     slug: 'trip',
     title: 'הצהרת בריאות ובטיחות + הסרת אחריות — יציאה / טיול',
+    headline: 'יציאה לטיול עם קיר בועז',
+    nature: [
+      'יציאה לשטח היא פעילות אתגרית מהנה, אבל היא גם כרוכה בסיכונים.',
+      'הפעילות מתקיימת בשטח פתוח וכוללת הליכה, טיפוס, גלישה על חבל (סנפלינג) ולעיתים כניסה למערה, עם ציוד בטיחות ובהשגחת מדריך. הסיכונים העיקריים הם:',
+      '• נפילה מגובה או התדרדרות בשטח — עלולה לגרום לפציעה חמורה, נכות או מוות',
+      '• התדרדרות אבנים, ופגיעה מציוד או ממשתתפים אחרים',
+      '• תנאי שטח ומזג אוויר — חום, קור, רטיבות והחלקה, ובמערה גם חושך וחללים צרים',
+      '• ריחוק ממענה רפואי מיידי, והנסיעה אל אתר הפעילות וממנו',
+      'סיכונים אלו קיימים גם בהקפדה מלאה על כללי הבטיחות.',
+    ].join('\n\n'),
     activityPhrase: 'יציאה לטיול הליכה / סנפלינג / טיפוס / מערנות',
     // A trip may be one of these activities, or combine some of them. The
     // wording must not claim that every outing necessarily includes all three.
@@ -171,6 +190,10 @@ export function declarationFor(activity) {
     slug: activity.slug,
     activityType: activity.slug,
     title: activity.title,
+    // מה הפעילות, ומה קוראים עליה לפני כללי הבטיחות. שניהם עריכים במסך
+    // ההצהרות; כאן נכתב נוסח הפתיחה שלהם.
+    headline: activity.headline,
+    activityNature: activity.nature,
     waiverText: buildWaiver(activity),
     waiverSummary: buildSummary(activity),
     // The fitness declaration is not a tick box any more: it is clause 3 of the
@@ -257,7 +280,7 @@ function printDiff(current, desired) {
   if (current && current.slug !== desired.slug) {
     console.log(`  ~ slug (${current.slug} → ${desired.slug}) — הכתובת הישנה תמשיך לעבוד`);
   }
-  for (const key of ['title', 'waiverText', 'waiverSummary']) {
+  for (const key of ['title', 'headline', 'activityNature', 'waiverText', 'waiverSummary']) {
     const before = String(current?.[key] || '');
     const after = desired[key];
     console.log(before === after

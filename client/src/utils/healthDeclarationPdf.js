@@ -34,6 +34,14 @@ const SAFETY_RULE_TEXTS = {
   t8: 'אני מאשר/ת שהסברתי לילדי את הכללים הללו',
 };
 
+/** יום בספרות עם נקודות, כדי ש-RTL לא יהפוך את סדר החלקים של תאריך ISO. */
+function formatDay(value) {
+  const iso = String(value || '').trim().slice(0, 10);
+  const match = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return String(value || '').trim();
+  return `${match[3]}.${match[2]}.${match[1]}`;
+}
+
 function escapeHtml(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
@@ -177,6 +185,19 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, questionKinds 
       : 'הצהרת בריאות + הסרת אחריות — אישור חתום'));
   const templateNote = decl.templateSlug ? `תבנית: ${decl.templateSlug}` : '';
   const brandName = decl.brandName || 'הרפתקאות';
+  /**
+   * לאיזו יציאה האישור ניתן. הפרטים נשמרים ברגע החתימה כי שם הפעילות בלוח
+   * השנה ניתן לשינוי אחרי כן, והמסמך החתום חייב לומר על מה נחתם — לא להצביע
+   * על שורה שאפשר לערוך.
+   */
+  const activity = decl.activity || snapshot.activity || null;
+  const activityName = String(activity?.name || '').trim();
+  const activityDates = [activity?.date, activity?.endDate]
+    .map((d) => formatDay(d))
+    .filter(Boolean);
+  const activityWhen = activityDates.length === 2 && activityDates[0] !== activityDates[1]
+    ? `${activityDates[0]} — ${activityDates[1]}`
+    : (activityDates[0] || '');
 
   return `
     <div id="hd-cert-root" dir="rtl" style="
@@ -202,6 +223,13 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, questionKinds 
           background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px;
         }
         #hd-cert-root .label { font-size: 11px; color: #64748b; margin-bottom: 4px; }
+        #hd-cert-root .activity {
+          background: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px;
+          padding: 10px 12px; margin-bottom: 14px;
+        }
+        #hd-cert-root .activity-label { font-size: 11px; color: #9a3412; margin-bottom: 3px; }
+        #hd-cert-root .activity-name { font-size: 15px; font-weight: 800; color: #7c2d12; }
+        #hd-cert-root .activity-when { font-size: 12px; color: #9a3412; margin-top: 2px; }
         #hd-cert-root .value { font-size: 14px; font-weight: 700; color: #0f172a; }
         #hd-cert-root h2 { font-size: 15px; margin: 18px 0 10px; color: #ea580c; }
         #hd-cert-root .qa {
@@ -245,6 +273,12 @@ function buildCertificateHtml(decl, { waiverText, questionLabels, questionKinds 
         </div>
         <div class="badge">✓ נחתם</div>
       </div>
+
+      ${activityName ? `<div class="activity">
+        <div class="activity-label">האישור ניתן עבור</div>
+        <div class="activity-name">${escapeHtml(activityName)}</div>
+        ${activityWhen ? `<div class="activity-when">${escapeHtml(activityWhen)}</div>` : ''}
+      </div>` : ''}
 
       <div class="grid">
         <div class="field"><div class="label">שם החותם / הורה</div><div class="value">${escapeHtml(parentName)}</div></div>
