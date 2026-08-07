@@ -2496,18 +2496,6 @@ export default function PublicOnboardingForm() {
             <div className="required-legend">
               שדות המסומנים ב־<span className="req-star">*</span> הם שדות חובה
             </div>
-            {/* מה שחסר, בשמו. „יש למלא את כל שדות החובה” מול טופס שנראה מלא
-                שולח אדם לחפש מה הוא פספס. */}
-            {identityReady && missingParentFields.length > 0 && (
-              <div style={{
-                background: 'rgba(251,191,36,.1)', border: '1px solid rgba(252,211,77,.45)',
-                borderRadius: 12, padding: 12, marginBottom: 14,
-                fontSize: 13, lineHeight: 1.7, color: '#FCD34D',
-              }}>
-                חסרים בתיק: {missingParentFields.map((field) => MISSING_LABELS[field]).join(', ')} —
-                {' '}השדות מסומנים למטה.
-              </div>
-            )}
             {/* First name and surname are separate on purpose: the surname is
                 what recognises a second parent of a household we already know,
                 and it also reaches the invoice. Guessing it from the last word
@@ -2932,7 +2920,7 @@ export default function PublicOnboardingForm() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => updateChild(index, { skipThisTime: true })}
+                            onClick={() => updateChild(index, { confirmSkip: true })}
                             style={{
                               background: 'transparent', border: '1px solid rgba(255,255,255,0.18)',
                               borderRadius: 10, color: 'rgba(255,255,255,0.65)',
