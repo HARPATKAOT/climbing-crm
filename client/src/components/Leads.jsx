@@ -2114,7 +2114,70 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     }
   };
 
+  /**
+   * זיכוי השכרת ציוד — לפי מדיניות הביטול ולא על מלוא הסכום.
+   *
+   * ההשכרה תומחרה לפי כמה מחצי העונה נותר, ולכן גם ההחזר: ערך התקופה שלא
+   * נוצלה פחות דמי הביטול. השרת מחשב, כאן רק מציגים לאישור — ומאשרים בדיוק
+   * את הסכום שהוצג.
+   */
+  const refundEquipmentPayment = async (payment) => {
+    const key = `${payment.id}:refund`;
+    setPaymentBusyKey(key);
+    setPaymentActionError('');
+    setPaymentActionOk('');
+    try {
+      const previewRes = await fetch(
+        `/api/payments/${encodeURIComponent(payment.id)}/equipment-refund-preview`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' } }
+      );
+      const preview = await previewRes.json().catch(() => ({}));
+      if (!previewRes.ok) throw new Error(preview.error || 'חישוב הזיכוי נכשל');
+
+      const rec = preview.recommendation || {};
+      if (!rec.period_resolved) {
+        throw new Error('לא ניתן לקבוע כמה מתקופת ההשכרה נוצלה — יש לבצע את הזיכוי ידנית');
+      }
+      const amount = Number(rec.amount) || 0;
+      const fee = Number(rec.fixed_fee) || 0;
+      const ok = window.confirm(
+        `זיכוי השכרת ציוד לפי ${preview.policy?.name || 'מדיניות הביטול'}:\n\n`
+        + `שולם: ₪${Number(preview.paid_amount || 0).toLocaleString()}\n`
+        + `נותרו ${rec.remaining_units} מתוך ${rec.total_units} יחידות\n`
+        + (fee ? `דמי ביטול: ₪${fee.toLocaleString()}\n` : '')
+        + `\nלהחזיר ₪${amount.toLocaleString()}?`
+      );
+      if (!ok) return;
+      const reason = window.prompt('סיבת הזיכוי (לא חובה):', '') ?? '';
+
+      const res = await fetch(
+        `/api/payments/${encodeURIComponent(payment.id)}/equipment-refund`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approved_amount: amount, reason: reason.trim() }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'הזיכוי נכשל');
+      setPaymentActionOk(
+        `זוכו ₪${Number(data.amount || 0).toLocaleString()}`
+        + (data.refund_doc_number ? ` · מסמך ${data.refund_doc_number}` : '')
+        + (data.document_error ? ' · הכסף חזר אך חשבונית הזיכוי נכשלה — יש להוציאה ידנית' : '')
+      );
+      setPaymentMenuId(null);
+      await loadStudentPayments();
+      refreshData?.();
+    } catch (err) {
+      setPaymentActionError(err.message || 'הזיכוי נכשל');
+    } finally {
+      setPaymentBusyKey('');
+    }
+  };
+
   const refundPayment = async (payment) => {
+    // השכרת ציוד אינה מבוטלת במלואה אלא מזוכה לפי מה שנותר.
+    if (payment?.equipment_checkout_token) return refundEquipmentPayment(payment);
     const amountText = `₪${Number(payment.amount || 0).toLocaleString()}`;
     const ok = window.confirm(
       `לזכות את התשלום "${payment.description || 'תשלום'}" על ${amountText}?\n` +

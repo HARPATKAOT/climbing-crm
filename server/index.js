@@ -193,6 +193,8 @@ import {
   draftActivityCopy,
   isDraftableField,
 } from './activityCopyDraft.js';
+import { executePartialRefund } from './partialRefund.js';
+import { equipmentRefundRecommendation, isEquipmentPayment } from './equipmentRefund.js';
 import {
   summarizeActivityCancellation,
   registrationsToRelease,
@@ -320,6 +322,8 @@ import {
   EQUIPMENT_TEMPLATE_NAME,
   DEFAULT_EQUIPMENT_SETTINGS,
   normalizeEquipmentSettings,
+  resolveSeasonHalves,
+  halfMonthUnits,
   isKidStudent,
   isEquipmentEligibleStudent,
   equipmentItemTypesForStudent,
@@ -8876,6 +8880,151 @@ app.post('/api/payments/:id/send-invoice', async (req, res) => {
  * host payment — each of those has extra bookkeeping, so we dispatch to the
  * helper that already handles it instead of only cancelling the document.
  */
+/**
+ * זיכוי על השכרת ציוד — לפי מדיניות הביטול שהוצמדה לו.
+ *
+ * ההשכרה מתומחרת מלכתחילה לפי כמה מחצי העונה נותר, ולכן גם הזיכוי כזה:
+ * ערך החודשים שטרם נוצלו פחות דמי הביטול. החלון עצמו לא נשמר על התשלום, ולכן
+ * הוא נגזר מחדש — חצי העונה שבתוכו נעשתה הרכישה.
+ */
+function equipmentRentalPeriod(settings, payment) {
+  const anchor = payment?.paid_at || payment?.created_at || new Date();
+  const half = resolveSeasonHalves(normalizeEquipmentSettings(settings), new Date(anchor)).current;
+  const endInclusive = new Date(half.endExclusive.getTime() - 864e5);
+  return {
+    total_units: halfMonthUnits(half.start, half.endExclusive),
+    half_start: half.start.toISOString().slice(0, 10),
+    half_end: endInclusive.toISOString().slice(0, 10),
+    half_label: half.label,
+  };
+}
+
+async function equipmentRefundPlan(payment) {
+  const settings = await loadEquipmentSettings();
+  const pricing = equipmentRentalPeriod(settings, payment);
+  // מדיניות הציוד היא הראשונה בבסיס „ניצול”; בלעדיה אין לפי מה לחשב.
+  const usagePolicies = (db.get('cancellation_policies') || [])
+    .filter((row) => row.status !== 'archived')
+    .map((row) => currentPolicyVersion(db, row.id))
+    .filter((resolved) => resolved?.snapshot?.basis === 'usage');
+  const chosen = usagePolicies.find((resolved) => /נעל|ציוד|השכר/.test(resolved.policy.name))
+    || usagePolicies[0]
+    || null;
+  if (!chosen) {
+    return { ok: false, error: 'לא הוגדרה מדיניות ביטול בבסיס „ניצול” לציוד' };
+  }
+  const recommendation = equipmentRefundRecommendation({
+    snapshot: chosen.snapshot,
+    payment,
+    pricing,
+  });
+  return {
+    ok: true,
+    policy: { id: chosen.policy.id, name: chosen.policy.name },
+    snapshot: chosen.snapshot,
+    pricing,
+    recommendation,
+  };
+}
+
+app.post('/api/payments/:id/equipment-refund-preview', async (req, res) => {
+  try {
+    await refreshPaymentTables();
+    const payment = db.getOne('payments', req.params.id);
+    if (!payment) return res.status(404).json({ error: 'התשלום לא נמצא' });
+    if (!isEquipmentPayment(payment)) {
+      return res.status(400).json({ error: 'זה אינו תשלום ציוד' });
+    }
+    const plan = await equipmentRefundPlan(payment);
+    if (!plan.ok) return res.status(400).json({ error: plan.error });
+    res.json({
+      policy: plan.policy,
+      pricing: plan.pricing,
+      recommendation: plan.recommendation,
+      paid_amount: Number(payment.amount) || 0,
+    });
+  } catch (err) {
+    console.error('equipment refund preview error:', err.message);
+    res.status(500).json({ error: err.message || 'חישוב הזיכוי נכשל' });
+  }
+});
+
+app.post('/api/payments/:id/equipment-refund', async (req, res) => {
+  try {
+    if (!icount.isConfigured()) {
+      return res.status(503).json({ error: 'מערכת החיוב לא מוגדרת בשרת' });
+    }
+    await refreshPaymentTables();
+    const payment = db.getOne('payments', req.params.id);
+    if (!payment) return res.status(404).json({ error: 'התשלום לא נמצא' });
+    if (!isEquipmentPayment(payment)) {
+      return res.status(400).json({ error: 'זה אינו תשלום ציוד' });
+    }
+    if (payment.status === 'refunded') {
+      return res.status(400).json({ error: 'התשלום כבר זוכה' });
+    }
+
+    const plan = await equipmentRefundPlan(payment);
+    if (!plan.ok) return res.status(400).json({ error: plan.error });
+
+    // אותו אישור סכום שקיים בזיכוי הרשמה: מה שמאושר הוא מה שהוצג, ולא מספר
+    // שנוצר מחדש בין הצגת המסך ללחיצה.
+    const approved = Number(req.body?.approved_amount);
+    if (!Number.isFinite(approved)
+      || Math.abs(approved - Number(plan.recommendation.amount)) >= 0.005) {
+      return res.status(409).json({
+        error: 'יש לאשר את סכום הזיכוי המוצג',
+        code: 'refund_amount_approval_required',
+        recommendation: plan.recommendation,
+        pricing: plan.pricing,
+      });
+    }
+    if (!plan.recommendation.period_resolved) {
+      return res.status(409).json({
+        error: 'לא ניתן לקבוע כמה מתקופת ההשכרה נוצלה — יש לבצע את הזיכוי ידנית',
+        code: 'period_unresolved',
+        recommendation: plan.recommendation,
+      });
+    }
+
+    const parent = payment.parent_id ? db.getOne('parents', payment.parent_id) : null;
+    const reason = String(req.body?.reason || '').trim()
+      || `זיכוי השכרת ציוד · ${plan.policy.name}`;
+
+    const result = await executePartialRefund({
+      icount,
+      payment,
+      amount: plan.recommendation.amount,
+      reason,
+      clientName: parent?.name || payment.client_name || 'לקוח',
+      emailTo: parent?.email || null,
+    });
+    if (!result.ok) return res.status(400).json(result);
+
+    const now = new Date().toISOString();
+    const updated = db.update('payments', payment.id, {
+      status: 'refunded',
+      refunded_at: now,
+      refund_reason: reason,
+      refund_amount: result.amount,
+      refund_doc_number: result.refund_doc_number,
+      refund_doc_url: result.refund_doc_url,
+      refunded_by: req.crmUser?.email || req.crmUser?.name || null,
+      cc_bill_log_id: result.ccBillLogId || payment.cc_bill_log_id || null,
+      updated_at: now,
+    });
+    if (updated) await persistCore('payments', updated);
+
+    console.log(
+      `↩️ [equipment] partial refund payment=${payment.id} ₪${result.amount} doc=${result.refund_doc_number || '-'}`
+    );
+    res.json({ success: true, ...result, payment: updated, recommendation: plan.recommendation });
+  } catch (err) {
+    console.error('equipment refund error:', err.message);
+    res.status(502).json({ error: err.message || 'הזיכוי נכשל' });
+  }
+});
+
 app.post('/api/payments/:id/refund', async (req, res) => {
   try {
     if (!icount.isConfigured()) {

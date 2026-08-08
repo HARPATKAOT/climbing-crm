@@ -422,6 +422,108 @@ export function extractCcClearing(source = {}) {
  * refundCc (refund_cc=1): also reverse the card charge on the linked terminal
  * (Max via iCount). Without it, only the accounting document is cancelled.
  */
+/**
+ * זיכוי חלקי — מה שביטול מסמך שלם לא יודע לעשות.
+ *
+ * שני הצדדים נפרדים ב-iCount ושניהם נדרשים: `cc/refund` מחזיר כסף לכרטיס,
+ * ו-`doc/create` בסוג `refund` מוציא חשבונית זיכוי. אומת ב-8.8.26 שזיכוי
+ * חלקי **אינו** יוצר מסמך מעצמו — הכסף חוזר והספרים נשארים בלי רישום — ולכן
+ * מי שקורא לכאן חייב את שניהם.
+ */
+
+/** מינימום שהסולק אוכף: „סכום החיוב חייב להיות מעל שקל”. */
+export const MIN_PARTIAL_REFUND = 1;
+
+/**
+ * מזהה החיוב בכרטיס עבור מסמך. אינו מופיע ב-doc/info, ולכן מאתרים אותו
+ * ביומן החיובים סביב מועד התשלום.
+ *
+ * @param {string} docnum מספר המסמך
+ * @param {string|Date} around מועד התשלום — היומן נסרק בחלון סביבו
+ */
+export async function findCcCharge({ docnum, around, windowDays = 3 } = {}) {
+  if (!docnum) throw new Error('docnum required');
+  const ref = around ? new Date(around) : new Date();
+  const day = (offset) => {
+    const d = new Date(ref.getTime() + offset * 864e5);
+    return d.toISOString().slice(0, 10);
+  };
+  // `from_date` נדחה עם empty_query — השמות הנכונים הם start_date/end_date.
+  const data = await icountPost('cc/transactions', {
+    start_date: day(-windowDays),
+    end_date: day(windowDays),
+  });
+  const rows = Array.isArray(data?.results_list) ? data.results_list : [];
+  const match = rows.find((row) => String(row.docnumber) === String(docnum));
+  if (!match) return null;
+  return {
+    ccBillLogId: String(match.cc_bill_log_id),
+    charged: Number(match.cctotal) || 0,
+    alreadyRefunded: String(match.refunded || '0') !== '0',
+    confirmationCode: match.confirmation_code || null,
+    cardLast4: match.cc_cardnumber || null,
+  };
+}
+
+/** מחזיר סכום לכרטיס. `sum` חובה — בלעדיו עלול לזכות את החיוב במלואו. */
+export async function refundCcAmount({ ccBillLogId, sum } = {}) {
+  if (!ccBillLogId) throw new Error('ccBillLogId required');
+  const amount = Number(sum);
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('sum required');
+  if (amount < MIN_PARTIAL_REFUND) {
+    const err = new Error('סכום הזיכוי חייב להיות מעל שקל');
+    err.code = 'below_min_refund';
+    throw err;
+  }
+  const data = await icountPost('cc/refund', { cc_bill_log_id: ccBillLogId, sum: amount });
+  return {
+    confirmationCode: data.confirmation_code || null,
+    refundType: data.refund_type || null,
+    refundAmount: Number(data.refund_amount) || amount,
+    remainingAmount: Number(data.remaining_amount) || 0,
+    raw: data,
+  };
+}
+
+/**
+ * חשבונית זיכוי על הסכום שהוחזר. הסכומים כאן הם ברוטו — מה שבאמת חזר לכרטיס —
+ * ולכן `vattype: 0`, אחרת המע״מ היה נוסף פעם שנייה על סכום שכבר כולל אותו.
+ */
+export async function createRefundDoc({
+  clientId,
+  clientName,
+  amount,
+  description,
+  comment,
+  emailTo,
+} = {}) {
+  const gross = Number(amount);
+  if (!Number.isFinite(gross) || gross <= 0) throw new Error('amount required');
+  const fields = {
+    doctype: 'refund',
+    doc_date: todayYyyymmdd(),
+    currency: 'ILS',
+    vattype: 0,
+    ...buildDocLineFields([{ description: description || 'זיכוי', unitprice: gross, quantity: 1 }]),
+  };
+  if (clientId) fields.client_id = clientId;
+  else if (clientName) fields.client_name = clientName;
+  else throw new Error('clientId or clientName required');
+  if (comment) fields.comment = comment;
+  if (emailTo) {
+    fields.email_to = emailTo;
+    fields.send_email = 1;
+  }
+  const result = await icountPost('doc/create', fields);
+  return {
+    docId: result.doc_id != null ? String(result.doc_id) : null,
+    docnum: result.docnum != null ? String(result.docnum) : null,
+    docUrl: result.doc_url || result.docurl || null,
+    amount: gross,
+    raw: result,
+  };
+}
+
 export async function cancelDoc({
   doctype = 'invrec',
   docnum,
@@ -635,6 +737,10 @@ export const icount = {
   getDocInfo,
   extractCcClearing,
   cancelDoc,
+  findCcCharge,
+  refundCcAmount,
+  createRefundDoc,
+  MIN_PARTIAL_REFUND,
   listInventoryItems,
   updateInventoryQty,
   buildPaymentUrl,
