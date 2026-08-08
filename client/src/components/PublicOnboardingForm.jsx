@@ -2195,14 +2195,81 @@ export default function PublicOnboardingForm() {
       };
     });
     setChildren(withSig);
-    // Booking an outing: the signatures are done, and what is left is the
+    // Booking an outing: the signatures are done and filed right now — before
+    // the payment screen ever shows. Someone who signed and never paid still
+    // exists in the CRM with their signed forms; what is left here is the
     // summary, the cancellation terms and the payment that registers everyone.
     if (eventMode) {
-      setSignedSnapshot(withSig);
+      const saved = await submitEventDocuments(withSig);
+      if (!saved) return;
+      setChildren(saved);
+      setSignedSnapshot(saved);
       setHealthSubStep(SUB_PAYMENT);
       return;
     }
     await submitAll(withSig);
+  };
+
+  /**
+   * שלב א' של הרשמה לאירוע: הטפסים החתומים נשמרים בשרת ברגע שהחתימה ניתנה.
+   * ההרשמה והתשלום (שלב ב', `submitEventRegistration`) רק מקשרים אליהם את
+   * ההזמנה — אף אחד לא חותם פעמיים, ומי שעצר לפני התשלום לא איבד כלום.
+   */
+  const submitEventDocuments = async (childrenSnapshot) => {
+    const signs = (c) => c.name.trim() && joinsThisRound(c) && !defersDocuments(c);
+    const signing = childrenSnapshot.filter(signs);
+    if (!signing.length) return childrenSnapshot;
+    setIsSubmitting(true);
+    setError('');
+    try {
+      const submitted = signing.map((c) => ({ ...participantPayload(c), waiverAccepted: true }));
+      const res = await fetch(`/api/public/activities/${encodeURIComponent(eventSlug)}/save-documents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parent: parentPayload(),
+          participants: submitted,
+          phoneVerification: otp.token ? { token: otp.token } : null,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error || 'שמירת הטפסים נכשלה — נסו שוב');
+        // The verification lapsed while the form was being filled in.
+        if (res.status === 403) {
+          setOtp((o) => ({ ...o, token: '', verifiedPhone: '', code: '', stage: 'idle' }));
+          setStep(1);
+        }
+        return null;
+      }
+      setUploadingPdfs(true);
+      await uploadSignedParticipationPdfs({
+        signedDocuments: data.signedDocuments || [],
+        submittedParticipants: submitted,
+        parent: { ...parent, name: parentFullName() },
+        template: template || {},
+        brandName,
+        phoneVerificationToken: otp.token,
+      });
+      // Each signer carries home the id of the card that was saved — the
+      // booking after payment finds them by it and links these documents
+      // instead of asking for a second signature.
+      const filed = data.signedDocuments || [];
+      let index = 0;
+      return childrenSnapshot.map((c) => {
+        if (!signs(c)) return c;
+        const entry = filed[index];
+        index += 1;
+        return { ...c, id: entry?.student?.id || c.id, docsSaved: true };
+      });
+    } catch (err) {
+      console.error(err);
+      setError('שגיאת רשת — נסו שוב');
+      return null;
+    } finally {
+      setIsSubmitting(false);
+      setUploadingPdfs(false);
+    }
   };
 
   /**
@@ -2282,16 +2349,27 @@ export default function PublicOnboardingForm() {
     try {
       const booked = (childrenSnapshot || children)
         .filter((c) => c.name.trim() && joinsThisRound(c))
-        .map((c) => ({
-          ...participantPayload(c),
-          waiverAccepted: !defersDocuments(c),
-          // Every participant in this submission signed a fresh declaration
-          // just now — except a spouse whose signature is still to come.
-          reuse_health: false,
-          reuse_health_document: false,
-          reuse_waiver: false,
-          defer_documents: defersDocuments(c),
-        }));
+        .map((c) => {
+          const base = {
+            ...participantPayload(c),
+            waiverAccepted: !defersDocuments(c),
+            defer_documents: defersDocuments(c),
+          };
+          // The documents were filed the moment the signature was given
+          // (`submitEventDocuments`). Booking links those records instead of
+          // writing a second copy of each form.
+          if (c.docsSaved && !defersDocuments(c)) {
+            return {
+              ...base,
+              signature: '',
+              medicalClearance: null,
+              reuse_health: true,
+              reuse_health_document: true,
+              reuse_waiver: true,
+            };
+          }
+          return { ...base, reuse_health: false, reuse_health_document: false, reuse_waiver: false };
+        });
       if (!booked.length) {
         setError('יש לבחור לפחות משתתף אחד לפעילות');
         return;
@@ -3806,6 +3884,11 @@ export default function PublicOnboardingForm() {
                 </div>
 
                 {error && <ErrorBox message={error} />}
+                {uploadingPdfs && (
+                  <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginTop: 10 }}>
+                    שומר עותק PDF בתיק האישי...
+                  </p>
+                )}
                 <button
                   type="button"
                   className="event-primary"
@@ -3814,10 +3897,10 @@ export default function PublicOnboardingForm() {
                   onClick={advanceHealthOrSubmit}
                 >
                   {isSubmitting
-                    ? 'שולח...'
+                    ? 'שומר...'
                     : childHealthIndex < kids.length - 1
                       ? `שמור והמשך ל-${kids[childHealthIndex + 1]?.name || 'הבא'}`
-                      : (eventMode ? 'המשך לסיכום ההרשמה' : 'שלח')}
+                      : (eventMode ? 'שמירת הטפסים ומעבר לסיכום' : 'שלח')}
                 </button>
               </>
             )}
@@ -3849,7 +3932,7 @@ export default function PublicOnboardingForm() {
                       מי שמשלים חתימה בקישור נפרד מופיע בשורה משלו. */}
                   {eventParticipants.some((participant) => !defersDocuments(participant)) && (
                     <div>
-                      <span>טופסי השתתפות נחתמו</span>
+                      <span>טופסי השתתפות נחתמו ונשמרו</span>
                       <strong>
                         {eventParticipants
                           .filter((participant) => !defersDocuments(participant))

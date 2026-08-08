@@ -108,6 +108,7 @@ import {
   makeRegistrationSlug,
   makePrivatePaymentToken,
   normalizeHostPaymentStatus,
+  leadSourceFromActivityType,
   activeRegistrations,
   heldRegistrationsBy,
   remainingCapacity,
@@ -7069,6 +7070,88 @@ app.get('/api/public/activities/:slug/household', publicFormRateLimit, async (re
   } catch (err) {
     console.error('public activity household error:', err.message);
     res.status(500).json({ error: err.message || 'טעינת פרטי הלקוח נכשלה' });
+  }
+});
+
+/**
+ * The signatures, filed the moment they are given — before the payment screen.
+ * A family that signed and never paid still exists in the CRM with its signed
+ * documents; the booking itself (order, held places, payment) happens only in
+ * /register below, which reuses the documents this call saved instead of
+ * asking anyone to sign twice.
+ */
+app.post('/api/public/activities/:slug/save-documents', publicFormRateLimit, async (req, res) => {
+  try {
+    const verified = requireVerifiedPublicPhone(req, res, req.body?.parent?.phone);
+    if (!verified) return;
+    const identity = requirePublicIdentityPair(req, res, verified, req.body?.parent || {});
+    if (!identity) return;
+    const { activity, storeAvailable } = await findActivityBySlugFresh(req.params.slug);
+    if (!storeAvailable) {
+      const unavailable = publicStoreUnavailableError();
+      return res.status(unavailable.status).json(unavailable.body);
+    }
+    if (!activity) return res.status(404).json({ error: 'הפעילות לא נמצאה' });
+    if (!registrationIsOpen(activity)) {
+      return res.status(400).json({ error: 'ההרשמה לפעילות זו סגורה' });
+    }
+    const clearance = await uploadClearanceFiles((req.body || {}).participants || []);
+    if (clearance.error) return res.status(clearance.status).json({ error: clearance.error });
+    for (const upload of clearance.uploads) {
+      const participant = req.body?.participants?.[upload.participantIndex];
+      if (participant) participant.medicalClearanceDocumentId = upload.clientDocumentId;
+    }
+    const template = declarationTemplateForActivity(db, activity, resolveDeclarationTemplate);
+    const crm = await saveCrmParticipants({
+      db,
+      persist: persistCore,
+      parent: req.body?.parent || {},
+      participants: (req.body?.participants || []).filter(
+        (participant) => participant?.defer_documents !== true && participant?.deferDocuments !== true
+      ),
+      template,
+      activityId: activity.id,
+      // There is no order yet — it is created when they actually book. The
+      // registration links these documents then, through the reuse path.
+      orderId: null,
+      participationScope: scopeForActivity(activity),
+      phoneVerification: verifiedPhoneEvidence(verified),
+      evidenceContext: { requestContext: requestEvidence(req) },
+      source: leadSourceFromActivityType(activity.type, activity.event_kind),
+      onStudentCreated: (student, parent) => automationsService.triggerEvent('new_lead', {
+        ...student,
+        phone: parent.phone,
+        parentName: parent.name,
+      }),
+      onStudentStatusChanged: (student) => automationsService.triggerEvent('status_changed', {
+        ...student,
+        new_status: 'health_signed',
+      }),
+    });
+    await fileClearanceDocuments(clearance.uploads, {
+      parentId: crm.parent?.id || null,
+      findTarget: (upload) => {
+        const match = (crm.participants || []).find((p) => p.name === upload.name);
+        return {
+          studentId: match?.student?.id || null,
+          declarationId: match?.declaration?.id || null,
+        };
+      },
+    });
+    touchGoogleContacts();
+    // The token is deliberately not consumed: the same verification still has
+    // to authorize the booking call that follows this one.
+    res.status(201).json({
+      success: true,
+      signedDocuments: (crm.participants || []).map((participant) => ({
+        student: participant.student,
+        health: participant.healthCreated ? participant.healthDeclaration : null,
+        waiver: participant.waiverCreated ? participant.waiver : null,
+      })),
+    });
+  } catch (err) {
+    console.error('public activity save-documents error:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 

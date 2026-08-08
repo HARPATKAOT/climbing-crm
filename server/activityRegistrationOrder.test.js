@@ -621,3 +621,69 @@ test('an order that ordered nothing is cleared instead of answered as duplicate'
   assert.equal(result.registrations.length, 1);
   assert.ok(!db.store.activity_registration_orders.some((row) => row.id === 'debris-order'));
 });
+
+// The two-phase flow: signatures are filed the moment they are given
+// (save-documents, no order yet), and paying links those records instead of
+// writing a second copy of each form.
+test('documents filed before payment are linked by the booking, not re-signed', async () => {
+  const { saveCrmParticipants, resolveDeclarationTemplate } = await import('./crmWaiverService.js');
+  const { scopeForActivity } = await import('./participationDocuments.js');
+  const db = createDb();
+  const activity = {
+    id: 'activity-two-phase',
+    name: 'טיול',
+    date: '2026-09-04',
+    type: 'trip',
+    price: 100,
+    max_participants: 10,
+    registration_mode: 'paid_per_participant',
+  };
+  db.store.activities.push(activity);
+
+  // Phase 1 — the signing screen saved the documents, with no order to point at.
+  const crm = await saveCrmParticipants({
+    db,
+    persist,
+    parent,
+    participants: [signed('אמא ישראלי', 'adult'), signed('ילד א')],
+    template: resolveDeclarationTemplate(db),
+    activityId: activity.id,
+    orderId: null,
+    participationScope: scopeForActivity(activity),
+  });
+  assert.equal(db.store.participation_waivers.length, 2);
+  assert.equal(db.store.health_declarations.length, 2);
+  assert.ok(db.store.participation_waivers.every((row) => row.order_id === null));
+
+  // Phase 2 — the payment click books, reusing what phase 1 filed.
+  const result = await registerActivityGroup({
+    db,
+    persist,
+    activity,
+    payload: {
+      idempotency_key: 'two-phase',
+      parent,
+      participants: crm.participants.map((p) => ({
+        id: p.student.id,
+        name: p.name,
+        type: p.student.isAdult ? 'adult' : 'child',
+        birthDate: p.student.birthDate,
+        reuse_health: true,
+        reuse_health_document: true,
+        reuse_waiver: true,
+      })),
+    },
+    createPaymentUrl: async () => 'pay',
+  });
+  assert.equal(db.store.participation_waivers.length, 2, 'no second copy of any waiver');
+  assert.equal(db.store.health_declarations.length, 2, 'no second declaration');
+  assert.equal(result.registrations.length, 2);
+  const waiverIds = db.store.participation_waivers.map((row) => row.id).sort();
+  assert.deepEqual(
+    result.registrations.map((row) => row.participation_waiver_id).sort(),
+    waiverIds,
+    'each registration points at the waiver signed before payment'
+  );
+  assert.ok(result.registrations.every((row) => row.health_declaration_id));
+  assert.ok(result.registrations.every((row) => row.document_status === 'eligible'));
+});
