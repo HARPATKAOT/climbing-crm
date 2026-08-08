@@ -3,7 +3,7 @@ import {
   Plus, ChevronLeft, ChevronRight, X, Save, Trash2, Link2, Unlink,
   RefreshCw, Loader2, CalendarDays, CalendarRange, Layers, List,
   CheckCircle, AlertCircle, Clock3, Check, Pencil, Undo2, Users,
-  Eye, EyeOff, Copy, SlidersHorizontal, Lock, Globe, Ban, RotateCcw, ClipboardCheck,
+  Eye, EyeOff, Copy, SlidersHorizontal, Lock, Globe, Ban, RotateCcw,
   StickyNote, ClipboardList, UserPlus,
 } from 'lucide-react';
 import EntityLink from '../utils/entityLinks.jsx';
@@ -25,6 +25,7 @@ import {
 } from '../utils/eventKinds.js';
 import { activityIcon, activityTypeIcon } from '../utils/activityIcons.js';
 import { roleIcon, roleColor } from '../utils/roleIcons.js';
+import { templateKind, GENERIC_KIND } from '../utils/declarationKinds.js';
 import {
   CALENDAR_DISPLAY_FIELDS, loadDisplayFields, saveDisplayFields,
   setSelectedDisplayFields, setActivityStaffNames, activityDisplayLines,
@@ -1260,12 +1261,18 @@ function NewActivityTypeChip({ disabled = false, onCreated }) {
 }
 
 /**
- * ההצהרה נושאת כאן את הסימן שהיא נושאת אצל הלקוח: הכתום של דף ההרשמה
- * (`--form-accent` ב-publicFormKit) והאייקון של מסמך לאישור. כך הבחירה בטופס
- * והמסמך שהנרשם רואה נקראים כאותו דבר.
+ * ההצהרה נושאת כאן בדיוק את הסימן שהיא נושאת בתיק המשתתף — המטפס בענבר
+ * לאישור הקיר, עקבות הנעליים בטורקיז לטיול. אותו מסמך, אותו סימן, בכל מסך
+ * שבו הוא מופיע. הסימנים מוגדרים במקום אחד ב-declarationKinds.js.
  */
-const DECLARATION_ACCENT = '#FB923C';
-const declarationOptionIcon = () => ({ Icon: ClipboardCheck, color: DECLARATION_ACCENT });
+function declarationOptionIconFor(templates) {
+  return (value) => {
+    if (!value) return { Icon: GENERIC_KIND.Icon, color: 'var(--text-3)' };
+    const template = (templates || []).find((t) => t.slug === value);
+    const kind = templateKind(template || { slug: value });
+    return { Icon: kind.Icon, color: kind.color };
+  };
+}
 
 /** סוגי קלט שאין להם „ריק” במובן הזה — סימון שלהם רק יצבע רעש. */
 const UNMARKABLE_INPUTS = new Set([
@@ -1575,7 +1582,7 @@ function RegularActivityModal({
                         : null,
                     }))}
                     disabled={readOnly}
-                    optionIcon={declarationOptionIcon}
+                    optionIcon={declarationOptionIconFor(declarationTemplates)}
                   >
                     <option value="">לפי סוג הפעילות</option>
                     {declarationTemplates.map((t) => (
