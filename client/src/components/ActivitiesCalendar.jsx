@@ -4,7 +4,7 @@ import {
   RefreshCw, Loader2, CalendarDays, CalendarRange, Layers, List,
   CheckCircle, AlertCircle, Clock3, Check, Pencil, Undo2, Users,
   Eye, EyeOff, Copy, SlidersHorizontal, Lock, Globe, Ban, RotateCcw,
-  StickyNote, ClipboardList, UserPlus,
+  StickyNote, ClipboardList, UserPlus, CalendarClock,
 } from 'lucide-react';
 import EntityLink from '../utils/entityLinks.jsx';
 import ActivityPageDesigner from './ActivityPageDesigner.jsx';
@@ -1154,6 +1154,24 @@ function WorkAssignmentsBlock({
                     <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--green)', marginInlineEnd: 4 }}>
                       ₪{amount}
                     </div>
+                    {/* השעות נלקחו מהאירוע כשהשורה נוצרה, אבל האירוע יכול לזוז
+                        אחר כך והשורה נשארה על השעות הישנות. הכפתור מושך אותן
+                        שוב — ומופיע רק כשהן באמת נבדלות. */}
+                    {eventTimes?.start && eventTimes?.end
+                      && (row.start_time !== eventTimes.start || row.end_time !== eventTimes.end) && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-icon btn-xs"
+                        title={`התאמה לשעות האירוע (${eventTimes.start}–${eventTimes.end})`}
+                        onClick={() => patchLocal(row.id, {
+                          start_time: eventTimes.start,
+                          end_time: eventTimes.end,
+                          hours: roundHoursQuarter(hoursFromTimes(eventTimes.start, eventTimes.end)),
+                        })}
+                      >
+                        <CalendarClock size={12} />
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="btn btn-ghost btn-icon btn-xs"
