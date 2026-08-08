@@ -151,16 +151,24 @@ function rateForRow(agreement, row) {
  * (הדרכת סנפלינג, למשל). החישוב תמיד ידע את ההבדל — יום סנפלינג משולם כיום
  * ולא לפי שעות — אבל מה שנכתב ליד הסכום לא תאם אותו.
  */
-function rateModeForRow(agreement, row) {
-  const rate = rateForRole(agreement, row?.role || workTypeRole(row?.work_type));
-  return rate?.mode === 'daily' ? 'daily' : 'hourly';
+function rateModeForRow(agreement, row, payableRoles = []) {
+  const role = row?.role || workTypeRole(row?.work_type);
+  const rate = rateForRole(agreement, role);
+  if (rate) return rate.mode === 'daily' ? 'daily' : 'hourly';
+  // לעובד עוד אין תעריף לתפקיד הזה. אופן התשלום עדיין ידוע — הוא תכונה של
+  // התפקיד, לא של ההסכם — ובלי הנפילה הזאת יום סנפלינג היה נקרא „שעתי” רק
+  // מפני שטרם הוזן לו סכום.
+  const fallback = (payableRoles || []).find((r) => r.role === role);
+  return fallback?.defaultMode === 'daily' ? 'daily' : 'hourly';
 }
 
 /** „₪450 ליום” או „₪70 לשעה”, לפי אותו תעריף. */
-function rateLabelForRow(agreement, row) {
+function rateLabelForRow(agreement, row, payableRoles = []) {
   const amount = rateForRow(agreement, row);
   if (!amount) return '';
-  return rateModeForRow(agreement, row) === 'daily' ? `₪${amount} ליום` : `₪${amount} לשעה`;
+  return rateModeForRow(agreement, row, payableRoles) === 'daily'
+    ? `₪${amount} ליום`
+    : `₪${amount} לשעה`;
 }
 
 function payAmountForAssignment(row, agreement) {
@@ -1007,7 +1015,7 @@ function WorkAssignmentsBlock({
                     {row.start_time}–{row.end_time} · {row.hours} שעות ·{' '}
                     {row.pay_mode === 'flat'
                       ? 'סכום מיוחד ליום הזה'
-                      : rateLabelForRow(agreement, row)} · הערכה ₪{amount}
+                      : rateLabelForRow(agreement, row, payableRoles)} · הערכה ₪{amount}
                     {' '}{amountBasisLabel(empPaymentMethod(row.employee_id))}
                   </div>
                 </div>
@@ -1061,22 +1069,6 @@ function WorkAssignmentsBlock({
                       {row.approved ? ' · מאושר' : ''}
                     </div>
                   </div>
-                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
-                    אופן תשלום
-                    <AppSelect
-                      className="input"
-                      value={payMode}
-                      onChange={(e) => patchLocal(row.id, { pay_mode: e.target.value })}
-                      style={{ fontSize: 12, padding: '4px 6px' }}
-                    >
-                      <option value="hourly">
-                        {rateModeForRow(agreement, row) === 'daily'
-                          ? 'לפי תעריף יומי'
-                          : 'לפי תעריף שעתי'}
-                      </option>
-                      <option value="flat">סכום מיוחד ליום הזה</option>
-                    </AppSelect>
-                  </label>
                   {payMode === 'hourly' ? (
                     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
                       תעריף
@@ -1111,6 +1103,22 @@ function WorkAssignmentsBlock({
                       />
                     </label>
                   )}
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                    אופן תשלום
+                    <AppSelect
+                      className="input"
+                      value={payMode}
+                      onChange={(e) => patchLocal(row.id, { pay_mode: e.target.value })}
+                      style={{ fontSize: 12, padding: '4px 6px' }}
+                    >
+                      <option value="hourly">
+                        {rateModeForRow(agreement, row, payableRoles) === 'daily'
+                          ? 'לפי תעריף יומי'
+                          : 'לפי תעריף שעתי'}
+                      </option>
+                      <option value="flat">סכום מיוחד ליום הזה</option>
+                    </AppSelect>
+                  </label>
                   <div style={{ display: 'flex', gap: 4, paddingBottom: 2, alignItems: 'center' }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--green)', marginInlineEnd: 4 }}>
                       ₪{amount}
