@@ -114,6 +114,18 @@ export const BOT_CAPABILITIES = [
       hint: 'מופרדים בפסיק. ריק = התהליך לא יופעל על אף הודעה.',
     },
   },
+  {
+    key: 'centre_marks_registered',
+    label: 'אישור מהמתנ״ס מסמן «רשום» אוטומטית',
+    hint: 'כבוי: הבוט רק מודיע לצוות שצריך לסמן, והסטטוס לא זז. דלוק: הוא '
+      + 'מסמן בעצמו לפי דיווח המתנ״ס',
+    source: 'משנה את הסטטוס בכרטיס המתאמן',
+    // Deliberately off. Changing a trainee's registration on somebody else's
+    // word is the one thing worth watching before letting it happen by itself.
+    defaultOff: true,
+    tools: [],
+    requires: 'centre_report',
+  },
 ];
 
 /** Free-text settings a capability owns, so the panel may write them. */
@@ -158,7 +170,15 @@ export function capabilitySettingsPatch({ capabilities, values } = {}) {
 export function isCapabilityEnabled(settings, key) {
   const capability = BOT_CAPABILITIES.find((c) => c.key === key);
   if (!capability) return false;
-  if (settings?.[capabilitySettingKey(key)] === false) return false;
+  const saved = settings?.[capabilitySettingKey(key)];
+  // A capability that changes a customer's record on somebody else's word
+  // starts off, and is turned on once it has been watched working.
+  if (capability.defaultOff) {
+    if (saved !== true) return false;
+    if (capability.requires) return isCapabilityEnabled(settings, capability.requires);
+    return true;
+  }
+  if (saved === false) return false;
   // "Register an interest" cannot outlive "talk about events": leaving it on
   // would offer to slot someone into a trip the bot may not describe.
   if (capability.requires) return isCapabilityEnabled(settings, capability.requires);

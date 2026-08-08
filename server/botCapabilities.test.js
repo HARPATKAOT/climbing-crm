@@ -35,9 +35,24 @@ test('every capability says which screen its answer comes from', () => {
 
 test('a capability is on until it is explicitly turned off', () => {
   // Adding a switch must not quietly change what the bot already does.
+  const optIn = new Set(BOT_CAPABILITIES.filter((c) => c.defaultOff).map((c) => c.key));
   for (const key of CAPABILITY_KEYS) {
+    if (optIn.has(key)) continue;
     assert.equal(isCapabilityEnabled({}, key), true, key);
   }
+  // Except one that was born off on purpose: it changes a trainee's
+  // registration on the community centre's word, and it stays off until
+  // somebody has watched it work.
+  assert.equal(isCapabilityEnabled({}, 'centre_marks_registered'), false);
+  assert.equal(isCapabilityEnabled({ botCap_centre_marks_registered: true }, 'centre_marks_registered'), true);
+  // And it cannot outlive the exchange it belongs to.
+  assert.equal(
+    isCapabilityEnabled(
+      { botCap_centre_marks_registered: true, botCap_centre_report: false },
+      'centre_marks_registered'
+    ),
+    false
+  );
   assert.equal(isCapabilityEnabled({ botCap_events: false }, 'events'), false);
   assert.equal(isCapabilityEnabled({}, 'no_such_capability'), false);
 });

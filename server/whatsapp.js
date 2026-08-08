@@ -193,8 +193,26 @@ async function handleCentreMessage({ text, phone, isSimulator = false }) {
 
   // Registration is the one thing the centre's word settles: they are the ones
   // who register the child. Only move forward, never drag a status back.
+  //
+  // Until the switch is turned on, the confirmation is recorded and the team is
+  // told what to mark — the status itself waits for a person. Watching it work
+  // before letting it change a customer's record is the whole point.
+  const settings = await loadBrandedBotSettings();
+  const mayMark = isCapabilityEnabled(settings, 'centre_marks_registered');
   let statusChanged = false;
-  if (report.ok && student && !CUSTOMER_STATUSES.has(String(student.status || ''))) {
+  let needsStaffMark = false;
+  if (report.ok && student && !CUSTOMER_STATUSES.has(String(student.status || '')) && !mayMark) {
+    needsStaffMark = true;
+    await notifyStaffOfHandoff({
+      settings,
+      parent,
+      phone: parent?.phone || '',
+      customerText: `המתנ״ס אישר ש${student.name} נרשם — צריך לסמן אותו «רשום» בכרטיס`,
+      reason: 'handoff',
+      isSimulator,
+    });
+  }
+  if (report.ok && student && mayMark && !CUSTOMER_STATUSES.has(String(student.status || ''))) {
     const updated = db.update('students', student.id, { status: 'registered' });
     if (updated) {
       await persistCore('students', updated);
@@ -217,7 +235,7 @@ async function handleCentreMessage({ text, phone, isSimulator = false }) {
     summary: report.ok
       ? `דווח למתנ״ס: ${student?.name} מתאמן מ-${formatReportDate(report.date)}`
       : `בקשת המתנ״ס לא נענתה אוטומטית (${report.reason}): "${typed}"`,
-    details: { ok: report.ok, reason: report.reason || '', date: report.date || '', typed, statusChanged },
+    details: { ok: report.ok, reason: report.reason || '', date: report.date || '', typed, statusChanged, needsStaffMark },
     studentId: student?.id || null,
     studentName: student?.name || '',
     phone,
