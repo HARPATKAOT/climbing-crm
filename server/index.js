@@ -15211,7 +15211,11 @@ app.get('/api/students/:id/activity-registrations', async (req, res) => {
           start_time: activity.start_time || '',
           location: activity.location || '',
           status: registration.status || '',
-          status_label: statusLabels[registration.status] || registration.status || '',
+          // A refunded registration is stored as cancelled+refunded; the money
+          // side is the part worth surfacing.
+          status_label: registration.payment_status === 'refunded'
+            ? statusLabels.refunded
+            : statusLabels[registration.status] || registration.status || '',
           payment_status: registration.payment_status || '',
           created_at: registration.created_at || registration.updated_at || '',
           days,

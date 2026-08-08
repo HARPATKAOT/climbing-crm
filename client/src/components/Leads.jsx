@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, UserRound, Star, Phone, PhoneOff, AtSign, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, FolderOpen, Download, ReceiptText, History, RotateCw, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert, HeartPulse } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, UserRound, Star, Phone, PhoneOff, AtSign, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, FolderOpen, Download, ReceiptText, History, RotateCw, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert, HeartPulse, Undo2, Loader2 } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { StatusBadge, Modal } from './UI.jsx';
 import {
@@ -984,6 +984,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [activityHistoryLoading, setActivityHistoryLoading] = useState(false);
   const [activityDayBusy, setActivityDayBusy] = useState('');
   const [activityDayError, setActivityDayError] = useState('');
+  const [activityActionBusy, setActivityActionBusy] = useState('');
   const [customerPasses, setCustomerPasses] = useState([]);
   const [guardians, setGuardians] = useState([]);
   const [settingPrimary, setSettingPrimary] = useState(false);
@@ -1464,6 +1465,107 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       setActivityDayError(err.message || 'שמירת הנוכחות נכשלה');
     } finally {
       setActivityDayBusy('');
+    }
+  };
+
+  // Removal and refund hit the same endpoints the activity screen uses, so a
+  // participant cancelled here is indistinguishable from one cancelled there.
+  const applyActivityRegistrationPatch = (rowId, patch) => {
+    // A cancelled registration stops counting for attendance, so its day rows go too.
+    setActivityHistory((prev) => prev.map((item) => (
+      item.id === rowId ? { ...item, ...patch, days: [] } : item
+    )));
+  };
+
+  const removeActivityRegistration = async (row) => {
+    const paidNote = row.payment_status === 'paid'
+      ? '\n\nשימו לב: יש תשלום ששולם. ההסרה לא מזכה אותו — לזיכוי יש להשתמש בכפתור הזיכוי.'
+      : '';
+    const ok = window.confirm(
+      `להסיר את ${student.name || 'המשתתף'} מ"${row.activity_name}"?${paidNote}`
+    );
+    if (!ok) return;
+    setActivityActionBusy(row.id);
+    setActivityDayError('');
+    try {
+      const res = await fetch(
+        `/api/activities/${encodeURIComponent(row.activity_id)}/registrations/${encodeURIComponent(row.id)}`,
+        { method: 'DELETE' }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setActivityDayError(data.error || 'הסרת המשתתף נכשלה');
+        return;
+      }
+      applyActivityRegistrationPatch(row.id, { status: 'cancelled', status_label: 'בוטל' });
+    } catch {
+      setActivityDayError('שגיאת רשת');
+    } finally {
+      setActivityActionBusy('');
+    }
+  };
+
+  const refundActivityRegistration = async (row) => {
+    const name = student.name || 'המשתתף';
+    setActivityActionBusy(`refund:${row.id}`);
+    setActivityDayError('');
+    try {
+      const previewRes = await fetch(
+        `/api/activities/${encodeURIComponent(row.activity_id)}/registrations/${encodeURIComponent(row.id)}/refund-preview`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }
+      );
+      const preview = await previewRes.json().catch(() => ({}));
+      if (!previewRes.ok) {
+        setActivityDayError(preview.error || 'חישוב ההחזר נכשל');
+        return;
+      }
+      const recommended = Number(preview.recommendation?.amount) || 0;
+      if (preview.manual_partial_refund_required) {
+        const openIcount = window.confirm(
+          `ההחזר המומלץ עבור ${name}: ₪${recommended.toLocaleString()}\n\n` +
+          'זהו זיכוי חלקי. כדי למנוע זיכוי מלא בטעות, יש לבצע אותו במסמך המקורי ב-iCount. לפתוח אותו עכשיו?'
+        );
+        if (openIcount && preview.icount_doc_app_url) {
+          window.open(preview.icount_doc_app_url, '_blank', 'noopener,noreferrer');
+        }
+        setActivityDayError(`החזר מומלץ עבור ${name}: ₪${recommended.toLocaleString()} · נדרש זיכוי חלקי ב-iCount`);
+        return;
+      }
+      // A group order shares one payment — refunding it cancels the siblings too,
+      // and from the child's card that is easy to miss. Spell it out first.
+      const sharedNote = preview.shared_payment
+        ? `\n\nהתשלום משותף להרשמות של: ${(preview.participant_names || []).join(', ')} — כולן יזוכו ויבוטלו יחד.`
+        : '';
+      const ok = window.confirm(
+        `החזר מומלץ עבור ${name}: ₪${recommended.toLocaleString()}${sharedNote}\n\n` +
+        'לאחר האישור יבוצע זיכוי מלא וההרשמה תבוטל. פעולה זו לא ניתנת לביטול מהמערכת.'
+      );
+      if (!ok) return;
+      const res = await fetch(
+        `/api/activities/${encodeURIComponent(row.activity_id)}/registrations/${encodeURIComponent(row.id)}/refund`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reason: `זיכוי משתתף · ${name}`,
+            approved_amount: recommended,
+          }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setActivityDayError(data.error || 'הזיכוי נכשל');
+        return;
+      }
+      applyActivityRegistrationPatch(row.id, {
+        status: 'cancelled',
+        status_label: 'זוכה',
+        payment_status: 'refunded',
+      });
+    } catch {
+      setActivityDayError('שגיאת רשת');
+    } finally {
+      setActivityActionBusy('');
     }
   };
 
@@ -5144,7 +5246,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                           borderBottom: '1px solid var(--border)',
                         }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
                           <div>
                             <div style={{ fontWeight: 700, color: 'var(--text)' }}>{row.activity_name}</div>
                             <div style={{ color: 'var(--text-3)', marginTop: 2 }}>
@@ -5155,7 +5257,39 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                               {row.location ? ` · ${row.location}` : ''}
                             </div>
                           </div>
-                          <span className="badge badge-gray">{row.status_label || row.status || '—'}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+                            <span className="badge badge-gray">{row.status_label || row.status || '—'}</span>
+                            {!['cancelled', 'canceled', 'refunded'].includes(String(row.status || '')) && (
+                              <>
+                                {canManageBilling && row.payment_status === 'paid' && (
+                                  <button
+                                    type="button"
+                                    className="icon-btn"
+                                    onClick={() => refundActivityRegistration(row)}
+                                    disabled={!!activityActionBusy}
+                                    aria-label="זיכוי והסרה מהפעילות"
+                                    title="זיכוי תשלום והסרה"
+                                  >
+                                    {activityActionBusy === `refund:${row.id}`
+                                      ? <Loader2 size={14} className="spin" />
+                                      : <Undo2 size={14} />}
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  className="icon-btn is-danger"
+                                  onClick={() => removeActivityRegistration(row)}
+                                  disabled={!!activityActionBusy}
+                                  aria-label="הסרה מהפעילות"
+                                  title="הסרה מהפעילות"
+                                >
+                                  {activityActionBusy === row.id
+                                    ? <Loader2 size={14} className="spin" />
+                                    : <Trash2 size={14} />}
+                                </button>
+                              </>
+                            )}
+                          </div>
                         </div>
 
                         {/* Every day of the activity — a camp gets one line per day. */}
