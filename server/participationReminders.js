@@ -14,6 +14,26 @@ function calendarDayNumber(key) {
   return Date.UTC(year, month - 1, day) / 86400000;
 }
 
+function israelHour(value = new Date()) {
+  return Number(new Intl.DateTimeFormat('en-GB', {
+    timeZone: TIME_ZONE, hour: '2-digit', hour12: false,
+  }).format(value));
+}
+
+/**
+ * A reminder is due on a day, not at a minute. The scan runs every hour around
+ * the clock, so a document reminder that came due overnight went out at 00:37 —
+ * a parent's phone lighting up in the middle of the night about a summer camp.
+ * Skipping is safe: the same scan finds the same family again in the morning,
+ * and the sent-row guard still stops it going twice.
+ */
+export const REMINDER_HOURS = { from: 9, until: 21 };
+
+export function withinReminderHours(now = new Date()) {
+  const hour = israelHour(now);
+  return hour >= REMINDER_HOURS.from && hour < REMINDER_HOURS.until;
+}
+
 export function daysUntilActivity(activity, now = new Date()) {
   const activityKey = String(activity?.date || '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(activityKey)) return null;
@@ -54,6 +74,7 @@ export async function runHealthExpiryReminders({
   const students = db.get('students') || [];
   const sentRows = db.get('participation_reminders') || [];
   const summary = { candidates: 0, sent: 0, skipped: 0, failed: 0 };
+  if (!withinReminderHours(now)) return { ...summary, quiet_hours: true };
 
   for (const student of students) {
     if (student?.status && ['inactive', 'archived', 'left'].includes(String(student.status))) continue;
@@ -99,6 +120,7 @@ export async function runParticipationDocumentReminders({ db, persist, send, now
   const activities = db.get('activities') || [];
   const sentRows = db.get('participation_reminders') || [];
   const summary = { candidates: 0, sent: 0, skipped: 0, failed: 0 };
+  if (!withinReminderHours(now)) return { ...summary, quiet_hours: true };
 
   for (const registration of registrations) {
     if (!['pending_profile', 'awaiting_documents', 'blocked_health'].includes(registration.document_status)) continue;
