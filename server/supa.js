@@ -151,6 +151,7 @@ export const OPERATIONAL_TABLES = [
   'pass_punches',
   'student_guardians',
   'pos_sales',
+  'pos_checkout_links',
   'equipment_checkouts',
   'equipment_payment_allocations',
   'activity_interest',

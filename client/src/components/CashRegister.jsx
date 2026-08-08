@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
-import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X, Printer, ShoppingCart, Package, Calculator, History, BarChart3, Wallet } from 'lucide-react';
+import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X, Printer, ShoppingCart, Package, Calculator, History, BarChart3, Wallet, Link2 } from 'lucide-react';
 import EntityLink from '../utils/entityLinks.jsx';
 import PosSale from './PosSale.jsx';
 import Pricelist from './Pricelist.jsx';
 import AppSelect from './AppSelect.jsx';
 import CashShiftPanel from './CashShiftPanel.jsx';
 import CashManagerPanel from './CashManagerPanel.jsx';
+import PosCheckoutLinks from './PosCheckoutLinks.jsx';
 
 function docAmount(doc) {
   const n = Number(doc?.totalwithvat ?? doc?.total ?? doc?.sum ?? 0);
@@ -383,6 +384,7 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
   const tabs = [
     { k: 'sale', label: 'מכירה', icon: ShoppingCart },
     ...(isOwner ? [{ k: 'products', label: 'מוצרים', icon: Package }] : []),
+    { k: 'links', label: 'קישורים ללקוח', icon: Link2 },
     { k: 'close', label: 'פתיחה / סגירה', icon: Calculator },
     ...(isOwner ? [{ k: 'manager', label: 'מסוף מנהל', icon: Wallet }] : []),
     { k: 'history', label: 'היסטוריה', icon: History },
@@ -572,6 +574,8 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
       )}
 
       {activeTab === 'products' && isOwner && <Pricelist />}
+
+      {activeTab === 'links' && <PosCheckoutLinks />}
 
       {activeTab === 'close' && (
         <CashShiftPanel employees={employees} isOwner={isOwner} />

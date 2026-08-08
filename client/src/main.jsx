@@ -17,6 +17,7 @@ const PublicActivityRegistration = lazy(() => import('./components/PublicActivit
 const PublicHostPayment          = lazy(() => import('./components/PublicHostPayment.jsx'));
 const PublicEquipmentPayment     = lazy(() => import('./components/PublicEquipmentPayment.jsx'));
 const PublicShop                 = lazy(() => import('./components/PublicShopPurchase.jsx'));
+const PublicPosCheckout          = lazy(() => import('./components/PublicPosCheckout.jsx'));
 const PublicSite                 = lazy(() => import('./public-site/PublicSite.jsx'));
 
 /**
@@ -77,6 +78,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/equipment/:token" element={<PublicEquipmentPayment />} />
             <Route path="/shop" element={<PublicShop />} />
             <Route path="/shop/:slug" element={<PublicShop />} />
+            {/* A cart the counter could not charge yet: sign what is missing,
+                then pay. The token carries the cart and who it is for. */}
+            <Route path="/checkout/:token" element={<PublicPosCheckout />} />
             <Route
               path="*"
               element={showsCrmShell() ? <AuthGate><App /></AuthGate> : <PublicSite />}

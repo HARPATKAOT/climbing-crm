@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Search, LogIn, LogOut, Clock, CheckCircle2, ShieldAlert, ShieldCheck, Flame, RefreshCw, QrCode, Circle, Wallet } from 'lucide-react';
+import { Search, LogIn, LogOut, Clock, CheckCircle2, ShieldAlert, ShieldCheck, RefreshCw, QrCode, Circle, Wallet, AlertTriangle } from 'lucide-react';
 import { CheckIcon } from './safetyCheckIcons.jsx';
-import { isHealthDeclarationValid } from '../utils/healthValidity.js';
 import AppSelect from './AppSelect.jsx';
 import CashCountModal from './CashCountModal.jsx';
 
@@ -467,30 +466,37 @@ function pickBestPunchCard(passes) {
   })[0];
 }
 
-// 'valid' | 'expired' | 'missing' — expired declarations stay on file but require renewal
-function healthStatusFor(climber, declarations) {
-  const signedDecls = (declarations || []).filter(
-    (d) => d.studentName === climber.name && d.signed
-  );
-  const anySigned = signedDecls.length > 0
-    || climber.status === 'registered'
-    || !!climber.healthSignedAt;
-  if (!anySigned) return 'missing';
-  const dates = [
-    ...signedDecls.map((d) => d.signedDate || d.date),
-    climber.healthSignedAt,
-  ].filter(Boolean);
-  if (dates.length === 0) return 'valid';
-  return dates.some((dt) => isHealthDeclarationValid(dt)) ? 'valid' : 'expired';
+/**
+ * The badge on a check-in row.
+ *
+ * `documents_state` is written by the server when the entry is registered,
+ * under the same rule that decides whether the pass may be punched. Older rows
+ * carry only the boolean, so they fall back to it rather than losing their mark.
+ */
+function checkInDocumentsBadge(checkIn) {
+  const state = checkIn?.documents_state
+    || (checkIn?.medical_approved ? 'valid' : 'missing');
+  const label = checkIn?.documents_label
+    || (checkIn?.medical_approved ? 'תקין' : 'חסרה הצהרה');
+  if (state === 'valid') {
+    return { className: 'badge badge-green', Icon: ShieldCheck, label };
+  }
+  if (state === 'expired') {
+    return { className: 'badge badge-amber', Icon: ShieldAlert, label };
+  }
+  return { className: 'badge badge-red', Icon: ShieldAlert, label };
 }
 
 export default function CheckInConsole({ students, groups, operationalOnly = false }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClimber, setSelectedClimber] = useState(null);
   const [selectedPasses, setSelectedPasses] = useState([]);
+  // { state, ok, label } from the server — the punch gate's own verdict.
+  const [selectedDocuments, setSelectedDocuments] = useState(null);
   const [checkIns, setCheckIns] = useState([]);
-  const [declarations, setDeclarations] = useState([]);
   const [successMsg, setSuccessMsg] = useState(null);
+  // { name, reason } — the entry was registered but the pass was not punched.
+  const [refusalMsg, setRefusalMsg] = useState(null);
   const [scanning, setScanning] = useState(false);
   const [dueSafety, setDueSafety] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -513,11 +519,7 @@ export default function CheckInConsole({ students, groups, operationalOnly = fal
   const refreshCheckins = async () => {
     try {
       const data = await fetch('/api/check-ins').then(r => r.ok ? r.json() : []);
-      const decls = operationalOnly
-        ? []
-        : await fetch('/api/health-declarations').then(r => r.ok ? r.json() : []);
       setCheckIns(data);
-      setDeclarations(decls);
     } catch (err) {
       console.error(err);
     }
@@ -567,14 +569,22 @@ export default function CheckInConsole({ students, groups, operationalOnly = fal
   const loadPasses = async (climberId) => {
     if (!climberId) {
       setSelectedPasses([]);
+      setSelectedDocuments(null);
       return;
     }
+    setSelectedDocuments(null);
     try {
-      const passes = await fetch(`/api/pos/passes?studentId=${encodeURIComponent(climberId)}&active=1`)
-        .then((r) => (r.ok ? r.json() : []));
+      const [passes, documents] = await Promise.all([
+        fetch(`/api/pos/passes?studentId=${encodeURIComponent(climberId)}&active=1`)
+          .then((r) => (r.ok ? r.json() : [])),
+        fetch(`/api/students/${encodeURIComponent(climberId)}/wall-documents`)
+          .then((r) => (r.ok ? r.json() : null)),
+      ]);
       setSelectedPasses(Array.isArray(passes) ? passes : []);
+      setSelectedDocuments(documents);
     } catch {
       setSelectedPasses([]);
+      setSelectedDocuments(null);
     }
   };
 
@@ -598,14 +608,13 @@ export default function CheckInConsole({ students, groups, operationalOnly = fal
 
     const matchedGroup = groups.find(g => g.id === climber.groupId);
 
-    const hasDecl = healthStatusFor(climber, declarations) === 'valid';
-
+    // No documents verdict is sent: the server decides it, so the row cannot
+    // disagree with the punch that follows it.
     const newCheckIn = {
       climber_id: climber.id,
       climber_name: climber.name,
       group_name: matchedGroup ? matchedGroup.name : 'טיפוס חופשי',
       timestamp: new Date().toISOString(),
-      medical_approved: hasDecl
     };
 
     try {
@@ -617,6 +626,11 @@ export default function CheckInConsole({ students, groups, operationalOnly = fal
 
       if (response.ok) {
         let punchNote = '';
+        // A refused punch used to ride along inside the green "כניסה אושרה"
+        // banner, after a ⚠, while the screen said the person's name out loud.
+        // Someone who must not climb got a welcome. A refusal now takes the
+        // banner over: red, silent, name and reason at full size.
+        let refusal = null;
         try {
           const passes = await fetch(`/api/pos/passes?studentId=${encodeURIComponent(climber.id)}&active=1`)
             .then((r) => (r.ok ? r.json() : []));
@@ -633,10 +647,11 @@ export default function CheckInConsole({ students, groups, operationalOnly = fal
             const punchData = await punchRes.json().catch(() => ({}));
             if (punchRes.ok) {
               punchNote = ` · נשארו ${punchData.pass?.visits_remaining} כניסות`;
+              // Punched and paid for — the briefing and the safety test happen
+              // with an instructor after this, so it is a note, not a refusal.
+              if (punchData.safetyNote) punchNote += ` · ⚠ ${punchData.safetyNote}`;
             } else if (punchData.error) {
-              // הרישום נשמר אבל הכרטיסייה לא נוקבה (למשל בלי הצהרה או מבחן
-              // אבטחה בתוקף) — זה חייב להיראות בדלפק, אחרת ייראה שנוקבה.
-              punchNote = ` · ⚠ ${punchData.error}`;
+              refusal = punchData.error;
             }
           } else if (activeMembership) {
             punchNote = ' · מנוי בתוקף';
@@ -645,10 +660,20 @@ export default function CheckInConsole({ students, groups, operationalOnly = fal
           console.warn('pass punch on check-in failed', e);
         }
 
-        setSuccessMsg(`✓ כניסה אושרה: ${climber.name}!${punchNote}`);
         setSelectedClimber(null);
         setSelectedPasses([]);
         refreshCheckins();
+
+        if (refusal) {
+          setRefusalMsg({ name: climber.name, reason: refusal });
+          setSuccessMsg(null);
+          // Deliberately no spoken welcome, and no auto-dismiss: this one is
+          // closed by hand, so it cannot scroll past while the counter is busy.
+          return;
+        }
+
+        setRefusalMsg(null);
+        setSuccessMsg(`✓ כניסה אושרה: ${climber.name}!${punchNote}`);
 
         try {
           if ('speechSynthesis' in window) {
@@ -675,6 +700,26 @@ export default function CheckInConsole({ students, groups, operationalOnly = fal
       {successMsg && (
         <div className="alert alert-success" style={{ marginBottom: 20, fontSize: 18, display: 'flex', alignItems: 'center', gap: 10 }}>
           <CheckCircle2 size={24} /> {successMsg}
+        </div>
+      )}
+
+      {refusalMsg && (
+        <div
+          className="alert alert-error"
+          style={{ marginBottom: 20, display: 'flex', alignItems: 'flex-start', gap: 14 }}
+          role="alert"
+        >
+          <AlertTriangle size={34} style={{ flexShrink: 0, marginTop: 2 }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 26, fontWeight: 800, lineHeight: 1.2 }}>{refusalMsg.name}</div>
+            <div style={{ fontSize: 19, fontWeight: 600, marginTop: 6 }}>{refusalMsg.reason}</div>
+            <div style={{ fontSize: 13, marginTop: 8, opacity: 0.85 }}>
+              הכניסה נרשמה, אבל הכרטיסייה לא נוקבה.
+            </div>
+          </div>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setRefusalMsg(null)}>
+            סגירה
+          </button>
         </div>
       )}
 
@@ -807,14 +852,18 @@ export default function CheckInConsole({ students, groups, operationalOnly = fal
 
               <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginBottom: 24 }}>
                 {(() => {
-                  const status = healthStatusFor(selectedClimber, declarations);
-                  if (status === 'valid') {
-                    return <span className="badge badge-green" style={{ fontSize: 14, padding: '6px 12px' }}><ShieldCheck size={14} /> הצהרת בריאות בתוקף</span>;
+                  // Asked of the server on selection, so what the counter reads
+                  // here is what the punch will decide a moment later.
+                  if (!selectedDocuments) {
+                    return <span className="badge badge-gray" style={{ fontSize: 14, padding: '6px 12px' }}>בודק מסמכים...</span>;
                   }
-                  if (status === 'expired') {
-                    return <span className="badge badge-amber" style={{ fontSize: 14, padding: '6px 12px' }}><ShieldAlert size={14} /> הצהרה פגת תוקף — נדרש חידוש</span>;
+                  if (selectedDocuments.state === 'valid') {
+                    return <span className="badge badge-green" style={{ fontSize: 14, padding: '6px 12px' }}><ShieldCheck size={14} /> מסמכים בתוקף</span>;
                   }
-                  return <span className="badge badge-red" style={{ fontSize: 14, padding: '6px 12px' }}><ShieldAlert size={14} /> חסרה הצהרה!</span>;
+                  if (selectedDocuments.state === 'expired') {
+                    return <span className="badge badge-amber" style={{ fontSize: 14, padding: '6px 12px' }}><ShieldAlert size={14} /> {selectedDocuments.label} — נדרש חידוש</span>;
+                  }
+                  return <span className="badge badge-red" style={{ fontSize: 14, padding: '6px 12px' }}><ShieldAlert size={14} /> {selectedDocuments.label}!</span>;
                 })()}
               </div>
 
@@ -845,7 +894,7 @@ export default function CheckInConsole({ students, groups, operationalOnly = fal
                 <th>שעה</th>
                 <th>שם</th>
                 <th>קבוצה</th>
-                <th>סטטוס רפואי</th>
+                <th>מסמכים</th>
               </tr>
             </thead>
             <tbody>
@@ -858,10 +907,14 @@ export default function CheckInConsole({ students, groups, operationalOnly = fal
                   <td style={{ fontWeight: 600 }}>{c.climber_name}</td>
                   <td>{c.group_name}</td>
                   <td>
-                    {c.medical_approved
-                      ? <span className="badge badge-green"><ShieldCheck size={12} /> תקין</span>
-                      : <span className="badge badge-amber"><Flame size={12} /> ללא הצהרה</span>
-                    }
+                    {(() => {
+                      const badge = checkInDocumentsBadge(c);
+                      return (
+                        <span className={badge.className}>
+                          <badge.Icon size={12} /> {badge.label}
+                        </span>
+                      );
+                    })()}
                   </td>
                 </tr>
               ))}

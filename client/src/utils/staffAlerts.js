@@ -125,6 +125,13 @@ export const STAFF_ALERT_KINDS = [
     hint: 'סיכום יומי של מי שממתין יותר מכמה ימים',
   },
   {
+    key: 'pos_link_paid',
+    category: 'office',
+    scope: 'all',
+    label: 'שולם קישור מהקופה',
+    hint: 'לקוח שנשלח לו קישור להשלמת מסמכים ותשלום — סיים ושילם',
+  },
+  {
     key: 'placement',
     category: 'management',
     scope: 'all',

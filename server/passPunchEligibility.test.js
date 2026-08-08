@@ -4,6 +4,8 @@ import {
   declarationsForStudent,
   healthDeclarationState,
   passPunchBlockReason,
+  passPunchSafetyNote,
+  wallDocumentsStatus,
 } from './passPunchEligibility.js';
 
 const NOW = '2027-01-15';
@@ -32,24 +34,31 @@ test('בלי הצהרת בריאות — חסום', () => {
   assert.match(reason, /לא נחתמה הצהרת בריאות/);
 });
 
-test('בלי מבחן אבטחה — חסום', () => {
-  const reason = passPunchBlockReason({ student, declarations: [validDecl], waivers: [validWaiver], tests: [] }, NOW);
-  assert.match(reason, /אין מבחן אבטחה/);
+// המתאמן נכנס, מנקב, ורק אז יוצא עם המדריך לתדריך ולמבחן — חסימה כאן הייתה
+// מונעת ניקוב בדיוק ברגע שבו עוד לא ייתכן שיהיה לו מבחן.
+test('בלי מבחן אבטחה — מותר לנקב, עם הערה לדלפק', () => {
+  const args = { student, declarations: [validDecl], waivers: [validWaiver], tests: [] };
+  assert.equal(passPunchBlockReason(args, NOW), null);
+  assert.match(passPunchSafetyNote(args, NOW), /אין עדיין מבחן אבטחה/);
 });
 
-test('מבחן אבטחה שפג — חסום עם תאריך התפוגה', () => {
+test('מבחן אבטחה שפג — מותר לנקב, וההערה נושאת את תאריך התפוגה', () => {
   // מבחן ביוני 2026 פג באיפוס של 31.8.2026.
-  const reason = passPunchBlockReason(
-    { student, declarations: [validDecl], waivers: [validWaiver], tests: [safetyTest('2026-06-01')] },
-    NOW
-  );
-  assert.match(reason, /מבחן האבטחה פג תוקף \(31\.08\.2026\)/);
+  const args = { student, declarations: [validDecl], waivers: [validWaiver], tests: [safetyTest('2026-06-01')] };
+  assert.equal(passPunchBlockReason(args, NOW), null);
+  assert.match(passPunchSafetyNote(args, NOW), /פג תוקף \(31\.08\.2026\)/);
 });
 
-test('שתי הסיבות מופיעות יחד', () => {
-  const reason = passPunchBlockReason({ student, declarations: [], tests: [] }, NOW);
+test('מבחן אבטחה בתוקף — אין הערה', () => {
+  const args = { student, declarations: [validDecl], waivers: [validWaiver], tests: [safetyTest('2026-12-01')] };
+  assert.equal(passPunchSafetyNote(args, NOW), null);
+});
+
+test('שתי סיבות המסמכים מופיעות יחד, והמבחן אינו אחת מהן', () => {
+  const reason = passPunchBlockReason({ student, declarations: [], waivers: [], tests: [] }, NOW);
   assert.match(reason, /לא נחתמה הצהרת בריאות/);
-  assert.match(reason, /אין מבחן אבטחה/);
+  assert.match(reason, /אין אישור פעילות בקיר/);
+  assert.doesNotMatch(reason, /מבחן אבטחה/);
 });
 
 test('הצהרה שפגה מדווחת כפגה ולא כחסרה', () => {
@@ -107,18 +116,55 @@ test('הצהרה של מתאמן אחר באותה משפחה אינה נספר�
 });
 
 test('מבחן אבטחה של מתאמן אחר אינו נספר', () => {
-  const reason = passPunchBlockReason(
+  const note = passPunchSafetyNote(
     {
       student,
-      declarations: [validDecl],
-      waivers: [validWaiver],
       tests: [{ studentId: 's2', test_type: 'security', date: '2026-12-01', passed: true }],
     },
     NOW
   );
-  assert.match(reason, /אין מבחן אבטחה/);
+  assert.match(note, /אין עדיין מבחן אבטחה/);
 });
 
 test('כרטיסייה בלי מתאמן משויך — חסומה', () => {
   assert.match(passPunchBlockReason({ student: null }, NOW), /לא משויכת למתאמן/);
+});
+
+// התווית ביומן הכניסות והגייט של הניקוב חייבים לענות אותה תשובה — אחרת
+// המסך מראה «תקין» ירוק בדיוק למי שהניקוב שלו נדחה.
+test('התווית מסכימה עם הגייט בכל מצב', () => {
+  const cases = [
+    [{ declarations: [validDecl], waivers: [validWaiver] }, 'valid', true],
+    [{ declarations: [], waivers: [] }, 'missing', false],
+    // חתומה ומאושרת, אבל פגה — נספרת ולכן מדווחת כפגה ולא כחסרה.
+    [{ declarations: [{ ...validDecl, signedDate: '2024-05-01' }], waivers: [validWaiver] }, 'expired', false],
+    [{ declarations: [validDecl], waivers: [] }, 'missing', false],
+  ];
+  for (const [args, state, ok] of cases) {
+    const badge = wallDocumentsStatus({ student, ...args }, NOW);
+    assert.equal(badge.state, state);
+    assert.equal(badge.ok, ok);
+    assert.equal(passPunchBlockReason({ student, ...args }, NOW) === null, ok);
+  }
+});
+
+test('חסימה רפואית מסומנת בתווית ולא מוסווית כהצהרה חסרה', () => {
+  const badge = wallDocumentsStatus(
+    {
+      student,
+      declarations: [validDecl],
+      waivers: [validWaiver],
+      healthHolds: [{ student_id: 's1', created_at: '2026-12-01', status: 'open' }],
+    },
+    NOW
+  );
+  assert.equal(badge.state, 'blocked');
+  assert.equal(badge.label, 'חסימה רפואית');
+});
+
+test('סטטוס «רשום» אינו נחשב חתימה, וגם לא הצהרה של מתאמן אחר', () => {
+  const registered = { ...student, status: 'registered' };
+  assert.equal(wallDocumentsStatus({ student: registered, declarations: [], waivers: [] }, NOW).ok, false);
+  const sibling = { studentId: 's2', signedDate: '2026-09-01', status: 'approved', signature_url: 'x.png' };
+  assert.equal(wallDocumentsStatus({ student, declarations: [sibling], waivers: [validWaiver] }, NOW).ok, false);
 });

@@ -1,9 +1,15 @@
 /**
  * מי מותר לנקב לו כרטיסייה.
  *
- * הניקוב נעשה ידנית בדלפק — אין שער שנפתח בעקבותיו. הוא הרגע שבו מישהו
- * מהצוות מאשר למתאמן לטפס, ולכן הוא חסום למי שאין לו הצהרת בריאות והסרת
- * אחריות בתוקף, או שאין לו מבחן אבטחה בתוקף. שתי הבדיקות נדרשות יחד.
+ * הניקוב נעשה ידנית בדלפק — אין שער שנפתח בעקבותיו. הוא הרגע שבו הכניסה
+ * נגבית, ולכן הוא חסום למי שאין לו הצהרת בריאות והסרת אחריות בתוקף: על אלה
+ * חותמים לפני שנכנסים, ואי אפשר לגבות כניסה ממי שלא חתם.
+ *
+ * מבחן האבטחה **אינו** חוסם ניקוב, אף שהוא נדרש לטיפוס. סדר היום בקיר הוא
+ * שהמתאמן נכנס, מנקב, ורק אז יוצא עם המדריך לתדריך ולמבחן — חסימה כאן הייתה
+ * מונעת את הניקוב בדיוק ברגע שבו עוד לא ייתכן שיהיה לו מבחן. הוא מוחזר
+ * כהערה (`passPunchSafetyNote`) שהדלפק מציג, כדי שאפשר יהיה לראות מי עוד לא
+ * עשה אותו בלי לעצור את התור.
  *
  * הצהרת הבריאות והסרת האחריות הן טופס אחד עם חתימה אחת, ולכן נבדק כאן
  * תאריך חתימה אחד ולא שניים.
@@ -92,7 +98,6 @@ export function passPunchBlockReason(
     declarations = [],
     waivers = [],
     healthHolds = [],
-    tests = [],
   } = {},
   refDate = new Date()
 ) {
@@ -111,7 +116,6 @@ export function passPunchBlockReason(
     scope: 'wall',
     now: refDate,
   });
-  const safety = safetyTestStatus(testsForStudent(student, tests), refDate);
 
   const missing = [];
   if (eligibility.health.state === 'blocked') missing.push('קיימת חסימה רפואית עד למילוי הצהרה חדשה');
@@ -123,12 +127,63 @@ export function passPunchBlockReason(
   else if (eligibility.waiver.state === 'expired') {
     missing.push(`אישור הפעילות בקיר פג (נחתם ב-${formatDay(eligibility.waiver.signed_at)})`);
   }
-  if (safety.state === 'missing') missing.push('אין מבחן אבטחה');
-  else if (safety.state === 'expired') {
-    missing.push(`מבחן האבטחה פג תוקף (${formatDay(safety.expires_at)})`);
-  }
   if (missing.length === 0) return null;
 
   const name = String(student.name || '').trim() || 'המתאמן';
   return `אי אפשר לנקב ל${name}: ${missing.join(' · ')}. יש להשלים לפני הטיפוס.`;
+}
+
+/**
+ * אותה תשובה בדיוק, בגרסה קצרה לתווית ברשימה.
+ *
+ * מסך הכניסה חישב את הסטטוס הרפואי בעצמו לפי כלל רופף יותר — התאמה לפי שם
+ * ולא לפי מזהה, וסטטוס "רשום" שנחשב כחתימה — ולכן הציג «תקין» ירוק בדיוק
+ * למי שהניקוב שלו נדחה. תווית וגייט חייבים לענות על אותה שאלה.
+ *
+ * @returns {{state:'valid'|'expired'|'missing'|'blocked', ok:boolean, label:string}}
+ */
+export function wallDocumentsStatus(
+  { student, declarations = [], waivers = [], healthHolds = [] } = {},
+  refDate = new Date()
+) {
+  if (!student) return { state: 'missing', ok: false, label: 'אין מתאמן' };
+  const documentDb = {
+    get(table) {
+      if (table === 'health_declarations') return declarations;
+      if (table === 'participation_waivers') return waivers;
+      if (table === 'health_holds') return healthHolds;
+      return [];
+    },
+  };
+  const { health, waiver } = participationEligibility(documentDb, {
+    studentId: student.id,
+    scope: 'wall',
+    now: refDate,
+  });
+  if (health.state === 'blocked') return { state: 'blocked', ok: false, label: 'חסימה רפואית' };
+  if (health.state === 'missing') return { state: 'missing', ok: false, label: 'אין הצהרת בריאות' };
+  if (health.state === 'expired') return { state: 'expired', ok: false, label: 'הצהרת בריאות פגה' };
+  if (waiver.state === 'missing') return { state: 'missing', ok: false, label: 'אין אישור קיר' };
+  if (waiver.state === 'expired') return { state: 'expired', ok: false, label: 'אישור הקיר פג' };
+  return { state: 'valid', ok: true, label: 'תקין' };
+}
+
+/**
+ * מה שהדלפק צריך לדעת על המתאמן הזה בלי שזה יעצור את הניקוב.
+ *
+ * מבחן אבטחה חסר אינו סיבה לא לגבות את הכניסה — הוא סיבה לא לתת לו לטפס עד
+ * שיעבור אותו עם מדריך. ההבחנה הזאת היא כל ההבדל בין הודעה שהצוות פועל לפיה
+ * לבין הודעה שהוא לומד לעקוף.
+ *
+ * @returns {string|null}
+ */
+export function passPunchSafetyNote({ student, tests = [] } = {}, refDate = new Date()) {
+  if (!student) return null;
+  const safety = safetyTestStatus(testsForStudent(student, tests), refDate);
+  const name = String(student.name || '').trim() || 'המתאמן';
+  if (safety.state === 'missing') return `ל${name} אין עדיין מבחן אבטחה — לטיפוס רק אחרי תדריך ומבחן עם מדריך`;
+  if (safety.state === 'expired') {
+    return `מבחן האבטחה של ${name} פג תוקף (${formatDay(safety.expires_at)}) — נדרש מבחן מחדש לפני טיפוס`;
+  }
+  return null;
 }

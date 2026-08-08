@@ -96,6 +96,10 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
   const [cashClosedHint, setCashClosedHint] = useState(false);
   const [showOpenCash, setShowOpenCash] = useState(false);
   const [cancellationAccepted, setCancellationAccepted] = useState(false);
+  // Who the last attempt refused to sell to, and the link sent instead.
+  const [documentsBlock, setDocumentsBlock] = useState(null);
+  const [documentsLink, setDocumentsLink] = useState(null);
+  const [sendingDocsLink, setSendingDocsLink] = useState(false);
 
   useEffect(() => {
     if (!cashSessionOpen && paymentMethod === 'cash') {
@@ -640,6 +644,8 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
     setError('');
     setResult(null);
     setResendMsg('');
+    setDocumentsBlock(null);
+    setDocumentsLink(null);
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -647,7 +653,12 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
         body: JSON.stringify({ ...payloadBase(), ...extra }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'הפעולה נכשלה');
+      if (!res.ok) {
+        throw Object.assign(new Error(data.error || 'הפעולה נכשלה'), {
+          code: data.code,
+          blocked: data.blocked,
+        });
+      }
       setResult(data);
 
       const payUrl = data.shareUrl || data.payUrl || data.sale?.payment_url || '';
@@ -701,8 +712,43 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
       refresh();
     } catch (err) {
       setError(err.message || 'שגיאה');
+      // The cart is intact and the customer is standing here — offer to send
+      // them the forms instead of leaving the staff member with a dead end.
+      if (err.code === 'wall_documents_required') {
+        setDocumentsBlock(err.blocked?.length ? err.blocked : []);
+      }
     } finally {
       setBusy(false);
+    }
+  };
+
+  /**
+   * Hand the whole cart to the customer as one link: sign what is missing, pay
+   * at the end. No sale is opened here — the customer's signature is what opens
+   * it, and only the payment closes it.
+   */
+  const sendDocumentsLink = async () => {
+    setSendingDocsLink(true);
+    setError('');
+    try {
+      const res = await fetch('/api/pos/documents-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...payloadBase(),
+          sendWhatsapp: true,
+          couponCode: appliedCoupon?.code || undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'יצירת הקישור נכשלה');
+      setDocumentsLink(data);
+      setDocumentsBlock(null);
+      setCart([]);
+    } catch (err) {
+      setError(err.message || 'יצירת הקישור נכשלה');
+    } finally {
+      setSendingDocsLink(false);
     }
   };
 
@@ -721,6 +767,10 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
       tenderedAmount: tendered,
     });
   };
+
+  // A medical hold is a decision, not missing paperwork: no form lifts it, so
+  // the link is not offered for it.
+  const documentsHold = !!documentsBlock?.some((gap) => gap.blocked);
 
   const changePreview = useMemo(() => {
     if (paymentMethod !== 'cash') return null;
@@ -1630,6 +1680,99 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
 
           {error && (
             <div className="alert alert-error" style={{ marginTop: 12 }}>{error}</div>
+          )}
+          {documentsBlock && (
+            <div
+              className="alert alert-warn"
+              style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}
+            >
+              <div style={{ fontWeight: 800 }}>חסרים מסמכים לטיפוס בקיר</div>
+              {documentsBlock.length > 0 && (
+                <ul style={{ margin: 0, paddingInlineStart: 20, lineHeight: 1.7, fontSize: 13 }}>
+                  {documentsBlock.map((gap) => (
+                    <li key={gap.student_id}>
+                      <strong>{gap.name}</strong> — {gap.blocked
+                        ? 'קיימת חסימה רפואית — נדרש בירור מול הצוות'
+                        : [
+                          gap.missing?.includes('health')
+                            ? (gap.health_state === 'expired' ? 'הצהרת בריאות שפגה' : 'הצהרת בריאות')
+                            : null,
+                          gap.missing?.includes('waiver')
+                            ? (gap.waiver_state === 'expired' ? 'אישור טיפוס בקיר שפג' : 'אישור טיפוס בקיר')
+                            : null,
+                        ].filter(Boolean).join(' · ')}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div style={{ fontSize: 12 }}>
+                {documentsHold
+                  ? 'חסימה רפואית לא נפתרת בטופס חדש — יש לפנות למנהל לפני מכירה.'
+                  : `שליחת קישור ללקוח: הוא ממלא וחותם על מה שחסר, ובסוף משלם ₪${Number(total || 0).toLocaleString('he-IL')}. הכרטיסייה נכנסת לתיק רק אחרי התשלום.`}
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {!documentsHold && (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    disabled={sendingDocsLink}
+                    onClick={sendDocumentsLink}
+                  >
+                    <Send size={13} />
+                    {sendingDocsLink ? 'שולח...' : 'שלח קישור להשלמה ותשלום'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setDocumentsBlock(null)}
+                >
+                  <X size={13} /> סגירה
+                </button>
+              </div>
+            </div>
+          )}
+          {documentsLink && (
+            <div
+              className="alert alert-success"
+              style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700 }}>
+                <CheckCircle2 size={14} />
+                קישור להשלמת מסמכים ותשלום נוצר
+                {documentsLink.whatsappSent ? ' · נשלח בוואטסאפ' : ''}
+              </div>
+              {documentsLink.whatsappError && (
+                <div className="alert alert-warn" style={{ fontSize: 12, margin: 0 }}>
+                  {documentsLink.whatsappError}
+                </div>
+              )}
+              <div
+                style={{
+                  fontSize: 12,
+                  wordBreak: 'break-all',
+                  direction: 'ltr',
+                  textAlign: 'left',
+                  background: 'rgba(0,0,0,0.2)',
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                }}
+              >
+                {documentsLink.pageUrl}
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => copyPayUrl(documentsLink.pageUrl)}
+                >
+                  {copied ? 'הועתק!' : 'העתק קישור'}
+                </button>
+              </div>
+              <div style={{ fontSize: 12 }}>
+                מעקב אחרי הקישור והתשלום נמצא בלשונית «קישורים ללקוח».
+              </div>
+            </div>
           )}
           {(lastPayUrl || result?.shareUrl || result?.payUrl) && (
             <div

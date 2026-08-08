@@ -270,7 +270,11 @@ import {
   savePolicyDraft,
   suggestedRefund,
 } from './cancellationPolicies.js';
-import { passPunchBlockReason } from './passPunchEligibility.js';
+import {
+  passPunchBlockReason,
+  passPunchSafetyNote,
+  wallDocumentsStatus,
+} from './passPunchEligibility.js';
 import { runHealthExpiryReminders, runParticipationDocumentReminders } from './participationReminders.js';
 import { OPERATIONAL_LIST, migrateToTwoBroadcastLists } from './broadcastListMigration.js';
 import {
@@ -316,6 +320,20 @@ import {
   publicShopItems,
   shopItemPayload,
 } from './publicShop.js';
+import {
+  POS_CHECKOUT_STATUS,
+  POS_CHECKOUT_TABLE,
+  buildPosCheckoutLink,
+  checkoutItemsLabel,
+  documentGaps,
+  gapText,
+  isPosCheckoutOpen,
+  newPosCheckoutToken,
+  posCheckoutStatus,
+  posCheckoutStatusLabel,
+  wallAccessLines,
+  wallParticipantIds,
+} from './posCheckoutLinks.js';
 import {
   EQUIPMENT_ITEM_TYPES,
   EQUIPMENT_ITEM_LABELS,
@@ -7550,6 +7568,269 @@ app.post('/api/public/shop/:slug/purchase', publicFormRateLimit, async (req, res
   }
 });
 
+// ─── Counter link, customer side: sign what is missing, then pay ────────────
+
+/**
+ * The page behind the link the register sent.
+ *
+ * What is shown before the phone is verified is deliberately no more than the
+ * WhatsApp message already said: what is being bought, for how much, and whose
+ * documents are missing. Everything that writes anything is gated on the code.
+ */
+app.get('/api/public/pos-checkout/:token', publicFormRateLimit, async (req, res) => {
+  try {
+    const link = await resolvePosCheckoutLink(req.params.token);
+    if (!link) return res.status(404).json({ error: 'הקישור לא נמצא' });
+    const status = posCheckoutStatus(link);
+    if (status === 'paid') {
+      return res.json({ status, paid: true, items_label: checkoutItemsLabel(link) });
+    }
+    if (!isPosCheckoutOpen(link)) {
+      return res.status(410).json({
+        error: status === POS_CHECKOUT_STATUS.CANCELLED
+          ? 'הקישור בוטל — פנו לצוות'
+          : 'פג תוקף הקישור — בקשו קישור חדש מהצוות',
+        status,
+      });
+    }
+    const template = resolveDefaultDeclarationTemplate(db);
+    const parent = db.getOne('parents', link.parent_id);
+    res.json({
+      status,
+      paid: false,
+      // The invoice needs somewhere to go. Asked for only when the file has no
+      // address on it, so a returning customer is not made to retype one.
+      needs_email: !String(parent?.email || '').trim(),
+      total: Number(link.total) || 0,
+      items: (link.items || []).map((line) => ({
+        name: line.name || 'פריט',
+        quantity: Number(line.quantity) || 1,
+        unitprice: Number(line.unitprice) || 0,
+      })),
+      items_label: checkoutItemsLabel(link),
+      customer_name: link.customer_name || '',
+      // Masked: enough to recognise the number the code will go to, not enough
+      // to read someone's phone number off a link that was forwarded.
+      phone_hint: String(link.customer_phone || '').slice(-4),
+      participants: (link.participants || []).map((participant) => {
+        const student = db.getOne('students', participant.student_id);
+        return {
+          student_id: participant.student_id,
+          name: participant.name || student?.name || '',
+          missing: participant.missing || [],
+          is_adult: student?.isAdult === true,
+          birthDate: student?.birthDate || '',
+        };
+      }),
+      // The sale already has a payment link waiting — the documents were signed
+      // and the customer came back before paying.
+      payment_url: link.status === POS_CHECKOUT_STATUS.AWAITING_PAYMENT
+        ? link.payment_url || null
+        : null,
+      form_template: template,
+      cancellation_policy: cancellationPoliciesForSaleLines(link.items || [])
+        .map((resolved) => resolved.snapshot)[0] || null,
+    });
+  } catch (err) {
+    console.error('public pos-checkout lookup error:', err.message);
+    res.status(500).json({ error: err.message || 'טעינת הדף נכשלה' });
+  }
+});
+
+/**
+ * Signatures first, then the charge.
+ *
+ * The documents are written before any sale exists, exactly as an outing writes
+ * them before its order: a family that signed and walked away still has valid
+ * documents on file, and the next attempt reuses them instead of asking for a
+ * second signature.
+ */
+app.post('/api/public/pos-checkout/:token/complete', publicFormRateLimit, async (req, res) => {
+  try {
+    const link = await resolvePosCheckoutLink(req.params.token);
+    if (!link) return res.status(404).json({ error: 'הקישור לא נמצא' });
+    if (posCheckoutStatus(link) === 'paid') {
+      return res.status(400).json({ error: 'הקישור כבר שולם' });
+    }
+    if (!isPosCheckoutOpen(link)) {
+      return res.status(410).json({ error: 'פג תוקף הקישור — בקשו קישור חדש מהצוות' });
+    }
+    const parent = db.getOne('parents', link.parent_id);
+    if (!parent) return res.status(404).json({ error: 'תיק הלקוח לא נמצא — פנו לצוות' });
+
+    // The code has to go to the number the link was sent to. Verifying some
+    // other phone would let anyone holding a forwarded link sign for this family.
+    const verified = requireVerifiedPublicPhone(req, res, parent.phone);
+    if (!verified) return;
+
+    const email = String(req.body?.parent?.email || parent.email || '').trim();
+    if (!email) {
+      return res.status(400).json({ error: 'נדרש דואר אלקטרוני לשליחת החשבונית' });
+    }
+
+    const student = db.getOne('students', link.student_id);
+    const template = resolveDefaultDeclarationTemplate(db);
+    const submitted = Array.isArray(req.body?.participants) ? req.body.participants : [];
+    const clearance = await uploadClearanceFiles(submitted);
+    if (clearance.error) return res.status(clearance.status).json({ error: clearance.error });
+    for (const upload of clearance.uploads) {
+      const participant = submitted[upload.participantIndex];
+      if (participant) participant.medicalClearanceDocumentId = upload.clientDocumentId;
+    }
+
+    // Only the people the link was opened for. A posted participant that is not
+    // on the link is ignored rather than trusted.
+    const wanted = new Map((link.participants || []).map((p) => [String(p.student_id), p]));
+    const participants = [];
+    for (const input of submitted) {
+      const target = wanted.get(String(input?.student_id || input?.id || ''));
+      if (!target) continue;
+      const row = db.getOne('students', target.student_id);
+      participants.push({
+        ...input,
+        id: target.student_id,
+        type: row?.isAdult === true ? 'adult' : 'child',
+        name: row?.name || target.name || '',
+        birthDate: input.birthDate || row?.birthDate || '',
+      });
+    }
+    if (participants.length !== wanted.size) {
+      return res.status(400).json({ error: 'יש להשלים את הטפסים לכל מי שמופיע בקישור' });
+    }
+
+    // Whoever already has valid documents is not asked to sign again — they may
+    // have signed on another form since the link was sent, or the first attempt
+    // may have saved the signatures and then failed at the clearing step.
+    const unsigned = participants.filter((participant) => !participationEligibility(db, {
+      studentId: participant.id,
+      scope: 'wall',
+    }).eligible);
+
+    let crm = null;
+    if (unsigned.length) {
+      crm = await saveCrmParticipants({
+        db,
+        persist: persistCore,
+        parent: {
+          name: parent.name,
+          lastName: parent.lastName,
+          phone: parent.phone,
+          email,
+          city: parent.city,
+          idNumber: parent.idNumber,
+        },
+        participants: unsigned,
+        template,
+        participationScope: 'wall',
+        phoneVerification: verifiedPhoneEvidence(verified),
+        evidenceContext: { requestContext: requestEvidence(req) },
+        source: parent.source || 'pos',
+        onStudentStatusChanged: (updated) => automationsService.triggerEvent('status_changed', {
+          ...updated,
+          new_status: 'health_signed',
+        }),
+      });
+      await fileClearanceDocuments(clearance.uploads, {
+        parentId: parent.id,
+        findTarget: (upload) => {
+          const match = (crm.participants || []).find((p) => p.name === upload.name);
+          return {
+            studentId: match?.student?.id || null,
+            declarationId: match?.declaration?.id || null,
+          };
+        },
+      });
+    }
+
+    // Judged against what is now on file, not against what the customer just
+    // posted: the documents are the authority, and a stale link cannot conjure
+    // eligibility that the participation rules do not agree with.
+    const stillMissing = documentGaps({
+      participantIds: [...wanted.keys()],
+      eligibilityOf: (studentId) => participationEligibility(db, { studentId, scope: 'wall' }),
+      nameOf: (studentId) => db.getOne('students', studentId)?.name || 'המשתתף',
+    });
+    if (stillMissing.length) {
+      return res.status(400).json({
+        error: `עדיין חסר: ${stillMissing.map((gap) => `${gap.name} — ${gapText(gap)}`).join(' · ')}`,
+      });
+    }
+
+    // Coming back to a link whose documents were already signed: the sale and
+    // its clearing page exist, so send them back to the same one instead of
+    // opening a second charge.
+    if (link.status === POS_CHECKOUT_STATUS.AWAITING_PAYMENT && link.payment_url) {
+      return res.json({ paymentUrl: link.payment_url, duplicate: true, signedDocuments: [] });
+    }
+
+    const policies = cancellationPoliciesForSaleLines(link.items || []);
+    if (policies.length && req.body?.policyAccepted !== true) {
+      return res.status(400).json({ error: 'יש לקרוא ולאשר את תנאי הביטול לפני התשלום' });
+    }
+
+    const opened = await openPendingPosSale({
+      lines: link.items || [],
+      student,
+      parent,
+      parentId: parent.id,
+      couponCode: link.coupon_code || null,
+      cancellationPolicies: policies,
+      recordAcceptances: async ({ sale }) => {
+        const acceptances = [];
+        for (const resolved of policies) {
+          const acceptance = await recordPolicyAcceptance(db, persistCore, {
+            ...resolved,
+            parentId: parent.id,
+            posSaleId: sale.id,
+            acceptedVia: 'online',
+          });
+          if (acceptance) acceptances.push(acceptance);
+        }
+        return acceptances;
+      },
+      soldBy: link.created_by || null,
+      source: 'checkout_link',
+      checkoutLinkId: link.id,
+      successUrl: `${frontendPublicBase(req)}/checkout/${encodeURIComponent(link.id)}?paid=1`,
+    });
+
+    const updatedLink = db.update(POS_CHECKOUT_TABLE, link.id, {
+      status: POS_CHECKOUT_STATUS.AWAITING_PAYMENT,
+      sale_id: opened.sale.id,
+      payment_id: opened.payment.id,
+      payment_url: opened.payUrl,
+      documents_signed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }) || link;
+    await persistCore(POS_CHECKOUT_TABLE, updatedLink);
+    touchGoogleContacts();
+    console.log(`📝 [POS] checkout link ${link.id} signed — sale ${opened.sale.id} awaiting payment`);
+
+    res.status(201).json({
+      paymentUrl: opened.payUrl,
+      total: opened.total,
+      duplicate: false,
+      // The signed copies are rendered in the browser and posted back, and the
+      // certificate names the person who signed it. The phone answering this
+      // request already proved it is theirs.
+      signer: {
+        name: parent.name || '',
+        lastName: parent.lastName || '',
+        idNumber: parent.idNumber || '',
+        phone: parent.phone || '',
+      },
+      signedDocuments: (crm?.participants || []).map((participant) => ({
+        student: participant.student,
+        health: participant.healthCreated ? participant.healthDeclaration : null,
+        waiver: participant.waiverCreated ? participant.waiver : null,
+      })),
+    });
+  } catch (err) {
+    console.error('public pos-checkout complete error:', err.message);
+    res.status(err.status || 500).json({ error: err.message || 'השלמת הרכישה נכשלה' });
+  }
+});
+
 // ─── Google Calendar connection + sync ───────────────────────────────────────
 app.get('/api/google-calendar/status', async (req, res) => {
   try {
@@ -9325,6 +9606,13 @@ app.post('/api/icount/webhook', async (req, res) => {
               await persistCore('customer_coupons', db.getOne('customer_coupons', sale.coupon_id));
               console.log(`🎟️ [POS] coupon ${sale.coupon_code} redeemed on paid link ${sale.id}`);
             }
+          }
+
+          // A sale that started as "go fill your forms" closes here. The link
+          // is the only place staff can see that story end, so it is marked
+          // before anything else can fail, and the team is told.
+          if (sale.checkout_link_id) {
+            await closePaidCheckoutLink(sale, updated?.paid_at);
           }
         } else if (sale?.id && Object.keys(clearFields).length) {
           const patchedSale = db.update('pos_sales', sale.id, {
@@ -11791,14 +12079,22 @@ async function recordCounterPolicyAcceptances(req, policies, sale, parentId) {
   return acceptances;
 }
 
-async function enforceWallAccessSaleEligibility(lines, { student, parent }) {
-  const relevant = (lines || []).filter((line) => line.grants_wall_climbing && !line.family_shared);
-  if (!relevant.length) return lines;
+/**
+ * Wall-access lines resolved to the people they are for, with everyone still
+ * short of a document named.
+ *
+ * The sale and the "fill the forms, then pay" link both ask this question. The
+ * link exists precisely for the case the sale refuses, so the two must never be
+ * able to disagree about who is missing what.
+ */
+async function resolveWallAccessSale(lines, { student, parent }) {
+  const relevant = wallAccessLines(lines);
+  if (!relevant.length) return { lines, gaps: [] };
   if (!student?.id || !parent?.id) {
     throw Object.assign(new Error('מוצר שמקנה טיפוס בקיר דורש שיוך לבן משפחה'), { status: 400 });
   }
   const household = await ensureHouseholdForParent(db, persistCore, parent.id);
-  return (lines || []).map((line) => {
+  const resolved = (lines || []).map((line) => {
     if (!line.grants_wall_climbing || line.family_shared) return line;
     const quantity = Math.max(1, Number(line.quantity) || 1);
     const participantIds = line.participant_ids?.length
@@ -11811,17 +12107,29 @@ async function enforceWallAccessSaleEligibility(lines, { student, parent }) {
       if (!isStudentInHousehold(db, household.id, participantId)) {
         throw Object.assign(new Error('לא ניתן לשייך מוצר לאדם שאינו חבר בתיק המשפחה'), { status: 403 });
       }
-      const eligibility = participationEligibility(db, { studentId: participantId, scope: 'wall' });
-      if (!eligibility.eligible) {
-        const target = db.getOne('students', participantId);
-        const error = new Error(`${target?.name || 'המשתתף'} חסר/ת הצהרת בריאות או אישור קיר בתוקף`);
-        error.status = 409;
-        error.code = 'wall_documents_required';
-        throw error;
-      }
     }
     return { ...line, participant_ids: participantIds };
   });
+  const gaps = documentGaps({
+    participantIds: wallParticipantIds(resolved, student.id),
+    eligibilityOf: (studentId) => participationEligibility(db, { studentId, scope: 'wall' }),
+    nameOf: (studentId) => db.getOne('students', studentId)?.name || 'המשתתף',
+  });
+  return { lines: resolved, gaps, household };
+}
+
+async function enforceWallAccessSaleEligibility(lines, { student, parent }) {
+  const { lines: resolved, gaps } = await resolveWallAccessSale(lines, { student, parent });
+  if (!gaps.length) return resolved;
+  // The register offers to send a link instead of simply refusing, so the error
+  // carries who is missing what rather than only saying that someone is.
+  const error = new Error(
+    `חסרים מסמכים — ${gaps.map((gap) => `${gap.name}: ${gapText(gap)}`).join(' · ')}`
+  );
+  error.status = 409;
+  error.code = 'wall_documents_required';
+  error.blocked = gaps;
+  throw error;
 }
 
 function fulfillSalePasses({ sale, lines, studentId, parentId, docId, docNumber }) {
@@ -11917,18 +12225,24 @@ async function punchPass(pass, { punchedBy, source, note, studentId }) {
       throw err;
     }
   }
+  const punchingStudent = actualStudentId ? db.getOne('students', actualStudentId) : null;
   const blocked = passPunchBlockReason({
-    student: actualStudentId ? db.getOne('students', actualStudentId) : null,
+    student: punchingStudent,
     declarations: db.get('health_declarations') || [],
     waivers: db.get('participation_waivers') || [],
     healthHolds: db.get('health_holds') || [],
-    tests: db.get('level_tests') || [],
   });
   if (blocked) {
     const err = new Error(blocked);
     err.status = 409;
     throw err;
   }
+  // Travels with a successful punch, not instead of one: the entry is paid for
+  // now, and the briefing happens with an instructor afterwards.
+  const safetyNote = passPunchSafetyNote({
+    student: punchingStudent,
+    tests: db.get('level_tests') || [],
+  });
   const before = Number(pass.visits_remaining);
   const after = before - 1;
   const now = new Date().toISOString();
@@ -11964,7 +12278,7 @@ async function punchPass(pass, { punchedBy, source, note, studentId }) {
       ...(db.get('pass_punches') || []).filter((row) => String(row.id) !== String(savedPunch.id)),
       savedPunch,
     ]);
-    return { pass: updated, punch: savedPunch };
+    return { pass: updated, punch: savedPunch, safetyNote };
   }
   const updated = db.update('customer_passes', pass.id, {
     visits_remaining: after,
@@ -11972,7 +12286,7 @@ async function punchPass(pass, { punchedBy, source, note, studentId }) {
     updated_at: now,
   });
   const savedPunch = db.insert('pass_punches', punch);
-  return { pass: updated, punch: savedPunch };
+  return { pass: updated, punch: savedPunch, safetyNote };
 }
 
 /** Undo an accidental punch: give the visit back and keep the row as a cancelled record. */
@@ -12925,9 +13239,10 @@ app.post('/api/pos/sale', async (req, res) => {
     const details = Array.isArray(err.details?.error_details)
       ? err.details.error_details.filter(Boolean).join(' · ')
       : '';
-    res.status(502).json({
+    res.status(err.status || 502).json({
       error: details || err.message,
       code: err.code,
+      blocked: err.blocked,
     });
   }
 });
@@ -13194,7 +13509,7 @@ app.post('/api/pos/quote', async (req, res) => {
     });
   } catch (err) {
     console.error('POS quote error:', err.message);
-    res.status(502).json({ error: err.message, code: err.code });
+    res.status(err.status || 502).json({ error: err.message, code: err.code, blocked: err.blocked });
   }
 });
 
@@ -13338,6 +13653,189 @@ app.post('/api/pos/sales/:id/send-link', async (req, res) => {
   }
 });
 
+/**
+ * Open a `pending_payment` counter sale and the clearing link that closes it.
+ *
+ * The register reaches this directly; the documents link reaches it from the
+ * public page, once the customer has signed what was missing. Both must produce
+ * the same sale, the same held benefit and the same webhook behaviour, so the
+ * whole thing lives here once instead of being written twice.
+ *
+ * `recordAcceptances` differs between the two — staff tick the policy at the
+ * counter, the customer ticks it on their own page — so the caller supplies it.
+ */
+async function openPendingPosSale({
+  lines: inputLines,
+  student,
+  parent,
+  parentId = null,
+  walkInName = '',
+  walkInPhone = '',
+  walkInEmail = '',
+  couponCode = null,
+  cancellationPolicies = [],
+  recordAcceptances = async () => [],
+  soldBy = null,
+  source = null,
+  checkoutLinkId = null,
+  successUrl = null,
+} = {}) {
+  let lines = inputLines;
+  // Server-side recompute, so the amount baked into the payment link is one we
+  // calculated, not one the screen sent.
+  let coupon = null;
+  let couponDiscount = 0;
+  if (couponCode) {
+    const check = checkCouponForSale(db, {
+      code: couponCode,
+      parentId: parent?.id || parentId || null,
+      studentId: student?.id || null,
+      lines,
+    });
+    if (!check.ok) throw Object.assign(new Error(check.error), { status: 400 });
+    lines = check.lines;
+    coupon = check.coupon;
+    couponDiscount = check.discount;
+  }
+
+  const total = computeSaleTotal(lines);
+  if (!(Number(total) > 0)) {
+    throw Object.assign(
+      new Error(
+        'לא ניתן ליצור קישור תשלום לסכום 0. עמוד הסליקה חוזר אז למחיר ברירת מחדל. לסכום חינם השתמשו במזומן או גבייה ללא קישור.'
+      ),
+      { status: 400 }
+    );
+  }
+  let clientId = parent?.icount_client_id || null;
+  let syncedParent = parent;
+  let syncWarning = null;
+  if (parent?.id && icount.isConfigured()) {
+    try {
+      const synced = await syncParentToIcount(parent);
+      syncedParent = synced.parent;
+      clientId = synced.clientId;
+    } catch (err) {
+      syncWarning = err.message;
+    }
+  }
+
+  // The payment page shows this one line, so the benefit has to be named here
+  // — otherwise the customer sees a reduced price with no explanation. A line
+  // the coupon split is regrouped by product, so it reads as one item.
+  const quantityByName = new Map();
+  for (const line of lines) {
+    const name = line.name || 'פריט';
+    quantityByName.set(name, (quantityByName.get(name) || 0) + (Number(line.quantity) || 1));
+  }
+  const itemsLabel = [...quantityByName]
+    .map(([name, qty]) => `${name}${qty > 1 ? ` (${qty})` : ''}`)
+    .join(', ');
+  const discountNote = coupon
+    ? ` · כולל הטבה ${coupon.code}: ${coupon.label} (−₪${couponDiscount})`
+    : '';
+  const description = `${itemsLabel}${discountNote}`.slice(0, 180);
+  const payment = db.insert('payments', {
+    parent_id: syncedParent?.id || null,
+    student_id: student?.id || null,
+    amount: total,
+    description,
+    status: 'pending',
+    payment_url: null,
+    price_includes_vat: true,
+    icount_client_id: clientId,
+    icount_doc_id: null,
+    icount_doc_number: null,
+    paid_at: null,
+    updated_at: new Date().toISOString(),
+  });
+
+  let sale = db.insert('pos_sales', {
+    items: lines.map(({ item, ...rest }) => rest),
+    total,
+    payment_method: 'online',
+    status: 'pending_payment',
+    price_includes_vat: true,
+    student_id: student?.id || null,
+    parent_id: syncedParent?.id || null,
+    customer_name: syncedParent?.name || student?.name || walkInName || 'לקוח',
+    customer_phone: syncedParent?.phone || walkInPhone || '',
+    customer_email: syncedParent?.email || walkInEmail || '',
+    icount_client_id: clientId,
+    payment_id: payment.id,
+    sold_by: soldBy,
+    source: source || undefined,
+    // The link that produced this sale, so the webhook can report back to it.
+    checkout_link_id: checkoutLinkId || null,
+    coupon_id: coupon?.id || null,
+    coupon_code: coupon?.code || null,
+    coupon_discount: couponDiscount || 0,
+    policy_snapshots: cancellationPolicies.map((resolved) => resolved.snapshot),
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+
+  const policyAcceptances = await recordAcceptances({ sale, parentId: syncedParent?.id || parentId || null });
+  if (policyAcceptances.length) {
+    sale = db.update('pos_sales', sale.id, {
+      cancellation_acceptance_ids: policyAcceptances.map((acceptance) => acceptance.id),
+      updated_at: new Date().toISOString(),
+    }) || sale;
+  }
+
+  db.update('payments', payment.id, { pos_sale_id: sale.id });
+
+  // Held, not spent: the link may never be paid, and the daily job hands the
+  // benefit back if it is still unpaid a week from now.
+  if (coupon) {
+    reserveCoupon(db, coupon.id, { saleId: sale.id, amount: couponDiscount });
+    await persistCore('customer_coupons', db.getOne('customer_coupons', coupon.id));
+    console.log(`🎟️ [POS] coupon ${coupon.code} reserved for payment link on sale ${sale.id}`);
+  }
+
+  const ipnUrl = icount.buildIpnUrl({ paymentId: payment.id });
+  const payUrl = await icount.buildPaymentUrl({
+    amount: total,
+    description: description || `רכישה ב-${await businessBrand()}`,
+    name: syncedParent?.name || student?.name || walkInName || 'לקוח',
+    lastName: syncedParent?.lastName,
+    idNumber: syncedParent?.idNumber,
+    phone: syncedParent?.phone || walkInPhone,
+    email: syncedParent?.email || walkInEmail,
+    paymentId: payment.id,
+    ipnUrl,
+    ...(successUrl ? { successUrl } : {}),
+  });
+  const updatedPayment = db.update('payments', payment.id, {
+    payment_url: payUrl,
+    updated_at: new Date().toISOString(),
+  });
+  const updatedSale = db.update('pos_sales', sale.id, {
+    payment_url: payUrl,
+    updated_at: new Date().toISOString(),
+  });
+  if (updatedPayment) await persistCore('payments', updatedPayment);
+  if (updatedSale) await persistCore('pos_sales', updatedSale);
+
+  const shortUrl = icount.buildPaymentRedirectUrl(payment.id);
+  const shareUrl = icount.isLocalPublicApiBase() ? payUrl : shortUrl || payUrl;
+  console.log(
+    `💳 [POS] payment-link created sale=${sale.id} total=${total} url=${payUrl} short=${shortUrl}`
+  );
+
+  return {
+    sale: updatedSale || { ...sale, payment_url: payUrl },
+    payment: updatedPayment || { ...payment, payment_url: payUrl },
+    payUrl,
+    shortUrl,
+    shareUrl,
+    description,
+    total,
+    syncedParent,
+    syncWarning,
+  };
+}
+
 app.post('/api/pos/payment-link', async (req, res) => {
   try {
     const {
@@ -13369,153 +13867,37 @@ app.post('/api/pos/payment-link', async (req, res) => {
     const cancellationPolicies = cancellationPoliciesForSaleLines(lines);
     requireCounterPolicyAcceptance(req, cancellationPolicies);
 
-    // Same server-side recompute as the counter sale, so the amount baked into
-    // the payment link is one we calculated, not one the screen sent.
-    let coupon = null;
-    let couponDiscount = 0;
-    if (couponCode) {
-      const check = checkCouponForSale(db, {
-        code: couponCode,
-        parentId: parent?.id || parentId || null,
-        studentId: student?.id || null,
-        lines,
-      });
-      if (!check.ok) return res.status(400).json({ error: check.error });
-      lines = check.lines;
-      coupon = check.coupon;
-      couponDiscount = check.discount;
-    }
-
-    const total = computeSaleTotal(lines);
-    if (!(Number(total) > 0)) {
-      return res.status(400).json({
-        error:
-          'לא ניתן ליצור קישור תשלום לסכום 0. עמוד הסליקה חוזר אז למחיר ברירת מחדל. לסכום חינם השתמשו במזומן או גבייה ללא קישור.',
-      });
-    }
-    let clientId = parent?.icount_client_id || null;
-    let syncedParent = parent;
-    let syncWarning = null;
-    if (parent?.id && icount.isConfigured()) {
-      try {
-        const synced = await syncParentToIcount(parent);
-        syncedParent = synced.parent;
-        clientId = synced.clientId;
-      } catch (err) {
-        syncWarning = err.message;
-      }
-    }
-
-    // The payment page shows this one line, so the benefit has to be named here
-    // — otherwise the customer sees a reduced price with no explanation. A line
-    // the coupon split is regrouped by product, so it reads as one item.
-    const quantityByName = new Map();
-    for (const line of lines) {
-      const name = line.name || 'פריט';
-      quantityByName.set(name, (quantityByName.get(name) || 0) + (Number(line.quantity) || 1));
-    }
-    const itemsLabel = [...quantityByName]
-      .map(([name, qty]) => `${name}${qty > 1 ? ` (${qty})` : ''}`)
-      .join(', ');
-    const discountNote = coupon
-      ? ` · כולל הטבה ${coupon.code}: ${coupon.label} (−₪${couponDiscount})`
-      : '';
-    const description = `${itemsLabel}${discountNote}`.slice(0, 180);
-    const payment = db.insert('payments', {
-      parent_id: syncedParent?.id || null,
-      student_id: student?.id || null,
-      amount: total,
+    const {
+      sale: updatedSale,
+      payment: updatedPayment,
+      payUrl,
+      shortUrl,
+      shareUrl,
       description,
-      status: 'pending',
-      payment_url: null,
-      price_includes_vat: true,
-      icount_client_id: clientId,
-      icount_doc_id: null,
-      icount_doc_number: null,
-      paid_at: null,
-      updated_at: new Date().toISOString(),
-    });
-
-    let sale = db.insert('pos_sales', {
-      items: lines.map(({ item, ...rest }) => rest),
       total,
-      payment_method: 'online',
-      status: 'pending_payment',
-      price_includes_vat: true,
-      student_id: student?.id || null,
-      parent_id: syncedParent?.id || null,
-      customer_name: syncedParent?.name || student?.name || walkInName || 'לקוח',
-      customer_phone: syncedParent?.phone || walkInPhone || '',
-      customer_email: syncedParent?.email || walkInEmail || '',
-      icount_client_id: clientId,
-      payment_id: payment.id,
-      sold_by: req.crmUser?.email || req.crmUser?.name || null,
-      coupon_id: coupon?.id || null,
-      coupon_code: coupon?.code || null,
-      coupon_discount: couponDiscount || 0,
-      policy_snapshots: cancellationPolicies.map((resolved) => resolved.snapshot),
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
-
-    const policyAcceptances = await recordCounterPolicyAcceptances(
-      req,
+      syncedParent,
+      syncWarning,
+    } = await openPendingPosSale({
+      lines,
+      student,
+      parent,
+      parentId,
+      walkInName,
+      walkInPhone,
+      walkInEmail,
+      couponCode,
       cancellationPolicies,
-      sale,
-      syncedParent?.id || parentId || null
-    );
-    if (policyAcceptances.length) {
-      sale = db.update('pos_sales', sale.id, {
-        cancellation_acceptance_ids: policyAcceptances.map((acceptance) => acceptance.id),
-        updated_at: new Date().toISOString(),
-      }) || sale;
-    }
-
-    db.update('payments', payment.id, { pos_sale_id: sale.id });
-
-    // Held, not spent: the link may never be paid, and the daily job hands the
-    // benefit back if it is still unpaid a week from now.
-    if (coupon) {
-      reserveCoupon(db, coupon.id, { saleId: sale.id, amount: couponDiscount });
-      await persistCore('customer_coupons', db.getOne('customer_coupons', coupon.id));
-      console.log(`🎟️ [POS] coupon ${coupon.code} reserved for payment link on sale ${sale.id}`);
-    }
-
-    const ipnUrl = icount.buildIpnUrl({ paymentId: payment.id });
-    const payUrl = await icount.buildPaymentUrl({
-      amount: total,
-      description: description || `רכישה ב-${await businessBrand()}`,
-      name: syncedParent?.name || student?.name || walkInName || 'לקוח',
-      lastName: syncedParent?.lastName,
-      idNumber: syncedParent?.idNumber,
-      phone: syncedParent?.phone || walkInPhone,
-      email: syncedParent?.email || walkInEmail,
-      paymentId: payment.id,
-      ipnUrl,
+      recordAcceptances: ({ sale, parentId: payerId }) =>
+        recordCounterPolicyAcceptances(req, cancellationPolicies, sale, payerId),
+      soldBy: req.crmUser?.email || req.crmUser?.name || null,
     });
-    const updatedPayment = db.update('payments', payment.id, {
-      payment_url: payUrl,
-      updated_at: new Date().toISOString(),
-    });
-    const updatedSale = db.update('pos_sales', sale.id, {
-      payment_url: payUrl,
-      updated_at: new Date().toISOString(),
-    });
-    if (updatedPayment) await persistCore('payments', updatedPayment);
-    if (updatedSale) await persistCore('pos_sales', updatedSale);
-
-    const shortUrl = icount.buildPaymentRedirectUrl(payment.id);
-    const shareUrl = icount.isLocalPublicApiBase() ? payUrl : shortUrl || payUrl;
-    console.log(
-      `💳 [POS] payment-link created sale=${sale.id} total=${total} url=${payUrl} short=${shortUrl}`
-    );
 
     const delivery = sendWhatsapp
       ? await sendPaymentLinkWhatsapp({
           phone: syncedParent?.phone || walkInPhone,
           customerName: syncedParent?.name || walkInName || 'לקוח',
           parentId: syncedParent?.id || null,
-          paymentId: payment.id,
+          paymentId: updatedPayment.id,
           description,
           amount: total,
           shareUrl,
@@ -13524,8 +13906,8 @@ app.post('/api/pos/payment-link', async (req, res) => {
     const { whatsappUrl, whatsappSent, whatsappError, via, deliveryWarning } = delivery;
 
     res.status(201).json({
-      sale: updatedSale || { ...sale, payment_url: payUrl },
-      payment: updatedPayment || { ...payment, payment_url: payUrl },
+      sale: updatedSale,
+      payment: updatedPayment,
       payUrl,
       shortUrl,
       shareUrl,
@@ -13540,7 +13922,253 @@ app.post('/api/pos/payment-link', async (req, res) => {
     });
   } catch (err) {
     console.error('POS payment-link error:', err.message);
-    res.status(err.status || 502).json({ error: err.message, code: err.code });
+    res.status(err.status || 502).json({ error: err.message, code: err.code, blocked: err.blocked });
+  }
+});
+
+// ─── Counter link: fill the missing documents, then pay ─────────────────────
+
+/**
+ * The link's own record of the payment, plus the message that tells the team.
+ *
+ * Staff sent this customer away to fill forms; without a line arriving when the
+ * money does, the only way to learn it ended well is to go looking for it.
+ */
+async function closePaidCheckoutLink(sale, paidAt) {
+  try {
+    const link = await resolvePosCheckoutLink(sale.checkout_link_id);
+    if (!link || link.status === POS_CHECKOUT_STATUS.PAID) return;
+    const at = paidAt || new Date().toISOString();
+    const paid = db.update(POS_CHECKOUT_TABLE, link.id, {
+      status: POS_CHECKOUT_STATUS.PAID,
+      paid_at: at,
+      sale_id: sale.id,
+      updated_at: at,
+    }) || link;
+    await persistCore(POS_CHECKOUT_TABLE, paid);
+    console.log(`✅ [POS] checkout link ${link.id} paid — sale ${sale.id}`);
+
+    const names = (link.participants || []).map((p) => p.name).filter(Boolean).join(', ');
+    const text =
+      `💳 שולם קישור מהקופה\n` +
+      `${link.customer_name || 'לקוח'} — ${checkoutItemsLabel(link)} · ₪${Number(link.total) || 0}\n` +
+      (names ? `המסמכים הושלמו עבור: ${names}\n` : '') +
+      `הכרטיסייה/המנוי נכנסו לתיק.`;
+    for (const employee of alertSubscribers(db, 'pos_link_paid')) {
+      await sendStaffAlert({
+        employee,
+        kind: 'pos_link_paid',
+        text,
+        sendId: `sa-pos-link-${link.id}-${employee.id}`,
+        date: at.slice(0, 10),
+      });
+    }
+  } catch (err) {
+    // The customer paid and the pass was issued — a failure to update the
+    // register's list must never turn into a failed webhook and a retry.
+    console.warn('⚠️ [POS] checkout link close skipped:', err.message);
+  }
+}
+
+function checkoutLinkPageUrl(req, token) {
+  const path = `/checkout/${encodeURIComponent(token)}`;
+  const origin = String(req?.headers?.origin || '').trim().replace(/\/$/, '');
+  // Staff testing from localhost get a link they can open in the same browser.
+  if (origin && isLocalAppOrigin(origin)) return `${origin}${path}`;
+  return `${frontendPublicBase(req)}${path}`;
+}
+
+/**
+ * A link by its token, including one created by another instance.
+ *
+ * The durable read only happens on a miss, and merges rather than replaces:
+ * a link written here a moment ago must not be wiped by a remote snapshot that
+ * predates it.
+ */
+async function resolvePosCheckoutLink(token) {
+  const wanted = String(token || '').trim();
+  if (!wanted) return null;
+  const local = db.getOne(POS_CHECKOUT_TABLE, wanted);
+  if (local) return local;
+  if (!supa.isEnabled()) return null;
+  try {
+    const rows = await supa.getAll(POS_CHECKOUT_TABLE);
+    if (Array.isArray(rows)) db.mergeLocal(POS_CHECKOUT_TABLE, rows);
+    return db.getOne(POS_CHECKOUT_TABLE, wanted) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** What the register's list shows about one link. */
+function posCheckoutLinkRow(row, req = null) {
+  return {
+    token: row.id,
+    status: posCheckoutStatus(row),
+    status_label: posCheckoutStatusLabel(row),
+    customer_name: row.customer_name || '',
+    customer_phone: row.customer_phone || '',
+    items_label: checkoutItemsLabel(row),
+    total: Number(row.total) || 0,
+    participants: (row.participants || []).map((participant) => participant.name).filter(Boolean),
+    sale_id: row.sale_id || null,
+    documents_signed_at: row.documents_signed_at || null,
+    paid_at: row.paid_at || null,
+    expires_at: row.expires_at || null,
+    created_by: row.created_by || null,
+    created_at: row.created_at || null,
+    page_url: req ? checkoutLinkPageUrl(req, row.id) : null,
+  };
+}
+
+/**
+ * The register asks for this when a sale is refused for missing documents. The
+ * cart travels into the link exactly as priced, and nothing is charged or even
+ * recorded as a sale until the customer has signed on their own page.
+ */
+app.post('/api/pos/documents-link', async (req, res) => {
+  try {
+    const {
+      cart = [],
+      studentId,
+      parentId,
+      walkInName,
+      walkInPhone,
+      walkInEmail,
+      sendWhatsapp = true,
+      couponCode,
+    } = req.body || {};
+
+    const lines = mapCartLines(cart);
+    if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
+    if (!wallAccessLines(lines).length) {
+      return res.status(400).json({
+        error: 'הקישור נועד למוצרים שמקנים טיפוס בקיר — בעגלה הזאת אין כאלה',
+      });
+    }
+    const { student, parent } = resolvePosCustomer({
+      studentId,
+      parentId,
+      walkInName,
+      walkInPhone,
+      walkInEmail,
+    });
+    if (!student?.id || !parent?.id) {
+      return res.status(400).json({ error: 'קישור להשלמת מסמכים דורש בחירת מתאמן מתיק משפחה' });
+    }
+    if (!parent.phone) {
+      return res.status(400).json({ error: 'חסר טלפון ללקוח — אי אפשר לשלוח את הקישור' });
+    }
+
+    const { lines: resolvedLines, gaps } = await resolveWallAccessSale(lines, { student, parent });
+    if (!gaps.length) {
+      return res.status(400).json({
+        error: 'לכל המשתתפים יש מסמכים בתוקף — אפשר לגבות רגיל',
+        code: 'no_documents_missing',
+      });
+    }
+    // A medical hold is a decision someone made about this climber. Signing a
+    // fresh declaration does not lift it, so a link would only send them to
+    // fill a form that still ends in a refusal.
+    if (gaps.some((gap) => gap.blocked)) {
+      return res.status(409).json({
+        error: 'קיימת חסימה רפואית — הצהרה חדשה אינה מסירה אותה. יש לפנות למנהל.',
+        code: 'health_hold',
+      });
+    }
+
+    const total = computeSaleTotal(resolvedLines);
+    if (!(Number(total) > 0)) {
+      return res.status(400).json({ error: 'לא ניתן לשלוח קישור תשלום לסכום 0' });
+    }
+
+    const token = newPosCheckoutToken();
+    const link = db.insert(POS_CHECKOUT_TABLE, buildPosCheckoutLink({
+      token,
+      lines: resolvedLines,
+      total,
+      parentId: parent.id,
+      studentId: student.id,
+      customerName: parent.name || student.name || 'לקוח',
+      customerPhone: parent.phone || '',
+      customerEmail: parent.email || '',
+      couponCode: couponCode || null,
+      gaps,
+      createdBy: req.crmUser?.email || req.crmUser?.name || null,
+    }));
+    const persisted = await persistCore(POS_CHECKOUT_TABLE, link);
+    if (persisted && persisted.ok === false) {
+      return res.status(503).json({ error: 'שמירת הקישור נכשלה — נסו שוב' });
+    }
+
+    const pageUrl = checkoutLinkPageUrl(req, token);
+    const names = gaps.map((gap) => gap.name).filter(Boolean).join(', ');
+    let whatsappSent = false;
+    let whatsappError = null;
+    if (sendWhatsapp) {
+      const message =
+        `שלום ${parent.name || ''},\n` +
+        `כדי להשלים את הרכישה (${checkoutItemsLabel(link)}) נדרשת הצהרת בריאות ואישור טיפוס בקיר עבור ${names}.\n\n` +
+        `${pageUrl}\n\n` +
+        `בקישור ממלאים וחותמים, ובסוף עוברים לתשלום של ₪${total}. הכרטיסייה נכנסת לתיק מיד עם אישור התשלום.`;
+      try {
+        const sent = await whatsappService.sendTextMessage(normalizePhone(parent.phone), message, false, {
+          parentId: parent.id,
+          fallbackName: parent.name,
+        });
+        whatsappSent = !!sent?.success;
+        if (!whatsappSent) whatsappError = sent?.error || 'שליחת ההודעה נכשלה';
+      } catch (waErr) {
+        whatsappError = waErr.message || 'שליחת ההודעה נכשלה';
+      }
+      if (!whatsappSent && !whatsappError) {
+        whatsappError = 'חלון 24 השעות סגור — העתיקו את הקישור ושלחו ידנית';
+      }
+    }
+
+    console.log(`📝 [POS] documents link ${token} for ${names} total=${total}`);
+    res.status(201).json({
+      link: posCheckoutLinkRow(link, req),
+      pageUrl,
+      whatsappSent,
+      whatsappError,
+      gaps: gaps.map((gap) => ({ ...gap, text: gapText(gap) })),
+    });
+  } catch (err) {
+    console.error('POS documents-link error:', err.message);
+    res.status(err.status || 500).json({ error: err.message, code: err.code });
+  }
+});
+
+/** The register's own list — this is where a payment on a link becomes visible. */
+app.get('/api/pos/checkout-links', async (req, res) => {
+  try {
+    const rows = (await readTable(POS_CHECKOUT_TABLE))
+      .map((row) => posCheckoutLinkRow(row, req))
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    const openOnly = String(req.query.open || '') === '1';
+    res.json(openOnly ? rows.filter((row) => row.status !== 'paid' && row.status !== 'cancelled') : rows);
+  } catch (err) {
+    console.error('POS checkout-links error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/pos/checkout-links/:token/cancel', async (req, res) => {
+  try {
+    const link = await resolvePosCheckoutLink(req.params.token);
+    if (!link) return res.status(404).json({ error: 'הקישור לא נמצא' });
+    if (link.status === POS_CHECKOUT_STATUS.PAID) {
+      return res.status(400).json({ error: 'הקישור כבר שולם' });
+    }
+    const cancelled = db.update(POS_CHECKOUT_TABLE, link.id, {
+      status: POS_CHECKOUT_STATUS.CANCELLED,
+      updated_at: new Date().toISOString(),
+    }) || link;
+    await persistCore(POS_CHECKOUT_TABLE, cancelled);
+    res.json(posCheckoutLinkRow(cancelled, req));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -13813,8 +14441,31 @@ app.patch('/api/safety/inspections/:id', (req, res) => {
   res.json(activityForRequest(req, updated));
 });
 
+/** The documents verdict for one climber — the same rule that gates a punch. */
+function wallDocumentsFor(studentId) {
+  return wallDocumentsStatus({
+    student: studentId ? db.getOne('students', studentId) : null,
+    declarations: db.get('health_declarations') || [],
+    waivers: db.get('participation_waivers') || [],
+    healthHolds: db.get('health_holds') || [],
+  });
+}
+
+app.get('/api/students/:id/wall-documents', (req, res) => {
+  res.json(wallDocumentsFor(req.params.id));
+});
+
 app.post('/api/check-ins', (req, res) => {
-  const record = db.insert('check_ins', req.body);
+  // Decided here, never taken from the screen: the counter used to compute it
+  // with a looser rule of its own, so the day's log could show a green "תקין"
+  // beside someone whose pass had just been refused.
+  const documents = wallDocumentsFor(req.body?.climber_id);
+  const record = db.insert('check_ins', {
+    ...req.body,
+    medical_approved: documents.ok,
+    documents_state: documents.state,
+    documents_label: documents.label,
+  });
   res.status(201).json(record);
 });
 
