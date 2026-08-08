@@ -462,7 +462,9 @@ export function EventShell({ children }) {
 
 export function EventStyles() {
   return <style>{`
-    .event-page{min-height:100vh;direction:rtl;background:radial-gradient(circle at top,#1e293b,#070b14 65%);padding:20px 12px;color:#f8fafc;font-family:Heebo,Assistant,system-ui,sans-serif}
+    /* התכלת של טופס ההצהרה הוא הצבע של כל המסכים הציבוריים — דף האירוע
+       והטופס שהוא מוביל אליו הם מסע אחד, ולא שני מוצרים בשני צבעים. */
+    .event-page{--form-accent-solid:#38bdf8;--form-accent-deep:#0284c7;--form-accent-text:#7dd3fc;--form-accent-border:rgba(56,189,248,.45);--form-accent-soft:rgba(56,189,248,.09);--form-accent-soft-strong:rgba(56,189,248,.18);min-height:100vh;direction:rtl;background:radial-gradient(circle at top,#1e293b,#070b14 65%);padding:20px 12px;color:#f8fafc;font-family:Heebo,Assistant,system-ui,sans-serif}
     .event-card{width:min(620px,100%);margin:auto;background:rgba(15,23,42,.94);border:1px solid rgba(255,255,255,.12);border-radius:22px;padding:0 0 24px;overflow:hidden;box-shadow:0 22px 70px rgba(0,0,0,.45)}
     .event-centered{text-align:center;margin-top:12vh;padding:24px}.event-cover{width:100%;height:210px;background:#0b1220}.event-cover img{width:100%;height:100%;object-fit:cover;object-position:center center;display:block}
     .event-hero{padding:22px 24px 0}.event-brand{color:var(--form-accent-text,#fb923c);font-weight:900;letter-spacing:.12em;font-size:12px}.event-brand-logo{display:flex;justify-content:flex-start;margin:0 0 6px}.event-brand-logo img{height:36px;width:auto;max-width:160px;object-fit:contain}.event-card h1{margin:8px 0;font-size:28px}.event-card h2{font-size:20px;margin:20px 0 14px;padding:0 24px}.event-card section{padding:0 24px}.event-meta{display:flex;flex-direction:column;gap:4px;margin:6px 0 0;color:#94a3b8;font-size:14px}

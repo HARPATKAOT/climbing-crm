@@ -2749,9 +2749,18 @@ export default function PublicOnboardingForm() {
         <div className="form-header">
           {/* תמונת הפעילות, כשהוגדרה בתבנית. היא אומרת בלי מילים לאיזו פעילות
               הטופס הזה — מה שכותרת המסמך לבדה מעולם לא אמרה. */}
-          {template?.coverImage && (
+          {/* לאירוע יש תמונה משלו, והיא זו שהנרשם ראה רגע קודם בדף האירוע —
+              היא ממשיכה איתו לאורך הטופס. תמונת התבנית נשארת לטפסים שאינם
+              הרשמה לאירוע מסוים. */}
+          {(activity?.cover_image || template?.coverImage) && (
             <div className="form-cover">
-              <img src={template.coverImage} alt="" />
+              <img
+                src={activity?.cover_image || template.coverImage}
+                alt=""
+                style={activity?.cover_image
+                  ? { objectPosition: activity.cover_position || '50% 50%' }
+                  : undefined}
+              />
             </div>
           )}
           <div className="logo-circle">

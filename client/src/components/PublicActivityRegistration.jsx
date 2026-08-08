@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CalendarClock, CheckCircle, Loader2 } from 'lucide-react';
+import { CalendarClock, CheckCircle, Compass, Loader2 } from 'lucide-react';
 import { useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { ACTIVITY_PAGE_FIELDS } from '../utils/activityPageFields.js';
@@ -127,17 +127,28 @@ export default function PublicActivityRegistration() {
             {activity.location && <span>{activity.location}</span>}
             {activity.remaining != null && <span>{activity.remaining} מקומות פנויים</span>}
           </div>
-          {(activity.page_body || activity.description) && (
-            <p className="event-body">{activity.page_body || activity.description}</p>
-          )}
         </header>
 
-        {ACTIVITY_PAGE_FIELDS.some(({ key }) => activity[key]) && (
-          <section style={{ marginTop: 20 }}>
+        {/* הטקסט החופשי הוא סעיף ככל הסעיפים, ולכן הוא נושא כותרת ואייקון
+            משלו במקום להיות פסקה חסרת שם מתחת לכותרת הראשית. */}
+        {String(activity.page_body || activity.description || '').trim() && (
+          <section style={{ marginTop: 18 }}>
+            <p className="event-detail-block">
+              <strong>
+                <Compass size={15} style={{ color: '#F472B6' }} aria-hidden="true" />
+                מידע על הפעילות
+              </strong>
+              <span>{activity.page_body || activity.description}</span>
+            </p>
+          </section>
+        )}
+
+        {ACTIVITY_PAGE_FIELDS.some(({ key }) => String(activity[key] || '').trim()) && (
+          <section style={{ marginTop: 6 }}>
             {/* אותם ארבעה חלקים, עם אותו סימן שהם נושאים במסך העריכה — מי
                 שכתב אותם ומי שקורא אותם רואים את אותו דבר. */}
             {ACTIVITY_PAGE_FIELDS.map(({ key, label, Icon, color }) => (
-              activity[key] ? (
+              String(activity[key] || '').trim() ? (
                 <p key={key} className="event-detail-block">
                   <strong>
                     <Icon size={15} style={{ color }} aria-hidden="true" />
