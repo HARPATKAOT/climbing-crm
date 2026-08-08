@@ -14271,6 +14271,9 @@ app.get('/api/public/onboard-context', publicFormRateLimit, async (req, res) => 
           // מה הפעילות, ותמונה שלה — הכותרת לבדה אמרה רק על מה חותמים.
           headline: template.headline || '',
           coverImage: template.coverImage || '',
+          // "אופי הפעילות והסיכונים" — בלעדיו המסך נופל לנוסח הקבוע בקוד
+          // הקליינט, שכבר אינו הנוסח שבתבנית החיה.
+          activityNature: template.activityNature || '',
           waiverText: template.waiverText,
           healthQuestions: template.healthQuestions,
         }

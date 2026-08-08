@@ -200,6 +200,9 @@ export function resolveDeclarationTemplate(db, { templateId, templateSlug } = {}
     // אותן מעל שם המסמך.
     headline: selected?.headline || '',
     coverImage: selected?.coverImage || '',
+    // "אופי הפעילות והסיכונים" — בלעדיו הטופס נופל לנוסח הקבוע בקוד הקליינט,
+    // שכבר אינו הנוסח שבתבנית החיה.
+    activityNature: selected?.activityNature || '',
     waiverText: selectedSlug === 'trip'
       ? normalizeTripWaiverText(normalizeLiabilityPartyText(selected?.waiverText || STANDARD_WAIVER_TEXT))
       : normalizeLiabilityPartyText(selected?.waiverText || STANDARD_WAIVER_TEXT),
