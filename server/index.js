@@ -196,6 +196,7 @@ import {
 import { executePartialRefund } from './partialRefund.js';
 import { equipmentRefundRecommendation, isEquipmentPayment } from './equipmentRefund.js';
 import { passesOfSale, saleRefundPlan } from './passRefund.js';
+import { validateManualRefund, manualRefundMarks } from './manualRefund.js';
 import {
   summarizeActivityCancellation,
   registrationsToRelease,
@@ -9233,6 +9234,72 @@ function passRefundContext(payment) {
   const plan = saleRefundPlan({ snapshot, passes, payment });
   return { ok: true, passes, sale, snapshot, plan };
 }
+
+/**
+ * זיכוי בסכום שנקבע ידנית.
+ *
+ * שמור לבעלים בכוונה. כל שאר המסלולים כפופים למדיניות ולכן בטוחים בידי כל
+ * מי שמורשה לגעת בתיק הלקוח; זה עוקף אותה, ולכן הוא במפורש החלטה של מי
+ * שאחראי על הכסף. אם צריך לפתוח אותו לצוות — זה שינוי של שורה אחת כאן.
+ *
+ * לא מבטל כרטיסיות ולא משחרר מקומות: מי שמזכה סכום שרירותי יודע מה הוא עושה,
+ * וביטול אוטומטי של זכאות שלא ביקש היה מפתיע אותו.
+ */
+app.post('/api/payments/:id/manual-refund', requireOwner, async (req, res) => {
+  try {
+    if (!icount.isConfigured()) {
+      return res.status(503).json({ error: 'מערכת החיוב לא מוגדרת בשרת' });
+    }
+    await refreshPaymentTables();
+    const payment = db.getOne('payments', req.params.id);
+    if (!payment) return res.status(404).json({ error: 'התשלום לא נמצא' });
+    if (payment.status === 'refunded') {
+      return res.status(400).json({ error: 'התשלום כבר זוכה' });
+    }
+
+    const reason = String(req.body?.reason || '').trim();
+    const check = validateManualRefund({
+      amount: req.body?.amount,
+      paidAmount: payment.amount,
+      reason,
+      minRefund: icount.MIN_PARTIAL_REFUND,
+    });
+    if (!check.ok) {
+      return res.status(400).json({ error: check.error, code: check.code || null });
+    }
+
+    const parent = payment.parent_id ? db.getOne('parents', payment.parent_id) : null;
+    const result = await executePartialRefund({
+      icount,
+      payment,
+      amount: check.amount,
+      reason,
+      clientName: parent?.name || payment.client_name || 'לקוח',
+      emailTo: parent?.email || null,
+    });
+    if (!result.ok) return res.status(400).json(result);
+
+    const recommended = Number(req.body?.recommended_amount);
+    const updated = db.update('payments', payment.id, manualRefundMarks({
+      amount: result.amount,
+      reason,
+      recommended: Number.isFinite(recommended) ? recommended : null,
+      approvedBy: req.crmUser?.email || req.crmUser?.name || null,
+      result,
+    }));
+    if (updated) await persistCore('payments', updated);
+
+    console.log(
+      `↩️ [manual] refund payment=${payment.id} ₪${result.amount}`
+      + (updated?.refund_policy_exception ? ' · חריגה ממדיניות' : '')
+      + ` · ${req.crmUser?.email || 'לא ידוע'}`
+    );
+    res.json({ success: true, ...result, payment: updated });
+  } catch (err) {
+    console.error('manual refund error:', err.message);
+    res.status(502).json({ error: err.message || 'הזיכוי נכשל' });
+  }
+});
 
 app.post('/api/payments/:id/pass-refund-preview', async (req, res) => {
   try {

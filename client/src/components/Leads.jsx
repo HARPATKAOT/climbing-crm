@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, UserRound, Star, Phone, PhoneOff, AtSign, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, FolderOpen, Download, ReceiptText, History, RotateCw, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert, HeartPulse, Undo2, Loader2 } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, UserRound, Star, Phone, PhoneOff, AtSign, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, FolderOpen, Download, ReceiptText, History, RotateCw, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert, HeartPulse, Undo2, Loader2, Pencil } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
+import { useAuth } from './AuthGate.jsx';
 import { StatusBadge, Modal } from './UI.jsx';
 import {
   TEST_KINDS,
@@ -437,6 +438,8 @@ function FolderRow({ id, title, icon: Icon, summary, open, onToggle, children, r
 
 // ─── Lead/Customer Card (detail sidebar) ────────────────────────────────────
 export function CustomerCard({ student, parent: primaryParent, parents: allParents = [], siblings = [], declarations: knownDeclarations = [], onSelectSibling, group, groups = [], onClose, onStatusChange, onDelete, onArchive, onUpdateStudent, onUpdateParent, pricelist, refreshData, canManageBilling = false, canViewComms = true, onCommunicationHandled }) {
+  // זיכוי בסכום ידני עוקף את המדיניות, ולכן הוא שמור לבעלים.
+  const { isOwner } = useAuth() || {};
   if (!student) return null;
 
   /**
@@ -2151,6 +2154,88 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
    * כניסה בודדת והיתרה חוזרת. השרת מחשב; כאן מציגים לאישור ומאשרים בדיוק את
    * הסכום שהוצג.
    */
+  /**
+   * זיכוי בסכום שנקבע ידנית — לכל מקרה שהמדיניות לא צפתה.
+   *
+   * מציג קודם מה המדיניות ממליצה, אם יש המלצה, כדי שהחריגה תהיה החלטה ולא
+   * ניחוש. הסיבה חובה: היא מה שיאפשר אחר כך להבין למה חרגנו.
+   */
+  const refundManually = async (payment) => {
+    const paid = Number(payment.amount) || 0;
+    let recommended = null;
+    try {
+      const endpoint = payment.equipment_checkout_token
+        ? 'equipment-refund-preview'
+        : (payment.has_passes ? 'pass-refund-preview' : null);
+      if (endpoint) {
+        const res = await fetch(`/api/payments/${encodeURIComponent(payment.id)}/${endpoint}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          const value = data.total ?? data.recommendation?.amount;
+          if (Number.isFinite(Number(value))) recommended = Number(value);
+        }
+      }
+    } catch {
+      // אין המלצה — לא סיבה לחסום זיכוי ידני, רק להציג בלעדיה.
+    }
+
+    const entered = window.prompt(
+      `סכום הזיכוי (שולם ₪${paid.toLocaleString()})`
+      + (recommended != null ? `\nלפי המדיניות: ₪${recommended.toLocaleString()}` : '')
+      + '\n\nהסכום יוחזר לכרטיס ותופק חשבונית זיכוי.',
+      recommended != null ? String(recommended) : ''
+    );
+    if (entered == null) return;
+    const amount = Number(String(entered).replace(/[^\d.]/g, ''));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setPaymentActionError('סכום לא תקין');
+      return;
+    }
+    if (amount > paid) {
+      setPaymentActionError(`הסכום גבוה ממה ששולם (₪${paid.toLocaleString()})`);
+      return;
+    }
+    const reason = window.prompt('סיבת הזיכוי (חובה):', '') ?? '';
+    if (!reason.trim()) {
+      setPaymentActionError('זיכוי ידני מחייב סיבה');
+      return;
+    }
+    const deviates = recommended != null && Math.abs(amount - recommended) >= 0.005;
+    const ok = window.confirm(
+      `להחזיר ₪${amount.toLocaleString()}?`
+      + (deviates ? `\n\nזו חריגה מהמדיניות (₪${recommended.toLocaleString()}), והיא תירשם ככזו.` : '')
+    );
+    if (!ok) return;
+
+    const key = `${payment.id}:refund`;
+    setPaymentBusyKey(key);
+    setPaymentActionError('');
+    setPaymentActionOk('');
+    try {
+      const res = await fetch(`/api/payments/${encodeURIComponent(payment.id)}/manual-refund`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount, reason: reason.trim(), recommended_amount: recommended }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'הזיכוי נכשל');
+      setPaymentActionOk(
+        `זוכו ₪${Number(data.amount || 0).toLocaleString()}`
+        + (data.refund_doc_number ? ` · מסמך ${data.refund_doc_number}` : '')
+        + (data.document_error ? ' · הכסף חזר אך חשבונית הזיכוי נכשלה — יש להוציאה ידנית' : '')
+      );
+      setPaymentMenuId(null);
+      await loadStudentPayments();
+      refreshData?.();
+    } catch (err) {
+      setPaymentActionError(err.message || 'הזיכוי נכשל');
+    } finally {
+      setPaymentBusyKey('');
+    }
+  };
+
   const refundPassPayment = async (payment) => {
     const key = `${payment.id}:refund`;
     setPaymentBusyKey(key);
@@ -3796,13 +3881,24 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                                       {paymentBusyKey === `${p.id}:refund` ? 'מזכה...' : 'זיכוי מלא'}
                                     </button>
                                   )}
+                                  {canRefund && isOwner && (
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-xs"
+                                      disabled={busy}
+                                      onClick={() => refundManually(p)}
+                                      title="זיכוי בסכום שאתה קובע — מחייב סיבה ונרשם כחריגה ממדיניות"
+                                    >
+                                      <Pencil size={12} /> זיכוי בסכום אחר
+                                    </button>
+                                  )}
                                   {p.icount_doc_app_url && (
                                     <a
                                       className="btn btn-ghost btn-xs"
                                       href={p.icount_doc_app_url}
                                       target="_blank"
                                       rel="noreferrer"
-                                      title="לזיכוי חלקי — פותחים את המסמך במערכת החיוב"
+                                      title="לפעולות שאינן זמינות כאן"
                                     >
                                       <ReceiptText size={12} /> פתח מסמך במערכת החיוב
                                     </a>
