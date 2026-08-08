@@ -221,8 +221,9 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
     const q = customerQuery.trim().toLowerCase();
     if (q.length < 1) return [];
     const phoneQ = normalizePhoneDigits(customerQuery);
-    const results = [];
+    const normName = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
+    const parentHits = [];
     for (const parent of parents) {
       const name = String(parent.name || '').toLowerCase();
       const phone = normalizePhoneDigits(parent.phone);
@@ -232,7 +233,7 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
         email.includes(q) ||
         (phoneQ.length >= 3 && phone.includes(phoneQ))
       ) {
-        results.push({
+        parentHits.push({
           key: `parent:${parent.id}`,
           type: 'parent',
           id: parent.id,
@@ -243,11 +244,12 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
       }
     }
 
+    const studentHits = [];
     for (const student of students) {
       const name = String(student.name || '').toLowerCase();
       if (!name.includes(q)) continue;
       const parent = parents.find((p) => p.id === student.parentId);
-      results.push({
+      studentHits.push({
         key: `student:${student.id}`,
         type: 'student',
         id: student.id,
@@ -256,10 +258,21 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
         parentName: parent?.name || '',
         phone: parent?.phone || '',
         email: parent?.email || '',
+        // An adult who climbs is their own customer — the student record and
+        // the parent record are the same person, not a household of two.
+        isSelfCustomer: Boolean(student.parentId) && normName(student.name) === normName(parent?.name),
       });
     }
 
-    return results.slice(0, 12);
+    // The same person must not appear twice. Keep the trainee row — picking it
+    // selects both the customer and the trainee in one tap.
+    const selfParentIds = new Set(
+      studentHits.filter((hit) => hit.isSelfCustomer).map((hit) => String(hit.parentId))
+    );
+    return [
+      ...parentHits.filter((hit) => !selfParentIds.has(String(hit.id))),
+      ...studentHits,
+    ].slice(0, 12);
   }, [customerQuery, parents, students]);
 
   const selectCustomer = (hit) => {
@@ -1078,7 +1091,9 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
                   {selectedStudent ? selectedStudent.name : selectedParent?.name}
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 2 }}>
-                  {selectedStudent && selectedParent?.name ? `הורה: ${selectedParent.name} · ` : ''}
+                  {selectedStudent && selectedParent?.name && selectedParent.name.trim() !== String(selectedStudent.name || '').trim()
+                    ? `הורה: ${selectedParent.name} · `
+                    : ''}
                   {effectivePhone || 'בלי טלפון'}
                   {effectiveEmail ? ` · ${effectiveEmail}` : ''}
                 </div>
@@ -1155,8 +1170,8 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
                     >
                       <span style={{ fontWeight: 700 }}>{hit.name}</span>
                       <span style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                        {hit.type === 'parent' ? 'לקוח / הורה' : 'מתאמן'}
-                        {hit.parentName ? ` · ${hit.parentName}` : ''}
+                        {hit.type === 'parent' ? 'לקוח / הורה' : hit.isSelfCustomer ? 'לקוח · מתאמן' : 'מתאמן'}
+                        {hit.parentName && !hit.isSelfCustomer ? ` · ${hit.parentName}` : ''}
                         {hit.phone ? ` · ${hit.phone}` : ''}
                       </span>
                     </button>
