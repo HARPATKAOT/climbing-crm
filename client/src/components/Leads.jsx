@@ -2121,6 +2121,29 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
    * נוצלה פחות דמי הביטול. השרת מחשב, כאן רק מציגים לאישור — ומאשרים בדיוק
    * את הסכום שהוצג.
    */
+  /**
+   * מה שהמדיניות שנשמרה עם התשלום אומרת, בשורה אחת.
+   *
+   * הצילום נשמר על העסקה ברגע הרכישה, ולכן זה מה שהיה בתוקף אז — גם אם
+   * המדיניות שונתה מאז. עובד בדלפק שנשאל „מה מגיע לי” קורא כאן ולא מנחש.
+   */
+  const policyLine = (payment) => {
+    const snap = payment?.policy_snapshot
+      || (Array.isArray(payment?.policy_snapshots) ? payment.policy_snapshots[0] : null);
+    if (!snap) return '';
+    const name = snap.policy_name || 'מדיניות ביטול';
+    if (snap.basis === 'usage') {
+      const rule = snap.usage_rule || {};
+      const percent = Number(rule.unused_refund_percent) || 0;
+      const fee = Number(rule.fixed_fee) || 0;
+      return `${name}: ${percent}% ממה שלא נוצל${fee ? `, בניכוי ₪${fee}` : ''}`;
+    }
+    const top = (snap.rules || [])[0];
+    if (!top) return name;
+    const fee = Number(top.fixed_fee) || 0;
+    return `${name}: עד ${Number(top.refund_percent) || 0}% החזר${fee ? `, בניכוי ₪${fee} למשתתף` : ''}`;
+  };
+
   const refundEquipmentPayment = async (payment) => {
     const key = `${payment.id}:refund`;
     setPaymentBusyKey(key);
@@ -3619,6 +3642,12 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                               {paymentStudent && (
                                 <div style={{ marginTop: 4, color: 'var(--text-3)', fontSize: 11 }}>
                                   עבור {paymentStudent.name}
+                                </div>
+                              )}
+                              {policyLine(p) && (
+                                <div style={{ marginTop: 4, color: 'var(--text-3)', fontSize: 11 }}>
+                                  <ShieldCheck size={11} style={{ verticalAlign: -1, marginInlineEnd: 4 }} />
+                                  {policyLine(p)}
                                 </div>
                               )}
                               {equipmentAllocations.length > 0 && (

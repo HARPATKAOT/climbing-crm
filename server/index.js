@@ -322,8 +322,6 @@ import {
   EQUIPMENT_TEMPLATE_NAME,
   DEFAULT_EQUIPMENT_SETTINGS,
   normalizeEquipmentSettings,
-  resolveSeasonHalves,
-  halfMonthUnits,
   isKidStudent,
   isEquipmentEligibleStudent,
   equipmentItemTypesForStudent,
@@ -4306,6 +4304,10 @@ async function createFamilyEquipmentPayment(req, res, checkout) {
     equipment_family_discount_percent: pricing.percent,
     equipment_family_discount_amount: pricing.discount,
     equipment_family_total: pricing.total,
+    // צילום מדיניות הביטול כפי שהיא ברגע הרכישה. בלעדיו הזיכוי היה קורא את
+    // המדיניות העדכנית בזמן הביטול, ושינוי דמי הביטול היה משנה למפרע החזר
+    // של השכרה שכבר שולמה.
+    policy_snapshot: equipmentPolicySnapshot(),
     updated_at: now,
   });
 
@@ -8881,28 +8883,10 @@ app.post('/api/payments/:id/send-invoice', async (req, res) => {
  * helper that already handles it instead of only cancelling the document.
  */
 /**
- * זיכוי על השכרת ציוד — לפי מדיניות הביטול שהוצמדה לו.
- *
- * ההשכרה מתומחרת מלכתחילה לפי כמה מחצי העונה נותר, ולכן גם הזיכוי כזה:
- * ערך החודשים שטרם נוצלו פחות דמי הביטול. החלון עצמו לא נשמר על התשלום, ולכן
- * הוא נגזר מחדש — חצי העונה שבתוכו נעשתה הרכישה.
+ * מדיניות הביטול של הציוד — הפעילה בבסיס „ניצול”, שנבחרת לפי שמה.
+ * מוצמדת לתשלום ברגע הרכישה ולא נקראת מחדש בזמן הזיכוי.
  */
-function equipmentRentalPeriod(settings, payment) {
-  const anchor = payment?.paid_at || payment?.created_at || new Date();
-  const half = resolveSeasonHalves(normalizeEquipmentSettings(settings), new Date(anchor)).current;
-  const endInclusive = new Date(half.endExclusive.getTime() - 864e5);
-  return {
-    total_units: halfMonthUnits(half.start, half.endExclusive),
-    half_start: half.start.toISOString().slice(0, 10),
-    half_end: endInclusive.toISOString().slice(0, 10),
-    half_label: half.label,
-  };
-}
-
-async function equipmentRefundPlan(payment) {
-  const settings = await loadEquipmentSettings();
-  const pricing = equipmentRentalPeriod(settings, payment);
-  // מדיניות הציוד היא הראשונה בבסיס „ניצול”; בלעדיה אין לפי מה לחשב.
+function equipmentPolicySnapshot() {
   const usagePolicies = (db.get('cancellation_policies') || [])
     .filter((row) => row.status !== 'archived')
     .map((row) => currentPolicyVersion(db, row.id))
@@ -8910,19 +8894,27 @@ async function equipmentRefundPlan(payment) {
   const chosen = usagePolicies.find((resolved) => /נעל|ציוד|השכר/.test(resolved.policy.name))
     || usagePolicies[0]
     || null;
-  if (!chosen) {
+  return chosen?.snapshot || null;
+}
+
+function equipmentRefundPlan(payment) {
+  // הצילום שנשמר על התשלום הוא האמת. הנפילה לאחור היא בשביל השכרות שנרכשו
+  // לפני שהצילום נשמר — עליהן, ורק עליהן, נקראת המדיניות הנוכחית.
+  const snapshot = payment?.policy_snapshot || equipmentPolicySnapshot();
+  if (!snapshot) {
     return { ok: false, error: 'לא הוגדרה מדיניות ביטול בבסיס „ניצול” לציוד' };
   }
-  const recommendation = equipmentRefundRecommendation({
-    snapshot: chosen.snapshot,
-    payment,
-    pricing,
-  });
+  const recommendation = equipmentRefundRecommendation({ snapshot, payment });
+  if (!recommendation.has_shoes) {
+    return {
+      ok: false,
+      error: 'מדיניות הביטול חלה רק על השכרת נעליים, ובתשלום הזה אין נעליים',
+    };
+  }
   return {
     ok: true,
-    policy: { id: chosen.policy.id, name: chosen.policy.name },
-    snapshot: chosen.snapshot,
-    pricing,
+    policy: { name: snapshot.policy_name || 'מדיניות ביטול ציוד', from_payment: !!payment?.policy_snapshot },
+    snapshot,
     recommendation,
   };
 }
@@ -8935,11 +8927,10 @@ app.post('/api/payments/:id/equipment-refund-preview', async (req, res) => {
     if (!isEquipmentPayment(payment)) {
       return res.status(400).json({ error: 'זה אינו תשלום ציוד' });
     }
-    const plan = await equipmentRefundPlan(payment);
+    const plan = equipmentRefundPlan(payment);
     if (!plan.ok) return res.status(400).json({ error: plan.error });
     res.json({
       policy: plan.policy,
-      pricing: plan.pricing,
       recommendation: plan.recommendation,
       paid_amount: Number(payment.amount) || 0,
     });
@@ -8964,7 +8955,7 @@ app.post('/api/payments/:id/equipment-refund', async (req, res) => {
       return res.status(400).json({ error: 'התשלום כבר זוכה' });
     }
 
-    const plan = await equipmentRefundPlan(payment);
+    const plan = equipmentRefundPlan(payment);
     if (!plan.ok) return res.status(400).json({ error: plan.error });
 
     // אותו אישור סכום שקיים בזיכוי הרשמה: מה שמאושר הוא מה שהוצג, ולא מספר
@@ -8976,7 +8967,6 @@ app.post('/api/payments/:id/equipment-refund', async (req, res) => {
         error: 'יש לאשר את סכום הזיכוי המוצג',
         code: 'refund_amount_approval_required',
         recommendation: plan.recommendation,
-        pricing: plan.pricing,
       });
     }
     if (!plan.recommendation.period_resolved) {

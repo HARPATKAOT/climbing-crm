@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { rentalUsage, equipmentRefundRecommendation } from './equipmentRefund.js';
+import {
+  rentalUsage,
+  shoesPortionOf,
+  equipmentRefundRecommendation,
+} from './equipmentRefund.js';
 
-/** מדיניות ציוד: כל מה שלא נוצל חוזר, פחות 50 ₪ דמי ביטול. */
+/** מדיניות הציוד: כל מה שלא נוצל חוזר, פחות 50 ₪ דמי ביטול. */
 const snapshot = {
   basis: 'usage',
   cooling_off_hours: 24,
@@ -14,66 +18,91 @@ const snapshot = {
   },
 };
 
-test('הדוגמה של בעל העסק: נותרו חודשיים מתוך חמישה, ערכם 60 — מוחזרים 10', () => {
-  // חמישה חודשים, שולם 150; בנקודה שבה נותרו שתי חמישיות ערכן 60
-  const pricing = {
-    total_units: 5,
-    half_start: '2026-01-01',
-    half_end: '2026-06-01',
+/** תשלום ציוד אמיתי: נעליים + חולצה, חצי עונה 1.9–14.2. */
+function payment({ shoes = 150, shirt = 120, charged = null } = {}) {
+  const subtotal = shoes + shirt;
+  return {
+    equipment_checkout_token: 'chk1',
+    amount: charged ?? subtotal,
+    paid_at: '2026-09-01T00:00:00Z',
+    equipment_allocations: [{
+      student_name: 'ילד',
+      item_types: ['shoes', 'shirt'],
+      shoes_amount: shoes,
+      rental_starts_at: '2026-09-01',
+      rental_ends_at: '2027-02-14',
+      subtotal,
+      charge_amount: charged ?? subtotal,
+    }],
   };
-  const result = equipmentRefundRecommendation({
-    snapshot,
-    payment: { amount: 150, paid_at: '2026-01-01T00:00:00Z' },
-    pricing,
-    refDate: new Date('2026-04-01T00:00:00Z'),
-  });
-  assert.equal(result.remaining_units, 2);
-  assert.equal(result.amount, 10);
-  assert.equal(result.fixed_fee, 50);
+}
+
+test('רק הנעליים נכנסות לחישוב — החולצה אינה השכרה', () => {
+  const shoes = shoesPortionOf(payment());
+  assert.equal(shoes.amount, 150);
+  assert.equal(shoes.has_shoes, true);
 });
 
-test('נותר מעט — דמי הביטול לא הופכים את ההחזר לשלילי', () => {
-  const result = equipmentRefundRecommendation({
-    snapshot,
-    payment: { amount: 150, paid_at: '2026-01-01T00:00:00Z' },
-    pricing: { total_units: 5, half_start: '2026-01-01', half_end: '2026-06-01' },
-    refDate: new Date('2026-05-20T00:00:00Z'),
-  });
-  assert.equal(result.amount, 0);
+test('הנחת משפחה ומע״מ חלים על חלק הנעליים באותו יחס', () => {
+  // שולם 243 מתוך מחירון 270 — 90%
+  const shoes = shoesPortionOf(payment({ charged: 243 }));
+  assert.equal(shoes.amount, 135);
 });
 
-test('ביטול באותו יום, לפני שנוצל דבר — החזר מלא בלי דמי ביטול', () => {
+test('תשלום ציוד בלי נעליים — אין מה לזכות לפי המדיניות הזו', () => {
+  const withoutShoes = {
+    equipment_checkout_token: 'chk1',
+    amount: 120,
+    equipment_allocations: [{ item_types: ['shirt'], shoes_amount: null, subtotal: 120, charge_amount: 120 }],
+  };
+  const result = equipmentRefundRecommendation({ snapshot, payment: withoutShoes });
+  assert.equal(result.has_shoes, false);
+  assert.equal(result.period_resolved, false);
+});
+
+test('הצטרף בספטמבר ועזב באוקטובר — ההחזר מחושב על הנעליים בלבד', () => {
   const result = equipmentRefundRecommendation({
     snapshot,
-    payment: { amount: 150, paid_at: '2026-01-01T08:00:00Z' },
-    pricing: { total_units: 5, half_start: '2026-01-01', half_end: '2026-06-01' },
-    refDate: new Date('2026-01-01T10:00:00Z'),
+    payment: payment(),
+    refDate: new Date('2026-10-01T00:00:00Z'),
+  });
+  assert.equal(result.shoes_amount, 150);
+  assert.equal(result.total_units, 5.5);
+  assert.equal(result.used_units, 1);
+  assert.equal(result.remaining_units, 4.5);
+  // 150 × (4.5/5.5) = 122.73, פחות 50
+  assert.equal(result.amount, 72.73);
+});
+
+test('ביטול באותו יום — החזר מלא על הנעליים, בלי דמי ביטול', () => {
+  const result = equipmentRefundRecommendation({
+    snapshot,
+    payment: payment(),
+    refDate: new Date('2026-09-01T10:00:00Z'),
   });
   assert.equal(result.rule_id, 'cooling_off');
   assert.equal(result.amount, 150);
 });
 
-test('בלי תאריכי תקופה — מסומן שלא נפתר, ולא מוצג סכום כאילו הוא ודאי', () => {
-  const usage = rentalUsage({ pricing: { total_units: 5 } });
-  assert.equal(usage.resolved, false);
-  assert.equal(usage.usedUnits, 5);
-
-  const result = equipmentRefundRecommendation({
-    snapshot,
-    payment: { amount: 150 },
-    pricing: { total_units: 5 },
-  });
-  assert.equal(result.period_resolved, false);
-  assert.equal(result.amount, 0);
-});
-
 test('התקופה נגמרה — אין מה להחזיר', () => {
   const result = equipmentRefundRecommendation({
     snapshot,
-    payment: { amount: 150, paid_at: '2026-01-01T00:00:00Z' },
-    pricing: { total_units: 5, half_start: '2026-01-01', half_end: '2026-06-01' },
-    refDate: new Date('2026-07-01T00:00:00Z'),
+    payment: payment(),
+    refDate: new Date('2027-03-01T00:00:00Z'),
   });
   assert.equal(result.remaining_units, 0);
   assert.equal(result.amount, 0);
+});
+
+test('בלי חלון השכרה — מסומן שלא נפתר, בלי להציג סכום מנוחש', () => {
+  const usage = rentalUsage({ startsAt: null, endsAt: null });
+  assert.equal(usage.resolved, false);
+
+  const broken = {
+    equipment_checkout_token: 'chk1',
+    amount: 150,
+    equipment_allocations: [{ shoes_amount: 150, subtotal: 150, charge_amount: 150 }],
+  };
+  const result = equipmentRefundRecommendation({ snapshot, payment: broken });
+  assert.equal(result.period_resolved, false);
 });
