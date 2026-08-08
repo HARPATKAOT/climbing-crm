@@ -138,10 +138,29 @@ const WORK_TYPE_OPTIONS = [
 
 const DEFAULT_WAGE = { counter_rate: 45, class_rate: 70, private_rate: 90, route_rate: 60 };
 
-/** התעריף השעתי המוערך לשורה — לפי התפקיד שלה, דרך הסכם השכר של העובד. */
+/** התעריף המוערך לשורה — לפי התפקיד שלה, דרך הסכם השכר של העובד. */
 function rateForRow(agreement, row) {
   const rate = rateForRole(agreement, row?.role || workTypeRole(row?.work_type));
   return rate ? rate.amount : 0;
+}
+
+/**
+ * שעתי או יומי — לפי מה שנקבע לתפקיד בהסכם השכר של אותו עובד.
+ *
+ * המסך כתב „שעתי” על כל שורה שאינה גלובלית, גם כשהתעריף בהסכם הוא יומי
+ * (הדרכת סנפלינג, למשל). החישוב תמיד ידע את ההבדל — יום סנפלינג משולם כיום
+ * ולא לפי שעות — אבל מה שנכתב ליד הסכום לא תאם אותו.
+ */
+function rateModeForRow(agreement, row) {
+  const rate = rateForRole(agreement, row?.role || workTypeRole(row?.work_type));
+  return rate?.mode === 'daily' ? 'daily' : 'hourly';
+}
+
+/** „₪450 ליום” או „₪70 לשעה”, לפי אותו תעריף. */
+function rateLabelForRow(agreement, row) {
+  const amount = rateForRow(agreement, row);
+  if (!amount) return '';
+  return rateModeForRow(agreement, row) === 'daily' ? `₪${amount} ליום` : `₪${amount} לשעה`;
 }
 
 function payAmountForAssignment(row, agreement) {
@@ -986,7 +1005,9 @@ function WorkAssignmentsBlock({
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
                     {row.start_time}–{row.end_time} · {row.hours} שעות ·{' '}
-                    {row.pay_mode === 'flat' ? 'גלובלי' : `₪${rate} לשעה`} · הערכה ₪{amount}
+                    {row.pay_mode === 'flat'
+                      ? 'סכום מיוחד ליום הזה'
+                      : rateLabelForRow(agreement, row)} · הערכה ₪{amount}
                     {' '}{amountBasisLabel(empPaymentMethod(row.employee_id))}
                   </div>
                 </div>
@@ -1048,8 +1069,12 @@ function WorkAssignmentsBlock({
                       onChange={(e) => patchLocal(row.id, { pay_mode: e.target.value })}
                       style={{ fontSize: 12, padding: '4px 6px' }}
                     >
-                      <option value="hourly">שעתי</option>
-                      <option value="flat">גלובלי</option>
+                      <option value="hourly">
+                        {rateModeForRow(agreement, row) === 'daily'
+                          ? 'לפי תעריף יומי'
+                          : 'לפי תעריף שעתי'}
+                      </option>
+                      <option value="flat">סכום מיוחד ליום הזה</option>
                     </AppSelect>
                   </label>
                   {payMode === 'hourly' ? (
@@ -1074,7 +1099,7 @@ function WorkAssignmentsBlock({
                     </label>
                   ) : (
                     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
-                      סכום גלובלי
+                      סכום ליום הזה
                       <input
                         className="input"
                         type="number"
