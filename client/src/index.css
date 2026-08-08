@@ -3397,8 +3397,13 @@ select option, select optgroup {
 .draft-style-controls {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 5px;
   margin-inline-start: 8px;
+}
+
+.draft-style-controls .app-select-wrap {
+  flex: 0 0 auto;
 }
 
 .draft-style-controls .app-select-trigger {
@@ -3413,9 +3418,13 @@ select option, select optgroup {
 .draft-all-button {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
   height: 24px;
-  padding: 0 9px;
+  padding: 0 10px;
+  /* בלי זה „מלא הכל” נשבר לשתי שורות ויוצא מגובה השורה. */
+  white-space: nowrap;
+  flex: 0 0 auto;
   border: 1px solid color-mix(in srgb, var(--purple) 45%, transparent);
   border-radius: 7px;
   background: color-mix(in srgb, var(--purple) 12%, transparent);

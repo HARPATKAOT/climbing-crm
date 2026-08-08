@@ -6,6 +6,7 @@ import {
   draftPromptFor,
   draftActivityCopy,
   isDraftableField,
+  normalizeLength,
   otherSectionsOf,
 } from './activityCopyDraft.js';
 
@@ -89,4 +90,11 @@ test("הטון והאימוג'י משנים את הוראת המערכת", () =>
   assert.ok(buildSystemPrompt({ emoji: false }).includes('בלי אימוג'));
   // טון שאינו מוכר נופל לברירת המחדל במקום לשבור
   assert.ok(buildSystemPrompt({ tone: 'nonsense' }).includes('חם ומזמין'));
+});
+
+test('אורך הטקסט משנה את הוראת המערכת, וערך לא מוכר נופל לבינוני', () => {
+  assert.ok(buildSystemPrompt({ length: 'short' }).includes('שורה אחת עד שתיים'));
+  assert.ok(buildSystemPrompt({ length: 'long' }).includes('4–7 שורות'));
+  assert.ok(buildSystemPrompt({ length: 'nonsense' }).includes('2–4 שורות'));
+  assert.equal(normalizeLength(''), 'medium');
 });

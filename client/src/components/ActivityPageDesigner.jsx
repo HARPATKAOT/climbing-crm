@@ -12,6 +12,13 @@ const DRAFT_TONE_LABELS = {
   brief: 'קצר מאוד',
 };
 
+/** אותם מפתחות שהשרת מכיר ב-DRAFT_LENGTHS. */
+const DRAFT_LENGTH_LABELS = {
+  short: 'קצר',
+  medium: 'בינוני',
+  long: 'מפורט',
+};
+
 function parsePosition(position) {
   const raw = String(position || '50% 50%').trim().toLowerCase();
   const xWords = { left: 0, center: 50, right: 100 };
@@ -105,6 +112,10 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
   );
   useEffect(() => { localStorage.setItem('activityDraftTone', draftTone); }, [draftTone]);
   useEffect(() => { localStorage.setItem('activityDraftEmoji', draftEmoji ? '1' : '0'); }, [draftEmoji]);
+  const [draftLength, setDraftLength] = useState(
+    () => localStorage.getItem('activityDraftLength') || 'medium'
+  );
+  useEffect(() => { localStorage.setItem('activityDraftLength', draftLength); }, [draftLength]);
 
   /** מבקש ניסוח לסעיף אחד ומכניס אותו לשדה. לא שומר — זו טיוטה לעריכה. */
   /**
@@ -120,6 +131,7 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
         field,
         tone: draftTone,
         emoji: draftEmoji,
+        length: draftLength,
         activity: {
           type: form.type,
           name: form.name,
@@ -387,6 +399,16 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
                 title="סגנון הניסוח של העוזר"
               >
                 {Object.entries(DRAFT_TONE_LABELS).map(([value, text]) => (
+                  <option key={value} value={value}>{text}</option>
+                ))}
+              </AppSelect>
+              <AppSelect
+                className="input"
+                value={draftLength}
+                onChange={(event) => setDraftLength(event.target.value)}
+                title="אורך הטקסט"
+              >
+                {Object.entries(DRAFT_LENGTH_LABELS).map(([value, text]) => (
                   <option key={value} value={value}>{text}</option>
                 ))}
               </AppSelect>

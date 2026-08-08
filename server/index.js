@@ -5868,6 +5868,7 @@ app.post('/api/activities/draft-copy', async (req, res) => {
       instruction: req.body?.instruction || '',
       tone: req.body?.tone,
       emoji: req.body?.emoji !== false,
+      length: req.body?.length,
       generate: async ({ prompt, system }) => {
         const { content, error } = await callGeminiChat({
           contents: [{ role: 'user', parts: [{ text: prompt }] }],

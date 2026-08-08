@@ -46,13 +46,38 @@ export const DRAFT_TONES = {
   },
 };
 
+/** כמה טקסט נכתב. משפיע על השורה שקובעת את האורך בהוראת המערכת. */
+export const DRAFT_LENGTHS = {
+  short: {
+    key: 'short',
+    label: 'קצר',
+    line: 'שורה אחת עד שתיים, ולא יותר.',
+  },
+  medium: {
+    key: 'medium',
+    label: 'בינוני',
+    line: '2–4 שורות קצרות לכל היותר.',
+  },
+  long: {
+    key: 'long',
+    label: 'מפורט',
+    line: '4–7 שורות, כל אחת פריט או משפט שעומד בפני עצמו.',
+  },
+};
+
+export function normalizeLength(value) {
+  const key = String(value || '').trim();
+  return DRAFT_LENGTHS[key] ? key : 'medium';
+}
+
 export function normalizeTone(value) {
   const key = String(value || '').trim();
   return DRAFT_TONES[key] ? key : 'warm';
 }
 
-export function buildSystemPrompt({ tone = 'warm', emoji = true } = {}) {
+export function buildSystemPrompt({ tone = 'warm', emoji = true, length = 'medium' } = {}) {
   const chosen = DRAFT_TONES[normalizeTone(tone)];
+  const size = DRAFT_LENGTHS[normalizeLength(length)];
   return [
     'אתה כותב תוכן לדף הרשמה של חברת טיולים וקיר טיפוס בישראל.',
     'כתוב בעברית, בגוף שני רבים.',
@@ -60,7 +85,7 @@ export function buildSystemPrompt({ tone = 'warm', emoji = true } = {}) {
     emoji
       ? "שלב אימוג'י אחד בתחילת כל שורה או פריט, כזה שמתאים לתוכן השורה. אימוג'י אחד לשורה לכל היותר, ולא בסוף משפט."
       : "בלי אימוג'י ובלי סימנים מיוחדים.",
-    '2–4 שורות קצרות לכל היותר, בלי כותרת ובלי לחזור על שם האירוע או התאריך.',
+    `${size.line} בלי כותרת ובלי לחזור על שם האירוע או התאריך.`,
     'אל תמציא עובדות שלא נמסרו לך: אל תכתוב מחירים, שעות, מרחקים או שמות מקומות',
     'שלא הופיעו בקלט. אם חסר מידע — כתוב את מה שנכון לכל פעילות מהסוג הזה.',
     'כל סעיף בדף עומד בפני עצמו — אל תחזור על מה שכבר נאמר בסעיף אחר.',
@@ -143,14 +168,14 @@ export function cleanDraft(text) {
  * @param {(input: {prompt: string, system: string}) => Promise<{text: string, error: string}>} generate
  */
 export async function draftActivityCopy({
-  field, activity, instruction, generate, tone = 'warm', emoji = true,
+  field, activity, instruction, generate, tone = 'warm', emoji = true, length = 'medium',
 } = {}) {
   if (!isDraftableField(field)) {
     return { ok: false, error: 'הסעיף הזה אינו פתוח לניסוח אוטומטי' };
   }
   const { text, error } = await generate({
     prompt: draftPromptFor(field, activity, instruction),
-    system: buildSystemPrompt({ tone, emoji }),
+    system: buildSystemPrompt({ tone, emoji, length }),
   });
   if (error === 'no_api_key') {
     return { ok: false, error: 'העוזר לא מוגדר בשרת' };
