@@ -107,36 +107,68 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
   useEffect(() => { localStorage.setItem('activityDraftEmoji', draftEmoji ? '1' : '0'); }, [draftEmoji]);
 
   /** מבקש ניסוח לסעיף אחד ומכניס אותו לשדה. לא שומר — זו טיוטה לעריכה. */
+  /**
+   * מבקש ניסוח לסעיף אחד. `known` הוא מה שכבר נוסח בריצה הנוכחית — בלעדיו
+   * מילוי של כל הסעיפים ברצף היה שולח לכל אחד את המצב שלפני הלחיצה, וארבעתם
+   * היו חוזרים זה על זה בדיוק כפי שתוקן בשרת.
+   */
+  const requestDraft = async (field, known = {}) => {
+    const res = await fetch('/api/activities/draft-copy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        field,
+        tone: draftTone,
+        emoji: draftEmoji,
+        activity: {
+          type: form.type,
+          name: form.name,
+          location: form.location,
+          date: form.date,
+          start_time: form.start_time,
+          end_time: form.end_time,
+          registration_page_body: form.registration_page_body || form.description || '',
+          audience: form.audience,
+          included: form.included,
+          what_to_bring: form.what_to_bring,
+          important_info: form.important_info,
+          ...known,
+        },
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.draft) throw new Error(data.error || 'ניסוח ההצעה נכשל');
+    return data.draft;
+  };
+
   const draftField = async (field) => {
     if (readOnly || draftBusy) return;
     setDraftBusy(field);
     setDraftError('');
     try {
-      const res = await fetch('/api/activities/draft-copy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          field,
-          tone: draftTone,
-          emoji: draftEmoji,
-          activity: {
-            type: form.type,
-            name: form.name,
-            location: form.location,
-            date: form.date,
-            start_time: form.start_time,
-            end_time: form.end_time,
-            registration_page_body: form.registration_page_body || form.description || '',
-            audience: form.audience,
-            included: form.included,
-            what_to_bring: form.what_to_bring,
-            important_info: form.important_info,
-          },
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.draft) throw new Error(data.error || 'ניסוח ההצעה נכשל');
-      patch({ [field]: data.draft });
+      patch({ [field]: await requestDraft(field) });
+    } catch (err) {
+      setDraftError(err.message || 'ניסוח ההצעה נכשל');
+    } finally {
+      setDraftBusy('');
+    }
+  };
+
+  /**
+   * ממלא את ארבעת הסעיפים. ברצף ולא במקביל בכוונה: כל סעיף מקבל את מה שנוסח
+   * לפניו, וזה מה שמונע ממנו לחזור עליו. מה שכבר נוסח נשאר גם אם אחד באמצע
+   * נכשל — לא מוחקים עבודה שהצליחה בגלל שגיאה שאחריה.
+   */
+  const draftAll = async () => {
+    if (readOnly || draftBusy) return;
+    setDraftError('');
+    const known = {};
+    try {
+      for (const { key } of ACTIVITY_PAGE_FIELDS) {
+        setDraftBusy(key);
+        known[key] = await requestDraft(key, known);
+        patch({ [key]: known[key] });
+      }
     } catch (err) {
       setDraftError(err.message || 'ניסוח ההצעה נכשל');
     } finally {
@@ -360,6 +392,16 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
               </AppSelect>
               <button
                 type="button"
+                className="draft-all-button"
+                onClick={draftAll}
+                disabled={!!draftBusy}
+                title="מנסח את ארבעת הסעיפים בזה אחר זה, כך שלא יחזרו זה על זה"
+              >
+                {draftBusy ? <Loader2 size={12} className="spin" /> : <Sparkles size={12} />}
+                מלא הכל
+              </button>
+              <button
+                type="button"
                 className={`draft-emoji-toggle${draftEmoji ? ' is-on' : ''}`}
                 onClick={() => setDraftEmoji((on) => !on)}
                 title={draftEmoji ? "עם אימוג'י" : "בלי אימוג'י"}
@@ -388,16 +430,7 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
                 <span>
                   <Icon size={15} aria-hidden="true" />
                   {label}
-                </span>
-                {/* הכפתור יושב בפינת התיבה שאותה הוא ממלא. ההצעה נכנסת כטיוטה
-                    — היא לא נשמרת עד שתשמרו את האירוע, וניתן לערוך אותה. */}
-                <span className="event-field-box">
-                  <textarea
-                    rows={3}
-                    value={form[key] || ''}
-                    placeholder={hint}
-                    onChange={(event) => patch({ [key]: event.target.value })}
-                  />
+                  {/* ההצעה נכנסת כטיוטה — היא לא נשמרת עד שתשמרו את האירוע. */}
                   <button
                     type="button"
                     className="event-field-draft"
@@ -410,6 +443,12 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
                       : <Sparkles size={13} />}
                   </button>
                 </span>
+                <textarea
+                  rows={3}
+                  value={form[key] || ''}
+                  placeholder={hint}
+                  onChange={(event) => patch({ [key]: event.target.value })}
+                />
               </label>
             )
           ))}

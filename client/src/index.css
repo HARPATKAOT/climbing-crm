@@ -3410,6 +3410,29 @@ select option, select optgroup {
   letter-spacing: 0;
 }
 
+.draft-all-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--purple) 45%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--purple) 12%, transparent);
+  color: #C4B5FD;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--t-fast);
+}
+
+.draft-all-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--purple) 22%, transparent);
+}
+
+.draft-all-button:disabled { opacity: 0.6; cursor: default; }
+
 .draft-emoji-toggle {
   display: inline-flex;
   align-items: center;
@@ -4384,17 +4407,8 @@ select option, select optgroup {
 
 /* כפתור הניסוח יושב בקצה שורת התווית, ומופיע בעדינות כדי לא להתחרות
    בכותרת הסעיף. */
-/* התיבה עוטפת את השדה ואת הכפתור, כדי שהכפתור ישב בתוך התיבה שהוא ממלא. */
-.activity-designer .event-field-box {
-  position: relative;
-  display: block;
-  min-width: 0;
-}
-
 .event-field-draft {
-  position: absolute;
-  inset-block-start: 7px;
-  inset-inline-start: 7px;
+  margin-inline-start: auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
