@@ -4,6 +4,7 @@ import {
   RefreshCw, Loader2, CalendarDays, CalendarRange, Layers, List,
   CheckCircle, AlertCircle, Clock3, Check, Pencil, Undo2, Users,
   Eye, EyeOff, Copy, SlidersHorizontal, Lock, Globe, Ban, RotateCcw, ClipboardCheck,
+  StickyNote, ClipboardList, UserPlus,
 } from 'lucide-react';
 import EntityLink from '../utils/entityLinks.jsx';
 import ActivityPageDesigner from './ActivityPageDesigner.jsx';
@@ -445,6 +446,7 @@ function WorkAssignmentsBlock({
   const [selectedIds, setSelectedIds] = useState([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  const [addOpen, setAddOpen] = useState(false);
   // „כל האירוע” או חלק ממנו. נבחר לפני השיבוץ ונשמר על השורות שנוצרות.
   const [hoursScope, setHoursScope] = useState('all');
   const [customStart, setCustomStart] = useState('');
@@ -631,10 +633,36 @@ function WorkAssignmentsBlock({
   const requiredRoles = staffPay?.role
     ? [staffPay.role]
     : activityRoleLabels(roleCatalog, activityType);
+
+  // הסינון שהאירוע מכתיב היה קורה בשקט: הרשימה כבר הראתה רק את מי שמתאים,
+  // בלי לומר לפי מה, ובלי דרך לראות מישהו אחר. עכשיו הוא מוצג כשורת אייקוני
+  // תפקידים — מסומנים מראש לפי סוג האירוע, וניתנים לשינוי כדי לשבץ גם מי
+  // שאינו התפקיד המתבקש.
+  const [roleFilter, setRoleFilter] = useState(null); // null = עוד לא אותחל
+  const autoRolesKey = (requiredRoles || []).join('|');
+  useEffect(() => {
+    setRoleFilter(requiredRoles && requiredRoles.length ? [...requiredRoles] : []);
+    // מאותחל מחדש כשסוג האירוע או התפקיד שנבחר משתנים — הבחירה הידנית מוותרת
+    // בפני הכוונה החדשה, ולא נשארת מסננת לפי משהו שכבר לא רלוונטי.
+  }, [autoRolesKey]);
+
+  const activeRoleFilter = roleFilter ?? (requiredRoles || []);
   const unassigned = employees.filter((e) => !shownRows.some((r) => r.employee_id === e.id));
-  const available = staffForRole(unassigned, requiredRoles);
-  const blockedByRole = requiredRoles && unassigned.length > 0 && available.length === 0;
+  // רשימה ריקה = בלי סינון, כלומר כל מי שעוד לא משובץ.
+  const available = staffForRole(unassigned, activeRoleFilter.length ? activeRoleFilter : null);
+  const blockedByRole = activeRoleFilter.length > 0 && unassigned.length > 0 && available.length === 0;
   const assignLabel = selectedIds.length > 1 ? 'שבץ עובדים' : 'שבץ עובד';
+
+  const toggleRoleFilter = (label) => {
+    setRoleFilter((prev) => {
+      const base = prev ?? (requiredRoles || []);
+      return base.includes(label)
+        ? base.filter((r) => r !== label)
+        : [...base, label];
+    });
+    // מי שכבר סומן ונעלם מהרשימה לא נשאר מסומן מאחורי הקלעים.
+    setSelectedIds([]);
+  };
 
   return (
     <div style={{
@@ -647,12 +675,26 @@ function WorkAssignmentsBlock({
       flexDirection: 'column',
       gap: 10,
     }}>
-      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--text-1)' }}>
+      <div className="activity-settings-card-title" style={{ '--card-accent': 'var(--amber)' }}>
+        <Users aria-hidden="true" />
         עובדים במשמרת
       </div>
 
       {/* הוספת עובד לאירוע: תפקיד, שכר, שעות, ואז מי — בסדר הזה, כי התפקיד
-          הוא שקובע מי בכלל מופיע ברשימת העובדים שאפשר לשבץ. */}
+          הוא שקובע מי בכלל מופיע ברשימת העובדים שאפשר לשבץ.
+
+          סגור כברירת מחדל: רוב הפעמים שפותחים אירוע לא באים לשבץ, והחלונית
+          הזאת תפסה את רוב הגובה של הכרטיס לפני שהגיעו למי שכבר משובץ. */}
+      <button
+        type="button"
+        className={`btn btn-sm staff-add-toggle${addOpen ? ' is-open' : ''}`}
+        onClick={() => setAddOpen((open) => !open)}
+        aria-expanded={addOpen}
+      >
+        {addOpen ? <X size={14} /> : <UserPlus size={14} />}
+        הוספת עובד לאירוע
+      </button>
+      {addOpen && (
       <div style={{
         display: 'flex',
         flexDirection: 'column',
@@ -661,9 +703,6 @@ function WorkAssignmentsBlock({
         borderRadius: 10,
         border: '1px dashed var(--border)',
       }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)' }}>
-          הוספת עובד לאירוע
-        </div>
 
         {draftMode && canViewHr && (
           <div style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-3)' }}>
@@ -776,7 +815,34 @@ function WorkAssignmentsBlock({
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-end' }}>
             <div style={{ flex: 1, minWidth: 180, display: 'flex', flexDirection: 'column', gap: 6 }}>
               <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                {staffPay?.role ? `את מי משבצים — רק מי שמסומן כ״${staffPay.role}״` : 'את מי משבצים'}
+                את מי משבצים
+              </div>
+              {/* אייקון לכל תפקיד, ובוחרים כמה שרוצים. מה שסוג האירוע מכתיב
+                  מסומן מראש; ביטול הסימון פותח את הרשימה לשאר העובדים. */}
+              <div className="staff-role-filter">
+                {payableRoles.map(({ role }) => {
+                  const Icon = roleIcon(role);
+                  const on = activeRoleFilter.includes(role);
+                  const count = staffForRole(unassigned, [role]).length;
+                  return (
+                    <button
+                      key={role}
+                      type="button"
+                      className={`staff-role-chip${on ? ' is-on' : ''}`}
+                      style={{ '--role-accent': roleColor(role) }}
+                      onClick={() => toggleRoleFilter(role)}
+                      title={`${role} · ${count} עובדים`}
+                      aria-pressed={on}
+                    >
+                      <Icon size={15} aria-hidden="true" />
+                    </button>
+                  );
+                })}
+                <span className="staff-role-filter-note">
+                  {activeRoleFilter.length
+                    ? `${available.length} מתוך ${unassigned.length}`
+                    : `כל ${unassigned.length} העובדים`}
+                </span>
               </div>
               <div style={{
                 display: 'flex',
@@ -834,6 +900,7 @@ function WorkAssignmentsBlock({
           </div>
         )}
       </div>
+      )}
 
       {shownRows.length === 0 ? (
         <div style={{ fontSize: 12, color: 'var(--text-3)', fontStyle: 'italic' }}>
@@ -1330,8 +1397,9 @@ function RegularActivityModal({
 
           <div className="activity-modal-operations">
             {(isTemplateEdit || !isOps) && (
-            <section className="activity-settings-card">
+            <section className="activity-settings-card" style={{ '--card-accent': 'var(--blue)' }}>
               <div className="activity-settings-card-title">
+                <SlidersHorizontal aria-hidden="true" />
                 {isTemplateEdit ? 'הגדרות התבנית' : 'הגדרות האירוע'}
               </div>
               {isTemplateEdit && (
@@ -1519,8 +1587,9 @@ function RegularActivityModal({
             </section>
             )}
 
-            <section className="activity-settings-card">
+            <section className="activity-settings-card" style={{ '--card-accent': 'var(--green)' }}>
               <div className="activity-settings-card-title">
+                <CalendarDays aria-hidden="true" />
                 {isOps || !canViewFinance ? 'מועד ומקום' : 'מועד, מקום ומחיר'}
               </div>
 
@@ -1686,8 +1755,9 @@ function RegularActivityModal({
 
             {/* הערות פנימיות הן באמת רשות — אירוע תקין לגמרי יכול להישאר בלי
                 אף מילה כאן, ולכן הן לא נצבעות ככאלה שחסרות. */}
-            <section className="activity-settings-card" data-optional>
+            <section className="activity-settings-card" data-optional style={{ '--card-accent': 'var(--cyan)' }}>
               <div className="activity-settings-card-title">
+                {isOps ? <ClipboardList aria-hidden="true" /> : <StickyNote aria-hidden="true" />}
                 {isOps ? 'מה עושים בפעילות' : 'הערות פנימיות'}
               </div>
               <textarea

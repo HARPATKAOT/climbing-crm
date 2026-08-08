@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Copy, Download, ExternalLink, Loader2, Pencil, Plus, RefreshCw,
+  Copy, CreditCard, Download, ExternalLink, Loader2, Pencil, Plus, RefreshCw,
   Search, Send, Trash2, Undo2, UserCheck, UserPlus, Users, X,
 } from 'lucide-react';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
@@ -871,7 +871,11 @@ export default function ActivityRegistrationPanel({
 
   return (
     <div className="activity-registration-operations">
-      <div className="activity-registration-operations-title">
+      <div
+        className="activity-registration-operations-title"
+        style={{ '--card-accent': 'var(--purple)' }}
+      >
+        <CreditCard aria-hidden="true" />
         תשלום והרשמה
       </div>
 

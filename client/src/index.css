@@ -3262,31 +3262,34 @@ select option, select optgroup {
   background: color-mix(in srgb, var(--card-accent) 55%, transparent);
 }
 
-.activity-modal-operations > .activity-settings-card:nth-of-type(7n + 1) { --card-accent: var(--blue); }
-.activity-modal-operations > .activity-settings-card:nth-of-type(7n + 2) { --card-accent: var(--green); }
-.activity-modal-operations > .activity-settings-card:nth-of-type(7n + 3) { --card-accent: var(--purple); }
-.activity-modal-operations > .activity-settings-card:nth-of-type(7n + 4) { --card-accent: var(--amber); }
-.activity-modal-operations > .activity-settings-card:nth-of-type(7n + 5) { --card-accent: var(--cyan); }
-.activity-modal-operations > .activity-settings-card:nth-of-type(7n + 6) { --card-accent: var(--pink); }
-.activity-modal-operations > .activity-settings-card:nth-of-type(7n + 7) { --card-accent: var(--red); }
+/* הצבע נקבע לכל חלונית במפורש ולא לפי מיקום: שתיים מהן מרונדרות ברכיבים
+   אחרים, וספירה לפי סדר הייתה מדלגת עליהן. */
+.activity-settings-card { --card-accent: var(--blue); }
 
-.activity-settings-card-title {
+/* כותרת של חלונית — האייקון בתוך ריבוע צבוע, והכיתוב גדול ובהיר מספיק כדי
+   שהעין תתפוס איפה מתחיל נושא חדש בלי לקרוא. */
+.activity-settings-card-title,
+.activity-registration-operations-title {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 9px;
+  margin-bottom: 2px;
   color: var(--text-1);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 800;
+  letter-spacing: -0.01em;
 }
 
-.activity-settings-card-title::before {
-  content: '';
+.activity-settings-card-title > svg,
+.activity-registration-operations-title > svg {
   flex: 0 0 auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--card-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--card-accent) 16%, transparent);
+  width: 26px;
+  height: 26px;
+  padding: 5px;
+  border-radius: 8px;
+  color: var(--card-accent);
+  background: color-mix(in srgb, var(--card-accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--card-accent) 26%, transparent);
 }
 
 /* שלוש האפשרויות של „מי יכול להירשם” הן בחירה אחת, ולכן הן שורה אחת — קודם
@@ -3345,6 +3348,68 @@ select option, select optgroup {
 /* הסימן של אפשרות בתפריט — אייקון וצבע שמזהים אותה בכל מקום במערכת. */
 .app-select-icon {
   flex: 0 0 auto;
+}
+
+/* סינון העובדים לפי תפקיד: אייקון אחד לכל תפקיד, בצבע שלו, וכמה שנבחרו
+   פועלים יחד. כבוי = אפור ושקוף, כדי שמה שמסונן עכשיו ייקרא במבט אחד. */
+.staff-role-filter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.staff-role-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: all var(--t-fast);
+}
+
+.staff-role-chip:hover {
+  border-color: color-mix(in srgb, var(--role-accent) 45%, transparent);
+  color: var(--role-accent);
+}
+
+.staff-role-chip.is-on {
+  color: var(--role-accent);
+  border-color: color-mix(in srgb, var(--role-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--role-accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--role-accent) 18%, transparent);
+}
+
+.staff-role-filter-note {
+  margin-inline-start: 4px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.staff-add-toggle {
+  align-self: flex-start;
+  gap: 6px;
+  border: 1px dashed color-mix(in srgb, var(--blue) 40%, var(--border));
+  background: color-mix(in srgb, var(--blue) 8%, transparent);
+  color: var(--blue);
+  font-weight: 700;
+}
+
+.staff-add-toggle:hover {
+  background: color-mix(in srgb, var(--blue) 15%, transparent);
+}
+
+.staff-add-toggle.is-open {
+  border-style: solid;
+  color: var(--text-2);
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 /* אותה שפה של תוויות בשני הצדדים של המסך — פס קטן מעל השדה, לא משפט לידו. */
