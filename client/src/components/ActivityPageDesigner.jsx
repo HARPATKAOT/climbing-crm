@@ -112,6 +112,21 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
   );
   useEffect(() => { localStorage.setItem('activityDraftTone', draftTone); }, [draftTone]);
   useEffect(() => { localStorage.setItem('activityDraftEmoji', draftEmoji ? '1' : '0'); }, [draftEmoji]);
+  const [draftMenuOpen, setDraftMenuOpen] = useState(false);
+  const draftMenuRef = useRef(null);
+  useEffect(() => {
+    if (!draftMenuOpen) return undefined;
+    const close = (event) => {
+      if (!draftMenuRef.current?.contains(event.target)) setDraftMenuOpen(false);
+    };
+    const onKey = (event) => { if (event.key === 'Escape') setDraftMenuOpen(false); };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [draftMenuOpen]);
   const [draftLength, setDraftLength] = useState(
     () => localStorage.getItem('activityDraftLength') || 'medium'
   );
@@ -391,46 +406,68 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
         {!readOnly && (
           <div className="activity-designer-divider">
             מה יופיע בדף
-            <span className="draft-style-controls">
-              <AppSelect
-                className="input"
-                value={draftTone}
-                onChange={(event) => setDraftTone(event.target.value)}
-                title="סגנון הניסוח של העוזר"
-              >
-                {Object.entries(DRAFT_TONE_LABELS).map(([value, text]) => (
-                  <option key={value} value={value}>{text}</option>
-                ))}
-              </AppSelect>
-              <AppSelect
-                className="input"
-                value={draftLength}
-                onChange={(event) => setDraftLength(event.target.value)}
-                title="אורך הטקסט"
-              >
-                {Object.entries(DRAFT_LENGTH_LABELS).map(([value, text]) => (
-                  <option key={value} value={value}>{text}</option>
-                ))}
-              </AppSelect>
+            {/* בקרה אחת במקום ארבע: כפתור שפותח את אופי הטקסט — טון, אורך
+                ואימוג'י — ואת פעולת המילוי עצמה. הבחירות נזכרות בדפדפן. */}
+            <span className="draft-menu" ref={draftMenuRef}>
               <button
                 type="button"
-                className="draft-all-button"
-                onClick={draftAll}
-                disabled={!!draftBusy}
-                title="מנסח את ארבעת הסעיפים בזה אחר זה, כך שלא יחזרו זה על זה"
+                className={`draft-all-button${draftMenuOpen ? ' is-open' : ''}`}
+                onClick={() => setDraftMenuOpen((open) => !open)}
+                aria-expanded={draftMenuOpen}
+                title="ניסוח בעזרת העוזר"
               >
                 {draftBusy ? <Loader2 size={12} className="spin" /> : <Sparkles size={12} />}
-                מלא הכל
+                ניסוח
               </button>
-              <button
-                type="button"
-                className={`draft-emoji-toggle${draftEmoji ? ' is-on' : ''}`}
-                onClick={() => setDraftEmoji((on) => !on)}
-                title={draftEmoji ? "עם אימוג'י" : "בלי אימוג'י"}
-                aria-pressed={draftEmoji}
-              >
-                <Smile size={13} />
-              </button>
+              {draftMenuOpen && (
+                <div className="draft-menu-panel">
+                  <label>
+                    <span>טון</span>
+                    <AppSelect
+                      className="input"
+                      value={draftTone}
+                      onChange={(event) => setDraftTone(event.target.value)}
+                    >
+                      {Object.entries(DRAFT_TONE_LABELS).map(([value, text]) => (
+                        <option key={value} value={value}>{text}</option>
+                      ))}
+                    </AppSelect>
+                  </label>
+                  <label>
+                    <span>אורך</span>
+                    <AppSelect
+                      className="input"
+                      value={draftLength}
+                      onChange={(event) => setDraftLength(event.target.value)}
+                    >
+                      {Object.entries(DRAFT_LENGTH_LABELS).map(([value, text]) => (
+                        <option key={value} value={value}>{text}</option>
+                      ))}
+                    </AppSelect>
+                  </label>
+                  <button
+                    type="button"
+                    className={`draft-menu-emoji${draftEmoji ? ' is-on' : ''}`}
+                    onClick={() => setDraftEmoji((on) => !on)}
+                    aria-pressed={draftEmoji}
+                  >
+                    <Smile size={14} />
+                    {draftEmoji ? "עם אימוג'י" : "בלי אימוג'י"}
+                  </button>
+                  <button
+                    type="button"
+                    className="draft-menu-run"
+                    disabled={!!draftBusy}
+                    onClick={() => { setDraftMenuOpen(false); draftAll(); }}
+                  >
+                    {draftBusy ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />}
+                    מלא את כל הסעיפים
+                  </button>
+                  <span className="draft-menu-note">
+                    הסעיפים מנוסחים בזה אחר זה, כך שלא יחזרו זה על זה.
+                  </span>
+                </div>
+              )}
             </span>
           </div>
         )}
