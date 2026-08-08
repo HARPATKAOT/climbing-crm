@@ -15,7 +15,7 @@ function SettingsTabs({ tab, setTab }) {
         { key: 'profile', label: 'פרטי עסק', icon: Building2 },
         { key: 'integrations', label: 'חיבורים', icon: Plug },
         { key: 'users', label: 'משתמשים והרשאות', icon: Users },
-        { key: 'policies', label: 'מדיניות ותנאים', icon: FileText },
+        { key: 'policies', label: 'מדיניות ביטול', icon: FileText },
       ].map(({ key, label, icon: Icon }) => (
         <button
           key={key}

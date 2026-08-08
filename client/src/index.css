@@ -5311,3 +5311,199 @@ select option, select optgroup {
   .decl-preview { position: static; }
   .decl-preview-screen { max-height: none; }
 }
+
+
+/* ── מדיניות ביטול ───────────────────────────────────────────────────────
+   המסך היה רשת שתי עמודות עם שדות מספר צפים בתוכה, בלי שום דבר שאומר איפה
+   נגמר נושא ומתחיל אחר. עכשיו כל נושא הוא בלוק, והתצוגה המקדימה נראית כמו
+   מה שהיא — מה שהלקוח יקרא. */
+.policies-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.policies-layout {
+  display: grid;
+  grid-template-columns: minmax(190px, 250px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.policies-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.policy-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-2);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  transition: all var(--t-fast);
+}
+
+.policy-card:hover {
+  border-color: color-mix(in srgb, var(--blue) 35%, transparent);
+}
+
+.policy-card.is-active {
+  border-color: color-mix(in srgb, var(--blue) 60%, transparent);
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+  color: var(--text-1);
+}
+
+.policy-card-name { font-size: 13.5px; font-weight: 700; }
+
+.policy-card-tag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.policy-card-tag.is-default {
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+  color: var(--green);
+}
+
+.policy-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.policy-block {
+  padding: 15px 16px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.policy-block-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  color: var(--text-1);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.policy-block-title > svg { color: var(--blue); }
+
+.policy-block-sub {
+  margin: 0 0 12px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.policy-default-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 12px;
+}
+
+.policy-default-toggle > span { display: grid; gap: 2px; }
+.policy-default-toggle strong { font-size: 13px; color: var(--text-1); }
+.policy-default-toggle small { font-size: 11.5px; color: var(--text-3); }
+
+.policy-cooling-row {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.policy-cooling-row .form-group { width: 150px; }
+
+.policy-cooling-presets { display: flex; gap: 6px; padding-bottom: 2px; }
+
+.policy-preset {
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--t-fast);
+}
+
+.policy-preset.is-on {
+  border-color: color-mix(in srgb, var(--blue) 55%, transparent);
+  background: color-mix(in srgb, var(--blue) 14%, transparent);
+  color: var(--blue);
+}
+
+.policy-rules { display: flex; flex-direction: column; gap: 10px; }
+
+.policy-rule {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 118px 148px;
+  gap: 12px;
+  align-items: end;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.policy-rule-when { display: grid; gap: 3px; min-width: 0; }
+.policy-rule-when strong { font-size: 13px; color: var(--text-1); }
+.policy-rule-when small { font-size: 11px; color: var(--text-3); line-height: 1.5; }
+
+.policy-preview {
+  padding: 15px 16px;
+  border: 1px solid color-mix(in srgb, var(--blue) 30%, transparent);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--blue) 7%, transparent);
+}
+
+.policy-preview-line {
+  margin: 0 0 7px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.policy-preview-line b { color: var(--text-1); }
+.policy-preview-line.is-good b { color: var(--green); }
+
+.policy-preview-free {
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.policy-history { color: var(--text-3); font-size: 12px; }
+.policy-history-row { margin-top: 6px; }
+.policy-message { margin-top: 12px; color: var(--green); font-size: 12.5px; }
+
+.policy-actions { display: flex; gap: 10px; }
+
+@media (max-width: 860px) {
+  .policies-layout { grid-template-columns: minmax(0, 1fr); }
+  .policy-rule { grid-template-columns: minmax(0, 1fr); }
+}

@@ -8,6 +8,23 @@ export const DEFAULT_CANCELLATION_RULES = Object.freeze([
 
 export const DEFAULT_CANCELLATION_TEXT = 'הפעילות מותנית במינימום משתתפים. במקרה של ביטול הפעילות על ידינו יוחזר מלוא הסכום.';
 
+/**
+ * חלון התחרטות: כמה שעות מרגע הרכישה מותר לבטל בלי עלות, בלי קשר לכמה זמן
+ * נשאר עד הפעילות.
+ *
+ * בלעדיו מי שקנה יומיים לפני הטיול נפל מיד למדרגה של 50% — גם אם התחרט חמש
+ * דקות אחרי שלחץ. החלון נספר מהרכישה ולא מהפעילות, ולכן הוא המדרגה היחידה
+ * שאינה נמדדת לאחור מהתאריך.
+ */
+export const DEFAULT_COOLING_OFF_HOURS = 24;
+
+export function normalizeCoolingOffHours(value) {
+  if (value === null || value === '' || value === undefined) return 0;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(720, Math.round(n * 100) / 100);
+}
+
 function id(prefix) {
   return `${prefix}_${crypto.randomUUID()}`;
 }
@@ -37,6 +54,7 @@ export function policySnapshot(policy, version) {
     version_id: version.id,
     version_number: version.version_number,
     rules: normalizeCancellationRules(version.rules),
+    cooling_off_hours: normalizeCoolingOffHours(version.cooling_off_hours),
     free_text: String(version.free_text || ''),
     published_at: version.published_at || null,
   };
@@ -66,6 +84,7 @@ export function suggestedRefund({
   snapshot,
   paidAmount,
   activityStartsAt,
+  purchasedAt = null,
   cancelledAt = new Date(),
   organizerCancelled = false,
   participantsCancelled = 1,
@@ -77,6 +96,26 @@ export function suggestedRefund({
   if (!snapshot || Number.isNaN(starts.getTime()) || Number.isNaN(cancelled.getTime())) {
     return { amount: 0, rule_id: null, refund_percent: 0, fixed_fee: 0 };
   }
+
+  // חלון ההתחרטות נבדק ראשון והוא מחזיר הכול — אבל רק כל עוד הפעילות עוד לא
+  // התחילה. מי שקנה שש שעות לפני היציאה לא מקבל בזכותו יממה של ביטול חינם
+  // אחרי שהאוטובוס יצא.
+  const coolingOff = normalizeCoolingOffHours(snapshot.cooling_off_hours);
+  const bought = purchasedAt ? new Date(purchasedAt) : null;
+  if (coolingOff > 0 && bought && !Number.isNaN(bought.getTime())) {
+    const sincePurchase = (cancelled.getTime() - bought.getTime()) / 36e5;
+    if (sincePurchase >= 0 && sincePurchase <= coolingOff && cancelled.getTime() < starts.getTime()) {
+      return {
+        amount: paid,
+        rule_id: 'cooling_off',
+        refund_percent: 100,
+        fixed_fee: 0,
+        cooling_off_hours: coolingOff,
+        hours_since_purchase: Math.round(sincePurchase * 100) / 100,
+      };
+    }
+  }
+
   const hours = Math.max(0, (starts.getTime() - cancelled.getTime()) / 36e5);
   const rules = normalizeCancellationRules(snapshot.rules);
   const rule = rules.find((candidate) => (
@@ -116,6 +155,7 @@ export async function createPolicy(db, persist, input = {}, actor = '') {
     policy_id: policy.id,
     version_number: 1,
     rules: normalizeCancellationRules(input.rules),
+    cooling_off_hours: normalizeCoolingOffHours(input.cooling_off_hours ?? DEFAULT_COOLING_OFF_HOURS),
     free_text: String(input.free_text ?? DEFAULT_CANCELLATION_TEXT),
     status: 'draft',
     published_at: null,
@@ -138,6 +178,7 @@ export async function savePolicyDraft(db, persist, policyId, input = {}, actor =
       id: id('cpv'), policy_id: policy.id,
       version_number: Math.max(0, ...versions.map((row) => Number(row.version_number) || 0)) + 1,
       rules: normalizeCancellationRules(input.rules || current?.rules),
+      cooling_off_hours: normalizeCoolingOffHours(input.cooling_off_hours ?? current?.cooling_off_hours),
       free_text: String(input.free_text ?? current?.free_text ?? ''),
       status: 'draft', published_at: null, created_by: actor || null,
       created_at: new Date().toISOString(),
@@ -145,6 +186,7 @@ export async function savePolicyDraft(db, persist, policyId, input = {}, actor =
   } else {
     draft = db.update('cancellation_policy_versions', draft.id, {
       rules: normalizeCancellationRules(input.rules || draft.rules),
+      cooling_off_hours: normalizeCoolingOffHours(input.cooling_off_hours ?? draft.cooling_off_hours),
       free_text: String(input.free_text ?? draft.free_text ?? ''),
     }) || draft;
   }

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { FileText, Loader2, Plus, Save, Send } from 'lucide-react';
+import { CalendarClock, Clock3, Eye, FileText, Loader2, Plus, Save, Send } from 'lucide-react';
 import { formatIls } from '../utils/vat.js';
 
 const DEFAULT_RULES = [
@@ -17,9 +17,17 @@ function editableFrom(policy) {
   return {
     name: policy?.name || 'מדיניות ביטול',
     rules: (source?.rules || DEFAULT_RULES).map((rule) => ({ ...rule })),
+    cooling_off_hours: source?.cooling_off_hours ?? 24,
     free_text: source?.free_text ?? DEFAULT_TEXT,
     is_default: !!policy?.is_default,
   };
+}
+
+/** ההסבר שמלווה כל מדרגה — מה היא אומרת ללקוח, לא רק כמה אחוזים. */
+function ruleHint(rule) {
+  if (Number(rule.min_hours_before) >= 168) return 'ביטול מוקדם — יש עוד זמן למכור את המקום';
+  if (Number(rule.min_hours_before) >= 48) return 'ההרשמה כבר תפסה מקום, אבל עוד אפשר לאייש אותו';
+  return 'הצוות, הציוד וההיערכות כבר הוזמנו';
 }
 
 function ruleLabel(rule) {
@@ -125,12 +133,16 @@ export default function CancellationPoliciesSettings() {
 
   if (loading) return <div style={{ padding: 24 }}><Loader2 size={18} className="spin" /> טוען מדיניות...</div>;
 
+  const coolingHours = Number(draft.cooling_off_hours) || 0;
+
   return (
-    <div className="business-settings">
+    <div className="policies-screen">
       <div className="business-settings-header">
         <div>
-          <div className="business-settings-title"><FileText size={18} /> מדיניות ותנאים</div>
-          <div className="business-settings-sub">גרסה שפורסמה נשמרת עם העסקה ואינה משתנה בדיעבד.</div>
+          <div className="business-settings-title"><FileText size={18} /> מדיניות ביטול</div>
+          <div className="business-settings-sub">
+            גרסה שפורסמה נשמרת עם העסקה ואינה משתנה בדיעבד — שינוי כאן משפיע רק על רכישות חדשות.
+          </div>
         </div>
         <button type="button" className="btn btn-secondary" onClick={create} disabled={busy}>
           <Plus size={14} /> מדיניות חדשה
@@ -140,63 +152,133 @@ export default function CancellationPoliciesSettings() {
       {policies.length === 0 ? (
         <div className="settings-section"><p>עדיין אין מדיניות. צרו את המדיניות הראשונה.</p></div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px,260px) minmax(0,1fr)', gap: 18 }}>
-          <aside className="settings-section" style={{ alignSelf: 'start' }}>
+        <div className="policies-layout">
+          <aside className="policies-list">
             {policies.map((policy) => (
               <button
                 key={policy.id}
                 type="button"
-                className={`btn ${selectedId === policy.id ? 'btn-primary' : 'btn-secondary'}`}
-                style={{ width: '100%', justifyContent: 'space-between', marginBottom: 8 }}
+                className={`policy-card${selectedId === policy.id ? ' is-active' : ''}`}
                 onClick={() => select(policy.id)}
               >
-                <span>{policy.name}</span>
-                <small>{policy.is_default ? 'ברירת מחדל' : policy.status === 'published' ? 'פורסם' : 'טיוטה'}</small>
+                <span className="policy-card-name">{policy.name}</span>
+                <span className={`policy-card-tag${policy.is_default ? ' is-default' : ''}`}>
+                  {policy.is_default ? 'ברירת מחדל' : policy.status === 'published' ? 'פורסם' : 'טיוטה'}
+                </span>
               </button>
             ))}
           </aside>
 
-          <section className="settings-section">
-            <label className="form-group">
-              <span>שם המדיניות</span>
-              <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '12px 0' }}>
-              <input type="checkbox" checked={draft.is_default} onChange={(event) => setDraft({ ...draft, is_default: event.target.checked })} />
-              מדיניות ברירת המחדל לעסקאות חדשות
-            </label>
+          <section className="policy-editor">
+            <div className="policy-block">
+              <label className="form-group">
+                <span>שם המדיניות</span>
+                <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+              </label>
+              <label className="policy-default-toggle">
+                <input
+                  type="checkbox"
+                  checked={draft.is_default}
+                  onChange={(event) => setDraft({ ...draft, is_default: event.target.checked })}
+                />
+                <span>
+                  <strong>ברירת המחדל לעסקאות חדשות</strong>
+                  <small>כל אירוע שלא נבחרה לו מדיניות אחרת יקבל את זו.</small>
+                </span>
+              </label>
+            </div>
 
-            <h3>כללים מובנים</h3>
-            {draft.rules.map((rule, index) => (
-              <div key={rule.id || index} style={{ display: 'grid', gridTemplateColumns: '1fr 130px 130px', gap: 10, alignItems: 'end', marginBottom: 10 }}>
-                <div><strong>{ruleLabel(rule)}</strong></div>
-                <label className="form-group"><span>אחוז החזר</span><input type="number" min="0" max="100" value={rule.refund_percent} onChange={(event) => updateRule(index, 'refund_percent', event.target.value)} /></label>
-                <label className="form-group"><span>דמי ביטול</span><input type="number" min="0" value={rule.fixed_fee} onChange={(event) => updateRule(index, 'fixed_fee', event.target.value)} /></label>
+            {/* חלון ההתחרטות נמדד מהרכישה ולא מהפעילות, ולכן הוא עומד בנפרד
+                מהמדרגות ולא כשורה רביעית בטבלה שלהן. */}
+            <div className="policy-block">
+              <div className="policy-block-title"><Clock3 size={15} /> חלון התחרטות</div>
+              <p className="policy-block-sub">
+                ביטול חינם בתוך פרק זמן מרגע הרכישה, בלי קשר לכמה זמן נשאר עד הפעילות —
+                כך שמי שנרשם יומיים לפני עדיין יכול להתחרט. תקף עד תחילת הפעילות בלבד.
+              </p>
+              <div className="policy-cooling-row">
+                <label className="form-group">
+                  <span>שעות מרגע הרכישה</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="720"
+                    value={draft.cooling_off_hours}
+                    onChange={(event) => setDraft({ ...draft, cooling_off_hours: event.target.value })}
+                  />
+                </label>
+                <div className="policy-cooling-presets">
+                  {[0, 12, 24, 48].map((hours) => (
+                    <button
+                      key={hours}
+                      type="button"
+                      className={`policy-preset${coolingHours === hours ? ' is-on' : ''}`}
+                      onClick={() => setDraft({ ...draft, cooling_off_hours: hours })}
+                    >
+                      {hours === 0 ? 'ללא' : `${hours} שעות`}
+                    </button>
+                  ))}
+                </div>
               </div>
-            ))}
+            </div>
 
-            <label className="form-group">
-              <span>טקסט חופשי</span>
-              <textarea rows={5} value={draft.free_text} onChange={(event) => setDraft({ ...draft, free_text: event.target.value })} />
-            </label>
+            <div className="policy-block">
+              <div className="policy-block-title"><CalendarClock size={15} /> מדרגות לפי מועד הביטול</div>
+              <div className="policy-rules">
+                {draft.rules.map((rule, index) => (
+                  <div key={rule.id || index} className="policy-rule">
+                    <div className="policy-rule-when">
+                      <strong>{ruleLabel(rule)}</strong>
+                      <small>{ruleHint(rule)}</small>
+                    </div>
+                    <label className="form-group">
+                      <span>אחוז החזר</span>
+                      <input
+                        type="number" min="0" max="100" value={rule.refund_percent}
+                        onChange={(event) => updateRule(index, 'refund_percent', event.target.value)}
+                      />
+                    </label>
+                    <label className="form-group">
+                      <span>דמי ביטול למשתתף</span>
+                      <input
+                        type="number" min="0" value={rule.fixed_fee}
+                        onChange={(event) => updateRule(index, 'fixed_fee', event.target.value)}
+                      />
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </div>
 
-            <div style={{ marginTop: 18, padding: 16, border: '1px solid var(--border)', borderRadius: 12 }}>
-              <strong>תצוגה מקדימה</strong>
+            <div className="policy-block">
+              <label className="form-group">
+                <span>טקסט חופשי — מופיע ללקוח מתחת למדרגות</span>
+                <textarea rows={4} value={draft.free_text} onChange={(event) => setDraft({ ...draft, free_text: event.target.value })} />
+              </label>
+            </div>
+
+            <div className="policy-preview">
+              <div className="policy-block-title"><Eye size={15} /> כפי שהלקוח יראה</div>
+              {coolingHours > 0 && (
+                <p className="policy-preview-line is-good">
+                  <b>עד {coolingHours} שעות מרגע ההרשמה:</b> ביטול ללא עלות, החזר מלא.
+                </p>
+              )}
               {draft.rules.map((rule) => (
-                <p key={rule.id} style={{ margin: '8px 0 0' }}>
-                  {ruleLabel(rule)}: החזר {Number(rule.refund_percent) || 0}%
+                <p key={rule.id} className="policy-preview-line">
+                  <b>{ruleLabel(rule)}:</b> החזר {Number(rule.refund_percent) || 0}%
                   {Number(rule.fixed_fee) ? `, בניכוי ${formatIls(rule.fixed_fee)} לכל משתתף` : ''}
                 </p>
               ))}
-              <p style={{ whiteSpace: 'pre-wrap' }}>{draft.free_text}</p>
-              <p><strong>ביטול על ידי המארגן:</strong> החזר מלא.</p>
+              {draft.free_text && <p className="policy-preview-free">{draft.free_text}</p>}
+              <p className="policy-preview-line is-good"><b>ביטול על ידינו:</b> החזר מלא.</p>
             </div>
 
             {selected?.versions?.length > 0 && (
-              <details style={{ marginTop: 16 }}>
+              <details className="policy-history">
                 <summary>היסטוריית גרסאות ({selected.versions.length})</summary>
                 {selected.versions.map((version) => (
-                  <div key={version.id} style={{ marginTop: 8 }}>
+                  <div key={version.id} className="policy-history-row">
                     גרסה {version.version_number} — {version.status === 'published' ? `פורסמה ${new Date(version.published_at).toLocaleString('he-IL')}` : 'טיוטה'}
                   </div>
                 ))}
@@ -204,10 +286,15 @@ export default function CancellationPoliciesSettings() {
             )}
 
             {error && <div className="error-message" style={{ marginTop: 12 }}>{error}</div>}
-            {message && <div style={{ color: 'var(--success)', marginTop: 12 }}>{message}</div>}
-            <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
-              <button type="button" className="btn btn-secondary" onClick={() => write(false)} disabled={busy}><Save size={14} /> שמירת טיוטה</button>
-              <button type="button" className="btn btn-primary" onClick={() => write(true)} disabled={busy}><Send size={14} /> פרסום גרסה</button>
+            {message && <div className="policy-message">{message}</div>}
+
+            <div className="policy-actions">
+              <button type="button" className="btn btn-secondary" onClick={() => write(false)} disabled={busy}>
+                <Save size={14} /> שמירת טיוטה
+              </button>
+              <button type="button" className="btn btn-primary" onClick={() => write(true)} disabled={busy}>
+                <Send size={14} /> פרסום גרסה
+              </button>
             </div>
           </section>
         </div>

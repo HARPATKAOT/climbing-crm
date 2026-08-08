@@ -5398,6 +5398,9 @@ function cancellationReviewForPayment({ activity, payment, order = null, paidAmo
         snapshot,
         paidAmount,
         activityStartsAt: new Date(startsAt),
+        // מתי שולם — זה מה שקובע אם חלון ההתחרטות עדיין פתוח. בלעדיו הכלל
+        // הזה לא היה נבדק אף פעם, כי הוא נמדד מהרכישה ולא מהפעילות.
+        purchasedAt: payment?.paid_at || order?.created_at || payment?.created_at || null,
         organizerCancelled,
         participantsCancelled,
       })
