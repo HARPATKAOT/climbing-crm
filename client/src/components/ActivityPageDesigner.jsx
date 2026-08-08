@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ImagePlus, X } from 'lucide-react';
+import { ImagePlus, Loader2, ShieldCheck, ShieldOff, Sparkles, X } from 'lucide-react';
+import AppSelect from './AppSelect.jsx';
 import { compressImageFile, readImageFileAsDataUrl } from './productCategories.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { ACTIVITY_PAGE_FIELDS } from '../utils/activityPageFields.js';
@@ -84,6 +85,45 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
   const patch = (values) => {
     if (readOnly) return;
     setForm((current) => ({ ...current, ...values }));
+  };
+
+  const [draftBusy, setDraftBusy] = useState('');
+  const [draftError, setDraftError] = useState('');
+
+  /** מבקש ניסוח לסעיף אחד ומכניס אותו לשדה. לא שומר — זו טיוטה לעריכה. */
+  const draftField = async (field) => {
+    if (readOnly || draftBusy) return;
+    setDraftBusy(field);
+    setDraftError('');
+    try {
+      const res = await fetch('/api/activities/draft-copy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          field,
+          activity: {
+            type: form.type,
+            name: form.name,
+            location: form.location,
+            date: form.date,
+            start_time: form.start_time,
+            end_time: form.end_time,
+            registration_page_body: form.registration_page_body || form.description || '',
+            audience: form.audience,
+            included: form.included,
+            what_to_bring: form.what_to_bring,
+            important_info: form.important_info,
+          },
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.draft) throw new Error(data.error || 'ניסוח ההצעה נכשל');
+      patch({ [field]: data.draft });
+    } catch (err) {
+      setDraftError(err.message || 'ניסוח ההצעה נכשל');
+    } finally {
+      setDraftBusy('');
+    }
   };
 
   const patchTheme = (values) => {
@@ -287,6 +327,7 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
         )}
 
         {!readOnly && <div className="activity-designer-divider">מה יופיע בדף</div>}
+        {draftError && <div className="activity-designer-image-error">{draftError}</div>}
         <div className="activity-designer-fields">
           {ACTIVITY_PAGE_FIELDS.map(({ key, label, hint, Icon, color }) => (
             readOnly ? (
@@ -304,6 +345,19 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
                 <span>
                   <Icon size={15} aria-hidden="true" />
                   {label}
+                  {/* הצעה מהעוזר נכנסת לשדה כטיוטה — היא לא נשמרת עד שתשמרו
+                      את האירוע, וניתן לערוך אותה כמו כל טקסט אחר. */}
+                  <button
+                    type="button"
+                    className="event-field-draft"
+                    title="נסח הצעה לסעיף הזה"
+                    disabled={draftBusy === key}
+                    onClick={() => draftField(key)}
+                  >
+                    {draftBusy === key
+                      ? <Loader2 size={13} className="spin" />
+                      : <Sparkles size={13} />}
+                  </button>
                 </span>
                 <textarea
                   rows={3}
@@ -324,8 +378,14 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
             <div className="activity-designer-divider">על מה חותמים</div>
             <div className="activity-designer-fields">
             <label className="event-field" style={{ margin: 0 }}>
-              <span>מדיניות ביטול</span>
-              <select
+              <span>
+                <ShieldCheck size={15} aria-hidden="true" />
+                מדיניות ביטול
+              </span>
+              {/* היה `select` מקורי, ולכן רשימת האפשרויות נצבעה על ידי מערכת
+                  ההפעלה — לבן על פאנל כהה. AppSelect מצייר אותה בעצמו. */}
+              <AppSelect
+                className="input"
                 value={form.cancellation_policy_disabled
                   ? '__none__'
                   : (form.cancellation_policy_id || '__default__')}
@@ -336,13 +396,16 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
                     cancellation_policy_disabled: value === '__none__',
                   });
                 }}
+                optionIcon={(value) => (value === '__none__'
+                  ? { Icon: ShieldOff, color: 'var(--text-3)' }
+                  : { Icon: ShieldCheck, color: '#A78BFA' })}
               >
                 <option value="__default__">ברירת המחדל של העסק</option>
                 <option value="__none__">ללא מדיניות</option>
                 {policies.filter((policy) => policy.status === 'published').map((policy) => (
                   <option key={policy.id} value={policy.id}>{policy.name}</option>
                 ))}
-              </select>
+              </AppSelect>
             </label>
             </div>
           </>

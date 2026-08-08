@@ -150,7 +150,7 @@ import {
   updateScenario,
   updateTask,
 } from './aiActions.js';
-import { READ_TOOLS, runChatTurn } from './aiChat.js';
+import { READ_TOOLS, runChatTurn, callGeminiChat } from './aiChat.js';
 import {
   approveFeedback,
   feedbackStats,
@@ -189,6 +189,10 @@ import {
   applyHostRefundMarks,
   summarizeHostPayment,
 } from './activityRegistrationRefund.js';
+import {
+  draftActivityCopy,
+  isDraftableField,
+} from './activityCopyDraft.js';
 import {
   summarizeActivityCancellation,
   registrationsToRelease,
@@ -5844,6 +5848,44 @@ function organizerCancelReview(activity) {
       organizerCancelled: true,
     });
 }
+
+/**
+ * ניסוח טיוטה לאחד מסעיפי דף האירוע.
+ *
+ * מחזיר טקסט בלבד — הוא נכנס לשדה בטופס ומי שביקש עורך אותו לפני שמירה.
+ * השרת לא נוגע באירוע עצמו, ולכן אין כאן מסלול שבו ניסוח של מודל מגיע לדף
+ * החי בלי שאדם ראה אותו.
+ */
+app.post('/api/activities/draft-copy', async (req, res) => {
+  const field = String(req.body?.field || '');
+  if (!isDraftableField(field)) {
+    return res.status(400).json({ error: 'הסעיף הזה אינו פתוח לניסוח אוטומטי' });
+  }
+  try {
+    const result = await draftActivityCopy({
+      field,
+      activity: req.body?.activity || {},
+      instruction: req.body?.instruction || '',
+      generate: async ({ prompt, system }) => {
+        const { content, error } = await callGeminiChat({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          systemInstruction: system,
+          declarations: [],
+        });
+        const text = (content?.parts || [])
+          .map((part) => String(part.text || ''))
+          .filter(Boolean)
+          .join('\n');
+        return { text, error };
+      },
+    });
+    if (!result.ok) return res.status(result.error.includes('מכסת') ? 429 : 502).json(result);
+    res.json(result);
+  } catch (err) {
+    console.error('activity draft copy error:', err.message);
+    res.status(500).json({ error: 'ניסוח ההצעה נכשל' });
+  }
+});
 
 app.get('/api/activities/:id/cancellation-preview', async (req, res) => {
   const activity = db.getOne('activities', req.params.id);

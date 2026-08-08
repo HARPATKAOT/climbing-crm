@@ -4343,13 +4343,39 @@ select option, select optgroup {
   font-weight: 700;
 }
 
+/* כפתור הניסוח יושב בקצה שורת התווית, ומופיע בעדינות כדי לא להתחרות
+   בכותרת הסעיף. */
+.event-field-draft {
+  margin-inline-start: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.event-field-draft:hover:not(:disabled) {
+  color: #C4B5FD;
+  border-color: rgba(196, 181, 253, 0.45);
+  background: rgba(196, 181, 253, 0.12);
+}
+
+.event-field-draft:disabled { opacity: 0.6; cursor: default; }
+
 .activity-designer .event-field > span > svg {
   flex: 0 0 auto;
   color: var(--field-accent, #94a3b8);
 }
 
 .activity-designer .event-field textarea,
-.activity-designer .event-field select {
+.activity-designer .event-field .app-select-trigger {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
@@ -4378,31 +4404,16 @@ select option, select optgroup {
 }
 
 .activity-designer .event-field textarea:hover,
-.activity-designer .event-field select:hover {
+.activity-designer .event-field .app-select-trigger:hover {
   border-color: rgba(255, 255, 255, 0.18);
 }
 
 .activity-designer .event-field textarea:focus,
-.activity-designer .event-field select:focus {
+.activity-designer .event-field .app-select-trigger:focus {
   border-color: rgba(251, 146, 60, 0.55);
   background: rgba(251, 146, 60, 0.06);
 }
 
-.activity-designer .event-field select {
-  appearance: none;
-  padding-inline-end: 30px;
-  background-image: linear-gradient(45deg, transparent 50%, #94a3b8 50%),
-    linear-gradient(135deg, #94a3b8 50%, transparent 50%);
-  background-position: calc(12px) calc(50% + 1px), calc(17px) calc(50% + 1px);
-  background-size: 5px 5px, 5px 5px;
-  background-repeat: no-repeat;
-  cursor: pointer;
-}
-
-.activity-designer .event-field select option {
-  background: #0f172a;
-  color: #e2e8f0;
-}
 
 .activity-designer-details {
   display: grid;
