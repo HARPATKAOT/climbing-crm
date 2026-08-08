@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle, Loader2 } from 'lucide-react';
+import { CalendarClock, CheckCircle, Loader2 } from 'lucide-react';
 import { useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { ACTIVITY_PAGE_FIELDS } from '../utils/activityPageFields.js';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
-import { cancellationRuleText } from '../utils/cancellationText.js';
+import { cancellationRuleParts } from '../utils/cancellationText.js';
 import { EventShell, EventStyles } from './publicFormKit.jsx';
 
 /**
@@ -161,13 +161,22 @@ export default function PublicActivityRegistration() {
             במסך התשלום — שם הוא תנאי לחיוב. */}
         {paidMode && policy && (
           <section style={{ marginTop: 20 }}>
-            <div className="participant-card">
-              <h3 style={{ marginTop: 0 }}>תנאי ביטול</h3>
-              <ul style={{ lineHeight: 1.7 }}>
-                {(policy.rules || []).map((rule) => <li key={rule.id}>{cancellationRuleText(rule)}</li>)}
-              </ul>
+            <div className="event-policy">
+              <h3><CalendarClock size={15} aria-hidden="true" />תנאי ביטול</h3>
+              {(policy.rules || []).map((rule) => {
+                const { period, outcome, tone } = cancellationRuleParts(rule);
+                return (
+                  <div key={rule.id} className="event-policy-row">
+                    <span className={`event-policy-dot is-${tone}`} aria-hidden="true" />
+                    <div>
+                      <div className="event-policy-when">{period}</div>
+                      <div className={`event-policy-what is-${tone}`}>{outcome}</div>
+                    </div>
+                  </div>
+                );
+              })}
               {policy.free_text && (
-                <p className="event-hint" style={{ whiteSpace: 'pre-wrap' }}>{policy.free_text}</p>
+                <p className="event-policy-note">{policy.free_text}</p>
               )}
             </div>
           </section>
