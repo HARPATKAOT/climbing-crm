@@ -36,8 +36,27 @@ export function normalizePolicyBasis(value) {
  * כללי מדיניות לפי ניצול. מבנה שטוח ולא מדרגות, כי אין כאן ציר זמן —
  * יש חלק שנוצל וחלק שלא.
  */
+/**
+ * שתי דרכים ליישב כרטיסייה שבוטלה באמצע.
+ *
+ * `pro_rata` — מחזירים את ערכו היחסי של החלק שלא נוצל. נכון להשכרה, שבה
+ *   המחיר הוא על תקופה ולא על כמות.
+ * `full_price` — הכניסות שנוצלו מחויבות במחיר כניסה בודדת, וההפרש חוזר. זה
+ *   הנכון לכרטיסייה: ההנחה ניתנה על ההתחייבות לכמות, ומי שניצל חלק לא עמד
+ *   בה — ולכן אינו זכאי להנחה על מה שכן צרך.
+ */
+export const USAGE_SETTLEMENTS = Object.freeze({ PRO_RATA: 'pro_rata', FULL_PRICE: 'full_price' });
+
+export function normalizeUsageSettlement(value) {
+  return String(value || '') === USAGE_SETTLEMENTS.FULL_PRICE
+    ? USAGE_SETTLEMENTS.FULL_PRICE
+    : USAGE_SETTLEMENTS.PRO_RATA;
+}
+
 export const DEFAULT_USAGE_RULE = Object.freeze({
+  settlement: USAGE_SETTLEMENTS.PRO_RATA,
   unused_refund_percent: 100,
+  full_unit_price: 0,
   fixed_fee: 0,
   min_used_units: 0,
   no_refund_after_percent: 100,
@@ -45,16 +64,27 @@ export const DEFAULT_USAGE_RULE = Object.freeze({
 
 export function normalizeUsageRule(rule = {}) {
   const source = rule || {};
+  // `??` תופס רק null/undefined, לא NaN — ולכן `Number(undefined) ?? 100`
+  // החזיר NaN, שהתגלגל ל-0. „אין החזר מעל 0% ניצול” חסם כל החזר של כרטיסייה
+  // שנגעו בה פעם אחת. אחוז חסר חייב ליפול לברירת המחדל, לא לאפס.
+  const percent = (value, fallback) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(100, Math.max(0, n));
+  };
   return {
-    // כמה מהחלק שלא נוצל מוחזר
-    unused_refund_percent: Math.min(100, Math.max(0, Number(source.unused_refund_percent) ?? 100)) || 0,
+    settlement: normalizeUsageSettlement(source.settlement),
+    // כמה מהחלק שלא נוצל מוחזר (ביישוב יחסי)
+    unused_refund_percent: percent(source.unused_refund_percent, 100),
+    // מחיר יחידה בודדת ללא הנחה (ביישוב לפי מחיר מלא) — למשל כניסה אחת לקיר
+    full_unit_price: money(source.full_unit_price),
     // דמי ביטול קבועים, פעם אחת על הביטול כולו
     fixed_fee: money(source.fixed_fee),
     // התחייבות מינימלית: כמה יחידות (כניסות או חודשים) חייבות להיות מנוצלות
     // או משולמות לפני שמגיע החזר בכלל
     min_used_units: Math.max(0, Math.round(Number(source.min_used_units) || 0)),
     // מעל אחוז ניצול זה אין החזר בכלל
-    no_refund_after_percent: Math.min(100, Math.max(0, Number(source.no_refund_after_percent) ?? 100)) || 0,
+    no_refund_after_percent: percent(source.no_refund_after_percent, 100),
   };
 }
 
@@ -191,6 +221,24 @@ export function suggestedUsageRefund({
       fixed_fee: 0,
       used_units: used,
       total_units: total,
+      used_percent: Math.round(usedPercent * 100) / 100,
+    };
+  }
+
+  if (rule.settlement === USAGE_SETTLEMENTS.FULL_PRICE && rule.full_unit_price > 0) {
+    // מה שנוצל מחויב במחיר מלא, והיתרה חוזרת. אם המחיר המלא של מה שנוצל עולה
+    // על מה ששולם — ההחזר הוא אפס ולא סכום שלילי: הלקוח לא נשאר חייב לנו.
+    const owedForUsed = used * rule.full_unit_price;
+    const amount = money(Math.max(0, paid - owedForUsed - rule.fixed_fee));
+    return {
+      amount,
+      rule_id: 'used_at_full_price',
+      refund_percent: 100,
+      fixed_fee: rule.fixed_fee,
+      used_units: used,
+      total_units: total,
+      full_unit_price: rule.full_unit_price,
+      charged_for_used: money(owedForUsed),
       used_percent: Math.round(usedPercent * 100) / 100,
     };
   }

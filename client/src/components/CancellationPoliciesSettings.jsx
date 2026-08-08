@@ -22,7 +22,9 @@ function editableFrom(policy) {
     basis: source?.basis === 'usage' ? 'usage' : 'activity_date',
     rules: (source?.rules || DEFAULT_RULES).map((rule) => ({ ...rule })),
     usage_rule: {
+      settlement: source?.usage_rule?.settlement === 'full_price' ? 'full_price' : 'pro_rata',
       unused_refund_percent: source?.usage_rule?.unused_refund_percent ?? 100,
+      full_unit_price: source?.usage_rule?.full_unit_price ?? 0,
       fixed_fee: source?.usage_rule?.fixed_fee ?? 0,
       min_used_units: source?.usage_rule?.min_used_units ?? 0,
       no_refund_after_percent: source?.usage_rule?.no_refund_after_percent ?? 100,
@@ -283,18 +285,52 @@ export default function CancellationPoliciesSettings() {
               <div className="policy-block">
                 <div className="policy-block-title"><Ticket size={15} /> כללי הביטול לפי ניצול</div>
                 <p className="policy-block-sub">
-                  מחזירים את ערך החלק שלא נוצל — כניסות שנותרו בכרטיסייה, חודשים
-                  שנותרו במנוי או בהשכרה — פחות דמי הביטול.
+                  איך מיישבים ביטול באמצע — לפי מה שנותר, או לפי מה שנוצל.
                 </p>
+                <div className="policy-basis-row" style={{ marginBottom: 12 }}>
+                  {[
+                    {
+                      key: 'pro_rata',
+                      label: 'יחסי למה שנותר',
+                      hint: 'נכון להשכרה: המחיר הוא על תקופה, ומחזירים את ערך מה שלא נוצל',
+                    },
+                    {
+                      key: 'full_price',
+                      label: 'הנוצל במחיר מלא',
+                      hint: 'נכון לכרטיסייה: ההנחה ניתנה על הכמות, ומי שניצל חלק לא עמד בה',
+                    },
+                  ].map(({ key, label, hint }) => (
+                    <button
+                      key={key}
+                      type="button"
+                      className={`policy-basis${draft.usage_rule.settlement === key ? ' is-on' : ''}`}
+                      onClick={() => setUsage('settlement', key)}
+                    >
+                      <strong>{label}</strong>
+                      <small>{hint}</small>
+                    </button>
+                  ))}
+                </div>
                 <div className="policy-usage-grid">
-                  <label className="form-group">
-                    <span>אחוז החזר על החלק שלא נוצל</span>
-                    <input
-                      type="number" min="0" max="100"
-                      value={draft.usage_rule.unused_refund_percent}
-                      onChange={(event) => setUsage('unused_refund_percent', event.target.value)}
-                    />
-                  </label>
+                  {draft.usage_rule.settlement === 'full_price' ? (
+                    <label className="form-group">
+                      <span>מחיר יחידה בודדת (₪)</span>
+                      <input
+                        type="number" min="0"
+                        value={draft.usage_rule.full_unit_price}
+                        onChange={(event) => setUsage('full_unit_price', event.target.value)}
+                      />
+                    </label>
+                  ) : (
+                    <label className="form-group">
+                      <span>אחוז החזר על החלק שלא נוצל</span>
+                      <input
+                        type="number" min="0" max="100"
+                        value={draft.usage_rule.unused_refund_percent}
+                        onChange={(event) => setUsage('unused_refund_percent', event.target.value)}
+                      />
+                    </label>
+                  )}
                   <label className="form-group">
                     <span>דמי ביטול (₪)</span>
                     <input
@@ -368,8 +404,10 @@ export default function CancellationPoliciesSettings() {
               {draft.basis === 'usage' ? (
                 <>
                   <p className="policy-preview-line">
-                    <b>ביטול באמצע:</b> החזר {Number(draft.usage_rule.unused_refund_percent) || 0}%
-                    {' '}מערך החלק שלא נוצל
+                    <b>ביטול באמצע:</b>{' '}
+                    {draft.usage_rule.settlement === 'full_price'
+                      ? `מה שנוצל מחויב ב-${formatIls(draft.usage_rule.full_unit_price)} ליחידה, והיתרה מוחזרת`
+                      : `החזר ${Number(draft.usage_rule.unused_refund_percent) || 0}% מערך החלק שלא נוצל`}
                     {Number(draft.usage_rule.fixed_fee)
                       ? `, בניכוי ${formatIls(draft.usage_rule.fixed_fee)} דמי ביטול`
                       : ''}.
