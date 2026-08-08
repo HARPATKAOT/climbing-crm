@@ -130,13 +130,6 @@ export default function PublicActivityRegistration() {
           {(activity.page_body || activity.description) && (
             <p className="event-body">{activity.page_body || activity.description}</p>
           )}
-          {paidMode && unitVat.entered > 0 && (
-            <div className="event-price-chip">
-              {formatIls(unitVat.gross)} למשתתף
-              {' · '}
-              {includesVat ? 'כולל מע״מ' : 'לפני מע״מ + מע״מ'}
-            </div>
-          )}
         </header>
 
         {ACTIVITY_PAGE_FIELDS.some(({ key }) => activity[key]) && (
