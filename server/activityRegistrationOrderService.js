@@ -135,14 +135,25 @@ export async function registerActivityGroup({
         order.idempotency_key === normalized.idempotencyKey
     );
     if (existing) {
-      return {
-        duplicate: true,
-        order: existing,
-        registrations: (db.get('activity_registrations') || []).filter(
-          (registration) => registration.order_id === existing.id
-        ),
-        paymentUrl: (db.get('payments') || []).find((payment) => payment.id === existing.payment_id)?.payment_url || null,
-      };
+      const existingRegistrations = (db.get('activity_registrations') || []).filter(
+        (registration) => registration.order_id === existing.id
+      );
+      // An order with no registrations is debris of an attempt that failed
+      // between writing the order and writing what it ordered. Returning it as
+      // a duplicate would brick the form's retry, so clear it and start over.
+      const abandoned = !existingRegistrations.length && existing.payment_status !== 'paid';
+      if (!abandoned) {
+        return {
+          duplicate: true,
+          order: existing,
+          registrations: existingRegistrations,
+          paymentUrl: (db.get('payments') || []).find((payment) => payment.id === existing.payment_id)?.payment_url || null,
+        };
+      }
+      const cleared = await db.deleteDurable('activity_registration_orders', existing.id);
+      if (cleared?.ok === false && !cleared.notFound) {
+        throw Object.assign(new Error('לא ניתן לחדש את ההרשמה כרגע — נסו שוב'), { status: 503 });
+      }
     }
 
     const count = normalized.participants.length;
@@ -178,112 +189,139 @@ export async function registerActivityGroup({
       throw Object.assign(new Error('רק בן/בת זוג מבוגרים יכולים להשלים מסמכים לאחר התשלום'), { status: 400 });
     }
     const signingInputs = normalized.participants.filter((participant) => !participant.defer_documents);
-    const crm = await saveCrmParticipants({
-      db,
-      persist,
-      parent: normalized.parent,
-      participants: signingInputs,
-      template,
-      activityId: activity.id,
-      orderId,
-      participationScope,
-      phoneVerification: normalized.phoneVerification,
-      evidenceContext: normalized.evidenceContext,
-      allowEmptyParticipants: signingInputs.length === 0,
-      source: leadSource,
-      onStudentCreated,
-      onStudentStatusChanged,
-    });
 
-    const household = await ensureHouseholdForParent(db, persist, crm.parent.id);
-    assertNoExternalAdults(db, {
-      parent: crm.parent,
-      participants: signingInputs,
-      householdId: household.id,
-    });
-
-    for (const input of deferredInputs) {
-      let student = input.id ? db.getOne('students', input.id) : null;
-      let profileStatus = 'complete';
-      if (!student && input.parent_member_id) {
-        const memberParent = db.getOne('parents', input.parent_member_id);
-        const memberHouseholdId = householdIdForParent(db, memberParent?.id);
-        if (!memberParent || memberHouseholdId !== household.id) {
-          throw Object.assign(new Error('בן/בת הזוג אינם משויכים לתיק המשפחה'), { status: 403 });
-        }
-        const adult = await ensureAdultParticipantForParent(db, persist, {
-          householdId: household.id,
-          parent: memberParent,
-          profileStatus: 'pending_profile',
-          source: leadSource,
-        });
-        student = adult.student;
-        profileStatus = adult.member.profile_status;
-      }
-      if (!student && input.spouse_phone) {
-        const spouse = await addPendingSpouse(db, persist, {
-          householdId: household.id,
-          name: input.name,
-          phone: input.spouse_phone,
-          source: leadSource,
-        });
-        const adult = await ensureAdultParticipantForParent(db, persist, {
-          householdId: household.id,
-          parent: spouse.parent,
-          profileStatus: spouse.member.profile_status,
-          source: leadSource,
-        });
-        student = adult.student;
-        profileStatus = adult.member.profile_status;
-      }
-      if (!student?.id || student.isAdult !== true || !isStudentInHousehold(db, household.id, student.id)) {
-        throw Object.assign(new Error('אפשר לדחות מסמכים רק עבור בן/בת זוג מתיק המשפחה'), { status: 403 });
-      }
-      crm.participants.push({
-        input,
-        type: 'adult',
-        name: student.name || input.name,
-        student,
-        declaration: null,
-        healthDeclaration: null,
-        waiver: null,
-        profileStatus,
+    // The order row is written the moment the parent exists — before any
+    // declaration or waiver. Those documents carry order_id, and the database
+    // enforces the reference: writing them first is exactly the failure this
+    // ordering prevents.
+    let order = null;
+    let household = null;
+    const persistOrderFirst = async ({ parent }) => {
+      household = await ensureHouseholdForParent(db, persist, parent.id);
+      order = db.insert('activity_registration_orders', {
+        id: orderId,
+        activity_id: activity.id,
+        parent_id: parent.id,
+        household_id: household.id,
+        payer_person_id: parent.id,
+        idempotency_key: normalized.idempotencyKey,
+        participant_count: count,
+        unit_price: unitPrice,
+        unit_charge: unitCharge,
+        price_includes_vat: includesVat,
+        total_amount: total,
+        payment_status: pendingPayment ? 'pending' : 'not_required',
+        status: pendingPayment ? 'pending_payment' : 'confirmed',
+        payment_id: null,
+        cancellation_acceptance_id: null,
+        policy_snapshot: policyResolution?.snapshot || null,
+        hold_expires_at: holdExpiresAt,
+        updated_at: new Date().toISOString(),
       });
-    }
+      await durable(persist, 'activity_registration_orders', order);
+    };
 
-    // New children created above are now part of the explicit household too.
-    await ensureHouseholdForParent(db, persist, crm.parent.id);
-    for (const participant of crm.participants) {
-      if (!isStudentInHousehold(db, household.id, participant.student?.id)) {
-        throw Object.assign(new Error('אפשר לרשום ולשלם רק עבור בני המשפחה בתיק'), { status: 403 });
+    // Any failure between the order write and its registrations would leave an
+    // order that ordered nothing; delete it so the form can simply try again.
+    let crm;
+    try {
+      crm = await saveCrmParticipants({
+        db,
+        persist,
+        parent: normalized.parent,
+        participants: signingInputs,
+        template,
+        activityId: activity.id,
+        orderId,
+        participationScope,
+        phoneVerification: normalized.phoneVerification,
+        evidenceContext: normalized.evidenceContext,
+        allowEmptyParticipants: signingInputs.length === 0,
+        source: leadSource,
+        onStudentCreated,
+        onStudentStatusChanged,
+        onParentReady: persistOrderFirst,
+      });
+
+      assertNoExternalAdults(db, {
+        parent: crm.parent,
+        participants: signingInputs,
+        householdId: household.id,
+      });
+
+      for (const input of deferredInputs) {
+        let student = input.id ? db.getOne('students', input.id) : null;
+        let profileStatus = 'complete';
+        if (!student && input.parent_member_id) {
+          const memberParent = db.getOne('parents', input.parent_member_id);
+          const memberHouseholdId = householdIdForParent(db, memberParent?.id);
+          if (!memberParent || memberHouseholdId !== household.id) {
+            throw Object.assign(new Error('בן/בת הזוג אינם משויכים לתיק המשפחה'), { status: 403 });
+          }
+          const adult = await ensureAdultParticipantForParent(db, persist, {
+            householdId: household.id,
+            parent: memberParent,
+            profileStatus: 'pending_profile',
+            source: leadSource,
+          });
+          student = adult.student;
+          profileStatus = adult.member.profile_status;
+        }
+        if (!student && input.spouse_phone) {
+          const spouse = await addPendingSpouse(db, persist, {
+            householdId: household.id,
+            name: input.name,
+            phone: input.spouse_phone,
+            source: leadSource,
+          });
+          const adult = await ensureAdultParticipantForParent(db, persist, {
+            householdId: household.id,
+            parent: spouse.parent,
+            profileStatus: spouse.member.profile_status,
+            source: leadSource,
+          });
+          student = adult.student;
+          profileStatus = adult.member.profile_status;
+        }
+        if (!student?.id || student.isAdult !== true || !isStudentInHousehold(db, household.id, student.id)) {
+          throw Object.assign(new Error('אפשר לדחות מסמכים רק עבור בן/בת זוג מתיק המשפחה'), { status: 403 });
+        }
+        crm.participants.push({
+          input,
+          type: 'adult',
+          name: student.name || input.name,
+          student,
+          declaration: null,
+          healthDeclaration: null,
+          waiver: null,
+          profileStatus,
+        });
       }
+
+      // New children created above are now part of the explicit household too.
+      await ensureHouseholdForParent(db, persist, crm.parent.id);
+      for (const participant of crm.participants) {
+        if (!isStudentInHousehold(db, household.id, participant.student?.id)) {
+          throw Object.assign(new Error('אפשר לרשום ולשלם רק עבור בני המשפחה בתיק'), { status: 403 });
+        }
+      }
+    } catch (error) {
+      // The order exists but nothing was registered under it. Remove it so the
+      // same idempotency key can try again; if the removal itself fails, the
+      // debris check above clears it on the next attempt.
+      if (order) {
+        try {
+          await db.deleteDurable('activity_registration_orders', order.id);
+        } catch {
+          // best effort — the retry path handles what remains
+        }
+      }
+      throw error;
     }
 
     if (typeof db.updateParentBroadcastLists === 'function') {
       db.updateParentBroadcastLists(crm.parent.id, normalized.subscriptions);
     }
-
-    let order = db.insert('activity_registration_orders', {
-      id: orderId,
-      activity_id: activity.id,
-      parent_id: crm.parent.id,
-      household_id: household.id,
-      payer_person_id: crm.parent.id,
-      idempotency_key: normalized.idempotencyKey,
-      participant_count: count,
-      unit_price: unitPrice,
-      unit_charge: unitCharge,
-      price_includes_vat: includesVat,
-      total_amount: total,
-      payment_status: pendingPayment ? 'pending' : 'not_required',
-      status: pendingPayment ? 'pending_payment' : 'confirmed',
-      payment_id: null,
-      cancellation_acceptance_id: null,
-      policy_snapshot: policyResolution?.snapshot || null,
-      hold_expires_at: holdExpiresAt,
-      updated_at: new Date().toISOString(),
-    });
-    await durable(persist, 'activity_registration_orders', order);
 
     if (policyResolution) {
       const acceptance = await recordPolicyAcceptance(db, persist, {

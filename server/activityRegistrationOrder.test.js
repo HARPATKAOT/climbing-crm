@@ -69,6 +69,12 @@ function createDb(seed = {}) {
       store[table][index] = { ...store[table][index], ...patch };
       return store[table][index];
     },
+    deleteDurable: async (table, id) => {
+      const index = (store[table] || []).findIndex((item) => item.id === id);
+      if (index === -1) return { ok: false, notFound: true };
+      store[table].splice(index, 1);
+      return { ok: true };
+    },
     upsertParentByPhone: (name, phone, email, extras = {}) => {
       const normalized = String(phone).replace(/\D/g, '').replace(/^972/, '0');
       let parentRow = store.parents.find(
@@ -501,4 +507,117 @@ test('a disclosure that demands a doctor approval cannot register without one', 
   assert.equal(withFile.registrations.length, 1);
   const withoutDisclosure = await register({ ...signed('ילד בריא'), answers: { ...HEALTHY_ANSWERS } });
   assert.equal(withoutDisclosure.registrations.length, 1);
+});
+
+// The live database enforces participation_waivers.order_id → orders(id).
+// The in-memory persist stub does not, which is exactly how the ordering bug
+// reached production: documents were durable before the order they reference.
+test('the order row is persisted before any document that references it', async () => {
+  const db = createDb();
+  const activity = {
+    id: 'activity-fk-order',
+    name: 'טיול',
+    price: 100,
+    max_participants: 10,
+    registration_mode: 'paid_per_participant',
+  };
+  db.store.activities.push(activity);
+  const persistSequence = [];
+  const recordingPersist = async (table) => {
+    persistSequence.push(table);
+    return { ok: true };
+  };
+  await registerActivityGroup({
+    db,
+    persist: recordingPersist,
+    activity,
+    payload: {
+      idempotency_key: 'fk-order',
+      parent,
+      participants: [signed('ילד א'), signed('ילד ב')],
+    },
+    createPaymentUrl: async () => 'pay',
+  });
+  const orderAt = persistSequence.indexOf('activity_registration_orders');
+  const waiverAt = persistSequence.indexOf('participation_waivers');
+  const declarationAt = persistSequence.indexOf('health_declarations');
+  assert.ok(orderAt !== -1 && waiverAt !== -1);
+  assert.ok(orderAt < waiverAt, `order persisted at ${orderAt}, after waiver at ${waiverAt}`);
+  assert.ok(orderAt < declarationAt, `order persisted at ${orderAt}, after declaration at ${declarationAt}`);
+});
+
+test('a failure after the order is written removes it, and the same key can retry', async () => {
+  const db = createDb();
+  const activity = {
+    id: 'activity-retry',
+    name: 'טיול',
+    price: 100,
+    max_participants: 10,
+    registration_mode: 'paid_per_participant',
+  };
+  db.store.activities.push(activity);
+  // An adult who is not the signing parent is rejected only after the CRM save
+  // began — by then the order row already exists.
+  await assert.rejects(
+    registerActivityGroup({
+      db,
+      persist,
+      activity,
+      payload: {
+        idempotency_key: 'retry-after-failure',
+        parent,
+        participants: [signed('אמא ישראלי', 'adult'), signed('מבוגר זר', 'adult')],
+      },
+      createPaymentUrl: async () => 'pay',
+    })
+  );
+  assert.equal(db.store.activity_registration_orders.length, 0, 'failed attempt left no order behind');
+
+  const retry = await registerActivityGroup({
+    db,
+    persist,
+    activity,
+    payload: {
+      idempotency_key: 'retry-after-failure',
+      parent,
+      participants: [signed('אמא ישראלי', 'adult'), signed('ילד א')],
+    },
+    createPaymentUrl: async () => 'pay',
+  });
+  assert.equal(retry.duplicate, false, 'the retry registered, not answered as duplicate');
+  assert.equal(retry.registrations.length, 2);
+});
+
+test('an order that ordered nothing is cleared instead of answered as duplicate', async () => {
+  const db = createDb({
+    activity_registration_orders: [{
+      id: 'debris-order',
+      activity_id: 'activity-debris',
+      idempotency_key: 'crashed-attempt',
+      payment_status: 'pending',
+      status: 'pending_payment',
+    }],
+  });
+  const activity = {
+    id: 'activity-debris',
+    name: 'טיול',
+    price: 100,
+    max_participants: 10,
+    registration_mode: 'paid_per_participant',
+  };
+  db.store.activities.push(activity);
+  const result = await registerActivityGroup({
+    db,
+    persist,
+    activity,
+    payload: {
+      idempotency_key: 'crashed-attempt',
+      parent,
+      participants: [signed('ילד א')],
+    },
+    createPaymentUrl: async () => 'pay',
+  });
+  assert.equal(result.duplicate, false);
+  assert.equal(result.registrations.length, 1);
+  assert.ok(!db.store.activity_registration_orders.some((row) => row.id === 'debris-order'));
 });

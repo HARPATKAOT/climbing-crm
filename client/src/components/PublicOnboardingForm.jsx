@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertTriangle, ArrowLeft, Baby, BellRing, Bone, Brain, CheckCircle, Download, FileWarning,
-  HeartPulse, HelpCircle, Lock, Megaphone, Pencil, PenTool, Pill, Plus, ShieldAlert, ShieldCheck,
-  Stethoscope, Wind,
+  AlertTriangle, ArrowLeft, Baby, BellRing, Bone, Brain, CalendarClock, CheckCircle, Download,
+  FileWarning, HeartPulse, HelpCircle, Lock, Megaphone, Pencil, PenTool, Pill, Plus, ShieldAlert,
+  ShieldCheck, Stethoscope, Wind,
 } from 'lucide-react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
@@ -55,7 +55,7 @@ import {
 import { CANONICAL_HEALTH_QUESTIONS } from '../utils/participationDocuments.js';
 import { uploadSignedParticipationPdfs } from '../utils/participationPdfUpload.js';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
-import { cancellationRuleText } from '../utils/cancellationText.js';
+import { cancellationRuleParts } from '../utils/cancellationText.js';
 
 /** Day for the form UI — digits with dots so RTL does not reshuffle ISO dates. */
 function formatSignedDay(value) {
@@ -3845,54 +3845,67 @@ export default function PublicOnboardingForm() {
                       </strong>
                     </div>
                   )}
+                  {/* שורה אחת לכל החותמים — מי חתם, לא שורת "נחתם" לכל שם.
+                      מי שמשלים חתימה בקישור נפרד מופיע בשורה משלו. */}
+                  {eventParticipants.some((participant) => !defersDocuments(participant)) && (
+                    <div>
+                      <span>טופסי השתתפות נחתמו</span>
+                      <strong>
+                        {eventParticipants
+                          .filter((participant) => !defersDocuments(participant))
+                          .map((participant) => childFullName(participant))
+                          .join(', ')}
+                      </strong>
+                    </div>
+                  )}
+                  {eventParticipants.some((participant) => defersDocuments(participant)) && (
+                    <div>
+                      <span>ישלימו חתימה בקישור נפרד</span>
+                      <strong>
+                        {eventParticipants
+                          .filter((participant) => defersDocuments(participant))
+                          .map((participant) => childFullName(participant))
+                          .join(', ')}
+                      </strong>
+                    </div>
+                  )}
+                  {paidEvent && (
+                    <div>
+                      <span>מחיר למשתתף כולל מע״מ</span>
+                      <strong>{formatIls(eventUnitVat.gross)}</strong>
+                    </div>
+                  )}
                   <div>
                     <span>מספר משתתפים</span>
                     <strong>{eventParticipants.length}</strong>
                   </div>
-                  {eventParticipants.map((participant) => (
-                    <div key={childKey(participant)}>
-                      <span>{childFullName(participant)}</span>
-                      <strong>
-                        {defersDocuments(participant)
-                          ? 'ישלים חתימה בקישור נפרד'
-                          : 'טופס השתתפות נחתם'}
-                      </strong>
-                    </div>
-                  ))}
                   {paidEvent && (
-                    <>
-                      <div>
-                        <span>{eventIncludesVat ? 'מחיר למשתתף כולל מע״מ' : 'מחיר למשתתף לפני מע״מ'}</span>
-                        <strong>{formatIls(eventUnitVat.entered)}</strong>
-                      </div>
-                      {!eventIncludesVat && (
-                        <div>
-                          <span>מחיר למשתתף כולל מע״מ</span>
-                          <strong>{formatIls(eventUnitVat.gross)}</strong>
-                        </div>
-                      )}
-                      <div className="event-total">
-                        <span>סך הכול לתשלום</span>
-                        <strong>{formatIls(eventTotalVat.gross)}</strong>
-                      </div>
-                    </>
+                    <div className="event-total">
+                      <span>סך הכול לתשלום</span>
+                      <strong>{formatIls(eventTotalVat.gross)}</strong>
+                    </div>
                   )}
                 </div>
 
                 {/* התנאים והאישור עליהם באותו מסך שבו משלמים — אישור שניתן
                     לפני שידעו מה הסכום אינו אישור על העסקה הזאת. */}
                 {paidEvent && eventPolicy && (
-                  <div className="participant-card" style={{ marginTop: 16 }}>
-                    <h3 style={{ marginTop: 0 }}>תנאי ביטול</h3>
-                    <ul style={{ lineHeight: 1.7 }}>
-                      {(eventPolicy.rules || []).map((rule) => (
-                        <li key={rule.id}>{cancellationRuleText(rule)}</li>
-                      ))}
-                    </ul>
+                  <div className="event-policy" style={{ marginTop: 16 }}>
+                    <h3><CalendarClock size={15} aria-hidden="true" />תנאי ביטול</h3>
+                    {(eventPolicy.rules || []).map((rule) => {
+                      const { period, outcome, tone } = cancellationRuleParts(rule);
+                      return (
+                        <div key={rule.id} className="event-policy-row">
+                          <span className={`event-policy-dot is-${tone}`} aria-hidden="true" />
+                          <div>
+                            <div className="event-policy-when">{period}</div>
+                            <div className={`event-policy-what is-${tone}`}>{outcome}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
                     {eventPolicy.free_text && (
-                      <p style={{ fontSize: 13, color: 'rgba(255,255,255,.7)', whiteSpace: 'pre-wrap' }}>
-                        {eventPolicy.free_text}
-                      </p>
+                      <p className="event-policy-note">{eventPolicy.free_text}</p>
                     )}
                     <label className="event-check">
                       <input

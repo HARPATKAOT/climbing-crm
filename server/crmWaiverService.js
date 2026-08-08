@@ -368,6 +368,10 @@ export async function saveCrmParticipants({
   source = 'form',
   onStudentCreated,
   onStudentStatusChanged,
+  // Runs after the parent row is durable and before any document is written.
+  // The registration order uses it to persist the order row first: waivers
+  // carry order_id, and the database enforces that the order exists.
+  onParentReady,
 } = {}) {
   const parentName = clean(parentInput?.name);
   const phone = clean(parentInput?.phone);
@@ -422,6 +426,7 @@ export async function saveCrmParticipants({
     phone: existingById ? (phone || parent.phone || '') : parent.phone,
   }) || parent;
   await requireDurable(persist, 'parents', parent);
+  if (onParentReady) await onParentReady({ parent });
 
   const signedAt = new Date().toISOString();
   const signedDate = signedAt.slice(0, 10);
