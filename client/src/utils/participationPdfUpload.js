@@ -20,7 +20,11 @@ export async function uploadSignedParticipationPdfs({
   phoneVerificationToken = '',
 } = {}) {
   const uploadToken = phoneVerificationToken || phoneVerification?.token || '';
-  const parentName = joinParentName(parent) || parent.name || '';
+  // `joinParentName` takes two strings. Handed the whole parent object it
+  // stringified it, and "[object Object]" was printed on the signed copy as the
+  // name of the person who signed it.
+  const parentName = String(parent.name || '').trim()
+    || joinParentName(parent.firstName || parent.first || '', parent.lastName || '');
   const findInput = (entry) => submittedParticipants.find((input) => (
     (input.id && String(input.id) === String(entry.student?.id || ''))
     || cleanName(input.name) === cleanName(entry.student?.name)

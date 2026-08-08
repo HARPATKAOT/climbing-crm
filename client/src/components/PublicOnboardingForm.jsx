@@ -53,6 +53,9 @@ import {
   participationGenderValue,
 } from '../utils/participationForm.js';
 import { CANONICAL_HEALTH_QUESTIONS } from '../utils/participationDocuments.js';
+import { uploadSignedParticipationPdfs } from '../utils/participationPdfUpload.js';
+import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
+import { cancellationRuleText } from '../utils/cancellationText.js';
 
 /** Day for the form UI — digits with dots so RTL does not reshuffle ISO dates. */
 function formatSignedDay(value) {
@@ -693,6 +696,10 @@ const LIST_ICONS = {
 const SUB_HEALTH = 1;
 const SUB_ACTIVITY = 2;
 const SUB_WAIVER = 3;
+// Only when the form was opened from an event page: what is being booked, what
+// it costs, and the terms of cancelling it. Signing comes first — payment is
+// the last thing that happens, and it is what puts the participants on the list.
+const SUB_PAYMENT = 4;
 
 export default function PublicOnboardingForm() {
   const { profile, legalName } = useBusinessProfile();
@@ -705,6 +712,19 @@ export default function PublicOnboardingForm() {
   const [searchParams] = useSearchParams();
   const healthOnlyMode = searchParams.get('mode') === 'health-renewal';
   const targetStudentId = String(searchParams.get('studentId') || '').trim();
+  // Opened from an event page (`/event/<slug>` → here). The form then registers
+  // the family for that outing and ends at payment, instead of only filing
+  // their details. The activity itself is the authority on which declaration is
+  // signed, what it costs and how many places are left.
+  const eventSlug = String(searchParams.get('event') || '').trim();
+  const [activity, setActivity] = useState(null);
+  const [activityError, setActivityError] = useState('');
+  const [policyAccepted, setPolicyAccepted] = useState(false);
+  const [signedSnapshot, setSignedSnapshot] = useState(null);
+  const [idempotencyKey] = useState(
+    () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`
+  );
+  const eventMode = !!eventSlug;
   // A link to one particular declaration (/health/<slug>). Without one the
   // default template arrives with the onboarding context below.
   const { slug: routeSlug } = useParams();
@@ -868,6 +888,7 @@ export default function PublicOnboardingForm() {
     if (step !== 3) return `step-${step}`;
     if (healthSubStep === SUB_HEALTH) return `health:${childHealthIndex + 1}`;
     if (healthSubStep === SUB_ACTIVITY) return 'safety-rules';
+    if (healthSubStep === SUB_PAYMENT) return 'booking-and-payment';
     return 'waiver-and-signature';
   };
 
@@ -1115,13 +1136,28 @@ export default function PublicOnboardingForm() {
     && !skipsThisRound(child);
 
   /**
+   * בן/בת זוג שאינם עדיין בתיק המשפחה, כשנרשמים לאירוע. אי אפשר לחתום עבור
+   * מבוגר/ת אחר/ת — השרת דוחה זאת — ולכן שומרים להם מקום ומשלמים עכשיו,
+   * והקישור לחתימה נשלח אליהם לטלפון שנמסר כאן.
+   */
+  const defersDocuments = (child) => eventMode
+    && child?.relationToSigner === 'spouse'
+    && !child?.id;
+
+  /**
+   * Whether this participant is part of this submission at all: everyone the
+   * parent said is coming, minus anyone who has to sign for themselves.
+   */
+  const joinsThisRound = (child) => !skipsThisRound(child)
+    && !awaitingParticipationChoice(child);
+
+  /**
    * Whether this participant gets a medical screen. Everyone in the submission
    * does, and everyone answers it in full: the declaration is short, so it is
    * simply filled afresh on every visit — a declaration in force only changes
    * what the card says will happen, never what is asked.
    */
-  const fillsDeclaration = (child) => !skipsThisRound(child)
-    && !awaitingParticipationChoice(child);
+  const fillsDeclaration = (child) => joinsThisRound(child) && !defersDocuments(child);
 
   /**
    * The signer's own card, already answered on the details step: name, id,
@@ -1158,7 +1194,7 @@ export default function PublicOnboardingForm() {
   };
 
   /** Whether this card's own identity fields are asked for on the participants step. */
-  const fillsOwnDetails = (child) => fillsDeclaration(child);
+  const fillsOwnDetails = (child) => joinsThisRound(child);
 
   /**
    * מצב הכרטיס — עובדה אחת שממנה נגזרים פס המצב, הכפתורים והשדות. קודם כל
@@ -1325,11 +1361,39 @@ export default function PublicOnboardingForm() {
   }, [searchParams, fallbackQuestions]);
 
   /**
+   * The outing this form is registering for. Its own declaration template wins
+   * over the one in the address: the event row is what decides what is signed
+   * for it, and a link with the wrong template in it must not change that.
+   */
+  useEffect(() => {
+    if (!eventSlug) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/public/activities/${encodeURIComponent(eventSlug)}`);
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) {
+          setActivityError(data.error || 'הפעילות לא נמצאה');
+          return;
+        }
+        setActivity(data);
+        if (data.form_template?.id) setTemplate(data.form_template);
+      } catch {
+        if (!cancelled) setActivityError('טעינת הפעילות נכשלה — רעננו את הדף');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [eventSlug]);
+
+  /**
    * A link that names a declaration (/health/<slug>, or ?template=) overrides
    * the default template loaded above. A slug we do not know simply leaves the
    * default in place — a wrong link must never leave the family with no form.
    */
   useEffect(() => {
+    // An event link carries its own template, fetched above.
+    if (eventSlug) return;
     const slug = routeSlug || searchParams.get('template') || '';
     if (!slug || slug === 'default') return;
     let cancelled = false;
@@ -1611,13 +1675,31 @@ export default function PublicOnboardingForm() {
   const isFitnessDeclaration = (q) => String(q?.id || '').toLowerCase() === 'h1';
   const sharedConfirmations = allSharedConfirmations.filter((q) => !isFitnessDeclaration(q));
   const fitnessDeclarations = allSharedConfirmations.filter(isFitnessDeclaration);
-  const sharedSubSteps = () => (sharedConfirmations.length ? [SUB_ACTIVITY, SUB_WAIVER] : [SUB_WAIVER]);
+  const sharedSubSteps = () => [
+    ...(sharedConfirmations.length ? [SUB_ACTIVITY] : []),
+    SUB_WAIVER,
+    // Payment is the last screen, and only when an event is being booked.
+    ...(eventMode ? [SUB_PAYMENT] : []),
+  ];
   const signingNames = healthChildren().map((kid) => String(kid.name || '').trim()).filter(Boolean);
   // המסמך חל רק על מי שמשתתף. החותם שענה „לא משתתף” הוא חותם — לא מכוסה,
   // והוספה אוטומטית של שמו רשמה אותו על ויתור שלא נועד לו. כשהוא כן משתתף,
   // הכרטיס שלו נמצא ב-signingNames ממילא.
   const coveredNames = [...new Set(signingNames)];
   const signingFirstNames = signingNames.map((name) => name.split(/\s+/)[0]).filter(Boolean);
+
+  // What is being booked, for how many, and for how much. Everyone the family
+  // said is coming is a place on the trip and a line on the invoice — including
+  // a spouse whose own signature is still to come.
+  const eventParticipants = namedChildren();
+  const paidEvent = activity?.registration_mode === 'paid_per_participant';
+  const eventIncludesVat = normalizePriceIncludesVat(activity?.price_includes_vat);
+  const eventUnitVat = vatBreakdown(activity?.unit_price, eventIncludesVat);
+  const eventTotalVat = vatBreakdown(
+    (Number(activity?.unit_price) || 0) * eventParticipants.length,
+    eventIncludesVat
+  );
+  const eventPolicy = activity?.cancellation_policy || null;
 
   const goNextFromParent = async () => {
     setError('');
@@ -1921,8 +2003,31 @@ export default function PublicOnboardingForm() {
       return;
     }
 
+    // A trip has a fixed number of places, and the last one may have gone while
+    // this form was being filled in. Say so here rather than at the card.
+    if (eventMode) {
+      const booked = namedChildren().length;
+      if (!booked) {
+        setError('יש לבחור לפחות משתתף אחד לפעילות');
+        return;
+      }
+      if (activity?.remaining != null && booked > activity.remaining) {
+        setError(activity.remaining > 0
+          ? `נותרו רק ${activity.remaining} מקומות פנויים בפעילות`
+          : 'הפעילות מלאה');
+        return;
+      }
+    }
+
     // Everyone here already has a declaration in force on their existing file.
     if (!healthChildren().length) {
+      // Nobody left to sign, but there is still a booking to pay for.
+      if (eventMode) {
+        setSignedSnapshot(children);
+        setHealthSubStep(SUB_PAYMENT);
+        setStep(3);
+        return;
+      }
       await submitAll(children);
       return;
     }
@@ -2023,6 +2128,16 @@ export default function PublicOnboardingForm() {
       return;
     }
 
+    // The signed forms are already in hand; this screen is the booking itself.
+    if (healthSubStep === SUB_PAYMENT) {
+      if (paidEvent && eventPolicy && !policyAccepted) {
+        setError('יש לקרוא ולאשר את תנאי הביטול לפני המעבר לתשלום');
+        return;
+      }
+      await submitAll(signedSnapshot || children);
+      return;
+    }
+
     if (healthOnlyMode && !healthDeclarationAccepted) {
       setError('יש לאשר שהמידע בהצהרת הבריאות מלא, נכון ומעודכן');
       return;
@@ -2080,91 +2195,178 @@ export default function PublicOnboardingForm() {
       };
     });
     setChildren(withSig);
+    // Booking an outing: the signatures are done, and what is left is the
+    // summary, the cancellation terms and the payment that registers everyone.
+    if (eventMode) {
+      setSignedSnapshot(withSig);
+      setHealthSubStep(SUB_PAYMENT);
+      return;
+    }
     await submitAll(withSig);
   };
 
+  /**
+   * The one participant shape both submissions build from: name, identity, the
+   * answers that were actually asked, and the signature that covers them.
+   */
+  const participantPayload = (c) => {
+    const participantQuestions = questionsForParticipant(c);
+    const asked = new Set(participantQuestions.map((q) => q.id));
+    const answers = Object.fromEntries(
+      Object.entries(c.answers || {}).filter(([id]) => asked.has(id))
+    );
+    const healthNotes = participantQuestions
+      .filter((q) => isScreeningQuestion(q) && answers[q.id] === true)
+      .map((q) => {
+        const note = String(c.answerNotes?.[q.id] || '').trim();
+        return note ? `${questionLabel(q)} — ${note}` : '';
+      })
+      .filter(Boolean)
+      .join('\n') || (c.healthNotes || '').trim();
+    return {
+      id: c.id,
+      name: childFullName(c),
+      lastName: participantLastName(c),
+      idNumber: (c.idNumber || '').trim(),
+      type: c.type === 'adult' ? 'adult' : 'child',
+      birthDate: c.birthDate,
+      gender: c.gender,
+      childPhone: c.childPhone,
+      registrationNotes: c.registrationNotes,
+      answers,
+      healthNotes,
+      medicalClearance: c.medicalClearance || null,
+      signature: c.signature,
+      signatureEvidenceTimeline: c.signatureEvidenceTimeline || null,
+      ...linkFieldsFor(knownChildren[childKey(c)]),
+      spouse_phone: c.relationToSigner === 'spouse' ? String(c.spousePhone || '').trim() : '',
+    };
+  };
+
+  /** The signer's own card, as both endpoints read it. */
+  const parentPayload = () => ({
+    name: parentFullName(),
+    lastName: parent.lastName.trim(),
+    idNumber: parent.idNumber.trim(),
+    // Derived from the cards: someone who marked a participant as their child
+    // is that child's parent, and their own gender says which. The single
+    // "relation to participants" field could not describe a family with more
+    // than one kind of tie in it.
+    relation: parent.relation
+      || (children.some((c) => c.relationToSigner === 'child')
+        ? (parent.gender === 'female' ? 'mother' : 'father')
+        : 'other'),
+    phone: parent.phone.trim(),
+    email: parent.email.trim(),
+    city: parent.city.trim(),
+    gender: parent.gender || '',
+    // נשמר על תיק ההורה, לא רק על כרטיס מתאמן: הורה שרק חותם על ילדיו איבד
+    // אותו, ונשאל מחדש בכל ביקור.
+    birthDate: parent.birthDate || '',
+    source: 'form',
+    family_parent_id: familyParentId || null,
+  });
+
+  /**
+   * Booking an outing. `registerActivityGroup` on the server already does the
+   * whole job in one call — the family's records, the declarations against this
+   * activity, the places held and the payment link — so this sends it what it
+   * asks for rather than filing the details separately and registering after.
+   *
+   * The payment link is the last step: it is what turns held places into
+   * confirmed ones.
+   */
+  const submitEventRegistration = async (childrenSnapshot) => {
+    setIsSubmitting(true);
+    setError('');
+    try {
+      const booked = (childrenSnapshot || children)
+        .filter((c) => c.name.trim() && joinsThisRound(c))
+        .map((c) => ({
+          ...participantPayload(c),
+          waiverAccepted: !defersDocuments(c),
+          // Every participant in this submission signed a fresh declaration
+          // just now — except a spouse whose signature is still to come.
+          reuse_health: false,
+          reuse_health_document: false,
+          reuse_waiver: false,
+          defer_documents: defersDocuments(c),
+        }));
+      if (!booked.length) {
+        setError('יש לבחור לפחות משתתף אחד לפעילות');
+        return;
+      }
+      const res = await fetch(`/api/public/activities/${encodeURIComponent(eventSlug)}/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          idempotency_key: idempotencyKey,
+          parent: parentPayload(),
+          subscriptions: { ...subscriptions },
+          participants: booked,
+          phoneVerification: otp.token ? { token: otp.token } : null,
+          policyAccepted,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error || 'ההרשמה נכשלה');
+        // The verification lapsed while the form was being filled in.
+        if (res.status === 403 && !data.error?.includes('בני המשפחה')) {
+          setOtp((o) => ({ ...o, token: '', verifiedPhone: '', code: '', stage: 'idle' }));
+          setStep(1);
+        }
+        return;
+      }
+      // The signed copies are filed before the customer leaves for the payment
+      // page — once the browser is at the provider, this code never runs again.
+      setUploadingPdfs(true);
+      await uploadSignedParticipationPdfs({
+        signedDocuments: data.signedDocuments || [],
+        submittedParticipants: booked,
+        parent: { ...parent, name: parentFullName() },
+        template: template || {},
+        brandName,
+        phoneVerificationToken: otp.token,
+      });
+      setUploadingPdfs(false);
+      if (data.paymentUrl) {
+        window.location.assign(data.paymentUrl);
+        return;
+      }
+      setIsSuccess(true);
+    } catch (err) {
+      console.error(err);
+      setError('שגיאת רשת — נסו שוב');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const submitAll = async (childrenSnapshot) => {
+    if (eventMode) return submitEventRegistration(childrenSnapshot);
     setIsSubmitting(true);
     setError('');
     try {
       const kids = (childrenSnapshot || children)
         // Same rule as the screen: a "not participating", an unanswered card,
         // or an adult who signs for themselves, is not part of the submission.
-        .filter((c) => c.name.trim() && !skipsThisRound(c) && !awaitingParticipationChoice(c))
-        .map((c) => {
-          const participantQuestions = questionsForParticipant(c);
-          const asked = new Set(participantQuestions.map((q) => q.id));
-          const answers = Object.fromEntries(
-            Object.entries(c.answers || {}).filter(([id]) => asked.has(id))
-          );
-          // Everything downstream — the declaration record, the PDF, the
-          // student's file — reads one healthNotes string, so the per-question
-          // details are composed into lines that keep saying which question
-          // each one answered.
-          const healthNotes = participantQuestions
-            .filter((q) => isScreeningQuestion(q) && answers[q.id] === true)
-            .map((q) => {
-              const note = String(c.answerNotes?.[q.id] || '').trim();
-              return note ? `${questionLabel(q)} — ${note}` : '';
-            })
-            .filter(Boolean)
-            .join('\n') || (c.healthNotes || '').trim();
-          return {
-            id: c.id,
-            name: childFullName(c),
-            lastName: participantLastName(c),
-            idNumber: (c.idNumber || '').trim(),
-            type: c.type === 'adult' ? 'adult' : 'child',
-            birthDate: c.birthDate,
-            gender: c.gender,
-            childPhone: c.childPhone,
-            registrationNotes: c.registrationNotes,
-            answers,
-            healthNotes,
-            // Travels with the declaration so the two are saved or refused
-            // together — never a signature on file with the approval missing.
-            medicalClearance: c.medicalClearance || null,
-            signature: c.signature,
-            healthAccepted: healthOnlyMode ? c.healthAccepted === true : false,
-            waiverAccepted: !healthOnlyMode,
-            signatureEvidenceTimeline: c.signatureEvidenceTimeline || null,
-            ...linkFieldsFor(knownChildren[childKey(c)]),
-            // אין עוד שימוש חוזר: כל משתתף בשליחה חתם עכשיו על הצהרה ואישור
-            // טריים, והשרת שומר לו רשומות ו-PDF חדשים.
-            reuse_health_document: false,
-            reuse_waiver: false,
-            // A spouse is a parent of this household as well as a participant.
-            // The phone is what the server needs to create — or recognise — them.
-            spouse_phone: c.relationToSigner === 'spouse' ? String(c.spousePhone || '').trim() : '',
-          };
-        });
+        .filter((c) => c.name.trim() && joinsThisRound(c))
+        .map((c) => ({
+          ...participantPayload(c),
+          healthAccepted: healthOnlyMode ? c.healthAccepted === true : false,
+          waiverAccepted: !healthOnlyMode,
+          // אין עוד שימוש חוזר: כל משתתף בשליחה חתם עכשיו על הצהרה ואישור
+          // טריים, והשרת שומר לו רשומות ו-PDF חדשים.
+          reuse_health_document: false,
+          reuse_waiver: false,
+        }));
 
       const res = await fetch('/api/public/onboard', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          parent: {
-            name: parentFullName(),
-            lastName: parent.lastName.trim(),
-            idNumber: parent.idNumber.trim(),
-            // Derived from the cards: someone who marked a participant as
-            // their child is that child's parent, and their own gender says
-            // which. The single "relation to participants" field could not
-            // describe a family with more than one kind of tie in it.
-            relation: parent.relation
-              || (children.some((c) => c.relationToSigner === 'child')
-                ? (parent.gender === 'female' ? 'mother' : 'father')
-                : 'other'),
-            phone: parent.phone.trim(),
-            email: parent.email.trim(),
-            city: parent.city.trim(),
-            gender: parent.gender || '',
-            // נשמר על תיק ההורה, לא רק על כרטיס מתאמן: הורה שרק חותם על
-            // ילדיו איבד אותו, ונשאל מחדש בכל ביקור.
-            birthDate: parent.birthDate || '',
-            source: 'form',
-            family_parent_id: familyParentId || null,
-          },
+          parent: parentPayload(),
           interest,
           children: kids,
           subscriptions: effectiveRequiredListKey
@@ -2287,11 +2489,25 @@ export default function PublicOnboardingForm() {
     }
   };
 
-  if (loading) {
+  if (loading || (eventMode && !activity && !activityError)) {
     return (
       <div className="event-page onboard-page" ref={pageTopRef}>
         <div className="event-card" style={{ textAlign: 'center', padding: 40 }}>
           <p style={{ color: 'rgba(255,255,255,0.7)' }}>טוען טופס השלמת פרטים...</p>
+        </div>
+        <FormStyles />
+      </div>
+    );
+  }
+
+  // The link says it is registering for an outing and the outing cannot be
+  // read. Filling the form in would file details and register nobody.
+  if (eventMode && activityError) {
+    return (
+      <div className="event-page onboard-page" ref={pageTopRef}>
+        <div className="event-card" style={{ textAlign: 'center', padding: 40 }}>
+          <h1 style={{ color: '#fff', fontSize: 22, marginBottom: 10 }}>לא ניתן להירשם</h1>
+          <p style={{ color: 'rgba(255,255,255,0.7)' }}>{activityError}</p>
         </div>
         <FormStyles />
       </div>
@@ -2303,13 +2519,17 @@ export default function PublicOnboardingForm() {
       <div className="event-page onboard-page" ref={pageTopRef}>
         <div className="event-card event-centered">
           <CheckCircle size={60} color="var(--form-accent-solid, #38bdf8)" style={{ margin: '0 auto', marginBottom: 20 }} />
-          <h1 style={{ color: '#fff', fontSize: 24, marginBottom: 10 }}>הפרטים התקבלו!</h1>
+          <h1 style={{ color: '#fff', fontSize: 24, marginBottom: 10 }}>
+            {eventMode ? 'ההרשמה התקבלה' : 'הפרטים התקבלו!'}
+          </h1>
           <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16 }}>
-            תודה {parent.name}. {healthOnlyMode
-              ? 'הצהרת הבריאות החדשה נשמרה בתיק.'
-              : 'הפרטים והצהרת הבריאות נשמרו במערכת.'}
+            תודה {parent.name}. {eventMode
+              ? `המקומות ב„${activity?.page_title || activity?.name || 'פעילות'}” נשמרו.`
+              : (healthOnlyMode
+                ? 'הצהרת הבריאות החדשה נשמרה בתיק.'
+                : 'הפרטים והצהרת הבריאות נשמרו במערכת.')}
           </p>
-          {!healthOnlyMode && (
+          {!healthOnlyMode && !eventMode && (
             <p style={{ color: 'rgba(255,255,255,0.55)', fontSize: 14, marginTop: 12 }}>
               השיבוץ לחוג יבוצע על ידי הצוות בהמשך.
             </p>
@@ -2389,7 +2609,10 @@ export default function PublicOnboardingForm() {
    * שם הפעילות שהטופס משרת. נערך בתבנית ב-CRM; עד שמגדירים אותו, נגזר מסוג
    * הטופס — מי שפותח קישור צריך לדעת על מה הוא חותם עוד לפני שהוא קורא.
    */
-  const activityHeadline = String(template?.headline || '').trim()
+  // A booking says which outing it is, by name, on every screen — that is what
+  // the family chose on the event page and what they are paying for.
+  const activityHeadline = (eventMode && (activity?.page_title || activity?.name))
+    || String(template?.headline || '').trim()
     || (isTripForm ? 'יציאה / טיול' : `טיפוס ב${brandName}`);
   /**
    * מה הטופס הזה, במשפט אחד, בדף הראשון. „הצהרת בריאות והסרת אחריות” הוא שם
@@ -2409,6 +2632,7 @@ export default function PublicOnboardingForm() {
     [SUB_HEALTH]: sectionTitles.health,
     [SUB_ACTIVITY]: sectionTitles.confirm,
     [SUB_WAIVER]: healthOnlyMode ? 'אישור הצהרת הבריאות' : 'אישור השתתפות והסרת אחריות',
+    [SUB_PAYMENT]: paidEvent ? 'סיכום ההרשמה ותשלום' : 'סיכום ההרשמה',
   }[healthSubStep] || documentTitle;
   const progressPercent = Math.round((displayStep / totalStepsLabel) * 100);
 
@@ -2422,7 +2646,12 @@ export default function PublicOnboardingForm() {
             onClick={() => {
               setError('');
               const backShared = sharedScreens[sharedScreens.indexOf(healthSubStep) - 1];
-              if (step === 3 && healthSubStep !== SUB_HEALTH && backShared) {
+              // Nobody signed on the way in — the signature screen was never
+              // shown, so going back from the booking lands on the participants.
+              if (step === 3 && healthSubStep === SUB_PAYMENT && !kids.length) {
+                setHealthSubStep(SUB_HEALTH);
+                setStep(2);
+              } else if (step === 3 && healthSubStep !== SUB_HEALTH && backShared) {
                 setHealthSubStep(backShared);
               } else if (step === 3 && healthSubStep !== SUB_HEALTH) {
                 // Out of the shared screens and back into the medical ones lands
@@ -3277,9 +3506,9 @@ export default function PublicOnboardingForm() {
           </div>
         )}
 
-        {step === 3 && currentChild && (
+        {step === 3 && (currentChild || healthSubStep === SUB_PAYMENT) && (
           <div className="fade-in">
-            {healthSubStep === SUB_HEALTH && (
+            {healthSubStep === SUB_HEALTH && currentChild && (
               <>
                 {/* Whose declaration this is. It was shown only to a participant
                     on file, so the parent — who is on the same screen answering
@@ -3588,7 +3817,120 @@ export default function PublicOnboardingForm() {
                     ? 'שולח...'
                     : childHealthIndex < kids.length - 1
                       ? `שמור והמשך ל-${kids[childHealthIndex + 1]?.name || 'הבא'}`
-                      : 'שלח'}
+                      : (eventMode ? 'המשך לסיכום ההרשמה' : 'שלח')}
+                </button>
+              </>
+            )}
+
+            {/* מה נרשם, בכמה, ובאילו תנאים — המסך האחרון לפני החיוב. הוא קיים
+                רק כשהטופס נפתח מדף אירוע: בלעדיו הטופס רק מתייק פרטים. */}
+            {healthSubStep === SUB_PAYMENT && (
+              <>
+                <div className="event-summary">
+                  <div>
+                    <span>הפעילות</span>
+                    <strong>{activity?.page_title || activity?.name || ''}</strong>
+                  </div>
+                  {activity?.date && (
+                    <div>
+                      <span>מתי</span>
+                      <strong>
+                        {formatSignedDay(activity.date)}
+                        {activity.end_date && activity.end_date !== activity.date
+                          ? ` – ${formatSignedDay(activity.end_date)}`
+                          : ''}
+                        {!activity.all_day && activity.start_time
+                          ? ` · ${String(activity.start_time).slice(0, 5)}`
+                          : ''}
+                      </strong>
+                    </div>
+                  )}
+                  <div>
+                    <span>מספר משתתפים</span>
+                    <strong>{eventParticipants.length}</strong>
+                  </div>
+                  {eventParticipants.map((participant) => (
+                    <div key={childKey(participant)}>
+                      <span>{childFullName(participant)}</span>
+                      <strong>
+                        {defersDocuments(participant)
+                          ? 'ישלים חתימה בקישור נפרד'
+                          : 'טופס השתתפות נחתם'}
+                      </strong>
+                    </div>
+                  ))}
+                  {paidEvent && (
+                    <>
+                      <div>
+                        <span>{eventIncludesVat ? 'מחיר למשתתף כולל מע״מ' : 'מחיר למשתתף לפני מע״מ'}</span>
+                        <strong>{formatIls(eventUnitVat.entered)}</strong>
+                      </div>
+                      {!eventIncludesVat && (
+                        <div>
+                          <span>מחיר למשתתף כולל מע״מ</span>
+                          <strong>{formatIls(eventUnitVat.gross)}</strong>
+                        </div>
+                      )}
+                      <div className="event-total">
+                        <span>סך הכול לתשלום</span>
+                        <strong>{formatIls(eventTotalVat.gross)}</strong>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* התנאים והאישור עליהם באותו מסך שבו משלמים — אישור שניתן
+                    לפני שידעו מה הסכום אינו אישור על העסקה הזאת. */}
+                {paidEvent && eventPolicy && (
+                  <div className="participant-card" style={{ marginTop: 16 }}>
+                    <h3 style={{ marginTop: 0 }}>תנאי ביטול</h3>
+                    <ul style={{ lineHeight: 1.7 }}>
+                      {(eventPolicy.rules || []).map((rule) => (
+                        <li key={rule.id}>{cancellationRuleText(rule)}</li>
+                      ))}
+                    </ul>
+                    {eventPolicy.free_text && (
+                      <p style={{ fontSize: 13, color: 'rgba(255,255,255,.7)', whiteSpace: 'pre-wrap' }}>
+                        {eventPolicy.free_text}
+                      </p>
+                    )}
+                    <label className="event-check">
+                      <input
+                        type="checkbox"
+                        checked={policyAccepted}
+                        onChange={(e) => {
+                          recordTick('cancellation_policy_accepted', e.target.checked);
+                          setPolicyAccepted(e.target.checked);
+                        }}
+                      />
+                      <span>{g('קראתי ואני מאשר', 'קראתי ואני מאשרת', 'קראתי ואני מאשר/ת')} את תנאי הביטול</span>
+                    </label>
+                  </div>
+                )}
+                {!paidEvent && (
+                  <p style={{ color: '#6ee7b7', fontSize: 14, marginTop: 14 }}>
+                    אין צורך בתשלום — אישור ההרשמה שומר את המקומות.
+                  </p>
+                )}
+
+                {error && <ErrorBox message={error} />}
+                {uploadingPdfs && (
+                  <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginTop: 10 }}>
+                    שומר עותק PDF בתיק האישי...
+                  </p>
+                )}
+                <button
+                  type="button"
+                  className="event-primary"
+                  style={{ marginTop: 16 }}
+                  disabled={isSubmitting}
+                  onClick={advanceHealthOrSubmit}
+                >
+                  {isSubmitting
+                    ? 'שולח...'
+                    : paidEvent
+                      ? `מעבר לתשלום · ${formatIls(eventTotalVat.gross)}`
+                      : 'אישור הרשמה'}
                 </button>
               </>
             )}
