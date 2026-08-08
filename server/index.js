@@ -8437,7 +8437,23 @@ function normalizeIcountNotifyPayload(raw = {}, query = {}) {
     payload?.doc?.doctype ||
     null;
 
-  return { payload, docId, docnum, doctype };
+  return { payload, docId, docnum, doctype, ccBillLogId: extractCcBillLogId(raw) };
+}
+
+/**
+ * מזהה החיוב בכרטיס, אם iCount שלח אותו ב-IPN.
+ *
+ * `cc/refund` — הדרך היחידה ב-API לזכות כרטיס בסכום חלקי — מקבל אך ורק את
+ * המזהה הזה, והוא אינו מופיע ב-doc/info של המסמך. ה-IPN הוא ההזדמנות היחידה
+ * לתפוס אותו, ולכן הוא נשמר על התשלום גם לפני שמסך הזיכוי החלקי קיים.
+ */
+function extractCcBillLogId(raw = {}) {
+  for (const [key, value] of Object.entries(raw || {})) {
+    if (/bill_?log/i.test(key) && value != null && String(value).trim()) {
+      return String(value).trim();
+    }
+  }
+  return null;
 }
 
 async function resolveCcClearing({ payload, doctype, docnum } = {}) {
@@ -9036,14 +9052,18 @@ app.post('/api/icount/webhook', async (req, res) => {
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
 
-    const { payload, docId, docnum, doctype } = normalizeIcountNotifyPayload(
+    const { payload, docId, docnum, doctype, ccBillLogId } = normalizeIcountNotifyPayload(
       req.body || {},
       req.query || {}
     );
+    // שמות השדות בלבד, בלי ערכים — כדי לדעת מה iCount באמת שולח לנו, בלי
+    // פרטי אשראי ביומן. חד-פעמי לכל אירוע ולא מזיק.
     console.log(
       '📩 [iCount webhook] payment/document notify',
       doctype ? `doctype=${doctype}` : '',
-      docnum ? `docnum=${docnum}` : ''
+      docnum ? `docnum=${docnum}` : '',
+      ccBillLogId ? 'cc_bill_log=yes' : 'cc_bill_log=no',
+      `fields=[${Object.keys(req.body || {}).join(',').slice(0, 300)}]`
     );
 
     // The process that receives the notification is not necessarily the one that
@@ -9077,6 +9097,10 @@ app.post('/api/icount/webhook', async (req, res) => {
 
       const updated = db.update('payments', payment.id, {
         status: 'paid',
+        // בלעדיו אין זיכוי חלקי דרך ה-API — נשמר עכשיו, גם אם המסך שישתמש
+        // בו ייבנה אחר כך. תשלומים ישנים יישארו בלעדיו, וזה בסדר: עליהם
+        // הזיכוי החלקי ימשיך להיעשות ידנית ב-iCount.
+        cc_bill_log_id: ccBillLogId || payment.cc_bill_log_id || null,
         icount_doc_id: docId || payment.icount_doc_id,
         icount_doc_number: docnum || payment.icount_doc_number,
         icount_doctype: doctype || payment.icount_doctype || null,
