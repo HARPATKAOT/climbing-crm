@@ -252,7 +252,7 @@ export const parentToRow = (o) => ({
   bot_outside_hours_date: emptyToNull(o.bot_outside_hours_date),
 });
 
-const mappers = {
+export const mappers = {
   parents: {
     fromRow: parentFromRow,
     toRow: parentToRow,
@@ -376,17 +376,29 @@ const mappers = {
 
 // For the newer tables the JS shape already matches the columns; we just make
 // sure we only send real columns (so a stray updated_at/created_at won't error).
-const columnMapper = (allowed) => ({
-  fromRow: (r) => r,
-  toRow: (o) => {
-    const row = {};
-    for (const key of allowed) {
-      if (o[key] !== undefined) row[key] = o[key] === '' ? null : o[key];
-    }
-    row.id = o.id;
-    return row;
-  },
-});
+/**
+ * מחרוזת ריקה נשמרת כ-null, כי ברוב השדות „לא מולא” ו„ריק” הם אותו דבר ו-null
+ * הוא מה שמסננים לפיו. אבל עמודה שהוגדרה NOT NULL נשברת מזה: ברירת המחדל
+ * שלה חלה רק כשהעמודה מושמטת, לא כששולחים לתוכה null במפורש — וכך מחיקת
+ * הטקסט החופשי במדיניות ביטול הפילה את השמירה.
+ *
+ * `keepEmpty` מחזיק את העמודות שבהן מחרוזת ריקה היא ערך לגיטימי.
+ */
+const columnMapper = (allowed, { keepEmpty = [] } = {}) => {
+  const keep = new Set(keepEmpty);
+  return {
+    fromRow: (r) => r,
+    toRow: (o) => {
+      const row = {};
+      for (const key of allowed) {
+        if (o[key] === undefined) continue;
+        row[key] = o[key] === '' && !keep.has(key) ? null : o[key];
+      }
+      row.id = o.id;
+      return row;
+    },
+  };
+};
 
 mappers.activities = columnMapper([
   'id', 'name', 'type', 'category', 'status', 'date', 'end_date', 'start_time', 'end_time', 'location',
@@ -411,7 +423,7 @@ mappers.activities = columnMapper([
   // type; this is the label that tells them apart on the board.
   'event_kind', 'participation_scope',
   'created_at', 'updated_at',
-]);
+], { keepEmpty: ['audience', 'included', 'what_to_bring', 'important_info'] });
 mappers.attendance = columnMapper([
   'id', 'student_id', 'group_id', 'date', 'status', 'marked_by', 'notes',
 ]);
@@ -454,7 +466,7 @@ mappers.cancellation_policies = columnMapper([
 mappers.cancellation_policy_versions = columnMapper([
   'id', 'policy_id', 'version_number', 'basis', 'rules', 'usage_rule', 'cooling_off_hours', 'free_text', 'status',
   'published_at', 'created_by', 'created_at',
-]);
+], { keepEmpty: ['free_text'] });
 mappers.cancellation_acceptances = columnMapper([
   'id', 'policy_id', 'policy_version_id', 'parent_id', 'activity_id', 'order_id',
   'pos_sale_id', 'payment_id', 'accepted_via', 'accepted_by_staff', 'snapshot', 'accepted_at',
@@ -478,7 +490,7 @@ mappers.activity_templates = columnMapper([
   'theme', 'sort_order', 'is_active',
   'staff_role', 'staff_pay_mode', 'staff_flat_amount',
   'created_at', 'updated_at',
-]);
+], { keepEmpty: ['audience', 'included', 'what_to_bring', 'important_info'] });
 
 mappers.health_declarations = {
   fromRow: (r) => ({
