@@ -452,7 +452,7 @@ mappers.cancellation_policies = columnMapper([
   'created_at', 'updated_at',
 ]);
 mappers.cancellation_policy_versions = columnMapper([
-  'id', 'policy_id', 'version_number', 'rules', 'cooling_off_hours', 'free_text', 'status',
+  'id', 'policy_id', 'version_number', 'basis', 'rules', 'usage_rule', 'cooling_off_hours', 'free_text', 'status',
   'published_at', 'created_by', 'created_at',
 ]);
 mappers.cancellation_acceptances = columnMapper([

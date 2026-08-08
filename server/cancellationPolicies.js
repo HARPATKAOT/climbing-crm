@@ -18,6 +18,46 @@ export const DEFAULT_CANCELLATION_TEXT = 'הפעילות מותנית במיני
  */
 export const DEFAULT_COOLING_OFF_HOURS = 24;
 
+/**
+ * על מה המדיניות נמדדת.
+ *
+ * `activity_date` — כמה זמן נשאר עד הפעילות. נכון לאירוע שיש לו תאריך.
+ * `usage` — כמה מהמוצר כבר נוצל. זה הבסיס לכרטיסייה ולמנוי, שאין להם תאריך
+ *   שממנו סופרים אחורה: מה שקובע הוא כמה כניסות נותרו או כמה מהתקופה נשארה.
+ */
+export const POLICY_BASES = Object.freeze({ ACTIVITY_DATE: 'activity_date', USAGE: 'usage' });
+
+export function normalizePolicyBasis(value) {
+  const key = String(value || '').trim();
+  return key === POLICY_BASES.USAGE ? POLICY_BASES.USAGE : POLICY_BASES.ACTIVITY_DATE;
+}
+
+/**
+ * כללי מדיניות לפי ניצול. מבנה שטוח ולא מדרגות, כי אין כאן ציר זמן —
+ * יש חלק שנוצל וחלק שלא.
+ */
+export const DEFAULT_USAGE_RULE = Object.freeze({
+  unused_refund_percent: 100,
+  fixed_fee: 0,
+  min_used_units: 0,
+  no_refund_after_percent: 100,
+});
+
+export function normalizeUsageRule(rule = {}) {
+  const source = rule || {};
+  return {
+    // כמה מהחלק שלא נוצל מוחזר
+    unused_refund_percent: Math.min(100, Math.max(0, Number(source.unused_refund_percent) ?? 100)) || 0,
+    // דמי ביטול קבועים, פעם אחת על הביטול כולו
+    fixed_fee: money(source.fixed_fee),
+    // התחייבות מינימלית: כמה יחידות (כניסות או חודשים) חייבות להיות מנוצלות
+    // או משולמות לפני שמגיע החזר בכלל
+    min_used_units: Math.max(0, Math.round(Number(source.min_used_units) || 0)),
+    // מעל אחוז ניצול זה אין החזר בכלל
+    no_refund_after_percent: Math.min(100, Math.max(0, Number(source.no_refund_after_percent) ?? 100)) || 0,
+  };
+}
+
 export function normalizeCoolingOffHours(value) {
   if (value === null || value === '' || value === undefined) return 0;
   const n = Number(value);
@@ -53,7 +93,9 @@ export function policySnapshot(policy, version) {
     policy_name: policy.name,
     version_id: version.id,
     version_number: version.version_number,
+    basis: normalizePolicyBasis(version.basis),
     rules: normalizeCancellationRules(version.rules),
+    usage_rule: normalizeUsageRule(version.usage_rule),
     cooling_off_hours: normalizeCoolingOffHours(version.cooling_off_hours),
     free_text: String(version.free_text || ''),
     published_at: version.published_at || null,
@@ -80,6 +122,92 @@ export function resolvePolicyFor(db, source = {}) {
   return fallback ? currentPolicyVersion(db, fallback.id) : null;
 }
 
+/**
+ * החזר לכרטיסייה או למנוי — לפי מה שנותר, לא לפי מה שיקרה מחר.
+ *
+ * `totalUnits` הוא מה שנקנה (כניסות, או חודשי מנוי) ו-`usedUnits` מה שכבר
+ * נוצל. ההחזר הוא ערך החלק שלא נוצל, לפי האחוז שנקבע, פחות דמי ביטול —
+ * ואפס כשהניצול עבר את הגבול או כשלא הושלמה ההתחייבות המינימלית.
+ */
+export function suggestedUsageRefund({
+  snapshot,
+  paidAmount,
+  totalUnits,
+  usedUnits = 0,
+  purchasedAt = null,
+  cancelledAt = new Date(),
+  organizerCancelled = false,
+} = {}) {
+  const paid = money(paidAmount);
+  if (organizerCancelled) {
+    return { amount: paid, rule_id: 'organizer_cancelled', refund_percent: 100, fixed_fee: 0 };
+  }
+  const total = Math.max(0, Number(totalUnits) || 0);
+  const used = Math.max(0, Number(usedUnits) || 0);
+  const rule = normalizeUsageRule(snapshot?.usage_rule);
+
+  // התחרטות: החזר מלא, אבל רק אם עוד לא נגעו במוצר. מי שכבר נכנס פעם אחת
+  // צרך ממנו, וזה כבר לא ביטול אלא שימוש חלקי.
+  const coolingOff = normalizeCoolingOffHours(snapshot?.cooling_off_hours);
+  const bought = purchasedAt ? new Date(purchasedAt) : null;
+  const cancelled = cancelledAt instanceof Date ? cancelledAt : new Date(cancelledAt);
+  if (coolingOff > 0 && used === 0 && bought && !Number.isNaN(bought.getTime())) {
+    const sincePurchase = (cancelled.getTime() - bought.getTime()) / 36e5;
+    if (sincePurchase >= 0 && sincePurchase <= coolingOff) {
+      return {
+        amount: paid,
+        rule_id: 'cooling_off',
+        refund_percent: 100,
+        fixed_fee: 0,
+        cooling_off_hours: coolingOff,
+      };
+    }
+  }
+
+  if (!total) return { amount: 0, rule_id: 'no_units', refund_percent: 0, fixed_fee: 0 };
+
+  const usedPercent = Math.min(100, (used / total) * 100);
+  if (used < rule.min_used_units) {
+    // התחייבות מינימלית שלא הושלמה — משלמים עליה, ולכן אין החזר על החלק הזה.
+    const owed = Math.min(total, rule.min_used_units);
+    const remaining = Math.max(0, total - owed);
+    const value = paid * (remaining / total);
+    const amount = money(Math.max(0, value * (rule.unused_refund_percent / 100) - rule.fixed_fee));
+    return {
+      amount,
+      rule_id: 'below_min_commitment',
+      refund_percent: rule.unused_refund_percent,
+      fixed_fee: rule.fixed_fee,
+      used_units: used,
+      total_units: total,
+      billed_units: owed,
+    };
+  }
+  if (usedPercent > rule.no_refund_after_percent) {
+    return {
+      amount: 0,
+      rule_id: 'used_too_much',
+      refund_percent: 0,
+      fixed_fee: 0,
+      used_units: used,
+      total_units: total,
+      used_percent: Math.round(usedPercent * 100) / 100,
+    };
+  }
+
+  const unusedValue = paid * (Math.max(0, total - used) / total);
+  const amount = money(Math.max(0, unusedValue * (rule.unused_refund_percent / 100) - rule.fixed_fee));
+  return {
+    amount,
+    rule_id: 'unused_portion',
+    refund_percent: rule.unused_refund_percent,
+    fixed_fee: rule.fixed_fee,
+    used_units: used,
+    total_units: total,
+    used_percent: Math.round(usedPercent * 100) / 100,
+  };
+}
+
 export function suggestedRefund({
   snapshot,
   paidAmount,
@@ -88,9 +216,17 @@ export function suggestedRefund({
   cancelledAt = new Date(),
   organizerCancelled = false,
   participantsCancelled = 1,
+  totalUnits = 0,
+  usedUnits = 0,
 } = {}) {
   const paid = money(paidAmount);
   if (organizerCancelled) return { amount: paid, rule_id: 'organizer_cancelled', refund_percent: 100, fixed_fee: 0 };
+  // מדיניות שנמדדת לפי ניצול אין לה תאריך לספור ממנו אחורה.
+  if (snapshot && normalizePolicyBasis(snapshot.basis) === POLICY_BASES.USAGE) {
+    return suggestedUsageRefund({
+      snapshot, paidAmount, totalUnits, usedUnits, purchasedAt, cancelledAt, organizerCancelled,
+    });
+  }
   const starts = activityStartsAt instanceof Date ? activityStartsAt : new Date(activityStartsAt);
   const cancelled = cancelledAt instanceof Date ? cancelledAt : new Date(cancelledAt);
   if (!snapshot || Number.isNaN(starts.getTime()) || Number.isNaN(cancelled.getTime())) {
@@ -154,7 +290,9 @@ export async function createPolicy(db, persist, input = {}, actor = '') {
     id: id('cpv'),
     policy_id: policy.id,
     version_number: 1,
+    basis: normalizePolicyBasis(input.basis),
     rules: normalizeCancellationRules(input.rules),
+    usage_rule: normalizeUsageRule(input.usage_rule),
     cooling_off_hours: normalizeCoolingOffHours(input.cooling_off_hours ?? DEFAULT_COOLING_OFF_HOURS),
     free_text: String(input.free_text ?? DEFAULT_CANCELLATION_TEXT),
     status: 'draft',
@@ -177,7 +315,9 @@ export async function savePolicyDraft(db, persist, policyId, input = {}, actor =
     draft = db.insert('cancellation_policy_versions', {
       id: id('cpv'), policy_id: policy.id,
       version_number: Math.max(0, ...versions.map((row) => Number(row.version_number) || 0)) + 1,
+      basis: normalizePolicyBasis(input.basis ?? current?.basis),
       rules: normalizeCancellationRules(input.rules || current?.rules),
+      usage_rule: normalizeUsageRule(input.usage_rule || current?.usage_rule),
       cooling_off_hours: normalizeCoolingOffHours(input.cooling_off_hours ?? current?.cooling_off_hours),
       free_text: String(input.free_text ?? current?.free_text ?? ''),
       status: 'draft', published_at: null, created_by: actor || null,
@@ -185,7 +325,9 @@ export async function savePolicyDraft(db, persist, policyId, input = {}, actor =
     });
   } else {
     draft = db.update('cancellation_policy_versions', draft.id, {
+      basis: normalizePolicyBasis(input.basis ?? draft.basis),
       rules: normalizeCancellationRules(input.rules || draft.rules),
+      usage_rule: normalizeUsageRule(input.usage_rule || draft.usage_rule),
       cooling_off_hours: normalizeCoolingOffHours(input.cooling_off_hours ?? draft.cooling_off_hours),
       free_text: String(input.free_text ?? draft.free_text ?? ''),
     }) || draft;

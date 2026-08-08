@@ -5507,3 +5507,89 @@ select option, select optgroup {
   .policies-layout { grid-template-columns: minmax(0, 1fr); }
   .policy-rule { grid-template-columns: minmax(0, 1fr); }
 }
+
+
+/* שדות הקלט במסך המדיניות היו תיבות אפורות מרובעות של הדפדפן. אלה שדות
+   קטנים שיושבים בתוך כרטיסים כהים, ולכן הם מקבלים את אותה שפה של שאר
+   המערכת: פינות מעוגלות, רקע שקוף וטבעת מיקוד. */
+.policies-screen .form-group { display: grid; gap: 5px; min-width: 0; }
+
+.policies-screen .form-group > span {
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.policies-screen input[type="text"],
+.policies-screen input[type="number"],
+.policies-screen input:not([type]),
+.policies-screen textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-1);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  outline: none;
+  transition: border-color var(--t-fast), background var(--t-fast), box-shadow var(--t-fast);
+}
+
+.policies-screen textarea {
+  min-height: 84px;
+  resize: none;
+  field-sizing: content;
+  overflow-y: auto;
+}
+
+.policies-screen input:hover,
+.policies-screen textarea:hover { border-color: rgba(255, 255, 255, 0.2); }
+
+.policies-screen input:focus,
+.policies-screen textarea:focus {
+  border-color: color-mix(in srgb, var(--blue) 55%, transparent);
+  background: color-mix(in srgb, var(--blue) 6%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 14%, transparent);
+}
+
+.policies-screen input[type="number"] { text-align: start; }
+
+.policy-card-name { display: flex; align-items: center; gap: 7px; }
+
+.policy-basis-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+
+.policy-basis {
+  display: grid;
+  gap: 3px;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: rgba(0, 0, 0, 0.16);
+  color: var(--text-2);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  transition: all var(--t-fast);
+}
+
+.policy-basis strong { font-size: 13px; }
+.policy-basis small { font-size: 11px; color: var(--text-3); line-height: 1.5; }
+
+.policy-basis.is-on {
+  border-color: color-mix(in srgb, var(--blue) 55%, transparent);
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+  color: var(--text-1);
+}
+
+.policy-usage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 700px) {
+  .policy-basis-row { grid-template-columns: minmax(0, 1fr); }
+}

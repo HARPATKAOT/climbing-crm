@@ -1,5 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarClock, Clock3, Eye, FileText, Loader2, Plus, Save, Send } from 'lucide-react';
+import {
+  CalendarClock, Clock3, Eye, FileText, Footprints, Loader2, Plus, Save, Send,
+  Ticket, PartyPopper, Percent,
+} from 'lucide-react';
 import { formatIls } from '../utils/vat.js';
 
 const DEFAULT_RULES = [
@@ -16,11 +19,30 @@ function editableFrom(policy) {
     || policy?.versions?.[0];
   return {
     name: policy?.name || 'מדיניות ביטול',
+    basis: source?.basis === 'usage' ? 'usage' : 'activity_date',
     rules: (source?.rules || DEFAULT_RULES).map((rule) => ({ ...rule })),
+    usage_rule: {
+      unused_refund_percent: source?.usage_rule?.unused_refund_percent ?? 100,
+      fixed_fee: source?.usage_rule?.fixed_fee ?? 0,
+      min_used_units: source?.usage_rule?.min_used_units ?? 0,
+      no_refund_after_percent: source?.usage_rule?.no_refund_after_percent ?? 100,
+    },
     cooling_off_hours: source?.cooling_off_hours ?? 24,
     free_text: source?.free_text ?? DEFAULT_TEXT,
     is_default: !!policy?.is_default,
   };
+}
+
+/**
+ * אייקון לכל מדיניות. נגזר מהשם ומהבסיס ולא נשמר בנפרד — שם המדיניות הוא
+ * ממילא מה שאומר על מה היא חלה, ושדה נוסף היה עוד דבר לתחזק.
+ */
+function policyIcon(policy) {
+  const name = String(policy?.name || '');
+  if (/נעל|ציוד|השכר/.test(name)) return { Icon: Footprints, color: '#FBBF24' };
+  if (/כרטיסי|מנוי/.test(name)) return { Icon: Ticket, color: '#2DD4BF' };
+  if (/אירוע|טיול|פעילות/.test(name)) return { Icon: PartyPopper, color: '#A78BFA' };
+  return { Icon: FileText, color: '#38BDF8' };
 }
 
 /** ההסבר שמלווה כל מדרגה — מה היא אומרת ללקוח, לא רק כמה אחוזים. */
@@ -76,6 +98,13 @@ export default function CancellationPoliciesSettings() {
     setDraft(editableFrom(policies.find((policy) => policy.id === id)));
     setError('');
     setMessage('');
+  };
+
+  const setUsage = (field, value) => {
+    setDraft((current) => ({
+      ...current,
+      usage_rule: { ...current.usage_rule, [field]: value },
+    }));
   };
 
   const updateRule = (index, field, value) => {
@@ -154,19 +183,25 @@ export default function CancellationPoliciesSettings() {
       ) : (
         <div className="policies-layout">
           <aside className="policies-list">
-            {policies.map((policy) => (
+            {policies.map((policy) => {
+              const { Icon: PolicyIcon, color } = policyIcon(policy);
+              return (
               <button
                 key={policy.id}
                 type="button"
                 className={`policy-card${selectedId === policy.id ? ' is-active' : ''}`}
                 onClick={() => select(policy.id)}
               >
-                <span className="policy-card-name">{policy.name}</span>
+                <span className="policy-card-name">
+                  <PolicyIcon size={15} style={{ color }} aria-hidden="true" />
+                  {policy.name}
+                </span>
                 <span className={`policy-card-tag${policy.is_default ? ' is-default' : ''}`}>
                   {policy.is_default ? 'ברירת מחדל' : policy.status === 'published' ? 'פורסם' : 'טיוטה'}
                 </span>
               </button>
-            ))}
+              );
+            })}
           </aside>
 
           <section className="policy-editor">
@@ -222,6 +257,71 @@ export default function CancellationPoliciesSettings() {
               </div>
             </div>
 
+            {/* על מה המדיניות נמדדת. לכרטיסייה אין תאריך שממנו סופרים אחורה,
+                ולכן היא נמדדת לפי כמה ממנה כבר נוצל. */}
+            <div className="policy-block">
+              <div className="policy-block-title"><Percent size={15} /> על מה המדיניות נמדדת</div>
+              <div className="policy-basis-row">
+                {[
+                  { key: 'activity_date', label: 'לפי מועד הפעילות', hint: 'אירועים וטיולים — כמה זמן נשאר עד המועד' },
+                  { key: 'usage', label: 'לפי ניצול', hint: 'כרטיסיות, מנויים והשכרת ציוד — כמה כבר נוצל' },
+                ].map(({ key, label, hint }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`policy-basis${draft.basis === key ? ' is-on' : ''}`}
+                    onClick={() => setDraft({ ...draft, basis: key })}
+                  >
+                    <strong>{label}</strong>
+                    <small>{hint}</small>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {draft.basis === 'usage' ? (
+              <div className="policy-block">
+                <div className="policy-block-title"><Ticket size={15} /> כללי הביטול לפי ניצול</div>
+                <p className="policy-block-sub">
+                  מחזירים את ערך החלק שלא נוצל — כניסות שנותרו בכרטיסייה, חודשים
+                  שנותרו במנוי או בהשכרה — פחות דמי הביטול.
+                </p>
+                <div className="policy-usage-grid">
+                  <label className="form-group">
+                    <span>אחוז החזר על החלק שלא נוצל</span>
+                    <input
+                      type="number" min="0" max="100"
+                      value={draft.usage_rule.unused_refund_percent}
+                      onChange={(event) => setUsage('unused_refund_percent', event.target.value)}
+                    />
+                  </label>
+                  <label className="form-group">
+                    <span>דמי ביטול (₪)</span>
+                    <input
+                      type="number" min="0"
+                      value={draft.usage_rule.fixed_fee}
+                      onChange={(event) => setUsage('fixed_fee', event.target.value)}
+                    />
+                  </label>
+                  <label className="form-group">
+                    <span>התחייבות מינימלית (יחידות)</span>
+                    <input
+                      type="number" min="0"
+                      value={draft.usage_rule.min_used_units}
+                      onChange={(event) => setUsage('min_used_units', event.target.value)}
+                    />
+                  </label>
+                  <label className="form-group">
+                    <span>אין החזר מעל ניצול של (%)</span>
+                    <input
+                      type="number" min="0" max="100"
+                      value={draft.usage_rule.no_refund_after_percent}
+                      onChange={(event) => setUsage('no_refund_after_percent', event.target.value)}
+                    />
+                  </label>
+                </div>
+              </div>
+            ) : (
             <div className="policy-block">
               <div className="policy-block-title"><CalendarClock size={15} /> מדרגות לפי מועד הביטול</div>
               <div className="policy-rules">
@@ -249,6 +349,7 @@ export default function CancellationPoliciesSettings() {
                 ))}
               </div>
             </div>
+            )}
 
             <div className="policy-block">
               <label className="form-group">
@@ -264,7 +365,27 @@ export default function CancellationPoliciesSettings() {
                   <b>עד {coolingHours} שעות מרגע ההרשמה:</b> ביטול ללא עלות, החזר מלא.
                 </p>
               )}
-              {draft.rules.map((rule) => (
+              {draft.basis === 'usage' ? (
+                <>
+                  <p className="policy-preview-line">
+                    <b>ביטול באמצע:</b> החזר {Number(draft.usage_rule.unused_refund_percent) || 0}%
+                    {' '}מערך החלק שלא נוצל
+                    {Number(draft.usage_rule.fixed_fee)
+                      ? `, בניכוי ${formatIls(draft.usage_rule.fixed_fee)} דמי ביטול`
+                      : ''}.
+                  </p>
+                  {Number(draft.usage_rule.min_used_units) > 0 && (
+                    <p className="policy-preview-line">
+                      <b>התחייבות מינימלית:</b> {draft.usage_rule.min_used_units} יחידות משולמות בכל מקרה.
+                    </p>
+                  )}
+                  {Number(draft.usage_rule.no_refund_after_percent) < 100 && (
+                    <p className="policy-preview-line">
+                      <b>מעל {draft.usage_rule.no_refund_after_percent}% ניצול:</b> אין החזר.
+                    </p>
+                  )}
+                </>
+              ) : draft.rules.map((rule) => (
                 <p key={rule.id} className="policy-preview-line">
                   <b>{ruleLabel(rule)}:</b> החזר {Number(rule.refund_percent) || 0}%
                   {Number(rule.fixed_fee) ? `, בניכוי ${formatIls(rule.fixed_fee)} לכל משתתף` : ''}
