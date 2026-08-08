@@ -2144,6 +2144,68 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     return `${name}: עד ${Number(top.refund_percent) || 0}% החזר${fee ? `, בניכוי ₪${fee} למשתתף` : ''}`;
   };
 
+  /**
+   * זיכוי כרטיסייה או מנוי — לפי מה שנוצל, לא על מלוא הסכום.
+   *
+   * הכרטיסייה מוזלת בזכות ההתחייבות לכמות, ולכן הכניסות שנוצלו מחויבות במחיר
+   * כניסה בודדת והיתרה חוזרת. השרת מחשב; כאן מציגים לאישור ומאשרים בדיוק את
+   * הסכום שהוצג.
+   */
+  const refundPassPayment = async (payment) => {
+    const key = `${payment.id}:refund`;
+    setPaymentBusyKey(key);
+    setPaymentActionError('');
+    setPaymentActionOk('');
+    try {
+      const previewRes = await fetch(
+        `/api/payments/${encodeURIComponent(payment.id)}/pass-refund-preview`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' } }
+      );
+      const preview = await previewRes.json().catch(() => ({}));
+      if (!previewRes.ok) throw new Error(preview.error || 'חישוב הזיכוי נכשל');
+      if (!preview.resolved) {
+        throw new Error('לא ניתן לקבוע כמה מהכרטיס נוצל — יש לבצע את הזיכוי ידנית');
+      }
+
+      const total = Number(preview.total) || 0;
+      const lines = (preview.items || []).map((item) => {
+        const unit = item.unit === 'days' ? 'ימים' : 'כניסות';
+        const charged = Number(item.charged_for_used);
+        return `${item.pass_name}: נוצלו ${item.used_units} מתוך ${item.total_units} ${unit}`
+          + (Number.isFinite(charged) ? ` · מחויב ₪${charged.toLocaleString()}` : '')
+          + ` · מוחזר ₪${Number(item.amount || 0).toLocaleString()}`;
+      });
+      const ok = window.confirm(
+        `זיכוי לפי ${preview.policy?.name || 'מדיניות הביטול'}:\n\n`
+        + lines.join('\n')
+        + `\n\nסה״כ להחזר: ₪${total.toLocaleString()}\n`
+        + 'הכרטיסים יבוטלו לאחר שהכסף יוחזר.'
+      );
+      if (!ok) return;
+      const reason = window.prompt('סיבת הזיכוי (לא חובה):', '') ?? '';
+
+      const res = await fetch(`/api/payments/${encodeURIComponent(payment.id)}/pass-refund`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approved_amount: total, reason: reason.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'הזיכוי נכשל');
+      setPaymentActionOk(
+        `זוכו ₪${Number(data.amount || 0).toLocaleString()}`
+        + (data.refund_doc_number ? ` · מסמך ${data.refund_doc_number}` : '')
+        + (data.document_error ? ' · הכסף חזר אך חשבונית הזיכוי נכשלה — יש להוציאה ידנית' : '')
+      );
+      setPaymentMenuId(null);
+      await loadStudentPayments();
+      refreshData?.();
+    } catch (err) {
+      setPaymentActionError(err.message || 'הזיכוי נכשל');
+    } finally {
+      setPaymentBusyKey('');
+    }
+  };
+
   const refundEquipmentPayment = async (payment) => {
     const key = `${payment.id}:refund`;
     setPaymentBusyKey(key);
@@ -2201,6 +2263,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const refundPayment = async (payment) => {
     // השכרת ציוד אינה מבוטלת במלואה אלא מזוכה לפי מה שנותר.
     if (payment?.equipment_checkout_token) return refundEquipmentPayment(payment);
+    // וכך גם כרטיסייה או מנוי — לפי הכניסות שנוצלו.
+    if (payment?.pos_sale_id && payment?.has_passes) return refundPassPayment(payment);
     const amountText = `₪${Number(payment.amount || 0).toLocaleString()}`;
     const ok = window.confirm(
       `לזכות את התשלום "${payment.description || 'תשלום'}" על ${amountText}?\n` +

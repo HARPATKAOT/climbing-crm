@@ -195,6 +195,7 @@ import {
 } from './activityCopyDraft.js';
 import { executePartialRefund } from './partialRefund.js';
 import { equipmentRefundRecommendation, isEquipmentPayment } from './equipmentRefund.js';
+import { passesOfSale, saleRefundPlan } from './passRefund.js';
 import {
   summarizeActivityCancellation,
   registrationsToRelease,
@@ -8999,6 +9000,11 @@ app.get('/api/payments', async (req, res) => {
           icount_client_app_url: icount.clientCardUrl(
             payment.icount_client_id || parent?.icount_client_id
           ),
+          // האם העסקה מכרה כרטיסייה או מנוי — זה מה שמנתב את כפתור הזיכוי
+          // למסלול היחסי במקום לביטול מסמך שלם.
+          has_passes: payment.pos_sale_id
+            ? passesOfSale(db.get('customer_passes') || [], payment.pos_sale_id).length > 0
+            : false,
         };
       });
     res.json(payments);
@@ -9167,15 +9173,19 @@ app.post('/api/payments/:id/send-invoice', async (req, res) => {
  * מדיניות הביטול של הציוד — הפעילה בבסיס „ניצול”, שנבחרת לפי שמה.
  * מוצמדת לתשלום ברגע הרכישה ולא נקראת מחדש בזמן הזיכוי.
  */
-function equipmentPolicySnapshot() {
+function usagePolicySnapshot(namePattern) {
   const usagePolicies = (db.get('cancellation_policies') || [])
     .filter((row) => row.status !== 'archived')
     .map((row) => currentPolicyVersion(db, row.id))
     .filter((resolved) => resolved?.snapshot?.basis === 'usage');
-  const chosen = usagePolicies.find((resolved) => /נעל|ציוד|השכר/.test(resolved.policy.name))
+  const chosen = usagePolicies.find((resolved) => namePattern.test(resolved.policy.name))
     || usagePolicies[0]
     || null;
   return chosen?.snapshot || null;
+}
+
+function equipmentPolicySnapshot() {
+  return usagePolicySnapshot(/נעל|ציוד|השכר/);
 }
 
 function equipmentRefundPlan(payment) {
@@ -9199,6 +9209,131 @@ function equipmentRefundPlan(payment) {
     recommendation,
   };
 }
+
+/**
+ * זיכוי כרטיסייה או מנוי, לפי מה שנוצל.
+ *
+ * הכרטיס יודע בעצמו כמה נוצל (`visits_remaining`) וכמה שולם עליו
+ * (`paid_price`), ולכן אין צורך לפרק את שורות המכירה: מכירה שכללה גם מוצר
+ * אחר מזוכה על חלק הכרטיס בלבד.
+ */
+function passRefundContext(payment) {
+  const passes = passesOfSale(db.get('customer_passes') || [], payment.pos_sale_id);
+  if (!passes.length) {
+    return { ok: false, error: 'לא נמצאה כרטיסייה פעילה בעסקה הזאת' };
+  }
+  const sale = db.getOne('pos_sales', payment.pos_sale_id);
+  // הצילום שנשמר על המכירה הוא האמת. הנפילה לאחור היא למכירות ישנות בלבד.
+  const snapshot = (Array.isArray(sale?.policy_snapshots) ? sale.policy_snapshots : [])
+    .find((snap) => snap?.basis === 'usage')
+    || usagePolicySnapshot(/כרטיסי|מנוי/);
+  if (!snapshot) {
+    return { ok: false, error: 'לא הוגדרה מדיניות ביטול בבסיס „ניצול” לכרטיסיות' };
+  }
+  const plan = saleRefundPlan({ snapshot, passes, payment });
+  return { ok: true, passes, sale, snapshot, plan };
+}
+
+app.post('/api/payments/:id/pass-refund-preview', async (req, res) => {
+  try {
+    await refreshPaymentTables();
+    const payment = db.getOne('payments', req.params.id);
+    if (!payment) return res.status(404).json({ error: 'התשלום לא נמצא' });
+    const ctx = passRefundContext(payment);
+    if (!ctx.ok) return res.status(400).json({ error: ctx.error });
+    res.json({
+      policy: { name: ctx.snapshot.policy_name || 'מדיניות ביטול כרטיסיות' },
+      items: ctx.plan.items,
+      total: ctx.plan.total,
+      resolved: ctx.plan.resolved,
+      paid_amount: Number(payment.amount) || 0,
+    });
+  } catch (err) {
+    console.error('pass refund preview error:', err.message);
+    res.status(500).json({ error: err.message || 'חישוב הזיכוי נכשל' });
+  }
+});
+
+app.post('/api/payments/:id/pass-refund', async (req, res) => {
+  try {
+    if (!icount.isConfigured()) {
+      return res.status(503).json({ error: 'מערכת החיוב לא מוגדרת בשרת' });
+    }
+    await refreshPaymentTables();
+    const payment = db.getOne('payments', req.params.id);
+    if (!payment) return res.status(404).json({ error: 'התשלום לא נמצא' });
+    if (payment.status === 'refunded') {
+      return res.status(400).json({ error: 'התשלום כבר זוכה' });
+    }
+    const ctx = passRefundContext(payment);
+    if (!ctx.ok) return res.status(400).json({ error: ctx.error });
+
+    const approved = Number(req.body?.approved_amount);
+    if (!Number.isFinite(approved) || Math.abs(approved - ctx.plan.total) >= 0.005) {
+      return res.status(409).json({
+        error: 'יש לאשר את סכום הזיכוי המוצג',
+        code: 'refund_amount_approval_required',
+        items: ctx.plan.items,
+        total: ctx.plan.total,
+      });
+    }
+    if (!ctx.plan.resolved) {
+      return res.status(409).json({
+        error: 'לא ניתן לקבוע כמה מהכרטיס נוצל — יש לבצע את הזיכוי ידנית',
+        code: 'usage_unresolved',
+        items: ctx.plan.items,
+      });
+    }
+    if (ctx.plan.total <= 0) {
+      return res.status(400).json({ error: 'לפי המדיניות אין החזר על הכרטיס הזה' });
+    }
+
+    const parent = payment.parent_id ? db.getOne('parents', payment.parent_id) : null;
+    const reason = String(req.body?.reason || '').trim() || 'זיכוי כרטיסייה';
+
+    const result = await executePartialRefund({
+      icount,
+      payment,
+      amount: ctx.plan.total,
+      reason,
+      clientName: parent?.name || payment.client_name || 'לקוח',
+      emailTo: parent?.email || null,
+    });
+    if (!result.ok) return res.status(400).json(result);
+
+    const now = new Date().toISOString();
+    // הכרטיסים מבוטלים רק אחרי שהכסף חזר — כרטיס מבוטל בלי החזר הוא הגרוע
+    // משני הכיוונים.
+    for (const pass of ctx.passes) {
+      const updated = db.update('customer_passes', pass.id, {
+        status: 'void',
+        void_reason: reason,
+        updated_at: now,
+      });
+      if (updated) await persistCore('customer_passes', updated);
+    }
+    const updatedPayment = db.update('payments', payment.id, {
+      status: 'refunded',
+      refunded_at: now,
+      refund_reason: reason,
+      refund_amount: result.amount,
+      refund_doc_number: result.refund_doc_number,
+      refund_doc_url: result.refund_doc_url,
+      refunded_by: req.crmUser?.email || req.crmUser?.name || null,
+      cc_bill_log_id: result.ccBillLogId || payment.cc_bill_log_id || null,
+      updated_at: now,
+    });
+    if (updatedPayment) await persistCore('payments', updatedPayment);
+
+    console.log(
+      `↩️ [pass] partial refund payment=${payment.id} ₪${result.amount} passes=${ctx.passes.length}`
+    );
+    res.json({ success: true, ...result, payment: updatedPayment, items: ctx.plan.items });
+  } catch (err) {
+    console.error('pass refund error:', err.message);
+    res.status(502).json({ error: err.message || 'הזיכוי נכשל' });
+  }
+});
 
 app.post('/api/payments/:id/equipment-refund-preview', async (req, res) => {
   try {
