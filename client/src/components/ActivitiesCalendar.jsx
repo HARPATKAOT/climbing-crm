@@ -27,6 +27,7 @@ import { activityIcon, activityTypeIcon } from '../utils/activityIcons.js';
 import { roleIcon, roleColor } from '../utils/roleIcons.js';
 import { templateKind, GENERIC_KIND } from '../utils/declarationKinds.js';
 import { PaymentMethodBadge, amountBasisLabel } from '../utils/paymentMethod.jsx';
+import InfoHint from '../utils/InfoHint.jsx';
 import {
   CALENDAR_DISPLAY_FIELDS, loadDisplayFields, saveDisplayFields,
   setSelectedDisplayFields, setActivityStaffNames, activityDisplayLines,
@@ -618,6 +619,13 @@ function WorkAssignmentsBlock({
           ...(canViewHr ? {
             pay_mode: payMode,
             flat_amount: payMode === 'flat' ? Number(row.flat_amount) || 0 : null,
+            // התפקיד והנסיעות נערכים על השורה אבל לא נשלחו בשמירה, ולכן שניהם
+            // חזרו לערכם הקודם ברגע שהרשימה נטענה מחדש. ריק בנסיעות נשלח
+            // כ-null במפורש — הוא אומר „חזור לתעריף הקבוע”, ולא „אל תיגע”.
+            role: row.role || null,
+            travel_amount: row.travel_amount === '' || row.travel_amount == null
+              ? null
+              : Number(row.travel_amount) || 0,
           } : {}),
           source: 'manual',
           notes: row.notes || '',
@@ -1204,8 +1212,20 @@ function WorkAssignmentsBlock({
                       style={{ fontSize: 12, padding: '4px 6px' }}
                     />
                   </label>
+                  {/* בתעריף יומי השעות אינן מחשבות את התשלום — הן עדיין
+                      נרשמות, כי הן הרישום של מתי המשמרת הייתה ונספרות בסך
+                      השעות החודשי. בלי המשפט הזה ₪700 ליד „8 שעות” נקרא כמו
+                      תוצאה של כפל. */}
                   <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
-                    שעות
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                      שעות
+                      {rateModeForRow(agreement, row, payableRoles) === 'daily' && payMode !== 'flat' && (
+                        <InfoHint label="השפעת השעות בתעריף יומי" align="end">
+                          בתעריף יומי השעות אינן משנות את התשלום — הוא סכום היום כולו.
+                          הן נרשמות כדי לתעד מתי המשמרת הייתה, ונספרות בסך השעות החודשי.
+                        </InfoHint>
+                      )}
+                    </span>
                     <input
                       className="input"
                       type="number"
