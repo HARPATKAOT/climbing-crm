@@ -15,7 +15,7 @@ import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat
 import {
   staffForRole, noStaffForRoleMessage, fetchRoleCatalog, activityRoleLabels, payableRolesOf,
 } from '../utils/staffRoles.js';
-import { rateForRole, amountForWorkRow, workTypeRole } from '../utils/wageRates.js';
+import { rateForRole, amountForWorkRow, workTypeRole, travelPerDay } from '../utils/wageRates.js';
 import {
   DEFAULT_ACTIVITY_TYPES, activityTypes, activityTypeMeta, useActivityTypes,
   fetchActivityTypes, invalidateActivityTypes,
@@ -1053,7 +1053,9 @@ function WorkAssignmentsBlock({
               >
                 <div style={{
                   display: 'grid',
-                  gridTemplateColumns: '1.2fr 1fr 1fr auto',
+                  gridTemplateColumns: payMode === 'flat'
+                    ? '1.1fr 1fr 1fr 0.8fr 0.8fr auto'
+                    : '1.2fr 1fr 1fr 0.8fr auto',
                   gap: 6,
                   alignItems: 'end',
                 }}>
@@ -1069,40 +1071,30 @@ function WorkAssignmentsBlock({
                       {row.approved ? ' · מאושר' : ''}
                     </div>
                   </div>
-                  {payMode === 'hourly' ? (
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
-                      תעריף
-                      <AppSelect
-                        className="input"
-                        value={row.role || workTypeRole(row.work_type) || ''}
-                        onChange={(e) => patchLocal(row.id, { role: e.target.value })}
-                        style={{ fontSize: 12, padding: '4px 6px' }}
-                      >
-                        <option value="">ללא תפקיד</option>
-                        {payableRoles.map(({ role }) => {
-                          const r = rateForRole(agreement, role);
-                          return (
-                            <option key={role} value={role}>
-                              {r ? `${role} — ₪${r.amount}${r.mode === 'daily' ? '/יום' : '/שעה'}` : role}
-                            </option>
-                          );
-                        })}
-                      </AppSelect>
-                    </label>
-                  ) : (
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
-                      סכום ליום הזה
-                      <input
-                        className="input"
-                        type="number"
-                        min="0"
-                        step="1"
-                        value={row.flat_amount ?? ''}
-                        onChange={(e) => patchLocal(row.id, { flat_amount: e.target.value })}
-                        style={{ fontSize: 12, padding: '4px 6px' }}
-                      />
-                    </label>
-                  )}
+                  {/* התפקיד קודם — הוא שקובע מה אופן התשלום אומר —
+                      ואחריו אופן התשלום, ואז מה שספציפי ליום הזה בלבד. */}
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                    סוג תפקיד
+                    <AppSelect
+                      className="input"
+                      value={row.role || workTypeRole(row.work_type) || ''}
+                      onChange={(e) => patchLocal(row.id, { role: e.target.value })}
+                      style={{ fontSize: 12, padding: '4px 6px' }}
+                      optionIcon={(value) => (value
+                        ? { Icon: roleIcon(value), color: roleColor(value) }
+                        : null)}
+                    >
+                      <option value="">ללא תפקיד</option>
+                      {payableRoles.map(({ role }) => {
+                        const r = rateForRole(agreement, role);
+                        return (
+                          <option key={role} value={role}>
+                            {r ? `${role} — ₪${r.amount}${r.mode === 'daily' ? '/יום' : '/שעה'}` : role}
+                          </option>
+                        );
+                      })}
+                    </AppSelect>
+                  </label>
                   <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
                     אופן תשלום
                     <AppSelect
@@ -1118,6 +1110,35 @@ function WorkAssignmentsBlock({
                       </option>
                       <option value="flat">סכום מיוחד ליום הזה</option>
                     </AppSelect>
+                  </label>
+                  {payMode === 'flat' && (
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                      סכום ליום הזה
+                      <input
+                        className="input"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={row.flat_amount ?? ''}
+                        onChange={(e) => patchLocal(row.id, { flat_amount: e.target.value })}
+                        style={{ fontSize: 12, padding: '4px 6px' }}
+                      />
+                    </label>
+                  )}
+                  {/* כל טיול סנפלינג יוצא למקום אחר, ולכן הנסיעה משתנה
+                      מיום ליום. ריק = התעריף הקבוע שבהסכם; 0 = היום הזה בלי נסיעות. */}
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
+                    נסיעות ליום הזה
+                    <input
+                      className="input"
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder={travelPerDay(agreement) ? `${travelPerDay(agreement)} (קבוע)` : 'ללא'}
+                      value={row.travel_amount ?? ''}
+                      onChange={(e) => patchLocal(row.id, { travel_amount: e.target.value })}
+                      style={{ fontSize: 12, padding: '4px 6px' }}
+                    />
                   </label>
                   <div style={{ display: 'flex', gap: 4, paddingBottom: 2, alignItems: 'center' }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--green)', marginInlineEnd: 4 }}>
@@ -1157,25 +1178,10 @@ function WorkAssignmentsBlock({
                       color: rate ? 'var(--text-3)' : '#FBBF24',
                     }}>
                       {rate
-                        ? `תעריף נבחר: ₪${rate}/שעה`
+                        ? `תעריף נבחר: ${rateLabelForRow(agreement, row, payableRoles)}`
                         : 'אין לעובד תעריף לתפקיד הזה — הוסיפו אותו בהסכם השכר'}
                     </div>
-                  ) : (
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
-                      סוג תפקיד
-                      <AppSelect
-                        className="input"
-                        value={row.role || workTypeRole(row.work_type) || ''}
-                        onChange={(e) => patchLocal(row.id, { role: e.target.value })}
-                        style={{ fontSize: 12, padding: '4px 6px' }}
-                      >
-                        <option value="">ללא תפקיד</option>
-                        {payableRoles.map(({ role }) => (
-                          <option key={role} value={role}>{role}</option>
-                        ))}
-                      </AppSelect>
-                    </label>
-                  )}
+                  ) : <div />}
                   <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
                     התחלה
                     <input

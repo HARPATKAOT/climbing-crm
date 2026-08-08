@@ -157,6 +157,48 @@ export function workDaysOf(rows) {
   return new Set((rows || []).map((r) => r?.date).filter(Boolean)).size;
 }
 
+/** האם נרשמה על השורה נסיעה מיוחדת ליום הזה. */
+export function hasTravelOverride(row) {
+  const value = row?.travel_amount;
+  return value !== undefined && value !== null && value !== '' && Number.isFinite(Number(value));
+}
+
+/**
+ * הנסיעות של שורה אחת: מה שנרשם עליה במפורש, ואם לא — התעריף הקבוע בהסכם.
+ *
+ * טיול סנפלינג יוצא כל פעם למקום אחר, ולכן נסיעה אחת אינה כמו השנייה. עד
+ * כאן היה רק סכום קבוע להסכם, ולא היה איפה לרשום את היום החריג.
+ */
+export function travelForRow(row, agreement) {
+  return hasTravelOverride(row) ? num(row.travel_amount) : travelPerDay(agreement);
+}
+
+/**
+ * סך הנסיעות לתקופה. עדיין נסיעה אחת ליום עבודה — אבל יום שנרשם עליו סכום
+ * מיוחד משלם אותו במקום את התעריף הקבוע. שתי שורות באותו יום עם שני סכומים
+ * מיוחדים אינן שתי נסיעות: נלקח הגבוה, כי זו הנסיעה שנעשתה.
+ */
+export function travelTotalOf(rows, agreement) {
+  const byDay = new Map();
+  for (const row of rows || []) {
+    if (!row?.date) continue;
+    const explicit = hasTravelOverride(row);
+    const amount = travelForRow(row, agreement);
+    const current = byDay.get(row.date);
+    if (!current) {
+      byDay.set(row.date, { amount, explicit });
+      continue;
+    }
+    if (explicit && !current.explicit) byDay.set(row.date, { amount, explicit });
+    else if (explicit && current.explicit && amount > current.amount) {
+      byDay.set(row.date, { amount, explicit });
+    }
+  }
+  let total = 0;
+  for (const entry of byDay.values()) total += entry.amount;
+  return Math.round(total);
+}
+
 /**
  * פירוט לפי תפקיד: כמה שעות וכמה כסף נצברו בכל תפקיד בפועל. שורות בתשלום
  * גלובלי מופרדות, כי אין להן תעריף שעתי שאפשר להציג לידן.
@@ -187,7 +229,7 @@ export function summarizeWork(rows, agreement) {
     pay += amountForWorkRow(row, agreement);
   }
   const days = workDaysOf(rows);
-  const travel = days * travelPerDay(agreement);
+  const travel = travelTotalOf(rows, agreement);
   return {
     hours: Math.round(hours * 100) / 100,
     pay: Math.round(pay),

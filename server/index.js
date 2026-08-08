@@ -10403,6 +10403,13 @@ function normalizeWorkAssignment(body = {}, { existing = null } = {}) {
   }
   const payMode = normalizePayMode(body.pay_mode, existing);
   const flatAmount = normalizeFlatAmount(body.flat_amount, payMode, existing);
+  // נסיעות ליום הזה בלבד. ריק = ליפול לתעריף הקבוע שבהסכם, ולכן ריק ואפס
+  // אינם אותו דבר: אפס הוא „ביום הזה לא היו נסיעות”.
+  const travelAmount = body.travel_amount === undefined
+    ? (existing?.travel_amount ?? null)
+    : (body.travel_amount === null || body.travel_amount === ''
+      ? null
+      : Math.max(0, Number(body.travel_amount) || 0));
   return {
     employee_id: body.employee_id || existing?.employee_id || null,
     activity_id: body.activity_id !== undefined ? (body.activity_id || null) : (existing?.activity_id ?? null),
@@ -10421,6 +10428,7 @@ function normalizeWorkAssignment(body = {}, { existing = null } = {}) {
     hours,
     pay_mode: payMode,
     flat_amount: flatAmount,
+    travel_amount: travelAmount,
     source: body.source || existing?.source || 'manual',
     shift_id: body.shift_id !== undefined ? (body.shift_id || null) : (existing?.shift_id ?? null),
     approved: body.approved !== undefined ? !!body.approved : !!(existing?.approved),
