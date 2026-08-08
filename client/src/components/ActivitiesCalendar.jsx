@@ -419,7 +419,9 @@ function emptyForm(dateStr = '', opts = {}) {
     registration_enabled: false,
     collect_registration_payment: false,
     registration_mode: 'paid_per_participant',
-    price_includes_vat: false,
+    // המחיר שנרשם על אירוע הוא מה שהלקוח משלם בפועל, ולכן הוא כולל מע״מ.
+    // מי שעובד אחרת משנה זאת במפורש.
+    price_includes_vat: true,
     registration_slug: '',
     registration_page_title: '',
     registration_page_body: '',
@@ -1317,6 +1319,21 @@ function NewActivityTypeChip({ disabled = false, onCreated }) {
  * לאישור הקיר, עקבות הנעליים בטורקיז לטיול. אותו מסמך, אותו סימן, בכל מסך
  * שבו הוא מופיע. הסימנים מוגדרים במקום אחד ב-declarationKinds.js.
  */
+/**
+ * לאיזו הצהרה „לפי סוג הפעילות” מתורגם עבור סוג הפעילות הזה.
+ *
+ * מראה מול תבניות ההצהרה: כל תבנית מסומנת לאיזה סוג פעילות היא משרתת, וכל מה
+ * שאינו יציאה לשטח חולק את הצהרת הקיר. בלי זה החלפת סוג האירוע לא שינתה שום
+ * דבר על המסך, אף שהיא כן משנה על מה החותם חותם.
+ */
+function defaultDeclarationTitle(activityType, templates = []) {
+  const wanted = isEventType(activityType) ? 'wall' : normalizeParticipationScope(activityType);
+  const match = (templates || []).find(
+    (t) => normalizeParticipationScope(t.activityType || t.activity_type || t.slug) === wanted
+  );
+  return match ? (match.title || match.slug) : '';
+}
+
 function declarationOptionIconFor(templates) {
   return (value) => {
     if (!value) return { Icon: GENERIC_KIND.Icon, color: 'var(--text-3)' };
@@ -1636,7 +1653,13 @@ function RegularActivityModal({
                     disabled={readOnly}
                     optionIcon={declarationOptionIconFor(declarationTemplates)}
                   >
-                    <option value="">לפי סוג הפעילות</option>
+                    {/* „לפי סוג הפעילות” אומר עכשיו לאיזו הצהרה זה מתורגם
+                        בפועל, אחרת החלפת סוג האירוע נראתה כאילו לא שינתה כלום. */}
+                    <option value="">
+                      {defaultDeclarationTitle(form.type, declarationTemplates)
+                        ? `לפי סוג הפעילות · ${defaultDeclarationTitle(form.type, declarationTemplates)}`
+                        : 'לפי סוג הפעילות'}
+                    </option>
                     {declarationTemplates.map((t) => (
                       <option key={t.slug} value={t.slug}>{t.title || t.slug}</option>
                     ))}
@@ -1996,7 +2019,9 @@ function ActivityFormModal({
     registration_mode: initial?.registration_mode || (
       initial?.collect_registration_payment ? 'paid_per_participant' : 'host_pays'
     ),
-    price_includes_vat: !!initial?.price_includes_vat,
+    price_includes_vat: initial?.price_includes_vat === undefined
+      ? true
+      : !!initial.price_includes_vat,
     registration_page_title: initial?.registration_page_title || '',
     registration_page_body: initial?.registration_page_body || '',
     registration_theme: (

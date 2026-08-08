@@ -3392,6 +3392,69 @@ select option, select optgroup {
   font-size: 11px;
 }
 
+/* הסבר לפי דרישה. הטקסט נשאר כלשונו — הוא פשוט לא תופס מקום עד שמבקשים
+   אותו. עובד גם בריחוף וגם בפוקוס, כי במסך מגע אין ריחוף. */
+.info-hint {
+  position: relative;
+  display: inline-flex;
+  vertical-align: middle;
+}
+
+.info-hint-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+  cursor: help;
+  transition: color var(--t-fast), border-color var(--t-fast);
+}
+
+.info-hint-button:hover,
+.info-hint-button:focus-visible {
+  color: var(--blue);
+  border-color: color-mix(in srgb, var(--blue) 45%, transparent);
+  outline: none;
+}
+
+.info-hint-bubble {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 7px);
+  width: max-content;
+  max-width: 280px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #0f172a;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.55;
+  text-align: start;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-3px);
+  transition: opacity var(--t-fast), transform var(--t-fast), visibility var(--t-fast);
+  pointer-events: none;
+}
+
+.info-hint--start .info-hint-bubble { inset-inline-start: -6px; }
+.info-hint--end .info-hint-bubble { inset-inline-end: -6px; }
+
+.info-hint:hover .info-hint-bubble,
+.info-hint-button:focus-visible + .info-hint-bubble {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
 /* מסלול ההעסקה בגרסה מצומצמת — סימן לצד שם, לא תג שגוזל שורה. */
 .payment-method-dot {
   display: inline-flex;
@@ -3432,14 +3495,16 @@ select option, select optgroup {
   background: rgba(255, 255, 255, 0.04);
 }
 
-/* אותה שפה של תוויות בשני הצדדים של המסך — פס קטן מעל השדה, לא משפט לידו. */
+/* אותה שפה של תוויות בשני הצדדים של המסך — פס קטן מעל השדה, לא משפט לידו.
+   בעברית מרווח בין אותיות שובר את המילה במקום להדגיש אותה, ו-10px קטן מדי
+   כדי לקרוא בלי להתאמץ. */
 .activity-settings-label {
   display: block;
-  margin-bottom: 4px;
-  color: var(--text-3);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.07em;
+  margin-bottom: 5px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 
 .activity-settings-grid {
@@ -4269,12 +4334,18 @@ select option, select optgroup {
 }
 
 .activity-designer .event-field > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding-inline-start: 2px;
-  color: #94a3b8;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.activity-designer .event-field > span > svg {
+  flex: 0 0 auto;
+  color: var(--field-accent, #94a3b8);
 }
 
 .activity-designer .event-field textarea,

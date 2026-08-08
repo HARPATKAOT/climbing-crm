@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle, Copy, Loader2, Plus, Trash2 } from 'lucide-react';
 import { useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
+import { ACTIVITY_PAGE_FIELDS } from '../utils/activityPageFields.js';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
 import {
   EventShell,
@@ -587,10 +588,19 @@ export default function PublicActivityRegistration() {
             {paidMode && unitVat.entered > 0 && <div className="event-price-chip">{formatIls(unitVat.gross)} למשתתף</div>}
           </header>
           <section style={{ marginTop: 20 }}>
-            {activity.audience && <p><strong>למי מתאים:</strong> {activity.audience}</p>}
-            {activity.included && <p><strong>מה כלול:</strong> {activity.included}</p>}
-            {activity.what_to_bring && <p><strong>מה להביא:</strong> {activity.what_to_bring}</p>}
-            {activity.important_info && <p><strong>חשוב לדעת:</strong> {activity.important_info}</p>}
+            {/* אותם ארבעה חלקים, עם אותו סימן שהם נושאים במסך העריכה — מי
+                שכתב אותם ומי שקורא אותם רואים את אותו דבר. */}
+            {ACTIVITY_PAGE_FIELDS.map(({ key, label, Icon, color }) => (
+              activity[key] ? (
+                <p key={key} className="event-detail-block">
+                  <strong>
+                    <Icon size={15} style={{ color }} aria-hidden="true" />
+                    {label}
+                  </strong>
+                  <span>{activity[key]}</span>
+                </p>
+              ) : null
+            ))}
           </section>
           <footer className="event-actions">
             <button type="button" className="event-primary" onClick={() => setShowInfo(false)}>

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ImagePlus, X } from 'lucide-react';
 import { compressImageFile, readImageFileAsDataUrl } from './productCategories.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
+import { ACTIVITY_PAGE_FIELDS } from '../utils/activityPageFields.js';
 
 function parsePosition(position) {
   const raw = String(position || '50% 50%').trim().toLowerCase();
@@ -287,17 +288,23 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
 
         {!readOnly && <div className="activity-designer-divider">מה יופיע בדף</div>}
         <div className="activity-designer-fields">
-          {[
-            ['audience', 'קהל יעד', 'למי הפעילות מתאימה — גיל, ניסיון, כושר'],
-            ['included', 'מה כלול', 'ציוד, מדריך, הסעה, כיבוד'],
-            ['what_to_bring', 'מה להביא / ציוד', 'מה שהמשתתף מביא בעצמו'],
-            ['important_info', 'מידע חשוב', 'שעת מפגש, מזג אוויר, ביטול'],
-          ].map(([key, label, hint]) => (
+          {ACTIVITY_PAGE_FIELDS.map(({ key, label, hint, Icon, color }) => (
             readOnly ? (
-              form[key] ? <div key={key}><strong>{label}</strong><p style={{ whiteSpace: 'pre-wrap' }}>{form[key]}</p></div> : null
+              form[key] ? (
+                <div key={key}>
+                  <strong style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Icon size={15} style={{ color }} aria-hidden="true" />
+                    {label}
+                  </strong>
+                  <p style={{ whiteSpace: 'pre-wrap' }}>{form[key]}</p>
+                </div>
+              ) : null
             ) : (
-              <label key={key} className="event-field">
-                <span>{label}</span>
+              <label key={key} className="event-field" style={{ '--field-accent': color }}>
+                <span>
+                  <Icon size={15} aria-hidden="true" />
+                  {label}
+                </span>
                 <textarea
                   rows={3}
                   value={form[key] || ''}

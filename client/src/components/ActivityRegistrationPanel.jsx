@@ -2,8 +2,9 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Copy, CreditCard, Download, ExternalLink, Loader2, Pencil, Plus, RefreshCw,
-  Search, Send, Trash2, Undo2, UserCheck, UserPlus, Users, X,
+  Search, Send, Trash2, Undo2, UserCheck, UserPlus, UserRoundCheck, Users, X,
 } from 'lucide-react';
+import InfoHint from '../utils/InfoHint.jsx';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
 import { AttendanceDayBar, AttendanceToggle, useActivityAttendance } from './ActivityAttendance.jsx';
 import AppSelect from './AppSelect.jsx';
@@ -933,6 +934,9 @@ export default function ActivityRegistrationPanel({
             collect_registration_payment: e.target.value === 'paid_per_participant',
           })}
           disabled={readOnly}
+          optionIcon={(value) => (value === 'host_pays'
+            ? { Icon: UserRoundCheck, color: 'var(--amber)' }
+            : { Icon: Users, color: 'var(--green)' })}
         >
           <option value="paid_per_participant">הרשמה בתשלום לכל משתתף</option>
           <option value="host_pays">המזמין משלם על כל האירוע</option>
@@ -1579,12 +1583,12 @@ export default function ActivityRegistrationPanel({
                 שיבוץ מתעניין
               </button>
             )}
+            <InfoHint label="מה זה מתעניינים" align="end">
+              שיבוץ מתעניינים שעדיין לא נרשמו ולא שילמו. הם לא נספרים במכסת המקומות,
+              וברגע שיירשמו דרך קישור המשתתפים הם יעברו לרשומים אוטומטית.
+            </InfoHint>
           </div>
 
-          <div className="registration-interest-hint">
-            שיבוץ מתעניינים שעדיין לא נרשמו ולא שילמו. הם לא נספרים במכסת המקומות,
-            וברגע שיירשמו דרך קישור המשתתפים הם יעברו לרשומים אוטומטית.
-          </div>
 
           {interestDraft && !readOnly && (
             <div className="registration-interest-form">
