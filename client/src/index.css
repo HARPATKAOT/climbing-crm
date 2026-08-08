@@ -3303,6 +3303,50 @@ select option, select optgroup {
   padding-inline: 8px;
 }
 
+/* תזכורת „עוד לא מולא”. כתום ולא אדום בכוונה: זו לא שגיאה ולא חסימת שמירה,
+   אלא סימן שנשאר עוד מה למלא. נעלם ברגע שנכנס תוכן, ולא מופיע בשדות שסומנו
+   `data-optional`. */
+.activity-modal [data-empty] {
+  border-color: rgba(251, 146, 60, 0.55) !important;
+  background-image: linear-gradient(rgba(251, 146, 60, 0.06), rgba(251, 146, 60, 0.06));
+}
+
+.activity-modal .app-select-wrap[data-empty] .app-select-trigger {
+  border-color: rgba(251, 146, 60, 0.55);
+  background-image: linear-gradient(rgba(251, 146, 60, 0.06), rgba(251, 146, 60, 0.06));
+}
+
+.activity-modal [data-empty]:focus,
+.activity-modal [data-empty]:focus-visible {
+  border-color: rgba(251, 146, 60, 0.85) !important;
+  box-shadow: 0 0 0 3px rgba(251, 146, 60, 0.16) !important;
+}
+
+/* שלוש האפשרויות של „מי יכול להירשם” הן בחירה אחת, ולכן הן שורה אחת — קודם
+   השלישית נפלה לשורה נפרדת ונקראה כמו הגדרה אחרת. */
+.activity-settings-card .choice-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.activity-settings-card .choice-row .choice-pill {
+  justify-content: center;
+  min-width: 0;
+  padding-inline: 8px;
+  /* בלי זה כיתוב ארוך גולש מהתא ונדרס על הפיל שלידו. */
+  overflow: hidden;
+}
+
+.activity-settings-card .choice-row .choice-pill > svg {
+  flex: 0 0 auto;
+}
+
+/* הסימן של אפשרות בתפריט — אייקון וצבע שמזהים אותה בכל מקום במערכת. */
+.app-select-icon {
+  flex: 0 0 auto;
+}
+
 /* אותה שפה של תוויות בשני הצדדים של המסך — פס קטן מעל השדה, לא משפט לידו. */
 .activity-settings-label {
   display: block;

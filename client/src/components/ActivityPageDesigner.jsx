@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ImagePlus, X } from 'lucide-react';
 import { compressImageFile, readImageFileAsDataUrl } from './productCategories.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
-import { normalizeParticipationScope } from '../utils/participationDocuments.js';
 
 function parsePosition(position) {
   const raw = String(position || '50% 50%').trim().toLowerCase();
@@ -312,20 +311,11 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
 
         {!readOnly && (
           <>
+            {/* „האישור הנדרש מהמשתתפים” ישב כאן וגם „הצהרת בריאות” בחלונית
+                ההגדרות — שתי שאלות שנשמעות זהות על אותו מסך, ושיכלו לסתור זו את
+                זו. נשארה אחת, בחלונית ההגדרות, והיא קובעת גם את תחום האישור. */}
             <div className="activity-designer-divider">על מה חותמים</div>
             <div className="activity-designer-fields">
-            <label className="event-field" style={{ margin: 0 }}>
-              <span>האישור הנדרש מהמשתתפים</span>
-              <select
-                value={normalizeParticipationScope(
-                  form.participation_scope || (form.type === 'trip' ? 'trip' : 'wall')
-                )}
-                onChange={(event) => patch({ participation_scope: event.target.value })}
-              >
-                <option value="wall">אישור פעילות בקיר</option>
-                <option value="trip">יציאה לטיול הליכה / סנפלינג / טיפוס / מערנות</option>
-              </select>
-            </label>
             <label className="event-field" style={{ margin: 0 }}>
               <span>מדיניות ביטול</span>
               <select

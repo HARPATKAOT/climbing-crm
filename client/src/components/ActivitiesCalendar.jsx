@@ -3,7 +3,7 @@ import {
   Plus, ChevronLeft, ChevronRight, X, Save, Trash2, Link2, Unlink,
   RefreshCw, Loader2, CalendarDays, CalendarRange, Layers, List,
   CheckCircle, AlertCircle, Clock3, Check, Pencil, Undo2, Users,
-  Eye, EyeOff, Copy, SlidersHorizontal, Lock, Globe, Ban, RotateCcw,
+  Eye, EyeOff, Copy, SlidersHorizontal, Lock, Globe, Ban, RotateCcw, ClipboardCheck,
 } from 'lucide-react';
 import EntityLink from '../utils/entityLinks.jsx';
 import ActivityPageDesigner from './ActivityPageDesigner.jsx';
@@ -23,6 +23,7 @@ import {
   EVENT_TYPE, EVENT_KINDS, activityEventKind, eventKindLabel, isEventType,
 } from '../utils/eventKinds.js';
 import { activityIcon, activityTypeIcon } from '../utils/activityIcons.js';
+import { roleIcon, roleColor } from '../utils/roleIcons.js';
 import {
   CALENDAR_DISPLAY_FIELDS, loadDisplayFields, saveDisplayFields,
   setSelectedDisplayFields, setActivityStaffNames, activityDisplayLines,
@@ -675,11 +676,16 @@ function WorkAssignmentsBlock({
           <div style={{ display: 'grid', gridTemplateColumns: staffPay?.mode === 'flat' ? '1fr 1fr 1fr' : '1fr 1fr', gap: 8 }}>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-3)' }}>
               באיזה תפקיד
+              {/* אותו אייקון ואותו צבע שהתפקיד נושא בתיק העובד ובשורות השכר —
+                  הסימן מזהה את התפקיד בכל מקום שבו הוא מופיע. */}
               <AppSelect
                 className="input"
                 value={staffPay?.role || ''}
                 onChange={(e) => onStaffPayChange({ staff_role: e.target.value })}
                 style={{ fontSize: 12, padding: '4px 6px' }}
+                optionIcon={(value) => (value
+                  ? { Icon: roleIcon(value), color: roleColor(value) }
+                  : null)}
               >
                 <option value="">לפי סוג האירוע</option>
                 {payableRoles.map(({ role }) => (
@@ -1186,6 +1192,64 @@ function NewActivityTypeChip({ disabled = false, onCreated }) {
   );
 }
 
+/**
+ * ההצהרה נושאת כאן את הסימן שהיא נושאת אצל הלקוח: הכתום של דף ההרשמה
+ * (`--form-accent` ב-publicFormKit) והאייקון של מסמך לאישור. כך הבחירה בטופס
+ * והמסמך שהנרשם רואה נקראים כאותו דבר.
+ */
+const DECLARATION_ACCENT = '#FB923C';
+const declarationOptionIcon = () => ({ Icon: ClipboardCheck, color: DECLARATION_ACCENT });
+
+/** סוגי קלט שאין להם „ריק” במובן הזה — סימון שלהם רק יצבע רעש. */
+const UNMARKABLE_INPUTS = new Set([
+  'checkbox', 'radio', 'file', 'range', 'hidden', 'button', 'submit', 'reset', 'image', 'color',
+]);
+
+/**
+ * מקיף בכתום כל שדה שעדיין לא מולא, כל עוד הטופס פתוח לעריכה.
+ *
+ * נעשה על ה-DOM ולא שדה-שדה בכוונה: הטופס ארוך ומורכב, וסימון ידני היה מפספס
+ * בדיוק את השדות שיתווספו אחר כך. שדה שהריקנות שלו לגיטימית מסומן
+ * ב-`data-optional` על העטיפה שלו ואינו נצבע.
+ */
+function useEmptyFieldMarks(enabled) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return undefined;
+
+    const mark = () => {
+      if (!enabled) {
+        root.querySelectorAll('[data-empty]').forEach((el) => el.removeAttribute('data-empty'));
+        return;
+      }
+      root.querySelectorAll('input, textarea').forEach((el) => {
+        if (UNMARKABLE_INPUTS.has(String(el.type || 'text').toLowerCase())) return;
+        // ה-select המוסתר של AppSelect — הטבעת מצוירת על העטיפה במקום.
+        if (el.classList.contains('app-select-native')) return;
+        if (el.closest('[data-optional]')) return;
+        el.toggleAttribute('data-empty', !String(el.value ?? '').trim() && !el.disabled);
+      });
+      root.querySelectorAll('.app-select-wrap').forEach((wrap) => {
+        if (wrap.closest('[data-optional]')) return;
+        wrap.toggleAttribute('data-empty', !!wrap.querySelector('.app-select-value.is-placeholder'));
+      });
+    };
+
+    // בלי מערך תלויות — רץ אחרי כל רינדור, וכל הקלדה בטופס מרנדרת אותו.
+    mark();
+    root.addEventListener('input', mark);
+    root.addEventListener('change', mark);
+    return () => {
+      root.removeEventListener('input', mark);
+      root.removeEventListener('change', mark);
+    };
+  });
+
+  return ref;
+}
+
 function RegularActivityModal({
   form,
   set,
@@ -1217,10 +1281,12 @@ function RegularActivityModal({
   const typeOptions = isOps
     ? activityTypes().filter((t) => ['opening_hours', 'route_building', 'other'].includes(t.id))
     : activityTypes();
+  const formRef = useEmptyFieldMarks(!readOnly);
 
   return (
     <div className="activity-modal-backdrop" onClick={onClose}>
       <form
+        ref={formRef}
         className={`activity-modal activity-modal--wide${isOps ? ' activity-modal--ops' : ''}`}
         onClick={(event) => event.stopPropagation()}
         onSubmit={submit}
@@ -1387,7 +1453,7 @@ function RegularActivityModal({
                   )}
                 </div>
               )}
-              <div className="activity-settings-grid">
+              <div>
                 {/* One decision, not two boxes where the second depends on the
                     first. The pair behind it stays — a birthday has a working
                     registration page that must never be advertised — but that
@@ -1414,32 +1480,42 @@ function RegularActivityModal({
                     </span>
                   </div>
                 )}
-                {/* על מה חותמים כשנרשמים לאירוע הזה. „לפי סוג הפעילות” הוא
-                    ברירת המחדל ונכון כמעט תמיד — טיול מחתים על הצהרת הטיול —
-                    ומי שצריך משהו אחר בוחר במפורש. */}
-                {!isOps && (
-                  <label>
-                    <span className="activity-settings-label">הצהרת בריאות</span>
-                    <AppSelect
-                      className="input"
-                      value={normalizeParticipationScope(form.form_template_slug) === 'trip' ? 'trip' : ''}
-                      onChange={(event) => setForm((prev) => ({
-                        ...prev,
-                        form_template_slug: event.target.value,
-                        // בחירה מפורשת מחליפה גם את המזהה, אחרת תבנית ישנה
-                        // שנשמרה לפי id הייתה גוברת על מה שנבחר עכשיו.
-                        form_template_id: null,
-                      }))}
-                      disabled={readOnly}
-                    >
-                      <option value="">לפי סוג הפעילות</option>
-                      {declarationTemplates.map((t) => (
-                        <option key={t.slug} value={t.slug}>{t.title || t.slug}</option>
-                      ))}
-                    </AppSelect>
-                  </label>
-                )}
               </div>
+              {/* על מה חותמים כשנרשמים לאירוע הזה. „לפי סוג הפעילות” הוא
+                  ברירת המחדל ונכון כמעט תמיד — טיול מחתים על הצהרת הטיול —
+                  ומי שצריך משהו אחר בוחר במפורש.
+
+                  שורה משל עצמו: שמות ההצהרות ארוכים, וכשהוא היה חלק מרשת שתי
+                  העמודות הוא דחס את שלוש הפילים של „מי יכול להירשם” עד שנדרסו
+                  זו על זו. */}
+              {!isOps && (
+                <label style={{ display: 'block' }}>
+                  <span className="activity-settings-label">הצהרת בריאות</span>
+                  <AppSelect
+                    className="input"
+                    value={normalizeParticipationScope(form.form_template_slug) === 'trip' ? 'trip' : ''}
+                    onChange={(event) => setForm((prev) => ({
+                      ...prev,
+                      form_template_slug: event.target.value,
+                      // בחירה מפורשת מחליפה גם את המזהה, אחרת תבנית ישנה
+                      // שנשמרה לפי id הייתה גוברת על מה שנבחר עכשיו.
+                      form_template_id: null,
+                      // תחום האישור המשפטי נגזר מאותה בחירה במקום להישאל שוב
+                      // בנפרד בתצוגה המקדימה. ריק = שהשרת יגזור מסוג הפעילות.
+                      participation_scope: event.target.value
+                        ? normalizeParticipationScope(event.target.value)
+                        : null,
+                    }))}
+                    disabled={readOnly}
+                    optionIcon={declarationOptionIcon}
+                  >
+                    <option value="">לפי סוג הפעילות</option>
+                    {declarationTemplates.map((t) => (
+                      <option key={t.slug} value={t.slug}>{t.title || t.slug}</option>
+                    ))}
+                  </AppSelect>
+                </label>
+              )}
             </section>
             )}
 
@@ -1461,7 +1537,7 @@ function RegularActivityModal({
                       disabled={readOnly}
                     />
                   </label>
-                  <label>
+                  <label data-optional>
                     <span className="activity-settings-label">תאריך סיום</span>
                     <input
                       className="input"
@@ -1608,7 +1684,9 @@ function RegularActivityModal({
               />
             )}
 
-            <section className="activity-settings-card">
+            {/* הערות פנימיות הן באמת רשות — אירוע תקין לגמרי יכול להישאר בלי
+                אף מילה כאן, ולכן הן לא נצבעות ככאלה שחסרות. */}
+            <section className="activity-settings-card" data-optional>
               <div className="activity-settings-card-title">
                 {isOps ? 'מה עושים בפעילות' : 'הערות פנימיות'}
               </div>

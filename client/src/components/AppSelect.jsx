@@ -50,6 +50,13 @@ export default function AppSelect({
   size,
   title,
   'aria-label': ariaLabel,
+  /**
+   * סימן ויזואלי לכל אפשרות: `(value, label) => ({ Icon, color })` או null.
+   * פונקציה ולא תכונה על ה-option, כי `option` הוא אלמנט DOM ואי אפשר להעביר
+   * דרכו רכיב. הסימן מופיע גם בתפריט וגם על מה שנבחר — אחרת הוא נעלם בדיוק
+   * ברגע שהוא מסכם את הבחירה.
+   */
+  optionIcon = null,
 }) {
   // multiple / size lists stay native — rare, and the custom menu is single-pick.
   if (multiple || (size && Number(size) > 1)) {
@@ -167,6 +174,20 @@ export default function AppSelect({
     .filter(Boolean)
     .join(' ');
 
+  const renderMark = (value, label) => {
+    const mark = optionIcon ? optionIcon(value, label) : null;
+    if (!mark?.Icon) return null;
+    const { Icon } = mark;
+    return (
+      <Icon
+        size={15}
+        className="app-select-icon"
+        style={mark.color ? { color: mark.color } : undefined}
+        aria-hidden="true"
+      />
+    );
+  };
+
   const wrapStyle = {};
   if (style && style.width != null) wrapStyle.width = style.width;
   if (style && style.flex != null) wrapStyle.flex = style.flex;
@@ -207,6 +228,7 @@ export default function AppSelect({
         aria-expanded={open}
         onClick={() => !disabled && setOpen((v) => !v)}
       >
+        {selected && renderMark(selected.value, selected.label)}
         <span className={`app-select-value${display ? '' : ' is-placeholder'}`}>
           {display || 'בחרו...'}
         </span>
@@ -239,6 +261,7 @@ export default function AppSelect({
                 onClick={() => pick(item.opt)}
               >
                 <Check size={13} className="app-select-check" />
+                {renderMark(item.opt.value, item.opt.label)}
                 <span>{item.opt.label}</span>
               </button>
             )
