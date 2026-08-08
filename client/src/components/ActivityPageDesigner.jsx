@@ -1,9 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ImagePlus, Loader2, ShieldCheck, ShieldOff, Sparkles, X } from 'lucide-react';
+import { ImagePlus, Loader2, ShieldCheck, ShieldOff, Smile, Sparkles, X } from 'lucide-react';
 import AppSelect from './AppSelect.jsx';
 import { compressImageFile, readImageFileAsDataUrl } from './productCategories.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { ACTIVITY_PAGE_FIELDS } from '../utils/activityPageFields.js';
+
+/** אותם מפתחות שהשרת מכיר ב-DRAFT_TONES. */
+const DRAFT_TONE_LABELS = {
+  plain: 'ענייני',
+  warm: 'חם ומזמין',
+  brief: 'קצר מאוד',
+};
 
 function parsePosition(position) {
   const raw = String(position || '50% 50%').trim().toLowerCase();
@@ -89,6 +96,15 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
 
   const [draftBusy, setDraftBusy] = useState('');
   const [draftError, setDraftError] = useState('');
+  // העדפת סגנון אישית ונשמרת בדפדפן — היא לא תכונה של האירוע ולא של העסק.
+  const [draftTone, setDraftTone] = useState(
+    () => localStorage.getItem('activityDraftTone') || 'warm'
+  );
+  const [draftEmoji, setDraftEmoji] = useState(
+    () => localStorage.getItem('activityDraftEmoji') !== '0'
+  );
+  useEffect(() => { localStorage.setItem('activityDraftTone', draftTone); }, [draftTone]);
+  useEffect(() => { localStorage.setItem('activityDraftEmoji', draftEmoji ? '1' : '0'); }, [draftEmoji]);
 
   /** מבקש ניסוח לסעיף אחד ומכניס אותו לשדה. לא שומר — זו טיוטה לעריכה. */
   const draftField = async (field) => {
@@ -101,6 +117,8 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           field,
+          tone: draftTone,
+          emoji: draftEmoji,
           activity: {
             type: form.type,
             name: form.name,
@@ -326,7 +344,32 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
           />
         )}
 
-        {!readOnly && <div className="activity-designer-divider">מה יופיע בדף</div>}
+        {!readOnly && (
+          <div className="activity-designer-divider">
+            מה יופיע בדף
+            <span className="draft-style-controls">
+              <AppSelect
+                className="input"
+                value={draftTone}
+                onChange={(event) => setDraftTone(event.target.value)}
+                title="סגנון הניסוח של העוזר"
+              >
+                {Object.entries(DRAFT_TONE_LABELS).map(([value, text]) => (
+                  <option key={value} value={value}>{text}</option>
+                ))}
+              </AppSelect>
+              <button
+                type="button"
+                className={`draft-emoji-toggle${draftEmoji ? ' is-on' : ''}`}
+                onClick={() => setDraftEmoji((on) => !on)}
+                title={draftEmoji ? "עם אימוג'י" : "בלי אימוג'י"}
+                aria-pressed={draftEmoji}
+              >
+                <Smile size={13} />
+              </button>
+            </span>
+          </div>
+        )}
         {draftError && <div className="activity-designer-image-error">{draftError}</div>}
         <div className="activity-designer-fields">
           {ACTIVITY_PAGE_FIELDS.map(({ key, label, hint, Icon, color }) => (
@@ -345,13 +388,21 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
                 <span>
                   <Icon size={15} aria-hidden="true" />
                   {label}
-                  {/* הצעה מהעוזר נכנסת לשדה כטיוטה — היא לא נשמרת עד שתשמרו
-                      את האירוע, וניתן לערוך אותה כמו כל טקסט אחר. */}
+                </span>
+                {/* הכפתור יושב בפינת התיבה שאותה הוא ממלא. ההצעה נכנסת כטיוטה
+                    — היא לא נשמרת עד שתשמרו את האירוע, וניתן לערוך אותה. */}
+                <span className="event-field-box">
+                  <textarea
+                    rows={3}
+                    value={form[key] || ''}
+                    placeholder={hint}
+                    onChange={(event) => patch({ [key]: event.target.value })}
+                  />
                   <button
                     type="button"
                     className="event-field-draft"
-                    title="נסח הצעה לסעיף הזה"
-                    disabled={draftBusy === key}
+                    title={`נסח הצעה · ${DRAFT_TONE_LABELS[draftTone]}${draftEmoji ? " · עם אימוג'י" : ""}`}
+                    disabled={!!draftBusy}
                     onClick={() => draftField(key)}
                   >
                     {draftBusy === key
@@ -359,12 +410,6 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
                       : <Sparkles size={13} />}
                   </button>
                 </span>
-                <textarea
-                  rows={3}
-                  value={form[key] || ''}
-                  placeholder={hint}
-                  onChange={(event) => patch({ [key]: event.target.value })}
-                />
               </label>
             )
           ))}

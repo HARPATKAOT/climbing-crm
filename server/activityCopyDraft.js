@@ -24,12 +24,49 @@ export function draftableFields() {
   return [...DRAFTABLE.keys()];
 }
 
-const SYSTEM = `אתה כותב תוכן לדף הרשמה של חברת טיולים וקיר טיפוס בישראל.
-כתוב בעברית, בגוף שני רבים, בטון ענייני וחם — לא שיווקי ולא מנופח.
-2–4 שורות קצרות לכל היותר, בלי כותרת ובלי לחזור על שם האירוע או התאריך.
-אל תמציא עובדות שלא נמסרו לך: אל תכתוב מחירים, שעות, מרחקים או שמות מקומות
-שלא הופיעו בקלט. אם חסר מידע — כתוב את מה שנכון לכל פעילות מהסוג הזה.
-החזר טקסט בלבד, בלי מרכאות ובלי הסברים.`;
+/**
+ * הטון נשלט מהמסך ולא מהקוד — מי שכותב את הדף הוא זה שיודע איך הוא רוצה
+ * שהוא יישמע, וזה משתנה בין טיול משפחתי לאימון בוגרים.
+ */
+export const DRAFT_TONES = {
+  plain: {
+    key: 'plain',
+    label: 'ענייני',
+    line: 'טון ענייני וברור, בלי שיווק ובלי הגזמות.',
+  },
+  warm: {
+    key: 'warm',
+    label: 'חם ומזמין',
+    line: 'טון חם ומזמין, כמו מי שמדבר עם משפחות שהוא מכיר — בלי סופרלטיבים.',
+  },
+  brief: {
+    key: 'brief',
+    label: 'קצר מאוד',
+    line: 'קצר ככל האפשר: שורה או שתיים, רשימה של עובדות בלי משפטי קישור.',
+  },
+};
+
+export function normalizeTone(value) {
+  const key = String(value || '').trim();
+  return DRAFT_TONES[key] ? key : 'warm';
+}
+
+export function buildSystemPrompt({ tone = 'warm', emoji = true } = {}) {
+  const chosen = DRAFT_TONES[normalizeTone(tone)];
+  return [
+    'אתה כותב תוכן לדף הרשמה של חברת טיולים וקיר טיפוס בישראל.',
+    'כתוב בעברית, בגוף שני רבים.',
+    chosen.line,
+    emoji
+      ? "שלב אימוג'י אחד בתחילת כל שורה או פריט, כזה שמתאים לתוכן השורה. אימוג'י אחד לשורה לכל היותר, ולא בסוף משפט."
+      : "בלי אימוג'י ובלי סימנים מיוחדים.",
+    '2–4 שורות קצרות לכל היותר, בלי כותרת ובלי לחזור על שם האירוע או התאריך.',
+    'אל תמציא עובדות שלא נמסרו לך: אל תכתוב מחירים, שעות, מרחקים או שמות מקומות',
+    'שלא הופיעו בקלט. אם חסר מידע — כתוב את מה שנכון לכל פעילות מהסוג הזה.',
+    'כל סעיף בדף עומד בפני עצמו — אל תחזור על מה שכבר נאמר בסעיף אחר.',
+    'החזר טקסט בלבד, בלי מרכאות ובלי הסברים.',
+  ].join('\n');
+}
 
 /** מה שהמודל מקבל על האירוע — עובדות בלבד, בלי כסף ובלי מסמכים. */
 export function activityFactsFor(activity = {}) {
@@ -42,15 +79,32 @@ export function activityFactsFor(activity = {}) {
       ? `${activity.start_time}–${activity.end_time}`
       : ''],
     ['תיאור קיים', activity.registration_page_body || activity.description],
-    ['קהל יעד', activity.audience],
-    ['מה כלול', activity.included],
-    ['מה להביא', activity.what_to_bring],
-    ['מידע חשוב', activity.important_info],
   ];
   return facts
     .filter(([, value]) => String(value || '').trim())
     .map(([label, value]) => `${label}: ${String(value).trim()}`)
     .join('\n');
+}
+
+const SECTION_TITLES = {
+  audience: 'קהל יעד',
+  included: 'מה כלול',
+  what_to_bring: 'מה להביא / ציוד',
+  important_info: 'מידע חשוב',
+};
+
+/**
+ * מה שכבר כתוב בסעיפים האחרים.
+ *
+ * נמסר בנפרד מהעובדות ובכותרת משלו, כי תפקידו הפוך: לא מקור להשראה אלא רשימה
+ * של מה שאסור לחזור עליו. כשכל הסעיפים נמסרו יחד תחת „מה שידוע”, „מידע חשוב”
+ * חזר על המים והנעליים שכבר הופיעו ב„מה להביא”.
+ */
+export function otherSectionsOf(field, activity = {}) {
+  return [...DRAFTABLE.keys()]
+    .filter((key) => key !== field && String(activity[key] || '').trim())
+    .map((key) => `[${SECTION_TITLES[key]}]\n${String(activity[key]).trim()}`)
+    .join('\n\n');
 }
 
 export function draftPromptFor(field, activity, instruction = '') {
@@ -61,8 +115,18 @@ export function draftPromptFor(field, activity, instruction = '') {
     '',
     'מה שידוע על האירוע:',
     activityFactsFor(activity) || '(לא נמסרו פרטים — כתוב מה שנכון לפעילות מהסוג הזה)',
+    otherSectionsOf(field, activity)
+      ? [
+        '',
+        'הסעיפים הבאים כבר מופיעים באותו דף, מעל או מתחת לסעיף שאתה כותב.',
+        'אל תחזור על שום פריט מהם — לא באותן מילים ולא בניסוח אחר.',
+        'כתוב רק את מה ששייך לסעיף שהתבקשת ועדיין לא נאמר:',
+        '',
+        otherSectionsOf(field, activity),
+      ].join('\n')
+      : '',
     extra ? `\nבקשה נוספת מהצוות: ${extra}` : '',
-  ].join('\n').trim();
+  ].filter(Boolean).join('\n').trim();
 }
 
 /** מנקה את מה שחזר: המודל נוטה לעטוף במרכאות ולהוסיף כותרת. */
@@ -78,13 +142,15 @@ export function cleanDraft(text) {
 /**
  * @param {(input: {prompt: string, system: string}) => Promise<{text: string, error: string}>} generate
  */
-export async function draftActivityCopy({ field, activity, instruction, generate } = {}) {
+export async function draftActivityCopy({
+  field, activity, instruction, generate, tone = 'warm', emoji = true,
+} = {}) {
   if (!isDraftableField(field)) {
     return { ok: false, error: 'הסעיף הזה אינו פתוח לניסוח אוטומטי' };
   }
   const { text, error } = await generate({
     prompt: draftPromptFor(field, activity, instruction),
-    system: SYSTEM,
+    system: buildSystemPrompt({ tone, emoji }),
   });
   if (error === 'no_api_key') {
     return { ok: false, error: 'העוזר לא מוגדר בשרת' };

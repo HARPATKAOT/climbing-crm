@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildSystemPrompt,
   cleanDraft,
   draftPromptFor,
   draftActivityCopy,
   isDraftableField,
+  otherSectionsOf,
 } from './activityCopyDraft.js';
 
 const ACTIVITY = {
@@ -65,4 +67,26 @@ test('ניסוח תקין חוזר נקי', async () => {
     generate: async () => ({ text: '  ילדים מגיל 10 ומעלה.  ', error: '' }),
   });
   assert.deepEqual(result, { ok: true, draft: 'ילדים מגיל 10 ומעלה.' });
+});
+
+test('מה שכבר כתוב בסעיפים האחרים נמסר כרשימת „אל תחזור על זה”', () => {
+  const filled = { ...ACTIVITY, what_to_bring: 'נעליים סגורות, 3 ליטר מים' };
+  const prompt = draftPromptFor('important_info', filled);
+  assert.ok(prompt.includes('אל תחזור על שום פריט מהם'));
+  assert.ok(prompt.includes('נעליים סגורות, 3 ליטר מים'));
+  // הסעיף שנכתב עכשיו אינו מופיע ברשימת מה שאסור לחזור עליו
+  assert.equal(otherSectionsOf('what_to_bring', filled).includes('נעליים סגורות'), false);
+});
+
+test('בלי סעיפים אחרים אין פסקת „אל תחזור”', () => {
+  const prompt = draftPromptFor('audience', { type: 'trip', name: 'טיול' });
+  assert.equal(prompt.includes('אל תחזור על שום פריט'), false);
+});
+
+test("הטון והאימוג'י משנים את הוראת המערכת", () => {
+  assert.ok(buildSystemPrompt({ tone: 'brief' }).includes('קצר ככל האפשר'));
+  assert.ok(buildSystemPrompt({ emoji: true }).includes('שלב אימוג'));
+  assert.ok(buildSystemPrompt({ emoji: false }).includes('בלי אימוג'));
+  // טון שאינו מוכר נופל לברירת המחדל במקום לשבור
+  assert.ok(buildSystemPrompt({ tone: 'nonsense' }).includes('חם ומזמין'));
 });

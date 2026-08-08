@@ -5866,6 +5866,8 @@ app.post('/api/activities/draft-copy', async (req, res) => {
       field,
       activity: req.body?.activity || {},
       instruction: req.body?.instruction || '',
+      tone: req.body?.tone,
+      emoji: req.body?.emoji !== false,
       generate: async ({ prompt, system }) => {
         const { content, error } = await callGeminiChat({
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
@@ -10652,11 +10654,18 @@ app.post('/api/work-assignments/from-activity', async (req, res) => {
   const flatAmount = flatPay ? (Number(flatSource) || 0) : null;
   // שעות שנקבעו במפורש הן ההוראה; שאיבה משעון הנוכחות היא רק ניחוש כשאין כזו.
   const explicitTimes = !!(hm(startOverride) && hm(endOverride));
-  const existing = (db.get('work_assignments') || []).filter((r) => r.activity_id === activity_id);
   const created = [];
 
+  // הרשימה נקראת מחדש בכל סיבוב ולא פעם אחת לפני הלולאה: שמירת האירוע
+  // והכפתור בפאנל יכולים להגיע כמעט יחד, ושתי בקשות שקראו את אותו צילום מצב
+  // הכניסו שתיהן שורה — אותו עובד שובץ פעמיים לאותו אירוע, ושולם פעמיים.
+  const alreadyAssigned = (employeeId) => (db.get('work_assignments') || []).some(
+    (r) => String(r.activity_id) === String(activity_id)
+      && String(r.employee_id) === String(employeeId)
+  );
+
   for (const employeeId of ids) {
-    if (existing.some((r) => r.employee_id === employeeId)) continue;
+    if (alreadyAssigned(employeeId)) continue;
     const suggestion = explicitTimes
       ? null
       : suggestHoursFromClock(employeeId, activity.date, eventStart, eventEnd);
