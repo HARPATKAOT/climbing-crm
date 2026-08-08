@@ -3,10 +3,11 @@ import {
   Clock, LogIn, LogOut, Coins, Plus, Trash2, Edit2,
   Save, X, UserCheck, RefreshCw, Briefcase, Award, ArrowUpRight, Search, ChevronDown, ChevronUp,
   Upload, Download, FileText, Users, Banknote, Link2, Copy, Settings2, MessageCircle, Check, ChevronLeft, CalendarRange,
-  Phone, Mail, MapPin, CreditCard, User, Calendar, Cake, Landmark, Car, Lock, Receipt
+  Phone, Mail, MapPin, CreditCard, User, Calendar, Cake, Landmark, Car, Lock
 , Pencil , Bell , Shield } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import EntityLink, { takeOpenParam } from '../utils/entityLinks.jsx';
+import { PaymentMethodBadge } from '../utils/paymentMethod.jsx';
 import { Modal } from './UI.jsx';
 import GenderPicker from './GenderPicker.jsx';
 import {
@@ -338,23 +339,6 @@ function MonthlyPayCard({ employee, agreement, rows, month, onEditWage }) {
       {/* התעריפים עצמם והתפקידים בלי תעריף מוצגים בכרטיס ההסכם שמתחת — אין
           טעם לחזור עליהם פעמיים באותה לשונית. */}
     </div>
-  );
-}
-
-/**
- * תלוש מול חשבונית: שני מסלולי העסקה שונים לגמרי, ולכן הם נבדלים בסימן
- * ובצבע ולא רק במילה.
- */
-function PaymentMethodBadge({ method }) {
-  const invoice = method === 'invoice' || method === 'חשבונית';
-  return (
-    <span
-      className={`badge ${invoice ? 'badge-amber' : 'badge-blue'}`}
-      style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-    >
-      {invoice ? <FileText size={12} /> : <Receipt size={12} />}
-      {invoice ? 'חשבונית' : 'תלוש'}
-    </span>
   );
 }
 

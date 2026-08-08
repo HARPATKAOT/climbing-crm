@@ -26,6 +26,7 @@ import {
 import { activityIcon, activityTypeIcon } from '../utils/activityIcons.js';
 import { roleIcon, roleColor } from '../utils/roleIcons.js';
 import { templateKind, GENERIC_KIND } from '../utils/declarationKinds.js';
+import { PaymentMethodBadge, amountBasisLabel } from '../utils/paymentMethod.jsx';
 import {
   CALENDAR_DISPLAY_FIELDS, loadDisplayFields, saveDisplayFields,
   setSelectedDisplayFields, setActivityStaffNames, activityDisplayLines,
@@ -501,6 +502,9 @@ function WorkAssignmentsBlock({
   const payableRoles = useMemo(() => payableRolesOf(roleCatalog), [roleCatalog]);
 
   const empName = (id) => employees.find((e) => e.id === id)?.name || 'עובד';
+  // מסלול ההעסקה מגיע מתיק העובד ונראה כאן בלבד — הוא קובע אם הסכום שמוצג
+  // הוא לפני מע״מ (חשבונית) או ברוטו (תלוש).
+  const empPaymentMethod = (id) => employees.find((e) => e.id === id)?.payment_method || '';
   const agreementFor = (employeeId) => wages.find((w) => w.employee_id === employeeId) || DEFAULT_WAGE;
 
   // Before the event exists there is nothing to attach a row to, so the picked
@@ -884,6 +888,11 @@ function WorkAssignmentsBlock({
                         }}
                       />
                       <span style={{ fontSize: 13 }}>{employee.name}</span>
+                      {/* מסלול ההעסקה נסגר בתיק העובד ולא כאן — זו תזכורת בלבד,
+                          כי היא משנה מה הסכום שמוצג אומר. */}
+                      {canViewHr && employee.payment_method && (
+                        <PaymentMethodBadge method={employee.payment_method} compact />
+                      )}
                     </label>
                   );
                 })}
@@ -967,14 +976,18 @@ function WorkAssignmentsBlock({
                 }}
               >
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)', display: 'flex', alignItems: 'center', gap: 6 }}>
                     <EntityLink kind="employee" id={row.employee_id} title="מעבר לתיק העובד">
                       {empName(row.employee_id)}
                     </EntityLink>
+                    {empPaymentMethod(row.employee_id) && (
+                      <PaymentMethodBadge method={empPaymentMethod(row.employee_id)} compact />
+                    )}
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
                     {row.start_time}–{row.end_time} · {row.hours} שעות ·{' '}
                     {row.pay_mode === 'flat' ? 'גלובלי' : `₪${rate} לשעה`} · הערכה ₪{amount}
+                    {' '}{amountBasisLabel(empPaymentMethod(row.employee_id))}
                   </div>
                 </div>
                 <button
