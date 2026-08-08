@@ -83,8 +83,7 @@ test('registering an interest cannot outlive talking about events', () => {
 
 test('a capability may own a field, and stays inert while it is empty', () => {
   // The community centre's secretary can change, so the phone is something the
-  // owner types — not a redeploy. The switch itself carries no model tool: the
-  // exchange is handled in code, and the switch gates that branch.
+  // owner types — not a redeploy.
   const centre = capabilityState({}).find((c) => c.key === 'centre_report');
   assert.equal(centre.input.key, 'aiCentrePhones');
   assert.equal(centre.input.value, '');
@@ -94,11 +93,12 @@ test('a capability may own a field, and stays inert while it is empty', () => {
     .find((c) => c.key === 'centre_report');
   assert.equal(withPhone.input.value, '0501234567');
 
-  // Turning it off must not withdraw a tool from the model — it owns none.
-  assert.deepEqual(
-    [...enabledToolNames({ botCap_centre_report: false })].sort(),
-    [...enabledToolNames({})].sort()
-  );
+  // Turning it off withdraws the one tool it owns — writing down a parent's
+  // claim to have registered — and nothing else.
+  const off = enabledToolNames({ botCap_centre_report: false });
+  assert.equal(off.has('reportCentreRegistration'), false);
+  assert.equal(enabledToolNames({}).has('reportCentreRegistration'), true);
+  assert.equal(off.has('listClasses'), true);
   assert.equal(isCapabilityEnabled({ botCap_centre_report: false }, 'centre_report'), false);
 });
 

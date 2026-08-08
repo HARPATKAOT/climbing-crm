@@ -17,6 +17,7 @@ import {
   runConversationAnalysis,
   runNightlySweep,
   runNightlySweepIfDue,
+  runCentreRegistrationChecks,
 } from './whatsapp.js';
 import { whatsappConnectService } from './whatsappConnect.js';
 import { automationsService, runScheduledAutomationsIfDue } from './automations.js';
@@ -15960,6 +15961,12 @@ app.listen(PORT, () => {
 
   // AI assistant sweep over conversations that went quiet (from 03:00 Asia/Jerusalem)
   setInterval(() => { runNightlySweepIfDue(3); }, 15 * 60 * 1000);
+
+  // Sunday and Tuesday at 08:00: one question to the community centre carrying
+  // every trainee whose parent said they had registered there.
+  setInterval(() => {
+    runCentreRegistrationChecks().catch((err) => console.error('Centre check run failed:', err.message));
+  }, 15 * 60 * 1000);
 
   // Google Calendar pull every 10 minutes (backup for missed webhooks).
   // Skipped on local/dev so a laptop API cannot thrash the live OAuth tokens.

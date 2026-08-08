@@ -104,9 +104,11 @@ export const BOT_CAPABILITIES = [
     hint: 'המתנ״ס כותב שם של ילד, והבוט עונה ממתי הוא מתאמן (בלי אימון ההיכרות) '
       + 'ומסמן אותו כרשום',
     source: 'נוכחות המתאמן — האימון הראשון שאינו היכרות',
-    // Not a model tool: a fixed exchange with one right answer, handled in code
-    // before the model is reached. The switch gates that branch instead.
-    tools: [],
+    // The inbound exchange is a fixed one with one right answer, handled in
+    // code before the model is reached, and the switch gates that branch. The
+    // one model tool here goes the other way: writing down a parent's claim to
+    // have registered, so Sunday's question to the centre has something on it.
+    tools: ['reportCentreRegistration'],
     input: {
       key: 'aiCentrePhones',
       label: 'מספרי הטלפון של המתנ״ס',

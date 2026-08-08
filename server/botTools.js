@@ -33,6 +33,7 @@ import {
   updateInterest,
 } from './activityInterest.js';
 import { recordBotAction } from './botActivityLog.js';
+import { recordParentReport } from './centreRegistrationChecks.js';
 import { FORM_SHORT, FORM_FULL, FORM_PURPOSE } from './participationForm.js';
 import {
   FOLLOWUP_COLLECTION,
@@ -294,6 +295,20 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         notes: { type: 'string', description: 'מה הלקוח ביקש לציין, אם ציין' },
       },
       required: ['eventId'],
+    },
+  },
+  {
+    name: 'reportCentreRegistration',
+    description:
+      'רושם שההורה מסר שהשלים את ההרשמה של הילד במתנ״ס. אינו משנה סטטוס ואינו '
+      + 'מאשר כלום — הוא רק מכניס את השם לרשימת הבדיקה השבועית מול המתנ״ס. '
+      + 'להשתמש כשההורה אומר «נרשמנו», «ההרשמה מעודכנת במתנ״ס» וכדומה.',
+    parameters: {
+      type: 'object',
+      properties: {
+        childName: { type: 'string', description: 'שם הילד שההורה מסר עליו' },
+      },
+      required: ['childName'],
     },
   },
   {
@@ -1065,6 +1080,52 @@ export function buildCustomerTools({
         תאריך: eventDateLabel(activity),
         הערה: 'זהו שיבוץ רך שאינו תופס מקום ואינו הרשמה. יש לומר ללקוח שנרשם '
           + 'כמתעניין ושהצוות יחזור אליו להשלמת ההרשמה, ולציין מה המחיר אם יש.',
+      };
+    },
+
+    /**
+     * The parent's word, written down — and nothing more.
+     *
+     * "ההרשמה מעודכנת במתנס" used to be a sentence in a conversation: the bot
+     * thanked her, the trainee stayed "ממתין להרשמה", and nobody knew the claim
+     * had been made. It cannot be verified here — the מתנ״ס registers, not us —
+     * so it becomes a line on the list Carmit is asked about on Sunday.
+     */
+    reportCentreRegistration: async ({ childName } = {}) => {
+      if (!parent?.id) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
+      const kids = studentsForParent(parent);
+      if (!kids.length) return { error: 'אין מתאמן בכרטיס — יש להעביר לצוות' };
+
+      const named = String(childName || '').trim();
+      const matches = named
+        ? kids.filter((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
+        : kids;
+      if (!matches.length) return { error: `אין בכרטיס מתאמן בשם ${named} — יש לשאול את הלקוח` };
+      if (matches.length > 1) {
+        return {
+          error: 'יש כמה ילדים מתאימים — יש לשאול על מי מדובר',
+          ילדים: matches.map((s) => s.name || ''),
+        };
+      }
+
+      const student = matches[0];
+      const result = await recordParentReport({
+        db, persist: persistCore, student, parent,
+      });
+      if (!result.ok) return { error: result.error || 'לא הצלחנו לרשום את הדיווח' };
+      if (!result.duplicate) {
+        journal(
+          'centre_report_claimed',
+          `${student.name || 'מתאמן'} — ההורה מסר שההרשמה במתנ״ס הושלמה`,
+          { student_id: student.id },
+          student
+        );
+      }
+
+      return {
+        נרשם_לבדיקה: student.name || '',
+        הערה: 'הדיווח נשמר לבדיקה מול המתנ״ס. יש להודות ללקוח ולומר שנאמת מול '
+          + 'המתנ״ס ונעדכן — ואין לומר שהילד כבר רשום או שהסטטוס עודכן.',
       };
     },
 

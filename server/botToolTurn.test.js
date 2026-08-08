@@ -265,6 +265,7 @@ test('the tools offered to the model are facts, links and placements — never s
     'joinWaitlist',
     'listClasses',
     'removeActivityInterest',
+    'reportCentreRegistration',
     'scheduleFollowUp',
     'startSignup',
     'updateCustomerDetails',

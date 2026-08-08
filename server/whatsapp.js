@@ -28,6 +28,7 @@ import {
   mergeBotSettings,
   withBotMark,
   isCentrePhone,
+  centrePhones,
   CUSTOMER_STATUSES,
   loadBrandedBotSettings,
   decideBotGate,
@@ -62,6 +63,15 @@ import { alertRecipients } from './staffAlerts.js';
 import { recordBotAction } from './botActivityLog.js';
 import { isCapabilityEnabled } from './botCapabilities.js';
 import { buildCentreReport, formatReportDate } from './centreReport.js';
+import {
+  buildDigestMessage,
+  dueForDigest,
+  dueForParentRecheck,
+  isDigestTime,
+  markAsked,
+  markConfirmed as markCentreCheckConfirmed,
+  markParentAsked,
+} from './centreRegistrationChecks.js';
 
 /**
  * What the bot says when it cannot answer at all — no model key, a model error,
@@ -201,6 +211,12 @@ async function handleCentreMessage({ text, phone, isSimulator = false }) {
   const mayMark = isCapabilityEnabled(settings, 'centre_marks_registered');
   let statusChanged = false;
   let needsStaffMark = false;
+  // Whatever happens to the status, the weekly loop for this trainee is over:
+  // the centre has answered about them, and Sunday must not ask again.
+  if (report.ok && student) {
+    await markCentreCheckConfirmed({ db, persist: persistCore, studentId: student.id })
+      .catch((err) => console.error('centre check confirm failed:', err.message));
+  }
   if (report.ok && student && !CUSTOMER_STATUSES.has(String(student.status || '')) && !mayMark) {
     needsStaffMark = true;
     await notifyStaffOfHandoff({
@@ -417,6 +433,46 @@ export async function runNightlySweep({ force = false, spacingMs = 2000 } = {}) 
 
 /** פעם ביום לפי שעון ישראל, באותה תבנית של האוטומציות. */
 let lastSweepDate = null;
+/**
+ * Sunday and Tuesday at 08:00 — one question to the centre with every trainee
+ * whose parent said they had registered, and a nudge to the parents nobody has
+ * confirmed. Runs on the hourly tick; the date stamp on each row is what keeps
+ * a restart from asking twice in the same morning.
+ */
+export async function runCentreRegistrationChecks({ now = new Date(), isSimulator = false } = {}) {
+  if (!isDigestTime(now)) return { skipped: 'not_due' };
+  const settings = await loadBrandedBotSettings();
+  if (!isBotEnabled(settings) && !isSimulator) return { skipped: 'disabled' };
+  if (!isCapabilityEnabled(settings, 'centre_report')) return { skipped: 'capability_off' };
+  const centre = centrePhones(settings)[0];
+  if (!centre) return { skipped: 'no_centre_phone' };
+
+  // The parents first: whoever we asked the centre about last time and heard
+  // nothing back. A second identical question to Carmit answers nothing.
+  let parentsAsked = 0;
+  for (const row of dueForParentRecheck(db, now)) {
+    if (!row.phone) continue;
+    const text = `היי 🙂\nרצינו לוודא — ההרשמה של ${row.student_name} במתנ״ס הושלמה?\n`
+      + 'לא מצאנו אישור אצלם, ולכן שווה לבדוק שוב כדי שהמקום יישמר.';
+    await whatsappService.sendBotReply(row.phone, text, { isSimulator });
+    await markParentAsked({ db, persist: persistCore, row, now });
+    parentsAsked += 1;
+  }
+
+  const due = dueForDigest(db, now);
+  const message = buildDigestMessage(due);
+  if (!message) return { skipped: 'nothing_to_ask', parentsAsked };
+
+  await whatsappService.sendBotReply(centre, message, { isSimulator, source: 'bot_control' });
+  await markAsked({ db, persist: persistCore, list: due, now });
+  recordBotAction(db, persistCore, {
+    type: 'centre_digest',
+    summary: `נשלחה למתנ״ס בקשת אישור על ${due.length} מתאמנים`,
+    details: { names: due.map((row) => row.student_name), parentsAsked },
+  });
+  return { asked: due.length, parentsAsked };
+}
+
 export async function runNightlySweepIfDue(hour = 3) {
   try {
     const today = israelDateStr();
