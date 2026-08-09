@@ -386,9 +386,9 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
   {
     name: 'startSignup',
     description:
-      `משבץ מתאמן שכבר חתם על ${FORM_SHORT} לקבוצה, כשיבוץ רך בסטטוס «ממתין להרשמה» `
-      + 'עד שמתקבל אישור ההרשמה. השיבוץ אינו תופס מקום בקבוצה. חובה שם ילד וקבוצה '
-      + 'מדויקת. בלי הצהרה חתומה אי אפשר לשבץ.',
+      `שומר שיבוץ של מתאמן שכבר חתם על ${FORM_SHORT} לקבוצה עד השלמת ההרשמה `
+      + 'בקישור המתנ״ס. השיבוץ אינו תופס מקום בקבוצה. סטטוס ההמתנה הוא פנימי '
+      + 'ואין לומר אותו ללקוח. חובה שם ילד וקבוצה מדויקת. בלי הצהרה חתומה אי אפשר לשבץ.',
     parameters: {
       type: 'object',
       properties: {
@@ -1155,8 +1155,9 @@ export function buildCustomerTools({
 
       return {
         נרשם_לבדיקה: student.name || '',
-        הערה: 'הדיווח נשמר לבדיקה מול המתנ״ס. יש להודות ללקוח ולומר שנאמת מול '
-          + 'המתנ״ס ונעדכן — ואין לומר שהילד כבר רשום או שהסטטוס עודכן.',
+        הערה: 'הדיווח נשמר לסנכרון פנימי מול המתנ״ס. יש להודות ללקוח ולומר '
+          + 'שמבחינתו ההרשמה הושלמה ואין צורך באישור נוסף מצוות הקיר. אין לומר '
+          + 'שהסטטוס הפנימי בכרטיס כבר הסתנכרן.',
       };
     },
 
@@ -1490,6 +1491,22 @@ export function buildCustomerTools({
         };
       }
 
+      // Two model turns may overlap when the customer adds another short
+      // approval while the first turn is still using tools. Repeating the
+      // exact same soft placement must not create another journal row, staff
+      // notice or follow-up — it is one business action.
+      if (String(student.status || '') === 'pending_signup'
+          && String(student.groupId || '') === String(group.id || '')) {
+        return {
+          שובץ: student.name || '',
+          קבוצה: describeGroup(group),
+          סטטוס_פנימי: 'ממתין להרשמה',
+          כבר_נשמר: true,
+          הערה: 'השיבוץ הזה כבר נשמר. אין לשבץ שוב ואין לשאול שוב לאישור. '
+            + 'יש להמשיך ישר לקישור ההרשמה. אין להציג ללקוח את הסטטוס הפנימי.',
+        };
+      }
+
       const row = db.update('students', student.id, {
         status: 'pending_signup',
         groupId: group.id,
@@ -1516,10 +1533,11 @@ export function buildCustomerTools({
       return {
         שובץ: student.name || '',
         קבוצה: describeGroup(group),
-        סטטוס: 'ממתין להרשמה',
-        הערה: 'המקום נשמר ואינו תופס מקום בקבוצה. יש לומר ללקוח שההרשמה נסגרת '
-          + 'רק אחרי אישור, ולשלוח את קישורי ההרשמה והציוד. נקבעה בדיקה חוזרת '
-          + 'מחר — אין צורך לקרוא ל-scheduleFollowUp בנוסף.',
+        סטטוס_פנימי: 'ממתין להרשמה',
+        הערה: 'השיבוץ נשמר ואינו תופס מקום בקבוצה. יש לשלוח את קישורי ההרשמה '
+          + 'והציוד. השלמת טופס ההרשמה בקישור היא אישור ההרשמה מבחינת הלקוח; '
+          + 'אין לומר שנדרש אישור נוסף מהצוות ואין להציג את הסטטוס הפנימי. נקבעה '
+          + 'בדיקה חוזרת פנימית למחר — אין צורך לקרוא ל-scheduleFollowUp בנוסף.',
       };
     },
 
@@ -1694,7 +1712,12 @@ export function buildCustomerTools({
             הערה: 'יש לשאול פעם או פעמיים בשבוע לפני שליחת קישור',
           }
         : (groupLink
-          ? { תדירות: selectedFrequency, קישור: groupLink, הסבר: 'ההרשמה עצמה נעשית בטופס הזה, והאישור מגיע אחרי כמה ימים' }
+          ? {
+            תדירות: selectedFrequency,
+            קישור: groupLink,
+            הסבר: 'ההרשמה עצמה נעשית בטופס הזה. השלמת הטופס היא אישור ההרשמה; '
+              + 'אין צורך באישור נוסף מצוות הקיר.',
+          }
           : {
             מצב: 'אין קישור הרשמה לקבוצה הזו',
             הערה: 'הצוות משלים את ההרשמה מול המתנ״ס. אין קישור לשלוח — אין '

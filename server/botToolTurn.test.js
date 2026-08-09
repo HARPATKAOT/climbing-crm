@@ -7,6 +7,7 @@ import {
   unknownUrlsInReply,
   unbackedReplyClaims,
   CUSTOMER_TOOL_RULES,
+  confirmsLastBotQuestion,
 } from './botToolTurn.js';
 import {
   CUSTOMER_TOOL_DECLARATIONS,
@@ -152,6 +153,31 @@ test('the current inbound message is not appended twice when history already con
   assert.equal(turn.text, 'לאיזו כיתה?');
   assert.equal(received.length, 1);
   assert.equal(received[0].parts[0].text, 'כמה עולה חוג?');
+});
+
+test('כן תודה is treated as approval of the last bot question, not a reason to repeat it', async () => {
+  const history = [
+    { role: 'model', parts: [{ text: 'לשבץ אותך לקבוצת הבוגרים ביום ד׳ בשעה 20:10?' }] },
+    { role: 'user', parts: [{ text: 'כן תודה' }] },
+  ];
+  assert.equal(confirmsLastBotQuestion(history, 'כן תודה'), true);
+  assert.equal(confirmsLastBotQuestion([], 'כן תודה'), false);
+  assert.equal(confirmsLastBotQuestion([
+    { role: 'model', parts: [{ text: 'קבוצת הבוגרים מתקיימת ביום ד׳' }] },
+  ], 'כן'), false);
+
+  let instruction = '';
+  await runCustomerToolTurn({
+    history,
+    incomingText: 'כן תודה',
+    apiKey: 'test-key',
+    callModel: async (args) => {
+      instruction = args.systemInstruction;
+      return { content: textReply('ממשיך לשיבוץ'), error: '' };
+    },
+  });
+  assert.match(instruction, /אישר בחיוב/);
+  assert.match(instruction, /אין לשאול אותה שוב/);
 });
 
 test('a customer-provided URL in history is not trusted as a bot link', async () => {

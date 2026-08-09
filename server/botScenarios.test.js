@@ -370,7 +370,7 @@ test('שיבוץ רך: הכרטיס עובר לממתין להרשמה, נקבע
     const result = await tools.startSignup({ childName: 'יותם', grade: 'ג' });
 
     assert.equal(result.שובץ, 'יותם כהן');
-    assert.equal(result.סטטוס, 'ממתין להרשמה');
+    assert.equal(result.סטטוס_פנימי, 'ממתין להרשמה');
     assert.equal(student('s-yotam').status, 'pending_signup');
     assert.equal(student('s-yotam').groupId, GROUP_GD.id);
 
@@ -386,6 +386,30 @@ test('שיבוץ רך: הכרטיס עובר לממתין להרשמה, נקבע
 
     assert.equal(journal().length, 1);
     assert.equal(journal()[0].type, 'placement');
+  });
+});
+
+test('אותו שיבוץ פעמיים נשמר פעם אחת בלבד ולא יוצר תשובה תפעולית כפולה', async () => {
+  await withSeed({
+    groups: [GROUP_GD],
+    students: [childYotam()],
+    ...signedFormFor(['s-yotam']),
+  }, async () => {
+    const notices = [];
+    const tools = buildCustomerTools({
+      parent: PARENT,
+      phone: PARENT.phone,
+      onPlacement: (notice) => notices.push(notice),
+    });
+
+    const first = await tools.startSignup({ childName: 'יותם', grade: 'ג' });
+    const repeated = await tools.startSignup({ childName: 'יותם', grade: 'ג' });
+
+    assert.equal(first.כבר_נשמר, undefined);
+    assert.equal(repeated.כבר_נשמר, true);
+    assert.equal(notices.length, 1);
+    assert.equal(journal().filter((row) => row.type === 'placement').length, 1);
+    assert.equal(followUps().filter((row) => row.reason === 'pending_signup').length, 1);
   });
 });
 
@@ -620,6 +644,9 @@ test('חבילת ההרשמה: שלושה שלבים בסדר, ושלב הציו
     ]);
     assert.equal(pack.שלב_1_הצהרת_בריאות.מצב, 'נחתמה');
     assert.match(pack.שלב_2_הרשמה_לקבוצה.קישור, /\/s\/g-gd\/1$/);
+    assert.match(pack.שלב_2_הרשמה_לקבוצה.הסבר, /השלמת הטופס היא אישור ההרשמה/);
+    assert.match(pack.שלב_2_הרשמה_לקבוצה.הסבר, /אין צורך באישור נוסף/);
+    assert.doesNotMatch(pack.שלב_2_הרשמה_לקבוצה.הסבר, /אחרי כמה ימים/);
     assert.ok(pack.שלב_3_תשלום_ציוד.קישור);
     assert.equal('סכום' in pack.שלב_3_תשלום_ציוד, false);
   });

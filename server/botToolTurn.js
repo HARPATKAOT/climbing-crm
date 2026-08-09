@@ -33,12 +33,13 @@ export const CUSTOMER_TOOL_RULES = [
   'שאלה על מבוגרים או נוער היא על שכבה (בוגרים / תיכון / חטיבה), לא על כיתה.',
   'אל תציע לשמור מקום בשם הילד כשמדובר בקבוצת בוגרים.',
   'אל תחזור על אותה שאלה פעמיים ברצף. אם הלקוח כתב משהו לא ברור — בקש הבהרה קצרה פעם אחת.',
+  'תשובה קצרה וחיובית כמו «כן», «כן תודה», «בטח» או «אשמח» לשאלה האחרונה שלך היא אישור. אל תשאל שוב את אותה שאלה: בצע את הפעולה שאושרה באמצעות הכלי המתאים והמשך רק לנתון הבא שבאמת חסר.',
   'כשההודעה הנוכחית מסומנת כרצף הודעות מהלקוח — קרא את כל השורות כפנייה אחת, אל תצטט את הסימון, והשב עליהן בהודעה אחת קצרה ומסודרת בלי לחזור על אותו מידע.',
   'מה שכבר נאמר בשיחה — כיתה, שם ילד, יום ושעה — אל תשאל עליו שוב. קרא את ההיסטוריה והשלם ממנה את הפרטים לקריאת הכלי.',
   'אם בכרטיס יש ילד יחיד, זה הילד שמדובר בו — אל תשאל לשמו. שאל רק כשיש כמה ילדים או שאין אף אחד.',
   'אל תבטיח פעולה שאתה לא יכול לבצע (לשריין מקום, לקבוע אימון, לשלוח קישור תשלום). אפשר להציע שהצוות יחזור אליהם.',
   'בקשה שאין לך כלי לבצע — «תשבצו אותו לנבחרת אם תיפתח», «נשמח ליום אחר», «תעדכנו אותנו כשיהיה מקום» — אל תאמר «רשמנו לפנינו» או «רשום אצלנו». שום דבר לא נרשם. כתוב HANDOFF ואז משפט שמעביר את הבקשה לצוות, כדי שיהיה מי שמחזיק אותה.',
-  'הלקוח מודיע שהשלים את ההרשמה במתנ״ס («נרשמתי», «ההרשמה מעודכנת») — קרא ל-reportCentreRegistration עם שם הילד, הודה לו, ואמור שנאמת מול המתנ״ס ונעדכן. אינך יכול לאמת את זה בעצמך: אל תאמר שהילד רשום ואל תאשר שהסטטוס עודכן.',
+  'הלקוח מודיע שהשלים את ההרשמה במתנ״ס («נרשמתי», «ההרשמה מעודכנת») — קרא ל-reportCentreRegistration עם שם הילד והודה לו. אמור שמבחינתו ההרשמה הושלמה ואין צורך באישור נוסף מצוות הקיר. אל תטען שהסטטוס הפנימי בכרטיס כבר הסתנכרן.',
   'קישור הרשמה לחוג כן מותר לשלוח — קרא ל-getSignupLink עם הכיתה או השכבה, ואם צריך גם יום ושעה. אם חזרו כמה קבוצות, שאל לאיזו מהן ואל תשלח קישור.',
   `שאלה על הצהרת בריאות, הסרת אחריות או טפסים: בדוק ב-getHealthDeclarations. למי שאין ${FORM_SHORT} בתוקף — שלח את הקישור למילוי וציין את שם המתאמן. למי שיש — אמור עד מתי הוא בתוקף, בלי לשלוח קישור.`,
   `טופס בתוקף אינו חדשה ואין להזכיר אותו. אל תסיים תשובה על שעות, מחיר או כל נושא אחר במשפט כמו «${FORM_SHORT} שלכם בתוקף, אפשר להגיע» — הלקוח לא שאל, וזה מוסיף רעש. מזכירים את הטופס רק כששאלו עליו, או כשהוא חסר או פג.`,
@@ -52,8 +53,8 @@ export const CUSTOMER_TOOL_RULES = [
   'שאלה «למה צריך X» או «מה זה» על ציוד, או «על מה משלמים דמי העשרה» — קרא ל-getEquipmentInfo וענה ממה שכתוב שם. אם ההסבר חסר — אל תמציא אותו מהידע הכללי שלך.',
   'בקשה לשלם על ציוד או קישור לתשלום ציוד: קרא ל-getEquipmentPaymentLink. אם הוחזר קישור — אמור שזהו ציוד חובה לאימונים, ציין אילו פריטים חסרים, ושלח את הקישור להשלמת הרכישה. אל תנקוב בסכום ואל תפרט מחיר לפריט — דף התשלום מציג את המחיר. אם הוחזרה הערה שאין חוב או שצריך לשאול — פעל לפיה.',
   `לקוח שרוצה להירשם: ודא קודם ${FORM_SHORT} (getHealthDeclarations). אין טופס — שלח את הקישור והסבר ש${FORM_PURPOSE}, ואל תשבץ. יש טופס — קרא ל-startSignup לקבוצה שנבחרה, ואם היא מלאה ל-joinWaitlist.`,
-  'אחרי שיבוץ מוצלח: אמור שהמקום נשמר כ«ממתין להרשמה» עד אישור ההרשמה, ושלח את getRegistrationPack עם הסבר קצר לכל קישור.',
-  'אל תבטיח שהילד רשום. רשום = אחרי אישור ההרשמה, וזה מגיע מהצוות.',
+  'אחרי שיבוץ מוצלח: אמור שהשיבוץ נשמר ושלח את getRegistrationPack עם הסבר קצר לכל קישור. «ממתין להרשמה» הוא סטטוס פנימי בלבד ואסור להציג אותו ללקוח.',
+  'השלמת טופס ההרשמה בקישור של המתנ״ס היא אישור ההרשמה מבחינת הלקוח. אין לומר שנדרש אחריה אישור נוסף מצוות הקיר. הסנכרון של הסטטוס הפנימי מול המתנ״ס נעשה ברקע.',
   'שאלה על ילד ששמו נזכר — קרא קודם ל-getFamilyCard כדי לראות באיזו קבוצה ובאיזה סטטוס הוא. אל תסיק מ-listClasses שהילד לא קיים.',
   'בקשה להוציא ילד מקבוצה או לבטל שיבוץ: קרא ל-cancelSignup עם שמו. להעביר לקבוצה אחרת: cancelSignup ואז startSignup לקבוצה החדשה.',
   'שיבוץ, העברה וביטול מותרים רק כל עוד המתאמן אינו רשום לחוג. אם כלי החזיר שהוא כבר רשום — זו העברה לצוות, לא ניסיון נוסף ולא ניסוח אחר.',
@@ -104,6 +105,32 @@ export function historyToContents(messages = []) {
       parts: [{ text: String(m.content || '').trim() }],
     }))
     .filter((entry) => entry.parts[0].text);
+}
+
+const SHORT_AFFIRMATIVE = /^(?:כן(?:\s+(?:תודה|בבקשה|בשמחה))?|בטח|בהחלט|קדימה|אשמח|סבבה|מעולה)$/u;
+
+function normalizedShortReply(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * A one-word approval has meaning only beside the question it answers. The
+ * model occasionally treated "כן תודה" as a fresh greeting and repeated the
+ * question, so the current turn receives an explicit, deterministic cue.
+ */
+export function confirmsLastBotQuestion(history = [], incomingText = '') {
+  if (!SHORT_AFFIRMATIVE.test(normalizedShortReply(incomingText))) return false;
+  const previousBotText = [...history]
+    .reverse()
+    .find((entry) => entry?.role === 'model')
+    ?.parts?.map((part) => String(part?.text || '')).join('\n')
+    .trim();
+  if (!previousBotText) return false;
+  return /[?？]|(?:האם|לשבץ|לשלוח|להמשיך|תרצ[הי]|מאשר(?:ת)?)/u.test(previousBotText);
 }
 
 const URL_PATTERN = /https?:\/\/[^\s<>"')\]]+/gi;
@@ -281,7 +308,12 @@ export async function runCustomerToolTurn({
 
   const toolsUsed = [];
   const successfulCalls = [];
-  const instruction = [systemInstruction, CUSTOMER_TOOL_RULES].filter(Boolean).join('\n\n');
+  const confirmationInstruction = confirmsLastBotQuestion(history, incoming)
+    ? '## מצב התור הנוכחי\nהלקוח אישר בחיוב את השאלה האחרונה של הבוט. אין לשאול אותה שוב. יש לבצע עכשיו את הפעולה שאושרה בעזרת הכלי המתאים, ואז להמשיך רק לפרט הבא שחסר.'
+    : '';
+  const instruction = [systemInstruction, CUSTOMER_TOOL_RULES, confirmationInstruction]
+    .filter(Boolean)
+    .join('\n\n');
   // Addresses the prompt itself carries (the health form, the site) are as good
   // as a tool's — they were not invented by the model either.
   const allowedUrls = collectUrls(instruction);
