@@ -39,6 +39,7 @@ const SCENARIO_COLLECTIONS = [
   'student_guardians',
   'program_eligibility',
   'placement_requests',
+  'level_tests',
 ];
 
 /**
@@ -672,6 +673,7 @@ test('קישור תשלום ציוד: אילו פריטים חסרים, בלי �
     assert.match(first.פריטים, /מידה S/);
     assert.doesNotMatch(first.פריטים, /מגנזיום/);
     assert.ok(first.קישור);
+    assert.match(first.קישור, /\/api\/e\//);
     // דף התשלום הוא המקום היחיד שיודע את המחיר — הודעה עם סכום היא מספר להתווכח עליו.
     assert.equal(first.סכום, undefined);
     assert.match(first.הערה, /בלי לנקוב בסכום/);
@@ -679,6 +681,27 @@ test('קישור תשלום ציוד: אילו פריטים חסרים, בלי �
     const second = await tools.getEquipmentPaymentLink({ childName: 'יותם' });
     assert.equal(second.קישור, first.קישור);
     assert.equal((db.get('equipment_checkouts') || []).length, 1);
+  });
+});
+
+test('a returning participant is found only by one safe full-name match', async () => {
+  const owner = { id: 'p-old', name: 'Dana Rubin', lastName: 'Rubin', phone: '0500000000' };
+  const current = { ...PARENT, name: 'Noa Rubin', lastName: 'Rubin' };
+  await withSeed({
+    parents: [current, owner],
+    students: [{ id: 's-dor', parentId: owner.id, name: 'Dor Rubin', gender: 'male' }],
+    level_tests: [{ id: 'lt-dor', student_id: 's-dor', level: '6B', tested_at: SIGNED_TODAY }],
+    program_eligibility: [{ id: 'pe-dor', student_id: 's-dor', season: '2026-27', program: 'young_squad', status: 'returning', source: 'notion_previous_season' }],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: current, phone: current.phone });
+    const found = await tools.findExistingParticipant({ childName: 'Dor Rubin' });
+    assert.equal(found.נמצא, true);
+    assert.equal(found.שם, 'Dor Rubin');
+    assert.equal(found.מבחן_רמה_אחרון, '6B');
+    assert.match(JSON.stringify(found.זכאות_למסלולים), /returning/);
+
+    const unsafe = await tools.findExistingParticipant({ childName: 'Dor' });
+    assert.equal(unsafe.נמצא, false);
   });
 });
 

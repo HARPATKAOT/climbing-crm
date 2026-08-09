@@ -14,6 +14,7 @@
 import { db } from './db.js';
 import {
   findPrimaryParent,
+  hasOpenBotHandoff,
   isBotPaused,
   isOptedOut,
   loadBrandedBotSettings,
@@ -70,6 +71,10 @@ export async function resumeConversationAfterForm({
   if (!parent) return { sent: false, reason: 'no_card' };
   if (isOptedOut(parent)) return { sent: false, reason: 'opted_out' };
   if (isBotPaused(parent, new Date(now))) return { sent: false, reason: 'paused' };
+  // Completing a form updates the existing staff task; it must not reopen the
+  // bot and ask the customer to choose again while a human decision is still
+  // pending (for example, an exceptional placement consultation).
+  if (hasOpenBotHandoff(parent, phone)) return { sent: false, reason: 'handoff_pending' };
 
   // Only where a conversation is actually open. A form filled from a link the
   // staff sent, with no bot conversation behind it, gets the confirmation the

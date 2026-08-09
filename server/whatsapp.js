@@ -48,6 +48,7 @@ import {
   mergeBotSettings,
   withBotMark,
   isClosingAcknowledgement,
+  hasOpenBotHandoff,
   isCentrePhone,
   centrePhones,
   CUSTOMER_STATUSES,
@@ -314,7 +315,9 @@ export async function notifyStaffOfHandoff({
     '🔔 העברה מהבוט',
     `לקוח: ${name}`,
     `טלפון: ${customerPhone || '—'}`,
-    reason === 'unsure' ? 'סיבה: הבוט לא היה בטוח' : 'סיבה: העברה לצוות',
+    reason === 'unsure'
+      ? 'סיבה: הבוט לא היה בטוח'
+      : (reason === 'handoff_update' ? 'עדכון לפנייה שכבר ממתינה לצוות' : 'סיבה: העברה לצוות'),
     excerpt ? `הודעה אחרונה: ${excerpt}` : '',
     '← ממתינים לטיפול במערכת',
   ].filter(Boolean).join('\n');
@@ -1076,6 +1079,15 @@ export const whatsappService = {
     const parent = context.parent || findPrimaryParent(normalizedPhone);
     let students = context.students || studentsForParent(parent);
     const speaker = context.speaker || null;
+    if (context.respectGate) {
+      if (!parent || isClosingAcknowledgement(incomingText) || hasOpenBotHandoff(parent, normalizedPhone)) {
+        return { success: false, status: 409, reason: 'not_actionable' };
+      }
+      const recoveryGate = decideBotGate(settings, parent, students, incomingText, { isSimulator: false });
+      if (recoveryGate.action !== 'reply') {
+        return { success: false, status: 409, reason: recoveryGate.reason || recoveryGate.action };
+      }
+    }
     const replyKey = String(context.replyKey || '');
     const claim = await claimBotReply(db, replyKey, { phone: normalizedPhone });
     if (!claim.claimed) {
@@ -1089,7 +1101,7 @@ export const whatsappService = {
 
     try {
       // The staff member explicitly asked the bot to take this turn now.
-      await clearBotPause(normalizedPhone);
+      if (!context.respectGate) await clearBotPause(normalizedPhone);
 
       if (isSensitivePersonalEvent(incomingText)) {
         await recordBotHandoff(normalizedPhone);
@@ -1397,6 +1409,23 @@ export const whatsappService = {
         isNew,
         replied: false,
         skippedReason: 'closing_acknowledgement',
+        burstCount: inboundBurst?.items?.length || 1,
+      };
+    }
+
+    // The first handoff acknowledgement already told the customer what will
+    // happen. Further bubbles update the same staff task silently; repeating
+    // the acknowledgement after every detail made the bot look stuck in a
+    // loop and flooded both sides of the conversation.
+    if (!isStaffPhone(settings, normalizedPhone)
+      && !fixedCentreConversation
+      && hasOpenBotHandoff(parent, normalizedPhone)) {
+      return {
+        parent,
+        student,
+        isNew,
+        replied: false,
+        skippedReason: 'handoff_pending',
         burstCount: inboundBurst?.items?.length || 1,
       };
     }
@@ -1786,6 +1815,86 @@ export const whatsappService = {
       .sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
   },
 };
+
+/**
+ * Recover customer text that was stored durably but never received a bot turn
+ * (for example, a process restarted after the webhook write). The ordinary
+ * gate, 24-hour window, open handoff and durable reply claim still apply.
+ */
+export function unansweredRecoveryCandidates(messages = [], {
+  now = Date.now(),
+  minAgeMs = 20_000,
+  maxAgeMs = 2 * 60 * 60 * 1000,
+} = {}) {
+  const byPhone = new Map();
+  for (const message of messages) {
+    if ((message.channel || 'whatsapp') !== 'whatsapp' || !message.phone) continue;
+    const phone = formatWaPhone(message.phone) || message.phone;
+    if (!byPhone.has(phone)) byPhone.set(phone, []);
+    byPhone.get(phone).push(message);
+  }
+
+  const candidates = [];
+  for (const [phone, rows] of byPhone) {
+    rows.sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+    let lastSuccessfulOutbound = -1;
+    rows.forEach((row, index) => {
+      if (row.direction === 'outbound'
+        && !['failed', 'undelivered', 'error'].includes(String(row.status || '').toLowerCase())) {
+        lastSuccessfulOutbound = index;
+      }
+    });
+    const pending = rows.slice(lastSuccessfulOutbound + 1).filter((row) => {
+      const type = String(row.message_type || 'text').toLowerCase();
+      const body = String(row.message || '').trim();
+      return row.direction === 'inbound'
+        && type === 'text'
+        && body
+        && !isClosingAcknowledgement(body)
+        && !/^ריאקציה:/u.test(body);
+    });
+    if (!pending.length) continue;
+    const lastAt = Date.parse(pending.at(-1).created_at || '');
+    const age = now - lastAt;
+    if (!Number.isFinite(lastAt) || age < minAgeMs || age > maxAgeMs) continue;
+    candidates.push({ phone, pending, lastAt });
+  }
+
+  return candidates.sort((a, b) => a.lastAt - b.lastAt);
+}
+
+export async function recoverUnansweredConversations({
+  now = Date.now(),
+  minAgeMs = 20_000,
+  maxAgeMs = 2 * 60 * 60 * 1000,
+  limit = 5,
+} = {}) {
+  const messages = db.get('messages') || [];
+  const candidates = unansweredRecoveryCandidates(messages, { now, minAgeMs, maxAgeMs });
+  const scanned = new Set(messages
+    .filter((message) => (message.channel || 'whatsapp') === 'whatsapp' && message.phone)
+    .map((message) => formatWaPhone(message.phone) || message.phone)).size;
+  const results = [];
+  for (const candidate of candidates.slice(0, Math.max(0, Number(limit) || 0))) {
+    const parent = findPrimaryParent(candidate.phone);
+    const items = candidate.pending.map((message) => ({
+      text: message.message,
+      messageId: message.meta_message_id || message.id,
+      createdAt: message.created_at,
+    }));
+    const text = items.map((item) => item.text).join('\n');
+    const result = await whatsappService.continueConversation(candidate.phone, text, {
+      parent,
+      students: studentsForParent(parent),
+      replyKey: replyKeyForBurst(candidate.phone, items),
+      lastInboundAt: new Date(candidate.lastAt).toISOString(),
+      inboundBurstCount: items.length,
+      respectGate: true,
+    });
+    results.push({ phone: candidate.phone, success: !!result?.success, reason: result?.reason || '' });
+  }
+  return { scanned, candidates: candidates.length, results };
+}
 
 function getInstagramToken() {
   const settings = db.getSettings();

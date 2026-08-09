@@ -19,7 +19,7 @@ import {
   studentsForParent,
   unlinkGuardian,
 } from './studentGuardians.js';
-import { saveCrmParticipants } from './crmWaiverService.js';
+import { saveCrmParticipants, sameHouseholdParticipantCandidate } from './crmWaiverService.js';
 import { CANONICAL_HEALTH_QUESTIONS } from './participationDocuments.js';
 import { declarationGap, mustConfirm } from './healthQuestions.js';
 import { addPendingSpouse, ensureHouseholdForParent, splitExplicitHousehold } from './households.js';
@@ -776,4 +776,20 @@ test('without a link the old behaviour stands: a new child for the new parent', 
   });
   assert.equal(db.store.students.length, 2);
   assert.equal(db.store.student_guardians.length, 0);
+});
+
+test('same household and birth date treats a missing surname suffix as the same trainee', () => {
+  const db = createDb({
+    parents: [{ id: 'p1', name: 'אחיעד לוי', lastName: 'לוי', phone: '0500000001' }],
+    students: [{
+      id: 's1', name: 'תמר שושנה לוי', parentId: 'p1', birthDate: '2017-05-06', isAdult: false,
+    }],
+  });
+  const matched = sameHouseholdParticipantCandidate(db, 'p1', {
+    name: 'תמר שושנה', birthDate: '2017-05-06',
+  });
+  assert.equal(matched?.id, 's1');
+  assert.equal(sameHouseholdParticipantCandidate(db, 'p1', {
+    name: 'תמר שושנה', birthDate: '2017-05-07',
+  }), null);
 });

@@ -62,7 +62,26 @@ export function isClosingAcknowledgement(text) {
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return /^(?:תודה(?:\s+(?:רבה|לכם|לך|ענקית))?|מעולה\s+תודה|סבבה\s+תודה)$/u.test(normalized);
+  return /^(?:תודה(?:\s+(?:רבה|לכם|לך|ענקית))?|מעולה(?:\s+תודה)?|סבבה(?:\s+תודה)?|בסדר(?:\s+תודה(?:\s+רבה)?)?|אוקי(?:\s+תודה)?|אוקיי(?:\s+תודה)?)$/u.test(normalized);
+}
+
+/**
+ * A handoff is a workflow state, not merely a sentence the bot once sent.
+ * It stays open until a person answers from the CRM/connected phone or staff
+ * explicitly resumes the bot. Additional customer bubbles belong to the same
+ * staff task and must not receive another "מעביר לצוות" acknowledgement.
+ */
+export function hasOpenBotHandoff(parent, phone = parent?.phone || '') {
+  const handedAt = Date.parse(parent?.bot_handoff_at || '');
+  if (!Number.isFinite(handedAt)) return false;
+  const normalized = normalizeWaPhone(phone) || phone;
+  return !(db.get('messages') || []).some((message) => {
+    if (message.direction !== 'outbound') return false;
+    if (!phonesMatch(message.phone || '', normalized)) return false;
+    if (Date.parse(message.created_at || '') <= handedAt) return false;
+    return message.is_ai !== true
+      && !['ai', 'bot_control', 'automation', 'template', 'otp'].includes(String(message.source || ''));
+  });
 }
 
 /** Runtime allow/forbid — short bounds, no conversation script. */
@@ -515,7 +534,11 @@ export function describeBotState(parent, settings = {}, now = new Date()) {
 export async function pauseBotForPhone(phone, minutes, { reason = 'human_reply' } = {}) {
   const mins = Math.max(1, Number(minutes) || 1);
   const until = new Date(Date.now() + mins * 60 * 1000).toISOString();
-  const patch = { bot_paused_until: until, bot_pause_reason: reason };
+  const patch = {
+    bot_paused_until: until,
+    bot_pause_reason: reason,
+    ...(reason === 'human_reply' ? { bot_handoff_at: null } : {}),
+  };
   if (reason === 'handoff') patch.bot_handoff_at = new Date().toISOString();
   const updated = await updateParentsForPhone(phone, patch);
   return { until, updated };

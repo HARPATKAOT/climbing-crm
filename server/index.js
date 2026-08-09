@@ -19,6 +19,7 @@ import {
   runNightlySweepIfDue,
   runCentreRegistrationChecks,
   probeGeminiService,
+  recoverUnansweredConversations,
 } from './whatsapp.js';
 import { getAiServiceState } from './aiServiceState.js';
 import { whatsappConnectService } from './whatsappConnect.js';
@@ -17354,6 +17355,16 @@ app.listen(PORT, () => {
   setInterval(() => {
     probeGeminiService().catch((err) => console.error('Gemini recovery probe failed:', err.message));
   }, 5 * 60 * 1000);
+
+  // A webhook can be stored successfully and then lose its worker during a
+  // restart. Revisit only recent, still-unanswered customer text; the ordinary
+  // gate and durable reply claim decide whether a recovery may answer.
+  setTimeout(() => {
+    recoverUnansweredConversations().catch((err) => console.error('unanswered WhatsApp recovery failed:', err.message));
+  }, 40_000);
+  setInterval(() => {
+    recoverUnansweredConversations().catch((err) => console.error('unanswered WhatsApp recovery failed:', err.message));
+  }, 60_000);
 
   // Staff reminders before their own shifts. Every 10 minutes rather than once
   // a day, because the lead time is each employee's own choice — two hours for

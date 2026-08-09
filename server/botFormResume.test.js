@@ -142,6 +142,26 @@ test('חלון 24 השעות סגור — אין הודעה יזומה בטקס�
   });
 });
 
+test('completion of a form stays silent while a staff handoff is still open', async () => {
+  await withWorld({
+    parents: [{ ...PARENT, bot_handoff_at: minutesAgo(12) }],
+    messages: BOT_THREAD,
+  }, async () => {
+    const service = fakeService();
+    const result = await resumeConversationAfterForm({
+      phone: PHONE,
+      studentNames: ['Ram Cohen'],
+      whatsappService: service,
+      now: NOW,
+      isSimulator: true,
+    });
+    assert.equal(result.sent, false);
+    assert.equal(result.reason, 'handoff_pending');
+    assert.equal(service.calls.generated.length, 0);
+    assert.equal(service.calls.sent.length, 0);
+  });
+});
+
 test('botSpokeRecently מבדיל בין שיחה של הבוט לשיחה של אדם', () => {
   assert.equal(botSpokeRecently(BOT_THREAD, PHONE, NOW), true);
   assert.equal(

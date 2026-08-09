@@ -7770,7 +7770,7 @@ export default function Leads({
                           </button>
                         )}
                         {parent?.phone && !isIg ? (
-                          <a href={`https://wa.me/972${parent?.phone?.replace(/^0/, '').replace(/[-\s]/g, '')}`}
+                          <a href={`https://wa.me/${normalizePhone(parent?.phone)}`}
                             target="_blank" rel="noreferrer" className="btn btn-success btn-xs" onClick={(e) => e.stopPropagation()}>
                             💬
                           </a>

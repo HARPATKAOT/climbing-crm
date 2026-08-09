@@ -102,7 +102,7 @@ export const BOT_CAPABILITIES = [
     label: 'קריאת כרטיס המשפחה',
     hint: 'רואה את הילדים כדי לשאול «בשביל מי מהם?»',
     source: 'כרטיס הלקוח והמתאמנים שלו',
-    tools: ['getFamilyCard'],
+    tools: ['getFamilyCard', 'findExistingParticipant'],
   },
   {
     key: 'centre_report',

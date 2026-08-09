@@ -23,6 +23,7 @@ import {
   customerNameWords,
   parseCustomerFullName,
   isClosingAcknowledgement,
+  hasOpenBotHandoff,
 } from './whatsappBot.js';
 import { isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 import { db } from './db.js';
@@ -117,11 +118,32 @@ test('every bot reply is marked, and the mark never stacks', () => {
 });
 
 test('a standalone thank-you closes the exchange without another bot turn', () => {
-  for (const text of ['תודה', 'תודה רבה!', 'מעולה תודה 🙏', 'סבבה תודה']) {
+  for (const text of ['תודה', 'תודה רבה!', 'מעולה תודה 🙏', 'סבבה תודה', 'בסדר, תודה רבה', 'אוקיי תודה']) {
     assert.equal(isClosingAcknowledgement(text), true, text);
   }
   for (const text of ['תודה, באיזה יום האימון?', 'כן תודה', 'תודה אבל לא קיבלתי קישור']) {
     assert.equal(isClosingAcknowledgement(text), false, text);
+  }
+});
+
+test('an open handoff stays open until a human replies', () => {
+  const original = db.get;
+  const handedAt = new Date(Date.now() - 60_000).toISOString();
+  const parent = { phone: '972500000099', bot_handoff_at: handedAt };
+  let rows = [{
+    direction: 'outbound', phone: parent.phone, is_ai: true, source: 'bot_control',
+    created_at: new Date(Date.now() - 50_000).toISOString(),
+  }];
+  db.get = (table) => (table === 'messages' ? rows : original.call(db, table));
+  try {
+    assert.equal(hasOpenBotHandoff(parent), true);
+    rows = [...rows, {
+      direction: 'outbound', phone: parent.phone, is_ai: false, source: 'phone',
+      created_at: new Date().toISOString(),
+    }];
+    assert.equal(hasOpenBotHandoff(parent), false);
+  } finally {
+    db.get = original;
   }
 });
 

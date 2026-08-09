@@ -7,6 +7,7 @@
  * system stays the only source of the numbers, so nothing can be invented.
  */
 import { db } from './db.js';
+import { supa } from './supa.js';
 import { enrichGroupsWithCapacity } from './groupCapacity.js';
 import { groupMatchesGradeLetter } from './groupBands.js';
 import { getSortedGroupDays, groupMeetsOnDay } from './attendanceUtils.js';
@@ -42,7 +43,44 @@ import {
   normalizedName,
   updateInterest,
 } from './activityInterest.js';
+
+/**
+ * Public forms and WhatsApp webhooks can land on different server instances.
+ * Documents are durable immediately, while another instance's memory may be a
+ * few minutes old. Refresh the two canonical document collections before the
+ * bot tells a family that something is missing.
+ */
+async function refreshParticipationDocuments() {
+  if (!supa.isEnabled()) return;
+  const [health, waivers] = await Promise.all([
+    supa.getAll('health_declarations'),
+    supa.getAll('participation_waivers'),
+  ]);
+  if (Array.isArray(health)) db.set('health_declarations', health);
+  if (Array.isArray(waivers)) db.set('participation_waivers', waivers);
+}
+
+async function refreshProgramEligibility() {
+  if (!supa.isEnabled()) return;
+  const rows = await supa.getAll('program_eligibility');
+  if (Array.isArray(rows)) db.set('program_eligibility', rows);
+}
+
+async function refreshExistingParticipantData() {
+  if (!supa.isEnabled()) return;
+  const [parents, students, levels, eligibility] = await Promise.all([
+    supa.getAll('parents'),
+    supa.getAll('students'),
+    supa.getAll('level_tests'),
+    supa.getAll('program_eligibility'),
+  ]);
+  if (Array.isArray(parents)) db.set('parents', parents);
+  if (Array.isArray(students)) db.set('students', students);
+  if (Array.isArray(levels)) db.set('level_tests', levels);
+  if (Array.isArray(eligibility)) db.set('program_eligibility', eligibility);
+}
 import { recordBotAction } from './botActivityLog.js';
+import { normalizedChildName } from './studentGuardians.js';
 import { recordParentReport } from './centreRegistrationChecks.js';
 import { FORM_SHORT, FORM_FULL, FORM_PURPOSE } from './participationForm.js';
 import {
@@ -512,6 +550,20 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         time: { type: 'string', description: 'שעת הקבוצה' },
         frequency: CLASS_FREQUENCY_PROPERTY,
       },
+    },
+  },
+  {
+    name: 'findExistingParticipant',
+    description:
+      'מחפש מתאמן ותיק בשם מלא כאשר הוא עדיין לא מחובר לכרטיס המשפחה הנוכחי. '
+      + 'הכלי מחזיר רק התאמה יחידה ובטוחה לפי שם מלא ושם המשפחה של הפונה, בלי לחשוף פרטי קשר של כרטיס אחר. '
+      + 'יש להשתמש בו כאשר הלקוח אומר שהילד התאמן בעבר, היה בנבחרת/מתקדמים או אמור להמשיך, אך הילד אינו מופיע בכרטיס המשפחה.',
+    parameters: {
+      type: 'object',
+      properties: {
+        childName: { type: 'string', description: 'השם המלא של המתאמן כפי שהלקוח כתב' },
+      },
+      required: ['childName'],
     },
   },
   {
@@ -1426,6 +1478,7 @@ export function buildCustomerTools({
      * wrong document, and a link to fill in everything again.
      */
     getHealthDeclarations: async () => {
+      await refreshParticipationDocuments();
       const link = healthFormUrl(phone);
       if (!parent) return { מתאמנים: [], קישור_למילוי: link, הערה: 'אין כרטיס לקוח' };
       const kids = studentsForParent(parent);
@@ -1534,6 +1587,7 @@ export function buildCustomerTools({
     },
 
     getPlacementEligibility: async ({ childName, grade, band } = {}) => {
+      await refreshProgramEligibility();
       if (!parent) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
       const named = String(childName || '').trim().split(/\s+/)[0];
       const kids = studentsForParent(parent);
@@ -1883,6 +1937,7 @@ export function buildCustomerTools({
     },
 
     getRegistrationPack: async ({ childName, studentId, groupId, grade, band, day, time, frequency } = {}) => {
+      await refreshParticipationDocuments();
       const kids = parent ? studentsForParent(parent) : [];
       const exactId = String(studentId || '').trim();
       const named = String(childName || '').trim();
@@ -1963,7 +2018,48 @@ export function buildCustomerTools({
       return pack;
     },
 
+    findExistingParticipant: async ({ childName } = {}) => {
+      await refreshExistingParticipantData();
+      const fullName = String(childName || '').trim();
+      const wanted = normalizedChildName(fullName);
+      const surname = normalizedChildName(parent?.lastName || String(parent?.name || '').trim().split(/\s+/).slice(-1)[0]);
+      if (!parent || fullName.split(/\s+/).length < 2 || !wanted || !surname) {
+        return { נמצא: false, הערה: 'נדרש שם מלא כדי לחפש מתאמן ותיק בבטחה' };
+      }
+      const matches = (db.get('students') || []).filter((student) => {
+        if (normalizedChildName(student.name) !== wanted) return false;
+        if (!wanted.includes(surname)) return false;
+        const owner = db.getOne('parents', student.parentId);
+        const ownerSurname = normalizedChildName(owner?.lastName || String(owner?.name || '').trim().split(/\s+/).slice(-1)[0]);
+        return ownerSurname === surname;
+      });
+      if (matches.length !== 1) {
+        return {
+          נמצא: false,
+          הערה: matches.length > 1
+            ? 'נמצאו כמה התאמות — אין לנחש ויש להעביר לצוות'
+            : 'לא נמצאה התאמה חד־משמעית',
+        };
+      }
+      const student = matches[0];
+      const latest = latestLevelTest(db, student.id);
+      const eligibility = eligibilityForStudent(db, student.id, { season: currentSeason() });
+      return {
+        נמצא: true,
+        שם: student.name,
+        מגדר: student.gender || 'לא ידוע',
+        מבחן_רמה_אחרון: latest.level || 'לא ידוע',
+        זכאות_למסלולים: eligibility.map((row) => ({
+          מסלול: row.program,
+          סטטוס: row.status,
+          מקור: row.source,
+        })),
+        הערה: 'המתאמן נמצא בכרטיס ותיק שטרם חובר למשפחה הנוכחית. אפשר להסתמך על הרמה והזכאות, אך החיבור עצמו ייעשה לאחר אימות בטופס או בידי הצוות.',
+      };
+    },
+
     getFamilyCard: async () => {
+      await refreshProgramEligibility();
       if (!parent) return { כרטיס: null, הערה: 'אין כרטיס לקוח' };
       // A student record has no band of its own — שכבה used to read a field
       // that does not exist and always came back empty. The band that means

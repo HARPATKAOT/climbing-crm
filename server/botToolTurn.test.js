@@ -379,6 +379,7 @@ test('the tools offered to the model are facts, links and placements — never s
   assert.deepEqual(names, [
     'addActivityInterest',
     'cancelSignup',
+    'findExistingParticipant',
     'getEquipmentInfo',
     'getEquipmentPaymentLink',
     'getEvents',

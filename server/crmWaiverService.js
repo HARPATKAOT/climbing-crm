@@ -62,6 +62,28 @@ function normalizedName(value) {
   return clean(value).replace(/\s+/g, ' ').toLocaleLowerCase('he');
 }
 
+/**
+ * Forms sometimes include the family name although the imported card stores
+ * only the given names (or the opposite). With an exact birth date and the
+ * same household, that suffix difference must update the existing trainee,
+ * not create a second child. Ambiguous candidates are intentionally ignored.
+ */
+export function sameHouseholdParticipantCandidate(db, parentId, input = {}, participantType = 'child') {
+  const birthDate = clean(input.birthDate);
+  const wanted = normalizedName(input.name);
+  if (!birthDate || !wanted) return null;
+  const candidates = (db.get('students') || []).filter((student) => {
+    if (participantType === 'adult' ? student.isAdult !== true : student.isAdult === true) return false;
+    if (String(student.birthDate || '').trim() !== birthDate) return false;
+    const belongs = String(student.parentId || '') === String(parentId)
+      || guardianParentIds(db, student).includes(parentId);
+    if (!belongs) return false;
+    const existing = normalizedName(student.name);
+    return existing === wanted || existing.startsWith(wanted) || wanted.startsWith(existing);
+  });
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
 function wantsReuse(participant) {
   return participant?.reuse_health === true
     || participant?.reuseHealth === true
@@ -545,6 +567,15 @@ export async function saveCrmParticipants({
         if (item.isAdult === true) return false;
         return !input.birthDate || !item.birthDate || item.birthDate === input.birthDate;
       });
+    }
+    if (!student) {
+      student = sameHouseholdParticipantCandidate(db, parent.id, input, participantType);
+    }
+    // Two rows in one family form can resolve to the same canonical trainee
+    // (for example, one with and one without the family-name suffix). Save and
+    // sign that person once, not twice.
+    if (student?.id && savedParticipants.some((saved) => String(saved.student?.id) === String(student.id))) {
+      continue;
     }
     const adultCreatesDocument = participantType === 'adult'
       && !skipDocuments
