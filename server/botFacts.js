@@ -11,7 +11,6 @@
 import { upcomingOpeningHours, upcomingPublicActivities } from './publicSite.js';
 import { appPublicBase, buildRedirectUrl } from './publicLinks.js';
 import {
-  DEFAULT_EQUIPMENT_SETTINGS,
   EQUIPMENT_ITEM_LABELS,
   normalizeEquipmentSettings,
 } from './equipmentService.js';
@@ -21,11 +20,6 @@ import { getSortedGroupDays } from './attendanceUtils.js';
 const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 const SHORT_DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'שבת'];
 
-function shortGroupDaysPhrase(group) {
-  const days = getSortedGroupDays(group).map((day) => SHORT_DAY_NAMES[day]);
-  if (!days.length) return '';
-  return days.length === 1 ? `יום ${days[0]}` : `ימים ${days.join(' ו')}`;
-}
 
 
 
@@ -72,25 +66,7 @@ function dayLabelForDate(dateStr) {
   return `${DAY_NAMES[date.getDay()]} ${date.getDate()}.${date.getMonth() + 1}`;
 }
 
-function slotLabel(slot) {
-  if (slot.all_day) return 'כל היום';
-  const start = String(slot.start_time || '').trim();
-  const end = String(slot.end_time || '').trim();
-  if (start && end) return `${start}–${end}`;
-  return start || end || 'לפי היומן';
-}
 
-/** Next few days that have opening hours in the calendar. '' when none do. */
-export function formatOpeningHoursReply(db, { days = 14, maxDays = 7 } = {}) {
-  const upcoming = upcomingOpeningHours(db, { days }).filter((day) => day.open);
-  if (!upcoming.length) return '';
-  const lines = upcoming.slice(0, maxDays).map((day) => {
-    const times = day.slots.map(slotLabel).join(', ');
-    const note = day.slots.map((s) => s.note).find((n) => n && n !== 'שעות פתיחה');
-    return `📅 ${dayLabelForDate(day.date)} · ${times}${note ? ` (${note})` : ''}`;
-  });
-  return `🕐 שעות הפתיחה הקרובות:\n\n${lines.join('\n')}`;
-}
 
 // ─── אירועים ציבוריים + קישור הרשמה ──────────────────────────────────────────
 
@@ -114,19 +90,6 @@ export function eventDateLabel(activity) {
  * A private birthday has a registration link too, and it must never be quoted
  * here — `upcomingPublicActivities` is what keeps the two apart.
  */
-export function formatPublicEventsReply(db, { limit = 5 } = {}) {
-  const events = upcomingPublicActivities(db, { limit });
-  if (!events.length) return '';
-  const blocks = events.map((event) => {
-    const lines = [`• ${event.name || 'אירוע'} — ${eventDateLabel(event)}`];
-    if (event.location) lines.push(`  📍 ${event.location}`);
-    if (Number(event.price) > 0) lines.push(`  💳 ${Number(event.price)} ₪`);
-    const url = eventPublicUrl(event.slug);
-    if (url) lines.push(`  ${url}`);
-    return lines.join('\n');
-  });
-  return `🎒 מה קרוב אצלנו:\n\n${blocks.join('\n\n')}`;
-}
 
 // ─── מחירים ──────────────────────────────────────────────────────────────────
 
@@ -170,18 +133,6 @@ export async function loadEquipmentInfo() {
 }
 
 
-function groupPriceLine(group) {
-  const week = Number(group.priceWeek) || 0;
-  const twice = Number(group.priceTwice) || 0;
-  if (!week && !twice) return '';
-  const parts = [];
-  if (week) parts.push(`פעם בשבוע ${week} ₪`);
-  if (twice) parts.push(`פעמיים בשבוע ${twice} ₪`);
-  const age = String(group.ageCategory || '').trim();
-  const when = [shortGroupDaysPhrase(group), String(group.time || '').trim()].filter(Boolean).join(' ');
-  const title = [age, when].filter(Boolean).join(' · ') || 'חוג טיפוס';
-  return `• ${title} — ${parts.join(' / ')}`;
-}
 
 /**
  * Single-visit wall entry products from the pricelist category «כניסה».
@@ -207,18 +158,6 @@ export function entryProductsFromPricelist(pricelist = []) {
 }
 
 
-function equipmentLines(prices) {
-  return ['shoes', 'shirt', 'chalk_bag']
-    .filter((item) => Number(prices?.[item]) > 0)
-    .map((item) => {
-      const label = EQUIPMENT_ITEM_LABELS[item];
-      const price = Number(prices[item]);
-      if (item === 'shoes') {
-        return `• ${label} — ${price} ₪ להשכרה לחצי עונה (מי שמצטרף באמצע משלם יחסית)`;
-      }
-      return `• ${label} — ${price} ₪`;
-    });
-}
 
 /**
  * A price answer built only from what the CRM holds. Anything else — מנוי,

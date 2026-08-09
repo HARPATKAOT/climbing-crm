@@ -4,8 +4,6 @@ import assert from 'node:assert/strict';
 import {
   enrichmentFeeFromSettings,
   resolveEnrichmentFee,
-  formatOpeningHoursReply,
-  formatPublicEventsReply,
   inviteLink,
   entryProductsFromPricelist,
   trainerNameForGroup,
@@ -24,71 +22,7 @@ function futureDate(daysAhead) {
 
 // ─── שעות פתיחה ──────────────────────────────────────────────────────────────
 
-test('an empty calendar yields no opening hours to quote', () => {
-  assert.equal(formatOpeningHoursReply(fakeDb({ activities: [] })), '');
-});
-
-test('opening hours are read from the calendar entries', () => {
-  const db = fakeDb({
-    activities: [
-      {
-        type: 'opening_hours',
-        date: futureDate(1),
-        start_time: '16:00',
-        end_time: '21:00',
-        name: 'שעות פתיחה',
-      },
-      // A different activity type on the same day must not leak in.
-      { type: 'birthday', date: futureDate(1), start_time: '10:00', end_time: '12:00' },
-    ],
-  });
-  const reply = formatOpeningHoursReply(db);
-  assert.match(reply, /16:00–21:00/);
-  assert.doesNotMatch(reply, /10:00/);
-});
-
 // ─── אירועים ציבוריים ────────────────────────────────────────────────────────
-
-test('only a published activity is offered, with its registration link', () => {
-  const db = fakeDb({
-    activities: [
-      {
-        id: 'a1',
-        type: 'trip',
-        name: 'טיול לנקיק השחור',
-        date: futureDate(3),
-        start_time: '09:00',
-        price: 200,
-        show_on_site: true,
-        registration_enabled: true,
-        participant_registration_slug: 'abc123',
-      },
-      // Private birthday: it has a live registration link the host shares, and
-      // the bot must never advertise it.
-      {
-        id: 'a2',
-        type: 'birthday',
-        name: 'יום הולדת של נועם',
-        date: futureDate(4),
-        show_on_site: false,
-        registration_enabled: true,
-        participant_registration_slug: 'secret9',
-      },
-    ],
-    activity_registrations: [],
-  });
-  const reply = formatPublicEventsReply(db);
-  assert.match(reply, /טיול לנקיק השחור/);
-  // The address is now the short redirect on our own host; /ev resolves it to
-  // the same public page, and survives the page moving.
-  assert.match(reply, /\/ev\/abc123/);
-  assert.doesNotMatch(reply, /יום הולדת/);
-  assert.doesNotMatch(reply, /secret9/);
-});
-
-test('no published activities means no events reply at all', () => {
-  assert.equal(formatPublicEventsReply(fakeDb({ activities: [] })), '');
-});
 
 // ─── מחירים ──────────────────────────────────────────────────────────────────
 

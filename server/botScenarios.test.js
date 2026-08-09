@@ -762,6 +762,60 @@ test('אין אף מסמך — זה טופס ההשתתפות המלא, עם ה�
   });
 });
 
+// ─── שעות פתיחה ──────────────────────────────────────────────────────────────
+
+const openingHoursOn = (date) => ({
+  id: `oh-${date}`,
+  type: 'opening_hours',
+  name: 'שעות פתיחה',
+  date,
+  start_time: '16:30',
+  end_time: '21:00',
+});
+
+/** מחר ומחרתיים, כדי שהיום עצמו לעולם לא יהיה אחד מהם. */
+function dayAfter(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+test('היום סגור — הכלי אומר את זה במפורש, ולא רק מונה ימים פתוחים', async () => {
+  await withSeed({ activities: [openingHoursOn(dayAfter(2)), openingHoursOn(dayAfter(5))] }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const hours = await tools.getOpeningHours();
+
+    // «אפשר להגיע היום בין 16:30–21:00» נאמר ללקוחה ביום שהקיר סגור, והיא
+    // כמעט הגיעה להחזיר ציוד. השעות היו אמיתיות — היום לא.
+    assert.equal(hours.היום.פתוח, false);
+    assert.equal(hours.היום.שעות, undefined);
+    assert.match(hours.הערה, /היום סגור/);
+    assert.equal(hours.ימים_פתוחים.length, 2);
+    assert.ok(hours.ימים_פתוחים[0].תאריך);
+    assert.match(hours.ימים_פתוחים[0].שעות, /16:30/);
+  });
+});
+
+test('היום פתוח — מותר לומר «היום», עם השעות של היום עצמו', async () => {
+  await withSeed({ activities: [openingHoursOn(dayAfter(0)), openingHoursOn(dayAfter(3))] }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const hours = await tools.getOpeningHours();
+
+    assert.equal(hours.היום.פתוח, true);
+    assert.match(hours.היום.שעות, /16:30–21:00/);
+    assert.match(hours.הערה, /מותר לומר/);
+  });
+});
+
+test('אין שעות ביומן — אין מה לומר, ואין להמציא', async () => {
+  await withSeed({ activities: [] }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const hours = await tools.getOpeningHours();
+    assert.deepEqual(hours.ימים_פתוחים, []);
+    assert.match(hours.הערה, /לא עודכנו/);
+  });
+});
+
 // ─── ציוד ותשלומים חוזרים ────────────────────────────────────────────────────
 
 test('הנעליים הן השכרה לחצי עונה, ודמי ההעשרה הם תשלום שנתי', async () => {

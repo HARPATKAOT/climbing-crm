@@ -24,7 +24,7 @@ import {
   resolveSeasonHalves,
   DEFAULT_EQUIPMENT_SETTINGS,
 } from './equipmentService.js';
-import { upcomingPublicActivities, activityPublicSlug } from './publicSite.js';
+import { upcomingPublicActivities, activityPublicSlug, upcomingOpeningHours } from './publicSite.js';
 import {
   addInterest,
   interestRows,
@@ -47,8 +47,6 @@ import {
   loadEquipmentInfo,
   resolveEnrichmentFee,
   entryProductsFromPricelist,
-  formatOpeningHoursReply,
-  formatPublicEventsReply,
   trainerNameForGroup,
   groupSignupUrl,
   eventPublicUrl,
@@ -979,10 +977,43 @@ export function buildCustomerTools({
       };
     },
 
-    getOpeningHours: async () => ({
-      שעות: formatOpeningHoursReply(db) || '',
-      הערה: formatOpeningHoursReply(db) ? '' : 'לא עודכנו שעות פתיחה ביומן',
-    }),
+    /**
+     * Which days are open, and — said outright — whether today is one of them.
+     *
+     * The paragraph of upcoming days alone let the model answer "אפשר להגיע
+     * היום בין 16:30–21:00" on a day the wall is shut: the hours were real, the
+     * day was not. A customer was about to drive over to return equipment.
+     */
+    getOpeningHours: async () => {
+      const upcoming = upcomingOpeningHours(db);
+      const todayRow = upcoming[0];
+      const openDays = upcoming.filter((day) => day.open).slice(0, 7).map((day) => ({
+        תאריך: spellOutDate(day.date),
+        שעות: day.slots
+          .map((slot) => (slot.all_day ? 'כל היום' : `${slot.start_time}–${slot.end_time}`))
+          .join(', '),
+      }));
+      if (!openDays.length) {
+        return { ימים_פתוחים: [], הערה: 'לא עודכנו שעות פתיחה ביומן' };
+      }
+      return {
+        היום: {
+          תאריך: spellOutDate(todayRow.date),
+          פתוח: !!todayRow?.open,
+          ...(todayRow?.open
+            ? {
+              שעות: todayRow.slots
+                .map((slot) => (slot.all_day ? 'כל היום' : `${slot.start_time}–${slot.end_time}`))
+                .join(', '),
+            }
+            : {}),
+        },
+        ימים_פתוחים: openDays,
+        הערה: todayRow?.open
+          ? 'היום פתוח — מותר לומר «היום» עם השעות שלמעלה.'
+          : 'היום סגור. אין לומר «אפשר להגיע היום» בשום ניסוח — יש לומר מתי הימים הפתוחים הקרובים.',
+      };
+    },
 
     getEvents: async () => {
       // A formatted paragraph was all the model got, so it could describe a trip
