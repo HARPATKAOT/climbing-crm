@@ -8,6 +8,9 @@ import {
   Bookmark,
   RefreshCw,
   CheckCircle2,
+  Check,
+  CheckCheck,
+  AlertCircle,
   Bot,
   PowerOff,
   ChevronDown,
@@ -60,6 +63,32 @@ function LinkifiedMessage({ text }) {
       </React.Fragment>
     );
   });
+}
+
+const BRAND_ORANGE = '#fb923c';
+const DAY_SEPARATOR_LINE = 'rgba(251,146,60,0.35)';
+
+// WhatsApp's own vocabulary, because staff already read it there: one tick
+// sent, two ticks delivered, two blue ticks read. Inbound messages carry a
+// 'received' status that means nothing to a reader — they get no mark at all.
+const DELIVERY_MARKS = {
+  sent: { Icon: Check, color: 'var(--text-3)', label: 'נשלחה' },
+  delivered: { Icon: CheckCheck, color: 'var(--text-3)', label: 'נמסרה' },
+  read: { Icon: CheckCheck, color: '#53BDEB', label: 'נקראה' },
+  failed: { Icon: AlertCircle, color: '#ef4444', label: 'השליחה נכשלה' },
+  undelivered: { Icon: AlertCircle, color: '#ef4444', label: 'לא נמסרה' },
+  error: { Icon: AlertCircle, color: '#ef4444', label: 'שגיאת שליחה' },
+};
+
+function DeliveryMark({ status }) {
+  const mark = DELIVERY_MARKS[String(status || '').toLowerCase()];
+  if (!mark) return null;
+  const { Icon, color, label } = mark;
+  return (
+    <span title={label} style={{ display: 'inline-flex', flexShrink: 0 }}>
+      <Icon size={14} style={{ color }} aria-label={label} />
+    </span>
+  );
 }
 
 // The local calendar day a message belongs to. Not the ISO date — that one
@@ -1249,19 +1278,20 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                       width: '100%',
                       margin: '4px 0',
                     }}>
-                      <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                      <div style={{ flex: 1, height: 1, background: DAY_SEPARATOR_LINE }} />
                       <span style={{
-                        fontSize: 10,
-                        color: 'var(--text-3)',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: BRAND_ORANGE,
                         whiteSpace: 'nowrap',
                         padding: '2px 10px',
                         borderRadius: 999,
-                        border: '1px solid var(--border)',
+                        border: `1px solid ${DAY_SEPARATOR_LINE}`,
                         background: 'var(--bg-card)',
                       }}>
                         {messageDayLabel(m.created_at)}
                       </span>
-                      <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                      <div style={{ flex: 1, height: 1, background: DAY_SEPARATOR_LINE }} />
                     </div>
                   )}
                   <div
@@ -1305,13 +1335,25 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                         <LinkifiedMessage text={m.body || m.message || m.text} />
                       </div>
                     )}
-                    <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4 }}>
+                    <div style={{
+                      fontSize: 12,
+                      color: 'var(--text-3)',
+                      marginTop: 4,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4,
+                    }}>
                       {/* Only the clock — the day is on the separator above. */}
-                      {m.created_at
-                        ? new Date(m.created_at).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })
-                        : ''}
-                      {m.status && m.status !== 'deleted' ? ` · ${m.status}` : ''}
-                      {m.edited_at && !(m.deleted_at || m.status === 'deleted') ? ' · נערכה' : ''}
+                      <span>
+                        {m.created_at
+                          ? new Date(m.created_at).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })
+                          : ''}
+                      </span>
+                      {m.edited_at && !(m.deleted_at || m.status === 'deleted') ? <span>· נערכה</span> : null}
+                      {/* Ticks belong to messages we sent; an incoming one has nothing to report. */}
+                      {!inbound && m.status !== 'deleted' && !m.deleted_at && (
+                        <DeliveryMark status={m.status} />
+                      )}
                     </div>
                     {m.is_ai && m.id && !(m.deleted_at || m.status === 'deleted') && (
                       <div style={{ marginTop: 6 }}>
