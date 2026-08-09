@@ -281,7 +281,8 @@ const SEED_DATA = {
     aiAudienceMode: 'all',
     aiHistoryCount: 8,
     aiMaxReplyChars: 700,
-    aiReplyDelayMs: 800,
+    // Wait for a short run of WhatsApp bubbles, then answer the whole run once.
+    aiReplyDelayMs: 7_000,
     aiRateLimitPerHour: 20,
     // These seed values win over DEFAULT_BOT_SETTINGS (getSettings spreads the
     // seed first), so they must stay in step with whatsappBot.js.

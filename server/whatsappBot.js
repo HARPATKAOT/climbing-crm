@@ -77,7 +77,8 @@ export const DEFAULT_BOT_SETTINGS = {
   aiAudienceMode: 'all',
   aiHistoryCount: 8,
   aiMaxReplyChars: 700,
-  aiReplyDelayMs: 800,
+  // Quiet window after the customer's last bubble. A new bubble resets it.
+  aiReplyDelayMs: 7_000,
   aiRateLimitPerHour: 20,
   aiKnowledgeBase:
     'שאלות נפוצות:\n'

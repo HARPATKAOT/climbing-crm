@@ -9,6 +9,10 @@ import {
   releaseInboundMetaId,
 } from './channels/messageStore.js';
 import {
+  InboundBurstCoordinator,
+  markInboundBurstForModel,
+} from './inboundBurst.js';
+import {
   getSortedGroupDays,
   israelDateStr,
   israelHour,
@@ -86,6 +90,7 @@ const MODEL_UNAVAILABLE_REPLY = 'קיבלנו 🙏\nמעביר לצוות שלנ
 export { israelClockParts, isBotEnabled, shouldAiAutoReply };
 
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v25.0';
+const inboundCustomerBursts = new InboundBurstCoordinator();
 
 /**
  * What a staff number may ask over WhatsApp: who a customer is, when a trainee
@@ -810,6 +815,13 @@ export const whatsappService = {
     // confident sentence nobody had checked.
     if (hasModel) {
       const historyLimit = normalizeHistoryLimit(settings.aiHistoryCount, 8);
+      const fullHistory = phone ? getChatHistoryMessages(phone, historyLimit) : [];
+      const burstCount = Math.max(0, Math.trunc(Number(context.inboundBurstCount) || 0));
+      // The burst is supplied below as the current turn. Leaving its individual
+      // bubbles in history as well repeats every sentence twice to the model.
+      const priorHistory = burstCount > 1
+        ? fullHistory.slice(0, Math.max(0, fullHistory.length - burstCount))
+        : fullHistory;
       // The knowledge base, the bounds rules and the approved learned examples
       // all reach the model — a parking question is answered from the knowledge
       // base, and the learning loop feeds back in here.
@@ -825,7 +837,7 @@ export const whatsappService = {
           BOT_BOUNDS_RULES,
           learnedBlock,
         ].filter(Boolean).join('\n\n'),
-        history: historyToContents(phone ? getChatHistoryMessages(phone, historyLimit) : []),
+        history: historyToContents(priorHistory),
         incomingText,
         settings,
         parent,
@@ -931,7 +943,9 @@ export const whatsappService = {
       });
       return { success: true, text };
     }
-    return whatsappService.sendTextMessage(phone, text, true, { source });
+    // Live inbound handling already waited for the customer's quiet window.
+    // Waiting again here made the reply feel slow without collecting anything.
+    return whatsappService.sendTextMessage(phone, text, true, { source, skipDelay: true });
   },
 
   // Process incoming messages (webhook entrypoint / simulator)
@@ -1046,6 +1060,55 @@ export const whatsappService = {
     let students = studentsForParent(parent);
     const settings = await loadBrandedBotSettings();
 
+    if (!text) {
+      return { parent, student, isNew, replied: false, skippedReason: 'empty' };
+    }
+
+    // Reactions are conversation metadata, not a customer question. They must
+    // not reset a real text burst or turn a thumbs-up into part of the prompt.
+    const isReaction = String(meta.type || '') === 'reaction'
+      || /^ריאקציה:\s*/u.test(String(text || '').trim());
+    if (isReaction) {
+      return { parent, student, isNew, replied: false, skippedReason: 'reaction' };
+    }
+
+    let inboundBurst = null;
+    const fixedCentreConversation = isCapabilityEnabled(settings, 'centre_report')
+      && isCentrePhone(settings, normalizedPhone);
+    const shouldCollectBurst = !isSimulator
+      && !isStaffPhone(settings, normalizedPhone)
+      && !fixedCentreConversation;
+
+    if (shouldCollectBurst) {
+      // Hard silence states do not need to hold a webhook open for the quiet
+      // window. Text-dependent actions (opt-out, handoff, ordinary replies)
+      // are deliberately decided only after the complete burst is available.
+      const earlyGate = decideBotGate(settings, parent, students, text, { isSimulator });
+      if (earlyGate.action === 'silence') {
+        console.log(`🤖 Bot silence (${earlyGate.reason}) for ${normalizedPhone}`);
+        return { parent, student, isNew, replied: false, skippedReason: earlyGate.reason };
+      }
+
+      inboundBurst = await inboundCustomerBursts.push(normalizedPhone, {
+        text,
+        messageId: metaMessageId,
+        type: meta.type || 'text',
+        createdAt: inboundAt,
+      }, { quietMs: settings.aiReplyDelayMs });
+
+      if (!inboundBurst.leader) {
+        return {
+          parent,
+          student,
+          isNew,
+          replied: false,
+          skippedReason: 'burst_superseded',
+          burstCount: 0,
+        };
+      }
+      text = inboundBurst.text || text;
+    }
+
     // הצעות פעולה לצוות — רקע בלבד, לעולם לא מעכב את התשובה ללקוח.
     if (text && !isSimulator) {
       Promise.resolve(runConversationAnalysis(normalizedPhone, { parent, students, auto: true }))
@@ -1060,19 +1123,6 @@ export const whatsappService = {
     // has filled in nothing. That automation belongs to the intake form, and
     // the form fires it. Somebody saying hello on WhatsApp gets the bot's own
     // greeting, which is the whole point of the bot.
-
-    if (!text) {
-      return { parent, student, isNew, replied: false, skippedReason: 'empty' };
-    }
-
-    // Reactions are conversation metadata, not a customer question. Detect
-    // them before staff routing and before the hours gate, otherwise a reaction
-    // outside opening hours receives an automatic "we are closed" reply.
-    const isReaction = String(meta.type || '') === 'reaction'
-      || /^ריאקציה:\s*/u.test(String(text || '').trim());
-    if (isReaction) {
-      return { parent, student, isNew, replied: false, skippedReason: 'reaction' };
-    }
 
     // A media-only message cannot be read by the model. It still obeys hard
     // silence states (bot off, opt-out, an active human thread), but it should
@@ -1163,7 +1213,7 @@ export const whatsappService = {
       return { parent, student, isNew, replied: true, reply: gate.reply, reason: 'handoff' };
     }
 
-    let aiIncomingText = text;
+    let aiIncomingText = inboundBurst?.modelText || text;
 
     // Identity collection is not optional, and it runs before the model.
     // A trainee writing from their known personal phone is already identified;
@@ -1200,7 +1250,11 @@ export const whatsappService = {
       }
       parent = nameCapture.parent || findPrimaryParent(normalizedPhone) || parent;
       students = studentsForParent(parent);
-      aiIncomingText = nameCapture.pendingMessage || text;
+      const pendingText = nameCapture.pendingMessage || text;
+      aiIncomingText = markInboundBurstForModel(
+        pendingText,
+        inboundBurst?.items?.length || 1
+      );
     }
 
     const speaker = matchedVia === 'child_phone' ? student : null;
@@ -1210,7 +1264,22 @@ export const whatsappService = {
       students,
       speaker,
       isSimulator,
+      inboundBurstCount: inboundBurst?.items?.length || 0,
     });
+    // The customer may add one last bubble while the model is composing. The
+    // newer handler owns the answer; sending this stale draft would recreate
+    // the exact multi-reply problem the quiet window is meant to solve.
+    if (inboundBurst
+      && !inboundCustomerBursts.isCurrent(normalizedPhone, inboundBurst.generation)) {
+      return {
+        parent,
+        student,
+        isNew,
+        replied: false,
+        skippedReason: 'burst_superseded_during_reply',
+        burstCount: inboundBurst.items.length,
+      };
+    }
     if (aiResult.handoff) {
       await recordBotHandoff(normalizedPhone);
       // Prefer the model's natural wording; canned ack only when empty.

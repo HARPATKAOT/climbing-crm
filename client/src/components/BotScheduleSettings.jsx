@@ -143,15 +143,18 @@ export default function BotScheduleSettings({ settings, setSettings, disabled = 
             />
           </div>
           <div className="form-group">
-            <label className="form-label" style={{ fontSize: 11 }}>עיכוב לפני תשובה (אלפיות שנייה)</label>
+            <label className="form-label" style={{ fontSize: 11 }}>המתנה לשקט בין הודעות (אלפיות שנייה)</label>
             <input
               className="input input-sm"
               type="number"
               min={0}
               max={10000}
-              value={settings.aiReplyDelayMs ?? 800}
+              value={settings.aiReplyDelayMs ?? 7000}
               onChange={(e) => patch('aiReplyDelayMs', Number(e.target.value))}
             />
+            <div className="text-muted" style={{ fontSize: 10, marginTop: 4 }}>
+              כל הודעה חדשה מאפסת את הטיימר. בסיומו הבוט עונה פעם אחת על כל הרצף.
+            </div>
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label" style={{ fontSize: 11 }}>הודעות היסטוריה לבינה</label>
