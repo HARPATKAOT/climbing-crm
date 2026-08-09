@@ -1839,7 +1839,14 @@ function EmployeeFormModal({
             </div>
 
             {saveError && (
-              <div style={{ fontSize: 13, color: 'var(--red)' }}>{saveError}</div>
+              <div
+                className="alert alert-error"
+                role="alert"
+                style={{ fontSize: 13, display: 'flex', flexDirection: 'column', gap: 3 }}
+              >
+                <strong>השמירה לא הושלמה</strong>
+                <span>{saveError}</span>
+              </div>
             )}
 
             <div style={{
@@ -2388,6 +2395,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
   const [staffAttBusy, setStaffAttBusy] = useState(false);
   const [staffAttMsg, setStaffAttMsg] = useState('');
   const [selectedEmployee, setSelectedEmployee] = useState(null);
+  const [employeeSaveNotice, setEmployeeSaveNotice] = useState(null);
   // תיק העובד מחולק ללשוניות; פרטים, שכר, משמרות, תעודות והתראות — כל אחד עולם בפני עצמו.
   const [drawerTab, setDrawerTab] = useState('file'); // file | wage | shifts | certs | alerts
   const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
@@ -2401,10 +2409,19 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
   // כדי שלחיצה מתשלום חודשי תוכל לפתוח ישר במשמרות בלי שיאופס לתיק אישי.
   const openEmployeeDrawer = (emp, tab = 'file') => {
     if (!emp) return;
+    setEmployeeSaveNotice(null);
     setAvatarPickerOpen(false);
     setDrawerTab(tab);
     setSelectedEmployee(emp);
   };
+
+  // האישור נשאר מחוץ לטופס עצמו: כך הוא לא נעלם כשהוספת עובד חדש גורמת
+  // לטופס להיטען מחדש עם המזהה שקיבל מהשרת.
+  useEffect(() => {
+    if (!employeeSaveNotice) return undefined;
+    const timer = window.setTimeout(() => setEmployeeSaveNotice(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [employeeSaveNotice]);
 
   useEffect(() => {
     setAvatarPickerOpen(false);
@@ -2710,6 +2727,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
   }, [roleCatalog, employees]);
 
   const handleSaveEmployee = async (data) => {
+    setEmployeeSaveNotice(null);
     const { _pendingFiles = {}, _wage = null, ...payload } = data;
     const isEdit = employees.some(e => e.id === payload.id);
     const previousDocs = isEdit
@@ -2784,6 +2802,10 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
     if (!selectedEmployee?.id || selectedEmployee.id === saved.id) {
       setSelectedEmployee(saved);
     }
+    setEmployeeSaveNotice({
+      id: Date.now(),
+      message: isEdit ? 'השינויים נשמרו בהצלחה' : 'העובד נוסף ונשמר בהצלחה',
+    });
     return saved;
   };
 
@@ -3092,7 +3114,11 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
             </div>
             <button
               className="btn btn-ghost btn-icon btn-sm"
-              onClick={() => { setSelectedEmployee(null); setAvatarPickerOpen(false); }}
+              onClick={() => {
+                setSelectedEmployee(null);
+                setAvatarPickerOpen(false);
+                setEmployeeSaveNotice(null);
+              }}
             >
               <X size={16} />
             </button>
@@ -3151,6 +3177,27 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
               </button>
             ))}
           </div>
+
+          {employeeSaveNotice && (
+            <div
+              key={employeeSaveNotice.id}
+              className="alert alert-success"
+              role="status"
+              aria-live="polite"
+              style={{
+                marginBottom: 14,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                fontWeight: 700,
+                flexShrink: 0,
+              }}
+            >
+              <Check size={17} aria-hidden="true" />
+              {employeeSaveNotice.message}
+            </div>
+          )}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14, flex: 1, overflowY: 'auto' }}>
 
