@@ -1,19 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, User, Users, X } from 'lucide-react';
-import { buildLeadEntries, normalizePhone } from '../utils/leadUtils.js';
+import { buildLeadEntries, matchesLeadSearch } from '../utils/leadUtils.js';
 
 const MAX_RESULTS = 8;
-
-function searchableText(entry) {
-  const { student, parent } = entry;
-  return [
-    student?.name,
-    parent?.name,
-    parent?.phone,
-    normalizePhone(parent?.phone),
-    parent?.email,
-  ].filter(Boolean).join(' ').toLocaleLowerCase('he');
-}
 
 export default function GlobalSearch({ students = [], parents = [], onOpen }) {
   const [query, setQuery] = useState('');
@@ -24,15 +13,11 @@ export default function GlobalSearch({ students = [], parents = [], onOpen }) {
   const results = useMemo(() => {
     const trimmed = query.trim().toLocaleLowerCase('he');
     if (!trimmed) return [];
-    const normalized = normalizePhone(trimmed);
     const seen = new Set();
     // A global search should find every customer, archived included — it's the
     // one place staff can reach someone who isn't on any working list anymore.
     return buildLeadEntries(students, parents, { includeArchived: true })
-      .filter((entry) => {
-        const haystack = searchableText(entry);
-        return haystack.includes(trimmed) || (normalized && haystack.includes(normalized));
-      })
+      .filter((entry) => matchesLeadSearch(entry, trimmed))
       .filter((entry) => {
         const key = String(entry.key);
         if (seen.has(key)) return false;
