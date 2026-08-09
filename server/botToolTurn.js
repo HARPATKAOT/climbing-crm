@@ -290,6 +290,28 @@ function textOf(content) {
 }
 
 /**
+ * A group-suitability question can depend on professional knowledge that is not
+ * represented by grade/age in the CRM. When the model correctly hands it to a
+ * person, a generic "we got it" acknowledgement hides the important fact that
+ * the bot does not know the answer. Make that limitation explicit without
+ * changing handoffs for refunds, cancellations and other human-only topics.
+ */
+export function explicitGroupSuitabilityHandoff(incomingText, fallbackText = '') {
+  const incoming = String(incomingText || '').trim();
+  const asksWhichGroup = /(?:לאיז(?:ו|ה)\s+קבוצה|איזו\s+קבוצה|לאיזו\s+מסגרת)/u.test(incoming);
+  const asksWhatFits = /(?:למה|לְמה)\s+[^?!.]{1,60}\s+מתאי(?:ם|מה)|מתאי(?:ם|מה)\s+לאיז(?:ו|ה)\s+קבוצה/u.test(incoming);
+  if (!asksWhichGroup && !asksWhatFits) return String(fallbackText || '').trim();
+
+  const nameMatch = incoming.match(/(?:לאיז(?:ו|ה)\s+קבוצה|(?:למה|לְמה))\s+([\p{L}'״׳-]{2,24})\s+מתאי(?:ם|מה)/u);
+  const possibleName = String(nameMatch?.[1] || '').trim();
+  const name = /^(?:הוא|היא|הילד|הילדה|המתאמן|המתאמנת)$/u.test(possibleName) ? '' : possibleName;
+  const missingFact = name
+    ? `אני לא יודע לאיזו קבוצה ${name} מתאים, ולכן אני מעביר את השאלה לצוות שלנו.`
+    : 'אני לא יודע מהי הקבוצה המתאימה במקרה הזה, ולכן אני מעביר את השאלה לצוות שלנו.';
+  return `${missingFact}\nמישהו מהצוות יחזור אליכם בהקדם.`;
+}
+
+/**
  * @returns {{ text: string, handoff: boolean, toolsUsed: string[], reason: string }}
  */
 export async function runCustomerToolTurn({
@@ -409,7 +431,10 @@ export async function runCustomerToolTurn({
         };
       }
 
-      return { text, handoff, unsure, toolsUsed, reason: 'ok' };
+      const customerText = handoff
+        ? explicitGroupSuitabilityHandoff(incoming, text)
+        : text;
+      return { text: customerText, handoff, unsure, toolsUsed, reason: 'ok' };
     }
 
     contents.push(content);

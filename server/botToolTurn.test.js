@@ -7,6 +7,7 @@ import {
   unknownUrlsInReply,
   unbackedReplyClaims,
   CUSTOMER_TOOL_RULES,
+  explicitGroupSuitabilityHandoff,
   confirmsLastBotQuestion,
   separateMultiChildGradeQuestion,
 } from './botToolTurn.js';
@@ -54,6 +55,28 @@ test('HANDOFF on the first line marks the turn for the team', async () => {
   });
   assert.equal(turn.handoff, true);
   assert.equal(turn.text, 'מעביר את זה לצוות, הם יחזרו אליך.');
+});
+
+test('a group-suitability handoff says plainly that the bot does not know', async () => {
+  const turn = await runCustomerToolTurn({
+    incomingText: "היי, לאיזו קבוצה רועי מתאים שנה הבאה בכיתה ה'?",
+    apiKey: 'test-key',
+    callModel: scriptedModel([textReply('HANDOFF\nקיבלנו 🙏 מעביר לצוות שלנו — מישהו יחזור אליכם בהקדם.')]),
+  });
+
+  assert.equal(turn.handoff, true);
+  assert.equal(
+    turn.text,
+    'אני לא יודע לאיזו קבוצה רועי מתאים, ולכן אני מעביר את השאלה לצוות שלנו.\n'
+      + 'מישהו מהצוות יחזור אליכם בהקדם.'
+  );
+});
+
+test('the transparent wording is limited to group suitability questions', () => {
+  assert.equal(
+    explicitGroupSuitabilityHandoff('אני רוצה החזר', 'מעביר את בקשת ההחזר לצוות.'),
+    'מעביר את בקשת ההחזר לצוות.'
+  );
 });
 
 test('an UNSURE prefix is stripped and is not a handoff', async () => {
