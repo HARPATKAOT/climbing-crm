@@ -197,16 +197,20 @@ test('ממשיך מהעונה הקודמת נכנס לנבחרת בלי לפתו
     signupLinkTwice: 'https://centre.example/returning-squad',
   };
   const returning = childYotam({
-    id: 's-returning', name: 'עידו גרינברג', status: 'past_registered', birthDate: '2010-05-01',
+    id: 's-returning', name: 'עידו גרינברג', gender: 'male', status: 'past_registered', birthDate: '2010-05-01',
+  });
+  const returningGirl = childYotam({
+    id: 's-returning-girl', name: 'עלמה גרינברג', gender: 'female', status: 'past_registered', birthDate: '2010-06-01',
   });
   await withSeed({
     groups: [squad],
-    students: [returning],
-    health_declarations: [declarationFor(returning.id)],
-    participation_waivers: [waiverFor(returning.id)],
-    program_eligibility: [{
-      id: 'pe-returning', student_id: returning.id, program: 'adult_squad', season: '2026-27', status: 'returning',
-    }],
+    students: [returning, returningGirl],
+    health_declarations: [declarationFor(returning.id), declarationFor(returningGirl.id)],
+    participation_waivers: [waiverFor(returning.id), waiverFor(returningGirl.id)],
+    program_eligibility: [
+      { id: 'pe-returning', student_id: returning.id, program: 'adult_squad', season: '2026-27', status: 'returning' },
+      { id: 'pe-returning-girl', student_id: returningGirl.id, program: 'adult_squad', season: '2026-27', status: 'returning' },
+    ],
   }, async () => {
     const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
     const approval = await tools.requestPlacementApproval({
@@ -214,7 +218,14 @@ test('ממשיך מהעונה הקודמת נכנס לנבחרת בלי לפתו
     });
     assert.equal(approval.נדרש_אישור, false, JSON.stringify(approval));
     assert.equal(approval.זכאי_לשיבוץ_ישיר, true);
+    assert.equal(approval.להמשיך_לשיבוץ, true);
+    assert.equal(approval.אישור_ללקוח, 'עידו מאושר להרשמה לנבחרת');
+    assert.doesNotMatch(JSON.stringify(approval), /startSignup|כבר קיימת זכאות/);
     assert.equal((db.get('placement_requests') || []).length, 0);
+    const girlApproval = await tools.requestPlacementApproval({
+      childName: returningGirl.name, band: 'תיכון', frequency: 'פעמיים בשבוע',
+    });
+    assert.equal(girlApproval.אישור_ללקוח, 'עלמה מאושרת להרשמה לנבחרת');
 
     const signup = await tools.startSignup({
       childName: returning.name,

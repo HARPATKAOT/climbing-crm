@@ -19,6 +19,7 @@ import {
   evaluateProgramCandidate,
   isRestrictedGroup,
   latestLevelTest,
+  programForGroup,
   requestProgramApproval,
 } from './placementEligibility.js';
 import { studentsForParent, updateCustomerFullName } from './whatsappBot.js';
@@ -1647,13 +1648,17 @@ export function buildCustomerTools({
       }
       const direct = canPlaceInRestrictedGroup(db, child.student, picked.group);
       if (direct.allowed && ['returning', 'approved'].includes(direct.reason)) {
+        const firstName = String(child.student.name || '').trim().split(/\s+/)[0] || 'המתאמן';
+        const feminine = ['female', 'נקבה', 'בת'].includes(String(child.student.gender || '').trim().toLowerCase());
+        const programLabel = programForGroup(picked.group) === 'advanced' ? 'לקבוצת המתקדמים' : 'לנבחרת';
         return {
           נדרש_אישור: false,
           זכאי_לשיבוץ_ישיר: true,
+          להמשיך_לשיבוץ: true,
           מתאמן: child.student.name || '',
           קבוצה: describeGroup(picked.group),
           סטטוס_זכאות: direct.reason,
-          הערה: 'כבר קיימת זכאות למסלול. אין לפתוח בקשת אישור ואין לומר שממתינים לצוות; יש להמשיך עכשיו ל-startSignup לאחר שהלקוח בחר בקבוצה.',
+          אישור_ללקוח: `${firstName} ${feminine ? 'מאושרת' : 'מאושר'} להרשמה ${programLabel}`,
         };
       }
       const result = await requestProgramApproval(db, persistCore, {
