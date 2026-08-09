@@ -5633,3 +5633,33 @@ select option, select optgroup {
   color: var(--text-3);
   cursor: default;
 }
+
+/* „סה״כ ימים” — קריאה בלבד, ולכן נראה כמו ערך ולא כמו שדה שאפשר להקליד בו. */
+.activity-day-count {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-1);
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.activity-day-count small {
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* תאריך, תאריך סיום וסה״כ ימים בשורה אחת — הספירה שייכת לצד התאריכים
+   שממנה היא נגזרת, לא לשורה משל עצמה. */
+.activity-settings-grid--dates {
+  grid-template-columns: 1fr 1fr 0.6fr;
+}
+
+@media (max-width: 560px) {
+  .activity-settings-grid--dates { grid-template-columns: 1fr 1fr; }
+}

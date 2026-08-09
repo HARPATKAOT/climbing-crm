@@ -1666,7 +1666,7 @@ function RegularActivityModal({
               </div>
 
               {!isTemplateEdit && (
-                <div className="activity-settings-grid">
+                <div className="activity-settings-grid activity-settings-grid--dates">
                   <label>
                     <span className="activity-settings-label">תאריך</span>
                     <input
@@ -1689,6 +1689,15 @@ function RegularActivityModal({
                       disabled={readOnly}
                     />
                   </label>
+                  {/* כמה ימים זה יוצא בפועל. בטווח של שבוע וחצי אף אחד לא סופר
+                      בראש נכון, וזה המספר שמחיר היום הבודד מוכפל בו. */}
+                  <div data-optional>
+                    <span className="activity-settings-label">סה״כ ימים</span>
+                    <div className="activity-day-count">
+                      {eventDayCount}
+                      <small>{eventDayCount === 1 ? 'יום' : 'ימים'}</small>
+                    </div>
+                  </div>
                 </div>
               )}
 
