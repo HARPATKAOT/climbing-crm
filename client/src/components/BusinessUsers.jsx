@@ -51,6 +51,7 @@ function roleVisual(role = {}) {
   const name = String(role.name || '');
   if (id === 'owner') return { Icon: ShieldCheck, tone: 'owner' };
   if (id === 'employee') return { Icon: Briefcase, tone: 'employee' };
+  if (id === 'wall-station') return { Icon: Monitor, tone: 'wall' };
   if (id === 'operations' || id === 'operations-manager') return { Icon: Settings2, tone: 'operations' };
   if (id === 'instructor' || /מדריך|הדרכה/.test(name)) return { Icon: GraduationCap, tone: 'instructor' };
   if (id === 'safety-officer' || /בטיחות/.test(name)) return { Icon: ShieldCheck, tone: 'safety' };
@@ -98,7 +99,7 @@ export default function BusinessUsers() {
   const [moduleCatalog, setModuleCatalog] = useState([]);
   const [sensitiveCatalog, setSensitiveCatalog] = useState([]);
   const [selectedRoleId, setSelectedRoleId] = useState('');
-  const [form, setForm] = useState({ name: '', email: '', role_ids: [] });
+  const [form, setForm] = useState({ name: '', email: '', account_type: 'personal', role_ids: [] });
   const [newRoleName, setNewRoleName] = useState('');
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [replacementRoleId, setReplacementRoleId] = useState('');
@@ -124,6 +125,7 @@ export default function BusinessUsers() {
     const employeeRole = roles.find((role) => role.id === 'employee');
     return employeeRole ? [employeeRole, ...assignableRoles] : assignableRoles;
   }, [roles, assignableRoles]);
+  const wallStationRole = roles.find((role) => role.id === 'wall-station') || null;
   const selectedRole = roles.find((role) => role.id === selectedRoleId) || roles[0] || null;
   const groupedModules = useMemo(() => {
     const groups = new Map();
@@ -270,20 +272,23 @@ export default function BusinessUsers() {
     setError('');
     setMessage('');
     try {
-      const employeeAccessRequested = form.role_ids.includes('employee');
+      const sharedStation = form.account_type === 'shared_station';
+      const employeeAccessRequested = !sharedStation && form.role_ids.includes('employee');
       const response = await fetch('/api/settings/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...form,
-          role_ids: form.role_ids.filter((roleId) => roleId !== 'employee'),
+          role_ids: sharedStation
+            ? ['wall-station']
+            : form.role_ids.filter((roleId) => roleId !== 'employee' && roleId !== 'wall-station'),
           employee_access_requested: employeeAccessRequested,
         }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || 'שליחת ההזמנה נכשלה');
-      setForm({ name: '', email: '', role_ids: [] });
-      flash(`הזמנה נשלחה אל ${body.email}`);
+      setForm({ name: '', email: '', account_type: 'personal', role_ids: [] });
+      flash(sharedStation ? `עמדת הקיר הוזמנה בכתובת ${body.email}` : `הזמנה נשלחה אל ${body.email}`);
       await load();
     } catch (err) {
       setError(err.message || 'שליחת ההזמנה נכשלה');
@@ -319,7 +324,10 @@ export default function BusinessUsers() {
   };
 
   const removeAccess = async (user) => {
-    if (!window.confirm(`להסיר את ${user.name} מרשימת המשתמשים המורשים?\n\nהכניסה ל־CRM תבוטל, אך תיק העובד, המשמרות והמסמכים לא יימחקו. ניתן להזמין את המשתמש מחדש בעתיד.`)) return;
+    const retainedData = user.account_type === 'shared_station'
+      ? 'הכניסה ל־CRM מהמחשב תבוטל. נתוני העובדים והפעולות שכבר בוצעו יישארו שמורים.'
+      : 'הכניסה ל־CRM תבוטל, אך תיק העובד, המשמרות והמסמכים לא יימחקו.';
+    if (!window.confirm(`להסיר את ${user.name} מרשימת המשתמשים המורשים?\n\n${retainedData} ניתן להזמין מחדש בעתיד.`)) return;
     setBusyId(`user:${user.id}`);
     setError('');
     try {
@@ -468,7 +476,11 @@ export default function BusinessUsers() {
           <div className="business-role-sidebar-head"><strong>תפקידים</strong><span>{roles.length}</span></div>
           {roles.map((role) => (
             <button type="button" key={role.id} className={selectedRole?.id === role.id ? 'is-active' : ''} onClick={() => setSelectedRoleId(role.id)}>
-              <span><RoleIcon role={role} />{role.name}{role.id === 'employee' && <small>אוטומטי</small>}</span>{role.locked && <ShieldCheck size={13} />}
+              <span>
+                <RoleIcon role={role} />{role.name}
+                {role.id === 'employee' && <small>אוטומטי</small>}
+                {role.id === 'wall-station' && <small>עמדה</small>}
+              </span>{role.locked && <ShieldCheck size={13} />}
             </button>
           ))}
           <form className="business-role-create-stacked" onSubmit={createRole}>
@@ -484,7 +496,13 @@ export default function BusinessUsers() {
                 {selectedRole.locked
                   ? <h3><RoleIcon role={selectedRole} size={18} /> {selectedRole.name}</h3>
                   : <div className="business-role-name-edit"><RoleIcon role={selectedRole} size={17} /><input className="input business-role-name-input" value={selectedRole.name} onChange={(event) => updateRoleDraft(selectedRole.id, { name: event.target.value })} /></div>}
-                <p>{selectedRole.id === 'employee' ? 'גישה אוטומטית לתיק העובד האישי בלבד.' : selectedRole.id === 'owner' ? 'גישה מלאה וקבועה לכל המערכת.' : 'בחרו רמת גישה לכל תחום.'}</p>
+                <p>{selectedRole.id === 'employee'
+                  ? 'גישה אוטומטית לתיק העובד האישי בלבד.'
+                  : selectedRole.id === 'owner'
+                    ? 'גישה מלאה וקבועה לכל המערכת.'
+                    : selectedRole.id === 'wall-station'
+                      ? 'גישה תפעולית קבועה למחשב המשותף של הקיר — ללא תיק עובד.'
+                      : 'בחרו רמת גישה לכל תחום.'}</p>
               </div>
               {!selectedRole.locked && <div className="business-role-editor-actions">
                 <button className="btn btn-ghost is-danger" type="button" onClick={() => { setDeleteTarget(selectedRole); setReplacementRoleId(''); }}><Trash2 size={14} /> מחיקה</button>
@@ -503,6 +521,9 @@ export default function BusinessUsers() {
                 <p>אין צורך לבחור את התפקיד „עובד” — הוא מזוהה אוטומטית. אפשר לצרף גם תפקידים נוספים, כמו מדריך חוגים או אחראי בטיחות.</p>
               </div>
               <a className="btn btn-primary btn-sm" href="/employees"><ExternalLink size={14} /> פתיחת עובדים ומשמרות</a>
+            </div> : selectedRole.id === 'wall-station' ? <div className="business-role-system-note is-wall-station">
+              <Monitor size={20} />
+              <span><strong>עמדה משותפת, לא עובד.</strong> מאפשרת לעובדים לבחור את שמם בכל פעולה: כניסה למשמרת, פתיחת וסגירת קיר, חתימה על בדיקות בטיחות, מכירה ופתיחת או סגירת קופה. דוחות כספיים, שכר ותיקים אישיים נשארים חסומים.</span>
             </div> : <div className="business-role-system-note"><ShieldCheck size={20} /><span>למנהל הראשי יש גישה מלאה לכל היכולות והמידע הרגיש.</span></div> : <>
               <div className="business-sensitive-permissions">
                 {sensitiveCatalog.map((permission) => (
@@ -549,42 +570,79 @@ export default function BusinessUsers() {
       <form className="business-user-invite" onSubmit={invite}>
         <div className="business-user-invite-intro">
           <span className="business-users-heading-icon is-invite"><MailPlus size={18} /></span>
-          <div className="business-settings-card-title">הזמנת משתמש</div>
+          <div><div className="business-settings-card-title">הזמנת גישה למערכת</div><small>בחרו אדם או מחשב משותף</small></div>
+        </div>
+        <div className="business-account-type" role="group" aria-label="סוג החשבון">
+          <button
+            type="button"
+            className={form.account_type === 'personal' ? 'is-active' : ''}
+            aria-pressed={form.account_type === 'personal'}
+            onClick={() => setForm((current) => ({
+              ...current,
+              account_type: 'personal',
+              role_ids: current.role_ids.filter((roleId) => roleId !== 'wall-station'),
+            }))}
+          >
+            <UserCog size={19} />
+            <span><strong>חשבון אישי</strong><small>לאדם מסוים; אפשר לקשר לתיק עובד</small></span>
+          </button>
+          <button
+            type="button"
+            className={form.account_type === 'shared_station' ? 'is-active is-station' : 'is-station'}
+            aria-pressed={form.account_type === 'shared_station'}
+            onClick={() => setForm((current) => ({ ...current, account_type: 'shared_station', role_ids: ['wall-station'] }))}
+          >
+            <Monitor size={19} />
+            <span><strong>עמדת קיר משותפת</strong><small>למחשב הקבוע; אינה יוצרת עובד</small></span>
+          </button>
         </div>
         <div className="business-user-invite-fields">
-          <label className="business-settings-field">שם<input className="input" value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} required /></label>
-          <label className="business-settings-field">כתובת מייל<input className="input" type="email" dir="ltr" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} required /></label>
+          <label className="business-settings-field">{form.account_type === 'shared_station' ? 'שם העמדה' : 'שם'}<input className="input" placeholder={form.account_type === 'shared_station' ? 'למשל: מחשב קיר ראשי' : ''} value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} required /></label>
+          <label className="business-settings-field">{form.account_type === 'shared_station' ? 'מייל להתחברות מהמחשב' : 'כתובת מייל'}<input className="input" type="email" dir="ltr" placeholder={form.account_type === 'shared_station' ? 'wall@your-business.co.il' : ''} value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} required /></label>
         </div>
-        <div className="business-settings-field business-invite-roles"><span>תפקידים — אפשר לבחור כמה</span><RolePicker roles={inviteRoles} value={form.role_ids} onChange={(role_ids) => setForm((current) => ({ ...current, role_ids }))} /></div>
-        <div className="business-user-invite-action"><button className="btn btn-primary" type="submit" disabled={saving}>{saving ? <Loader2 size={14} className="spin" /> : <MailPlus size={14} />} שליחת הזמנה</button></div>
+        <div className="business-settings-field business-invite-roles">
+          {form.account_type === 'shared_station' ? <>
+            <span>הרשאות העמדה</span>
+            <div className="business-station-access-summary">
+              <div><RoleIcon role={wallStationRole || { id: 'wall-station', name: 'עמדת קיר משותפת' }} size={16} /><strong>{wallStationRole?.name || 'עמדת קיר משותפת'}</strong><ShieldCheck size={14} /></div>
+              <p>משמרות ופתיחת קיר · בדיקות בטיחות · מכירה · פתיחה וסגירה של הקופה</p>
+              <small><Check size={13} /> הפעולה נרשמת על שם העובד שנבחר במסך, לא על שם המחשב.</small>
+            </div>
+          </> : <><span>תפקידים — אפשר לבחור כמה</span><RolePicker roles={inviteRoles} value={form.role_ids} onChange={(role_ids) => setForm((current) => ({ ...current, role_ids }))} /></>}
+        </div>
+        <div className="business-user-invite-action"><button className="btn btn-primary" type="submit" disabled={saving || (form.account_type === 'shared_station' && !wallStationRole)}>{saving ? <Loader2 size={14} className="spin" /> : <MailPlus size={14} />} {form.account_type === 'shared_station' ? 'הזמנת העמדה' : 'שליחת הזמנה'}</button></div>
       </form>
 
       <div className="business-user-cards">
         {users.map((user) => {
           const owner = user.role === 'owner';
+          const sharedStation = user.account_type === 'shared_station';
           const status = STATUS[user.status] || STATUS.invited;
           const personalOverrideCount = Object.keys(user.permission_overrides?.modules || {}).length
             + Object.keys(user.permission_overrides?.sensitive || {}).length;
-          return <article key={user.id} className="business-user-card">
+          return <article key={user.id} className={`business-user-card ${sharedStation ? 'is-shared-station' : ''}`}>
             <div className="business-user-card-main">
-              <div className="business-user-card-avatar"><UsersRound /></div>
+              <div className="business-user-card-avatar">{sharedStation ? <Monitor /> : <UsersRound />}</div>
               <div><strong>{user.name}</strong><span dir="ltr">{user.email}</span></div>
               <span className={`business-user-status ${status.className}`}>{status.label}</span>
             </div>
             <div className="business-user-card-roles">
               {owner ? <span className="business-user-owner-note"><ShieldCheck size={13} /> מנהל ראשי</span> : <>
-                {user.employee_match === 'matched' && <>
+                {sharedStation ? <>
+                  <span className="business-shared-station-badge"><Monitor size={13} /> עמדת עבודה משותפת · לא עובד</span>
+                  <span className="business-station-role-chip"><RoleIcon role={wallStationRole || { id: 'wall-station' }} size={14} /> {user.role_names?.join(' · ') || 'עמדת קיר משותפת'}</span>
+                </> : user.employee_match === 'matched' && <>
                   <span className="business-employee-match is-matched"><Check size={12} /> עובד — זוהה לפי מייל</span>
                   {user.employee_id && <a className="btn btn-ghost btn-xs" href={`/employees?open=${encodeURIComponent(user.employee_id)}`}><ExternalLink size={12} /> פתיחת תיק העובד</a>}
                 </>}
-                {user.employee_match === 'duplicate' && <span className="business-employee-match is-warning"><AlertTriangle size={12} /> המייל מופיע בכמה תיקי עובדים</span>}
-                {user.employee_match === 'missing' && <span className="business-employee-match is-muted">לא נמצא תיק עובד תואם</span>}
-                <RolePicker roles={assignableRoles} value={user.role_ids || []} disabled={busyId === `user:${user.id}`} onChange={(role_ids) => updateUser(user, { role_ids }, `התפקידים של ${user.name} עודכנו`)} />
+                {!sharedStation && user.employee_match === 'duplicate' && <span className="business-employee-match is-warning"><AlertTriangle size={12} /> המייל מופיע בכמה תיקי עובדים</span>}
+                {!sharedStation && user.employee_match === 'missing' && <span className="business-employee-match is-muted">לא נמצא תיק עובד תואם</span>}
+                {!sharedStation && <RolePicker roles={assignableRoles} value={user.role_ids || []} disabled={busyId === `user:${user.id}`} onChange={(role_ids) => updateUser(user, { role_ids }, `התפקידים של ${user.name} עודכנו`)} />}
                 {personalOverrideCount > 0 && <span className="business-user-custom-badge"><SlidersHorizontal size={12} /> {personalOverrideCount} התאמות הרשאה אישיות</span>}
               </>}
             </div>
             {!owner && <div className="business-user-card-actions">
-              <div className="business-user-card-actions-title">פעולות משתמש</div>
+              <div className="business-user-card-actions-title">{sharedStation ? 'פעולות עמדה' : 'פעולות משתמש'}</div>
               <button className="btn btn-sm btn-ghost" type="button" onClick={() => openPermissionEditor(user)}><SlidersHorizontal size={14} /> הרשאות אישיות</button>
               <button className="btn btn-sm btn-ghost" type="button" onClick={() => openUserPreview(user)}><Monitor size={14} /> תצוגת משתמש</button>
               <button className="btn btn-sm btn-ghost" type="button" disabled={busyId === `reset:${user.id}`} onClick={() => sendPasswordReset(user)}>{busyId === `reset:${user.id}` ? <Loader2 className="spin" size={14} /> : <LockKeyhole size={14} />} איפוס סיסמה</button>
@@ -601,7 +659,7 @@ export default function BusinessUsers() {
               <button
                 className="btn btn-sm btn-ghost is-danger"
                 type="button"
-                title="הסרה מרשימת המשתמשים המורשים; תיק העובד והמסמכים נשארים"
+                title={sharedStation ? 'הסרת הגישה של מחשב הקיר; נתוני העובדים והפעולות נשארים' : 'הסרה מרשימת המשתמשים המורשים; תיק העובד והמסמכים נשארים'}
                 disabled={busyId === `user:${user.id}`}
                 onClick={() => removeAccess(user)}
               ><Trash2 size={14} /> הסר מהרשימה</button>
@@ -635,6 +693,11 @@ export default function BusinessUsers() {
             <div className="business-user-preview-roles">
               {(previewData.role_names || []).map((name) => <span key={name}>{name}</span>)}
             </div>
+
+            {previewData.account_type === 'shared_station' && <div className="business-shared-station-note">
+              <Monitor size={17} />
+              <span><strong>זהו חשבון של מחשב משותף</strong><small>אין לו תיק עובד אישי. במסכי המשמרת, הבטיחות והקופה העובד המבצע בוחר את שמו לפני האישור.</small></span>
+            </div>}
 
             <section className="business-user-preview-section">
               <div className="business-user-preview-section-title"><strong>המסכים שיופיעו בתפריט</strong><small>לפי איחוד כל התפקידים</small></div>
@@ -683,6 +746,10 @@ export default function BusinessUsers() {
               <div><strong>{Object.values(effectivePermissionDraft.modules).filter((level) => level === 'edit').length}</strong><span>תחומים לעריכה</span></div>
               <div><strong>{Object.keys(permissionDraft.modules || {}).length + Object.keys(permissionDraft.sensitive || {}).length}</strong><span>התאמות אישיות</span></div>
             </div>
+            {permissionData.account_type === 'shared_station' && <div className="business-shared-station-note">
+              <Monitor size={17} />
+              <span><strong>הרשאות של עמדה משותפת</strong><small>ההתאמות כאן משנות את יכולות המחשב בלבד ואינן יוצרות או משנות עובד.</small></span>
+            </div>}
             {permissionData.employee_id && <div className="business-user-self-access-note"><Briefcase size={17} /><span><strong>התיק שלי</strong><small>גישה אישית קבועה לתיק העובד שזוהה לפי כתובת המייל; אינה מעניקה גישה לתיקי עובדים אחרים.</small></span></div>}
 
             <section className="business-user-personal-sensitive">

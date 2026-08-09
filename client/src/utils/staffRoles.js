@@ -134,6 +134,8 @@ export function payableRolesOf(catalog) {
   if (!Array.isArray(system) || system.length === 0) return PAYABLE_ROLES;
   return system.map((r) => ({
     role: r.label,
+    // המפתח נשמר לצד התווית כדי שהאייקון והצבע של התפקיד ישרדו שינוי שם.
+    key: r.key,
     defaultMode: PAYABLE_ROLE_MODES[r.key] || 'hourly',
   }));
 }

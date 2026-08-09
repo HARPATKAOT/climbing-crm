@@ -61,6 +61,7 @@ export function buildPassFromItem({
   docId,
   docNumber,
   discount = null,
+  unitListPrice = null,
 }) {
   const productType = normalizeProductType(item);
   if (productType === PRODUCT_TYPES.PRODUCT) return null;
@@ -109,6 +110,11 @@ export function buildPassFromItem({
     icount_doc_number: docNumber || null,
     list_price: discount?.listPrice != null ? Number(discount.listPrice) : null,
     paid_price: discount?.paidPrice != null ? Number(discount.paidPrice) : null,
+    // מחיר הכניסה הבודדת ביום המכירה. נצרב כאן ולא נקרא מהמחירון בזמן הזיכוי,
+    // כדי שהעלאת מחיר כניסה לא תקטין החזר של כרטיס שנמכר לפני חודש.
+    unit_list_price: unitListPrice != null && Number.isFinite(Number(unitListPrice))
+      ? Number(unitListPrice)
+      : null,
     coupon_code: discount?.couponCode || null,
     coupon_label: discount?.couponLabel || null,
     grants_wall_climbing: item.grants_wall_climbing === true,

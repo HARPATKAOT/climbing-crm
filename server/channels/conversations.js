@@ -23,6 +23,7 @@ import { replyKeyForBurst } from '../botReplyClaims.js';
 import { supa } from '../supa.js';
 import { childrenOfParent } from '../studentGuardians.js';
 import { recordMessage, setMessageStatusByMetaId, toLogRow } from './messageStore.js';
+import { resolveConversationTemplateOptions } from './conversationTemplateOptions.js';
 
 function ageFromBirthDate(birthDate) {
   if (!birthDate) return null;
@@ -1007,11 +1008,19 @@ export async function replyToParent(parentId, payload = {}) {
       return { success: false, error: 'תבניות Meta זמינות רק בוואטסאפ', status: 400 };
     }
     if (!target.phone) return { success: false, error: 'אין מספר טלפון לשליחה', status: 400 };
+    const templateOptions = resolveConversationTemplateOptions({
+      templateName,
+      students,
+      formStudentId: payload.formStudentId,
+    });
+    if (templateOptions.error) {
+      return { success: false, error: templateOptions.error, status: 400 };
+    }
     const result = await whatsappService.sendTemplateMessage(
       target.phone,
       templateName,
       variables.length ? variables : [parent.name || ''],
-      { language: payload.language, ...sendOpts }
+      { language: payload.language, ...templateOptions, ...sendOpts }
     );
     if (result.success) {
       try {

@@ -12,10 +12,7 @@ import {
   PowerOff,
   ChevronDown,
   Sparkles,
-  Archive,
-  ArchiveRestore,
   ExternalLink,
-  Pencil,
   ThumbsUp,
   ThumbsDown,
   UserCheck,
@@ -25,7 +22,10 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { normalizeTemplateVariables, buildPrefillValues } from './templateVariables.js';
-import { SUGGESTED_TEMPLATE_TAGS, templateTagStyle } from './templateTags.js';
+import {
+  conversationTemplates,
+  isParticipationFormTemplate,
+} from './conversationTemplatePicker.js';
 import { isAwaitingHandling, threadIsBehindCard } from './communicationQueue.js';
 import AppSelect from './AppSelect.jsx';
 
@@ -412,12 +412,6 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
   const [savedReplies, setSavedReplies] = useState(() => savedRepliesCache || []);
   const [selectedTemplate, setSelectedTemplate] = useState('');
   const [templateVars, setTemplateVars] = useState([]);
-  const [showArchivedTemplates, setShowArchivedTemplates] = useState(false);
-  const [editingTemplateId, setEditingTemplateId] = useState('');
-  const [templateTagDraft, setTemplateTagDraft] = useState('');
-  const [templateUsageDraft, setTemplateUsageDraft] = useState('');
-  const [templateBusyId, setTemplateBusyId] = useState('');
-  const [templateError, setTemplateError] = useState('');
   // The last template fetch failed — different from "Meta approved nothing".
   const [templatesUnavailable, setTemplatesUnavailable] = useState(false);
   const [selectedSaved, setSelectedSaved] = useState('');
@@ -457,41 +451,6 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
   const pickThread = (threadId) => {
     activeThreadIdRef.current = threadId;
     setActiveThreadId(threadId);
-  };
-
-  const refreshTemplates = async () => {
-    const res = await fetch('/api/message-templates?approved=1&archived=1');
-    const rows = res.ok ? await res.json().catch(() => null) : null;
-    setTemplatesUnavailable(!Array.isArray(rows));
-    if (Array.isArray(rows)) {
-      approvedTemplatesCache = rows;
-      setTemplates(rows);
-    }
-  };
-
-  /**
-   * The label and the archive flag are internal fields — Meta never sees them,
-   * so they stay editable after approval and can be fixed from here instead of
-   * making staff leave the conversation to tidy a list they are looking at.
-   */
-  const patchTemplate = async (tpl, patch) => {
-    setTemplateBusyId(tpl.id);
-    setTemplateError('');
-    try {
-      const res = await fetch(`/api/message-templates/${encodeURIComponent(tpl.id)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error || 'עדכון התבנית נכשל');
-      await refreshTemplates();
-      setEditingTemplateId('');
-    } catch (err) {
-      setTemplateError(err.message);
-    } finally {
-      setTemplateBusyId('');
-    }
   };
 
   const load = async ({ quiet = false } = {}) => {
@@ -785,6 +744,10 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
         body.templateName = tpl.meta_name || tpl.name;
         body.language = tpl.language || 'he';
         body.variables = templateVars.filter((v) => v != null && String(v).length);
+        if (isParticipationFormTemplate(tpl)) {
+          if (!templateStudent?.id) throw new Error('בחרו מתאמן כדי לשלוח טופס השתתפות');
+          body.formStudentId = templateStudent.id;
+        }
       } else if (mode === 'saved') {
         if (!selectedSaved) throw new Error('בחרו הודעה שמורה');
         body.savedReplyId = selectedSaved;
@@ -950,10 +913,9 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
   const templateStudent = activeThread?.studentId
     ? (data?.students || []).find((s) => String(s.id) === String(activeThread.studentId)) || student
     : student;
-  const mainTemplates = templates.filter((t) => !t.archived);
-  const archivedTemplates = templates.filter((t) => !!t.archived);
+  const manualTemplates = conversationTemplates(templates, { hasStudent: !!templateStudent?.id });
   const pickTemplate = {
-    rows: showArchivedTemplates ? [...mainTemplates, ...archivedTemplates] : mainTemplates,
+    rows: manualTemplates,
     select: (tpl) => {
       setSelectedTemplate(tpl.id);
       const normalized = normalizeTemplateVariables(tpl?.variables, tpl?.body);
@@ -1344,7 +1306,10 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                       </div>
                     )}
                     <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4 }}>
-                      {m.created_at ? new Date(m.created_at).toLocaleString('he-IL') : ''}
+                      {/* Only the clock — the day is on the separator above. */}
+                      {m.created_at
+                        ? new Date(m.created_at).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })
+                        : ''}
                       {m.status && m.status !== 'deleted' ? ` · ${m.status}` : ''}
                       {m.edited_at && !(m.deleted_at || m.status === 'deleted') ? ' · נערכה' : ''}
                     </div>
@@ -1496,189 +1461,99 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                   )
                 ) : (
                   <>
-                    {/* A list rather than a <AppSelect>: the purpose chip is what
-                        staff scan for, and an option element cannot carry it.
-                        The label and the archive flag are internal, so they can
-                        be fixed right here instead of from the templates screen. */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
-                      {pickTemplate.rows.map((t) => {
-                        const active = String(selectedTemplate) === String(t.id);
-                        const chip = templateTagStyle(t.tag);
-                        const editing = editingTemplateId === t.id;
-                        const busy = templateBusyId === t.id;
-                        return (
-                          <div key={t.id}>
-                            <div style={{ display: 'flex', alignItems: 'stretch', gap: 4 }}>
-                              <button
-                                type="button"
-                                onClick={() => pickTemplate.select(t)}
-                                style={{
-                                  flex: 1,
-                                  minWidth: 0,
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: 8,
-                                  textAlign: 'right',
-                                  padding: '7px 9px',
-                                  borderRadius: 10,
-                                  cursor: 'pointer',
-                                  border: active
-                                    ? '1px solid rgba(56,189,248,0.65)'
-                                    : '1px solid var(--border)',
-                                  background: active ? 'rgba(56,189,248,0.14)' : 'rgba(255,255,255,0.03)',
-                                  color: 'var(--text-1)',
-                                  fontSize: 12,
-                                  fontWeight: active ? 700 : 500,
-                                }}
-                              >
-                                {chip && <span style={chip}>{t.tag}</span>}
-                                {/* The Meta name (`coustumer_details`) means nothing
-                                    to whoever is writing to a customer. A label
-                                    they chose replaces it; the name is only shown
-                                    when there is no label to show instead. */}
-                                <span style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                  {!chip && (
-                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                      {t.name || t.meta_name}
-                                    </span>
-                                  )}
-                                  {t.usage && (
-                                    <span style={{
-                                      fontSize: 11,
-                                      fontWeight: 400,
-                                      color: 'var(--text-3)',
-                                      lineHeight: 1.35,
-                                      display: '-webkit-box',
-                                      WebkitLineClamp: 2,
-                                      WebkitBoxOrient: 'vertical',
-                                      overflow: 'hidden',
-                                    }}>
-                                      {t.usage}
-                                    </span>
-                                  )}
-                                </span>
-                                {t.archived && (
-                                  <span style={{ fontSize: 10, color: 'var(--text-3)', marginInlineStart: 'auto' }}>
-                                    ארכיון
-                                  </span>
-                                )}
-                              </button>
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-icon btn-xs"
-                                title="פרטי התבנית המלאים — טקסט, כפתורים וסטטוס אישור"
-                                onClick={() => navigate('/broadcasts', { state: { broadcastTab: 'templates' } })}
-                              >
-                                <ExternalLink size={12} />
-                              </button>
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-icon btn-xs"
-                                title="עריכת תווית / ארכיון"
-                                disabled={busy}
-                                onClick={() => {
-                                  setTemplateError('');
-                                  setEditingTemplateId(editing ? '' : t.id);
-                                  setTemplateTagDraft(t.tag || '');
-                                  setTemplateUsageDraft(t.usage || '');
-                                }}
-                              >
-                                <Pencil size={12} />
-                              </button>
-                            </div>
-                            {editing && (
-                              <div style={{
-                                margin: '4px 0 6px',
-                                padding: 8,
-                                borderRadius: 10,
-                                border: '1px solid var(--border)',
-                                background: 'rgba(0,0,0,0.2)',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                gap: 6,
-                              }}>
-                                <input
-                                  className="input input-sm"
-                                  placeholder="תווית (למשל: הצהרת בריאות)"
-                                  value={templateTagDraft}
-                                  maxLength={24}
-                                  onChange={(e) => setTemplateTagDraft(e.target.value)}
-                                />
-                                <textarea
-                                  className="input input-sm"
-                                  rows={2}
-                                  placeholder="למה התבנית משמשת? (הערה פנימית לצוות — לא נשלחת ללקוח)"
-                                  value={templateUsageDraft}
-                                  onChange={(e) => setTemplateUsageDraft(e.target.value)}
-                                />
-                                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                                  {SUGGESTED_TEMPLATE_TAGS.map((tag) => (
-                                    <button
-                                      key={tag}
-                                      type="button"
-                                      onClick={() => setTemplateTagDraft(tag)}
-                                      style={{
-                                        ...templateTagStyle(tag),
-                                        opacity: templateTagDraft === tag ? 1 : 0.6,
-                                        cursor: 'pointer',
-                                      }}
-                                    >
-                                      {tag}
-                                    </button>
-                                  ))}
-                                </div>
-                                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                                  <button
-                                    type="button"
-                                    className="btn btn-primary btn-xs"
-                                    disabled={busy}
-                                    onClick={() => patchTemplate(t, {
-                                      tag: templateTagDraft,
-                                      usage: templateUsageDraft,
-                                    })}
-                                  >
-                                    {busy ? 'שומר...' : 'שמירה'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="btn btn-ghost btn-xs"
-                                    disabled={busy}
-                                    onClick={() => patchTemplate(t, { archived: !t.archived })}
-                                  >
-                                    {t.archived ? <ArchiveRestore size={12} /> : <Archive size={12} />}
-                                    {t.archived ? 'שחזור מהארכיון' : 'העברה לארכיון'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="btn btn-ghost btn-xs"
-                                    disabled={busy}
-                                    onClick={() => setEditingTemplateId('')}
-                                  >
-                                    ביטול
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-1)' }}>
+                        תבניות שימושיות לשיחה
+                      </span>
+                      <span style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.4 }}>
+                        רק הודעות שבוחרים ושולחים ידנית מכאן.
+                      </span>
                     </div>
-                    {templateError && (
-                      <div style={{ fontSize: 11, color: '#FCA5A5', lineHeight: 1.45 }}>{templateError}</div>
+
+                    {pickTemplate.rows.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {pickTemplate.rows.map((t) => {
+                          const active = String(selectedTemplate) === String(t.id);
+                          const { title, badge, description } = t.presentation;
+                          return (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => pickTemplate.select(t)}
+                              aria-pressed={active}
+                              style={{
+                                width: '100%',
+                                minWidth: 0,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 10,
+                                textAlign: 'right',
+                                padding: '10px 11px',
+                                borderRadius: 12,
+                                cursor: 'pointer',
+                                border: active
+                                  ? '1px solid rgba(56,189,248,0.72)'
+                                  : '1px solid var(--border)',
+                                background: active ? 'rgba(56,189,248,0.14)' : 'rgba(255,255,255,0.03)',
+                                color: 'var(--text-1)',
+                              }}
+                            >
+                              <span style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                                  <span style={{ fontSize: 12, fontWeight: 800 }}>{title}</span>
+                                  <span style={{
+                                    padding: '1px 7px',
+                                    borderRadius: 999,
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    color: '#7DD3FC',
+                                    background: 'rgba(56,189,248,0.12)',
+                                  }}>
+                                    {badge}
+                                  </span>
+                                </span>
+                                <span style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.4 }}>
+                                  {description}
+                                </span>
+                              </span>
+                              {active && <CheckCircle2 size={16} style={{ color: '#38BDF8', flexShrink: 0 }} />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div style={{
+                        padding: '10px 11px',
+                        borderRadius: 10,
+                        border: '1px dashed var(--border)',
+                        color: 'var(--text-3)',
+                        fontSize: 11,
+                        lineHeight: 1.45,
+                      }}>
+                        אין כרגע תבנית ידנית מתאימה לשיחה הזו.
+                      </div>
                     )}
-                    {archivedTemplates.length > 0 && (
+
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      paddingTop: 2,
+                    }}>
+                      <span style={{ fontSize: 10, color: 'var(--text-3)', lineHeight: 1.35 }}>
+                        אירועים, תשלומים ואוטומציות נשלחים מהמסך המתאים.
+                      </span>
                       <button
                         type="button"
                         className="btn btn-ghost btn-xs"
-                        style={{ alignSelf: 'flex-start' }}
-                        onClick={() => setShowArchivedTemplates((v) => !v)}
+                        style={{ flexShrink: 0 }}
+                        onClick={() => navigate('/broadcasts', { state: { broadcastTab: 'templates' } })}
+                        title="ניהול כל תבניות Meta"
                       >
-                        <Archive size={12} />
-                        {showArchivedTemplates
-                          ? 'הסתרת הארכיון'
-                          : `הצגת ארכיון (${archivedTemplates.length})`}
+                        <ExternalLink size={12} /> ניהול תבניות
                       </button>
-                    )}
+                    </div>
                   </>
                 )}
                 {selectedTemplate && (() => {

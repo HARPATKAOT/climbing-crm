@@ -296,6 +296,13 @@ import {
 import { runHealthExpiryReminders, runParticipationDocumentReminders } from './participationReminders.js';
 import { OPERATIONAL_LIST, migrateToTwoBroadcastLists } from './broadcastListMigration.js';
 import {
+  anchorInUseBy,
+  computeAnchoredPrice,
+  dependentPriceUpdates,
+  isPriceAnchor,
+  validateAnchorLink,
+} from './pricelistPricing.js';
+import {
   enrichPricelistItem,
   buildPassFromItem,
   computeSaleTotal,
@@ -7548,7 +7555,7 @@ app.get('/api/public/shop/:slug', publicFormRateLimit, async (req, res) => {
     res.json({
       ...shopItemPayload(item),
       form_template: resolveDefaultDeclarationTemplate(db),
-      cancellation_policy: resolvePolicyFor(db, item)?.snapshot || null,
+      cancellation_policy: resolvePolicyFor(db, item, { allowDefault: false })?.snapshot || null,
     });
   } catch (err) {
     console.error('public shop item error:', err.message);
@@ -8526,7 +8533,7 @@ app.get('/api/pricelist', (req, res) => {
   const withImages = req.query.images !== '0';
   const items = (db.get('pricelist') || []).map((raw) => {
     const item = enrichPricelistItem(raw);
-    const payload = { ...item, cancellation_policy: resolvePolicyFor(db, item)?.snapshot || null };
+    const payload = { ...item, cancellation_policy: resolvePolicyFor(db, item, { allowDefault: false })?.snapshot || null };
     if (!withImages) delete payload.image;
     return payload;
   });
@@ -8568,6 +8575,44 @@ function catalogImageStillInUse(imageUrl) {
   return rows.some((row) => row?.image === imageUrl);
 }
 
+/**
+ * מחיר של פריט שנשען על עוגן נקבע כאן ולא במסך.
+ *
+ * המסך יכול להיות פתוח מאתמול, ומחיר שנשלח ממנו היה מחזיר לחיים מחיר עוגן
+ * ישן. לכן המחיר שהגיע מהלקוח נזרק, והשרת גוזר אותו מחדש מהעוגן שבמחירון.
+ */
+function applyPriceAnchor(body, current = {}) {
+  const merged = { ...current, ...body };
+  if (!merged.price_anchor_id) return null;
+  const anchor = db.getOne('pricelist', merged.price_anchor_id);
+  const problem = validateAnchorLink(merged, anchor);
+  if (problem) return { status: 400, error: problem };
+  body.price = computeAnchoredPrice(merged, anchor);
+  return null;
+}
+
+/**
+ * מחיר היחידה הבודדת של מוצר — מחיר העוגן שהוא נשען עליו. זה מה שנצרב על
+ * כרטיסייה ברגע המכירה, וממנו מחושב אחר כך מה שנוצל במחיר מלא.
+ */
+function anchorPriceForProduct(pricelistId) {
+  const item = pricelistId ? db.getOne('pricelist', pricelistId) : null;
+  if (!item?.price_anchor_id) return null;
+  const anchor = db.getOne('pricelist', item.price_anchor_id);
+  const price = Number(anchor?.price);
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+
+/**
+ * העלאת מחיר בעוגן מזיזה את כל מי שנשען עליו, באותה שמירה. אחרת היה נשאר
+ * מחירון שבו הכניסה כבר 80 והכרטיסייה עדיין מחושבת לפי 70.
+ */
+function cascadeAnchorPrices(anchor) {
+  const updates = dependentPriceUpdates(db.get('pricelist') || [], anchor);
+  for (const update of updates) db.update('pricelist', update.id, { price: update.price });
+  return updates;
+}
+
 // Create pricelist item
 app.post('/api/pricelist', async (req, res) => {
   try {
@@ -8579,6 +8624,8 @@ app.post('/api/pricelist', async (req, res) => {
     body.category = body.categories[0];
     const denied = applySelfServeFields(body, {}, req.crmUser);
     if (denied) return res.status(denied.status).json({ error: denied.error });
+    const anchorProblem = applyPriceAnchor(body);
+    if (anchorProblem) return res.status(anchorProblem.status).json({ error: anchorProblem.error });
     const record = db.insert('pricelist', body);
     res.status(201).json(enrichPricelistItem(record));
   } catch (err) {
@@ -8603,9 +8650,21 @@ app.put('/api/pricelist/:id', async (req, res) => {
     }
     const denied = applySelfServeFields(body, current, req.crmUser);
     if (denied) return res.status(denied.status).json({ error: denied.error });
+    // פריט עוגן שמאבד את הסימון בזמן שנשענים עליו משאיר מחירים בלי מקור.
+    if (isPriceAnchor(current) && body.is_price_anchor === false) {
+      const dependents = anchorInUseBy(db.get('pricelist') || [], id);
+      if (dependents.length) {
+        return res.status(400).json({
+          error: `${dependents.length} פריטים גוזרים את מחירם מכאן (${dependents.map((row) => row.name).slice(0, 3).join(', ')}) — יש לנתק אותם קודם`,
+        });
+      }
+    }
+    const anchorProblem = applyPriceAnchor(body, current);
+    if (anchorProblem) return res.status(anchorProblem.status).json({ error: anchorProblem.error });
     const updated = db.update('pricelist', id, body);
     if (!updated) return res.status(404).json({ error: 'Pricelist item not found' });
-    res.json(enrichPricelistItem(updated));
+    const cascaded = isPriceAnchor(updated) ? cascadeAnchorPrices(updated) : [];
+    res.json({ ...enrichPricelistItem(updated), anchor_cascade: cascaded });
     if (body.image !== undefined) {
       forgetImageValue(current.image, body.image, catalogImageStillInUse);
     }
@@ -12343,10 +12402,11 @@ function mapCartLines(cart) {
 function cancellationPoliciesForSaleLines(lines = []) {
   const byVersion = new Map();
   for (const line of lines) {
-    // Custom counter lines are not configured products and therefore have no
-    // implicit policy. Catalogue products explicitly choose default/specific/none.
+    // A product carries a policy only when one was linked to it in the catalog —
+    // there is no business-wide fallback at the counter, so an unlinked product
+    // asks the customer to accept nothing.
     if (!line.pricelist_id) continue;
-    const resolved = resolvePolicyFor(db, line.item || {});
+    const resolved = resolvePolicyFor(db, line.item || {}, { allowDefault: false });
     if (resolved?.version?.id) byVersion.set(resolved.version.id, resolved);
   }
   return [...byVersion.values()];
@@ -12456,6 +12516,7 @@ function fulfillSalePasses({ sale, lines, studentId, parentId, docId, docNumber 
         saleId: sale.id,
         docId,
         docNumber,
+        unitListPrice: anchorPriceForProduct(line.pricelist_id),
         discount: line.coupon_applied
           ? {
               listPrice: line.list_price,
@@ -13300,6 +13361,24 @@ app.get('/api/pos/reports', requireOwner, (req, res) => {
   });
 });
 
+function posSellerForRequest(req) {
+  const employeeId = String(req.body?.seller_employee_id || '').trim();
+  if (!employeeId) {
+    if (req.crmUser?.account_type === 'shared_station') {
+      throw Object.assign(new Error('יש לבחור מי מבצע את המכירה'), { status: 400, code: 'SELLER_REQUIRED' });
+    }
+    return {
+      employee_id: req.crmUser?.employee_id || null,
+      name: req.crmUser?.name || req.crmUser?.email || 'צוות',
+    };
+  }
+  const employee = (db.get('employees') || []).find((row) => String(row.id) === employeeId);
+  if (!employee || employee.is_active === false) {
+    throw Object.assign(new Error('העובד שנבחר אינו פעיל או לא נמצא'), { status: 400, code: 'SELLER_INVALID' });
+  }
+  return { employee_id: employee.id, name: employee.name || 'עובד' };
+}
+
 app.post('/api/pos/sale', async (req, res) => {
   try {
     const {
@@ -13318,6 +13397,7 @@ app.post('/api/pos/sale', async (req, res) => {
 
     let lines = mapCartLines(cart);
     if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
+    const seller = posSellerForRequest(req);
 
     const needsCustomer = lines.some((l) => requiresCustomer(l.product_type));
     const { student, parent, isNewLead } = resolvePosCustomer({
@@ -13419,7 +13499,8 @@ app.post('/api/pos/sale', async (req, res) => {
       icount_doc_number: doc?.docnum || null,
       icount_doctype: doc ? 'invrec' : null,
       icount_doc_url: doc?.docUrl || null,
-      sold_by: req.crmUser?.email || req.crmUser?.name || null,
+      sold_by: seller.name,
+      sold_by_employee_id: seller.employee_id,
       sent_email: !!sendEmail,
       sent_whatsapp: !!sendWhatsapp,
       coupon_id: coupon?.id || null,
@@ -13452,7 +13533,7 @@ app.post('/api/pos/sale', async (req, res) => {
       changeGiven,
       saleId: sale.id,
       sessionId: openSessionRow?.id || null,
-      reqUser: req.crmUser,
+      reqUser: { ...req.crmUser, employee_id: seller.employee_id, name: seller.name },
     });
 
     if (coupon) {
@@ -13565,6 +13646,7 @@ app.post('/api/pos/quote', async (req, res) => {
 
     let lines = mapCartLines(cart);
     if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
+    const seller = posSellerForRequest(req);
 
     const needsCustomer = lines.some((l) => requiresCustomer(l.product_type));
     const { student, parent, isNewLead } = resolvePosCustomer({
@@ -13674,7 +13756,8 @@ app.post('/api/pos/quote', async (req, res) => {
       icount_doctype: 'offer',
       payment_id: payment?.id || null,
       payment_url: payUrl || null,
-      sold_by: req.crmUser?.email || req.crmUser?.name || null,
+      sold_by: seller.name,
+      sold_by_employee_id: seller.employee_id,
       sent_email: !!(sendEmail && email),
       sent_whatsapp: !!sendWhatsapp,
       policy_snapshots: cancellationPolicies.map((resolved) => resolved.snapshot),
@@ -13975,6 +14058,7 @@ async function openPendingPosSale({
   cancellationPolicies = [],
   recordAcceptances = async () => [],
   soldBy = null,
+  soldByEmployeeId = null,
   source = null,
   checkoutLinkId = null,
   successUrl = null,
@@ -14063,6 +14147,7 @@ async function openPendingPosSale({
     icount_client_id: clientId,
     payment_id: payment.id,
     sold_by: soldBy,
+    sold_by_employee_id: soldByEmployeeId,
     source: source || undefined,
     // The link that produced this sale, so the webhook can report back to it.
     checkout_link_id: checkoutLinkId || null,
@@ -14150,6 +14235,7 @@ app.post('/api/pos/payment-link', async (req, res) => {
 
     let lines = mapCartLines(cart);
     if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
+    const seller = posSellerForRequest(req);
 
     const needsCustomer = lines.some((l) => requiresCustomer(l.product_type));
     const { student, parent, isNewLead } = resolvePosCustomer({
@@ -14188,7 +14274,8 @@ app.post('/api/pos/payment-link', async (req, res) => {
       cancellationPolicies,
       recordAcceptances: ({ sale, parentId: payerId }) =>
         recordCounterPolicyAcceptances(req, cancellationPolicies, sale, payerId),
-      soldBy: req.crmUser?.email || req.crmUser?.name || null,
+      soldBy: seller.name,
+      soldByEmployeeId: seller.employee_id,
     });
 
     const delivery = sendWhatsapp
@@ -14340,6 +14427,7 @@ app.post('/api/pos/documents-link', async (req, res) => {
 
     const lines = mapCartLines(cart);
     if (!lines.length) return res.status(400).json({ error: 'העגלה ריקה' });
+    const seller = posSellerForRequest(req);
     if (!wallAccessLines(lines).length) {
       return res.status(400).json({
         error: 'הקישור נועד למוצרים שמקנים טיפוס בקיר — בעגלה הזאת אין כאלה',
@@ -14393,7 +14481,7 @@ app.post('/api/pos/documents-link', async (req, res) => {
       customerEmail: parent.email || '',
       couponCode: couponCode || null,
       gaps,
-      createdBy: req.crmUser?.email || req.crmUser?.name || null,
+      createdBy: seller.name,
     }));
     const persisted = await persistCore(POS_CHECKOUT_TABLE, link);
     if (persisted && persisted.ok === false) {

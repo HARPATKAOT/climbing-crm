@@ -57,7 +57,12 @@ test('module levels and sensitive grants are both enforced', () => {
   assert.equal(isStaffRequestAllowed('GET', '/api/activities', context), true);
   assert.equal(isStaffRequestAllowed('PUT', '/api/activities/a1', context), false);
   assert.equal(isStaffRequestAllowed('POST', '/api/activities/a1/registrations', context), true);
-  assert.equal(isStaffRequestAllowed('GET', '/api/cash-register/session', context), false);
+  assert.equal(isStaffRequestAllowed('GET', '/api/cash-register/session', context), true);
+  assert.equal(isStaffRequestAllowed('POST', '/api/cash-register/open', context), true);
+  assert.equal(isStaffRequestAllowed('POST', '/api/cash-register/close', context), true);
+  assert.equal(isStaffRequestAllowed('POST', '/api/cash-register/reset', context), false);
+  assert.equal(isStaffRequestAllowed('GET', '/api/cash-register/ledger', context), false);
+  assert.equal(isStaffRequestAllowed('GET', '/api/payments', context), false);
   assert.equal(isStaffRequestAllowed('GET', '/api/activities/a1/host-payment/invoice', context), false);
 });
 

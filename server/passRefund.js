@@ -68,6 +68,20 @@ export function passPaidAmount(pass) {
 }
 
 /**
+ * מחיר היחידה שהמדיניות תחייב בו את מה שנוצל, כשהיא מוגדרת „לפי המחירון”.
+ *
+ * המספר נלקח מהכרטיס עצמו — מחיר הכניסה ביום שבו הוא נמכר — ולא מהמחירון של
+ * היום. בלי זה, העלאת מחיר כניסה הייתה מקטינה החזר של כרטיסייה ישנה, ואיש לא
+ * היה מבין למה ההחזר השתנה. כרטיס שנמכר לפני שהיה עוגן חוזר ל-null, והמדיניות
+ * ממשיכה עם המספר שמוקלד בה.
+ */
+function anchoredUnitPrice(snapshot, pass) {
+  if (snapshot?.usage_rule?.full_unit_price_source !== 'anchor') return null;
+  const price = Number(pass?.unit_list_price);
+  return Number.isFinite(price) && price > 0 ? Math.round(price * 100) / 100 : null;
+}
+
+/**
  * ההחזר המומלץ על כרטיס אחד.
  *
  * מנוי לזמן מיושב תמיד יחסית, גם כשהמדיניות קובעת „מחיר מלא" — למחיר יחידה
@@ -77,9 +91,14 @@ export function passRefundRecommendation({ snapshot, pass, payment, refDate = ne
   const usage = passUsage(pass, refDate);
   const paid = passPaidAmount(pass);
 
-  const effective = usage.unit === 'days' && snapshot?.usage_rule?.settlement === 'full_price'
-    ? { ...snapshot, usage_rule: { ...snapshot.usage_rule, settlement: 'pro_rata' } }
-    : snapshot;
+  const anchored = anchoredUnitPrice(snapshot, pass);
+  const base = anchored == null
+    ? snapshot
+    : { ...snapshot, usage_rule: { ...snapshot.usage_rule, full_unit_price: anchored } };
+
+  const effective = usage.unit === 'days' && base?.usage_rule?.settlement === 'full_price'
+    ? { ...base, usage_rule: { ...base.usage_rule, settlement: 'pro_rata' } }
+    : base;
 
   const recommendation = suggestedUsageRefund({
     snapshot: effective,

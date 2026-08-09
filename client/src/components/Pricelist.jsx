@@ -117,7 +117,7 @@ function ImagePicker({ value, onChange, label = 'תמונה', tall = false, fit 
   );
 }
 
-function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory, cancellationPolicies = [] }) {
+export function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory, cancellationPolicies = [], items = [] }) {
   const isNew = !item?.id;
   const [name, setName] = useState(item?.name || '');
   const [price, setPrice] = useState(item?.price ?? '');
@@ -145,11 +145,24 @@ function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory, ca
   const [grantsWallClimbing, setGrantsWallClimbing] = useState(item?.grants_wall_climbing === true);
   const [familyShared, setFamilyShared] = useState(item?.family_shared === true);
   const [cancellationPolicyChoice, setCancellationPolicyChoice] = useState(
-    item?.cancellation_policy_disabled === true
-      ? 'none'
-      : (item?.cancellation_policy_id || 'default')
+    item?.cancellation_policy_id || 'none'
   );
+  const [isPriceAnchor, setIsPriceAnchor] = useState(item?.is_price_anchor === true);
+  const [priceAnchorId, setPriceAnchorId] = useState(item?.price_anchor_id || '');
+  const [anchorUnits, setAnchorUnits] = useState(item?.anchor_units ?? '');
+  const [anchorDiscount, setAnchorDiscount] = useState(item?.anchor_discount_percent ?? 0);
   const sellableOnline = productType === 'punch_card' || productType === 'time_membership';
+
+  const anchorOptions = items.filter((row) => row.is_price_anchor === true && row.id !== item?.id);
+  const anchor = anchorOptions.find((row) => row.id === priceAnchorId) || null;
+  // הכרטיסייה נמדדת בכניסות שכבר הוקלדו למעלה; למנוי אין כניסות ולכן מקלידים
+  // כמה יחידות עוגן הוא שווה.
+  const unitsForPrice = productType === 'punch_card'
+    ? (parseInt(visitsTotal, 10) || 0)
+    : (parseFloat(anchorUnits) || 0);
+  const anchoredPrice = anchor && unitsForPrice > 0
+    ? Math.round(unitsForPrice * (Number(anchor.price) || 0) * (1 - (parseFloat(anchorDiscount) || 0) / 100) * 100) / 100
+    : null;
 
   const toggleCat = (cat) => setCats((prev) =>
     prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]
@@ -161,7 +174,7 @@ function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory, ca
     onSave({
       ...(item || {}),
       name: name.trim(),
-      price: parseFloat(price) || 0,
+      price: anchoredPrice != null ? anchoredPrice : (parseFloat(price) || 0),
       description: desc.trim(),
       notes: notes.trim(),
       durationH: durationH !== '' ? parseFloat(durationH) : null,
@@ -180,10 +193,14 @@ function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory, ca
       self_serve: sellableOnline && selfServe,
       grants_wall_climbing: grantsWallClimbing,
       family_shared: productType === 'punch_card' && familyShared,
-      cancellation_policy_id: !['default', 'none'].includes(cancellationPolicyChoice)
-        ? cancellationPolicyChoice
+      cancellation_policy_id: cancellationPolicyChoice === 'none' ? null : cancellationPolicyChoice,
+      cancellation_policy_disabled: false,
+      is_price_anchor: isPriceAnchor,
+      price_anchor_id: isPriceAnchor ? null : (priceAnchorId || null),
+      anchor_units: !isPriceAnchor && priceAnchorId && productType !== 'punch_card'
+        ? (parseFloat(anchorUnits) || null)
         : null,
-      cancellation_policy_disabled: cancellationPolicyChoice === 'none',
+      anchor_discount_percent: !isPriceAnchor && priceAnchorId ? (parseFloat(anchorDiscount) || 0) : 0,
     });
   };
 
@@ -210,8 +227,14 @@ function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory, ca
         </div>
         <div className="form-group">
           <label className="form-label">מחיר (₪)</label>
-          <input className="input" type="number" min={0} step={0.5} value={price}
-            onChange={(e) => setPrice(e.target.value)} placeholder="0" />
+          {anchoredPrice != null ? (
+            <input className="input" value={`₪${anchoredPrice} · לפי העוגן`} readOnly disabled
+              title="המחיר נגזר מפריט העוגן ואינו מוקלד"
+              style={{ opacity: 0.65, cursor: 'not-allowed' }} />
+          ) : (
+            <input className="input" type="number" min={0} step={0.5} value={price}
+              onChange={(e) => setPrice(e.target.value)} placeholder="0" />
+          )}
         </div>
         {productType === 'punch_card' && (
           <>
@@ -297,6 +320,61 @@ function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory, ca
         )}
       </div>
 
+      <div className="form-group" style={{ padding: 12, borderRadius: 10, background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.25)' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+          <input type="checkbox" checked={isPriceAnchor}
+            onChange={(event) => { setIsPriceAnchor(event.target.checked); if (event.target.checked) setPriceAnchorId(''); }}
+            style={{ width: 18, height: 18 }} />
+          <span style={{ fontWeight: 700 }}>פריט עוגן — מחירים אחרים נגזרים ממנו</span>
+        </label>
+        <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
+          כניסה בודדת לקיר היא עוגן: כרטיסייה היא כמות ממנה, ושינוי המחיר כאן מזיז את כולן בבת אחת.
+        </div>
+
+        {!isPriceAnchor && (
+          <>
+            <label className="form-label" style={{ marginTop: 12 }}>המחיר נגזר מפריט עוגן</label>
+            <AppSelect className="input select" value={priceAnchorId}
+              onChange={(event) => setPriceAnchorId(event.target.value)}>
+              <option value="">מחיר עצמאי — מוקלד ידנית</option>
+              {anchorOptions.map((row) => (
+                <option key={row.id} value={row.id}>{row.name} · ₪{row.price}</option>
+              ))}
+            </AppSelect>
+          </>
+        )}
+
+        {!isPriceAnchor && priceAnchorId && (
+          <div className="form-grid-2" style={{ marginTop: 12 }}>
+            {productType !== 'punch_card' && (
+              <div className="form-group">
+                <label className="form-label">שווה־ערך ל־(יחידות)</label>
+                <input className="input" type="number" min={0} step={0.5} value={anchorUnits}
+                  onChange={(event) => setAnchorUnits(event.target.value)} placeholder="5" />
+              </div>
+            )}
+            <div className="form-group">
+              <label className="form-label">הנחה מהעוגן (%)</label>
+              <input className="input" type="number" step={0.01} value={anchorDiscount}
+                onChange={(event) => setAnchorDiscount(event.target.value)} />
+            </div>
+            <div className="form-group" style={{ gridColumn: 'span 2', fontSize: 12, color: 'var(--text-3)' }}>
+              {anchoredPrice != null ? (
+                <>
+                  {unitsForPrice} × ₪{anchor?.price} {(parseFloat(anchorDiscount) || 0) >= 0 ? 'פחות' : 'ועוד'}
+                  {' '}{Math.abs(parseFloat(anchorDiscount) || 0)}% = <strong style={{ color: 'var(--text-1)' }}>₪{anchoredPrice}</strong>
+                  {(parseFloat(anchorDiscount) || 0) < 0 && ' — תוספת מעל מחיר העוגן'}
+                </>
+              ) : (
+                productType === 'punch_card'
+                  ? 'צריך מספר כניסות כדי לגזור מחיר'
+                  : 'צריך להגדיר לכמה יחידות עוגן הפריט שווה'
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="form-group">
         <label className="form-label">מדיניות ביטול ותנאים</label>
         <AppSelect
@@ -304,14 +382,13 @@ function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCategory, ca
           value={cancellationPolicyChoice}
           onChange={(event) => setCancellationPolicyChoice(event.target.value)}
         >
-          <option value="default">מדיניות ברירת המחדל</option>
-          <option value="none">ללא מדיניות</option>
+          <option value="none">ללא מדיניות ביטול</option>
           {cancellationPolicies
             .filter((policy) => policy.status === 'published')
             .map((policy) => <option key={policy.id} value={policy.id}>{policy.name}</option>)}
         </AppSelect>
         <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
-          הגרסה שפורסמה בזמן העסקה תישמר כתצלום קבוע ולא תשתנה בדיעבד.
+          מוצר מציג מדיניות בקופה ובחנות רק אם קושרה אליו כאן. הגרסה שפורסמה בזמן העסקה תישמר כתצלום קבוע ולא תשתנה בדיעבד.
         </div>
       </div>
 
@@ -736,6 +813,7 @@ export default function Pricelist() {
             defaultCategory={openCatName}
             categoryOptions={categoryNames}
             cancellationPolicies={cancellationPolicies}
+            items={items}
             onSave={handleSaveItem}
             onCancel={() => setAddingNew(false)}
           />
@@ -897,6 +975,7 @@ export default function Pricelist() {
                       defaultCategory={openCatName === UNCATEGORIZED ? null : openCatName}
                       categoryOptions={categoryNames}
                       cancellationPolicies={cancellationPolicies}
+                      items={items}
                       onSave={handleSaveItem}
                       onCancel={() => setEditingId(null)}
                     />

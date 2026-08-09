@@ -76,7 +76,7 @@ function saleStatusBadge(status) {
   return 'badge badge-gray';
 }
 
-export default function CashRegister({ isOwner = true, initialTab = null }) {
+export default function CashRegister({ isOwner = true, sharedStation = false, initialTab = null }) {
   const [expectedAmount, setExpectedAmount] = useState('');
   const [actualAmount, setActualAmount] = useState('');
   const [shiftType, setShiftType] = useState('בוקר');
@@ -570,6 +570,7 @@ export default function CashRegister({ isOwner = true, initialTab = null }) {
           onManageProducts={isOwner ? () => setActiveTab('products') : null}
           employees={employees}
           isOwner={isOwner}
+          requireSeller={sharedStation}
         />
       )}
 

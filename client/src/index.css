@@ -1452,6 +1452,19 @@ select option, select optgroup {
   min-width: 0;
 }
 
+.pos-seller-field {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 11px 12px;
+  border: 1px solid rgba(251, 113, 133, .28);
+  border-radius: 10px;
+  background: rgba(251, 113, 133, .055);
+}
+.pos-seller-field > span { display: flex; align-items: center; gap: 6px; color: var(--text-1); font-size: 13px; font-weight: 700; }
+.pos-seller-field > span > svg { color: #fb7185; }
+.pos-seller-field > small { color: var(--text-3); font-size: 10px; line-height: 1.45; }
+
 /* === DIVIDER === */
 .divider { height: 1px; background: var(--border); margin: 20px 0; }
 .divider-sm { height: 1px; background: var(--border); margin: 12px 0; }
@@ -3292,20 +3305,6 @@ select option, select optgroup {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--card-accent) 26%, transparent);
 }
 
-/* שלוש האפשרויות של „מי יכול להירשם” הן בחירה אחת, ולכן הן שורה אחת — קודם
-   השלישית הייתה נופלת לשורה נפרדת ונקראה כמו הגדרה אחרת. */
-.activity-settings-card .choice-row {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.activity-settings-card .choice-row .choice-pill {
-  justify-content: center;
-  min-width: 0;
-  padding-inline: 8px;
-}
-
 /* תזכורת „עוד לא מולא”. כתום ולא אדום בכוונה: זו לא שגיאה ולא חסימת שמירה,
    אלא סימן שנשאר עוד מה למלא. נעלם ברגע שנכנס תוכן, ולא מופיע בשדות שסומנו
    `data-optional`. */
@@ -4150,7 +4149,7 @@ select option, select optgroup {
   display: grid;
   grid-template-columns: minmax(240px, 290px) minmax(400px, 1fr) minmax(150px, 170px);
   grid-template-areas:
-    "intro roles action"
+    "intro kind action"
     "fields roles action";
   gap: 10px 16px;
   align-items: start;
@@ -4161,11 +4160,28 @@ select option, select optgroup {
 }
 
 .business-user-invite-intro { grid-area: intro; }
+.business-user-invite-intro > div { display: grid; gap: 2px; }
+.business-user-invite-intro small { color: var(--text-3); font-size: 11px; }
+.business-account-type { grid-area: kind; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.business-account-type > button { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; min-height: 58px; padding: 9px 11px; color: var(--text-2); background: var(--bg-input); border: 1px solid var(--border); border-radius: 11px; font: inherit; text-align: start; cursor: pointer; }
+.business-account-type > button:hover { color: var(--text-1); border-color: rgba(96, 165, 250, .36); }
+.business-account-type > button.is-active { color: var(--text-1); border-color: rgba(96, 165, 250, .56); background: rgba(96, 165, 250, .1); box-shadow: inset 0 0 0 1px rgba(96, 165, 250, .12); }
+.business-account-type > button.is-station.is-active { border-color: rgba(251, 113, 133, .5); background: rgba(251, 113, 133, .09); box-shadow: inset 0 0 0 1px rgba(251, 113, 133, .1); }
+.business-account-type > button > svg { color: var(--blue); }
+.business-account-type > button.is-station > svg { color: #fb7185; }
+.business-account-type > button > span { display: grid; gap: 2px; min-width: 0; }
+.business-account-type strong { color: inherit; font-size: 12px; }
+.business-account-type small { color: var(--text-3); font-size: 9px; line-height: 1.4; }
 .business-user-invite-fields { grid-area: fields; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
 .business-user-invite-fields .input { width: 100%; }
 .business-invite-roles { grid-area: roles; align-self: stretch; }
 .business-user-invite-action { grid-area: action; align-self: end; display: flex; justify-content: flex-end; }
 .business-user-invite-action .btn { width: 100%; min-width: 0; }
+.business-station-access-summary { display: grid; gap: 7px; min-height: 74px; padding: 11px 12px; border: 1px solid rgba(251, 113, 133, .3); border-radius: 11px; background: rgba(251, 113, 133, .06); }
+.business-station-access-summary > div { display: flex; align-items: center; gap: 7px; color: var(--text-1); }
+.business-station-access-summary > div > svg:last-child { margin-inline-start: auto; color: #fb7185; }
+.business-station-access-summary p { margin: 0; color: var(--text-2); font-size: 11px; line-height: 1.5; }
+.business-station-access-summary small { display: flex; align-items: center; gap: 5px; color: #5eead4; font-size: 10px; line-height: 1.45; }
 
 .business-users-table-wrap {
   overflow-x: auto;
@@ -4198,7 +4214,7 @@ select option, select optgroup {
 
   .business-user-invite {
     grid-template-columns: 1fr;
-    grid-template-areas: "intro" "fields" "roles" "action";
+    grid-template-areas: "intro" "kind" "fields" "roles" "action";
   }
   .business-role-section-head { align-items: stretch; flex-direction: column; }
   .business-role-create .input { width: 100%; }
@@ -4967,6 +4983,10 @@ select option, select optgroup {
 .business-role-editor-actions { display: flex; gap: 8px; }
 .btn.is-danger, .icon-btn.is-danger { color: var(--red); }
 .business-role-system-note { display: flex; align-items: center; gap: 10px; margin-top: 16px; padding: 16px; color: var(--text-2); background: var(--bg-input); border: 1px solid var(--border); border-radius: 11px; }
+.business-role-system-note > svg { flex: 0 0 auto; }
+.business-role-system-note strong { display: block; margin-bottom: 3px; color: var(--text-1); }
+.business-role-system-note.is-wall-station { align-items: flex-start; border-color: rgba(251, 113, 133, .28); background: rgba(251, 113, 133, .06); line-height: 1.6; }
+.business-role-system-note.is-wall-station > svg { color: #fb7185; }
 .business-employee-role-guide { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 13px; margin-top: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-input); }
 .business-employee-role-guide-icon { width: 38px; height: 38px; display: grid; place-items: center; color: var(--blue); background: var(--blue-dim); border-radius: 10px; }
 .business-employee-role-guide strong { color: var(--text-1); font-size: 14px; }
@@ -5030,6 +5050,8 @@ select option, select optgroup {
 .business-user-card-main strong { color: var(--text-1); }
 .business-user-card-main span[dir="ltr"] { color: var(--text-3); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
 .business-user-card-avatar { width: 36px; height: 36px; display: grid; place-items: center; color: var(--blue); background: var(--blue-dim); border-radius: 10px; }
+.business-user-card.is-shared-station { border-color: rgba(251, 113, 133, .25); background: linear-gradient(135deg, var(--bg-card), rgba(251, 113, 133, .035)); }
+.business-user-card.is-shared-station .business-user-card-avatar { color: #fb7185; background: rgba(251, 113, 133, .1); }
 .business-user-card-roles { display: grid; gap: 8px; }
 .business-user-card-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; padding-inline-start: 16px; border-inline-start: 1px solid var(--border); }
 .business-user-card-actions .btn { width: 100%; justify-content: center; white-space: nowrap; }
@@ -5039,6 +5061,9 @@ select option, select optgroup {
 .business-employee-match.is-matched { color: var(--green); background: var(--green-dim); }
 .business-employee-match.is-warning { color: var(--amber); background: var(--amber-dim); }
 .business-employee-match.is-muted { color: var(--text-3); background: var(--bg-input); }
+.business-shared-station-badge, .business-station-role-chip { width: fit-content; display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-radius: 999px; font-size: 10px; }
+.business-shared-station-badge { color: #fda4af; background: rgba(251, 113, 133, .11); }
+.business-station-role-chip { color: var(--text-2); border: 1px solid var(--border); background: var(--bg-input); }
 .business-user-custom-badge { width: fit-content; display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; color: #c4b5fd; background: var(--purple-dim); border-radius: 999px; font-size: 10px; }
 .business-user-preview-backdrop { position: fixed; inset: 0; z-index: 1200; display: grid; place-items: center; padding: 20px; background: rgba(3, 7, 18, .76); backdrop-filter: blur(5px); }
 .business-user-preview { width: min(760px, 100%); max-height: min(88vh, 820px); overflow-y: auto; padding: 20px; border: 1px solid var(--border); border-radius: 16px; background: var(--bg-card); box-shadow: 0 24px 80px rgba(0, 0, 0, .48); }
@@ -5084,6 +5109,10 @@ select option, select optgroup {
 .business-user-self-access-note > span { display: grid; gap: 2px; }
 .business-user-self-access-note strong { color: var(--text-1); font-size: 12px; }
 .business-user-self-access-note small { color: var(--text-3); font-size: 10px; }
+.business-shared-station-note { display: flex; align-items: center; gap: 9px; margin: 12px 0 14px; padding: 10px 12px; color: #fb7185; border: 1px solid rgba(251, 113, 133, .24); border-radius: 10px; background: rgba(251, 113, 133, .07); }
+.business-shared-station-note > span { display: grid; gap: 2px; }
+.business-shared-station-note strong { color: var(--text-1); font-size: 12px; }
+.business-shared-station-note small { color: var(--text-3); font-size: 10px; line-height: 1.45; }
 .business-user-personal-sensitive { display: grid; gap: 7px; margin: 14px 0; }
 .business-user-personal-sensitive .business-user-preview-section-title { margin-bottom: 1px; }
 .business-user-personal-row { display: grid; grid-template-columns: minmax(220px, 1fr) auto; align-items: center; gap: 12px; min-height: 58px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--bg-input); }
@@ -5159,7 +5188,7 @@ select option, select optgroup {
   .business-permission-row { grid-template-columns: 1fr; }
   .business-access-levels { width: fit-content; }
   .employee-document-upload { grid-template-columns: 1fr; }
-  .business-user-invite-fields, .business-invite-roles .business-role-picker { grid-template-columns: 1fr; }
+  .business-account-type, .business-user-invite-fields, .business-invite-roles .business-role-picker { grid-template-columns: 1fr; }
   .business-employee-role-guide { grid-template-columns: auto 1fr; }
   .business-employee-role-guide .btn { grid-column: 1 / -1; justify-content: center; }
   .business-user-preview-pages, .business-user-preview-sensitive { grid-template-columns: 1fr; }
@@ -5588,6 +5617,25 @@ select option, select optgroup {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
+}
+
+/* „לפי המחירון” — התיבה שמחליפה את המספר המוקלד במחיר העוגן של המוצר. */
+.policy-unit-source {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.policy-unit-source input {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  flex: none;
+  cursor: pointer;
 }
 
 @media (max-width: 700px) {

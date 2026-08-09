@@ -112,6 +112,10 @@ const TEAM_RULES = [
   { methods: READ, pattern: /^\/(pricelist|product-categories|pos)(\/|$)/, module: 'pos' },
   { methods: WRITE, pattern: /^\/(pricelist|product-categories|pos)(\/|$)/, module: 'pos', level: 'edit' },
   { methods: WRITE, pattern: /^\/checkout(\/|$)/, module: 'pos', level: 'edit' },
+  // A shared wall station may open/close the physical till, but it must not gain
+  // access to finance reports, payments or the manager cash terminal.
+  { methods: READ, pattern: /^\/cash-register\/session$/, module: 'cash_management' },
+  { methods: WRITE, pattern: /^\/cash-register\/(open|close)$/, module: 'cash_management', level: 'edit' },
   { methods: [...READ, ...WRITE], pattern: /^\/(cash-register|payments|icount)(\/|$)/, module: 'cash_management', sensitive: 'finance' },
 
   { methods: READ, pattern: /^\/safety\/check-types(\/|$)/, anyModules: ['safety_checks', 'safety_settings'] },

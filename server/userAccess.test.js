@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   accessAtLeast,
   applyPermissionOverrides,
+  employeeMatchForAccessEntry,
   employeeMatchForEmail,
   hasSensitiveAccess,
   normalizeAccessEntry,
@@ -130,6 +131,40 @@ test('requesting employee access requires one matching employee record', () => {
     () => validateRequestedEmployeeAccess('duplicate@example.com', true, employees),
     (error) => error.statusCode === 400 && error.message.includes('ביותר מתיק עובד אחד'),
   );
+});
+
+test('a shared wall station receives operational access without becoming an employee', () => {
+  const station = normalizeAccessEntry({
+    id: 'station-1',
+    name: 'Wall computer',
+    email: 'wall@example.com',
+    account_type: 'shared_station',
+    role_ids: ['wall-station'],
+    status: 'active',
+  });
+  const employees = [{ id: 'emp-accidental', email: 'wall@example.com' }];
+
+  assert.deepEqual(employeeMatchForAccessEntry(station, employees), {
+    employee_id: null,
+    employee_match: 'not_applicable',
+  });
+
+  const context = resolveAccessContext(
+    { id: 'station-1', email: 'wall@example.com', last_sign_in_at: '2026-08-09' },
+    { configured: true, roles: [], users: [station] },
+    employees,
+  );
+  assert.equal(context.account_type, 'shared_station');
+  assert.equal(context.employee_id, null);
+  assert.deepEqual(context.roleIds, ['wall-station']);
+  assert.equal(context.modules.checkin, 'edit');
+  assert.equal(context.modules.pos, 'edit');
+  assert.equal(context.modules.cash_management, 'edit');
+  assert.equal(context.modules.safety_checks, 'edit');
+  assert.equal(context.modules.employees, 'view');
+  assert.equal(context.modules.shifts, 'edit');
+  assert.equal(context.sensitive.finance, false);
+  assert.equal(context.sensitive.hr, false);
 });
 
 test('owner preview merges roles and reports self-service without creating a session', () => {

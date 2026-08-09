@@ -573,7 +573,7 @@ export default function App() {
               />
             )}
             {page === 'broadcasts' && <Broadcasts parents={parents} students={students} groups={groups} />}
-            {page === 'cash'       && <CashRegister isOwner={isOwner || user?.sensitive?.finance === true} initialTab={location.state?.cashTab} />}
+            {page === 'cash'       && <CashRegister isOwner={isOwner || user?.sensitive?.finance === true} sharedStation={user?.account_type === 'shared_station'} initialTab={location.state?.cashTab} />}
             {page === 'safety'     && <Safety canManageSettings={isOwner || moduleAtLeast('safety_settings', 'edit')} />}
             {page === 'employees'  && (
               <Employees

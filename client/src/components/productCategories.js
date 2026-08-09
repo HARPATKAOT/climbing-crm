@@ -1,5 +1,9 @@
 /** Shared product catalog categories for Pricelist + POS filters. */
 import {
+  hasGeneratedProductImage,
+  productImageOf,
+} from './productImageCatalog.js';
+import {
   Coffee, PartyPopper, Dumbbell, Ticket, Mountain,
   DoorOpen, Users, Percent, Package,
 } from 'lucide-react';
@@ -49,6 +53,7 @@ export const DEFAULT_CATEGORY_COLOR = { bg: 'rgba(255,255,255,0.05)', text: 'var
  */
 /** Normalized object-fit / background-size for a catalog image. */
 export function imageFitOf(record) {
+  if (hasGeneratedProductImage(record)) return 'cover';
   return record?.image_fit === 'contain' ? 'contain' : 'cover';
 }
 
@@ -57,7 +62,7 @@ export function imageFitOf(record) {
  * cropped, so the tile's own backdrop is layered underneath to fill the gaps.
  */
 export function imageBackground(record, fallback) {
-  const image = record?.image;
+  const image = productImageOf(record);
   if (!image) return fallback;
   const fit = imageFitOf(record);
   // Quoted: catalog photos are addresses now, not base64 blobs, and an address
@@ -66,6 +71,8 @@ export function imageBackground(record, fallback) {
   const layer = `center/${fit} no-repeat url("${quoted}")`;
   return fit === 'contain' && fallback ? `${layer}, ${fallback}` : layer;
 }
+
+export { productImageOf } from './productImageCatalog.js';
 
 export function catTint(color, alphaHex) {
   const c = String(color || '');

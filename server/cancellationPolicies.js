@@ -57,6 +57,7 @@ export const DEFAULT_USAGE_RULE = Object.freeze({
   settlement: USAGE_SETTLEMENTS.PRO_RATA,
   unused_refund_percent: 100,
   full_unit_price: 0,
+  full_unit_price_source: 'fixed',
   fixed_fee: 0,
   min_used_units: 0,
   no_refund_after_percent: 100,
@@ -78,6 +79,9 @@ export function normalizeUsageRule(rule = {}) {
     unused_refund_percent: percent(source.unused_refund_percent, 100),
     // מחיר יחידה בודדת ללא הנחה (ביישוב לפי מחיר מלא) — למשל כניסה אחת לקיר
     full_unit_price: money(source.full_unit_price),
+    // „מהמחירון” לוקח את מחיר העוגן שנצרב על הכרטיס ביום המכירה, במקום מספר
+    // שמוקלד כאן ומזדקן בשקט בכל פעם שמחיר הכניסה עולה.
+    full_unit_price_source: source.full_unit_price_source === 'anchor' ? 'anchor' : 'fixed',
     // דמי ביטול קבועים, פעם אחת על הביטול כולו
     fixed_fee: money(source.fixed_fee),
     // התחייבות מינימלית: כמה יחידות (כניסות או חודשים) חייבות להיות מנוצלות
@@ -143,11 +147,14 @@ export function currentPolicyVersion(db, policyId) {
   return version ? { policy, version, snapshot: policySnapshot(policy, version) } : null;
 }
 
-export function resolvePolicyFor(db, source = {}) {
+export function resolvePolicyFor(db, source = {}, { allowDefault = true } = {}) {
   if (source.cancellation_policy_disabled === true || source.cancellationPolicyDisabled === true) return null;
   const explicit = source.cancellation_policy_id || source.cancellationPolicyId;
   if (explicit === null || explicit === 'none') return null;
   if (explicit) return currentPolicyVersion(db, explicit);
+  // Catalog products opt in per item (allowDefault: false); activities without
+  // an explicit choice fall back to the business-wide default policy.
+  if (!allowDefault) return null;
   const fallback = (db.get('cancellation_policies') || []).find((row) => row.is_default && row.status === 'published');
   return fallback ? currentPolicyVersion(db, fallback.id) : null;
 }

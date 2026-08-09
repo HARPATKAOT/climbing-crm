@@ -108,3 +108,30 @@ test('כרטיס בלי מחיר ובלי יחידות מסומן כלא פתו�
   const result = passRefundRecommendation({ snapshot, pass: broken });
   assert.equal(result.period_resolved, false);
 });
+
+/** „לפי המחירון”: מחיר הכניסה שנצרב על הכרטיס גובר על המספר שבמדיניות. */
+const anchoredSnapshot = {
+  ...snapshot,
+  usage_rule: { ...snapshot.usage_rule, full_unit_price: 70, full_unit_price_source: 'anchor' },
+};
+
+test('מחיר היחידה נלקח מהכרטיס — מחיר הכניסה ביום המכירה, לא של היום', () => {
+  const result = passRefundRecommendation({
+    snapshot: anchoredSnapshot,
+    pass: card({ unit_list_price: 60 }),
+    refDate: new Date('2026-08-20T00:00:00Z'),
+  });
+  // 5 כניסות נוצלו ב-60 ₪ = 300, מתוך 550 ששולמו
+  assert.equal(result.amount, 250);
+  assert.equal(result.full_unit_price, 60);
+});
+
+test('כרטיס שנמכר לפני שהיה עוגן נופל למספר שמוקלד במדיניות', () => {
+  const result = passRefundRecommendation({
+    snapshot: anchoredSnapshot,
+    pass: card(),
+    refDate: new Date('2026-08-20T00:00:00Z'),
+  });
+  assert.equal(result.amount, 200);
+  assert.equal(result.full_unit_price, 70);
+});

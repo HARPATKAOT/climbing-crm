@@ -25,6 +25,7 @@ function editableFrom(policy) {
       settlement: source?.usage_rule?.settlement === 'full_price' ? 'full_price' : 'pro_rata',
       unused_refund_percent: source?.usage_rule?.unused_refund_percent ?? 100,
       full_unit_price: source?.usage_rule?.full_unit_price ?? 0,
+      full_unit_price_source: source?.usage_rule?.full_unit_price_source === 'anchor' ? 'anchor' : 'fixed',
       fixed_fee: source?.usage_rule?.fixed_fee ?? 0,
       min_used_units: source?.usage_rule?.min_used_units ?? 0,
       no_refund_after_percent: source?.usage_rule?.no_refund_after_percent ?? 100,
@@ -315,11 +316,23 @@ export default function CancellationPoliciesSettings() {
                   {draft.usage_rule.settlement === 'full_price' ? (
                     <label className="form-group">
                       <span>מחיר יחידה בודדת (₪)</span>
-                      <input
-                        type="number" min="0"
-                        value={draft.usage_rule.full_unit_price}
-                        onChange={(event) => setUsage('full_unit_price', event.target.value)}
-                      />
+                      {draft.usage_rule.full_unit_price_source === 'anchor' ? (
+                        <input value="לפי המחירון" readOnly disabled />
+                      ) : (
+                        <input
+                          type="number" min="0"
+                          value={draft.usage_rule.full_unit_price}
+                          onChange={(event) => setUsage('full_unit_price', event.target.value)}
+                        />
+                      )}
+                      <label className="policy-unit-source">
+                        <input
+                          type="checkbox"
+                          checked={draft.usage_rule.full_unit_price_source === 'anchor'}
+                          onChange={(event) => setUsage('full_unit_price_source', event.target.checked ? 'anchor' : 'fixed')}
+                        />
+                        <span>לפי מחיר העוגן של המוצר, כפי שהיה ביום המכירה</span>
+                      </label>
                     </label>
                   ) : (
                     <label className="form-group">
@@ -406,7 +419,9 @@ export default function CancellationPoliciesSettings() {
                   <p className="policy-preview-line">
                     <b>ביטול באמצע:</b>{' '}
                     {draft.usage_rule.settlement === 'full_price'
-                      ? `מה שנוצל מחויב ב-${formatIls(draft.usage_rule.full_unit_price)} ליחידה, והיתרה מוחזרת`
+                      ? (draft.usage_rule.full_unit_price_source === 'anchor'
+                        ? 'מה שנוצל מחויב במחיר היחידה שבמחירון ביום המכירה, והיתרה מוחזרת'
+                        : `מה שנוצל מחויב ב-${formatIls(draft.usage_rule.full_unit_price)} ליחידה, והיתרה מוחזרת`)
                       : `החזר ${Number(draft.usage_rule.unused_refund_percent) || 0}% מערך החלק שלא נוצל`}
                     {Number(draft.usage_rule.fixed_fee)
                       ? `, בניכוי ${formatIls(draft.usage_rule.fixed_fee)} דמי ביטול`

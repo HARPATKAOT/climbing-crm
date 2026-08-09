@@ -12,9 +12,11 @@ import {
   normalizeCategories,
   imageBackground,
   imageFitOf,
+  productImageOf,
 } from './productCategories.js';
 import AppSelect from './AppSelect.jsx';
 import CashCountModal from './CashCountModal.jsx';
+import EmployeeSelect from './EmployeeSelect.jsx';
 import { printReceiptFromSale, openInvoiceFallback, thermalSupported } from '../utils/thermalPrinter.js';
 
 const PAY_METHODS = [
@@ -48,7 +50,7 @@ function applyLineDiscount(listPrice, discountType, discountValue) {
 }
 
 /** `onManageProducts` opens the catalogue tab — omitted for non-owners. */
-export default function PosSale({ onManageProducts = null, employees = [], isOwner = false }) {
+export default function PosSale({ onManageProducts = null, employees = [], isOwner = false, requireSeller = false }) {
   const [pricelist, setPricelist] = useState([]);
   const [students, setStudents] = useState([]);
   const [parents, setParents] = useState([]);
@@ -99,6 +101,17 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
   const [documentsBlock, setDocumentsBlock] = useState(null);
   const [documentsLink, setDocumentsLink] = useState(null);
   const [sendingDocsLink, setSendingDocsLink] = useState(false);
+  const [sellerId, setSellerId] = useState('');
+
+  const activeEmployees = useMemo(
+    () => (employees || []).filter((employee) => employee?.is_active !== false),
+    [employees]
+  );
+  const seller = activeEmployees.find((employee) => employee.id === sellerId) || null;
+
+  useEffect(() => {
+    if (sellerId && !activeEmployees.some((employee) => employee.id === sellerId)) setSellerId('');
+  }, [activeEmployees, sellerId]);
 
   useEffect(() => {
     if (!cashSessionOpen && paymentMethod === 'cash') {
@@ -596,11 +609,17 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
     sendEmail,
     sendWhatsapp,
     cancellationPolicyAccepted: cancellationAccepted,
+    seller_employee_id: seller?.id || undefined,
+    seller_name: seller?.name || undefined,
   });
 
   const validate = () => {
     if (!cart.length) {
       setError('הוסיפו לפחות פריט אחד לעגלה');
+      return false;
+    }
+    if (requireSeller && !seller) {
+      setError('יש לבחור מי מבצע את המכירה');
       return false;
     }
     if (needsCustomer && !selectedStudentId) {
@@ -999,10 +1018,10 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
                     overflow: 'hidden',
                   }}
                 >
-                  {item.image && (
+                  {productImageOf(item) && (
                     <img
-                      src={item.image}
-                      alt=""
+                      src={productImageOf(item)}
+                      alt={item.name}
                       style={{ display: 'block', width: '100%', height: 86, objectFit: imageFitOf(item) }}
                     />
                   )}
@@ -1587,6 +1606,20 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
               );
             })}
           </div>
+
+          {requireSeller && (
+            <label className="pos-seller-field">
+              <span><User size={14} /> מי מבצע את המכירה?</span>
+              <EmployeeSelect
+                employees={activeEmployees}
+                value={sellerId}
+                placeholder="בחירת עובד"
+                aria-label="מי מבצע את המכירה"
+                onChange={(employee) => setSellerId(employee?.id || '')}
+              />
+              <small>העובד יירשם במכירה וביומן הקופה; חשבון המחשב נשאר רק אמצעי כניסה.</small>
+            </label>
+          )}
 
           {cashClosedHint && !cashSessionOpen && (
             <div className="alert alert-warn" style={{ marginTop: 10, fontSize: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>

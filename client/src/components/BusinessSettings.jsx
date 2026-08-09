@@ -8,6 +8,15 @@ import Integrations from './Integrations.jsx';
 import BusinessUsers from './BusinessUsers.jsx';
 import CancellationPoliciesSettings from './CancellationPoliciesSettings.jsx';
 
+const SETTINGS_TABS = new Set(['profile', 'integrations', 'users', 'policies']);
+
+function initialSettingsTab() {
+  const params = new URLSearchParams(window.location.search);
+  const requestedTab = params.get('tab');
+  if (SETTINGS_TABS.has(requestedTab)) return requestedTab;
+  return params.has('googleContacts') ? 'integrations' : 'profile';
+}
+
 function SettingsTabs({ tab, setTab }) {
   return (
     <div className="tab-bar" style={{ marginBottom: 16 }}>
@@ -49,10 +58,15 @@ export default function BusinessSettings() {
   const [imageBusy, setImageBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
-  // Land on the connections tab when Google bounces back from OAuth.
-  const [tab, setTab] = useState(() =>
-    new URLSearchParams(window.location.search).has('googleContacts') ? 'integrations' : 'profile'
-  );
+  // Support direct links while still landing on connections after Google OAuth.
+  const [tab, setTab] = useState(initialSettingsTab);
+
+  const selectTab = (nextTab) => {
+    setTab(nextTab);
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', nextTab);
+    window.history.replaceState(window.history.state, '', url);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -136,7 +150,7 @@ export default function BusinessSettings() {
   if (tab === 'integrations') {
     return (
       <div className="business-settings">
-        <SettingsTabs tab={tab} setTab={setTab} />
+        <SettingsTabs tab={tab} setTab={selectTab} />
         <Integrations />
       </div>
     );
@@ -145,7 +159,7 @@ export default function BusinessSettings() {
   if (tab === 'users') {
     return (
       <div className="business-settings">
-        <SettingsTabs tab={tab} setTab={setTab} />
+        <SettingsTabs tab={tab} setTab={selectTab} />
         <BusinessUsers />
       </div>
     );
@@ -154,7 +168,7 @@ export default function BusinessSettings() {
   if (tab === 'policies') {
     return (
       <div className="business-settings">
-        <SettingsTabs tab={tab} setTab={setTab} />
+        <SettingsTabs tab={tab} setTab={selectTab} />
         <CancellationPoliciesSettings />
       </div>
     );
@@ -162,7 +176,7 @@ export default function BusinessSettings() {
 
   return (
     <form className="business-settings" onSubmit={save}>
-      <SettingsTabs tab={tab} setTab={setTab} />
+      <SettingsTabs tab={tab} setTab={selectTab} />
 
       <div className="business-settings-header">
         <div>

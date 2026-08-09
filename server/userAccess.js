@@ -5,6 +5,7 @@ import { supa } from './supa.js';
 export const USER_ACCESS_KEY = 'crm_authorized_users';
 const LOCAL_ACCESS_TABLE = 'crm_user_access_registry';
 export const USER_STATUSES = new Set(['invited', 'active', 'blocked']);
+export const ACCOUNT_TYPES = new Set(['personal', 'shared_station']);
 export const ACCESS_LEVEL = Object.freeze({ none: 0, view: 1, edit: 2 });
 export const ACCESS_LEVELS = new Set(Object.keys(ACCESS_LEVEL));
 
@@ -89,12 +90,27 @@ export const DEFAULT_ROLES = Object.freeze([
   }),
 ]);
 
+// A wall computer is an operational doorway into the system, not a person in
+// the employee roster. Keep this role built in so every existing installation
+// receives the safe preset without re-seeding roles an owner deliberately
+// edited or deleted. Each signed action still asks which employee performed it.
+export const WALL_STATION_ROLE = Object.freeze(preset('wall-station', 'עמדת קיר משותפת', {
+  checkin: 'edit',
+  customers: 'view',
+  pos: 'edit',
+  cash_management: 'edit',
+  safety_checks: 'edit',
+  employees: 'view',
+  shifts: 'edit',
+}));
+
 function emailSet(value) {
   return new Set(String(value || '').split(',').map((email) => email.trim().toLowerCase()).filter(Boolean));
 }
 
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 const unique = (values) => [...new Set((Array.isArray(values) ? values : []).map(String).filter(Boolean))];
+const normalizeAccountType = (value) => ACCOUNT_TYPES.has(String(value || '')) ? String(value) : 'personal';
 
 function normalizePermissionOverrides(raw = {}) {
   const sourceModules = raw?.modules && typeof raw.modules === 'object' ? raw.modules : {};
@@ -180,6 +196,7 @@ export function normalizeAccessEntry(raw = {}) {
     auth_user_id: raw.auth_user_id ? String(raw.auth_user_id) : null,
     name: String(raw.name || email).trim(),
     email,
+    account_type: normalizeAccountType(raw.account_type),
     role_ids: roleIds,
     role: roleIds[0] || 'staff',
     permission_overrides: normalizePermissionOverrides(raw.permission_overrides || {
@@ -228,7 +245,8 @@ function mergeDefaultRoles(roles = []) {
 }
 
 function accessRole(registry, roleId) {
-  const found = (registry?.roles || []).find((role) => role.id === roleId)
+  const found = (roleId === WALL_STATION_ROLE.id ? WALL_STATION_ROLE : null)
+    || (registry?.roles || []).find((role) => role.id === roleId)
     || (!Array.isArray(registry?.roles) ? defaultRoles().find((role) => role.id === roleId) : null)
     || null;
   return found ? normalizeAccessRoleDefinition(found) : null;
@@ -246,6 +264,13 @@ export function employeeMatchForEmail(email, employees = db.get('employees') || 
   if (matches.length === 1) return { employee_id: String(matches[0].id), employee_match: 'matched' };
   if (matches.length > 1) return { employee_id: null, employee_match: 'duplicate' };
   return { employee_id: null, employee_match: 'missing' };
+}
+
+export function employeeMatchForAccessEntry(entry, employees = db.get('employees') || []) {
+  if (normalizeAccountType(entry?.account_type) === 'shared_station') {
+    return { employee_id: null, employee_match: 'not_applicable' };
+  }
+  return employeeMatchForEmail(entry?.email, employees);
 }
 
 export function validateRequestedEmployeeAccess(email, requested, employees) {
@@ -285,7 +310,7 @@ export function applyPermissionOverrides(baseAccess, rawOverrides) {
 
 export function previewAccessForEntry(entry, registry = { roles: defaultRoles() }, employees) {
   if (!entry) return null;
-  const employee = employeeMatchForEmail(entry.email, employees);
+  const employee = employeeMatchForAccessEntry(entry, employees);
   const owner = entry.role === 'owner';
   const assignedRoles = owner
     ? []
@@ -303,6 +328,7 @@ export function previewAccessForEntry(entry, registry = { roles: defaultRoles() 
     id: entry.id,
     name: entry.name,
     email: entry.email,
+    account_type: normalizeAccountType(entry.account_type),
     status: entry.status,
     access_enabled: entry.status !== 'blocked',
     role_ids: owner ? ['owner'] : assignedRoles.map((role) => role.id),
@@ -318,12 +344,13 @@ export function previewAccessForEntry(entry, registry = { roles: defaultRoles() 
 
 export function resolveAccessContext(user, registry = { configured: false, users: [], roles: defaultRoles() }, employees) {
   const legacyRole = legacyCrmRole(user);
-  const employee = employeeMatchForEmail(user?.email, employees || db.get('employees') || []);
+  const employeeRows = employees || db.get('employees') || [];
+  const legacyEmployee = employeeMatchForEmail(user?.email, employeeRows);
   if (legacyRole === 'owner') {
     return {
       role: 'owner', accessRoleId: 'owner', roleIds: ['owner'], roleName: 'מנהל ראשי',
       roleNames: ['מנהל ראשי'], permissions: ['*'], modules: { ...ALL_EDIT },
-      sensitive: { finance: true, hr: true }, ...employee,
+      sensitive: { finance: true, hr: true }, account_type: 'personal', ...legacyEmployee,
     };
   }
   if (!registry?.configured) {
@@ -332,7 +359,8 @@ export function resolveAccessContext(user, registry = { configured: false, users
     const merged = mergeRoleAccess(assigned);
     return {
       role: 'staff', accessRoleId: 'staff', roleIds: ['staff'], roleName: assigned[0]?.name || 'צוות תפעול',
-      roleNames: assigned.map((item) => item.name), permissions: legacyPermissionIds(merged.modules), ...merged, ...employee,
+      roleNames: assigned.map((item) => item.name), permissions: legacyPermissionIds(merged.modules),
+      account_type: 'personal', ...merged, ...legacyEmployee,
     };
   }
   const email = normalizeEmail(user?.email);
@@ -341,6 +369,7 @@ export function resolveAccessContext(user, registry = { configured: false, users
     (item.auth_user_id && String(item.auth_user_id) === id) || item.email === email
   ));
   if (!entry || entry.status === 'blocked') return null;
+  const employee = employeeMatchForAccessEntry(entry, employeeRows);
   // An invitation is an authorization intent, not an authenticated active
   // account. Supabase supplies last_sign_in_at after the invite was accepted.
   if (entry.status !== 'active' && !user?.last_sign_in_at) return null;
@@ -357,6 +386,7 @@ export function resolveAccessContext(user, registry = { configured: false, users
     roleIds: assignedRoles.map((item) => item.id),
     roleName: roleNames.join(' · ') || 'עובד',
     roleNames,
+    account_type: normalizeAccountType(entry.account_type),
     permissions: legacyPermissionIds(effective.modules),
     permissionOverrides: overrides,
     ...effective,
@@ -387,7 +417,7 @@ export async function loadAccessRegistry() {
     const storedVersion = Number(localValue?.version || 1);
     return {
       configured: true,
-      version: 3,
+      version: 4,
       users: (Array.isArray(source) ? source : []).map(normalizeAccessEntry).filter(Boolean),
       roles: storedVersion >= 2
         ? roleSource.map(normalizeAccessRoleDefinition).filter(Boolean)
@@ -401,7 +431,7 @@ export async function loadAccessRegistry() {
   const storedVersion = Number(result.value?.version || 1);
   return {
     configured: true,
-    version: 3,
+    version: 4,
     users: (Array.isArray(source) ? source : []).map(normalizeAccessEntry).filter(Boolean),
     // Version 1 stored only the old custom role list, so seed the new presets once
     // during migration. Version 2 is authoritative: a deliberately deleted preset
@@ -422,10 +452,12 @@ function displayName(authUser, fallback) {
 }
 
 function enrichAuthorizedRow(row, registry) {
-  const match = employeeMatchForEmail(row.email);
+  const accountType = normalizeAccountType(row.account_type);
+  const match = employeeMatchForAccessEntry({ ...row, account_type: accountType });
   const roleIds = row.role === 'owner' ? ['owner'] : unique(row.role_ids);
   return {
     ...row,
+    account_type: accountType,
     role_ids: roleIds,
     role: row.role === 'owner' ? 'owner' : (roleIds[0] || 'employee'),
     role_names: row.role === 'owner'
@@ -506,7 +538,7 @@ export async function sendAuthorizedUserPasswordReset(id, currentOwner) {
 
 async function saveRegistry(registry) {
   const value = {
-    version: 3,
+    version: 4,
     users: registry.users,
     roles: registry.roles,
   };
@@ -536,15 +568,24 @@ function validateRoleIds(registry, values) {
   return roleIds;
 }
 
-export async function inviteAuthorizedUser({ name, email, role, role_ids: rawRoleIds, employee_access_requested: employeeAccessRequested }, currentOwner) {
+export async function inviteAuthorizedUser({ name, email, role, role_ids: rawRoleIds, employee_access_requested: employeeAccessRequested, account_type: rawAccountType }, currentOwner) {
   const normalizedEmail = normalizeEmail(email);
   const cleanName = String(name || '').trim();
   if (!cleanName) throw Object.assign(new Error('שם המשתמש הוא שדה חובה'), { statusCode: 400 });
   if (!/^\S+@\S+\.\S+$/.test(normalizedEmail)) throw Object.assign(new Error('כתובת המייל אינה תקינה'), { statusCode: 400 });
   const registry = ensureRegistryAvailable(await loadAccessRegistry());
+  if (rawAccountType !== undefined && !ACCOUNT_TYPES.has(String(rawAccountType))) {
+    throw Object.assign(new Error('סוג החשבון אינו נתמך'), { statusCode: 400 });
+  }
+  const accountType = normalizeAccountType(rawAccountType);
   const requested = Array.isArray(rawRoleIds) ? rawRoleIds : (role ? [role] : []);
   const roleIds = validateRoleIds(registry, requested);
-  const employeeMatch = validateRequestedEmployeeAccess(normalizedEmail, employeeAccessRequested === true);
+  if (accountType === 'shared_station' && employeeAccessRequested === true) {
+    throw Object.assign(new Error('עמדת עבודה משותפת אינה יכולה להיות מקושרת לתיק עובד'), { statusCode: 400 });
+  }
+  const employeeMatch = accountType === 'shared_station'
+    ? { employee_id: null, employee_match: 'not_applicable' }
+    : validateRequestedEmployeeAccess(normalizedEmail, employeeAccessRequested === true);
   if (!roleIds.length && !employeeMatch.employee_id) {
     throw Object.assign(new Error('יש לבחור לפחות תפקיד אחד או לקשר את המייל לתיק עובד'), { statusCode: 400 });
   }
@@ -563,7 +604,8 @@ export async function inviteAuthorizedUser({ name, email, role, role_ids: rawRol
   const now = new Date().toISOString();
   const next = {
     id: String(authUser?.id || randomUUID()), auth_user_id: authUser?.id ? String(authUser.id) : null,
-    name: cleanName, email: normalizedEmail, role_ids: roleIds, role: roleIds[0] || 'employee',
+    name: cleanName, email: normalizedEmail, account_type: accountType,
+    role_ids: roleIds, role: roleIds[0] || 'employee',
     permission_overrides: { modules: {}, sensitive: {} },
     status: authUser?.last_sign_in_at ? 'active' : 'invited',
     invited_at: authUser?.invited_at || authUser?.created_at || now, updated_at: now,
@@ -580,21 +622,28 @@ export async function updateAuthorizedUser(id, patch, currentOwner) {
   }
   const hasRoles = patch?.role_ids !== undefined || patch?.role !== undefined;
   const hasOverrides = patch?.permission_overrides !== undefined;
+  const hasAccountType = patch?.account_type !== undefined;
+  if (hasAccountType && !ACCOUNT_TYPES.has(String(patch.account_type))) {
+    throw Object.assign(new Error('סוג החשבון אינו נתמך'), { statusCode: 400 });
+  }
   const nextRoles = hasRoles
     ? validateRoleIds(registry, patch.role_ids !== undefined ? patch.role_ids : [patch.role])
     : null;
   const nextOverrides = hasOverrides ? validatePermissionOverrides(patch.permission_overrides) : null;
-  if (status === undefined && !hasRoles && !hasOverrides) throw Object.assign(new Error('לא נשלח עדכון תקין'), { statusCode: 400 });
+  if (status === undefined && !hasRoles && !hasOverrides && !hasAccountType) throw Object.assign(new Error('לא נשלח עדכון תקין'), { statusCode: 400 });
   const rows = await listAuthorizedUsers(currentOwner);
   const target = rows.find((row) => String(row.id) === String(id));
   if (!target) throw Object.assign(new Error('המשתמש לא נמצא'), { statusCode: 404 });
   if (target.role === 'owner') throw Object.assign(new Error('לא ניתן לשנות את המנהל הראשי'), { statusCode: 400 });
-  if (nextRoles?.length === 0 && !target.employee_id) {
+  const nextAccountType = hasAccountType ? normalizeAccountType(patch.account_type) : normalizeAccountType(target.account_type);
+  const mayUseEmployeeAccess = nextAccountType === 'personal' && Boolean(target.employee_id);
+  if (nextRoles?.length === 0 && !mayUseEmployeeAccess) {
     throw Object.assign(new Error('משתמש שאינו מקושר לעובד חייב לפחות תפקיד אחד'), { statusCode: 400 });
   }
   const updated = {
     ...target,
     ...(status !== undefined ? { status } : {}),
+    ...(hasAccountType ? { account_type: nextAccountType } : {}),
     ...(nextRoles ? { role_ids: nextRoles, role: nextRoles[0] || 'employee' } : {}),
     ...(nextOverrides ? { permission_overrides: nextOverrides } : {}),
     updated_at: new Date().toISOString(),
@@ -615,7 +664,7 @@ export async function removeAuthorizedUser(id, currentOwner) {
 export async function listAccessRoles() {
   const registry = ensureRegistryAvailable(await loadAccessRegistry());
   return {
-    version: 3,
+    version: 4,
     permissions: OPERATIONAL_PERMISSIONS,
     modules: MODULE_CATALOG,
     sensitive: SENSITIVE_CATALOG,
@@ -627,6 +676,12 @@ export async function listAccessRoles() {
       {
         id: 'employee', name: 'עובד', modules: modulesOf(), sensitive: { finance: false, hr: false },
         permissions: [], locked: true, system: true, selfAccess: true,
+      },
+      {
+        ...WALL_STATION_ROLE,
+        locked: true,
+        system: true,
+        sharedStation: true,
       },
       ...registry.roles,
     ],
@@ -663,7 +718,7 @@ export async function createAccessRole(draft) {
 }
 
 export async function updateAccessRole(id, patch) {
-  if (id === 'owner' || id === 'employee') throw Object.assign(new Error('לא ניתן לערוך תפקיד מערכת'), { statusCode: 400 });
+  if (id === 'owner' || id === 'employee' || id === WALL_STATION_ROLE.id) throw Object.assign(new Error('לא ניתן לערוך תפקיד מערכת'), { statusCode: 400 });
   const registry = ensureRegistryAvailable(await loadAccessRegistry());
   const current = registry.roles.find((role) => role.id === id);
   if (!current) throw Object.assign(new Error('התפקיד לא נמצא'), { statusCode: 404 });
@@ -677,7 +732,7 @@ export async function updateAccessRole(id, patch) {
 }
 
 export async function deleteAccessRole(id, replacementRoleId = null) {
-  if (id === 'owner' || id === 'employee') throw Object.assign(new Error('לא ניתן למחוק תפקיד מערכת'), { statusCode: 400 });
+  if (id === 'owner' || id === 'employee' || id === WALL_STATION_ROLE.id) throw Object.assign(new Error('לא ניתן למחוק תפקיד מערכת'), { statusCode: 400 });
   const registry = ensureRegistryAvailable(await loadAccessRegistry());
   if (!registry.roles.some((role) => role.id === id)) throw Object.assign(new Error('התפקיד לא נמצא'), { statusCode: 404 });
   const assigned = registry.users.filter((user) => user.role_ids.includes(id));
