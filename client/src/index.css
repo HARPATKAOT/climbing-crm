@@ -5628,3 +5628,8 @@ select option, select optgroup {
   font-style: italic;
   white-space: nowrap;
 }
+
+.activity-day-toggle.is-disabled {
+  color: var(--text-3);
+  cursor: default;
+}

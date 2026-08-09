@@ -1810,8 +1810,16 @@ function RegularActivityModal({
                     </div>
                   )}
 
-                  {/* קייטנה נמשכת כמה ימים ולא כל הורה רוצה את כולם. מוצג רק
-                      באירוע רב-יומי — ליום אחד אין „ימים בודדים”. */}
+                  {/* קייטנה נמשכת כמה ימים ולא כל הורה רוצה את כולם.
+                      באירוע חד-יומי אין „ימים בודדים”, אבל התיבה עדיין מוצגת
+                      מושבתת עם ההסבר — אחרת התנאי בלתי נראה, ומי שמחפש את
+                      האפשרות לא מבין למה היא חסרה. */}
+                  {paidPerParticipant && !multiDay && (
+                    <label className="activity-day-toggle is-disabled">
+                      <input type="checkbox" checked={false} disabled readOnly />
+                      <span>אפשר הרשמה ליום בודד — יש לקבוע תאריך סיום</span>
+                    </label>
+                  )}
                   {multiDay && paidPerParticipant && (
                     <>
                       <label className="activity-day-toggle">
