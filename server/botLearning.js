@@ -278,21 +278,41 @@ export function withBotReplies(db, rows = []) {
     const thread = messages
       .filter((m) => phonesMatch(m.phone || '', row.phone))
       .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
-    return { ...row, reply_excerpt: clip(lastBotAnswer(thread, at), MAX_EXCERPT) };
+    // The question on the card, found in the thread — then whatever the bot
+    // said to it. Matching the text keeps the pair together even for rows
+    // written before the reply was stored.
+    const wanted = String(row.inbound_excerpt || '').trim();
+    const inbound = [...thread].reverse().find((m) => m.direction === 'inbound'
+      && Date.parse(m.created_at || '') <= at + 60_000
+      && (!wanted || String(m.message || m.body || '').trim() === wanted));
+    if (!inbound) return row;
+    return { ...row, reply_excerpt: clip(botAnswerTo(thread, inbound), MAX_EXCERPT) };
   });
 }
 
 /**
- * The last thing the bot actually answered before it handed over. The handoff
- * acknowledgement itself ("מעבירים אתכם לצוות") is not an answer — it is the
- * bot saying it has none, and it is written with `source: 'bot_control'`.
+ * What the bot answered *to this message* — the reply that comes after it and
+ * before the customer writes again.
+ *
+ * Reading backwards from the handoff instead put the wrong pair on the screen:
+ * the customer's "שהם" was shown against "נעים מאוד אלון, ומה שם המשפחה?", the
+ * question that had prompted it. The card read backwards, and the staff
+ * alternative was being judged against a reply to a different message.
+ *
+ * The handoff acknowledgement ("מעבירים אתכם לצוות") is not an answer — it is
+ * the bot saying it has none — and it is written with `source: 'bot_control'`.
+ * When that is all there is, the answer is empty, which is the truth.
  */
-function lastBotAnswer(messages, handoffAt) {
-  const answer = [...messages].reverse().find((m) => m.direction === 'outbound'
-    && m.is_ai
-    && String(m.source || '') !== 'bot_control'
-    && Date.parse(m.created_at || '') <= handoffAt + 60_000);
-  return answer ? String(answer.message || answer.body || '') : '';
+function botAnswerTo(messages, inbound) {
+  const index = messages.findIndex((m) => m === inbound);
+  if (index < 0) return '';
+  for (const message of messages.slice(index + 1)) {
+    if (message.direction === 'inbound') break;
+    if (message.direction !== 'outbound' || !message.is_ai) continue;
+    if (String(message.source || '') === 'bot_control') continue;
+    return String(message.message || message.body || '');
+  }
+  return '';
 }
 
 /**
@@ -336,10 +356,10 @@ export async function proposeFromHandoffStaffReply({
     phone: normalized,
     rating: 'down',
     alternative: staffText,
-    // What the bot said before it gave up, so the approval screen can show
+    // What the bot said to this message, so the approval screen can show
     // "instead of this — say that". Without it the card asked staff to judge a
     // replacement for an answer they could not see.
-    replyExcerpt: lastBotAnswer(messages, handoffAt),
+    replyExcerpt: botAnswerTo(messages, inbound),
     inboundExcerpt: inbound.message || inbound.body || '',
     note: 'הוצע אוטומטית מתשובת צוות אחרי העברה',
     createdBy,

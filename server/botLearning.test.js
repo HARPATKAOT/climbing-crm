@@ -163,6 +163,13 @@ test('a reaction is not a question, and never becomes a learned example', async 
 test('an older proposal gets its bot reply filled in from the conversation', () => {
   const db = threadDb([
     {
+      id: 'in-1',
+      phone: '0599111000',
+      direction: 'inbound',
+      message: 'כמה עולה יום הולדת?',
+      created_at: '2026-08-06T08:58:00.000Z',
+    },
+    {
       id: 'out-1',
       phone: '0599111000',
       direction: 'outbound',
@@ -195,6 +202,62 @@ test('an older proposal gets its bot reply filled in from the conversation', () 
   // A row that already carries one is left exactly as it is.
   const [kept] = withBotReplies(db, [{ id: 'f-2', phone: '0599111000', reply_excerpt: 'כבר שמור', created_at: HANDOFF_AT }]);
   assert.equal(kept.reply_excerpt, 'כבר שמור');
+});
+
+test('the reply shown is the answer to that question, not the one before it', () => {
+  // «שהם» was shown against «נעים מאוד אלון, ומה שם המשפחה?» — the question
+  // that had prompted it. The card read backwards, and the staff alternative
+  // was being judged against a reply to a different message.
+  const db = threadDb([
+    { id: 'in-1', phone: '0599111000', direction: 'inbound', message: 'אלון', created_at: '2026-08-06T08:50:00.000Z' },
+    {
+      id: 'out-1',
+      phone: '0599111000',
+      direction: 'outbound',
+      is_ai: true,
+      source: 'ai',
+      message: 'נעים מאוד אלון 🙂 ומה שם המשפחה?',
+      created_at: '2026-08-06T08:50:30.000Z',
+    },
+    { id: 'in-2', phone: '0599111000', direction: 'inbound', message: 'שהם', created_at: '2026-08-06T08:51:00.000Z' },
+    {
+      id: 'out-2',
+      phone: '0599111000',
+      direction: 'outbound',
+      is_ai: true,
+      source: 'ai',
+      message: 'תודה אלון שהם! במה אפשר לעזור?',
+      created_at: '2026-08-06T08:51:20.000Z',
+    },
+  ]);
+
+  const [filled] = withBotReplies(db, [{
+    id: 'f-3',
+    phone: '0599111000',
+    reply_excerpt: '',
+    inbound_excerpt: 'שהם',
+    created_at: '2026-08-06T08:52:00.000Z',
+  }]);
+  assert.equal(filled.reply_excerpt, 'תודה אלון שהם! במה אפשר לעזור?');
+
+  // And when the only thing after the question was the handoff line, there is
+  // no answer to show — an empty field is the truth, not an older message.
+  const noAnswer = threadDb([
+    { id: 'in-1', phone: '0599111000', direction: 'inbound', message: 'אלון', created_at: '2026-08-06T08:50:00.000Z' },
+    {
+      id: 'out-1', phone: '0599111000', direction: 'outbound', is_ai: true, source: 'ai',
+      message: 'נעים מאוד אלון 🙂', created_at: '2026-08-06T08:50:30.000Z',
+    },
+    { id: 'in-2', phone: '0599111000', direction: 'inbound', message: 'שהם', created_at: '2026-08-06T08:51:00.000Z' },
+    {
+      id: 'out-2', phone: '0599111000', direction: 'outbound', is_ai: true, source: 'bot_control',
+      message: 'מעבירים אתכם לצוות', created_at: '2026-08-06T08:51:20.000Z',
+    },
+  ]);
+  const [empty] = withBotReplies(noAnswer, [{
+    id: 'f-4', phone: '0599111000', reply_excerpt: '', inbound_excerpt: 'שהם', created_at: '2026-08-06T08:52:00.000Z',
+  }]);
+  assert.equal(empty.reply_excerpt, '');
 });
 
 test('a photo with no caption is not a question either', async () => {
