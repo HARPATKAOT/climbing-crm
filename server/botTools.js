@@ -1611,12 +1611,14 @@ export function buildCustomerTools({
             level: level.level,
           });
           const saved = existing.find((row) => row.program === evaluation.program);
+          const direct = ['returning', 'approved'].includes(String(saved?.status || ''));
           return {
             מזהה_קבוצה: group.id,
             קבוצה: describeGroup(group),
             מסלול: evaluation.program,
             רמה: level.level || 'לא ידועה',
-            מועמד: Boolean(evaluation.candidate),
+            מועמד: Boolean(evaluation.candidate) && !direct,
+            זכאי_לשיבוץ_ישיר: direct,
             חוזק: evaluation.strength || '',
             סטטוס_אישור: saved?.status || (evaluation.candidate ? 'נדרש אישור צוות' : 'לא מתאים לפי המדיניות'),
             סיבה: saved?.status || evaluation.reason,
@@ -1627,8 +1629,10 @@ export function buildCustomerTools({
         מגדר: student.gender || 'לא ידוע',
         רמת_מבחן_אחרונה: level.level || 'לא ידועה',
         אפשרויות: groups,
-        הערה: groups.some((row) => row.מועמד)
-          ? 'מועמד חדש אינו משובץ לפני אישור צוות, גם ברמת 6A ומעלה.'
+        הערה: groups.some((row) => row.זכאי_לשיבוץ_ישיר)
+          ? 'למסלול שמסומן returning או approved כבר קיימת זכאות: אין לבקש אישור צוות נוסף ויש להמשיך ל-startSignup אחרי בחירת הלקוח. מסלולים אחרים עדיין כפופים לסטטוס שמופיע לידם.'
+          : groups.some((row) => row.מועמד)
+            ? 'מועמד חדש אינו משובץ לפני אישור צוות, גם ברמת 6A ומעלה.'
           : 'אין להציע מתקדמים או נבחרת בלי התאמה בכלי. אפשר להציע קבוצות רגילות.',
       };
     },
@@ -1640,6 +1644,17 @@ export function buildCustomerTools({
       if (picked.error) return picked;
       if (!isRestrictedGroup(picked.group)) {
         return { error: 'הקבוצה שנבחרה היא קבוצה רגילה ואינה דורשת אישור מסלול' };
+      }
+      const direct = canPlaceInRestrictedGroup(db, child.student, picked.group);
+      if (direct.allowed && ['returning', 'approved'].includes(direct.reason)) {
+        return {
+          נדרש_אישור: false,
+          זכאי_לשיבוץ_ישיר: true,
+          מתאמן: child.student.name || '',
+          קבוצה: describeGroup(picked.group),
+          סטטוס_זכאות: direct.reason,
+          הערה: 'כבר קיימת זכאות למסלול. אין לפתוח בקשת אישור ואין לומר שממתינים לצוות; יש להמשיך עכשיו ל-startSignup לאחר שהלקוח בחר בקבוצה.',
+        };
       }
       const result = await requestProgramApproval(db, persistCore, {
         student: child.student,

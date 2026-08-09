@@ -183,6 +183,51 @@ test('אישור צוות ממשיך לפי מזהי המתאמן והקבוצה
   });
 });
 
+test('ממשיך מהעונה הקודמת נכנס לנבחרת בלי לפתוח בקשת אישור חדשה', async () => {
+  const squad = {
+    id: 'g-returning-squad',
+    name: 'נבחרת בוגרת — ב׳+ה׳ 19:10',
+    ageCategory: 'תיכון',
+    skillLevel: 'נבחרת',
+    day: 4,
+    time: '19:10',
+    maxSlots: 16,
+    priceWeek: 0,
+    priceTwice: 560,
+    signupLinkTwice: 'https://centre.example/returning-squad',
+  };
+  const returning = childYotam({
+    id: 's-returning', name: 'עידו גרינברג', status: 'past_registered', birthDate: '2010-05-01',
+  });
+  await withSeed({
+    groups: [squad],
+    students: [returning],
+    health_declarations: [declarationFor(returning.id)],
+    participation_waivers: [waiverFor(returning.id)],
+    program_eligibility: [{
+      id: 'pe-returning', student_id: returning.id, program: 'adult_squad', season: '2026-27', status: 'returning',
+    }],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const approval = await tools.requestPlacementApproval({
+      childName: returning.name, band: 'תיכון', frequency: 'פעמיים בשבוע',
+    });
+    assert.equal(approval.נדרש_אישור, false, JSON.stringify(approval));
+    assert.equal(approval.זכאי_לשיבוץ_ישיר, true);
+    assert.equal((db.get('placement_requests') || []).length, 0);
+
+    const signup = await tools.startSignup({
+      childName: returning.name,
+      studentId: returning.id,
+      groupId: squad.id,
+      frequency: 'פעמיים בשבוע',
+    });
+    assert.equal(signup.error, undefined);
+    assert.equal(student(returning.id).status, 'pending_signup');
+    assert.equal(student(returning.id).groupId, squad.id);
+  });
+});
+
 /** Both documents in force, which is what "signed the form" means. */
 function signedFormFor(studentIds = []) {
   return {
