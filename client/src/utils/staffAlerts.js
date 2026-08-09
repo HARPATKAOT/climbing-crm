@@ -139,6 +139,20 @@ export const STAFF_ALERT_KINDS = [
     hint: 'הבוט שיבץ מתאמן לקבוצה או לרשימת המתנה',
   },
   {
+    key: 'placement_approval',
+    category: 'management',
+    scope: 'all',
+    label: 'בקשת אישור למתקדמים או לנבחרת',
+    hint: 'מועמד חדש ממתין להחלטת צוות לפני שיבוץ ושליחת קישור',
+  },
+  {
+    key: 'ai_outage',
+    category: 'management',
+    scope: 'all',
+    label: 'שירות הבינה אינו זמין',
+    hint: 'התראה אחת בתקלה והתראה אחת לאחר התאוששות Gemini',
+  },
+  {
     key: 'cash_register_closed',
     category: 'management',
     scope: 'all',

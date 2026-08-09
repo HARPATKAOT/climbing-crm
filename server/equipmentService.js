@@ -23,7 +23,7 @@ export const EQUIPMENT_ITEM_LABELS = {
  * and can never be repaired in place — an approved button host is frozen.
  * This one points at the server redirect instead, so the destination stays ours.
  */
-export const EQUIPMENT_TEMPLATE_NAME = 'equipment_payment_link';
+export const EQUIPMENT_TEMPLATE_NAME = 'equipment_update_or_purchase_v2';
 export const EQUIPMENT_TEMPLATE_LEGACY_NAMES = ['equipment_payment'];
 
 /**
@@ -766,26 +766,26 @@ export function ensureEquipmentWhatsappTemplate({ db, persist } = {}) {
   const existing = templates.find(
     (t) =>
       (t.meta_name || t.name) === EQUIPMENT_TEMPLATE_NAME ||
-      t.id === 'tpl-equipment-payment-link'
+      t.id === 'tpl-equipment-update-or-purchase-v2'
   );
   if (existing) return existing;
 
   const buttonUrl = `${equipmentRedirectBase()}${EQUIPMENT_REDIRECT_PATH}/{{1}}`;
 
   const template = db.insert('message_templates', {
-    id: 'tpl-equipment-payment-link',
+    id: 'tpl-equipment-update-or-purchase-v2',
     name: EQUIPMENT_TEMPLATE_NAME,
     meta_name: EQUIPMENT_TEMPLATE_NAME,
     language: 'he',
     category: 'UTILITY',
     status: 'DRAFT',
     usage:
-      'נשלחת להורה כשיש לילד פריטי ציוד שטרם שולמו (נעליים, חולצת חוג, שק מגנזיום). ' +
-      'נשלחת מתיק המתאמן או ממסך הציוד. הכפתור מוביל לדף תשלום משפחתי שבו בוחרים מתאמן אחד או יותר.',
+      'נשלחת לכל משפחה כדי לעדכן ציוד קיים משנים קודמות או לרכוש את החסר. ' +
+      'הכפתור מוביל לדף שבו מסמנים מה כבר קיים ורוכשים רק פריטים חסרים.',
     body:
       'שלום {{1}},\n' +
-      'לתשלום ציוד האימונים של {{2}} לחצו על הכפתור.\n' +
-      'אפשר לבחור את המתאמנים ואת הציוד לכל אחד מהם ולשלם פעם אחת.',
+      'לעדכון ציוד האימונים של {{2}} לחצו על הכפתור.\n' +
+      'גם אם יש ציוד משנים קודמות, יש לסמן בדף מה כבר קיים ולרכוש רק את החסר.',
     header: '',
     footer: DEFAULT_BUSINESS_PROFILE.display_name,
     body_examples: ['דנה כהן', 'נועם כהן'],
@@ -796,7 +796,7 @@ export function ensureEquipmentWhatsappTemplate({ db, persist } = {}) {
     buttons: [
       {
         type: 'URL',
-        text: 'לתשלום ציוד',
+        text: 'לעדכון או רכישת ציוד',
         url: buttonUrl,
         example: ['demo-token'],
       },

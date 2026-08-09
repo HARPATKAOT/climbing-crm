@@ -158,6 +158,7 @@ export default function DailyWork({
   const [markingId, setMarkingId] = useState(null);
   const [suggestions, setSuggestions] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [placementRequests, setPlacementRequests] = useState([]);
   const [queuesLoaded, setQueuesLoaded] = useState(false);
   const [busyId, setBusyId] = useState(null);
 
@@ -190,6 +191,7 @@ export default function DailyWork({
     Promise.all([
       load('/api/ai/suggestions?status=pending', setSuggestions),
       load('/api/tasks?status=open', setTasks),
+      load('/api/placement-requests?status=pending', setPlacementRequests),
     ]).then(() => {
       if (!cancelled) setQueuesLoaded(true);
     });
@@ -283,6 +285,25 @@ export default function DailyWork({
     }
   };
 
+  const reviewPlacement = async (id, decision) => {
+    if (busyId) return;
+    setBusyId(id);
+    try {
+      const response = await fetch(`/api/placement-requests/${id}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'review failed');
+      setPlacementRequests((current) => current.filter((row) => String(row.id) !== String(id)));
+    } catch (error) {
+      console.error('Failed to review placement request:', error);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const markHandled = async (event, entry) => {
     event.stopPropagation();
     const parentId = entry.parent?.id;
@@ -349,6 +370,36 @@ export default function DailyWork({
       </section>
 
       <div className="daily-work-grid">
+        <WorkSection
+          icon={UserRoundPlus}
+          title="אישורי מתקדמים ונבחרת"
+          count={placementRequests.length}
+          empty="אין מועמדים שממתינים לאישור"
+          loading={!queuesLoaded}
+          tone="#F59E0B"
+        >
+          {placementRequests.map((row) => (
+            <ItemRow
+              key={row.id}
+              title={`${row.student_name || 'מתאמן/ת'} · ${row.group_name || row.program}`}
+              meta={[row.parent_name, row.grade_or_band, row.level ? `רמה ${row.level}` : ''].filter(Boolean).join(' · ')}
+              note={row.strength === 'strong' ? 'מועמד/ת חזק/ה — עדיין נדרש אישור צוות' : 'מועמד/ת אפשרי/ת — נדרש אישור צוות'}
+              badge={row.strength === 'strong' ? '6A ומעלה' : '5A–5C'}
+              onOpen={openParentCard(row.parent_id)}
+              actions={(
+                <>
+                  <button type="button" className="btn btn-success btn-sm" disabled={busyId === row.id} onClick={() => reviewPlacement(row.id, 'approved')}>
+                    <Check size={14} /> אשר
+                  </button>
+                  <button type="button" className="btn btn-ghost btn-sm" disabled={busyId === row.id} onClick={() => reviewPlacement(row.id, 'rejected')}>
+                    <X size={14} /> דחה
+                  </button>
+                </>
+              )}
+            />
+          ))}
+        </WorkSection>
+
         <WorkSection
           icon={Sparkles}
           title="הצעות AI לאישור"

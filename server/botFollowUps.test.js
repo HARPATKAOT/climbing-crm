@@ -11,6 +11,7 @@ import {
   newFollowUpId,
   inWindowSendAt,
   planFollowUp,
+  planMonthFollowUp,
 } from './botFollowUps.js';
 
 const TODAY = '2026-08-03';
@@ -83,6 +84,14 @@ test('a long follow-up admits it needs a template', () => {
   assert.equal(stale.needs_template, true);
 
   assert.equal(planFollowUp({ lastInboundAt: '2026-08-03T11:00:00Z' }), null);
+});
+
+test('a month-only request is scheduled seven days before the month at 09:00 Israel time', () => {
+  const plan = planMonthFollowUp({ targetMonth: 'אוקטובר', now: new Date('2026-08-09T12:00:00Z') });
+  assert.equal(plan.due_date, '2026-09-24');
+  assert.equal(plan.target_month, '2026-10');
+  assert.equal(plan.needs_template, true);
+  assert.equal(new Date(plan.due_at).toISOString(), '2026-09-24T06:00:00.000Z');
 });
 
 test('only open follow-ups that have come due are picked up', () => {

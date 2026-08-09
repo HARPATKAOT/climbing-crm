@@ -187,6 +187,20 @@ export const STAFF_ALERT_KINDS = [
     hint: 'הבוט שיבץ מתאמן לקבוצה או לרשימת המתנה',
   },
   {
+    key: 'placement_approval',
+    category: 'management',
+    scope: 'all',
+    label: 'בקשת אישור למתקדמים או לנבחרת',
+    hint: 'מועמד חדש ממתין להחלטת צוות לפני שיבוץ ושליחת קישור',
+  },
+  {
+    key: 'ai_outage',
+    category: 'management',
+    scope: 'all',
+    label: 'שירות הבינה אינו זמין',
+    hint: 'התראה אחת בתקלה והתראה אחת לאחר התאוששות Gemini',
+  },
+  {
     key: 'cash_register_closed',
     category: 'management',
     scope: 'all',
@@ -339,6 +353,19 @@ export function alertRecipients(store, kind, settings = {}) {
 
   const unique = [...new Set(subscribed)];
   if (unique.length) return { phones: unique, source: 'employees' };
+
+  // The AI circuit must never fail silently on a fresh installation. Dalak is
+  // the operational owner; once explicit subscribers are configured they take
+  // precedence over this bootstrap recipient.
+  if (kind === 'ai_outage') {
+    const ownerPhones = activeEmployees(store)
+      .filter((employee) => String(employee.id || '') === 'em1784923985754'
+        || /דלק/u.test(String(employee.name || '')))
+      .map((employee) => String(employee.phone || '').trim())
+      .filter(Boolean);
+    if (ownerPhones.length) return { phones: [...new Set(ownerPhones)], source: 'employees' };
+    return { phones: ['0508862878'], source: 'settings' };
+  }
 
   if (staffAlertKind(kind)?.scope === 'own') return { phones: [], source: 'none' };
 

@@ -10,6 +10,16 @@ import { db } from './db.js';
 import { enrichGroupsWithCapacity } from './groupCapacity.js';
 import { groupMatchesGradeLetter } from './groupBands.js';
 import { getSortedGroupDays, groupMeetsOnDay } from './attendanceUtils.js';
+import { enrichGroupsWithBotMeta } from './groupMetadata.js';
+import {
+  canPlaceInRestrictedGroup,
+  currentSeason,
+  eligibilityForStudent,
+  evaluateProgramCandidate,
+  isRestrictedGroup,
+  latestLevelTest,
+  requestProgramApproval,
+} from './placementEligibility.js';
 import { studentsForParent, updateCustomerFullName } from './whatsappBot.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { participationEligibility } from './participationEligibility.js';
@@ -340,12 +350,16 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
           type: 'integer',
           description: 'בעוד כמה ימים לחזור: 1 = מחר, 7 = בעוד שבוע. עד 14',
         },
+        targetMonth: {
+          type: 'string',
+          description: 'כאשר הלקוח ציין חודש בלבד, למשל אוקטובר או 2026-10. המערכת תקבע שבעה ימים לפני תחילת החודש בשעה 09:00.',
+        },
         note: {
           type: 'string',
           description: 'על מה לחזור, במילים של הלקוח — למשל «ההרשמה של לילי לחוג»',
         },
       },
-      required: ['days', 'note'],
+      required: ['note'],
     },
   },
   {
@@ -381,6 +395,40 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
       properties: {
         childName: { type: 'string', description: 'שם הילד כפי שמופיע בכרטיס' },
       },
+    },
+  },
+  {
+    name: 'getPlacementEligibility',
+    description:
+      'בודק התאמה אמיתית של מתאמן/ת למתקדמים ולנבחרת לפי מבחן הרמה, הגיל/הכיתה, '
+      + 'היסטוריית המסלול ואישורי הצוות. יש לקרוא לכלי לפני שמציעים מתקדמים או נבחרת; '
+      + 'הכלי אינו משבץ ואינו מנחש התאמה כשחסר מידע.',
+    parameters: {
+      type: 'object',
+      properties: {
+        childName: { type: 'string', description: 'שם המתאמן/ת כפי שמופיע בכרטיס' },
+        grade: { type: 'string', description: 'הכיתה הנוכחית, אם נמסרה בשיחה' },
+        band: { type: 'string', description: 'חטיבה / תיכון / בוגרים, אם נמסר' },
+      },
+      required: ['childName'],
+    },
+  },
+  {
+    name: 'requestPlacementApproval',
+    description:
+      'פותח בקשת אישור אחת לצוות עבור מועמד/ת חדש/ה למתקדמים או לנבחרת. '
+      + 'יש להשתמש רק אחרי getPlacementEligibility וכאשר הלקוח רוצה את המסלול המוצע. '
+      + 'הפעולה אינה משבצת ואינה מאשרת הרשמה.',
+    parameters: {
+      type: 'object',
+      properties: {
+        childName: { type: 'string', description: 'שם המתאמן/ת' },
+        grade: { type: 'string', description: 'הכיתה הנוכחית' },
+        band: { type: 'string', description: 'חטיבה / תיכון / בוגרים' },
+        day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת' },
+        time: { type: 'string', description: 'שעת הקבוצה' },
+      },
+      required: ['childName'],
     },
   },
   {
@@ -694,7 +742,7 @@ function selectGroups({
   frequency = '',
   includeSquads = false,
 } = {}) {
-  let groups = db.get('groups') || [];
+  let groups = enrichGroupsWithBotMeta(db, db.get('groups') || []);
   const wantedLevel = String(level || '').trim();
   if (wantedLevel) {
     groups = groups.filter((g) => String(g.skillLevel || '') === wantedLevel);
@@ -1155,9 +1203,8 @@ export function buildCustomerTools({
 
       return {
         נרשם_לבדיקה: student.name || '',
-        הערה: 'הדיווח נשמר לסנכרון פנימי מול המתנ״ס. יש להודות ללקוח ולומר '
-          + 'שמבחינתו ההרשמה הושלמה ואין צורך באישור נוסף מצוות הקיר. אין לומר '
-          + 'שהסטטוס הפנימי בכרטיס כבר הסתנכרן.',
+        הערה: 'הדיווח נשמר לבדיקה מול המתנ״ס. יש להודות ללקוח ולומר שהדיווח התקבל '
+          + 'ושהצוות יאמת את ההרשמה. אין לומר שההרשמה אושרה או שהסטטוס כבר הסתנכרן.',
       };
     },
 
@@ -1232,17 +1279,18 @@ export function buildCustomerTools({
      * had nowhere to write down that it had promised something. Now it does, and
      * the daily run brings it back.
      */
-    scheduleFollowUp: async ({ days, note } = {}) => {
+    scheduleFollowUp: async ({ days, targetMonth, note } = {}) => {
       if (!parent?.id) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
       const subject = String(note || '').trim();
       if (!subject) return { error: 'חסר על מה לחזור' };
 
       const plan = planFollowUp({
         days,
+        targetMonth,
         lastInboundAt: parent.last_inbound_whatsapp,
         settings,
       });
-      if (!plan) return { error: 'צריך לציין בעוד כמה ימים לחזור (1 = מחר)' };
+      if (!plan) return { error: 'צריך לציין בעוד כמה ימים לחזור או חודש יעד' };
 
       const existing = findOpenFollowUp(db, { parentId: parent.id, reason: 'customer_asked' });
       if (existing) {
@@ -1464,8 +1512,92 @@ export function buildCustomerTools({
         מתאמן: student.name || '',
         פריטים: describeEquipmentItems(itemTypes, shirtSize),
         קישור: buildRedirectUrl('e', token),
-        הערה: 'זהו ציוד חובה לאימונים. יש לומר שאלה הפריטים שחסרים, ולשלוח את '
-          + 'הקישור להשלמת הרכישה — בלי לנקוב בסכום ובלי לפרט מחיר לפריט.',
+        הערה: 'יש לשלוח את הקישור גם למי שיש לו ציוד משנים קודמות: בדף מסמנים '
+          + 'מה כבר קיים ורוכשים רק את החסר. הסימון אינו מחייב וניתן לביטול. '
+          + 'בלי לנקוב בסכום ובלי לפרט מחיר לפריט.',
+      };
+    },
+
+    getPlacementEligibility: async ({ childName, grade, band } = {}) => {
+      if (!parent) return { error: 'אין כרטיס לקוח — יש להעביר לצוות' };
+      const named = String(childName || '').trim().split(/\s+/)[0];
+      const kids = studentsForParent(parent);
+      const matches = named ? kids.filter((s) => String(s.name || '').includes(named)) : kids;
+      if (matches.length !== 1) {
+        return {
+          error: matches.length ? 'יש כמה מתאמנים מתאימים — צריך לציין שם' : 'המתאמן לא נמצא בכרטיס',
+          מתאמנים: kids.map((s) => s.name || '').filter(Boolean),
+        };
+      }
+      const student = matches[0];
+      const level = latestLevelTest(db, student.id);
+      const existing = eligibilityForStudent(db, student.id, { season: currentSeason() });
+      const groups = selectGroups({ grade, band, includeSquads: true })
+        .filter(isRestrictedGroup)
+        .map((group) => {
+          const evaluation = evaluateProgramCandidate({
+            student,
+            group,
+            gradeOrBand: grade || band || group.ageCategory,
+            level: level.level,
+          });
+          const saved = existing.find((row) => row.program === evaluation.program);
+          return {
+            מזהה_קבוצה: group.id,
+            קבוצה: describeGroup(group),
+            מסלול: evaluation.program,
+            רמה: level.level || 'לא ידועה',
+            מועמד: Boolean(evaluation.candidate),
+            חוזק: evaluation.strength || '',
+            סטטוס_אישור: saved?.status || (evaluation.candidate ? 'נדרש אישור צוות' : 'לא מתאים לפי המדיניות'),
+            סיבה: saved?.status || evaluation.reason,
+          };
+        });
+      return {
+        מתאמן: student.name || '',
+        מגדר: student.gender || 'לא ידוע',
+        רמת_מבחן_אחרונה: level.level || 'לא ידועה',
+        אפשרויות: groups,
+        הערה: groups.some((row) => row.מועמד)
+          ? 'מועמד חדש אינו משובץ לפני אישור צוות, גם ברמת 6A ומעלה.'
+          : 'אין להציע מתקדמים או נבחרת בלי התאמה בכלי. אפשר להציע קבוצות רגילות.',
+      };
+    },
+
+    requestPlacementApproval: async ({ childName, grade, band, day, time } = {}) => {
+      const child = requireDeclaredChild(parent, childName);
+      if (child.error) return child;
+      const picked = pickSingleGroup({ grade, band, day, time });
+      if (picked.error) return picked;
+      if (!isRestrictedGroup(picked.group)) {
+        return { error: 'הקבוצה שנבחרה היא קבוצה רגילה ואינה דורשת אישור מסלול' };
+      }
+      const result = await requestProgramApproval(db, persistCore, {
+        student: child.student,
+        parent,
+        group: picked.group,
+        gradeOrBand: grade || band || picked.group.ageCategory,
+      });
+      if (!result.ok) {
+        return {
+          error: result.error,
+          רמה: result.evaluation?.level || latestLevelTest(db, child.student.id).level || 'לא ידועה',
+          הערה: 'אם הרמה נמוכה מ-5A יש להציע קבוצה רגילה; אם המידע חסר יש להעביר לבדיקה אנושית.',
+        };
+      }
+      journal(
+        'placement_approval_requested',
+        `נפתחה בקשת אישור ל${child.student.name || 'מתאמן/ת'} עבור ${describeGroup(picked.group)}`,
+        { request_id: result.request?.id, group_id: picked.group.id, level: result.evaluation?.level },
+        child.student
+      );
+      return {
+        נשלח_לאישור: true,
+        כבר_קיים: Boolean(result.duplicate),
+        מתאמן: child.student.name || '',
+        קבוצה: describeGroup(picked.group),
+        רמה: result.evaluation?.level || '',
+        הערה: 'יש לומר בקצרה שההתאמה הועברה לאישור הצוות. אין לשלוח קישור הרשמה ואין לומר שהשיבוץ אושר.',
       };
     },
 
@@ -1517,6 +1649,35 @@ export function buildCustomerTools({
         };
       }
 
+      const restricted = canPlaceInRestrictedGroup(db, student, group);
+      if (!restricted.allowed) {
+        if (restricted.reason === 'staff_approval_required') {
+          const requested = await requestProgramApproval(db, persistCore, {
+            student,
+            parent,
+            group,
+            gradeOrBand: grade || band || group.ageCategory,
+          });
+          if (requested.ok) {
+            return {
+              שיבוץ: false,
+              נשלח_לאישור: true,
+              כבר_קיים: Boolean(requested.duplicate),
+              קבוצה: describeGroup(group),
+              רמה: requested.evaluation?.level || '',
+              הערה: 'אין לשלוח קישור הרשמה עד אישור הצוות. יש לומר שהבקשה הועברה לבדיקה.',
+            };
+          }
+        }
+        return {
+          error: restricted.reason,
+          שיבוץ: false,
+          הערה: restricted.reason === 'returning_priority_reserved'
+            ? 'המקומות שמורים כרגע לממשיכים; יש להעביר לצוות.'
+            : 'אין אישור לשיבוץ במסלול הזה. יש להציע קבוצה רגילה או להעביר לצוות.',
+        };
+      }
+
       const row = db.update('students', student.id, {
         status: 'pending_signup',
         groupId: group.id,
@@ -1554,8 +1715,8 @@ export function buildCustomerTools({
         סטטוס_פנימי: 'ממתין להרשמה',
         חבילת_הרשמה: registrationPack,
         הערה: 'השיבוץ נשמר ואינו תופס מקום בקבוצה. יש לשלוח את קישורי ההרשמה '
-          + 'והציוד. השלמת טופס ההרשמה בקישור היא אישור ההרשמה מבחינת הלקוח; '
-          + 'אין לומר שנדרש אישור נוסף מהצוות ואין להציג את הסטטוס הפנימי. נקבעה '
+          + 'והציוד. הקישור אינו אישור הרשמה; ההרשמה הופכת לסופית רק אחרי אימות '
+          + 'מהמתנ״ס או אישור צוות. אין להציג ללקוח את הסטטוס הפנימי. נקבעה '
           + 'בדיקה חוזרת פנימית למחר — אין צורך לקרוא ל-scheduleFollowUp בנוסף.',
       };
     },
@@ -1653,6 +1814,26 @@ export function buildCustomerTools({
 
       const { student } = child;
       const { group } = picked;
+      const restricted = canPlaceInRestrictedGroup(db, student, group);
+      if (!restricted.allowed) {
+        if (restricted.reason === 'staff_approval_required') {
+          const requested = await requestProgramApproval(db, persistCore, {
+            student,
+            parent,
+            group,
+            gradeOrBand: grade || band || group.ageCategory,
+          });
+          if (requested.ok) {
+            return {
+              שיבוץ: false,
+              נשלח_לאישור: true,
+              קבוצה: describeGroup(group),
+              הערה: 'גם רשימת המתנה למתקדמים או לנבחרת דורשת אישור צוות. אין לומר שהמתאמן שובץ.',
+            };
+          }
+        }
+        return { error: restricted.reason, שיבוץ: false };
+      }
       const row = db.update('students', student.id, {
         status: 'waitlist',
         groupId: group.id,
@@ -1734,8 +1915,8 @@ export function buildCustomerTools({
           ? {
             תדירות: selectedFrequency,
             קישור: groupLink,
-            הסבר: 'ההרשמה עצמה נעשית בטופס הזה. השלמת הטופס היא אישור ההרשמה; '
-              + 'אין צורך באישור נוסף מצוות הקיר.',
+            הסבר: 'זהו קישור לביצוע ההרשמה. שליחת הקישור או מילוי הטופס אינם '
+              + 'אישור סופי; ההרשמה תאושר לאחר אימות מהמתנ״ס או מהצוות.',
           }
           : {
             מצב: 'אין קישור הרשמה לקבוצה הזו',
@@ -1763,15 +1944,25 @@ export function buildCustomerTools({
       // A student record has no band of its own — שכבה used to read a field
       // that does not exist and always came back empty. The band that means
       // something is the one of the group the child is actually placed in.
-      const groups = db.get('groups') || [];
+      const groups = enrichGroupsWithBotMeta(db, db.get('groups') || []);
       const kids = studentsForParent(parent).map((s) => {
         const group = groups.find((g) => String(g.id) === String(s.groupId || ''));
         const birthDate = s.birthDate || s.birth_date || '';
+        const latest = latestLevelTest(db, s.id);
+        const eligibility = eligibilityForStudent(db, s.id, { season: currentSeason() });
         return {
           שם: s.name || '',
           // The age is computed here on purpose — see ageLabelFor.
           גיל: ageLabelFor(birthDate) || 'לא ידוע',
           תאריך_לידה: birthDate ? spellOutDate(birthDate) : '',
+          מגדר: s.gender || 'לא ידוע',
+          מבחן_רמה_אחרון: latest.level || 'לא ידוע',
+          זכאות_למסלולים: eligibility.map((row) => ({
+            מסלול: row.program,
+            סטטוס: row.status,
+            מקור: row.source,
+            קבוצה: groups.find((g) => String(g.id) === String(row.group_id || ''))?.name || '',
+          })),
           קבוצה: group ? describeGroup(group) : '',
           סטטוס: botVisibleStudentStatus(s, group),
           ...(s.status === 'pending_signup' && !group

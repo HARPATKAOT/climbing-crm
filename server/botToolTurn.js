@@ -463,6 +463,11 @@ export async function runCustomerToolTurn({
       apiKey,
     });
     if (!content) {
+      // A deterministic answer after a provider failure makes the same bot look
+      // suddenly less capable and can invent a different workflow. Provider
+      // outages are handled by the durable circuit breaker in whatsapp.js;
+      // during them the customer receives no automatic fallback.
+      if (error) return { text: '', handoff: false, toolsUsed, reason: error };
       const fallback = await deterministicModelFailureFallback({ history, incoming, tools, toolsUsed });
       return fallback || { text: '', handoff: false, toolsUsed, reason: error || 'model_error' };
     }

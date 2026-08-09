@@ -551,12 +551,14 @@ function BotEngineCard() {
   if (loading) return <LoadingCard title="מנוע השיחה של הבוט" icon={Bot} />;
 
   const configured = !!data?.configured;
-  const state = !configured ? 'off' : test ? (test.ok ? 'ok' : 'error') : 'warn';
+  const service = test?.service || data?.service || {};
+  const serviceHealthy = service.status === 'healthy';
+  const state = !configured ? 'off' : (!serviceHealthy || (test && !test.ok)) ? 'error' : 'ok';
   const stateLabel = !configured
     ? 'לא מוגדר'
-    : test
-      ? (test.ok ? 'עונה' : 'תקלה')
-      : 'מוגדר — לא נבדק';
+    : serviceHealthy
+      ? 'פעיל'
+      : service.status === 'quota_exhausted' ? 'המכסה הסתיימה' : 'מושבת זמנית';
 
   return (
     <IntegrationCard
@@ -565,10 +567,12 @@ function BotEngineCard() {
       title="מנוע השיחה של הבוט"
       state={state}
       stateLabel={stateLabel}
-      description="המנוע שמנסח את תשובות הבוט בוואטסאפ. בלי מפתח פעיל בשרת הבוט נופל לתשובות גיבוי קבועות."
-      alert={!configured ? 'אין מפתח מודל בשרת — הבוט עונה רק מהגיבוי' : (test && !test.ok ? test.error : null)}
+      description="המנוע שמנסח את תשובות הבוט בוואטסאפ. בתקלה הבוט שותק מול לקוחות, מתריע לצוות וחוזר אוטומטית לאחר בדיקה מוצלחת."
+      alert={!configured ? 'אין מפתח מודל בשרת — הבוט מושבת מול לקוחות' : (!serviceHealthy ? service.last_error || 'שירות הבינה אינו זמין' : (test && !test.ok ? test.error : null))}
       rows={[
         ['דגם מועדף', data?.preferredModel || '—'],
+        ...(service.failed_at ? [['כשל אחרון', formatDateTime(service.failed_at)]] : []),
+        ...(service.next_probe_at ? [['בדיקה הבאה', formatDateTime(service.next_probe_at)]] : []),
         ...(test?.ok ? [['ענה בפועל', test.model], ['נבדק', formatDateTime(test.testedAt)]] : []),
       ]}
     >

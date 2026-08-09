@@ -5,6 +5,12 @@ import { studentInGroup } from './studentGroups.js';
 const HEB_DAY_IDX = { א: 0, ב: 1, ג: 2, ד: 3, ה: 4, ו: 5 };
 
 export function getGroupDays(group) {
+  const canonical = Array.isArray(group?.trainingDays)
+    ? group.trainingDays
+      .map(Number)
+      .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+    : [];
+  if (canonical.length) return [...new Set(canonical)];
   const m = (group?.name || '').match(/([א-ו])['׳’]?\s*\+\s*([א-ו])['׳’]?/);
   if (m) {
     const days = [HEB_DAY_IDX[m[1]], HEB_DAY_IDX[m[2]]].filter((d) => d != null);

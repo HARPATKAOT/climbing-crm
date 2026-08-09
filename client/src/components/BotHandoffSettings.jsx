@@ -83,7 +83,7 @@ export default function BotHandoffSettings({ settings, setSettings }) {
             type="number"
             min={1}
             max={10080}
-            value={settings.aiPauseMinutesAfterHuman ?? 120}
+              value={settings.aiPauseMinutesAfterHuman ?? 1}
             onChange={(e) => patch('aiPauseMinutesAfterHuman', Number(e.target.value))}
           />
         </div>

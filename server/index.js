@@ -18,11 +18,15 @@ import {
   runNightlySweep,
   runNightlySweepIfDue,
   runCentreRegistrationChecks,
+  probeGeminiService,
 } from './whatsapp.js';
+import { getAiServiceState } from './aiServiceState.js';
 import { whatsappConnectService } from './whatsappConnect.js';
 import { automationsService, runScheduledAutomationsIfDue } from './automations.js';
 import { resumeConversationAfterForm } from './botFormResume.js';
 import { formConfirmationPayload } from './formConfirmation.js';
+import { ensureGroupSignupWhatsappTemplate } from './groupSignupWhatsappTemplate.js';
+import { runOneTimeBotDataMigrations } from './oneTimeBotDataMigrations.js';
 import { israelTimeToEpoch, runShiftRemindersIfDue, notifyShiftAssigned } from './shiftAlerts.js';
 import {
   DENOMINATIONS,
@@ -39,6 +43,17 @@ import {
 import { buildSaleReceipt, buildDrawerOnlyPayload } from './escposReceipt.js';
 import { alertSubscribers } from './staffAlerts.js';
 import { sendStaffAlert } from './staffNotify.js';
+import {
+  enrichGroupsWithBotMeta,
+  saveGroupBotMeta,
+  backfillCanonicalTrainingDays,
+} from './groupMetadata.js';
+import {
+  PLACEMENT_REQUEST_COLLECTION,
+  eligibilityForStudent,
+  reviewProgramApproval,
+} from './placementEligibility.js';
+import { buildRedirectUrl } from './publicLinks.js';
 import { notifyGroupMembershipDiff, runIntroHeadsUpIfDue } from './groupAlerts.js';
 import { capabilityState, capabilitySettingsPatch } from './botCapabilities.js';
 import { listBotActions, botActionSummary, BOT_ACTION_TYPES } from './botActivityLog.js';
@@ -1133,7 +1148,7 @@ function withGroupEnrollmentCounts(groups, students) {
   for (const g of groups || []) {
     if (g?.id) byId.set(g.id, g);
   }
-  return [...byId.values()].map(g => ({
+  return enrichGroupsWithBotMeta(db, [...byId.values()]).map(g => ({
     ...g,
     enrolled: countEnrolled(g.id, students || []),
   }));
@@ -1768,10 +1783,10 @@ app.get('/api/ai/status', async (req, res) => {
   const configured = !!(key && !key.includes('YOUR_'));
   const preferredModel = process.env.GEMINI_MODEL || 'gemini-flash-latest';
   if (req.query.test !== '1') {
-    return res.json({ configured, preferredModel });
+    return res.json({ configured, preferredModel, service: getAiServiceState(db) });
   }
   if (!configured) {
-    return res.json({ configured, preferredModel, tested: true, ok: false, error: 'לא הוגדר מפתח מודל בשרת' });
+    return res.json({ configured, preferredModel, tested: true, ok: false, error: 'לא הוגדר מפתח מודל בשרת', service: getAiServiceState(db) });
   }
   const models = [preferredModel, 'gemini-3.6-flash', 'gemini-3.5-flash'];
   let lastError = '';
@@ -1787,7 +1802,8 @@ app.get('/api/ai/status', async (req, res) => {
         }),
       });
       if (response.ok) {
-        return res.json({ configured, preferredModel, tested: true, ok: true, model, testedAt: new Date().toISOString() });
+        await probeGeminiService({ force: true });
+        return res.json({ configured, preferredModel, tested: true, ok: true, model, testedAt: new Date().toISOString(), service: getAiServiceState(db) });
       }
       const body = await response.text().catch(() => '');
       lastError = `${model}: HTTP ${response.status} ${body.slice(0, 160)}`;
@@ -1795,7 +1811,8 @@ app.get('/api/ai/status', async (req, res) => {
       lastError = `${model}: ${err.message}`;
     }
   }
-  res.json({ configured, preferredModel, tested: true, ok: false, error: lastError });
+  await probeGeminiService({ force: true });
+  res.json({ configured, preferredModel, tested: true, ok: false, error: lastError, service: getAiServiceState(db) });
 });
 
 // Connection status for settings UI
@@ -4495,27 +4512,74 @@ app.post('/api/public/equipment/:token/pay', publicFormRateLimit, async (req, re
 });
 
 // Create/Update Group (upsert by id so re-seeds don't duplicate local cache)
-app.post('/api/groups', (req, res) => {
+app.post('/api/groups', async (req, res) => {
+  const { trainingDays, returningPriorityUntil, ...groupFields } = req.body || {};
   const id = req.body?.id;
   if (id && db.getOne('groups', id)) {
-    const updated = db.update('groups', id, req.body);
-    return res.json(updated);
+    const updated = db.update('groups', id, groupFields);
+    await saveGroupBotMeta(db, persistCore, id, { trainingDays, returningPriorityUntil });
+    return res.json(enrichGroupsWithBotMeta(db, [updated])[0]);
   }
-  const record = db.insert('groups', req.body);
-  res.status(201).json(record);
+  const record = db.insert('groups', groupFields);
+  await saveGroupBotMeta(db, persistCore, record.id, { trainingDays, returningPriorityUntil });
+  res.status(201).json(enrichGroupsWithBotMeta(db, [record])[0]);
 });
 
-app.put('/api/groups/:id', (req, res) => {
+app.put('/api/groups/:id', async (req, res) => {
   const { id } = req.params;
-  const updated = db.update('groups', id, req.body);
+  const { trainingDays, returningPriorityUntil, ...groupFields } = req.body || {};
+  const updated = db.update('groups', id, groupFields);
   if (!updated) return res.status(404).json({ error: 'Group not found' });
-  res.json(updated);
+  if (trainingDays !== undefined || returningPriorityUntil !== undefined) {
+    await saveGroupBotMeta(db, persistCore, id, { trainingDays, returningPriorityUntil });
+  }
+  res.json(enrichGroupsWithBotMeta(db, [updated])[0]);
+});
+
+app.get('/api/placement-requests', (req, res) => {
+  const status = String(req.query.status || 'pending');
+  const rows = (db.get(PLACEMENT_REQUEST_COLLECTION) || [])
+    .filter((row) => !status || String(row.status) === status)
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  res.json(rows);
+});
+
+app.get('/api/students/:id/program-eligibility', (req, res) => {
+  res.json(eligibilityForStudent(db, req.params.id));
+});
+
+app.post('/api/placement-requests/:id/review', async (req, res) => {
+  const decision = req.body?.decision;
+  const result = await reviewProgramApproval(db, persistCore, req.params.id, {
+    decision,
+    note: req.body?.note || '',
+    actor: req.crmUser?.email || req.crmUser?.id || 'crm',
+  });
+  if (!result.ok) return res.status(result.status || 400).json(result);
+
+  if (decision === 'approved' && !result.duplicate) {
+    const parent = db.getOne('parents', result.request?.parent_id);
+    const link = result.group?.id ? buildRedirectUrl('s', result.group.id, 1) : '';
+    if (parent?.phone) {
+      const message = [
+        `אישרנו את ההתאמה של ${result.request?.student_name || 'המתאמן/ת'} ל${result.group?.name || 'קבוצה'}.`,
+        link ? `אפשר להמשיך להרשמה כאן:\n${link}` : 'הצוות יחזור אליכם עם קישור ההרשמה.',
+      ].join('\n');
+      await whatsappService.sendTextMessage(parent.phone, message, false, {
+        source: 'placement_approval',
+        parentId: parent.id,
+        studentId: result.request?.student_id || null,
+      });
+    }
+  }
+  res.json(result);
 });
 
 app.delete('/api/groups/:id', (req, res) => {
   const { id } = req.params;
   const deleted = db.delete('groups', id);
   if (!deleted) return res.status(404).json({ error: 'Group not found' });
+  db.delete('group_bot_meta', id);
   res.json({ success: true });
 });
 
@@ -16982,6 +17046,20 @@ initDb({ requireDurable: requiresDurableStore() }).then(() => {
   // Boot just read every core table — the first screen to open should serve
   // that snapshot, not queue a fresh download of everything it touches.
   markFreshlyLoaded(CORE_TABLES);
+  const liveBotSettings = db.getSettings();
+  if (Number(liveBotSettings.aiPauseMinutesAfterHuman) !== 1
+      || Number(liveBotSettings.aiMaxReplyChars) < 1200) {
+    db.saveSettings({
+      ...liveBotSettings,
+      aiPauseMinutesAfterHuman: 1,
+      aiMaxReplyChars: Math.max(1200, Number(liveBotSettings.aiMaxReplyChars) || 0),
+    });
+  }
+  try {
+    ensureGroupSignupWhatsappTemplate({ db, persist: persistCore });
+  } catch (err) {
+    console.warn('group signup template seed skipped:', err.message);
+  }
   try {
     const equipmentBackfill = backfillAdultEquipment({ db, persist: persistCore });
     if (equipmentBackfill.created > 0) {
@@ -17027,6 +17105,16 @@ initDb({ requireDurable: requiresDurableStore() }).then(() => {
       if (created) console.log(`🧠 Seeded ${created} default AI scenario(s)`);
     })
     .catch((err) => console.warn('AI scenario seed skipped:', err.message));
+  Promise.resolve(backfillCanonicalTrainingDays(db, persistCore))
+    .then((rows) => {
+      if (rows.length) console.log(`Canonical training days backfilled for ${rows.length} group(s)`);
+    })
+    .catch((err) => console.warn('training days backfill skipped:', err.message));
+  Promise.resolve(runOneTimeBotDataMigrations(db, persistCore))
+    .then((rows) => {
+      if (rows.length) console.log(`Bot rollout data migrations created ${rows.length} guardian link(s)`);
+    })
+    .catch((err) => console.warn('bot rollout data migration skipped:', err.message));
   try {
     // Seed/hydrate catalog folders, then heal products left without a category.
     ensureProductCategories(db);
@@ -17127,6 +17215,13 @@ app.listen(PORT, () => {
     automationsService.runBotFollowUps().catch((err) =>
       console.error('bot follow-ups failed:', err.message));
   }, 15 * 60 * 1000);
+
+  setTimeout(() => {
+    probeGeminiService().catch((err) => console.error('Gemini recovery probe failed:', err.message));
+  }, 30_000);
+  setInterval(() => {
+    probeGeminiService().catch((err) => console.error('Gemini recovery probe failed:', err.message));
+  }, 5 * 60 * 1000);
 
   // Staff reminders before their own shifts. Every 10 minutes rather than once
   // a day, because the lead time is each employee's own choice — two hours for

@@ -28,7 +28,21 @@ import {
 } from './aiActions.js';
 import { israelClockParts, isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 import { DEFAULT_BUSINESS_PROFILE, getBusinessProfile } from './businessProfile.js';
-import { READ_TOOLS, runChatTurn } from './aiChat.js';
+import { READ_TOOLS, runChatTurn, callGeminiChat } from './aiChat.js';
+import {
+  aiProbeDue,
+  getAiServiceState,
+  isAiServiceOpen,
+  markAiAlertSent,
+  recordAiFailure,
+  recordAiSuccess,
+} from './aiServiceState.js';
+import {
+  claimBotReply,
+  finishBotReplyClaim,
+  releaseBotReplyClaim,
+  replyKeyForBurst,
+} from './botReplyClaims.js';
 import {
   mergeBotSettings,
   withBotMark,
@@ -74,20 +88,17 @@ import {
   markParentAsked,
 } from './centreRegistrationChecks.js';
 
-/**
- * What the bot says when it cannot answer at all — no model key, a model error,
- * or a turn that ran out of steps.
- *
- * A keyword engine used to answer here from guessed intent. It is gone: a wrong
- * confident sentence costs more than a customer waiting for a person, and this
- * path always alerts the team, so nobody is left waiting silently.
- */
-const MODEL_UNAVAILABLE_REPLY = 'קיבלנו 🙏\nמעביר לצוות שלנו — מישהו יחזור אליכם בהקדם.';
-
 export { israelClockParts, isBotEnabled, shouldAiAutoReply };
 
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v25.0';
 const inboundCustomerBursts = new InboundBurstCoordinator();
+const FREE_CLIMBING_POLICY = [
+  'מדיניות טיפוס חופשי:',
+  '- מגיל 11 ניתן להגיע ללא מבוגר בשעות פתיחת הקיר.',
+  '- מתחת לגיל 11 ניתן להגיע עם מבוגר.',
+  '- גם הילד וגם המבוגר המלווים חייבים למלא טופס השתתפות.',
+  '- לחוגים ניתן להגיע ללא מבוגר מכיתה ג׳.',
+].join('\n');
 
 /**
  * What a staff number may ask over WhatsApp: who a customer is, when a trainee
@@ -143,6 +154,12 @@ function firstGroupDay(group) {
 // Meta message types the model cannot see into. A caption travels as the text,
 // so an image with a caption is handled as an ordinary text message.
 const MEDIA_MESSAGE_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker']);
+
+/** High-impact personal events are routed silently; sales automation must stop. */
+export function isSensitivePersonalEvent(text = '') {
+  return /(?:נפטר|נפטרה|מוות|אבל|שבעה|טיפול\s+נמרץ|מאושפז|מאושפזת|אירוע\s+מוחי|שבץ|סרטן|מחלה\s+קשה|תאונה\s+קשה)/u
+    .test(String(text || ''));
+}
 
 /** Any Hebrew letter — a name from the community centre always has one. */
 const HEBREW_LETTER = /[֐-׿]/;
@@ -368,6 +385,55 @@ export async function notifyStaffOfPlacement({
     }
   }
   return { sent };
+}
+
+async function notifyAiServiceIncident(kind, state, settings = {}) {
+  const field = kind === 'recovery' ? 'recovery_alerted_at' : 'outage_alerted_at';
+  if (state?.[field]) return { sent: 0, skipped: true, reason: 'already_alerted' };
+  const { phones } = alertRecipients(db, 'ai_outage', mergeBotSettings(settings));
+  const body = kind === 'recovery'
+    ? '✅ שירות Gemini חזר לפעילות. בוט הוואטסאפ הופעל מחדש אוטומטית.'
+    : [
+      '⚠️ שירות הבינה אינו זמין',
+      'בוט הוואטסאפ הושתק מול לקוחות כדי שלא ישלח תשובות חלופיות או מומצאות.',
+      `סוג: ${state?.status || 'לא ידוע'}`,
+      state?.last_error ? `שגיאה: ${clipReply(state.last_error, 220)}` : '',
+      state?.next_probe_at ? `בדיקה הבאה: ${new Date(state.next_probe_at).toLocaleString('he-IL')}` : '',
+    ].filter(Boolean).join('\n');
+  let sent = 0;
+  for (const rawPhone of phones) {
+    const result = await whatsappService.sendTextMessage(rawPhone, body, false, {
+      source: 'ai_service_alert',
+      clip: false,
+    });
+    if (result?.success) sent += 1;
+  }
+  if (sent) await markAiAlertSent(db, persistCore, kind);
+  return { sent };
+}
+
+/** Five-minute background probe. Customers are never used as health checks. */
+export async function probeGeminiService({ force = false } = {}) {
+  if (!force && !aiProbeDue(db)) return { skipped: true, state: getAiServiceState(db) };
+  const apiKey = process.env.GEMINI_API_KEY;
+  const result = await callGeminiChat({
+    apiKey,
+    systemInstruction: 'Return exactly OK.',
+    declarations: [],
+    contents: [{ role: 'user', parts: [{ text: 'OK' }] }],
+  });
+  if (result.content) {
+    const recovered = await recordAiSuccess(db, persistCore);
+    if (recovered.recovered) {
+      await notifyAiServiceIncident('recovery', recovered.state, await loadBrandedBotSettings());
+    }
+    return { ok: true, ...recovered };
+  }
+  const failure = await recordAiFailure(db, persistCore, result.error || 'model_error');
+  if (failure.opened || !failure.state.outage_alerted_at) {
+    await notifyAiServiceIncident('outage', failure.state, await loadBrandedBotSettings());
+  }
+  return { ok: false, ...failure };
 }
 
 export async function runConversationAnalysis(phone, { parent, students, auto = false } = {}) {
@@ -803,6 +869,10 @@ export const whatsappService = {
     // the parent whose card the thread is filed under.
     const speaker = context.speaker || null;
 
+    if (!context.isSimulator && isAiServiceOpen(db)) {
+      return { text: '', handoff: false, silent: true, reason: 'ai_circuit_open' };
+    }
+
     const apiKey = process.env.GEMINI_API_KEY;
     const hasModel = !!apiKey && apiKey !== 'YOUR_GEMINI_API_KEY_HERE';
 
@@ -829,6 +899,7 @@ export const whatsappService = {
           buildParentCardContext(parent, students, { speaker }),
           settings.aiBusinessFacts ? `עובדות העסק:\n${settings.aiBusinessFacts}` : '',
           settings.aiKnowledgeBase ? `בסיס ידע / שאלות נפוצות:\n${settings.aiKnowledgeBase}` : '',
+          FREE_CLIMBING_POLICY,
           settings.aiForbiddenTopics ? `אסור:\n${settings.aiForbiddenTopics}` : '',
           BOT_BOUNDS_RULES,
         ].filter(Boolean).join('\n\n'),
@@ -852,6 +923,10 @@ export const whatsappService = {
         apiKey,
       });
       if (turn.text) {
+        if (!context.isSimulator) {
+          const success = await recordAiSuccess(db, persistCore);
+          if (success.recovered) await notifyAiServiceIncident('recovery', success.state, settings);
+        }
         return {
           text: clipReply(turn.text, settings.aiMaxReplyChars),
           handoff: turn.handoff,
@@ -860,11 +935,17 @@ export const whatsappService = {
           toolsUsed: turn.toolsUsed,
         };
       }
-      // Out of steps, a model error, or an empty answer.
-      console.error(`bot tool turn produced nothing (${turn.reason}) — handing over`);
+      // Provider failures never turn into a generic customer reply. They are
+      // counted durably and, once the circuit opens, every server stays silent.
+      console.error(`bot tool turn produced nothing (${turn.reason})`);
+      if (!context.isSimulator) {
+        const failure = await recordAiFailure(db, persistCore, turn.reason || 'model_error');
+        if (failure.opened) await notifyAiServiceIncident('outage', failure.state, settings);
+      }
       return {
-        text: MODEL_UNAVAILABLE_REPLY,
-        handoff: true,
+        text: '',
+        handoff: false,
+        silent: true,
         unsure: false,
         confidence: 'low',
         reason: turn.reason,
@@ -873,9 +954,14 @@ export const whatsappService = {
 
     // A bot with no model does not improvise. It says so, and fetches a person.
     console.error('Gemini API key missing — the bot has no reply engine');
+    if (!context.isSimulator) {
+      const failure = await recordAiFailure(db, persistCore, 'no_api_key');
+      if (failure.opened) await notifyAiServiceIncident('outage', failure.state, settings);
+    }
     return {
-      text: MODEL_UNAVAILABLE_REPLY,
-      handoff: true,
+      text: '',
+      handoff: false,
+      silent: true,
       unsure: false,
       confidence: 'low',
       reason: 'no_model',
@@ -912,9 +998,19 @@ export const whatsappService = {
     }
   },
 
-  async sendBotReply(phone, replyText, { isSimulator = false, source = 'ai', parent = null, logType = '' } = {}) {
+  async sendBotReply(phone, replyText, {
+    isSimulator = false,
+    source = 'ai',
+    parent = null,
+    logType = '',
+    replyKey = '',
+  } = {}) {
     if (!replyText) return { success: false };
     const text = withBotMark(replyText);
+    if (!isSimulator && replyKey) {
+      const claim = await claimBotReply(db, replyKey, { phone });
+      if (!claim.claimed) return { success: true, skipped: true, reason: 'duplicate_reply', replyKey };
+    }
     // The journal is what makes "what did the bot say today" one question with
     // one answer, instead of a scroll through every conversation.
     const owner = parent || findPrimaryParent(phone);
@@ -940,7 +1036,15 @@ export const whatsappService = {
     }
     // Live inbound handling already waited for the customer's quiet window.
     // Waiting again here made the reply feel slow without collecting anything.
-    return whatsappService.sendTextMessage(phone, text, true, { source, skipDelay: true });
+    const result = await whatsappService.sendTextMessage(phone, text, true, { source, skipDelay: true });
+    if (replyKey) {
+      if (result?.success) {
+        await finishBotReplyClaim(db, persistCore, replyKey, { messageId: result.messageId || '' });
+      } else {
+        await releaseBotReplyClaim(db, replyKey);
+      }
+    }
+    return result;
   },
 
   // Process incoming messages (webhook entrypoint / simulator)
@@ -961,6 +1065,7 @@ export const whatsappService = {
     try {
     if (!isSimulator) await syncBotFlagFromRemote();
     const normalizedPhone = formatWaPhone(phone) || phone;
+    let replyKey = '';
 
     // Already handled this exact Meta message (webhook retry) — never process twice.
     const seen = findMessageByMetaId(metaMessageId);
@@ -1103,6 +1208,11 @@ export const whatsappService = {
       }
       text = inboundBurst.text || text;
     }
+    replyKey = replyKeyForBurst(normalizedPhone, inboundBurst?.items || [{
+      text,
+      messageId: metaMessageId,
+      createdAt: inboundAt,
+    }]);
 
     // "תודה" by itself closes the exchange. It must not spend another model
     // turn and, more importantly, must not repeat a fallback handoff when the
@@ -1142,6 +1252,19 @@ export const whatsappService = {
     const mediaOnly = MEDIA_MESSAGE_TYPES.has(String(meta.type || ''))
       && (!text || /^\[[^\]\r\n]+\]$/u.test(String(text).trim()));
 
+    if (isSensitivePersonalEvent(text)) {
+      await recordBotHandoff(normalizedPhone);
+      await notifyStaffOfHandoff({
+        settings,
+        parent,
+        phone: normalizedPhone,
+        customerText: text,
+        reason: 'handoff',
+        isSimulator,
+      });
+      return { parent, student, isNew, replied: false, skippedReason: 'sensitive_personal_event' };
+    }
+
     // 4b. Staff numbers talk to the CRM agent, not to the customer bot.
     if (isStaffPhone(settings, normalizedPhone)) {
       if (!isBotEnabled(settings) && !isSimulator) {
@@ -1149,7 +1272,7 @@ export const whatsappService = {
         return { parent, student, isNew, replied: false, skippedReason: 'disabled' };
       }
       const staffReply = await whatsappService.runStaffChat(normalizedPhone, text);
-      await whatsappService.sendBotReply(normalizedPhone, staffReply, { isSimulator, source: 'staff_chat' });
+      await whatsappService.sendBotReply(normalizedPhone, staffReply, { isSimulator, source: 'staff_chat', replyKey });
       return { parent, student, isNew, replied: true, reply: staffReply, reason: 'staff_chat' };
     }
 
@@ -1160,7 +1283,7 @@ export const whatsappService = {
       const report = await handleCentreMessage({ text, phone: normalizedPhone, isSimulator });
       if (report) {
         await whatsappService.sendBotReply(normalizedPhone, report.reply, {
-          isSimulator, source: 'bot_control', logType: 'reply',
+            isSimulator, source: 'bot_control', logType: 'reply', replyKey,
         });
         return { parent, student, isNew, replied: true, reply: report.reply, reason: 'centre_report' };
       }
@@ -1173,13 +1296,13 @@ export const whatsappService = {
       await optOutPhone(normalizedPhone, false);
       await clearBotPause(normalizedPhone);
       parent = findPrimaryParent(normalizedPhone) || parent;
-      await whatsappService.sendBotReply(normalizedPhone, gate.reply, { isSimulator, source: 'bot_control' });
+      await whatsappService.sendBotReply(normalizedPhone, gate.reply, { isSimulator, source: 'bot_control', replyKey });
       return { parent, student, isNew, replied: true, reply: gate.reply, reason: 'reactivated' };
     }
 
     if (gate.action === 'opt_out') {
       await optOutPhone(normalizedPhone, true, { source: 'customer' });
-      await whatsappService.sendBotReply(normalizedPhone, gate.reply, { isSimulator, source: 'bot_control' });
+      await whatsappService.sendBotReply(normalizedPhone, gate.reply, { isSimulator, source: 'bot_control', replyKey });
       return { parent, student, isNew, replied: true, reply: gate.reply, reason: 'opt_out' };
     }
 
@@ -1189,22 +1312,12 @@ export const whatsappService = {
     }
 
     if (mediaOnly) {
-      const mediaReply = 'קיבלנו 🙏 מעביר לצוות שלנו שיסתכל ויחזור אליכם.';
-      await whatsappService.sendBotReply(normalizedPhone, mediaReply, { isSimulator, source: 'bot_control' });
-      await notifyStaffOfHandoff({
-        settings,
-        parent,
-        phone: normalizedPhone,
-        customerText: `[${meta.type}] הלקוח שלח קובץ מדיה`,
-        reason: 'handoff',
-        isSimulator,
-      });
-      return { parent, student, isNew, replied: true, reply: mediaReply, reason: 'media' };
+      return { parent, student, isNew, replied: false, skippedReason: 'media_without_text' };
     }
 
     if (gate.action === 'outside_hours') {
       if (isSimulator || shouldSendOutsideHoursMessage(parent)) {
-        await whatsappService.sendBotReply(normalizedPhone, gate.reply, { isSimulator, source: 'bot_control' });
+        await whatsappService.sendBotReply(normalizedPhone, gate.reply, { isSimulator, source: 'bot_control', replyKey });
         if (!isSimulator) await markOutsideHoursSent(normalizedPhone);
         return { parent, student, isNew, replied: true, reply: gate.reply, reason: 'outside_hours' };
       }
@@ -1213,7 +1326,7 @@ export const whatsappService = {
 
     if (gate.action === 'handoff') {
       await recordBotHandoff(normalizedPhone);
-      await whatsappService.sendBotReply(normalizedPhone, gate.reply, { isSimulator, source: 'bot_control' });
+      await whatsappService.sendBotReply(normalizedPhone, gate.reply, { isSimulator, source: 'bot_control', replyKey });
       await notifyStaffOfHandoff({
         settings,
         parent,
@@ -1236,6 +1349,7 @@ export const whatsappService = {
       if (!nameCapture.done) {
         await whatsappService.sendBotReply(normalizedPhone, nameCapture.reply, {
           isSimulator,
+          replyKey,
           ...(nameCapture.handoff ? { source: 'bot_control' } : {}),
         });
         // Asked twice and still not a name: the customer is asking us
@@ -1313,6 +1427,16 @@ export const whatsappService = {
         };
       }
     }
+    if (aiResult.silent || !aiResult.text) {
+      return {
+        parent,
+        student,
+        isNew,
+        replied: false,
+        skippedReason: aiResult.reason || 'ai_unavailable',
+        burstCount: inboundBurst?.items?.length || 1,
+      };
+    }
     if (aiResult.handoff) {
       await recordBotHandoff(normalizedPhone);
       // Prefer the model's natural wording; canned ack only when empty.
@@ -1320,6 +1444,7 @@ export const whatsappService = {
       await whatsappService.sendBotReply(normalizedPhone, handoffText, {
         isSimulator,
         source: 'bot_control',
+        replyKey,
       });
       await notifyStaffOfHandoff({
         settings,
@@ -1332,7 +1457,7 @@ export const whatsappService = {
       return { parent, student, isNew, replied: true, reply: handoffText, reason: 'handoff' };
     }
 
-    await whatsappService.sendBotReply(normalizedPhone, aiResult.text, { isSimulator });
+    await whatsappService.sendBotReply(normalizedPhone, aiResult.text, { isSimulator, replyKey });
     return { parent, student, isNew, replied: true, reply: aiResult.text };
     } finally {
       releaseInboundMetaId(metaMessageId);

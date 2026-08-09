@@ -173,6 +173,14 @@ export const OPERATIONAL_TABLES = [
   'bot_followups',
   // Everything the bot did, in one journal.
   'bot_actions',
+  // Bot-domain records live in kv_collections so rollout does not depend on a
+  // locked Supabase schema migration.
+  'group_bot_meta',
+  'program_eligibility',
+  'placement_requests',
+  'bot_reply_claims',
+  'ai_service_state',
+  'participation_packs',
 ];
 
 // Kept as the public name used by db.js: every listed collection is durable.

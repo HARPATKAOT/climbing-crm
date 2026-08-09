@@ -1078,6 +1078,11 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
   const roleLabels = useStaffRoleLabels();
   const [name,       setName]       = useState(group?.name || '');
   const [day,        setDay]        = useState(group?.day ?? 0);
+  const [trainingDays, setTrainingDays] = useState(() => {
+    const saved = Array.isArray(group?.trainingDays) ? group.trainingDays.map(Number) : [];
+    return saved.length ? saved : [Number(group?.day ?? 0)];
+  });
+  const [returningPriorityUntil, setReturningPriorityUntil] = useState(group?.returningPriorityUntil || '');
   const [time,       setTime]       = useState(group?.time || '16:00');
   /**
    * A suggestion for a *new* group only. Editing an existing one shows what it
@@ -1147,6 +1152,8 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
       id:          group?.id || `g-${Date.now()}`,
       name:        name.trim() || autoName,
       day:         parseInt(day),
+      trainingDays: [...new Set([parseInt(day), ...trainingDays.map(Number)])].sort((a, b) => a - b),
+      returningPriorityUntil: returningPriorityUntil || null,
       time,
       duration:    numberOrNull(duration),
       trainer:     trainer,
@@ -1195,6 +1202,29 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
               </div>
             </div>
 
+            <div className="form-group">
+              <label className="form-label">כל ימי האימון</label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {DAYS_FULL.map((label, index) => {
+                  const selected = trainingDays.includes(index) || Number(day) === index;
+                  return (
+                    <label key={label} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 9px', border: '1px solid var(--border)', borderRadius: 8, cursor: Number(day) === index ? 'default' : 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        disabled={Number(day) === index}
+                        onChange={() => setTrainingDays((current) => (
+                          current.includes(index) ? current.filter((value) => value !== index) : [...current, index]
+                        ))}
+                      />
+                      {label}
+                    </label>
+                  );
+                })}
+              </div>
+              <div className="form-hint">היום הראשי תמיד כלול. לקבוצה של שני וחמישי סמנו את שניהם.</div>
+            </div>
+
             <div className="form-grid-2">
               <div className="form-group">
                 <label className="form-label">משך אימון</label>
@@ -1208,6 +1238,12 @@ function GroupFormModal({ group, employees, onSave, onDelete, onClose }) {
                   {AGE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                 </AppSelect>
               </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">קדימות לממשיכים עד</label>
+              <input className="input" type="date" value={returningPriorityUntil} onChange={(e) => setReturningPriorityUntil(e.target.value)} />
+              <div className="form-hint">עד תאריך זה מקומות פנויים במסלול נשמרים למי שהתאמן בו בעונה הקודמת.</div>
             </div>
 
             <div className="form-grid-2">

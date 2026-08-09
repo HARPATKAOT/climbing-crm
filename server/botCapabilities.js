@@ -68,7 +68,13 @@ export const BOT_CAPABILITIES = [
     label: 'שיבוץ לקבוצה',
     hint: 'שיבוץ רך «ממתין להרשמה», רשימת המתנה, והוצאה מקבוצה',
     source: 'כותב לכרטיס המתאמן; מתאמן רשום לא זז',
-    tools: ['startSignup', 'joinWaitlist', 'cancelSignup'],
+    tools: [
+      'getPlacementEligibility',
+      'requestPlacementApproval',
+      'startSignup',
+      'joinWaitlist',
+      'cancelSignup',
+    ],
   },
   {
     key: 'equipment',

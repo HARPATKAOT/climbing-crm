@@ -8,6 +8,8 @@ import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { israelClockParts, isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 import { recordMessage } from './channels/messageStore.js';
 import { DEFAULT_BUSINESS_PROFILE, getBusinessProfile } from './businessProfile.js';
+import { enrichGroupsWithBotMeta } from './groupMetadata.js';
+import { currentSeason, eligibilityForStudent, latestLevelTest } from './placementEligibility.js';
 
 export const LEAD_STATUSES = new Set(['lead_new', 'health_signed', 'waitlist']);
 export const CUSTOMER_STATUSES = new Set([
@@ -87,10 +89,11 @@ export const DEFAULT_BOT_SETTINGS = {
   aiStopKeywords: 'עצור,הסר,stop,unsubscribe,הסר אותי',
   aiOptOutMessage: 'הוסרתם מרשימת המענה האוטומטי.\nאם תרצו לחזור — כתבו «הפעל בוט».',
   aiPauseOnHumanReply: true,
-  aiPauseMinutesAfterHuman: 120,
+  aiPauseMinutesAfterHuman: 1,
   aiAudienceMode: 'all',
   aiHistoryCount: 8,
-  aiMaxReplyChars: 700,
+  // Emergency guard only; ordinary replies are kept short by the agent rules.
+  aiMaxReplyChars: 1200,
   // Quiet window after the customer's last bubble. A new bubble resets it.
   aiReplyDelayMs: 7_000,
   aiRateLimitPerHour: 20,
@@ -271,11 +274,20 @@ export function wantsExplicitHumanStaff(text, settings = {}) {
   return textMatchesKeywords(t, keywords);
 }
 
-export function clipReply(text, maxChars = 700) {
+export function clipReply(text, maxChars = 1200) {
   const body = String(text || '').trim();
-  const limit = Number(maxChars) > 0 ? Number(maxChars) : 700;
+  const limit = Number(maxChars) > 0 ? Number(maxChars) : 1200;
   if (body.length <= limit) return body;
-  return `${body.slice(0, Math.max(0, limit - 1)).trim()}…`;
+  const room = Math.max(0, limit - 1);
+  const chunk = body.slice(0, room);
+  const boundary = Math.max(
+    chunk.lastIndexOf('\n'),
+    chunk.lastIndexOf('. '),
+    chunk.lastIndexOf('? '),
+    chunk.lastIndexOf('! ')
+  );
+  const safe = boundary >= Math.floor(room * 0.55) ? chunk.slice(0, boundary + 1) : chunk;
+  return `${safe.trim()}…`;
 }
 
 export function sleep(ms) {
@@ -501,7 +513,7 @@ export function describeBotState(parent, settings = {}, now = new Date()) {
 }
 
 export async function pauseBotForPhone(phone, minutes, { reason = 'human_reply' } = {}) {
-  const mins = Math.max(1, Number(minutes) || 120);
+  const mins = Math.max(1, Number(minutes) || 1);
   const until = new Date(Date.now() + mins * 60 * 1000).toISOString();
   const patch = { bot_paused_until: until, bot_pause_reason: reason };
   if (reason === 'handoff') patch.bot_handoff_at = new Date().toISOString();
@@ -688,7 +700,7 @@ export function normalizeHistoryLimit(value, fallback = 8) {
 
 export function buildParentCardContext(parent, students = [], { speaker = null } = {}) {
   if (!parent) return 'אין כרטיס לקוח.';
-  const groups = db.get('groups') || [];
+  const groups = enrichGroupsWithBotMeta(db, db.get('groups') || []);
   const lines = [
     `הורה: ${parent.name || 'ללא שם'} | טלפון: ${parent.phone || ''} | סטטוס הורה: ${parent.status || '—'}`,
   ];
@@ -709,12 +721,17 @@ export function buildParentCardContext(parent, students = [], { speaker = null }
   } else {
     for (const s of students) {
       const group = groups.find((g) => g.id === s.groupId);
+      const latest = latestLevelTest(db, s.id);
+      const eligibility = eligibilityForStudent(db, s.id, { season: currentSeason() });
       const visibleStatus = s.status === 'pending_signup' && !group
         ? 'health_signed'
         : (s.status || '—');
       lines.push(
-        `מתאמן: ${s.name || '—'} | סטטוס: ${visibleStatus} | קבוצה: ${group?.name || 'ללא'} | כיתה/גיל: ${group?.ageCategory || s.birthDate || '—'}`
+        `מתאמן: ${s.name || '—'} | סטטוס: ${visibleStatus} | קבוצה: ${group?.name || 'ללא'} | כיתה/גיל: ${group?.ageCategory || s.birthDate || '—'} | מגדר: ${s.gender || 'לא ידוע'} | רמת מבחן אחרונה: ${latest.level || 'לא ידועה'}`
       );
+      if (eligibility.length) {
+        lines.push(`זכאות מסלולים: ${eligibility.map((row) => `${row.program}=${row.status}`).join(', ')}`);
+      }
       if (s.status === 'pending_signup' && !group) {
         lines.push('הערת מערכת: אין למתאמן קבוצה, ולכן אסור לומר שהוא משובץ או ממתין להרשמה.');
       }
@@ -1049,7 +1066,7 @@ export function decideBotGate(settings, parent, students, text, { isSimulator = 
     return {
       action: 'handoff',
       reply: s.aiHandoffAckMessage,
-      pauseMinutes: s.aiPauseMinutesAfterHuman || 120,
+      pauseMinutes: s.aiPauseMinutesAfterHuman || 1,
       explicit: true,
     };
   }

@@ -191,7 +191,7 @@ test('legacy edit markers are not shown to the model as customer messages', () =
   ]);
 });
 
-test('model failure asks what signup the customer means instead of handing off', async () => {
+test('model failure stays silent instead of switching to a deterministic bot', async () => {
   const previousStudents = db.get('students');
   db.set('students', [{ id: 'karni', parentId: 'adi', name: 'קרני אלימלך', status: 'lead_new' }]);
   try {
@@ -202,14 +202,14 @@ test('model failure asks what signup the customer means instead of handing off',
       callModel: async () => ({ content: null, error: 'temporary model error' }),
     });
     assert.equal(turn.handoff, false);
-    assert.equal(turn.reason, 'deterministic_signup_clarification');
-    assert.equal(turn.text, 'בשמחה — לאיזו קבוצה תרצו לרשום את קרני?');
+    assert.equal(turn.reason, 'temporary model error');
+    assert.equal(turn.text, '');
   } finally {
     db.set('students', previousStudents || []);
   }
 });
 
-test('model failure lists real class days once the customer supplied a grade', async () => {
+test('model failure does not send class options from a second reply engine', async () => {
   const previousGroups = db.get('groups');
   const previousStudents = db.get('students');
   db.set('groups', [
@@ -229,11 +229,9 @@ test('model failure lists real class days once the customer supplied a grade', a
       callModel: async () => ({ content: null, error: 'temporary model error' }),
     });
     assert.equal(turn.handoff, false);
-    assert.equal(turn.reason, 'deterministic_group_options');
-    assert.match(turn.text, /האפשרויות לכיתה ד׳ עבור קרני/);
-    assert.match(turn.text, /יום ב׳ בשעה 16:00/);
-    assert.match(turn.text, /יום ה׳ בשעה 17:30/);
-    assert.deepEqual(turn.toolsUsed, ['listClasses', 'getFamilyCard']);
+    assert.equal(turn.reason, 'temporary model error');
+    assert.equal(turn.text, '');
+    assert.deepEqual(turn.toolsUsed, []);
   } finally {
     db.set('groups', previousGroups || []);
     db.set('students', previousStudents || []);
@@ -387,6 +385,7 @@ test('the tools offered to the model are facts, links and placements — never s
     'getFamilyCard',
     'getHealthDeclarations',
     'getOpeningHours',
+    'getPlacementEligibility',
     'getPrices',
     'getRegistrationPack',
     'getSignupLink',
@@ -394,6 +393,7 @@ test('the tools offered to the model are facts, links and placements — never s
     'listClasses',
     'removeActivityInterest',
     'reportCentreRegistration',
+    'requestPlacementApproval',
     'scheduleFollowUp',
     'startSignup',
     'updateCustomerDetails',

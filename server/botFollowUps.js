@@ -21,6 +21,7 @@
  */
 
 import { israelDateStr } from './attendanceUtils.js';
+import { israelTimeToEpoch } from './shiftAlerts.js';
 
 export const FOLLOWUP_COLLECTION = 'bot_followups';
 
@@ -42,6 +43,10 @@ const MAX_DAYS_AHEAD = 90;
 const WINDOW_HOURS = 24;
 const AIM_HOURS = 23;
 const HOUR_MS = 60 * 60 * 1000;
+const MONTHS_HE = new Map([
+  ['ינואר', 1], ['פברואר', 2], ['מרץ', 3], ['אפריל', 4], ['מאי', 5], ['יוני', 6],
+  ['יולי', 7], ['אוגוסט', 8], ['ספטמבר', 9], ['אוקטובר', 10], ['נובמבר', 11], ['דצמבר', 12],
+]);
 
 function clean(value) {
   return String(value ?? '').trim();
@@ -155,10 +160,13 @@ export function resolveDueDate({ days = null, dueDate = '', today = israelDateSt
  */
 export function planFollowUp({
   days,
+  targetMonth = '',
   lastInboundAt,
   now = new Date(),
   settings = {},
 } = {}) {
+  const monthPlan = planMonthFollowUp({ targetMonth, now });
+  if (monthPlan) return monthPlan;
   // `now` has to reach the date too. It did not, so the day was taken from the
   // real clock while the hour was taken from the argument — the two disagreed
   // the moment midnight passed, which is exactly when a test notices and a
@@ -178,8 +186,42 @@ export function planFollowUp({
   }
   // Further out than the window can reach: noon on the day, by template.
   return {
-    due_at: `${dueDate}T09:00:00.000Z`,
+    due_at: new Date(israelTimeToEpoch(dueDate, '09:00')).toISOString(),
     due_date: dueDate,
+    needs_template: true,
+  };
+}
+
+/** A month-only promise is a reminder, never an advance placement. */
+export function planMonthFollowUp({ targetMonth = '', now = new Date() } = {}) {
+  const source = clean(targetMonth);
+  if (!source) return null;
+  const nowDate = new Date(now);
+  const today = israelDateStr(nowDate);
+  let year;
+  let month;
+  const iso = /^(\d{4})-(\d{1,2})$/.exec(source);
+  if (iso) {
+    year = Number(iso[1]);
+    month = Number(iso[2]);
+  } else {
+    month = MONTHS_HE.get(source.replace(/^ב/u, '')) || Number(source);
+    year = Number(today.slice(0, 4));
+  }
+  if (!Number.isInteger(month) || month < 1 || month > 12) return null;
+  let monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
+  if (monthStart < today && monthStart.slice(0, 7) !== today.slice(0, 7)) {
+    year += 1;
+    monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
+  }
+  const target = new Date(`${monthStart}T12:00:00Z`);
+  target.setUTCDate(target.getUTCDate() - 7);
+  let dueDate = target.toISOString().slice(0, 10);
+  if (dueDate < today) dueDate = today;
+  return {
+    due_at: new Date(israelTimeToEpoch(dueDate, '09:00')).toISOString(),
+    due_date: dueDate,
+    target_month: monthStart.slice(0, 7),
     needs_template: true,
   };
 }

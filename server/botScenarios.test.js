@@ -653,8 +653,8 @@ test('חבילת ההרשמה: שלושה שלבים בסדר, ושלב הציו
     ]);
     assert.equal(pack.שלב_1_הצהרת_בריאות.מצב, 'נחתמה');
     assert.match(pack.שלב_2_הרשמה_לקבוצה.קישור, /\/s\/g-gd\/1$/);
-    assert.match(pack.שלב_2_הרשמה_לקבוצה.הסבר, /השלמת הטופס היא אישור ההרשמה/);
-    assert.match(pack.שלב_2_הרשמה_לקבוצה.הסבר, /אין צורך באישור נוסף/);
+    assert.match(pack.שלב_2_הרשמה_לקבוצה.הסבר, /אינם אישור סופי/);
+    assert.match(pack.שלב_2_הרשמה_לקבוצה.הסבר, /אימות מהמתנ״ס או מהצוות/);
     assert.doesNotMatch(pack.שלב_2_הרשמה_לקבוצה.הסבר, /אחרי כמה ימים/);
     assert.ok(pack.שלב_3_תשלום_ציוד.קישור);
     assert.equal('סכום' in pack.שלב_3_תשלום_ציוד, false);
@@ -925,7 +925,7 @@ test('הכללים אוסרים לחזור על אותו קישור ועל או�
 
 // ─── כשהמודל לא זמין ─────────────────────────────────────────────────────────
 
-test('מודל שנופל אינו הופך לניחוש — הבוט אומר שהוא מעביר, ומעביר', async () => {
+test('מודל שנופל אינו הופך לניחוש — הבוט שותק ומפעיל את מנגנון התקלה', async () => {
   await withSeed({ groups: [GROUP_GD], students: [childYotam()] }, async () => {
     const { whatsappService } = await import('./whatsapp.js');
     const key = process.env.GEMINI_API_KEY;
@@ -937,10 +937,12 @@ test('מודל שנופל אינו הופך לניחוש — הבוט אומר �
         phone: PARENT.phone,
         parent: PARENT,
         students: [],
+        isSimulator: true,
       });
-      assert.equal(result.handoff, true);
+      assert.equal(result.handoff, false);
       assert.equal(result.reason, 'no_model');
-      assert.match(result.text, /לצוות/);
+      assert.equal(result.silent, true);
+      assert.equal(result.text, '');
       // No price, no group, no schedule — nothing that would need a source.
       assert.doesNotMatch(result.text, /\d{2,}/);
     } finally {

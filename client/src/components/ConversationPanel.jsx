@@ -43,6 +43,46 @@ const CHANNEL_COLORS = {
   messenger: 'rgba(0,132,255,0.14)',
 };
 
+function LinkifiedMessage({ text }) {
+  const value = String(text || '(ללא תוכן)');
+  const parts = value.split(/(https?:\/\/[^\s]+)/giu);
+  return parts.map((part, index) => {
+    if (!/^https?:\/\//iu.test(part)) return <React.Fragment key={`${index}-${part}`}>{part}</React.Fragment>;
+    const match = part.match(/^(.*?)([.,;:!?)}\]׳״]*)$/u);
+    const href = match?.[1] || part;
+    const suffix = match?.[2] || '';
+    return (
+      <React.Fragment key={`${index}-${part}`}>
+        <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: '#7dd3fc', textDecoration: 'underline' }}>
+          {href}
+        </a>
+        {suffix}
+      </React.Fragment>
+    );
+  });
+}
+
+// The local calendar day a message belongs to. Not the ISO date — that one
+// flips at UTC midnight and would cut an evening conversation in two.
+function messageDayKey(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
+function messageDayLabel(value) {
+  const d = new Date(value);
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (messageDayKey(d) === messageDayKey(today)) return 'היום';
+  if (messageDayKey(d) === messageDayKey(yesterday)) return 'אתמול';
+  const opts = { weekday: 'long', day: 'numeric', month: 'numeric' };
+  if (d.getFullYear() !== today.getFullYear()) opts.year = 'numeric';
+  return d.toLocaleDateString('he-IL', opts);
+}
+
 function phonesMatchClient(a, b) {
   const digits = (p) => String(p || '').replace(/[^\d]/g, '');
   let na = digits(a);
@@ -1165,9 +1205,34 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                 const childLabel = m.fromChild || m.student_id
                   ? (m.studentName || activeThread?.label || 'מתאמן')
                   : null;
+                const dayKey = messageDayKey(m.created_at);
+                const startsNewDay = !!dayKey && dayKey !== messageDayKey(messages[i - 1]?.created_at);
                 return (
+                  <React.Fragment key={m.id || i}>
+                  {startsNewDay && (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      width: '100%',
+                      margin: '4px 0',
+                    }}>
+                      <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                      <span style={{
+                        fontSize: 10,
+                        color: 'var(--text-3)',
+                        whiteSpace: 'nowrap',
+                        padding: '2px 10px',
+                        borderRadius: 999,
+                        border: '1px solid var(--border)',
+                        background: 'var(--bg-card)',
+                      }}>
+                        {messageDayLabel(m.created_at)}
+                      </span>
+                      <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                    </div>
+                  )}
                   <div
-                    key={m.id || i}
                     style={{
                       alignSelf: inbound ? 'flex-start' : 'flex-end',
                       maxWidth: '88%',
@@ -1205,7 +1270,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                       </div>
                     ) : (
                       <div style={{ color: 'var(--text-1)', whiteSpace: 'pre-wrap' }}>
-                        {m.body || m.message || m.text || '(ללא תוכן)'}
+                        <LinkifiedMessage text={m.body || m.message || m.text} />
                       </div>
                     )}
                     <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4 }}>
@@ -1272,6 +1337,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                       </div>
                     )}
                   </div>
+                  </React.Fragment>
                 );
               })
             )}

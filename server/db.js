@@ -277,10 +277,10 @@ const SEED_DATA = {
     aiStopKeywords: 'עצור,הסר,stop,unsubscribe,הסר אותי',
     aiOptOutMessage: 'הוסרתם מרשימת המענה האוטומטי.\nאם תרצו לחזור — כתבו «הפעל בוט».',
     aiPauseOnHumanReply: true,
-    aiPauseMinutesAfterHuman: 120,
+    aiPauseMinutesAfterHuman: 1,
     aiAudienceMode: 'all',
     aiHistoryCount: 8,
-    aiMaxReplyChars: 700,
+    aiMaxReplyChars: 1200,
     // Wait for a short run of WhatsApp bubbles, then answer the whole run once.
     aiReplyDelayMs: 7_000,
     aiRateLimitPerHour: 20,

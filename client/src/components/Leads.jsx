@@ -535,6 +535,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [savingGroup, setSavingGroup] = useState(false);
   const [editingFollowup, setEditingFollowup] = useState(false);
   const [savingFollowup, setSavingFollowup] = useState(false);
+  const [programEligibility, setProgramEligibility] = useState([]);
   
   // Edit Form Fields (student)
   // שם פרטי ושם משפחה בשני שדות, כמו אצל ההורה. תיק שקדם לפיצול נפתח עם
@@ -605,6 +606,23 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [contactStudentIds, setContactStudentIds] = useState([]);
   const [addingContact, setAddingContact] = useState(false);
   const [addContactError, setAddContactError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    if (parentOnly || !student?.id) {
+      setProgramEligibility([]);
+      return () => { cancelled = true; };
+    }
+    fetch(`/api/students/${encodeURIComponent(student.id)}/program-eligibility`)
+      .then((response) => (response.ok ? response.json() : []))
+      .then((rows) => {
+        if (!cancelled) setProgramEligibility(Array.isArray(rows) ? rows : []);
+      })
+      .catch(() => {
+        if (!cancelled) setProgramEligibility([]);
+      });
+    return () => { cancelled = true; };
+  }, [parentOnly, student?.id]);
 
   useEffect(() => {
     {
@@ -2630,6 +2648,23 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     : climbingLevel?.startsWith('6')
       ? '#16A34A'
       : climbingLevel ? '#F97316' : 'var(--text-3)';
+  const programLabels = {
+    advanced: 'מתקדמים',
+    young_squad: 'נבחרת צעירה',
+    adult_squad: 'נבחרת בוגרת',
+  };
+  const eligibilityLabels = {
+    returning: 'ממשיך',
+    pending: 'ממתין לאישור',
+    approved: 'מאושר',
+    rejected: 'נדחה',
+  };
+  const eligibilityColors = {
+    returning: '#60A5FA',
+    pending: '#FBBF24',
+    approved: '#34D399',
+    rejected: '#F87171',
+  };
   const safetyTone = SAFETY_TONE[punchSafety.state] || SAFETY_TONE.missing;
   const SafetyStatusIcon = safetyTone.alert ? ShieldAlert : ShieldCheck;
   const absenceStreak = consecutiveAbsences(attendanceHistory);
@@ -3471,6 +3506,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     )}
                   </div>
                   {showStudentProfile && (
+                    <>
                     <div
                       aria-label="סיכום מצב המתאמן"
                       style={{
@@ -3627,6 +3663,41 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         )}
                       </span>
                     </div>
+                    {programEligibility.length > 0 && (
+                      <div
+                        aria-label="זכאות למתקדמים ולנבחרת"
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          gap: 5,
+                          marginTop: 5,
+                          paddingTop: 5,
+                          borderTop: '1px solid rgba(148,163,184,0.12)',
+                        }}
+                      >
+                        {programEligibility.map((item) => (
+                          <span
+                            key={item.id || `${item.program}-${item.season}`}
+                            title={`${programLabels[item.program] || item.program}: ${eligibilityLabels[item.status] || item.status}`}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              padding: '3px 7px',
+                              borderRadius: 999,
+                              border: `1px solid ${eligibilityColors[item.status] || 'var(--border)'}`,
+                              color: eligibilityColors[item.status] || 'var(--text-2)',
+                              background: 'rgba(15,23,42,0.28)',
+                              fontSize: 10,
+                              fontWeight: 700,
+                            }}
+                          >
+                            {programLabels[item.program] || item.program} · {eligibilityLabels[item.status] || item.status}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    </>
                   )}
                 </div>
               </div>
