@@ -701,6 +701,15 @@ const SUB_WAIVER = 3;
 // the last thing that happens, and it is what puts the participants on the list.
 const SUB_PAYMENT = 4;
 
+/** „א׳ 10.8” — קצר מספיק לאסימון, ברור מספיק כדי לבחור לפיו. */
+const DAY_CHIP_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
+function formatDayChip(date) {
+  const parsed = new Date(`${String(date).slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return String(date);
+  const name = DAY_CHIP_NAMES[parsed.getUTCDay()];
+  return `${name} ${parsed.getUTCDate()}.${parsed.getUTCMonth() + 1}`;
+}
+
 export default function PublicOnboardingForm() {
   const { profile, legalName } = useBusinessProfile();
   const brandName = profile.display_name || 'הרפתקאות';
@@ -717,6 +726,10 @@ export default function PublicOnboardingForm() {
   // their details. The activity itself is the authority on which declaration is
   // signed, what it costs and how many places are left.
   const eventSlug = String(searchParams.get('event') || '').trim();
+  // בחירת ימים היא של ההרשמה כולה ולא של משתתף בודד: משפחה שרוצה ימים שונים
+  // לילדים שונים נרשמת פעמיים.
+  const [partialDays, setPartialDays] = useState(false);
+  const [selectedDays, setSelectedDays] = useState([]);
   const [activity, setActivity] = useState(null);
   const [activityError, setActivityError] = useState('');
   const [policyAccepted, setPolicyAccepted] = useState(false);
@@ -1694,11 +1707,23 @@ export default function PublicOnboardingForm() {
   const eventParticipants = namedChildren();
   const paidEvent = activity?.registration_mode === 'paid_per_participant';
   const eventIncludesVat = normalizePriceIncludesVat(activity?.price_includes_vat);
-  const eventUnitVat = vatBreakdown(activity?.unit_price, eventIncludesVat);
+  // קייטנה של כמה ימים יכולה להימכר גם ליום בודד. ברירת המחדל היא כל האירוע —
+  // הוא בדרך כלל זול יותר, ואין סיבה לגרום למישהו לבחור ימים בלי שביקש.
+  const eventDays = Array.isArray(activity?.days) ? activity.days : [];
+  const canPickDays = activity?.allow_single_day === true && eventDays.length > 1;
+  const pickedDays = canPickDays && partialDays
+    ? eventDays.filter((date) => selectedDays.includes(date))
+    : [];
+  const eventUnitPrice = pickedDays.length
+    ? (Number(activity?.single_day_price) || 0) * pickedDays.length
+    : (Number(activity?.unit_price) || 0);
+  const eventUnitVat = vatBreakdown(eventUnitPrice, eventIncludesVat);
   const eventTotalVat = vatBreakdown(
-    (Number(activity?.unit_price) || 0) * eventParticipants.length,
+    eventUnitPrice * eventParticipants.length,
     eventIncludesVat
   );
+  // „ימים מסוימים” בלי אף יום מסומן אינו מצב שאפשר לשלם עליו.
+  const daysIncomplete = canPickDays && partialDays && pickedDays.length === 0;
   const eventPolicy = activity?.cancellation_policy || null;
 
   const goNextFromParent = async () => {
@@ -2379,6 +2404,7 @@ export default function PublicOnboardingForm() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           idempotency_key: idempotencyKey,
+        attending_dates: pickedDays.length ? pickedDays : null,
           parent: parentPayload(),
           subscriptions: { ...subscriptions },
           participants: booked,
@@ -3961,9 +3987,58 @@ export default function PublicOnboardingForm() {
                       </strong>
                     </div>
                   )}
+                  {canPickDays && (
+                    <div className="event-day-picker">
+                      <label className="event-day-toggle">
+                        <input
+                          type="checkbox"
+                          checked={partialDays}
+                          onChange={(event) => {
+                            setPartialDays(event.target.checked);
+                            if (!event.target.checked) setSelectedDays([]);
+                          }}
+                        />
+                        <span>רק ימים מסוימים</span>
+                      </label>
+                      {partialDays && (
+                        <>
+                          <div className="event-day-chips">
+                            {eventDays.map((date) => {
+                              const on = selectedDays.includes(date);
+                              return (
+                                <button
+                                  key={date}
+                                  type="button"
+                                  className={`event-day-chip${on ? ' is-on' : ''}`}
+                                  onClick={() => setSelectedDays((prev) => (
+                                    prev.includes(date)
+                                      ? prev.filter((value) => value !== date)
+                                      : [...prev, date]
+                                  ))}
+                                >
+                                  {formatDayChip(date)}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <p className="event-hint" style={{ margin: '8px 0 0' }}>
+                            {daysIncomplete
+                              ? 'בחרו לפחות יום אחד'
+                              : `${pickedDays.length} ימים · ${formatIls(
+                                Number(activity?.single_day_price) || 0
+                              )} ליום`}
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  )}
                   {paidEvent && (
                     <div>
-                      <span>מחיר למשתתף כולל מע״מ</span>
+                      <span>
+                        {pickedDays.length
+                          ? `מחיר למשתתף · ${pickedDays.length} ימים`
+                          : 'מחיר למשתתף כולל מע״מ'}
+                      </span>
                       <strong>{formatIls(eventUnitVat.gross)}</strong>
                     </div>
                   )}
@@ -4028,7 +4103,7 @@ export default function PublicOnboardingForm() {
                   type="button"
                   className="event-primary"
                   style={{ marginTop: 16 }}
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || daysIncomplete}
                   onClick={advanceHealthOrSubmit}
                 >
                   {isSubmitting

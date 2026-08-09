@@ -423,6 +423,8 @@ mappers.activities = columnMapper([
   // school group are one thing to staff and to pay, so they share the `event`
   // type; this is the label that tells them apart on the board.
   'event_kind', 'participation_scope',
+  // הרשמה ליום בודד באירוע רב-יומי, והמחיר שלה.
+  'allow_single_day', 'single_day_price',
   'created_at', 'updated_at',
 ], { keepEmpty: ['audience', 'included', 'what_to_bring', 'important_info'] });
 mappers.attendance = columnMapper([
@@ -436,13 +438,15 @@ mappers.activity_registrations = columnMapper([
   'payment_status', 'amount', 'paid_at', 'status', 'notes', 'payment_id',
   'order_id', 'participant_type', 'health_declaration_id', 'participation_waiver_id',
   'document_status', 'hold_expires_at',
+  // אילו ימים ההרשמה מכסה. null = כל ימי האירוע.
+  'attending_dates',
   'created_at', 'updated_at',
 ]);
 mappers.activity_registration_orders = columnMapper([
   'id', 'activity_id', 'parent_id', 'idempotency_key', 'participant_count',
   'unit_price', 'total_amount', 'payment_status', 'status', 'payment_id',
   'hold_expires_at', 'household_id', 'payer_person_id', 'cancellation_acceptance_id',
-  'policy_snapshot', 'created_at', 'updated_at',
+  'policy_snapshot', 'attending_dates', 'created_at', 'updated_at',
 ]);
 mappers.households = columnMapper([
   'id', 'status', 'merged_into_id', 'created_at', 'updated_at',

@@ -423,6 +423,8 @@ function emptyForm(dateStr = '', opts = {}) {
     // המחיר שנרשם על אירוע הוא מה שהלקוח משלם בפועל, ולכן הוא כולל מע״מ.
     // מי שעובד אחרת משנה זאת במפורש.
     price_includes_vat: true,
+    allow_single_day: false,
+    single_day_price: '',
     registration_slug: '',
     registration_page_title: '',
     registration_page_body: '',
@@ -434,6 +436,16 @@ function emptyForm(dateStr = '', opts = {}) {
     notes: '',
     status: 'open',
   };
+}
+
+/** מספר ימי האירוע, כולל שני הקצוות. תואם ל-activityDateRange בשרת. */
+function countEventDays(start, end) {
+  if (!start) return 1;
+  if (!end || end <= start) return 1;
+  const from = new Date(`${String(start).slice(0, 10)}T00:00:00Z`);
+  const to = new Date(`${String(end).slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return 1;
+  return Math.max(1, Math.round((to - from) / 864e5) + 1);
 }
 
 function roundHoursQuarter(h) {
@@ -1456,6 +1468,8 @@ function RegularActivityModal({
   const multiDay = !!(form.date && form.end_date && form.end_date > form.date);
   const paidPerParticipant = isPaidPerParticipant(form);
   const includesVat = normalizePriceIncludesVat(form.price_includes_vat);
+  // כמה ימים האירוע נמשך — משמש להשוואה בין מחיר יום למחיר מלא.
+  const eventDayCount = countEventDays(form.date, form.end_date);
   const priceVat = vatBreakdown(form.price, includesVat);
   const isOps = normalizeTemplateCategory(form.category) === 'ops';
   const isCancelled = String(form.status || '').toLowerCase() === 'cancelled';
@@ -1857,6 +1871,47 @@ function RegularActivityModal({
                         : `כולל מע״מ: ${formatIls(priceVat.gross)} · לתשלום: ${formatIls(priceVat.gross)}`}
                     </div>
                   )}
+
+                  {/* קייטנה נמשכת כמה ימים ולא כל הורה רוצה את כולם. מוצג רק
+                      באירוע רב-יומי — ליום אחד אין „ימים בודדים”. */}
+                  {multiDay && paidPerParticipant && (
+                    <>
+                      <label className="activity-day-toggle">
+                        <input
+                          type="checkbox"
+                          checked={!!form.allow_single_day}
+                          onChange={(event) => set('allow_single_day', event.target.checked)}
+                          disabled={readOnly}
+                        />
+                        <span>אפשר הרשמה ליום בודד</span>
+                      </label>
+                      {form.allow_single_day && (
+                        <div className="activity-settings-grid">
+                          <label>
+                            <span className="activity-settings-label">
+                              {includesVat ? 'עלות ליום בודד · כולל מע״מ' : 'עלות ליום בודד · לפני מע״מ'}
+                            </span>
+                            <input
+                              className="input"
+                              type="number"
+                              min="0"
+                              step="1"
+                              value={form.single_day_price ?? ''}
+                              onChange={(event) => set('single_day_price', event.target.value)}
+                              disabled={readOnly}
+                            />
+                          </label>
+                          <div className="activity-settings-hint" style={{ alignSelf: 'end' }}>
+                            {Number(form.single_day_price) > 0
+                              ? `${eventDayCount} ימים לפי יום בודד: ${formatIls(
+                                vatBreakdown(Number(form.single_day_price) * eventDayCount, includesVat).gross
+                              )} · אירוע מלא: ${formatIls(priceVat.gross)}`
+                              : 'בלי מחיר ליום בודד ההרשמה החלקית תיחסם'}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </>
               )}
             </section>
@@ -2060,6 +2115,8 @@ function ActivityFormModal({
     price_includes_vat: initial?.price_includes_vat === undefined
       ? true
       : !!initial.price_includes_vat,
+    allow_single_day: !!initial?.allow_single_day,
+    single_day_price: initial?.single_day_price ?? '',
     registration_page_title: initial?.registration_page_title || '',
     registration_page_body: initial?.registration_page_body || '',
     registration_theme: (
@@ -2109,6 +2166,7 @@ function ActivityFormModal({
     if (!canViewFinance) {
       for (const key of [
         'price', 'price_includes_vat', 'collect_registration_payment', 'registration_mode',
+        'allow_single_day', 'single_day_price',
         'payment_link', 'payment_url', 'host_payment_id', 'host_payment_token',
       ]) delete next[key];
     }
@@ -2146,6 +2204,10 @@ function ActivityFormModal({
         location: form.location || '',
         price: form.price === '' ? 0 : Number(form.price),
         price_includes_vat: !!form.price_includes_vat,
+      allow_single_day: !!form.allow_single_day,
+      single_day_price: form.single_day_price === '' || form.single_day_price == null
+        ? 0
+        : Number(form.single_day_price),
         max_participants: form.max_participants === '' ? null : Number(form.max_participants),
         description: form.description || '',
         notes: form.notes || '',
@@ -2197,6 +2259,10 @@ function ActivityFormModal({
       name: String(form.name).trim(),
       price: form.price === '' ? 0 : Number(form.price),
       price_includes_vat: !!form.price_includes_vat,
+      allow_single_day: !!form.allow_single_day,
+      single_day_price: form.single_day_price === '' || form.single_day_price == null
+        ? 0
+        : Number(form.single_day_price),
       max_participants: form.max_participants === '' ? null : Number(form.max_participants),
       closeAfter,
     }));

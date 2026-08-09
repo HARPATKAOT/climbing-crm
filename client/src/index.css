@@ -5593,3 +5593,38 @@ select option, select optgroup {
 @media (max-width: 700px) {
   .policy-basis-row { grid-template-columns: minmax(0, 1fr); }
 }
+
+
+/* „אפשר הרשמה ליום בודד” — תיבת סימון שפותחת את מחיר היום. */
+.activity-day-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* הימים שהרשמה חלקית מכסה, בשורת המשתתף. */
+.registration-partial-days {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-inline-start: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--amber) 32%, transparent);
+  background: color-mix(in srgb, var(--amber) 12%, transparent);
+  color: var(--amber);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.registration-not-enrolled {
+  color: var(--text-3);
+  font-size: 11px;
+  font-style: italic;
+  white-space: nowrap;
+}

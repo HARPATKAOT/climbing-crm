@@ -162,13 +162,27 @@ export function useActivityAttendance({ activityId, refreshToken = '', enabled =
 
   const dayIndex = dates.indexOf(activeDate);
 
+  // מאז שהרשמה יכולה לכסות חלק מהימים, `days` אינו באורך אחיד בין משתתפים —
+  // חיפוש לפי אינדקס היה מציג את הסטטוס של היום הלא נכון.
   const statusByRegistration = useMemo(() => {
     const map = new Map();
     for (const participant of data?.participants || []) {
-      map.set(String(participant.registration_id), participant.days?.[dayIndex]?.status || 'pending');
+      const day = (participant.days || []).find((entry) => entry.date === activeDate);
+      if (day) map.set(String(participant.registration_id), day.status || 'pending');
     }
     return map;
-  }, [data, dayIndex]);
+  }, [data, activeDate]);
+
+  /** מי רשום ליום שמסומן כרגע. מי שלא — לא אמור להופיע ברשימה בכלל. */
+  const enrolledOnActiveDay = useMemo(() => {
+    const set = new Set();
+    for (const participant of data?.participants || []) {
+      if ((participant.days || []).some((entry) => entry.date === activeDate)) {
+        set.add(String(participant.registration_id));
+      }
+    }
+    return set;
+  }, [data, activeDate]);
 
   const applyLocal = (updates) => {
     setData((prev) => {
@@ -184,9 +198,12 @@ export function useActivityAttendance({ activityId, refreshToken = '', enabled =
           days: participant.days.map((day) => (day.date === activeDate ? { ...day, status: next } : day)),
         };
       });
-      const summary = { date: activeDate, attended: 0, absent: 0, pending: 0, total: participants.length };
+      const summary = { date: activeDate, attended: 0, absent: 0, pending: 0, total: 0 };
       for (const participant of participants) {
-        summary[participant.days[index]?.status || 'pending'] += 1;
+        const day = (participant.days || []).find((entry) => entry.date === activeDate);
+        if (!day) continue;
+        summary.total += 1;
+        summary[day.status || 'pending'] += 1;
       }
       return {
         ...prev,
@@ -216,9 +233,12 @@ export function useActivityAttendance({ activityId, refreshToken = '', enabled =
   };
 
   const markAllPresent = async () => {
-    const pending = (data?.participants || []).filter(
-      (participant) => participant.days?.[dayIndex]?.status !== 'attended'
-    );
+    // רק מי שרשום ליום הזה. „סימון כולם” על משתתף שלא נרשם ליום היה נדחה
+    // בשרת וגורר שגיאה על פעולה שנראית תמימה.
+    const pending = (data?.participants || []).filter((participant) => {
+      const day = (participant.days || []).find((entry) => entry.date === activeDate);
+      return day && day.status !== 'attended';
+    });
     if (!pending.length || !activeDate) return;
     setBusyKey('all');
     setError('');
@@ -249,6 +269,9 @@ export function useActivityAttendance({ activityId, refreshToken = '', enabled =
     setActiveDate,
     hasList: dates.length > 0 && (data?.participants?.length || 0) > 0,
     statusFor: (registrationId) => statusByRegistration.get(String(registrationId)) || 'pending',
+    // האם המשתתף רשום ליום שמסומן כרגע. רשימת המשתתפים מסתירה לפי זה, כדי
+    // שילד שנרשם ליומיים לא יופיע ביום שלישי שאינו שלו.
+    enrolledOn: (registrationId) => enrolledOnActiveDay.has(String(registrationId)),
     busyFor: (registrationId) => busyKey === String(registrationId) || busyKey === 'all',
     markingAll: busyKey === 'all',
     mark,

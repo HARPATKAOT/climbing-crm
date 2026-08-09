@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { normalizeAttendingDates, participantPrice } from './activityDays.js';
 import {
   activeRegistrations,
   leadSourceFromActivityType,
@@ -67,6 +68,9 @@ export function normalizeGroupedRegistrationPayload(body = {}) {
       phoneVerification: body.phoneVerification || body.phone_verification || null,
       evidenceContext: body.evidenceContext || body.evidence_context || null,
       policyAccepted: body.policyAccepted === true || body.policy_accepted === true,
+      // הבחירה היא לכל ההרשמה ולא לכל משתתף: משפחה שרוצה ימים שונים לילדים
+      // שונים נרשמת פעמיים.
+      attendingDates: body.attending_dates || body.attendingDates || null,
       participants: body.participants.map((participant) => ({
         ...participant,
         type: participant.type === 'adult' ? 'adult' : 'child',
@@ -95,6 +99,7 @@ export function normalizeGroupedRegistrationPayload(body = {}) {
     phoneVerification: body.phoneVerification || body.phone_verification || null,
     evidenceContext: body.evidenceContext || body.evidence_context || null,
     policyAccepted: body.policyAccepted === true || body.policy_accepted === true,
+    attendingDates: body.attending_dates || body.attendingDates || null,
     participants: [{
       type: body.participant_type === 'adult' ? 'adult' : 'child',
       name: clean(body.participant_name || body.name),
@@ -167,7 +172,17 @@ export async function registerActivityGroup({
     );
     const paid = mode === 'paid_per_participant';
     const includesVat = normalizePriceIncludesVat(activity.price_includes_vat);
-    const unitPrice = paid ? Math.max(0, Number(activity.price) || 0) : 0;
+    // אילו ימים ההרשמה מכסה. null = כל האירוע, וזה גם המצב של כל הרשמה
+    // שנעשתה לפני שהאפשרות הזאת קיימה.
+    const attendingDates = normalizeAttendingDates(activity, normalized.attendingDates);
+    if (attendingDates && !(Number(activity.single_day_price) > 0)) {
+      // לגבות אפס על ימים בודדים זו טעות שקטה שמגיעה עד לחשבונית.
+      throw Object.assign(
+        new Error('לא הוגדר מחיר ליום בודד באירוע הזה'),
+        { status: 400 }
+      );
+    }
+    const unitPrice = paid ? participantPrice(activity, attendingDates) : 0;
     const unitCharge = paid ? chargeAmount(unitPrice, includesVat) : 0;
     const total = unitCharge * count;
     const pendingPayment = paid && total > 0;
@@ -215,6 +230,7 @@ export async function registerActivityGroup({
         payment_id: null,
         cancellation_acceptance_id: null,
         policy_snapshot: policyResolution?.snapshot || null,
+        attending_dates: attendingDates,
         hold_expires_at: holdExpiresAt,
         updated_at: new Date().toISOString(),
       });
@@ -363,6 +379,7 @@ export async function registerActivityGroup({
         hold_expires_at: holdExpiresAt,
         payment_status: pendingPayment ? 'pending' : 'not_required',
         amount: unitCharge,
+        attending_dates: attendingDates,
         paid_at: null,
         payment_id: null,
         updated_at: new Date().toISOString(),
@@ -378,7 +395,10 @@ export async function registerActivityGroup({
         parent_id: crm.parent.id,
         student_id: null,
         amount: total,
-        description: `הרשמה: ${activity.name} — ${count} משתתפים`,
+        // מספר הימים נכנס לתיאור כדי שהחשבונית תסביר למה חויב פחות מהמחיר
+        // המלא — בלי זה לקוח שקנה יומיים מקבל מסמך שנראה כמו טעות.
+        description: `הרשמה: ${activity.name} — ${count} משתתפים`
+          + (attendingDates ? ` · ${attendingDates.length} ימים` : ''),
         status: 'pending',
         payment_url: null,
         activity_id: activity.id,

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Copy, CreditCard, Download, ExternalLink, Loader2, Pencil, Plus, RefreshCw,
-  Search, Send, Trash2, Undo2, UserCheck, UserPlus, UserRoundCheck, Users, X,
+  CalendarDays, Search, Send, Trash2, Undo2, UserCheck, UserPlus, UserRoundCheck, Users, X,
 } from 'lucide-react';
 import InfoHint from '../utils/InfoHint.jsx';
 import { formatIls, normalizePriceIncludesVat, vatBreakdown } from '../utils/vat.js';
@@ -1470,6 +1470,16 @@ export default function ActivityRegistrationPanel({
                         ) : (
                           <span className="registration-participant-name">{r.participant_name}</span>
                         )}
+                        {/* הרשמה חלקית — בלי זה אי אפשר להסביר ללקוח למה חויב פחות. */}
+                        {Array.isArray(r.attending_dates) && r.attending_dates.length > 0 && (
+                          <span
+                            className="registration-partial-days"
+                            title={r.attending_dates.join(' · ')}
+                          >
+                            <CalendarDays size={11} />
+                            {r.attending_dates.length} ימים
+                          </span>
+                        )}
                         <small className="registration-participant-meta">
                           {r.participant_type === 'adult' ? 'מבוגר' : 'ילד'}
                           {r.parent_name && parentOpenId ? (
@@ -1500,15 +1510,24 @@ export default function ActivityRegistrationPanel({
                               : ' · ללא תשלום'}
                         </small>
                       </span>
+                      {/* מי שלא נרשם ליום שמסומן כרגע מקבל הערה במקום מתג —
+                          עדיף שיֵראה בשורה ויוסבר, מאשר שייעלם ויֵראה כאילו
+                          נמחק מהאירוע. */}
                       {attendance.hasList && (
-                        <span className="registration-participant-attendance">
-                          <AttendanceToggle
-                            status={attendance.statusFor(r.id)}
-                            busy={attendance.busyFor(r.id)}
-                            disabled={readOnly}
-                            onMark={(status) => attendance.mark(r.id, status)}
-                          />
-                        </span>
+                        attendance.enrolledOn(r.id) ? (
+                          <span className="registration-participant-attendance">
+                            <AttendanceToggle
+                              status={attendance.statusFor(r.id)}
+                              busy={attendance.busyFor(r.id)}
+                              disabled={readOnly}
+                              onMark={(status) => attendance.mark(r.id, status)}
+                            />
+                          </span>
+                        ) : (
+                          <span className="registration-participant-attendance registration-not-enrolled">
+                            לא ביום הזה
+                          </span>
+                        )
                       )}
                       {!readOnly && (
                         <span className="registration-participant-actions">

@@ -10,6 +10,7 @@
  */
 
 import { activityDateRange } from './attendanceUtils.js';
+import { registrationDays, registrationCoversDate } from './activityDays.js';
 
 export const ACTIVITY_ATTENDANCE_COLLECTION = 'activity_attendance';
 
@@ -58,7 +59,9 @@ export function indexSavedAttendance(saved = []) {
 /** ימי האירוע (כולל אירוע רב-יומי) עם הסטטוס של משתתף אחד. */
 export function attendanceDaysFor({ activity, registration, savedById }) {
   const index = savedById instanceof Map ? savedById : indexSavedAttendance(savedById);
-  return activityDateRange(activity).map((date) => {
+  // רק הימים שההרשמה מכסה. ילד שנרשם ליומיים מתוך חמישה כבר לא מייצר שלושה
+  // תאים ריקים שאיש לא אמור לסמן.
+  return registrationDays(activity, registration).map((date) => {
     const id = activityAttendanceId(registration?.id, date);
     const row = index.get(id) || null;
     return {
@@ -88,14 +91,22 @@ export function buildActivityAttendance({ activity, registrations = [], saved = 
     parent_name: registration.parent_name || '',
     participant_name: registration.participant_name || '',
     participant_type: registration.participant_type === 'adult' ? 'adult' : 'child',
+    // אילו ימים הוא רשום אליהם. הלקוח מסנן לפי זה, ולכן זה נשלח במפורש ולא
+    // נגזר מאורך `days` — הרשמה חלקית ורשימה מלאה נראות אחרת.
+    attending_dates: registrationDays(activity, registration),
     days: attendanceDaysFor({ activity, registration, savedById }),
   }));
 
-  const totals = dates.map((date, index) => {
-    const summary = { date, attended: 0, absent: 0, pending: 0, total: participants.length };
+  // `days` כבר אינו באורך אחיד בין משתתפים, ולכן הסטטוס נמצא לפי תאריך ולא
+  // לפי אינדקס. גם הסכום הכולל סופר רק את מי שרשום לאותו יום — אחרת
+  // „2 מתוך 12” היה משקר על יום שרשומים אליו ארבעה.
+  const totals = dates.map((date) => {
+    const summary = { date, attended: 0, absent: 0, pending: 0, total: 0 };
     for (const participant of participants) {
-      const status = participant.days[index]?.status || 'pending';
-      summary[status] += 1;
+      const day = participant.days.find((entry) => entry.date === date);
+      if (!day) continue;
+      summary.total += 1;
+      summary[day.status || 'pending'] += 1;
     }
     return summary;
   });
@@ -129,6 +140,11 @@ export function planAttendanceMark({
   }
   if (!day || !activityDateRange(activity).includes(day)) {
     return { action: 'invalid', error: 'התאריך לא נכלל בימי הפעילות' };
+  }
+  // יום שההרשמה אינה מכסה. הודעה נפרדת, כי זו טעות אחרת לגמרי מתאריך שאינו
+  // של האירוע — כאן היום קיים, פשוט לא נרשמו אליו.
+  if (!registrationCoversDate(activity, registration, day)) {
+    return { action: 'invalid', error: 'המשתתף לא נרשם ליום הזה' };
   }
   const normalized = normalizeActivityAttStatus(status);
   const id = activityAttendanceId(registration.id, day);

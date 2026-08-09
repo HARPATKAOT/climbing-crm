@@ -6,6 +6,7 @@ import { clampImage } from './productCategories.js';
 import { DEFAULT_BUSINESS_PROFILE } from './businessProfile.js';
 import { normalizePriceIncludesVat } from './vat.js';
 import { normalizeParticipationScope, scopeForActivity } from './participationDocuments.js';
+import { activityDayList, singleDayEnabled, singleDayPrice } from './activityDays.js';
 
 const PAYMENT_STATUSES = new Set(['unpaid', 'paid', 'partial', 'refunded']);
 
@@ -170,6 +171,11 @@ export function publicRegistrationPayload(activity, registrations) {
     registration_mode: registrationMode,
     collect_payment: collectPay,
     unit_price: collectPay ? price : 0,
+    // ימי האירוע נשלחים מהשרת ולא נגזרים בדפדפן, כדי ששני הצדדים לא יחשבו
+    // את אותו טווח בנפרד ויסתרו זה את זה.
+    days: activityDayList(activity),
+    allow_single_day: singleDayEnabled(activity),
+    single_day_price: singleDayEnabled(activity) ? singleDayPrice(activity) : 0,
     page_title: activity.registration_page_title || activity.name || '',
     page_body: activity.registration_page_body || activity.description || '',
     audience: activity.audience || '',
