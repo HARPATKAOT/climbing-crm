@@ -394,6 +394,9 @@ test('אותו שיבוץ פעמיים נשמר פעם אחת בלבד ולא י
     groups: [GROUP_GD],
     students: [childYotam()],
     ...signedFormFor(['s-yotam']),
+    student_equipment: [
+      { id: 'se-soft', student_id: 's-yotam', item_type: 'shoes', payment_status: 'unpaid' },
+    ],
   }, async () => {
     const notices = [];
     const tools = buildCustomerTools({
@@ -407,6 +410,12 @@ test('אותו שיבוץ פעמיים נשמר פעם אחת בלבד ולא י
 
     assert.equal(first.כבר_נשמר, undefined);
     assert.equal(repeated.כבר_נשמר, true);
+    assert.match(first.חבילת_הרשמה.שלב_2_הרשמה_לקבוצה.קישור, /\/s\/g-gd\/1$/);
+    assert.ok(first.חבילת_הרשמה.שלב_3_תשלום_ציוד.קישור);
+    assert.equal(
+      repeated.חבילת_הרשמה.שלב_3_תשלום_ציוד.קישור,
+      first.חבילת_הרשמה.שלב_3_תשלום_ציוד.קישור
+    );
     assert.equal(notices.length, 1);
     assert.equal(journal().filter((row) => row.type === 'placement').length, 1);
     assert.equal(followUps().filter((row) => row.reason === 'pending_signup').length, 1);

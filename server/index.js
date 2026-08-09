@@ -22,6 +22,7 @@ import {
 import { whatsappConnectService } from './whatsappConnect.js';
 import { automationsService, runScheduledAutomationsIfDue } from './automations.js';
 import { resumeConversationAfterForm } from './botFormResume.js';
+import { formConfirmationPayload } from './formConfirmation.js';
 import { israelTimeToEpoch, runShiftRemindersIfDue, notifyShiftAssigned } from './shiftAlerts.js';
 import {
   DENOMINATIONS,
@@ -15768,11 +15769,6 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
       evidenceContext: { requestContext: requestEvidence(req) },
       healthOnly,
       source: parentBody.source || 'form',
-      onStudentCreated: (student, savedParent) => automationsService.triggerEvent('new_lead', {
-        ...student,
-        phone: savedParent.phone,
-        parentName: savedParent.name,
-      }),
       onStudentStatusChanged: (student) => automationsService.triggerEvent('status_changed', {
         ...student,
         new_status: 'health_signed',
@@ -15885,6 +15881,20 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   // meant a submission refused for a missing birth date burned the
   // verification, and the correction came back "אימות הטלפון פג".
   otpService.consumeToken(otpToken, verified.phone);
+
+  // The confirmation belongs to this submission as a whole. Previously it was
+  // fired only by `onStudentCreated`, so a form that updated existing Tom and
+  // created new Aviv told their mother that only Aviv had been received. Send
+  // one confirmation after every participant in the form is durable, naming
+  // all of them once and in the same order as the form.
+  if (!healthOnly) {
+    const confirmation = formConfirmationPayload({
+      parent,
+      students: savedStudents,
+      phone: verified.phone,
+    });
+    if (confirmation) await automationsService.triggerEvent('new_lead', confirmation);
+  }
 
   // The bot was waiting for exactly this. It reads the conversation it was
   // having and asks whether to place the trainee in the class already agreed —

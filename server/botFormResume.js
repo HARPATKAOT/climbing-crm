@@ -81,6 +81,16 @@ export async function resumeConversationAfterForm({
     return { sent: false, reason: 'window_closed' };
   }
 
+  // The bot itself asked for the grades immediately before the family opened
+  // the form. There is no reason to spend a model turn rediscovering that next
+  // step: in the real two-child thread the model ran out of steps and replaced
+  // the question with a handoff. Resume the exact missing fact deterministically.
+  const pendingGradeQuestion = gradeQuestionAfterForm(messages, names);
+  if (pendingGradeQuestion) {
+    await whatsappService.sendBotReply(phone, pendingGradeQuestion, { isSimulator });
+    return { sent: true, reply: pendingGradeQuestion, deterministic: true };
+  }
+
   const who = names.join(' ו');
   const result = await whatsappService.generateAIResponse(
     `[מערכת] טופס ההשתתפות של ${who} נחתם ונשמר זה עתה. המשך את השיחה מהמקום שבו עצרתם.`,

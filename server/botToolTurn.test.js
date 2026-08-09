@@ -167,6 +167,12 @@ test('a shared grade question is rewritten as one fact per child', () => {
   );
 });
 
+test('choosing a proposed group is approval to place and return registration links', () => {
+  assert.match(CUSTOMER_TOOL_RULES, /הבחירה שלו היא אישור השיבוץ/);
+  assert.match(CUSTOMER_TOOL_RULES, /חבילת ההרשמה/);
+  assert.match(CUSTOMER_TOOL_RULES, /קישור ההרשמה\/התשלום/);
+});
+
 test('כן תודה is treated as approval of the last bot question, not a reason to repeat it', async () => {
   const history = [
     { role: 'model', parts: [{ text: 'לשבץ אותך לקבוצת הבוגרים ביום ד׳ בשעה 20:10?' }] },

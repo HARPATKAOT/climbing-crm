@@ -154,7 +154,7 @@ test('botSpokeRecently מבדיל בין שיחה של הבוט לשיחה של 
   );
 });
 
-test('כשל מודל אחרי טופס אינו שולח העברה לצוות, אלא ממשיך את שאלת הכיתות', async () => {
+test('אחרי טופס ממשיכים ישירות את שאלת הכיתות בלי להסתכן בכשל מודל', async () => {
   const gradeThread = [
     { phone: PHONE, direction: 'inbound', message: 'בשביל תום ואביב', created_at: minutesAgo(20) },
     {
@@ -180,7 +180,8 @@ test('כשל מודל אחרי טופס אינו שולח העברה לצוות,
     });
 
     assert.equal(result.sent, true);
-    assert.equal(result.fallback, true);
+    assert.equal(result.deterministic, true);
+    assert.equal(service.calls.generated.length, 0);
     assert.equal(service.calls.sent.length, 1);
     assert.equal(
       service.calls.sent[0].text,

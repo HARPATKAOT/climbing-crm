@@ -1497,13 +1497,23 @@ export function buildCustomerTools({
       // notice or follow-up — it is one business action.
       if (String(student.status || '') === 'pending_signup'
           && String(student.groupId || '') === String(group.id || '')) {
+        const registrationPack = await tools.getRegistrationPack({
+          childName: student.name || childName,
+          grade,
+          band,
+          day,
+          time,
+          frequency,
+        });
         return {
           שובץ: student.name || '',
           קבוצה: describeGroup(group),
           סטטוס_פנימי: 'ממתין להרשמה',
           כבר_נשמר: true,
+          חבילת_הרשמה: registrationPack,
           הערה: 'השיבוץ הזה כבר נשמר. אין לשבץ שוב ואין לשאול שוב לאישור. '
-            + 'יש להמשיך ישר לקישור ההרשמה. אין להציג ללקוח את הסטטוס הפנימי.',
+            + 'קישורי ההרשמה והתשלום מוחזרים בחבילת ההרשמה ויש לשלוח אותם עכשיו. '
+            + 'אין להציג ללקוח את הסטטוס הפנימי.',
         };
       }
 
@@ -1530,10 +1540,19 @@ export function buildCustomerTools({
         row
       );
 
+      const registrationPack = await tools.getRegistrationPack({
+        childName: student.name || childName,
+        grade,
+        band,
+        day,
+        time,
+        frequency,
+      });
       return {
         שובץ: student.name || '',
         קבוצה: describeGroup(group),
         סטטוס_פנימי: 'ממתין להרשמה',
+        חבילת_הרשמה: registrationPack,
         הערה: 'השיבוץ נשמר ואינו תופס מקום בקבוצה. יש לשלוח את קישורי ההרשמה '
           + 'והציוד. השלמת טופס ההרשמה בקישור היא אישור ההרשמה מבחינת הלקוח; '
           + 'אין לומר שנדרש אישור נוסף מהצוות ואין להציג את הסטטוס הפנימי. נקבעה '
