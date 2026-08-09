@@ -67,12 +67,14 @@ export async function applyPreviousProgramImport(db, persist, report) {
       id,
       student_id: match.student_id,
       parent_id: match.parent_id,
-      group_id: null,
-      previous_group_name: match.group_name || '',
       program: match.program,
       season: report.season,
       status: 'returning',
       source: 'notion_previous_season',
+      // Eligibility is deliberately independent of placement. If the same
+      // row previously came from an approval request, remove that stale group
+      // choice while keeping brand-new eligibility rows free of group data.
+      ...(existing?.group_id ? { group_id: null } : {}),
       requestedAt: existing?.requestedAt || now,
       reviewedAt: existing?.reviewedAt || now,
       reviewedBy: existing?.reviewedBy || 'notion-import',

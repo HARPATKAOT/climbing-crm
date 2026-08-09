@@ -1,7 +1,9 @@
 /**
  * One-time previous-season advanced/squad importer.
  *
- * Input JSON rows:
+ * Preferred input contains only the student and eligibility program:
+ *   [{ "student_name": "...", "program": "young_squad" }]
+ * Legacy group-name rows are accepted too, but group details are never stored:
  *   [{ "name": "...", "group_name": "נבחרת צעירה" }]
  *
  * Dry-run is the default and writes nothing:

@@ -2,11 +2,31 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   PROGRAMS,
+  canPlaceInRestrictedGroup,
   evaluateProgramCandidate,
   isStrongLevelCandidate,
   programForGroup,
   programMatchesGrade,
 } from './placementEligibility.js';
+
+test('a returning eligibility flag lets the bot continue without staff approval', () => {
+  const student = { id: 'returning-student' };
+  const group = { id: 'young-squad', name: 'נבחרת צעירה', ageCategory: 'חטיבה', skillLevel: 'נבחרת' };
+  const db = {
+    get: (table) => (table === 'program_eligibility' ? [{
+      id: 'returning-row',
+      student_id: student.id,
+      program: PROGRAMS.YOUNG_SQUAD,
+      season: '2026-27',
+      status: 'returning',
+    }] : []),
+  };
+
+  const result = canPlaceInRestrictedGroup(db, student, group, { season: '2026-27' });
+
+  assert.equal(result.allowed, true);
+  assert.equal(result.reason, 'returning');
+});
 
 test('6B in middle school is a strong young-squad candidate but still needs approval', () => {
   const group = { name: 'נבחרת צעירה', ageCategory: 'חטיבה', skillLevel: 'נבחרת' };

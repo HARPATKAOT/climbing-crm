@@ -49,4 +49,27 @@ test('apply imports only exact rows as returning and is safe to rerun', async ()
   assert.equal(db.store.program_eligibility.length, 1);
   assert.equal(db.store.program_eligibility[0].status, 'returning');
   assert.equal(db.store.program_eligibility[0].source, 'notion_previous_season');
+  assert.equal(db.store.program_eligibility[0].group_id, undefined);
+  assert.equal(db.store.program_eligibility[0].previous_group_name, undefined);
+});
+
+test('returning eligibility clears an old approval group without adding placement to new rows', async () => {
+  const db = fakeDb();
+  db.store.program_eligibility.push({
+    id: 'pe-2026-27-s1-young_squad',
+    student_id: 's1',
+    program: 'young_squad',
+    season: '2026-27',
+    status: 'pending',
+    group_id: 'g-old-choice',
+  });
+  const report = buildPreviousProgramImportReport(db, [
+    { name: 'איתן נוימן', program: 'young_squad' },
+  ], { season: '2026-27' });
+
+  await applyPreviousProgramImport(db, async () => {}, report);
+
+  assert.equal(db.store.program_eligibility.length, 1);
+  assert.equal(db.store.program_eligibility[0].status, 'returning');
+  assert.equal(db.store.program_eligibility[0].group_id, null);
 });
