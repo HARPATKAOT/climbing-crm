@@ -69,6 +69,12 @@ function createDb(seed = {}) {
       store[table][index] = { ...store[table][index], ...patch };
       return store[table][index];
     },
+    mergeLocal: (table, rows = []) => {
+      store[table] ||= [];
+      for (const row of rows) {
+        if (!store[table].some((item) => String(item.id) === String(row.id))) store[table].push(row);
+      }
+    },
     deleteDurable: async (table, id) => {
       const index = (store[table] || []).findIndex((item) => item.id === id);
       if (index === -1) return { ok: false, notFound: true };
@@ -620,6 +626,74 @@ test('an order that ordered nothing is cleared instead of answered as duplicate'
   assert.equal(result.duplicate, false);
   assert.equal(result.registrations.length, 1);
   assert.ok(!db.store.activity_registration_orders.some((row) => row.id === 'debris-order'));
+});
+
+// המפתח ייחודי במסד גם כשהמטמון המקומי שכח את השורה — הפעלה מחדש באמצע בקשה
+// או ניקוי שרץ לפני שכתיבה קודמת נחתה. בלי לשאול את המסד, הניסיון החוזר נופל
+// על "duplicate key" והנרשם נשאר תקוע מול כפתור התשלום.
+test('שורה שהמסד מחזיק והמטמון איבד מנוקה, והניסיון החוזר נרשם', async () => {
+  const db = createDb();
+  const activity = {
+    id: 'activity-ghost',
+    name: 'קייטנה',
+    price: 100,
+    max_participants: 10,
+    registration_mode: 'paid_per_participant',
+  };
+  db.store.activities.push(activity);
+  const ghost = {
+    id: 'ghost-order',
+    activity_id: 'activity-ghost',
+    idempotency_key: 'lost-by-cache',
+    payment_status: 'pending',
+    status: 'pending_payment',
+  };
+  const result = await registerActivityGroup({
+    db,
+    persist,
+    activity,
+    payload: { idempotency_key: 'lost-by-cache', parent, participants: [signed('ילד א')] },
+    createPaymentUrl: async () => 'pay',
+    findDurable: async (table) => (table === 'activity_registration_orders' ? [ghost] : []),
+  });
+  assert.equal(result.duplicate, false);
+  assert.equal(result.registrations.length, 1);
+  assert.ok(!db.store.activity_registration_orders.some((row) => row.id === 'ghost-order'));
+});
+
+// ואם המסד מחזיק הרשמה שלמה — היא תשובה, לא הזמנה שנייה. חיוב כפול על אותו
+// מפתח הוא הטעות היקרה יותר.
+test('הרשמה שלמה שהמטמון איבד מוחזרת ככפילות ולא נרשמת שוב', async () => {
+  const db = createDb();
+  const activity = {
+    id: 'activity-ghost-paid',
+    name: 'קייטנה',
+    price: 100,
+    max_participants: 10,
+    registration_mode: 'paid_per_participant',
+  };
+  db.store.activities.push(activity);
+  const ghost = {
+    id: 'ghost-paid-order',
+    activity_id: 'activity-ghost-paid',
+    idempotency_key: 'already-registered',
+    payment_status: 'pending',
+    status: 'pending_payment',
+  };
+  const ghostRegistration = { id: 'ghost-reg', order_id: 'ghost-paid-order', amount: 100 };
+  const result = await registerActivityGroup({
+    db,
+    persist,
+    activity,
+    payload: { idempotency_key: 'already-registered', parent, participants: [signed('ילד א')] },
+    createPaymentUrl: async () => 'pay',
+    findDurable: async (table) => (
+      table === 'activity_registration_orders' ? [ghost] : [ghostRegistration]
+    ),
+  });
+  assert.equal(result.duplicate, true);
+  assert.equal(result.order.id, 'ghost-paid-order');
+  assert.equal(db.store.activity_registrations.length, 1);
 });
 
 // The two-phase flow: signatures are filed the moment they are given

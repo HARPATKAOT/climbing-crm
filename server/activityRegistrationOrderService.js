@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { supa } from './supa.js';
 import { normalizeAttendingDates, participantPrice } from './activityDays.js';
 import {
   activeRegistrations,
@@ -113,10 +114,46 @@ export function normalizeGroupedRegistrationPayload(body = {}) {
   };
 }
 
+/**
+ * ההזמנה שכבר נרשמה תחת אותו מפתח מניעת-כפילות.
+ *
+ * המטמון המקומי הוא נתיב הקריאה הרגיל, אבל הוא יכול לאבד שורה שהמסד כן מחזיק:
+ * הפעלה מחדש של השרת באמצע בקשה, או ניקוי שרץ לפני שכתיבה קודמת נחתה. המפתח
+ * ייחודי במסד גם כשהמטמון שכח אותו, ולכן בלי לשאול את המסד כל ניסיון חוזר
+ * מאותו טופס נחסם בשגיאת מפתח כפול — והלקוח תקוע בלי דרך לשלם.
+ */
+async function findOrderByKey(db, activityId, idempotencyKey, findDurable) {
+  const local = (db.get('activity_registration_orders') || []).find(
+    (order) => String(order.activity_id) === String(activityId)
+      && order.idempotency_key === idempotencyKey
+  );
+  if (local) return local;
+  const lookup = findDurable
+    || (supa.isEnabled() ? (table, filters) => supa.findWhere(table, filters) : null);
+  if (!lookup || typeof db.mergeLocal !== 'function') return null;
+  const remote = await lookup('activity_registration_orders', {
+    activity_id: activityId,
+    idempotency_key: idempotencyKey,
+  });
+  const order = (remote || [])[0];
+  if (!order) return null;
+  // מחזירים את השורה למטמון כדי שגם הניקוי וגם בדיקת ה"כבר נרשם" יעבדו עליה
+  // כרגיל. בלעדיה מחיקת השאריות מחפשת מזהה שאינו קיים מקומית ולא עושה כלום.
+  db.mergeLocal('activity_registration_orders', [order]);
+  const registrations = await lookup('activity_registrations', { order_id: order.id });
+  if (registrations?.length) db.mergeLocal('activity_registrations', registrations);
+  return order;
+}
+
 async function durable(persist, table, row) {
   const result = await persist(table, row);
   if (result?.ok === false) {
-    throw Object.assign(new Error(result.error || `שמירת ${table} נכשלה`), { status: 503 });
+    // שגיאת מפתח כפול מגיעה מ-Postgres באנגלית ובשם האילוץ. הנרשם לא אמור
+    // לראות את זה מול כפתור התשלום, וגם לא לנחש שרענון הדף פותר את זה.
+    const message = /idempotency_key/.test(String(result.error || ''))
+      ? 'ההרשמה הזאת כבר נקלטה במערכת. רעננו את הדף כדי להמשיך לתשלום.'
+      : result.error || `שמירת ${table} נכשלה`;
+    throw Object.assign(new Error(message), { status: 503 });
   }
 }
 
@@ -128,17 +165,14 @@ export async function registerActivityGroup({
   createPaymentUrl,
   onStudentCreated,
   onStudentStatusChanged,
+  findDurable,
 } = {}) {
   return withActivityLock(activity.id, async () => {
     const normalized = normalizeGroupedRegistrationPayload(payload);
     if (!normalized.idempotencyKey) {
       throw Object.assign(new Error('חסר מפתח מניעת כפילות'), { status: 400 });
     }
-    const existing = (db.get('activity_registration_orders') || []).find(
-      (order) =>
-        String(order.activity_id) === String(activity.id) &&
-        order.idempotency_key === normalized.idempotencyKey
-    );
+    const existing = await findOrderByKey(db, activity.id, normalized.idempotencyKey, findDurable);
     if (existing) {
       const existingRegistrations = (db.get('activity_registrations') || []).filter(
         (registration) => registration.order_id === existing.id

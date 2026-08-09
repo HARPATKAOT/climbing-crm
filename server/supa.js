@@ -901,6 +901,25 @@ export const supa = {
     return { ok: true };
   },
 
+  /**
+   * Rows of one CRM-core table matching an equality filter, straight from the
+   * database. Reads normally come from the local cache; this exists for the few
+   * checks that must see what the database actually holds — a unique key the
+   * cache lost track of is still a unique key, and the write will be refused.
+   */
+  async findWhere(table, filters = {}) {
+    if (!client || OPERATIONAL_TABLES.includes(table)) return null;
+    let query = client.from(table).select('*');
+    for (const [column, value] of Object.entries(filters)) query = query.eq(column, value);
+    const { data, error } = await query.limit(500);
+    if (error) {
+      console.error(`Supabase findWhere(${table}) failed:`, error.message);
+      return null;
+    }
+    const m = mapperFor(table);
+    return (data || []).map(m.fromRow);
+  },
+
   /** Atomically decrement a pass and append its audit punch in kv_collections. */
   async atomicPassPunch({ passId, punch } = {}) {
     if (!client) return { ok: false, configured: false, error: 'Supabase not configured' };

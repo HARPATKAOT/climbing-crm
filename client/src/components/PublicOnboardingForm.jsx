@@ -3963,30 +3963,8 @@ export default function PublicOnboardingForm() {
                       </strong>
                     </div>
                   )}
-                  {/* שורה אחת לכל החותמים — מי חתם, לא שורת "נחתם" לכל שם.
-                      מי שמשלים חתימה בקישור נפרד מופיע בשורה משלו. */}
-                  {eventParticipants.some((participant) => !defersDocuments(participant)) && (
-                    <div>
-                      <span>טופסי השתתפות נחתמו ונשמרו</span>
-                      <strong>
-                        {eventParticipants
-                          .filter((participant) => !defersDocuments(participant))
-                          .map((participant) => childFullName(participant))
-                          .join(', ')}
-                      </strong>
-                    </div>
-                  )}
-                  {eventParticipants.some((participant) => defersDocuments(participant)) && (
-                    <div>
-                      <span>ישלימו חתימה בקישור נפרד</span>
-                      <strong>
-                        {eventParticipants
-                          .filter((participant) => defersDocuments(participant))
-                          .map((participant) => childFullName(participant))
-                          .join(', ')}
-                      </strong>
-                    </div>
-                  )}
+                  {/* בחירת הימים צמודה לתאריכי האירוע — היא ממשיכה את השאלה
+                      "מתי", ולכן שום שורה אחרת לא מפרידה ביניהן. */}
                   {canPickDays && (
                     <div className="event-day-picker">
                       <label className="event-day-toggle">
@@ -4030,6 +4008,30 @@ export default function PublicOnboardingForm() {
                           </p>
                         </>
                       )}
+                    </div>
+                  )}
+                  {/* שורה אחת לכל החותמים — מי חתם, לא שורת "נחתם" לכל שם.
+                      מי שמשלים חתימה בקישור נפרד מופיע בשורה משלו. */}
+                  {eventParticipants.some((participant) => !defersDocuments(participant)) && (
+                    <div>
+                      <span>טופסי השתתפות נחתמו ונשמרו</span>
+                      <strong>
+                        {eventParticipants
+                          .filter((participant) => !defersDocuments(participant))
+                          .map((participant) => childFullName(participant))
+                          .join(', ')}
+                      </strong>
+                    </div>
+                  )}
+                  {eventParticipants.some((participant) => defersDocuments(participant)) && (
+                    <div>
+                      <span>ישלימו חתימה בקישור נפרד</span>
+                      <strong>
+                        {eventParticipants
+                          .filter((participant) => defersDocuments(participant))
+                          .map((participant) => childFullName(participant))
+                          .join(', ')}
+                      </strong>
                     </div>
                   )}
                   {paidEvent && (
