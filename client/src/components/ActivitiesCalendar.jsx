@@ -2191,6 +2191,12 @@ function ActivityFormModal({
       setLocalError('תאריך הסיום חייב להיות אחרי תאריך ההתחלה או באותו יום');
       return;
     }
+    // אפשרות ליום בודד בלי מחיר ליום היא אירוע שאי אפשר להירשם אליו חלקית —
+    // עדיף לעצור כאן מאשר לגלות את זה בדף התשלום.
+    if (form.allow_single_day && !(Number(form.single_day_price) > 0)) {
+      setLocalError('הרשמה ליום בודד מחייבת עלות ליום בודד');
+      return;
+    }
     const endDateNorm = form.end_date && form.end_date > form.date ? form.end_date : '';
     const closeAfter = options.closeAfter !== false;
 

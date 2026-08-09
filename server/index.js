@@ -4558,6 +4558,11 @@ function normalizeActivityPayload(body = {}) {
     location: body.location || '',
     price: isOps ? 0 : (body.price === '' || body.price === undefined ? 0 : Number(body.price) || 0),
     price_includes_vat: isOps ? false : normalizePriceIncludesVat(body.price_includes_vat),
+    // הרשמה ליום בודד באירוע רב-יומי. פעילות תפעולית לא נמכרת, ולכן כבויה שם.
+    allow_single_day: isOps ? false : body.allow_single_day === true,
+    single_day_price: isOps ? 0 : (body.single_day_price === '' || body.single_day_price == null
+      ? 0
+      : Math.max(0, Number(body.single_day_price) || 0)),
     max_participants: isOps ? null : (body.max_participants === '' || body.max_participants == null
       ? null
       : Number(body.max_participants) || null),
@@ -4795,6 +4800,11 @@ app.post('/api/activities', async (req, res) => {
   if (payload.end_date && payload.end_date < payload.date) {
     return res.status(400).json({ error: 'תאריך הסיום לפני תאריך ההתחלה' });
   }
+  // אירוע שמציע ימים בודדים חייב מחיר ליום. בלי זה ההרשמה החלקית הייתה
+  // נחסמת רק ברגע התשלום — הרבה אחרי שהאפשרות כבר פורסמה ללקוחות.
+  if (payload.allow_single_day && !(Number(payload.single_day_price) > 0)) {
+    return res.status(400).json({ error: 'הרשמה ליום בודד מחייבת עלות ליום בודד' });
+  }
   if (payload.registration_enabled && !payload.participant_registration_slug) {
     payload.participant_registration_slug = makeRegistrationSlug();
     payload.registration_slug = payload.participant_registration_slug;
@@ -4832,6 +4842,11 @@ app.put('/api/activities/:id', async (req, res) => {
   if (!payload.date) return res.status(400).json({ error: 'חסר תאריך' });
   if (payload.end_date && payload.end_date < payload.date) {
     return res.status(400).json({ error: 'תאריך הסיום לפני תאריך ההתחלה' });
+  }
+  // אירוע שמציע ימים בודדים חייב מחיר ליום. בלי זה ההרשמה החלקית הייתה
+  // נחסמת רק ברגע התשלום — הרבה אחרי שהאפשרות כבר פורסמה ללקוחות.
+  if (payload.allow_single_day && !(Number(payload.single_day_price) > 0)) {
+    return res.status(400).json({ error: 'הרשמה ליום בודד מחייבת עלות ליום בודד' });
   }
   if (payload.registration_enabled && !payload.registration_slug) {
     payload.registration_slug = existing.registration_slug || makeRegistrationSlug();
@@ -6632,6 +6647,11 @@ app.post('/api/activity-templates/:id/create-activity', async (req, res) => {
   });
   if (payload.end_date && payload.end_date < payload.date) {
     return res.status(400).json({ error: 'תאריך הסיום לפני תאריך ההתחלה' });
+  }
+  // אירוע שמציע ימים בודדים חייב מחיר ליום. בלי זה ההרשמה החלקית הייתה
+  // נחסמת רק ברגע התשלום — הרבה אחרי שהאפשרות כבר פורסמה ללקוחות.
+  if (payload.allow_single_day && !(Number(payload.single_day_price) > 0)) {
+    return res.status(400).json({ error: 'הרשמה ליום בודד מחייבת עלות ליום בודד' });
   }
   const record = db.insert('activities', payload);
   const durable = await persistCore('activities', record);
