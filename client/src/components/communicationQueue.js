@@ -38,6 +38,51 @@ export function awaitingSince(parent, students = []) {
   return Math.max(latestInboundTime(parent), latestRegistrationTime(students));
 }
 
+function familyAwaitingSince(row) {
+  const familyParents = row?.parents?.length ? row.parents : [row?.parent];
+  return Math.max(
+    0,
+    ...familyParents.map((parent) => awaitingSince(parent, row?.students || []))
+  );
+}
+
+function familyParentName(row) {
+  return [row?.parent?.name, row?.parent?.lastName]
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+}
+
+const HEBREW_NAME_COLLATOR = new Intl.Collator('he', {
+  sensitivity: 'base',
+  numeric: true,
+});
+
+/** Sort the household-level handling queue without mutating its source rows. */
+export function sortCommunicationRows(rows = [], sortBy = 'conversation_desc') {
+  const sorted = [...rows];
+  sorted.sort((a, b) => {
+    let difference = 0;
+    if (sortBy === 'conversation_asc') {
+      difference = familyAwaitingSince(a) - familyAwaitingSince(b);
+    } else if (sortBy === 'name_asc') {
+      difference = HEBREW_NAME_COLLATOR.compare(familyParentName(a), familyParentName(b));
+    } else if (sortBy === 'created_desc') {
+      difference = (Date.parse(b?.created || '') || 0) - (Date.parse(a?.created || '') || 0);
+    } else if (sortBy === 'created_asc') {
+      difference = (Date.parse(a?.created || '') || 0) - (Date.parse(b?.created || '') || 0);
+    } else {
+      difference = familyAwaitingSince(b) - familyAwaitingSince(a);
+    }
+
+    if (difference) return difference;
+    const nameDifference = HEBREW_NAME_COLLATOR.compare(familyParentName(a), familyParentName(b));
+    if (nameDifference) return nameDifference;
+    return String(a?.key || '').localeCompare(String(b?.key || ''));
+  });
+  return sorted;
+}
+
 export function isAwaitingHandling(parent, students = []) {
   const eventTime = awaitingSince(parent, students);
   if (!eventTime) return false;

@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { awaitingSince, isAwaitingHandling, threadIsAwaitingReply } from './communicationQueue.js';
+import {
+  awaitingSince,
+  isAwaitingHandling,
+  sortCommunicationRows,
+  threadIsAwaitingReply,
+} from './communicationQueue.js';
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -60,6 +65,47 @@ test('the queue sorts by whichever happened last', () => {
   const messaged = { last_inbound_whatsapp: iso(now - 3 * HOUR) };
   const justSigned = [{ status: 'health_signed', healthSignedAt: iso(now - HOUR) }];
   assert.ok(awaitingSince({}, justSigned) > awaitingSince(messaged, []));
+});
+
+test('handling queue can be sorted by conversation time in both directions', () => {
+  const older = {
+    key: 'older',
+    parent: { name: 'ברק', last_inbound_whatsapp: '2026-08-08T08:00:00Z' },
+    parents: [],
+    students: [],
+  };
+  const newer = {
+    key: 'newer',
+    parent: { name: 'אורית', last_inbound_whatsapp: '2026-08-09T08:00:00Z' },
+    parents: [],
+    students: [],
+  };
+
+  assert.deepEqual(
+    sortCommunicationRows([older, newer], 'conversation_desc').map((row) => row.key),
+    ['newer', 'older']
+  );
+  assert.deepEqual(
+    sortCommunicationRows([older, newer], 'conversation_asc').map((row) => row.key),
+    ['older', 'newer']
+  );
+});
+
+test('handling queue supports parent-name and intake-date sorting', () => {
+  const rows = [
+    { key: 'b', parent: { name: 'ברק' }, students: [], created: '2026-08-01' },
+    { key: 'a', parent: { name: 'אורית' }, students: [], created: '2026-08-03' },
+  ];
+
+  assert.deepEqual(
+    sortCommunicationRows(rows, 'name_asc').map((row) => row.key),
+    ['a', 'b']
+  );
+  assert.deepEqual(
+    sortCommunicationRows(rows, 'created_desc').map((row) => row.key),
+    ['a', 'b']
+  );
+  assert.deepEqual(rows.map((row) => row.key), ['b', 'a']);
 });
 
 test('reply indicator belongs only to the exact family member whose last message is inbound', () => {

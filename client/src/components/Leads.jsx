@@ -66,7 +66,7 @@ import {
   activityDayLabel,
   saveActivityAttendance,
 } from './ActivityAttendance.jsx';
-import { awaitingSince, isAwaitingHandling, threadIsAwaitingReply } from './communicationQueue.js';
+import { isAwaitingHandling, sortCommunicationRows, threadIsAwaitingReply } from './communicationQueue.js';
 import { consecutiveAbsences } from '../scheduleUtils.js';
 import { studentGroupIds } from '../utils/studentGroups.js';
 import { passPurchasedText, passSubtitle } from '../utils/passes.js';
@@ -6928,6 +6928,7 @@ export default function Leads({
   const [markingHandledId, setMarkingHandledId] = useState(null);
   const [markingAllHandled, setMarkingAllHandled] = useState(false);
   const [handlingError, setHandlingError] = useState('');
+  const [communicationSort, setCommunicationSort] = useState('conversation_desc');
   // The whole declaration feed, so the table can mark each climber without
   // opening their file. One fetch for the list, not one per row.
   const [declarations, setDeclarations] = useState([]);
@@ -7108,17 +7109,10 @@ export default function Leads({
   const familyRows = useMemo(() => {
     const rows = buildFamilyRows(filtered, parents, students);
     if (filterStatus === 'communication') {
-      // Newest first, counting a fresh registration as well as an inbound
-      // message — otherwise a family who just signed sorts to the bottom.
-      // Either parent's message counts: the row stands for the whole household.
-      const rowAwaitingSince = (row) => Math.max(
-        ...(row.parents?.length ? row.parents : [row.parent])
-          .map((parent) => awaitingSince(parent, row.students))
-      );
-      rows.sort((a, b) => rowAwaitingSince(b) - rowAwaitingSince(a));
+      return sortCommunicationRows(rows, communicationSort);
     }
     return rows;
-  }, [filtered, parents, students, filterStatus]);
+  }, [filtered, parents, students, filterStatus, communicationSort]);
 
   // The customer table is a thousand-odd households, and drawing every row cost
   // roughly a second of frozen screen on each visit and each keystroke in
@@ -7127,7 +7121,7 @@ export default function Leads({
   const ROWS_PER_PAGE = 60;
   const [visibleRowCount, setVisibleRowCount] = useState(ROWS_PER_PAGE);
   const moreRowsRef = useRef(null);
-  useEffect(() => { setVisibleRowCount(ROWS_PER_PAGE); }, [search, filterStatus]);
+  useEffect(() => { setVisibleRowCount(ROWS_PER_PAGE); }, [search, filterStatus, communicationSort]);
   const visibleFamilyRows = useMemo(
     () => familyRows.slice(0, visibleRowCount),
     [familyRows, visibleRowCount]
@@ -7510,14 +7504,29 @@ export default function Leads({
           </button>
         )}
         {filterStatus === 'communication' && familyCountByStatus.communication > 0 && (
-          <button
-            className="btn btn-sm btn-success"
-            style={{ marginInlineStart: 'auto', gap: 6 }}
-            disabled={markingAllHandled}
-            onClick={handleMarkAllHandled}
-          >
-            <Check size={13} /> {markingAllHandled ? 'מסמן את כולם...' : 'סמן את כולם כטופלו'}
-          </button>
+          <div style={{ marginInlineStart: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <AppSelect
+              value={communicationSort}
+              onChange={(event) => setCommunicationSort(event.target.value)}
+              className="btn btn-sm btn-ghost"
+              style={{ width: 218 }}
+              aria-label="מיון הממתינים לטיפול"
+              title="מיון רשימת הממתינים לטיפול"
+            >
+              <option value="conversation_desc">מיון: זמן שיחה · חדש לישן</option>
+              <option value="conversation_asc">מיון: זמן שיחה · ישן לחדש</option>
+              <option value="name_asc">מיון: שם הורה · א׳–ת׳</option>
+              <option value="created_desc">מיון: תאריך קליטה · חדש לישן</option>
+              <option value="created_asc">מיון: תאריך קליטה · ישן לחדש</option>
+            </AppSelect>
+            <button
+              className="btn btn-sm btn-success"
+              disabled={markingAllHandled}
+              onClick={handleMarkAllHandled}
+            >
+              <Check size={13} /> {markingAllHandled ? 'מסמן את כולם...' : 'סמן את כולם כטופלו'}
+            </button>
+          </div>
         )}
       </div>
       )}
