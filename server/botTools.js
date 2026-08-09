@@ -427,6 +427,7 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
         band: { type: 'string', description: 'חטיבה / תיכון / בוגרים' },
         day: { type: 'integer', description: 'יום בשבוע 0=ראשון … 6=שבת' },
         time: { type: 'string', description: 'שעת הקבוצה' },
+        frequency: CLASS_FREQUENCY_PROPERTY,
       },
       required: ['childName'],
     },
@@ -771,7 +772,18 @@ function describeGroup(group) {
 }
 
 /** Exactly one group, or a note saying what the customer still has to choose. */
-function pickSingleGroup({ grade, band, day, time, frequency } = {}) {
+function pickSingleGroup({ groupId = '', grade, band, day, time, frequency } = {}) {
+  // Staff approvals already point at one canonical group. Keep that internal
+  // identifier all the way through the continuation instead of trying to
+  // rediscover the group from a band, day and time (which can match more than
+  // one group, and used to produce the wrong registration link).
+  if (String(groupId || '').trim()) {
+    const group = enrichGroupsWithBotMeta(db, db.get('groups') || [])
+      .find((row) => String(row.id) === String(groupId));
+    return group
+      ? { group }
+      : { error: 'הקבוצה שאושרה כבר אינה קיימת במערכת — יש להעביר לצוות' };
+  }
   if (!String(grade || '').trim() && !String(band || '').trim()) {
     return { error: 'חסר לאיזו כיתה או שכבה — יש לשאול את הלקוח' };
   }
@@ -806,7 +818,7 @@ function pickSingleGroup({ grade, band, day, time, frequency } = {}) {
  * bot — so any placement needs an existing child who already has one. Without a
  * declaration the answer is the form, not a placement.
  */
-function requireDeclaredChild(parent, childName) {
+function requireDeclaredChild(parent, childName, studentId = '') {
   const kids = parent ? studentsForParent(parent) : [];
   if (!kids.length) {
     return {
@@ -814,10 +826,13 @@ function requireDeclaredChild(parent, childName) {
       צריך_הצהרה: true,
     };
   }
+  const exactId = String(studentId || '').trim();
   const named = String(childName || '').trim();
-  const matches = named
-    ? kids.filter((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
-    : kids;
+  const matches = exactId
+    ? kids.filter((s) => String(s.id) === exactId)
+    : (named
+      ? kids.filter((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
+      : kids);
   if (!matches.length) return { error: `אין בכרטיס מתאמן בשם ${named} — יש לשאול את הלקוח` };
   if (matches.length > 1) {
     return {
@@ -1564,10 +1579,10 @@ export function buildCustomerTools({
       };
     },
 
-    requestPlacementApproval: async ({ childName, grade, band, day, time } = {}) => {
+    requestPlacementApproval: async ({ childName, grade, band, day, time, frequency } = {}) => {
       const child = requireDeclaredChild(parent, childName);
       if (child.error) return child;
-      const picked = pickSingleGroup({ grade, band, day, time });
+      const picked = pickSingleGroup({ grade, band, day, time, frequency });
       if (picked.error) return picked;
       if (!isRestrictedGroup(picked.group)) {
         return { error: 'הקבוצה שנבחרה היא קבוצה רגילה ואינה דורשת אישור מסלול' };
@@ -1577,6 +1592,7 @@ export function buildCustomerTools({
         parent,
         group: picked.group,
         gradeOrBand: grade || band || picked.group.ageCategory,
+        frequency,
       });
       if (!result.ok) {
         return {
@@ -1601,10 +1617,10 @@ export function buildCustomerTools({
       };
     },
 
-    startSignup: async ({ childName, grade, band, day, time, frequency } = {}) => {
-      const child = requireDeclaredChild(parent, childName);
+    startSignup: async ({ childName, studentId, groupId, grade, band, day, time, frequency } = {}) => {
+      const child = requireDeclaredChild(parent, childName, studentId);
       if (child.error) return child;
-      const picked = pickSingleGroup({ grade, band, day, time, frequency });
+      const picked = pickSingleGroup({ groupId, grade, band, day, time, frequency });
       if (picked.error) return picked;
 
       const { student } = child;
@@ -1631,6 +1647,8 @@ export function buildCustomerTools({
           && String(student.groupId || '') === String(group.id || '')) {
         const registrationPack = await tools.getRegistrationPack({
           childName: student.name || childName,
+          studentId: student.id,
+          groupId: group.id,
           grade,
           band,
           day,
@@ -1657,6 +1675,7 @@ export function buildCustomerTools({
             parent,
             group,
             gradeOrBand: grade || band || group.ageCategory,
+            frequency,
           });
           if (requested.ok) {
             return {
@@ -1703,6 +1722,8 @@ export function buildCustomerTools({
 
       const registrationPack = await tools.getRegistrationPack({
         childName: student.name || childName,
+        studentId: student.id,
+        groupId: group.id,
         grade,
         band,
         day,
@@ -1861,12 +1882,15 @@ export function buildCustomerTools({
       };
     },
 
-    getRegistrationPack: async ({ childName, grade, band, day, time, frequency } = {}) => {
+    getRegistrationPack: async ({ childName, studentId, groupId, grade, band, day, time, frequency } = {}) => {
       const kids = parent ? studentsForParent(parent) : [];
+      const exactId = String(studentId || '').trim();
       const named = String(childName || '').trim();
-      const student = named
-        ? kids.find((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
-        : (kids.length === 1 ? kids[0] : null);
+      const student = exactId
+        ? kids.find((s) => String(s.id) === exactId)
+        : (named
+          ? kids.find((s) => String(s.name || '').includes(named.split(/\s+/)[0]))
+          : (kids.length === 1 ? kids[0] : null));
       const documents = student
         ? participationEligibility(db, { studentId: student.id })
         : null;
@@ -1888,7 +1912,7 @@ export function buildCustomerTools({
           },
       };
 
-      const picked = pickSingleGroup({ grade, band, day, time, frequency });
+      const picked = pickSingleGroup({ groupId, grade, band, day, time, frequency });
       // Same rule as getSignupLink: the intake form is not a link to send back
       // to a family that has already filled it.
       const frequencies = picked.error ? [] : availableGroupFrequencies(picked.group);

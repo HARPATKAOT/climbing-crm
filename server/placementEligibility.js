@@ -160,6 +160,7 @@ export async function requestProgramApproval(db, persist, {
   parent = null,
   group,
   gradeOrBand = '',
+  frequency = '',
   source = 'level_candidate',
   note = '',
   season = currentSeason(),
@@ -213,6 +214,7 @@ export async function requestProgramApproval(db, persist, {
     season,
     status: 'pending',
     grade_or_band: clean(gradeOrBand),
+    frequency: clean(frequency),
     level: latest.level,
     strength: evaluation.strength,
     reason: evaluation.reason,
@@ -235,9 +237,15 @@ export async function reviewProgramApproval(db, persist, requestId, {
   const request = db.getOne(PLACEMENT_REQUEST_COLLECTION, requestId);
   if (!request) return { ok: false, status: 404, error: 'request_not_found' };
   if (!['approved', 'rejected'].includes(decision)) return { ok: false, status: 400, error: 'invalid_decision' };
-  if (request.status !== 'pending') return { ok: true, duplicate: true, request };
   const group = db.getOne('groups', request.group_id);
   if (!group) return { ok: false, status: 409, error: 'group_not_found' };
+  if (request.status !== 'pending') {
+    if (request.status !== decision) {
+      return { ok: false, status: 409, error: 'request_already_reviewed', request };
+    }
+    const eligibility = db.getOne(ELIGIBILITY_COLLECTION, request.eligibility_id);
+    return { ok: true, duplicate: true, request, eligibility, group };
+  }
   if (decision === 'approved') {
     const capacity = capacityAfterReturningPriority(db, group, { now, season: request.season });
     if (capacity.available !== null && capacity.available <= 0) {

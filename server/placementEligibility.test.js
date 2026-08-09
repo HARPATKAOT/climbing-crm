@@ -7,6 +7,7 @@ import {
   isStrongLevelCandidate,
   programForGroup,
   programMatchesGrade,
+  reviewProgramApproval,
 } from './placementEligibility.js';
 
 test('a returning eligibility flag lets the bot continue without staff approval', () => {
@@ -58,4 +59,32 @@ test('grade bands are matched without treating arbitrary Hebrew letters as a gra
   assert.equal(programMatchesGrade(PROGRAMS.ADULT_SQUAD, 'תיכון'), true);
   assert.equal(programMatchesGrade(PROGRAMS.ADVANCED, 'חטיבה'), false);
   assert.equal(isStrongLevelCandidate('6A'), true);
+});
+
+test('retrying the same approval returns the group so its unfinished continuation can recover', async () => {
+  const request = {
+    id: 'request',
+    status: 'approved',
+    group_id: 'adult-squad',
+    eligibility_id: 'eligibility',
+  };
+  const group = { id: 'adult-squad', name: 'נבחרת בוגרת' };
+  const eligibility = { id: 'eligibility', status: 'approved' };
+  const tables = {
+    placement_requests: [request],
+    groups: [group],
+    program_eligibility: [eligibility],
+  };
+  const db = {
+    getOne: (table, id) => (tables[table] || []).find((row) => row.id === id),
+  };
+  const result = await reviewProgramApproval(db, async () => {}, request.id, { decision: 'approved' });
+  assert.equal(result.ok, true);
+  assert.equal(result.duplicate, true);
+  assert.equal(result.group, group);
+  assert.equal(result.eligibility, eligibility);
+
+  const conflict = await reviewProgramApproval(db, async () => {}, request.id, { decision: 'rejected' });
+  assert.equal(conflict.ok, false);
+  assert.equal(conflict.error, 'request_already_reviewed');
 });

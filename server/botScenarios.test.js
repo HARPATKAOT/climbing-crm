@@ -37,6 +37,8 @@ const SCENARIO_COLLECTIONS = [
   'student_equipment',
   'equipment_checkouts',
   'student_guardians',
+  'program_eligibility',
+  'placement_requests',
 ];
 
 /**
@@ -133,6 +135,52 @@ function waiverFor(studentId, patch = {}) {
     ...patch,
   };
 }
+
+test('אישור צוות ממשיך לפי מזהי המתאמן והקבוצה המדויקים ושולח קישור נבחרת כפול', async () => {
+  const squad = {
+    id: 'g-adult-squad',
+    name: 'נבחרת בוגרת — ב׳+ה׳ 19:10',
+    ageCategory: 'תיכון',
+    skillLevel: 'נבחרת',
+    day: 4,
+    time: '19:10',
+    maxSlots: 16,
+    priceWeek: 0,
+    priceTwice: 560,
+    signupLinkTwice: 'https://centre.example/adult-squad',
+  };
+  const ido = childYotam({
+    id: 's-ido',
+    name: 'עידו גרינברג',
+    status: 'past_registered',
+    birthDate: '2010-05-01',
+  });
+  await withSeed({
+    groups: [GROUP_GD, squad],
+    students: [ido],
+    health_declarations: [declarationFor(ido.id)],
+    participation_waivers: [waiverFor(ido.id)],
+    program_eligibility: [{
+      id: 'pe-ido',
+      student_id: ido.id,
+      program: 'adult_squad',
+      season: '2026-27',
+      status: 'approved',
+    }],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const result = await tools.startSignup({
+      childName: ido.name,
+      studentId: ido.id,
+      groupId: squad.id,
+      frequency: 'פעמיים בשבוע',
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(student(ido.id).status, 'pending_signup');
+    assert.equal(student(ido.id).groupId, squad.id);
+    assert.match(result.חבילת_הרשמה.שלב_2_הרשמה_לקבוצה.קישור, /\/api\/s\/g-adult-squad\/2$/);
+  });
+});
 
 /** Both documents in force, which is what "signed the form" means. */
 function signedFormFor(studentIds = []) {

@@ -161,6 +161,7 @@ export default function DailyWork({
   const [placementRequests, setPlacementRequests] = useState([]);
   const [queuesLoaded, setQueuesLoaded] = useState(false);
   const [busyId, setBusyId] = useState(null);
+  const [placementNotice, setPlacementNotice] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -288,6 +289,7 @@ export default function DailyWork({
   const reviewPlacement = async (id, decision) => {
     if (busyId) return;
     setBusyId(id);
+    setPlacementNotice(null);
     try {
       const response = await fetch(`/api/placement-requests/${id}/review`, {
         method: 'POST',
@@ -295,10 +297,23 @@ export default function DailyWork({
         body: JSON.stringify({ decision }),
       });
       const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || 'review failed');
+      if (!response.ok) {
+        const detail = result.continuation?.error || result.error || 'המשך התהליך נכשל';
+        throw new Error(detail);
+      }
       setPlacementRequests((current) => current.filter((row) => String(row.id) !== String(id)));
+      setPlacementNotice({
+        type: 'success',
+        text: decision === 'approved'
+          ? 'השיבוץ אושר ונשמר, והודעת ההמשך עם קישור ההרשמה נשלחה ללקוח.'
+          : 'בקשת השיבוץ נדחתה.',
+      });
     } catch (error) {
       console.error('Failed to review placement request:', error);
+      setPlacementNotice({
+        type: 'error',
+        text: `הפעולה לא הושלמה: ${error.message}. הבקשה נשארה כאן ואפשר לנסות שוב.`,
+      });
     } finally {
       setBusyId(null);
     }
@@ -369,6 +384,12 @@ export default function DailyWork({
         </div>
       </section>
 
+      {placementNotice && (
+        <div className={`alert alert-${placementNotice.type}`} style={{ marginBottom: 16 }}>
+          {placementNotice.text}
+        </div>
+      )}
+
       <div className="daily-work-grid">
         <WorkSection
           icon={UserRoundPlus}
@@ -383,17 +404,21 @@ export default function DailyWork({
               key={row.id}
               title={`${row.student_name || 'מתאמן/ת'} · ${row.group_name || row.program}`}
               meta={[row.parent_name, row.grade_or_band, row.level ? `רמה ${row.level}` : ''].filter(Boolean).join(' · ')}
-              note={row.strength === 'strong' ? 'מועמד/ת חזק/ה — עדיין נדרש אישור צוות' : 'מועמד/ת אפשרי/ת — נדרש אישור צוות'}
+              note={row.status === 'approved'
+                ? `האישור נשמר, אך הודעת ההמשך לא הושלמה${row.continuation_error ? ` · ${row.continuation_error}` : ''}`
+                : (row.strength === 'strong' ? 'מועמד/ת חזק/ה — עדיין נדרש אישור צוות' : 'מועמד/ת אפשרי/ת — נדרש אישור צוות')}
               badge={row.strength === 'strong' ? '6A ומעלה' : '5A–5C'}
               onOpen={openParentCard(row.parent_id)}
               actions={(
                 <>
                   <button type="button" className="btn btn-success btn-sm" disabled={busyId === row.id} onClick={() => reviewPlacement(row.id, 'approved')}>
-                    <Check size={14} /> אשר
+                    <Check size={14} /> {row.status === 'approved' ? 'המשך ושלח' : 'אשר'}
                   </button>
-                  <button type="button" className="btn btn-ghost btn-sm" disabled={busyId === row.id} onClick={() => reviewPlacement(row.id, 'rejected')}>
-                    <X size={14} /> דחה
-                  </button>
+                  {row.status !== 'approved' && (
+                    <button type="button" className="btn btn-ghost btn-sm" disabled={busyId === row.id} onClick={() => reviewPlacement(row.id, 'rejected')}>
+                      <X size={14} /> דחה
+                    </button>
+                  )}
                 </>
               )}
             />

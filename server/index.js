@@ -53,7 +53,9 @@ import {
   eligibilityForStudent,
   reviewProgramApproval,
 } from './placementEligibility.js';
-import { buildRedirectUrl } from './publicLinks.js';
+import { buildCustomerTools } from './botTools.js';
+import { loadBrandedBotSettings } from './whatsappBot.js';
+import { continueApprovedPlacement } from './placementApprovalContinuation.js';
 import { notifyGroupMembershipDiff, runIntroHeadsUpIfDue } from './groupAlerts.js';
 import { capabilityState, capabilitySettingsPatch } from './botCapabilities.js';
 import { normalizeInboundQuietMs } from './inboundBurst.js';
@@ -4566,7 +4568,15 @@ app.put('/api/groups/:id', async (req, res) => {
 app.get('/api/placement-requests', (req, res) => {
   const status = String(req.query.status || 'pending');
   const rows = (db.get(PLACEMENT_REQUEST_COLLECTION) || [])
-    .filter((row) => !status || String(row.status) === status)
+    .filter((row) => {
+      if (!status) return true;
+      if (status !== 'pending') return String(row.status) === status;
+      // An approval whose automatic continuation failed is still work for the
+      // team. Keeping it in this queue gives the same button a safe retry path
+      // instead of silently losing it after the first click.
+      return String(row.status) === 'pending'
+        || (String(row.status) === 'approved' && row.continuation_status !== 'sent');
+    })
     .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
   res.json(rows);
 });
@@ -4584,20 +4594,34 @@ app.post('/api/placement-requests/:id/review', async (req, res) => {
   });
   if (!result.ok) return res.status(result.status || 400).json(result);
 
-  if (decision === 'approved' && !result.duplicate) {
-    const parent = db.getOne('parents', result.request?.parent_id);
-    const link = result.group?.id ? buildRedirectUrl('s', result.group.id, 1) : '';
-    if (parent?.phone) {
-      const message = [
-        `אישרנו את ההתאמה של ${result.request?.student_name || 'המתאמן/ת'} ל${result.group?.name || 'קבוצה'}.`,
-        link ? `אפשר להמשיך להרשמה כאן:\n${link}` : 'הצוות יחזור אליכם עם קישור ההרשמה.',
-      ].join('\n');
-      await whatsappService.sendTextMessage(parent.phone, message, false, {
-        source: 'placement_approval',
-        parentId: parent.id,
-        studentId: result.request?.student_id || null,
+  if (decision === 'approved') {
+    const continuation = await continueApprovedPlacement({
+      db,
+      persist: persistCore,
+      request: result.request,
+      group: result.group,
+      settings: await loadBrandedBotSettings(),
+      buildTools: buildCustomerTools,
+      sendReply: (phone, message, options) => whatsappService.sendBotReply(phone, message, options),
+    });
+    if (!continuation.ok) {
+      return res.status(continuation.status || 409).json({
+        ...result,
+        request: continuation.request || result.request,
+        continuation: {
+          ok: false,
+          error: continuation.error,
+        },
       });
     }
+    return res.json({
+      ...result,
+      request: continuation.request || result.request,
+      continuation: {
+        ok: true,
+        duplicate: Boolean(continuation.duplicate),
+      },
+    });
   }
   res.json(result);
 });
