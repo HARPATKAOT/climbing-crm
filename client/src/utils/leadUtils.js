@@ -111,3 +111,36 @@ export function buildLeadEntries(students = [], parents = [], { includeArchived 
 
   return entries;
 }
+
+/**
+ * Keep the working customer list and the archive-inclusive list independent.
+ * UI filters must never change the meaning of the working-customer counter.
+ */
+export function buildLeadEntryScopes(students = [], parents = []) {
+  return {
+    working: buildLeadEntries(students, parents),
+    archiveInclusive: buildLeadEntries(students, parents, { includeArchived: true }),
+  };
+}
+
+/** Search every useful customer identity form, including local/international phones. */
+export function matchesLeadSearch(entry, query) {
+  const needle = String(query || '').trim().toLocaleLowerCase('he');
+  if (!needle) return true;
+
+  const normalizedNeedle = normalizePhone(needle);
+  const rawHaystack = [
+    entry?.student?.name,
+    entry?.student?.firstName,
+    entry?.student?.lastName,
+    entry?.parent?.name,
+    entry?.parent?.firstName,
+    entry?.parent?.lastName,
+    entry?.parent?.phone,
+    entry?.parent?.email,
+  ].filter(Boolean).join(' ').toLocaleLowerCase('he');
+  const normalizedPhone = normalizePhone(entry?.parent?.phone);
+
+  return rawHaystack.includes(needle)
+    || Boolean(normalizedNeedle && normalizedPhone.includes(normalizedNeedle));
+}

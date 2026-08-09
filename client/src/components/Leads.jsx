@@ -40,8 +40,10 @@ import {
 } from '../utils/participationForm.js';
 import {
   buildLeadEntries,
+  buildLeadEntryScopes,
   isArchivedParent,
   isParentOnlyLead,
+  matchesLeadSearch,
   normalizePhone,
   resolveLeadOpenTarget,
 } from '../utils/leadUtils.js';
@@ -7070,34 +7072,37 @@ export default function Leads({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // The archive tab is the only place archived customers surface — except in
-  // the waiting queue. An archived customer who writes still gets an answer
-  // from the bot, so leaving them out of the queue hides a live conversation
-  // from the team: the queue is about an unanswered message, not about status.
+  // Keep both scopes stable. Previously the working-list count jumped merely
+  // because the waiting tab used an archive-inclusive source list.
   const showArchived = filterStatus === 'archived';
-  // Building household rows walks the full customer list. Keep that work tied
-  // to actual data/filter changes so opening a card or switching family members
-  // does not rebuild the entire waiting queue on every click.
-  const leadEntries = useMemo(() => buildLeadEntries(students, parents, {
-    includeArchived: showArchived || filterStatus === 'communication',
-  }), [students, parents, showArchived, filterStatus]);
+  const searchActive = Boolean(search.trim());
+  const leadEntryScopes = useMemo(
+    () => buildLeadEntryScopes(students, parents),
+    [students, parents]
+  );
+  // A direct search is archive-inclusive so an old customer can always be
+  // found without the employee first guessing which status tab contains them.
+  const leadEntries = searchActive || showArchived || filterStatus === 'communication'
+    ? leadEntryScopes.archiveInclusive
+    : leadEntryScopes.working;
 
   const filtered = useMemo(() => {
-    const searchKey = search.toLowerCase();
     return leadEntries.filter(({ student: s, parent: p }) => {
       const parent = p || parents.find((x) => x.id === s.parentId);
-      const matchSearch = (s.name || '').toLowerCase().includes(searchKey) ||
-        parent?.name?.toLowerCase().includes(searchKey) ||
-        (parent?.phone || '').includes(search);
-      const matchStatus = showArchived
-        ? isArchivedParent(parent)
-        : filterStatus === 'all'
-          || (filterStatus === 'communication'
-            ? isAwaitingHandling(parent, [s])
-            : s.status === filterStatus);
+      const matchSearch = matchesLeadSearch({ student: s, parent }, search);
+      // Searching is a database-wide lookup rather than an intersection with
+      // whichever workflow tab happened to be selected beforehand.
+      const matchStatus = searchActive
+        ? true
+        : showArchived
+          ? isArchivedParent(parent)
+          : filterStatus === 'all'
+            || (filterStatus === 'communication'
+              ? isAwaitingHandling(parent, [s])
+              : s.status === filterStatus);
       return matchSearch && matchStatus;
     }).map((entry) => entry.student);
-  }, [leadEntries, parents, search, showArchived, filterStatus]);
+  }, [leadEntries, parents, search, searchActive, showArchived, filterStatus]);
 
   // Table: one row per family. Kanban stays per-student for the funnel.
   const familyRows = useMemo(() => {
@@ -7141,11 +7146,15 @@ export default function Leads({
 
   const familyCountByStatus = useMemo(() => {
     const map = {
-      all: buildFamilyRows(leadEntries.map((e) => e.student), parents, students).length,
+      all: buildFamilyRows(
+        leadEntryScopes.working.map((e) => e.student),
+        parents,
+        students
+      ).length,
       // Counted off its own archive-inclusive list, so the badge shows the same
       // number whichever tab happens to be open.
       communication: buildFamilyRows(
-        buildLeadEntries(students, parents, { includeArchived: true })
+        leadEntryScopes.archiveInclusive
           .filter(({ parent, student }) => isAwaitingHandling(parent, [student]))
           .map(({ student }) => student),
         parents,
@@ -7154,18 +7163,22 @@ export default function Leads({
     };
     for (const key of Object.keys(STATUSES)) {
       if (key === 'archived') continue;
-      const matching = leadEntries.filter((e) => e.student.status === key).map((e) => e.student);
+      const matching = leadEntryScopes.working
+        .filter((e) => e.student.status === key)
+        .map((e) => e.student);
       map[key] = buildFamilyRows(matching, parents, students).length;
     }
     map.archived = buildFamilyRows(
-      buildLeadEntries(students, parents, { includeArchived: true })
+      leadEntryScopes.archiveInclusive
         .filter(({ parent }) => isArchivedParent(parent))
         .map((e) => e.student),
       parents,
       students
     ).length;
     return map;
-  }, [leadEntries, students, parents]);
+  }, [leadEntryScopes, students, parents]);
+
+  const totalFamilyCount = familyCountByStatus.all + familyCountByStatus.archived;
 
   const applyHandledParents = (updatedParents = [], handledAt) => {
     const byId = new Map(updatedParents.map((item) => [item.id, item]));
@@ -7419,7 +7432,9 @@ export default function Leads({
       <div className="section-header">
         <div>
           <div className="section-title">מאגר לקוחות ולידים</div>
-          <div className="section-sub">{leadEntries.length} רשומות סה"כ</div>
+          <div className="section-sub">
+            {totalFamilyCount} משפחות במאגר · {familyCountByStatus.all} פעילות
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <div className="tab-bar tab-bar-inline">
@@ -7478,7 +7493,7 @@ export default function Leads({
           ממתינים לטיפול ({familyCountByStatus.communication})
         </button>
         <button className={`btn btn-sm ${filterStatus === 'all' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilterStatus('all')}>
-          הכל ({familyCountByStatus.all})
+          פעילים ({familyCountByStatus.all})
         </button>
         {Object.entries(STATUSES).filter(([k]) => k !== 'archived').map(([k, v]) => (
           <button key={k} className={`btn btn-sm ${filterStatus === k ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setFilterStatus(k)}>
@@ -7597,6 +7612,11 @@ export default function Leads({
               onChange={e => setSearch(e.target.value)}
             />
           </div>
+          {searchActive && (
+            <span className="text-muted" style={{ fontSize: 12 }}>
+              החיפוש כולל גם את הארכיון
+            </span>
+          )}
         </div>
         <div className="table-wrap">
           <table className="crm-table">
@@ -7645,6 +7665,11 @@ export default function Leads({
                       {awaiting && (
                         <div style={{ marginTop: 4 }}>
                           <span className="badge badge-amber" style={{ fontSize: 10 }}>ממתין לטיפול</span>
+                        </div>
+                      )}
+                      {isArchivedParent(parent) && (
+                        <div style={{ marginTop: 4 }}>
+                          <span className="badge badge-gray" style={{ fontSize: 10 }}>ארכיון</span>
                         </div>
                       )}
                     </td>
