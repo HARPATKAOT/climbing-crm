@@ -9,7 +9,11 @@ process.env.LOCAL_DURABLE_STORAGE = '1';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { db } from './db.js';
-import { botSpokeRecently, resumeConversationAfterForm } from './botFormResume.js';
+import {
+  botSpokeRecently,
+  gradeQuestionAfterForm,
+  resumeConversationAfterForm,
+} from './botFormResume.js';
 
 const PHONE = '972599111000';
 const NOW = Date.parse('2026-08-06T12:00:00.000Z');
@@ -147,5 +151,70 @@ test('botSpokeRecently מבדיל בין שיחה של הבוט לשיחה של 
   assert.equal(
     botSpokeRecently([{ direction: 'outbound', is_ai: true, created_at: new Date(NOW - 40 * 60 * 60_000).toISOString() }], PHONE, NOW),
     false
+  );
+});
+
+test('כשל מודל אחרי טופס אינו שולח העברה לצוות, אלא ממשיך את שאלת הכיתות', async () => {
+  const gradeThread = [
+    { phone: PHONE, direction: 'inbound', message: 'בשביל תום ואביב', created_at: minutesAgo(20) },
+    {
+      phone: PHONE,
+      direction: 'outbound',
+      is_ai: true,
+      message: 'מלאו טופס השתתפות. באיזו כיתה תום ואביב לומדים כיום?',
+      created_at: minutesAgo(15),
+    },
+  ];
+  await withWorld({ parents: [PARENT], messages: gradeThread }, async () => {
+    const service = fakeService('קיבלנו 🙏\nמעביר לצוות שלנו — מישהו יחזור אליכם בהקדם.');
+    service.generateAIResponse = async (text, context) => {
+      service.calls.generated.push({ text, context });
+      return { text: 'קיבלנו 🙏\nמעביר לצוות שלנו — מישהו יחזור אליכם בהקדם.', handoff: true };
+    };
+    const result = await resumeConversationAfterForm({
+      phone: PHONE,
+      studentNames: ['תום פרידמן', 'אביב פרידמן'],
+      whatsappService: service,
+      now: NOW,
+      isSimulator: true,
+    });
+
+    assert.equal(result.sent, true);
+    assert.equal(result.fallback, true);
+    assert.equal(service.calls.sent.length, 1);
+    assert.equal(
+      service.calls.sent[0].text,
+      'כדי להמשיך, מה הכיתה של תום כיום, ומה הכיתה של אביב?'
+    );
+    assert.doesNotMatch(service.calls.sent[0].text, /צוות/);
+  });
+});
+
+test('כשל מודל בלי צעד בטוח להמשך נשאר שקט ולא ממציא העברה', async () => {
+  await withWorld({ parents: [PARENT], messages: BOT_THREAD }, async () => {
+    const service = fakeService('מעביר לצוות');
+    service.generateAIResponse = async () => ({ text: 'מעביר לצוות', handoff: true });
+    const result = await resumeConversationAfterForm({
+      phone: PHONE,
+      studentNames: ['ראם כהן'],
+      whatsappService: service,
+      now: NOW,
+      isSimulator: true,
+    });
+    assert.equal(result.sent, false);
+    assert.equal(result.reason, 'handoff_suppressed');
+    assert.equal(service.calls.sent.length, 0);
+  });
+});
+
+test('שאלת כיתה אחרי טופס מפרידה בין כל ילד', () => {
+  const messages = [{
+    direction: 'outbound',
+    is_ai: true,
+    message: 'באיזו כיתה תום ואביב לומדים?',
+  }];
+  assert.equal(
+    gradeQuestionAfterForm(messages, ['תום פרידמן', 'אביב פרידמן']),
+    'כדי להמשיך, מה הכיתה של תום כיום, ומה הכיתה של אביב?'
   );
 });

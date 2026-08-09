@@ -22,6 +22,7 @@ import {
   hasCustomerFullName,
   customerNameWords,
   parseCustomerFullName,
+  isClosingAcknowledgement,
 } from './whatsappBot.js';
 import { isBotEnabled, shouldAiAutoReply } from './whatsappSchedule.js';
 import { db } from './db.js';
@@ -113,6 +114,15 @@ test('every bot reply is marked, and the mark never stacks', () => {
   // Nothing to mark stays nothing, so an empty reply is still not sent.
   assert.equal(withBotMark(''), '');
   assert.equal(withBotMark(null), '');
+});
+
+test('a standalone thank-you closes the exchange without another bot turn', () => {
+  for (const text of ['תודה', 'תודה רבה!', 'מעולה תודה 🙏', 'סבבה תודה']) {
+    assert.equal(isClosingAcknowledgement(text), true, text);
+  }
+  for (const text of ['תודה, באיזה יום האימון?', 'כן תודה', 'תודה אבל לא קיבלתי קישור']) {
+    assert.equal(isClosingAcknowledgement(text), false, text);
+  }
 });
 
 test('a staff message stops holding the thread once the pause would have ended', () => {

@@ -31,6 +31,25 @@ export function botSpokeRecently(messages = [], phone = '', now = Date.now()) {
     && Date.parse(m.created_at || '') > now - FREE_TEXT_WINDOW_MS);
 }
 
+/** The form interrupted a grade question; resume it without asking one answer for two children. */
+export function gradeQuestionAfterForm(messages = [], studentNames = []) {
+  const lastBot = [...messages]
+    .reverse()
+    .find((message) => message.direction === 'outbound' && message.is_ai);
+  if (!lastBot || !/כיתה/u.test(String(lastBot.message || ''))) return '';
+
+  const firstNames = studentNames
+    .map((name) => String(name || '').trim().split(/\s+/)[0])
+    .filter((name) => name.length >= 2);
+  const unique = [...new Set(firstNames)];
+  if (!unique.length) return '';
+  if (unique.length === 1) return `כדי להמשיך, מה הכיתה של ${unique[0]} כיום?`;
+  if (unique.length === 2) {
+    return `כדי להמשיך, מה הכיתה של ${unique[0]} כיום, ומה הכיתה של ${unique[1]}?`;
+  }
+  return `כדי להמשיך, כתבו בבקשה באיזו כיתה כל אחד מהילדים לומד כיום: ${unique.join(', ')}.`;
+}
+
 /**
  * @returns {{ sent: boolean, reason?: string, reply?: string }}
  */
@@ -67,9 +86,24 @@ export async function resumeConversationAfterForm({
     `[מערכת] טופס ההשתתפות של ${who} נחתם ונשמר זה עתה. המשך את השיחה מהמקום שבו עצרתם.`,
     { phone, parent, students: studentsForParent(parent), isSimulator }
   );
-  const reply = String(result?.text || '').trim();
-  if (!reply) return { sent: false, reason: result?.reason || 'no_reply' };
+  let reply = String(result?.text || '').trim();
+
+  // A model outage during a background continuation must never manufacture a
+  // customer handoff. In Tali's thread the form confirmation was immediately
+  // followed by "מעביר לצוות", and her polite "תודה" triggered the same text
+  // again. If the interrupted question was the children's grades, that next
+  // step is safe and deterministic; otherwise the confirmation already sent by
+  // the form is enough and we stay quiet.
+  if (!reply || result?.handoff) {
+    reply = gradeQuestionAfterForm(messages, names);
+    if (!reply) {
+      return {
+        sent: false,
+        reason: result?.handoff ? 'handoff_suppressed' : (result?.reason || 'no_reply'),
+      };
+    }
+  }
 
   await whatsappService.sendBotReply(phone, reply, { isSimulator });
-  return { sent: true, reply };
+  return { sent: true, reply, fallback: !!result?.handoff || !result?.text };
 }

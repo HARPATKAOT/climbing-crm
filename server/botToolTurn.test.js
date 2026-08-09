@@ -8,6 +8,7 @@ import {
   unbackedReplyClaims,
   CUSTOMER_TOOL_RULES,
   confirmsLastBotQuestion,
+  separateMultiChildGradeQuestion,
 } from './botToolTurn.js';
 import {
   CUSTOMER_TOOL_DECLARATIONS,
@@ -153,6 +154,17 @@ test('the current inbound message is not appended twice when history already con
   assert.equal(turn.text, 'לאיזו כיתה?');
   assert.equal(received.length, 1);
   assert.equal(received[0].parts[0].text, 'כמה עולה חוג?');
+});
+
+test('a shared grade question is rewritten as one fact per child', () => {
+  assert.equal(
+    separateMultiChildGradeQuestion('באיזו כיתה תום ואביב לומדים כיום?'),
+    'מה הכיתה של תום כיום, ומה הכיתה של אביב?'
+  );
+  assert.equal(
+    separateMultiChildGradeQuestion('מה הכיתה של תום כיום, ומה הכיתה של אביב?'),
+    'מה הכיתה של תום כיום, ומה הכיתה של אביב?'
+  );
 });
 
 test('כן תודה is treated as approval of the last bot question, not a reason to repeat it', async () => {

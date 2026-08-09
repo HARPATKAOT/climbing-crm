@@ -30,6 +30,7 @@ export const CUSTOMER_TOOL_RULES = [
   'אם הכלי החזיר הערה שהכותב מתחת לגיל 18 — אל תמסור מחירי חוגים, ציוד או דמי העשרה. מחיר כניסה לקיר מותר. לשאר המחירים הפנה להורה או לצוות.',
   'שאלה על חוג בלי לדעת למי: אם יש ילדים בכרטיס (getFamilyCard) שאל «בשביל <שם>?» ולא «באיזו כיתה». אם אין — שאל באיזו כיתה או באיזה גיל.',
   'כיתה וגיל הם עובדות, לא העדפה. אם חסרה כיתה שאל «באיזו כיתה הילד/ה לומד/ת כיום?». לעולם אל תשאל «איזו כיתה תעדיפו» ואל תציע לבחור גיל או כיתה.',
+  'כשנרשמים כמה ילדים, מטפלים בכל ילד בנפרד: בודקים לכל אחד את הכרטיס ואת הטופס, ולא מניחים שהם באותה כיתה או מתאימים לאותה קבוצה. אם חסרה הכיתה של שניהם, שאל בנפרד ובאותו משפט, למשל «מה הכיתה של תום כיום, ומה הכיתה של אביב?».',
   'שאלה על מבוגרים או נוער היא על שכבה (בוגרים / תיכון / חטיבה), לא על כיתה.',
   'אל תציע לשמור מקום בשם הילד כשמדובר בקבוצת בוגרים.',
   'אל תחזור על אותה שאלה פעמיים ברצף. אם הלקוח כתב משהו לא ברור — בקש הבהרה קצרה פעם אחת.',
@@ -173,6 +174,20 @@ export function unknownUrlsInReply(text, allowed) {
   return urlsIn(text)
     .map(trimUrl)
     .filter((url) => !known.has(url));
+}
+
+/**
+ * "באיזו כיתה תום ואביב לומדים?" reads as though the two children share one
+ * answer. Besides sounding odd, one grade can then be reused for both children
+ * and send the younger sibling to the wrong class search. The prompt tells the
+ * model to ask separately; this small output guard makes that rule deterministic
+ * for the common two-name Hebrew phrasing as well.
+ */
+export function separateMultiChildGradeQuestion(text) {
+  return String(text || '').replace(
+    /באיזו\s+כיתה\s+([\p{L}'׳״-]{2,})\s+ו([\p{L}'׳״-]{2,})\s+לומדים(?:\s+כיום)?\s*\?/gu,
+    (_match, first, second) => `מה הכיתה של ${first} כיום, ומה הכיתה של ${second}?`
+  );
 }
 
 function successfulToolResult(result) {
@@ -340,7 +355,9 @@ export async function runCustomerToolTurn({
       // The older prompt taught the model to prefix UNSURE as well; either
       // marker must be stripped so a customer never reads it.
       const unsure = !handoff && /^UNSURE\b/i.test(raw);
-      const text = whatsappifyMarkdown(raw.replace(/^(?:HANDOFF|UNSURE)\s*/i, ''));
+      const text = separateMultiChildGradeQuestion(
+        whatsappifyMarkdown(raw.replace(/^(?:HANDOFF|UNSURE)\s*/i, ''))
+      );
 
       const invented = unknownUrlsInReply(text, allowedUrls);
       if (invented.length) {

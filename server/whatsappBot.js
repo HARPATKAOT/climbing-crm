@@ -49,6 +49,20 @@ export function withBotMark(text) {
   return body.startsWith(BOT_MARK) ? body : `${BOT_MARK} ${body}`;
 }
 
+/**
+ * A standalone thank-you closes the exchange; it is not a new question. Sending
+ * another acknowledgement is harmless once, but after a degraded model turn it
+ * repeated the same handoff and made the bot look stuck in a loop.
+ */
+export function isClosingAcknowledgement(text) {
+  const normalized = String(text || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return /^(?:תודה(?:\s+(?:רבה|לכם|לך|ענקית))?|מעולה\s+תודה|סבבה\s+תודה)$/u.test(normalized);
+}
+
 /** Runtime allow/forbid — short bounds, no conversation script. */
 export const BOT_BOUNDS_RULES = [
   '## מותר / אסור',

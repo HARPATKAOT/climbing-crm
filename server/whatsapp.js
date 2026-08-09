@@ -31,6 +31,7 @@ import { READ_TOOLS, runChatTurn } from './aiChat.js';
 import {
   mergeBotSettings,
   withBotMark,
+  isClosingAcknowledgement,
   isCentrePhone,
   centrePhones,
   CUSTOMER_STATUSES,
@@ -1107,6 +1108,23 @@ export const whatsappService = {
         };
       }
       text = inboundBurst.text || text;
+    }
+
+    // "תודה" by itself closes the exchange. It must not spend another model
+    // turn and, more importantly, must not repeat a fallback handoff when the
+    // previous automatic message was already an acknowledgement.
+    if (!isStaffPhone(settings, normalizedPhone)
+      && !fixedCentreConversation
+      && isClosingAcknowledgement(text)) {
+      console.log(`🤖 Closing acknowledgement — no reply for ${normalizedPhone}`);
+      return {
+        parent,
+        student,
+        isNew,
+        replied: false,
+        skippedReason: 'closing_acknowledgement',
+        burstCount: inboundBurst?.items?.length || 1,
+      };
     }
 
     // הצעות פעולה לצוות — רקע בלבד, לעולם לא מעכב את התשובה ללקוח.
