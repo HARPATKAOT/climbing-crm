@@ -16,7 +16,25 @@ import {
   claimInboundMetaId,
   releaseInboundMetaId,
   clearInboundMetaClaims,
+  newerInboundMessage,
 } from './messageStore.js';
+
+test('a newer durable inbound supersedes a stale reply across server instances', () => {
+  const rows = [
+    { direction: 'inbound', phone: '972501112233', created_at: '2026-08-09T09:46:33Z' },
+    { direction: 'outbound', phone: '972501112233', created_at: '2026-08-09T09:46:40Z' },
+    { direction: 'inbound', phone: '0501112233', created_at: '2026-08-09T09:46:43Z' },
+  ];
+  const newer = newerInboundMessage(rows, {
+    phone: '972501112233',
+    after: '2026-08-09T09:46:33Z',
+  });
+  assert.equal(newer?.created_at, '2026-08-09T09:46:43Z');
+  assert.equal(newerInboundMessage(rows, {
+    phone: '972501112233',
+    after: '2026-08-09T09:46:43Z',
+  }), null);
+});
 
 /** In-memory stand-in for the local cache + durable store. */
 function createStore({ persist, enabled = true } = {}) {

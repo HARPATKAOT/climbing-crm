@@ -133,6 +133,32 @@ export function findMessageByMetaId(metaMessageId, store = liveStore) {
   });
 }
 
+export function newerInboundMessage(rows = [], { parentId = '', phone = '', after = '' } = {}) {
+  const afterMs = Date.parse(String(after || ''));
+  if (!Number.isFinite(afterMs)) return null;
+  const phoneVariants = new Set(supa.phoneVariants(phone).map(String));
+  return (rows || []).find((row) => {
+    if (row?.direction !== 'inbound' || row?.deleted_at || row?.status === 'deleted') return false;
+    const belongsToThread = (parentId && String(row?.parent_id || '') === String(parentId))
+      || (phoneVariants.size && phoneVariants.has(String(row?.phone || '')));
+    return belongsToThread && Date.parse(String(row?.created_at || '')) > afterMs;
+  }) || null;
+}
+
+/**
+ * The in-memory burst coordinator cannot see a second webhook that reached a
+ * different server instance during a rolling deploy. Check the durable thread
+ * before sending a completed draft, so the newer customer bubble always owns
+ * the eventual answer across every instance.
+ */
+export async function hasNewerDurableInbound({ parentId = '', phone = '', after = '' } = {}) {
+  const local = newerInboundMessage(liveStore.read('messages'), { parentId, phone, after });
+  if (local) return true;
+  if (!supa.isEnabled()) return false;
+  const durable = await supa.getMessagesForParent({ parentId, phone });
+  return !!newerInboundMessage(durable || [], { parentId, phone, after });
+}
+
 function storeLocal(message, { pending = false } = {}, store = liveStore) {
   const record = pending ? { ...message, [PENDING_FLAG]: true } : message;
   store.mergeLocal('messages', [record]);

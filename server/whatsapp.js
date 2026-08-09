@@ -7,6 +7,7 @@ import {
   findMessageByMetaId,
   claimInboundMetaId,
   releaseInboundMetaId,
+  hasNewerDurableInbound,
 } from './channels/messageStore.js';
 import {
   InboundBurstCoordinator,
@@ -1297,6 +1298,27 @@ export const whatsappService = {
         skippedReason: 'burst_superseded_during_reply',
         burstCount: inboundBurst.items.length,
       };
+    }
+    if (inboundBurst) {
+      const latestBurstAt = inboundBurst.items
+        .map((item) => String(item?.createdAt || ''))
+        .filter(Boolean)
+        .sort()
+        .at(-1);
+      if (latestBurstAt && await hasNewerDurableInbound({
+        parentId: parent?.id || '',
+        phone: normalizedPhone,
+        after: latestBurstAt,
+      })) {
+        return {
+          parent,
+          student,
+          isNew,
+          replied: false,
+          skippedReason: 'burst_superseded_durably',
+          burstCount: inboundBurst.items.length,
+        };
+      }
     }
     if (aiResult.handoff) {
       await recordBotHandoff(normalizedPhone);

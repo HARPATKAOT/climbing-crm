@@ -179,6 +179,55 @@ test('the current inbound message is not appended twice when history already con
   assert.equal(received[0].parts[0].text, 'כמה עולה חוג?');
 });
 
+test('model failure asks what signup the customer means instead of handing off', async () => {
+  const previousStudents = db.get('students');
+  db.set('students', [{ id: 'karni', parentId: 'adi', name: 'קרני אלימלך', status: 'lead_new' }]);
+  try {
+    const turn = await runCustomerToolTurn({
+      parent: { id: 'adi', name: 'עדי אלימלך' },
+      incomingText: 'היי איפה נרשמים. לא ברור',
+      apiKey: 'test-key',
+      callModel: async () => ({ content: null, error: 'temporary model error' }),
+    });
+    assert.equal(turn.handoff, false);
+    assert.equal(turn.reason, 'deterministic_signup_clarification');
+    assert.equal(turn.text, 'בשמחה — לאיזו קבוצה תרצו לרשום את קרני?');
+  } finally {
+    db.set('students', previousStudents || []);
+  }
+});
+
+test('model failure lists real class days once the customer supplied a grade', async () => {
+  const previousGroups = db.get('groups');
+  const previousStudents = db.get('students');
+  db.set('groups', [
+    { id: 'gd-mon', ageCategory: 'ג׳-ד׳', day: 1, time: '16:00', maxSlots: 10 },
+    { id: 'gd-thu', ageCategory: 'ג׳-ד׳', day: 4, time: '17:30', maxSlots: 10 },
+  ]);
+  db.set('students', [{ id: 'karni', parentId: 'adi', name: 'קרני אלימלך', status: 'lead_new' }]);
+  try {
+    const turn = await runCustomerToolTurn({
+      parent: { id: 'adi', name: 'עדי אלימלך' },
+      history: [{
+        role: 'user',
+        parts: [{ text: 'נכון. אשמח שתרשום את קרני, אבל לא הבנתי מה האופציות מבחינת ימים' }],
+      }],
+      incomingText: 'היא תהיה בכיתה ד׳ כן',
+      apiKey: 'test-key',
+      callModel: async () => ({ content: null, error: 'temporary model error' }),
+    });
+    assert.equal(turn.handoff, false);
+    assert.equal(turn.reason, 'deterministic_group_options');
+    assert.match(turn.text, /האפשרויות לכיתה ד׳ עבור קרני/);
+    assert.match(turn.text, /יום ב׳ בשעה 16:00/);
+    assert.match(turn.text, /יום ה׳ בשעה 17:30/);
+    assert.deepEqual(turn.toolsUsed, ['listClasses', 'getFamilyCard']);
+  } finally {
+    db.set('groups', previousGroups || []);
+    db.set('students', previousStudents || []);
+  }
+});
+
 test('a shared grade question is rewritten as one fact per child', () => {
   assert.equal(
     separateMultiChildGradeQuestion('באיזו כיתה תום ואביב לומדים כיום?'),

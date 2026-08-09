@@ -311,6 +311,94 @@ export function explicitGroupSuitabilityHandoff(incomingText, fallbackText = '')
   return `${missingFact}\nמישהו מהצוות יחזור אליכם בהקדם.`;
 }
 
+function recentCustomerText(history = [], incomingText = '') {
+  const texts = history
+    .filter((entry) => entry?.role === 'user')
+    .map((entry) => String(entry?.parts?.[0]?.text || '').trim())
+    .filter(Boolean)
+    .slice(-4);
+  const incoming = String(incomingText || '').trim();
+  if (incoming && texts.at(-1) !== incoming) texts.push(incoming);
+  return texts.join('\n');
+}
+
+export function gradeFromRecentCustomerText(text = '') {
+  const matches = [...String(text || '').matchAll(/כיתה\s*([א-ו])(?:['׳״"])?/gu)];
+  return matches.at(-1)?.[1] || '';
+}
+
+function groupOptionsReply(groups = [], grade = '', childName = '') {
+  const lines = groups.map((group) => {
+    const days = Array.isArray(group?.ימי_אימון) && group.ימי_אימון.length
+      ? group.ימי_אימון.join(' ו')
+      : String(group?.יום || '').trim();
+    const when = [days ? `יום ${days}` : '', group?.שעה ? `בשעה ${group.שעה}` : '']
+      .filter(Boolean)
+      .join(' ');
+    const state = String(group?.מצב || '').trim();
+    return `• ${when || String(group?.שכבה || 'קבוצה').trim()}${state ? ` — ${state}` : ''}`;
+  });
+  const who = childName ? ` עבור ${childName}` : '';
+  return `אלה האפשרויות לכיתה ${grade}׳${who}:\n${lines.join('\n')}\nאיזו אפשרות מתאימה לכם?`;
+}
+
+/**
+ * A short, factual safety net for the two core registration questions. It is
+ * used only when the model is unavailable or exhausts its tool steps; the data
+ * still comes from the same CRM tools, never from a guessed schedule.
+ */
+async function deterministicModelFailureFallback({ history, incoming, tools, toolsUsed }) {
+  const current = String(incoming || '').trim();
+  const context = recentCustomerText(history, current);
+  const ambiguousSignup = /(?:איפה|איך|כיצד)[^?!.]{0,30}נרשמ|נרשמ[^?!.]{0,30}(?:איפה|איך)/u.test(current);
+
+  if (ambiguousSignup) {
+    const card = await tools.getFamilyCard();
+    if (!toolsUsed.includes('getFamilyCard')) toolsUsed.push('getFamilyCard');
+    const children = Array.isArray(card?.ילדים) ? card.ילדים : [];
+    const firstName = children.length === 1
+      ? String(children[0]?.שם || '').trim().split(/\s+/)[0]
+      : '';
+    return {
+      text: firstName
+        ? `בשמחה — לאיזו קבוצה תרצו לרשום את ${firstName}?`
+        : 'בשמחה — לאיזה חוג או קבוצה תרצו להירשם?',
+      handoff: false,
+      unsure: false,
+      toolsUsed,
+      reason: 'deterministic_signup_clarification',
+    };
+  }
+
+  const asksForDays = /(?:אופציות|אפשרויות)[^?!.]{0,40}(?:ימים|יום)|(?:איזה|אילו|מה)[^?!.]{0,20}ימים|לא\s+הבנתי[^?!.]{0,40}ימים/u.test(context);
+  const wantsSignup = /(?:לרשום|להירשם|תרשום|תרשמי)/u.test(context);
+  const grade = gradeFromRecentCustomerText(context);
+  if (grade && (asksForDays || wantsSignup)) {
+    const [classes, card] = await Promise.all([
+      tools.listClasses({ grade }),
+      tools.getFamilyCard(),
+    ]);
+    for (const toolName of ['listClasses', 'getFamilyCard']) {
+      if (!toolsUsed.includes(toolName)) toolsUsed.push(toolName);
+    }
+    const groups = Array.isArray(classes?.קבוצות) ? classes.קבוצות : [];
+    if (groups.length) {
+      const children = Array.isArray(card?.ילדים) ? card.ילדים : [];
+      const childName = children.length === 1
+        ? String(children[0]?.שם || '').trim().split(/\s+/)[0]
+        : '';
+      return {
+        text: groupOptionsReply(groups, grade, childName),
+        handoff: false,
+        unsure: false,
+        toolsUsed,
+        reason: 'deterministic_group_options',
+      };
+    }
+  }
+  return null;
+}
+
 /**
  * @returns {{ text: string, handoff: boolean, toolsUsed: string[], reason: string }}
  */
@@ -369,7 +457,10 @@ export async function runCustomerToolTurn({
       declarations,
       apiKey,
     });
-    if (!content) return { text: '', handoff: false, toolsUsed, reason: error || 'model_error' };
+    if (!content) {
+      const fallback = await deterministicModelFailureFallback({ history, incoming, tools, toolsUsed });
+      return fallback || { text: '', handoff: false, toolsUsed, reason: error || 'model_error' };
+    }
 
     const calls = functionCallsOf(content);
     if (!calls.length) {
@@ -464,6 +555,8 @@ export async function runCustomerToolTurn({
     contents.push({ role: 'user', parts: responseParts });
   }
 
-  // Out of steps: better to say nothing here and let the caller fall back.
-  return { text: '', handoff: false, toolsUsed, reason: 'max_steps' };
+  // Out of steps: cover the core registration questions deterministically;
+  // everything else still returns empty so the caller can hand it to a person.
+  const fallback = await deterministicModelFailureFallback({ history, incoming, tools, toolsUsed });
+  return fallback || { text: '', handoff: false, toolsUsed, reason: 'max_steps' };
 }
