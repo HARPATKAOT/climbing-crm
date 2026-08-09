@@ -424,6 +424,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
   const [imagePreview, setImagePreview] = useState(null);
   const [imageBase64, setImageBase64] = useState('');
   const [botBusy, setBotBusy] = useState(false);
+  const [botContinuing, setBotContinuing] = useState(false);
   const [botMenuOpen, setBotMenuOpen] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [draftInfo, setDraftInfo] = useState(null);
@@ -606,6 +607,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
     setImageBase64('');
     setImagePreview(null);
     setBotMenuOpen(false);
+    setBotContinuing(false);
     composingRef.current = false;
   }, [parent?.id, selectedThreadId]);
 
@@ -861,6 +863,34 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
     }
   };
 
+  const handleBotContinue = async () => {
+    if (!parent?.id || !activeThread?.phone || botBusy) return;
+    setBotBusy(true);
+    setBotContinuing(true);
+    setBotMenuOpen(false);
+    setError('');
+    try {
+      const res = await fetch(`/api/conversations/${parent.id}/bot/continue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetPhone: activeThread.phone,
+          studentId: activeThread.studentId || null,
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.error || (json ? 'הפעלת הבוט נכשלה' : SERVER_DOWN_MESSAGE));
+      }
+      await load({ quiet: true });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBotContinuing(false);
+      setBotBusy(false);
+    }
+  };
+
   const handleDraft = async () => {
     if (!parent?.id || drafting) return;
     setDrafting(true);
@@ -1011,6 +1041,27 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                     boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
                   }}
                 >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="btn btn-ghost btn-xs"
+                    style={{
+                      justifyContent: 'flex-start',
+                      width: '100%',
+                      gap: 7,
+                      color: '#86EFAC',
+                      borderBottom: '1px solid var(--border)',
+                      borderRadius: 0,
+                      paddingBottom: 8,
+                      marginBottom: 3,
+                    }}
+                    disabled={botBusy || channel !== 'whatsapp' || !activeThread?.phone}
+                    onClick={handleBotContinue}
+                    title={channel !== 'whatsapp' ? 'המשך אוטומטי זמין בשיחות וואטסאפ' : 'ענה עכשיו להודעות הלקוח שעדיין לא קיבלו מענה'}
+                  >
+                    <Sparkles size={13} />
+                    המשך שיחה עכשיו
+                  </button>
                   {botBadge.canResume && (
                     <button
                       type="button"
@@ -1104,6 +1155,25 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
           borderRadius: fillHeight ? 0 : undefined,
         }}
       >
+        {botContinuing && (
+          <div
+            role="status"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '8px 12px',
+              borderBottom: '1px solid var(--border)',
+              background: 'rgba(52,211,153,0.10)',
+              color: '#86EFAC',
+              fontSize: 11,
+              flexShrink: 0,
+            }}
+          >
+            <RefreshCw size={12} className="spin" />
+            הבוט קורא את השיחה ומנסח תשובה אחת...
+          </div>
+        )}
         {(botBadge?.blocks || []).map((block) => (
           <div
             key={block.kind}

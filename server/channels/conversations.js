@@ -17,7 +17,9 @@ import {
   clearBotPause,
   optOutPhone,
   describeBotState,
+  isClosingAcknowledgement,
 } from '../whatsappBot.js';
+import { replyKeyForBurst } from '../botReplyClaims.js';
 import { supa } from '../supa.js';
 import { childrenOfParent } from '../studentGuardians.js';
 import { recordMessage, setMessageStatusByMetaId, toLogRow } from './messageStore.js';
@@ -761,6 +763,126 @@ function lastInboundForTarget(messages, target, parent) {
     if (String(m.message || '').trim()) return m;
   }
   return null;
+}
+
+function messageBelongsToReplyTarget(message, target, parent) {
+  if ((message?.channel || 'whatsapp') !== 'whatsapp') return false;
+  if (target?.studentId) {
+    return String(message?.student_id || '') === String(target.studentId)
+      || phonesMatch(message?.phone, target.phone);
+  }
+  if (message?.student_id && !phonesMatch(parent?.phone, message?.phone)) return false;
+  return !target?.phone || !message?.phone || phonesMatch(message.phone, target.phone);
+}
+
+function successfulOutbound(message) {
+  if (message?.direction !== 'outbound') return false;
+  return !['failed', 'undelivered', 'error'].includes(String(message?.status || '').toLowerCase());
+}
+
+function actionableCustomerMessage(message) {
+  if (message?.direction !== 'inbound') return false;
+  const type = String(message?.message_type || message?.media_type || 'text').toLowerCase();
+  if (type === 'reaction' || type === 'sticker') return false;
+  const text = String(message?.message || '').trim();
+  if (!text || /^תגובה:/u.test(text) || /^ריאקציה:/u.test(text)) return false;
+  if (/^\[[^\]\r\n]+\]$/u.test(text) && type !== 'text') return false;
+  return !isClosingAcknowledgement(text);
+}
+
+/**
+ * Select the still-unanswered customer burst for the one-click CRM action.
+ * This is deliberately pure so the UI/API guard can be regression-tested
+ * without ever contacting WhatsApp or Gemini.
+ */
+export function botContinuationForMessages(messages = [], target = {}, parent = {}) {
+  const thread = (Array.isArray(messages) ? messages : [])
+    .filter((message) => messageBelongsToReplyTarget(message, target, parent));
+
+  let lastAnsweredIndex = -1;
+  for (let index = 0; index < thread.length; index += 1) {
+    if (successfulOutbound(thread[index])) lastAnsweredIndex = index;
+  }
+
+  const unanswered = thread.slice(lastAnsweredIndex + 1).filter(actionableCustomerMessage);
+  if (!unanswered.length) {
+    const hasInbound = thread.some((message) => message?.direction === 'inbound');
+    return {
+      canContinue: false,
+      reason: hasInbound && lastAnsweredIndex >= 0 ? 'already_answered' : 'nothing_to_answer',
+      messages: [],
+      text: '',
+    };
+  }
+
+  return {
+    canContinue: true,
+    reason: null,
+    messages: unanswered,
+    text: unanswered.map((message) => String(message.message || '').trim()).join('\n'),
+    lastInbound: unanswered[unanswered.length - 1],
+  };
+}
+
+/** Run the smart bot once on the latest unanswered WhatsApp turn. */
+export async function continueBotConversation(parentId, payload = {}) {
+  const parent = findParentById(parentId);
+  if (!parent) return { success: false, error: 'הלקוח לא נמצא', status: 404 };
+
+  const students = studentsForParent(parent.id);
+  const target = resolveReplyTarget(parent, students, payload);
+  if (target.error) return { success: false, error: target.error, status: target.status || 400 };
+  if (!target.phone) return { success: false, error: 'לשיחה אין מספר וואטסאפ', status: 400 };
+
+  const messages = annotateMessages(mergeThread(parent), parent, students);
+  const continuation = botContinuationForMessages(messages, target, parent);
+  if (!continuation.canContinue) {
+    const error = continuation.reason === 'already_answered'
+      ? 'כבר נשלחה תשובה להודעה האחרונה של הלקוח'
+      : 'אין כרגע הודעת לקוח שמחכה לתשובה';
+    return { success: false, error, status: 409, reason: continuation.reason };
+  }
+
+  if (!getPhoneSessionWindow(messages, target.phone).open) {
+    return {
+      success: false,
+      error: 'חלון ה־24 שעות נסגר. כדי לפנות עכשיו צריך לשלוח הודעת תבנית מאושרת.',
+      status: 409,
+      reason: 'window_closed',
+    };
+  }
+
+  const bot = describeBotState(parent, mergeBotSettings(db.getSettings()));
+  if (bot.globallyOff) {
+    return { success: false, error: 'הבוט כבוי כרגע לכל הלקוחות. יש להפעיל אותו תחילה.', status: 409, reason: 'disabled' };
+  }
+  if (bot.status === 'opted_out') {
+    return { success: false, error: 'הבוט כבוי ללקוח הזה. יש להפעיל אותו תחילה.', status: 409, reason: 'opted_out' };
+  }
+
+  const replyKey = replyKeyForBurst(target.phone, continuation.messages.map((message) => ({
+    messageId: `manual:${message.meta_message_id || message.id || message.created_at || message.message}`,
+    text: message.message,
+    createdAt: message.created_at,
+  })));
+
+  const result = await whatsappService.continueConversation(target.phone, continuation.text, {
+    parent,
+    students: target.student ? [target.student, ...students.filter((row) => row.id !== target.student.id)] : students,
+    speaker: target.student || null,
+    replyKey,
+    inboundBurstCount: continuation.messages.length,
+    lastInboundAt: continuation.lastInbound?.created_at || '',
+  });
+
+  return {
+    ...result,
+    basedOn: {
+      count: continuation.messages.length,
+      messageId: continuation.lastInbound?.id || null,
+      at: continuation.lastInbound?.created_at || null,
+    },
+  };
 }
 
 /**

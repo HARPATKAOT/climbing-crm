@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  botContinuationForMessages,
   isAwaitingHandling,
   latestInboundAt,
   listConversations,
@@ -57,6 +58,56 @@ test('an outbound-only conversation still counts as behind the card', () => {
 
 test('a customer who never wrote needs no refill', () => {
   assert.equal(threadIsBehindCard({}, []), false);
+});
+
+test('manual bot continuation combines every customer bubble since the last answer', () => {
+  const parent = { phone: '0501111111' };
+  const messages = [
+    { id: 'out-1', phone: parent.phone, channel: 'whatsapp', direction: 'outbound', status: 'delivered', message: 'איך אפשר לעזור?' },
+    { id: 'in-1', phone: parent.phone, channel: 'whatsapp', direction: 'inbound', message: 'אני רוצה להירשם' },
+    { id: 'in-2', phone: parent.phone, channel: 'whatsapp', direction: 'inbound', message: 'לימי שני וחמישי' },
+  ];
+
+  const result = botContinuationForMessages(messages, { phone: parent.phone }, parent);
+  assert.equal(result.canContinue, true);
+  assert.equal(result.messages.length, 2);
+  assert.equal(result.text, 'אני רוצה להירשם\nלימי שני וחמישי');
+});
+
+test('manual bot continuation refuses to answer a customer turn twice', () => {
+  const parent = { phone: '0501111111' };
+  const messages = [
+    { id: 'in-1', phone: parent.phone, channel: 'whatsapp', direction: 'inbound', message: 'יש מקום?' },
+    { id: 'out-1', phone: parent.phone, channel: 'whatsapp', direction: 'outbound', status: 'read', message: 'כן' },
+  ];
+
+  const result = botContinuationForMessages(messages, { phone: parent.phone }, parent);
+  assert.equal(result.canContinue, false);
+  assert.equal(result.reason, 'already_answered');
+});
+
+test('a failed outbound send does not hide an unanswered customer message', () => {
+  const parent = { phone: '0501111111' };
+  const messages = [
+    { id: 'in-1', phone: parent.phone, channel: 'whatsapp', direction: 'inbound', message: 'אפשר להמשיך?' },
+    { id: 'out-1', phone: parent.phone, channel: 'whatsapp', direction: 'outbound', status: 'failed', message: 'נכשל' },
+  ];
+
+  const result = botContinuationForMessages(messages, { phone: parent.phone }, parent);
+  assert.equal(result.canContinue, true);
+  assert.equal(result.messages.length, 1);
+});
+
+test('reaction and closing thanks do not become a manual bot turn', () => {
+  const parent = { phone: '0501111111' };
+  const messages = [
+    { id: 'in-1', phone: parent.phone, channel: 'whatsapp', direction: 'inbound', message_type: 'reaction', message: 'תגובה: 👍' },
+    { id: 'in-2', phone: parent.phone, channel: 'whatsapp', direction: 'inbound', message: 'תודה' },
+  ];
+
+  const result = botContinuationForMessages(messages, { phone: parent.phone }, parent);
+  assert.equal(result.canContinue, false);
+  assert.equal(result.reason, 'nothing_to_answer');
 });
 
 // ─── Inbox list ──────────────────────────────────────────────────────────────

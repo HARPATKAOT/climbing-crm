@@ -886,8 +886,13 @@ export const whatsappService = {
       const burstCount = Math.max(0, Math.trunc(Number(context.inboundBurstCount) || 0));
       // The burst is supplied below as the current turn. Leaving its individual
       // bubbles in history as well repeats every sentence twice to the model.
-      const priorHistory = burstCount > 1
-        ? fullHistory.slice(0, Math.max(0, fullHistory.length - burstCount))
+      // Manual continuation always replays rows that are already in storage;
+      // remove even a one-message burst in that case.
+      const repeatedHistoryRows = context.replayExistingMessage
+        ? Math.max(1, burstCount)
+        : (burstCount > 1 ? burstCount : 0);
+      const priorHistory = repeatedHistoryRows > 0
+        ? fullHistory.slice(0, Math.max(0, fullHistory.length - repeatedHistoryRows))
         : fullHistory;
       // Only curated policy, live business facts and tool results reach the
       // model. Conversation feedback is quality-control data, never an
@@ -1052,6 +1057,163 @@ export const whatsappService = {
       }
     }
     return result;
+  },
+
+  /**
+   * Explicit one-off continuation from the CRM. It bypasses only the temporary
+   * human-reply pause: the global switch, the 24h window and customer opt-out
+   * are validated by the conversation API, while the durable reply claim keeps
+   * two clicks or server instances from running the same tool turn twice.
+   */
+  async continueConversation(phone, incomingText, context = {}) {
+    const normalizedPhone = formatWaPhone(phone) || phone;
+    const settings = await loadBrandedBotSettings();
+    if (!isBotEnabled(settings)) {
+      return { success: false, status: 409, reason: 'disabled', error: 'הבוט כבוי כרגע לכל הלקוחות.' };
+    }
+
+    const parent = context.parent || findPrimaryParent(normalizedPhone);
+    let students = context.students || studentsForParent(parent);
+    const speaker = context.speaker || null;
+    const replyKey = String(context.replyKey || '');
+    const claim = await claimBotReply(db, replyKey, { phone: normalizedPhone });
+    if (!claim.claimed) {
+      return {
+        success: false,
+        status: 409,
+        reason: 'already_running',
+        error: 'הבוט כבר הופעל על ההודעה הזאת או שכבר נשלחה תשובה.',
+      };
+    }
+
+    try {
+      // The staff member explicitly asked the bot to take this turn now.
+      await clearBotPause(normalizedPhone);
+
+      if (isSensitivePersonalEvent(incomingText)) {
+        await recordBotHandoff(normalizedPhone);
+        await notifyStaffOfHandoff({
+          settings,
+          parent,
+          phone: normalizedPhone,
+          customerText: incomingText,
+          reason: 'handoff',
+          isSimulator: false,
+        });
+        await finishBotReplyClaim(db, persistCore, replyKey, { status: 'sensitive_handoff' });
+        return {
+          success: false,
+          status: 409,
+          reason: 'sensitive_personal_event',
+          error: 'זו פנייה רגישה. היא הועברה לצוות בלי לשלוח תשובת בוט אוטומטית.',
+        };
+      }
+
+      let currentParent = parent;
+      if (!speaker && !hasCustomerFullName(currentParent)) {
+        const nameCapture = await advanceCustomerNameCapture(normalizedPhone, currentParent, incomingText);
+        if (!nameCapture.done) {
+          const sent = await whatsappService.sendBotReply(normalizedPhone, nameCapture.reply, {
+            parent: currentParent,
+            replyKey,
+            replyClaimed: true,
+            ...(nameCapture.handoff ? { source: 'bot_control' } : {}),
+          });
+          if (!sent?.success) {
+            return { success: false, status: 502, reason: 'send_failed', error: sent?.error || 'שליחת התשובה נכשלה' };
+          }
+          if (nameCapture.handoff) {
+            await recordBotHandoff(normalizedPhone);
+            await notifyStaffOfHandoff({
+              settings,
+              parent: currentParent,
+              phone: normalizedPhone,
+              customerText: incomingText,
+              reason: 'handoff',
+              isSimulator: false,
+            });
+          }
+          return {
+            success: true,
+            replied: true,
+            reply: nameCapture.reply,
+            reason: nameCapture.handoff ? 'handoff' : 'name_capture',
+          };
+        }
+        currentParent = nameCapture.parent || findPrimaryParent(normalizedPhone) || currentParent;
+        students = context.students || studentsForParent(currentParent);
+      }
+
+      const aiResult = await whatsappService.generateAIResponse(incomingText, {
+        phone: normalizedPhone,
+        parent: currentParent,
+        students,
+        speaker,
+        inboundBurstCount: Math.max(1, Number(context.inboundBurstCount) || 1),
+        replayExistingMessage: true,
+      });
+
+      // A fresh customer bubble arrived while Gemini was working. The new turn
+      // owns the answer; sending this older draft as well would recreate the
+      // duplicate-reply problem this action is meant to solve.
+      if (context.lastInboundAt && await hasNewerDurableInbound({
+        parentId: currentParent?.id || '',
+        phone: normalizedPhone,
+        after: context.lastInboundAt,
+      })) {
+        await finishBotReplyClaim(db, persistCore, replyKey, { status: 'superseded' });
+        return {
+          success: false,
+          status: 409,
+          reason: 'newer_inbound',
+          error: 'הגיעה הודעה חדשה בזמן שהבוט ניסח. לא נשלחה התשובה הישנה; אפשר להפעיל שוב על הרצף המעודכן.',
+        };
+      }
+
+      if (aiResult?.silent || !aiResult?.text) {
+        // A provider outage is retryable. Releasing this manual claim lets the
+        // same menu action work after Gemini recovers.
+        await releaseBotReplyClaim(db, replyKey);
+        return {
+          success: false,
+          status: 503,
+          reason: aiResult?.reason || 'ai_unavailable',
+          error: 'שירות הבינה אינו זמין כרגע. לא נשלחה הודעה ללקוח; אפשר לנסות שוב בהמשך.',
+        };
+      }
+
+      if (aiResult.handoff) await recordBotHandoff(normalizedPhone);
+      const sent = await whatsappService.sendBotReply(normalizedPhone, aiResult.text, {
+        parent: currentParent,
+        source: aiResult.handoff ? 'bot_control' : 'ai',
+        replyKey,
+        replyClaimed: true,
+      });
+      if (!sent?.success) {
+        return { success: false, status: 502, reason: 'send_failed', error: sent?.error || 'שליחת התשובה נכשלה' };
+      }
+
+      if (aiResult.handoff) {
+        await notifyStaffOfHandoff({
+          settings,
+          parent: currentParent,
+          phone: normalizedPhone,
+          customerText: incomingText,
+          reason: aiResult.unsure ? 'unsure' : 'handoff',
+          isSimulator: false,
+        });
+      }
+
+      return {
+        success: true,
+        replied: true,
+        reply: aiResult.text,
+        reason: aiResult.handoff ? 'handoff' : 'continued',
+      };
+    } catch (error) {
+      await releaseBotReplyClaim(db, replyKey);
+      throw error;
+    }
   },
 
   // Process incoming messages (webhook entrypoint / simulator)

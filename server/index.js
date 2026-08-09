@@ -476,6 +476,7 @@ import {
   markCommunicationHandled,
   markAllCommunicationsHandled,
   setBotState,
+  continueBotConversation,
   draftReply,
 } from './channels/conversations.js';
 import {
@@ -1925,6 +1926,17 @@ app.post('/api/conversations/:parentId/bot', async (req, res) => {
     res.json(result);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/conversations/:parentId/bot/continue', async (req, res) => {
+  try {
+    const result = await continueBotConversation(req.params.parentId, req.body || {});
+    if (!result.success) return res.status(result.status || 400).json(result);
+    res.json(result);
+  } catch (err) {
+    console.error('Manual bot continuation failed:', err);
+    res.status(500).json({ success: false, error: err.message || 'הפעלת הבוט נכשלה' });
   }
 });
 
