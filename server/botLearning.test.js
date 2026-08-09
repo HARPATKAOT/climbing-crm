@@ -54,7 +54,7 @@ test('feedback down with alternative enters pending queue', async () => {
   assert.equal(result.row.status, FEEDBACK_PENDING);
 });
 
-test('approve feedback creates an active learned reply', async () => {
+test('approved feedback stays quality-control data and never becomes a bot instruction', async () => {
   const db = memoryDb();
   const created = await recordFeedback({
     db,
@@ -73,13 +73,29 @@ test('approve feedback creates an active learned reply', async () => {
     actor: 'owner',
   });
   assert.equal(approved.ok, true);
-  assert.equal(approved.learned.active, true);
+  assert.equal(approved.learned, null);
   const matched = matchLearnedReplies(db, 'בן 7 כמה עולה החוג');
-  assert.ok(matched.length >= 1);
+  assert.deepEqual(matched, []);
   const block = formatLearnedRepliesForPrompt(matched);
-  assert.match(block, /דוגמאות מאושרות/);
-  assert.equal((db.get(LEARNED_COLLECTION) || []).length, 1);
+  assert.equal(block, '');
+  assert.equal((db.get(LEARNED_COLLECTION) || []).length, 0);
   assert.equal((db.get(FEEDBACK_COLLECTION) || [])[0].status, 'approved');
+});
+
+test('thumbs-up records feedback without creating a learned reply', async () => {
+  const db = memoryDb();
+  const result = await recordFeedback({
+    db,
+    persist: async () => {},
+    messageId: 'm-up',
+    rating: 'up',
+    inboundExcerpt: 'מתי פתוח?',
+    replyExcerpt: 'היום פתוח עד 22:00',
+    createdBy: 'tester',
+  });
+  assert.equal(result.ok, true);
+  assert.equal((db.get(FEEDBACK_COLLECTION) || []).length, 1);
+  assert.equal((db.get(LEARNED_COLLECTION) || []).length, 0);
 });
 
 // ─── הצעה אוטומטית מתשובת צוות אחרי העברה ────────────────────────────────────
@@ -91,7 +107,7 @@ function threadDb(messages) {
   return memoryDb({ parents: [CARD], messages });
 }
 
-test('the staff reply is proposed against the question the bot failed on', async () => {
+test('a staff reply after handoff is not proposed as bot learning', async () => {
   const db = threadDb([
     {
       id: 'in-1',
@@ -129,10 +145,10 @@ test('the staff reply is proposed against the question the bot failed on', async
     staffText: 'יום הולדת מתחיל ב-1,800 ₪ עד 20 ילדים',
   });
 
-  assert.equal(result.ok, true);
-  assert.equal(result.row.inbound_excerpt, 'כמה עולה יום הולדת?');
-  // What the bot said, so the approval screen can show what is being replaced.
-  assert.equal(result.row.reply_excerpt, 'אין לי את המחיר הזה');
+  assert.equal(result.ok, false);
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, 'quality_control_only');
+  assert.equal((db.get(FEEDBACK_COLLECTION) || []).length, 0);
 });
 
 test('a reaction is not a question, and never becomes a learned example', async () => {
@@ -156,7 +172,7 @@ test('a reaction is not a question, and never becomes a learned example', async 
   });
 
   assert.equal(result.ok, false);
-  assert.equal(result.reason, 'no_inbound');
+  assert.equal(result.reason, 'quality_control_only');
   assert.equal((db.get(FEEDBACK_COLLECTION) || []).length, 0);
 });
 

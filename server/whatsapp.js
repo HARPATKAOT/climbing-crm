@@ -59,11 +59,6 @@ import {
   advanceCustomerNameCapture,
   DEFAULT_BOT_SETTINGS,
 } from './whatsappBot.js';
-import {
-  matchLearnedReplies,
-  formatLearnedRepliesForPrompt,
-  proposeFromHandoffStaffReply,
-} from './botLearning.js';
 import { runCustomerToolTurn, historyToContents } from './botToolTurn.js';
 import { alertRecipients } from './staffAlerts.js';
 import { recordBotAction } from './botActivityLog.js';
@@ -824,10 +819,9 @@ export const whatsappService = {
       const priorHistory = burstCount > 1
         ? fullHistory.slice(0, Math.max(0, fullHistory.length - burstCount))
         : fullHistory;
-      // The knowledge base, the bounds rules and the approved learned examples
-      // all reach the model — a parking question is answered from the knowledge
-      // base, and the learning loop feeds back in here.
-      const learnedBlock = formatLearnedRepliesForPrompt(matchLearnedReplies(db, incomingText));
+      // Only curated policy, live business facts and tool results reach the
+      // model. Conversation feedback is quality-control data, never an
+      // instruction or a remembered answer for a different customer.
       const turn = await runCustomerToolTurn({
         systemInstruction: [
           `שם העסק הרשמי: ${settings.brandName || 'הרפתקאות'}\nהזכר את העסק רק בשם הרשמי הזה.`,
@@ -837,7 +831,6 @@ export const whatsappService = {
           settings.aiKnowledgeBase ? `בסיס ידע / שאלות נפוצות:\n${settings.aiKnowledgeBase}` : '',
           settings.aiForbiddenTopics ? `אסור:\n${settings.aiForbiddenTopics}` : '',
           BOT_BOUNDS_RULES,
-          learnedBlock,
         ].filter(Boolean).join('\n\n'),
         history: historyToContents(priorHistory),
         incomingText,
@@ -1376,20 +1369,6 @@ export const whatsappService = {
     const settings = mergeBotSettings(db.getSettings());
     if (settings.aiPauseOnHumanReply) {
       await pauseBotForPhone(normalizedPhone, settings.aiPauseMinutesAfterHuman, { reason: 'human_reply' });
-    }
-
-    // After a bot handoff, staff's reply becomes a learning candidate.
-    try {
-      await proposeFromHandoffStaffReply({
-        db,
-        persist: persistCore,
-        phone: normalizedPhone,
-        parent: echoParent,
-        staffText: text,
-        createdBy: 'handoff_mine',
-      });
-    } catch (err) {
-      console.error('Handoff learning propose failed:', err.message);
     }
 
     return { success: true, phone: normalizedPhone };

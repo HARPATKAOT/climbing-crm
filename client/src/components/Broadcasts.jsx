@@ -55,7 +55,7 @@ const BOT_TABS = [
   { key: 'schedule', label: 'מתי עונה',      icon: Clock },
   { key: 'handoff',  label: 'העברה לצוות',   icon: Headset },
   { key: 'sandbox',  label: 'ארגז חול',      icon: Sparkles },
-  { key: 'learning', label: 'אימון ולמידה',  icon: GraduationCap },
+  { key: 'learning', label: 'בקרת איכות',     icon: GraduationCap },
   { key: 'journal',  label: 'יומן פעולות',   icon: ClipboardList },
 ];
 
@@ -63,17 +63,18 @@ export default function Broadcasts({ parents, students, groups = [] }) {
   const { profile } = useBusinessProfile();
   const brandName = profile.display_name || 'הרפתקאות';
   const location = useLocation();
+  const query = new URLSearchParams(location.search);
   // Other screens link straight to a tab here (e.g. "full template details"
   // from the conversation panel), so the deep link decides the opening tab.
   const [activeTab, setActiveTab] = useState(
-    location.state?.broadcastTab || 'compose'
+    location.state?.broadcastTab || query.get('tab') || 'compose'
   ); // compose | templates | saved | campaigns | history | settings
   // The bot page held four unrelated things stacked in one column — settings,
   // a sandbox, the learning queue and the journal — so the capability list was
   // squeezed into half a column while the sandbox took the other half. Each is
   // its own job, so each gets its own tab and the full width.
   // tools | tone | schedule | handoff | sandbox | learning | journal
-  const [botTab, setBotTab] = useState('tools');
+  const [botTab, setBotTab] = useState(query.get('botTab') || 'tools');
   
   // Compose / Send State
   const [lists, setLists] = useState(DEFAULT_LISTS);

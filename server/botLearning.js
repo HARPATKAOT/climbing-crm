@@ -1,8 +1,9 @@
 /**
- * Bot learning loop: staff rates replies → optional correction → approve into
- * a learned-examples store that is injected into the next prompt.
+ * Bot quality-control loop.
  *
- * Same propose/approve pattern as aiActions — nothing goes live without staff.
+ * Staff ratings and corrections are retained for review and regression tests,
+ * but they never change the live bot prompt. Legacy learned examples are kept
+ * as an archive only so historical feedback is not destroyed.
  */
 
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
@@ -17,7 +18,6 @@ export const FEEDBACK_REJECTED = 'rejected';
 
 const MAX_EXCERPT = 500;
 const MAX_ALTERNATIVE = 900;
-const MAX_INJECT = 4;
 
 function clip(text, max) {
   const body = String(text || '').trim();
@@ -55,8 +55,9 @@ export function listFeedback(db, { status } = {}) {
 
 export function listLearned(db, { activeOnly = true } = {}) {
   const rows = db.get(LEARNED_COLLECTION) || [];
+  if (activeOnly) return [];
   return rows
-    .filter((r) => (activeOnly ? r.active !== false : true))
+    .map((r) => ({ ...r, active: false }))
     .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
 }
 
@@ -126,19 +127,6 @@ export async function recordFeedback({
   });
   if (persist) await persist(FEEDBACK_COLLECTION, row);
 
-  // Thumbs-up can seed a learned example from the successful reply itself.
-  if (rate === 'up' && row.inbound_excerpt && row.reply_excerpt) {
-    await upsertLearned({
-      db,
-      persist,
-      question: row.inbound_excerpt,
-      answer: row.reply_excerpt,
-      sourceFeedbackId: row.id,
-      createdBy,
-      autoActive: true,
-    });
-  }
-
   return { ok: true, row };
 }
 
@@ -176,26 +164,15 @@ export async function approveFeedback({ db, persist, id, actor = '', editedAlter
   const question = clip(current.inbound_excerpt, MAX_EXCERPT);
   if (!answer || !question) return { ok: false, error: 'חסרה חלופה או שאלת לקוח' };
 
-  const learned = await upsertLearned({
-    db,
-    persist,
-    question,
-    answer,
-    sourceFeedbackId: current.id,
-    createdBy: actor,
-    autoActive: true,
-  });
-  if (!learned.ok) return learned;
-
   const row = db.update(FEEDBACK_COLLECTION, current.id, {
     status: FEEDBACK_APPROVED,
     alternative: answer,
     approved_by: actor || '',
     approved_at: new Date().toISOString(),
-    learned_id: learned.row?.id || null,
+    learned_id: null,
   });
   if (row && persist) await persist(FEEDBACK_COLLECTION, row);
-  return { ok: true, row, learned: learned.row };
+  return { ok: true, row, learned: null };
 }
 
 export async function rejectFeedback({ db, persist, id, actor = '' } = {}) {
@@ -211,21 +188,16 @@ export async function rejectFeedback({ db, persist, id, actor = '' } = {}) {
 }
 
 export async function setLearnedActive({ db, persist, id, active } = {}) {
-  const row = db.update(LEARNED_COLLECTION, id, { active: !!active, updated_at: new Date().toISOString() });
+  // Legacy examples are permanently archived. Keep accepting the old endpoint
+  // so bookmarked/open screens do not fail, but never reactivate an example.
+  const row = db.update(LEARNED_COLLECTION, id, { active: false, updated_at: new Date().toISOString() });
   if (!row) return { ok: false, error: 'לא נמצא' };
   if (persist) await persist(LEARNED_COLLECTION, row);
   return { ok: true, row };
 }
 
-export function matchLearnedReplies(db, incomingText, { limit = MAX_INJECT } = {}) {
-  const q = String(incomingText || '').trim();
-  if (!q) return [];
-  return listLearned(db, { activeOnly: true })
-    .map((row) => ({ row, score: textOverlapScore(q, row.question) }))
-    .filter((x) => x.score >= 0.18)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map((x) => x.row);
+export function matchLearnedReplies() {
+  return [];
 }
 
 export function formatLearnedRepliesForPrompt(examples = []) {
@@ -239,27 +211,6 @@ export function formatLearnedRepliesForPrompt(examples = []) {
     'אל תדרוס נתונים חיים (מחיר קבוצה, שעות מהיומן, תפוסה) ואל תעבור על נושאים אסורים.',
     lines.join('\n'),
   ].join('\n');
-}
-
-const MEDIA_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker', 'reaction']);
-
-/**
- * Is this inbound message a question a reply could ever be learned from?
- *
- * A 🙏 reaction reached the queue as "the customer's question", next to a staff
- * reply of "אוי, שירגיש טוב ❤️" — approving that would teach the bot to answer
- * an emoji with a get-well message. Reactions are conversation metadata, and a
- * photo is something the model never even sees.
- */
-function isAnswerableQuestion(message) {
-  const type = String(message?.message_type || '').toLowerCase();
-  if (MEDIA_TYPES.has(type)) return false;
-  const text = String(message?.message || message?.body || '').trim();
-  if (!text) return false;
-  if (/^ריאקציה:/u.test(text)) return false;
-  // The stored placeholder for media that arrived with no caption.
-  if (/^\[[^\]\r\n]+\]$/u.test(text)) return false;
-  return true;
 }
 
 /**
@@ -327,41 +278,7 @@ export async function proposeFromHandoffStaffReply({
   staffText,
   createdBy = 'handoff_mine',
 } = {}) {
-  const normalized = normalizeWaPhone(phone) || phone;
-  if (!normalized || !String(staffText || '').trim()) return { ok: false, skipped: true };
-
-  const parents = (db.get('parents') || []).filter((p) => phonesMatch(p.phone, normalized));
-  const card = parent || parents[0];
-  if (!card?.bot_handoff_at) return { ok: false, skipped: true, reason: 'no_handoff' };
-
-  const handoffAt = Date.parse(card.bot_handoff_at);
-  if (!Number.isFinite(handoffAt)) return { ok: false, skipped: true };
-
-  const messages = (db.get('messages') || [])
-    .filter((m) => phonesMatch(m.phone || '', normalized))
-    .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
-
-  const inbound = [...messages]
-    .reverse()
-    .find((m) => m.direction === 'inbound'
-      && Date.parse(m.created_at || '') <= handoffAt + 60_000
-      && isAnswerableQuestion(m));
-  if (!inbound) return { ok: false, skipped: true, reason: 'no_inbound' };
-
-  return recordFeedback({
-    db,
-    persist,
-    messageId: `handoff-${inbound.id || handoffAt}`,
-    parentId: card.id || null,
-    phone: normalized,
-    rating: 'down',
-    alternative: staffText,
-    // What the bot said to this message, so the approval screen can show
-    // "instead of this — say that". Without it the card asked staff to judge a
-    // replacement for an answer they could not see.
-    replyExcerpt: botAnswerTo(messages, inbound),
-    inboundExcerpt: inbound.message || inbound.body || '',
-    note: 'הוצע אוטומטית מתשובת צוות אחרי העברה',
-    createdBy,
-  });
+  // A human reply is specific to its conversation. It must not silently become
+  // a reusable bot rule or even a pending training proposal.
+  return { ok: false, skipped: true, reason: 'quality_control_only' };
 }
