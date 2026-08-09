@@ -1525,7 +1525,7 @@ export default function ActivityRegistrationPanel({
                           </span>
                         ) : (
                           <span className="registration-participant-attendance registration-not-enrolled">
-                            לא ביום הזה
+                            לא מגיע ביום הזה
                           </span>
                         )
                       )}
