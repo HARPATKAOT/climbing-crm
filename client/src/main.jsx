@@ -2,10 +2,47 @@ import React, { lazy, Suspense } from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import AuthGate from './components/AuthGate.jsx';
+import AppErrorBoundary from './components/AppErrorBoundary.jsx';
 import { BusinessProfileProvider } from './BusinessProfileContext.jsx';
 import { getAccessToken } from './authClient.js';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import './index.css';
+
+// A tab that stayed open during a deployment can still run the previous entry
+// bundle while its lazy-loaded screen chunks have already been replaced. Vite
+// emits this event before surfacing the failed import. Reload once so the tab
+// picks up the current asset manifest; if that also fails, AppErrorBoundary
+// shows a usable recovery screen instead of leaving the application blank.
+const CHUNK_RELOAD_KEY = 'kirboaz:chunk-reload-at';
+const CHUNK_RELOAD_COOLDOWN_MS = 30_000;
+
+window.addEventListener('vite:preloadError', (event) => {
+  let lastReloadAt = 0;
+  try {
+    lastReloadAt = Number(window.sessionStorage.getItem(CHUNK_RELOAD_KEY)) || 0;
+  } catch {
+    // Storage can be unavailable in restrictive browser modes. The reload is
+    // still preferable to a blank screen in that case.
+  }
+
+  if (Date.now() - lastReloadAt < CHUNK_RELOAD_COOLDOWN_MS) return;
+
+  event.preventDefault();
+  try {
+    window.sessionStorage.setItem(CHUNK_RELOAD_KEY, String(Date.now()));
+  } catch {
+    // See the storage note above.
+  }
+  window.location.reload();
+});
+
+window.setTimeout(() => {
+  try {
+    window.sessionStorage.removeItem(CHUNK_RELOAD_KEY);
+  } catch {
+    // Nothing to clean up when storage is unavailable.
+  }
+}, CHUNK_RELOAD_COOLDOWN_MS);
 
 // Public forms are heavy (signature pad, PDF libs) and only needed on their
 // own routes — load them on demand so the CRM shell stays light.
@@ -55,10 +92,11 @@ window.fetch = async function (resource, init = {}) {
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <BusinessProfileProvider>
-        <Suspense fallback={<div style={{ padding: 40, textAlign: 'center', fontFamily: 'sans-serif' }}>טוען...</div>}>
-          <Routes>
+    <AppErrorBoundary>
+      <BrowserRouter>
+        <BusinessProfileProvider>
+          <Suspense fallback={<div style={{ padding: 40, textAlign: 'center', fontFamily: 'sans-serif' }}>טוען...</div>}>
+            <Routes>
             {/* One form, three addresses. /register is its name — it collects
                 details, health answers and a signature, so calling it /health
                 described a third of it. /health and /onboard are the addresses
@@ -85,9 +123,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               path="*"
               element={showsCrmShell() ? <AuthGate><App /></AuthGate> : <PublicSite />}
             />
-          </Routes>
-        </Suspense>
-      </BusinessProfileProvider>
-    </BrowserRouter>
+            </Routes>
+          </Suspense>
+        </BusinessProfileProvider>
+      </BrowserRouter>
+    </AppErrorBoundary>
   </React.StrictMode>,
 );
