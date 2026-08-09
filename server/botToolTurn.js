@@ -102,6 +102,11 @@ export function whatsappifyMarkdown(text) {
 /** `getChatHistoryMessages` rows → Gemini contents. */
 export function historyToContents(messages = []) {
   return messages
+    // Legacy coexistence webhooks stored edit/revoke markers as if the
+    // customer had literally typed "[edit]". Keep the audit row in the CRM,
+    // but never let transport metadata become part of the conversation the
+    // model is asked to understand.
+    .filter((m) => !/^\[(?:edit|edited|revoke|delete|deleted)\]$/i.test(String(m?.content || '').trim()))
     .map((m) => ({
       role: m.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: String(m.content || '').trim() }],

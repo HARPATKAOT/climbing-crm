@@ -179,6 +179,18 @@ test('the current inbound message is not appended twice when history already con
   assert.equal(received[0].parts[0].text, 'כמה עולה חוג?');
 });
 
+test('legacy edit markers are not shown to the model as customer messages', () => {
+  const contents = historyToContents([
+    { role: 'user', content: 'קרני אלימלך' },
+    { role: 'user', content: '[edit]' },
+    { role: 'assistant', content: 'איך אפשר לעזור?' },
+  ]);
+  assert.deepEqual(contents.map((entry) => entry.parts[0].text), [
+    'קרני אלימלך',
+    'איך אפשר לעזור?',
+  ]);
+});
+
 test('model failure asks what signup the customer means instead of handing off', async () => {
   const previousStudents = db.get('students');
   db.set('students', [{ id: 'karni', parentId: 'adi', name: 'קרני אלימלך', status: 'lead_new' }]);
