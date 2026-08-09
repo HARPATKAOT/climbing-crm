@@ -53,6 +53,7 @@ import {
   PLACEMENT_REQUEST_COLLECTION,
   eligibilityForStudent,
   reviewProgramApproval,
+  setSharedProgramEligibility,
 } from './placementEligibility.js';
 import { buildCustomerTools } from './botTools.js';
 import { loadBrandedBotSettings } from './whatsappBot.js';
@@ -4584,6 +4585,16 @@ app.get('/api/placement-requests', (req, res) => {
 
 app.get('/api/students/:id/program-eligibility', (req, res) => {
   res.json(eligibilityForStudent(db, req.params.id));
+});
+
+app.put('/api/students/:id/program-eligibility', async (req, res) => {
+  const result = await setSharedProgramEligibility(db, persistCore, {
+    studentId: req.params.id,
+    eligible: req.body?.eligible === true,
+    actor: req.crmUser?.email || req.crmUser?.id || 'crm',
+  });
+  if (!result.ok) return res.status(result.status || 400).json(result);
+  res.json(result);
 });
 
 app.post('/api/placement-requests/:id/review', async (req, res) => {

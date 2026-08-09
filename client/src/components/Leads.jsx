@@ -538,6 +538,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [editingFollowup, setEditingFollowup] = useState(false);
   const [savingFollowup, setSavingFollowup] = useState(false);
   const [programEligibility, setProgramEligibility] = useState([]);
+  const [editProgramEligible, setEditProgramEligible] = useState(false);
   
   // Edit Form Fields (student)
   // שם פרטי ושם משפחה בשני שדות, כמו אצל ההורה. תיק שקדם לפיצול נפתח עם
@@ -618,7 +619,11 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     fetch(`/api/students/${encodeURIComponent(student.id)}/program-eligibility`)
       .then((response) => (response.ok ? response.json() : []))
       .then((rows) => {
-        if (!cancelled) setProgramEligibility(Array.isArray(rows) ? rows : []);
+        if (!cancelled) {
+          const nextRows = Array.isArray(rows) ? rows : [];
+          setProgramEligibility(nextRows);
+          setEditProgramEligible(nextRows.some((row) => ['returning', 'approved'].includes(String(row.status || ''))));
+        }
       })
       .catch(() => {
         if (!cancelled) setProgramEligibility([]);
@@ -640,6 +645,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     setEditSegment(student.segment || '');
     setEditNextFollowup(student.nextFollowup || '');
     setEditGroupIds(studentGroupIds(student));
+    setEditProgramEligible(programEligibility.some((row) => ['returning', 'approved'].includes(String(row.status || ''))));
     const nextParentName = parentNameParts(parent);
     setEditParentName(nextParentName.firstName);
     setEditParentLastName(nextParentName.lastName);
@@ -1898,6 +1904,18 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
           return;
         }
         onUpdateStudent?.(student.id, sBody);
+
+        const eligibilityRes = await fetch(`/api/students/${student.id}/program-eligibility`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ eligible: editProgramEligible }),
+        });
+        const eligibilityBody = await eligibilityRes.json().catch(() => ({}));
+        if (!eligibilityRes.ok || !eligibilityBody.ok) {
+          setEditError(eligibilityBody.error || 'שמירת הזכאות למתקדמים ולנבחרות נכשלה');
+          return;
+        }
+        setProgramEligibility(Array.isArray(eligibilityBody.rows) ? eligibilityBody.rows : []);
       }
 
       if (parent?.id) {
@@ -2651,6 +2669,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       ? '#16A34A'
       : climbingLevel ? '#F97316' : 'var(--text-3)';
   const programLabels = {
+    advanced_squads: 'מתקדמים ונבחרות',
     advanced: 'מתקדמים ונבחרות',
     young_squad: 'מתקדמים ונבחרות',
     adult_squad: 'מתקדמים ונבחרות',
@@ -2667,6 +2686,13 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     approved: '#34D399',
     rejected: '#F87171',
   };
+  const visibleProgramEligibility = programEligibility
+    .filter((item) => ['returning', 'approved'].includes(String(item.status || '')))
+    .sort((a, b) => {
+      const rank = { returning: 2, approved: 1 };
+      return (rank[b.status] || 0) - (rank[a.status] || 0);
+    })
+    .slice(0, 1);
   const safetyTone = SAFETY_TONE[punchSafety.state] || SAFETY_TONE.missing;
   const SafetyStatusIcon = safetyTone.alert ? ShieldAlert : ShieldCheck;
   const absenceStreak = consecutiveAbsences(attendanceHistory);
@@ -3665,7 +3691,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         )}
                       </span>
                     </div>
-                    {programEligibility.length > 0 && (
+                    {visibleProgramEligibility.length > 0 && (
                       <div
                         aria-label="זכאות למתקדמים ולנבחרת"
                         style={{
@@ -3677,13 +3703,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                           borderTop: '1px solid rgba(148,163,184,0.12)',
                         }}
                       >
-                        {[...programEligibility]
-                          .sort((a, b) => {
-                            const rank = { returning: 4, approved: 3, pending: 2, rejected: 1 };
-                            return (rank[b.status] || 0) - (rank[a.status] || 0);
-                          })
-                          .slice(0, 1)
-                          .map((item) => (
+                        {visibleProgramEligibility.map((item) => (
                           <span
                             key={item.id || `${item.program}-${item.season}`}
                             title={`${programLabels[item.program] || item.program}: ${eligibilityLabels[item.status] || item.status}`}
@@ -6387,6 +6407,29 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                     }}
                   />
                 </div>
+                <label
+                  className="form-group"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    padding: '11px 12px',
+                    border: '1px solid var(--border)',
+                    borderRadius: 10,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={editProgramEligible}
+                    onChange={(event) => setEditProgramEligible(event.target.checked)}
+                    style={{ accentColor: 'var(--primary)', width: 17, height: 17 }}
+                  />
+                  <span>
+                    <strong style={{ display: 'block', fontSize: 13 }}>זכאי למתקדמים ולנבחרות</strong>
+                    <span style={{ color: 'var(--text-3)', fontSize: 11 }}>הקבוצה המדויקת נקבעת בנפרד</span>
+                  </span>
+                </label>
                 <div className="form-group">
                   <label className="form-label">תאריך מעקב הבא</label>
                   <input type="date" className="input" value={editNextFollowup} onChange={e => setEditNextFollowup(e.target.value)} />

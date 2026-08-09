@@ -8,6 +8,7 @@ import {
   programForGroup,
   programMatchesGrade,
   reviewProgramApproval,
+  setSharedProgramEligibility,
 } from './placementEligibility.js';
 
 test('a returning eligibility flag lets the bot continue without staff approval', () => {
@@ -59,6 +60,39 @@ test('one approved eligibility permits another restricted programme without a se
   const result = canPlaceInRestrictedGroup(db, student, youngSquad, { season: '2026-27' });
   assert.equal(result.allowed, true);
   assert.equal(result.reason, 'approved');
+});
+
+test('staff can grant and revoke the shared eligibility from the student card', async () => {
+  const tables = {
+    students: [{ id: 'student', parentId: 'parent' }],
+    program_eligibility: [],
+    placement_requests: [{ id: 'pending', student_id: 'student', season: '2026-27', status: 'pending' }],
+  };
+  const db = {
+    get: (table) => tables[table] || [],
+    getOne: (table, id) => (tables[table] || []).find((row) => row.id === id),
+    insert: (table, row) => { (tables[table] ||= []).push(row); return row; },
+    update: (table, id, patch) => {
+      const row = (tables[table] || []).find((item) => item.id === id);
+      if (!row) return null;
+      Object.assign(row, patch);
+      return row;
+    },
+  };
+
+  const granted = await setSharedProgramEligibility(db, async () => {}, {
+    studentId: 'student', eligible: true, season: '2026-27', actor: 'owner',
+  });
+  assert.equal(granted.eligible, true);
+  assert.equal(granted.rows[0].program, PROGRAMS.SHARED);
+  assert.equal(granted.rows[0].status, 'approved');
+
+  const revoked = await setSharedProgramEligibility(db, async () => {}, {
+    studentId: 'student', eligible: false, season: '2026-27', actor: 'owner',
+  });
+  assert.equal(revoked.eligible, false);
+  assert.equal(revoked.rows[0].status, 'rejected');
+  assert.equal(tables.placement_requests[0].status, 'rejected');
 });
 
 test('6B in middle school is a strong young-squad candidate but still needs approval', () => {

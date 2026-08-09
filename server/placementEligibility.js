@@ -4,6 +4,7 @@ export const ELIGIBILITY_COLLECTION = 'program_eligibility';
 export const PLACEMENT_REQUEST_COLLECTION = 'placement_requests';
 
 export const PROGRAMS = Object.freeze({
+  SHARED: 'advanced_squads',
   ADVANCED: 'advanced',
   YOUNG_SQUAD: 'young_squad',
   ADULT_SQUAD: 'adult_squad',
@@ -109,6 +110,74 @@ export function sharedRestrictedEligibility(db, studentId, { season = currentSea
       const rank = (row) => (row.status === 'returning' ? 3 : row.status === 'approved' ? 2 : row.status === 'pending' ? 1 : 0);
       return rank(b) - rank(a) || String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
     });
+}
+
+export async function setSharedProgramEligibility(db, persist, {
+  studentId,
+  eligible,
+  season = currentSeason(),
+  actor = 'crm',
+} = {}) {
+  const student = db?.getOne?.('students', studentId);
+  if (!student) return { ok: false, status: 404, error: 'student_not_found' };
+  const now = new Date().toISOString();
+  const rows = sharedRestrictedEligibility(db, studentId, { season });
+
+  if (eligible) {
+    const active = rows.find((row) => ['returning', 'approved'].includes(String(row.status || '')));
+    if (active) return { ok: true, eligible: true, rows: sharedRestrictedEligibility(db, studentId, { season }) };
+    const id = `pe-${season}-${studentId}-${PROGRAMS.SHARED}`;
+    const existing = db.getOne(ELIGIBILITY_COLLECTION, id);
+    const payload = {
+      id,
+      student_id: studentId,
+      parent_id: student.parentId || null,
+      program: PROGRAMS.SHARED,
+      season,
+      status: 'approved',
+      source: 'manual',
+      requestedAt: existing?.requestedAt || now,
+      reviewedAt: now,
+      reviewedBy: actor || 'crm',
+      note: existing?.note || '',
+      updated_at: now,
+    };
+    const saved = existing
+      ? db.update(ELIGIBILITY_COLLECTION, id, payload)
+      : db.insert(ELIGIBILITY_COLLECTION, payload);
+    if (saved && typeof persist === 'function') await persist(ELIGIBILITY_COLLECTION, saved);
+  } else {
+    for (const row of rows.filter((item) => ['returning', 'approved', 'pending'].includes(String(item.status || '')))) {
+      const updated = db.update(ELIGIBILITY_COLLECTION, row.id, {
+        status: 'rejected',
+        reviewedAt: now,
+        reviewedBy: actor || 'crm',
+        updated_at: now,
+      });
+      if (updated && typeof persist === 'function') await persist(ELIGIBILITY_COLLECTION, updated);
+    }
+    for (const request of placementRequestRows(db).filter((row) => (
+      String(row.student_id) === String(studentId)
+      && String(row.season) === String(season)
+      && String(row.status) === 'pending'
+    ))) {
+      const updated = db.update(PLACEMENT_REQUEST_COLLECTION, request.id, {
+        status: 'rejected',
+        reviewed_at: now,
+        reviewed_by: actor || 'crm',
+        review_note: 'הזכאות בוטלה ידנית בתיק המתאמן',
+        updated_at: now,
+      });
+      if (updated && typeof persist === 'function') await persist(PLACEMENT_REQUEST_COLLECTION, updated);
+    }
+  }
+
+  const resultRows = sharedRestrictedEligibility(db, studentId, { season });
+  return {
+    ok: true,
+    eligible: resultRows.some((row) => ['returning', 'approved'].includes(String(row.status || ''))),
+    rows: resultRows,
+  };
 }
 
 export function latestLevelTest(db, studentId) {
