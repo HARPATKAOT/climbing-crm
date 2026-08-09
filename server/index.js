@@ -56,6 +56,7 @@ import {
 import { buildRedirectUrl } from './publicLinks.js';
 import { notifyGroupMembershipDiff, runIntroHeadsUpIfDue } from './groupAlerts.js';
 import { capabilityState, capabilitySettingsPatch } from './botCapabilities.js';
+import { normalizeInboundQuietMs } from './inboundBurst.js';
 import { listBotActions, botActionSummary, BOT_ACTION_TYPES } from './botActivityLog.js';
 import {
   loadAgendaSettings,
@@ -1578,6 +1579,10 @@ app.get('/api/whatsapp/settings', async (req, res) => {
     // keep fallback
   }
   const branded = applyBusinessBrand(settings, brandName);
+  // Old screens allowed sub-second values such as 800. Report the effective
+  // safe value so the settings screen cannot present or resave that legacy
+  // value even before somebody explicitly edits the field.
+  branded.aiReplyDelayMs = normalizeInboundQuietMs(branded.aiReplyDelayMs);
   const {
     metaWaAccessToken,
     metaIgAccessToken,
@@ -1728,6 +1733,9 @@ app.post('/api/whatsapp/settings', requireOwner, async (req, res) => {
       payload[numKey] = Number.isFinite(n) ? n : undefined;
       if (payload[numKey] === undefined) delete payload[numKey];
     }
+  }
+  if (payload.aiReplyDelayMs !== undefined) {
+    payload.aiReplyDelayMs = normalizeInboundQuietMs(payload.aiReplyDelayMs);
   }
   let brandName = 'הרפתקאות';
   try {

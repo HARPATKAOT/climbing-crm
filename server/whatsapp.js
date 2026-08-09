@@ -11,6 +11,7 @@ import {
 } from './channels/messageStore.js';
 import {
   InboundBurstCoordinator,
+  inboundQuietMsForText,
   markInboundBurstForModel,
 } from './inboundBurst.js';
 import {
@@ -1363,7 +1364,7 @@ export const whatsappService = {
         messageId: metaMessageId,
         type: meta.type || 'text',
         createdAt: inboundAt,
-      }, { quietMs: settings.aiReplyDelayMs });
+      }, { quietMs: inboundQuietMsForText(text, settings.aiReplyDelayMs) });
 
       if (!inboundBurst.leader) {
         return {

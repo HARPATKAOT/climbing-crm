@@ -4,6 +4,7 @@ import {
   InboundBurstCoordinator,
   burstTextForModel,
   combineInboundTexts,
+  inboundQuietMsForText,
   markInboundBurstForModel,
   normalizeInboundQuietMs,
 } from './inboundBurst.js';
@@ -32,13 +33,13 @@ function fakeTimers() {
   };
 }
 
-test('consecutive bubbles reset one timer and elect only the newest handler', async () => {
+test('consecutive bubbles reset one timer and elect only the newest handler even with an old 800ms setting', async () => {
   const timers = fakeTimers();
   const bursts = new InboundBurstCoordinator(timers);
 
-  const first = bursts.push('972500000000', { text: 'כן כן רוצה', messageId: '1' }, { quietMs: 7_000 });
-  const second = bursts.push('972500000000', { text: 'פשוט יש לה מלא חוגים', messageId: '2' }, { quietMs: 7_000 });
-  const third = bursts.push('972500000000', { text: 'אני מנסה רגע לסנכרן', messageId: '3' }, { quietMs: 7_000 });
+  const first = bursts.push('972500000000', { text: 'כן כן רוצה', messageId: '1' }, { quietMs: 800 });
+  const second = bursts.push('972500000000', { text: 'פשוט יש לה מלא חוגים', messageId: '2' }, { quietMs: 800 });
+  const third = bursts.push('972500000000', { text: 'אני מנסה רגע לסנכרן', messageId: '3' }, { quietMs: 800 });
 
   assert.equal(timers.pendingCount(), 1);
   assert.equal(timers.latestDelay(), 7_000);
@@ -73,5 +74,14 @@ test('burst text stays ordered, trims blanks, and a single message stays untouch
   assert.equal(burstTextForModel([{ text: 'הודעה אחת' }]), 'הודעה אחת');
   assert.match(markInboundBurstForModel('א\nב', 2), /פנייה אחת/);
   assert.equal(normalizeInboundQuietMs('7000'), 7_000);
+  assert.equal(normalizeInboundQuietMs(800), 7_000);
+  assert.equal(normalizeInboundQuietMs(0), 7_000);
   assert.equal(normalizeInboundQuietMs(99_999), 30_000);
+});
+
+test('a standalone greeting gets extra breathing room before the bot replies', () => {
+  assert.equal(inboundQuietMsForText('היי', 7_000), 12_000);
+  assert.equal(inboundQuietMsForText('שלום 👋', 800), 12_000);
+  assert.equal(inboundQuietMsForText('היי, אני מתעניין בחוג', 7_000), 7_000);
+  assert.equal(inboundQuietMsForText('מה הימים של החוג?', 15_000), 15_000);
 });

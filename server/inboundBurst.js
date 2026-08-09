@@ -1,10 +1,29 @@
 export const DEFAULT_INBOUND_QUIET_MS = 7_000;
+export const MIN_INBOUND_QUIET_MS = 7_000;
+export const GREETING_INBOUND_QUIET_MS = 12_000;
+
+const STANDALONE_GREETING_RE = /^(?:הי+|היי+|שלום|אהלן|הלו|בוקר\s+טוב|צהריים\s+טובים|ערב\s+טוב|מה\s+נשמע)[\s!?,.…👋🙏🙂😊]*$/iu;
 
 export function normalizeInboundQuietMs(value, fallback = DEFAULT_INBOUND_QUIET_MS) {
   const parsed = Number(value);
   const safeFallback = Number.isFinite(Number(fallback)) ? Number(fallback) : DEFAULT_INBOUND_QUIET_MS;
-  if (!Number.isFinite(parsed)) return Math.max(0, Math.min(30_000, safeFallback));
-  return Math.max(0, Math.min(30_000, Math.trunc(parsed)));
+  if (!Number.isFinite(parsed)) {
+    return Math.max(MIN_INBOUND_QUIET_MS, Math.min(30_000, safeFallback));
+  }
+  return Math.max(MIN_INBOUND_QUIET_MS, Math.min(30_000, Math.trunc(parsed)));
+}
+
+/**
+ * A bare greeting is usually the first bubble, not the customer's whole turn.
+ * Give it a little longer while keeping normal questions at the configured
+ * seven-second minimum. This is a conversational rule, not a customer-specific
+ * exception.
+ */
+export function inboundQuietMsForText(text, configuredMs = DEFAULT_INBOUND_QUIET_MS) {
+  const base = normalizeInboundQuietMs(configuredMs);
+  return STANDALONE_GREETING_RE.test(String(text || '').trim())
+    ? Math.max(base, GREETING_INBOUND_QUIET_MS)
+    : base;
 }
 
 function normalizeItem(item = {}) {

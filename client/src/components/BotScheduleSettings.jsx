@@ -18,6 +18,10 @@ const DAY_OPTIONS = [
  */
 export default function BotScheduleSettings({ settings, setSettings, disabled = false }) {
   const patch = (key, value) => setSettings({ ...settings, [key]: value });
+  const replyDelaySeconds = Math.max(
+    7,
+    Math.min(30, Math.round(Number(settings.aiReplyDelayMs ?? 7_000) / 1_000))
+  );
 
   const toggleActiveDay = (day) => {
     const current = Array.isArray(settings.aiActiveDays) ? settings.aiActiveDays : [];
@@ -143,17 +147,18 @@ export default function BotScheduleSettings({ settings, setSettings, disabled = 
             />
           </div>
           <div className="form-group">
-            <label className="form-label" style={{ fontSize: 11 }}>המתנה לשקט בין הודעות (אלפיות שנייה)</label>
+            <label className="form-label" style={{ fontSize: 11 }}>המתנה לשקט בין הודעות (שניות)</label>
             <input
               className="input input-sm"
               type="number"
-              min={0}
-              max={10000}
-              value={settings.aiReplyDelayMs ?? 7000}
-              onChange={(e) => patch('aiReplyDelayMs', Number(e.target.value))}
+              min={7}
+              max={30}
+              step={1}
+              value={replyDelaySeconds}
+              onChange={(e) => patch('aiReplyDelayMs', Number(e.target.value) * 1_000)}
             />
             <div className="text-muted" style={{ fontSize: 10, marginTop: 4 }}>
-              כל הודעה חדשה מאפסת את הטיימר. בסיומו הבוט עונה פעם אחת על כל הרצף.
+              כל הודעה חדשה מאפסת את הטיימר. פתיח קצר כמו „היי” מקבל 12 שניות כדי לאפשר ללקוח להמשיך לכתוב.
             </div>
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
