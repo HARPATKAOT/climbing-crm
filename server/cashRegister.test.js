@@ -11,10 +11,16 @@ import {
   LEDGER_ACTIONS,
 } from './cashRegister.js';
 
+// פתיחה/סגירה מחייבות עובד שמסומן בתיק כמורשה קופה — לא רק שם חתום.
+const CASH_OPERATOR = { id: 'emp-operator', name: 'עומר', is_active: true, can_operate_cash: true };
+const PLAIN_EMPLOYEE = { id: 'emp-plain', name: 'דני', is_active: true, can_operate_cash: false };
+const OPERATOR_BODY = { employee_id: CASH_OPERATOR.id, employee_name: CASH_OPERATOR.name };
+
 function makeStore(seed = {}) {
   const data = {
     cash_register_sessions: [],
     cash_ledger: [],
+    employees: [CASH_OPERATOR, PLAIN_EMPLOYEE],
     ...seed,
   };
   return {
@@ -44,7 +50,7 @@ test('open → cash sale → close tracks expected and discrepancy', () => {
   openSession(store, {
     denominations: { 100: 8, 20: 1 },
     reqUser: { name: 'עומר' },
-    body: { employee_name: 'עומר' },
+    body: OPERATOR_BODY,
   });
   assert.equal(computeExpectedCash(store), 820);
 
@@ -61,7 +67,7 @@ test('open → cash sale → close tracks expected and discrepancy', () => {
   const closed = closeSession(store, {
     denominations: { 100: 8, 50: 1 },
     reqUser: { name: 'עומר' },
-    body: { employee_name: 'עומר' },
+    body: OPERATOR_BODY,
   });
   assert.equal(closed.expected, 850);
   assert.equal(closed.actual, 850);
@@ -74,7 +80,7 @@ test('empty reduces expected; fill increases', () => {
   openSession(store, {
     denominations: { 100: 10 },
     reqUser: { name: 'מנהל' },
-    body: { employee_name: 'מנהל' },
+    body: OPERATOR_BODY,
   });
   adjustCash(store, {
     action: 'empty',
@@ -92,15 +98,27 @@ test('empty reduces expected; fill increases', () => {
   assert.equal(computeExpectedCash(store), 850);
 });
 
-test('open/close/adjust require signed employee', () => {
+test('open/close require an authorized operator; adjust only needs a signature', () => {
   const store = makeStore();
   assert.throws(
     () => openSession(store, { denominations: { 100: 1 }, reqUser: { name: 'מחובר' } }),
     /יש לבחור מי מבצע/,
   );
+  // שם חופשי בלי בחירת עובד מהתיק לא מספיק לפתיחה/סגירה
+  assert.throws(
+    () => openSession(store, { denominations: { 100: 1 }, body: { employee_name: 'דני' } }),
+    /עובד מורשה/,
+  );
+  assert.throws(
+    () => openSession(store, {
+      denominations: { 100: 1 },
+      body: { employee_id: PLAIN_EMPLOYEE.id, employee_name: PLAIN_EMPLOYEE.name },
+    }),
+    /אינו מורשה/,
+  );
   openSession(store, {
     denominations: { 100: 1 },
-    body: { employee_name: 'דני' },
+    body: OPERATOR_BODY,
   });
   assert.throws(
     () => closeSession(store, { denominations: { 100: 1 }, reqUser: { name: 'מחובר' } }),
@@ -117,7 +135,7 @@ test('online sale does not change cash expected', () => {
   openSession(store, {
     denominations: { 100: 5 },
     reqUser: { name: 'א' },
-    body: { employee_name: 'א' },
+    body: OPERATOR_BODY,
   });
   recordSaleInLedger(store, {
     paymentMethod: 'online',
@@ -136,7 +154,7 @@ test('ledger running: open/reset gap vs books; fill/empty adjust balance', () =>
   // קופה ריקה בספרים → פתיחה עם 388.6 = שינוי +388.6, מצטברת +388.6
   openSession(store, {
     denominations: { 100: 3, 50: 1, 20: 1, '10c': 1, '5': 1, '2': 1, '1': 1, '0.5': 1, '0.1': 1 },
-    body: { employee_name: 'א' },
+    body: OPERATOR_BODY,
   });
   let rows = listLedger(store, { limit: 50 });
   let open = rows.find((r) => r.action_type === 'open');
@@ -181,7 +199,7 @@ test('ledger running: open/reset gap vs books; fill/empty adjust balance', () =>
   assert.equal(fill.gap_cumulative, 0);
 
   assert.throws(
-    () => openSession(store, { denominations: { 100: 1 }, body: { employee_name: 'א' } }),
+    () => openSession(store, { denominations: { 100: 1 }, body: OPERATOR_BODY }),
     /כבר יש משמרת פתוחה/,
   );
 });
