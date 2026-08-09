@@ -11,7 +11,7 @@
 
 import {
   Cake, GraduationCap, Briefcase, PartyPopper, Backpack, Dumbbell,
-  Route, DoorOpen, Palmtree, Tag,
+  Route, DoorOpen, Palmtree, Tag, Tent,
 } from 'lucide-react';
 import { activityEventKind, isEventType } from './eventKinds.js';
 
@@ -35,6 +35,7 @@ const EVENT_KIND_ICONS = {
   birthday: Cake,
   school: GraduationCap,
   company: Briefcase,
+  camp: Tent,
   other: PartyPopper,
 };
 

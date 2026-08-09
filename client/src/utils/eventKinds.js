@@ -12,6 +12,7 @@ export const EVENT_KINDS = [
   { id: 'birthday', label: 'יום הולדת' },
   { id: 'company', label: 'פעילות חברה' },
   { id: 'school', label: 'בית ספר' },
+  { id: 'camp', label: 'קייטנה' },
   { id: 'other', label: 'אחר' },
 ];
 

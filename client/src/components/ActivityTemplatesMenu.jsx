@@ -600,47 +600,31 @@ function TemplateRow({ tpl, busy, manageMode, onPick, onEdit, onRemove }) {
       {busy ? (
         <Loader2 size={14} className="spin" />
       ) : (onEdit || onRemove) ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} onClick={(e) => e.stopPropagation()}>
+        // אייקון בלבד. הטקסט הצר דחק את האייקון החוצה ויצר שני מלבנים
+        // שנראים כמו תוויות ולא כמו כפתורים; המשמעות נשארת ב-title ו-aria.
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} onClick={(e) => e.stopPropagation()}>
           {onEdit && (
             <button
               type="button"
-              className="icon-btn"
+              className="icon-btn template-action-btn"
               onClick={onEdit}
-              aria-label="עריכה"
+              aria-label="עריכת תבנית"
               title="עריכת תבנית"
-              style={{
-                color: '#7DD3FC',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                paddingInline: manageMode ? 8 : 6,
-                fontSize: 11,
-                fontWeight: 700,
-              }}
+              style={{ color: '#7DD3FC' }}
             >
-              <Pencil size={12} />
-              {manageMode ? 'עריכה' : null}
+              <Pencil size={14} />
             </button>
           )}
           {onRemove && (
             <button
               type="button"
-              className="icon-btn"
+              className="icon-btn template-action-btn template-action-btn--danger"
               onClick={onRemove}
-              aria-label="מחיקה"
+              aria-label="מחיקת תבנית"
               title="מחיקת תבנית"
-              style={{
-                color: '#F87171',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                paddingInline: manageMode ? 8 : 6,
-                fontSize: 11,
-                fontWeight: 700,
-              }}
+              style={{ color: '#F87171' }}
             >
-              <Trash2 size={12} />
-              {manageMode ? 'מחיקה' : null}
+              <Trash2 size={14} />
             </button>
           )}
         </div>

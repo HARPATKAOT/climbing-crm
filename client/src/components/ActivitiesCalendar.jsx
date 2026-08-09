@@ -1369,30 +1369,6 @@ function NewActivityTypeChip({ disabled = false, onCreated }) {
  * לאישור הקיר, עקבות הנעליים בטורקיז לטיול. אותו מסמך, אותו סימן, בכל מסך
  * שבו הוא מופיע. הסימנים מוגדרים במקום אחד ב-declarationKinds.js.
  */
-/**
- * לאיזו הצהרה „לפי סוג הפעילות” מתורגם עבור סוג הפעילות הזה.
- *
- * מראה מול תבניות ההצהרה: כל תבנית מסומנת לאיזה סוג פעילות היא משרתת, וכל מה
- * שאינו יציאה לשטח חולק את הצהרת הקיר. בלי זה החלפת סוג האירוע לא שינתה שום
- * דבר על המסך, אף שהיא כן משנה על מה החותם חותם.
- */
-function defaultDeclarationTitle(activityType, templates = []) {
-  const wanted = isEventType(activityType) ? 'wall' : normalizeParticipationScope(activityType);
-  const match = (templates || []).find(
-    (t) => normalizeParticipationScope(t.activityType || t.activity_type || t.slug) === wanted
-  );
-  return match ? (match.title || match.slug) : '';
-}
-
-function declarationOptionIconFor(templates) {
-  return (value) => {
-    if (!value) return { Icon: GENERIC_KIND.Icon, color: 'var(--text-3)' };
-    const template = (templates || []).find((t) => t.slug === value);
-    const kind = templateKind(template || { slug: value });
-    return { Icon: kind.Icon, color: kind.color };
-  };
-}
-
 /** סוגי קלט שאין להם „ריק” במובן הזה — סימון שלהם רק יצבע רעש. */
 const UNMARKABLE_INPUTS = new Set([
   'checkbox', 'radio', 'file', 'range', 'hidden', 'button', 'submit', 'reset', 'image', 'color',
@@ -1460,7 +1436,6 @@ function RegularActivityModal({
   title,
   canViewFinance,
   canViewHr,
-  declarationTemplates = [],
   onStaffChanged = null,
 }) {
   const activityId = isEdit && !isTemplateEdit ? initial?.id : null;
@@ -1677,47 +1652,10 @@ function RegularActivityModal({
                   </div>
                 )}
               </div>
-              {/* על מה חותמים כשנרשמים לאירוע הזה. „לפי סוג הפעילות” הוא
-                  ברירת המחדל ונכון כמעט תמיד — טיול מחתים על הצהרת הטיול —
-                  ומי שצריך משהו אחר בוחר במפורש.
-
-                  שורה משל עצמו: שמות ההצהרות ארוכים, וכשהוא היה חלק מרשת שתי
-                  העמודות הוא דחס את שלוש הפילים של „מי יכול להירשם” עד שנדרסו
-                  זו על זו. */}
-              {!isOps && (
-                <label style={{ display: 'block' }}>
-                  <span className="activity-settings-label">הצהרת בריאות</span>
-                  <AppSelect
-                    className="input"
-                    value={normalizeParticipationScope(form.form_template_slug) === 'trip' ? 'trip' : ''}
-                    onChange={(event) => setForm((prev) => ({
-                      ...prev,
-                      form_template_slug: event.target.value,
-                      // בחירה מפורשת מחליפה גם את המזהה, אחרת תבנית ישנה
-                      // שנשמרה לפי id הייתה גוברת על מה שנבחר עכשיו.
-                      form_template_id: null,
-                      // תחום האישור המשפטי נגזר מאותה בחירה במקום להישאל שוב
-                      // בנפרד בתצוגה המקדימה. ריק = שהשרת יגזור מסוג הפעילות.
-                      participation_scope: event.target.value
-                        ? normalizeParticipationScope(event.target.value)
-                        : null,
-                    }))}
-                    disabled={readOnly}
-                    optionIcon={declarationOptionIconFor(declarationTemplates)}
-                  >
-                    {/* „לפי סוג הפעילות” אומר עכשיו לאיזו הצהרה זה מתורגם
-                        בפועל, אחרת החלפת סוג האירוע נראתה כאילו לא שינתה כלום. */}
-                    <option value="">
-                      {defaultDeclarationTitle(form.type, declarationTemplates)
-                        ? `לפי סוג הפעילות · ${defaultDeclarationTitle(form.type, declarationTemplates)}`
-                        : 'לפי סוג הפעילות'}
-                    </option>
-                    {declarationTemplates.map((t) => (
-                      <option key={t.slug} value={t.slug}>{t.title || t.slug}</option>
-                    ))}
-                  </AppSelect>
-                </label>
-              )}
+              {/* בורר ההצהרה הוסר: סוג הפעילות כבר קובע על מה חותמים.
+                  `declarationSlugForActivity` בשרת בוחר את ההצהרה לפי הסוג,
+                  וטיול מחתים על הצהרת הטיול בלי שאיש יבחר. שדה שהתשובה שלו
+                  תמיד „לפי סוג הפעילות” הוא שאלה מיותרת. */}
             </section>
             )}
 
@@ -2130,24 +2068,6 @@ function ActivityFormModal({
     staff_flat_amount: initial?.staff_flat_amount ?? '',
   }));
   const [localError, setLocalError] = useState('');
-  // The declarations staff can point an event at. Fetched rather than hardcoded
-  // so a new one added in the health screen appears here without a deploy.
-  const [declarationTemplates, setDeclarationTemplates] = useState([]);
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/form-templates')
-      .then((r) => (r.ok ? r.json() : []))
-      .then((list) => {
-        if (cancelled || !Array.isArray(list)) return;
-        setDeclarationTemplates(list.filter((template) => (
-          template.isActive !== false
-          && ['wall', 'trip'].includes(normalizeParticipationScope(template.slug))
-          && !['event', 'birthday'].includes(String(template.slug || '').toLowerCase())
-        )));
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
   const isEdit = !!initial?.id && !isTemplateEdit;
   const showError = localError || error || '';
   const multiDay = !!(form.date && form.end_date && form.end_date > form.date);
@@ -2305,7 +2225,6 @@ function ActivityFormModal({
         title={title}
         canViewFinance={canViewFinance}
         canViewHr={canViewHr}
-        declarationTemplates={declarationTemplates}
         onStaffChanged={onStaffChanged}
       />
     );
@@ -4341,7 +4260,8 @@ export default function ActivitiesCalendar({
       registration_enabled: false,
       collect_registration_payment: false,
       registration_mode: 'paid_per_participant',
-      price_includes_vat: false,
+      // כמו באירוע חדש: המחיר שנרשם הוא מה שהלקוח משלם, ולכן כולל מע״מ.
+      price_includes_vat: true,
       registration_page_title: '',
       registration_page_body: '',
       registration_theme: {},
