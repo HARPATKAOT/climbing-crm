@@ -1344,7 +1344,10 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                       </div>
                     )}
                     <div style={{ fontSize: 10, color: 'var(--text-3)', marginTop: 4 }}>
-                      {m.created_at ? new Date(m.created_at).toLocaleString('he-IL') : ''}
+                      {/* Only the clock — the day is on the separator above. */}
+                      {m.created_at
+                        ? new Date(m.created_at).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })
+                        : ''}
                       {m.status && m.status !== 'deleted' ? ` · ${m.status}` : ''}
                       {m.edited_at && !(m.deleted_at || m.status === 'deleted') ? ' · נערכה' : ''}
                     </div>
