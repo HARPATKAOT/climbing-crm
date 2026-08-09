@@ -29,6 +29,38 @@ test('a returning eligibility flag lets the bot continue without staff approval'
   assert.equal(result.reason, 'returning');
 });
 
+test('one returning eligibility permits moving between every advanced and squad group', () => {
+  const student = { id: 'returning-student' };
+  const rows = [{
+    id: 'returning-row',
+    student_id: student.id,
+    program: PROGRAMS.YOUNG_SQUAD,
+    season: '2026-27',
+    status: 'returning',
+  }];
+  const db = { get: (table) => (table === 'program_eligibility' ? rows : []) };
+  const adultSquad = { id: 'adult', name: 'נבחרת בוגרת', ageCategory: 'תיכון', skillLevel: 'נבחרת' };
+  const advanced = { id: 'advanced', name: 'מתקדמים ד-ו', ageCategory: 'ד-ו', skillLevel: 'מתקדמים' };
+
+  assert.equal(canPlaceInRestrictedGroup(db, student, adultSquad, { season: '2026-27' }).allowed, true);
+  assert.equal(canPlaceInRestrictedGroup(db, student, advanced, { season: '2026-27' }).allowed, true);
+});
+
+test('one approved eligibility permits another restricted programme without a second approval', () => {
+  const student = { id: 'approved-student' };
+  const db = {
+    get: (table) => (table === 'program_eligibility' ? [{
+      id: 'approved-row', student_id: student.id, program: PROGRAMS.ADVANCED,
+      season: '2026-27', status: 'approved',
+    }] : []),
+  };
+  const youngSquad = { id: 'young', name: 'נבחרת צעירה', ageCategory: 'חטיבה', skillLevel: 'נבחרת' };
+
+  const result = canPlaceInRestrictedGroup(db, student, youngSquad, { season: '2026-27' });
+  assert.equal(result.allowed, true);
+  assert.equal(result.reason, 'approved');
+});
+
 test('6B in middle school is a strong young-squad candidate but still needs approval', () => {
   const group = { name: 'נבחרת צעירה', ageCategory: 'חטיבה', skillLevel: 'נבחרת' };
   const result = evaluateProgramCandidate({

@@ -2651,9 +2651,9 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       ? '#16A34A'
       : climbingLevel ? '#F97316' : 'var(--text-3)';
   const programLabels = {
-    advanced: 'מתקדמים',
-    young_squad: 'נבחרת צעירה',
-    adult_squad: 'נבחרת בוגרת',
+    advanced: 'מתקדמים ונבחרות',
+    young_squad: 'מתקדמים ונבחרות',
+    adult_squad: 'מתקדמים ונבחרות',
   };
   const eligibilityLabels = {
     returning: 'ממשיך',
@@ -3677,7 +3677,13 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                           borderTop: '1px solid rgba(148,163,184,0.12)',
                         }}
                       >
-                        {programEligibility.map((item) => (
+                        {[...programEligibility]
+                          .sort((a, b) => {
+                            const rank = { returning: 4, approved: 3, pending: 2, rejected: 1 };
+                            return (rank[b.status] || 0) - (rank[a.status] || 0);
+                          })
+                          .slice(0, 1)
+                          .map((item) => (
                           <span
                             key={item.id || `${item.program}-${item.season}`}
                             title={`${programLabels[item.program] || item.program}: ${eligibilityLabels[item.status] || item.status}`}

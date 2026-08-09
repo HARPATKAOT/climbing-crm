@@ -97,6 +97,20 @@ export function eligibilityForStudent(db, studentId, { season = currentSeason() 
   ));
 }
 
+/**
+ * Advanced and squad eligibility is one shared permission. The program saved
+ * on older rows records where the permission originally came from; it does not
+ * restrict staff from moving the trainee to another advanced/squad group.
+ */
+export function sharedRestrictedEligibility(db, studentId, { season = currentSeason() } = {}) {
+  return eligibilityForStudent(db, studentId, { season })
+    .filter((row) => Object.values(PROGRAMS).includes(String(row.program || '')))
+    .sort((a, b) => {
+      const rank = (row) => (row.status === 'returning' ? 3 : row.status === 'approved' ? 2 : row.status === 'pending' ? 1 : 0);
+      return rank(b) - rank(a) || String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
+    });
+}
+
 export function latestLevelTest(db, studentId) {
   const rows = (db?.get?.('level_tests') || [])
     .filter((row) => String(row.studentId || row.student_id) === String(studentId))
@@ -171,6 +185,11 @@ export async function requestProgramApproval(db, persist, {
   if (!evaluation.candidate) return { ok: false, evaluation, error: evaluation.reason };
 
   const program = evaluation.program;
+  const sharedEligibility = sharedRestrictedEligibility(db, student.id, { season })
+    .find((row) => ['returning', 'approved'].includes(String(row.status || '')));
+  if (sharedEligibility) {
+    return { ok: true, duplicate: true, eligibility: sharedEligibility, evaluation };
+  }
   const id = `pe-${season}-${student.id}-${program}`;
   const requestId = `pr-${season}-${student.id}-${program}`;
   const existingEligibility = db.getOne(ELIGIBILITY_COLLECTION, id);
@@ -278,8 +297,13 @@ export async function reviewProgramApproval(db, persist, requestId, {
 export function canPlaceInRestrictedGroup(db, student, group, { season = currentSeason() } = {}) {
   const program = programForGroup(group);
   if (!program) return { allowed: true, reason: 'regular_group' };
-  const row = eligibilityForStudent(db, student?.id, { season })
-    .find((item) => item.program === program);
+  // Eligibility is intentionally shared by every advanced and squad group.
+  // `program` remains on the row only as provenance for existing data and for
+  // the original approval request; the concrete group is a placement choice.
+  const row = sharedRestrictedEligibility(db, student?.id, { season })
+    .find((item) => ['returning', 'approved'].includes(String(item.status || '')))
+    || sharedRestrictedEligibility(db, student?.id, { season })
+      .find((item) => item.program === program && item.status === 'pending');
   if (!row || !['returning', 'approved'].includes(row.status)) {
     return { allowed: false, reason: 'staff_approval_required', eligibility: row || null };
   }
