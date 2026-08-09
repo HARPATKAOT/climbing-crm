@@ -3497,7 +3497,9 @@ export default function PublicOnboardingForm() {
                         variant="danger"
                         onClick={() => answerParticipation(index, false)}
                       >
-                        {cg('כן, לא משתתף', 'כן, לא משתתפת')}
+                        {/* השאלה למעלה כבר אומרת מה קורה. „כן, לא משתתף”
+                            כתשובה לשאלה שיש בה „לא” נקרא כמו שלילה כפולה. */}
+                        אישור
                       </CardButton>
                       <CardButton onClick={() => updateChild(index, { confirmSkip: false })}>
                         ביטול
