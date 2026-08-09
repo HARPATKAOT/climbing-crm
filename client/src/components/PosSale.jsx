@@ -10,7 +10,6 @@ import {
   CATEGORY_ICONS,
   DEFAULT_CATEGORY_COLOR,
   normalizeCategories,
-  catTint,
   imageBackground,
   imageFitOf,
 } from './productCategories.js';
@@ -943,7 +942,7 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
                       textAlign: 'center',
                       cursor: 'pointer',
                       overflow: 'hidden',
-                      border: `1px solid ${catTint(c.text, '33')}`,
+                      border: '1px solid var(--border)',
                       display: 'flex',
                       flexDirection: 'column',
                     }}
@@ -956,7 +955,7 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
                       justifyContent: 'center',
                       background: imageBackground(
                         category,
-                        `linear-gradient(145deg, ${c.bg}, rgba(15,20,30,0.9))`
+                        'var(--bg-input)'
                       ),
                     }}>
                       {!category.image && <Icon size={44} color={c.text} strokeWidth={1.6} />}
