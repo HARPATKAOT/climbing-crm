@@ -37,12 +37,18 @@ export async function claimBotReply(db, replyKey, { phone = '', now = new Date()
   return { claimed: Boolean(local), id, record: local, durable: Boolean(durable.configured) };
 }
 
-export async function finishBotReplyClaim(db, persist, replyKey, { messageId = '', now = new Date() } = {}) {
+export async function finishBotReplyClaim(db, persist, replyKey, {
+  messageId = '',
+  status = 'sent',
+  now = new Date(),
+} = {}) {
   if (!replyKey) return null;
+  const completedAt = new Date(now).toISOString();
   const updated = db.update(BOT_REPLY_CLAIMS, replyKey, {
-    status: 'sent',
+    status,
     message_id: messageId || null,
-    sent_at: new Date(now).toISOString(),
+    completed_at: completedAt,
+    ...(status === 'sent' ? { sent_at: completedAt } : {}),
   });
   if (updated && typeof persist === 'function') await persist(BOT_REPLY_CLAIMS, updated);
   return updated;

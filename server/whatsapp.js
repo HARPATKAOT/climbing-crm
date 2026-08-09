@@ -1004,10 +1004,11 @@ export const whatsappService = {
     parent = null,
     logType = '',
     replyKey = '',
+    replyClaimed = false,
   } = {}) {
     if (!replyText) return { success: false };
     const text = withBotMark(replyText);
-    if (!isSimulator && replyKey) {
+    if (!isSimulator && replyKey && !replyClaimed) {
       const claim = await claimBotReply(db, replyKey, { phone });
       if (!claim.claimed) return { success: true, skipped: true, reason: 'duplicate_reply', replyKey };
     }
@@ -1036,7 +1037,13 @@ export const whatsappService = {
     }
     // Live inbound handling already waited for the customer's quiet window.
     // Waiting again here made the reply feel slow without collecting anything.
-    const result = await whatsappService.sendTextMessage(phone, text, true, { source, skipDelay: true });
+    let result;
+    try {
+      result = await whatsappService.sendTextMessage(phone, text, true, { source, skipDelay: true });
+    } catch (err) {
+      if (replyKey) await releaseBotReplyClaim(db, replyKey);
+      throw err;
+    }
     if (replyKey) {
       if (result?.success) {
         await finishBotReplyClaim(db, persistCore, replyKey, { messageId: result.messageId || '' });
@@ -1384,19 +1391,49 @@ export const whatsappService = {
     }
 
     const speaker = matchedVia === 'child_phone' ? student : null;
-    const aiResult = await whatsappService.generateAIResponse(aiIncomingText, {
-      phone: normalizedPhone,
-      parent,
-      students,
-      speaker,
-      isSimulator,
-      inboundBurstCount: inboundBurst?.items?.length || 0,
-    });
+    // Claim the whole AI turn before the model can invoke a tool. Claiming only
+    // inside sendBotReply prevented duplicate WhatsApp messages, but two server
+    // processes could still execute the same placement/link/approval tool while
+    // composing their replies. This durable claim makes the tool turn itself
+    // single-owner across retries, restarts and parallel instances.
+    let aiTurnClaimed = false;
+    if (!isSimulator && replyKey) {
+      const turnClaim = await claimBotReply(db, replyKey, { phone: normalizedPhone });
+      if (!turnClaim.claimed) {
+        return {
+          parent,
+          student,
+          isNew,
+          replied: false,
+          skippedReason: 'duplicate_reply',
+          burstCount: inboundBurst?.items?.length || 1,
+        };
+      }
+      aiTurnClaimed = true;
+    }
+
+    let aiResult;
+    try {
+      aiResult = await whatsappService.generateAIResponse(aiIncomingText, {
+        phone: normalizedPhone,
+        parent,
+        students,
+        speaker,
+        isSimulator,
+        inboundBurstCount: inboundBurst?.items?.length || 0,
+      });
+    } catch (err) {
+      if (aiTurnClaimed) await releaseBotReplyClaim(db, replyKey);
+      throw err;
+    }
     // The customer may add one last bubble while the model is composing. The
     // newer handler owns the answer; sending this stale draft would recreate
     // the exact multi-reply problem the quiet window is meant to solve.
     if (inboundBurst
       && !inboundCustomerBursts.isCurrent(normalizedPhone, inboundBurst.generation)) {
+      if (aiTurnClaimed) {
+        await finishBotReplyClaim(db, persistCore, replyKey, { status: 'superseded' });
+      }
       return {
         parent,
         student,
@@ -1417,6 +1454,9 @@ export const whatsappService = {
         phone: normalizedPhone,
         after: latestBurstAt,
       })) {
+        if (aiTurnClaimed) {
+          await finishBotReplyClaim(db, persistCore, replyKey, { status: 'superseded' });
+        }
         return {
           parent,
           student,
@@ -1428,6 +1468,9 @@ export const whatsappService = {
       }
     }
     if (aiResult.silent || !aiResult.text) {
+      if (aiTurnClaimed) {
+        await finishBotReplyClaim(db, persistCore, replyKey, { status: 'silent' });
+      }
       return {
         parent,
         student,
@@ -1445,6 +1488,7 @@ export const whatsappService = {
         isSimulator,
         source: 'bot_control',
         replyKey,
+        replyClaimed: aiTurnClaimed,
       });
       await notifyStaffOfHandoff({
         settings,
@@ -1457,7 +1501,11 @@ export const whatsappService = {
       return { parent, student, isNew, replied: true, reply: handoffText, reason: 'handoff' };
     }
 
-    await whatsappService.sendBotReply(normalizedPhone, aiResult.text, { isSimulator, replyKey });
+    await whatsappService.sendBotReply(normalizedPhone, aiResult.text, {
+      isSimulator,
+      replyKey,
+      replyClaimed: aiTurnClaimed,
+    });
     return { parent, student, isNew, replied: true, reply: aiResult.text };
     } finally {
       releaseInboundMetaId(metaMessageId);
