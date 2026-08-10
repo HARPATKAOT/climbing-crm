@@ -95,7 +95,9 @@ export default function PosSale({
   const [walkInName, setWalkInName] = useState('');
   const [walkInPhone, setWalkInPhone] = useState('');
   const [walkInEmail, setWalkInEmail] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState('cash');
+  // ריק בכוונה: אמצעי התשלום נבחר, לא ננחש. ברירת מחדל „מזומן” גררה מכירות
+  // שנרשמו כמזומן כי איש לא שם לב שהיא כבר מסומנת.
+  const [paymentMethod, setPaymentMethod] = useState('');
   const [sendEmail, setSendEmail] = useState(false);
   const [sendWhatsapp, setSendWhatsapp] = useState(true);
   const [quoteIncludePaymentLink, setQuoteIncludePaymentLink] = useState(true);
@@ -849,7 +851,13 @@ ${data.link}`)}`,
       return false;
     }
     if (sendEmail && !String(effectiveEmail || '').trim()) {
-      setError('לשליחה למייל חובה למלא כתובת מייל, או לבטל את הסימון');
+      setError(paymentMethod === 'online'
+        ? 'לשליחת קישור התשלום למייל חובה כתובת מייל, או לבטל את הסימון'
+        : 'לשליחת החשבונית למייל חובה כתובת מייל, או לבטל את הסימון');
+      return false;
+    }
+    if (!paymentMethod) {
+      setError('יש לבחור איך התשלום מתקבל — מזומן או סליקה בקישור');
       return false;
     }
     if (paymentMethod === 'online' && !(Number(total) > 0)) {
@@ -957,6 +965,7 @@ ${data.link}`)}`,
       setTenderedDenoms({});
       // קישור תשלום סוגר את הטיפול בלקוח הזה: הוא עבר לרשימת הממתינים, והדלפק
       // פנוי לבא בתור. השארת הלקוח על המסך גרמה למכירה הבאה להיתלות עליו.
+      setPaymentMethod('');
       if (endpoint === '/api/pos/payment-link') {
         clearCustomer();
         setAnonymousSale(false);
@@ -1945,7 +1954,22 @@ ${data.link}`)}`,
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+          <div
+            style={{
+              display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap', alignItems: 'center',
+              ...(paymentMethod ? {} : {
+                padding: '10px 12px',
+                borderRadius: 10,
+                border: '1px solid rgba(251, 191, 36, 0.45)',
+                background: 'rgba(251, 191, 36, 0.06)',
+              }),
+            }}
+          >
+            {!paymentMethod && (
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: '#FBBF24' }}>
+                איך משלמים?
+              </span>
+            )}
             {PAY_METHODS.map((m) => {
               const Icon = m.icon;
               const cashBlocked = m.id === 'cash' && !cashSessionOpen;
@@ -2057,14 +2081,17 @@ ${data.link}`)}`,
             </div>
           )}
 
+          {/* אותן שתי תיבות שולחות דברים שונים לפי אופן התשלום: במזומן
+              החשבונית שכבר הופקה, ובסליקה הקישור לתשלום. „שליחה למייל” בלי
+              לומר מה נשלח הוא בדיוק המקום שבו נשלח הדבר הלא נכון. */}
           <div style={{ display: 'flex', gap: 16, marginTop: 12, fontSize: 13, flexWrap: 'wrap' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
               <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} />
-              שליחה למייל
+              {paymentMethod === 'online' ? 'שליחת קישור התשלום למייל' : 'שליחת החשבונית למייל'}
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
               <input type="checkbox" checked={sendWhatsapp} onChange={(e) => setSendWhatsapp(e.target.checked)} />
-              שליחה לוואטסאפ
+              {paymentMethod === 'online' ? 'שליחת קישור התשלום בוואטסאפ' : 'שליחת החשבונית בוואטסאפ'}
             </label>
           </div>
 
@@ -2285,7 +2312,11 @@ ${data.link}`)}`,
               disabled={busy}
               onClick={handleCheckout}
             >
-              {busy ? 'מעבד...' : paymentMethod === 'online' ? 'שלח קישור לתשלום' : 'גבה והפק חשבונית'}
+              {busy
+                ? 'מעבד...'
+                : !paymentMethod
+                  ? 'בחרו אמצעי תשלום'
+                  : paymentMethod === 'online' ? 'שלח קישור לתשלום' : 'גבה והפק חשבונית'}
             </button>
             <button
               type="button"
