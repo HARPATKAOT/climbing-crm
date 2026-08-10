@@ -16,6 +16,7 @@ export const OFFER_TYPES = {
   AMOUNT: 'amount',
   FREE_ITEM: 'free_item',
   BOGO: 'bogo',
+  RULESET: 'ruleset',
 };
 
 export const OFFER_TYPE_LABELS = {
@@ -23,6 +24,7 @@ export const OFFER_TYPE_LABELS = {
   [OFFER_TYPES.AMOUNT]: 'סכום הנחה',
   [OFFER_TYPES.FREE_ITEM]: 'פריט חינם',
   [OFFER_TYPES.BOGO]: 'אחד פלוס אחד',
+  [OFFER_TYPES.RULESET]: 'סל הנחות',
 };
 
 export const COUPON_STATUS = {
@@ -77,7 +79,7 @@ export function normalizeOffer(raw = {}) {
   if (type === OFFER_TYPES.PERCENT) value = Math.min(100, value);
   if (type === OFFER_TYPES.FREE_ITEM || type === OFFER_TYPES.BOGO) value = 0;
 
-  const appliesTo = ['all', 'items', 'product_type'].includes(raw.appliesTo)
+  const appliesTo = ['all', 'items', 'product_type', 'categories'].includes(raw.appliesTo)
     ? raw.appliesTo
     : 'all';
 
@@ -91,6 +93,7 @@ export function normalizeOffer(raw = {}) {
   const validityRaw = Number(raw.validityDays);
   const validityDays =
     Number.isFinite(validityRaw) && validityRaw > 0 ? Math.min(365, Math.round(validityRaw)) : 30;
+  const noExpiry = raw.noExpiry === true || raw.no_expiry === true;
 
   return {
     type,
@@ -98,9 +101,17 @@ export function normalizeOffer(raw = {}) {
     appliesTo,
     pricelistIds: Array.isArray(raw.pricelistIds) ? raw.pricelistIds.filter(Boolean).map(String) : [],
     productType: raw.productType || 'product',
+    categoryNames: Array.isArray(raw.categoryNames) ? raw.categoryNames.filter(Boolean).map(String) : [],
     units,
     maxDiscount,
     validityDays,
+    noExpiry,
+    parts: type === OFFER_TYPES.RULESET
+      ? (Array.isArray(raw.parts) ? raw.parts : []).map((part) => normalizeOffer({
+          ...part,
+          type: part.type === OFFER_TYPES.AMOUNT ? OFFER_TYPES.AMOUNT : OFFER_TYPES.PERCENT,
+        }))
+      : [],
     label: String(raw.label || '').trim(),
   };
 }
@@ -120,6 +131,7 @@ export function offerSummary(offer) {
   if (o.type === OFFER_TYPES.FREE_ITEM) {
     return o.units > 1 ? `${o.units} פריטים חינם${scope}` : `פריט חינם${scope}`;
   }
+  if (o.type === OFFER_TYPES.RULESET) return 'סל הנחות לפי זכאות';
   return `אחד פלוס אחד${scope}`;
 }
 
@@ -174,6 +186,15 @@ export function lineMatchesOffer(offer, line) {
   if (o.appliesTo === 'all') return true;
   if (o.appliesTo === 'items') {
     return !!line?.pricelist_id && o.pricelistIds.includes(String(line.pricelist_id));
+  }
+  if (o.appliesTo === 'categories') {
+    const categories = [
+      ...(Array.isArray(line?.item?.categories) ? line.item.categories : []),
+      line?.item?.category,
+      ...(Array.isArray(line?.categories) ? line.categories : []),
+      line?.category,
+    ].filter(Boolean).map(String);
+    return o.categoryNames.some((name) => categories.includes(String(name)));
   }
   return String(line?.product_type || 'product') === String(o.productType);
 }
@@ -251,6 +272,20 @@ export function selectDiscountedUnits(offer, lines) {
 export function applyOfferToLines(offer, lines) {
   const o = normalizeOffer(offer);
   const source = Array.isArray(lines) ? lines : [];
+  if (o.type === OFFER_TYPES.RULESET) {
+    let discount = 0;
+    const out = [];
+    for (const line of source) {
+      let best = { lines: [line], discount: 0, applied: false };
+      for (const part of o.parts) {
+        const candidate = applyOfferToLines(part, [line]);
+        if (candidate.discount > best.discount) best = candidate;
+      }
+      discount = roundMoney(discount + best.discount);
+      out.push(...best.lines);
+    }
+    return { lines: out, discount, applied: discount > 0, reason: discount > 0 ? null : 'no_eligible_items' };
+  }
   const picked = selectDiscountedUnits(o, source);
 
   if (!picked.length) {
@@ -308,7 +343,7 @@ export function applyOfferToLines(offer, lines) {
 
 // ─── Store access ────────────────────────────────────────────────────────────
 
-export function listCoupons(db, { parentId, studentId, campaignId, status, today } = {}) {
+export function listCoupons(db, { parentId, studentId, campaignId, employeeId, recurring, status, today } = {}) {
   const on = today || todayIsoDate();
   return (db.get('customer_coupons') || [])
     .filter((c) => {
@@ -316,6 +351,8 @@ export function listCoupons(db, { parentId, studentId, campaignId, status, today
         if (!couponBelongsTo(c, { parentId, studentId })) return false;
       }
       if (campaignId && String(c.campaign_id) !== String(campaignId)) return false;
+      if (employeeId && String(c.employee_id) !== String(employeeId)) return false;
+      if (recurring !== undefined && Boolean(c.recurring) !== Boolean(recurring)) return false;
       if (status && couponState(c, on) !== status) return false;
       return true;
     })
@@ -345,6 +382,8 @@ export function issueCoupon(
     campaignName = '',
     source = 'manual',
     issuedBy = '',
+    recurring = false,
+    employeeId = null,
     today = todayIsoDate(),
   } = {}
 ) {
@@ -361,13 +400,17 @@ export function issueCoupon(
     campaign_name: campaignName || '',
     parent_id: parentId,
     student_id: studentId,
+    employee_id: employeeId,
     offer: snapshot,
     label: offerSummary(snapshot),
     status: COUPON_STATUS.ACTIVE,
     source,
+    recurring: Boolean(recurring),
     issued_by: issuedBy || '',
     issued_at: today,
-    expires_at: addDaysIso(today, snapshot.validityDays),
+    expires_at: recurring || snapshot.noExpiry ? null : addDaysIso(today, snapshot.validityDays),
+    usage_count: 0,
+    last_used_at: null,
     redeemed_at: null,
     pos_sale_id: null,
     redeemed_amount: null,
@@ -413,6 +456,16 @@ export function checkCouponForSale(db, { code, couponId, parentId, studentId, li
 }
 
 export function redeemCoupon(db, couponId, { saleId = null, amount = 0 } = {}) {
+  const current = db.getOne('customer_coupons', couponId);
+  if (current?.recurring) {
+    return db.update('customer_coupons', couponId, {
+      status: COUPON_STATUS.ACTIVE,
+      usage_count: (Number(current.usage_count) || 0) + 1,
+      last_used_at: new Date().toISOString(),
+      last_pos_sale_id: saleId,
+      last_redeemed_amount: roundMoney(amount),
+    });
+  }
   return db.update('customer_coupons', couponId, {
     status: COUPON_STATUS.REDEEMED,
     redeemed_at: new Date().toISOString(),
@@ -427,6 +480,14 @@ export function redeemCoupon(db, couponId, { saleId = null, amount = 0 } = {}) {
  * counter — but it is not consumed either, because the payment may never come.
  */
 export function reserveCoupon(db, couponId, { saleId = null, amount = 0, today = todayIsoDate() } = {}) {
+  const current = db.getOne('customer_coupons', couponId);
+  if (current?.recurring) {
+    return db.update('customer_coupons', couponId, {
+      last_reserved_at: new Date().toISOString(),
+      last_reserved_sale_id: saleId,
+      last_reserved_amount: roundMoney(amount),
+    });
+  }
   return db.update('customer_coupons', couponId, {
     status: COUPON_STATUS.RESERVED,
     reserved_at: new Date().toISOString(),

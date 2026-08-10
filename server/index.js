@@ -75,7 +75,9 @@ import {
 import {
   OFFER_TYPES,
   OFFER_TYPE_LABELS,
+  normalizeOffer,
   offerSummary,
+  couponState,
   listCoupons,
   activeCouponsFor,
   issueCoupon,
@@ -88,6 +90,11 @@ import {
   COUPON_STATUS,
   todayIsoDate,
 } from './coupons.js';
+import {
+  matchingDiscountRules,
+  normalizeDiscountRule,
+  offerForDiscountRule,
+} from './discountRules.js';
 import {
   TRIGGER_TYPES,
   TRIGGER_LABELS,
@@ -10880,7 +10887,7 @@ app.get('/api/trainers', (req, res) => {
 
 const EMPLOYEE_OPERATIONAL_FIELDS = new Set([
   'id', 'name', 'role', 'certifications', 'is_active', 'active', 'availability',
-  'can_open_wall', 'can_sign_daily_safety', 'can_operate_cash',
+  'can_open_wall', 'can_sign_daily_safety', 'can_operate_cash', 'customer_student_id',
 ]);
 
 function isOwnEmployeeRequest(req, employeeId) {
@@ -13073,13 +13080,116 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
 // A coupon is the benefit a campaign (or a member of staff) handed to one
 // customer. Staff may read and issue them; only the owner deletes campaigns.
 
+app.get('/api/discount-rules', requireOwner, (_req, res) => {
+  res.json([...(db.get('discount_rules') || [])].sort((a, b) => (
+    String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || ''))
+  )));
+});
+
+app.post('/api/discount-rules', requireOwner, async (req, res) => {
+  const normalized = normalizeDiscountRule(req.body || {});
+  if (!normalized.name) return res.status(400).json({ error: 'יש לתת שם לכלל' });
+  if (normalized.audience === 'employee_role' && !normalized.role) {
+    return res.status(400).json({ error: 'יש לבחור תפקיד עובד' });
+  }
+  if (!normalized.benefits.length) return res.status(400).json({ error: 'יש להוסיף לפחות הנחה אחת' });
+  const created = db.insert('discount_rules', {
+    ...normalized,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+  await persistCore('discount_rules', created);
+  res.status(201).json(created);
+});
+
+app.put('/api/discount-rules/employee/:employeeId/student', requireOwner, async (req, res) => {
+  const employee = db.getOne('employees', req.params.employeeId);
+  if (!employee) return res.status(404).json({ error: 'העובד לא נמצא' });
+  const studentId = req.body?.studentId || null;
+  if (studentId && !db.getOne('students', studentId)) {
+    return res.status(404).json({ error: 'תיק המתאמן לא נמצא' });
+  }
+  const updated = db.update('employees', employee.id, {
+    customer_student_id: studentId,
+    updated_at: new Date().toISOString(),
+  });
+  await persistCore('employees', updated);
+  res.json(employeeForRequest(req, updated));
+});
+
+app.put('/api/discount-rules/:id', requireOwner, async (req, res) => {
+  const current = db.getOne('discount_rules', req.params.id);
+  if (!current) return res.status(404).json({ error: 'כלל ההנחה לא נמצא' });
+  const normalized = normalizeDiscountRule({ ...current, ...req.body });
+  if (!normalized.name || !normalized.benefits.length) {
+    return res.status(400).json({ error: 'הכלל דורש שם והנחה אחת לפחות' });
+  }
+  const updated = db.update('discount_rules', current.id, {
+    ...normalized,
+    updated_at: new Date().toISOString(),
+  });
+  await persistCore('discount_rules', updated);
+  res.json(updated);
+});
+
+async function syncAutomaticDiscountCoupon(studentId) {
+  if (!studentId) return null;
+  const student = db.getOne('students', studentId);
+  if (!student) return null;
+  const rules = matchingDiscountRules(db, studentId);
+  const existing = (db.get('customer_coupons') || []).find((coupon) => (
+    coupon.source === 'discount_rules' && String(coupon.student_id) === String(studentId)
+  )) || null;
+  if (!rules.length) {
+    if (existing && existing.status !== COUPON_STATUS.CANCELLED) {
+      const cancelled = cancelCoupon(db, existing.id, 'הזכאות האוטומטית הסתיימה');
+      await persistCore('customer_coupons', cancelled);
+    }
+    return null;
+  }
+  const ruleOffers = rules.map(offerForDiscountRule);
+  const offer = normalizeOffer({
+    type: 'ruleset',
+    label: rules.map((rule) => rule.name).join(' · '),
+    noExpiry: true,
+    parts: ruleOffers.flatMap((item) => item.parts),
+  });
+  if (existing) {
+    const updated = db.update('customer_coupons', existing.id, {
+      offer,
+      label: offer.label,
+      parent_id: student.parentId || student.parent_id || null,
+      rule_ids: rules.map((rule) => rule.id),
+      recurring: true,
+      status: COUPON_STATUS.ACTIVE,
+      expires_at: null,
+      updated_at: new Date().toISOString(),
+    });
+    await persistCore('customer_coupons', updated);
+    return updated;
+  }
+  const created = issueCoupon(db, {
+    offer,
+    parentId: student.parentId || student.parent_id || null,
+    studentId,
+    recurring: true,
+    source: 'discount_rules',
+    issuedBy: 'כללי הנחה אוטומטיים',
+  });
+  const enriched = db.update('customer_coupons', created.id, { rule_ids: rules.map((rule) => rule.id) });
+  await persistCore('customer_coupons', enriched);
+  return enriched;
+}
+
 app.get('/api/coupons', (req, res) => {
-  const { parentId, studentId, campaignId, status } = req.query;
+  const { parentId, studentId, campaignId, employeeId, recurring, status } = req.query;
   res.json(
     listCoupons(db, {
       parentId: parentId || undefined,
       studentId: studentId || undefined,
       campaignId: campaignId || undefined,
+      employeeId: employeeId || undefined,
+      recurring: recurring === undefined ? undefined : recurring === '1' || recurring === 'true',
       status: status || undefined,
     })
   );
@@ -13087,7 +13197,7 @@ app.get('/api/coupons', (req, res) => {
 
 app.post('/api/coupons', async (req, res) => {
   try {
-    const { offer, parentId, studentId, campaignId, campaignName } = req.body || {};
+    const { offer, parentId, studentId, employeeId, recurring, campaignId, campaignName } = req.body || {};
     if (!parentId && !studentId) {
       return res.status(400).json({ error: 'בחרו לקוח שיקבל את ההטבה' });
     }
@@ -13097,6 +13207,8 @@ app.post('/api/coupons', async (req, res) => {
       studentId: studentId || null,
       campaignId: campaignId || null,
       campaignName: campaignName || '',
+      employeeId: employeeId || null,
+      recurring: Boolean(recurring),
       source: 'manual',
       issuedBy: req.crmUser?.email || req.crmUser?.name || '',
     });
@@ -13114,10 +13226,27 @@ app.post('/api/coupons/:id/cancel', async (req, res) => {
   res.json(updated);
 });
 
+app.put('/api/coupons/:id', async (req, res) => {
+  const existing = db.getOne('customer_coupons', req.params.id);
+  if (!existing) return res.status(404).json({ error: 'ההטבה לא נמצאה' });
+  if (!existing.recurring) return res.status(400).json({ error: 'אפשר לעדכן רק הנחה קבועה' });
+  const offer = req.body?.offer ? normalizeOffer(req.body.offer) : existing.offer;
+  const updated = db.update('customer_coupons', existing.id, {
+    offer,
+    label: offerSummary(offer),
+    parent_id: req.body?.parentId === undefined ? existing.parent_id : req.body.parentId || null,
+    student_id: req.body?.studentId === undefined ? existing.student_id : req.body.studentId || null,
+    updated_at: new Date().toISOString(),
+  });
+  await persistCore('customer_coupons', updated);
+  res.json({ ...updated, state: couponState(updated), days_left: null });
+});
+
 /** Active benefits for the customer the register has selected. */
-app.get('/api/pos/coupons', (req, res) => {
+app.get('/api/pos/coupons', async (req, res) => {
   const { parentId, studentId } = req.query;
   if (!parentId && !studentId) return res.json([]);
+  if (studentId) await syncAutomaticDiscountCoupon(studentId);
   res.json(activeCouponsFor(db, { parentId, studentId }));
 });
 
@@ -13144,7 +13273,7 @@ app.post('/api/pos/coupon-preview', (req, res) => {
 app.get('/api/campaigns/meta', requireOwner, (req, res) => {
   res.json({
     triggers: Object.values(TRIGGER_TYPES).map((key) => ({ key, label: TRIGGER_LABELS[key] })),
-    offerTypes: Object.values(OFFER_TYPES).map((key) => ({ key, label: OFFER_TYPE_LABELS[key] })),
+    offerTypes: Object.values(OFFER_TYPES).filter((key) => key !== OFFER_TYPES.RULESET).map((key) => ({ key, label: OFFER_TYPE_LABELS[key] })),
     presets: campaignPresets(),
   });
 });

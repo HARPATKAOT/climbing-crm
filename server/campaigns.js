@@ -445,7 +445,7 @@ export function campaignMessageVars({ entry, coupon, businessName = '' }) {
     couponLabel: coupon?.label || '',
     expires: coupon?.expires_at
       ? new Date(`${coupon.expires_at}T12:00:00Z`).toLocaleDateString('he-IL')
-      : '',
+      : 'ללא הגבלת זמן',
   };
 }
 

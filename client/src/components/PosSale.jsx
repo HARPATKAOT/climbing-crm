@@ -1546,8 +1546,12 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 600 }}>{coupon.label}</div>
                       <div style={{ fontSize: 11, color: 'var(--text-3)' }}>
-                        קוד {coupon.code} · בתוקף עד {coupon.expires_at}
-                        {coupon.days_left != null ? ` · עוד ${coupon.days_left} ימים` : ''}
+                        {coupon.recurring
+                          ? `הנחה קבועה · קוד ${coupon.code}`
+                          : coupon.expires_at
+                            ? `קוד ${coupon.code} · בתוקף עד ${coupon.expires_at}`
+                            : `קוד ${coupon.code} · ללא תוקף`}
+                        {!coupon.recurring && coupon.days_left != null ? ` · עוד ${coupon.days_left} ימים` : ''}
                       </div>
                     </div>
                     {isApplied ? (
@@ -1579,7 +1583,7 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
                   הוסיפו פריט לעגלה כדי להחיל את ההטבה
                 </div>
               )}
-              {paymentMethod === 'online' && appliedCoupon && (
+              {paymentMethod === 'online' && appliedCoupon && !customerCoupons.find((c) => c.id === appliedCoupon.id)?.recurring && (
                 <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
                   הקישור ייווצר עם הסכום אחרי ההנחה. ההטבה תישמר בצד עד שהתשלום ייקלט,
                   ואם הקישור לא ישולם תוך שבוע היא תחזור ללקוח.

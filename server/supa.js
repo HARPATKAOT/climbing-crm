@@ -182,6 +182,7 @@ export const OPERATIONAL_TABLES = [
   'campaign_sends',
   'campaign_runs',
   'customer_coupons',
+  'discount_rules',
   // Reminders the bot sets for itself — same kv pattern, no migration.
   'bot_followups',
   // Everything the bot did, in one journal.

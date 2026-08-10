@@ -115,6 +115,8 @@ const EMPTY_COUPON_DRAFT = {
   validityDays: '30',
   pricelistId: '',
   label: '',
+  recurring: false,
+  noExpiry: false,
 };
 
 /** One labelled row in the manual-benefit form. */
@@ -1113,11 +1115,13 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
         body: JSON.stringify({
           parentId: parent?.id || null,
           studentId: parentOnly ? null : student?.id || null,
+          recurring: Boolean(couponDraft.recurring),
           offer: {
             type: couponDraft.type,
             value: Number(couponDraft.value) || 0,
-            units: Number(couponDraft.units) || 1,
+            units: couponDraft.recurring ? 50 : (Number(couponDraft.units) || 1),
             validityDays: Number(couponDraft.validityDays) || 30,
+            noExpiry: Boolean(couponDraft.noExpiry),
             // An untyped name still reads correctly, so nobody ends up with a
             // benefit called "50% הנחה" when it only covers one product.
             label: couponDraft.label.trim() || suggestedCouponLabel(couponDraft, pricelist),
@@ -5098,13 +5102,18 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
                         <div style={{ minWidth: 0 }}>
                           <div style={{ fontWeight: 700, fontSize: 13 }}>{coupon.label}</div>
+                          {coupon.recurring && (
+                            <div style={{ fontSize: 11, color: 'var(--green)', marginTop: 2 }}>
+                              הנחה קבועה · ללא תאריך תפוגה{coupon.usage_count ? ` · מומשה ${coupon.usage_count} פעמים` : ''}
+                            </div>
+                          )}
                           <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>
                             קוד <strong style={{ fontFamily: 'monospace' }}>{coupon.code}</strong>
                             {coupon.expires_at
                               ? coupon.state === 'expired'
                                 ? ` · פג ב-${coupon.expires_at}`
                                 : ` · בתוקף עד ${coupon.expires_at}`
-                              : ''}
+                              : !coupon.recurring ? ' · ללא תוקף' : ''}
                             {coupon.state === 'active' && coupon.days_left != null
                               ? ` · עוד ${coupon.days_left} ימים`
                               : ''}
@@ -5221,18 +5230,40 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                       </CouponField>
                     )}
 
-                    <CouponField
-                      label="תוקף ההטבה בימים"
-                      hint={couponExpiryPreview(couponDraft.validityDays)}
-                    >
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, cursor: 'pointer' }}>
                       <input
-                        className="input input-sm"
-                        type="number"
-                        min="1"
-                        value={couponDraft.validityDays}
-                        onChange={(e) => setCouponDraft((d) => ({ ...d, validityDays: e.target.value }))}
+                        type="checkbox"
+                        checked={couponDraft.recurring}
+                        onChange={(e) => setCouponDraft((d) => ({ ...d, recurring: e.target.checked }))}
                       />
-                    </CouponField>
+                      <span><strong>הנחה קבועה למתאמן</strong><br /><small style={{ color: 'var(--text-3)' }}>תוצע בכל קנייה ולא תתבטל אחרי מימוש</small></span>
+                    </label>
+
+                    {!couponDraft.recurring && (
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={couponDraft.noExpiry}
+                          onChange={(e) => setCouponDraft((d) => ({ ...d, noExpiry: e.target.checked }))}
+                        />
+                        <span><strong>ללא תוקף</strong><br /><small style={{ color: 'var(--text-3)' }}>הטבה חד־פעמית שלא תפוג עד למימוש</small></span>
+                      </label>
+                    )}
+
+                    {!couponDraft.recurring && !couponDraft.noExpiry && (
+                      <CouponField
+                        label="תוקף ההטבה בימים"
+                        hint={couponExpiryPreview(couponDraft.validityDays)}
+                      >
+                        <input
+                          className="input input-sm"
+                          type="number"
+                          min="1"
+                          value={couponDraft.validityDays}
+                          onChange={(e) => setCouponDraft((d) => ({ ...d, validityDays: e.target.value }))}
+                        />
+                      </CouponField>
+                    )}
 
                     <CouponField label="איך ההטבה תיקרא ללקוח" hint="מופיע בתיק, בהודעה ובקופה">
                       <input
@@ -5247,7 +5278,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                       <Gift size={11} />{' '}
                       {couponDraft.label || suggestedCouponLabel(couponDraft, pricelist)}
                       {' · '}
-                      {couponExpiryPreview(couponDraft.validityDays) || 'בלי תוקף'}
+                      {couponDraft.recurring ? 'קבועה · ללא תפוגה' : couponDraft.noExpiry ? 'חד־פעמית · ללא תוקף' : (couponExpiryPreview(couponDraft.validityDays) || 'בלי תוקף')}
                     </div>
 
                     {couponError && <div style={{ fontSize: 11, color: '#fb7185' }}>{couponError}</div>}
@@ -5267,7 +5298,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                   </div>
                 ) : (
                   <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowIssueCoupon(true)}>
-                    <Gift size={13} /> הנפקת הטבה ידנית
+                    <Gift size={13} /> הוספת הטבה או הנחה קבועה
                   </button>
                 )}
               </div>

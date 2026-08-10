@@ -52,7 +52,7 @@ const emptyCampaign = () => ({
   name: '',
   trigger_type: 'inactive_customer',
   trigger_config: { inactiveDays: 60, maxInactiveDays: 365 },
-  offer: { type: 'percent', value: 50, appliesTo: 'all', units: 1, validityDays: 30, label: '' },
+  offer: { type: 'percent', value: 50, appliesTo: 'all', units: 1, validityDays: 30, noExpiry: false, label: '' },
   message: { text: '', templateName: '', preferTemplate: true },
   mode: 'approval',
   is_active: false,
@@ -655,7 +655,7 @@ function CouponList({ rows, busy, onCancel }) {
                 </td>
                 <td style={{ fontSize: 12 }}>{row.issued_at}</td>
                 <td style={{ fontSize: 12 }}>
-                  {row.expires_at}
+                  {row.expires_at || (row.recurring ? 'קבועה' : 'ללא תוקף')}
                   {row.state === 'active' && row.days_left != null && (
                     <span style={{ color: 'var(--text-3)' }}> · עוד {row.days_left} ימים</span>
                   )}
@@ -779,8 +779,13 @@ function CampaignEditor({
         )}
         <div className="form-group">
           <label className="form-label">תוקף (ימים)</label>
-          <input className="input" type="number" value={draft.offer?.validityDays ?? 30}
+          <input className="input" type="number" disabled={draft.offer?.noExpiry === true} value={draft.offer?.validityDays ?? 30}
             onChange={(e) => setOffer({ validityDays: e.target.value })} />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, fontSize: 12 }}>
+            <input type="checkbox" checked={draft.offer?.noExpiry === true}
+              onChange={(e) => setOffer({ noExpiry: e.target.checked })} />
+            ללא תוקף — עד למימוש
+          </label>
         </div>
       </div>
 
