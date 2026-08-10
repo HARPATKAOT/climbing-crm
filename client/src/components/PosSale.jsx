@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ShoppingCart, Plus, Minus, Trash2, Search, User,
   Banknote, Link2, FileText, CheckCircle2, X, Percent, Tag,
-  Package, ArrowRight, Gift, Send, Settings2, Printer,
+  Package, ArrowRight, Gift, Send, Settings2, Printer, RotateCcw,
 } from 'lucide-react';
 import {
   PRODUCT_CATEGORIES,
@@ -46,6 +46,15 @@ function productTypeLabel(type) {
 
 function makeCartLineId() {
   return `cl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * כמה אנשים יחידה אחת מכסה — שדה „מספר משתתפים” במחירון.
+ * מראה את unitCapacity ב-server/posUtils.js, כמו pickBestPunchCard.
+ */
+function unitCapacity(item) {
+  const n = parseInt(String(item?.participants ?? '').trim(), 10);
+  return Number.isFinite(n) && n > 1 ? n : 1;
 }
 
 function roundMoney(n) {
@@ -371,6 +380,32 @@ export default function PosSale({
     setShowContactFields(false);
   };
 
+  /**
+   * איפוס הקופה — מסך נקי ללקוח הבא.
+   *
+   * הדלפק לא תמיד מסיים במכירה: לקוח מתחרט, נבחר בטעות אדם אחר, או שהעגלה
+   * נבנתה תוך כדי שיחה. בלי כפתור אחד שמנקה הכול צריך למחוק שורה־שורה,
+   * ומה שנשכח מתגלגל אל הלקוח הבא.
+   */
+  const resetRegister = () => {
+    setCart([]);
+    clearCustomer();
+    setAnonymousSale(false);
+    setAppliedCoupon(null);
+    setDismissedCoupons(new Set());
+    setPaymentMethod('');
+    setTenderedAmount('');
+    setTenderedDenoms({});
+    setEditingDiscountId(null);
+    setShowCustomForm(false);
+    setCustomDraft({ name: '', price: '', quantity: '1' });
+    setShowQuoteOptions(false);
+    setDocumentsBlock(null);
+    setDocumentsLink(null);
+    setResult(null);
+    setError('');
+  };
+
   // בחירת הלקוח שהגיע מבחוץ. נעשית פעם אחת לכל מזהה, כדי שניקוי הלקוח בידיים
   // לא יחזיר אותו מיד.
   const appliedInitialRef = useRef('');
@@ -644,6 +679,7 @@ ${data.link}`)}`,
           // את המוצר במחירון בכל ציור.
           grants_wall_climbing: item.grants_wall_climbing === true,
           family_shared: item.family_shared === true,
+          participants_per_unit: unitCapacity(item),
           cancellation_policy: item.cancellation_policy || null,
           discountType: null,
           discountValue: 0,
@@ -693,6 +729,9 @@ ${data.link}`)}`,
    * השרת כבר יודע לשייך כל יחידה למשתתף (`participant_ids`), אבל בדלפק לא
    * הייתה דרך לומר לו על מי: כל כניסה נרשמה על המתאמן שנבחר, וגם כשקנו שתיים
    * שתיהן היו על אותו ילד. הכמות נגזרת מהבחירה ולא להפך.
+   *
+   * יחידה אחת אינה בהכרח אדם אחד: אימון זוגי מכסה שניים, ולכן סימון של הילד
+   * השני ממלא את היחידה במקום להכפיל אותה.
    */
   const toggleParticipant = (cartLineId, studentId) => {
     setCart((prev) => prev.map((l) => {
@@ -704,7 +743,8 @@ ${data.link}`)}`,
         ? current.filter((id) => id !== studentId)
         : [...current, studentId];
       if (!next.length) return l;
-      return { ...l, participant_ids: next, quantity: next.length };
+      const perUnit = Math.max(1, Number(l.participants_per_unit) || 1);
+      return { ...l, participant_ids: next, quantity: Math.ceil(next.length / perUnit) };
     }));
   };
 
@@ -1304,6 +1344,15 @@ ${data.link}`)}`,
         >
           <div className="section-title" style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
             <User size={16} /> לקוח לחיוב
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              style={{ marginInlineStart: 'auto' }}
+              onClick={resetRegister}
+              title="ניקוי הלקוח, העגלה ואמצעי התשלום"
+            >
+              <RotateCcw size={14} /> איפוס קופה
+            </button>
           </div>
           {loadError && (
             <div
@@ -1712,6 +1761,9 @@ ${data.link}`)}`,
                           <div style={{ marginTop: 8 }}>
                             <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>
                               עבור מי:
+                              {(Number(line.participants_per_unit) || 1) > 1 && (
+                                <> {line.name} מכסה {line.participants_per_unit} משתתפים ליחידה</>
+                              )}
                             </div>
                             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                               {childrenOfSelectedParent.map((child) => {
@@ -2036,6 +2088,9 @@ ${data.link}`)}`,
                   לחשב אותו בראש בזמן שמישהו עומד ומחכה, וטעות שם היא עודף
                   שגוי; ספירת השטרות היא בדיוק מה שהיד עושה ממילא. */}
               <div style={{ fontSize: 13, fontWeight: 600 }}>התקבל מהלקוח</div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+                קליק שמאלי על שטר או מטבע מוסיף אחד, קליק ימני מוריד.
+              </div>
               <CashDenominationPad
                 variant="stepper"
                 value={tenderedDenoms}
@@ -2071,6 +2126,11 @@ ${data.link}`)}`,
                   : changePreview < 0
                     ? `חסרים ₪${Math.abs(changePreview).toFixed(2)}`
                     : `עודף להחזר: ₪${changePreview.toFixed(2)}`}
+              </div>
+              {/* מה שנשאר במגירה הוא סכום המכירה, לא מה שהלקוח הושיט: העודף
+                  יוצא חזרה. זה מה שספירת הסגירה תיבדק מולו. */}
+              <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+                יתווסף למגירה: ₪{roundMoney(total).toFixed(2)}
               </div>
             </div>
           )}

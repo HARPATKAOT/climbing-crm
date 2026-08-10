@@ -331,6 +331,7 @@ import {
   listTrackedInventory,
   listExpiringPasses,
   aggregatePosSales,
+  unitCapacity,
 } from './posUtils.js';
 import {
   childrenOfParent,
@@ -12872,6 +12873,7 @@ function mapCartLines(cart) {
       grants_wall_climbing: item.grants_wall_climbing === true,
       family_shared: item.family_shared === true,
       transferable: item.transferable === true,
+      participants_per_unit: unitCapacity(item),
       participant_ids: Array.isArray(line.participant_ids)
         ? line.participant_ids.map(String).filter(Boolean)
         : [],
@@ -12939,11 +12941,19 @@ async function resolveWallAccessSale(lines, { student, parent }) {
   const resolved = (lines || []).map((line) => {
     if (!line.grants_wall_climbing || line.family_shared) return line;
     const quantity = Math.max(1, Number(line.quantity) || 1);
+    // יחידה אחת אינה בהכרח אדם אחד: אימון זוגי מכסה שניים. הקיבולת היא
+    // כמות × משתתפים ליחידה, ופחות מזה מותר — מי שקנה זוגי ובא לבד שילם
+    // על המקום הפנוי.
+    const perUnit = Math.max(1, Number(line.participants_per_unit) || 1);
+    const capacity = quantity * perUnit;
     const participantIds = line.participant_ids?.length
       ? line.participant_ids
-      : Array.from({ length: quantity }, () => String(student.id));
-    if (participantIds.length !== quantity) {
-      throw Object.assign(new Error(`יש לשייך כל יחידה של "${line.name}" לבן משפחה`), { status: 400 });
+      : Array.from({ length: capacity }, () => String(student.id));
+    if (participantIds.length > capacity) {
+      throw Object.assign(
+        new Error(`"${line.name}" מכסה ${capacity} משתתפים ונבחרו ${participantIds.length}`),
+        { status: 400 }
+      );
     }
     for (const participantId of participantIds) {
       if (!isStudentInHousehold(db, household.id, participantId)) {
@@ -12989,20 +12999,32 @@ function registerEntriesForSale({ lines, studentId }) {
     && (line.product_type || 'product') === 'product'
   ));
   if (!entryLines.length) return null;
-  const student = db.getOne('students', studentId);
-  if (!student) return null;
-  const documents = wallDocumentsFor(studentId);
-  const group = student.groupId ? db.getOne('groups', student.groupId) : null;
-  return db.insert('check_ins', {
-    climber_id: student.id,
-    climber_name: student.name,
-    group_name: group?.name || 'טיפוס חופשי',
-    timestamp: new Date().toISOString(),
-    medical_approved: documents.ok,
-    documents_state: documents.state,
-    documents_label: documents.label,
-    source: 'pos_sale',
-  });
+  // הכניסה נרשמת על כל מי שהשורה נקנתה עבורו, ולא על הלקוח שנבחר בדלפק.
+  // אימון זוגי הוא יחידה אחת ושני מטפסים; אם נרשום רק את הראשון, השני נמצא
+  // על הקיר בלי שאיש יודע.
+  const climberIds = new Set();
+  for (const line of entryLines) {
+    const ids = line.participant_ids?.length ? line.participant_ids : [studentId];
+    for (const id of ids) if (id) climberIds.add(String(id));
+  }
+  const inserted = [];
+  for (const climberId of climberIds) {
+    const student = db.getOne('students', climberId);
+    if (!student) continue;
+    const documents = wallDocumentsFor(climberId);
+    const group = student.groupId ? db.getOne('groups', student.groupId) : null;
+    inserted.push(db.insert('check_ins', {
+      climber_id: student.id,
+      climber_name: student.name,
+      group_name: group?.name || 'טיפוס חופשי',
+      timestamp: new Date().toISOString(),
+      medical_approved: documents.ok,
+      documents_state: documents.state,
+      documents_label: documents.label,
+      source: 'pos_sale',
+    }));
+  }
+  return inserted[0] || null;
 }
 
 function fulfillSalePasses({ sale, lines, studentId, parentId, docId, docNumber }) {

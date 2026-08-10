@@ -49,10 +49,23 @@ function DenomLine({ d, qty, onBump, onSet }) {
     <div
       className={`cash-line cash-line--${d.kind}${active ? ' is-active' : ''}`}
       style={{ '--accent': d.accent, '--tint': d.tint }}
-      title={title}
+      title={`${title} — קליק שמאלי מוסיף, קליק ימני מוריד`}
     >
-      {/* RTL: ימין ← תמונה · בוחר כמות · סכום השורה */}
-      <div className={`cash-line-img cash-line-img--${d.kind}`}>
+      {/* הספירה נעשית ביד על השטרות עצמם: קליק שמאלי על השטר מוסיף אחד,
+          קליק ימני מוריד. הכפתורים והמספר נשארים למי שמעדיף אותם ולתיקון
+          מהיר של כמות גדולה. */}
+      <div
+        className={`cash-line-img cash-line-img--${d.kind}`}
+        role="button"
+        tabIndex={0}
+        aria-label={`${title} — הוספה`}
+        style={{ cursor: 'pointer', userSelect: 'none' }}
+        onClick={() => onBump(1)}
+        onContextMenu={(e) => { e.preventDefault(); if (qty > 0) onBump(-1); }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onBump(1); }
+        }}
+      >
         <img
           src={d.image}
           alt={title}
