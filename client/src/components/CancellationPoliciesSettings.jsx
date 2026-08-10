@@ -3,7 +3,8 @@ import {
   CalendarClock, Clock3, Eye, FileText, Footprints, Loader2, Plus, Save, Send,
   Ticket, PartyPopper, Percent,
 } from 'lucide-react';
-import { formatIls } from '../utils/vat.js';
+
+import CancellationPolicyPreview from './CancellationPolicyPreview.jsx';
 
 const DEFAULT_RULES = [
   { id: 'seven_days', min_hours_before: 168, max_hours_before: '', refund_percent: 100, fixed_fee: 50 },
@@ -409,43 +410,7 @@ export default function CancellationPoliciesSettings() {
 
             <div className="policy-preview">
               <div className="policy-block-title"><Eye size={15} /> כפי שהלקוח יראה</div>
-              {coolingHours > 0 && (
-                <p className="policy-preview-line is-good">
-                  <b>עד {coolingHours} שעות מרגע ההרשמה:</b> ביטול ללא עלות, החזר מלא.
-                </p>
-              )}
-              {draft.basis === 'usage' ? (
-                <>
-                  <p className="policy-preview-line">
-                    <b>ביטול באמצע:</b>{' '}
-                    {draft.usage_rule.settlement === 'full_price'
-                      ? (draft.usage_rule.full_unit_price_source === 'anchor'
-                        ? 'מה שנוצל מחויב במחיר היחידה שבמחירון ביום המכירה, והיתרה מוחזרת'
-                        : `מה שנוצל מחויב ב-${formatIls(draft.usage_rule.full_unit_price)} ליחידה, והיתרה מוחזרת`)
-                      : `החזר ${Number(draft.usage_rule.unused_refund_percent) || 0}% מערך החלק שלא נוצל`}
-                    {Number(draft.usage_rule.fixed_fee)
-                      ? `, בניכוי ${formatIls(draft.usage_rule.fixed_fee)} דמי ביטול`
-                      : ''}.
-                  </p>
-                  {Number(draft.usage_rule.min_used_units) > 0 && (
-                    <p className="policy-preview-line">
-                      <b>התחייבות מינימלית:</b> {draft.usage_rule.min_used_units} יחידות משולמות בכל מקרה.
-                    </p>
-                  )}
-                  {Number(draft.usage_rule.no_refund_after_percent) < 100 && (
-                    <p className="policy-preview-line">
-                      <b>מעל {draft.usage_rule.no_refund_after_percent}% ניצול:</b> אין החזר.
-                    </p>
-                  )}
-                </>
-              ) : draft.rules.map((rule) => (
-                <p key={rule.id} className="policy-preview-line">
-                  <b>{ruleLabel(rule)}:</b> החזר {Number(rule.refund_percent) || 0}%
-                  {Number(rule.fixed_fee) ? `, בניכוי ${formatIls(rule.fixed_fee)} לכל משתתף` : ''}
-                </p>
-              ))}
-              {draft.free_text && <p className="policy-preview-free">{draft.free_text}</p>}
-              <p className="policy-preview-line is-good"><b>ביטול על ידינו:</b> החזר מלא.</p>
+              <CancellationPolicyPreview policy={{ ...draft, cooling_off_hours: coolingHours }} className="" />
             </div>
 
             {selected?.versions?.length > 0 && (

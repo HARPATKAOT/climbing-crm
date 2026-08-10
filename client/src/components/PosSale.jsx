@@ -15,6 +15,7 @@ import {
   productImageOf,
 } from './productCategories.js';
 import AppSelect from './AppSelect.jsx';
+import CancellationPolicyPreview from './CancellationPolicyPreview.jsx';
 import CashCountModal from './CashCountModal.jsx';
 import EmployeeSelect from './EmployeeSelect.jsx';
 import { printReceiptFromSale, openInvoiceFallback, thermalSupported } from '../utils/thermalPrinter.js';
@@ -1726,21 +1727,8 @@ export default function PosSale({
               <div style={{ fontWeight: 800, marginBottom: 8 }}>מדיניות ביטול ותנאים להצגה ללקוח</div>
               {activeCancellationPolicies.map((policy) => (
                 <div key={policy.version_id} style={{ marginBottom: 10 }}>
-                  <div style={{ fontWeight: 700 }}>{policy.policy_name}</div>
-                  <ul style={{ margin: '6px 0', paddingInlineStart: 20, lineHeight: 1.6 }}>
-                    {(policy.rules || []).map((rule) => (
-                      <li key={rule.id}>
-                        {Number(rule.min_hours_before) >= 168
-                          ? 'לפחות 7 ימים לפני הפעילות'
-                          : Number(rule.min_hours_before) >= 48
-                            ? 'בין 48 שעות ל־7 ימים לפני הפעילות'
-                            : 'פחות מ־48 שעות לפני הפעילות'}:
-                        {' '}{rule.refund_percent}% החזר
-                        {Number(rule.fixed_fee) > 0 ? `, בניכוי ₪${rule.fixed_fee} לכל משתתף` : ''}
-                      </li>
-                    ))}
-                  </ul>
-                  {policy.free_text && <div style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>{policy.free_text}</div>}
+                  <div style={{ fontWeight: 700, marginBottom: 4 }}>{policy.policy_name}</div>
+                  <CancellationPolicyPreview policy={policy} />
                 </div>
               ))}
               <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', fontWeight: 700 }}>
