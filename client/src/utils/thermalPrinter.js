@@ -61,7 +61,16 @@ export async function sendEscPosBase64(base64) {
   const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
   const { device, interfaceNumber, endpointNumber } = await openDevice();
   try {
-    await device.transferOut(endpointNumber, bytes);
+    // `transferOut` אינו זורק כשהמדפסת מסרבת — הוא מחזיר סטטוס. בלי הבדיקה
+    // הזאת שליחה שנבלעה נראית כמו הצלחה, ואיש לא מבין למה שום דבר לא יצא.
+    const result = await device.transferOut(endpointNumber, bytes);
+    if (result?.status && result.status !== 'ok') {
+      throw new Error(
+        result.status === 'stall'
+          ? 'המדפסת דחתה את השליחה — כבו והדליקו אותה ונסו שוב'
+          : `המדפסת החזירה סטטוס ${result.status}`
+      );
+    }
   } finally {
     try {
       await device.releaseInterface(interfaceNumber);

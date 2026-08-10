@@ -816,9 +816,11 @@ export default function PosSale({
           console.warn('thermal print failed', printErr);
           const docUrl = data.doc?.docUrl || data.sale?.icount_doc_url;
           if (docUrl) openInvoiceFallback(docUrl);
+          // ההודעה הכללית לא אמרה למה נכשל, ולכן לא היה מה לעשות איתה.
+          // הסיבה שהדפדפן החזיר היא ההבדל בין „המדפסת כבויה” לבין „לא חוברה”.
           setError(
             thermalSupported()
-              ? 'המכירה נקלטה, אבל ההדפסה נכשלה — בדקו את חיבור המדפסת או פתחו את החשבונית מהקישור'
+              ? `המכירה נקלטה, אבל ההדפסה נכשלה: ${printErr?.message || 'שגיאה לא ידועה'}`
               : 'המכירה נקלטה. הדפסה ישירה לא זמינה בדפדפן הזה — נפתחה החשבונית להדפסה רגילה'
           );
         }

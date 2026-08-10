@@ -80,3 +80,17 @@ test('a row removed by hand does not come back the same day', () => {
   );
   assert.deepEqual(buildPendingQueue({ ...parts, dismissedIds: ['entry:s2', 'payment:ps1'] }), []);
 });
+
+test('someone who paid for a single entry is on the list like anyone who walked in', () => {
+  // כניסה בודדת אינה מייצרת כרטיסייה, ולכן אין ניקוב שירשום את הכניסה. אם
+  // המכירה לא רושמת אותה, מי ששילם ונכנס אינו מופיע בשום מקום — לא ביומן
+  // ולא בין מי שממתין לתדריך.
+  const rows = entryRows({
+    checkIns: [{ climber_id: 's2', timestamp: '2026-08-10T09:00:00.000Z', source: 'pos_sale' }],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: () => ({ state: 'missing' }),
+  });
+  assert.deepEqual(rows.map((r) => r.name), ['תמר לוי']);
+});

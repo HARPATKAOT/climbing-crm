@@ -10248,6 +10248,7 @@ app.post('/api/icount/webhook', async (req, res) => {
             docNumber: docnum || payment.icount_doc_number,
           });
           decrementInventory(lines);
+          registerEntriesForSale({ lines, studentId: sale.student_id });
           const docUrl =
             updated?.icount_doc_url ||
             payload.doc_url ||
@@ -12964,6 +12965,37 @@ async function enforceWallAccessSaleEligibility(lines, { student, parent }) {
   throw error;
 }
 
+/**
+ * מכירת כניסה בודדת **היא** הכניסה.
+ *
+ * כרטיסייה ומנוי מייצרים כרטיס שמנוקב בדלפק, ולכן הכניסה נרשמת בניקוב. כניסה
+ * בודדת לא מייצרת כלום — כך שמי שקנה אותה שילם, נכנס לקיר, ולא הופיע באף
+ * רשימה: לא ביומן הכניסות, ולא בין מי שממתין לתדריך ולמבחן אבטחה. מי ששילם
+ * על כניסה עכשיו נכנס עכשיו, וזה נרשם כאן.
+ */
+function registerEntriesForSale({ lines, studentId }) {
+  if (!studentId) return null;
+  const entryLines = (lines || []).filter((line) => (
+    line.grants_wall_climbing === true
+    && (line.product_type || 'product') === 'product'
+  ));
+  if (!entryLines.length) return null;
+  const student = db.getOne('students', studentId);
+  if (!student) return null;
+  const documents = wallDocumentsFor(studentId);
+  const group = student.groupId ? db.getOne('groups', student.groupId) : null;
+  return db.insert('check_ins', {
+    climber_id: student.id,
+    climber_name: student.name,
+    group_name: group?.name || 'טיפוס חופשי',
+    timestamp: new Date().toISOString(),
+    medical_approved: documents.ok,
+    documents_state: documents.state,
+    documents_label: documents.label,
+    source: 'pos_sale',
+  });
+}
+
 function fulfillSalePasses({ sale, lines, studentId, parentId, docId, docNumber }) {
   const issued = [];
   for (const line of lines) {
@@ -14153,6 +14185,7 @@ app.post('/api/pos/sale', async (req, res) => {
       docNumber: doc?.docnum,
     });
     decrementInventory(lines);
+    registerEntriesForSale({ lines, studentId: student?.id });
 
     db.insert('payments', {
       parent_id: syncedParent?.id || null,
