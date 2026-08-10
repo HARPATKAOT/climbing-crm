@@ -12,6 +12,17 @@ services:
         value: "20"
 
   - type: cron
+    name: climbing-crm-finance-sync
+    runtime: node
+    rootDir: server
+    schedule: "*/15 * * * *"
+    buildCommand: npm install
+    startCommand: node -e "const s=process.env.CRON_SECRET;if(!s)throw new Error('CRON_SECRET missing');fetch((process.env.RENDER_EXTERNAL_URL||'https://climbing-crm-api.onrender.com')+'/api/finance/sync-scheduled',{method:'POST',headers:{'x-cron-secret':s,'Content-Type':'application/json'}}).then(async r=>{const j=await r.json();console.log(j);if(!r.ok)process.exit(1)}).catch(e=>{console.error(e);process.exit(1)})"
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+
+  - type: cron
     name: climbing-crm-attendance-ensure
     runtime: node
     rootDir: server

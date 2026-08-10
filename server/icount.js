@@ -348,12 +348,30 @@ export async function searchDocs({ startDate, endDate } = {}) {
     start = toYyyymmdd(d.toISOString().slice(0, 10));
   }
 
-  const data = await icountPost('doc/search', {
-    start_date: start,
-    end_date: end,
-  });
+  let data;
+  try {
+    data = await icountPost('doc/search', { start_date: start, end_date: end });
+  } catch (error) {
+    if (/אין תוצאות|no results/i.test(error.message || '')) return [];
+    throw error;
+  }
 
   const list = data.results_list || data.documents || data.docs || [];
+  return Array.isArray(list) ? list : Object.values(list);
+}
+
+/** Search supplier expenses for a date range. */
+export async function searchExpenses({ startDate, endDate } = {}) {
+  const end = endDate ? toYyyymmdd(endDate) : todayYyyymmdd();
+  const start = startDate ? toYyyymmdd(startDate) : toYyyymmdd(new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
+  let data;
+  try {
+    data = await icountPost('expense/search', { start_date: start, end_date: end });
+  } catch (error) {
+    if (/אין תוצאות|no results/i.test(error.message || '')) return [];
+    throw error;
+  }
+  const list = data.results_list || data.expenses || data.results || [];
   return Array.isArray(list) ? list : Object.values(list);
 }
 
@@ -733,6 +751,7 @@ export const icount = {
   createInvRec,
   createOffer,
   searchDocs,
+  searchExpenses,
   getDoc,
   getDocInfo,
   extractCcClearing,
