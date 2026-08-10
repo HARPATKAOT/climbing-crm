@@ -161,20 +161,21 @@ test('family discount settings default to 5 percent and clamp to 0-100', () => {
   assert.equal(normalizeEquipmentSettings({ family_discount_percent: -2 }).family_discount_percent, 0);
 });
 
-test('magnesium explanation is concise by default and remains owner-editable', () => {
+test('magnesium explanation has a default and remains owner-editable', () => {
   assert.equal(normalizeEquipmentSettings({}).item_info.chalk_bag, DEFAULT_CHALK_BAG_INFO);
   assert.equal(
     normalizeEquipmentSettings({ item_info: { chalk_bag: 'טקסט מותאם של העסק' } }).item_info.chalk_bag,
     'טקסט מותאם של העסק'
   );
-  assert.equal(
-    normalizeEquipmentSettings({
-      item_info: {
-        chalk_bag: 'מגנזיום הוא אבקה לבנה שמייבשת את הידיים מזיעה, כדי שהאחיזה לא תחליק. כל מטפס משתמש בה. השק נקשר למותן ומלווה את הילד/ה לאורך כל שנות הטיפוס.',
-      },
-    }).item_info.chalk_bag,
-    DEFAULT_CHALK_BAG_INFO
-  );
+});
+
+test('saved magnesium wording is returned verbatim, including the original wording', () => {
+  const original = 'מגנזיום הוא אבקה לבנה שמייבשת את הידיים מזיעה, כדי שהאחיזה לא תחליק. כל מטפס משתמש בה. השק נקשר למותן ומלווה את הילד/ה לאורך כל שנות הטיפוס.';
+  const settings = normalizeEquipmentSettings({
+    ...DEFAULT_EQUIPMENT_SETTINGS,
+    item_info: { ...DEFAULT_EQUIPMENT_SETTINGS.item_info, chalk_bag: original },
+  });
+  assert.equal(settings.item_info.chalk_bag, original);
 });
 
 test('markEquipmentItemsPaid sets shoes rental window and shirt size', () => {

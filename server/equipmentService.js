@@ -40,9 +40,6 @@ export const EQUIPMENT_INFO_KEYS = ['shoes', 'shirt', 'chalk_bag'];
 export const DEFAULT_CHALK_BAG_INFO =
   'מגנזיום סופג לחות מהידיים, משפר את האחיזה ועוזר למנוע החלקה מהאחיזות בזמן הטיפוס.';
 
-const LEGACY_CHALK_BAG_INFO =
-  'מגנזיום הוא אבקה לבנה שמייבשת את הידיים מזיעה, כדי שהאחיזה לא תחליק. כל מטפס משתמש בה. השק נקשר למותן ומלווה את הילד/ה לאורך כל שנות הטיפוס.';
-
 export const DEFAULT_EQUIPMENT_SETTINGS = {
   prices: {
     // נעליים מושכרות לחצי עונת חוגים. זה המחיר המלא לחצי עונה,
@@ -98,16 +95,12 @@ export function normalizeEquipmentSettings(raw = {}) {
   if (!shirtSizes.length) shirtSizes = [...base.shirt_sizes];
   const rentalDays = Math.max(1, Number(raw.rental_days ?? base.rental_days) || base.rental_days);
 
-  // Free text, trimmed and capped. The legacy magnesium paragraph is migrated
-  // to the shorter checkout wording requested by the business. A custom value
-  // remains untouched and is still editable from Equipment Settings.
-  const infoIn = raw.item_info && typeof raw.item_info === 'object' ? raw.item_info : {};
+  // Free text from the settings screen is the source of truth. Never replace
+  // saved owner wording with a built-in explanation.
+  const infoIn = raw.item_info && typeof raw.item_info === 'object' ? raw.item_info : base.item_info;
   const itemInfo = {};
   for (const key of EQUIPMENT_INFO_KEYS) {
     itemInfo[key] = String(infoIn[key] ?? '').trim().slice(0, 1200);
-  }
-  if (!itemInfo.chalk_bag || itemInfo.chalk_bag === LEGACY_CHALK_BAG_INFO) {
-    itemInfo.chalk_bag = base.item_info.chalk_bag;
   }
   const feeRaw = raw.enrichment_fee;
   const fee = feeRaw === '' || feeRaw === null || feeRaw === undefined
