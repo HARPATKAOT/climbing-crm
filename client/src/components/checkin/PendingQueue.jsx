@@ -172,21 +172,31 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                   style={row.paid ? { background: 'rgba(16,185,129,0.07)' } : undefined}
                 >
                   <td style={{ fontFamily: 'monospace' }}>{hhmm(row.at)}</td>
-                  <td style={{ fontWeight: 600 }}>{row.name}</td>
-                  <td>
-                    {!isPayment ? (
-                      <span className={row.state === 'missing' ? 'badge badge-red' : 'badge badge-amber'}>
-                        <ShieldAlert size={12} /> {row.state === 'missing' ? 'תדריך ומבחן אבטחה' : `מבחן אבטחה פג ${row.expires_at || ''}`}
-                      </span>
-                    ) : row.paid ? (
-                      <span className="badge badge-green">
-                        <CheckCircle2 size={12} /> שולם ₪{row.total} — אפשר להכניס
-                      </span>
-                    ) : (
-                      <span className="badge badge-amber">
-                        <Hourglass size={12} /> קישור תשלום ₪{row.total} — טרם שולם
-                      </span>
+                  <td style={{ fontWeight: 600 }}>
+                    {row.name}
+                    {row.payer_name && row.payer_name !== row.name && (
+                      <div style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 400 }}>
+                        שילם: {row.payer_name}
+                      </div>
                     )}
+                  </td>
+                  <td>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {isPayment && (row.paid ? (
+                        <span className="badge badge-green">
+                          <CheckCircle2 size={12} /> שולם ₪{row.total} — אפשר להכניס
+                        </span>
+                      ) : (
+                        <span className="badge badge-amber">
+                          <Hourglass size={12} /> קישור תשלום ₪{row.total} — טרם שולם
+                        </span>
+                      ))}
+                      {row.needs_safety && (
+                        <span className={row.state === 'missing' ? 'badge badge-red' : 'badge badge-amber'}>
+                          <ShieldAlert size={12} /> {row.state === 'missing' ? 'תדריך ומבחן אבטחה' : `מבחן אבטחה פג ${row.expires_at || ''}`}
+                        </span>
+                      )}
+                    </div>
                     {isPayment && row.items && (
                       <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 3 }}>{row.items}</div>
                     )}
@@ -210,14 +220,14 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                       {isPayment && !waitingForMoney && (
                         <button
                           type="button"
-                          className="btn btn-primary btn-sm"
+                          className="btn btn-secondary btn-sm"
                           disabled={savingId === row.id}
                           onClick={() => clearPayment(row)}
                         >
                           <CreditCard size={14} /> {savingId === row.id ? 'שומר...' : 'ראיתי — הסר'}
                         </button>
                       )}
-                      {!isPayment && (
+                      {row.needs_safety && row.student_id && (
                         <button
                           type="button"
                           className="btn btn-primary btn-sm"

@@ -94,3 +94,41 @@ test('someone who paid for a single entry is on the list like anyone who walked 
   });
   assert.deepEqual(rows.map((r) => r.name), ['תמר לוי']);
 });
+
+test('a parent paying for their child is one row, in the child\u0027s name', () => {
+  // ההורה שילם והופיע ברשימה בשמו; אחרי שהתשלום נפרע נוצרה כניסה לילד
+  // והצטרפה שורה שנייה. כניסה אחת, אדם אחד, שורה אחת.
+  const queue = buildPendingQueue({
+    checkIns: [{ climber_id: 's2', timestamp: '2026-08-10T09:10:00.000Z', source: 'pos_sale' }],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: () => ({ state: 'missing' }),
+    sales: [{
+      id: 'ps1', payment_method: 'online', status: 'paid', student_id: 's2',
+      customer_name: 'נועה לוי', total: 60,
+      created_at: '2026-08-10T09:00:00.000Z', updated_at: '2026-08-10T09:05:00.000Z',
+    }],
+  });
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].name, 'תמר לוי');
+  assert.equal(queue[0].payer_name, 'נועה לוי');
+  assert.equal(queue[0].paid, true);
+  assert.equal(queue[0].needs_safety, true);
+});
+
+test('a payment with no climber attached keeps its own row under the payer', () => {
+  const queue = buildPendingQueue({
+    checkIns: [],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: () => ({ state: 'missing' }),
+    sales: [{
+      id: 'ps9', payment_method: 'online', status: 'pending_payment',
+      customer_name: 'קונה מזדמן', total: 20, created_at: '2026-08-10T09:00:00.000Z',
+    }],
+  });
+  assert.deepEqual(queue.map((r) => r.name), ['קונה מזדמן']);
+  assert.equal(queue[0].needs_safety, undefined);
+});
