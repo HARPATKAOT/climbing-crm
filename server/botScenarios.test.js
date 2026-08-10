@@ -36,6 +36,7 @@ const SCENARIO_COLLECTIONS = [
   'bot_actions',
   'student_equipment',
   'equipment_checkouts',
+  'centre_registration_checks',
   'student_guardians',
   'program_eligibility',
   'placement_requests',
@@ -732,11 +733,30 @@ test('קישור תשלום ציוד: אילו פריטים חסרים, בלי �
     assert.match(first.קישור, /\/api\/e\//);
     // דף התשלום הוא המקום היחיד שיודע את המחיר — הודעה עם סכום היא מספר להתווכח עליו.
     assert.equal(first.סכום, undefined);
-    assert.match(first.הערה, /בלי לנקוב בסכום/);
+    assert.match(first.הערה, /אין לנקוב בסכום/);
 
     const second = await tools.getEquipmentPaymentLink({ childName: 'יותם' });
     assert.equal(second.קישור, first.קישור);
     assert.equal((db.get('equipment_checkouts') || []).length, 1);
+  });
+});
+
+test('אישור הרשמה במתנ״ס ממשיך לציוד שעדיין לא נסגר', async () => {
+  await withSeed({
+    parents: [PARENT],
+    students: [childYotam({ status: 'pending_signup', groupId: GROUP_GD.id })],
+    groups: [GROUP_GD],
+    student_equipment: [
+      { id: 'se-open', student_id: 's-yotam', item_type: 'shoes', payment_status: 'unpaid' },
+    ],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const result = await tools.reportCentreRegistration({ childName: 'יותם' });
+
+    assert.equal(result.ציוד.מצב, 'טרם נסגר');
+    assert.match(result.ציוד.קישור, /\/api\/e\//);
+    assert.match(result.ציוד.הסבר, /ציוד מהבית/);
+    assert.match(result.הערה, /אין צורך בפעולה נוספת/);
   });
 });
 
@@ -759,6 +779,29 @@ test('a returning participant is found only by one safe full-name match', async 
     const unsafe = await tools.findExistingParticipant({ childName: 'Dor' });
     assert.equal(unsafe.נמצא, false);
   });
+});
+
+test('גם למי שיש ציוד — צריך להיכנס לקישור ולסמן', async () => {
+  await withSeed({
+    groups: [GROUP_GD],
+    students: [childYotam()],
+    ...signedFormFor(['s-yotam']),
+    student_equipment: [
+      { id: 'se-1', student_id: 's-yotam', item_type: 'shoes', payment_status: 'unpaid' },
+    ],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const link = await tools.getEquipmentPaymentLink({ childName: 'יותם' });
+
+    // «אנחנו לא צריכים ציוד, יש לנו משנה שעברה» — וההורה לא ידע שצריך
+    // בכל זאת להיכנס ולסמן, ולכן הפריט נשאר חסר במערכת.
+    assert.match(link.הערה, /בכל מקרה/);
+    assert.match(link.הערה, /נשאר חסר/);
+    assert.match(link.מה_לומר, /לסמן מה כבר יש/);
+  });
+
+  const { CUSTOMER_TOOL_RULES } = await import('./botToolTurn.js');
+  assert.match(CUSTOMER_TOOL_RULES, /אל תאמר «מצוין, אין צורך»/);
 });
 
 test('חבילת ההרשמה: שלושה שלבים בסדר, ושלב הציוד בלי סכום', async () => {

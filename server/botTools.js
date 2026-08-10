@@ -1291,10 +1291,25 @@ export function buildCustomerTools({
         );
       }
 
+      // Completing the registration with the community centre is not the end
+      // of onboarding while equipment is still unresolved.  Return the actual
+      // equipment state in the same tool result so the model cannot close the
+      // conversation after acknowledging only the registration.
+      const equipment = await tools.getEquipmentPaymentLink({ childName: student.name || named });
+
       return {
         נרשם_לבדיקה: student.name || '',
+        ציוד: equipment.קישור
+          ? {
+            מצב: 'טרם נסגר',
+            פריטים: equipment.פריטים || '',
+            קישור: equipment.קישור,
+            הסבר: 'יש להמשיך עכשיו לסגירת הציוד. גם מי שיש לו ציוד מהבית נכנס לקישור ומסמן מה כבר קיים.',
+          }
+          : { מצב: 'סגור', הערה: equipment.הערה || '' },
         הערה: 'הדיווח נשמר לבדיקה מול המתנ״ס. יש להודות ללקוח ולומר שהדיווח התקבל '
-          + 'ושהצוות יאמת את ההרשמה. אין לומר שההרשמה אושרה או שהסטטוס כבר הסתנכרן.',
+          + 'ושהצוות יאמת את ההרשמה. אם שדה הציוד מציג «טרם נסגר», חובה להמשיך אליו באותה תשובה '
+          + 'ולשלוח את הקישור; אין לומר שאין צורך בפעולה נוספת. אין לומר שההרשמה אושרה או שהסטטוס כבר הסתנכרן.',
       };
     },
 
@@ -1603,9 +1618,16 @@ export function buildCustomerTools({
         מתאמן: student.name || '',
         פריטים: describeEquipmentItems(itemTypes, shirtSize),
         קישור: buildRedirectUrl('e', token),
-        הערה: 'יש לשלוח את הקישור גם למי שיש לו ציוד משנים קודמות: בדף מסמנים '
-          + 'מה כבר קיים ורוכשים רק את החסר. הסימון אינו מחייב וניתן לביטול. '
-          + 'בלי לנקוב בסכום ובלי לפרט מחיר לפריט.',
+        // "יש לנו ציוד משנה שעברה" is not the end of the errand: the page is
+        // also where a parent says so, item by item, and until they do the kit
+        // reads as missing. Saying only "you can buy in advance" left families
+        // who own everything with nothing to do and a gap nobody could see.
+        הערה: 'יש להיכנס לקישור בכל מקרה — גם למי שכבר יש ציוד. בדף מסמנים על '
+          + 'כל פריט אם הוא כבר קיים, ורוכשים רק את מה שחסר. בלי הסימון הפריט '
+          + 'נשאר חסר במערכת. הסימון ניתן לשינוי. אין לנקוב בסכום ואין לפרט '
+          + 'מחיר לפריט.',
+        מה_לומר: 'להסביר שהכניסה לקישור נדרשת משני הצדדים: לסמן מה כבר יש, '
+          + 'ולהשלים את מה שחסר.',
       };
     },
 
@@ -2054,7 +2076,8 @@ export function buildCustomerTools({
           // No sum here either — see getEquipmentPaymentLink. The key stayed
           // behind after the amount was dropped, handing the model an empty
           // field where a price used to be.
-          הסבר: 'אפשר לשלם מראש, ולקבל את הציוד באימון הראשון',
+          הסבר: 'נכנסים לקישור בכל מקרה: מסמנים מה כבר יש, ומשלימים את החסר. '
+            + 'מי שמשלם מראש מקבל את הציוד באימון הראשון.',
         }
         : { מצב: 'אין חוב ציוד', הערה: equipment.הערה || '' };
 
