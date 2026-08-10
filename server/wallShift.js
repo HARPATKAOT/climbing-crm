@@ -13,12 +13,18 @@
  */
 
 import { employeeIsWallStaff } from './employeeScope.js';
-import { overlappingPaidMinutes, earlyArrivalNote } from './staffAttendanceSettings.js';
-import { openWallShifts, employeeCanOperateWall } from './wallOperations.js';
+import { employeeCanOpenWall, overlappingPaidMinutes, earlyArrivalNote } from './staffAttendanceSettings.js';
 import { roundHoursHalfUp } from './wageRates.js';
 
 export const WALL_ACTIVITY_TYPE = 'counter_shift';
 export const WALL_ROLE = Object.freeze({ OPENER: 'opener', STAFF: 'staff' });
+
+/** המשמרות הפתוחות של הקיר. משמרות שנפתחו ממסך העובדים נספרות גם הן. */
+export function openWallShifts(shiftHours = []) {
+  return (Array.isArray(shiftHours) ? shiftHours : []).filter(
+    (shift) => shift?.status === 'open' && (shift?.activity_type || WALL_ACTIVITY_TYPE) === WALL_ACTIVITY_TYPE
+  );
+}
 
 /**
  * מי פתח את המשמרת.
@@ -90,7 +96,7 @@ export function qualifiedClosersOnShift(openShifts = [], employees = []) {
   const byId = new Map((Array.isArray(employees) ? employees : []).map((emp) => [emp?.id, emp]));
   return open
     .map((shift) => byId.get(shift.employee_id))
-    .filter((emp) => emp && employeeCanOperateWall(emp));
+    .filter((emp) => emp && employeeCanOpenWall(emp));
 }
 
 /** האם העובד רשאי בכלל להיכנס למשמרת קיר מהמסוף. */

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   WALL_ROLE,
+  openWallShifts,
   wallShiftOpener,
   wallShiftStage,
   isLastOnShift,
@@ -10,7 +11,6 @@ import {
   canJoinShift,
   buildWallPayrollRow,
 } from './wallShift.js';
-import { openWallShifts } from './wallOperations.js';
 
 const openerShift = { id: 'sh1', employee_id: 'e1', status: 'open', activity_type: 'counter_shift', wall_role: WALL_ROLE.OPENER, clock_in: '2026-08-10T06:00:00.000Z' };
 const staffShift = { id: 'sh2', employee_id: 'e2', status: 'open', activity_type: 'counter_shift', wall_role: WALL_ROLE.STAFF, clock_in: '2026-08-10T08:00:00.000Z' };

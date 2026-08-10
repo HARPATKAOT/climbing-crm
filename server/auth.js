@@ -62,6 +62,8 @@ const PUBLIC_API_ROUTES = [
   /^\/google-calendar\/oauth\/callback$/,
   /^\/google-calendar\/sync-due$/,
   /^\/google-contacts\/oauth\/callback$/,
+  /^\/google-contacts\/sync-due$/,
+  /^\/finance\/sync-scheduled$/,
 ];
 
 const READ = ['GET'];
@@ -93,8 +95,7 @@ const TEAM_RULES = [
   { methods: READ, pattern: /^\/wall-shift(\/|$)/, module: 'checkin' },
   { methods: WRITE, pattern: /^\/wall-shift(\/|$)/, module: 'checkin', level: 'edit' },
   { methods: READ, pattern: /^\/checkin\//, module: 'checkin' },
-  { methods: WRITE, pattern: /^\/checkin\/pending\//, module: 'checkin', level: 'edit' },
-  { methods: READ, pattern: /^\/settings\/staff-attendance$/, anyModules: ['attendance', 'checkin', 'shifts'] },
+  { methods: READ, pattern: /^\/settings\/staff-attendance$/, module: 'attendance' },
 
   { methods: READ, pattern: /^\/equipment-settings$/, module: 'equipment' },
   { methods: READ, pattern: /^\/(equipment|student-equipment)(\/|$)/, module: 'equipment' },
@@ -126,6 +127,7 @@ const TEAM_RULES = [
   // היא לא מחזירה שום נתון על העסק. בלעדיה עמדת הקיר לא יכולה להדפיס בכלל.
   { methods: WRITE, pattern: /^\/cash-register\/receipt-bytes$/, module: 'cash_management', level: 'edit' },
   { methods: [...READ, ...WRITE], pattern: /^\/(cash-register|payments|icount)(\/|$)/, module: 'cash_management', sensitive: 'finance' },
+  { methods: [...READ, ...WRITE], pattern: /^\/finance(\/|$)/, module: 'cash_management', sensitive: 'finance' },
 
   { methods: READ, pattern: /^\/safety\/check-types(\/|$)/, anyModules: ['safety_checks', 'safety_settings'] },
   { methods: WRITE, pattern: /^\/safety\/check-types(\/|$)/, module: 'safety_settings', level: 'edit' },

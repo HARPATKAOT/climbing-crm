@@ -81,11 +81,7 @@ export function canFillRole(employee, required) {
  */
 export function staffForRole(employees, required, keepIds = []) {
   const keep = new Set(keepIds.filter(Boolean));
-  return (employees || []).filter((e) => (
-    e?.is_active !== false
-    && e?.active !== false
-    && (keep.has(e.id) || canFillRole(e, required))
-  ));
+  return (employees || []).filter((e) => keep.has(e.id) || canFillRole(e, required));
 }
 
 /** נוסח אחיד למצב שבו אף עובד לא סומן בתפקיד הנדרש. */

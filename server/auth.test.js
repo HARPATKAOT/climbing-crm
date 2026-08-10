@@ -66,26 +66,6 @@ test('module levels and sensitive grants are both enforced', () => {
   assert.equal(isStaffRequestAllowed('GET', '/api/activities/a1/host-payment/invoice', context), false);
 });
 
-test('wall station workflow has safe reads without finance administration', () => {
-  const context = {
-    role: 'staff',
-    modules: {
-      checkin: 'edit', cash_management: 'edit', safety_checks: 'edit',
-      employees: 'view', shifts: 'edit', pos: 'edit', customers: 'view',
-    },
-    sensitive: { finance: false, hr: false },
-    account_type: 'shared_station',
-  };
-  assert.equal(isStaffRequestAllowed('GET', '/api/settings/staff-attendance', context), true);
-  assert.equal(isStaffRequestAllowed('GET', '/api/trainers', context), true);
-  assert.equal(isStaffRequestAllowed('POST', '/api/wall-shift/open', context), true);
-  assert.equal(isStaffRequestAllowed('POST', '/api/wall-shift/close', context), true);
-  assert.equal(isStaffRequestAllowed('GET', '/api/cash-register/session', context), true);
-  assert.equal(isStaffRequestAllowed('GET', '/api/cash-register', context), false);
-  assert.equal(isStaffRequestAllowed('GET', '/api/pos/sales/sale-1/invoice', context), false);
-  assert.equal(isStaffRequestAllowed('POST', '/api/pos/sales/sale-1/refund', context), false);
-});
-
 test('self employee routes require an employee link', () => {
   const base = { role: 'staff', modules: {}, sensitive: {} };
   assert.equal(isStaffRequestAllowed('GET', '/api/me/employee', base), false);

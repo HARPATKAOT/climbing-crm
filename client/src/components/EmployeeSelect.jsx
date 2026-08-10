@@ -17,7 +17,7 @@ export default function EmployeeSelect({
 }) {
   const active = useMemo(
     () => (Array.isArray(employees) ? employees : [])
-      .filter((e) => e && e.is_active !== false && e.active !== false && String(e.name || '').trim())
+      .filter((e) => e && e.is_active !== false && String(e.name || '').trim())
       .slice()
       .sort((a, b) => String(a.name).localeCompare(String(b.name), 'he')),
     [employees]
