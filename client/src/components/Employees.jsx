@@ -1261,6 +1261,11 @@ function EmployeeFormModal({
   const [canOperateCash, setCanOperateCash] = useState(
     () => employee?.can_operate_cash === true
   );
+  // תדריך ומבחן אבטחה הם מה שמכשיר מתאמן לטפס. מי שחותם עליהם קובע בפועל
+  // שמותר לאדם להיות על הקיר, ולכן זו הסמכה נפרדת מחתימה על בדיקות הציוד.
+  const [canTestSafety, setCanTestSafety] = useState(
+    () => employee?.can_test_safety === true
+  );
   // קטלוג התפקידים מגיע מהשרת; תפקידי מערכת נעולים, השאר ניתנים לעריכה.
   const [roleCatalog, setRoleCatalog] = useState(null);
   const [showCatalog, setShowCatalog] = useState(false);
@@ -1365,6 +1370,7 @@ function EmployeeFormModal({
         can_open_wall: canOpenWall,
         can_sign_daily_safety: canSignDailySafety,
         can_operate_cash: canOperateCash,
+        can_test_safety: canTestSafety,
         alerts,
         access_level: accessLevel,
         // Settings for alerts nobody is subscribed to are dropped: a lead time
@@ -1647,6 +1653,7 @@ function EmployeeFormModal({
                         setCanOpenWall(false);
                         setCanSignDailySafety(false);
                         setCanOperateCash(false);
+                        setCanTestSafety(false);
                       }
                     }}
                   />
@@ -1690,6 +1697,15 @@ function EmployeeFormModal({
                 onChange={(e) => setCanOperateCash(e.target.checked)}
               />
               מורשה לפתוח ולסגור קופה
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={canTestSafety}
+                disabled={!isWallStaff}
+                onChange={(e) => setCanTestSafety(e.target.checked)}
+              />
+              מורשה להעביר תדריך ומבחן אבטחה
             </label>
 
             <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>הסכם שכר</div>
@@ -3890,6 +3906,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
                   const permissions = [
                     { key: 'can_open_wall', label: 'פתיחת קיר' },
                     { key: 'can_sign_daily_safety', label: 'בדיקות בטיחות' },
+                    { key: 'can_test_safety', label: 'מבחני אבטחה' },
                     { key: 'can_operate_cash', label: 'פתיחה וסגירת קופה' },
                   ];
                   return (
@@ -3958,6 +3975,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
                                 is_wall_staff: false,
                                 can_open_wall: false,
                                 can_sign_daily_safety: false,
+                                can_test_safety: false,
                                 can_operate_cash: false,
                               }
                               : { is_wall_staff: true })}

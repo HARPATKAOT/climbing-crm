@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { CalendarClock, LogIn, Search, Send, ShieldAlert, ShieldCheck, Ticket, UserPlus } from 'lucide-react';
+import {
+  CalendarClock, LogIn, Plus, Search, Send, ShieldAlert, ShieldCheck, Ticket, UserPlus,
+} from 'lucide-react';
 
 /** מספר לוואטסאפ: ספרות בלבד, ו-0 מקומי מוחלף בקידומת ישראל. */
 function waPhone(raw) {
@@ -68,7 +70,10 @@ export function ClimberPicker({
  * הכרטיסייה והקופה יהיו כולם על מסך אחד — הדלפקיסט לא מחליף מסכים באמצע
  * שיחה עם מי שעומד מולו.
  */
-export default function ClimberEntryPanel({ studentId, students = [], groups = [], onEntered }) {
+export default function ClimberEntryPanel({
+  studentId, students = [], groups = [], onEntered,
+  addToCart, wallProducts = [], cartCount = 0,
+}) {
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -142,6 +147,8 @@ export default function ClimberEntryPanel({ studentId, students = [], groups = [
 
   const punch = summary?.best_punch;
   const membership = summary?.membership;
+  // הטפסים הם השער: בלי הצהרה והסרת אחריות בתוקף אין כניסה ואין מכירת כניסה.
+  const blocked = !!summary && summary.documents?.state !== 'valid';
   const climber = summary?.student
     || students.find((s) => String(s.id) === String(studentId))
     || null;
@@ -267,47 +274,84 @@ export default function ClimberEntryPanel({ studentId, students = [], groups = [
         ) : membership ? (
           <div>מנוי: <strong>{membership.name}</strong>{membership.valid_until ? ` · עד ${membership.valid_until}` : ''}</div>
         ) : (
-          <div style={{ color: 'var(--text-3)' }}>אין כרטיסייה או מנוי פעיל — מכרו כניסה בעגלה שמשמאל</div>
+          <div style={{ color: 'var(--text-3)' }}>אין כרטיסייה או מנוי פעיל</div>
         )}
       </div>
 
-      {summary?.punch_block_reason && (
-        <div className="alert alert-error" style={{ fontSize: 12.5, margin: 0 }}>{summary.punch_block_reason}</div>
-      )}
-
-      {/* בלי הכפתור הזה מי שמגיע בלי טפסים הוא מבוי סתום: הדלפק רואה שחסר,
-          ואין לו דרך לבקש. הקישור נשלח להורה האחראי בתבנית מאושרת, ולכן הוא
-          עובד גם כשחלון 24 השעות סגור. */}
-      {summary && summary.documents?.state !== 'valid' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {/* טפסים לא בתוקף = סוף הדרך כאן. אי אפשר להיכנס ואי אפשר למכור כניסה,
+          ולכן הפעולה היחידה היא לבקש חתימה — בלי כפתור כניסה שאסור ללחוץ
+          עליו ובלי כפתורי מכירה שיסורבו בעגלה ממילא. */}
+      {blocked ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div className="alert alert-error" style={{ fontSize: 12.5, margin: 0 }}>
+            {summary?.punch_block_reason || 'אין טופס השתתפות בתוקף — אי אפשר להיכנס או למכור כניסה'}
+          </div>
           <button
             type="button"
-            className="btn btn-secondary btn-full"
-            disabled={busy || !summary.parent?.phone}
+            className="btn btn-primary btn-full"
+            disabled={busy || !summary?.parent?.phone}
             onClick={sendDocumentsLink}
           >
             <Send size={14} /> {sendState === 'sending' ? 'שולח...' : 'שליחת קישור לחתימה בוואטסאפ'}
           </button>
           <div style={{ fontSize: 11.5, color: sendState === 'error' ? 'var(--red)' : 'var(--text-3)' }}>
             {sendNote
-              || (summary.parent?.phone
+              || (summary?.parent?.phone
                 ? `נשלח ל${summary.parent.name || 'ההורה'} · ${summary.parent.phone}`
                 : 'אין מספר טלפון להורה — צריך להשלים בתיק הלקוח')}
           </div>
         </div>
+      ) : punch ? (
+        <button
+          type="button"
+          className={entered ? 'btn btn-secondary btn-full' : 'btn btn-primary btn-full'}
+          style={{ minHeight: 44, fontWeight: 700, fontSize: 16 }}
+          disabled={busy || loading}
+          onClick={confirmEntry}
+        >
+          <Ticket size={16} /> {entered ? 'ניקוב נוסף' : `ניקוב כניסה · נשארו ${punch.visits_remaining}`}
+        </button>
+      ) : membership ? (
+        <button
+          type="button"
+          className={entered ? 'btn btn-secondary btn-full' : 'btn btn-primary btn-full'}
+          style={{ minHeight: 44, fontWeight: 700, fontSize: 16 }}
+          disabled={busy || loading}
+          onClick={confirmEntry}
+        >
+          <LogIn size={16} /> {entered ? 'כניסה נוספת' : 'רישום כניסה — מנוי בתוקף'}
+        </button>
+      ) : (
+        // אין במה לנקב: הכניסה נרשמת רק אחרי שנמכרה. הכפתורים מוסיפים לעגלה
+        // שמשמאל, והתשלום נגבה שם — כך אין מצב של „אישור כניסה” בלי תמורה.
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין כרטיסייה או מנוי — מכרו כניסה:</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {(wallProducts || []).map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => addToCart?.(item)}
+              >
+                <Plus size={13} /> {item.name} · ₪{item.price}
+              </button>
+            ))}
+            {(wallProducts || []).length === 0 && (
+              <span style={{ fontSize: 12, color: 'var(--amber)' }}>
+                אין מוצר שמסומן כמקנה כניסה לקיר — סמנו במחירון.
+              </span>
+            )}
+          </div>
+          {cartCount > 0 && (
+            <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+              נוסף לעגלה — לגבות תשלום, ואז הכניסה נרשמת מהכרטיסייה שנמכרה.
+            </div>
+          )}
+        </div>
       )}
 
-      <button
-        type="button"
-        className={entered ? 'btn btn-secondary btn-full' : 'btn btn-primary btn-full'}
-        style={{ minHeight: 42, fontWeight: 700 }}
-        disabled={busy || loading}
-        onClick={confirmEntry}
-      >
-        {entered ? 'רישום כניסה נוספת' : punch ? 'אישור כניסה וניקוב' : 'אישור כניסה'}
-      </button>
-
-      {punch?.transferable && (
+      {!blocked && punch?.transferable && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ fontSize: 12, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 6 }}>
             <UserPlus size={13} /> ניקוב נוסף על אותה כרטיסייה — לחבר שבא יחד

@@ -8,6 +8,7 @@ import ShiftStaffTab from './checkin/ShiftStaffTab.jsx';
 import ClimberEntryPanel, { ClimberPicker } from './checkin/ClimberEntryPanel.jsx';
 import PendingQueue from './checkin/PendingQueue.jsx';
 import PrinterControls from './checkin/PrinterControls.jsx';
+import EmployeeSelect from './EmployeeSelect.jsx';
 import PosSale from './PosSale.jsx';
 
 // מסך עבודה אחד: בחירת הלקוח, מצב המסמכים והכרטיסייה שלו, המכירה, מי שנתקע
@@ -44,6 +45,9 @@ export default function CheckInConsole({
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState('climbers');
   const [receptionStudentId, setReceptionStudentId] = useState('');
+  // אחראי הקופה למשמרת. ברירת המחדל היא מי שפתח את הקיר, וניתן להחליף —
+  // כך אף מכירה לא שואלת „מי מבצע?” באמצע הטיפול בלקוח.
+  const [cashierId, setCashierId] = useState('');
   const [closing, setClosing] = useState(false);
   const [justOpened, setJustOpened] = useState(false);
   const [successMsg, setSuccessMsg] = useState(null);
@@ -173,6 +177,12 @@ export default function CheckInConsole({
     );
   }
 
+  // ברירת המחדל נקבעת פעם אחת, כשידוע מי פתח; החלפה ידנית גוברת עליה.
+  const cashier = state.staff.find((row) => row.employee_id === cashierId)
+    || state.staff.find((row) => row.employee_id === state.opener?.employee_id)
+    || state.staff[0]
+    || null;
+
   const banners = (
     <>
       {errorMsg && (
@@ -253,7 +263,19 @@ export default function CheckInConsole({
         <span className="badge badge-green">משמרת פתוחה</span>
         <span style={{ fontSize: 13, color: 'var(--text-3)' }}>
           {state.opener?.name} · מ-{hhmm(state.opener?.clock_in)}
-          {state.staff.length > 1 ? ` · ${state.staff.length} עובדים` : ''}
+        </span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+          <span style={{ color: 'var(--text-3)' }}>אחראי קופה:</span>
+          <div style={{ minWidth: 170 }}>
+            <EmployeeSelect
+              className="input select input-sm"
+              employees={state.staff.map((row) => ({ id: row.employee_id, name: row.name, is_active: true }))}
+              value={cashier?.employee_id || ''}
+              placeholder="בחירת עובד"
+              aria-label="אחראי הקופה במשמרת"
+              onChange={(employee) => setCashierId(employee?.id || '')}
+            />
+          </div>
         </span>
         <div style={{ marginInlineStart: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           <PrinterControls
@@ -296,12 +318,17 @@ export default function CheckInConsole({
             <PosSale
               employees={employees}
               requireSeller
-              renderCustomerExtra={({ studentId }) => (
+              sellerEmployeeId={cashier?.employee_id || ''}
+              hideInvoiceContactEditor
+              renderCustomerExtra={({ studentId, addToCart, wallProducts, cartCount }) => (
                 <ClimberEntryPanel
                   studentId={studentId}
                   students={students}
                   groups={groups}
                   onEntered={onEntered}
+                  addToCart={addToCart}
+                  wallProducts={wallProducts}
+                  cartCount={cartCount}
                 />
               )}
             />
@@ -330,7 +357,7 @@ export default function CheckInConsole({
               יומן כניסות ורשימת ממתינים — שהציגו את אותם אנשים בזו אחר זו,
               והקריאה דרשה להצליב ביניהן. */}
           <PendingQueue
-            employees={employees}
+            employees={state.safety?.examiners || []}
             refreshKey={checkIns.length}
             onDone={(message) => {
               setSuccessMsg(message);

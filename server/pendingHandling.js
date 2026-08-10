@@ -12,6 +12,10 @@
  * שורת תשלום **אינה נעלמת מעצמה כשהכסף מגיע**: היא נצבעת כ„שולם”, והמדריך
  * מסיר אותה בלחיצה. זו כל הנקודה — הלחיצה היא מה שמוודא שאדם אמיתי ראה
  * שהתשלום עבר, במקום ששורה תיעלם מהמסך בזמן שאיש לא הסתכל.
+ *
+ * טופס השתתפות חסר אינו כאן בכוונה: מי שלא חתם אינו יכול לקנות כניסה או
+ * כרטיסייה מלכתחילה, ולכן הוא לא ממתין — הוא חסום, וזה נאמר בדלפק ברגע
+ * שבוחרים אותו.
  */
 
 export const PENDING_KIND = Object.freeze({ SAFETY: 'safety_test', PAYMENT: 'payment_link' });
@@ -31,23 +35,18 @@ export function todaysEntrants(checkIns = [], today, dateOf) {
 /**
  * מי שנכנס היום ומשהו עדיין פתוח אצלו.
  *
- * רק מי שחסר לו משהו נמצא כאן — מי שנכנס והכול אצלו תקין לא דורש טיפול,
- * ושורה שלו רק מרחיקה מהעין את מי שכן. אדם אחד יכול לחכות לשני דברים
- * במקביל (חתימה ומבחן), ולכן הם שני דגלים על שורה אחת ולא שתי שורות.
+ * רק מי שנכנס ועוד אין לו מבחן אבטחה בתוקף. מי שהכול אצלו סגור לא דורש
+ * טיפול, ושורה שלו רק מרחיקה מהעין את מי שכן.
  *
  * @param safetyOf (studentId) => {state, expires_at, test_date}
- * @param documentsOf (studentId) => {state, label}
  */
-export function entryRows({ checkIns = [], today, dateOf, studentOf, safetyOf, documentsOf }) {
+export function entryRows({ checkIns = [], today, dateOf, studentOf, safetyOf }) {
   const rows = [];
   for (const [studentId, at] of todaysEntrants(checkIns, today, dateOf)) {
     const student = studentOf(studentId);
     if (!student) continue;
     const safety = safetyOf(studentId) || { state: 'missing' };
-    const documents = (documentsOf ? documentsOf(studentId) : null) || { state: 'valid', label: 'תקין' };
-    const needsSafety = safety.state !== 'valid';
-    const needsDocuments = documents.state !== 'valid';
-    if (!needsSafety && !needsDocuments) continue;
+    if (safety.state === 'valid') continue;
     rows.push({
       id: `entry:${studentId}`,
       kind: PENDING_KIND.SAFETY,
@@ -55,12 +54,8 @@ export function entryRows({ checkIns = [], today, dateOf, studentOf, safetyOf, d
       name: student.name,
       at,
       pending: true,
-      needs_safety: needsSafety,
-      needs_documents: needsDocuments,
       state: safety.state,
       expires_at: safety.expires_at || null,
-      documents_state: documents.state,
-      documents_label: documents.label,
     });
   }
   return rows;
@@ -100,8 +95,8 @@ export function paymentRows({ sales = [], today, dateOf }) {
 }
 
 /**
- * טבלה אחת של כל מי שממתין למשהו: תשלום בקישור, חתימה על טופס השתתפות,
- * או תדריך ומבחן אבטחה. מי שהכול אצלו סגור אינו כאן.
+ * טבלה אחת של כל מי שממתין למשהו: תשלום בקישור, או תדריך ומבחן אבטחה.
+ * מי שהכול אצלו סגור אינו כאן.
  *
  * הסדר הוא סדר הדחיפות ולא סדר השעה — מי שכבר שילם וממתין רק ללחיצה בראש,
  * ואחריו השאר לפי סדר ההגעה.

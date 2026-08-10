@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Award, CheckCircle2, ClipboardList, CreditCard, FileSignature, Hourglass, RefreshCw, Send, ShieldAlert,
+  Award, CheckCircle2, ClipboardList, CreditCard, Hourglass, RefreshCw, ShieldAlert,
 } from 'lucide-react';
 import EmployeeSelect from '../EmployeeSelect.jsx';
 
@@ -50,7 +50,9 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
     };
   }, []);
 
-  const staff = employees.filter((e) => e.is_active !== false);
+  // רק מי שהוסמך להעביר תדריך ומבחן. הרשימה מגיעה מהשרת כבר מסוננת, וזו
+  // הרשת השנייה: מבחן לא נחתם על שם מי שלא מורשה לו.
+  const staff = employees.filter((e) => e.is_active !== false && e.can_test_safety !== false);
   const pickedFor = (row) => byRow[row.id] || staff[0]?.id || '';
 
   const signSafety = async (row) => {
@@ -79,27 +81,6 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'שמירת המבחן נכשלה');
       await load();
       onDone?.(`נחתם מבחן אבטחה ל${row.name}`);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSavingId(null);
-    }
-  };
-
-  /** קישור חתימה להורה האחראי — השרת בוחר אותו ומעדיף תבנית מאושרת. */
-  const sendFormLink = async (row) => {
-    setSavingId(row.id);
-    setError('');
-    try {
-      const res = await fetch(`/api/leads/${encodeURIComponent(row.student_id)}/send-health-form`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'שליחת הקישור נכשלה');
-      if (data.sent) onDone?.(`הקישור לחתימה נשלח ל${data.sentTo || 'ההורה'}`);
-      else setError(data.warning || 'הקישור לא נשלח אוטומטית');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -175,18 +156,9 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                   <td style={{ fontWeight: 600 }}>{row.name}</td>
                   <td>
                     {!isPayment ? (
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {row.needs_documents && (
-                          <span className={row.documents_state === 'expired' ? 'badge badge-amber' : 'badge badge-red'}>
-                            <FileSignature size={12} /> חתימה על טופס השתתפות — {row.documents_label}
-                          </span>
-                        )}
-                        {row.needs_safety && (
-                          <span className={row.state === 'missing' ? 'badge badge-red' : 'badge badge-amber'}>
-                            <ShieldAlert size={12} /> {row.state === 'missing' ? 'תדריך ומבחן אבטחה' : `מבחן אבטחה פג ${row.expires_at || ''}`}
-                          </span>
-                        )}
-                      </div>
+                      <span className={row.state === 'missing' ? 'badge badge-red' : 'badge badge-amber'}>
+                        <ShieldAlert size={12} /> {row.state === 'missing' ? 'תדריך ומבחן אבטחה' : `מבחן אבטחה פג ${row.expires_at || ''}`}
+                      </span>
                     ) : row.paid ? (
                       <span className="badge badge-green">
                         <CheckCircle2 size={12} /> שולם ₪{row.total} — אפשר להכניס
@@ -203,8 +175,6 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                   <td style={{ minWidth: 190 }}>
                     {waitingForMoney ? (
                       <span style={{ fontSize: 12, color: 'var(--text-3)' }}>ממתין לסליקה</span>
-                    ) : !isPayment && !row.needs_safety ? (
-                      <span style={{ fontSize: 12, color: 'var(--text-3)' }}>ממתין לחתימת ההורה</span>
                     ) : (
                       <EmployeeSelect
                         className="input select input-sm"
@@ -228,17 +198,7 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                           <CreditCard size={14} /> {savingId === row.id ? 'שומר...' : 'ראיתי — הסר'}
                         </button>
                       )}
-                      {!isPayment && row.needs_documents && (
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-sm"
-                          disabled={savingId === row.id}
-                          onClick={() => sendFormLink(row)}
-                        >
-                          <Send size={14} /> {savingId === row.id ? 'שולח...' : 'שליחת קישור לחתימה'}
-                        </button>
-                      )}
-                      {!isPayment && row.needs_safety && (
+                      {!isPayment && (
                         <button
                           type="button"
                           className="btn btn-primary btn-sm"

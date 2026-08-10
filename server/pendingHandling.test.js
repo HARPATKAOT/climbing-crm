@@ -19,34 +19,15 @@ test('only the last entry of the day counts per climber', () => {
   assert.deepEqual([...seen], [['s1', '2026-08-10T11:00:00.000Z']]);
 });
 
-test('a climber with nothing open is not on the list at all', () => {
+test('only a climber still missing a safety test is on the list', () => {
   const checkIns = [
     { climber_id: 's1', timestamp: '2026-08-10T09:00:00.000Z' },
     { climber_id: 's2', timestamp: '2026-08-10T09:30:00.000Z' },
   ];
   const safetyOf = (id) => (id === 's1' ? { state: 'valid' } : { state: 'missing' });
-  const documentsOf = () => ({ state: 'valid', label: 'תקין' });
-  const rows = entryRows({ checkIns, today: TODAY, dateOf, studentOf, safetyOf, documentsOf });
+  const rows = entryRows({ checkIns, today: TODAY, dateOf, studentOf, safetyOf });
   assert.deepEqual(rows.map((r) => r.name), ['תמר לוי']);
-  assert.equal(rows[0].needs_safety, true);
-  assert.equal(rows[0].needs_documents, false);
   assert.equal(rows[0].kind, PENDING_KIND.SAFETY);
-});
-
-test('waiting for a signature and waiting for a test are two flags on one row, not two rows', () => {
-  const checkIns = [{ climber_id: 's2', timestamp: '2026-08-10T09:30:00.000Z' }];
-  const rows = entryRows({
-    checkIns,
-    today: TODAY,
-    dateOf,
-    studentOf,
-    safetyOf: () => ({ state: 'missing' }),
-    documentsOf: () => ({ state: 'missing', label: 'אין הצהרת בריאות' }),
-  });
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].needs_safety, true);
-  assert.equal(rows[0].needs_documents, true);
-  assert.equal(rows[0].documents_label, 'אין הצהרת בריאות');
 });
 
 test('a payment link waits on the list until an instructor clears it, not until it is paid', () => {
@@ -72,7 +53,6 @@ test('whoever already paid rises to the top — they are waiting on a click, not
     dateOf,
     studentOf,
     safetyOf: () => ({ state: 'missing' }),
-    documentsOf: () => ({ state: 'valid', label: 'תקין' }),
     sales: [
       { id: 'ps1', payment_method: 'online', status: 'pending_payment', created_at: '2026-08-10T09:00:00.000Z', customer_name: 'ממתין לכסף' },
       { id: 'ps2', payment_method: 'online', status: 'paid', created_at: '2026-08-10T09:30:00.000Z', customer_name: 'שילם' },

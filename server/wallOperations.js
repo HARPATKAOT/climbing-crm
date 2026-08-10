@@ -21,6 +21,7 @@ export function wallStationEmployee(employee = {}) {
     can_open_wall: employee.can_open_wall === true,
     can_sign_daily_safety: employee.can_sign_daily_safety === true,
     can_operate_cash: employee.can_operate_cash === true,
+    can_test_safety: employee.can_test_safety === true,
     certifications: Array.isArray(employee.certifications) ? employee.certifications : [],
   };
 }
@@ -37,6 +38,35 @@ export function openWallShifts(rows = []) {
 
 export function employeeCanOperateWall(employee) {
   return employee?.active !== false && employeeIsWallStaff(employee) && employeeCanOpenWall(employee);
+}
+
+/**
+ * מי מוסמך להעביר תדריך ומבחן אבטחה.
+ *
+ * החתימה על המבחן היא הקביעה שמותר לאדם לטפס, ולכן היא שמורה לעובד קיר
+ * שסומן במפורש — לא לכל מי שעומד בדלפק. חתימה על בדיקות הציוד היום היא
+ * הסמכה אחרת, ואחת אינה גוררת את השנייה.
+ */
+export function employeeCanTestSafety(employee) {
+  return employee?.active !== false
+    && employeeIsWallStaff(employee)
+    && employee?.can_test_safety === true;
+}
+
+export function requireSafetyExaminer(employees = [], examinerId) {
+  const examiner = (Array.isArray(employees) ? employees : [])
+    .find((employee) => String(employee?.id) === String(examinerId || ''));
+  if (!examiner) {
+    const error = new Error('יש לבחור מי העביר את התדריך והמבחן');
+    error.status = 400;
+    throw error;
+  }
+  if (!employeeCanTestSafety(examiner)) {
+    const error = new Error('העובד אינו מורשה להעביר תדריך ומבחן אבטחה');
+    error.status = 403;
+    throw error;
+  }
+  return examiner;
 }
 
 export function requireWallSafetyComplete(rows = []) {

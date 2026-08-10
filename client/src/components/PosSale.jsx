@@ -58,6 +58,10 @@ export default function PosSale({
   // חלונית נוספת מתחת ללקוח הנבחר. מסוף הכניסה שותל בה את אישור הכניסה
   // והניקוב, כדי שבחירת הלקוח, מצב המסמכים והקופה יהיו על מסך אחד.
   renderCustomerExtra = null,
+  // מסוף הכניסה קובע את אחראי הקופה למעלה, לכל המשמרת. בורר עובד באמצע כל
+  // מכירה הוא שאלה שנשאלת שוב ושוב על תשובה שלא משתנה.
+  sellerEmployeeId = '',
+  hideInvoiceContactEditor = false,
 }) {
   const [pricelist, setPricelist] = useState([]);
   const [students, setStudents] = useState([]);
@@ -110,6 +114,10 @@ export default function PosSale({
   const [documentsLink, setDocumentsLink] = useState(null);
   const [sendingDocsLink, setSendingDocsLink] = useState(false);
   const [sellerId, setSellerId] = useState('');
+  // אחראי הקופה שנקבע במסוף גובר: המכירה נרשמת עליו בלי לשאול שוב.
+  useEffect(() => {
+    if (sellerEmployeeId) setSellerId(sellerEmployeeId);
+  }, [sellerEmployeeId]);
 
   const activeEmployees = useMemo(
     () => (employees || []).filter((employee) => employee?.is_active !== false && employee?.active !== false),
@@ -1267,6 +1275,11 @@ export default function PosSale({
           {typeof renderCustomerExtra === 'function' && renderCustomerExtra({
             studentId: selectedStudentId,
             student: selectedStudent || null,
+            // מסוף הכניסה מציע מכאן כניסה בודדת או כרטיסייה ישירות לעגלה, כדי
+            // שהמוכר לא יחפש אותן בקטלוג בזמן שהמתאמן עומד מולו.
+            addToCart,
+            wallProducts: pricelist.filter((item) => item.grants_wall_climbing === true),
+            cartCount: cart.length,
           })}
 
           {contactFieldsVisible ? (
@@ -1291,7 +1304,7 @@ export default function PosSale({
               </div>
             </div>
           ) : (
-            (selectedStudent || selectedParent) && (
+            (selectedStudent || selectedParent) && !hideInvoiceContactEditor && (
               <button
                 type="button"
                 className="btn btn-ghost btn-xs"
@@ -1624,7 +1637,7 @@ export default function PosSale({
             })}
           </div>
 
-          {requireSeller && (
+          {requireSeller && !sellerEmployeeId && (
             <label className="pos-seller-field">
               <span><User size={14} /> מי מבצע את המכירה?</span>
               <EmployeeSelect

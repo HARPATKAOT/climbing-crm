@@ -494,8 +494,10 @@ import { isDailySafetyCheck } from './wallOperatingDay.js';
 import {
   employeeCanOperateWall,
   openWallShifts,
+  employeeCanTestSafety,
   pendingWallSafetyChecks,
   requireQualifiedWallCloser,
+  requireSafetyExaminer,
   wallOpeningSafetyChecks,
   wallStationEmployee,
 } from './wallOperations.js';
@@ -10624,6 +10626,9 @@ async function wallShiftState() {
       due: dueSafety,
       pending: pendingSafety,
       signers: employees.filter(employeeCanSignDailySafety).map(wallStationEmployee),
+      // מי שמוסמך להעביר תדריך ומבחן — הרשימה היחידה שמסך המבחנים בדלפק
+      // רשאי להציע, כדי שלא ייחתם מבחן על שם מי שלא הוסמך לו.
+      examiners: employees.filter(employeeCanTestSafety).map(wallStationEmployee),
     },
     closers_on_shift: qualifiedClosersOnShift(open, employees).map(wallStationEmployee),
     settings: await readStaffAttendanceSettings(db, supa),
@@ -11243,7 +11248,8 @@ app.get('/api/trainers', (req, res) => {
 const EMPLOYEE_OPERATIONAL_FIELDS = new Set([
   'id', 'name', 'role', 'certifications', 'is_active', 'active', 'availability',
   'is_wall_staff', 'staff_category',
-  'can_open_wall', 'can_sign_daily_safety', 'can_operate_cash', 'customer_student_id',
+  'can_open_wall', 'can_sign_daily_safety', 'can_operate_cash', 'can_test_safety',
+  'customer_student_id',
 ]);
 const EMPLOYEE_STAFF_CATEGORIES = new Set(['trainer', 'assistant', 'youth_trainer', 'other']);
 
@@ -12610,6 +12616,15 @@ app.get('/api/groups/:id/training-brief', async (req, res) => {
 app.post('/api/level-tests', (req, res) => {
   if (!canAccessLevelTest(req.crmUser, req.body || {}, 'edit')) {
     return res.status(403).json({ error: 'אין הרשאה ליצור מבחן מהסוג הזה' });
+  }
+  // מבחן אבטחה הוא הקביעה שמותר לאדם לטפס, ולכן הבודק חייב להיות עובד קיר
+  // שהוסמך לכך במפורש. שאר סוגי המבחנים ממשיכים כרגיל.
+  if (String(req.body?.test_type || '') === 'security') {
+    try {
+      requireSafetyExaminer(db.get('employees') || [], req.body?.examinerId);
+    } catch (err) {
+      return res.status(err.status || 403).json({ error: err.message });
+    }
   }
   const record = db.insertLevelTest(req.body);
   res.status(201).json(record);
@@ -15518,7 +15533,6 @@ app.get('/api/checkin/pending', (req, res) => {
       const student = db.getOne('students', id);
       return student ? safetyTestStatus(testsForStudent(student, tests)) : null;
     },
-    documentsOf: (id) => wallDocumentsFor(id),
   }));
 });
 
