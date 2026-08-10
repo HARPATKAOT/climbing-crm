@@ -401,8 +401,13 @@ export default function PosSale({
   const missingSendTarget =
     hasSelectedCustomer &&
     ((sendWhatsapp && !effectivePhone.trim()) || (sendEmail && !effectiveEmail.trim()));
+  // רשימת ההצעות היא שכבה צפה מעל מה שמתחתיה. כשהשדות נפתחו כבר בזמן
+  // ההקלדה, הרשימה ישבה עליהם — ולכן הם מחכים שהבחירה תיסגר.
+  const suggestionsOpen = Boolean(customerQuery.trim()) && !hideSuggestions;
+
   // במכירה ללא זיהוי אין למי לשלוח ואין למי לחייב — השדות רק מפריעים.
   const contactFieldsVisible = !anonymousSale
+    && !suggestionsOpen
     && (isPendingNewLead || missingSendTarget || showContactFields);
 
   const cartTotal = cart.reduce(
@@ -1330,7 +1335,7 @@ ${data.link}`)}`,
               style={{
                 marginBottom: 10,
                 position: 'relative',
-                zIndex: customerQuery.trim() && !hideSuggestions ? 70 : 1,
+                zIndex: suggestionsOpen ? 70 : 1,
               }}
             >
               <label className="form-label">
@@ -1529,7 +1534,7 @@ ${data.link}`)}`,
           )}
 
           {/* לקוח שאינו במערכת: שולחים לו את טופס ההרשמה ולא שומרים כלום. */}
-          {isPendingNewLead && !anonymousSale && (
+          {isPendingNewLead && !anonymousSale && !suggestionsOpen && (
             <div
               className="form-group"
               style={{
