@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Award, CheckCircle2, ClipboardList, CreditCard, Hourglass, RefreshCw, ShieldAlert } from 'lucide-react';
+import {
+  Award, CheckCircle2, ClipboardList, CreditCard, FileSignature, Hourglass, RefreshCw, Send, ShieldAlert,
+} from 'lucide-react';
 import EmployeeSelect from '../EmployeeSelect.jsx';
 
 const hhmm = (iso) => {
@@ -84,6 +86,27 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
     }
   };
 
+  /** קישור חתימה להורה האחראי — השרת בוחר אותו ומעדיף תבנית מאושרת. */
+  const sendFormLink = async (row) => {
+    setSavingId(row.id);
+    setError('');
+    try {
+      const res = await fetch(`/api/leads/${encodeURIComponent(row.student_id)}/send-health-form`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'שליחת הקישור נכשלה');
+      if (data.sent) onDone?.(`הקישור לחתימה נשלח ל${data.sentTo || 'ההורה'}`);
+      else setError(data.warning || 'הקישור לא נשלח אוטומטית');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
   const clearPayment = async (row) => {
     setSavingId(row.id);
     setError('');
@@ -104,16 +127,12 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
   };
 
   const paidCount = rows.filter((r) => r.paid).length;
-  const pendingCount = rows.filter((r) => r.pending).length;
 
   return (
     <div className="card">
       <div className="section-title" style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <ClipboardList size={17} />
-        <span>היום בדלפק ({rows.length})</span>
-        {pendingCount > 0 && (
-          <span className="badge badge-amber">{pendingCount} ממתינים לטיפול</span>
-        )}
+        <span>ממתינים לטיפול ({rows.length})</span>
         {paidCount > 0 && (
           <span className="badge badge-green">{paidCount} שילמו — ממתינים לאישור</span>
         )}
@@ -141,38 +160,30 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
             )}
             {!loading && rows.length === 0 && (
               <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 24 }}>
-                עוד לא נרשמה פעילות היום
+                אין אף אחד שממתין לטיפול
               </td></tr>
             )}
             {rows.map((row) => {
               const isPayment = row.kind === 'payment_link';
               const waitingForMoney = isPayment && !row.paid;
-              const settled = !isPayment && !row.pending;
               return (
                 <tr
                   key={row.id}
-                  style={row.paid ? { background: 'rgba(16,185,129,0.07)' } : settled ? { opacity: 0.6 } : undefined}
+                  style={row.paid ? { background: 'rgba(16,185,129,0.07)' } : undefined}
                 >
                   <td style={{ fontFamily: 'monospace' }}>{hhmm(row.at)}</td>
-                  <td style={{ fontWeight: 600 }}>
-                    {row.name}
-                    {!isPayment && row.group_name && (
-                      <div style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 400 }}>{row.group_name}</div>
-                    )}
-                  </td>
+                  <td style={{ fontWeight: 600 }}>{row.name}</td>
                   <td>
                     {!isPayment ? (
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {row.pending ? (
+                        {row.needs_documents && (
+                          <span className={row.documents_state === 'expired' ? 'badge badge-amber' : 'badge badge-red'}>
+                            <FileSignature size={12} /> חתימה על טופס השתתפות — {row.documents_label}
+                          </span>
+                        )}
+                        {row.needs_safety && (
                           <span className={row.state === 'missing' ? 'badge badge-red' : 'badge badge-amber'}>
                             <ShieldAlert size={12} /> {row.state === 'missing' ? 'תדריך ומבחן אבטחה' : `מבחן אבטחה פג ${row.expires_at || ''}`}
-                          </span>
-                        ) : (
-                          <span className="badge badge-green"><CheckCircle2 size={12} /> נכנס — הכול תקין</span>
-                        )}
-                        {row.documents_state !== 'valid' && (
-                          <span className={row.documents_state === 'expired' ? 'badge badge-amber' : 'badge badge-red'}>
-                            <ShieldAlert size={12} /> {row.documents_label}
                           </span>
                         )}
                       </div>
@@ -190,8 +201,10 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                     )}
                   </td>
                   <td style={{ minWidth: 190 }}>
-                    {settled ? null : waitingForMoney ? (
+                    {waitingForMoney ? (
                       <span style={{ fontSize: 12, color: 'var(--text-3)' }}>ממתין לסליקה</span>
+                    ) : !isPayment && !row.needs_safety ? (
+                      <span style={{ fontSize: 12, color: 'var(--text-3)' }}>ממתין לחתימת ההורה</span>
                     ) : (
                       <EmployeeSelect
                         className="input select input-sm"
@@ -204,25 +217,38 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                     )}
                   </td>
                   <td>
-                    {settled || waitingForMoney ? null : isPayment ? (
-                      <button
-                        type="button"
-                        className="btn btn-primary btn-sm"
-                        disabled={savingId === row.id}
-                        onClick={() => clearPayment(row)}
-                      >
-                        <CreditCard size={14} /> {savingId === row.id ? 'שומר...' : 'ראיתי — הסר'}
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="btn btn-primary btn-sm"
-                        disabled={savingId === row.id || staff.length === 0}
-                        onClick={() => signSafety(row)}
-                      >
-                        <Award size={14} /> {savingId === row.id ? 'שומר...' : 'עבר מבחן'}
-                      </button>
-                    )}
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {isPayment && !waitingForMoney && (
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          disabled={savingId === row.id}
+                          onClick={() => clearPayment(row)}
+                        >
+                          <CreditCard size={14} /> {savingId === row.id ? 'שומר...' : 'ראיתי — הסר'}
+                        </button>
+                      )}
+                      {!isPayment && row.needs_documents && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          disabled={savingId === row.id}
+                          onClick={() => sendFormLink(row)}
+                        >
+                          <Send size={14} /> {savingId === row.id ? 'שולח...' : 'שליחת קישור לחתימה'}
+                        </button>
+                      )}
+                      {!isPayment && row.needs_safety && (
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          disabled={savingId === row.id || staff.length === 0}
+                          onClick={() => signSafety(row)}
+                        >
+                          <Award size={14} /> {savingId === row.id ? 'שומר...' : 'עבר מבחן'}
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               );

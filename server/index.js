@@ -15518,10 +15518,7 @@ app.get('/api/checkin/pending', (req, res) => {
       const student = db.getOne('students', id);
       return student ? safetyTestStatus(testsForStudent(student, tests)) : null;
     },
-    lastCheckInOf: (id) => checkIns
-      .filter((row) => String(row.climber_id) === String(id))
-      .sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')))
-      .pop() || null,
+    documentsOf: (id) => wallDocumentsFor(id),
   }));
 });
 

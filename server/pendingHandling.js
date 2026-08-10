@@ -29,35 +29,38 @@ export function todaysEntrants(checkIns = [], today, dateOf) {
 }
 
 /**
- * שורות הכניסות של היום.
+ * מי שנכנס היום ומשהו עדיין פתוח אצלו.
  *
- * כאן נמצאת **כל** מי שנכנס, ולא רק מי שחסר לו משהו: יומן הכניסות ורשימת
- * הממתינים היו שתי טבלאות שהציגו את אותם אנשים בזו אחר זו, וקריאת שתיהן
- * דרשה להצליב ביניהן. מי שחסר לו תדריך ומבחן מסומן ב-`pending`, וזה כל ההבדל.
+ * רק מי שחסר לו משהו נמצא כאן — מי שנכנס והכול אצלו תקין לא דורש טיפול,
+ * ושורה שלו רק מרחיקה מהעין את מי שכן. אדם אחד יכול לחכות לשני דברים
+ * במקביל (חתימה ומבחן), ולכן הם שני דגלים על שורה אחת ולא שתי שורות.
  *
  * @param safetyOf (studentId) => {state, expires_at, test_date}
+ * @param documentsOf (studentId) => {state, label}
  */
-export function entryRows({ checkIns = [], today, dateOf, studentOf, safetyOf, lastCheckInOf }) {
+export function entryRows({ checkIns = [], today, dateOf, studentOf, safetyOf, documentsOf }) {
   const rows = [];
   for (const [studentId, at] of todaysEntrants(checkIns, today, dateOf)) {
     const student = studentOf(studentId);
     if (!student) continue;
     const safety = safetyOf(studentId) || { state: 'missing' };
-    const entry = lastCheckInOf ? lastCheckInOf(studentId) : null;
+    const documents = (documentsOf ? documentsOf(studentId) : null) || { state: 'valid', label: 'תקין' };
+    const needsSafety = safety.state !== 'valid';
+    const needsDocuments = documents.state !== 'valid';
+    if (!needsSafety && !needsDocuments) continue;
     rows.push({
       id: `entry:${studentId}`,
       kind: PENDING_KIND.SAFETY,
       student_id: studentId,
       name: student.name,
       at,
-      pending: safety.state !== 'valid',
+      pending: true,
+      needs_safety: needsSafety,
+      needs_documents: needsDocuments,
       state: safety.state,
       expires_at: safety.expires_at || null,
-      group_name: entry?.group_name || '',
-      documents_state: entry?.documents_state
-        || (entry?.medical_approved ? 'valid' : 'missing'),
-      documents_label: entry?.documents_label
-        || (entry?.medical_approved ? 'תקין' : 'חסרה הצהרה'),
+      documents_state: documents.state,
+      documents_label: documents.label,
     });
   }
   return rows;
@@ -97,17 +100,16 @@ export function paymentRows({ sales = [], today, dateOf }) {
 }
 
 /**
- * כל היום בדלפק בטבלה אחת: כניסות וקישורי תשלום.
+ * טבלה אחת של כל מי שממתין למשהו: תשלום בקישור, חתימה על טופס השתתפות,
+ * או תדריך ומבחן אבטחה. מי שהכול אצלו סגור אינו כאן.
  *
- * הסדר הוא סדר הדחיפות ולא סדר השעה — מי שכבר שילם וממתין ללחיצה בראש,
- * אחריו כל השאר שדורש טיפול, ומי שהכול אצלו סגור יורד למטה. כך העין נופלת
- * ראשונה על מה שדורש פעולה, בלי לוותר על התמונה המלאה של היום.
+ * הסדר הוא סדר הדחיפות ולא סדר השעה — מי שכבר שילם וממתין רק ללחיצה בראש,
+ * ואחריו השאר לפי סדר ההגעה.
  */
 export function buildPendingQueue(parts) {
   const rows = [...entryRows(parts), ...paymentRows(parts)];
-  const rank = (row) => (row.paid ? 0 : row.pending ? 1 : 2);
   return rows.sort((a, b) => {
-    if (rank(a) !== rank(b)) return rank(a) - rank(b);
-    return String(b.at || '').localeCompare(String(a.at || ''));
+    if (!!b.paid !== !!a.paid) return b.paid ? 1 : -1;
+    return String(a.at || '').localeCompare(String(b.at || ''));
   });
 }
