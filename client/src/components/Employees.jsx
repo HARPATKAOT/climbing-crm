@@ -19,8 +19,10 @@ import {
 } from '../utils/staffAlerts.js';
 import {
   STAFF_ROLE_OPTIONS,
+  SYSTEM_ROLE_KEYS,
   assignableLabelsOf,
   payableRolesOf,
+  roleLabelOf,
   useRoleCatalog,
   invalidateRoleCatalog,
 } from '../utils/staffRoles.js';
@@ -2800,6 +2802,15 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
     return [...new Set([...assignable, ...certsInUse(employees)])];
   }, [roleCatalog, employees]);
 
+  const certGridPositions = useMemo(() => new Map([
+    [roleLabelOf(roleCatalog, SYSTEM_ROLE_KEYS.TRAINER), { gridColumn: 1, gridRow: 1 }],
+    [roleLabelOf(roleCatalog, SYSTEM_ROLE_KEYS.PRIVATE), { gridColumn: 1, gridRow: 2 }],
+    [roleLabelOf(roleCatalog, SYSTEM_ROLE_KEYS.WALL_OPERATOR), { gridColumn: 1, gridRow: 3 }],
+    [roleLabelOf(roleCatalog, SYSTEM_ROLE_KEYS.ASSISTANT), { gridColumn: 2, gridRow: 1 }],
+    [roleLabelOf(roleCatalog, SYSTEM_ROLE_KEYS.ROUTE), { gridColumn: 2, gridRow: 2 }],
+    [roleLabelOf(roleCatalog, SYSTEM_ROLE_KEYS.RAPPEL), { gridColumn: 3, gridRow: 1 }],
+  ]), [roleCatalog]);
+
   const certificationEmployees = useMemo(() => {
     const query = certSearch.trim().toLocaleLowerCase('he');
     return employees
@@ -3961,12 +3972,16 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
                             const selected = roles.includes(role);
                             const RoleIcon = roleIcon(role);
                             const color = roleColor(role);
+                            const gridPosition = certGridPositions.get(role);
                             return (
                               <button
                                 key={role}
                                 type="button"
                                 className={`bulk-token role-token ${selected ? 'is-selected' : ''}`}
-                                style={selected ? { '--token-color': color } : undefined}
+                                style={{
+                                  ...(selected ? { '--token-color': color } : {}),
+                                  ...gridPosition,
+                                }}
                                 disabled={!canEditEmployees}
                                 aria-pressed={selected}
                                 onClick={() => quickPatchEmployee(emp.id, (current) => {
