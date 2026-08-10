@@ -4,7 +4,7 @@ import {
   RefreshCw, Loader2, CalendarDays, CalendarRange, Layers, List,
   CheckCircle, AlertCircle, Clock3, Check, Pencil, Undo2, Users,
   Eye, EyeOff, Copy, SlidersHorizontal, Lock, Globe, Ban, RotateCcw,
-  StickyNote, ClipboardList, UserPlus, CalendarClock,
+  StickyNote, ClipboardList, UserPlus, CalendarClock, FileStack,
 } from 'lucide-react';
 import EntityLink from '../utils/entityLinks.jsx';
 import ActivityPageDesigner from './ActivityPageDesigner.jsx';
@@ -435,6 +435,9 @@ function emptyForm(dateStr = '', opts = {}) {
     description: '',
     notes: '',
     status: 'open',
+    // An empty choice is meaningful while a new event is still a draft: the
+    // user must decide whether to inherit, disable, or select a policy.
+    _cancellation_policy_choice: '',
   };
 }
 
@@ -1453,6 +1456,41 @@ function RegularActivityModal({
     : activityTypes();
   const formRef = useEmptyFieldMarks(!readOnly);
 
+  const [templateMenuOpen, setTemplateMenuOpen] = useState(false);
+  const [templateOptions, setTemplateOptions] = useState([]);
+  const [templateTarget, setTemplateTarget] = useState('');
+  const [templateLoading, setTemplateLoading] = useState(false);
+  const templateMenuRef = useRef(null);
+
+  useEffect(() => {
+    if (!templateMenuOpen) return undefined;
+    const close = (event) => {
+      if (!templateMenuRef.current?.contains(event.target)) setTemplateMenuOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [templateMenuOpen]);
+
+  useEffect(() => {
+    if (!templateMenuOpen || templateOptions.length) return undefined;
+    let active = true;
+    setTemplateLoading(true);
+    fetch('/api/activity-templates')
+      .then(async (response) => {
+        const body = await response.json().catch(() => []);
+        if (!response.ok) throw new Error('טעינת התבניות נכשלה');
+        if (active) setTemplateOptions((Array.isArray(body) ? body : []).filter((item) => item.is_active !== false));
+      })
+      .catch(() => { if (active) setTemplateOptions([]); })
+      .finally(() => { if (active) setTemplateLoading(false); });
+    return () => { active = false; };
+  }, [templateMenuOpen, templateOptions.length]);
+
+  const saveAsTemplate = (event, action) => {
+    setTemplateMenuOpen(false);
+    submit(event, { closeAfter: false, saveAsTemplate: action });
+  };
+
   return (
     <div className="activity-modal-backdrop" onClick={onClose}>
       <form
@@ -1966,15 +2004,69 @@ function RegularActivityModal({
             {!readOnly && (
               <>
                 {!isTemplateEdit && (
-                  <button
-                    type="button"
-                    className="btn activity-modal-btn activity-modal-btn--ghost"
-                    disabled={saving}
-                    onClick={(event) => submit(event, { closeAfter: false })}
-                  >
-                    {saving ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
-                    החל
-                  </button>
+                  <>
+                    <div className="activity-template-save" ref={templateMenuRef}>
+                      <button
+                        type="button"
+                        className="btn activity-modal-btn activity-modal-btn--ghost"
+                        disabled={saving}
+                        onClick={() => setTemplateMenuOpen((open) => !open)}
+                        aria-expanded={templateMenuOpen}
+                      >
+                        <FileStack size={14} /> שמירה כתבנית
+                      </button>
+                      {templateMenuOpen && (
+                        <div className="activity-template-save-menu">
+                          <button
+                            type="button"
+                            className="activity-template-save-new"
+                            onClick={(event) => saveAsTemplate(event, { mode: 'create' })}
+                          >
+                            <Plus size={15} />
+                            <span><b>שמירה כתבנית חדשה</b><small>שם התבנית יהיה שם האירוע</small></span>
+                          </button>
+                          <div className="activity-template-save-divider">או החלפת תבנית קיימת</div>
+                          {templateLoading ? (
+                            <div className="activity-template-save-loading"><Loader2 size={15} className="spin" /> טוען תבניות…</div>
+                          ) : (
+                            <>
+                              <AppSelect
+                                value={templateTarget}
+                                onChange={(event) => setTemplateTarget(event.target.value)}
+                                aria-label="תבנית להחלפה"
+                              >
+                                <option value="" disabled>בחרו תבנית קיימת</option>
+                                {templateOptions.map((template) => (
+                                  <option key={template.id} value={template.id}>{template.name}</option>
+                                ))}
+                              </AppSelect>
+                              <button
+                                type="button"
+                                className="btn activity-modal-btn activity-modal-btn--danger"
+                                disabled={!templateTarget}
+                                onClick={(event) => {
+                                  const target = templateOptions.find((template) => String(template.id) === String(templateTarget));
+                                  if (!target || !window.confirm(`להחליף את התבנית "${target.name}" בפרטי האירוע הנוכחי?`)) return;
+                                  saveAsTemplate(event, { mode: 'replace', templateId: target.id });
+                                }}
+                              >
+                                החלפת התבנית
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      className="btn activity-modal-btn activity-modal-btn--ghost"
+                      disabled={saving}
+                      onClick={(event) => submit(event, { closeAfter: false })}
+                    >
+                      {saving ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
+                      החל
+                    </button>
+                  </>
                 )}
                 <button
                   type="submit"
@@ -2049,6 +2141,11 @@ function ActivityFormModal({
   const [form, setForm] = useState(() => ({
     ...emptyForm(),
     ...initial,
+    _cancellation_policy_choice: Object.hasOwn(initial || {}, '_cancellation_policy_choice')
+      ? initial._cancellation_policy_choice
+      : (initial?.cancellation_policy_disabled
+        ? '__none__'
+        : (initial?.cancellation_policy_id || (initial?.id || initial?._template_id ? '__default__' : ''))),
     end_date: initial?.end_date ? String(initial.end_date).slice(0, 10) : '',
     start_time: initial?.start_time ? String(initial.start_time).slice(0, 5) : (initial?.all_day ? '' : '10:00'),
     end_time: initial?.end_time ? String(initial.end_time).slice(0, 5) : (initial?.all_day ? '' : '12:00'),
@@ -2128,6 +2225,10 @@ function ActivityFormModal({
       setLocalError('תאריך הסיום חייב להיות אחרי תאריך ההתחלה או באותו יום');
       return;
     }
+    if (!isOverlay && normalizeTemplateCategory(form.category) !== 'ops' && !form._cancellation_policy_choice) {
+      setLocalError('יש לבחור מדיניות ביטול');
+      return;
+    }
     // אפשרות ליום בודד בלי מחיר ליום היא אירוע שאי אפשר להירשם אליו חלקית —
     // עדיף לעצור כאן מאשר לגלות את זה בדף התשלום.
     if (form.allow_single_day && !(Number(form.single_day_price) > 0)) {
@@ -2170,6 +2271,8 @@ function ActivityFormModal({
         ),
         registration_page_title: form.registration_page_title || '',
         registration_page_body: form.registration_page_body || '',
+        cancellation_policy_id: form.cancellation_policy_id || null,
+        cancellation_policy_disabled: form.cancellation_policy_disabled === true,
         theme: form.registration_theme || {},
         closeAfter,
       }));
@@ -2207,6 +2310,7 @@ function ActivityFormModal({
         ? 0
         : Number(form.single_day_price),
       max_participants: form.max_participants === '' ? null : Number(form.max_participants),
+      _save_as_template: options.saveAsTemplate || null,
       closeAfter,
     }));
   };
@@ -4255,6 +4359,11 @@ export default function ActivitiesCalendar({
       registration_page_title: tpl.registration_page_title || tpl.name || '',
       registration_page_body: tpl.registration_page_body || tpl.description || '',
       registration_theme: theme,
+      cancellation_policy_id: tpl.cancellation_policy_id || null,
+      cancellation_policy_disabled: tpl.cancellation_policy_disabled === true,
+      _cancellation_policy_choice: tpl.cancellation_policy_disabled
+        ? '__none__'
+        : (tpl.cancellation_policy_id || '__default__'),
       payment_status: 'unpaid',
     });
     setBanner(`תבנית: ${tpl.name} — ערכו ושמרו`);
@@ -4286,6 +4395,11 @@ export default function ActivitiesCalendar({
       registration_page_title: tpl.registration_page_title || tpl.name || '',
       registration_page_body: tpl.registration_page_body || tpl.description || '',
       registration_theme: theme,
+      cancellation_policy_id: tpl.cancellation_policy_id || null,
+      cancellation_policy_disabled: tpl.cancellation_policy_disabled === true,
+      _cancellation_policy_choice: tpl.cancellation_policy_disabled
+        ? '__none__'
+        : (tpl.cancellation_policy_id || '__default__'),
       _editing_template: true,
       _template_id: tpl.id,
     });
@@ -4580,6 +4694,42 @@ export default function ActivitiesCalendar({
     setFormError('');
     const closeAfter = payload.closeAfter !== false;
     try {
+      if (payload._save_as_template) {
+        const action = payload._save_as_template;
+        const {
+          _save_as_template: _templateAction,
+          _cancellation_policy_choice: _policyChoice,
+          closeAfter: _closeAfter,
+          id: _activityId,
+          date: _date,
+          end_date: _endDate,
+          created_at: _createdAt,
+          updated_at: _updatedAt,
+          ...eventFields
+        } = payload;
+        const body = {
+          ...eventFields,
+          name: String(payload.name || '').trim(),
+          category: normalizeTemplateCategory(payload.category),
+          theme: payload.registration_theme || payload.theme || {},
+        };
+        const replacing = action.mode === 'replace' && action.templateId;
+        const res = await fetch(
+          replacing
+            ? `/api/activity-templates/${encodeURIComponent(action.templateId)}`
+            : '/api/activity-templates',
+          {
+            method: replacing ? 'PUT' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          },
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'שמירת התבנית נכשלה');
+        setBanner(replacing ? 'התבנית הקיימת הוחלפה בפרטי האירוע' : 'האירוע נשמר כתבנית חדשה');
+        return;
+      }
+
       if (payload._editing_template) {
         const {
           closeAfter: _closeAfter,

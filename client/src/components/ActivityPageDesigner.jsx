@@ -529,12 +529,12 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
                   ההפעלה — לבן על פאנל כהה. AppSelect מצייר אותה בעצמו. */}
               <AppSelect
                 className="input"
-                value={form.cancellation_policy_disabled
-                  ? '__none__'
-                  : (form.cancellation_policy_id || '__default__')}
+                required
+                value={form._cancellation_policy_choice || ''}
                 onChange={(event) => {
                   const value = event.target.value;
                   patch({
+                    _cancellation_policy_choice: value,
                     cancellation_policy_id: value.startsWith('__') ? null : value,
                     cancellation_policy_disabled: value === '__none__',
                   });
