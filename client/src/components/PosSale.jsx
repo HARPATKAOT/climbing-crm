@@ -102,6 +102,7 @@ export default function PosSale({
   // הטבות שהוסרו ביד. בלי הזיכרון הזה ההחלה האוטומטית מחזירה אותן מיד —
   // כפתור „הסרה” שלא מסיר כלום הוא גרוע יותר מכפתור שלא קיים.
   const [dismissedCoupons, setDismissedCoupons] = useState(() => new Set());
+  const [newClimberState, setNewClimberState] = useState(null); // null | 'sending' | string
   const [couponError, setCouponError] = useState('');
   const [couponBusy, setCouponBusy] = useState(false);
   const [resendingLink, setResendingLink] = useState(false);
@@ -463,6 +464,57 @@ export default function PosSale({
     if (all && !names.size) return 'חל על כל העגלה';
     if (!names.size) return '';
     return `חל על: ${[...names].join(', ')}`;
+  };
+
+  /**
+   * לקוח שמגיע לראשונה: פתיחת תיק ושליחת טופס ההשתתפות בפעולה אחת.
+   *
+   * הטופס נשלח לפי מתאמן, וללקוח חדש אין תיק מתאמן — כך שהדלפק נשאר בלי דרך
+   * לבקש חתימה בדיוק ממי שאין לו שום מסמך. הפרטים שהטופס צריך נמסרים בו,
+   * ולכן די כאן בשם ובטלפון.
+   */
+  const openFileAndSendForm = async () => {
+    const name = String(pendingNewLeadName || walkInName || '').trim();
+    const phone = String(walkInPhone || '').trim();
+    if (!name) return;
+    if (!phone) {
+      setNewClimberState('חסר טלפון — בלעדיו אי אפשר לשלוח את הקישור');
+      return;
+    }
+    setNewClimberState('sending');
+    try {
+      const created = await fetch('/api/checkin/new-climber', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, phone, email: walkInEmail || '' }),
+      }).then(async (r) => {
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(body.error || 'פתיחת התיק נכשלה');
+        return body;
+      });
+
+      const sent = await fetch(`/api/leads/${encodeURIComponent(created.student.id)}/send-health-form`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }).then((r) => r.json().catch(() => ({})));
+
+      // התיק כבר קיים, ולכן הלקוח נבחר גם אם השליחה עצמה לא הצליחה.
+      selectCustomer({
+        type: 'student',
+        id: created.student.id,
+        name: created.student.name,
+        parentId: created.parent.id,
+        parentName: created.parent.name,
+        phone: created.parent.phone || phone,
+        email: created.parent.email || walkInEmail || '',
+      });
+      setNewClimberState(sent?.sent
+        ? `✓ נפתח תיק והקישור נשלח ל${sent.sentTo || name}`
+        : `נפתח תיק ל${name}, אבל הקישור לא נשלח: ${sent?.warning || 'שגיאה בשליחה'}`);
+    } catch (err) {
+      setNewClimberState(err.message);
+    }
   };
 
   const applyCoupon = async (coupon, { silent = false } = {}) => {
@@ -1346,6 +1398,37 @@ export default function PosSale({
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </AppSelect>
+            </div>
+          )}
+
+          {/* לקוח שאינו במערכת: אין לו תיק מתאמן, ולכן אין למי לשלוח טופס.
+              הכפתור פותח תיק ושולח את הקישור בפעולה אחת. */}
+          {isPendingNewLead && (
+            <div
+              className="form-group"
+              style={{
+                marginBottom: 12, padding: 10, borderRadius: 10,
+                background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.35)',
+                display: 'flex', flexDirection: 'column', gap: 6,
+              }}
+            >
+              <div style={{ fontSize: 12.5, fontWeight: 700 }}>לקוח חדש — {pendingNewLeadName}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+                בלי טופס השתתפות חתום אי אפשר למכור לו כניסה. מלאו טלפון ושלחו לו את הטופס.
+              </div>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={newClimberState === 'sending' || !String(walkInPhone || '').trim()}
+                onClick={openFileAndSendForm}
+              >
+                <Send size={14} /> {newClimberState === 'sending' ? 'פותח ושולח...' : 'פתיחת תיק ושליחת טופס השתתפות'}
+              </button>
+              {newClimberState && newClimberState !== 'sending' && (
+                <div style={{ fontSize: 11.5, color: newClimberState.startsWith('✓') ? 'var(--green)' : 'var(--amber)' }}>
+                  {newClimberState}
+                </div>
+              )}
             </div>
           )}
 

@@ -15548,6 +15548,53 @@ app.get('/api/checkin/climber/:id', async (req, res) => {
 });
 
 /**
+ * פתיחת תיק למי שאין לו, כדי שאפשר יהיה לשלוח לו את טופס ההשתתפות.
+ *
+ * מי שמגיע לראשונה לא נמצא בחיפוש, והקופה פותחת לו תיק הורה בלבד — בלי תיק
+ * מתאמן. הטופס נשלח לפי מתאמן, ולכן הדלפק נשאר בלי דרך לבקש חתימה בדיוק
+ * מהאדם שאין לו שום מסמך: מבוי סתום שנפתח רק על ידי עריכה ידנית בתיק הלקוח.
+ *
+ * המסלול מסתפק בשם ובטלפון — זה מה שיש בדלפק — ומשאיר את שאר הפרטים לטופס
+ * עצמו, שהלקוח ממלא בעצמו.
+ */
+app.post('/api/checkin/new-climber', async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  const phone = String(req.body?.phone || '').trim();
+  const email = String(req.body?.email || '').trim();
+  if (!name) return res.status(400).json({ error: 'חסר שם' });
+  if (!phone) return res.status(400).json({ error: 'חסר טלפון — בלעדיו אי אפשר לשלוח את הקישור' });
+
+  const parent = db.upsertParentByPhone(name, phone, email, {
+    source: 'pos',
+    channel: 'pos',
+    status: 'lead_new',
+  });
+
+  // מתאמן קיים באותו שם אצל אותו הורה אינו נפתח פעמיים — הדלפק לוחץ שוב
+  // כשהשליחה נכשלה, ולא כדי לייצר תיק נוסף.
+  const normalized = (value) => String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('he');
+  let student = (db.get('students') || []).find((row) => (
+    String(row.parentId || '') === String(parent.id)
+    && normalized(row.name) === normalized(name)
+  ));
+  if (!student) {
+    student = db.insert('students', {
+      name,
+      parentId: parent.id,
+      groupId: null,
+      status: 'lead_new',
+      source: 'pos',
+    });
+  }
+
+  await Promise.all([
+    persistCore('parents', parent),
+    persistCore('students', student),
+  ]);
+  res.status(201).json({ student, parent });
+});
+
+/**
  * טבלת „ממתינים לטיפול” של הדלפק: מבחני אבטחה חסרים וקישורי תשלום פתוחים.
  *
  * הכללים עצמם ב-`pendingHandling.js`; כאן רק אספקת הנתונים.

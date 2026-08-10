@@ -99,6 +99,8 @@ const TEAM_RULES = [
   // בלי הכלל הזה הכפתורים קיימים במסך ועונים „אין הרשאה” — התקלה הכי גרועה,
   // כי היא נראית כמו באג ולא כמו הרשאה חסרה.
   { methods: WRITE, pattern: /^\/checkin\/pending(\/|$)/, module: 'checkin', level: 'edit' },
+  // פתיחת תיק למי שמגיע לראשונה, כדי שאפשר יהיה לשלוח לו את טופס ההשתתפות.
+  { methods: WRITE, pattern: /^\/checkin\/new-climber$/, anyModules: ['checkin', 'customers'], level: 'edit' },
   { methods: READ, pattern: /^\/settings\/staff-attendance$/, module: 'attendance' },
 
   { methods: READ, pattern: /^\/equipment-settings$/, module: 'equipment' },
