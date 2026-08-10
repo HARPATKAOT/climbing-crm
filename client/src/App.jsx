@@ -80,6 +80,7 @@ const PAGE_PATHS = {
 const PATH_TO_PAGE = Object.fromEntries(
   Object.entries(PAGE_PATHS).map(([key, path]) => [path, key])
 );
+PATH_TO_PAGE['/wall-operations'] = 'dashboard';
 
 // Public routes are handled outside App (main.jsx). Never redirect these into the CRM shell.
 const PAGE_MODULES = {
@@ -322,7 +323,13 @@ export default function App() {
     // NOT on every tab change, which used to re-download all parents/students/groups.
   }, [coreReloadKey, isOwner, user?.modules]); // eslint-disable-line react-hooks/exhaustive-deps
   const [showNotifications, setShowNotifications] = useState(false);
-  const info   = PAGE_TITLES[page] || {};
+  const sharedStation = user?.account_type === 'shared_station';
+  const info = page === 'dashboard' && sharedStation
+    ? {
+        title: 'מסך תפעול הקיר',
+        sub: 'פתיחת קופה, בדיקות בטיחות, פתיחת קיר וסגירת המשמרת במקום אחד',
+      }
+    : (PAGE_TITLES[page] || {});
 
   // Unread notification count (newest first)
   const leadTs = (s) => {
@@ -384,7 +391,7 @@ export default function App() {
                 <span className="nav-icon-wrap">
                   <Icon className="nav-icon" size={17} strokeWidth={2} />
                 </span>
-                <span>{n.label}</span>
+                <span>{sharedStation && n.key === 'dashboard' ? 'מסך עבודה' : n.label}</span>
                 {n.key === 'leads' && newLeadsCount > 0 && (
                   <span className="nav-badge">{newLeadsCount}</span>
                 )}
@@ -517,15 +524,15 @@ export default function App() {
         {/* Page Content */}
         <main className="page-content">
           <Suspense fallback={<PageLoader />}>
-            {page === 'dashboard'  && (
-              <DailyWork
-                students={students}
-                parents={parents}
-                groups={groups}
-                setParents={setParents}
-                onNavigate={navigate}
-              />
-            )}
+            {page === 'dashboard' && (sharedStation
+              ? <CheckInConsole students={students} groups={groups} operationalOnly />
+              : <DailyWork
+                  students={students}
+                  parents={parents}
+                  groups={groups}
+                  setParents={setParents}
+                  onNavigate={navigate}
+                />)}
             {page === 'checkin'    && <CheckInConsole students={students} groups={groups} operationalOnly={!isOwner} />}
             {page === 'leads'      && (
               <Leads
@@ -573,7 +580,7 @@ export default function App() {
               />
             )}
             {page === 'broadcasts' && <Broadcasts parents={parents} students={students} groups={groups} />}
-            {page === 'cash'       && <CashRegister isOwner={isOwner || user?.sensitive?.finance === true} sharedStation={user?.account_type === 'shared_station'} initialTab={location.state?.cashTab} />}
+            {page === 'cash'       && <CashRegister isOwner={isOwner || user?.sensitive?.finance === true} sharedStation={sharedStation} initialTab={location.state?.cashTab} />}
             {page === 'safety'     && <Safety canManageSettings={isOwner || moduleAtLeast('safety_settings', 'edit')} />}
             {page === 'employees'  && (
               <Employees

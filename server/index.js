@@ -114,6 +114,7 @@ import {
   listAccessRoles,
   listAuthorizedUsers,
   removeAuthorizedUser,
+  resendAuthorizedUserInvite,
   sendAuthorizedUserPasswordReset,
   updateAccessRole,
   updateAuthorizedUser,
@@ -892,6 +893,14 @@ app.post('/api/settings/users/:id/password-reset', requireOwner, async (req, res
     res.json(await sendAuthorizedUserPasswordReset(req.params.id, req.crmUser));
   } catch (error) {
     res.status(error.statusCode || 503).json({ error: error.message || 'שליחת קישור האיפוס נכשלה' });
+  }
+});
+
+app.post('/api/settings/users/:id/resend-invite', requireOwner, async (req, res) => {
+  try {
+    res.json(await resendAuthorizedUserInvite(req.params.id, req.crmUser));
+  } catch (error) {
+    res.status(error.statusCode || 503).json({ error: error.message || 'שליחת ההזמנה מחדש נכשלה' });
   }
 });
 

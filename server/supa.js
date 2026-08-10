@@ -19,6 +19,19 @@ const SUPABASE_AUTH_KEY =
   process.env.SUPABASE_KEY ||
   process.env.SUPABASE_ANON_KEY;
 
+export function authEmailRedirectUrl(environment = process.env) {
+  const raw = String(environment.PUBLIC_APP_URL || environment.FRONTEND_URL || '').trim();
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    if (!['http:', 'https:'].includes(url.protocol)) return undefined;
+    url.hash = '';
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return undefined;
+  }
+}
+
 export function isServiceRoleKey(value) {
   const key = String(value || '').trim();
   if (!key) return false;
@@ -981,7 +994,7 @@ export const supa = {
 
   async inviteAuthUser(email, name) {
     if (!client) return { ok: false, user: null, error: 'Supabase service role is not configured' };
-    const redirectTo = process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || undefined;
+    const redirectTo = authEmailRedirectUrl();
     const options = { data: { full_name: name, name } };
     if (redirectTo) options.redirectTo = redirectTo;
     const { data, error } = await client.auth.admin.inviteUserByEmail(email, options);
@@ -989,9 +1002,29 @@ export const supa = {
     return { ok: true, user: data?.user || null };
   },
 
+  async resendAuthInvite(email, name) {
+    if (!client) return { ok: false, error: 'Supabase service role is not configured' };
+    const redirectTo = authEmailRedirectUrl();
+    const options = { data: { full_name: name, name } };
+    if (redirectTo) options.redirectTo = redirectTo;
+    const { error } = await client.auth.admin.inviteUserByEmail(email, options);
+    if (!error) return { ok: true, delivery: 'invite' };
+
+    // An invite may already have been accepted even when the CRM still shows
+    // "invited" (for example, the redirect failed before the first app load).
+    // In that case a recovery link is the safe way to finish password setup.
+    if (/already (?:been )?registered|already exists/i.test(error.message || '')) {
+      const recovery = await supa.sendPasswordResetEmail(email);
+      return recovery.ok
+        ? { ok: true, delivery: 'password_reset' }
+        : { ok: false, error: recovery.error };
+    }
+    return { ok: false, error: error.message };
+  },
+
   async sendPasswordResetEmail(email) {
     if (!authClient) return { ok: false, error: 'Supabase authentication is not configured' };
-    const redirectTo = process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || undefined;
+    const redirectTo = authEmailRedirectUrl();
     const options = redirectTo ? { redirectTo } : undefined;
     const { error } = await authClient.auth.resetPasswordForEmail(email, options);
     if (error) return { ok: false, error: error.message };

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isServiceRoleKey, parentFromRow, parentToRow } from './supa.js';
+import { authEmailRedirectUrl, isServiceRoleKey, parentFromRow, parentToRow } from './supa.js';
 
 function unsignedJwt(payload) {
   const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -12,6 +12,15 @@ test('service key validation rejects a public key hidden in the service variable
   assert.equal(isServiceRoleKey(unsignedJwt({ role: 'service_role' })), true);
   assert.equal(isServiceRoleKey('sb_secret_example'), true);
   assert.equal(isServiceRoleKey('not-a-key'), false);
+});
+
+test('auth email links prefer the public app and normalize its URL', () => {
+  assert.equal(authEmailRedirectUrl({
+    PUBLIC_APP_URL: 'https://app.kirboaz.co.il/',
+    FRONTEND_URL: 'http://localhost:3001',
+  }), 'https://app.kirboaz.co.il');
+  assert.equal(authEmailRedirectUrl({ FRONTEND_URL: 'http://localhost:3000/' }), 'http://localhost:3000');
+  assert.equal(authEmailRedirectUrl({ PUBLIC_APP_URL: 'not a URL' }), undefined);
 });
 
 test('parent mapper exposes next_followup as nextFollowup', () => {

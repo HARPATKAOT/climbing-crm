@@ -95,6 +95,7 @@ export const DEFAULT_ROLES = Object.freeze([
 // receives the safe preset without re-seeding roles an owner deliberately
 // edited or deleted. Each signed action still asks which employee performed it.
 export const WALL_STATION_ROLE = Object.freeze(preset('wall-station', 'עמדת קיר משותפת', {
+  dashboard: 'view',
   checkin: 'edit',
   customers: 'view',
   pos: 'edit',
@@ -534,6 +535,21 @@ export async function sendAuthorizedUserPasswordReset(id, currentOwner) {
   const result = await supa.sendPasswordResetEmail(target.email);
   if (!result.ok) throw new Error(result.error || 'שליחת קישור האיפוס נכשלה');
   return { success: true, email: target.email };
+}
+
+export async function resendAuthorizedUserInvite(id, currentOwner) {
+  const rows = await listAuthorizedUsers(currentOwner);
+  const target = rows.find((row) => String(row.id) === String(id));
+  if (!target) throw Object.assign(new Error('המשתמש לא נמצא'), { statusCode: 404 });
+  if (target.role === 'owner') {
+    throw Object.assign(new Error('לא ניתן לשלוח מחדש הזמנה למנהל הראשי'), { statusCode: 400 });
+  }
+  if (target.status !== 'invited') {
+    throw Object.assign(new Error('החשבון כבר הופעל; יש להשתמש באיפוס סיסמה'), { statusCode: 400 });
+  }
+  const result = await supa.resendAuthInvite(target.email, target.name);
+  if (!result.ok) throw new Error(result.error || 'שליחת ההזמנה מחדש נכשלה');
+  return { success: true, email: target.email, delivery: result.delivery || 'invite' };
 }
 
 async function saveRegistry(registry) {

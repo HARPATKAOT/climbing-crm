@@ -21,7 +21,7 @@ export function useAuth() {
   return useContext(AuthContext);
 }
 
-function LoginScreen() {
+function LoginScreen({ linkError = '' }) {
   const { profile } = useBusinessProfile();
   const brandName = profile.display_name || 'הרפתקאות';
   const brandLogo = profile.logo_url || '/logo.png';
@@ -30,7 +30,7 @@ function LoginScreen() {
   const [savePassword, setSavePassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [resetting, setResetting] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(linkError);
   const [info, setInfo] = useState('');
 
   const submit = async (event) => {
@@ -209,7 +209,14 @@ export default function AuthGate({ children }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [recoveryMode, setRecoveryMode] = useState(false);
+  const initialAuthType = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('type');
+  const initialAuthError = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('error_code');
+  const [recoveryMode, setRecoveryMode] = useState(
+    initialAuthType === 'recovery' || initialAuthType === 'invite'
+  );
+  const [authLinkError] = useState(() => initialAuthError
+    ? 'קישור ההזמנה אינו תקף או שפג תוקפו. בקשו ממנהל המערכת לשלוח הזמנה חדשה.'
+    : '');
   // Identity only — token refresh must not remount the whole app.
   const userId = session?.user?.id || null;
   const onPublicPath = isPublicPath(location.pathname);
@@ -360,12 +367,15 @@ export default function AuthGate({ children }) {
         onDone={() => {
           setRecoveryMode(false);
           setLoading(true);
+          const url = new URL(window.location.href);
+          url.hash = '';
+          window.history.replaceState(window.history.state, '', url);
         }}
       />
     );
   }
   if (loading && !profile) return <div className="auth-page"><div className="auth-card">טוען את המערכת...</div></div>;
-  if (!session) return <LoginScreen />;
+  if (!session) return <LoginScreen linkError={authLinkError} />;
   if (error || !profile) {
     return (
       <div className="auth-page">

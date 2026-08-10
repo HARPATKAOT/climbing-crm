@@ -457,6 +457,25 @@ export default function BusinessUsers() {
     }
   };
 
+  const resendInvite = async (user) => {
+    if (!window.confirm(`לשלוח הזמנה חדשה אל ${user.email}? הקישור הקודם יבוטל.`)) return;
+    setBusyId(`invite:${user.id}`);
+    setError('');
+    setMessage('');
+    try {
+      const response = await fetch(`/api/settings/users/${encodeURIComponent(user.id)}/resend-invite`, { method: 'POST' });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || 'שליחת ההזמנה מחדש נכשלה');
+      flash(body.delivery === 'password_reset'
+        ? `נשלח אל ${body.email} קישור חדש להגדרת סיסמה`
+        : `הזמנה חדשה נשלחה אל ${body.email}`);
+    } catch (err) {
+      setError(err.message || 'שליחת ההזמנה מחדש נכשלה');
+    } finally {
+      setBusyId('');
+    }
+  };
+
   if (loading) return <div className="business-users-loading"><Loader2 size={18} className="spin" /> טוען משתמשים ותפקידים...</div>;
 
   return (
@@ -645,7 +664,9 @@ export default function BusinessUsers() {
               <div className="business-user-card-actions-title">{sharedStation ? 'פעולות עמדה' : 'פעולות משתמש'}</div>
               <button className="btn btn-sm btn-ghost" type="button" onClick={() => openPermissionEditor(user)}><SlidersHorizontal size={14} /> הרשאות אישיות</button>
               <button className="btn btn-sm btn-ghost" type="button" onClick={() => openUserPreview(user)}><Monitor size={14} /> תצוגת משתמש</button>
-              <button className="btn btn-sm btn-ghost" type="button" disabled={busyId === `reset:${user.id}`} onClick={() => sendPasswordReset(user)}>{busyId === `reset:${user.id}` ? <Loader2 className="spin" size={14} /> : <LockKeyhole size={14} />} איפוס סיסמה</button>
+              {user.status === 'invited'
+                ? <button className="btn btn-sm btn-ghost" type="button" disabled={busyId === `invite:${user.id}`} onClick={() => resendInvite(user)}>{busyId === `invite:${user.id}` ? <Loader2 className="spin" size={14} /> : <MailPlus size={14} />} שליחת הזמנה מחדש</button>
+                : <button className="btn btn-sm btn-ghost" type="button" disabled={busyId === `reset:${user.id}`} onClick={() => sendPasswordReset(user)}>{busyId === `reset:${user.id}` ? <Loader2 className="spin" size={14} /> : <LockKeyhole size={14} />} איפוס סיסמה</button>}
               <button
                 className={`btn btn-sm ${user.status === 'blocked' ? 'btn-primary' : 'btn-ghost'}`}
                 type="button"
