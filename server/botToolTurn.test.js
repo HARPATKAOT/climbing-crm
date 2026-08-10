@@ -334,14 +334,14 @@ test('the bot cannot call a pending trainee registered without registered CRM ev
   );
 });
 
-test('grade is requested as a fact rather than offered as a preference', async () => {
+test('grade is collected by the participation form rather than WhatsApp', async () => {
   const turn = await runCustomerToolTurn({
     incomingText: 'תאריך הלידה של שקד הוא 4.4.2018',
     apiKey: 'test-key',
     callModel: scriptedModel([textReply('איזה גיל או כיתה תעדיף עבור שקד?')]),
   });
   assert.equal(turn.reason, 'invalid_grade_question');
-  assert.equal(turn.text, 'באיזו כיתה הילד/ה לומד/ת כיום?');
+  assert.equal(turn.text, 'הכיתה והגיל מתעדכנים בטופס ההשתתפות.');
 });
 
 test('placing, moving and unplacing is locked only once a trainee is registered', () => {

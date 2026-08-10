@@ -16090,29 +16090,30 @@ app.post('/api/public/onboard', publicFormRateLimit, async (req, res) => {
   // verification, and the correction came back "אימות הטלפון פג".
   otpService.consumeToken(otpToken, verified.phone);
 
-  // The confirmation belongs to this submission as a whole. Previously it was
-  // fired only by `onStudentCreated`, so a form that updated existing Tom and
-  // created new Aviv told their mother that only Aviv had been received. Send
-  // one confirmation after every participant in the form is durable, naming
-  // all of them once and in the same order as the form.
+  // In an active bot conversation the form confirmation and the placement
+  // question are one short message. Sending the generic onboarding automation
+  // first produced two confirmations seconds apart. If there is no active bot
+  // conversation, keep the ordinary standalone confirmation.
+  let botResumeResult = null;
   if (!healthOnly) {
-    const confirmation = formConfirmationPayload({
-      parent,
-      students: savedStudents,
-      phone: verified.phone,
-    });
-    if (confirmation) await automationsService.triggerEvent('new_lead', confirmation);
-  }
+    try {
+      botResumeResult = await resumeConversationAfterForm({
+        phone: parent?.phone || verified.phone,
+        studentNames: savedStudents.map((student) => student?.name).filter(Boolean),
+        whatsappService,
+      });
+    } catch (err) {
+      console.error('bot resume after form failed:', err.message);
+    }
 
-  // The bot was waiting for exactly this. It reads the conversation it was
-  // having and asks whether to place the trainee in the class already agreed —
-  // it never places anyone by itself. A failure here must not fail the form.
-  if (!healthOnly) {
-    resumeConversationAfterForm({
-      phone: parent?.phone || verified.phone,
-      studentNames: savedStudents.map((student) => student?.name).filter(Boolean),
-      whatsappService,
-    }).catch((err) => console.error('bot resume after form failed:', err.message));
+    if (!botResumeResult?.sent) {
+      const confirmation = formConfirmationPayload({
+        parent,
+        students: savedStudents,
+        phone: verified.phone,
+      });
+      if (confirmation) await automationsService.triggerEvent('new_lead', confirmation);
+    }
   }
 
   res.status(201).json({
@@ -17448,4 +17449,3 @@ app.listen(PORT, () => {
   console.error('FATAL: server startup aborted because durable data is unavailable:', error.message);
   process.exit(1);
 });
-

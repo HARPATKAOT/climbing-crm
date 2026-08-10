@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { db } from './db.js';
 import {
   botSpokeRecently,
-  gradeQuestionAfterForm,
+  placementQuestionAfterForm,
   resumeConversationAfterForm,
 } from './botFormResume.js';
 
@@ -73,11 +73,8 @@ test('אחרי חתימה, הבוט חוזר לשיחה עם מה שכבר סו�
 
     assert.equal(result.sent, true);
     assert.equal(service.calls.sent.length, 1);
-    // The model is told what happened, in a line marked as a system update so
-    // it is never read back to the customer as something they wrote.
-    const [{ text }] = service.calls.generated;
-    assert.match(text, /^\[מערכת\]/);
-    assert.match(text, /ראם כהן/);
+    assert.equal(service.calls.generated.length, 0);
+    assert.equal(service.calls.sent[0].text, 'הפרטים התקבלו. לאיזו קבוצה תרצו להשתבץ?');
   });
 });
 
@@ -174,7 +171,7 @@ test('botSpokeRecently מבדיל בין שיחה של הבוט לשיחה של 
   );
 });
 
-test('אחרי טופס ממשיכים ישירות את שאלת הכיתות בלי להסתכן בכשל מודל', async () => {
+test('אחרי טופס מאשרים פעם אחת ושואלים רק על הקבוצה', async () => {
   const gradeThread = [
     { phone: PHONE, direction: 'inbound', message: 'בשביל תום ואביב', created_at: minutesAgo(20) },
     {
@@ -205,13 +202,13 @@ test('אחרי טופס ממשיכים ישירות את שאלת הכיתות �
     assert.equal(service.calls.sent.length, 1);
     assert.equal(
       service.calls.sent[0].text,
-      'כדי להמשיך, מה הכיתה של תום כיום, ומה הכיתה של אביב?'
+      'הפרטים התקבלו. לאילו קבוצות תרצו לשבץ את תום ואביב?'
     );
-    assert.doesNotMatch(service.calls.sent[0].text, /צוות/);
+    assert.doesNotMatch(service.calls.sent[0].text, /כיתה|בריאות|צוות/);
   });
 });
 
-test('כשל מודל בלי צעד בטוח להמשך נשאר שקט ולא ממציא העברה', async () => {
+test('המשך אחרי הטופס אינו תלוי במודל', async () => {
   await withWorld({ parents: [PARENT], messages: BOT_THREAD }, async () => {
     const service = fakeService('מעביר לצוות');
     service.generateAIResponse = async () => ({ text: 'מעביר לצוות', handoff: true });
@@ -222,20 +219,16 @@ test('כשל מודל בלי צעד בטוח להמשך נשאר שקט ולא �
       now: NOW,
       isSimulator: true,
     });
-    assert.equal(result.sent, false);
-    assert.equal(result.reason, 'handoff_suppressed');
-    assert.equal(service.calls.sent.length, 0);
+    assert.equal(result.sent, true);
+    assert.equal(result.deterministic, true);
+    assert.equal(service.calls.sent.length, 1);
+    assert.equal(service.calls.generated.length, 0);
   });
 });
 
-test('שאלת כיתה אחרי טופס מפרידה בין כל ילד', () => {
-  const messages = [{
-    direction: 'outbound',
-    is_ai: true,
-    message: 'באיזו כיתה תום ואביב לומדים?',
-  }];
+test('שאלת השיבוץ אחרי טופס מפרידה בין כל ילד', () => {
   assert.equal(
-    gradeQuestionAfterForm(messages, ['תום פרידמן', 'אביב פרידמן']),
-    'כדי להמשיך, מה הכיתה של תום כיום, ומה הכיתה של אביב?'
+    placementQuestionAfterForm(['תום פרידמן', 'אביב פרידמן']),
+    'הפרטים התקבלו. לאילו קבוצות תרצו לשבץ את תום ואביב?'
   );
 });

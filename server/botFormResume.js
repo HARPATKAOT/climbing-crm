@@ -18,7 +18,6 @@ import {
   isBotPaused,
   isOptedOut,
   loadBrandedBotSettings,
-  studentsForParent,
 } from './whatsappBot.js';
 import { isBotEnabled } from './whatsappSchedule.js';
 
@@ -32,23 +31,18 @@ export function botSpokeRecently(messages = [], phone = '', now = Date.now()) {
     && Date.parse(m.created_at || '') > now - FREE_TEXT_WINDOW_MS);
 }
 
-/** The form interrupted a grade question; resume it without asking one answer for two children. */
-export function gradeQuestionAfterForm(messages = [], studentNames = []) {
-  const lastBot = [...messages]
-    .reverse()
-    .find((message) => message.direction === 'outbound' && message.is_ai);
-  if (!lastBot || !/כיתה/u.test(String(lastBot.message || ''))) return '';
-
+/**
+ * Form completion has one deterministic customer-facing continuation.  The
+ * possible groups were already presented before the form was sent, so another
+ * model turn only repeats the form confirmation or reopens data collection.
+ */
+export function placementQuestionAfterForm(studentNames = []) {
   const firstNames = studentNames
     .map((name) => String(name || '').trim().split(/\s+/)[0])
-    .filter((name) => name.length >= 2);
+    .filter(Boolean);
   const unique = [...new Set(firstNames)];
-  if (!unique.length) return '';
-  if (unique.length === 1) return `כדי להמשיך, מה הכיתה של ${unique[0]} כיום?`;
-  if (unique.length === 2) {
-    return `כדי להמשיך, מה הכיתה של ${unique[0]} כיום, ומה הכיתה של ${unique[1]}?`;
-  }
-  return `כדי להמשיך, כתבו בבקשה באיזו כיתה כל אחד מהילדים לומד כיום: ${unique.join(', ')}.`;
+  if (unique.length <= 1) return 'הפרטים התקבלו. לאיזו קבוצה תרצו להשתבץ?';
+  return `הפרטים התקבלו. לאילו קבוצות תרצו לשבץ את ${unique.join(' ו')}?`;
 }
 
 /**
@@ -86,39 +80,7 @@ export async function resumeConversationAfterForm({
     return { sent: false, reason: 'window_closed' };
   }
 
-  // The bot itself asked for the grades immediately before the family opened
-  // the form. There is no reason to spend a model turn rediscovering that next
-  // step: in the real two-child thread the model ran out of steps and replaced
-  // the question with a handoff. Resume the exact missing fact deterministically.
-  const pendingGradeQuestion = gradeQuestionAfterForm(messages, names);
-  if (pendingGradeQuestion) {
-    await whatsappService.sendBotReply(phone, pendingGradeQuestion, { isSimulator });
-    return { sent: true, reply: pendingGradeQuestion, deterministic: true };
-  }
-
-  const who = names.join(' ו');
-  const result = await whatsappService.generateAIResponse(
-    `[מערכת] טופס ההשתתפות של ${who} נחתם ונשמר זה עתה. המשך את השיחה מהמקום שבו עצרתם.`,
-    { phone, parent, students: studentsForParent(parent), isSimulator }
-  );
-  let reply = String(result?.text || '').trim();
-
-  // A model outage during a background continuation must never manufacture a
-  // customer handoff. In Tali's thread the form confirmation was immediately
-  // followed by "מעביר לצוות", and her polite "תודה" triggered the same text
-  // again. If the interrupted question was the children's grades, that next
-  // step is safe and deterministic; otherwise the confirmation already sent by
-  // the form is enough and we stay quiet.
-  if (!reply || result?.handoff) {
-    reply = gradeQuestionAfterForm(messages, names);
-    if (!reply) {
-      return {
-        sent: false,
-        reason: result?.handoff ? 'handoff_suppressed' : (result?.reason || 'no_reply'),
-      };
-    }
-  }
-
+  const reply = placementQuestionAfterForm(names);
   await whatsappService.sendBotReply(phone, reply, { isSimulator });
-  return { sent: true, reply, fallback: !!result?.handoff || !result?.text };
+  return { sent: true, reply, deterministic: true };
 }
