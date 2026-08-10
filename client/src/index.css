@@ -2108,6 +2108,70 @@ select option, select optgroup {
   appearance: textfield;
 }
 
+/* ספירת המזומן בדלפק: שורה אחת דחוסה, מהשטר הגדול מימין למטבע הקטן משמאל. */
+.cash-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+.cash-chip {
+  position: relative;
+  width: 56px;
+  height: 33px;
+  padding: 0;
+  border-radius: 5px;
+  overflow: hidden;
+  background: #0d101c;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform 0.08s ease, border-color 0.12s ease;
+}
+.cash-chip--coin {
+  width: 33px;
+  border-radius: 50%;
+  background: #f3f3f3;
+}
+.cash-chip:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent, #64748b);
+}
+.cash-chip.is-active {
+  border-color: var(--accent, #64748b);
+  box-shadow: 0 0 0 1px var(--accent, #64748b);
+}
+.cash-chip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.cash-chip--coin img {
+  transform: scale(1.16);
+}
+.cash-chip-qty {
+  position: absolute;
+  inset-inline-end: -2px;
+  bottom: -2px;
+  min-width: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--accent, #2563eb);
+  color: #0b1020;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 15px;
+  text-align: center;
+}
+.cash-row-total {
+  margin-inline-start: auto;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
 @media (max-width: 720px) {
   .cash-line-grid {
     grid-template-columns: 1fr;

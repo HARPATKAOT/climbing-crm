@@ -2089,10 +2089,10 @@ ${data.link}`)}`,
                   שגוי; ספירת השטרות היא בדיוק מה שהיד עושה ממילא. */}
               <div style={{ fontSize: 13, fontWeight: 600 }}>התקבל מהלקוח</div>
               <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-                קליק שמאלי על שטר או מטבע מוסיף אחד, קליק ימני מוריד.
+                קליק על שטר או מטבע מוסיף אחד, קליק ימני מוריד.
               </div>
               <CashDenominationPad
-                variant="stepper"
+                variant="row"
                 value={tenderedDenoms}
                 showTotal={false}
                 onChange={(next) => {

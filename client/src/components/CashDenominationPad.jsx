@@ -81,6 +81,36 @@ function DenomLine({ d, qty, onBump, onSet }) {
   );
 }
 
+/**
+ * שורה אחת דחוסה: כל השטרות והמטבעות זה ליד זה, מהגדול (ימין) לקטן (שמאל).
+ *
+ * בדלפק אין מקום לרשת של עשר שורות שגובהה כגובה המסך, וגם אין זמן: הספירה
+ * נעשית תוך כדי שהלקוח עומד. קליק על השטר מוסיף אחד, קליק ימני מוריד, והמספר
+ * יושב על השטר עצמו — בלי כפתורים ובלי שדות.
+ */
+function DenomChip({ d, qty, onBump }) {
+  const title = `${d.label} ${d.unit}`;
+  return (
+    <button
+      type="button"
+      className={`cash-chip cash-chip--${d.kind}${qty > 0 ? ' is-active' : ''}`}
+      style={{ '--accent': d.accent }}
+      title={`${title} — קליק מוסיף, קליק ימני מוריד`}
+      aria-label={`${title}, ${qty}`}
+      onClick={() => onBump(1)}
+      onContextMenu={(e) => { e.preventDefault(); if (qty > 0) onBump(-1); }}
+    >
+      <img
+        src={d.image}
+        alt={title}
+        draggable={false}
+        style={d.objectPosition ? { objectPosition: d.objectPosition } : undefined}
+      />
+      {qty > 0 && <span className="cash-chip-qty">{qty}</span>}
+    </button>
+  );
+}
+
 export default function CashDenominationPad({
   denominations = CASH_DENOMS,
   value = {},
@@ -99,6 +129,22 @@ export default function CashDenominationPad({
   const bump = (key, delta) => {
     setQty(key, (Number(value[key]) || 0) + delta);
   };
+
+  if (variant === 'row') {
+    // הקטלוג כבר מסודר מ-200 ומטה, וב-RTL הראשון הוא הימני — הגדול מימין.
+    return (
+      <div className="cash-row">
+        {catalog.map((d) => (
+          <DenomChip key={d.key} d={d} qty={Number(value[d.key]) || 0} onBump={(delta) => bump(d.key, delta)} />
+        ))}
+        {showTotal && (
+          <span className="cash-row-total">
+            ₪{total.toLocaleString('he-IL', { minimumFractionDigits: 2 })}
+          </span>
+        )}
+      </div>
+    );
+  }
 
   if (variant === 'stepper') {
     const notes = catalog.filter((d) => d.kind === 'note');
