@@ -1266,6 +1266,25 @@ function EmployeeFormModal({
   const [canTestSafety, setCanTestSafety] = useState(
     () => employee?.can_test_safety === true
   );
+  // תיק המתאמן של העובד עצמו. זה מה שמאפשר לקופה לזהות שהלקוח שמולה הוא גם
+  // עובד ולהחיל את הנחת המדריכים — בלי הקישור הזה כלל ההנחה פעיל ולא נתפס.
+  const [customerStudentId, setCustomerStudentId] = useState(
+    () => employee?.customer_student_id || ''
+  );
+  const [studentOptions, setStudentOptions] = useState([]);
+  const [studentQuery, setStudentQuery] = useState('');
+  useEffect(() => {
+    fetch('/api/students')
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows) => setStudentOptions(Array.isArray(rows) ? rows : []))
+      .catch(() => setStudentOptions([]));
+  }, []);
+  const linkedStudent = studentOptions.find((s) => String(s.id) === String(customerStudentId)) || null;
+  const studentHits = studentQuery.trim()
+    ? studentOptions
+      .filter((s) => String(s.name || '').toLowerCase().includes(studentQuery.trim().toLowerCase()))
+      .slice(0, 6)
+    : [];
   // קטלוג התפקידים מגיע מהשרת; תפקידי מערכת נעולים, השאר ניתנים לעריכה.
   const [roleCatalog, setRoleCatalog] = useState(null);
   const [showCatalog, setShowCatalog] = useState(false);
@@ -1371,6 +1390,7 @@ function EmployeeFormModal({
         can_sign_daily_safety: canSignDailySafety,
         can_operate_cash: canOperateCash,
         can_test_safety: canTestSafety,
+        customer_student_id: customerStudentId || null,
         alerts,
         access_level: accessLevel,
         // Settings for alerts nobody is subscribed to are dropped: a lead time
@@ -1707,6 +1727,49 @@ function EmployeeFormModal({
               />
               מורשה להעביר תדריך ומבחן אבטחה
             </label>
+
+            {/* בלי הקישור הזה הקופה לא יודעת שהלקוח שמולה הוא עובד, וכללי
+                ההנחה למדריכים ולעוזרי מדריך פעילים אך אינם נתפסים לעולם. */}
+            <div className="form-group" style={{ marginTop: 14, marginBottom: 0, position: 'relative' }}>
+              <label className="form-label">תיק המתאמן של העובד — לזיהוי הנחות בקופה</label>
+              {linkedStudent || customerStudentId ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span className="badge badge-green">{linkedStudent?.name || customerStudentId}</span>
+                  <button type="button" className="btn btn-ghost btn-xs" onClick={() => setCustomerStudentId('')}>
+                    ניתוק
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <input
+                    className="input input-sm"
+                    placeholder="חיפוש תיק מתאמן לפי שם..."
+                    value={studentQuery}
+                    onChange={(event) => setStudentQuery(event.target.value)}
+                  />
+                  {studentHits.length > 0 && (
+                    <div style={{
+                      position: 'absolute', top: '100%', right: 0, left: 0, zIndex: 60,
+                      background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
+                      marginTop: 4, boxShadow: '0 8px 24px rgba(0,0,0,0.4)', overflow: 'hidden',
+                    }}>
+                      {studentHits.map((student) => (
+                        <div
+                          key={student.id}
+                          onClick={() => { setCustomerStudentId(student.id); setStudentQuery(''); }}
+                          style={{ padding: '9px 12px', cursor: 'pointer', borderBottom: '1px solid var(--border)', fontSize: 13 }}
+                        >
+                          {student.name}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 4 }}>
+                    לא חובה. נדרש רק אם לעובד מגיעה הנחה לפי תפקידו.
+                  </div>
+                </>
+              )}
+            </div>
 
             <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>הסכם שכר</div>
             <div className="form-grid-2">
