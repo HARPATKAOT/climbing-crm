@@ -99,6 +99,9 @@ export default function PosSale({
   const [discountDraft, setDiscountDraft] = useState({ type: 'percent', value: '' });
   const [customerCoupons, setCustomerCoupons] = useState([]);
   const [appliedCoupon, setAppliedCoupon] = useState(null);
+  // הטבות שהוסרו ביד. בלי הזיכרון הזה ההחלה האוטומטית מחזירה אותן מיד —
+  // כפתור „הסרה” שלא מסיר כלום הוא גרוע יותר מכפתור שלא קיים.
+  const [dismissedCoupons, setDismissedCoupons] = useState(() => new Set());
   const [couponError, setCouponError] = useState('');
   const [couponBusy, setCouponBusy] = useState(false);
   const [resendingLink, setResendingLink] = useState(false);
@@ -400,6 +403,10 @@ export default function PosSale({
     setCancellationAccepted(false);
   }, [cart.map((line) => `${line.pricelist_id}:${line.quantity}`).join('|')]);
 
+  useEffect(() => {
+    setDismissedCoupons(new Set());
+  }, [selectedStudentId, selectedParentId]);
+
   const needsCustomer = cart.some(
     (line) => line.product_type === 'punch_card' || line.product_type === 'time_membership'
   );
@@ -501,9 +508,11 @@ export default function PosSale({
   // הבדיקה נכשלת בשקט ולא צובעת את המסך באדום.
   useEffect(() => {
     if (appliedCoupon || couponBusy || !cart.length || !customerCoupons.length) return;
-    applyCoupon(customerCoupons[0], { silent: true });
+    const candidate = customerCoupons.find((coupon) => !dismissedCoupons.has(coupon.id));
+    if (!candidate) return;
+    applyCoupon(candidate, { silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cart.length, cartTotal, customerCoupons.length, appliedCoupon]);
+  }, [cart.length, cartTotal, customerCoupons.length, appliedCoupon, dismissedCoupons]);
 
   const addToCart = (item) => {
     setResult(null);
@@ -1659,7 +1668,11 @@ export default function PosSale({
                       <button
                         type="button"
                         className="btn btn-ghost btn-xs"
-                        onClick={() => { setAppliedCoupon(null); setCouponError(''); }}
+                        onClick={() => {
+                          setAppliedCoupon(null);
+                          setCouponError('');
+                          setDismissedCoupons((prev) => new Set(prev).add(coupon.id));
+                        }}
                       >
                         הסרה
                       </button>
@@ -1668,7 +1681,14 @@ export default function PosSale({
                         type="button"
                         className="btn btn-success btn-xs"
                         disabled={couponBusy || !cart.length}
-                        onClick={() => applyCoupon(coupon)}
+                        onClick={() => {
+                          setDismissedCoupons((prev) => {
+                            const next = new Set(prev);
+                            next.delete(coupon.id);
+                            return next;
+                          });
+                          applyCoupon(coupon);
+                        }}
                       >
                         {couponBusy ? 'בודק...' : 'החלה ידנית'}
                       </button>
