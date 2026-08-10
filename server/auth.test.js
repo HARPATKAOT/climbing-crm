@@ -117,3 +117,15 @@ test('roles resolve from metadata and configured email lists', () => {
     else process.env.CRM_STAFF_EMAILS = oldStaffEmails;
   }
 });
+
+test('a wall station can print a receipt and kick the drawer without finance access', () => {
+  // ההדפסה היא פעולת דלפק ולא דוח כספי; בלעדיה עמדת הקיר לא מדפיסה כלל.
+  const station = {
+    role: 'staff',
+    modules: { cash_management: 'edit', checkin: 'edit' },
+    sensitive: { finance: false, hr: false },
+  };
+  assert.equal(isStaffRequestAllowed('POST', '/api/cash-register/receipt-bytes', station), true);
+  // ודוחות הקופה עצמם נשארים חסומים.
+  assert.equal(isStaffRequestAllowed('GET', '/api/cash-register/ledger', station), false);
+});

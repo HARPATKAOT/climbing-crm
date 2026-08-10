@@ -122,6 +122,9 @@ const TEAM_RULES = [
   // access to finance reports, payments or the manager cash terminal.
   { methods: READ, pattern: /^\/cash-register\/session$/, module: 'cash_management' },
   { methods: WRITE, pattern: /^\/cash-register\/(open|close)$/, module: 'cash_management', level: 'edit' },
+  // בניית בייטים להדפסת קבלה ולפתיחת המגירה היא פעולת דלפק, לא דוח כספי —
+  // היא לא מחזירה שום נתון על העסק. בלעדיה עמדת הקיר לא יכולה להדפיס בכלל.
+  { methods: WRITE, pattern: /^\/cash-register\/receipt-bytes$/, module: 'cash_management', level: 'edit' },
   { methods: [...READ, ...WRITE], pattern: /^\/(cash-register|payments|icount)(\/|$)/, module: 'cash_management', sensitive: 'finance' },
 
   { methods: READ, pattern: /^\/safety\/check-types(\/|$)/, anyModules: ['safety_checks', 'safety_settings'] },

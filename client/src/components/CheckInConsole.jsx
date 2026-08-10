@@ -7,6 +7,7 @@ import WallShiftClose from './checkin/WallShiftClose.jsx';
 import ShiftStaffTab from './checkin/ShiftStaffTab.jsx';
 import ClimberEntryPanel, { ClimberPicker } from './checkin/ClimberEntryPanel.jsx';
 import PendingQueue from './checkin/PendingQueue.jsx';
+import PrinterControls from './checkin/PrinterControls.jsx';
 import TodayLog from './checkin/TodayLog.jsx';
 import PosSale from './PosSale.jsx';
 
@@ -255,14 +256,21 @@ export default function CheckInConsole({
           {state.opener?.name} · מ-{hhmm(state.opener?.clock_in)}
           {state.staff.length > 1 ? ` · ${state.staff.length} עובדים` : ''}
         </span>
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          style={{ marginInlineStart: 'auto' }}
-          onClick={() => setClosing(true)}
-        >
-          <LogOut size={14} /> סגירת משמרת
-        </button>
+        <div style={{ marginInlineStart: 'auto', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <PrinterControls
+            onMessage={(message, isError) => {
+              if (isError) setErrorMsg(message);
+              else {
+                setErrorMsg('');
+                setSuccessMsg(message);
+                window.setTimeout(() => setSuccessMsg(null), 4000);
+              }
+            }}
+          />
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setClosing(true)}>
+            <LogOut size={14} /> סגירת משמרת
+          </button>
+        </div>
       </div>
 
       {banners}
