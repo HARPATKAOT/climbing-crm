@@ -14,6 +14,7 @@ import {
   imageBackground,
 } from './productCategories.js';
 import AppSelect from './AppSelect.jsx';
+import { cancellationPolicyIcon } from '../utils/cancellationPolicyIcons.js';
 
 const NOTION_PRICELIST = [
   { id: 'pr-1a', name: 'כניסה לקיר', price: 50, description: 'כניסה בודדת לקיר הטיפוס ללא הגבלת זמן', notes: '', durationH: null, participants: '', categories: ['כניסה'], ages: ['ללא הגבלה'], active: true, image: '' },
@@ -148,14 +149,23 @@ export function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCateg
   const [cancellationPolicyChoice, setCancellationPolicyChoice] = useState(
     item?.cancellation_policy_id || 'none'
   );
-  const [isPriceAnchor, setIsPriceAnchor] = useState(item?.is_price_anchor === true);
+  /**
+   * שלושת המצבים של תמחור הפריט נבחרים במפורש ולא נגזרים מ„לא סומן”.
+   * צ'קבוקס „פריט עוגן” שהסתיר את תפריט העוגן דווקא כשסימנו אותו נקרא הפוך:
+   * כדי שמחיר ייגזר מעוגן היה צריך להשאיר אותו כבוי.
+   */
+  const [pricingMode, setPricingMode] = useState(
+    item?.is_price_anchor === true ? 'anchor' : (item?.price_anchor_id ? 'derived' : 'own')
+  );
   const [priceAnchorId, setPriceAnchorId] = useState(item?.price_anchor_id || '');
   const [anchorUnits, setAnchorUnits] = useState(item?.anchor_units ?? '');
   const [anchorDiscount, setAnchorDiscount] = useState(item?.anchor_discount_percent ?? 0);
   const sellableOnline = productType === 'punch_card' || productType === 'time_membership';
 
   const anchorOptions = items.filter((row) => row.is_price_anchor === true && row.id !== item?.id);
-  const anchor = anchorOptions.find((row) => row.id === priceAnchorId) || null;
+  const anchor = pricingMode === 'derived'
+    ? (anchorOptions.find((row) => row.id === priceAnchorId) || null)
+    : null;
   // הכרטיסייה נמדדת בכניסות שכבר הוקלדו למעלה; למנוי אין כניסות ולכן מקלידים
   // כמה יחידות עוגן הוא שווה.
   const unitsForPrice = productType === 'punch_card'
@@ -197,12 +207,12 @@ export function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCateg
       transferable: productType === 'punch_card' && transferable,
       cancellation_policy_id: cancellationPolicyChoice === 'none' ? null : cancellationPolicyChoice,
       cancellation_policy_disabled: false,
-      is_price_anchor: isPriceAnchor,
-      price_anchor_id: isPriceAnchor ? null : (priceAnchorId || null),
-      anchor_units: !isPriceAnchor && priceAnchorId && productType !== 'punch_card'
+      is_price_anchor: pricingMode === 'anchor',
+      price_anchor_id: pricingMode === 'derived' ? (priceAnchorId || null) : null,
+      anchor_units: pricingMode === 'derived' && priceAnchorId && productType !== 'punch_card'
         ? (parseFloat(anchorUnits) || null)
         : null,
-      anchor_discount_percent: !isPriceAnchor && priceAnchorId ? (parseFloat(anchorDiscount) || 0) : 0,
+      anchor_discount_percent: pricingMode === 'derived' && priceAnchorId ? (parseFloat(anchorDiscount) || 0) : 0,
     });
   };
 
@@ -333,22 +343,34 @@ export function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCateg
       </div>
 
       <div className="form-group" style={{ padding: 12, borderRadius: 10, background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.25)' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-          <input type="checkbox" checked={isPriceAnchor}
-            onChange={(event) => { setIsPriceAnchor(event.target.checked); if (event.target.checked) setPriceAnchorId(''); }}
-            style={{ width: 18, height: 18 }} />
-          <span style={{ fontWeight: 700 }}>פריט עוגן — מחירים אחרים נגזרים ממנו</span>
-        </label>
+        <label className="form-label">איך נקבע המחיר של הפריט</label>
+        <AppSelect className="input select" value={pricingMode}
+          onChange={(event) => {
+            const mode = event.target.value;
+            setPricingMode(mode);
+            // מעבר ל„נגזר” בלי עוגן נבחר היה משאיר תפריט ריק שנשמר כמחיר מוקלד.
+            if (mode === 'derived' && !priceAnchorId) setPriceAnchorId(anchorOptions[0]?.id || '');
+          }}>
+          <option value="own">מחיר עצמאי — מוקלד ידנית</option>
+          <option value="derived" disabled={!anchorOptions.length}>
+            {anchorOptions.length ? 'מחיר נגזר מפריט עוגן' : 'מחיר נגזר מפריט עוגן — אין עדיין פריט עוגן'}
+          </option>
+          <option value="anchor">פריט עוגן — מחירים אחרים נגזרים ממנו</option>
+        </AppSelect>
         <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
-          כניסה בודדת לקיר היא עוגן: כרטיסייה היא כמות ממנה, ושינוי המחיר כאן מזיז את כולן בבת אחת.
+          {pricingMode === 'anchor'
+            ? 'כניסה בודדת לקיר היא עוגן: כרטיסייה היא כמות ממנה, ושינוי המחיר כאן מזיז את כולן בבת אחת.'
+            : pricingMode === 'derived'
+              ? 'המחיר מחושב מהעוגן ואינו מוקלד. שינוי מחיר העוגן יעדכן גם את הפריט הזה.'
+              : 'המחיר מוקלד ידנית ואינו מושפע משום פריט אחר.'}
         </div>
 
-        {!isPriceAnchor && (
+        {pricingMode === 'derived' && (
           <>
-            <label className="form-label" style={{ marginTop: 12 }}>המחיר נגזר מפריט עוגן</label>
+            <label className="form-label" style={{ marginTop: 12 }}>פריט העוגן</label>
             <AppSelect className="input select" value={priceAnchorId}
               onChange={(event) => setPriceAnchorId(event.target.value)}>
-              <option value="">מחיר עצמאי — מוקלד ידנית</option>
+              <option value="">— בחר פריט עוגן —</option>
               {anchorOptions.map((row) => (
                 <option key={row.id} value={row.id}>{row.name} · ₪{row.price}</option>
               ))}
@@ -356,7 +378,7 @@ export function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCateg
           </>
         )}
 
-        {!isPriceAnchor && priceAnchorId && (
+        {pricingMode === 'derived' && priceAnchorId && (
           <div className="form-grid-2" style={{ marginTop: 12 }}>
             {productType !== 'punch_card' && (
               <div className="form-group">
@@ -393,6 +415,7 @@ export function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCateg
           className="input select"
           value={cancellationPolicyChoice}
           onChange={(event) => setCancellationPolicyChoice(event.target.value)}
+          optionIcon={(value) => cancellationPolicyIcon(value, cancellationPolicies)}
         >
           <option value="none">ללא מדיניות ביטול</option>
           {cancellationPolicies

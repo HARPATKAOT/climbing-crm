@@ -18,6 +18,10 @@ async function api(path, options) {
   if (!response.ok) throw new Error(body.error || 'הפעולה נכשלה');
   return body;
 }
+function expectRows(rows) {
+  if (!Array.isArray(rows)) throw new Error('תשובה לא צפויה מהשרת');
+  return rows;
+}
 function targetText(benefit, products) {
   if (benefit.target === 'product_type') return benefit.productType === 'punch_card' ? 'כל הכרטיסיות' : benefit.productType === 'time_membership' ? 'כל המנויים' : 'כל המוצרים';
   if (benefit.target === 'products') return benefit.pricelistIds.map((id) => products.find((p) => String(p.id) === String(id))?.name).filter(Boolean).join(', ');
@@ -41,19 +45,28 @@ export default function DiscountCenter() {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
 
+  /**
+   * כל רשימה נטענת בנפרד. כשהמסך טען את כולן בבת אחת, קריאה אחת שנכשלה
+   * השאירה גם את בורר המוצרים ריק — והמשתמש ראה תפריט בלי מוצרים בלי לדעת
+   * שדבר אחר לגמרי הוא שנפל. עכשיו מה שנטען מוצג, ומה שנכשל מופיע בשמו.
+   */
   const load = async () => {
-    try {
-      const [ruleRows, discountRows, employeeRows, studentRows, parentRows, priceRows, categoryRows, groupRows, roles] = await Promise.all([
-        api('/api/discount-rules'), api('/api/coupons?recurring=1'), api('/api/employees'), api('/api/students'), api('/api/parents'),
-        api('/api/pricelist?images=0'), api('/api/product-categories'), api('/api/groups'), api('/api/staff-roles'),
-      ]);
-      setRules(Array.isArray(ruleRows) ? ruleRows : []);
-      setDiscounts((Array.isArray(discountRows) ? discountRows : []).filter((row) => row.source !== 'discount_rules'));
-      setEmployees(Array.isArray(employeeRows) ? employeeRows : []); setStudents(Array.isArray(studentRows) ? studentRows : []);
-      setParents(Array.isArray(parentRows) ? parentRows : []); setProducts(Array.isArray(priceRows) ? priceRows : []);
-      setCategories(Array.isArray(categoryRows) ? categoryRows : []); setGroups(Array.isArray(groupRows) ? groupRows : []);
-      setRoleCatalog(roles || { system: [], extra: [] }); setError('');
-    } catch (err) { setError(err.message); }
+    const sources = [
+      ['כללי ההנחה', '/api/discount-rules', (rows) => setRules(expectRows(rows))],
+      ['הנחות אישיות', '/api/coupons?recurring=1', (rows) => setDiscounts(expectRows(rows).filter((row) => row.source !== 'discount_rules'))],
+      ['עובדים', '/api/employees', (rows) => setEmployees(expectRows(rows))],
+      ['מתאמנים', '/api/students', (rows) => setStudents(expectRows(rows))],
+      ['הורים', '/api/parents', (rows) => setParents(expectRows(rows))],
+      ['מוצרים', '/api/pricelist?images=0', (rows) => setProducts(expectRows(rows))],
+      ['קטגוריות', '/api/product-categories', (rows) => setCategories(expectRows(rows))],
+      ['חוגים', '/api/groups', (rows) => setGroups(expectRows(rows))],
+      ['תפקידים', '/api/staff-roles', (roles) => setRoleCatalog(roles && typeof roles === 'object' ? roles : { system: [], extra: [] })],
+    ];
+    const failures = await Promise.all(sources.map(async ([label, path, apply]) => {
+      try { apply(await api(path)); return null; } catch (err) { return `${label} — ${err.message}`; }
+    }));
+    const failed = failures.filter(Boolean);
+    setError(failed.length ? `חלק מהנתונים לא נטענו: ${failed.join(' | ')}. רעננו את הדף ונסו שוב.` : '');
   };
   useEffect(() => { load(); }, []);
 
@@ -61,11 +74,7 @@ export default function DiscountCenter() {
   const employeeById = useMemo(() => new Map(employees.map((e) => [String(e.id), e])), [employees]);
   const studentById = useMemo(() => new Map(students.map((s) => [String(s.id), s])), [students]);
   const roles = useMemo(() => [...(roleCatalog.system || []).map((r) => r.label), ...(roleCatalog.extra || [])].filter(Boolean), [roleCatalog]);
-  const visibleEmployees = employees.filter((employee) => (
-    employee?.is_active !== false
-    && employee?.active !== false
-    && `${employee.name} ${(employee.certifications || []).join(' ')}`.toLowerCase().includes(query.toLowerCase())
-  ));
+  const visibleEmployees = employees.filter((employee) => `${employee.name} ${(employee.certifications || []).join(' ')}`.toLowerCase().includes(query.toLowerCase()));
 
   const saveRule = async () => {
     if (!ruleDraft?.name.trim()) return setError('יש לתת שם לכלל');
@@ -127,7 +136,7 @@ export default function DiscountCenter() {
     {ruleDraft && <div className="modal-overlay" onMouseDown={(e) => e.target === e.currentTarget && setRuleDraft(null)}><div className="modal" style={{ maxWidth: 760 }}><div className="modal-header"><div className="modal-title">{ruleDraft.id ? 'עריכת כלל הנחה' : 'כלל הנחה חדש'}</div><button className="btn btn-ghost btn-icon" onClick={() => setRuleDraft(null)}><X size={17} /></button></div><div className="modal-body" style={{ display: 'grid', gap: 13 }}>
       <div><label className="form-label">שם הכלל</label><input className="input" value={ruleDraft.name} onChange={(e) => setRuleDraft((d) => ({ ...d, name: e.target.value }))} placeholder="למשל: הטבות מדריכי נוער" /></div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}><div><label className="form-label">מי זכאי?</label><AppSelect className="input" value={ruleDraft.audience} onChange={(e) => setRuleDraft((d) => ({ ...d, audience: e.target.value }))}><option value="employee_role">עובדים לפי תפקיד</option><option value="active_class">מתאמנים הרשומים לחוג</option></AppSelect></div>{ruleDraft.audience === 'employee_role' ? <div><label className="form-label">תפקיד</label><AppSelect className="input" value={ruleDraft.role} onChange={(e) => setRuleDraft((d) => ({ ...d, role: e.target.value }))}><option value="">בחירת תפקיד...</option>{roles.map((role) => <option key={role} value={role}>{role}</option>)}</AppSelect></div> : <div><label className="form-label">חוג</label><AppSelect className="input" value={ruleDraft.group_id} onChange={(e) => setRuleDraft((d) => ({ ...d, group_id: e.target.value }))}><option value="">כל מי שרשום לחוג פעיל</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</AppSelect></div>}</div>
-      <div><div style={{ fontWeight: 800, marginBottom: 8 }}>מה מקבלים?</div><div style={{ display: 'grid', gap: 8 }}>{ruleDraft.benefits.map((benefit, index) => <div key={index} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 10, display: 'grid', gridTemplateColumns: '120px 100px 145px 1fr 34px', gap: 7, alignItems: 'end' }}><div><label className="form-label">סוג הנחה</label><AppSelect className="input input-sm" value={benefit.type} onChange={(e) => updateBenefit(index, { type: e.target.value })}><option value="percent">אחוז</option><option value="amount">₪ קבוע</option></AppSelect></div><div><label className="form-label">גובה</label><input className="input input-sm" type="number" value={benefit.value} onChange={(e) => updateBenefit(index, { value: e.target.value })} /></div><div><label className="form-label">יעד</label><AppSelect className="input input-sm" value={benefit.target} onChange={(e) => updateBenefit(index, { target: e.target.value, categoryNames: [], pricelistIds: [] })}><option value="categories">קטגוריה</option><option value="products">מוצר מסוים</option><option value="product_type">סוג מוצר</option></AppSelect></div><div><label className="form-label">על מה?</label>{benefit.target === 'categories' ? <AppSelect className="input input-sm" value={benefit.categoryNames?.[0] || ''} onChange={(e) => updateBenefit(index, { categoryNames: e.target.value ? [e.target.value] : [] })}><option value="">בחירת קטגוריה...</option>{categories.filter((c) => c.active !== false).map((c) => <option key={c.id || c.name} value={c.name}>{c.name}</option>)}</AppSelect> : benefit.target === 'products' ? <AppSelect className="input input-sm" value={benefit.pricelistIds?.[0] || ''} onChange={(e) => updateBenefit(index, { pricelistIds: e.target.value ? [e.target.value] : [] })}><option value="">בחירת מוצר...</option>{products.filter((p) => p.active !== false).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</AppSelect> : <AppSelect className="input input-sm" value={benefit.productType} onChange={(e) => updateBenefit(index, { productType: e.target.value })}><option value="punch_card">כרטיסיות</option><option value="time_membership">מנויים</option><option value="product">מוצרים רגילים</option></AppSelect>}</div><button className="btn btn-ghost btn-icon" disabled={ruleDraft.benefits.length === 1} onClick={() => removeBenefit(index)}><Trash2 size={13} /></button></div>)}</div><button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={() => setRuleDraft((d) => ({ ...d, benefits: [...d.benefits, emptyBenefit()] }))}><Plus size={13} /> שורת הנחה נוספת</button></div>
+      <div><div style={{ fontWeight: 800, marginBottom: 8 }}>מה מקבלים?</div><div style={{ display: 'grid', gap: 8 }}>{ruleDraft.benefits.map((benefit, index) => <div key={index} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 10, display: 'grid', gridTemplateColumns: '120px 100px 145px 1fr 34px', gap: 7, alignItems: 'end' }}><div><label className="form-label">סוג הנחה</label><AppSelect className="input input-sm" value={benefit.type} onChange={(e) => updateBenefit(index, { type: e.target.value })}><option value="percent">אחוז</option><option value="amount">₪ קבוע</option></AppSelect></div><div><label className="form-label">גובה</label><input className="input input-sm" type="number" value={benefit.value} onChange={(e) => updateBenefit(index, { value: e.target.value })} /></div><div><label className="form-label">יעד</label><AppSelect className="input input-sm" value={benefit.target} onChange={(e) => updateBenefit(index, { target: e.target.value, categoryNames: [], pricelistIds: [] })}><option value="categories">קטגוריה</option><option value="products">מוצר מסוים</option><option value="product_type">סוג מוצר</option></AppSelect></div><div><label className="form-label">על מה?</label>{benefit.target === 'categories' ? <AppSelect className="input input-sm" value={benefit.categoryNames?.[0] || ''} onChange={(e) => updateBenefit(index, { categoryNames: e.target.value ? [e.target.value] : [] })}><option value="">בחירת קטגוריה...</option>{categories.filter((c) => c.active !== false).map((c) => <option key={c.id || c.name} value={c.name}>{c.name}</option>)}</AppSelect> : benefit.target === 'products' ? <AppSelect className="input input-sm" value={benefit.pricelistIds?.[0] || ''} onChange={(e) => updateBenefit(index, { pricelistIds: e.target.value ? [e.target.value] : [] })}><option value="">{products.length ? 'בחירת מוצר...' : 'אין מוצרים להצגה'}</option>{products.filter((p) => p.active !== false).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</AppSelect> : <AppSelect className="input input-sm" value={benefit.productType} onChange={(e) => updateBenefit(index, { productType: e.target.value })}><option value="punch_card">כרטיסיות</option><option value="time_membership">מנויים</option><option value="product">מוצרים רגילים</option></AppSelect>}</div><button className="btn btn-ghost btn-icon" disabled={ruleDraft.benefits.length === 1} onClick={() => removeBenefit(index)}><Trash2 size={13} /></button></div>)}</div><button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={() => setRuleDraft((d) => ({ ...d, benefits: [...d.benefits, emptyBenefit()] }))}><Plus size={13} /> שורת הנחה נוספת</button></div>
     </div><div className="modal-footer"><button className="btn btn-primary" disabled={busy === 'rule'} onClick={saveRule}><Save size={14} /> {busy === 'rule' ? 'שומר...' : 'שמירת הכלל'}</button><button className="btn btn-ghost" onClick={() => setRuleDraft(null)}>ביטול</button></div></div></div>}
 
     {personalDraft && <div className="modal-overlay"><div className="modal" style={{ maxWidth: 590 }}><div className="modal-header"><div className="modal-title">הנחה אישית קבועה</div><button className="btn btn-ghost btn-icon" onClick={() => setPersonalDraft(null)}><X size={17} /></button></div><div className="modal-body" style={{ display: 'grid', gap: 11 }}><div><label className="form-label">תיק מתאמן</label><AppSelect className="input" value={personalDraft.studentId} onChange={(e) => setPersonalDraft((d) => ({ ...d, studentId: e.target.value }))}><option value="">בחירה...</option>{students.map((s) => <option key={s.id} value={s.id}>{studentName(s)}</option>)}</AppSelect></div><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}><AppSelect className="input" value={personalDraft.type} onChange={(e) => setPersonalDraft((d) => ({ ...d, type: e.target.value }))}><option value="percent">אחוז הנחה</option><option value="amount">סכום בשקלים</option></AppSelect><input className="input" type="number" value={personalDraft.value} onChange={(e) => setPersonalDraft((d) => ({ ...d, value: e.target.value }))} /></div><div><label className="form-label">מוצר מסוים (רשות)</label><AppSelect className="input" value={personalDraft.pricelistId} onChange={(e) => setPersonalDraft((d) => ({ ...d, pricelistId: e.target.value }))}><option value="">כל המוצרים</option>{products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</AppSelect></div><input className="input" value={personalDraft.label} onChange={(e) => setPersonalDraft((d) => ({ ...d, label: e.target.value }))} placeholder="שם ההנחה בקופה" /></div><div className="modal-footer"><button className="btn btn-primary" disabled={busy === 'personal'} onClick={savePersonal}><Save size={14} /> שמירה</button><button className="btn btn-ghost" onClick={() => setPersonalDraft(null)}>ביטול</button></div></div></div>}

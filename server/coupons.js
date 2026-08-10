@@ -481,6 +481,8 @@ export function redeemCoupon(db, couponId, { saleId = null, amount = 0 } = {}) {
  */
 export function reserveCoupon(db, couponId, { saleId = null, amount = 0, today = todayIsoDate() } = {}) {
   const current = db.getOne('customer_coupons', couponId);
+  // A standing discount is intentionally reusable. A pending payment link must
+  // not hide it from the employee's next purchase at the counter.
   if (current?.recurring) {
     return db.update('customer_coupons', couponId, {
       last_reserved_at: new Date().toISOString(),

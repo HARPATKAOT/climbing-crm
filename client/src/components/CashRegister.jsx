@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X, Printer, ShoppingCart, Package, Calculator, History, BarChart3, Wallet, Link2, BadgePercent } from 'lucide-react';
 import EntityLink from '../utils/entityLinks.jsx';
 import PosSale from './PosSale.jsx';
@@ -78,6 +79,7 @@ function saleStatusBadge(status) {
 }
 
 export default function CashRegister({ isOwner = true, canResetCash = isOwner, sharedStation = false, initialTab = null }) {
+  const navigate = useNavigate();
   const [expectedAmount, setExpectedAmount] = useState('');
   const [actualAmount, setActualAmount] = useState('');
   const [shiftType, setShiftType] = useState('בוקר');
@@ -116,9 +118,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
 
   const refreshRegister = useCallback(async () => {
     try {
-      const data = isOwner
-        ? await fetch('/api/cash-register').then((r) => (r.ok ? r.json() : []))
-        : [];
+      const data = await fetch('/api/cash-register').then((r) => (r.ok ? r.json() : []));
       setShifts(Array.isArray(data) ? data : []);
       const emps = await fetch('/api/employees').then((r) => (r.ok ? r.json() : []));
       const list = Array.isArray(emps) ? emps : [];
@@ -336,7 +336,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
       if (docsRes.ok) {
         const docsData = await docsRes.json();
         setIcountDocs(Array.isArray(docsData.docs) ? docsData.docs : []);
-        setIcountTotal(Number(docsData.total) || 0);
+        setIcountTotal(Number(docsData.recognizedTotal ?? docsData.total) || 0);
       } else {
         setIcountDocs([]);
         setIcountTotal(0);
@@ -394,7 +394,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
     { k: 'history', label: 'היסטוריה', icon: History },
     ...(isOwner
       ? [
-          { k: 'reports', label: 'דוחות', icon: BarChart3 },
+          { k: 'reports', label: 'דוחות פיננסיים', icon: BarChart3, route: '/reports' },
           { k: 'icount', label: 'סליקה ומסמכים', icon: ReceiptText },
         ]
       : []),
@@ -541,7 +541,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
             <div className="stat-value">₪{totalCash.toLocaleString()}</div>
           </div>
           <div className="card stat-card" style={{ '--stat-color': '#6366F1' }}>
-            <div className="stat-label">מסמכי חיוב (30 יום)</div>
+            <div className="stat-label">הכנסה חשבונאית (30 יום)</div>
             <div className="stat-value">₪{Math.round(icountTotal).toLocaleString()}</div>
             <div className={`stat-sub ${icountStatus.ok ? 'up' : 'down'}`}>{statusLine}</div>
           </div>
@@ -558,11 +558,11 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
       )}
 
       <div className="tab-bar">
-        {tabs.map(({ k, label, icon: Icon }) => (
+        {tabs.map(({ k, label, icon: Icon, route }) => (
           <button
             key={k}
             className={`tab-pill ${activeTab === k ? 'active' : ''}`}
-            onClick={() => setActiveTab(k)}
+            onClick={() => route ? navigate(route) : setActiveTab(k)}
           >
             <Icon size={14} /> {label}
           </button>
@@ -601,7 +601,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
                 <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
                   {isOwner
                     ? 'לחיצה על שורה פותחת פירוט · זיכוי וקישורים נמצאים בתוך הפירוט'
-                    : 'לחיצה על שורה פותחת פירוט · קישורי תשלום זמינים לעסקאות היום'}
+                    : 'לחיצה על שורה פותחת פירוט · זיכוי זמין לעסקאות שלך בתוך הפירוט'}
                 </div>
               </div>
               <button className="btn btn-ghost btn-sm" onClick={refreshSales} disabled={salesLoading}>
@@ -908,7 +908,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
                                       </a>
                                     </>
                                   )}
-                                  {isOwner && canDownloadCharge && (
+                                  {canDownloadCharge && (
                                     <button
                                       type="button"
                                       className="btn btn-ghost btn-sm"
@@ -924,7 +924,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
                                       הורדת חשבונית
                                     </button>
                                   )}
-                                  {isOwner && canDownloadCharge && (
+                                  {canDownloadCharge && (
                                     <button
                                       type="button"
                                       className="btn btn-ghost btn-sm"
@@ -937,7 +937,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
                                       הדפסת חשבונית
                                     </button>
                                   )}
-                                  {isOwner && canDownloadRefund && (
+                                  {canDownloadRefund && (
                                     <button
                                       type="button"
                                       className="btn btn-ghost btn-sm"
@@ -953,7 +953,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
                                       הורדת מסמך זיכוי
                                     </button>
                                   )}
-                                  {isOwner && canRefund && (
+                                  {canRefund && (
                                     <>
                                       <span className="pos-sale-detail-actions-spacer" />
                                       <button
@@ -983,7 +983,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
             </div>
           </div>
 
-          {isOwner && <div className="card">
+          <div className="card">
             <div className="section-title" style={{ padding: '14px 16px 0' }}>סגירות קופה</div>
             <div className="table-wrap">
               <table className="crm-table">
@@ -1026,7 +1026,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
                 </tbody>
               </table>
             </div>
-          </div>}
+          </div>
         </div>
       )}
 

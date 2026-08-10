@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ShoppingCart, Plus, Minus, Trash2, Search, User,
   Banknote, Link2, FileText, CheckCircle2, X, Percent, Tag,
@@ -56,6 +56,9 @@ export default function PosSale({
   employees = [],
   isOwner = false,
   requireSeller = false,
+  // מסוף הכניסה מגיע לכאן כשהמתאמן כבר עומד מול הדלפק ונבחר במסך הקבלה —
+  // הקלדת השם פעם שנייה היא בדיוק המקום שבו נבחר הלקוח הלא נכון.
+  initialStudentId = '',
   // חלונית נוספת מתחת ללקוח הנבחר. מסוף הכניסה שותל בה את אישור הכניסה
   // והניקוב, כדי שבחירת הלקוח, מצב המסמכים והקופה יהיו על מסך אחד.
   renderCustomerExtra = null,
@@ -121,7 +124,7 @@ export default function PosSale({
   }, [sellerEmployeeId]);
 
   const activeEmployees = useMemo(
-    () => (employees || []).filter((employee) => employee?.is_active !== false && employee?.active !== false),
+    () => (employees || []).filter((employee) => employee?.is_active !== false),
     [employees]
   );
   const seller = activeEmployees.find((employee) => employee.id === sellerId) || null;
@@ -342,6 +345,25 @@ export default function PosSale({
     setWalkInEmail('');
     setShowContactFields(false);
   };
+
+  // בחירת הלקוח שהגיע מבחוץ. נעשית פעם אחת לכל מזהה, כדי שניקוי הלקוח בידיים
+  // לא יחזיר אותו מיד.
+  const appliedInitialRef = useRef('');
+  useEffect(() => {
+    if (!initialStudentId || !students.length) return;
+    if (appliedInitialRef.current === initialStudentId) return;
+    const student = students.find((s) => String(s.id) === String(initialStudentId));
+    if (!student) return;
+    appliedInitialRef.current = initialStudentId;
+    const parent = parents.find((p) => String(p.id) === String(student.parentId));
+    setSelectedStudentId(student.id);
+    setSelectedParentId(student.parentId || '');
+    setWalkInName(parent?.name || student.name || '');
+    setWalkInPhone(parent?.phone || student.phone || '');
+    setWalkInEmail(parent?.email || student.email || '');
+    setCustomerQuery('');
+    setError('');
+  }, [initialStudentId, students, parents]);
 
   const pendingNewLeadName =
     !selectedParent && !selectedStudent ? String(customerQuery || walkInName || '').trim() : '';

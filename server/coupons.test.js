@@ -432,17 +432,28 @@ test('campaign stats count redemptions and exclude refunded revenue', () => {
 test('a standing discount stays active and records every use', () => {
   const db = fakeDb({ customer_coupons: [] });
   const discount = issueCoupon(db, {
-    studentId: 'student-1', employeeId: 'employee-1', recurring: true,
+    studentId: 'student-1',
+    employeeId: 'employee-1',
+    recurring: true,
     offer: { type: 'percent', value: 25, units: 1, label: 'הנחת עובד' },
     today: '2026-08-10',
   });
+
   assert.equal(discount.expires_at, null);
+  assert.equal(discount.recurring, true);
   assert.equal(checkCouponForSale(db, {
-    couponId: discount.id, studentId: 'student-1', lines: [entry()], today: '2026-08-10',
+    couponId: discount.id,
+    studentId: 'student-1',
+    lines: [entry()],
+    today: '2026-08-10',
   }).ok, true);
+
   redeemCoupon(db, discount.id, { saleId: 'sale-1', amount: 15 });
   redeemCoupon(db, discount.id, { saleId: 'sale-2', amount: 15 });
-  assert.equal(db.getOne('customer_coupons', discount.id).usage_count, 2);
+  const used = db.getOne('customer_coupons', discount.id);
+  assert.equal(used.status, COUPON_STATUS.ACTIVE);
+  assert.equal(used.usage_count, 2);
+
   reserveCoupon(db, discount.id, { saleId: 'pending-link', amount: 15 });
   assert.equal(db.getOne('customer_coupons', discount.id).status, COUPON_STATUS.ACTIVE);
 });
@@ -450,9 +461,12 @@ test('a standing discount stays active and records every use', () => {
 test('a no-expiry benefit stays single-use but has no expiry date', () => {
   const db = fakeDb({ customer_coupons: [] });
   const coupon = issueCoupon(db, {
-    studentId: 'student-1', offer: { type: 'percent', value: 10, noExpiry: true }, today: '2026-08-10',
+    studentId: 'student-1',
+    offer: { type: 'percent', value: 10, noExpiry: true },
+    today: '2026-08-10',
   });
   assert.equal(coupon.expires_at, null);
+  assert.equal(coupon.recurring, false);
   assert.equal(couponState(coupon, '2036-08-10'), COUPON_STATUS.ACTIVE);
   redeemCoupon(db, coupon.id, { saleId: 'sale-1', amount: 6 });
   assert.equal(db.getOne('customer_coupons', coupon.id).status, COUPON_STATUS.REDEEMED);
@@ -470,6 +484,6 @@ test('a ruleset applies different rates and never stacks overlapping benefits', 
     entry({ pricelist_id: 'entry', unitprice: 60, item: { categories: ['כניסה'] } }),
     entry({ pricelist_id: 'shoes', unitprice: 300, item: { categories: ['ציוד טיפוס'] } }),
   ]);
-  assert.equal(result.discount, 120);
+  assert.equal(result.discount, 120); // 50% of 60 + 30% of 300
   assert.equal(result.lines.filter((line) => line.coupon_applied).length, 2);
 });
