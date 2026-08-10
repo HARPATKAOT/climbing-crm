@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Package, RefreshCw, Send, Check, RotateCcw, Settings, X, AlertCircle, Clock, List } from 'lucide-react';
+import { Package, RefreshCw, Send, Check, RotateCcw, Settings, X, AlertCircle, Clock, List, ShieldCheck } from 'lucide-react';
 import {
   EQUIPMENT_ICONS,
   EQUIPMENT_ICON_COLORS,
@@ -157,6 +157,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
   const [groupId, setGroupId] = useState('');
   const [rows, setRows] = useState([]);
   const [settings, setSettings] = useState(null);
+  const [cancellationPolicies, setCancellationPolicies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState('');
@@ -286,6 +287,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
       info_chalk_bag: source?.item_info?.chalk_bag || '',
       enrichment_fee: source?.enrichment_fee == null ? '' : String(source.enrichment_fee),
       enrichment_info: source?.enrichment_info || '',
+      cancellation_policy_id: source?.cancellation_policy_id || '',
     });
   };
 
@@ -293,10 +295,16 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
     setLoadingSettings(true);
     setSettingsError('');
     try {
-      const res = await fetch('/api/equipment-settings', { cache: 'no-store' });
+      const [res, policiesRes] = await Promise.all([
+        fetch('/api/equipment-settings', { cache: 'no-store' }),
+        fetch('/api/settings/cancellation-policies', { cache: 'no-store' }),
+      ]);
       const body = await res.json().catch(() => ({}));
+      const policiesBody = await policiesRes.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || 'טעינת הגדרות הציוד נכשלה');
+      if (!policiesRes.ok) throw new Error(policiesBody.error || 'טעינת מדיניות הביטולים נכשלה');
       setSettings(body);
+      setCancellationPolicies(Array.isArray(policiesBody.policies) ? policiesBody.policies : []);
       resetDraft(body);
       return body;
     } catch (err) {
@@ -367,6 +375,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
           },
           enrichment_fee: String(draft.enrichment_fee || '').trim(),
           enrichment_info: draft.enrichment_info || '',
+          cancellation_policy_id: draft.cancellation_policy_id || null,
           ...season,
         }),
       });
@@ -489,6 +498,35 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
             ))}
           </div>
 
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 14, display: 'grid', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 800, fontSize: 13 }}>
+              <ShieldCheck size={15} color="var(--accent)" />
+              מדיניות ביטול לציוד
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.6 }}>
+              המדיניות שנבחרת כאן נצמדת לכל תשלום ציוד בזמן הרכישה ומשמשת לחישוב הזיכוי גם אם המדיניות תשתנה בעתיד.
+            </div>
+            <AppSelect
+              className="input input-sm"
+              value={draft.cancellation_policy_id || ''}
+              onChange={(event) => setDraft((d) => ({ ...d, cancellation_policy_id: event.target.value }))}
+              aria-label="מדיניות ביטול לציוד"
+            >
+              <option value="">לא נבחרה מדיניות</option>
+              {cancellationPolicies
+                .filter((policy) => policy.status === 'published' && policy.current?.basis === 'usage')
+                .map((policy) => <option key={policy.id} value={policy.id}>{policy.name}</option>)}
+            </AppSelect>
+            {!cancellationPolicies.some((policy) => policy.status === 'published' && policy.current?.basis === 'usage') && (
+              <div style={{ fontSize: 11, color: '#fbbf24' }}>
+                אין כרגע מדיניות מפורסמת שמחושבת לפי ניצול. אפשר ליצור אחת בהגדרות העסק.
+              </div>
+            )}
+            <a href="/business-settings" style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 700, width: 'fit-content' }}>
+              ניהול מדיניות הביטולים בהגדרות העסק
+            </a>
+          </div>
+
           <div
             style={{
               borderTop: '1px solid var(--border)',
@@ -501,7 +539,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
             <div style={{ fontWeight: 800, fontSize: 13 }}>קישור לתשלום ציוד</div>
             <div style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.6 }}>
               הקישור שייך לכל תיק המשפחה. ברשימה לחצו על „קישור תשלום” — המשפחה תוכל לבחור מתאמן אחד או יותר ולשלם פעם אחת.
-              ביטול השכרת נעליים באמצע התקופה כרוך בדמי ביטול של 30 ₪ (מוצג גם בדף התשלום להורים).
+              תנאי הביטול והזיכוי נקבעים לפי המדיניות המקושרת לציוד למעלה.
             </div>
             {lastPaymentLink ? (
               <a

@@ -3700,6 +3700,15 @@ async function saveEquipmentSettings(next) {
   const current = read.configured ? read.value : (db.getSettings?.()?.equipment_settings || {});
   const merged = mergeEquipmentSettingsPatch(current, next);
   const normalized = normalizeEquipmentSettings(merged);
+  if (normalized.cancellation_policy_id) {
+    const selectedPolicy = currentPolicyVersion(db, normalized.cancellation_policy_id);
+    if (!selectedPolicy || selectedPolicy.policy.status !== 'published') {
+      throw new Error('מדיניות הביטול שנבחרה אינה מפורסמת');
+    }
+    if (selectedPolicy.snapshot.basis !== 'usage') {
+      throw new Error('מדיניות ביטול לציוד חייבת להיות מחושבת לפי ניצול');
+    }
+  }
   const result = await supa.setAppSetting('equipment_settings', normalized);
   if (result?.ok === false) {
     throw new Error(result.error || 'שמירת הגדרות הציוד נכשלה');
@@ -4411,7 +4420,7 @@ async function createFamilyEquipmentPayment(req, res, checkout) {
     // צילום מדיניות הביטול כפי שהיא ברגע הרכישה. בלעדיו הזיכוי היה קורא את
     // המדיניות העדכנית בזמן הביטול, ושינוי דמי הביטול היה משנה למפרע החזר
     // של השכרה שכבר שולמה.
-    policy_snapshot: equipmentPolicySnapshot(),
+    policy_snapshot: equipmentPolicySnapshot(settings),
     updated_at: now,
   });
 
@@ -9452,7 +9461,10 @@ function usagePolicySnapshot(namePattern) {
   return chosen?.snapshot || null;
 }
 
-function equipmentPolicySnapshot() {
+function equipmentPolicySnapshot(settings = null) {
+  if (settings?.cancellation_policy_id) {
+    return currentPolicyVersion(db, settings.cancellation_policy_id)?.snapshot || null;
+  }
   return usagePolicySnapshot(/נעל|ציוד|השכר/);
 }
 
