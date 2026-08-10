@@ -1364,14 +1364,14 @@ select option, select optgroup {
   overscroll-behavior-inline: contain;
 }
 .bulk-qualifications-table-wrap > table {
-  width: max(100%, 1510px);
-  min-width: 1510px;
+  width: max(100%, 1470px);
+  min-width: 1470px;
   table-layout: fixed;
 }
 .bulk-col-employee { width: 155px; }
 .bulk-col-status { width: 145px; }
 .bulk-col-category { width: 165px; }
-.bulk-col-scope { width: 155px; }
+.bulk-col-scope { width: 115px; }
 .bulk-col-roles { width: 385px; }
 .bulk-col-permissions { width: 255px; }
 .bulk-col-docs { width: 170px; }
@@ -1406,7 +1406,23 @@ select option, select optgroup {
 .bulk-employee-name { font-size: 13px; font-weight: 800; transition: color var(--t-fast); }
 .bulk-employee-phone { direction: ltr; font-size: 11px; color: var(--text-3); }
 .bulk-token-group { display: flex; flex-wrap: wrap; gap: 5px; min-width: 150px; }
-.bulk-role-tokens { min-width: 330px; max-width: 510px; }
+.bulk-scope-token { min-width: 0; }
+.bulk-scope-token .scope-toggle { width: 100%; justify-content: center; }
+.bulk-role-tokens {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  min-width: 0;
+  max-width: none;
+}
+.bulk-role-tokens .role-token {
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  justify-content: flex-start;
+  padding-inline: 8px;
+}
+.bulk-role-tokens .role-token svg:last-child { margin-inline-start: auto; flex-shrink: 0; }
 .bulk-token {
   min-height: 28px;
   display: inline-flex;

@@ -3936,31 +3936,22 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
                         </div>
                       </td>
                       <td>
-                        <div className="bulk-token-group" aria-label={`שיוך ${emp.name}`}>
+                        <div className="bulk-token-group bulk-scope-token" aria-label={`שיוך ${emp.name}`}>
                           <button
                             type="button"
-                            className={`bulk-token scope-wall ${wallStaff ? 'is-selected' : ''}`}
+                            className={`bulk-token scope-toggle ${wallStaff ? 'scope-wall' : 'scope-external'} is-selected`}
                             disabled={!canEditEmployees}
-                            aria-pressed={wallStaff}
-                            onClick={() => quickPatchEmployee(emp.id, {
-                              is_wall_staff: true,
-                            })}
+                            aria-label={`${emp.name}: ${wallStaff ? 'עובד קיר' : 'חיצוני'}. לחיצה תשנה את השיוך`}
+                            onClick={() => quickPatchEmployee(emp.id, wallStaff
+                              ? {
+                                is_wall_staff: false,
+                                can_open_wall: false,
+                                can_sign_daily_safety: false,
+                                can_operate_cash: false,
+                              }
+                              : { is_wall_staff: true })}
                           >
-                            {wallStaff && <Check size={13} />} עובד קיר
-                          </button>
-                          <button
-                            type="button"
-                            className={`bulk-token scope-external ${!wallStaff ? 'is-selected' : ''}`}
-                            disabled={!canEditEmployees}
-                            aria-pressed={!wallStaff}
-                            onClick={() => quickPatchEmployee(emp.id, {
-                              is_wall_staff: false,
-                              can_open_wall: false,
-                              can_sign_daily_safety: false,
-                              can_operate_cash: false,
-                            })}
-                          >
-                            {!wallStaff && <Check size={13} />} חיצוני
+                            <Check size={13} /> {wallStaff ? 'עובד קיר' : 'חיצוני'}
                           </button>
                         </div>
                       </td>
