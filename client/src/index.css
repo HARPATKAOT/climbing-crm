@@ -1328,6 +1328,112 @@ select option, select optgroup {
 .input-error { border-color: var(--red) !important; box-shadow: 0 0 0 3px rgba(239,68,68,0.2) !important; }
 .form-error { font-size: 12px; color: var(--red); }
 
+/* עריכה מרוכזת של תפקידי עובדים והרשאות — צפוף מספיק לעבודה מהירה,
+   אבל כל בחירה נשארת כפתור אמיתי ונגישה במקלדת. */
+.bulk-qualifications { display: flex; flex-direction: column; gap: 12px; }
+.bulk-qualifications-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.bulk-qualifications-filters { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bulk-qualification-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-2);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.bulk-qualifications-table-wrap { overflow: hidden; }
+.bulk-qualifications-table-wrap > table { min-width: 1120px; }
+.bulk-qualifications-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--bg-card);
+  white-space: nowrap;
+}
+.bulk-qualifications-table tbody tr { vertical-align: top; }
+.bulk-qualifications-table tbody tr.is-archived { opacity: 0.55; }
+.bulk-qualifications-table td { padding-top: 13px; padding-bottom: 13px; }
+.bulk-employee-cell { min-width: 150px; }
+.bulk-employee-link {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: right;
+  cursor: pointer;
+  padding: 0;
+}
+.bulk-employee-link:hover .bulk-employee-name { color: var(--blue); }
+.bulk-employee-name { font-size: 13px; font-weight: 800; transition: color var(--t-fast); }
+.bulk-employee-phone { direction: ltr; font-size: 11px; color: var(--text-3); }
+.bulk-token-group { display: flex; flex-wrap: wrap; gap: 5px; min-width: 150px; }
+.bulk-role-tokens { min-width: 330px; max-width: 510px; }
+.bulk-token {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 9px;
+  background: rgba(255,255,255,0.025);
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color var(--t-fast), background var(--t-fast), color var(--t-fast), transform var(--t-fast);
+}
+.bulk-token:hover:not(:disabled) { border-color: var(--border-hover); color: var(--text-1); transform: translateY(-1px); }
+.bulk-token:disabled { cursor: not-allowed; opacity: 0.42; }
+.bulk-token.scope-wall.is-selected {
+  color: #67E8F9;
+  border-color: rgba(34,211,238,.45);
+  background: rgba(34,211,238,.11);
+}
+.bulk-token.scope-external.is-selected {
+  color: #FBBF24;
+  border-color: rgba(251,191,36,.42);
+  background: rgba(251,191,36,.1);
+}
+.bulk-token.role-token.is-selected {
+  color: var(--token-color, var(--blue));
+  border-color: color-mix(in srgb, var(--token-color, var(--blue)) 50%, transparent);
+  background: color-mix(in srgb, var(--token-color, var(--blue)) 13%, transparent);
+}
+.bulk-token.permission-token.is-selected {
+  color: #A7F3D0;
+  border-color: rgba(52,211,153,.42);
+  background: rgba(52,211,153,.1);
+}
+.bulk-doc-tokens { min-width: 140px; max-width: 210px; }
+.bulk-doc-tokens .badge { font-size: 9px; padding: 2px 6px; }
+.bulk-save-cell { min-width: 78px; }
+.bulk-save-state { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; white-space: nowrap; }
+.bulk-save-state.is-saving { color: var(--amber); }
+.bulk-save-state.is-saving svg { animation: spin 900ms linear infinite; }
+.bulk-save-state.is-saved { color: var(--green); }
+.bulk-save-state.is-error { color: var(--red); }
+.bulk-empty { padding: 36px !important; text-align: center; color: var(--text-3); }
+
+@media (max-width: 850px) {
+  .bulk-qualifications-toolbar { align-items: stretch; flex-direction: column; }
+  .bulk-qualifications-filters .input-icon-wrap { flex: 1; }
+  .bulk-qualifications-table-wrap { overflow-x: auto; }
+}
+
 /* POS history filters */
 .pos-history-filters {
   margin-top: 16px;

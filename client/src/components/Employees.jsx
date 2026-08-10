@@ -2492,6 +2492,15 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
   const [empFilterActive, setEmpFilterActive] = useState('all');
   const [empFilterRole, setEmpFilterRole] = useState('all');
   const [empSortConfig, setEmpSortConfig] = useState({ key: 'name', direction: 'asc' });
+  const [certSearch, setCertSearch] = useState('');
+  const [certActiveOnly, setCertActiveOnly] = useState(true);
+  const [bulkSavingIds, setBulkSavingIds] = useState(() => new Set());
+  const [bulkSaveErrors, setBulkSaveErrors] = useState({});
+  const employeesRef = useRef([]);
+  const bulkSaveQueues = useRef(new Map());
+  const bulkPendingCounts = useRef(new Map());
+
+  useEffect(() => { employeesRef.current = employees; }, [employees]);
 
   // Shift logging quick state
   const [clockActivity, setClockActivity] = useState({});
@@ -2775,6 +2784,59 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
     const assignable = assignableLabelsOf(roleCatalog);
     return [...new Set([...assignable, ...certsInUse(employees)])];
   }, [roleCatalog, employees]);
+
+  const certificationEmployees = useMemo(() => {
+    const query = certSearch.trim().toLocaleLowerCase('he');
+    return employees
+      .filter((emp) => (!certActiveOnly || emp.is_active !== false))
+      .filter((emp) => !query
+        || String(emp.name || '').toLocaleLowerCase('he').includes(query)
+        || String(emp.phone || '').includes(query))
+      .slice()
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'he'));
+  }, [employees, certSearch, certActiveOnly]);
+
+  /**
+   * עריכה מרוכזת: הממשק מתעדכן מיד, והשמירות של אותו עובד נשלחות בתור.
+   * כך אפשר ללחוץ במהירות על כמה אסימונים בלי שתשובה איטית תדרוס בחירה חדשה.
+   */
+  const quickPatchEmployee = (employeeId, patchFor) => {
+    const current = employeesRef.current.find((emp) => emp.id === employeeId);
+    if (!current || !canEditEmployees) return;
+    const patch = typeof patchFor === 'function' ? patchFor(current) : patchFor;
+    const next = { ...current, ...patch };
+    employeesRef.current = employeesRef.current.map((emp) => (emp.id === employeeId ? next : emp));
+    setEmployees(employeesRef.current);
+    setBulkSaveErrors((prev) => ({ ...prev, [employeeId]: '' }));
+
+    const pending = (bulkPendingCounts.current.get(employeeId) || 0) + 1;
+    bulkPendingCounts.current.set(employeeId, pending);
+    setBulkSavingIds((prev) => new Set(prev).add(employeeId));
+
+    const previous = bulkSaveQueues.current.get(employeeId) || Promise.resolve();
+    const queued = previous.catch(() => {}).then(async () => {
+      const response = await fetch(`/api/employees/${encodeURIComponent(employeeId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (!response.ok) throw new Error(await saveErrorMessage(response));
+    }).catch((error) => {
+      setBulkSaveErrors((prev) => ({ ...prev, [employeeId]: error.message || 'השמירה נכשלה' }));
+      refreshData();
+    }).finally(() => {
+      const left = Math.max(0, (bulkPendingCounts.current.get(employeeId) || 1) - 1);
+      bulkPendingCounts.current.set(employeeId, left);
+      if (left === 0) {
+        setBulkSavingIds((prev) => {
+          const nextIds = new Set(prev);
+          nextIds.delete(employeeId);
+          return nextIds;
+        });
+      }
+    });
+    bulkSaveQueues.current.set(employeeId, queued);
+  };
 
   const handleSaveEmployee = async (data) => {
     setEmployeeSaveNotice(null);
@@ -3664,43 +3726,178 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
 
       {/* ─── Tab 2: Certificates & Accreditations ─────────────────────────── */}
       {activeTab === 'certs' && (
-        <div className="card">
-          <div className="table-wrap">
-            <table className="crm-table">
+        <div className="bulk-qualifications">
+          <div className="card card-p bulk-qualifications-toolbar">
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 800 }}>הגדרה מהירה לכל העובדים</div>
+              <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 3 }}>
+                לחיצה על אסימון מעדכנת ושומרת מיד. עובד חיצוני לא יופיע בפעולות התפעול של הקיר.
+              </div>
+            </div>
+            <div className="bulk-qualifications-filters">
+              <div className="input-icon-wrap" style={{ minWidth: 230 }}>
+                <Search size={15} className="input-icon" />
+                <input
+                  className="input"
+                  value={certSearch}
+                  onChange={(event) => setCertSearch(event.target.value)}
+                  placeholder="חיפוש עובד לפי שם או טלפון"
+                  aria-label="חיפוש עובד בהגדרות המרוכזות"
+                />
+              </div>
+              <label className="bulk-qualification-switch">
+                <input
+                  type="checkbox"
+                  checked={certActiveOnly}
+                  onChange={(event) => setCertActiveOnly(event.target.checked)}
+                />
+                פעילים בלבד
+              </label>
+            </div>
+          </div>
+
+          <div className="card bulk-qualifications-table-wrap">
+            <table className="crm-table bulk-qualifications-table">
               <thead>
                 <tr>
-                  <th>שם מלא</th>
-                  <th>טלפון</th>
+                  <th>עובד</th>
+                  <th>שיוך</th>
+                  <th>סוגי עבודה ותפקידים</th>
+                  <th>הרשאות מסוף</th>
                   <th>טפסים ואישורים</th>
-                  <th>תפקידים והסמכות</th>
+                  <th>שמירה</th>
                 </tr>
               </thead>
               <tbody>
-                {employees.map(emp => (
-                  <tr key={emp.id} style={{ cursor: 'pointer' }} onClick={() => openEmployeeDrawer(emp, 'file')}>
-                    <td style={{ fontWeight: 700 }}>{emp.name}</td>
-                    <td style={{ fontSize: 13, color: 'var(--text-3)' }}>{emp.phone || '—'}</td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                        {hasEmployeeDoc(emp, 'contract') && <span className="badge badge-green" style={{ fontSize: 9 }}>חוזה</span>}
-                        {hasEmployeeDoc(emp, 'police') && <span className="badge badge-green" style={{ fontSize: 9 }}>משטרה</span>}
-                        {hasEmployeeDoc(emp, 'form101') && <span className="badge badge-green" style={{ fontSize: 9 }}>101</span>}
-                        {hasEmployeeDoc(emp, 'idPhoto') && <span className="badge badge-blue" style={{ fontSize: 9 }}>צילום ת.ז</span>}
-                        {hasEmployeeDoc(emp, 'certificates') && <span className="badge badge-blue" style={{ fontSize: 9 }}>תעודות</span>}
-                        {!EMPLOYEE_DOC_FIELDS.some((f) => hasEmployeeDoc(emp, f.key)) && (
-                          <span style={{ color: 'var(--text-3)', fontSize: 11 }}>אין קבצים</span>
-                        )}
-                      </div>
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', maxWidth: 220 }}>
-                        {emp.certifications?.map(c => (
-                          <span key={c} className="badge badge-blue" style={{ fontSize: 9, padding: '1px 6px' }}>{c}</span>
-                        )) || '—'}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {certificationEmployees.map((emp) => {
+                  const roles = Array.isArray(emp.certifications) ? emp.certifications : [];
+                  const wallStaff = employeeIsWallStaff({ ...emp, is_active: true });
+                  const saving = bulkSavingIds.has(emp.id);
+                  const saveError = bulkSaveErrors[emp.id];
+                  const permissions = [
+                    { key: 'can_open_wall', label: 'פתיחת קיר' },
+                    { key: 'can_sign_daily_safety', label: 'בדיקות בטיחות' },
+                    { key: 'can_operate_cash', label: 'פתיחה וסגירת קופה' },
+                  ];
+                  return (
+                    <tr key={emp.id} className={emp.is_active === false ? 'is-archived' : ''}>
+                      <td className="bulk-employee-cell">
+                        <button
+                          type="button"
+                          className="bulk-employee-link"
+                          onClick={() => openEmployeeDrawer(emp, 'file')}
+                          title="פתיחת תיק העובד"
+                        >
+                          <span className="bulk-employee-name">{emp.name}</span>
+                          <span className="bulk-employee-phone">{emp.phone || 'ללא טלפון'}</span>
+                        </button>
+                      </td>
+                      <td>
+                        <div className="bulk-token-group" aria-label={`שיוך ${emp.name}`}>
+                          <button
+                            type="button"
+                            className={`bulk-token scope-wall ${wallStaff ? 'is-selected' : ''}`}
+                            disabled={!canEditEmployees}
+                            aria-pressed={wallStaff}
+                            onClick={() => quickPatchEmployee(emp.id, {
+                              is_wall_staff: true,
+                            })}
+                          >
+                            {wallStaff && <Check size={13} />} עובד קיר
+                          </button>
+                          <button
+                            type="button"
+                            className={`bulk-token scope-external ${!wallStaff ? 'is-selected' : ''}`}
+                            disabled={!canEditEmployees}
+                            aria-pressed={!wallStaff}
+                            onClick={() => quickPatchEmployee(emp.id, {
+                              is_wall_staff: false,
+                              can_open_wall: false,
+                              can_sign_daily_safety: false,
+                              can_operate_cash: false,
+                            })}
+                          >
+                            {!wallStaff && <Check size={13} />} חיצוני
+                          </button>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="bulk-token-group bulk-role-tokens">
+                          {certOptions.map((role) => {
+                            const selected = roles.includes(role);
+                            const RoleIcon = roleIcon(role);
+                            const color = roleColor(role);
+                            return (
+                              <button
+                                key={role}
+                                type="button"
+                                className={`bulk-token role-token ${selected ? 'is-selected' : ''}`}
+                                style={selected ? { '--token-color': color } : undefined}
+                                disabled={!canEditEmployees}
+                                aria-pressed={selected}
+                                onClick={() => quickPatchEmployee(emp.id, (current) => {
+                                  const currentRoles = Array.isArray(current.certifications) ? current.certifications : [];
+                                  return {
+                                    certifications: currentRoles.includes(role)
+                                      ? currentRoles.filter((item) => item !== role)
+                                      : [...currentRoles, role],
+                                  };
+                                })}
+                              >
+                                <RoleIcon size={13} />
+                                {role}
+                                {selected ? <X size={12} /> : <Plus size={12} />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </td>
+                      <td>
+                        <div className="bulk-token-group">
+                          {permissions.map((permission) => {
+                            const selected = wallStaff && emp[permission.key] === true;
+                            return (
+                              <button
+                                key={permission.key}
+                                type="button"
+                                className={`bulk-token permission-token ${selected ? 'is-selected' : ''}`}
+                                disabled={!canEditEmployees || !wallStaff}
+                                aria-pressed={selected}
+                                title={!wallStaff ? 'הרשאות מסוף זמינות רק לעובד קיר' : ''}
+                                onClick={() => quickPatchEmployee(emp.id, {
+                                  [permission.key]: !selected,
+                                })}
+                              >
+                                {!wallStaff ? <Lock size={12} /> : selected ? <Check size={12} /> : <Plus size={12} />}
+                                {permission.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </td>
+                      <td>
+                        <div className="bulk-token-group bulk-doc-tokens">
+                          {hasEmployeeDoc(emp, 'contract') && <span className="badge badge-green">חוזה</span>}
+                          {hasEmployeeDoc(emp, 'police') && <span className="badge badge-green">משטרה</span>}
+                          {hasEmployeeDoc(emp, 'form101') && <span className="badge badge-green">101</span>}
+                          {hasEmployeeDoc(emp, 'idPhoto') && <span className="badge badge-blue">צילום ת.ז</span>}
+                          {hasEmployeeDoc(emp, 'certificates') && <span className="badge badge-blue">תעודות</span>}
+                          {!EMPLOYEE_DOC_FIELDS.some((field) => hasEmployeeDoc(emp, field.key)) && (
+                            <span style={{ color: 'var(--text-3)', fontSize: 11 }}>אין קבצים</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="bulk-save-cell">
+                        {saving ? <span className="bulk-save-state is-saving"><RefreshCw size={12} /> שומר…</span>
+                          : saveError ? <span className="bulk-save-state is-error">לא נשמר</span>
+                            : <span className="bulk-save-state is-saved"><Check size={12} /> נשמר</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {certificationEmployees.length === 0 && (
+                  <tr><td colSpan={6} className="bulk-empty">לא נמצאו עובדים מתאימים</td></tr>
+                )}
               </tbody>
             </table>
           </div>
