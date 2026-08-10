@@ -45,6 +45,7 @@ import { buildSaleReceipt, buildDrawerOnlyPayload } from './escposReceipt.js';
 import { alertSubscribers } from './staffAlerts.js';
 import { sendStaffAlert } from './staffNotify.js';
 import {
+  GROUP_META_COLLECTION,
   enrichGroupsWithBotMeta,
   saveGroupBotMeta,
   backfillCanonicalTrainingDays,
@@ -404,6 +405,8 @@ import {
   equipmentPublicBase,
   shoesSeasonPricing,
 } from './equipmentService.js';
+import { weeklySessionsForStudent } from './studentFrequency.js';
+import { shoesUpgradeQuote, describeShoesUpgrade } from './equipmentUpgrade.js';
 import { safetyTestStatus } from './safetyTestService.js';
 import {
   EVENT_HOST_PAYMENT_TEMPLATE,
@@ -3726,15 +3729,19 @@ async function saveEquipmentSettings(next) {
 }
 
 /**
- * מחיר הנעליים לחצי העונה הנוכחי, מקוזז לפי תאריך ההצטרפות של המתאמן
- * כפי שהוא עולה מרשימת הנוכחות שלו.
+ * מחיר הנעליים לחצי העונה הנוכחי: מחיר הבסיס נבחר לפי כמה אימונים בשבוע יש
+ * למתאמן, ומקוזז לפי תאריך ההצטרפות כפי שהוא עולה מרשימת הנוכחות שלו.
  */
 async function shoesPricingForStudent(studentId, settings) {
   await refreshAttendanceCache();
+  // התדירות נגזרת מהקבוצות הפעילות, ולכן שלוש הטבלאות האלה חייבות להיות
+  // טעונות לפני החישוב — אחרת מתאמן פעמיים בשבוע מתומחר כפעם בשבוע.
+  await readTables('enrollments', 'groups', GROUP_META_COLLECTION);
   const attendance = (db.get('attendance') || []).filter(
     (row) => row && row.student_id === studentId
   );
-  return shoesSeasonPricing({ settings, attendance });
+  const weeklySessions = weeklySessionsForStudent({ db, studentId });
+  return shoesSeasonPricing({ settings, attendance, weeklySessions });
 }
 
 function buildEquipmentPageUrl(req, token) {
@@ -3809,11 +3816,14 @@ app.get('/api/equipment', async (req, res) => {
   try {
     await readTable('student_equipment');
     const settings = await loadEquipmentSettings();
-    let [students, parents, groups, enrollments] = await readTables(
+    let [students, parents, groups, enrollments, payments] = await readTables(
       'students',
       'parents',
       'groups',
-      'enrollments'
+      'enrollments',
+      // חיוב ההפרש נגזר מהתדירות שצולמה על התשלום, ומימי האימון של הקבוצות.
+      'payments',
+      GROUP_META_COLLECTION
     );
     students = supa.isEnabled()
       ? enrichStudentsWithGroupIds(students, enrollments)
@@ -3827,11 +3837,38 @@ app.get('/api/equipment', async (req, res) => {
 
     const parentById = new Map(parents.map((p) => [p.id, p]));
     const groupById = new Map(groups.map((g) => [g.id, g]));
+    // מסננים את התשלומים פעם אחת לכל מתאמן; אחרת כל שורה סורקת את כל הטבלה.
+    const equipmentPaymentsByStudent = new Map();
+    for (const payment of payments) {
+      if (!payment || payment.status !== 'paid') continue;
+      if (!payment.equipment_payment && !payment.equipment_shoes_upgrade) continue;
+      const ids = new Set();
+      if (payment.student_id) ids.add(String(payment.student_id));
+      for (const allocation of payment.equipment_allocations || []) {
+        if (allocation?.student_id) ids.add(String(allocation.student_id));
+      }
+      for (const id of ids) {
+        if (!equipmentPaymentsByStudent.has(id)) equipmentPaymentsByStudent.set(id, []);
+        equipmentPaymentsByStudent.get(id).push(payment);
+      }
+    }
     const rows = [];
 
     for (const student of trainees) {
       const items = ensureStudentEquipment({ db, student, persist: persistCore });
-      const gaps = equipmentGapFlags(items);
+      const baseGaps = equipmentGapFlags(items);
+      const upgrade = shoesUpgradeQuote({
+        settings,
+        shoesRow: items.find((item) => item.item_type === 'shoes') || null,
+        payments: equipmentPaymentsByStudent.get(String(student.id)) || [],
+        weeklySessions: weeklySessionsForStudent({ db, studentId: student.id, student }),
+      });
+      // הפרש שלא נגבה הוא חוסר לכל דבר, ולכן הוא נכנס ללשונית „חסר משהו”.
+      const gaps = {
+        ...baseGaps,
+        hasUpgrade: upgrade.eligible,
+        hasGap: baseGaps.hasGap || upgrade.eligible,
+      };
       if (filter === 'unpaid' && !gaps.hasUnpaid) continue;
       if (filter === 'awaiting' && !gaps.hasAwaitingHandoff) continue;
       if (filter === 'gaps' && !gaps.hasGap) continue;
@@ -3848,6 +3885,7 @@ app.get('/api/equipment', async (req, res) => {
         group_name: group?.name || '',
         items,
         gaps,
+        shoes_upgrade: upgrade.eligible ? upgrade : null,
       });
     }
 
@@ -4212,6 +4250,146 @@ app.post('/api/students/:id/equipment/payment-link', async (req, res) => {
   }
 });
 
+/** הצעת חיוב ההפרש למתאמן אחד, על נתונים טריים. */
+async function shoesUpgradeForStudent(student, settings) {
+  await refreshStudentEquipmentCache();
+  const [payments] = await readTables('payments', 'enrollments', 'groups', GROUP_META_COLLECTION);
+  const items = ensureStudentEquipment({ db, student, persist: persistCore });
+  return shoesUpgradeQuote({
+    settings,
+    shoesRow: items.find((item) => item.item_type === 'shoes') || null,
+    payments,
+    weeklySessions: weeklySessionsForStudent({ db, studentId: student.id, student }),
+  });
+}
+
+app.get('/api/students/:id/equipment/shoes-upgrade', async (req, res) => {
+  try {
+    const student = db.getOne('students', req.params.id);
+    if (!student) return res.status(404).json({ error: 'המתאמן לא נמצא' });
+    const settings = await loadEquipmentSettings();
+    res.json(await shoesUpgradeForStudent(student, settings));
+  } catch (err) {
+    console.error('shoes upgrade quote error:', err.message);
+    res.status(500).json({ error: err.message || 'חישוב ההפרש נכשל' });
+  }
+});
+
+/**
+ * קישור תשלום על הפרש דמי ההשכרה בלבד.
+ *
+ * לא עובר דרך דף הציוד הציבורי: שם בוחרים פריטים שטרם שולמו, והנעליים כאן
+ * כבר שולמו. זהו חיוב יחיד בסכום קבוע, ולכן קישור סליקה ישיר.
+ */
+app.post('/api/students/:id/equipment/shoes-upgrade-link', async (req, res) => {
+  try {
+    if (!icount.isConfigured()) {
+      return res.status(503).json({ error: 'מערכת החיוב לא מוגדרת בשרת' });
+    }
+    const student = db.getOne('students', req.params.id);
+    if (!student) return res.status(404).json({ error: 'המתאמן לא נמצא' });
+
+    // כסף — לכן ההגדרות חייבות להגיע מהמקור הקבוע, בלי נפילה לברירות מחדל.
+    const settings = await loadEquipmentSettingsForCharge();
+    const quote = await shoesUpgradeForStudent(student, settings);
+    if (!quote.eligible) {
+      return res.status(400).json({ error: quote.reason || 'אין הפרש לגבות', quote });
+    }
+
+    const sendWhatsapp = req.body?.sendWhatsapp !== false;
+    const parent = chooseRecipientParent(db.get('parents') || [], {
+      guardianIds: guardianParentIds(db, student),
+      primaryParentId: student.parentId,
+      preferredParentId: req.body?.preferredParentId,
+    });
+    if (!parent) return res.status(400).json({ error: 'לא נמצא משלם בתיק המשפחה' });
+    if (sendWhatsapp && !parent.phone) {
+      return res.status(400).json({ error: 'חסר טלפון להורה — אי אפשר לשלוח קישור' });
+    }
+
+    const includesVat = normalizePriceIncludesVat(settings.price_includes_vat, true);
+    const amount = chargeAmount(quote.amount, includesVat);
+    const description = describeShoesUpgrade(quote, student.name);
+
+    // קישור פתוח שכבר נוצר לאותו הפרש נשלח שוב, כדי שלא ייפתחו שני חיובים.
+    const existing = (db.get('payments') || []).find(
+      (payment) =>
+        payment.status === 'pending' &&
+        payment.equipment_shoes_upgrade &&
+        String(payment.student_id) === String(student.id) &&
+        Number(payment.amount) === amount &&
+        payment.payment_url
+    );
+    if (existing) {
+      return res.json({ success: true, reused: true, paymentUrl: existing.payment_url, amount, description, quote });
+    }
+
+    const payment = db.insert('payments', {
+      parent_id: parent.id,
+      student_id: student.id,
+      amount,
+      price_includes_vat: includesVat,
+      description,
+      status: 'pending',
+      payment_url: null,
+      paid_at: null,
+      // לא equipment_payment: אין כאן פריט לסמן „שולם”, הפריט כבר שולם.
+      // הדגל הזה הוא מה ש-paidWeeklySessions קורא כדי לדעת שההפרש נסגר.
+      equipment_shoes_upgrade: true,
+      equipment_upgrade_from_sessions: quote.from_sessions,
+      equipment_upgrade_to_sessions: quote.to_sessions,
+      equipment_upgrade_quote: quote,
+      updated_at: new Date().toISOString(),
+    });
+
+    const paymentUrl = await icount.buildPaymentUrl({
+      amount,
+      description,
+      name: parent.name,
+      lastName: parent.lastName,
+      idNumber: parent.idNumber,
+      phone: normalizePhone(parent.phone),
+      email: parent.email,
+      paymentId: payment.id,
+      ipnUrl: icount.buildIpnUrl({ paymentId: payment.id }),
+    });
+
+    const updatedPayment = db.update('payments', payment.id, {
+      payment_url: paymentUrl,
+      updated_at: new Date().toISOString(),
+    }) || payment;
+    await persistCore('payments', updatedPayment);
+
+    let whatsappSent = false;
+    let whatsappError = null;
+    if (sendWhatsapp) {
+      if (canSendFreeform(parent, 'whatsapp')) {
+        const msg =
+          `שלום ${parent.name || ''},\n` +
+          `${student.name} עבר/ה ל${quote.to_label} באמצע תקופת השכרת הנעליים.\n` +
+          `נותר לשלם את ההפרש על התקופה שנותרה בלבד — ${amount} ₪:\n\n${paymentUrl}`;
+        try {
+          const waResult = await whatsappService.sendTextMessage(normalizePhone(parent.phone), msg, false, {
+            parentId: parent.id,
+            fallbackName: parent.name,
+          });
+          whatsappSent = !!waResult?.success;
+          if (!whatsappSent) whatsappError = waResult?.error || 'שליחת הודעה נכשלה';
+        } catch (waErr) {
+          whatsappError = waErr.message || 'שליחת הודעה נכשלה';
+        }
+      } else {
+        whatsappError = 'חלון 24 השעות סגור — העתיקו את הקישור ידנית';
+      }
+    }
+
+    res.json({ success: true, paymentUrl, amount, description, quote, whatsappSent, whatsappError });
+  } catch (err) {
+    console.error('shoes upgrade link error:', err.message);
+    res.status(500).json({ error: err.message || 'יצירת קישור ההפרש נכשלה' });
+  }
+});
+
 app.get('/api/public/equipment/:token', publicFormRateLimit, async (req, res) => {
   try {
     const checkout = await resolveEquipmentCheckout(req.params.token);
@@ -4350,6 +4528,8 @@ async function createFamilyEquipmentPayment(req, res, checkout) {
       item_types: selected,
       shirt_size: selected.includes('shirt') ? shirtSize : null,
       shoes_amount: selected.includes('shoes') ? shoesPricing.amount : null,
+      // איזה מחיר בסיס נבחר, כדי שאפשר יהיה להסביר את החיוב בעוד חצי שנה.
+      weekly_sessions: selected.includes('shoes') ? shoesPricing.weekly_sessions : null,
       rental_starts_at: selected.includes('shoes') ? shoesPricing.rental_starts_at : null,
       rental_ends_at: selected.includes('shoes') ? shoesPricing.half_end : null,
       rental_days: settings.rental_days,
@@ -4559,6 +4739,7 @@ app.post('/api/public/equipment/:token/pay', publicFormRateLimit, async (req, re
       equipment_rental_starts_at: shoesPricing.rental_starts_at,
       equipment_rental_ends_at: shoesPricing.half_end,
       equipment_shoes_amount: selected.includes('shoes') ? shoesPricing.amount : null,
+      equipment_weekly_sessions: selected.includes('shoes') ? shoesPricing.weekly_sessions : null,
       updated_at: new Date().toISOString(),
     });
 

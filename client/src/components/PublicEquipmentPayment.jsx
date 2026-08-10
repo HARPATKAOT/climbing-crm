@@ -367,6 +367,7 @@ export default function PublicEquipmentPayment() {
                                 {member.shoes_pricing ? (
                                   <>
                                     <span>ההשכרה היא ל{seasonHalfLabel(member.shoes_pricing.half_label)} — מ־{shortDate(member.shoes_pricing.half_start)} ועד {shortDate(member.shoes_pricing.half_end)}.</span>
+                                    {member.shoes_pricing.frequency_label && <span>המחיר הוא לפי {member.shoes_pricing.frequency_label}.</span>}
                                     {member.shoes_pricing.prorated && <span>המחיר המלא הוא {formatIls(member.shoes_pricing.full_price)}; המחיר כבר קוזז עבור {monthsLabel(member.shoes_pricing.remaining_units)} מתוך {member.shoes_pricing.total_units}.</span>}
                                   </>
                                 ) : <span>המחיר המוצג הוא עבור כל תקופת ההשכרה.</span>}

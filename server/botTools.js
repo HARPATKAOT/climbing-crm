@@ -599,6 +599,25 @@ function seasonHalfFields(now = new Date()) {
 }
 
 /**
+ * דמי השכרת הנעליים, לפי התדירות שהלקוח כבר ציין.
+ *
+ * בלי תדירות אין דרך לדעת איזה מהשניים נכון, ולכן נחשפים שניהם — עדיף
+ * שהמודל ישאל פעם או פעמיים בשבוע מאשר ינקוב בסכום שלא יופיע בדף התשלום.
+ */
+function shoeRentalPrices(prices, frequency = '') {
+  const once = Number(prices?.shoes) || 0;
+  const twice = Number(prices?.shoes_twice ?? prices?.shoes) || 0;
+  const wanted = String(frequency || '').trim();
+  if (wanted === 'פעם בשבוע') return { מחיר_לחצי_עונה: once };
+  if (wanted === 'פעמיים בשבוע') return { מחיר_לחצי_עונה: twice };
+  if (once === twice) return { מחיר_לחצי_עונה: once };
+  return {
+    מחיר_לחצי_עונה_פעם_בשבוע: once,
+    מחיר_לחצי_עונה_פעמיים_בשבוע: twice,
+  };
+}
+
+/**
  * The free-text note the staff wrote on the group card. Only included when it
  * has something in it — an empty key in every row would read to the model like
  * "there is nothing to say about this group", which is not the same as "nobody
@@ -1038,7 +1057,10 @@ export function buildCustomerTools({
             // only "נעלי טיפוס: 150 ₪" reads it as a purchase, and then hears
             // about the period and the proration at the payment page.
             נעליים: {
-              מחיר_לחצי_עונה: Number(prices.shoes) || 0,
+              // דמי ההשכרה תלויים בתדירות. כשהלקוח כבר אמר כמה פעמים בשבוע,
+              // נוקבים במחיר אחד; אחרת חושפים את שניהם, כדי שלא ייאמר סכום
+              // שלא יתאים למה שיופיע בדף התשלום.
+              ...shoeRentalPrices(prices, frequency),
               תנאים: 'השכרה לחצי עונת חוגים, לא רכישה',
               ...seasonHalfFields(),
               הערה: 'מי שמצטרף באמצע החצי משלם חלק יחסי — הסכום המדויק מחושב בדף התשלום.',

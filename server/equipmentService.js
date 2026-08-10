@@ -44,7 +44,12 @@ export const DEFAULT_EQUIPMENT_SETTINGS = {
   prices: {
     // נעליים מושכרות לחצי עונת חוגים. זה המחיר המלא לחצי עונה,
     // ומי שמצטרף באמצע משלם ממנו יחסית — ראו shoesSeasonPricing.
+    //
+    // הבלאי תלוי בכמה המתאמן מטפס, ולכן יש שני מחירי בסיס: `shoes` למי
+    // שמגיע פעם בשבוע ו-`shoes_twice` למי שמגיע פעמיים ומעלה. התדירות
+    // נגזרת מהקבוצות שהמתאמן רשום אליהן — ראו studentFrequency.js.
     shoes: 150,
+    shoes_twice: 150,
     shirt: 120,
     chalk_bag: 80,
   },
@@ -89,6 +94,9 @@ export function normalizeEquipmentSettings(raw = {}) {
     shirt: Math.max(0, Number(pricesIn.shirt ?? base.prices.shirt) || 0),
     chalk_bag: Math.max(0, Number(pricesIn.chalk_bag ?? base.prices.chalk_bag) || 0),
   };
+  // הגדרות שנשמרו לפני שהיו שני מחירי נעליים נופלות חזרה למחיר היחיד,
+  // כך שהמחיר לא זז לאף משפחה עד שבעל העסק מזין מחיר לפעמיים בשבוע.
+  prices.shoes_twice = Math.max(0, Number(pricesIn.shoes_twice ?? prices.shoes) || 0);
   let shirtSizes = Array.isArray(raw.shirt_sizes) ? raw.shirt_sizes : base.shirt_sizes;
   shirtSizes = shirtSizes
     .map((s) => String(s || '').trim())
@@ -382,15 +390,44 @@ export function resolveJoinDate(attendance = []) {
   return base;
 }
 
+/** מכמה אימונים בשבוע מתחיל המחיר הגבוה. */
+export const TWICE_WEEKLY_SESSIONS = 2;
+
+export const FREQUENCY_LABEL_ONCE = 'פעם בשבוע';
+export const FREQUENCY_LABEL_TWICE = 'פעמיים בשבוע';
+
+export function frequencyLabelFor(weeklySessions = 1) {
+  return Number(weeklySessions) >= TWICE_WEEKLY_SESSIONS
+    ? FREQUENCY_LABEL_TWICE
+    : FREQUENCY_LABEL_ONCE;
+}
+
+/**
+ * מחיר הבסיס לחצי עונה, לפני הקיזוז היחסי, לפי כמה אימונים בשבוע.
+ * מקבל אובייקט הגדרות מלא או אובייקט מחירים בלבד — ראו pricesFrom.
+ */
+export function shoesBasePrice(settings, weeklySessions = 1) {
+  const prices = pricesFrom(settings);
+  return Number(weeklySessions) >= TWICE_WEEKLY_SESSIONS ? prices.shoes_twice : prices.shoes;
+}
+
 /**
  * מחיר הנעליים לחצי העונה הנוכחי, מקוזז לפי תאריך ההצטרפות.
+ * `weeklySessions` בוחר את מחיר הבסיס — ראו studentFrequency.js.
  * @returns {{amount:number, full_price:number, remaining_units:number,
  *   total_units:number, prorated:boolean, join_date:string|null,
+ *   weekly_sessions:number, frequency_label:string,
  *   half_label:string, half_start:string, half_end:string}}
  */
-export function shoesSeasonPricing({ settings = {}, attendance = [], refDate = new Date() } = {}) {
+export function shoesSeasonPricing({
+  settings = {},
+  attendance = [],
+  refDate = new Date(),
+  weeklySessions = 1,
+} = {}) {
   const s = normalizeEquipmentSettings(settings);
-  const fullPrice = s.prices.shoes;
+  const sessions = Math.max(1, Math.round(Number(weeklySessions) || 1));
+  const fullPrice = shoesBasePrice(s, sessions);
   const ref = parseDayDate(refDate) || parseDayDate(new Date());
   const joinDate = resolveJoinDate(attendance);
   // בלי נוכחות רשומה — הקישור נשלח בהרשמה, לפני האימון הראשון,
@@ -427,6 +464,8 @@ export function shoesSeasonPricing({ settings = {}, attendance = [], refDate = n
     join_date: joinDate,
     join_source: joinDate ? 'attendance' : 'today',
     intro_grace_days: INTRO_GRACE_DAYS,
+    weekly_sessions: sessions,
+    frequency_label: frequencyLabelFor(sessions),
     half_label: half.label,
     half_start: isoDay(half.start),
     // סוף כולל, לתצוגה להורה

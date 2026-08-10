@@ -30,6 +30,16 @@ function monthDayToDisplay(md) {
   return match ? `${match[2]}/${match[1]}` : '';
 }
 
+/** „חודשיים” קריא יותר מ-2, וחצאי חודש הם היחידה שבה ההשכרה מתומחרת. */
+function monthsLeftLabel(units) {
+  const value = Number(units) || 0;
+  if (value === 0.5) return 'חצי חודש';
+  if (value === 1) return 'חודש';
+  if (value === 1.5) return 'חודש וחצי';
+  if (value === 2) return 'חודשיים';
+  return `${value} חודשים`;
+}
+
 function displayToMonthDay(value) {
   const match = /^(\d{1,2})\s*[/.]\s*(\d{1,2})$/.exec(String(value || '').trim());
   if (!match) return null;
@@ -266,20 +276,62 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
     }
   };
 
+  /** חיוב ההפרש למי שעבר לפעמיים בשבוע אחרי שכבר שילם על ההשכרה. */
+  const sendUpgradeLink = async (studentId) => {
+    setBusyId(`upgrade-${studentId}`);
+    setLinkMsg('');
+    setLastPaymentLink('');
+    setError('');
+    try {
+      const res = await fetch(
+        `/api/students/${encodeURIComponent(studentId)}/equipment/shoes-upgrade-link`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sendWhatsapp: true }),
+        }
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'יצירת קישור ההפרש נכשלה');
+      if (body.paymentUrl) {
+        setLastPaymentLink(body.paymentUrl);
+        try {
+          await navigator.clipboard.writeText(body.paymentUrl);
+        } catch {
+          /* ignore clipboard */
+        }
+      }
+      setLinkMsg(
+        body.whatsappSent
+          ? `קישור ההפרש (${body.amount}₪) נשלח בוואטסאפ וגם הועתק`
+          : `קישור ההפרש (${body.amount}₪) הועתק${body.whatsappError ? ` — ${body.whatsappError}` : ''}`
+      );
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusyId('');
+    }
+  };
+
   const summary = useMemo(() => {
     let unpaid = 0;
     let awaiting = 0;
+    let upgrades = 0;
     for (const row of rows) {
       unpaid += row.gaps?.unpaidCount || 0;
       awaiting += row.gaps?.awaitingCount || 0;
+      if (row.shoes_upgrade) upgrades += 1;
     }
-    return { unpaid, awaiting, trainees: rows.length };
+    return { unpaid, awaiting, upgrades, trainees: rows.length };
   }, [rows]);
 
   const resetDraft = (source = settings) => {
     setSettingsError('');
     setDraft({
       shoes: String(source?.prices?.shoes ?? ''),
+      // הגדרות ישנות שנשמרו לפני שני המחירים מגיעות בלי shoes_twice —
+      // השרת ממלא אותו מ-shoes, וכאן נופלים לאותו ערך אם בכל זאת חסר.
+      shoes_twice: String(source?.prices?.shoes_twice ?? source?.prices?.shoes ?? ''),
       shirt: String(source?.prices?.shirt ?? ''),
       chalk_bag: String(source?.prices?.chalk_bag ?? ''),
       shirt_sizes: (source?.shirt_sizes || []).join(', '),
@@ -344,7 +396,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
         .filter(Boolean);
       if (!sizes.length) throw new Error('יש להזין לפחות מידת חולצה אחת');
       const prices = {};
-      for (const key of ['shoes', 'shirt', 'chalk_bag']) {
+      for (const key of ['shoes', 'shoes_twice', 'shirt', 'chalk_bag']) {
         const value = Number(draft[key]);
         if (!Number.isFinite(value) || value < 0) {
           throw new Error('המחירים חייבים להיות מספרים לא שליליים');
@@ -409,6 +461,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
         <div style={{ fontWeight: 800, fontSize: 16 }}>ציוד לאימונים</div>
         <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
           {summary.trainees} מתאמנים · {summary.unpaid} ממתינים לתשלום · {summary.awaiting} שולמו
+          {summary.upgrades > 0 && ` · ${summary.upgrades} הפרשי תדירות`}
         </div>
         <button type="button" className="btn btn-ghost btn-sm" onClick={load} style={{ marginInlineStart: 'auto' }}>
           <RefreshCw size={14} /> רענון
@@ -452,7 +505,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
       {settings && !onSettingsTab && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', fontSize: 12, color: 'var(--text-3)' }}>
           <span>
-            מחירים: נעליים {settings.prices?.shoes}₪ לחצי עונה · חולצה {settings.prices?.shirt}₪ · מגנזיום {settings.prices?.chalk_bag}₪
+            מחירים: נעליים לחצי עונה {settings.prices?.shoes}₪ פעם בשבוע / {settings.prices?.shoes_twice ?? settings.prices?.shoes}₪ פעמיים · חולצה {settings.prices?.shirt}₪ · מגנזיום {settings.prices?.chalk_bag}₪
             {' · '}
             שנת חוגים {monthDayToDisplay(settings.season_start)}–{monthDayToDisplay(settings.season_end)}
             {' · '}
@@ -493,7 +546,8 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
             {[
-              { key: 'shoes', label: 'נעליים — חצי עונת חוגים (₪)' },
+              { key: 'shoes', label: 'נעליים · פעם בשבוע — חצי עונה (₪)' },
+              { key: 'shoes_twice', label: 'נעליים · פעמיים בשבוע — חצי עונה (₪)' },
               { key: 'shirt', label: 'חולצת חוג (₪)' },
               { key: 'chalk_bag', label: 'שק מגנזיום (₪)' },
             ].map((f) => (
@@ -855,6 +909,37 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
                 {byType.shoes?.payment_status === 'paid' && formatRentalRange(byType.shoes) && (
                   <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-3)' }}>
                     השכרת נעליים: {formatRentalRange(byType.shoes)}
+                  </div>
+                )}
+                {row.shoes_upgrade && (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      padding: '8px 10px',
+                      borderRadius: 10,
+                      background: 'rgba(251, 191, 36, 0.12)',
+                      border: '1px solid rgba(251, 191, 36, 0.35)',
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      alignItems: 'center',
+                      gap: 8,
+                      fontSize: 11,
+                    }}
+                  >
+                    <AlertCircle size={13} color="#fbbf24" />
+                    <span>
+                      עבר/ה מ{row.shoes_upgrade.from_label} ל{row.shoes_upgrade.to_label} באמצע ההשכרה —
+                      הפרש של {row.shoes_upgrade.amount}₪ על {monthsLeftLabel(row.shoes_upgrade.remaining_units)} שנותרו
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      disabled={busyId === `upgrade-${row.student_id}`}
+                      onClick={() => sendUpgradeLink(row.student_id)}
+                      style={{ marginInlineStart: 'auto' }}
+                    >
+                      <Send size={12} /> חיוב ההפרש
+                    </button>
                   </div>
                 )}
               </div>

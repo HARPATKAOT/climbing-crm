@@ -242,3 +242,56 @@ test('אמצע עונה מחוץ לטווח נחתך לפי ימים, ושני �
   assert.equal(season.halves.length, 2);
   assert.ok(season.mid > season.start && season.mid < season.end);
 });
+
+const TWO_PRICE_SETTINGS = {
+  ...DEFAULT_EQUIPMENT_SETTINGS,
+  prices: { shoes: 550, shoes_twice: 700, shirt: 120, chalk_bag: 80 },
+};
+
+test('מחיר הנעליים נבחר לפי מספר האימונים בשבוע', () => {
+  const args = { settings: TWO_PRICE_SETTINGS, attendance: [att('2026-09-01')], refDate: '2026-09-05' };
+  const once = shoesSeasonPricing({ ...args, weeklySessions: 1 });
+  const twice = shoesSeasonPricing({ ...args, weeklySessions: 2 });
+
+  assert.equal(once.amount, 550);
+  assert.equal(once.frequency_label, 'פעם בשבוע');
+  assert.equal(twice.amount, 700);
+  assert.equal(twice.weekly_sessions, 2);
+  assert.equal(twice.frequency_label, 'פעמיים בשבוע');
+});
+
+test('הקיזוז היחסי חל על מחיר הבסיס של פעמיים בשבוע', () => {
+  const pricing = shoesSeasonPricing({
+    settings: TWO_PRICE_SETTINGS,
+    attendance: [att('2026-10-01')],
+    refDate: '2026-10-05',
+    weeklySessions: 2,
+  });
+  assert.equal(pricing.full_price, 700);
+  assert.equal(pricing.remaining_units, 4.5);
+  assert.equal(pricing.amount, Math.round((700 * 4.5) / 5.5));
+});
+
+test('שלושה אימונים בשבוע מתומחרים כפעמיים — אין מדרגה שלישית', () => {
+  const args = { settings: TWO_PRICE_SETTINGS, attendance: [att('2026-09-01')], refDate: '2026-09-05' };
+  assert.equal(shoesSeasonPricing({ ...args, weeklySessions: 3 }).amount, 700);
+});
+
+test('הגדרות ישנות בלי shoes_twice מחזירות את המחיר היחיד בכל תדירות', () => {
+  const normalized = normalizeEquipmentSettings({ prices: { shoes: 550 } });
+  assert.equal(normalized.prices.shoes_twice, 550);
+
+  const args = { settings: SETTINGS, attendance: [att('2026-09-01')], refDate: '2026-09-05' };
+  assert.equal(shoesSeasonPricing({ ...args, weeklySessions: 1 }).amount, 550);
+  assert.equal(shoesSeasonPricing({ ...args, weeklySessions: 2 }).amount, 550);
+});
+
+test('בלי weeklySessions מתמחרים כפעם בשבוע', () => {
+  const pricing = shoesSeasonPricing({
+    settings: TWO_PRICE_SETTINGS,
+    attendance: [att('2026-09-01')],
+    refDate: '2026-09-05',
+  });
+  assert.equal(pricing.amount, 550);
+  assert.equal(pricing.weekly_sessions, 1);
+});
