@@ -793,6 +793,15 @@ function resolveIntakeRegisterPath(slugParam) {
 function redirectIntakeForm(req, res) {
   const studentId = String(req.params.studentId || '').trim();
   if (!studentId) return res.status(400).send('חסר מזהה מתאמן');
+  // `p:<טלפון>` — טופס למי שאין לו עדיין תיק. תבנית הוואטסאפ המאושרת בנויה
+  // סביב `/f/{{1}}`, ולכן זו הדרך היחידה להגיע דרכה לטופס לפי טלפון בלי
+  // לפתוח תיק מראש רק כדי שיהיה מזהה לשים בקישור.
+  if (studentId.startsWith('p:')) {
+    const phone = studentId.slice(2).replace(/\D/g, '');
+    if (!phone) return res.status(400).send('חסר טלפון');
+    const path = resolveIntakeRegisterPath(req.params.slug);
+    return res.redirect(302, `${eventPublicBase()}${path}?phone=${encodeURIComponent(phone)}`);
+  }
   if (String(req.params.slug || '').trim().toLowerCase() === 'health-renewal') {
     const params = new URLSearchParams({ studentId, mode: 'health-renewal' });
     return res.redirect(302, `${eventPublicBase()}/register?${params.toString()}`);
@@ -15544,6 +15553,55 @@ app.get('/api/checkin/climber/:id', async (req, res) => {
     safety: safetyTestStatus(tests),
     safety_note: passPunchSafetyNote({ student, tests }),
     last_visit: { ...visit, label: lastVisitLabel(visit) },
+  });
+});
+
+/**
+ * שליחת טופס ההרשמה למי שאינו במערכת, בלי לפתוח לו תיק.
+ *
+ * הכפתור בדלפק פתח קודם וואטסאפ עם הקישור מוכן וחיכה שהדלפקיסט ילחץ שלח —
+ * צעד נוסף בדיוק ברגע שבו מישהו עומד וממתין. התבנית המאושרת נשלחת מהשרת
+ * ומגיעה גם מחוץ לחלון 24 השעות, והקישור שבה מוביל לטופס לפי טלפון.
+ */
+app.post('/api/checkin/send-form-to-phone', async (req, res) => {
+  const rawPhone = String(req.body?.phone || '').trim();
+  const digits = rawPhone.replace(/\D/g, '');
+  if (digits.length < 9) return res.status(400).json({ error: 'מספר טלפון לא תקין' });
+  const name = String(req.body?.name || '').trim() || 'לקוח';
+
+  try {
+    ensureParticipationFormWhatsappTemplate({ db, persist: persistCore });
+  } catch (err) {
+    console.warn('participation form template ensure skipped:', err.message);
+  }
+
+  const origin = resolvePublicAppOrigin(req.body?.origin);
+  const formTemplate = findDefaultFormTemplate();
+  const link = buildShareableHealthUrl(origin, { phone: digits });
+  const approved = findApprovedParticipationFormTemplate(db);
+
+  if (approved?.meta_name) {
+    try {
+      const result = await whatsappService.sendTemplateMessage(
+        digits,
+        approved.meta_name,
+        [name, name],
+        {
+          buttonUrlParam: `p:${digits}`,
+          source: 'participation_form',
+        }
+      );
+      if (result?.success) return res.json({ sent: true, via: 'template', link });
+      return res.json({ sent: false, link, warning: result?.error || 'שליחת התבנית נכשלה' });
+    } catch (err) {
+      return res.json({ sent: false, link, warning: err.message });
+    }
+  }
+  res.json({
+    sent: false,
+    link,
+    templateSlug: formTemplate?.slug || null,
+    warning: `התבנית «${PARTICIPATION_FORM_TEMPLATE}» אינה מאושרת — אי אפשר לשלוח למי שלא כתב לנו קודם`,
   });
 });
 

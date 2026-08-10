@@ -16,6 +16,8 @@ import {
 } from './productCategories.js';
 import AppSelect from './AppSelect.jsx';
 import CancellationPolicyPreview from './CancellationPolicyPreview.jsx';
+import CashDenominationPad from './CashDenominationPad.jsx';
+import { sumDenoms } from './cashDenoms.js';
 import CashCountModal from './CashCountModal.jsx';
 import EmployeeSelect from './EmployeeSelect.jsx';
 import {
@@ -119,6 +121,7 @@ export default function PosSale({
   // מכירה ללא זיהוי: קרטיב במזומן אינו דורש טלפון, שם, או תיק לקוח. בלי
   // המסלול הזה כל מכירה קטנה גוררת הקלדת פרטים שאיש לא יסתכל בהם שוב.
   const [anonymousSale, setAnonymousSale] = useState(false);
+  const [tenderedDenoms, setTenderedDenoms] = useState({});
   const [couponError, setCouponError] = useState('');
   const [couponBusy, setCouponBusy] = useState(false);
   const [resendingLink, setResendingLink] = useState(false);
@@ -496,17 +499,41 @@ export default function PosSale({
    * בשמיעה, ואת הפרטים האמיתיים הוא ימסור בעצמו בטופס. לכן כאן נשלח רק
    * הקישור — וואטסאפ נפתח עם ההודעה מוכנה, והדלפקיסט לוחץ שלח.
    */
-  const sendBlankFormLink = () => {
-    const phone = waPhone(walkInPhone);
+  const sendBlankFormLink = async () => {
+    const phone = String(walkInPhone || '').trim();
     if (!phone) {
       setNewClimberState('חסר טלפון — בלעדיו אין לאן לשלוח');
       return;
     }
-    const link = `${window.location.origin}/register`;
-    const text = `שלום, כדי להיכנס לקיר צריך למלא טופס השתתפות והצהרת בריאות:
-${link}`;
-    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
-    setNewClimberState('✓ וואטסאפ נפתח עם הקישור — לחצו שלח');
+    setNewClimberState('sending');
+    try {
+      const data = await fetch('/api/checkin/send-form-to-phone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, name: pendingNewLeadName || walkInName || '' }),
+      }).then(async (r) => {
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(body.error || 'השליחה נכשלה');
+        return body;
+      });
+      if (data.sent) {
+        setNewClimberState(`✓ הטופס נשלח ל${phone}`);
+        return;
+      }
+      // התבנית לא זמינה — וואטסאפ אישי עם הקישור, כדי שלא להישאר בלי דרך.
+      setNewClimberState(data.warning || 'לא נשלח אוטומטית — נפתח וואטסאפ לשליחה ידנית');
+      const wa = waPhone(phone);
+      if (data.link && wa) {
+        window.open(
+          `https://wa.me/${wa}?text=${encodeURIComponent(`שלום, כדי להיכנס לקיר צריך למלא טופס השתתפות והצהרת בריאות:
+${data.link}`)}`,
+          '_blank',
+          'noopener'
+        );
+      }
+    } catch (err) {
+      setNewClimberState(err.message);
+    }
   };
 
   /**
@@ -578,16 +605,7 @@ ${link}`;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cart.length, cartTotal]);
 
-  // הטבה שהלקוח זכאי לה אינה משהו שצריך לזכור ללחוץ עליו. ברגע שנכנס לעגלה
-  // פריט שההטבה חלה עליו היא נכנסת לתוקף מעצמה; אם היא לא מתאימה לעגלה,
-  // הבדיקה נכשלת בשקט ולא צובעת את המסך באדום.
-  useEffect(() => {
-    if (appliedCoupon || couponBusy || !cart.length || !customerCoupons.length) return;
-    const candidate = customerCoupons.find((coupon) => !dismissedCoupons.has(coupon.id));
-    if (!candidate) return;
-    applyCoupon(candidate, { silent: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cart.length, cartTotal, customerCoupons.length, appliedCoupon, dismissedCoupons]);
+
 
   const addToCart = (item) => {
     setResult(null);
@@ -906,6 +924,7 @@ ${link}`;
       // Clear cart after any successful checkout action
       setCart([]);
       setTenderedAmount('');
+      setTenderedDenoms({});
       setShowQuoteOptions(false);
       if (data.isNewLead || (!selectedParentId && !selectedStudentId && pendingNewLeadName)) {
         clearCustomer();
@@ -1303,8 +1322,17 @@ ${link}`;
             </div>
           )}
 
+          {/* שכבת החיפוש מתרוממת רק כשהרשימה פתוחה. כשהיא נשארה גבוהה תמיד
+              היא כיסתה את שדה הטלפון שמתחתיה בדיוק ברגע שצריך למלא אותו. */}
           {!anonymousSale && !(selectedStudent || selectedParent) && (
-            <div className="form-group" style={{ marginBottom: 10, position: 'relative', zIndex: 70 }}>
+            <div
+              className="form-group"
+              style={{
+                marginBottom: 10,
+                position: 'relative',
+                zIndex: customerQuery.trim() && !hideSuggestions ? 70 : 1,
+              }}
+            >
               <label className="form-label">
                 לקוח — שם, טלפון או מייל {needsCustomer ? '*' : ''}
               </label>
@@ -1827,7 +1855,7 @@ ${link}`;
                           applyCoupon(coupon);
                         }}
                       >
-                        {couponBusy ? 'בודק...' : 'החלה ידנית'}
+                        {couponBusy ? 'בודק...' : 'החלה'}
                       </button>
                     )}
                   </div>
@@ -1838,7 +1866,7 @@ ${link}`;
               )}
               {!cart.length && (
                 <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
-                  ההטבה תיכנס לתוקף מעצמה ברגע שייכנס לעגלה פריט שהיא חלה עליו
+                  הוסיפו פריט לעגלה ואז לחצו „החלה”
                 </div>
               )}
               {paymentMethod === 'online' && appliedCoupon && !customerCoupons.find((c) => c.id === appliedCoupon.id)?.recurring && (
@@ -1913,19 +1941,39 @@ ${link}`;
                 gap: 8,
               }}
             >
-              <label style={{ fontSize: 13, fontWeight: 600 }}>
-                התקבל מהלקוח (ש״ח)
+              {/* מה שהלקוח נתן, בשטרות ומטבעות ולא כמספר. הקלדת סכום דורשת
+                  לחשב אותו בראש בזמן שמישהו עומד ומחכה, וטעות שם היא עודף
+                  שגוי; ספירת השטרות היא בדיוק מה שהיד עושה ממילא. */}
+              <div style={{ fontSize: 13, fontWeight: 600 }}>התקבל מהלקוח</div>
+              <CashDenominationPad
+                variant="stepper"
+                value={tenderedDenoms}
+                showTotal={false}
+                onChange={(next) => {
+                  setTenderedDenoms(next);
+                  const sum = sumDenoms(next);
+                  setTenderedAmount(sum > 0 ? String(sum) : '');
+                }}
+              />
+              <label style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
+                או סכום ישירות
                 <input
-                  className="input"
+                  className="input input-sm"
                   type="number"
                   min={0}
                   step="0.01"
                   inputMode="decimal"
                   value={tenderedAmount}
-                  onChange={(e) => setTenderedAmount(e.target.value)}
+                  onChange={(e) => {
+                    setTenderedAmount(e.target.value);
+                    setTenderedDenoms({});
+                  }}
                   style={{ marginTop: 6 }}
                 />
               </label>
+              <div style={{ fontSize: 13 }}>
+                התקבל: <strong>₪{(Number(tenderedAmount) || 0).toFixed(2)}</strong>
+              </div>
               <div style={{ fontSize: 14, fontWeight: 700 }}>
                 {changePreview == null
                   ? 'הזינו כמה התקבל מהלקוח'

@@ -99,6 +99,8 @@ const TEAM_RULES = [
   // בלי הכלל הזה הכפתורים קיימים במסך ועונים „אין הרשאה” — התקלה הכי גרועה,
   // כי היא נראית כמו באג ולא כמו הרשאה חסרה.
   { methods: WRITE, pattern: /^\/checkin\/pending(\/|$)/, module: 'checkin', level: 'edit' },
+  // שליחת טופס הרשמה לטלפון של מי שאינו במערכת — קישור בלבד, בלי תיק לקוח.
+  { methods: WRITE, pattern: /^\/checkin\/send-form-to-phone$/, anyModules: ['checkin', 'customers', 'health'], level: 'edit' },
   { methods: READ, pattern: /^\/settings\/staff-attendance$/, module: 'attendance' },
 
   { methods: READ, pattern: /^\/equipment-settings$/, module: 'equipment' },
