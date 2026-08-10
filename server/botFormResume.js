@@ -40,9 +40,16 @@ export function botSpokeRecently(messages = [], phone = '', now = Date.now()) {
  */
 const JUST_ANSWERED_MS = 3 * 60 * 1000;
 
+/**
+ * Anything the customer has just received counts, not only the bot's own words.
+ * Completing the form also fires the onboarding confirmation — "קיבלנו את
+ * הפרטים… נחזור אליכם" — and a minute later this arrived saying the same thing
+ * in different words. From the customer's side that is one event and two
+ * messages, whichever part of the system sent them.
+ */
 export function botAnsweredMomentsAgo(messages = [], now = Date.now()) {
   return messages.some((m) => m.direction === 'outbound'
-    && m.is_ai
+    && String(m.source || '') !== 'otp'
     && Date.parse(m.created_at || '') > now - JUST_ANSWERED_MS);
 }
 

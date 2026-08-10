@@ -185,6 +185,57 @@ test('הבוט בדיוק ענה — אין הודעה שנייה ברצף על 
   });
 });
 
+test('אישור הקליטה האוטומטי נחשב הודעה — אין שנייה אחריו', async () => {
+  await withWorld({
+    parents: [PARENT],
+    messages: [
+      ...BOT_THREAD,
+      // עדי פלג קיבלה ב-13:53 «קיבלנו את הפרטים… נחזור אליכם», ודקה אחריה
+      // הודעה נוספת על אותו טופס עצמו. אירוע אחד, שתי הודעות.
+      {
+        phone: PHONE,
+        direction: 'outbound',
+        is_ai: false,
+        source: 'automation',
+        message: 'שלום עדי, קיבלנו את הפרטים ואת הצהרת הבריאות של נדב.',
+        created_at: minutesAgo(1),
+      },
+    ],
+  }, async () => {
+    const service = fakeService();
+    const result = await resumeConversationAfterForm({
+      phone: PHONE, studentNames: ['נדב פלג'], whatsappService: service, now: NOW, isSimulator: true,
+    });
+    assert.equal(result.sent, false);
+    assert.equal(result.reason, 'just_answered');
+    assert.equal(service.calls.sent.length, 0);
+  });
+});
+
+test('קוד אימות אינו נחשב הודעה ששווה להיסוג מפניה', async () => {
+  await withWorld({
+    parents: [PARENT],
+    messages: [
+      ...BOT_THREAD,
+      {
+        phone: PHONE,
+        direction: 'outbound',
+        is_ai: false,
+        source: 'otp',
+        message: '123456 הוא קוד האימות שלך',
+        created_at: minutesAgo(1),
+      },
+    ],
+  }, async () => {
+    const service = fakeService();
+    const result = await resumeConversationAfterForm({
+      phone: PHONE, studentNames: ['נדב פלג'], whatsappService: service, now: NOW, isSimulator: true,
+    });
+    assert.equal(result.sent, true);
+    assert.equal(service.calls.sent.length, 1);
+  });
+});
+
 test('מי שכבר שובץ אינו נשאל שוב לאיזו קבוצה', async () => {
   await withWorld({
     parents: [PARENT],
