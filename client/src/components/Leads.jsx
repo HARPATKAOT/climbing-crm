@@ -66,7 +66,7 @@ import {
   activityDayLabel,
   saveActivityAttendance,
 } from './ActivityAttendance.jsx';
-import { isAwaitingHandling, sortCommunicationRows, threadIsAwaitingReply } from './communicationQueue.js';
+import { isAwaitingHandling, nextCommunicationRow, sortCommunicationRows, threadIsAwaitingReply } from './communicationQueue.js';
 import { consecutiveAbsences } from '../scheduleUtils.js';
 import { studentGroupIds } from '../utils/studentGroups.js';
 import { passPurchasedText, passSubtitle } from '../utils/passes.js';
@@ -7196,6 +7196,19 @@ export default function Leads({
     return rows;
   }, [filtered, parents, students, filterStatus, communicationSort]);
 
+  // Keep modal navigation tied to the complete handling queue, even when the
+  // table underneath is filtered or searched. Its order follows the sort the
+  // employee selected for incoming enquiries.
+  const communicationFamilyRows = useMemo(() => {
+    const waitingStudents = leadEntryScopes.archiveInclusive
+      .filter(({ parent, student }) => isAwaitingHandling(parent, [student]))
+      .map(({ student }) => student);
+    return sortCommunicationRows(
+      buildFamilyRows(waitingStudents, parents, students),
+      communicationSort
+    );
+  }, [leadEntryScopes, parents, students, communicationSort]);
+
   // The customer table is a thousand-odd households, and drawing every row cost
   // roughly a second of frozen screen on each visit and each keystroke in
   // search. Rows are added as they are scrolled towards instead. Filtering or
@@ -7328,6 +7341,17 @@ export default function Leads({
   const selectedHouseholdParents = parents.filter(
     (item) => selectedHouseholdParentIds.has(String(item.id))
   );
+
+  const handleSelectedCommunicationHandled = (updatedParents = [], handledAt) => {
+    // Resolve the next card before the current household disappears from the
+    // waiting queue as a result of applying the handled timestamp.
+    const nextFamily = nextCommunicationRow(
+      communicationFamilyRows,
+      selectedHouseholdParents.map((item) => item.id)
+    );
+    applyHandledParents(updatedParents, handledAt);
+    setSelectedStudentId(nextFamily?.primaryStudent?.id || null);
+  };
 
   const handleAdd = async ({ parentName, lastName, idNumber, phone, email, city, source, children }) => {
     let updatedParents = [...parents];
@@ -7496,7 +7520,7 @@ export default function Leads({
           refreshData={refreshData}
           canManageBilling={canManageBilling}
           canViewComms={canViewComms}
-          onCommunicationHandled={applyHandledParents}
+          onCommunicationHandled={handleSelectedCommunicationHandled}
         />
       )}
 

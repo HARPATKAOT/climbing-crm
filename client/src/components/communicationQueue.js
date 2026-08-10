@@ -83,6 +83,22 @@ export function sortCommunicationRows(rows = [], sortBy = 'conversation_desc') {
   return sorted;
 }
 
+/** The row immediately after the open household in the visible queue order. */
+export function nextCommunicationRow(rows = [], currentParentIds = []) {
+  const wantedIds = new Set(
+    (Array.isArray(currentParentIds) ? currentParentIds : [currentParentIds])
+      .filter((id) => id != null)
+      .map(String)
+  );
+  if (!wantedIds.size) return null;
+
+  const currentIndex = rows.findIndex((row) => (
+    (row?.parents?.length ? row.parents : [row?.parent])
+      .some((parent) => parent?.id != null && wantedIds.has(String(parent.id)))
+  ));
+  return currentIndex >= 0 ? rows[currentIndex + 1] || null : null;
+}
+
 export function isAwaitingHandling(parent, students = []) {
   const eventTime = awaitingSince(parent, students);
   if (!eventTime) return false;
