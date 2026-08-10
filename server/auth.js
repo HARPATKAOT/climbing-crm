@@ -95,6 +95,10 @@ const TEAM_RULES = [
   { methods: READ, pattern: /^\/wall-shift(\/|$)/, module: 'checkin' },
   { methods: WRITE, pattern: /^\/wall-shift(\/|$)/, module: 'checkin', level: 'edit' },
   { methods: READ, pattern: /^\/checkin\//, module: 'checkin' },
+  // אישור שהתשלום התקבל והסרה ידנית מרשימת הממתינים הן פעולות הדלפק עצמו.
+  // בלי הכלל הזה הכפתורים קיימים במסך ועונים „אין הרשאה” — התקלה הכי גרועה,
+  // כי היא נראית כמו באג ולא כמו הרשאה חסרה.
+  { methods: WRITE, pattern: /^\/checkin\/pending(\/|$)/, module: 'checkin', level: 'edit' },
   { methods: READ, pattern: /^\/settings\/staff-attendance$/, module: 'attendance' },
 
   { methods: READ, pattern: /^\/equipment-settings$/, module: 'equipment' },
