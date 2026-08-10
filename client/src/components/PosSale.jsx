@@ -427,9 +427,40 @@ export default function PosSale({
    * Ask the server what the coupon is worth against this cart. The answer is a
    * preview only — the sale route recomputes it before the discount is given.
    */
-  const applyCoupon = async (coupon) => {
+  /**
+   * על אילו פריטים ההטבה חלה.
+   *
+   * הכרטיס אמר רק „הוסיפו פריט לעגלה” בלי לומר איזה, כך שהדרך היחידה לגלות
+   * הייתה לנסות. ההגדרה כבר נמצאת בהטבה עצמה — צריך רק לתרגם מזהי מוצר לשמות.
+   */
+  const couponScopeText = (coupon) => {
+    const parts = coupon?.offer?.parts?.length
+      ? coupon.offer.parts
+      : (coupon?.offer ? [coupon.offer] : []);
+    const names = new Set();
+    let all = false;
+    for (const part of parts) {
+      if (part.appliesTo === 'items') {
+        for (const id of part.pricelistIds || []) {
+          const item = pricelist.find((row) => String(row.id) === String(id));
+          names.add(item?.name || id);
+        }
+      } else if (part.appliesTo === 'categories') {
+        for (const name of part.categoryNames || []) names.add(name);
+      } else if (part.appliesTo === 'product_type') {
+        names.add(productTypeLabel(part.productType));
+      } else {
+        all = true;
+      }
+    }
+    if (all && !names.size) return 'חל על כל העגלה';
+    if (!names.size) return '';
+    return `חל על: ${[...names].join(', ')}`;
+  };
+
+  const applyCoupon = async (coupon, { silent = false } = {}) => {
     setCouponBusy(true);
-    setCouponError('');
+    if (!silent) setCouponError('');
     try {
       const res = await fetch('/api/pos/coupon-preview', {
         method: 'POST',
@@ -443,8 +474,11 @@ export default function PosSale({
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || 'לא ניתן להשתמש בהטבה');
+      // בהחלה אוטומטית שווה 0 אינו הטבה — עדיף בלי כלום מאשר שורת „הטבה ₪0”.
+      if (silent && !(Number(body.discount) > 0)) return;
       setAppliedCoupon({ id: coupon.id, code: coupon.code, label: coupon.label, discount: body.discount });
     } catch (err) {
+      if (silent) return;
       setAppliedCoupon(null);
       setCouponError(err.message);
     } finally {
@@ -461,6 +495,15 @@ export default function PosSale({
     applyCoupon(coupon);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cart.length, cartTotal]);
+
+  // הטבה שהלקוח זכאי לה אינה משהו שצריך לזכור ללחוץ עליו. ברגע שנכנס לעגלה
+  // פריט שההטבה חלה עליו היא נכנסת לתוקף מעצמה; אם היא לא מתאימה לעגלה,
+  // הבדיקה נכשלת בשקט ולא צובעת את המסך באדום.
+  useEffect(() => {
+    if (appliedCoupon || couponBusy || !cart.length || !customerCoupons.length) return;
+    applyCoupon(customerCoupons[0], { silent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cart.length, cartTotal, customerCoupons.length, appliedCoupon]);
 
   const addToCart = (item) => {
     setResult(null);
@@ -1606,6 +1649,11 @@ export default function PosSale({
                             : `קוד ${coupon.code} · ללא תוקף`}
                         {!coupon.recurring && coupon.days_left != null ? ` · עוד ${coupon.days_left} ימים` : ''}
                       </div>
+                      {couponScopeText(coupon) && (
+                        <div style={{ fontSize: 11.5, color: 'var(--green)', marginTop: 2 }}>
+                          {couponScopeText(coupon)}
+                        </div>
+                      )}
                     </div>
                     {isApplied ? (
                       <button
@@ -1622,7 +1670,7 @@ export default function PosSale({
                         disabled={couponBusy || !cart.length}
                         onClick={() => applyCoupon(coupon)}
                       >
-                        {couponBusy ? 'בודק...' : 'החלה'}
+                        {couponBusy ? 'בודק...' : 'החלה ידנית'}
                       </button>
                     )}
                   </div>
@@ -1633,7 +1681,7 @@ export default function PosSale({
               )}
               {!cart.length && (
                 <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
-                  הוסיפו פריט לעגלה כדי להחיל את ההטבה
+                  ההטבה תיכנס לתוקף מעצמה ברגע שייכנס לעגלה פריט שהיא חלה עליו
                 </div>
               )}
               {paymentMethod === 'online' && appliedCoupon && !customerCoupons.find((c) => c.id === appliedCoupon.id)?.recurring && (
