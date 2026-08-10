@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Search, LogIn, LogOut, Clock, CheckCircle2, ShieldAlert, ShieldCheck, RefreshCw, QrCode, Circle, Wallet, AlertTriangle } from 'lucide-react';
 import { CheckIcon } from './safetyCheckIcons.jsx';
-import AppSelect from './AppSelect.jsx';
+import EmployeeSelect from './EmployeeSelect.jsx';
 import CashCountModal from './CashCountModal.jsx';
+import { isWallStaff } from '../utils/employeeScope.js';
 
 function StepRow({ done, current, title, children }) {
   const Icon = done ? CheckCircle2 : current ? Clock : Circle;
@@ -80,13 +81,13 @@ function WallShiftPanel({
   };
   useEffect(() => { load(); }, []);
 
-  const operators = employees.filter((e) =>
-    e.is_active !== false && e.can_open_wall === true);
+  const wallEmployees = employees.filter(isWallStaff);
+  const operators = wallEmployees.filter((e) => e.can_open_wall === true);
   const safetySigners = employees.filter((e) =>
-    e.is_active !== false && e.can_sign_daily_safety === true);
+    isWallStaff(e) && e.can_sign_daily_safety === true);
   const openIds = new Set(openShifts.map((s) => s.employee_id));
   const canOpen = operators.filter((e) => !openIds.has(e.id));
-  const activeEmployees = employees.filter((e) => e.is_active !== false);
+  const activeEmployees = wallEmployees;
   const nameOf = (id) => employees.find((e) => e.id === id)?.name || 'עובד';
 
   const pendingSafety = dueSafety.filter((c) => c.is_due && !c.signed_today);
@@ -272,17 +273,19 @@ function WallShiftPanel({
                           <span className="badge badge-green">נחתם</span>
                         ) : (
                           <>
-                            <AppSelect
-                              className="input select input-sm"
-                              style={{ height: 32, fontSize: 12, minWidth: 120 }}
-                              value={signerByCheck[check.id] || signers[0]?.id || ''}
-                              onChange={(e) => setSignerByCheck((prev) => ({ ...prev, [check.id]: e.target.value }))}
-                            >
-                              <option value="">בודק...</option>
-                              {signers.map((emp) => (
-                                <option key={emp.id} value={emp.id}>{emp.name}</option>
-                              ))}
-                            </AppSelect>
+                            <div style={{ minWidth: 180, flex: '1 1 180px' }}>
+                              <EmployeeSelect
+                                className="input select input-sm"
+                                employees={signers}
+                                value={signerByCheck[check.id] || signers[0]?.id || ''}
+                                placeholder="מי ביצע את הבדיקה?"
+                                aria-label={`בחירת עובד עבור ${check.name}`}
+                                onChange={(emp) => setSignerByCheck((prev) => ({
+                                  ...prev,
+                                  [check.id]: emp?.id || '',
+                                }))}
+                              />
+                            </div>
                             <button
                               type="button"
                               className="btn btn-secondary btn-sm"
@@ -312,18 +315,17 @@ function WallShiftPanel({
                 </div>
               ) : (
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <AppSelect
-                    className="input select"
-                    style={{ flex: 1, minWidth: 160, height: 40 }}
-                    value={pickedId}
-                    onChange={(e) => setPickedId(e.target.value)}
-                    disabled={!cashIsOpen}
-                  >
-                    <option value="">מי פותח את הקיר?</option>
-                    {canOpen.map((emp) => (
-                      <option key={emp.id} value={emp.id}>{emp.name}</option>
-                    ))}
-                  </AppSelect>
+                  <div style={{ flex: 1, minWidth: 200 }}>
+                    <EmployeeSelect
+                      className="input select"
+                      employees={canOpen}
+                      value={pickedId}
+                      onChange={(emp) => setPickedId(emp?.id || '')}
+                      placeholder="מי פותח את הקיר?"
+                      aria-label="בחירת עובד שפותח את הקיר"
+                      disabled={!cashIsOpen}
+                    />
+                  </div>
                   <button
                     type="button"
                     className="btn btn-primary btn-sm"

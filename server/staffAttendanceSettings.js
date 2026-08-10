@@ -2,6 +2,9 @@
  * הגדרות שעון נוכחות / פתיחת קיר — נשמרות ב-app_settings.
  */
 import { getOpenSession } from './cashRegister.js';
+import { employeeIsWallStaff } from './employeeScope.js';
+
+export { employeeIsWallStaff } from './employeeScope.js';
 
 export const STAFF_ATTENDANCE_SETTINGS_KEY = 'staff_attendance';
 
@@ -45,11 +48,11 @@ export async function writeStaffAttendanceSettings(db, supa, patch) {
 }
 
 export function employeeCanOpenWall(emp) {
-  return !!emp && emp.is_active !== false && emp.can_open_wall === true;
+  return employeeIsWallStaff(emp) && emp.can_open_wall === true;
 }
 
 export function employeeCanSignDailySafety(emp) {
-  return !!emp && emp.is_active !== false && emp.can_sign_daily_safety === true;
+  return employeeIsWallStaff(emp) && emp.can_sign_daily_safety === true;
 }
 
 export function requireOpenCashSession(db) {

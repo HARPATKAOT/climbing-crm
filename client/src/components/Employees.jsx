@@ -42,6 +42,7 @@ import {
   AVATAR_ICON_OPTIONS, travelColor,
 } from '../utils/roleIcons.js';
 import AppSelect from './AppSelect.jsx';
+import { isWallStaff as employeeIsWallStaff } from '../utils/employeeScope.js';
 
 const STATUS_OPTIONS = ['עובד פעיל', 'מנהל', 'עובד זמני', 'מדריך צעיר', 'מועמד', 'ארכיון', 'סנפלינג'];
 const PAYMENT_OPTIONS = ['תלוש', 'חשבונית'];
@@ -1236,6 +1237,10 @@ function EmployeeFormModal({
       .catch(() => {});
   }, []);
   const [customCert, setCustomCert]   = useState('');
+  const [isWallStaff, setIsWallStaff] = useState(() => employeeIsWallStaff({
+    ...(employee || {}),
+    is_active: true,
+  }));
   const [canOpenWall, setCanOpenWall] = useState(() => employee?.can_open_wall === true);
   const [canSignDailySafety, setCanSignDailySafety] = useState(
     () => employee?.can_sign_daily_safety === true
@@ -1343,6 +1348,7 @@ function EmployeeFormModal({
         hasIdPhoto: hasEmployeeDoc({ documents }, 'idPhoto') || !!pendingFiles.idPhoto,
         hasForm101: hasEmployeeDoc({ documents }, 'form101') || !!pendingFiles.form101,
         certifications,
+        is_wall_staff: isWallStaff,
         can_open_wall: canOpenWall,
         can_sign_daily_safety: canSignDailySafety,
         can_operate_cash: canOperateCash,
@@ -1599,6 +1605,47 @@ function EmployeeFormModal({
             </div>
 
             <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>
+              שיוך העובד
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: -6 }}>
+              עובד חיצוני נשאר זמין לשיבוצים לפי התפקידים שלו, אבל לא יופיע בפעולות התפעול של הקיר.
+            </div>
+            <div className="form-grid-2">
+              {[
+                { value: true, title: 'עובד קיר', hint: 'מופיע בפתיחת הקיר ובבדיקות הבטיחות' },
+                { value: false, title: 'עובד חיצוני', hint: 'למשל מדריך סנפלינג או ספק חיצוני' },
+              ].map((choice) => (
+                <label
+                  key={String(choice.value)}
+                  style={{
+                    display: 'flex', gap: 9, alignItems: 'flex-start', cursor: 'pointer',
+                    padding: 10, borderRadius: 10,
+                    border: `1px solid ${isWallStaff === choice.value ? 'var(--blue)' : 'var(--border)'}`,
+                    background: isWallStaff === choice.value ? 'rgba(56,189,248,0.08)' : 'var(--bg-input)',
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="employee-wall-scope"
+                    checked={isWallStaff === choice.value}
+                    onChange={() => {
+                      setIsWallStaff(choice.value);
+                      if (!choice.value) {
+                        setCanOpenWall(false);
+                        setCanSignDailySafety(false);
+                        setCanOperateCash(false);
+                      }
+                    }}
+                  />
+                  <span>
+                    <span style={{ display: 'block', fontSize: 13, fontWeight: 700 }}>{choice.title}</span>
+                    <span style={{ display: 'block', fontSize: 11, color: 'var(--text-3)', marginTop: 2 }}>{choice.hint}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+
+            <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>
               הרשאות מסוף
             </div>
             <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: -6 }}>
@@ -1608,6 +1655,7 @@ function EmployeeFormModal({
               <input
                 type="checkbox"
                 checked={canOpenWall}
+                disabled={!isWallStaff}
                 onChange={(e) => setCanOpenWall(e.target.checked)}
               />
               מורשה לפתוח קיר
@@ -1616,6 +1664,7 @@ function EmployeeFormModal({
               <input
                 type="checkbox"
                 checked={canSignDailySafety}
+                disabled={!isWallStaff}
                 onChange={(e) => setCanSignDailySafety(e.target.checked)}
               />
               מורשה לחתום על בדיקות בטיחות
@@ -1624,6 +1673,7 @@ function EmployeeFormModal({
               <input
                 type="checkbox"
                 checked={canOperateCash}
+                disabled={!isWallStaff}
                 onChange={(e) => setCanOperateCash(e.target.checked)}
               />
               מורשה לפתוח ולסגור קופה

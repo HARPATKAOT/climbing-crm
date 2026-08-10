@@ -1,3 +1,5 @@
+import { employeeIsWallStaff } from './employeeScope.js';
+
 /**
  * Cash register: one physical drawer, accumulating float, daily sessions, ledger.
  * Mirrors the Notion "מעקב קופה" action types plus sale/refund lines.
@@ -126,7 +128,7 @@ function requireCashOperator(store, body = {}) {
   if (!emp || emp.is_active === false) {
     throw new Error('העובד לא נמצא או לא פעיל');
   }
-  if (emp.can_operate_cash !== true) {
+  if (!employeeIsWallStaff(emp) || emp.can_operate_cash !== true) {
     throw new Error('העובד אינו מורשה לפתוח ולסגור קופה');
   }
   return {

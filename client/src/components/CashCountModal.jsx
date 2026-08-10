@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { X, Eraser, Wallet } from 'lucide-react';
 import CashDenominationPad from './CashDenominationPad.jsx';
 import EmployeeSelect from './EmployeeSelect.jsx';
+import { isWallStaff } from '../utils/employeeScope.js';
 import { CASH_DENOMS, sumDenoms } from './cashDenoms.js';
 
 async function readJson(res) {
@@ -91,7 +92,7 @@ export default function CashCountModal({
   const selectableEmployees = useMemo(() => {
     const active = (employees || []).filter((e) => e.is_active !== false);
     if (mode === 'open' || mode === 'close') {
-      return active.filter((e) => e.can_operate_cash === true);
+      return active.filter((e) => isWallStaff(e) && e.can_operate_cash === true);
     }
     return active;
   }, [employees, mode]);

@@ -482,6 +482,7 @@ import {
   writeStaffAttendanceSettings,
   employeeCanOpenWall,
   employeeCanSignDailySafety,
+  employeeIsWallStaff,
   requireOpenCashSession,
   overlappingPaidMinutes,
   earlyArrivalNote,
@@ -10875,6 +10876,7 @@ app.get('/api/trainers', (req, res) => {
       name: employee.name || '',
       role: employee.role || 'trainer',
       is_active: employee.is_active !== false && employee.active !== false,
+      is_wall_staff: employeeIsWallStaff(employee),
       can_open_wall: employee.can_open_wall === true,
       can_sign_daily_safety: employee.can_sign_daily_safety === true,
       can_operate_cash: employee.can_operate_cash === true,
@@ -10887,6 +10889,7 @@ app.get('/api/trainers', (req, res) => {
 
 const EMPLOYEE_OPERATIONAL_FIELDS = new Set([
   'id', 'name', 'role', 'certifications', 'is_active', 'active', 'availability',
+  'is_wall_staff',
   'can_open_wall', 'can_sign_daily_safety', 'can_operate_cash', 'customer_student_id',
 ]);
 
@@ -12126,6 +12129,13 @@ app.post('/api/safety/inspections', (req, res) => {
       if (!employeeCanSignDailySafety(emp)) {
         return res.status(403).json({
           error: 'העובד אינו מורשה לחתום על בדיקות בטיחות יומיות',
+        });
+      }
+    } else if (type && body.completed_by_employee_id) {
+      const emp = (db.get('employees') || []).find((e) => e.id === body.completed_by_employee_id);
+      if (!employeeIsWallStaff(emp)) {
+        return res.status(403).json({
+          error: 'רק עובד קיר פעיל יכול לחתום על בדיקות הקיר',
         });
       }
     }
