@@ -1,5 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ImagePlus, Loader2, ShieldCheck, ShieldOff, Smile, Sparkles, X } from 'lucide-react';
+import {
+  Building2, CalendarX2, CreditCard, ImagePlus, Loader2, PackageCheck,
+  ShieldCheck, ShieldOff, Smile, Sparkles, X,
+} from 'lucide-react';
 import AppSelect from './AppSelect.jsx';
 import { compressImageFile, readImageFileAsDataUrl } from './productCategories.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
@@ -51,6 +54,18 @@ function themeFrom(value) {
     }
   }
   return {};
+}
+
+function cancellationPolicyIcon(value, policies = []) {
+  if (value === '__default__') return { Icon: Building2, color: '#7DD3FC' };
+  if (value === '__none__') return { Icon: ShieldOff, color: 'var(--text-3)' };
+
+  const policy = policies.find((item) => String(item.id) === String(value));
+  const name = String(policy?.name || '').toLowerCase();
+  if (/כרטיס|מנוי|כניס/.test(name)) return { Icon: CreditCard, color: '#FBBF24' };
+  if (/ציוד|השכר|רתמ|נעל/.test(name)) return { Icon: PackageCheck, color: '#FB923C' };
+  if (/אירוע|טיול|פעילות|סדנ/.test(name)) return { Icon: CalendarX2, color: '#A78BFA' };
+  return { Icon: ShieldCheck, color: '#A78BFA' };
 }
 
 function InlineField({ label, value, onChange, readOnly, type = 'text', className = '', ...props }) {
@@ -539,9 +554,7 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
                     cancellation_policy_disabled: value === '__none__',
                   });
                 }}
-                optionIcon={(value) => (value === '__none__'
-                  ? { Icon: ShieldOff, color: 'var(--text-3)' }
-                  : { Icon: ShieldCheck, color: '#A78BFA' })}
+                optionIcon={(value) => cancellationPolicyIcon(value, policies)}
               >
                 <option value="__default__">ברירת המחדל של העסק</option>
                 <option value="__none__">ללא מדיניות</option>
