@@ -2741,10 +2741,24 @@ function EventChip({ activity, onClick, draggable = true }) {
           status={activity.payment_status}
           perParticipant={isPaidPerParticipant(activity)}
         />
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {timeLabel ? `${timeLabel} · ` : ''}{activity.name}
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {activity.name}
+          </span>
         </span>
-      </span>
+        {timeLabel && (
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 600,
+              opacity: 0.85,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {timeLabel}
+          </span>
+        )}
       {extraLines.map((line) => (
         <span
           key={line}
@@ -2766,9 +2780,11 @@ function EventChip({ activity, onClick, draggable = true }) {
 
 function OverlayChip({ event, onClick, draggable = true }) {
   const color = event.color || '#94A3B8';
+  const chipStart = event.start_time ? String(event.start_time).slice(0, 5) : '';
+  const chipEnd = event.end_time ? String(event.end_time).slice(0, 5) : '';
   const timeLabel = event.all_day
-    ? ''
-    : (event.start_time ? String(event.start_time).slice(0, 5) : '');
+    ? 'יום שלם'
+    : (chipStart && chipEnd ? `${chipStart}–${chipEnd}` : chipStart);
   const editable = canEditEvent(event);
   const title = `${event.calendar_name || 'יומן חיצוני'}: ${event.name}${timeLabel ? ` · ${timeLabel}` : ''}${editable ? '' : ' (צפייה בלבד)'}`;
   return (
@@ -2796,13 +2812,16 @@ function OverlayChip({ event, onClick, draggable = true }) {
         onClick?.(event);
       }}
       style={{
-        display: 'block',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'stretch',
+        gap: 1,
         width: '100%',
         maxWidth: '100%',
         boxSizing: 'border-box',
         textAlign: 'right',
         borderRadius: 6,
-        padding: '2px 6px',
+        padding: '3px 6px',
         marginBottom: 3,
         background: `${color}22`,
         color,
@@ -2816,7 +2835,23 @@ function OverlayChip({ event, onClick, draggable = true }) {
         cursor: editable ? 'grab' : 'pointer',
       }}
     >
-      {timeLabel ? `${timeLabel} · ` : ''}{event.name}
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {event.name}
+      </span>
+      {timeLabel && (
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 500,
+            opacity: 0.85,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {timeLabel}
+        </span>
+      )}
     </button>
   );
 }
