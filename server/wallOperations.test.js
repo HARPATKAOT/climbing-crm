@@ -54,10 +54,12 @@ test('only an active certified employee may be recorded as the wall closer', () 
     { id: 'allowed', name: 'נועם', is_active: true, can_open_wall: true },
     { id: 'blocked', name: 'רון', is_active: true, can_open_wall: false },
     { id: 'external', name: 'חוץ', is_active: true, is_wall_staff: false, can_open_wall: true },
+    { id: 'archived-legacy', name: 'ארכיון', is_active: true, active: false, can_open_wall: true },
   ];
   assert.equal(requireQualifiedWallCloser(employees, 'allowed').name, 'נועם');
   assert.throws(() => requireQualifiedWallCloser(employees, 'blocked'), /אינו מורשה/);
   assert.equal(employeeCanOperateWall(employees[2]), false);
   assert.throws(() => requireQualifiedWallCloser(employees, 'external'), /אינו מורשה/);
+  assert.throws(() => requireQualifiedWallCloser(employees, 'archived-legacy'), /אינו מורשה/);
   assert.throws(() => requireQualifiedWallCloser(employees, ''), /יש לבחור/);
 });

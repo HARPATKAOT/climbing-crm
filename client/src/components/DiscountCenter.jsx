@@ -61,7 +61,11 @@ export default function DiscountCenter() {
   const employeeById = useMemo(() => new Map(employees.map((e) => [String(e.id), e])), [employees]);
   const studentById = useMemo(() => new Map(students.map((s) => [String(s.id), s])), [students]);
   const roles = useMemo(() => [...(roleCatalog.system || []).map((r) => r.label), ...(roleCatalog.extra || [])].filter(Boolean), [roleCatalog]);
-  const visibleEmployees = employees.filter((employee) => `${employee.name} ${(employee.certifications || []).join(' ')}`.toLowerCase().includes(query.toLowerCase()));
+  const visibleEmployees = employees.filter((employee) => (
+    employee?.is_active !== false
+    && employee?.active !== false
+    && `${employee.name} ${(employee.certifications || []).join(' ')}`.toLowerCase().includes(query.toLowerCase())
+  ));
 
   const saveRule = async () => {
     if (!ruleDraft?.name.trim()) return setError('יש לתת שם לכלל');

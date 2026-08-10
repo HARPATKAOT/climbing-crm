@@ -4567,9 +4567,36 @@ app.post('/api/public/equipment/:token/pay', publicFormRateLimit, async (req, re
   }
 });
 
+function requireActiveEmployees(employeeIds = []) {
+  const ids = [...new Set((employeeIds || []).map((id) => String(id || '')).filter(Boolean))];
+  if (!ids.length) return [];
+  const employees = db.get('employees') || [];
+  const selected = ids.map((id) => employees.find((employee) => String(employee.id) === id));
+  const invalid = ids.map((id, index) => ({ id, employee: selected[index] })).filter(({ employee }) => (
+    !employee || employee.is_active === false || employee.active === false
+  ));
+  if (invalid.length) {
+    const names = invalid.map(({ id, employee }) => employee?.name || id).filter(Boolean);
+    throw Object.assign(new Error(`לא ניתן לשבץ עובד בארכיון${names.length ? `: ${names.join(', ')}` : ''}`), {
+      statusCode: 400,
+      code: 'EMPLOYEE_ARCHIVED',
+    });
+  }
+  return selected;
+}
+
+function groupEmployeeIds(fields = {}) {
+  return [fields.trainer, ...(Array.isArray(fields.assistants) ? fields.assistants : [])];
+}
+
 // Create/Update Group (upsert by id so re-seeds don't duplicate local cache)
 app.post('/api/groups', async (req, res) => {
   const { trainingDays, returningPriorityUntil, ...groupFields } = req.body || {};
+  try {
+    requireActiveEmployees(groupEmployeeIds(groupFields));
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message, code: error.code });
+  }
   const id = req.body?.id;
   if (id && db.getOne('groups', id)) {
     const updated = db.update('groups', id, groupFields);
@@ -4584,6 +4611,11 @@ app.post('/api/groups', async (req, res) => {
 app.put('/api/groups/:id', async (req, res) => {
   const { id } = req.params;
   const { trainingDays, returningPriorityUntil, ...groupFields } = req.body || {};
+  try {
+    requireActiveEmployees(groupEmployeeIds(groupFields));
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message, code: error.code });
+  }
   const updated = db.update('groups', id, groupFields);
   if (!updated) return res.status(404).json({ error: 'Group not found' });
   if (trainingDays !== undefined || returningPriorityUntil !== undefined) {
@@ -11506,6 +11538,11 @@ app.post('/api/work-assignments/from-activity', async (req, res) => {
     ? employee_ids.filter(Boolean)
     : [];
   if (!ids.length) return res.status(400).json({ error: 'employee_ids is required' });
+  try {
+    requireActiveEmployees(ids);
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message, code: error.code });
+  }
 
   const workType = activityTypeToWorkType(activity.type);
   // מה שנבחר במסך השיבוץ גובר על ההגדרה השמורה של האירוע: הבחירה נעשית רגע
@@ -11697,6 +11734,12 @@ app.post('/api/groups/:id/staff-attendance', async (req, res) => {
     if (existing) db.delete('staff_attendance', existing.id);
     syncClassPayRow({ group, date, employeeId, paid: false });
     return res.json({ status: null, removed: !!existing });
+  }
+
+  try {
+    requireActiveEmployees([employeeId]);
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message, code: error.code });
   }
 
   const staffRole = STAFF_ROLES.includes(role) ? role : 'trainer';
@@ -12048,6 +12091,11 @@ app.post('/api/work-assignments', (req, res) => {
   const normalized = normalizeWorkAssignment(req.body || {});
   if (!normalized.employee_id) return res.status(400).json({ error: 'employee_id is required' });
   if (!normalized.date) return res.status(400).json({ error: 'date is required' });
+  try {
+    requireActiveEmployees([normalized.employee_id]);
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message, code: error.code });
+  }
   const created = db.insert('work_assignments', withFrozenPay(normalized));
   res.status(201).json(workAssignmentForRequest(req, created));
 });
@@ -12062,6 +12110,13 @@ app.put('/api/work-assignments/:id', (req, res) => {
     return res.status(error.statusCode || 403).json({ error: error.message });
   }
   const normalized = normalizeWorkAssignment(req.body || {}, { existing });
+  if (String(normalized.employee_id || '') !== String(existing.employee_id || '')) {
+    try {
+      requireActiveEmployees([normalized.employee_id]);
+    } catch (error) {
+      return res.status(error.statusCode || 400).json({ error: error.message, code: error.code });
+    }
+  }
   // עריכה ידנית של השורה מתמחרת אותה מחדש — גם אם היום שלה כבר ננעל. שינוי
   // תעריף או שם תפקיד לעומת זאת לא עובר כאן, ולכן לא נוגע בשורות ישנות.
   const updated = db.update('work_assignments', id, withFrozenPay({ ...existing, ...normalized }));

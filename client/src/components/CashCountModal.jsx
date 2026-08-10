@@ -90,7 +90,7 @@ export default function CashCountModal({
   const total = useMemo(() => sumDenoms(denoms, CASH_DENOMS), [denoms]);
   // פתיחה/סגירה — רק מי שמורשה בתיק. פעולות מנהל נשארות עם כל העובדים הפעילים.
   const selectableEmployees = useMemo(() => {
-    const active = (employees || []).filter((e) => e.is_active !== false);
+    const active = (employees || []).filter((e) => e.is_active !== false && e.active !== false);
     if (mode === 'open' || mode === 'close') {
       return active.filter((e) => isWallStaff(e) && e.can_operate_cash === true);
     }

@@ -606,8 +606,8 @@ export default function CheckInConsole({ students, groups, operationalOnly = fal
   const handleSignSafety = async (check) => {
     const isDaily = check?.frequency === 'יומי' || Number(check?.interval_days) === 1;
     const pool = isDaily
-      ? employees.filter((e) => e.is_active !== false && e.can_sign_daily_safety === true)
-      : employees.filter((e) => e.is_active !== false);
+      ? employees.filter((e) => e.is_active !== false && e.active !== false && e.can_sign_daily_safety === true)
+      : employees.filter((e) => e.is_active !== false && e.active !== false);
     const testerId = signerByCheck[check.id] || pool[0]?.id;
     if (!testerId) {
       alert(isDaily

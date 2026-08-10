@@ -1330,14 +1330,22 @@ select option, select optgroup {
 
 /* עריכה מרוכזת של תפקידי עובדים והרשאות — צפוף מספיק לעבודה מהירה,
    אבל כל בחירה נשארת כפתור אמיתי ונגישה במקלדת. */
-.bulk-qualifications { display: flex; flex-direction: column; gap: 12px; }
+.bulk-qualifications { display: flex; flex-direction: column; gap: 12px; min-width: 0; max-width: 100%; }
 .bulk-qualifications-toolbar {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: stretch;
   gap: 16px;
+  min-width: 0;
 }
-.bulk-qualifications-filters { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bulk-qualifications-filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.6fr) repeat(4, minmax(120px, 1fr));
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.bulk-filter-select, .bulk-filter-role { width: 100%; }
 .bulk-qualification-switch {
   display: inline-flex;
   align-items: center;
@@ -1347,8 +1355,26 @@ select option, select optgroup {
   white-space: nowrap;
   cursor: pointer;
 }
-.bulk-qualifications-table-wrap { overflow: hidden; }
-.bulk-qualifications-table-wrap > table { min-width: 1120px; }
+.bulk-qualifications-table-wrap {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+}
+.bulk-qualifications-table-wrap > table {
+  width: max(100%, 1360px);
+  min-width: 1360px;
+  table-layout: fixed;
+}
+.bulk-col-employee { width: 155px; }
+.bulk-col-status { width: 145px; }
+.bulk-col-scope { width: 155px; }
+.bulk-col-roles { width: 385px; }
+.bulk-col-permissions { width: 255px; }
+.bulk-col-docs { width: 170px; }
+.bulk-col-save { width: 90px; }
 .bulk-qualifications-table thead th {
   position: sticky;
   top: 0;
@@ -1357,8 +1383,10 @@ select option, select optgroup {
   white-space: nowrap;
 }
 .bulk-qualifications-table tbody tr { vertical-align: top; }
-.bulk-qualifications-table tbody tr.is-archived { opacity: 0.55; }
-.bulk-qualifications-table td { padding-top: 13px; padding-bottom: 13px; }
+.bulk-qualifications-table tbody tr.is-archived { background: rgba(251,113,133,.035); }
+.bulk-qualifications-table tbody tr.is-archived .bulk-employee-link,
+.bulk-qualifications-table tbody tr.is-archived td:not(:nth-child(2)) .bulk-token-group { opacity: 0.62; }
+.bulk-qualifications-table td { padding-top: 13px; padding-bottom: 13px; overflow: hidden; }
 .bulk-employee-cell { min-width: 150px; }
 .bulk-employee-link {
   display: flex;
@@ -1408,6 +1436,17 @@ select option, select optgroup {
   border-color: rgba(251,191,36,.42);
   background: rgba(251,191,36,.1);
 }
+.bulk-token.status-active.is-selected {
+  color: #A7F3D0;
+  border-color: rgba(52,211,153,.45);
+  background: rgba(52,211,153,.11);
+}
+.bulk-token.status-archive.is-selected {
+  color: #FDA4AF;
+  border-color: rgba(251,113,133,.45);
+  background: rgba(251,113,133,.1);
+}
+.bulk-status-tokens { min-width: 0; }
 .bulk-token.role-token.is-selected {
   color: var(--token-color, var(--blue));
   border-color: color-mix(in srgb, var(--token-color, var(--blue)) 50%, transparent);
@@ -1429,9 +1468,13 @@ select option, select optgroup {
 .bulk-empty { padding: 36px !important; text-align: center; color: var(--text-3); }
 
 @media (max-width: 850px) {
-  .bulk-qualifications-toolbar { align-items: stretch; flex-direction: column; }
-  .bulk-qualifications-filters .input-icon-wrap { flex: 1; }
-  .bulk-qualifications-table-wrap { overflow-x: auto; }
+  .bulk-qualifications-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .bulk-qualifications-filters .input-icon-wrap { grid-column: 1 / -1; }
+}
+
+@media (max-width: 520px) {
+  .bulk-qualifications-filters { grid-template-columns: 1fr; }
+  .bulk-qualifications-filters .input-icon-wrap { grid-column: auto; }
 }
 
 /* POS history filters */

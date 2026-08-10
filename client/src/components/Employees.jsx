@@ -2493,7 +2493,10 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
   const [empFilterRole, setEmpFilterRole] = useState('all');
   const [empSortConfig, setEmpSortConfig] = useState({ key: 'name', direction: 'asc' });
   const [certSearch, setCertSearch] = useState('');
-  const [certActiveOnly, setCertActiveOnly] = useState(true);
+  const [certStatusFilter, setCertStatusFilter] = useState('active');
+  const [certScopeFilter, setCertScopeFilter] = useState('all');
+  const [certRoleFilter, setCertRoleFilter] = useState('all');
+  const [certSort, setCertSort] = useState('name-asc');
   const [bulkSavingIds, setBulkSavingIds] = useState(() => new Set());
   const [bulkSaveErrors, setBulkSaveErrors] = useState({});
   const employeesRef = useRef([]);
@@ -2788,13 +2791,38 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
   const certificationEmployees = useMemo(() => {
     const query = certSearch.trim().toLocaleLowerCase('he');
     return employees
-      .filter((emp) => (!certActiveOnly || emp.is_active !== false))
+      .filter((emp) => {
+        const active = emp.is_active !== false && emp.active !== false;
+        if (certStatusFilter === 'active') return active;
+        if (certStatusFilter === 'archive') return !active;
+        return true;
+      })
+      .filter((emp) => {
+        if (certScopeFilter === 'all') return true;
+        const wallStaff = employeeIsWallStaff({ ...emp, is_active: true, active: true });
+        return certScopeFilter === 'wall' ? wallStaff : !wallStaff;
+      })
+      .filter((emp) => certRoleFilter === 'all' || (emp.certifications || []).includes(certRoleFilter))
       .filter((emp) => !query
         || String(emp.name || '').toLocaleLowerCase('he').includes(query)
         || String(emp.phone || '').includes(query))
       .slice()
-      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'he'));
-  }, [employees, certSearch, certActiveOnly]);
+      .sort((a, b) => {
+        const nameOrder = String(a.name || '').localeCompare(String(b.name || ''), 'he');
+        if (certSort === 'name-desc') return -nameOrder;
+        if (certSort === 'status') {
+          const activeA = a.is_active !== false && a.active !== false ? 1 : 0;
+          const activeB = b.is_active !== false && b.active !== false ? 1 : 0;
+          return activeB - activeA || nameOrder;
+        }
+        if (certSort === 'scope') {
+          const wallA = employeeIsWallStaff({ ...a, is_active: true, active: true }) ? 1 : 0;
+          const wallB = employeeIsWallStaff({ ...b, is_active: true, active: true }) ? 1 : 0;
+          return wallB - wallA || nameOrder;
+        }
+        return nameOrder;
+      });
+  }, [employees, certSearch, certStatusFilter, certScopeFilter, certRoleFilter, certSort]);
 
   /**
    * עריכה מרוכזת: הממשק מתעדכן מיד, והשמירות של אותו עובד נשלחות בתור.
@@ -3745,22 +3773,64 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
                   aria-label="חיפוש עובד בהגדרות המרוכזות"
                 />
               </div>
-              <label className="bulk-qualification-switch">
-                <input
-                  type="checkbox"
-                  checked={certActiveOnly}
-                  onChange={(event) => setCertActiveOnly(event.target.checked)}
-                />
-                פעילים בלבד
-              </label>
+              <AppSelect
+                className="input input-sm bulk-filter-select"
+                value={certStatusFilter}
+                onChange={(event) => setCertStatusFilter(event.target.value)}
+                aria-label="סינון לפי סטטוס עובד"
+              >
+                <option value="all">כל הסטטוסים</option>
+                <option value="active">פעילים</option>
+                <option value="archive">ארכיון</option>
+              </AppSelect>
+              <AppSelect
+                className="input input-sm bulk-filter-select"
+                value={certScopeFilter}
+                onChange={(event) => setCertScopeFilter(event.target.value)}
+                aria-label="סינון לפי שיוך עובד"
+              >
+                <option value="all">כל השיוכים</option>
+                <option value="wall">עובדי קיר</option>
+                <option value="external">עובדים חיצוניים</option>
+              </AppSelect>
+              <AppSelect
+                className="input input-sm bulk-filter-select bulk-filter-role"
+                value={certRoleFilter}
+                onChange={(event) => setCertRoleFilter(event.target.value)}
+                aria-label="סינון לפי סוג עבודה"
+              >
+                <option value="all">כל סוגי העבודה</option>
+                {certOptions.map((role) => <option key={role} value={role}>{role}</option>)}
+              </AppSelect>
+              <AppSelect
+                className="input input-sm bulk-filter-select"
+                value={certSort}
+                onChange={(event) => setCertSort(event.target.value)}
+                aria-label="מיון עובדים"
+              >
+                <option value="name-asc">שם א–ת</option>
+                <option value="name-desc">שם ת–א</option>
+                <option value="status">סטטוס</option>
+                <option value="scope">שיוך</option>
+              </AppSelect>
             </div>
           </div>
 
           <div className="card bulk-qualifications-table-wrap">
             <table className="crm-table bulk-qualifications-table">
+              <colgroup>
+                <col className="bulk-col-employee" />
+                <col className="bulk-col-status" />
+                <col className="bulk-col-scope" />
+                <col className="bulk-col-roles" />
+                <col className="bulk-col-permissions" />
+                <col className="bulk-col-docs" />
+                <col className="bulk-col-save" />
+              </colgroup>
               <thead>
                 <tr>
                   <th>עובד</th>
+                  <th>סטטוס עובד</th>
                   <th>שיוך</th>
                   <th>סוגי עבודה ותפקידים</th>
                   <th>הרשאות מסוף</th>
@@ -3771,7 +3841,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
               <tbody>
                 {certificationEmployees.map((emp) => {
                   const roles = Array.isArray(emp.certifications) ? emp.certifications : [];
-                  const wallStaff = employeeIsWallStaff({ ...emp, is_active: true });
+                  const wallStaff = employeeIsWallStaff({ ...emp, is_active: true, active: true });
                   const saving = bulkSavingIds.has(emp.id);
                   const saveError = bulkSaveErrors[emp.id];
                   const permissions = [
@@ -3780,7 +3850,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
                     { key: 'can_operate_cash', label: 'פתיחה וסגירת קופה' },
                   ];
                   return (
-                    <tr key={emp.id} className={emp.is_active === false ? 'is-archived' : ''}>
+                    <tr key={emp.id} className={emp.is_active === false || emp.active === false ? 'is-archived' : ''}>
                       <td className="bulk-employee-cell">
                         <button
                           type="button"
@@ -3791,6 +3861,28 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
                           <span className="bulk-employee-name">{emp.name}</span>
                           <span className="bulk-employee-phone">{emp.phone || 'ללא טלפון'}</span>
                         </button>
+                      </td>
+                      <td>
+                        <div className="bulk-token-group bulk-status-tokens" aria-label={`סטטוס ${emp.name}`}>
+                          <button
+                            type="button"
+                            className={`bulk-token status-active ${emp.is_active !== false && emp.active !== false ? 'is-selected' : ''}`}
+                            disabled={!canEditEmployees}
+                            aria-pressed={emp.is_active !== false && emp.active !== false}
+                            onClick={() => quickPatchEmployee(emp.id, { is_active: true, active: true })}
+                          >
+                            {emp.is_active !== false && emp.active !== false ? <Check size={13} /> : <Plus size={12} />} פעיל
+                          </button>
+                          <button
+                            type="button"
+                            className={`bulk-token status-archive ${emp.is_active === false || emp.active === false ? 'is-selected' : ''}`}
+                            disabled={!canEditEmployees}
+                            aria-pressed={emp.is_active === false || emp.active === false}
+                            onClick={() => quickPatchEmployee(emp.id, { is_active: false, active: false })}
+                          >
+                            {emp.is_active === false || emp.active === false ? <Check size={13} /> : <Plus size={12} />} ארכיון
+                          </button>
+                        </div>
                       </td>
                       <td>
                         <div className="bulk-token-group" aria-label={`שיוך ${emp.name}`}>
@@ -3896,7 +3988,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
                   );
                 })}
                 {certificationEmployees.length === 0 && (
-                  <tr><td colSpan={6} className="bulk-empty">לא נמצאו עובדים מתאימים</td></tr>
+                  <tr><td colSpan={7} className="bulk-empty">לא נמצאו עובדים מתאימים</td></tr>
                 )}
               </tbody>
             </table>

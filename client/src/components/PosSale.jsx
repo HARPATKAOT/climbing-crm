@@ -104,7 +104,7 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
   const [sellerId, setSellerId] = useState('');
 
   const activeEmployees = useMemo(
-    () => (employees || []).filter((employee) => employee?.is_active !== false),
+    () => (employees || []).filter((employee) => employee?.is_active !== false && employee?.active !== false),
     [employees]
   );
   const seller = activeEmployees.find((employee) => employee.id === sellerId) || null;

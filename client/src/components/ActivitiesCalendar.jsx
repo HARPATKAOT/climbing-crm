@@ -518,7 +518,7 @@ function WorkAssignmentsBlock({
       const emps = empRes.ok ? await empRes.json() : [];
       const asgs = asgRes?.ok ? await asgRes.json() : [];
       const wageList = wageRes?.ok ? await wageRes.json() : [];
-      setEmployees(Array.isArray(emps) ? emps.filter((e) => e.is_active !== false) : []);
+      setEmployees(Array.isArray(emps) ? emps.filter((e) => e.is_active !== false && e.active !== false) : []);
       setWages(Array.isArray(wageList) ? wageList : []);
       setRows(Array.isArray(asgs)
         ? asgs.map((r) => ({
@@ -4208,7 +4208,7 @@ export default function ActivitiesCalendar({
         const nameById = new Map(list.map((e) => [e.id, e.name || '']));
         setStaffOptions(
           list
-            .filter((e) => e.is_active !== false && e.name)
+            .filter((e) => e.is_active !== false && e.active !== false && e.name)
             .map((e) => ({ id: e.id, name: e.name }))
             .sort((a, b) => a.name.localeCompare(b.name, 'he'))
         );

@@ -382,7 +382,9 @@ export default function LevelTests({ students, groups }) {
     refreshTests();
     fetch('/api/employees')
       .then(r => r.ok ? r.json() : [])
-      .then(data => setEmployees(Array.isArray(data) ? data : []))
+      .then(data => setEmployees(Array.isArray(data)
+        ? data.filter((employee) => employee?.is_active !== false && employee?.active !== false)
+        : []))
       .catch(err => console.error(err));
   }, []);
 
