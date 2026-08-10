@@ -1,5 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { CalendarClock, LogIn, Search, ShieldAlert, ShieldCheck, Ticket, UserPlus } from 'lucide-react';
+import { CalendarClock, LogIn, Search, Send, ShieldAlert, ShieldCheck, Ticket, UserPlus } from 'lucide-react';
+
+/** מספר לוואטסאפ: ספרות בלבד, ו-0 מקומי מוחלף בקידומת ישראל. */
+function waPhone(raw) {
+  let digits = String(raw || '').replace(/\D/g, '');
+  if (digits.startsWith('0')) digits = `972${digits.slice(1)}`;
+  return digits.length >= 11 ? digits : '';
+}
 
 function DocumentsBadge({ documents }) {
   if (!documents) return <span className="badge badge-gray">בודק מסמכים...</span>;
@@ -67,6 +74,8 @@ export default function ClimberEntryPanel({ studentId, students = [], groups = [
   const [busy, setBusy] = useState(false);
   const [entered, setEntered] = useState(false);
   const [guests, setGuests] = useState([]);
+  const [sendState, setSendState] = useState(null); // null | 'sending' | 'sent' | 'error'
+  const [sendNote, setSendNote] = useState('');
   const requestRef = useRef(0);
 
   const load = async (id) => {
@@ -86,6 +95,8 @@ export default function ClimberEntryPanel({ studentId, students = [], groups = [
   useEffect(() => {
     setEntered(false);
     setGuests([]);
+    setSendState(null);
+    setSendNote('');
     if (!studentId) {
       setSummary(null);
       requestRef.current += 1;
@@ -145,6 +156,53 @@ export default function ClimberEntryPanel({ studentId, students = [], groups = [
       await load(studentId);
     } catch (err) {
       onEntered({ name: climber.name, refusal: err.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * שליחת קישור החתימה להורה האחראי.
+   *
+   * השרת בוחר את ההורה, מנסה קודם תבנית מאושרת (עובדת גם מחוץ לחלון 24
+   * השעות), ורק אז נופל לטקסט חופשי. כשהוא לא הצליח לשלוח הוא מחזיר קישור
+   * לוואטסאפ אישי — פותחים אותו, כדי שהדלפק לא יישאר בלי דרך.
+   */
+  const sendDocumentsLink = async () => {
+    if (busy) return;
+    setBusy(true);
+    setSendState('sending');
+    setSendNote('');
+    try {
+      const res = await fetch(`/api/leads/${encodeURIComponent(studentId)}/send-health-form`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'שליחת הקישור נכשלה');
+      if (data.sent) {
+        setSendState('sent');
+        setSendNote(`✓ הקישור נשלח ל${data.sentTo || summary?.parent?.name || 'ההורה'} בוואטסאפ`);
+      } else {
+        // לא נשלח אוטומטית — פותחים וואטסאפ אישי עם הקישור מוכן, כדי שהדלפק
+        // לא יישאר בלי דרך להעביר אותו.
+        setSendState('error');
+        setSendNote(data.warning || 'הקישור לא נשלח אוטומטית — נפתח וואטסאפ לשליחה ידנית');
+        const link = data.shortUrl || data.healthUrl;
+        // wa.me רוצה מספר בינלאומי. 05… מקומי פותח שיחה עם מספר לא קיים.
+        const phone = waPhone(summary?.parent?.phone);
+        if (link && phone) {
+          window.open(
+            `https://wa.me/${phone}?text=${encodeURIComponent(`שלום, מצורף קישור למילוי טופס ההשתתפות והצהרת הבריאות:\n${link}`)}`,
+            '_blank',
+            'noopener'
+          );
+        }
+      }
+    } catch (err) {
+      setSendState('error');
+      setSendNote(err.message);
     } finally {
       setBusy(false);
     }
@@ -215,6 +273,28 @@ export default function ClimberEntryPanel({ studentId, students = [], groups = [
 
       {summary?.punch_block_reason && (
         <div className="alert alert-error" style={{ fontSize: 12.5, margin: 0 }}>{summary.punch_block_reason}</div>
+      )}
+
+      {/* בלי הכפתור הזה מי שמגיע בלי טפסים הוא מבוי סתום: הדלפק רואה שחסר,
+          ואין לו דרך לבקש. הקישור נשלח להורה האחראי בתבנית מאושרת, ולכן הוא
+          עובד גם כשחלון 24 השעות סגור. */}
+      {summary && summary.documents?.state !== 'valid' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-full"
+            disabled={busy || !summary.parent?.phone}
+            onClick={sendDocumentsLink}
+          >
+            <Send size={14} /> {sendState === 'sending' ? 'שולח...' : 'שליחת קישור לחתימה בוואטסאפ'}
+          </button>
+          <div style={{ fontSize: 11.5, color: sendState === 'error' ? 'var(--red)' : 'var(--text-3)' }}>
+            {sendNote
+              || (summary.parent?.phone
+                ? `נשלח ל${summary.parent.name || 'ההורה'} · ${summary.parent.phone}`
+                : 'אין מספר טלפון להורה — צריך להשלים בתיק הלקוח')}
+          </div>
+        </div>
       )}
 
       <button

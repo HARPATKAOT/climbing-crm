@@ -76,6 +76,10 @@ const TEAM_RULES = [
   { methods: WRITE, pattern: /^\/dashboard(\/|$)/, module: 'dashboard', level: 'edit' },
   { methods: READ, pattern: /^\/tasks(\/|$)/, anyModules: ['dashboard', 'assistant'] },
   { methods: WRITE, pattern: /^\/tasks(\/|$)/, anyModules: ['dashboard', 'assistant'], level: 'edit' },
+  // הדלפק חייב יכולת לשלוח להורה קישור לחתימה על הצהרת בריאות והסרת אחריות —
+  // בלעדיה מי שמגיע בלי טפסים נתקע במסוף בלי דרך קדימה. זו שליחת קישור בלבד,
+  // ולכן היא נפתחת למי שמפעיל את מסוף הכניסה בלי לפתוח לו את תיקי הלקוחות.
+  { methods: WRITE, pattern: /^\/leads\/[^/]+\/send-health-form$/, anyModules: ['customers', 'checkin', 'health'], level: 'edit' },
   { methods: READ, pattern: /^\/(parents|students|leads)(\/|$)/, module: 'customers' },
   { methods: WRITE, pattern: /^\/(parents|students|leads)(\/|$)/, module: 'customers', level: 'edit' },
   { methods: READ, pattern: /^\/groups\/[^/]+\/staff-attendance$/, module: 'attendance' },

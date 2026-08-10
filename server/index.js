@@ -15288,8 +15288,18 @@ app.get('/api/checkin/climber/:id', async (req, res) => {
     studentId,
   });
 
+  // ההורה האחראי — מי שקישור החתימה והתשלום נשלח אליו. הדלפק צריך לראות למי
+  // הוא שולח לפני שהוא לוחץ, ולא לגלות אחר כך שהמספר לא היה שם.
+  const recipient = chooseRecipientParent(db.get('parents') || [], {
+    guardianIds: guardianParentIds(db, student),
+    primaryParentId: student.parentId,
+  });
+
   res.json({
     student: { id: student.id, name: student.name, groupId: student.groupId || null },
+    parent: recipient
+      ? { id: recipient.id, name: recipient.name || '', phone: recipient.phone || '' }
+      : null,
     passes: mine,
     // כרטיסיות מועברות של אחרים שאפשר לנקב עבור המתאמן הזה (חבר שמשלם עליו).
     guest_passes: passes.filter((pass) => String(pass.student_id) !== String(studentId)),
