@@ -8,7 +8,6 @@ import ShiftStaffTab from './checkin/ShiftStaffTab.jsx';
 import ClimberEntryPanel, { ClimberPicker } from './checkin/ClimberEntryPanel.jsx';
 import PendingQueue from './checkin/PendingQueue.jsx';
 import PrinterControls from './checkin/PrinterControls.jsx';
-import TodayLog from './checkin/TodayLog.jsx';
 import PosSale from './PosSale.jsx';
 
 // מסך עבודה אחד: בחירת הלקוח, מצב המסמכים והכרטיסייה שלו, המכירה, מי שנתקע
@@ -327,9 +326,9 @@ export default function CheckInConsole({
             </div>
           )}
 
-          {/* מי שנשאר פתוח — תדריך ומבחן שלא ניתנו, וקישור תשלום שעוד לא
-              נסגר — נשאר מול העיניים של מי שצריך לטפל בו, ולא מאחורי טאב
-              שאיש לא פותח. */}
+          {/* טבלה אחת ליום: הכניסות וקישורי התשלום יחד. קודם היו כאן שתיים —
+              יומן כניסות ורשימת ממתינים — שהציגו את אותם אנשים בזו אחר זו,
+              והקריאה דרשה להצליב ביניהן. */}
           <PendingQueue
             employees={employees}
             refreshKey={checkIns.length}
@@ -338,8 +337,6 @@ export default function CheckInConsole({
               window.setTimeout(() => setSuccessMsg(null), 4000);
             }}
           />
-
-          <TodayLog checkIns={checkIns} onRefresh={loadCheckIns} />
         </div>
       )}
 

@@ -15507,8 +15507,9 @@ app.get('/api/checkin/climber/:id', async (req, res) => {
 app.get('/api/checkin/pending', (req, res) => {
   const today = israelDateStr();
   const tests = db.get('level_tests') || [];
+  const checkIns = db.get('check_ins') || [];
   res.json(buildPendingQueue({
-    checkIns: db.get('check_ins') || [],
+    checkIns,
     sales: db.get('pos_sales') || [],
     today,
     dateOf: (iso) => israelLocalParts(iso)?.date || null,
@@ -15517,6 +15518,10 @@ app.get('/api/checkin/pending', (req, res) => {
       const student = db.getOne('students', id);
       return student ? safetyTestStatus(testsForStudent(student, tests)) : null;
     },
+    lastCheckInOf: (id) => checkIns
+      .filter((row) => String(row.climber_id) === String(id))
+      .sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')))
+      .pop() || null,
   }));
 });
 

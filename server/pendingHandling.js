@@ -29,25 +29,35 @@ export function todaysEntrants(checkIns = [], today, dateOf) {
 }
 
 /**
- * שורות המבחן: מי שנכנס היום ואין לו מבחן אבטחה בתוקף.
+ * שורות הכניסות של היום.
+ *
+ * כאן נמצאת **כל** מי שנכנס, ולא רק מי שחסר לו משהו: יומן הכניסות ורשימת
+ * הממתינים היו שתי טבלאות שהציגו את אותם אנשים בזו אחר זו, וקריאת שתיהן
+ * דרשה להצליב ביניהן. מי שחסר לו תדריך ומבחן מסומן ב-`pending`, וזה כל ההבדל.
  *
  * @param safetyOf (studentId) => {state, expires_at, test_date}
  */
-export function safetyRows({ checkIns = [], today, dateOf, studentOf, safetyOf }) {
+export function entryRows({ checkIns = [], today, dateOf, studentOf, safetyOf, lastCheckInOf }) {
   const rows = [];
   for (const [studentId, at] of todaysEntrants(checkIns, today, dateOf)) {
     const student = studentOf(studentId);
     if (!student) continue;
-    const safety = safetyOf(studentId);
-    if (!safety || safety.state === 'valid') continue;
+    const safety = safetyOf(studentId) || { state: 'missing' };
+    const entry = lastCheckInOf ? lastCheckInOf(studentId) : null;
     rows.push({
-      id: `safety:${studentId}`,
+      id: `entry:${studentId}`,
       kind: PENDING_KIND.SAFETY,
       student_id: studentId,
       name: student.name,
       at,
+      pending: safety.state !== 'valid',
       state: safety.state,
       expires_at: safety.expires_at || null,
+      group_name: entry?.group_name || '',
+      documents_state: entry?.documents_state
+        || (entry?.medical_approved ? 'valid' : 'missing'),
+      documents_label: entry?.documents_label
+        || (entry?.medical_approved ? 'תקין' : 'חסרה הצהרה'),
     });
   }
   return rows;
@@ -75,6 +85,7 @@ export function paymentRows({ sales = [], today, dateOf }) {
       student_id: sale.student_id || null,
       name: sale.customer_name || 'לקוח',
       at: sale.created_at || sale.updated_at,
+      pending: true,
       paid: sale.status === 'paid',
       paid_at: sale.status === 'paid' ? (sale.updated_at || null) : null,
       total: Number(sale.total) || 0,
@@ -86,14 +97,17 @@ export function paymentRows({ sales = [], today, dateOf }) {
 }
 
 /**
- * הטבלה כולה.
+ * כל היום בדלפק בטבלה אחת: כניסות וקישורי תשלום.
  *
- * מי שכבר שילם עולה לראש: הוא זה שממתין ללחיצה, ולא לכסף.
+ * הסדר הוא סדר הדחיפות ולא סדר השעה — מי שכבר שילם וממתין ללחיצה בראש,
+ * אחריו כל השאר שדורש טיפול, ומי שהכול אצלו סגור יורד למטה. כך העין נופלת
+ * ראשונה על מה שדורש פעולה, בלי לוותר על התמונה המלאה של היום.
  */
 export function buildPendingQueue(parts) {
-  const rows = [...safetyRows(parts), ...paymentRows(parts)];
+  const rows = [...entryRows(parts), ...paymentRows(parts)];
+  const rank = (row) => (row.paid ? 0 : row.pending ? 1 : 2);
   return rows.sort((a, b) => {
-    if (!!b.paid !== !!a.paid) return b.paid ? 1 : -1;
-    return String(a.at || '').localeCompare(String(b.at || ''));
+    if (rank(a) !== rank(b)) return rank(a) - rank(b);
+    return String(b.at || '').localeCompare(String(a.at || ''));
   });
 }

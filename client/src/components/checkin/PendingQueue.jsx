@@ -104,12 +104,16 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
   };
 
   const paidCount = rows.filter((r) => r.paid).length;
+  const pendingCount = rows.filter((r) => r.pending).length;
 
   return (
     <div className="card">
       <div className="section-title" style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <ClipboardList size={17} />
-        <span>ממתינים לטיפול ({rows.length})</span>
+        <span>היום בדלפק ({rows.length})</span>
+        {pendingCount > 0 && (
+          <span className="badge badge-amber">{pendingCount} ממתינים לטיפול</span>
+        )}
         {paidCount > 0 && (
           <span className="badge badge-green">{paidCount} שילמו — ממתינים לאישור</span>
         )}
@@ -137,24 +141,41 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
             )}
             {!loading && rows.length === 0 && (
               <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 24 }}>
-                אין אף אחד שממתין לטיפול
+                עוד לא נרשמה פעילות היום
               </td></tr>
             )}
             {rows.map((row) => {
               const isPayment = row.kind === 'payment_link';
               const waitingForMoney = isPayment && !row.paid;
+              const settled = !isPayment && !row.pending;
               return (
                 <tr
                   key={row.id}
-                  style={row.paid ? { background: 'rgba(16,185,129,0.07)' } : undefined}
+                  style={row.paid ? { background: 'rgba(16,185,129,0.07)' } : settled ? { opacity: 0.6 } : undefined}
                 >
                   <td style={{ fontFamily: 'monospace' }}>{hhmm(row.at)}</td>
-                  <td style={{ fontWeight: 600 }}>{row.name}</td>
+                  <td style={{ fontWeight: 600 }}>
+                    {row.name}
+                    {!isPayment && row.group_name && (
+                      <div style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 400 }}>{row.group_name}</div>
+                    )}
+                  </td>
                   <td>
                     {!isPayment ? (
-                      <span className={row.state === 'missing' ? 'badge badge-red' : 'badge badge-amber'}>
-                        <ShieldAlert size={12} /> {row.state === 'missing' ? 'תדריך ומבחן אבטחה' : `מבחן אבטחה פג ${row.expires_at || ''}`}
-                      </span>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {row.pending ? (
+                          <span className={row.state === 'missing' ? 'badge badge-red' : 'badge badge-amber'}>
+                            <ShieldAlert size={12} /> {row.state === 'missing' ? 'תדריך ומבחן אבטחה' : `מבחן אבטחה פג ${row.expires_at || ''}`}
+                          </span>
+                        ) : (
+                          <span className="badge badge-green"><CheckCircle2 size={12} /> נכנס — הכול תקין</span>
+                        )}
+                        {row.documents_state !== 'valid' && (
+                          <span className={row.documents_state === 'expired' ? 'badge badge-amber' : 'badge badge-red'}>
+                            <ShieldAlert size={12} /> {row.documents_label}
+                          </span>
+                        )}
+                      </div>
                     ) : row.paid ? (
                       <span className="badge badge-green">
                         <CheckCircle2 size={12} /> שולם ₪{row.total} — אפשר להכניס
@@ -169,7 +190,7 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                     )}
                   </td>
                   <td style={{ minWidth: 190 }}>
-                    {waitingForMoney ? (
+                    {settled ? null : waitingForMoney ? (
                       <span style={{ fontSize: 12, color: 'var(--text-3)' }}>ממתין לסליקה</span>
                     ) : (
                       <EmployeeSelect
@@ -183,7 +204,7 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                     )}
                   </td>
                   <td>
-                    {waitingForMoney ? null : isPayment ? (
+                    {settled || waitingForMoney ? null : isPayment ? (
                       <button
                         type="button"
                         className="btn btn-primary btn-sm"

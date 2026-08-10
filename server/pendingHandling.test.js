@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PENDING_KIND, todaysEntrants, safetyRows, paymentRows, buildPendingQueue } from './pendingHandling.js';
+import { PENDING_KIND, todaysEntrants, entryRows, paymentRows, buildPendingQueue } from './pendingHandling.js';
 
 const TODAY = '2026-08-10';
 const dateOf = (iso) => String(iso || '').slice(0, 10);
@@ -19,14 +19,17 @@ test('only the last entry of the day counts per climber', () => {
   assert.deepEqual([...seen], [['s1', '2026-08-10T11:00:00.000Z']]);
 });
 
-test('a climber with a valid safety test is not on the list', () => {
+test('every climber who came today is listed; only the one missing a test is pending', () => {
+  // היומן והממתינים היו שתי טבלאות עם אותם אנשים. עכשיו זו אחת, והדגל הוא ההבדל.
   const checkIns = [
     { climber_id: 's1', timestamp: '2026-08-10T09:00:00.000Z' },
     { climber_id: 's2', timestamp: '2026-08-10T09:30:00.000Z' },
   ];
   const safetyOf = (id) => (id === 's1' ? { state: 'valid' } : { state: 'missing' });
-  const rows = safetyRows({ checkIns, today: TODAY, dateOf, studentOf, safetyOf });
-  assert.deepEqual(rows.map((r) => r.name), ['תמר לוי']);
+  const rows = entryRows({ checkIns, today: TODAY, dateOf, studentOf, safetyOf });
+  assert.deepEqual(rows.map((r) => r.name).sort(), ['יונתן כהן', 'תמר לוי']);
+  assert.equal(rows.find((r) => r.name === 'יונתן כהן').pending, false);
+  assert.equal(rows.find((r) => r.name === 'תמר לוי').pending, true);
   assert.equal(rows[0].kind, PENDING_KIND.SAFETY);
 });
 
@@ -58,5 +61,5 @@ test('whoever already paid rises to the top — they are waiting on a click, not
       { id: 'ps2', payment_method: 'online', status: 'paid', created_at: '2026-08-10T09:30:00.000Z', customer_name: 'שילם' },
     ],
   });
-  assert.deepEqual(queue.map((r) => r.name), ['שילם', 'תמר לוי', 'ממתין לכסף']);
+  assert.deepEqual(queue.map((r) => r.name), ['שילם', 'ממתין לכסף', 'תמר לוי']);
 });
