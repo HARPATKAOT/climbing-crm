@@ -18,6 +18,7 @@ import {
   isBotPaused,
   isOptedOut,
   loadBrandedBotSettings,
+  studentsForParent,
 } from './whatsappBot.js';
 import { isBotEnabled } from './whatsappSchedule.js';
 
@@ -29,6 +30,28 @@ export function botSpokeRecently(messages = [], phone = '', now = Date.now()) {
   return messages.some((m) => m.direction === 'outbound'
     && m.is_ai
     && Date.parse(m.created_at || '') > now - FREE_TEXT_WINDOW_MS);
+}
+
+/**
+ * A parent who submits the form while the conversation is running gets the
+ * ordinary reply and this one within seconds of each other — two messages in a
+ * row about the same placement. The turn that is already answering wins: it
+ * knows what was just asked, and this one is only here for the silence.
+ */
+const JUST_ANSWERED_MS = 3 * 60 * 1000;
+
+export function botAnsweredMomentsAgo(messages = [], now = Date.now()) {
+  return messages.some((m) => m.direction === 'outbound'
+    && m.is_ai
+    && Date.parse(m.created_at || '') > now - JUST_ANSWERED_MS);
+}
+
+/** Somebody already placed them — there is nothing left to ask. */
+export function allNamedArePlaced(students = [], names = []) {
+  const wanted = names.map((name) => String(name || '').trim().split(/\s+/)[0]).filter(Boolean);
+  if (!wanted.length) return false;
+  return wanted.every((first) => students.some((student) => String(student?.name || '').includes(first)
+    && student?.groupId));
 }
 
 /**
@@ -75,6 +98,12 @@ export async function resumeConversationAfterForm({
   // automation already sends — not a question about a class nobody discussed.
   const messages = (db.get('messages') || []).filter((m) => String(m.phone || '') === String(parent.phone || phone));
   if (!botSpokeRecently(messages, phone, now)) return { sent: false, reason: 'no_recent_conversation' };
+  // Two messages in a row about the same placement: the ordinary turn had just
+  // answered, and this one arrived seconds later saying much the same thing.
+  if (botAnsweredMomentsAgo(messages, now)) return { sent: false, reason: 'just_answered' };
+  if (allNamedArePlaced(studentsForParent(parent), names)) {
+    return { sent: false, reason: 'already_placed' };
+  }
   const lastInbound = Date.parse(parent.last_inbound_whatsapp || '');
   if (!Number.isFinite(lastInbound) || now - lastInbound > FREE_TEXT_WINDOW_MS) {
     return { sent: false, reason: 'window_closed' };

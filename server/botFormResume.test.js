@@ -159,6 +159,48 @@ test('completion of a form stays silent while a staff handoff is still open', as
   });
 });
 
+test('הבוט בדיוק ענה — אין הודעה שנייה ברצף על אותו שיבוץ', async () => {
+  await withWorld({
+    parents: [PARENT],
+    messages: [
+      ...BOT_THREAD,
+      // עדי ורמז קיבלה שתי הודעות בזו אחר זו: התשובה הרגילה עם הקישורים,
+      // ומיד אחריה «שיבצתי את נועם…» — שתיהן על אותו שיבוץ.
+      {
+        phone: PHONE,
+        direction: 'outbound',
+        is_ai: true,
+        message: 'השיבוץ של נועם נשמר. הרשמה: … ציוד: …',
+        created_at: minutesAgo(1),
+      },
+    ],
+  }, async () => {
+    const service = fakeService();
+    const result = await resumeConversationAfterForm({
+      phone: PHONE, studentNames: ['נועם ורמז'], whatsappService: service, now: NOW, isSimulator: true,
+    });
+    assert.equal(result.sent, false);
+    assert.equal(result.reason, 'just_answered');
+    assert.equal(service.calls.sent.length, 0);
+  });
+});
+
+test('מי שכבר שובץ אינו נשאל שוב לאיזו קבוצה', async () => {
+  await withWorld({
+    parents: [PARENT],
+    messages: BOT_THREAD,
+    students: [{ id: 'st-noam', name: 'נועם ורמז', parentId: PARENT.id, groupId: 'g-1' }],
+  }, async () => {
+    const service = fakeService();
+    const result = await resumeConversationAfterForm({
+      phone: PHONE, studentNames: ['נועם ורמז'], whatsappService: service, now: NOW, isSimulator: true,
+    });
+    assert.equal(result.sent, false);
+    assert.equal(result.reason, 'already_placed');
+    assert.equal(service.calls.sent.length, 0);
+  });
+});
+
 test('botSpokeRecently מבדיל בין שיחה של הבוט לשיחה של אדם', () => {
   assert.equal(botSpokeRecently(BOT_THREAD, PHONE, NOW), true);
   assert.equal(
