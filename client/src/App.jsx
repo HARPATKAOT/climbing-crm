@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Calendar, CalendarRange, ShieldCheck, UserCog, LogIn,
   MessageSquare, Bell, Coins, Award, FileHeart, Zap, LogOut, Building2, Package, Sparkles,
@@ -382,10 +382,10 @@ export default function App() {
             const Icon = n.icon;
             const isActive = page === n.key;
             return (
-              <button
+              <Link
                 key={n.key}
                 className={`nav-item ${isActive ? 'active' : ''}`}
-                onClick={() => goToPage(n.key)}
+                to={PAGE_PATHS[n.key] || '/'}
                 style={{ '--nav-accent': n.accent }}
               >
                 <span className="nav-icon-wrap">
@@ -395,7 +395,7 @@ export default function App() {
                 {n.key === 'leads' && newLeadsCount > 0 && (
                   <span className="nav-badge">{newLeadsCount}</span>
                 )}
-              </button>
+              </Link>
             );
           })}
 
@@ -407,16 +407,16 @@ export default function App() {
             if (n.key === 'assistant') {
               return (
                 <div key={n.key} className="nav-item-with-action">
-                  <button
+                  <Link
                     className={`nav-item ${isActive ? 'active' : ''}`}
-                    onClick={() => goToPage(n.key)}
+                    to={PAGE_PATHS[n.key] || '/'}
                     style={{ '--nav-accent': n.accent }}
                   >
                     <span className="nav-icon-wrap">
                       <Icon className="nav-icon" size={17} strokeWidth={2} />
                     </span>
                     <span>{n.label}</span>
-                  </button>
+                  </Link>
                   <button
                     type="button"
                     className="nav-agent-launch"
@@ -430,17 +430,17 @@ export default function App() {
               );
             }
             return (
-              <button
+              <Link
                 key={n.key}
                 className={`nav-item ${isActive ? 'active' : ''}`}
-                onClick={() => goToPage(n.key)}
+                to={PAGE_PATHS[n.key] || '/'}
                 style={{ '--nav-accent': n.accent }}
               >
                 <span className="nav-icon-wrap">
                   <Icon className="nav-icon" size={17} strokeWidth={2} />
                 </span>
                 <span>{n.label}</span>
-              </button>
+              </Link>
             );
           })}
         </nav>
