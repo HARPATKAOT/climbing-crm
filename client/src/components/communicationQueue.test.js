@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   awaitingSince,
   isAwaitingHandling,
+  nextCommunicationRow,
   sortCommunicationRows,
   threadIsAwaitingReply,
 } from './communicationQueue.js';
@@ -106,6 +107,18 @@ test('handling queue supports parent-name and intake-date sorting', () => {
     ['a', 'b']
   );
   assert.deepEqual(rows.map((row) => row.key), ['b', 'a']);
+});
+
+test('finishing treatment advances to the next household in queue order', () => {
+  const rows = [
+    { key: 'first', parents: [{ id: 'p1' }] },
+    { key: 'second', parents: [{ id: 'p2' }, { id: 'p3' }] },
+    { key: 'third', parent: { id: 'p4' } },
+  ];
+
+  assert.equal(nextCommunicationRow(rows, ['p2', 'p3'])?.key, 'third');
+  assert.equal(nextCommunicationRow(rows, 'p4'), null);
+  assert.equal(nextCommunicationRow(rows, 'missing'), null);
 });
 
 test('reply indicator belongs only to the exact family member whose last message is inbound', () => {
