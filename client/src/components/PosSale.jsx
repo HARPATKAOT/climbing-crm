@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ShoppingCart, Plus, Minus, Trash2, Search, User,
   Banknote, Link2, FileText, CheckCircle2, X, Percent, Tag,
-  Package, ArrowRight, Gift, Send, Settings2,
+  Package, ArrowRight, Gift, Send, Settings2, Printer,
 } from 'lucide-react';
 import {
   PRODUCT_CATEGORIES,
@@ -103,6 +103,9 @@ export default function PosSale({
   // כפתור „הסרה” שלא מסיר כלום הוא גרוע יותר מכפתור שלא קיים.
   const [dismissedCoupons, setDismissedCoupons] = useState(() => new Set());
   const [newClimberState, setNewClimberState] = useState(null); // null | 'sending' | string
+  // הקבלה האחרונה נשמרת כדי שאפשר יהיה לנסות להדפיס שוב בלי למכור מחדש.
+  // בלי זה כל בדיקה של המדפסת עולה עסקה, וכל תקלה מסתיימת בחשבונית ידנית.
+  const [lastReceipt, setLastReceipt] = useState(null);
   const [couponError, setCouponError] = useState('');
   const [couponBusy, setCouponBusy] = useState(false);
   const [resendingLink, setResendingLink] = useState(false);
@@ -517,6 +520,19 @@ export default function PosSale({
     }
   };
 
+  /** ניסיון הדפסה נוסף של הקבלה האחרונה — אחרי שהמדפסת הודלקה או חוברה. */
+  const retryPrint = async () => {
+    if (!lastReceipt) return;
+    setError('');
+    try {
+      await printReceiptFromSale(lastReceipt);
+      setLastReceipt(null);
+      setError('');
+    } catch (printErr) {
+      setError(`ההדפסה נכשלה שוב: ${printErr?.message || 'שגיאה לא ידועה'}`);
+    }
+  };
+
   const applyCoupon = async (coupon, { silent = false } = {}) => {
     setCouponBusy(true);
     if (!silent) setCouponError('');
@@ -862,8 +878,10 @@ export default function PosSale({
         setLastChange(Number(data.changeGiven));
       }
       if (data.receiptBytes?.base64) {
+        setLastReceipt(data.receiptBytes);
         try {
           await printReceiptFromSale(data.receiptBytes);
+          setLastReceipt(null);
         } catch (printErr) {
           console.warn('thermal print failed', printErr);
           const docUrl = data.doc?.docUrl || data.sale?.icount_doc_url;
@@ -1923,7 +1941,14 @@ export default function PosSale({
           )}
 
           {error && (
-            <div className="alert alert-error" style={{ marginTop: 12 }}>{error}</div>
+            <div className="alert alert-error" style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span style={{ flex: 1, minWidth: 200 }}>{error}</span>
+              {lastReceipt && thermalSupported() && (
+                <button type="button" className="btn btn-secondary btn-sm" onClick={retryPrint}>
+                  <Printer size={14} /> הדפסה חוזרת
+                </button>
+              )}
+            </div>
           )}
           {documentsBlock && (
             <div
