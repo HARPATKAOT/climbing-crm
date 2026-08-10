@@ -308,6 +308,7 @@ import {
   testsForStudent,
 } from './passPunchEligibility.js';
 import { lastVisit, lastVisitLabel } from './lastVisit.js';
+import { buildPendingQueue } from './pendingHandling.js';
 import { runHealthExpiryReminders, runParticipationDocumentReminders } from './participationReminders.js';
 import { OPERATIONAL_LIST, migrateToTwoBroadcastLists } from './broadcastListMigration.js';
 import {
@@ -15308,40 +15309,52 @@ app.get('/api/checkin/climber/:id', async (req, res) => {
 });
 
 /**
- * מי שנכנס היום ואין לו מבחן אבטחה בתוקף.
+ * טבלת „ממתינים לטיפול” של הדלפק: מבחני אבטחה חסרים וקישורי תשלום פתוחים.
  *
- * חסר מבחן אינו עוצר את הכניסה — המתאמן משלם, ואז יוצא עם מדריך לתדריך
- * ולמבחן. הרשימה הזאת היא מה שנשאר פתוח מהתור: היא מוצגת בדלפק כל המשמרת,
- * ושורה נעלמת ממנה ברגע שנחתם המבחן.
+ * הכללים עצמם ב-`pendingHandling.js`; כאן רק אספקת הנתונים.
  */
-app.get('/api/checkin/safety-queue', (req, res) => {
+app.get('/api/checkin/pending', (req, res) => {
   const today = israelDateStr();
   const tests = db.get('level_tests') || [];
-  const seen = new Map();
-  for (const row of db.get('check_ins') || []) {
-    const timestamp = row.timestamp || row.created_at;
-    if (!timestamp || israelLocalParts(timestamp)?.date !== today) continue;
-    if (!row.climber_id) continue;
-    const prev = seen.get(row.climber_id);
-    if (!prev || String(timestamp) > String(prev)) seen.set(row.climber_id, timestamp);
-  }
-  const rows = [];
-  for (const [studentId, at] of seen) {
-    const student = db.getOne('students', studentId);
-    if (!student) continue;
-    const safety = safetyTestStatus(testsForStudent(student, tests));
-    if (safety.state === 'valid') continue;
-    rows.push({
-      student_id: studentId,
-      name: student.name,
-      entered_at: at,
-      state: safety.state,
-      expires_at: safety.expires_at || null,
-      test_date: safety.test_date || null,
+  res.json(buildPendingQueue({
+    checkIns: db.get('check_ins') || [],
+    sales: db.get('pos_sales') || [],
+    today,
+    dateOf: (iso) => israelLocalParts(iso)?.date || null,
+    studentOf: (id) => db.getOne('students', id),
+    safetyOf: (id) => {
+      const student = db.getOne('students', id);
+      return student ? safetyTestStatus(testsForStudent(student, tests)) : null;
+    },
+  }));
+});
+
+/**
+ * „ראיתי שהתשלום עבר” — הלחיצה שמסירה שורת תשלום מהטבלה.
+ *
+ * מותרת רק אחרי שהכסף נכנס: שורה שממתינה לתשלום שנעלמת בלחיצה היא בדיוק
+ * המקרה שבו מתאמן נכנס לקיר בלי ששילם.
+ */
+app.post('/api/checkin/pending/payment/:saleId/handled', async (req, res) => {
+  const sale = db.getOne('pos_sales', req.params.saleId);
+  if (!sale) return res.status(404).json({ error: 'המכירה לא נמצאה' });
+  if (sale.status !== 'paid') {
+    return res.status(409).json({
+      error: 'הקישור עוד לא שולם — אי אפשר להסיר מהרשימה',
+      code: 'NOT_PAID',
     });
   }
-  rows.sort((a, b) => String(a.entered_at).localeCompare(String(b.entered_at)));
-  res.json(rows);
+  const employeeId = req.body?.employee_id || null;
+  const employee = employeeId ? (db.get('employees') || []).find((e) => e.id === employeeId) : null;
+  if (employeeId && !employee) return res.status(404).json({ error: 'העובד לא נמצא' });
+  const updated = db.update('pos_sales', sale.id, {
+    handled_at: new Date().toISOString(),
+    handled_by_employee_id: employee?.id || null,
+    handled_by_name: employee?.name || null,
+    updated_at: new Date().toISOString(),
+  });
+  if (updated) await persistCore('pos_sales', updated);
+  res.json({ ok: true, sale: updated });
 });
 
 app.post('/api/check-ins', (req, res) => {

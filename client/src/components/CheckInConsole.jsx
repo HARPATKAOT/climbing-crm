@@ -6,7 +6,7 @@ import WallShiftOpen from './checkin/WallShiftOpen.jsx';
 import WallShiftClose from './checkin/WallShiftClose.jsx';
 import ShiftStaffTab from './checkin/ShiftStaffTab.jsx';
 import ClimberEntryPanel, { ClimberPicker } from './checkin/ClimberEntryPanel.jsx';
-import SafetyTestQueue from './checkin/SafetyTestQueue.jsx';
+import PendingQueue from './checkin/PendingQueue.jsx';
 import TodayLog from './checkin/TodayLog.jsx';
 import PosSale from './PosSale.jsx';
 
@@ -319,9 +319,10 @@ export default function CheckInConsole({
             </div>
           )}
 
-          {/* מי שנכנס וממתין לתדריך ולמבחן נשאר מול העיניים של מי שצריך לתת
-              אותם, ולא מאחורי טאב שאיש לא פותח. */}
-          <SafetyTestQueue
+          {/* מי שנשאר פתוח — תדריך ומבחן שלא ניתנו, וקישור תשלום שעוד לא
+              נסגר — נשאר מול העיניים של מי שצריך לטפל בו, ולא מאחורי טאב
+              שאיש לא פותח. */}
+          <PendingQueue
             employees={employees}
             refreshKey={checkIns.length}
             onDone={(message) => {
