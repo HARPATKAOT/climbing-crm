@@ -22,14 +22,15 @@ test('regular employee attendance is never mistaken for an open wall shift', () 
 test('wall station employee contract carries every operational certification', () => {
   const view = wallStationEmployee({
     id: 'e-1', name: 'דנה', can_open_wall: true,
-    can_sign_daily_safety: true, can_operate_cash: true,
+    can_sign_daily_safety: true, can_operate_cash: true, staff_category: 'other',
   });
   assert.equal(view.can_open_wall, true);
   assert.equal(view.can_sign_daily_safety, true);
   assert.equal(view.can_operate_cash, true);
+  assert.equal(view.staff_category, 'other');
   assert.deepEqual(Object.keys(view).sort(), [
     'can_open_wall', 'can_operate_cash', 'can_sign_daily_safety', 'certifications',
-    'id', 'is_active', 'is_wall_staff', 'name', 'role',
+    'id', 'is_active', 'is_wall_staff', 'name', 'role', 'staff_category',
   ]);
 });
 

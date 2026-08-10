@@ -10936,9 +10936,10 @@ app.get('/api/trainers', (req, res) => {
 
 const EMPLOYEE_OPERATIONAL_FIELDS = new Set([
   'id', 'name', 'role', 'certifications', 'is_active', 'active', 'availability',
-  'is_wall_staff',
+  'is_wall_staff', 'staff_category',
   'can_open_wall', 'can_sign_daily_safety', 'can_operate_cash', 'customer_student_id',
 ]);
+const EMPLOYEE_STAFF_CATEGORIES = new Set(['trainer', 'assistant', 'youth_trainer', 'other']);
 
 function isOwnEmployeeRequest(req, employeeId) {
   return Boolean(req.crmUser?.employee_id && String(req.crmUser.employee_id) === String(employeeId));
@@ -10964,9 +10965,17 @@ function employeeForRequest(req, employee) {
 }
 
 function employeePatchForRequest(req, current, patch = {}) {
-  if (hasSensitiveAccess(req.crmUser, 'hr')) return patch;
+  const normalizedPatch = { ...patch };
+  if (Object.prototype.hasOwnProperty.call(normalizedPatch, 'staff_category')) {
+    const category = String(normalizedPatch.staff_category || '').trim();
+    if (category && !EMPLOYEE_STAFF_CATEGORIES.has(category)) {
+      throw Object.assign(new Error('קטגוריית העובד אינה תקינה'), { statusCode: 400 });
+    }
+    normalizedPatch.staff_category = category || null;
+  }
+  if (hasSensitiveAccess(req.crmUser, 'hr')) return normalizedPatch;
   const safe = {};
-  for (const [key, value] of Object.entries(patch)) {
+  for (const [key, value] of Object.entries(normalizedPatch)) {
     if (EMPLOYEE_OPERATIONAL_FIELDS.has(key) && key !== 'id') {
       safe[key] = value;
       continue;

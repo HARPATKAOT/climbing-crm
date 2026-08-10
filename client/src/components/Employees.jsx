@@ -53,6 +53,17 @@ const WORK_TYPE_OPTIONS = [
   { id: 'route_building_shift', label: 'בונה מסלולים' },
 ];
 
+const STAFF_CATEGORY_OPTIONS = [
+  { id: 'trainer', label: 'מדריך' },
+  { id: 'assistant', label: 'עוזר מדריך' },
+  { id: 'youth_trainer', label: 'מדריך נוער' },
+  { id: 'other', label: 'אחר' },
+];
+
+function staffCategoryLabel(value) {
+  return STAFF_CATEGORY_OPTIONS.find((option) => option.id === value)?.label || 'לא הוגדר';
+}
+
 // רוחב תיק העובד. 560 הוא ברירת המחדל; מתחת ל-380 הכרטיסים נשברים, ומעל
 // 900 המגירה מכסה את המסך שמאחוריה.
 const DRAWER_WIDTH_KEY = 'crm.employeeDrawerWidth';
@@ -2494,6 +2505,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
   const [empSortConfig, setEmpSortConfig] = useState({ key: 'name', direction: 'asc' });
   const [certSearch, setCertSearch] = useState('');
   const [certStatusFilter, setCertStatusFilter] = useState('active');
+  const [certCategoryFilter, setCertCategoryFilter] = useState('all');
   const [certScopeFilter, setCertScopeFilter] = useState('all');
   const [certRoleFilter, setCertRoleFilter] = useState('all');
   const [certSort, setCertSort] = useState('name-asc');
@@ -2802,6 +2814,8 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
         const wallStaff = employeeIsWallStaff({ ...emp, is_active: true, active: true });
         return certScopeFilter === 'wall' ? wallStaff : !wallStaff;
       })
+      .filter((emp) => certCategoryFilter === 'all'
+        || (certCategoryFilter === 'unset' ? !emp.staff_category : emp.staff_category === certCategoryFilter))
       .filter((emp) => certRoleFilter === 'all' || (emp.certifications || []).includes(certRoleFilter))
       .filter((emp) => !query
         || String(emp.name || '').toLocaleLowerCase('he').includes(query)
@@ -2815,6 +2829,9 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
           const activeB = b.is_active !== false && b.active !== false ? 1 : 0;
           return activeB - activeA || nameOrder;
         }
+        if (certSort === 'category') {
+          return staffCategoryLabel(a.staff_category).localeCompare(staffCategoryLabel(b.staff_category), 'he') || nameOrder;
+        }
         if (certSort === 'scope') {
           const wallA = employeeIsWallStaff({ ...a, is_active: true, active: true }) ? 1 : 0;
           const wallB = employeeIsWallStaff({ ...b, is_active: true, active: true }) ? 1 : 0;
@@ -2822,7 +2839,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
         }
         return nameOrder;
       });
-  }, [employees, certSearch, certStatusFilter, certScopeFilter, certRoleFilter, certSort]);
+  }, [employees, certSearch, certStatusFilter, certCategoryFilter, certScopeFilter, certRoleFilter, certSort]);
 
   /**
    * עריכה מרוכזת: הממשק מתעדכן מיד, והשמירות של אותו עובד נשלחות בתור.
@@ -3794,6 +3811,18 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
                 <option value="external">עובדים חיצוניים</option>
               </AppSelect>
               <AppSelect
+                className="input input-sm bulk-filter-select"
+                value={certCategoryFilter}
+                onChange={(event) => setCertCategoryFilter(event.target.value)}
+                aria-label="סינון לפי קטגוריית עובד"
+              >
+                <option value="all">כל הקטגוריות</option>
+                {STAFF_CATEGORY_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+                <option value="unset">לא הוגדר</option>
+              </AppSelect>
+              <AppSelect
                 className="input input-sm bulk-filter-select bulk-filter-role"
                 value={certRoleFilter}
                 onChange={(event) => setCertRoleFilter(event.target.value)}
@@ -3811,6 +3840,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
                 <option value="name-asc">שם א–ת</option>
                 <option value="name-desc">שם ת–א</option>
                 <option value="status">סטטוס</option>
+                <option value="category">קטגוריה כללית</option>
                 <option value="scope">שיוך</option>
               </AppSelect>
             </div>
@@ -3821,6 +3851,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
               <colgroup>
                 <col className="bulk-col-employee" />
                 <col className="bulk-col-status" />
+                <col className="bulk-col-category" />
                 <col className="bulk-col-scope" />
                 <col className="bulk-col-roles" />
                 <col className="bulk-col-permissions" />
@@ -3831,6 +3862,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
                 <tr>
                   <th>עובד</th>
                   <th>סטטוס עובד</th>
+                  <th>קטגוריה כללית</th>
                   <th>שיוך</th>
                   <th>סוגי עבודה ותפקידים</th>
                   <th>הרשאות מסוף</th>
@@ -3882,6 +3914,25 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
                           >
                             {emp.is_active === false || emp.active === false ? <Check size={13} /> : <Plus size={12} />} ארכיון
                           </button>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="bulk-token-group bulk-category-tokens" aria-label={`קטגוריה כללית ${emp.name}`}>
+                          {STAFF_CATEGORY_OPTIONS.map((option) => {
+                            const selected = emp.staff_category === option.id;
+                            return (
+                              <button
+                                key={option.id}
+                                type="button"
+                                className={`bulk-token category-token category-${option.id} ${selected ? 'is-selected' : ''}`}
+                                disabled={!canEditEmployees}
+                                aria-pressed={selected}
+                                onClick={() => quickPatchEmployee(emp.id, { staff_category: option.id })}
+                              >
+                                {selected ? <Check size={13} /> : <Plus size={12} />} {option.label}
+                              </button>
+                            );
+                          })}
                         </div>
                       </td>
                       <td>
@@ -3988,7 +4039,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
                   );
                 })}
                 {certificationEmployees.length === 0 && (
-                  <tr><td colSpan={7} className="bulk-empty">לא נמצאו עובדים מתאימים</td></tr>
+                  <tr><td colSpan={8} className="bulk-empty">לא נמצאו עובדים מתאימים</td></tr>
                 )}
               </tbody>
             </table>

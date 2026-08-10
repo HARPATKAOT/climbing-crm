@@ -1340,7 +1340,7 @@ select option, select optgroup {
 }
 .bulk-qualifications-filters {
   display: grid;
-  grid-template-columns: minmax(220px, 1.6fr) repeat(4, minmax(120px, 1fr));
+  grid-template-columns: minmax(220px, 1.6fr) repeat(3, minmax(115px, 1fr)) minmax(155px, 1.25fr) minmax(115px, 1fr);
   align-items: center;
   gap: 10px;
   width: 100%;
@@ -1364,12 +1364,13 @@ select option, select optgroup {
   overscroll-behavior-inline: contain;
 }
 .bulk-qualifications-table-wrap > table {
-  width: max(100%, 1360px);
-  min-width: 1360px;
+  width: max(100%, 1510px);
+  min-width: 1510px;
   table-layout: fixed;
 }
 .bulk-col-employee { width: 155px; }
 .bulk-col-status { width: 145px; }
+.bulk-col-category { width: 165px; }
 .bulk-col-scope { width: 155px; }
 .bulk-col-roles { width: 385px; }
 .bulk-col-permissions { width: 255px; }
@@ -1447,6 +1448,27 @@ select option, select optgroup {
   background: rgba(251,113,133,.1);
 }
 .bulk-status-tokens { min-width: 0; }
+.bulk-category-tokens { min-width: 0; }
+.bulk-token.category-trainer.is-selected {
+  color: #93C5FD;
+  border-color: rgba(96,165,250,.48);
+  background: rgba(96,165,250,.12);
+}
+.bulk-token.category-assistant.is-selected {
+  color: #C4B5FD;
+  border-color: rgba(167,139,250,.48);
+  background: rgba(167,139,250,.12);
+}
+.bulk-token.category-youth_trainer.is-selected {
+  color: #FDE68A;
+  border-color: rgba(251,191,36,.48);
+  background: rgba(251,191,36,.12);
+}
+.bulk-token.category-other.is-selected {
+  color: #CBD5E1;
+  border-color: rgba(148,163,184,.48);
+  background: rgba(148,163,184,.12);
+}
 .bulk-token.role-token.is-selected {
   color: var(--token-color, var(--blue));
   border-color: color-mix(in srgb, var(--token-color, var(--blue)) 50%, transparent);

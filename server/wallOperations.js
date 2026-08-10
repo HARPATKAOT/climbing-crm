@@ -17,6 +17,7 @@ export function wallStationEmployee(employee = {}) {
     role: employee.role || 'trainer',
     is_active: employee.is_active !== false && employee.active !== false,
     is_wall_staff: employeeIsWallStaff(employee),
+    staff_category: employee.staff_category || null,
     can_open_wall: employee.can_open_wall === true,
     can_sign_daily_safety: employee.can_sign_daily_safety === true,
     can_operate_cash: employee.can_operate_cash === true,
