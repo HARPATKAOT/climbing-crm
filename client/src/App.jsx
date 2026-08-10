@@ -580,7 +580,7 @@ export default function App() {
               />
             )}
             {page === 'broadcasts' && <Broadcasts parents={parents} students={students} groups={groups} />}
-            {page === 'cash'       && <CashRegister isOwner={isOwner || user?.sensitive?.finance === true} sharedStation={sharedStation} initialTab={location.state?.cashTab || new URLSearchParams(location.search).get('tab')} />}
+            {page === 'cash'       && <CashRegister isOwner={isOwner || user?.sensitive?.finance === true} canResetCash={isOwner} sharedStation={sharedStation} initialTab={location.state?.cashTab || new URLSearchParams(location.search).get('tab')} />}
             {page === 'safety'     && <Safety canManageSettings={isOwner || moduleAtLeast('safety_settings', 'edit')} />}
             {page === 'employees'  && (
               <Employees

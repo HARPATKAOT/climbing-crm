@@ -138,7 +138,7 @@ function formatBalance(bal) {
   })}`;
 }
 
-export default function CashManagerPanel({ employees = [] }) {
+export default function CashManagerPanel({ employees = [], canResetCash = false }) {
   const [expected, setExpected] = useState(0);
   const [rows, setRows] = useState([]);
   const [filter, setFilter] = useState('all');
@@ -213,7 +213,7 @@ export default function CashManagerPanel({ employees = [] }) {
       <div className="card" style={{ padding: 20 }}>
         <div className="section-title" style={{ marginBottom: 14 }}>כלים</div>
         <div className="cash-mgr-tools">
-          {TOOLS.map(({ id, title, desc, Icon, color }) => (
+          {TOOLS.filter(({ id }) => canResetCash || !['count', 'reset'].includes(id)).map(({ id, title, desc, Icon, color }) => (
             <button
               key={id}
               type="button"

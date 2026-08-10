@@ -77,7 +77,7 @@ function saleStatusBadge(status) {
   return 'badge badge-gray';
 }
 
-export default function CashRegister({ isOwner = true, sharedStation = false, initialTab = null }) {
+export default function CashRegister({ isOwner = true, canResetCash = isOwner, sharedStation = false, initialTab = null }) {
   const [expectedAmount, setExpectedAmount] = useState('');
   const [actualAmount, setActualAmount] = useState('');
   const [shiftType, setShiftType] = useState('בוקר');
@@ -86,7 +86,7 @@ export default function CashRegister({ isOwner = true, sharedStation = false, in
   const [savedOk, setSavedOk] = useState(false);
   const [shifts, setShifts] = useState([]);
   const [activeTab, setActiveTab] = useState(
-    ['products', 'discounts'].includes(initialTab) && isOwner ? initialTab : 'sale'
+    ['products', 'discounts', 'manager'].includes(initialTab) && isOwner ? initialTab : 'sale'
   );
   const [employees, setEmployees] = useState([]);
 
@@ -586,7 +586,9 @@ export default function CashRegister({ isOwner = true, sharedStation = false, in
         <CashShiftPanel employees={employees} isOwner={isOwner} />
       )}
 
-      {activeTab === 'manager' && isOwner && <CashManagerPanel employees={employees} />}
+      {activeTab === 'manager' && isOwner && (
+        <CashManagerPanel employees={employees} canResetCash={canResetCash} />
+      )}
 
       {activeTab === 'history' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
