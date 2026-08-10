@@ -154,6 +154,8 @@ export const OPERATIONAL_TABLES = [
   'broadcast_lists',
   'broadcast_list_defs',
   'check_ins',
+  // הסרות ידניות מטבלת „ממתינים לטיפול” בדלפק — שורה שהוסרה לא חוזרת באותו יום.
+  'checkin_dismissals',
   'automations',
   'automation_sends',
   'cash_register_shifts',

@@ -1276,10 +1276,14 @@ export default function PosSale({
           {typeof renderCustomerExtra === 'function' && renderCustomerExtra({
             studentId: selectedStudentId,
             student: selectedStudent || null,
-            // מסוף הכניסה מציע מכאן כניסה בודדת או כרטיסייה ישירות לעגלה, כדי
-            // שהמוכר לא יחפש אותן בקטלוג בזמן שהמתאמן עומד מולו.
+            // רק הכניסה הבודדת עולה כקיצור דרך. כרטיסיות ומנויים הם מכירה
+            // שקורית לעיתים רחוקות ויש להם קטלוג שלם ליד — רשימה של שלושה-עשר
+            // כפתורים מתחת לשם המתאמן מסתירה את הפעולה שבאמת נדרשת.
             addToCart,
-            wallProducts: pricelist.filter((item) => item.grants_wall_climbing === true),
+            wallProducts: pricelist.filter((item) => (
+              item.grants_wall_climbing === true
+              && (item.product_type || 'product') === 'product'
+            )),
             cartCount: cart.length,
           })}
 

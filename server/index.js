@@ -15533,7 +15533,33 @@ app.get('/api/checkin/pending', (req, res) => {
       const student = db.getOne('students', id);
       return student ? safetyTestStatus(testsForStudent(student, tests)) : null;
     },
+    dismissedIds: (db.get('checkin_dismissals') || [])
+      .filter((row) => row.date === today)
+      .map((row) => row.row_id),
   }));
+});
+
+/**
+ * הסרה ידנית של שורה מהרשימה.
+ *
+ * לפעמים האדם הלך, ולפעמים הצוות יודע משהו שהמערכת לא. ההסרה תקפה ליום אחד
+ * — למחרת הרשימה נבנית מחדש ממילא — והיא נרשמת עם מי שביצע אותה, כדי שאפשר
+ * יהיה לדעת מי הסיר שורה שהייתה צריכה להישאר.
+ */
+app.post('/api/checkin/pending/dismiss', async (req, res) => {
+  const rowId = String(req.body?.row_id || '').trim();
+  if (!rowId) return res.status(400).json({ error: 'row_id is required' });
+  const employeeId = req.body?.employee_id || null;
+  const employee = employeeId ? (db.get('employees') || []).find((e) => e.id === employeeId) : null;
+  const record = db.insert('checkin_dismissals', {
+    row_id: rowId,
+    date: israelDateStr(),
+    dismissed_by_employee_id: employee?.id || null,
+    dismissed_by_name: employee?.name || null,
+    reason: String(req.body?.reason || '').trim() || null,
+  });
+  await persistCore('checkin_dismissals', record);
+  res.status(201).json({ ok: true, dismissal: record });
 });
 
 /**

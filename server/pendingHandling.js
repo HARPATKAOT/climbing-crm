@@ -102,7 +102,11 @@ export function paymentRows({ sales = [], today, dateOf }) {
  * ואחריו השאר לפי סדר ההגעה.
  */
 export function buildPendingQueue(parts) {
-  const rows = [...entryRows(parts), ...paymentRows(parts)];
+  // הסרה ידנית: לפעמים אדם הלך, ולפעמים הצוות יודע משהו שהמערכת לא. שורה
+  // שהוסרה לא חוזרת באותו יום — אחרת ההסרה חסרת ערך והרשימה מפסיקה להיקרא.
+  const dismissed = new Set(parts?.dismissedIds || []);
+  const rows = [...entryRows(parts), ...paymentRows(parts)]
+    .filter((row) => !dismissed.has(row.id));
   return rows.sort((a, b) => {
     if (!!b.paid !== !!a.paid) return b.paid ? 1 : -1;
     return String(a.at || '').localeCompare(String(b.at || ''));
