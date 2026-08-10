@@ -638,6 +638,10 @@ ${data.link}`)}`,
           unitprice: price,
           quantity: 1,
           product_type: item.product_type || 'product',
+          // נשמר על השורה כדי שהעגלה תדע להציע בחירת משתתפים בלי לחפש
+          // את המוצר במחירון בכל ציור.
+          grants_wall_climbing: item.grants_wall_climbing === true,
+          family_shared: item.family_shared === true,
           cancellation_policy: item.cancellation_policy || null,
           discountType: null,
           discountValue: 0,
@@ -679,6 +683,27 @@ ${data.link}`)}`,
     ]);
     setCustomDraft({ name: '', price: '', quantity: '1' });
     setShowCustomForm(false);
+  };
+
+  /**
+   * מי המשתתפים בשורה — כשמשלמים על כמה ילדים של אותו הורה יחד.
+   *
+   * השרת כבר יודע לשייך כל יחידה למשתתף (`participant_ids`), אבל בדלפק לא
+   * הייתה דרך לומר לו על מי: כל כניסה נרשמה על המתאמן שנבחר, וגם כשקנו שתיים
+   * שתיהן היו על אותו ילד. הכמות נגזרת מהבחירה ולא להפך.
+   */
+  const toggleParticipant = (cartLineId, studentId) => {
+    setCart((prev) => prev.map((l) => {
+      if (l.cartLineId !== cartLineId) return l;
+      const current = Array.isArray(l.participant_ids) && l.participant_ids.length
+        ? l.participant_ids
+        : (selectedStudentId ? [selectedStudentId] : []);
+      const next = current.includes(studentId)
+        ? current.filter((id) => id !== studentId)
+        : [...current, studentId];
+      if (!next.length) return l;
+      return { ...l, participant_ids: next, quantity: next.length };
+    }));
   };
 
   const setQty = (cartLineId, qty) => {
@@ -930,6 +955,14 @@ ${data.link}`)}`,
       setCart([]);
       setTenderedAmount('');
       setTenderedDenoms({});
+      // קישור תשלום סוגר את הטיפול בלקוח הזה: הוא עבר לרשימת הממתינים, והדלפק
+      // פנוי לבא בתור. השארת הלקוח על המסך גרמה למכירה הבאה להיתלות עליו.
+      if (endpoint === '/api/pos/payment-link') {
+        clearCustomer();
+        setAnonymousSale(false);
+        setAppliedCoupon(null);
+        setDismissedCoupons(new Set());
+      }
       setShowQuoteOptions(false);
       if (data.isNewLead || (!selectedParentId && !selectedStudentId && pendingNewLeadName)) {
         clearCustomer();
@@ -1662,6 +1695,35 @@ ${data.link}`)}`,
                             </span>
                           )}
                         </div>
+
+                        {/* תשלום על כמה ילדים של אותו הורה בבת אחת: כל מי
+                            שמסומן מקבל יחידה משלו, והכמות נגזרת מהסימון. */}
+                        {line.grants_wall_climbing && !line.family_shared
+                          && childrenOfSelectedParent.length > 1 && (
+                          <div style={{ marginTop: 8 }}>
+                            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>
+                              עבור מי:
+                            </div>
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              {childrenOfSelectedParent.map((child) => {
+                                const chosen = (line.participant_ids?.length
+                                  ? line.participant_ids
+                                  : [selectedStudentId]).includes(child.id);
+                                return (
+                                  <button
+                                    key={child.id}
+                                    type="button"
+                                    className={`btn btn-sm ${chosen ? 'btn-primary' : 'btn-ghost'}`}
+                                    style={{ padding: '3px 9px', fontSize: 11 }}
+                                    onClick={() => toggleParticipant(line.cartLineId, child.id)}
+                                  >
+                                    {child.name}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
                       </div>
                       <div
                         style={{
@@ -2223,7 +2285,7 @@ ${data.link}`)}`,
               disabled={busy}
               onClick={handleCheckout}
             >
-              {busy ? 'מעבד...' : paymentMethod === 'online' ? 'צור קישור תשלום' : 'גבה והפק חשבונית'}
+              {busy ? 'מעבד...' : paymentMethod === 'online' ? 'שלח קישור לתשלום' : 'גבה והפק חשבונית'}
             </button>
             <button
               type="button"

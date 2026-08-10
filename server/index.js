@@ -309,7 +309,7 @@ import {
   testsForStudent,
 } from './passPunchEligibility.js';
 import { lastVisit, lastVisitLabel } from './lastVisit.js';
-import { buildPendingQueue } from './pendingHandling.js';
+import { buildCounterQueues } from './pendingHandling.js';
 import { runHealthExpiryReminders, runParticipationDocumentReminders } from './participationReminders.js';
 import { OPERATIONAL_LIST, migrateToTwoBroadcastLists } from './broadcastListMigration.js';
 import {
@@ -15614,7 +15614,7 @@ app.get('/api/checkin/pending', (req, res) => {
   const today = israelDateStr();
   const tests = db.get('level_tests') || [];
   const checkIns = db.get('check_ins') || [];
-  res.json(buildPendingQueue({
+  res.json(buildCounterQueues({
     checkIns,
     sales: db.get('pos_sales') || [],
     today,

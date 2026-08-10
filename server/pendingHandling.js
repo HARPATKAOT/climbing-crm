@@ -40,21 +40,21 @@ export function todaysEntrants(checkIns = [], today, dateOf) {
  *
  * @param safetyOf (studentId) => {state, expires_at, test_date}
  */
-export function entryRows({ checkIns = [], today, dateOf, studentOf, safetyOf }) {
+export function entryRows({ checkIns = [], today, dateOf, studentOf, safetyOf, includeSettled = false }) {
   const rows = [];
   for (const [studentId, at] of todaysEntrants(checkIns, today, dateOf)) {
     const student = studentOf(studentId);
     if (!student) continue;
     const safety = safetyOf(studentId) || { state: 'missing' };
-    if (safety.state === 'valid') continue;
+    if (safety.state === 'valid' && !includeSettled) continue;
     rows.push({
       id: `entry:${studentId}`,
       kind: PENDING_KIND.SAFETY,
       student_id: studentId,
       name: student.name,
       at,
-      pending: true,
-      needs_safety: true,
+      pending: safety.state !== 'valid',
+      needs_safety: safety.state !== 'valid',
       state: safety.state,
       expires_at: safety.expires_at || null,
     });
@@ -109,6 +109,26 @@ export function paymentRows({ sales = [], today, dateOf, studentOf }) {
  * הסדר הוא סדר הדחיפות ולא סדר השעה — מי שכבר שילם וממתין רק ללחיצה בראש,
  * ואחריו השאר לפי סדר ההגעה.
  */
+/**
+ * שתי הרשימות של הדלפק.
+ *
+ * `pending` — מי שמשהו אצלו עוד פתוח: תשלום שלא אושר, או תדריך ומבחן.
+ * `active`  — מי שנכנס, שילם ועבר את המבחן (או שלא נזקק לו). זו התמונה של
+ * מי נמצא עכשיו על הקיר, וזה מידע אחר לגמרי מרשימת המשימות — ולכן שתי
+ * לשוניות ולא טבלה אחת עם דגלים.
+ */
+export function buildCounterQueues(parts) {
+  const pending = buildPendingQueue(parts);
+  const pendingStudents = new Set(pending.map((row) => row.student_id).filter(Boolean));
+  const dismissed = new Set(parts?.dismissedIds || []);
+  const active = entryRows({ ...parts, includeSettled: true })
+    .filter((row) => !row.needs_safety
+      && !pendingStudents.has(row.student_id)
+      && !dismissed.has(row.id))
+    .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+  return { pending, active };
+}
+
 export function buildPendingQueue(parts) {
   // הסרה ידנית: לפעמים אדם הלך, ולפעמים הצוות יודע משהו שהמערכת לא. שורה
   // שהוסרה לא חוזרת באותו יום — אחרת ההסרה חסרת ערך והרשימה מפסיקה להיקרא.

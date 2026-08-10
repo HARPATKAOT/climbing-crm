@@ -22,6 +22,10 @@ const hhmm = (iso) => {
  */
 export default function PendingQueue({ employees = [], onDone, refreshKey = 0 }) {
   const [rows, setRows] = useState([]);
+  const [active, setActive] = useState([]);
+  // „ממתינים” היא רשימת משימות; „מטפסים במשמרת” היא תמונת מצב של מי על הקיר.
+  // שני דברים שונים, ולכן שתי לשוניות ולא טבלה אחת עם דגלים.
+  const [tab, setTab] = useState('pending');
   const [loading, setLoading] = useState(true);
   const [byRow, setByRow] = useState({});
   const [savingId, setSavingId] = useState(null);
@@ -30,10 +34,13 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
 
   const load = async () => {
     try {
-      const data = await fetch('/api/checkin/pending').then((r) => (r.ok ? r.json() : []));
-      if (liveRef.current) setRows(Array.isArray(data) ? data : []);
+      const data = await fetch('/api/checkin/pending').then((r) => (r.ok ? r.json() : null));
+      if (!liveRef.current) return;
+      // תמיכה בשתי הצורות: מערך שטוח מהגרסה הקודמת, ואובייקט שתי הרשימות.
+      setRows(Array.isArray(data) ? data : (data?.pending || []));
+      setActive(Array.isArray(data) ? [] : (data?.active || []));
     } catch {
-      if (liveRef.current) setRows([]);
+      if (liveRef.current) { setRows([]); setActive([]); }
     } finally {
       if (liveRef.current) setLoading(false);
     }
@@ -132,8 +139,21 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
     <div className="card">
       <div className="section-title" style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <ClipboardList size={17} />
-        <span>ממתינים לטיפול ({rows.length})</span>
-        {paidCount > 0 && (
+        <button
+          type="button"
+          className={`tab-pill ${tab === 'pending' ? 'active' : ''}`}
+          onClick={() => setTab('pending')}
+        >
+          ממתינים לטיפול ({rows.length})
+        </button>
+        <button
+          type="button"
+          className={`tab-pill ${tab === 'active' ? 'active' : ''}`}
+          onClick={() => setTab('active')}
+        >
+          מטפסים במשמרת ({active.length})
+        </button>
+        {tab === 'pending' && paidCount > 0 && (
           <span className="badge badge-green">{paidCount} שילמו — ממתינים לאישור</span>
         )}
         <button type="button" className="btn btn-ghost btn-sm" style={{ marginInlineStart: 'auto' }} onClick={load}>
@@ -143,6 +163,33 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
 
       {error && <div className="alert alert-error" style={{ margin: 14, fontSize: 13 }}>{error}</div>}
 
+      {tab === 'active' ? (
+        <div className="table-wrap">
+          <table className="crm-table">
+            <thead>
+              <tr><th>שעת כניסה</th><th>שם</th><th>מצב</th></tr>
+            </thead>
+            <tbody>
+              {active.length === 0 && (
+                <tr><td colSpan={3} style={{ textAlign: 'center', color: 'var(--text-3)', padding: 24 }}>
+                  אף אחד לא נכנס עדיין במשמרת הזאת
+                </td></tr>
+              )}
+              {active.map((row) => (
+                <tr key={row.id}>
+                  <td style={{ fontFamily: 'monospace' }}>{hhmm(row.at)}</td>
+                  <td style={{ fontWeight: 600 }}>{row.name}</td>
+                  <td>
+                    <span className="badge badge-green">
+                      <CheckCircle2 size={12} /> שילם ועבר מבחן — על הקיר
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
       <div className="table-wrap">
         <table className="crm-table">
           <thead>
@@ -255,6 +302,7 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
           </tbody>
         </table>
       </div>
+      )}
     </div>
   );
 }
