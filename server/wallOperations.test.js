@@ -6,6 +6,7 @@ import {
   pendingWallSafetyChecks,
   requireQualifiedWallCloser,
   requireWallSafetyComplete,
+  wallOpeningSafetyChecks,
   wallStationEmployee,
 } from './wallOperations.js';
 
@@ -32,16 +33,20 @@ test('wall station employee contract carries every operational certification', (
   ]);
 });
 
-test('wall opening is blocked until every due safety check is signed', () => {
+test('only the ropes and autobelays check can block wall opening', () => {
   const rows = [
-    { id: 'done', is_due: true, signed_today: true },
-    { id: 'pending', is_due: true, signed_today: false },
+    { id: 'another-due-check', name: 'בדיקה אחרת', is_due: true, signed_today: false },
+    { id: 'sct-ropes-autobelay', name: 'בדיקת חבלים וטרובלואים', is_due: true, signed_today: false },
   ];
-  assert.deepEqual(pendingWallSafetyChecks(rows).map((row) => row.id), ['pending']);
+  assert.deepEqual(wallOpeningSafetyChecks(rows).map((row) => row.id), ['sct-ropes-autobelay']);
+  assert.deepEqual(pendingWallSafetyChecks(rows).map((row) => row.id), ['sct-ropes-autobelay']);
   assert.throws(() => requireWallSafetyComplete(rows), (error) => (
     error.code === 'SAFETY_PENDING' && error.status === 409 && error.pending.length === 1
   ));
-  assert.deepEqual(requireWallSafetyComplete([{ is_due: true, signed_today: true }]), []);
+  assert.deepEqual(requireWallSafetyComplete([
+    { id: 'another-due-check', is_due: true, signed_today: false },
+    { name: 'בדיקת חבלים וטרובלואים', is_due: true, signed_today: true },
+  ]), []);
 });
 
 test('only an active certified employee may be recorded as the wall closer', () => {

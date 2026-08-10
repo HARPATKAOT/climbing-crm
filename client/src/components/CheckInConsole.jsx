@@ -566,7 +566,7 @@ export default function CheckInConsole({ students, groups, operationalOnly = fal
   const refreshSafety = async () => {
     try {
       const [dueResponse, employeeResponse] = await Promise.all([
-        fetch('/api/safety/due-today'),
+        fetch(operationalOnly ? '/api/safety/due-today?scope=wall-opening' : '/api/safety/due-today'),
         fetch(operationalOnly ? '/api/trainers' : '/api/employees'),
       ]);
       const [due, emps] = await Promise.all([

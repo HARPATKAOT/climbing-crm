@@ -1,6 +1,15 @@
 import { employeeCanOpenWall } from './staffAttendanceSettings.js';
 import { employeeIsWallStaff } from './employeeScope.js';
 
+export const WALL_OPENING_SAFETY_CHECK_ID = 'sct-ropes-autobelay';
+
+export function wallOpeningSafetyChecks(rows = []) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => (
+    row?.id === WALL_OPENING_SAFETY_CHECK_ID ||
+    String(row?.name || '').trim() === 'בדיקת חבלים וטרובלואים'
+  ));
+}
+
 export function wallStationEmployee(employee = {}) {
   return {
     id: employee.id,
@@ -16,7 +25,7 @@ export function wallStationEmployee(employee = {}) {
 }
 
 export function pendingWallSafetyChecks(rows = []) {
-  return (Array.isArray(rows) ? rows : []).filter((row) => row?.is_due && !row?.signed_today);
+  return wallOpeningSafetyChecks(rows).filter((row) => row?.is_due && !row?.signed_today);
 }
 
 export function openWallShifts(rows = []) {

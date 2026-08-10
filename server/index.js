@@ -493,6 +493,7 @@ import {
   openWallShifts,
   requireQualifiedWallCloser,
   requireWallSafetyComplete,
+  wallOpeningSafetyChecks,
   wallStationEmployee,
 } from './wallOperations.js';
 import {
@@ -12104,7 +12105,8 @@ app.delete('/api/safety/check-types/:id', (req, res) => {
 
 app.get('/api/safety/due-today', (req, res) => {
   const date = req.query.date || undefined;
-  res.json(db.getSafetyDueToday(date));
+  const rows = db.getSafetyDueToday(date);
+  res.json(req.query.scope === 'wall-opening' ? wallOpeningSafetyChecks(rows) : rows);
 });
 
 app.get('/api/safety/inspections', (req, res) => {
