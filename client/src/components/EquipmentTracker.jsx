@@ -293,7 +293,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
     setLoadingSettings(true);
     setSettingsError('');
     try {
-      const res = await fetch('/api/equipment-settings');
+      const res = await fetch('/api/equipment-settings', { cache: 'no-store' });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || 'טעינת הגדרות הציוד נכשלה');
       setSettings(body);
