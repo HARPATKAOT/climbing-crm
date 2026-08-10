@@ -1063,6 +1063,34 @@ export const whatsappService = {
     return result;
   },
 
+  sendDocumentMessage: async (phone, documentLink, filename = 'invoice.pdf', caption = '', options = {}) => {
+    try {
+      const result = await callMetaWhatsAppAPI(phone, {
+        type: 'document',
+        document: {
+          link: documentLink,
+          filename: String(filename || 'invoice.pdf').slice(0, 240),
+          ...(caption ? { caption: String(caption).slice(0, 1024) } : {}),
+        },
+      });
+      const logMessage = caption ? `📎 ${caption}` : `📎 ${filename}`;
+      recordMessage({
+        phone: formatWaPhone(phone) || phone,
+        channel: 'whatsapp',
+        direction: 'outbound',
+        message: logMessage,
+        status: result.mock ? 'sent' : 'delivered',
+        source: options.source || 'finance',
+        message_type: 'document',
+        media_url: documentLink,
+        meta_message_id: result.messageId || null,
+      });
+      return { success: true, mock: !!result.mock, messageId: result.messageId || null };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
   /**
    * Explicit one-off continuation from the CRM. It bypasses only the temporary
    * human-reply pause: the global switch, the 24h window and customer opt-out

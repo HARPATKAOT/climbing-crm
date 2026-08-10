@@ -9,6 +9,7 @@ export const PUBLIC_PATH_PREFIXES = [
   '/equipment',
   '/shop',
   '/privacy',
+  '/shift-signup',
 ];
 
 export function isPublicPath(pathname) {

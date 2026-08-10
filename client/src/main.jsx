@@ -55,6 +55,7 @@ const PublicHostPayment          = lazy(() => import('./components/PublicHostPay
 const PublicEquipmentPayment     = lazy(() => import('./components/PublicEquipmentPayment.jsx'));
 const PublicShop                 = lazy(() => import('./components/PublicShopPurchase.jsx'));
 const PublicPosCheckout          = lazy(() => import('./components/PublicPosCheckout.jsx'));
+const PublicShiftSignup          = lazy(() => import('./components/PublicShiftSignup.jsx'));
 const PublicSite                 = lazy(() => import('./public-site/PublicSite.jsx'));
 
 /**
@@ -109,6 +110,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/onboard" element={<PublicOnboardingForm />} />
             <Route path="/onboard/:slug" element={<PublicOnboardingForm />} />
             <Route path="/staff-onboard" element={<PublicEmployeeOnboardForm />} />
+            {/* זמינות למשמרות — הקישור שמחליף את הסקר בוואטסאפ. */}
+            <Route path="/shift-signup/:token" element={<PublicShiftSignup />} />
             <Route path="/join" element={<LeadIntakeForm />} />
             <Route path="/privacy" element={<PrivacyPolicy />} />
             <Route path="/event/:slug" element={<PublicActivityRegistration />} />
