@@ -174,6 +174,13 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
   const [settingsError, setSettingsError] = useState('');
   const [settingsMsg, setSettingsMsg] = useState('');
 
+  // A successful save remains visible until the user edits another field.
+  // This keeps the confirmation beside the buttons at the bottom of the form
+  // without falsely claiming that later, unsaved edits are already durable.
+  useEffect(() => {
+    setSettingsMsg('');
+  }, [draft]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -381,8 +388,13 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || 'שמירת ההגדרות נכשלה');
-      setSettings(body);
-      setSettingsMsg('ההגדרות נשמרו');
+      // Read back from the durable source before confirming success. The user
+      // sees “saved” only after the value is available to a fresh request.
+      const verifyRes = await fetch('/api/equipment-settings', { cache: 'no-store' });
+      const verified = await verifyRes.json().catch(() => ({}));
+      if (!verifyRes.ok) throw new Error(verified.error || 'השמירה בוצעה אך האימות נכשל');
+      setSettings(verified);
+      setSettingsMsg('ההגדרות נשמרו ואומתו');
     } catch (err) {
       setSettingsError(err.message);
     } finally {
@@ -704,14 +716,35 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
           </div>
 
           {settingsError && (
-            <div style={{ padding: 8, borderRadius: 10, background: 'rgba(248,113,113,.12)', color: '#f87171', fontSize: 12 }}>
+            <div role="alert" style={{ padding: 8, borderRadius: 10, background: 'rgba(248,113,113,.12)', color: '#f87171', fontSize: 12 }}>
               {settingsError}
+            </div>
+          )}
+
+          {settingsMsg && (
+            <div
+              role="status"
+              aria-live="polite"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 7,
+                padding: '9px 11px',
+                borderRadius: 10,
+                background: 'rgba(52,211,153,.12)',
+                border: '1px solid rgba(52,211,153,.28)',
+                color: '#34d399',
+                fontSize: 12,
+                fontWeight: 800,
+              }}
+            >
+              <Check size={15} /> {settingsMsg}
             </div>
           )}
 
           <div style={{ display: 'flex', gap: 8 }}>
             <button type="button" className="btn btn-primary btn-sm" disabled={savingSettings || loadingSettings || !draft} onClick={saveSettings}>
-              {savingSettings ? 'שומר...' : 'שמור הגדרות'}
+              {savingSettings ? 'שומר...' : settingsMsg ? 'נשמר ✓' : 'שמור הגדרות'}
             </button>
             <button type="button" className="btn btn-ghost btn-sm" disabled={savingSettings || loadingSettings} onClick={loadSettings}>
               {loadingSettings ? 'טוען מהשמור...' : 'שחזור מהשמור'}
