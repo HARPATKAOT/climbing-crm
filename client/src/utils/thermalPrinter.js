@@ -4,6 +4,34 @@
  */
 
 const STORAGE_KEY = 'kirboaz_thermal_usb';
+const MODE_KEY = 'kirboaz_print_mode';
+
+/**
+ * איך המסוף מדפיס במחשב הזה.
+ *
+ * `usb` — ישירות למדפסת, מדפיס ופותח את המגירה בפקודה אחת. דורש שהמדפסת
+ * תהיה שלנו בלבד: דרייבר ווינדוס שמחזיק אותה חוסם את הדפדפן לגמרי.
+ * `os`  — דרך מנגנון ההדפסה של ווינדוס, כמו כל תוכנה. המדפסת נשארת משותפת
+ * עם תוכנות אחרות; פתיחת המגירה נעשית בהגדרת הדרייבר ולא על ידינו.
+ */
+export const PRINT_MODES = Object.freeze({ USB: 'usb', OS: 'os' });
+
+export function printMode() {
+  try {
+    const saved = localStorage.getItem(MODE_KEY);
+    return saved === PRINT_MODES.OS ? PRINT_MODES.OS : PRINT_MODES.USB;
+  } catch {
+    return PRINT_MODES.USB;
+  }
+}
+
+export function setPrintMode(mode) {
+  try {
+    localStorage.setItem(MODE_KEY, mode === PRINT_MODES.OS ? PRINT_MODES.OS : PRINT_MODES.USB);
+  } catch {
+    /* ignore */
+  }
+}
 
 function loadFilter() {
   try {

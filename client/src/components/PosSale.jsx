@@ -18,12 +18,22 @@ import AppSelect from './AppSelect.jsx';
 import CancellationPolicyPreview from './CancellationPolicyPreview.jsx';
 import CashCountModal from './CashCountModal.jsx';
 import EmployeeSelect from './EmployeeSelect.jsx';
-import { printReceiptFromSale, openInvoiceFallback, thermalSupported } from '../utils/thermalPrinter.js';
+import {
+  printReceiptFromSale, openInvoiceFallback, thermalSupported, printMode, PRINT_MODES,
+} from '../utils/thermalPrinter.js';
+import { buildReceiptHtml, printReceiptViaOs } from '../utils/receiptHtml.js';
 
 const PAY_METHODS = [
   { id: 'cash', label: 'מזומן', icon: Banknote },
   { id: 'online', label: 'סליקה בקישור', icon: Link2 },
 ];
+
+/** מספר לוואטסאפ: ספרות בלבד, ו-0 מקומי מוחלף בקידומת ישראל. */
+function waPhone(raw) {
+  let digits = String(raw || '').replace(/\D/g, '');
+  if (digits.startsWith('0')) digits = `972${digits.slice(1)}`;
+  return digits.length >= 11 ? digits : '';
+}
 
 function productTypeLabel(type) {
   if (type === 'punch_card') return 'כרטיסייה';
@@ -106,6 +116,9 @@ export default function PosSale({
   // הקבלה האחרונה נשמרת כדי שאפשר יהיה לנסות להדפיס שוב בלי למכור מחדש.
   // בלי זה כל בדיקה של המדפסת עולה עסקה, וכל תקלה מסתיימת בחשבונית ידנית.
   const [lastReceipt, setLastReceipt] = useState(null);
+  // מכירה ללא זיהוי: קרטיב במזומן אינו דורש טלפון, שם, או תיק לקוח. בלי
+  // המסלול הזה כל מכירה קטנה גוררת הקלדת פרטים שאיש לא יסתכל בהם שוב.
+  const [anonymousSale, setAnonymousSale] = useState(false);
   const [couponError, setCouponError] = useState('');
   const [couponBusy, setCouponBusy] = useState(false);
   const [resendingLink, setResendingLink] = useState(false);
@@ -385,7 +398,9 @@ export default function PosSale({
   const missingSendTarget =
     hasSelectedCustomer &&
     ((sendWhatsapp && !effectivePhone.trim()) || (sendEmail && !effectiveEmail.trim()));
-  const contactFieldsVisible = isPendingNewLead || missingSendTarget || showContactFields;
+  // במכירה ללא זיהוי אין למי לשלוח ואין למי לחייב — השדות רק מפריעים.
+  const contactFieldsVisible = !anonymousSale
+    && (isPendingNewLead || missingSendTarget || showContactFields);
 
   const cartTotal = cart.reduce(
     (sum, line) => sum + (Number(line.unitprice) || 0) * (Number(line.quantity) || 1),
@@ -409,6 +424,11 @@ export default function PosSale({
 
   useEffect(() => {
     setDismissedCoupons(new Set());
+  }, [selectedStudentId, selectedParentId]);
+
+  // בחירת לקוח מבטלת מכירה ללא זיהוי — אי אפשר להיות שניהם.
+  useEffect(() => {
+    if (selectedStudentId || selectedParentId) setAnonymousSale(false);
   }, [selectedStudentId, selectedParentId]);
 
   const needsCustomer = cart.some(
@@ -470,54 +490,41 @@ export default function PosSale({
   };
 
   /**
-   * לקוח שמגיע לראשונה: פתיחת תיק ושליחת טופס ההשתתפות בפעולה אחת.
+   * לקוח שמגיע לראשונה: שולחים לו את טופס ההרשמה, ולא שומרים עליו כלום.
    *
-   * הטופס נשלח לפי מתאמן, וללקוח חדש אין תיק מתאמן — כך שהדלפק נשאר בלי דרך
-   * לבקש חתימה בדיוק ממי שאין לו שום מסמך. הפרטים שהטופס צריך נמסרים בו,
-   * ולכן די כאן בשם ובטלפון.
+   * פתיחת תיק על סמך שם שהוקלד בדלפק מייצרת לקוחות חצי-ריקים ששמם נכתב
+   * בשמיעה, ואת הפרטים האמיתיים הוא ימסור בעצמו בטופס. לכן כאן נשלח רק
+   * הקישור — וואטסאפ נפתח עם ההודעה מוכנה, והדלפקיסט לוחץ שלח.
    */
-  const openFileAndSendForm = async () => {
-    const name = String(pendingNewLeadName || walkInName || '').trim();
-    const phone = String(walkInPhone || '').trim();
-    if (!name) return;
+  const sendBlankFormLink = () => {
+    const phone = waPhone(walkInPhone);
     if (!phone) {
-      setNewClimberState('חסר טלפון — בלעדיו אי אפשר לשלוח את הקישור');
+      setNewClimberState('חסר טלפון — בלעדיו אין לאן לשלוח');
       return;
     }
-    setNewClimberState('sending');
-    try {
-      const created = await fetch('/api/checkin/new-climber', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, phone, email: walkInEmail || '' }),
-      }).then(async (r) => {
-        const body = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(body.error || 'פתיחת התיק נכשלה');
-        return body;
-      });
+    const link = `${window.location.origin}/register`;
+    const text = `שלום, כדי להיכנס לקיר צריך למלא טופס השתתפות והצהרת בריאות:
+${link}`;
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
+    setNewClimberState('✓ וואטסאפ נפתח עם הקישור — לחצו שלח');
+  };
 
-      const sent = await fetch(`/api/leads/${encodeURIComponent(created.student.id)}/send-health-form`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      }).then((r) => r.json().catch(() => ({})));
-
-      // התיק כבר קיים, ולכן הלקוח נבחר גם אם השליחה עצמה לא הצליחה.
-      selectCustomer({
-        type: 'student',
-        id: created.student.id,
-        name: created.student.name,
-        parentId: created.parent.id,
-        parentName: created.parent.name,
-        phone: created.parent.phone || phone,
-        email: created.parent.email || walkInEmail || '',
-      });
-      setNewClimberState(sent?.sent
-        ? `✓ נפתח תיק והקישור נשלח ל${sent.sentTo || name}`
-        : `נפתח תיק ל${name}, אבל הקישור לא נשלח: ${sent?.warning || 'שגיאה בשליחה'}`);
-    } catch (err) {
-      setNewClimberState(err.message);
+  /**
+   * הדפסת קבלה לפי מצב ההדפסה שנקבע במחשב הזה.
+   *
+   * במצב `os` הקבלה נבנית כ-HTML ועוברת דרך מנגנון ההדפסה של ווינדוס — כך
+   * המדפסת נשארת משותפת עם תוכנת הקופה השנייה. במצב `usb` היא נשלחת ישירות
+   * כ-ESC/POS, ואז גם המגירה נפתחת מאותה פקודה.
+   */
+  const printSaleReceipt = async (data) => {
+    if (printMode() === PRINT_MODES.OS) {
+      const sale = data.sale || {};
+      return printReceiptViaOs(buildReceiptHtml({
+        sale: { ...sale, tendered_amount: sale.tendered_amount ?? (Number(tenderedAmount) || undefined) },
+        changeGiven: data.changeGiven || 0,
+      }));
     }
+    return printReceiptFromSale(data.receiptBytes);
   };
 
   /** ניסיון הדפסה נוסף של הקבלה האחרונה — אחרי שהמדפסת הודלקה או חוברה. */
@@ -525,7 +532,7 @@ export default function PosSale({
     if (!lastReceipt) return;
     setError('');
     try {
-      await printReceiptFromSale(lastReceipt);
+      await printSaleReceipt(lastReceipt);
       setLastReceipt(null);
       setError('');
     } catch (printErr) {
@@ -785,8 +792,8 @@ export default function PosSale({
       setError('למנוי או כרטיסייה חובה לבחור מתאמן (אפשר לחפש הורה ואז לבחור ילד)');
       return false;
     }
-    if (isPendingNewLead && !String(effectivePhone || '').trim()) {
-      setError('לליד חדש חובה למלא טלפון (או לבחור לקוח קיים מהרשימה)');
+    if (!anonymousSale && isPendingNewLead && !String(effectivePhone || '').trim()) {
+      setError('לליד חדש חובה למלא טלפון, לבחור לקוח קיים, או לסמן מכירה ללא זיהוי');
       return false;
     }
     if (sendWhatsapp && !String(effectivePhone || '').trim()) {
@@ -878,9 +885,9 @@ export default function PosSale({
         setLastChange(Number(data.changeGiven));
       }
       if (data.receiptBytes?.base64) {
-        setLastReceipt(data.receiptBytes);
+        setLastReceipt(data);
         try {
-          await printReceiptFromSale(data.receiptBytes);
+          await printSaleReceipt(data);
           setLastReceipt(null);
         } catch (printErr) {
           console.warn('thermal print failed', printErr);
@@ -1285,7 +1292,18 @@ export default function PosSale({
             </div>
           )}
 
-          {!(selectedStudent || selectedParent) && (
+          {/* מכירה ללא זיהוי: קרטיב במזומן אינו דורש שם או טלפון, וכפייה
+              להקליד אותם מייצרת רשומות שאיש לא יסתכל בהן שוב. */}
+          {anonymousSale && !(selectedStudent || selectedParent) && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+              <span className="badge badge-gray">לקוח לא מזוהה</span>
+              <button type="button" className="btn btn-ghost btn-xs" onClick={() => setAnonymousSale(false)}>
+                בחירת לקוח
+              </button>
+            </div>
+          )}
+
+          {!anonymousSale && !(selectedStudent || selectedParent) && (
             <div className="form-group" style={{ marginBottom: 10, position: 'relative', zIndex: 70 }}>
               <label className="form-label">
                 לקוח — שם, טלפון או מייל {needsCustomer ? '*' : ''}
@@ -1419,37 +1437,6 @@ export default function PosSale({
             </div>
           )}
 
-          {/* לקוח שאינו במערכת: אין לו תיק מתאמן, ולכן אין למי לשלוח טופס.
-              הכפתור פותח תיק ושולח את הקישור בפעולה אחת. */}
-          {isPendingNewLead && (
-            <div
-              className="form-group"
-              style={{
-                marginBottom: 12, padding: 10, borderRadius: 10,
-                background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.35)',
-                display: 'flex', flexDirection: 'column', gap: 6,
-              }}
-            >
-              <div style={{ fontSize: 12.5, fontWeight: 700 }}>לקוח חדש — {pendingNewLeadName}</div>
-              <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-                בלי טופס השתתפות חתום אי אפשר למכור לו כניסה. מלאו טלפון ושלחו לו את הטופס.
-              </div>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={newClimberState === 'sending' || !String(walkInPhone || '').trim()}
-                onClick={openFileAndSendForm}
-              >
-                <Send size={14} /> {newClimberState === 'sending' ? 'פותח ושולח...' : 'פתיחת תיק ושליחת טופס השתתפות'}
-              </button>
-              {newClimberState && newClimberState !== 'sending' && (
-                <div style={{ fontSize: 11.5, color: newClimberState.startsWith('✓') ? 'var(--green)' : 'var(--amber)' }}>
-                  {newClimberState}
-                </div>
-              )}
-            </div>
-          )}
-
           {typeof renderCustomerExtra === 'function' && renderCustomerExtra({
             studentId: selectedStudentId,
             student: selectedStudent || null,
@@ -1495,6 +1482,53 @@ export default function PosSale({
                 עריכת טלפון / מייל לחשבונית
               </button>
             )
+          )}
+
+          {!anonymousSale && !needsCustomer && !(selectedStudent || selectedParent) && !isPendingNewLead && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              style={{ marginBottom: 10 }}
+              onClick={() => {
+                setAnonymousSale(true);
+                setSendWhatsapp(false);
+                setSendEmail(false);
+                clearCustomer();
+              }}
+            >
+              מכירה ללא זיהוי — בלי שם וטלפון
+            </button>
+          )}
+
+          {/* לקוח שאינו במערכת: שולחים לו את טופס ההרשמה ולא שומרים כלום. */}
+          {isPendingNewLead && !anonymousSale && (
+            <div
+              className="form-group"
+              style={{
+                marginBottom: 12, padding: 10, borderRadius: 10,
+                background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.35)',
+                display: 'flex', flexDirection: 'column', gap: 6,
+              }}
+            >
+              <div style={{ fontSize: 12.5, fontWeight: 700 }}>לקוח שאינו במערכת</div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+                בלי טופס השתתפות חתום אי אפשר למכור לו כניסה. שלחו לו את הטופס —
+                הפרטים ייכנסו למערכת כשהוא ימלא אותו.
+              </div>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={!String(walkInPhone || '').trim()}
+                onClick={sendBlankFormLink}
+              >
+                <Send size={14} /> שליחת טופס הרשמה בוואטסאפ
+              </button>
+              {newClimberState && newClimberState !== 'sending' && (
+                <div style={{ fontSize: 11.5, color: newClimberState.startsWith('✓') ? 'var(--green)' : 'var(--amber)' }}>
+                  {newClimberState}
+                </div>
+              )}
+            </div>
           )}
         </div>
 
@@ -1943,7 +1977,7 @@ export default function PosSale({
           {error && (
             <div className="alert alert-error" style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <span style={{ flex: 1, minWidth: 200 }}>{error}</span>
-              {lastReceipt && thermalSupported() && (
+              {lastReceipt && (
                 <button type="button" className="btn btn-secondary btn-sm" onClick={retryPrint}>
                   <Printer size={14} /> הדפסה חוזרת
                 </button>
