@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'rea
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Calendar, CalendarRange, ShieldCheck, UserCog, LogIn,
-  MessageSquare, Bell, Coins, Award, FileHeart, Zap, LogOut, Building2, Package, Sparkles,
+  MessageSquare, Bell, Coins, Award, FileHeart, Zap, LogOut, Building2, Package, Sparkles, BarChart3,
 } from 'lucide-react';
 import { useAuth } from './components/AuthGate.jsx';
 import { useBusinessProfile } from './BusinessProfileContext.jsx';
@@ -20,6 +20,7 @@ const Safety             = lazy(() => import('./components/Safety.jsx'));
 const Employees          = lazy(() => import('./components/Employees.jsx'));
 const Broadcasts         = lazy(() => import('./components/Broadcasts.jsx'));
 const CashRegister       = lazy(() => import('./components/CashRegister.jsx'));
+const FinancialReports   = lazy(() => import('./components/FinancialReports.jsx'));
 const LevelTests         = lazy(() => import('./components/LevelTests.jsx'));
 const HealthDeclarations = lazy(() => import('./components/HealthDeclarations.jsx'));
 const CheckInConsole     = lazy(() => import('./components/CheckInConsole.jsx'));
@@ -47,6 +48,7 @@ const NAV = [
   { key: 'activities', label: 'יומן',               icon: CalendarRange,    section: 'main', accent: '#FB923C' },
   { key: 'broadcasts', label: 'דיוור',              icon: MessageSquare,    section: 'main', accent: '#34D399' },
   { key: 'cash',       label: 'קופה ומכירה',      icon: Coins,            section: 'main', accent: '#F59E0B' },
+  { key: 'reports',    label: 'דוחות פיננסיים',   icon: BarChart3,        section: 'main', accent: '#2DD4BF' },
   { key: 'safety',     label: 'בדיקות בטיחות',     icon: ShieldCheck,      section: 'ops',  accent: '#4ADE80' },
   { key: 'employees',  label: 'עובדים ומשמרות',    icon: UserCog,          section: 'ops',  accent: '#60A5FA' },
   { key: 'levels',     label: 'מבחנים',             icon: Award,            section: 'ops',  accent: '#FCD34D' },
@@ -67,6 +69,7 @@ const PAGE_PATHS = {
   activities:  '/activities',
   broadcasts:  '/broadcasts',
   cash:        '/cash',
+  reports:     '/reports',
   safety:      '/safety',
   employees:   '/employees',
   levels:      '/levels',
@@ -115,6 +118,7 @@ const PAGE_TITLES = {
   activities: { title: 'יומן',                    sub: 'ימי הולדת, טיולים ואירועים — מסונכרן עם גוגל' },
   broadcasts: { title: 'דיוור',                   sub: 'שליחת הודעות מסיביות' },
   cash:       { title: 'קופה ומכירה',           sub: 'מכירה בדלפק, מוצרים, סגירת קופה ודוחות' },
+  reports:    { title: 'דוחות פיננסיים',         sub: 'הכנסות, גבייה, הוצאות, ספקים ורווחיות' },
   safety:     { title: 'בדיקות בטיחות',         sub: 'תדירויות, חתימות יומן ומעקב' },
   employees:  { title: 'עובדים ומשמרות',          sub: 'שעון נוכחות וניהול שכר' },
   levels:     { title: 'מבחנים',                  sub: 'רמה · אבטחה · הובלה' },
@@ -146,7 +150,8 @@ export default function App() {
       }))
       .map(([key]) => key),
     ...(user?.employee_id ? ['myfile'] : []),
-  ]), [user?.employee_id, user?.modules]);
+    ...(user?.sensitive?.finance === true ? ['reports'] : []),
+  ]), [user?.employee_id, user?.modules, user?.sensitive?.finance]);
   const defaultStaffPage = ['myfile', 'dashboard', 'checkin', 'schedule', 'safety', 'leads'].find((key) => staffPages.has(key)) || 'no-access';
   const page = requestedPage === 'myfile' && !user?.employee_id
     ? (isOwner ? 'dashboard' : defaultStaffPage)
@@ -534,6 +539,7 @@ export default function App() {
                 students={students}
                 groups={groups}
                 operationalOnly={!isOwner}
+                sharedStation={sharedStation}
                 canSell={isOwner || moduleAtLeast('pos', 'edit')}
               />
             )}
@@ -584,12 +590,14 @@ export default function App() {
             )}
             {page === 'broadcasts' && <Broadcasts parents={parents} students={students} groups={groups} />}
             {page === 'cash'       && <CashRegister isOwner={isOwner || user?.sensitive?.finance === true} canResetCash={isOwner} sharedStation={sharedStation} initialTab={location.state?.cashTab || new URLSearchParams(location.search).get('tab')} />}
+            {page === 'reports'    && (isOwner || user?.sensitive?.finance === true) && <FinancialReports />}
             {page === 'safety'     && <Safety canManageSettings={isOwner || moduleAtLeast('safety_settings', 'edit')} />}
             {page === 'employees'  && (
               <Employees
                 canViewHr={isOwner || user?.sensitive?.hr === true}
                 canEditEmployees={isOwner || moduleAtLeast('employees', 'edit')}
                 canViewShifts={isOwner || moduleAtLeast('shifts', 'view')}
+                canManageSignups={isOwner}
               />
             )}
             {page === 'levels'     && <LevelTests students={students} groups={groups} />}

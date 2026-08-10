@@ -1710,9 +1710,7 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     fetch('/api/employees')
       .then(res => res.ok ? res.json() : [])
       .then(data => {
-        const list = Array.isArray(data)
-          ? data.filter((employee) => employee?.is_active !== false && employee?.active !== false)
-          : [];
+        const list = Array.isArray(data) ? data : [];
         setEmployees(list);
         if (list.length > 0) setTestExaminerId(prev => prev || list[0].id);
       })

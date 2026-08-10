@@ -144,6 +144,10 @@ export const OPERATIONAL_TABLES = [
   'work_assignments',
   'staff_attendance',
   'shift_hours',
+  // טפסי הרשמה למשמרות והתשובות אליהם. נשמרים כאן — ולא כטבלה ייעודית —
+  // כי המבנה שלהם הוא מסמך אחד לכל טופס, בלי שאילתות חוצות-טפסים.
+  'shift_signup_windows',
+  'shift_signup_responses',
   'safety_inspections',
   'safety_incidents',
   'safety_check_types',
@@ -195,6 +199,21 @@ export const OPERATIONAL_TABLES = [
   'bot_reply_claims',
   'ai_service_state',
   'participation_packs',
+  // Financial reporting records. Kept in the durable JSON store so rollout is
+  // immediate; the normalized SQL migration adds the long-term indexed model.
+  'finance_documents',
+  'finance_document_lines',
+  'finance_payment_events',
+  'finance_expenses',
+  'finance_suppliers',
+  'finance_product_mappings',
+  'product_cost_history',
+  'finance_sync_runs',
+  'finance_reconciliation_items',
+  'finance_bank_transactions',
+  'finance_expense_matches',
+  'finance_accountant_deliveries',
+  'finance_automation_settings',
 ];
 
 // Kept as the public name used by db.js: every listed collection is durable.
@@ -868,6 +887,31 @@ export const supa = {
     return { ok: true };
   },
 
+  /** Bulk durable upsert, used by idempotent historical imports. */
+  async upsertMany(table, records = []) {
+    if (!client) return { ok: false, error: 'Supabase not configured' };
+    if (!records.length) return { ok: true, count: 0 };
+    if (!OPERATIONAL_TABLES.includes(table)) {
+      for (const record of records) {
+        const result = await supa.upsert(table, record);
+        if (!result.ok) return result;
+      }
+      return { ok: true, count: records.length };
+    }
+    const chunkSize = 250;
+    for (let index = 0; index < records.length; index += chunkSize) {
+      const rows = records.slice(index, index + chunkSize).map((record) => ({
+        collection: table,
+        id: String(record.id ?? record.key),
+        data: record,
+        updated_at: new Date().toISOString(),
+      }));
+      const { error } = await client.from('kv_collections').upsert(rows, { onConflict: 'collection,id' });
+      if (error) return { ok: false, error: error.message };
+    }
+    return { ok: true, count: records.length };
+  },
+
   /** Insert a journal row without an update path. */
   async insertOnly(table, record) {
     if (!client) return { ok: false, configured: false, error: 'Supabase not configured' };
@@ -1119,6 +1163,17 @@ export const supa = {
       return { ok: false, error: error.message };
     }
     return { ok: true, blob: data };
+  },
+
+  async createSignedClientDocumentUrl(storagePath, expiresIn = 3600) {
+    if (!client || !storagePath) return { ok: false, error: 'Supabase not configured' };
+    const { data, error } = await client.storage
+      .from('client-documents')
+      .createSignedUrl(storagePath, Math.max(60, Math.min(604800, Number(expiresIn) || 3600)));
+    if (error || !data?.signedUrl) {
+      return { ok: false, error: error?.message || 'signed URL was not created' };
+    }
+    return { ok: true, url: data.signedUrl };
   },
 
   async removeClientDocument(storagePath) {

@@ -800,9 +800,9 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
             <button type="button" className="btn btn-primary btn-sm" disabled={savingSettings || loadingSettings || !draft} onClick={saveSettings}>
               {savingSettings ? 'שומר...' : settingsMsg ? 'נשמר ✓' : 'שמור הגדרות'}
             </button>
-            <button type="button" className="btn btn-ghost btn-sm" disabled={savingSettings || loadingSettings} onClick={loadSettings}>
-              {loadingSettings ? 'טוען מהשמור...' : 'שחזור מהשמור'}
-            </button>
+              <button type="button" className="btn btn-ghost btn-sm" disabled={savingSettings || loadingSettings} onClick={loadSettings}>
+                {loadingSettings ? 'טוען מהשמור...' : 'שחזור מהשמור'}
+              </button>
           </div>
         </div>
       )}

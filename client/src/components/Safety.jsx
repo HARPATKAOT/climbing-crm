@@ -515,9 +515,7 @@ export default function Safety({ canManageSettings = true }) {
       setDueToday(Array.isArray(due) ? due : []);
       setLogs(Array.isArray(isps) ? isps : []);
       setIncidents(Array.isArray(incs) ? incs : []);
-      setEmployees(Array.isArray(emps)
-        ? emps.filter((employee) => employee?.is_active !== false && employee?.active !== false)
-        : []);
+      setEmployees(Array.isArray(emps) ? emps : []);
     } catch (err) {
       console.error(err);
     }

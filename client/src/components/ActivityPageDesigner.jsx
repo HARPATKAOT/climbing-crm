@@ -1,9 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import {
-  Ban, CalendarX2, CreditCard, ImagePlus, Loader2, PackageCheck,
-  ShieldCheck, Smile, Sparkles, X,
-} from 'lucide-react';
+import { ImagePlus, Loader2, ShieldCheck, Smile, Sparkles, X } from 'lucide-react';
 import AppSelect from './AppSelect.jsx';
+import { cancellationPolicyIcon } from '../utils/cancellationPolicyIcons.js';
 import { compressImageFile, readImageFileAsDataUrl } from './productCategories.js';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { ACTIVITY_PAGE_FIELDS } from '../utils/activityPageFields.js';
@@ -54,17 +52,6 @@ function themeFrom(value) {
     }
   }
   return {};
-}
-
-function cancellationPolicyIcon(value, policies = []) {
-  if (value === '__none__') return { Icon: Ban, color: '#F87171' };
-
-  const policy = policies.find((item) => String(item.id) === String(value));
-  const name = String(policy?.name || '').toLowerCase();
-  if (/כרטיס|מנוי|כניס/.test(name)) return { Icon: CreditCard, color: '#FBBF24' };
-  if (/ציוד|השכר|רתמ|נעל/.test(name)) return { Icon: PackageCheck, color: '#FB923C' };
-  if (/אירוע|טיול|פעילות|סדנ/.test(name)) return { Icon: CalendarX2, color: '#A78BFA' };
-  return { Icon: ShieldCheck, color: '#A78BFA' };
 }
 
 function InlineField({ label, value, onChange, readOnly, type = 'text', className = '', ...props }) {

@@ -142,6 +142,18 @@ function windowTone(open) {
   return open ? '#34D399' : '#F87171';
 }
 
+/**
+ * כפתורי הכותרת נטענים כל אחד בקצב שלו. בלי מקום שמור הם קופצים ממקום
+ * למקום בכל פתיחת שיחה, ולכן כל תא בשורה שומר את רוחבו גם כשהוא ריק.
+ */
+function HeaderSlot({ width, children }) {
+  return (
+    <span style={{ width, height: 30, flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}>
+      {children}
+    </span>
+  );
+}
+
 function WindowBadge({ windows, channel }) {
   const w = windows?.[channel];
   if (!w) return null;
@@ -183,6 +195,10 @@ function contactSyncTitle(info) {
   return lines.join('\n');
 }
 
+// אם אין מפתחות גוגל בשרת התכונה כבויה לכל השיחות. זוכרים את זה פעם אחת
+// כדי לא לשמור מקום ריק בכותרת של כל שיחה שנפתחת אחר כך.
+let contactSyncDisabled = false;
+
 /** Does this customer sit in the phone's address book under the agreed name. */
 function ContactSyncBadge({ parentId }) {
   const [info, setInfo] = useState(null);
@@ -210,7 +226,10 @@ function ContactSyncBadge({ parentId }) {
   }, [check]);
 
   // Without Google keys on the server the whole feature is off — stay silent.
-  if (!info || info.state === 'not_configured') return null;
+  if (info?.state === 'not_configured') contactSyncDisabled = true;
+  if (!info || info.state === 'not_configured') {
+    return contactSyncDisabled ? null : <HeaderSlot width={30} />;
+  }
   const iconColor = CONTACT_SYNC_TONES[info.state] || CONTACT_SYNC_TONES.error;
   const Icon = info.state === 'synced'
     ? UserCheck
@@ -973,7 +992,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
           flexShrink: 0,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', minWidth: 0, flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
             <div
               className="section-title"
@@ -989,9 +1008,9 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
             )}
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap', justifyContent: 'center', minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap', justifyContent: 'center', flexShrink: 0 }}>
           <ContactSyncBadge parentId={parent.id} />
-          {botBadge && (
+          {!botBadge ? <HeaderSlot width={44} /> : (
             <div ref={botMenuRef} style={{ position: 'relative' }}>
               <button
                 type="button"

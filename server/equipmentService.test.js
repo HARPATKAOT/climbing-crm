@@ -161,17 +161,17 @@ test('family discount settings default to 5 percent and clamp to 0-100', () => {
   assert.equal(normalizeEquipmentSettings({ family_discount_percent: -2 }).family_discount_percent, 0);
 });
 
-test('equipment settings retain the selected cancellation policy', () => {
-  assert.equal(normalizeEquipmentSettings({ cancellation_policy_id: 'cp-equipment' }).cancellation_policy_id, 'cp-equipment');
-  assert.equal(normalizeEquipmentSettings({ cancellation_policy_id: '' }).cancellation_policy_id, null);
-});
-
 test('magnesium explanation has a default and remains owner-editable', () => {
   assert.equal(normalizeEquipmentSettings({}).item_info.chalk_bag, DEFAULT_CHALK_BAG_INFO);
   assert.equal(
     normalizeEquipmentSettings({ item_info: { chalk_bag: 'טקסט מותאם של העסק' } }).item_info.chalk_bag,
     'טקסט מותאם של העסק'
   );
+});
+
+test('equipment settings retain the selected cancellation policy', () => {
+  assert.equal(normalizeEquipmentSettings({ cancellation_policy_id: 'cp-equipment' }).cancellation_policy_id, 'cp-equipment');
+  assert.equal(normalizeEquipmentSettings({ cancellation_policy_id: '' }).cancellation_policy_id, null);
 });
 
 test('saved magnesium wording is returned verbatim, including the original wording', () => {

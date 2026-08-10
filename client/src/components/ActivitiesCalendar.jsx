@@ -518,7 +518,7 @@ function WorkAssignmentsBlock({
       const emps = empRes.ok ? await empRes.json() : [];
       const asgs = asgRes?.ok ? await asgRes.json() : [];
       const wageList = wageRes?.ok ? await wageRes.json() : [];
-      setEmployees(Array.isArray(emps) ? emps.filter((e) => e.is_active !== false && e.active !== false) : []);
+      setEmployees(Array.isArray(emps) ? emps.filter((e) => e.is_active !== false) : []);
       setWages(Array.isArray(wageList) ? wageList : []);
       setRows(Array.isArray(asgs)
         ? asgs.map((r) => ({
@@ -2845,24 +2845,24 @@ function EventChip({ activity, onClick, draggable = true }) {
           status={activity.payment_status}
           perParticipant={isPaidPerParticipant(activity)}
         />
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {activity.name}
-          </span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {activity.name}
         </span>
-        {timeLabel && (
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 600,
-              opacity: 0.85,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {timeLabel}
-          </span>
-        )}
+      </span>
+      {timeLabel && (
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 600,
+            opacity: 0.85,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {timeLabel}
+        </span>
+      )}
       {extraLines.map((line) => (
         <span
           key={line}
@@ -4208,7 +4208,7 @@ export default function ActivitiesCalendar({
         const nameById = new Map(list.map((e) => [e.id, e.name || '']));
         setStaffOptions(
           list
-            .filter((e) => e.is_active !== false && e.active !== false && e.name)
+            .filter((e) => e.is_active !== false && e.name)
             .map((e) => ({ id: e.id, name: e.name }))
             .sort((a, b) => a.name.localeCompare(b.name, 'he'))
         );
