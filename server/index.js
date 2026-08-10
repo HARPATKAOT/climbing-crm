@@ -377,6 +377,7 @@ import {
   EQUIPMENT_ITEM_LABELS,
   EQUIPMENT_TEMPLATE_NAME,
   DEFAULT_EQUIPMENT_SETTINGS,
+  mergeEquipmentSettingsPatch,
   normalizeEquipmentSettings,
   isKidStudent,
   isEquipmentEligibleStudent,
@@ -3689,7 +3690,16 @@ async function loadEquipmentSettingsForCharge() {
 }
 
 async function saveEquipmentSettings(next) {
-  const normalized = normalizeEquipmentSettings(next);
+  // The settings screen is the source of truth, but older/stale clients may
+  // submit only the fields they know about. Preserve omitted saved fields so a
+  // partial payload can never silently erase prices or the owner's wording.
+  const read = await supa.readAppSetting('equipment_settings');
+  if (!read.ok) {
+    throw new Error(read.error || 'קריאת הגדרות הציוד הקיימות נכשלה');
+  }
+  const current = read.configured ? read.value : (db.getSettings?.()?.equipment_settings || {});
+  const merged = mergeEquipmentSettingsPatch(current, next);
+  const normalized = normalizeEquipmentSettings(merged);
   const result = await supa.setAppSetting('equipment_settings', normalized);
   if (result?.ok === false) {
     throw new Error(result.error || 'שמירת הגדרות הציוד נכשלה');

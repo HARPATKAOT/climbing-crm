@@ -18,6 +18,7 @@ import {
   equipmentGapFlags,
   unpaidEquipmentItems,
   DEFAULT_EQUIPMENT_SETTINGS,
+  mergeEquipmentSettingsPatch,
   DEFAULT_CHALK_BAG_INFO,
   equipmentPublicBase,
   EQUIPMENT_LIVE_APP_BASE,
@@ -27,6 +28,25 @@ import {
   buildEquipmentRedirectUrl,
   ensureEquipmentWhatsappTemplate,
 } from './equipmentService.js';
+
+test('partial equipment settings updates preserve saved prices and descriptions', () => {
+  const current = {
+    prices: { shoes: 150, shirt: 60, chalk_bag: 70 },
+    item_info: { shoes: 'shoe details', shirt: 'shirt details', chalk_bag: 'chalk details' },
+    enrichment_fee: 110,
+    enrichment_info: 'annual treats',
+  };
+  const merged = mergeEquipmentSettingsPatch(current, {
+    prices: { shirt: 65 },
+    family_discount_percent: 10,
+  });
+
+  assert.deepEqual(merged.prices, { shoes: 150, shirt: 65, chalk_bag: 70 });
+  assert.deepEqual(merged.item_info, current.item_info);
+  assert.equal(merged.enrichment_fee, 110);
+  assert.equal(merged.enrichment_info, 'annual treats');
+  assert.equal(merged.family_discount_percent, 10);
+});
 
 function makeDb(seed = {}) {
   const store = { ...seed };

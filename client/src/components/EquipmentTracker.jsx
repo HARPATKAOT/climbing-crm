@@ -169,6 +169,7 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
   const [onSettingsTab, setOnSettingsTab] = useState(false);
   const [draft, setDraft] = useState(null);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [loadingSettings, setLoadingSettings] = useState(false);
   const [settingsError, setSettingsError] = useState('');
   const [settingsMsg, setSettingsMsg] = useState('');
 
@@ -267,32 +268,50 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
     return { unpaid, awaiting, trainees: rows.length };
   }, [rows]);
 
-  const resetDraft = () => {
+  const resetDraft = (source = settings) => {
     setSettingsError('');
     setDraft({
-      shoes: String(settings?.prices?.shoes ?? ''),
-      shirt: String(settings?.prices?.shirt ?? ''),
-      chalk_bag: String(settings?.prices?.chalk_bag ?? ''),
-      shirt_sizes: (settings?.shirt_sizes || []).join(', '),
-      price_includes_vat: settings?.price_includes_vat !== false,
-      family_discount_enabled: settings?.family_discount_enabled !== false,
-      family_discount_percent: String(settings?.family_discount_percent ?? 5),
-      season_start: monthDayToDisplay(settings?.season_start) || '01/09',
-      season_mid: monthDayToDisplay(settings?.season_mid) || '15/02',
-      season_end: monthDayToDisplay(settings?.season_end) || '31/07',
-      info_shoes: settings?.item_info?.shoes || '',
-      info_shirt: settings?.item_info?.shirt || '',
-      info_chalk_bag: settings?.item_info?.chalk_bag || '',
-      enrichment_fee: settings?.enrichment_fee == null ? '' : String(settings.enrichment_fee),
-      enrichment_info: settings?.enrichment_info || '',
+      shoes: String(source?.prices?.shoes ?? ''),
+      shirt: String(source?.prices?.shirt ?? ''),
+      chalk_bag: String(source?.prices?.chalk_bag ?? ''),
+      shirt_sizes: (source?.shirt_sizes || []).join(', '),
+      price_includes_vat: source?.price_includes_vat !== false,
+      family_discount_enabled: source?.family_discount_enabled !== false,
+      family_discount_percent: String(source?.family_discount_percent ?? 5),
+      season_start: monthDayToDisplay(source?.season_start) || '01/09',
+      season_mid: monthDayToDisplay(source?.season_mid) || '15/02',
+      season_end: monthDayToDisplay(source?.season_end) || '31/07',
+      info_shoes: source?.item_info?.shoes || '',
+      info_shirt: source?.item_info?.shirt || '',
+      info_chalk_bag: source?.item_info?.chalk_bag || '',
+      enrichment_fee: source?.enrichment_fee == null ? '' : String(source.enrichment_fee),
+      enrichment_info: source?.enrichment_info || '',
     });
   };
 
-  const selectTab = (id) => {
+  const loadSettings = async () => {
+    setLoadingSettings(true);
+    setSettingsError('');
+    try {
+      const res = await fetch('/api/equipment-settings');
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'טעינת הגדרות הציוד נכשלה');
+      setSettings(body);
+      resetDraft(body);
+      return body;
+    } catch (err) {
+      setSettingsError(err.message);
+      return null;
+    } finally {
+      setLoadingSettings(false);
+    }
+  };
+
+  const selectTab = async (id) => {
     if (id === 'settings') {
       setSettingsMsg('');
-      resetDraft();
       setOnSettingsTab(true);
+      await loadSettings();
       return;
     }
     setOnSettingsTab(false);
@@ -653,11 +672,11 @@ export default function EquipmentTracker({ groups = [], onOpenStudent, canEditSe
           )}
 
           <div style={{ display: 'flex', gap: 8 }}>
-            <button type="button" className="btn btn-primary btn-sm" disabled={savingSettings} onClick={saveSettings}>
+            <button type="button" className="btn btn-primary btn-sm" disabled={savingSettings || loadingSettings || !draft} onClick={saveSettings}>
               {savingSettings ? 'שומר...' : 'שמור הגדרות'}
             </button>
-            <button type="button" className="btn btn-ghost btn-sm" disabled={savingSettings} onClick={resetDraft}>
-              שחזור מהשמור
+            <button type="button" className="btn btn-ghost btn-sm" disabled={savingSettings || loadingSettings} onClick={loadSettings}>
+              {loadingSettings ? 'טוען מהשמור...' : 'שחזור מהשמור'}
             </button>
           </div>
         </div>

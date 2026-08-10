@@ -133,6 +133,16 @@ export function normalizeEquipmentSettings(raw = {}) {
   };
 }
 
+/** Preserve settings that an older or stale settings screen did not submit. */
+export function mergeEquipmentSettingsPatch(current = {}, next = {}) {
+  return {
+    ...current,
+    ...next,
+    prices: { ...(current?.prices || {}), ...(next?.prices || {}) },
+    item_info: { ...(current?.item_info || {}), ...(next?.item_info || {}) },
+  };
+}
+
 export function isKidStudent(student) {
   if (!student) return false;
   if (student.isAdult === true || student.is_adult === true) return false;
