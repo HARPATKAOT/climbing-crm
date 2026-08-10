@@ -43,6 +43,7 @@ function StepRow({ done, current, title, children }) {
 function WallShiftPanel({
   employees,
   dueSafety = [],
+  safetyLoadError = '',
   onShiftOpened,
   onRefreshSafety,
   onSignSafety,
@@ -52,8 +53,10 @@ function WallShiftPanel({
 }) {
   const [openShifts, setOpenShifts] = useState([]);
   const [pickedId, setPickedId] = useState('');
+  const [closerId, setCloserId] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  const [loadError, setLoadError] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmMessage, setConfirmMessage] = useState('המקום מסודר ונקי?');
   const [confirmMode, setConfirmMode] = useState('open'); // 'open' | 'close'
@@ -67,16 +70,23 @@ function WallShiftPanel({
 
   const load = async () => {
     try {
-      const [rows, cash] = await Promise.all([
-        fetch('/api/wall-shift/open').then((r) => (r.ok ? r.json() : [])),
-        fetch('/api/cash-register/session').then((r) => (r.ok ? r.json() : null)),
+      const [shiftResponse, cashResponse] = await Promise.all([
+        fetch('/api/wall-shift/open'),
+        fetch('/api/cash-register/session'),
       ]);
+      const [rows, cash] = await Promise.all([
+        shiftResponse.json().catch(() => []),
+        cashResponse.json().catch(() => null),
+      ]);
+      if (!shiftResponse.ok || !cashResponse.ok) {
+        throw new Error(rows?.error || cash?.error || 'טעינת מצב הקיר והקופה נכשלה');
+      }
       setOpenShifts(Array.isArray(rows) ? rows : []);
       setCashOpen(cash?.open || null);
       setCashExpected(cash?.expected_cash ?? null);
-    } catch {
-      setOpenShifts([]);
-      setCashOpen(null);
+      setLoadError('');
+    } catch (error) {
+      setLoadError(error.message || 'טעינת מצב הקיר והקופה נכשלה');
     }
   };
   useEffect(() => { load(); }, []);
@@ -91,7 +101,7 @@ function WallShiftPanel({
   const nameOf = (id) => employees.find((e) => e.id === id)?.name || 'עובד';
 
   const pendingSafety = dueSafety.filter((c) => c.is_due && !c.signed_today);
-  const safetyDone = dueSafety.length === 0 || pendingSafety.length === 0;
+  const safetyDone = !safetyLoadError && (dueSafety.length === 0 || pendingSafety.length === 0);
   const wallOpen = openShifts.length > 0;
   const cashIsOpen = !!cashOpen;
 
@@ -139,6 +149,10 @@ function WallShiftPanel({
       setMsg('יש לפתוח קופה קודם');
       return;
     }
+    if (!safetyDone) {
+      setMsg(safetyLoadError || 'יש להשלים את בדיקות הבטיחות לפני פתיחת הקיר');
+      return;
+    }
     setConfirmMode('open');
     setConfirmOpen(true);
     fetch('/api/settings/staff-attendance')
@@ -167,6 +181,10 @@ function WallShiftPanel({
 
   const beginCloseShift = () => {
     setMsg('');
+    if (!closerId) {
+      setMsg('יש לבחור מי סוגר את הקיר');
+      return;
+    }
     if (cashIsOpen) {
       setPendingWallClose(true);
       setCashMode('close');
@@ -183,25 +201,31 @@ function WallShiftPanel({
     setBusy(true);
     setMsg('');
     try {
+      const failures = [];
       for (const shift of openShifts) {
         const res = await fetch('/api/wall-shift/close', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             employee_id: shift.employee_id,
-            closed_by: shift.employee_id,
+            closed_by: closerId,
           }),
         });
         const body = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(body.error || 'סגירת משמרת נכשלה');
+        if (!res.ok && res.status !== 404) {
+          failures.push(body.error || `סגירת המשמרת של ${nameOf(shift.employee_id)} נכשלה`);
+        }
       }
+      await load();
+      if (failures.length) throw new Error(failures.join(' · '));
       setMsg('המשמרת נסגרה');
+      setCloserId('');
       setConfirmOpen(false);
       setPendingWallClose(false);
       if (typeof onRefreshSafety === 'function') onRefreshSafety();
-      await load();
     } catch (err) {
       setMsg(err.message);
+      await load();
     } finally {
       setBusy(false);
     }
@@ -230,6 +254,11 @@ function WallShiftPanel({
       </div>
 
       <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {loadError && (
+          <div className="alert alert-error" role="alert">
+            <AlertTriangle size={18} /> {loadError}
+          </div>
+        )}
         {!wallOpen && (
           <>
             <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 2 }}>שלבים לפתיחת היום</div>
@@ -247,7 +276,11 @@ function WallShiftPanel({
             </StepRow>
 
             <StepRow done={safetyDone} current={openStep === 2} title="2. חתימה על בדיקות בטיחות">
-              {dueSafety.length === 0 ? (
+              {safetyLoadError ? (
+                <div className="alert alert-error" role="alert">
+                  <AlertTriangle size={16} /> {safetyLoadError}
+                </div>
+              ) : dueSafety.length === 0 ? (
                 <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין בדיקות שחייבות היום</div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -323,15 +356,19 @@ function WallShiftPanel({
                       onChange={(emp) => setPickedId(emp?.id || '')}
                       placeholder="מי פותח את הקיר?"
                       aria-label="בחירת עובד שפותח את הקיר"
-                      disabled={!cashIsOpen}
+                      disabled={!cashIsOpen || !safetyDone}
                     />
                   </div>
                   <button
                     type="button"
                     className="btn btn-primary btn-sm"
-                    disabled={busy || !pickedId || !cashIsOpen}
+                    disabled={busy || !pickedId || !cashIsOpen || !safetyDone}
                     onClick={requestOpen}
-                    title={cashIsOpen ? 'פתיחת קיר אחרי שהקופה כבר פתוחה' : 'יש לפתוח קופה קודם'}
+                    title={!cashIsOpen
+                      ? 'יש לפתוח קופה קודם'
+                      : !safetyDone
+                        ? 'יש להשלים את בדיקות הבטיחות קודם'
+                        : 'פתיחת קיר אחרי שהקופה כבר פתוחה'}
                   >
                     <LogIn size={14} /> פתיחת קיר
                   </button>
@@ -371,10 +408,28 @@ function WallShiftPanel({
                 </div>
               ))}
             </div>
+            <label className="form-group" style={{ margin: 0 }}>
+              <span className="form-label">מי סוגר את הקיר?</span>
+              <AppSelect
+                className="input select"
+                value={closerId}
+                onChange={(event) => setCloserId(event.target.value)}
+              >
+                <option value="">בחירת עובד מורשה...</option>
+                {operators.map((employee) => (
+                  <option key={employee.id} value={employee.id}>{employee.name}</option>
+                ))}
+              </AppSelect>
+            </label>
+            {operators.length === 0 && (
+              <div style={{ fontSize: 12, color: 'var(--amber)' }}>
+                אין עובד פעיל שמורשה לפתוח ולסגור את הקיר.
+              </div>
+            )}
             <button
               type="button"
               className="btn btn-primary"
-              disabled={busy}
+              disabled={busy || !closerId}
               onClick={beginCloseShift}
               style={{ minHeight: 46, fontWeight: 800 }}
             >
@@ -429,8 +484,9 @@ function WallShiftPanel({
                 </div>
               )}
               {confirmMode === 'close' && openShifts.length > 0 && (
-                <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
-                  נסגרת משמרת של: {openShifts.map((s) => nameOf(s.employee_id)).join(', ')}
+                <div style={{ fontSize: 12, color: 'var(--text-3)', display: 'grid', gap: 4 }}>
+                  <span>נסגרת משמרת של: {openShifts.map((s) => nameOf(s.employee_id)).join(', ')}</span>
+                  <span>סוגר בפועל: {nameOf(closerId)}</span>
                 </div>
               )}
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
@@ -438,7 +494,7 @@ function WallShiftPanel({
                   ביטול
                 </button>
                 {confirmMode === 'close' ? (
-                  <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={confirmAndCloseWall}>
+                  <button type="button" className="btn btn-primary btn-sm" disabled={busy || !closerId} onClick={confirmAndCloseWall}>
                     מאשר — סגור משמרת
                   </button>
                 ) : (
@@ -502,28 +558,43 @@ export default function CheckInConsole({ students, groups, operationalOnly = fal
   const [scanning, setScanning] = useState(false);
   const [dueSafety, setDueSafety] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [safetyLoadError, setSafetyLoadError] = useState('');
+  const [checkinsLoadError, setCheckinsLoadError] = useState('');
   const [signingId, setSigningId] = useState(null);
   const [signerByCheck, setSignerByCheck] = useState({});
 
   const refreshSafety = async () => {
     try {
-      const [due, emps] = await Promise.all([
-        fetch('/api/safety/due-today').then((r) => (r.ok ? r.json() : [])),
-        fetch(operationalOnly ? '/api/trainers' : '/api/employees').then((r) => (r.ok ? r.json() : [])),
+      const [dueResponse, employeeResponse] = await Promise.all([
+        fetch('/api/safety/due-today'),
+        fetch(operationalOnly ? '/api/trainers' : '/api/employees'),
       ]);
+      const [due, emps] = await Promise.all([
+        dueResponse.json().catch(() => []),
+        employeeResponse.json().catch(() => []),
+      ]);
+      if (!dueResponse.ok || !employeeResponse.ok) {
+        throw new Error(due?.error || emps?.error || 'טעינת בדיקות הבטיחות והעובדים נכשלה');
+      }
       setDueSafety(Array.isArray(due) ? due : []);
       setEmployees(Array.isArray(emps) ? emps : []);
+      setSafetyLoadError('');
     } catch (err) {
       console.error(err);
+      setSafetyLoadError(err.message || 'טעינת בדיקות הבטיחות והעובדים נכשלה');
     }
   };
 
   const refreshCheckins = async () => {
     try {
-      const data = await fetch('/api/check-ins').then(r => r.ok ? r.json() : []);
-      setCheckIns(data);
+      const response = await fetch('/api/check-ins');
+      const data = await response.json().catch(() => []);
+      if (!response.ok) throw new Error(data?.error || 'טעינת הכניסות נכשלה');
+      setCheckIns(Array.isArray(data) ? data : []);
+      setCheckinsLoadError('');
     } catch (err) {
       console.error(err);
+      setCheckinsLoadError(err.message || 'טעינת הכניסות נכשלה');
     }
   };
 
@@ -728,6 +799,7 @@ export default function CheckInConsole({ students, groups, operationalOnly = fal
       {showWallOperations && <WallShiftPanel
         employees={employees}
         dueSafety={dueSafety}
+        safetyLoadError={safetyLoadError}
         onShiftOpened={() => refreshSafety()}
         onRefreshSafety={refreshSafety}
         onSignSafety={handleSignSafety}
@@ -742,6 +814,12 @@ export default function CheckInConsole({ students, groups, operationalOnly = fal
             <span>מסוף כניסה</span>
             <button type="button" className="btn btn-ghost btn-sm" onClick={refreshCheckins}><RefreshCw size={14} /></button>
           </div>
+
+          {checkinsLoadError && (
+            <div className="alert alert-error" role="alert" style={{ marginBottom: 16 }}>
+              <AlertTriangle size={18} /> {checkinsLoadError}
+            </div>
+          )}
 
           <div className="form-group" style={{ position: 'relative' }}>
             <label className="form-label">חיפוש מתאמן לפי שם</label>

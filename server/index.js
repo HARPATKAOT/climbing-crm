@@ -489,6 +489,13 @@ import {
 } from './staffAttendanceSettings.js';
 import { isDailySafetyCheck } from './wallOperatingDay.js';
 import {
+  employeeCanOperateWall,
+  openWallShifts,
+  requireQualifiedWallCloser,
+  requireWallSafetyComplete,
+  wallStationEmployee,
+} from './wallOperations.js';
+import {
   getConversation,
   listConversations,
   replyToParent,
@@ -10288,7 +10295,7 @@ app.post('/api/shifts/approve', (req, res) => {
 // בתפקיד „מפעיל קיר” עם השעות בפועל — זו השורה שמסך השכר סוכם.
 
 app.get('/api/wall-shift/open', (req, res) => {
-  const open = (db.get('shift_hours') || []).filter((s) => s.status === 'open');
+  const open = openWallShifts(db.get('shift_hours') || []);
   res.json(open.map((s) => ({
     id: s.id,
     employee_id: s.employee_id,
@@ -10302,13 +10309,23 @@ app.post('/api/wall-shift/open', async (req, res) => {
   if (!employeeId) return res.status(400).json({ error: 'employee_id is required' });
   const emp = (db.get('employees') || []).find((e) => e.id === employeeId);
   if (!emp) return res.status(404).json({ error: 'העובד לא נמצא' });
-  if (!employeeCanOpenWall(emp)) {
+  if (!employeeCanOperateWall(emp)) {
     return res.status(403).json({ error: 'העובד אינו מורשה לפתוח קיר' });
   }
   try {
     requireOpenCashSession(db);
   } catch (err) {
     return res.status(409).json({ error: err.message, code: err.code || 'CASH_CLOSED' });
+  }
+  const dueSafety = db.getSafetyDueToday() || [];
+  try {
+    requireWallSafetyComplete(dueSafety);
+  } catch (err) {
+    return res.status(err.status || 409).json({
+      error: err.message,
+      code: err.code || 'SAFETY_PENDING',
+      due_safety: (err.pending || []).map((check) => ({ id: check.id, name: check.name })),
+    });
   }
   const settings = await readStaffAttendanceSettings(db, supa);
   if (confirmed !== true) {
@@ -10319,10 +10336,9 @@ app.post('/api/wall-shift/open', async (req, res) => {
     });
   }
   const shift = db.clockIn(employeeId, 'counter_shift', 'משמרת קיר — מסוף כניסה');
-  const dueSafety = (db.getSafetyDueToday() || []).filter((c) => c.is_due && !c.signed_today);
   res.status(201).json({
     shift,
-    due_safety: dueSafety,
+    due_safety: [],
     confirm_message: settings.wall_open_confirm_message,
   });
 });
@@ -10341,14 +10357,15 @@ app.post('/api/wall-shift/close', async (req, res) => {
 
   // מי שסוגר לא חייב להיות מי שפתח — מדריך אחר יכול לסגור בשם מי שכבר הלך.
   // אם לא צוין סוגר, מניחים שהעובד סוגר לעצמו.
-  let closerNote = '';
-  if (closedById && closedById !== employeeId) {
-    const closer = (db.get('employees') || []).find((e) => e.id === closedById);
-    if (!closer) return res.status(404).json({ error: 'העובד הסוגר לא נמצא' });
-    closerNote = `נסגר ע"י ${closer.name}`;
+  let closer;
+  try {
+    closer = requireQualifiedWallCloser(db.get('employees') || [], closedById);
+  } catch (err) {
+    return res.status(err.status || 400).json({ error: err.message });
   }
+  const closerNote = closer.id === employeeId ? '' : `נסגר ע"י ${closer.name}`;
 
-  const shift = db.clockOut(employeeId, closerNote, closedById || null);
+  const shift = db.clockOut(employeeId, closerNote, closer.id, 'counter_shift');
   if (!shift) return res.status(404).json({ error: 'אין משמרת פתוחה לעובד הזה' });
 
   // שורת השכר: חלון הפעלת קיר פחות דקות שיבוצים שעתיים חופפים (בלי כפל).
@@ -10871,20 +10888,7 @@ app.get('/api/trainers', (req, res) => {
   let employees = db.get('employees') || [];
   res.json(employees
     .filter((employee) => employee.is_active !== false && employee.active !== false)
-    .map((employee) => ({
-      id: employee.id,
-      name: employee.name || '',
-      role: employee.role || 'trainer',
-      is_active: employee.is_active !== false && employee.active !== false,
-      is_wall_staff: employeeIsWallStaff(employee),
-      can_open_wall: employee.can_open_wall === true,
-      can_sign_daily_safety: employee.can_sign_daily_safety === true,
-      can_operate_cash: employee.can_operate_cash === true,
-      // The schedule screen only offers an employee for a slot they are marked
-      // for, so the roles list has to travel with the name — without it every
-      // dropdown there is empty but for people already assigned.
-      certifications: Array.isArray(employee.certifications) ? employee.certifications : [],
-    })));
+    .map(wallStationEmployee));
 });
 
 const EMPLOYEE_OPERATIONAL_FIELDS = new Set([

@@ -116,7 +116,9 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
 
   const refreshRegister = useCallback(async () => {
     try {
-      const data = await fetch('/api/cash-register').then((r) => (r.ok ? r.json() : []));
+      const data = isOwner
+        ? await fetch('/api/cash-register').then((r) => (r.ok ? r.json() : []))
+        : [];
       setShifts(Array.isArray(data) ? data : []);
       const emps = await fetch('/api/employees').then((r) => (r.ok ? r.json() : []));
       const list = Array.isArray(emps) ? emps : [];
@@ -599,7 +601,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
                 <div style={{ fontSize: 12, color: 'var(--text-3)' }}>
                   {isOwner
                     ? 'לחיצה על שורה פותחת פירוט · זיכוי וקישורים נמצאים בתוך הפירוט'
-                    : 'לחיצה על שורה פותחת פירוט · זיכוי זמין לעסקאות שלך בתוך הפירוט'}
+                    : 'לחיצה על שורה פותחת פירוט · קישורי תשלום זמינים לעסקאות היום'}
                 </div>
               </div>
               <button className="btn btn-ghost btn-sm" onClick={refreshSales} disabled={salesLoading}>
@@ -906,7 +908,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
                                       </a>
                                     </>
                                   )}
-                                  {canDownloadCharge && (
+                                  {isOwner && canDownloadCharge && (
                                     <button
                                       type="button"
                                       className="btn btn-ghost btn-sm"
@@ -922,7 +924,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
                                       הורדת חשבונית
                                     </button>
                                   )}
-                                  {canDownloadCharge && (
+                                  {isOwner && canDownloadCharge && (
                                     <button
                                       type="button"
                                       className="btn btn-ghost btn-sm"
@@ -935,7 +937,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
                                       הדפסת חשבונית
                                     </button>
                                   )}
-                                  {canDownloadRefund && (
+                                  {isOwner && canDownloadRefund && (
                                     <button
                                       type="button"
                                       className="btn btn-ghost btn-sm"
@@ -951,7 +953,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
                                       הורדת מסמך זיכוי
                                     </button>
                                   )}
-                                  {canRefund && (
+                                  {isOwner && canRefund && (
                                     <>
                                       <span className="pos-sale-detail-actions-spacer" />
                                       <button
@@ -981,7 +983,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
             </div>
           </div>
 
-          <div className="card">
+          {isOwner && <div className="card">
             <div className="section-title" style={{ padding: '14px 16px 0' }}>סגירות קופה</div>
             <div className="table-wrap">
               <table className="crm-table">
@@ -1024,7 +1026,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
                 </tbody>
               </table>
             </div>
-          </div>
+          </div>}
         </div>
       )}
 

@@ -88,7 +88,7 @@ const TEAM_RULES = [
   { methods: WRITE, pattern: /^\/check-ins(\/|$)/, module: 'checkin', level: 'edit' },
   { methods: READ, pattern: /^\/wall-shift\/(open|close)$/, module: 'checkin' },
   { methods: WRITE, pattern: /^\/wall-shift\/(open|close)$/, module: 'checkin', level: 'edit' },
-  { methods: READ, pattern: /^\/settings\/staff-attendance$/, module: 'attendance' },
+  { methods: READ, pattern: /^\/settings\/staff-attendance$/, anyModules: ['attendance', 'checkin', 'shifts'] },
 
   { methods: READ, pattern: /^\/equipment-settings$/, module: 'equipment' },
   { methods: READ, pattern: /^\/(equipment|student-equipment)(\/|$)/, module: 'equipment' },

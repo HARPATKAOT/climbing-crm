@@ -1779,11 +1779,15 @@ export const db = {
   // closedByEmployeeId: מי בפועל ביצע את הסגירה, כשזה שונה ממי שפתח את
   // המשמרת (למשל מדריך שממשיך על הקיר סוגר בשם מי שכבר הלך). השעות עדיין
   // משולמות לבעל המשמרת — זה רק תיעוד מי אישר את הסגירה.
-  clockOut: (employeeId, notes, closedByEmployeeId) => {
+  clockOut: (employeeId, notes, closedByEmployeeId, activityType = null) => {
     const data = readDb();
     if (!data.shift_hours) data.shift_hours = [];
 
-    const openShift = data.shift_hours.find(s => s.employee_id === employeeId && s.status === 'open');
+    const openShift = data.shift_hours.find(s => (
+      s.employee_id === employeeId &&
+      s.status === 'open' &&
+      (!activityType || s.activity_type === activityType)
+    ));
     if (!openShift) return null;
 
     openShift.status = 'closed';
