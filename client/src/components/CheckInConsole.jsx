@@ -487,7 +487,7 @@ function checkInDocumentsBadge(checkIn) {
   return { className: 'badge badge-red', Icon: ShieldAlert, label };
 }
 
-export default function CheckInConsole({ students, groups, operationalOnly = false }) {
+export default function CheckInConsole({ students, groups, operationalOnly = false, showWallOperations = !operationalOnly }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClimber, setSelectedClimber] = useState(null);
   const [selectedPasses, setSelectedPasses] = useState([]);
@@ -723,7 +723,7 @@ export default function CheckInConsole({ students, groups, operationalOnly = fal
         </div>
       )}
 
-      {!operationalOnly && <WallShiftPanel
+      {showWallOperations && <WallShiftPanel
         employees={employees}
         dueSafety={dueSafety}
         onShiftOpened={() => refreshSafety()}

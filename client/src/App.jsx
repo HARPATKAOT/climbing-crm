@@ -525,7 +525,7 @@ export default function App() {
         <main className="page-content">
           <Suspense fallback={<PageLoader />}>
             {page === 'dashboard' && (sharedStation
-              ? <CheckInConsole students={students} groups={groups} operationalOnly />
+              ? <CheckInConsole students={students} groups={groups} operationalOnly showWallOperations />
               : <DailyWork
                   students={students}
                   parents={parents}
