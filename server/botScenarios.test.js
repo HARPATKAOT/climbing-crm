@@ -797,11 +797,14 @@ test('גם למי שיש ציוד — צריך להיכנס לקישור ולס�
     // בכל זאת להיכנס ולסמן, ולכן הפריט נשאר חסר במערכת.
     assert.match(link.הערה, /בכל מקרה/);
     assert.match(link.הערה, /נשאר חסר/);
-    assert.match(link.מה_לומר, /לסמן מה כבר יש/);
+    // וזה נאמר כבר בהודעה הראשונה, לא רק כשההורה מספר שיש לו.
+    assert.match(link.מה_לומר, /בהודעה הראשונה/);
+    assert.match(link.מה_לומר, /לסמן פריט שכבר יש/);
   });
 
   const { CUSTOMER_TOOL_RULES } = await import('./botToolTurn.js');
   assert.match(CUSTOMER_TOOL_RULES, /אל תאמר «מצוין, אין צורך»/);
+  assert.match(CUSTOMER_TOOL_RULES, /כבר בהודעה הראשונה/);
 });
 
 test('חבילת ההרשמה: שלושה שלבים בסדר, ושלב הציוד בלי סכום', async () => {
