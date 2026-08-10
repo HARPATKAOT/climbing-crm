@@ -60,3 +60,23 @@ test('whoever already paid rises to the top — they are waiting on a click, not
   });
   assert.deepEqual(queue.map((r) => r.name), ['שילם', 'תמר לוי', 'ממתין לכסף']);
 });
+
+test('a row removed by hand does not come back the same day', () => {
+  // ההסרה חייבת להחזיק, אחרת היא חסרת ערך והרשימה מפסיקה להיקרא.
+  const parts = {
+    checkIns: [{ climber_id: 's2', timestamp: '2026-08-10T08:00:00.000Z' }],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: () => ({ state: 'missing' }),
+    sales: [
+      { id: 'ps1', payment_method: 'online', status: 'paid', created_at: '2026-08-10T09:00:00.000Z', customer_name: 'שילם' },
+    ],
+  };
+  assert.deepEqual(buildPendingQueue(parts).map((r) => r.name), ['שילם', 'תמר לוי']);
+  assert.deepEqual(
+    buildPendingQueue({ ...parts, dismissedIds: ['entry:s2'] }).map((r) => r.name),
+    ['שילם']
+  );
+  assert.deepEqual(buildPendingQueue({ ...parts, dismissedIds: ['entry:s2', 'payment:ps1'] }), []);
+});

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Award, CheckCircle2, ClipboardList, CreditCard, Hourglass, RefreshCw, ShieldAlert,
+  Award, CheckCircle2, ClipboardList, CreditCard, Hourglass, RefreshCw, ShieldAlert, X,
 } from 'lucide-react';
 import EmployeeSelect from '../EmployeeSelect.jsx';
 
@@ -81,6 +81,25 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'שמירת המבחן נכשלה');
       await load();
       onDone?.(`נחתם מבחן אבטחה ל${row.name}`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  /** הסרה ידנית — למי שהלך, או למקרה שהצוות יודע משהו שהמערכת לא. */
+  const dismissRow = async (row) => {
+    setSavingId(row.id);
+    setError('');
+    try {
+      const res = await fetch('/api/checkin/pending/dismiss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ row_id: row.id, employee_id: pickedFor(row) || null }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'ההסרה נכשלה');
+      await load();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -208,6 +227,16 @@ export default function PendingQueue({ employees = [], onDone, refreshKey = 0 })
                           <Award size={14} /> {savingId === row.id ? 'שומר...' : 'עבר מבחן'}
                         </button>
                       )}
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-icon btn-sm"
+                        disabled={savingId === row.id}
+                        title="הסרה מהרשימה"
+                        aria-label={`הסרת ${row.name} מהרשימה`}
+                        onClick={() => dismissRow(row)}
+                      >
+                        <X size={14} />
+                      </button>
                     </div>
                   </td>
                 </tr>

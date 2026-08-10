@@ -326,28 +326,27 @@ export default function ClimberEntryPanel({
         // שמשמאל, והתשלום נגבה שם — כך אין מצב של „אישור כניסה” בלי תמורה.
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ fontSize: 12, color: 'var(--text-3)' }}>אין כרטיסייה או מנוי — מכרו כניסה:</div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {(wallProducts || []).map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className="btn btn-primary btn-sm"
-                onClick={() => addToCart?.(item)}
-              >
-                <Plus size={13} /> {item.name} · ₪{item.price}
-              </button>
-            ))}
-            {(wallProducts || []).length === 0 && (
-              <span style={{ fontSize: 12, color: 'var(--amber)' }}>
-                אין מוצר שמסומן כמקנה כניסה לקיר — סמנו במחירון.
-              </span>
-            )}
-          </div>
-          {cartCount > 0 && (
-            <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-              נוסף לעגלה — לגבות תשלום, ואז הכניסה נרשמת מהכרטיסייה שנמכרה.
-            </div>
+          {(wallProducts || []).map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className="btn btn-primary btn-full"
+              style={{ minHeight: 44, fontWeight: 700, fontSize: 15 }}
+              onClick={() => addToCart?.(item)}
+            >
+              <Plus size={15} /> {item.name} · ₪{item.price}
+            </button>
+          ))}
+          {(wallProducts || []).length === 0 && (
+            <span style={{ fontSize: 12, color: 'var(--amber)' }}>
+              אין מוצר כניסה שמסומן כמקנה טיפוס בקיר — סמנו במחירון.
+            </span>
           )}
+          <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
+            {cartCount > 0
+              ? 'נוסף לעגלה — לגבות תשלום, ואז לרשום את הכניסה.'
+              : 'כרטיסייה או מנוי — מהקטלוג שמשמאל.'}
+          </div>
         </div>
       )}
 
