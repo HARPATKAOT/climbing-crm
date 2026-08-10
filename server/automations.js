@@ -280,6 +280,22 @@ export function findStalledSignups({ days = 5, today = israelDateStr(), store = 
     .sort((a, b) => b.daysWaiting - a.daysWaiting);
 }
 
+/**
+ * טופס שמולא כדי להיכנס לקיר — לא הרשמה לחוג.
+ *
+ * ההבחנה הזאת קיימת בכל מקום אחר במערכת (`participation_scope`), והיא נעצרה
+ * בדיוק לפני הודעת האישור: מי שבא לטפס וחתם בדלפק קיבל הבטחה שנחזור אליו
+ * לתאם שיבוץ לחוג שהוא לא ביקש.
+ */
+export function isWallScope(scope) {
+  return String(scope || '').trim() === 'wall';
+}
+
+export const WALL_FORM_RECEIVED_MESSAGE =
+  'שלום {{parentName}},\n'
+  + 'קיבלנו את הפרטים ואת הצהרת הבריאות של {{name}} — הכול נשמר במערכת ואפשר להיכנס לקיר.\n'
+  + 'אפשר להשיב להודעה הזו בכל שאלה.';
+
 export const automationsService = {
   triggerEvent: async (eventName, payload) => {
     try {
@@ -326,6 +342,25 @@ export const automationsService = {
 
       const windowOpen = parent ? canSendFreeform(parent, 'whatsapp') : false;
       const varKeys = automation.action_payload?.templateVarKeys;
+
+      // מי שמילא את הטופס כדי להיכנס לקיר לא נרשם לחוג. התבנית המאושרת
+      // מסתיימת ב„נחזור אליכם בהקדם לתיאום השיבוץ לחוג” — הבטחה שאיש לא
+      // התכוון אליה, שנשלחה למי שבא לטפס שעה קודם. אין תבנית מאושרת לנוסח
+      // הנכון, ולכן בחלון פתוח נשלח הנוסח החופשי, ומחוץ לחלון עדיף לא לשלוח
+      // כלום מאשר לשלוח הבטחה שגויה.
+      if (isWallScope(enriched.participation_scope)) {
+        if (!windowOpen) {
+          console.warn(`🤖 Automation skipped for ${phone}: wall-scope form and no wall template`);
+          return { sent: false, reason: 'wall_scope_no_template' };
+        }
+        const wallText = fillMessageTemplate(
+          automation.action_payload?.messageWall || WALL_FORM_RECEIVED_MESSAGE,
+          enriched
+        );
+        console.log(`🤖 Sending wall-scope form confirmation to ${phone}`);
+        await whatsappService.sendTextMessage(phone, wallText, true);
+        return { sent: true, via: 'freeform', scope: 'wall' };
+      }
 
       if (templateName && (!windowOpen || automation.action_payload?.preferTemplate)) {
         const vars = templateVariableValues(enriched, varKeys);

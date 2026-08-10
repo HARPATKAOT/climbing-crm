@@ -15757,7 +15757,13 @@ app.post('/api/public/health-declarations', publicFormRateLimit, async (req, res
       healthSignedAt: signedAt,
       waiverSignedAt: signedAt,
     }) || student;
-    automationsService.triggerEvent('status_changed', { ...student, new_status: 'health_signed' });
+    // ההקשר נוסע עם האירוע: טופס קיר אינו הרשמה לחוג, ואישור הקבלה חייב
+    // לדעת את ההבדל לפני שהוא מבטיח משהו.
+    automationsService.triggerEvent('status_changed', {
+      ...student,
+      new_status: 'health_signed',
+      participation_scope: normalizeParticipationScope(template?.slug || templateSlug || 'wall'),
+    });
   } else {
     // Keep the CRM student's id when the staff link included studentId but the
     // server cache was empty (common after Render restart before reload).
