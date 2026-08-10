@@ -50,7 +50,15 @@ function applyLineDiscount(listPrice, discountType, discountValue) {
 }
 
 /** `onManageProducts` opens the catalogue tab — omitted for non-owners. */
-export default function PosSale({ onManageProducts = null, employees = [], isOwner = false, requireSeller = false }) {
+export default function PosSale({
+  onManageProducts = null,
+  employees = [],
+  isOwner = false,
+  requireSeller = false,
+  // חלונית נוספת מתחת ללקוח הנבחר. מסוף הכניסה שותל בה את אישור הכניסה
+  // והניקוב, כדי שבחירת הלקוח, מצב המסמכים והקופה יהיו על מסך אחד.
+  renderCustomerExtra = null,
+}) {
   const [pricelist, setPricelist] = useState([]);
   const [students, setStudents] = useState([]);
   const [parents, setParents] = useState([]);
@@ -1255,6 +1263,11 @@ export default function PosSale({ onManageProducts = null, employees = [], isOwn
               </AppSelect>
             </div>
           )}
+
+          {typeof renderCustomerExtra === 'function' && renderCustomerExtra({
+            studentId: selectedStudentId,
+            student: selectedStudent || null,
+          })}
 
           {contactFieldsVisible ? (
             <div className="form-grid-2" style={{ gap: 8 }}>

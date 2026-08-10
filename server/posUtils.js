@@ -120,6 +120,9 @@ export function buildPassFromItem({
     grants_wall_climbing: item.grants_wall_climbing === true,
     family_shared: item.family_shared === true,
     shared_household_id: item.family_shared === true ? (item.shared_household_id || null) : null,
+    // כרטיסייה מועברת אינה אישית: מי שמחזיק בה יכול לנקב בה גם לחבר שבא איתו,
+    // כולל מי שאין לו תיק. „משפחתית” היא דבר אחר — היא משותפת לבני הבית בלבד.
+    transferable: item.transferable === true && productType === PRODUCT_TYPES.PUNCH_CARD,
     created_at: now,
     updated_at: now,
   };

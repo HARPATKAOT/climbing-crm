@@ -94,13 +94,17 @@ export const DEFAULT_ROLES = Object.freeze([
 // the employee roster. Keep this role built in so every existing installation
 // receives the safe preset without re-seeding roles an owner deliberately
 // edited or deleted. Each signed action still asks which employee performed it.
+// אין כאן `dashboard`: מסך העבודה הוא של המנהל והמזכירה — לידים, משימות
+// ופניות. עמדת הקיר מקבלת את מסוף הכניסה בלבד, שבו נמצא כל מה שהיא צריכה.
+// `safety_tests` נדרש כדי לחתום בדלפק על מבחן אבטחה שמתאמן עבר עכשיו עם מדריך.
 export const WALL_STATION_ROLE = Object.freeze(preset('wall-station', 'עמדת קיר משותפת', {
-  dashboard: 'view',
   checkin: 'edit',
   customers: 'view',
   pos: 'edit',
   cash_management: 'edit',
   safety_checks: 'edit',
+  safety_tests: 'edit',
+  health: 'view',
   employees: 'view',
   shifts: 'edit',
 }));

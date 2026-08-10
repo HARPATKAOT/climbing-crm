@@ -11,17 +11,32 @@ export const STAFF_ATTENDANCE_SETTINGS_KEY = 'staff_attendance';
 export const DEFAULT_STAFF_ATTENDANCE_SETTINGS = {
   minutes_before_shift_ok: 15,
   wall_open_confirm_message: 'המקום מסודר ונקי?',
+  // צ׳ק-ליסט הסגירה — כל שורה תיבת סימון נפרדת במסוף. משפט אחד ארוך נקרא
+  // כמו אישור טכני ומסומן בלי לקרוא; פריטים נפרדים מחייבים מעבר על כל אחד.
+  wall_close_checklist: [
+    'אוטומטיים למעלה',
+    'שמשיות סגורות',
+    'פח רוקן',
+    'דלפק נקי ומסודר',
+  ],
 };
 
 export function normalizeStaffAttendanceSettings(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
   const minutes = Number(src.minutes_before_shift_ok);
+  const checklist = (Array.isArray(src.wall_close_checklist) ? src.wall_close_checklist : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
   return {
     minutes_before_shift_ok:
       Number.isFinite(minutes) && minutes >= 0 ? Math.min(180, Math.floor(minutes)) : 15,
     wall_open_confirm_message:
       String(src.wall_open_confirm_message || '').trim()
       || DEFAULT_STAFF_ATTENDANCE_SETTINGS.wall_open_confirm_message,
+    wall_close_checklist:
+      checklist.length > 0
+        ? checklist
+        : [...DEFAULT_STAFF_ATTENDANCE_SETTINGS.wall_close_checklist],
   };
 }
 

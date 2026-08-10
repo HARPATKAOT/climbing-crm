@@ -1745,15 +1745,20 @@ export const db = {
     return value;
   },
 
-  clockIn: (employeeId, activityType, notes) => {
+  // extra: שדות נוספים על שורת המשמרת (למשל `wall_role` ממסוף הכניסה). שורת
+  // המשמרת היא אוסף kv, ולכן שדה חדש נשמר בלי שינוי סכימה.
+  clockIn: (employeeId, activityType, notes, extra = {}) => {
     const data = readDb();
     if (!data.shift_hours) data.shift_hours = [];
-    
-    // Close any existing open shift for this employee
+
+    // Close any existing open shift for this employee. סגירה כזאת לא מייצרת
+    // שורת שכר, ולכן היא מסומנת — אחרת שעות נעלמות בלי שאיש ידע.
     data.shift_hours.forEach(s => {
       if (s.employee_id === employeeId && s.status === 'open') {
         s.status = 'closed';
         s.clock_out = new Date().toISOString();
+        s.auto_closed = true;
+        s.notes = (s.notes ? s.notes + ' | ' : '') + 'נסגרה אוטומטית בכניסה חדשה';
       }
     });
 
@@ -1765,9 +1770,10 @@ export const db = {
       activity_type: activityType || 'counter_shift',
       notes: notes || '',
       status: 'open',
-      approved_by_accounting: false
+      approved_by_accounting: false,
+      ...extra,
     };
-    
+
     data.shift_hours.push(newShift);
     writeDb(data);
     for (const shift of data.shift_hours.filter((s) => s.employee_id === employeeId)) {

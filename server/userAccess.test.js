@@ -157,8 +157,11 @@ test('a shared wall station receives operational access without becoming an empl
   assert.equal(context.account_type, 'shared_station');
   assert.equal(context.employee_id, null);
   assert.deepEqual(context.roleIds, ['wall-station']);
-  assert.equal(context.modules.dashboard, 'view');
+  // מסך העבודה הוא של המנהל והמזכירה — לידים, משימות ופניות. עמדת הקיר
+  // מקבלת את מסוף הכניסה, שבו נמצא כל מה שהיא צריכה, ולא את שניהם.
+  assert.equal(context.modules.dashboard, 'none');
   assert.equal(context.modules.checkin, 'edit');
+  assert.equal(context.modules.safety_tests, 'edit');
   assert.equal(context.modules.pos, 'edit');
   assert.equal(context.modules.cash_management, 'edit');
   assert.equal(context.modules.safety_checks, 'edit');

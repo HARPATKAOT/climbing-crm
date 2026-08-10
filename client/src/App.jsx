@@ -80,7 +80,8 @@ const PAGE_PATHS = {
 const PATH_TO_PAGE = Object.fromEntries(
   Object.entries(PAGE_PATHS).map(([key, path]) => [path, key])
 );
-PATH_TO_PAGE['/wall-operations'] = 'dashboard';
+// כתובת ישנה של תפעול הקיר — היום הכול חי במסוף הכניסה.
+PATH_TO_PAGE['/wall-operations'] = 'checkin';
 
 // Public routes are handled outside App (main.jsx). Never redirect these into the CRM shell.
 const PAGE_MODULES = {
@@ -107,7 +108,7 @@ function pathToPage(pathname) {
 
 const PAGE_TITLES = {
   dashboard:  { title: 'מסך העבודה שלי',          sub: 'כל המשימות והפניות שדורשות טיפול היום' },
-  checkin:    { title: 'מסוף כניסה מהירה',       sub: 'רישום כניסות וצ׳ק-אין של לקוחות ומנויים' },
+  checkin:    { title: 'מסוף כניסה',             sub: 'פתיחת משמרת, קופה, בדיקות, כניסת עובדים וקבלת מתאמנים' },
   leads:      { title: 'לקוחות ולידים',           sub: 'ניהול מאגר המתאמנים' },
   schedule:   { title: 'לוח חוגים',               sub: 'ניהול שיעורים ונוכחות' },
   equipment:  { title: 'ציוד לאימונים',           sub: 'מעקב תשלום ומסירה של נעליים, חולצה ומגנזיום' },
@@ -324,12 +325,7 @@ export default function App() {
   }, [coreReloadKey, isOwner, user?.modules]); // eslint-disable-line react-hooks/exhaustive-deps
   const [showNotifications, setShowNotifications] = useState(false);
   const sharedStation = user?.account_type === 'shared_station';
-  const info = page === 'dashboard' && sharedStation
-    ? {
-        title: 'מסך תפעול הקיר',
-        sub: 'פתיחת קופה, בדיקות בטיחות, פתיחת קיר וסגירת המשמרת במקום אחד',
-      }
-    : (PAGE_TITLES[page] || {});
+  const info = PAGE_TITLES[page] || {};
 
   // Unread notification count (newest first)
   const leadTs = (s) => {
@@ -391,7 +387,7 @@ export default function App() {
                 <span className="nav-icon-wrap">
                   <Icon className="nav-icon" size={17} strokeWidth={2} />
                 </span>
-                <span>{sharedStation && n.key === 'dashboard' ? 'מסך עבודה' : n.label}</span>
+                <span>{n.label}</span>
                 {n.key === 'leads' && newLeadsCount > 0 && (
                   <span className="nav-badge">{newLeadsCount}</span>
                 )}
@@ -524,16 +520,23 @@ export default function App() {
         {/* Page Content */}
         <main className="page-content">
           <Suspense fallback={<PageLoader />}>
-            {page === 'dashboard' && (sharedStation
-              ? <CheckInConsole students={students} groups={groups} operationalOnly showWallOperations />
-              : <DailyWork
-                  students={students}
-                  parents={parents}
-                  groups={groups}
-                  setParents={setParents}
-                  onNavigate={navigate}
-                />)}
-            {page === 'checkin'    && <CheckInConsole students={students} groups={groups} operationalOnly={!isOwner} />}
+            {page === 'dashboard' && (
+              <DailyWork
+                students={students}
+                parents={parents}
+                groups={groups}
+                setParents={setParents}
+                onNavigate={navigate}
+              />
+            )}
+            {page === 'checkin'    && (
+              <CheckInConsole
+                students={students}
+                groups={groups}
+                operationalOnly={!isOwner}
+                canSell={isOwner || moduleAtLeast('pos', 'edit')}
+              />
+            )}
             {page === 'leads'      && (
               <Leads
                 students={students}

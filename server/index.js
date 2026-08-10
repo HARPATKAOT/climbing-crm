@@ -305,7 +305,9 @@ import {
   passPunchBlockReason,
   passPunchSafetyNote,
   wallDocumentsStatus,
+  testsForStudent,
 } from './passPunchEligibility.js';
+import { lastVisit, lastVisitLabel } from './lastVisit.js';
 import { runHealthExpiryReminders, runParticipationDocumentReminders } from './participationReminders.js';
 import { OPERATIONAL_LIST, migrateToTwoBroadcastLists } from './broadcastListMigration.js';
 import {
@@ -481,22 +483,28 @@ import {
 import {
   readStaffAttendanceSettings,
   writeStaffAttendanceSettings,
-  employeeCanOpenWall,
   employeeCanSignDailySafety,
   employeeIsWallStaff,
-  requireOpenCashSession,
-  overlappingPaidMinutes,
-  earlyArrivalNote,
 } from './staffAttendanceSettings.js';
 import { isDailySafetyCheck } from './wallOperatingDay.js';
 import {
   employeeCanOperateWall,
   openWallShifts,
+  pendingWallSafetyChecks,
   requireQualifiedWallCloser,
-  requireWallSafetyComplete,
   wallOpeningSafetyChecks,
   wallStationEmployee,
 } from './wallOperations.js';
+import {
+  WALL_ACTIVITY_TYPE,
+  WALL_ROLE,
+  wallShiftOpener,
+  wallShiftStage,
+  canClockOut,
+  qualifiedClosersOnShift,
+  canJoinShift,
+  buildWallPayrollRow,
+} from './wallShift.js';
 import {
   getConversation,
   listConversations,
@@ -10346,8 +10354,108 @@ app.post('/api/shifts/approve', (req, res) => {
 });
 
 // ─── משמרת קיר מהמסוף ────────────────────────────────────────────────────────
-// פתיחה וסגירה של משמרת מפעיל קיר ממסוף הכניסה. הסגירה יוצרת שורת עבודה
-// בתפקיד „מפעיל קיר” עם השעות בפועל — זו השורה שמסך השכר סוכם.
+// פתיחת הקיר היא תהליך: כניסה למשמרת → פתיחת קופה → בדיקת חבלים ומכשירים.
+// שעון השכר מתחיל בשלב הראשון, כי גם הבדיקות הן עבודה. הסגירה יוצרת שורת
+// עבודה בתפקיד „הפעלת קיר” עם השעות בפועל — זו השורה שמסך השכר סוכם.
+
+/** סגירת משמרת אחת + שורת השכר שלה. */
+async function closeOneWallShift(employeeId, { closerNote = '', closedById = null } = {}) {
+  const shift = db.clockOut(employeeId, closerNote, closedById, WALL_ACTIVITY_TYPE);
+  if (!shift) return { shift: null, row: null };
+  const cin = israelLocalParts(shift.clock_in);
+  const cout = israelLocalParts(shift.clock_out);
+  const settings = await readStaffAttendanceSettings(db, supa);
+  const fields = buildWallPayrollRow({
+    shift,
+    cin,
+    cout,
+    dayAssignments: (db.get('work_assignments') || []).filter(
+      (r) => r.employee_id === employeeId && r.date === cin?.date
+    ),
+    roleLabel: await systemRoleLabel(SYSTEM_ROLE_KEYS.WALL_OPERATOR),
+    minutesBeforeShiftOk: settings.minutes_before_shift_ok,
+    closerNote,
+  });
+  const row = fields ? db.insert('work_assignments', withFrozenPay(fields)) : null;
+  return { shift, row };
+}
+
+/**
+ * כל מה שהמסוף צריך כדי לצייר את עצמו, בקריאה אחת.
+ *
+ * המסך שאל קודם שלוש שאלות נפרדות (משמרות, קופה, בטיחות) והרכיב מהן מצב
+ * בעצמו — כך שתשובה אחת שאיחרה הציגה שלב שכבר עבר.
+ */
+async function wallShiftState() {
+  const employees = db.get('employees') || [];
+  const byId = new Map(employees.map((e) => [e.id, e]));
+  const shiftHours = db.get('shift_hours') || [];
+  const open = openWallShifts(shiftHours);
+  const opener = wallShiftOpener(shiftHours);
+  const cash = sessionSnapshot(db);
+  const dueSafety = db.getSafetyDueToday() || [];
+  const pendingSafety = pendingWallSafetyChecks(dueSafety);
+  const { stage, step } = wallShiftStage({
+    opener,
+    cashOpen: !!cash.open,
+    pendingSafety,
+  });
+  const onShiftIds = new Set(open.map((s) => s.employee_id));
+  const wallStaff = employees.filter(employeeIsWallStaff);
+
+  // רגע השלמת התהליך נחתם כאן ולא במסך: אם המסוף נסגר או רוענן בדיוק עכשיו,
+  // היום עדיין נפתח. בלי החותמת הזאת ספירת הקופה שבסגירה הייתה מחזירה את
+  // המסוף לאשף הפתיחה.
+  if (stage === 'open' && opener && !opener.wall_opened_at) {
+    const stamped = db.update('shift_hours', opener.id, { wall_opened_at: new Date().toISOString() });
+    if (stamped?.wall_opened_at) opener.wall_opened_at = stamped.wall_opened_at;
+  }
+
+  return {
+    stage,
+    step,
+    opener: opener ? {
+      shift_id: opener.id,
+      employee_id: opener.employee_id,
+      name: byId.get(opener.employee_id)?.name || 'עובד',
+      clock_in: opener.clock_in,
+      wall_opened_at: opener.wall_opened_at || null,
+    } : null,
+    staff: open.map((shift) => ({
+      shift_id: shift.id,
+      employee_id: shift.employee_id,
+      name: byId.get(shift.employee_id)?.name || 'עובד',
+      clock_in: shift.clock_in,
+      wall_role: shift.wall_role || (opener?.id === shift.id ? WALL_ROLE.OPENER : WALL_ROLE.STAFF),
+      can_close: employeeCanOperateWall(byId.get(shift.employee_id)),
+      can_clock_out: canClockOut(open, shift.employee_id).ok,
+    })),
+    available: wallStaff
+      .filter((emp) => !onShiftIds.has(emp.id))
+      .map(wallStationEmployee),
+    cash: {
+      open: !!cash.open,
+      opened_by_name: cash.open?.opened_by_name || null,
+      expected_cash: cash.expected_cash ?? null,
+    },
+    safety: {
+      due: dueSafety,
+      pending: pendingSafety,
+      signers: employees.filter(employeeCanSignDailySafety).map(wallStationEmployee),
+    },
+    closers_on_shift: qualifiedClosersOnShift(open, employees).map(wallStationEmployee),
+    settings: await readStaffAttendanceSettings(db, supa),
+  };
+}
+
+app.get('/api/wall-shift/state', async (req, res) => {
+  try {
+    res.json(await wallShiftState());
+  } catch (err) {
+    console.error('wall shift state error:', err.message);
+    res.status(503).json({ error: 'טעינת מצב המשמרת נכשלה' });
+  }
+});
 
 app.get('/api/wall-shift/open', (req, res) => {
   const open = openWallShifts(db.get('shift_hours') || []);
@@ -10356,6 +10464,7 @@ app.get('/api/wall-shift/open', (req, res) => {
     employee_id: s.employee_id,
     clock_in: s.clock_in,
     activity_type: s.activity_type,
+    wall_role: s.wall_role || null,
   })));
 });
 
@@ -10367,20 +10476,15 @@ app.post('/api/wall-shift/open', async (req, res) => {
   if (!employeeCanOperateWall(emp)) {
     return res.status(403).json({ error: 'העובד אינו מורשה לפתוח קיר' });
   }
-  try {
-    requireOpenCashSession(db);
-  } catch (err) {
-    return res.status(409).json({ error: err.message, code: err.code || 'CASH_CLOSED' });
+  // הקופה ובדיקות החבלים כבר לא חוסמות כאן: הן השלבים הבאים בתהליך, לא תנאי
+  // מוקדם לו, והשעון של מי שמבצע אותן חייב לרוץ כבר עכשיו. הקיר נחשב פתוח רק
+  // כששלושתם הושלמו, והסגירה עדיין חסומה על קופה פתוחה.
+  const shiftHours = db.get('shift_hours') || [];
+  if (wallShiftOpener(shiftHours)) {
+    return res.status(409).json({ error: 'כבר יש משמרת פתוחה', code: 'SHIFT_ALREADY_OPEN' });
   }
-  const dueSafety = db.getSafetyDueToday() || [];
-  try {
-    requireWallSafetyComplete(dueSafety);
-  } catch (err) {
-    return res.status(err.status || 409).json({
-      error: err.message,
-      code: err.code || 'SAFETY_PENDING',
-      due_safety: (err.pending || []).map((check) => ({ id: check.id, name: check.name })),
-    });
+  if (openWallShifts(shiftHours).some((s) => s.employee_id === employeeId)) {
+    return res.status(409).json({ error: 'העובד כבר נמצא במשמרת', code: 'ALREADY_ON_SHIFT' });
   }
   const settings = await readStaffAttendanceSettings(db, supa);
   if (confirmed !== true) {
@@ -10390,17 +10494,52 @@ app.post('/api/wall-shift/open', async (req, res) => {
       confirm_message: settings.wall_open_confirm_message,
     });
   }
-  const shift = db.clockIn(employeeId, 'counter_shift', 'משמרת קיר — מסוף כניסה');
-  res.status(201).json({
-    shift,
-    due_safety: [],
-    confirm_message: settings.wall_open_confirm_message,
+  const shift = db.clockIn(employeeId, WALL_ACTIVITY_TYPE, 'משמרת קיר — מסוף כניסה', {
+    wall_role: WALL_ROLE.OPENER,
   });
+  res.status(201).json({ shift, state: await wallShiftState() });
 });
 
-app.post('/api/wall-shift/close', async (req, res) => {
-  const { employee_id: employeeId, closed_by: closedById } = req.body || {};
+app.post('/api/wall-shift/staff/clock-in', async (req, res) => {
+  const { employee_id: employeeId } = req.body || {};
   if (!employeeId) return res.status(400).json({ error: 'employee_id is required' });
+  if (!wallShiftOpener(db.get('shift_hours') || [])) {
+    return res.status(409).json({ error: 'צריך לפתוח משמרת קודם', code: 'NO_OPEN_SHIFT' });
+  }
+  const emp = (db.get('employees') || []).find((e) => e.id === employeeId);
+  const allowed = canJoinShift(emp);
+  if (!allowed.ok) return res.status(emp ? 403 : 404).json({ error: allowed.error });
+  if (openWallShifts(db.get('shift_hours') || []).some((s) => s.employee_id === employeeId)) {
+    return res.status(409).json({ error: 'העובד כבר נמצא במשמרת', code: 'ALREADY_ON_SHIFT' });
+  }
+  const shift = db.clockIn(employeeId, WALL_ACTIVITY_TYPE, 'כניסה למשמרת — מסוף כניסה', {
+    wall_role: WALL_ROLE.STAFF,
+  });
+  res.status(201).json({ shift, state: await wallShiftState() });
+});
+
+app.post('/api/wall-shift/staff/clock-out', async (req, res) => {
+  const { employee_id: employeeId } = req.body || {};
+  if (!employeeId) return res.status(400).json({ error: 'employee_id is required' });
+  const allowed = canClockOut(openWallShifts(db.get('shift_hours') || []), employeeId);
+  if (!allowed.ok) {
+    return res.status(allowed.code === 'NOT_ON_SHIFT' ? 404 : 409)
+      .json({ error: allowed.error, code: allowed.code });
+  }
+  const { shift, row } = await closeOneWallShift(employeeId);
+  if (!shift) return res.status(404).json({ error: 'אין משמרת פתוחה לעובד הזה' });
+  res.json({ shift, row, state: await wallShiftState() });
+});
+
+/**
+ * סגירת המשמרת: מוציאה את כל מי שעוד רשום בה, והסוגר אחרון.
+ *
+ * דיווח הסגירה הוא גם דיווח היציאה של הסוגר — אחרת מי שסוגר את הקיר נשאר
+ * רשום כנמצא בו.
+ */
+app.post('/api/wall-shift/close', async (req, res) => {
+  const body = req.body || {};
+  const closedById = body.closed_by || body.employee_id;
 
   // אי אפשר לסגור משמרת קיר לפני שסוגרים את הקופה.
   if (getOpenSession(db)) {
@@ -10411,65 +10550,38 @@ app.post('/api/wall-shift/close', async (req, res) => {
   }
 
   // מי שסוגר לא חייב להיות מי שפתח — מדריך אחר יכול לסגור בשם מי שכבר הלך.
-  // אם לא צוין סוגר, מניחים שהעובד סוגר לעצמו.
   let closer;
   try {
     closer = requireQualifiedWallCloser(db.get('employees') || [], closedById);
   } catch (err) {
     return res.status(err.status || 400).json({ error: err.message });
   }
-  const closerNote = closer.id === employeeId ? '' : `נסגר ע"י ${closer.name}`;
 
-  const shift = db.clockOut(employeeId, closerNote, closer.id, 'counter_shift');
-  if (!shift) return res.status(404).json({ error: 'אין משמרת פתוחה לעובד הזה' });
+  const openShifts = openWallShifts(db.get('shift_hours') || []);
+  if (openShifts.length === 0) return res.status(404).json({ error: 'אין משמרת פתוחה' });
 
-  // שורת השכר: חלון הפעלת קיר פחות דקות שיבוצים שעתיים חופפים (בלי כפל).
-  const cin = israelLocalParts(shift.clock_in);
-  const cout = israelLocalParts(shift.clock_out);
-  let row = null;
-  const settings = await readStaffAttendanceSettings(db, supa);
-  if (cin && cout) {
-    const totalMinutes = Math.max(
-      0,
-      (new Date(shift.clock_out) - new Date(shift.clock_in)) / 60000
-    );
-    const dayAssignments = (db.get('work_assignments') || []).filter(
-      (r) => r.employee_id === employeeId && r.date === cin.date
-    );
-    const carved = overlappingPaidMinutes(
-      dayAssignments,
-      cin.date,
-      cin.minutes,
-      cout.minutes
-    );
-    const wallMinutes = Math.max(0, totalMinutes - carved);
-    const exception = earlyArrivalNote(
-      dayAssignments,
-      cin.date,
-      cin.minutes,
-      settings.minutes_before_shift_ok
-    );
-    const noteParts = [closerNote, exception].filter(Boolean);
-    row = db.insert('work_assignments', withFrozenPay({
-      employee_id: employeeId,
-      activity_id: null,
-      group_id: null,
-      date: cin.date,
-      work_type: 'counter_shift',
-      role: await systemRoleLabel(SYSTEM_ROLE_KEYS.WALL_OPERATOR),
-      start_time: cin.hm,
-      end_time: cout.hm,
-      hours: roundHoursHalfUp(wallMinutes / 60),
-      pay_mode: 'hourly',
-      flat_amount: null,
-      source: 'wall_shift',
-      shift_id: shift.id,
-      approved: false,
-      notes: noteParts.join(' · '),
-      exception_notes: exception || '',
-    }));
+  const closerNote = `נסגר ע"י ${closer.name}`;
+  const ordered = [
+    ...openShifts.filter((s) => s.employee_id !== closer.id),
+    ...openShifts.filter((s) => s.employee_id === closer.id),
+  ];
+
+  const closed = [];
+  for (const openShift of ordered) {
+    const isCloser = openShift.employee_id === closer.id;
+    const result = await closeOneWallShift(openShift.employee_id, {
+      closerNote: isCloser ? '' : closerNote,
+      closedById: isCloser ? null : closer.id,
+    });
+    if (result.shift) closed.push(result);
   }
-  res.json({ shift, row });
+
+  res.json({
+    closed: closed.map(({ shift, row }) => ({ shift, row })),
+    shift: closed[closed.length - 1]?.shift || null,
+    row: closed[closed.length - 1]?.row || null,
+    state: await wallShiftState(),
+  });
 });
 
 // ─── קטלוג התפקידים וההסמכות ─────────────────────────────
@@ -12552,6 +12664,7 @@ function mapCartLines(cart) {
       duration_days: item.duration_days,
       grants_wall_climbing: item.grants_wall_climbing === true,
       family_shared: item.family_shared === true,
+      transferable: item.transferable === true,
       participant_ids: Array.isArray(line.participant_ids)
         ? line.participant_ids.map(String).filter(Boolean)
         : [],
@@ -12672,6 +12785,7 @@ function fulfillSalePasses({ sale, lines, studentId, parentId, docId, docNumber 
           duration_days: line.duration_days,
           grants_wall_climbing: line.grants_wall_climbing,
           family_shared: line.family_shared,
+          transferable: line.transferable,
           shared_household_id: line.family_shared ? householdIdForParent(db, parentId) : null,
         },
         studentId: assignedStudentId,
@@ -12739,8 +12853,14 @@ async function punchPass(pass, { punchedBy, source, note, studentId }) {
   }
   // הניקוב הוא אישור הצוות בדלפק שהמתאמן יכול לטפס: בלי הצהרת בריאות
   // והסרת אחריות בתוקף ובלי מבחן אבטחה בתוקף אין אישור, ולכן אין ניקוב.
-  const actualStudentId = pass.family_shared ? (studentId || pass.student_id) : pass.student_id;
-  if (pass.family_shared) {
+  //
+  // כרטיסייה מועברת פותחת את השאלה „למי מותר לנקב” לכל אחד — מי שקנה אותה
+  // יכול לשלם בה על חבר שבא איתו, וכל ניקוב נרשם על שם מי שנכנס. מה שהיא
+  // **לא** פותחת הוא שער המסמכים: החבר עדיין צריך הצהרה בתוקף בתיק שלו, ולכן
+  // צריך לבחור אותו מהרשימה ולא סתם להוסיף ניקוב אנונימי.
+  const shareable = pass.transferable === true || pass.family_shared === true;
+  const actualStudentId = shareable ? (studentId || pass.student_id) : pass.student_id;
+  if (pass.family_shared === true && pass.transferable !== true) {
     if (!actualStudentId || !pass.shared_household_id
       || !isStudentInHousehold(db, pass.shared_household_id, actualStudentId)) {
       const err = new Error('המתאמן שנכנס אינו חבר במשפחה של הכרטיסייה');
@@ -15125,6 +15245,103 @@ function wallDocumentsFor(studentId) {
 
 app.get('/api/students/:id/wall-documents', (req, res) => {
   res.json(wallDocumentsFor(req.params.id));
+});
+
+/**
+ * כל מה שהדלפק צריך לדעת על מתאמן שעומד מולו, בקריאה אחת.
+ *
+ * המסך שאל קודם בנפרד על כרטיסיות ועל מסמכים, וצייר את התשובה לפני שהשנייה
+ * הגיעה. כאן הכול נחתך מאותו רגע: הכרטיסייה שתנוקב, הסיבה שאולי לא תנוקב,
+ * מבחן האבטחה, ומתי המתאמן היה כאן בפעם האחרונה.
+ */
+app.get('/api/checkin/climber/:id', async (req, res) => {
+  const studentId = req.params.id;
+  const student = db.getOne('students', studentId);
+  if (!student) return res.status(404).json({ error: 'המתאמן לא נמצא' });
+
+  const passes = (db.get('customer_passes') || []).filter((pass) => (
+    isPassUsable(pass) && (
+      String(pass.student_id) === String(studentId)
+      || (pass.transferable === true)
+      || (pass.family_shared === true
+        && pass.shared_household_id
+        && isStudentInHousehold(db, pass.shared_household_id, studentId))
+    )
+  ));
+  const mine = passes.filter((pass) => String(pass.student_id) === String(studentId));
+  const tests = testsForStudent(student, db.get('level_tests') || []);
+
+  let attendance = [];
+  try {
+    await readTable('attendance');
+    attendance = (db.get('attendance') || []).filter(
+      (row) => String(row.student_id) === String(studentId)
+    );
+  } catch (err) {
+    // היסטוריית החוגים היא הקשר, לא שער. אם היא לא נטענה — הכניסה נמשכת.
+    console.warn('last visit attendance read failed:', err.message);
+  }
+  const visit = lastVisit({
+    checkIns: db.get('check_ins') || [],
+    attendance,
+    studentId,
+  });
+
+  res.json({
+    student: { id: student.id, name: student.name, groupId: student.groupId || null },
+    passes: mine,
+    // כרטיסיות מועברות של אחרים שאפשר לנקב עבור המתאמן הזה (חבר שמשלם עליו).
+    guest_passes: passes.filter((pass) => String(pass.student_id) !== String(studentId)),
+    best_punch: pickBestPunchCard(mine),
+    membership: mine.find((pass) => pass.pass_type === PRODUCT_TYPES.TIME_MEMBERSHIP) || null,
+    documents: wallDocumentsFor(studentId),
+    punch_block_reason: passPunchBlockReason({
+      student,
+      declarations: db.get('health_declarations') || [],
+      waivers: db.get('participation_waivers') || [],
+      healthHolds: db.get('health_holds') || [],
+    }),
+    safety: safetyTestStatus(tests),
+    safety_note: passPunchSafetyNote({ student, tests }),
+    last_visit: { ...visit, label: lastVisitLabel(visit) },
+  });
+});
+
+/**
+ * מי שנכנס היום ואין לו מבחן אבטחה בתוקף.
+ *
+ * חסר מבחן אינו עוצר את הכניסה — המתאמן משלם, ואז יוצא עם מדריך לתדריך
+ * ולמבחן. הרשימה הזאת היא מה שנשאר פתוח מהתור: היא מוצגת בדלפק כל המשמרת,
+ * ושורה נעלמת ממנה ברגע שנחתם המבחן.
+ */
+app.get('/api/checkin/safety-queue', (req, res) => {
+  const today = israelDateStr();
+  const tests = db.get('level_tests') || [];
+  const seen = new Map();
+  for (const row of db.get('check_ins') || []) {
+    const timestamp = row.timestamp || row.created_at;
+    if (!timestamp || israelLocalParts(timestamp)?.date !== today) continue;
+    if (!row.climber_id) continue;
+    const prev = seen.get(row.climber_id);
+    if (!prev || String(timestamp) > String(prev)) seen.set(row.climber_id, timestamp);
+  }
+  const rows = [];
+  for (const [studentId, at] of seen) {
+    const student = db.getOne('students', studentId);
+    if (!student) continue;
+    const safety = safetyTestStatus(testsForStudent(student, tests));
+    if (safety.state === 'valid') continue;
+    rows.push({
+      student_id: studentId,
+      name: student.name,
+      entered_at: at,
+      state: safety.state,
+      expires_at: safety.expires_at || null,
+      test_date: safety.test_date || null,
+    });
+  }
+  rows.sort((a, b) => String(a.entered_at).localeCompare(String(b.entered_at)));
+  res.json(rows);
 });
 
 app.post('/api/check-ins', (req, res) => {

@@ -144,6 +144,7 @@ export function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCateg
   const [selfServe, setSelfServe] = useState(item?.self_serve === true);
   const [grantsWallClimbing, setGrantsWallClimbing] = useState(item?.grants_wall_climbing === true);
   const [familyShared, setFamilyShared] = useState(item?.family_shared === true);
+  const [transferable, setTransferable] = useState(item?.transferable === true);
   const [cancellationPolicyChoice, setCancellationPolicyChoice] = useState(
     item?.cancellation_policy_id || 'none'
   );
@@ -193,6 +194,7 @@ export function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCateg
       self_serve: sellableOnline && selfServe,
       grants_wall_climbing: grantsWallClimbing,
       family_shared: productType === 'punch_card' && familyShared,
+      transferable: productType === 'punch_card' && transferable,
       cancellation_policy_id: cancellationPolicyChoice === 'none' ? null : cancellationPolicyChoice,
       cancellation_policy_disabled: false,
       is_price_anchor: isPriceAnchor,
@@ -313,10 +315,20 @@ export function ItemForm({ item, onSave, onCancel, categoryOptions, defaultCateg
           מסומן רק למוצרים שהשימוש בהם מאפשר כניסה לפעילות בקיר. הבדיקה אינה מסתמכת על שם המוצר.
         </div>
         {productType === 'punch_card' && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 12 }}>
-            <input type="checkbox" checked={familyShared} onChange={(event) => setFamilyShared(event.target.checked)} style={{ width: 18, height: 18 }} />
-            <span>כרטיסייה משפחתית — יתרה משותפת, בדיקת מסמכים בכל ניקוב</span>
-          </label>
+          <>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 12 }}>
+              <input type="checkbox" checked={familyShared} onChange={(event) => setFamilyShared(event.target.checked)} style={{ width: 18, height: 18 }} />
+              <span>כרטיסייה משפחתית — יתרה משותפת, בדיקת מסמכים בכל ניקוב</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 10 }}>
+              <input type="checkbox" checked={transferable} onChange={(event) => setTransferable(event.target.checked)} style={{ width: 18, height: 18 }} />
+              <span>כרטיסייה מועברת — אפשר לנקב בה גם לחבר שבא עם המתאמן</span>
+            </label>
+            <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>
+              „משפחתית” מוגבלת לבני הבית; „מועברת” פתוחה לכל אחד. בשני המקרים כל ניקוב
+              נרשם על שם מי שנכנס, והוא עדיין חייב הצהרת בריאות בתוקף.
+            </div>
+          </>
         )}
       </div>
 
