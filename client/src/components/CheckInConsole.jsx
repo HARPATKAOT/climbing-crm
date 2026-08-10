@@ -410,16 +410,14 @@ function WallShiftPanel({
             </div>
             <label className="form-group" style={{ margin: 0 }}>
               <span className="form-label">מי סוגר את הקיר?</span>
-              <AppSelect
+              <EmployeeSelect
                 className="input select"
+                employees={operators}
                 value={closerId}
-                onChange={(event) => setCloserId(event.target.value)}
-              >
-                <option value="">בחירת עובד מורשה...</option>
-                {operators.map((employee) => (
-                  <option key={employee.id} value={employee.id}>{employee.name}</option>
-                ))}
-              </AppSelect>
+                onChange={(employee) => setCloserId(employee?.id || '')}
+                placeholder="בחירת עובד מורשה..."
+                aria-label="בחירת עובד שסוגר את הקיר"
+              />
             </label>
             {operators.length === 0 && (
               <div style={{ fontSize: 12, color: 'var(--amber)' }}>
