@@ -44,7 +44,23 @@ async function openDevice() {
   }
   if (!device) throw new Error('לא נבחרה מדפסת');
   saveFilter(device);
-  if (!device.opened) await device.open();
+  if (!device.opened) {
+    try {
+      await device.open();
+    } catch (err) {
+      // „Access denied” בווינדוס אינו חוסר הרשאה בדפדפן אלא בעלות: דרייבר
+      // המדפסת של המערכת, או טאב אחר של המסוף, כבר מחזיק את ההתקן. אלה שתי
+      // תקלות שונות לגמרי עם שני פתרונות שונים, והודעת הדפדפן לא מבחינה.
+      if (/access denied|SecurityError|NotAllowedError/i.test(err?.message || err?.name || '')) {
+        throw new Error(
+          'המדפסת תפוסה על ידי תוכנה אחרת. סגרו טאבים אחרים של המסוף באותו מחשב '
+          + 'ונסו שוב; אם זה חוזר, דרייבר המדפסת של ווינדוס מחזיק אותה וצריך '
+          + 'להעביר אותה ל-WinUSB'
+        );
+      }
+      throw err;
+    }
+  }
   if (device.configuration === null) await device.selectConfiguration(1);
   const iface = device.configuration.interfaces.find((i) =>
     i.alternates.some((a) => a.interfaceClass === 7 || a.endpoints.some((e) => e.direction === 'out'))
@@ -72,8 +88,15 @@ export async function sendEscPosBase64(base64) {
       );
     }
   } finally {
+    // שחרור מלא ולא רק של הממשק: טאב שמחזיק את ההתקן פתוח חוסם כל טאב אחר
+    // באותו מחשב, וזו בדיוק „Access denied” שאי אפשר להסביר.
     try {
       await device.releaseInterface(interfaceNumber);
+    } catch {
+      /* ignore */
+    }
+    try {
+      await device.close();
     } catch {
       /* ignore */
     }
