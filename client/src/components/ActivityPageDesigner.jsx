@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Building2, CalendarX2, CreditCard, ImagePlus, Loader2, PackageCheck,
-  ShieldCheck, ShieldOff, Smile, Sparkles, X,
+  Ban, CalendarX2, CreditCard, ImagePlus, Loader2, PackageCheck,
+  ShieldCheck, Smile, Sparkles, X,
 } from 'lucide-react';
 import AppSelect from './AppSelect.jsx';
 import { compressImageFile, readImageFileAsDataUrl } from './productCategories.js';
@@ -57,8 +57,7 @@ function themeFrom(value) {
 }
 
 function cancellationPolicyIcon(value, policies = []) {
-  if (value === '__default__') return { Icon: Building2, color: '#7DD3FC' };
-  if (value === '__none__') return { Icon: ShieldOff, color: 'var(--text-3)' };
+  if (value === '__none__') return { Icon: Ban, color: '#F87171' };
 
   const policy = policies.find((item) => String(item.id) === String(value));
   const name = String(policy?.name || '').toLowerCase();
@@ -556,8 +555,7 @@ export default function ActivityPageDesigner({ form, setForm, readOnly }) {
                 }}
                 optionIcon={(value) => cancellationPolicyIcon(value, policies)}
               >
-                <option value="__default__">ברירת המחדל של העסק</option>
-                <option value="__none__">ללא מדיניות</option>
+                <option value="__none__">ללא אפשרות ביטול</option>
                 {policies.filter((policy) => policy.status === 'published').map((policy) => (
                   <option key={policy.id} value={policy.id}>{policy.name}</option>
                 ))}

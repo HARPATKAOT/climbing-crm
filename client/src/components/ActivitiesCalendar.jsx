@@ -2145,7 +2145,7 @@ function ActivityFormModal({
       ? initial._cancellation_policy_choice
       : (initial?.cancellation_policy_disabled
         ? '__none__'
-        : (initial?.cancellation_policy_id || (initial?.id || initial?._template_id ? '__default__' : ''))),
+        : (initial?.cancellation_policy_id || '')),
     end_date: initial?.end_date ? String(initial.end_date).slice(0, 10) : '',
     start_time: initial?.start_time ? String(initial.start_time).slice(0, 5) : (initial?.all_day ? '' : '10:00'),
     end_time: initial?.end_time ? String(initial.end_time).slice(0, 5) : (initial?.all_day ? '' : '12:00'),
@@ -4363,7 +4363,7 @@ export default function ActivitiesCalendar({
       cancellation_policy_disabled: tpl.cancellation_policy_disabled === true,
       _cancellation_policy_choice: tpl.cancellation_policy_disabled
         ? '__none__'
-        : (tpl.cancellation_policy_id || '__default__'),
+        : (tpl.cancellation_policy_id || ''),
       payment_status: 'unpaid',
     });
     setBanner(`תבנית: ${tpl.name} — ערכו ושמרו`);
@@ -4399,7 +4399,7 @@ export default function ActivitiesCalendar({
       cancellation_policy_disabled: tpl.cancellation_policy_disabled === true,
       _cancellation_policy_choice: tpl.cancellation_policy_disabled
         ? '__none__'
-        : (tpl.cancellation_policy_id || '__default__'),
+        : (tpl.cancellation_policy_id || ''),
       _editing_template: true,
       _template_id: tpl.id,
     });
