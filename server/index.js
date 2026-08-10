@@ -10870,6 +10870,7 @@ app.get('/api/trainers', (req, res) => {
       is_active: employee.is_active !== false && employee.active !== false,
       can_open_wall: employee.can_open_wall === true,
       can_sign_daily_safety: employee.can_sign_daily_safety === true,
+      can_operate_cash: employee.can_operate_cash === true,
       // The schedule screen only offers an employee for a slot they are marked
       // for, so the roles list has to travel with the name — without it every
       // dropdown there is empty but for people already assigned.
