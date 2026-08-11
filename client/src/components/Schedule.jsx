@@ -888,13 +888,44 @@ function t2m(t) { const [h, m] = t.split(':').map(Number); return h * 60 + m; }
 function topPx(time)   { return (t2m(time) - START_MIN) * PX_PER_MIN; }
 function heightPx(dur) { return dur * PX_PER_MIN; }
 
+// ─── Occupancy colour ─────────────────────────────────────────────────────────
+/**
+ * A capacity bar is read at a glance and should answer one question: which
+ * groups still need selling. So it is coloured by how full the group is, not
+ * by age category — the age colour is already the card's border and repeating
+ * it on the bar carried no information of its own.
+ */
+const OCCUPANCY_BANDS = [
+  { min: 100, bar: '#38BDF8', text: '#7DD3FC', label: 'מלא'         }, // blue
+  { min: 80,  bar: '#34D399', text: '#6EE7B7', label: 'כמעט מלא'    }, // green
+  { min: 50,  bar: '#FBBF24', text: '#FCD34D', label: 'חצי מלא'     }, // amber
+  { min: 0,   bar: '#F87171', text: '#FCA5A5', label: 'תפוסה נמוכה' }, // red
+];
+const NO_CAPACITY = { bar: 'rgba(255,255,255,0.25)', text: 'var(--text-3)', label: 'לא הוגדרה תפוסה' };
+
+/** Bar colour, count colour and a hover line, from a count against a capacity. */
+function occupancyOf(count, maxSlots) {
+  if (!(maxSlots > 0)) return { pct: 0, ...NO_CAPACITY, title: NO_CAPACITY.label };
+  const pct  = (count / maxSlots) * 100;
+  const band = OCCUPANCY_BANDS.find(b => pct >= b.min);
+  // Over capacity is not the same as full: somebody has to be moved out.
+  const over = count > maxSlots;
+  const label = over ? `חריגה · ${count - maxSlots} מעל התפוסה` : band.label;
+  return {
+    pct,
+    bar:  band.bar,
+    text: over ? '#FCA5A5' : band.text,
+    label,
+    title: `תפוסה ${Math.round(pct)}% · ${label}`,
+  };
+}
+
 // ─── Positioned Group Block ───────────────────────────────────────────────────
 function GroupBlock({ group, enrolledCount, selected, onClick }) {
   const c    = AGE_COLORS[group.ageCategory] || DEF_COLOR;
   const top  = topPx(group.time);
   const h    = heightPx(group.duration);
-  const pct  = group.maxSlots > 0 ? (enrolledCount / group.maxSlots * 100) : 0;
-  const full = enrolledCount >= group.maxSlots;
+  const occ  = occupancyOf(enrolledCount, group.maxSlots);
 
   // Short label
   const label = shortGroupLabel(group.name);
@@ -957,16 +988,16 @@ function GroupBlock({ group, enrolledCount, selected, onClick }) {
 
       {/* Time + capacity share the bottom row so staff keeps its own lines. */}
       {h >= 55 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 'auto',
+        <div title={occ.title} style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 'auto',
           paddingTop: 2, flexShrink: 0 }}>
           <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.45)', flexShrink: 0 }}>
             {group.time} · {group.duration}′
           </span>
           <div style={{ flex: 1, height: 2.5, borderRadius: 2, background: 'rgba(255,255,255,0.1)' }}>
-            <div style={{ width: `${Math.min(pct,100)}%`, height: '100%', borderRadius: 2,
-              background: full ? '#EF4444' : c.text }} />
+            <div style={{ width: `${Math.min(occ.pct, 100)}%`, height: '100%', borderRadius: 2,
+              background: occ.bar }} />
           </div>
-          <span style={{ fontSize: 9, fontWeight: 700, color: full ? '#FCA5A5' : 'rgba(255,255,255,0.45)' }}>
+          <span style={{ fontSize: 9, fontWeight: 700, color: occ.text }}>
             {enrolledCount}/{group.maxSlots}
           </span>
         </div>
@@ -2070,7 +2101,7 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
   const holdingMembers = members.filter(s => s.status === 'pending_signup');
   const seatedCount = members.length - holdingMembers.length;
 
-  const pct    = group.maxSlots > 0 ? Math.round(seatedCount / group.maxSlots * 100) : 0;
+  const occ    = occupancyOf(seatedCount, group.maxSlots);
   const isFull = seatedCount >= group.maxSlots;
   const freeSlots = Math.max(0, group.maxSlots - seatedCount);
 
@@ -2319,17 +2350,17 @@ function GroupPanel({ group, students, parents, employees, onClose, onEdit, onDe
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
+        <div title={occ.title} style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
           <div style={{ flex: 1, height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 3 }}>
             <div style={{
-              width: `${Math.min(pct, 100)}%`, height: '100%', borderRadius: 3,
-              background: isFull ? '#EF4444' : c.text,
-              transition: 'width 0.4s ease',
+              width: `${Math.min(occ.pct, 100)}%`, height: '100%', borderRadius: 3,
+              background: occ.bar,
+              transition: 'width 0.4s ease, background 0.3s ease',
             }} />
           </div>
           {/* bdi מבודד כל מספר לעצמו. בלעדיו הדפדפן מצרף „1/12” ו„11”
               לרצף ניטרלי אחד וההצגה יוצאת „11/1/12”. */}
-          <span style={{ fontSize: 12, fontWeight: 700, color: isFull ? 'var(--red)' : 'var(--text-2)', minWidth: 90 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: occ.text, minWidth: 90 }}>
             <bdi>{seatedCount}/{group.maxSlots}</bdi>
             {' · '}
             <bdi>{freeSlots} פנויים</bdi>
@@ -3702,8 +3733,7 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
                   .map(g => {
                     const c    = AGE_COLORS[g.ageCategory] || DEF_COLOR;
                     const enrolledCount = getEnrolledCount(g.id);
-                    const full = enrolledCount >= g.maxSlots;
-                    const pct  = g.maxSlots > 0 ? (enrolledCount / g.maxSlots * 100) : 0;
+                    const occ  = occupancyOf(enrolledCount, g.maxSlots);
                     const days = getGroupDays(g);
                     return (
                       <tr key={g.id} style={{ cursor: 'pointer' }} onClick={() => openPanel(g)}>
@@ -3724,11 +3754,11 @@ export default function Schedule({ groups, students, parents, setGroups, setStud
                           </span>
                         </td>
                         <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div title={occ.title} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                             <div style={{ width: 56, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)' }}>
-                              <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', borderRadius: 2, background: full ? '#EF4444' : '#34D399' }} />
+                              <div style={{ width: `${Math.min(occ.pct, 100)}%`, height: '100%', borderRadius: 2, background: occ.bar }} />
                             </div>
-                            <span style={{ fontSize: 12, color: full ? 'var(--red)' : 'var(--text-2)' }}>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: occ.text }}>
                               {enrolledCount}/{g.maxSlots}
                             </span>
                           </div>

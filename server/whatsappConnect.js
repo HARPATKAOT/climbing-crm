@@ -79,6 +79,37 @@ function extractMessageText(message = {}) {
   return '';
 }
 
+// Media types Meta hands us by id. `sticker` is included; `location`, `contacts`
+// and `reaction` carry no file at all.
+const MEDIA_PAYLOAD_KEYS = ['image', 'video', 'audio', 'document', 'sticker'];
+
+/**
+ * The media id behind an incoming message, when it has one.
+ *
+ * Deliberately separate from extractMessageText: that function decides what the
+ * bot reads and what a lead is created from, and must not move. This one only
+ * says where the bytes are, and a total function on purpose — every webhook
+ * delivery passes through it, so an unfamiliar payload has to come back as null
+ * rather than throw and cost us a customer's message.
+ */
+function extractMediaRef(message = {}) {
+  try {
+    for (const key of MEDIA_PAYLOAD_KEYS) {
+      const payload = message?.[key];
+      if (!payload?.id) continue;
+      return {
+        kind: key,
+        id: String(payload.id),
+        mime: String(payload.mime_type || '').split(';')[0].trim(),
+        filename: String(payload.filename || ''),
+      };
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function graphGet(path, token, params = {}) {
   const url = new URL(`${GRAPH_BASE}${path}`);
   Object.entries(params).forEach(([k, v]) => {
@@ -366,6 +397,9 @@ export const whatsappConnectService = {
   },
 
   extractMessageText,
+  extractMediaRef,
   normalizeWaPhone,
   phonesMatch,
 };
+
+export { extractMessageText, extractMediaRef };

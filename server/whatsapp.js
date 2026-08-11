@@ -1,6 +1,7 @@
 import { db, persistCore, syncBotFlagFromRemote } from './db.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { buildTemplateParameters } from './channels/templates.js';
+import { encodeMediaRef } from './channels/mediaRef.js';
 import {
   recordMessage,
   recordMessageDurable,
@@ -157,6 +158,15 @@ function firstGroupDay(group) {
 // Meta message types the model cannot see into. A caption travels as the text,
 // so an image with a caption is handled as an ordinary text message.
 const MEDIA_MESSAGE_TYPES = new Set(['image', 'video', 'audio', 'document', 'sticker']);
+
+// How a media message reads in the thread when it carries no caption of its own.
+const MEDIA_LOG_WORDS = {
+  image: { icon: '📷', noun: 'תמונה' },
+  video: { icon: '🎬', noun: 'סרטון' },
+  audio: { icon: '🎤', noun: 'הודעה קולית' },
+  sticker: { icon: '🩹', noun: 'סטיקר' },
+  document: { icon: '📄', noun: 'קובץ' },
+};
 
 /** High-impact personal events are routed silently; sales automation must stop. */
 export function isSensitivePersonalEvent(text = '') {
@@ -864,6 +874,59 @@ export const whatsappService = {
     }
   },
 
+  /**
+   * Any file the desk attaches — image, video, voice note or document.
+   *
+   * Kept apart from sendImageMessage / sendDocumentMessage on purpose: those two
+   * have their own callers (invoice delivery among them) and their own logged
+   * wording, and this is not the place to change what a customer's receipt says.
+   *
+   * `mediaRef` is what the thread stores in media_url. Prefer the mirrored copy
+   * in our own bucket, so the bubble keeps rendering after Meta drops its file.
+   */
+  sendMediaMessage: async (phone, { kind, mediaId, filename = '', caption = '', mediaRef = null } = {}, options = {}) => {
+    const type = MEDIA_MESSAGE_TYPES.has(String(kind)) ? String(kind) : 'document';
+    try {
+      const payload = { id: mediaId };
+      // WhatsApp rejects a caption on audio and on stickers.
+      if (caption && type !== 'audio' && type !== 'sticker') payload.caption = caption;
+      if (type === 'document' && filename) payload.filename = filename;
+
+      const result = await callMetaWhatsAppAPI(phone, { type, [type]: payload });
+      const { icon, noun } = MEDIA_LOG_WORDS[type] || MEDIA_LOG_WORDS.document;
+      const subject = type === 'document' && filename ? filename : noun;
+      const logMessage = caption ? `${icon} ${caption}` : `${icon} ${subject}`;
+
+      recordMessage({
+        phone: formatWaPhone(phone) || phone,
+        channel: 'whatsapp',
+        direction: 'outbound',
+        message: logMessage,
+        status: result.mock ? 'sent' : 'delivered',
+        source: options.source || 'crm',
+        meta_message_id: result.messageId || null,
+        message_type: type,
+        media_url: mediaRef || encodeMediaRef({ kind: 'meta', id: mediaId, filename }),
+        parent_id: options.parentId || null,
+        student_id: options.studentId || null,
+      });
+      return { success: true, message: logMessage, messageId: result.messageId || null };
+    } catch (error) {
+      recordMessage({
+        phone: formatWaPhone(phone) || phone,
+        channel: 'whatsapp',
+        direction: 'outbound',
+        message: `[נכשלה שליחת ${(MEDIA_LOG_WORDS[type] || MEDIA_LOG_WORDS.document).noun}]`,
+        status: 'failed',
+        source: options.source || 'crm',
+        message_type: type,
+        parent_id: options.parentId || null,
+        student_id: options.studentId || null,
+      });
+      return { success: false, error: error.message };
+    }
+  },
+
   // Generate automated AI response
   generateAIResponse: async (incomingText, context = {}) => {
     const settings = await loadBrandedBotSettings();
@@ -1317,6 +1380,7 @@ export const whatsappService = {
       source: 'customer',
       meta_message_id: metaMessageId,
       message_type: meta.type || 'text',
+      media_url: encodeMediaRef(meta.mediaRef),
       parent_id: parent?.id || null,
       student_id: matchedVia === 'child_phone' ? (student?.id || null) : null,
       created_at: inboundAt,
@@ -1734,7 +1798,7 @@ export const whatsappService = {
   },
 
   // Messages sent from WhatsApp Business app (Coexistence echoes)
-  handlePhoneEcho: async ({ phone, text, messageId, type } = {}) => {
+  handlePhoneEcho: async ({ phone, text, messageId, type, mediaRef = null } = {}) => {
     const normalizedPhone = formatWaPhone(phone) || phone;
     if (!normalizedPhone) return { skipped: true };
 
@@ -1757,6 +1821,7 @@ export const whatsappService = {
       source: 'phone',
       meta_message_id: messageId || null,
       message_type: type || 'text',
+      media_url: encodeMediaRef(mediaRef),
       parent_id: echoParent?.id || null,
     });
 
@@ -1769,7 +1834,7 @@ export const whatsappService = {
   },
 
   // Initial history sync payloads from Coexistence onboarding
-  handleHistoryMessage: async ({ phone, text, direction, messageId, timestamp, type } = {}) => {
+  handleHistoryMessage: async ({ phone, text, direction, messageId, timestamp, type, mediaRef = null } = {}) => {
     const normalizedPhone = formatWaPhone(phone) || phone;
     if (!normalizedPhone || !text) return { skipped: true };
 
@@ -1797,6 +1862,7 @@ export const whatsappService = {
       source: resolvedDirection === 'outbound' ? 'phone' : 'customer',
       meta_message_id: messageId || null,
       message_type: type || 'text',
+      media_url: encodeMediaRef(mediaRef),
       created_at: createdAt,
       parent_id: historyParent?.id || null,
     });

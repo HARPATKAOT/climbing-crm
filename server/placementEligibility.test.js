@@ -119,6 +119,20 @@ test('5B is possible and below 5A is not proactively offered', () => {
   assert.equal(below.reason, 'level_below_5a');
 });
 
+test('רמה שלא נמדדה אינה רמה נמוכה — הבקשה מגיעה לצוות במקום להידחות', () => {
+  // מהשיחה של יערה: שתי בנות חדשות, בקשה לנבחרת, ואיש לא ראה אותה.
+  const group = { name: 'נבחרת צעירה', ageCategory: 'חטיבה', skillLevel: 'נבחרת' };
+  const unknown = evaluateProgramCandidate({ student: { id: 's-new' }, group, gradeOrBand: 'חטיבה' });
+  assert.equal(unknown.candidate, true);
+  assert.equal(unknown.strength, 'unknown');
+  assert.equal(unknown.reason, 'level_unknown_requires_staff_approval');
+
+  // רמה שנמדדה ונמצאה נמוכה ממשיכה להיענות בקבוצה רגילה, לא בבקשה.
+  const measured = evaluateProgramCandidate({ student: { levelGrade: '4C' }, group, gradeOrBand: 'חטיבה' });
+  assert.equal(measured.candidate, false);
+  assert.equal(measured.reason, 'level_below_5a');
+});
+
 test('grade bands are matched without treating arbitrary Hebrew letters as a grade', () => {
   assert.equal(programMatchesGrade(PROGRAMS.ADVANCED, 'כיתה ד׳'), true);
   assert.equal(programMatchesGrade(PROGRAMS.YOUNG_SQUAD, 'חטיבה'), true);

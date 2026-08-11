@@ -63,11 +63,29 @@ function matchEmployee(employees, employeeNotionId) {
   return employees.find((e) => e.notionUrl && stripDashes(e.notionUrl).endsWith(pageId)) || null;
 }
 
-function extensionOf(contentType, fileName) {
-  const fromName = String(fileName || '').split('.').pop();
-  if (fromName && /^[a-z0-9]{2,5}$/i.test(fromName)) return fromName.toLowerCase();
-  return EXT_OF_MIME[String(contentType).split(';')[0].trim()] || 'pdf';
+/** הסוגים שדלי האחסון מקבל. כל השאר נדחה, ולכן אסור להעביר אותו כמו שהוא. */
+const ALLOWED_MIME = new Set(Object.keys(EXT_OF_MIME));
+
+/**
+ * הסוג האמיתי של הקובץ, לפי הבייטים הראשונים שלו.
+ *
+ * הרבה קבצים ב-Notion נשמרו בלי סיומת בשם („אוריאן קריאף - העברה 3.2025”),
+ * ואז ה-Content-Type שחוזר הוא text/plain — סוג שהדלי דוחה. הכותרת אינה
+ * עדות; הבייטים כן.
+ */
+function detectMime(buffer, contentType) {
+  if (buffer.length >= 4) {
+    const head = buffer.subarray(0, 4);
+    if (head.toString('latin1') === '%PDF') return 'application/pdf';
+    if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'image/jpeg';
+    if (head[0] === 0x89 && head.toString('latin1', 1, 4) === 'PNG') return 'image/png';
+    if (buffer.length >= 12 && buffer.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+  }
+  const declared = String(contentType || '').split(';')[0].trim().toLowerCase();
+  return ALLOWED_MIME.has(declared) ? declared : 'application/pdf';
 }
+
+const extensionOf = (mimeType) => EXT_OF_MIME[mimeType] || 'pdf';
 
 async function run() {
   await initDb();
@@ -98,7 +116,6 @@ async function run() {
 
   for (const row of manifest) {
     if (row.skipped) { skippedRows.push(`${row.notionPageId} — ${row.skipped}`); continue; }
-    if (alreadyImported.has(row.notionPageId)) { skippedRows.push(`${row.period} / ${row.type} — כבר יובא`); continue; }
 
     const type = String(row.type || '').trim();
     if (COMPANY_TYPES[type]) { companyRows.push({ ...row, companyType: COMPANY_TYPES[type] }); continue; }
@@ -123,50 +140,80 @@ async function run() {
     buckets.set(key, bucket);
   }
 
+  /**
+   * כתיבה אחת לכל עובד, ולא אחת לכל חודש.
+   *
+   * db.update שולח את השמירה ל-Supabase בלי להמתין לה. עובד עם עשרים חודשים
+   * קיבל עשרים כתיבות רודפות, ושמירה מוקדמת נחתה אחרי מאוחרת ודרסה אותה עם
+   * רשימה קצרה יותר — כך אבדו כשליש מהמסמכים בריצה הראשונה.
+   */
+  const byEmployee = new Map();
   for (const bucket of buckets.values()) {
-    const { employee, period, docs, fields, notes, sourceIds } = bucket;
-    console.log(`• ${employee.name} / ${period} — ${docs.length} קבצים${fields.pension_amount ? `, פנסיה ₪${fields.pension_amount}` : ''}`);
+    const list = byEmployee.get(bucket.employee.id) || { employee: bucket.employee, buckets: [] };
+    list.buckets.push(bucket);
+    byEmployee.set(bucket.employee.id, list);
+  }
 
-    if (!APPLY) { importedRows += 1; importedDocs += docs.length; continue; }
+  /** מסמך מזוהה לפי סוג, חודש ושם הקובץ המקורי — כך ריצה חוזרת לא מכפילה. */
+  const docKey = (type, period, title) => `${type}|${period}|${title}`;
 
+  for (const { employee, buckets: employeeBuckets } of byEmployee.values()) {
+    const fresh = (db.get('employees') || []).find((e) => e.id === employee.id) || employee;
+    const current = Array.isArray(fresh.payroll_documents) ? fresh.payroll_documents : [];
+    const have = new Set(current.map((d) => docKey(d.type, d.period, d.title)));
     const saved = [];
-    for (const doc of docs) {
-      const filePath = path.join(FOLDER, doc.file);
-      if (!fs.existsSync(filePath)) { console.error(`  ❌ קובץ חסר: ${doc.file}`); continue; }
-      const buffer = fs.readFileSync(filePath);
-      if (buffer.length > 10 * 1024 * 1024) {
-        oversized.push(`${employee.name} / ${period} / ${doc.originalName} — ${(buffer.length / 1024 / 1024).toFixed(1)}MB`);
-        continue;
+
+    for (const bucket of employeeBuckets) {
+      const { period, docs, fields } = bucket;
+      const pending = docs.filter((doc) => !have.has(docKey(doc.docType, period, doc.originalName)));
+      const label = pending.length === docs.length ? `${docs.length} קבצים` : `${pending.length}/${docs.length} חסרים`;
+      console.log(`• ${employee.name} / ${period} — ${label}${fields.pension_amount ? `, פנסיה ₪${fields.pension_amount}` : ''}`);
+      if (!APPLY) { importedDocs += pending.length; continue; }
+
+      for (const doc of pending) {
+        const filePath = path.join(FOLDER, doc.file);
+        if (!fs.existsSync(filePath)) { console.error(`  ❌ קובץ חסר: ${doc.file}`); continue; }
+        const buffer = fs.readFileSync(filePath);
+        if (buffer.length > 10 * 1024 * 1024) {
+          oversized.push(`${employee.name} / ${period} / ${doc.originalName} — ${(buffer.length / 1024 / 1024).toFixed(1)}MB`);
+          continue;
+        }
+        const id = `paydoc-${crypto.randomUUID()}`;
+        const mimeType = detectMime(buffer, doc.contentType);
+        const storagePath = `${employee.id}/payroll/${period}/${id}.${extensionOf(mimeType)}`;
+        const uploaded = await supa.uploadEmployeeDocument(storagePath, buffer, mimeType);
+        if (!uploaded.ok) { console.error(`  ❌ העלאה נכשלה: ${doc.originalName} — ${uploaded.error}`); continue; }
+        saved.push({
+          id,
+          employee_id: employee.id,
+          type: doc.docType,
+          period,
+          title: doc.originalName,
+          file_name: String(doc.originalName).replace(/[^\w֐-׿.\-]+/g, '_').slice(0, 120),
+          mime_type: mimeType,
+          storage_path: storagePath,
+          source: 'notion',
+          uploaded_at: new Date().toISOString(),
+        });
+        have.add(docKey(doc.docType, period, doc.originalName));
+        importedDocs += 1;
       }
-      const id = `paydoc-${crypto.randomUUID()}`;
-      const extension = extensionOf(doc.contentType, doc.originalName);
-      const mimeType = doc.contentType?.split(';')[0].trim() || 'application/pdf';
-      const storagePath = `${employee.id}/payroll/${period}/${id}.${extension}`;
-      const uploaded = await supa.uploadEmployeeDocument(storagePath, buffer, mimeType);
-      if (!uploaded.ok) { console.error(`  ❌ העלאה נכשלה: ${doc.originalName} — ${uploaded.error}`); continue; }
-      saved.push({
-        id,
-        employee_id: employee.id,
-        type: doc.docType,
-        period,
-        title: doc.originalName,
-        file_name: String(doc.originalName).replace(/[^\w֐-׿.\-]+/g, '_').slice(0, 120),
-        mime_type: mimeType,
-        storage_path: storagePath,
-        source: 'notion',
-        uploaded_at: new Date().toISOString(),
-      });
-      importedDocs += 1;
     }
 
-    if (saved.length) {
-      // קריאה מחדש: כל עובד מקבל כמה חודשים, והעותק שנתפס בתחילת הריצה מתיישן.
-      const fresh = (db.get('employees') || []).find((e) => e.id === employee.id) || employee;
+    if (APPLY && saved.length) {
+      const latest = (db.get('employees') || []).find((e) => e.id === employee.id) || fresh;
       const updated = db.update('employees', employee.id, {
-        payroll_documents: [...saved, ...(Array.isArray(fresh.payroll_documents) ? fresh.payroll_documents : [])],
+        payroll_documents: [...saved, ...(Array.isArray(latest.payroll_documents) ? latest.payroll_documents : [])],
       });
       await persistCore('employees', updated);
     }
+  }
+
+  for (const bucket of buckets.values()) {
+    const { employee, period, fields, notes, sourceIds } = bucket;
+    // שורה חודשית שכבר נוצרה לא נוצרת שוב — רק המסמכים החסרים הושלמו למעלה.
+    if (sourceIds.some((id) => alreadyImported.has(id))) { skippedRows.push(`${employee.name} / ${period} — השורה כבר קיימת`); continue; }
+    if (!APPLY) { importedRows += 1; continue; }
 
     const periodRow = db.insert('payroll_periods', {
       employee_id: employee.id,
@@ -186,6 +233,7 @@ async function run() {
   }
 
   for (const row of companyRows) {
+    if (alreadyImported.has(row.notionPageId)) { skippedRows.push(`ביטוח לאומי / ${row.period} — כבר יובא`); continue; }
     console.log(`• ביטוח לאומי / ${row.period}${Number.isFinite(row.total) ? ` — ₪${row.total}` : ''}`);
     if (!APPLY) { importedCompany += 1; continue; }
     const saved = db.insert('company_payments', {
