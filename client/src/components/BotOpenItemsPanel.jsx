@@ -106,6 +106,10 @@ export default function BotOpenItemsPanel() {
     if (!quiet) setLoading(true);
     try {
       const res = await fetch('/api/bot/open-items');
+      // The screen ships with the client, and the API it reads ships separately.
+      // Between the two deploys the route simply is not there yet, and saying so
+      // is kinder than "טעינה נכשלה" on a screen that never worked before.
+      if (res.status === 404) throw new Error('המסך יתמלא אחרי הפריסה הבאה של השרת');
       if (!res.ok) throw new Error('טעינה נכשלה');
       setData(await res.json());
       setError('');
