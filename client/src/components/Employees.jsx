@@ -2661,6 +2661,9 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
   const [empSearch, setEmpSearch] = useState('');
   const [empFilterActive, setEmpFilterActive] = useState('all');
   const [empFilterRole, setEmpFilterRole] = useState('all');
+  // עובד קיר מול עובד כללי: מי שמאייש את הקיר הוא קבוצה אחרת לגמרי מהמדריכים
+  // החיצוניים, וכמעט כל שאלה מול הרשימה הזאת נשאלת על אחת מהן בנפרד.
+  const [empFilterScope, setEmpFilterScope] = useState('all');
   const [empSortConfig, setEmpSortConfig] = useState({ key: 'name', direction: 'asc' });
   const [certSearch, setCertSearch] = useState('');
   const [certStatusFilter, setCertStatusFilter] = useState('active');
@@ -2930,7 +2933,11 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
       const matchSearch = emp.name.toLowerCase().includes(empSearch.toLowerCase()) || (emp.phone || '').includes(empSearch);
       const matchActive = empFilterActive === 'all' ? true : empFilterActive === 'active' ? emp.is_active : !emp.is_active;
       const matchRole = empFilterRole === 'all' || (emp.certifications || []).includes(empFilterRole);
-      return matchSearch && matchActive && matchRole;
+      // השיוך נבדק בלי תלות בפעילות: `isWallStaff` מחזיר false לעובד לא פעיל,
+      // ובלי העקיפה הזאת כל מי שיצא היה נופל תחת „עובדים כלליים”.
+      const isWall = employeeIsWallStaff({ ...emp, is_active: true });
+      const matchScope = empFilterScope === 'all' || (empFilterScope === 'wall' ? isWall : !isWall);
+      return matchSearch && matchActive && matchRole && matchScope;
     });
 
     filtered.sort((a, b) => {
@@ -2951,7 +2958,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
       return 0;
     });
     return filtered;
-  }, [employees, empSearch, empFilterActive, empFilterRole, empSortConfig, employeeShiftStats]);
+  }, [employees, empSearch, empFilterActive, empFilterRole, empFilterScope, empSortConfig, employeeShiftStats]);
 
   // ההסמכות שאפשר לסנן לפיהן: תפקידי הקטלוג, ובנוסף כל הסמכה שהוזנה ידנית.
   const certOptions = useMemo(() => {
@@ -3804,6 +3811,11 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
             </AppSelect>
             {/* סינון לפי הסמכה — "מי יכול להדריך סנפלינג" היא השאלה שהכי
                 נשאלת מול הרשימה הזאת. */}
+            <AppSelect className="input input-sm" style={{ width: 150 }} value={empFilterScope} onChange={e => setEmpFilterScope(e.target.value)}>
+              <option value="all">כל העובדים</option>
+              <option value="wall">עובדי קיר</option>
+              <option value="general">עובדים כלליים</option>
+            </AppSelect>
             <AppSelect className="input input-sm" style={{ width: 180 }} value={empFilterRole} onChange={e => setEmpFilterRole(e.target.value)}>
               <option value="all">כל ההסמכות</option>
               {certOptions.map((role) => (

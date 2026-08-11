@@ -310,7 +310,7 @@ import {
   testsForStudent,
 } from './passPunchEligibility.js';
 import { lastVisit, lastVisitLabel } from './lastVisit.js';
-import { buildPendingQueue } from './pendingHandling.js';
+import { buildCounterQueues } from './pendingHandling.js';
 import { runHealthExpiryReminders, runParticipationDocumentReminders } from './participationReminders.js';
 import { OPERATIONAL_LIST, migrateToTwoBroadcastLists } from './broadcastListMigration.js';
 import {
@@ -332,6 +332,7 @@ import {
   listTrackedInventory,
   listExpiringPasses,
   aggregatePosSales,
+  unitCapacity,
 } from './posUtils.js';
 import {
   childrenOfParent,
@@ -833,6 +834,15 @@ function resolveIntakeRegisterPath(slugParam) {
 function redirectIntakeForm(req, res) {
   const studentId = String(req.params.studentId || '').trim();
   if (!studentId) return res.status(400).send('חסר מזהה מתאמן');
+  // `p:<טלפון>` — טופס למי שאין לו עדיין תיק. תבנית הוואטסאפ המאושרת בנויה
+  // סביב `/f/{{1}}`, ולכן זו הדרך היחידה להגיע דרכה לטופס לפי טלפון בלי
+  // לפתוח תיק מראש רק כדי שיהיה מזהה לשים בקישור.
+  if (studentId.startsWith('p:')) {
+    const phone = studentId.slice(2).replace(/\D/g, '');
+    if (!phone) return res.status(400).send('חסר טלפון');
+    const path = resolveIntakeRegisterPath(req.params.slug);
+    return res.redirect(302, `${eventPublicBase()}${path}?phone=${encodeURIComponent(phone)}`);
+  }
   if (String(req.params.slug || '').trim().toLowerCase() === 'health-renewal') {
     const params = new URLSearchParams({ studentId, mode: 'health-renewal' });
     return res.redirect(302, `${eventPublicBase()}/register?${params.toString()}`);
@@ -10386,6 +10396,7 @@ app.post('/api/icount/webhook', async (req, res) => {
             docNumber: docnum || payment.icount_doc_number,
           });
           decrementInventory(lines);
+          registerEntriesForSale({ lines, studentId: sale.student_id });
           const docUrl =
             updated?.icount_doc_url ||
             payload.doc_url ||
@@ -13301,6 +13312,7 @@ function mapCartLines(cart) {
       grants_wall_climbing: item.grants_wall_climbing === true,
       family_shared: item.family_shared === true,
       transferable: item.transferable === true,
+      participants_per_unit: unitCapacity(item),
       participant_ids: Array.isArray(line.participant_ids)
         ? line.participant_ids.map(String).filter(Boolean)
         : [],
@@ -13368,11 +13380,19 @@ async function resolveWallAccessSale(lines, { student, parent }) {
   const resolved = (lines || []).map((line) => {
     if (!line.grants_wall_climbing || line.family_shared) return line;
     const quantity = Math.max(1, Number(line.quantity) || 1);
+    // יחידה אחת אינה בהכרח אדם אחד: אימון זוגי מכסה שניים. הקיבולת היא
+    // כמות × משתתפים ליחידה, ופחות מזה מותר — מי שקנה זוגי ובא לבד שילם
+    // על המקום הפנוי.
+    const perUnit = Math.max(1, Number(line.participants_per_unit) || 1);
+    const capacity = quantity * perUnit;
     const participantIds = line.participant_ids?.length
       ? line.participant_ids
-      : Array.from({ length: quantity }, () => String(student.id));
-    if (participantIds.length !== quantity) {
-      throw Object.assign(new Error(`יש לשייך כל יחידה של "${line.name}" לבן משפחה`), { status: 400 });
+      : Array.from({ length: capacity }, () => String(student.id));
+    if (participantIds.length > capacity) {
+      throw Object.assign(
+        new Error(`"${line.name}" מכסה ${capacity} משתתפים ונבחרו ${participantIds.length}`),
+        { status: 400 }
+      );
     }
     for (const participantId of participantIds) {
       if (!isStudentInHousehold(db, household.id, participantId)) {
@@ -13401,6 +13421,49 @@ async function enforceWallAccessSaleEligibility(lines, { student, parent }) {
   error.code = 'wall_documents_required';
   error.blocked = gaps;
   throw error;
+}
+
+/**
+ * מכירת כניסה בודדת **היא** הכניסה.
+ *
+ * כרטיסייה ומנוי מייצרים כרטיס שמנוקב בדלפק, ולכן הכניסה נרשמת בניקוב. כניסה
+ * בודדת לא מייצרת כלום — כך שמי שקנה אותה שילם, נכנס לקיר, ולא הופיע באף
+ * רשימה: לא ביומן הכניסות, ולא בין מי שממתין לתדריך ולמבחן אבטחה. מי ששילם
+ * על כניסה עכשיו נכנס עכשיו, וזה נרשם כאן.
+ */
+function registerEntriesForSale({ lines, studentId }) {
+  if (!studentId) return null;
+  const entryLines = (lines || []).filter((line) => (
+    line.grants_wall_climbing === true
+    && (line.product_type || 'product') === 'product'
+  ));
+  if (!entryLines.length) return null;
+  // הכניסה נרשמת על כל מי שהשורה נקנתה עבורו, ולא על הלקוח שנבחר בדלפק.
+  // אימון זוגי הוא יחידה אחת ושני מטפסים; אם נרשום רק את הראשון, השני נמצא
+  // על הקיר בלי שאיש יודע.
+  const climberIds = new Set();
+  for (const line of entryLines) {
+    const ids = line.participant_ids?.length ? line.participant_ids : [studentId];
+    for (const id of ids) if (id) climberIds.add(String(id));
+  }
+  const inserted = [];
+  for (const climberId of climberIds) {
+    const student = db.getOne('students', climberId);
+    if (!student) continue;
+    const documents = wallDocumentsFor(climberId);
+    const group = student.groupId ? db.getOne('groups', student.groupId) : null;
+    inserted.push(db.insert('check_ins', {
+      climber_id: student.id,
+      climber_name: student.name,
+      group_name: group?.name || 'טיפוס חופשי',
+      timestamp: new Date().toISOString(),
+      medical_approved: documents.ok,
+      documents_state: documents.state,
+      documents_label: documents.label,
+      source: 'pos_sale',
+    }));
+  }
+  return inserted[0] || null;
 }
 
 function fulfillSalePasses({ sale, lines, studentId, parentId, docId, docNumber }) {
@@ -14592,6 +14655,7 @@ app.post('/api/pos/sale', async (req, res) => {
       docNumber: doc?.docnum,
     });
     decrementInventory(lines);
+    registerEntriesForSale({ lines, studentId: student?.id });
 
     db.insert('payments', {
       parent_id: syncedParent?.id || null,
@@ -16063,7 +16127,7 @@ app.get('/api/checkin/pending', (req, res) => {
   const today = israelDateStr();
   const tests = db.get('level_tests') || [];
   const checkIns = db.get('check_ins') || [];
-  res.json(buildPendingQueue({
+  res.json(buildCounterQueues({
     checkIns,
     sales: db.get('pos_sales') || [],
     today,
