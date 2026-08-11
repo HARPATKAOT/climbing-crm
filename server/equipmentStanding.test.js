@@ -92,30 +92,32 @@ test('אין מה לאשר — אין הודעה', () => {
 
 // ─── מה המעקב של מחר באמת שואל ────────────────────────────────────────────────
 
-const ROW = { reason: 'pending_signup', subject: 'אלה', note: 'ההרשמה במתנ״ס' };
+const ROW = { reason: 'pending_signup', subject: 'אלה פרי דינרי', note: 'ההרשמה במתנ״ס' };
 
 test('נרשמו כבר — לא שואלים על ההרשמה, ממשיכים לציוד שנשאר פתוח', () => {
   const msg = followUpMessage(ROW, {
     firstName: 'יובל',
-    registrationDone: true,
+    awaitingRegistration: [],
     equipmentLine: `אגב, אני רואה שהציוד עדיין לא הוסדר — אלה (נעלי טיפוס).\nכאן משלימים: ${LINK}`,
   });
   assert.doesNotMatch(msg, /ההרשמה/);
   assert.match(msg, /הציוד עדיין לא הוסדר/);
 });
 
-test('לא נרשמו והציוד פתוח — שאלה אחת שמכסה את שניהם', () => {
+test('שני אחים ממתינים — שואלים על שניהם, בשמות פרטיים', () => {
   const msg = followUpMessage(ROW, {
     firstName: 'יובל',
-    registrationDone: false,
+    awaitingRegistration: ['אלה', 'אביתר'],
     equipmentLine: `אגב, הציוד — אלה (נעלי טיפוס). ${LINK}`,
   });
-  assert.match(msg, /ההרשמה של אלה במתנ״ס/);
+  assert.match(msg, /ההרשמה של אלה ואביתר במתנ״ס/);
+  // שם משפחה בהודעה לוואטסאפ הוא טופס, לא שיחה.
+  assert.doesNotMatch(msg, /פרי דינרי/);
   assert.match(msg, /הציוד/);
 });
 
 test('הכול נסגר בינתיים — אין הודעה בכלל', () => {
-  assert.equal(followUpMessage(ROW, { firstName: 'יובל', registrationDone: true, equipmentLine: '' }), '');
+  assert.equal(followUpMessage(ROW, { firstName: 'יובל', awaitingRegistration: [], equipmentLine: '' }), '');
   assert.equal(
     followUpMessage({ reason: 'equipment_unpaid', subject: 'אלה' }, { firstName: 'יובל', equipmentLine: '' }),
     ''

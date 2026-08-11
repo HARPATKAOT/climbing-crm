@@ -18,6 +18,7 @@ import {
   optOutPhone,
   describeBotState,
   isClosingAcknowledgement,
+  withStaffMark,
 } from '../whatsappBot.js';
 import { replyKeyForBurst } from '../botReplyClaims.js';
 import { supa } from '../supa.js';
@@ -1052,7 +1053,7 @@ export async function replyToParent(parentId, payload = {}) {
       );
       mediaId = uploaded.id;
     }
-    const caption = text || payload.caption || '';
+    const caption = withStaffMark(text || payload.caption || '');
     const result = await whatsappService.sendImageMessage(target.phone, mediaId, caption, sendOpts);
     if (result.success) {
       try {
@@ -1072,13 +1073,14 @@ export async function replyToParent(parentId, payload = {}) {
       return { success: false, error: 'אינסטגרם זמין רק בשיחת ההורה', status: 400 };
     }
     if (!parent.instagram_id) return { success: false, error: 'אין מזהה אינסטגרם ללקוח', status: 400 };
-    const result = await instagramService.sendTextMessage(parent.instagram_id, text.trim(), false);
+    const signed = withStaffMark(text);
+    const result = await instagramService.sendTextMessage(parent.instagram_id, signed, false);
     if (result.success) {
       logMessage({
         parent_id: parent.id,
         channel: 'instagram',
         direction: 'outbound',
-        message: text.trim(),
+        message: signed,
         phone: parent.instagram_id,
         recipient_id: parent.instagram_id,
         source: 'crm',
@@ -1093,19 +1095,20 @@ export async function replyToParent(parentId, payload = {}) {
     }
     if (!parent.messenger_psid) return { success: false, error: 'אין מזהה מסנג׳ר ללקוח', status: 400 };
     try {
-      const result = await sendMessengerText(parent.messenger_psid, text.trim());
+      const signed = withStaffMark(text);
+      const result = await sendMessengerText(parent.messenger_psid, signed);
       logMessage({
         parent_id: parent.id,
         channel: 'messenger',
         direction: 'outbound',
-        message: text.trim(),
+        message: signed,
         phone: parent.messenger_psid,
         recipient_id: parent.messenger_psid,
         source: 'crm',
         meta_message_id: result.messageId || null,
         status: result.mock ? 'sent' : 'delivered',
       });
-      return { success: true, text: text.trim() };
+      return { success: true, text: signed };
     } catch (err) {
       return { success: false, error: err.message, status: 500 };
     }
@@ -1113,7 +1116,10 @@ export async function replyToParent(parentId, payload = {}) {
 
   // WhatsApp text — respect session window (already checked)
   if (!target.phone) return { success: false, error: 'אין מספר טלפון לשליחה', status: 400 };
-  const result = await whatsappService.sendTextMessage(target.phone, text.trim(), false, sendOpts);
+  // The person mark went on replyFromCrm, which is the lead-card route nothing
+  // calls any more — the conversation screen sends here. So staff replies kept
+  // going out bare while the bot signed every one of its own.
+  const result = await whatsappService.sendTextMessage(target.phone, withStaffMark(text), false, sendOpts);
   if (result.success) {
     try {
       const settings = mergeBotSettings(db.getSettings());

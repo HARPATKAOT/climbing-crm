@@ -127,9 +127,11 @@ test('the message says what was promised, not "just checking in"', () => {
   assert.match(asked, /היי דנה/);
   assert.match(asked, /ההרשמה של לילי לחוג/);
 
+  // Who is still waiting is read at send time, not from the row — see
+  // followUpMessage. A row whose trainee has since registered asks nothing.
   const signup = followUpMessage(
     { reason: 'pending_signup', subject: 'ראם' },
-    { firstName: 'דלק' }
+    { firstName: 'דלק', awaitingRegistration: ['ראם'] }
   );
   assert.match(signup, /ראם/);
   assert.match(signup, /מתנ״ס/);

@@ -1654,12 +1654,16 @@ export function buildCustomerTools({
         return { קישור: '', הערה: `אין ציוד שטרם שולם עבור ${student.name || ''}` };
       }
 
-      // Reuse a live link rather than minting a token on every question.
+      // Reuse a live link rather than minting a token on every question — and
+      // the family's, not this child's. The page opens on the whole family and
+      // prices two children as one basket with the sibling discount, so a
+      // second link is a second payment that costs the parent more.
       const now = Date.now();
-      const existing = (db.get('equipment_checkouts') || []).find(
-        (c) => String(c.student_id || '') === String(student.id)
-          && (!c.expires_at || new Date(c.expires_at).getTime() > now)
+      const live = (db.get('equipment_checkouts') || []).filter(
+        (c) => !c.expires_at || new Date(c.expires_at).getTime() > now
       );
+      const existing = live.find((c) => String(c.parent_id || '') === String(parent.id))
+        || live.find((c) => String(c.student_id || '') === String(student.id));
       let token = existing?.id || '';
       if (!token) {
         token = newCheckoutToken();
@@ -1699,7 +1703,8 @@ export function buildCustomerTools({
         הערה: 'יש להיכנס לקישור בכל מקרה — גם למי שכבר יש ציוד. בדף מסמנים על '
           + 'כל פריט אם הוא כבר קיים, ורוכשים רק את מה שחסר. בלי הסימון הפריט '
           + 'נשאר חסר במערכת. הסימון ניתן לשינוי. אין לנקוב בסכום ואין לפרט '
-          + 'מחיר לפריט.',
+          + 'מחיר לפריט. הקישור פותח את כל המשפחה: אין לשלוח קישור נפרד לכל '
+          + 'ילד — בוחרים בדף על מי משלמים, ותשלום אחד לשני אחים גם מזכה בהנחה.',
         מה_לומר: 'כבר בהודעה הראשונה שבה נשלח הקישור יש לכתוב את שתי המטרות '
           + 'שלו: להשלים את מה שחסר, וגם לסמן פריט שכבר יש (משנה שעברה או ציוד '
           + 'פרטי). הורה שיש לו ציוד לא ינחש שהוא בכל זאת צריך להיכנס.',
