@@ -12,23 +12,44 @@ import AgentDock from './components/AgentDock.jsx';
 
 // Code-splitting: each screen is downloaded only when first visited,
 // which keeps the initial bundle (and first paint) small.
-const DailyWork          = lazy(() => import('./components/DailyWork.jsx'));
-const Leads              = lazy(() => import('./components/Leads.jsx'));
-const Schedule           = lazy(() => import('./components/Schedule.jsx'));
-const ActivitiesCalendar = lazy(() => import('./components/ActivitiesCalendar.jsx'));
-const Safety             = lazy(() => import('./components/Safety.jsx'));
-const Employees          = lazy(() => import('./components/Employees.jsx'));
-const Broadcasts         = lazy(() => import('./components/Broadcasts.jsx'));
-const CashRegister       = lazy(() => import('./components/CashRegister.jsx'));
-const FinancialReports   = lazy(() => import('./components/FinancialReports.jsx'));
-const LevelTests         = lazy(() => import('./components/LevelTests.jsx'));
-const HealthDeclarations = lazy(() => import('./components/HealthDeclarations.jsx'));
-const CheckInConsole     = lazy(() => import('./components/CheckInConsole.jsx'));
-const Automations        = lazy(() => import('./components/Automations.jsx'));
-const AiAssistant        = lazy(() => import('./components/AiAssistant.jsx'));
-const BusinessSettings   = lazy(() => import('./components/BusinessSettings.jsx'));
-const EquipmentTracker   = lazy(() => import('./components/EquipmentTracker.jsx'));
-const EmployeeSelf       = lazy(() => import('./components/EmployeeSelf.jsx'));
+//
+// The price of that split is a screen that only exists on the server: a
+// deployment replaces every chunk file, so a tab opened before it asks for a
+// file that is no longer there the moment someone switches to a screen they
+// had not opened yet — and gets the error screen instead. `screen()` collects
+// the loaders so the app can pull all of them into the browser a few seconds
+// after it starts. From then on switching screens costs no network at all,
+// and a deployment mid-shift cannot break it.
+const SCREEN_LOADERS = [];
+function screen(loader) {
+  SCREEN_LOADERS.push(loader);
+  return lazy(loader);
+}
+
+const DailyWork          = screen(() => import('./components/DailyWork.jsx'));
+const Leads              = screen(() => import('./components/Leads.jsx'));
+const Schedule           = screen(() => import('./components/Schedule.jsx'));
+const ActivitiesCalendar = screen(() => import('./components/ActivitiesCalendar.jsx'));
+const Safety             = screen(() => import('./components/Safety.jsx'));
+const Employees          = screen(() => import('./components/Employees.jsx'));
+const Broadcasts         = screen(() => import('./components/Broadcasts.jsx'));
+const CashRegister       = screen(() => import('./components/CashRegister.jsx'));
+const FinancialReports   = screen(() => import('./components/FinancialReports.jsx'));
+const LevelTests         = screen(() => import('./components/LevelTests.jsx'));
+const HealthDeclarations = screen(() => import('./components/HealthDeclarations.jsx'));
+const CheckInConsole     = screen(() => import('./components/CheckInConsole.jsx'));
+const Automations        = screen(() => import('./components/Automations.jsx'));
+const AiAssistant        = screen(() => import('./components/AiAssistant.jsx'));
+const BusinessSettings   = screen(() => import('./components/BusinessSettings.jsx'));
+const EquipmentTracker   = screen(() => import('./components/EquipmentTracker.jsx'));
+const EmployeeSelf       = screen(() => import('./components/EmployeeSelf.jsx'));
+
+// Panels that a screen loads on its own are separate chunk files and break the
+// same way — warm them with the screens rather than only when they are opened.
+SCREEN_LOADERS.push(
+  () => import('./components/Campaigns.jsx'),
+  () => import('./components/StudentFilePanel.jsx'),
+);
 
 function PageLoader() {
   return (
@@ -328,6 +349,37 @@ export default function App() {
     // Fetch core data once on mount (plus retry/visibility logic above) —
     // NOT on every tab change, which used to re-download all parents/students/groups.
   }, [coreReloadKey, isOwner, user?.modules]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Download every screen in the background, one at a time, once the first
+  // screen has settled. See the note next to SCREEN_LOADERS: this is what
+  // stops "לא הצלחנו לטעון את המסך" from appearing on a screen switch after a
+  // deployment. A failure here needs no handling — it means this tab is
+  // already running a replaced build, and the chunk-error listener in main.jsx
+  // reloads the tab while the user has not started working yet.
+  useEffect(() => {
+    let cancelled = false;
+    let index = 0;
+
+    const whenIdle = (run) => (typeof window.requestIdleCallback === 'function'
+      ? window.requestIdleCallback(run, { timeout: 3000 })
+      : window.setTimeout(run, 250));
+
+    const warmNext = () => {
+      if (cancelled) return;
+      const loader = SCREEN_LOADERS[index];
+      index += 1;
+      if (!loader) return;
+      loader()
+        .catch(() => {})
+        .then(() => { if (!cancelled) whenIdle(warmNext); });
+    };
+
+    const start = window.setTimeout(() => whenIdle(warmNext), 2500);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(start);
+    };
+  }, []);
   const [showNotifications, setShowNotifications] = useState(false);
   const sharedStation = user?.account_type === 'shared_station';
   const info = PAGE_TITLES[page] || {};
