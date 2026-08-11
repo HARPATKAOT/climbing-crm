@@ -47,6 +47,7 @@ import {
 import {
   mergeBotSettings,
   withBotMark,
+  withStaffMark,
   isClosingAcknowledgement,
   hasOpenBotHandoff,
   isCentrePhone,
@@ -1826,7 +1827,9 @@ export const whatsappService = {
   replyFromCrm: async (phone, text) => {
     if (!phone) return { success: false, error: 'חסר מספר טלפון' };
     if (!text || !String(text).trim()) return { success: false, error: 'חסר תוכן הודעה' };
-    const result = await whatsappService.sendTextMessage(phone, String(text).trim(), false);
+    // Marked as a person, the way the bot is marked as the bot. A customer
+    // should never have to guess which of the two just answered them.
+    const result = await whatsappService.sendTextMessage(phone, withStaffMark(text), false);
     if (result.success) {
       const settings = mergeBotSettings(db.getSettings());
       if (settings.aiPauseOnHumanReply) {

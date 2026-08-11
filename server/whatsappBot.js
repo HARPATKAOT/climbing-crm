@@ -52,6 +52,21 @@ export function withBotMark(text) {
 }
 
 /**
+ * The other half of the same promise: the bot says it is the bot, and a person
+ * says they are a person. Without it a customer cannot tell whether the answer
+ * that just arrived was typed by somebody or generated — which matters most in
+ * exactly the conversations where staff step in over the bot.
+ */
+export const STAFF_MARK = '👤';
+
+export function withStaffMark(text) {
+  const body = String(text || '').trim();
+  if (!body) return body;
+  if (body.startsWith(STAFF_MARK) || body.startsWith(BOT_MARK)) return body;
+  return `${STAFF_MARK} ${body}`;
+}
+
+/**
  * A standalone thank-you closes the exchange; it is not a new question. Sending
  * another acknowledgement is harmless once, but after a degraded model turn it
  * repeated the same handoff and made the bot look stuck in a loop.

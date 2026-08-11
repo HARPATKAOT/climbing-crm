@@ -684,6 +684,15 @@ function openGroupsPayload(groups) {
       גודל_הקבוצה: g.capacityKnown === false ? 'לא מוגדר' : Number(g.maxSlots),
       מדריך: trainerNameForGroup(db, g) || '',
       רמה: g.skillLevel || 'מתחילים',
+      // Who may actually join. Described as "for motivated climbers", a squad
+      // reads like something a parent can simply choose — and one was told
+      // exactly that about a child who had just started climbing.
+      ...(isSquadGroup(g)
+        ? {
+          תנאי_כניסה: 'רק באישור צוות הקיר, ולמטפסים עם ניסיון של כמה שנים. '
+            + 'אינה מתאימה למי שמתחיל לטפס — יש לומר זאת במפורש ולהפנות לקבוצות הרגילות.',
+        }
+        : {}),
       // A missing price is not a price of zero, and it is not an offer either.
       // Both frequencies were always listed, so a group sold only once a week
       // came back as "twice a week: 0" — and the bot offered a twice-weekly

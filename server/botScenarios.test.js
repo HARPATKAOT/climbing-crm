@@ -971,6 +971,41 @@ test('אין אף מסמך — זה טופס ההשתתפות המלא, עם ה�
   });
 });
 
+// ─── נבחרת ───────────────────────────────────────────────────────────────────
+
+test('נבחרת חוזרת עם תנאי הכניסה שלה, לא רק עם הרמה', async () => {
+  const SQUAD = {
+    id: 'g-squad',
+    name: 'נבחרת חטיבה — ב׳+ה׳ 17:00',
+    ageCategory: 'חטיבה',
+    skillLevel: 'נבחרת',
+    day: 1,
+    time: '17:00',
+    maxSlots: 12,
+    priceWeek: 0,
+    priceTwice: 520,
+    signupLinkTwice: 'https://forms.example.com/squad',
+  };
+  await withSeed({ groups: [SQUAD], students: [] }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    // אמא של ילד שרק מתחיל לטפס שאלה מה ההבדל, וקיבלה «מיועדת למתאמנים
+    // בעלי מוטיבציה גבוהה» — כאילו זו בחירה שלה.
+    const asked = await tools.listClasses({ band: 'חטיבה', level: 'נבחרת' });
+    const [squad] = asked.קבוצות;
+    assert.match(squad.תנאי_כניסה, /באישור צוות הקיר/);
+    assert.match(squad.תנאי_כניסה, /ניסיון של כמה שנים/);
+    assert.match(squad.תנאי_כניסה, /מתחיל לטפס/);
+
+    // וקבוצה רגילה אינה נושאת תנאי כניסה בכלל.
+    const regular = await tools.listClasses({ grade: 'ג' });
+    assert.equal(regular.קבוצות.some((g) => g.תנאי_כניסה), false);
+  });
+
+  const { CUSTOMER_TOOL_RULES } = await import('./botToolTurn.js');
+  assert.match(CUSTOMER_TOOL_RULES, /רק באישור צוות הקיר/);
+  assert.match(CUSTOMER_TOOL_RULES, /אינה מתאימה לו בשלב הזה/);
+});
+
 // ─── שעות פתיחה ──────────────────────────────────────────────────────────────
 
 const openingHoursOn = (date) => ({
