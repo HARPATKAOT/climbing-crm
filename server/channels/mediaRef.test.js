@@ -62,6 +62,16 @@ test('rows that point nowhere parse to null instead of throwing', () => {
   }
 });
 
+test('encoding nothing yields nothing, for every shape of nothing', () => {
+  // The common case by far: a text message has no media reference, and the
+  // inbound webhook path calls this on every single message that arrives.
+  // A destructuring default does not cover null, and that gap took down every
+  // plain text message until the harness caught it.
+  for (const input of [null, undefined, {}, { kind: 'meta' }, { id: '' }, { id: '   ' }]) {
+    assert.equal(encodeMediaRef(input), null, `expected null for ${JSON.stringify(input)}`);
+  }
+});
+
 test('a reference with no metadata still parses', () => {
   assert.deepEqual(parseMediaRef('wa-media:abc123'), {
     kind: 'meta',

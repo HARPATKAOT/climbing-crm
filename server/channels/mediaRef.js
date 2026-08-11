@@ -65,8 +65,13 @@ export function mediaKindForMime(mimeType) {
   return 'document';
 }
 
-/** Build the stored `media_url` string. Returns null when there is nothing to point at. */
-export function encodeMediaRef({ kind, id, mime, filename } = {}) {
+/**
+ * Build the stored `media_url` string. Returns null when there is nothing to
+ * point at — including when the caller passes null outright, which is the
+ * ordinary case: every text message has no media reference at all.
+ */
+export function encodeMediaRef(ref) {
+  const { kind, id, mime, filename } = ref || {};
   const target = String(id || '').trim();
   if (!target) return null;
 
