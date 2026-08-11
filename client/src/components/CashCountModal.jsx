@@ -195,10 +195,14 @@ export default function CashCountModal({
             </button>
           </div>
 
+          <div className="cash-count-hint">
+            קליק על שטר או מטבע מוסיף אחד, קליק ימני מוריד.
+          </div>
+
           <CashDenominationPad
             value={denoms}
             onChange={setDenoms}
-            variant="stepper"
+            size="lg"
             showTotal={false}
           />
 

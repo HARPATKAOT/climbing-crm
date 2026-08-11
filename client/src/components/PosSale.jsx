@@ -2092,7 +2092,7 @@ ${data.link}`)}`,
                 קליק על שטר או מטבע מוסיף אחד, קליק ימני מוריד.
               </div>
               <CashDenominationPad
-                variant="row"
+                size="sm"
                 value={tenderedDenoms}
                 showTotal={false}
                 onChange={(next) => {

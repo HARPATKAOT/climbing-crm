@@ -1936,184 +1936,23 @@ select option, select optgroup {
   border-radius: 11px;
 }
 
-.cash-pad {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-.cash-pad-section {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-.cash-pad-section:first-of-type {
-  flex: 2 1 0;
-}
-.cash-pad-section:last-of-type {
-  flex: 3 1 0;
-}
-.cash-pad-heading {
-  margin: 0 0 6px;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  color: var(--text-3);
-  flex-shrink: 0;
-}
-.cash-pad-total {
-  font-size: 13px;
-  color: var(--text-2);
-}
-.cash-pad-total strong {
-  color: var(--blue);
-  font-size: 16px;
-}
-.cash-pad-simple {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 8px;
-}
-.cash-pad-simple-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--text-2);
-}
-
-.cash-line-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  align-content: stretch;
-  grid-auto-rows: 1fr;
-  flex: 1;
-  min-height: 0;
-}
-.cash-line {
-  display: grid;
-  grid-template-columns: auto auto 1fr;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 14px;
-  background: #141625;
-  border: 1px solid #2a2f45;
-  min-width: 0;
-  min-height: 56px;
-}
-.cash-line:hover {
-  border-color: #3a4060;
-  background: #181b2c;
-}
-.cash-line.is-active {
-  border-color: color-mix(in srgb, var(--accent) 50%, #2a2f45);
-  background: linear-gradient(270deg, var(--tint), #141625 70%);
-  box-shadow: inset -3px 0 0 var(--accent);
-}
-.cash-line-img {
-  width: 88px;
-  height: 48px;
-  border-radius: 8px;
-  overflow: hidden;
-  background: #0d101c;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  flex-shrink: 0;
-}
-.cash-line-img--coin {
-  width: 52px;
-  height: 52px;
-  border-radius: 50%;
-  background: #f3f3f3;
-}
-.cash-line-img img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center;
-  display: block;
-  user-select: none;
-  -webkit-user-drag: none;
-}
-.cash-line-img--coin img {
-  transform: scale(1.16);
-}
-.cash-line-sum {
-  font-size: 14px;
-  font-weight: 800;
-  color: var(--text-1);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  min-width: 0;
-  text-align: start;
-  justify-self: stretch;
-}
-
-.cash-stepper {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  background: rgba(0, 0, 0, 0.28);
-  border: 1px solid #2a2f45;
-  border-radius: 11px;
-  padding: 3px;
-  flex-shrink: 0;
-}
-.cash-step {
-  width: 34px;
-  height: 34px;
-  border: none;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-1);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.cash-step:hover:not(:disabled) {
-  background: rgba(56, 189, 248, 0.16);
-}
-.cash-step--plus {
-  background: rgba(56, 189, 248, 0.14);
-  color: #7DD3FC;
-}
-.cash-step:disabled {
-  opacity: 0.3;
-  cursor: default;
-}
-.cash-qty {
-  width: 40px;
-  height: 34px;
-  border: none;
-  background: transparent;
-  color: var(--text-1);
-  text-align: center;
-  font-size: 15px;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  outline: none;
-}
-.cash-qty::-webkit-outer-spin-button,
-.cash-qty::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-.cash-qty[type='number'] {
-  -moz-appearance: textfield;
-  appearance: textfield;
-}
-
-/* ספירת המזומן בדלפק: שורה אחת דחוסה, מהשטר הגדול מימין למטבע הקטן משמאל. */
+/* ספירת מזומן: שורה אחת של שטרות ומטבעות, מהגדול מימין לקטן משמאל.
+   קליק על השטר מוסיף אחד, קליק ימני מוריד, והכמות יושבת על השטר. */
 .cash-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 5px;
+}
+.cash-count-hint {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-bottom: 8px;
+  text-align: center;
+}
+.cash-row--lg {
+  gap: 8px;
+  flex-wrap: nowrap;
 }
 .cash-chip {
   position: relative;
@@ -2172,10 +2011,37 @@ select option, select optgroup {
   font-weight: 700;
 }
 
-@media (max-width: 720px) {
-  .cash-line-grid {
-    grid-template-columns: 1fr;
+/* בפתיחת הקופה ובסגירתה הספירה היא כל המשימה — השטרות גדולים וברורים. */
+.cash-row--lg .cash-chip {
+  width: 104px;
+  height: 60px;
+  border-radius: 9px;
+}
+.cash-row--lg .cash-chip--coin {
+  width: 60px;
+}
+.cash-row--lg .cash-chip-qty {
+  min-width: 26px;
+  padding: 0 6px;
+  border-radius: 13px;
+  font-size: 15px;
+  line-height: 26px;
+  inset-inline-end: -4px;
+  bottom: -4px;
+}
+.cash-row--lg .cash-row-total {
+  font-size: 15px;
+}
+
+/* במסך צר השורה נשארת שורה — היא נגללת לצדדים במקום להישבר לשתיים. */
+@media (max-width: 860px) {
+  .cash-row--lg {
+    overflow-x: auto;
+    padding-bottom: 6px;
   }
+}
+
+@media (max-width: 720px) {
   .cash-shell {
     height: 100%;
     border-radius: 14px;
