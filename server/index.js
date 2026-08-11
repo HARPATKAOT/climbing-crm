@@ -42,7 +42,7 @@ import {
   roundMoney as cashRoundMoney,
 } from './cashRegister.js';
 import { buildSaleReceipt, buildDrawerOnlyPayload } from './escposReceipt.js';
-import { alertSubscribers } from './staffAlerts.js';
+import { alertRecipients, alertSubscribers } from './staffAlerts.js';
 import { sendStaffAlert } from './staffNotify.js';
 import {
   GROUP_META_COLLECTION,
@@ -55,7 +55,9 @@ import {
   eligibilityForStudent,
   reviewProgramApproval,
   setSharedProgramEligibility,
+  sharedRestrictedEligibility,
 } from './placementEligibility.js';
+import { announceProgramEligibility } from './eligibilityNotice.js';
 import { buildCustomerTools } from './botTools.js';
 import { loadBrandedBotSettings } from './whatsappBot.js';
 import { continueApprovedPlacement } from './placementApprovalContinuation.js';
@@ -4970,13 +4972,52 @@ app.get('/api/students/:id/program-eligibility', (req, res) => {
 });
 
 app.put('/api/students/:id/program-eligibility', async (req, res) => {
+  const wasEligible = sharedRestrictedEligibility(db, req.params.id)
+    .some((row) => ['returning', 'approved'].includes(String(row.status || '')));
   const result = await setSharedProgramEligibility(db, persistCore, {
     studentId: req.params.id,
     eligible: req.body?.eligible === true,
     actor: req.crmUser?.email || req.crmUser?.id || 'crm',
   });
   if (!result.ok) return res.status(result.status || 400).json(result);
-  res.json(result);
+
+  // The tick was a decision that stayed with us — the family heard nothing
+  // until somebody remembered to write. Now granting it opens the
+  // conversation, and the bot carries the registration on from the answer.
+  let announced = null;
+  if (!wasEligible && result.eligible) {
+    try {
+      const student = db.getOne('students', req.params.id);
+      const parent = student?.parentId ? db.getOne('parents', student.parentId) : null;
+      const row = (result.rows || []).find((r) => ['returning', 'approved'].includes(String(r.status || '')));
+      announced = await announceProgramEligibility({
+        db,
+        persist: persistCore,
+        student,
+        parent,
+        row,
+        windowOpen: parent ? canSendFreeform(parent, 'whatsapp') : false,
+        sendReply: (phone, message) => whatsappService.sendBotReply(phone, message, {
+          source: 'ai',
+          parent,
+          logType: 'placement',
+        }),
+        notifyStaff: async (text) => {
+          const { phones } = alertRecipients(db, 'handoff', db.getSettings ? db.getSettings() : {});
+          for (const staffPhone of phones) {
+            await whatsappService.sendTextMessage(staffPhone, text, false, {
+              source: 'staff_notify',
+              clip: false,
+            });
+          }
+        },
+      });
+    } catch (err) {
+      console.error('eligibility notice failed:', err.message);
+      announced = { ok: false, reason: 'error' };
+    }
+  }
+  res.json({ ...result, ...(announced ? { announced } : {}) });
 });
 
 app.post('/api/placement-requests/:id/review', async (req, res) => {
