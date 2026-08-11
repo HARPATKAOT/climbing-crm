@@ -63,6 +63,7 @@ import { notifyGroupMembershipDiff, runIntroHeadsUpIfDue } from './groupAlerts.j
 import { capabilityState, capabilitySettingsPatch } from './botCapabilities.js';
 import { normalizeInboundQuietMs } from './inboundBurst.js';
 import { listBotActions, botActionSummary, BOT_ACTION_TYPES } from './botActivityLog.js';
+import { botOpenItems } from './botOpenItems.js';
 import {
   loadAgendaSettings,
   saveAgendaSettings,
@@ -1714,6 +1715,16 @@ app.get('/api/whatsapp/settings', async (req, res) => {
       process.env.META_WA_ACCESS_TOKEN
     ),
   });
+});
+
+/**
+ * What the bot left open: who is waiting for a person, which reminders are due,
+ * and whose registration the מתנ״ס has not confirmed. Each of those lived in a
+ * different collection and on no screen, so two customers waited a day and
+ * nobody knew. Read-only — closing an item is done where it belongs.
+ */
+app.get('/api/bot/open-items', (req, res) => {
+  res.json(botOpenItems(db));
 });
 
 /**
