@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PENDING_KIND, todaysEntrants, entryRows, paymentRows, buildPendingQueue } from './pendingHandling.js';
+import {
+  PENDING_KIND, todaysEntrants, entryRows, paymentRows, buildPendingQueue, buildCounterQueues,
+} from './pendingHandling.js';
 
 const TODAY = '2026-08-10';
 const dateOf = (iso) => String(iso || '').slice(0, 10);
@@ -79,4 +81,89 @@ test('a row removed by hand does not come back the same day', () => {
     ['שילם']
   );
   assert.deepEqual(buildPendingQueue({ ...parts, dismissedIds: ['entry:s2', 'payment:ps1'] }), []);
+});
+
+test('someone who paid for a single entry is on the list like anyone who walked in', () => {
+  // כניסה בודדת אינה מייצרת כרטיסייה, ולכן אין ניקוב שירשום את הכניסה. אם
+  // המכירה לא רושמת אותה, מי ששילם ונכנס אינו מופיע בשום מקום — לא ביומן
+  // ולא בין מי שממתין לתדריך.
+  const rows = entryRows({
+    checkIns: [{ climber_id: 's2', timestamp: '2026-08-10T09:00:00.000Z', source: 'pos_sale' }],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: () => ({ state: 'missing' }),
+  });
+  assert.deepEqual(rows.map((r) => r.name), ['תמר לוי']);
+});
+
+test('a parent paying for their child is one row, in the child\u0027s name', () => {
+  // ההורה שילם והופיע ברשימה בשמו; אחרי שהתשלום נפרע נוצרה כניסה לילד
+  // והצטרפה שורה שנייה. כניסה אחת, אדם אחד, שורה אחת.
+  const queue = buildPendingQueue({
+    checkIns: [{ climber_id: 's2', timestamp: '2026-08-10T09:10:00.000Z', source: 'pos_sale' }],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: () => ({ state: 'missing' }),
+    sales: [{
+      id: 'ps1', payment_method: 'online', status: 'paid', student_id: 's2',
+      customer_name: 'נועה לוי', total: 60,
+      created_at: '2026-08-10T09:00:00.000Z', updated_at: '2026-08-10T09:05:00.000Z',
+    }],
+  });
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].name, 'תמר לוי');
+  assert.equal(queue[0].payer_name, 'נועה לוי');
+  assert.equal(queue[0].paid, true);
+  assert.equal(queue[0].needs_safety, true);
+});
+
+test('a payment with no climber attached keeps its own row under the payer', () => {
+  const queue = buildPendingQueue({
+    checkIns: [],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: () => ({ state: 'missing' }),
+    sales: [{
+      id: 'ps9', payment_method: 'online', status: 'pending_payment',
+      customer_name: 'קונה מזדמן', total: 20, created_at: '2026-08-10T09:00:00.000Z',
+    }],
+  });
+  assert.deepEqual(queue.map((r) => r.name), ['קונה מזדמן']);
+  assert.equal(queue[0].needs_safety, undefined);
+});
+
+test('a climber with nothing open moves to the shift list, not the task list', () => {
+  const parts = {
+    checkIns: [
+      { climber_id: 's1', timestamp: '2026-08-10T09:00:00.000Z' },
+      { climber_id: 's2', timestamp: '2026-08-10T09:30:00.000Z' },
+    ],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: (id) => (id === 's1' ? { state: 'valid' } : { state: 'missing' }),
+    sales: [],
+  };
+  const { pending, active } = buildCounterQueues(parts);
+  assert.deepEqual(pending.map((r) => r.name), ['תמר לוי']);
+  assert.deepEqual(active.map((r) => r.name), ['יונתן כהן']);
+});
+
+test('someone whose payment is still open is not counted as climbing', () => {
+  const { pending, active } = buildCounterQueues({
+    checkIns: [{ climber_id: 's1', timestamp: '2026-08-10T09:00:00.000Z' }],
+    today: TODAY,
+    dateOf,
+    studentOf,
+    safetyOf: () => ({ state: 'valid' }),
+    sales: [{
+      id: 'ps1', payment_method: 'online', status: 'pending_payment', student_id: 's1',
+      customer_name: 'אבי כהן', total: 60, created_at: '2026-08-10T08:55:00.000Z',
+    }],
+  });
+  assert.deepEqual(pending.map((r) => r.name), ['יונתן כהן']);
+  assert.deepEqual(active, []);
 });

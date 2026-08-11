@@ -7,6 +7,7 @@ import {
   isPassUsable,
   computeSaleTotal,
   passDiscountNote,
+  unitCapacity,
   PRODUCT_TYPES,
 } from './posUtils.js';
 
@@ -123,4 +124,14 @@ test('computeSaleTotal sums lines', () => {
     ]),
     200
   );
+});
+
+test('מספר משתתפים במוצר הוא כמה אנשים יחידה אחת מכסה', () => {
+  assert.equal(unitCapacity({ participants: '2' }), 2);
+  assert.equal(unitCapacity({ participants: '1' }), 1);
+  assert.equal(unitCapacity({ participants: '' }), 1);
+  assert.equal(unitCapacity({}), 1);
+  // טקסט חופשי שהוקלד בשדה לא הופך מוצר רגיל למוצר קבוצתי.
+  assert.equal(unitCapacity({ participants: 'עד 2 מטפסים' }), 1);
+  assert.equal(unitCapacity({ participants: '2 משתתפים' }), 2);
 });
