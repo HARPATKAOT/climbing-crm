@@ -67,7 +67,6 @@ export default function PublicEquipmentPayment() {
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
   const [owning, setOwning] = useState('');
-  const [iframeHeight, setIframeHeight] = useState(720);
 
   const loadData = useCallback(async ({ reset = false, quiet = false } = {}) => {
     if (!quiet) setLoading(true);
@@ -115,19 +114,6 @@ export default function PublicEquipmentPayment() {
     const timer = window.setInterval(() => loadData({ quiet: true }), 2000);
     return () => window.clearInterval(timer);
   }, [data?.latest_payment?.status, loadData, paidFlag, paymentComplete]);
-
-  useEffect(() => {
-    const onMessage = (event) => {
-      const payload = event?.data;
-      if (!payload || typeof payload !== 'object') return;
-      if (payload.event_type === 'page_load' || payload.event_type === 'page_size') {
-        const height = Number(payload.page_size?.height);
-        if (height > 200) setIframeHeight(Math.min(1400, Math.max(520, height + 24)));
-      }
-    };
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, []);
 
   const members = data?.members || [];
   const labels = data?.labels || DEFAULT_LABELS;
@@ -239,6 +225,9 @@ export default function PublicEquipmentPayment() {
       if (!response.ok) throw new Error(body.error || 'יצירת התשלום נכשלה');
       setPaymentSummary(body);
       setPaymentUrl(body.paymentUrl || '');
+      // The payment page has to be opened as a page, not framed — see the
+      // fallback panel below for why. success_url brings them back here.
+      if (body.paymentUrl) window.location.assign(body.paymentUrl);
     } catch (payError) {
       setError(payError.message);
     } finally {
@@ -408,7 +397,20 @@ export default function PublicEquipmentPayment() {
                 <strong>{formatIls(paymentSummary.amount)}</strong>
               </div>
             )}
-            <iframe title="תשלום ציוד לאימונים" src={paymentUrl} className="eq-pay-iframe" style={{ height: iframeHeight }} allow="payment *" />
+            {/*
+              iCount answers the payment link with a redirect that drops the
+              query string and keeps the basket in a session cookie — one it
+              sets without SameSite, so a browser will not hand it back inside
+              a frame on our domain. Framed, the second request arrived with no
+              session and the page fell back to whatever the pay page itself is
+              configured with: for weeks that was a ₪70 intro training, and
+              after the item was zeroed it became "המכירה נסגרה". Parents were
+              looking at somebody else's basket, or at a closed shop. Opening it
+              as a page makes iCount first-party and the basket is theirs.
+            */}
+            <a className="eq-pay-open" href={paymentUrl}>
+              <CreditCard size={18} /> מעבירים אתכם לתשלום מאובטח — אם הדף לא נפתח, לחצו כאן
+            </a>
           </section>
         )}
       </main>
@@ -431,7 +433,8 @@ export default function PublicEquipmentPayment() {
         .eq-pay-note{display:grid;gap:6px;margin-top:10px;padding:12px;border:1px solid rgba(56,189,248,.28);border-radius:12px;background:rgba(56,189,248,.07);color:#cbd5e1;font-size:12px;line-height:1.55}.eq-pay-note.eq-pay-item-note{grid-area:note;margin-top:0}.eq-pay-note strong{color:#7dd3fc}.eq-pay-note-warning{color:#fcd34d;font-weight:700}
         .eq-pay-summary{display:grid;gap:8px;margin-top:14px;padding:14px;border-radius:14px;background:rgba(2,6,23,.55)}.eq-pay-summary>div{display:flex;justify-content:space-between}.eq-pay-summary .is-discount{color:#6ee7b7}.eq-pay-summary .is-total{border-top:1px solid rgba(148,163,184,.22);padding-top:10px;font-size:18px}.eq-pay-summary small{color:#94a3b8;line-height:1.5}
         .eq-pay-error{margin-top:12px;padding:10px;border-radius:10px;background:rgba(248,113,113,.12);color:#fca5a5;font-size:13px}.eq-pay-cta{width:100%;display:flex;justify-content:center;align-items:center;gap:8px;margin-top:14px;padding:13px 18px;border:0;border-radius:12px;background:linear-gradient(135deg,#38bdf8,#0284c7);color:white;font:inherit;font-weight:900;cursor:pointer}.eq-pay-cta:disabled{opacity:.5;cursor:default}
-        .eq-payment-frame{padding:12px}.eq-frame-summary{display:flex;gap:10px;align-items:center;padding:7px 7px 13px}.eq-frame-summary small{color:#6ee7b7}.eq-frame-summary strong{margin-inline-start:auto;font-size:20px}.eq-pay-iframe{width:100%;border:0;border-radius:14px;background:white;display:block}
+        .eq-payment-frame{padding:12px}.eq-frame-summary{display:flex;gap:10px;align-items:center;padding:7px 7px 13px}.eq-frame-summary small{color:#6ee7b7}.eq-frame-summary strong{margin-inline-start:auto;font-size:20px}
+        .eq-pay-open{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:15px;border-radius:14px;background:linear-gradient(135deg,#22c55e,#16a34a);color:#04240f;font-weight:800;font-size:15px;text-decoration:none;text-align:center}
         @media(max-width:560px){.eq-pay-page{padding:10px 8px 28px}.eq-pay-header,.eq-pay-card{border-radius:17px}.eq-pay-brand{font-size:25px;gap:7px}.eq-pay-brand img{width:94px;height:94px}.eq-pay-required{padding:13px}.eq-pay-required>svg{width:25px;height:25px}.eq-pay-required>ul{gap:6px;padding-inline-start:18px}.eq-pay-required li{font-size:13px}.eq-pay-item{grid-template-columns:20px minmax(0,1fr);grid-template-areas:"check details" ". action";row-gap:10px;padding:12px}.eq-pay-item.has-note{grid-template-areas:"check details" ". action" "note note"}.eq-pay-own{justify-self:end}.eq-member{align-items:flex-start;flex-wrap:wrap}.eq-member>b{width:100%;margin-inline-start:32px}.eq-frame-summary{flex-wrap:wrap}}
       `}</style>
     </div>

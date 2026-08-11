@@ -14,7 +14,6 @@ export default function PublicHostPayment() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
-  const [iframeHeight, setIframeHeight] = useState(720);
   const [cancellationAccepted, setCancellationAccepted] = useState(false);
 
   // If iCount redirects success into the iframe, break out to the top window.
@@ -88,25 +87,14 @@ export default function PublicHostPayment() {
         return;
       }
       setPaymentUrl(body.paymentUrl || '');
+      // Framed, iCount loses the basket — see the button below.
+      if (body.paymentUrl) window.location.assign(body.paymentUrl);
     } catch (paymentError) {
       setError(paymentError.message);
     } finally {
       setPaying(false);
     }
   };
-
-  useEffect(() => {
-    const onMessage = (event) => {
-      const data = event?.data;
-      if (!data || typeof data !== 'object') return;
-      if (data.event_type === 'page_load' || data.event_type === 'page_size') {
-        const height = Number(data.page_size?.height);
-        if (height > 200) setIframeHeight(Math.min(1400, Math.max(520, height + 24)));
-      }
-    };
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, []);
 
   const paid = activity?.payment_status === 'paid' || searchParams.get('paid') === '1';
   const coverImage = activity?.cover_image || '';
@@ -230,14 +218,18 @@ export default function PublicHostPayment() {
                 <p>מכין טופס תשלום מאובטח...</p>
               </div>
             )}
+            {/*
+              Not an iframe. iCount redirects the payment link to a URL without
+              the query string and keeps the basket in a session cookie set
+              without SameSite, so inside a frame on our domain the browser
+              never hands it back — the page then renders whatever the pay page
+              itself is configured with instead of this host's amount. As a
+              page it is first-party and the basket survives.
+            */}
             {paymentUrl ? (
-              <iframe
-                title={`תשלום עבור ${activity?.name || 'האירוע'}`}
-                src={paymentUrl}
-                className="host-payment-iframe"
-                style={{ height: iframeHeight }}
-                allow="payment *"
-              />
+              <a className="host-payment-open" href={paymentUrl}>
+                <CreditCard size={18} /> מעבר לתשלום מאובטח
+              </a>
             ) : !paying && !activity.cancellation_policy && (
               <button
                 type="button"
@@ -357,11 +349,20 @@ export default function PublicHostPayment() {
           box-shadow:0 24px 70px rgba(0,0,0,.45);
           min-height:240px;
         }
-        .host-payment-iframe{
-          display:block;
+        .host-payment-open{
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          gap:8px;
           width:100%;
+          padding:16px;
           border:0;
-          background:#fff;
+          border-radius:14px;
+          background:linear-gradient(135deg,#22c55e,#16a34a);
+          color:#04240f;
+          font-weight:800;
+          font-size:16px;
+          text-decoration:none;
         }
         .host-payment-loading,
         .host-payment-success{
