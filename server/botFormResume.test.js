@@ -141,7 +141,9 @@ test('חלון 24 השעות סגור — אין הודעה יזומה בטקס�
 
 test('completion of a form stays silent while a staff handoff is still open', async () => {
   await withWorld({
-    parents: [{ ...PARENT, bot_handoff_at: minutesAgo(12) }],
+    // Fresh enough that a person is still expected to pick it up. An hour
+    // later the bot answers again — see the handoff hold.
+    parents: [{ ...PARENT, bot_handoff_at: new Date(Date.now() - 60_000).toISOString() }],
     messages: BOT_THREAD,
   }, async () => {
     const service = fakeService();

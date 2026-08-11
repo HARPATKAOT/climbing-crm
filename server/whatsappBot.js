@@ -71,9 +71,25 @@ export function isClosingAcknowledgement(text) {
  * explicitly resumes the bot. Additional customer bubbles belong to the same
  * staff task and must not receive another "מעביר לצוות" acknowledgement.
  */
-export function hasOpenBotHandoff(parent, phone = parent?.phone || '') {
+/**
+ * A handoff that is still fresh — not one from an hour ago.
+ *
+ * This was written to stop the acknowledgement repeating on every bubble of a
+ * burst, and it had no clock: once a conversation was handed over, the bot
+ * stopped answering that customer entirely until a human wrote to them. A
+ * parent who was told "I'll pass this to the team" at 17:04 asked an ordinary
+ * question three minutes later and got nothing; another asked the next day.
+ * Nine customers in two days were silenced this way.
+ *
+ * The staff task stays open either way. Answering the next question does not
+ * undo it — it just stops the customer talking to a wall.
+ */
+export const HANDOFF_HOLD_MS = 10 * 60 * 1000;
+
+export function hasOpenBotHandoff(parent, phone = parent?.phone || '', { withinMs = HANDOFF_HOLD_MS } = {}) {
   const handedAt = Date.parse(parent?.bot_handoff_at || '');
   if (!Number.isFinite(handedAt)) return false;
+  if (Number.isFinite(withinMs) && Date.now() - handedAt > withinMs) return false;
   const normalized = normalizeWaPhone(phone) || phone;
   return !(db.get('messages') || []).some((message) => {
     if (message.direction !== 'outbound') return false;

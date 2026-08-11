@@ -42,3 +42,21 @@ test('a message swallowed hours ago is still worth answering, up to a day', () =
   // The phone comes back normalised, the way every other lookup stores it.
   assert.deepEqual(phones, ['972503000001']);
 });
+
+test('a handoff holds the bot for minutes, not for ever', async () => {
+  const { hasOpenBotHandoff } = await import('./whatsappBot.js');
+  const card = (minutesAgo) => ({
+    phone: '0599111000',
+    bot_handoff_at: new Date(Date.now() - minutesAgo * 60_000).toISOString(),
+  });
+
+  // The burst this was written for: further bubbles must not each get their
+  // own "passing this to the team".
+  assert.equal(hasOpenBotHandoff(card(1), '0599111000'), true);
+
+  // But an ordinary question three minutes later, or the next day, deserves an
+  // answer. Nine customers in two days were met with silence instead.
+  assert.equal(hasOpenBotHandoff(card(30), '0599111000'), false);
+  assert.equal(hasOpenBotHandoff(card(60 * 24), '0599111000'), false);
+  assert.equal(hasOpenBotHandoff({ phone: '0599111000' }, '0599111000'), false);
+});
