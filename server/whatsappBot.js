@@ -36,7 +36,20 @@ const BRAND_NAME = DEFAULT_BUSINESS_PROFILE.display_name;
  * it reading as "this is the bot" — so those trailing copies were removed and
  * this is the only place it appears.
  */
-export const BOT_MARK = '🧗';
+export const BOT_MARK = '🤖🧗🏾';
+
+/**
+ * The mark before it grew the robot. Replies already sent carry it, and so do
+ * drafts sitting in the CRM — without this they would come back through here
+ * and end up wearing both marks at once.
+ */
+const LEGACY_BOT_MARKS = ['🧗'];
+
+export function isBotMarked(text) {
+  const body = String(text || '').trim();
+  if (!body) return false;
+  return body.startsWith(BOT_MARK) || LEGACY_BOT_MARKS.some((mark) => body.startsWith(mark));
+}
 
 /** Prices are allowed, invented prices are not. Stamped onto every system prompt. */
 export const PRICE_SOURCE_RULE =
@@ -48,7 +61,7 @@ export function withBotMark(text) {
   const body = String(text || '').trim();
   if (!body) return body;
   // A reply that passes through here twice must not stack the mark.
-  return body.startsWith(BOT_MARK) ? body : `${BOT_MARK} ${body}`;
+  return isBotMarked(body) ? body : `${BOT_MARK} ${body}`;
 }
 
 /**
@@ -62,7 +75,7 @@ export const STAFF_MARK = '👤';
 export function withStaffMark(text) {
   const body = String(text || '').trim();
   if (!body) return body;
-  if (body.startsWith(STAFF_MARK) || body.startsWith(BOT_MARK)) return body;
+  if (body.startsWith(STAFF_MARK) || isBotMarked(body)) return body;
   return `${STAFF_MARK} ${body}`;
 }
 
