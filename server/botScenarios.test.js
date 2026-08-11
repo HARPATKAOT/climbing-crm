@@ -738,6 +738,11 @@ test('קישור תשלום ציוד: אילו פריטים חסרים, בלי �
     const second = await tools.getEquipmentPaymentLink({ childName: 'יותם' });
     assert.equal(second.קישור, first.קישור);
     assert.equal((db.get('equipment_checkouts') || []).length, 1);
+
+    // קישור שאיש לא חוזר אליו הוא קישור שפג. תזכורת אחת בלבד, גם על שתי קריאות.
+    const checks = followUps().filter((f) => f.reason === 'equipment_unpaid');
+    assert.equal(checks.length, 1);
+    assert.equal(checks[0].subject, 'יותם כהן');
   });
 });
 

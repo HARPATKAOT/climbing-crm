@@ -407,6 +407,10 @@ import {
   equipmentPublicBase,
   shoesSeasonPricing,
 } from './equipmentService.js';
+import {
+  equipmentReceiptMessage,
+  familyEquipmentStanding,
+} from './equipmentStanding.js';
 import { weeklySessionsForStudent } from './studentFrequency.js';
 import { shoesUpgradeQuote, describeShoesUpgrade } from './equipmentUpgrade.js';
 import { safetyTestStatus } from './safetyTestService.js';
@@ -455,7 +459,13 @@ import {
   saveForm101Url,
 } from './employeeOnboardingForm.js';
 import { calculateDashboardStats } from './dashboardStats.js';
-import { applyBusinessBrand, resetPlaygroundConversation } from './whatsappBot.js';
+import {
+  applyBusinessBrand,
+  isOptedOut,
+  parentFirstName,
+  resetPlaygroundConversation,
+  withBotMark,
+} from './whatsappBot.js';
 import { waitForMessages, currentVersion } from './liveUpdates.js';
 import { shouldMarkIntroPaid } from './introStatus.js';
 import { countEnrolled } from './groupCapacity.js';
@@ -10229,6 +10239,40 @@ app.post('/api/payments/:id/refund', async (req, res) => {
   }
 });
 
+/**
+ * The message a family gets once the equipment is settled.
+ *
+ * Until now paying was a page that closed, and marking "we already have shoes"
+ * left no trace the parent could see — so the one who did everything right had
+ * no more confirmation than the one who did nothing. This says what was bought
+ * and for whom, what was recorded as already theirs, and whether anything is
+ * still open, so nobody has to ask.
+ *
+ * Never worth failing a webhook over: the payment is recorded either way.
+ */
+async function sendEquipmentReceipt(payment) {
+  try {
+    const parent = payment.parent_id ? db.getOne('parents', payment.parent_id) : null;
+    if (!parent?.phone) return;
+    if (isOptedOut(parent)) return;
+    const students = (db.get('students') || []).filter(
+      (s) => String(s.parentId || s.parent_id || '') === String(parent.id)
+    );
+    const standing = familyEquipmentStanding(db, { students });
+    const body = equipmentReceiptMessage(standing, { firstName: parentFirstName(parent) });
+    if (!body) return;
+    // A receipt is worth nothing a day late, and a template for it does not
+    // exist; outside the window the page itself already showed the result.
+    if (!canSendFreeform(parent, 'whatsapp')) return;
+    await whatsappService.sendTextMessage(normalizePhone(parent.phone), withBotMark(body), true, {
+      source: 'ai',
+      parentId: parent.id,
+    });
+  } catch (err) {
+    console.error('equipment receipt failed:', err.message);
+  }
+}
+
 app.post('/api/icount/webhook', async (req, res) => {
   try {
     const expectedSecret = (process.env.ICOUNT_WEBHOOK_SECRET || '').trim();
@@ -10468,6 +10512,8 @@ app.post('/api/icount/webhook', async (req, res) => {
           paidAt: updated?.paid_at || new Date().toISOString(),
         });
       }
+
+      if (payment.equipment_payment) await sendEquipmentReceipt(payment);
 
       return res.json({
         ok: true,

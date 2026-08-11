@@ -27,6 +27,44 @@ import {
   releaseFollowUpSend,
 } from './botFollowUps.js';
 import { FOLLOWUP_TEMPLATE_NAME } from './scripts/createFollowUpTemplate.js';
+import {
+  equipmentOpenLine,
+  familyEquipmentStanding,
+} from './equipmentStanding.js';
+import { buildEquipmentRedirectUrl } from './equipmentService.js';
+
+/** Registered at the centre — the thing a pending_signup follow-up asks about. */
+const REGISTERED_STATUSES = new Set(['registered', 'active']);
+
+/**
+ * What is still open for this family, read now rather than when the row was
+ * written. A follow-up promised yesterday must not ask about an errand that
+ * was finished overnight; see followUpMessage.
+ */
+function liveFollowUpState(row, parent) {
+  const students = (db.get('students') || []).filter(
+    (s) => String(s.parentId || s.parent_id || '') === String(parent.id)
+  );
+  const subject = row.student_id
+    ? students.find((s) => String(s.id) === String(row.student_id))
+    : null;
+  // No named trainee means the question was about the family; then it is done
+  // only once nobody is still waiting on the centre.
+  const registrationDone = subject
+    ? REGISTERED_STATUSES.has(String(subject.status || ''))
+    : students.every((s) => String(s.status || '') !== 'pending_signup');
+
+  const standing = familyEquipmentStanding(db, { students });
+  // Reuse a link the family already has rather than minting one from a
+  // background scan; without a live token there is nothing useful to say.
+  const now = Date.now();
+  const checkout = (db.get('equipment_checkouts') || []).find(
+    (c) => String(c.parent_id || '') === String(parent.id)
+      && (!c.expires_at || new Date(c.expires_at).getTime() > now)
+  );
+  const link = checkout?.id ? buildEquipmentRedirectUrl(checkout.id) : '';
+  return { registrationDone, equipmentLine: equipmentOpenLine(standing, { link }) };
+}
 
 /** A follow-up is answered once — sent, or handed to the team, or dropped. */
 async function closeFollowUp(row, status) {
@@ -541,6 +579,7 @@ export const automationsService = {
 
     const settings = db.getSettings ? db.getSettings() : {};
     let sent = 0;
+    let resolved = 0;
     const needStaff = [];
 
     for (const row of due) {
@@ -561,7 +600,16 @@ export const automationsService = {
       }
 
       const firstName = parentFirstName(parent);
-      const body = withBotMark(followUpMessage(row, { firstName }));
+      const live = liveFollowUpState(row, parent);
+      const text = followUpMessage(row, { firstName, ...live });
+      // Everything it was going to ask about has since been done. Closing it
+      // quietly is the whole point of reading the state now.
+      if (!text) {
+        await closeFollowUp(row, 'cancelled');
+        resolved += 1;
+        continue;
+      }
+      const body = withBotMark(text);
       const claim = await claimFollowUpSend(db, row, { date: today, phone, now });
       if (!claim.claimed) continue;
 
@@ -574,9 +622,11 @@ export const automationsService = {
           continue;
         }
         try {
-          const subject = row.reason === 'pending_signup'
+          // The template carries one subject, so it has to name the errand that
+          // is actually still open — not the one the row was created for.
+          const subject = (row.reason === 'pending_signup' && !live.registrationDone)
             ? `ההרשמה של ${row.subject || 'המתאמן'} במתנ״ס`
-            : (row.note || 'מה שדיברנו עליו');
+            : (live.equipmentLine ? 'הציוד לאימונים' : (row.note || 'מה שדיברנו עליו'));
           const result = await whatsappService.sendTemplateMessage(
             phone,
             FOLLOWUP_TEMPLATE_NAME,
@@ -632,9 +682,11 @@ export const automationsService = {
     if (needStaff.length) {
       const { phones } = alertRecipients(db, 'handoff', settings);
       const lines = needStaff.slice(0, 15).map(({ row, parent }) => {
-        const what = row.reason === 'pending_signup'
-          ? `הרשמה של ${row.subject || 'מתאמן'}`
-          : (row.note || 'מעקב');
+        const what = row.reason === 'equipment_unpaid'
+          ? `ציוד של ${row.subject || 'מתאמן'}`
+          : (row.reason === 'pending_signup'
+            ? `הרשמה של ${row.subject || 'מתאמן'}`
+            : (row.note || 'מעקב'));
         return `• ${parent.name || '—'} · ${parent.phone || ''} — ${what}`;
       });
       const body = [
@@ -667,6 +719,7 @@ export const automationsService = {
       date: today,
       due: due.length,
       sent,
+      resolved,
       window_closed: needStaff.length,
       staffNotified,
     };
