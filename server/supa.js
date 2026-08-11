@@ -216,6 +216,10 @@ export const OPERATIONAL_TABLES = [
   'finance_expense_matches',
   'finance_accountant_deliveries',
   'finance_automation_settings',
+  // מעקב תשלומי עובדים: שורה לכל עובד לכל חודש, ותשלומי חברה שאינם מיוחסים
+  // לעובד יחיד. אוסף kv, ולכן שדה חדש נשמר בלי מיגרציית סכימה.
+  'payroll_periods',
+  'company_payments',
 ];
 
 // Kept as the public name used by db.js: every listed collection is durable.

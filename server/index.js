@@ -490,6 +490,13 @@ import {
   applyRoleLabels,
 } from './wageRates.js';
 import {
+  COMPANY_PAYMENT_TYPES,
+  buildPeriodView,
+  isValidPeriod,
+  periodsForEmployee,
+  sanitizePeriodPatch,
+} from './payrollPeriods.js';
+import {
   readStaffAttendanceSettings,
   writeStaffAttendanceSettings,
   employeeCanSignDailySafety,
@@ -12286,7 +12293,9 @@ app.get('/api/employees/:id/shift-journal', (req, res) => {
 
 const PAYROLL_DOCUMENT_TYPES = Object.freeze({
   payslip: 'תלוש משכורת',
+  invoice: 'חשבונית מהעובד',
   salary_transfer: 'אישור העברת או הפקדת משכורת',
+  pension_split: 'דף פיצול',
   pension_deposit: 'אישור הפקדה לפנסיה',
   tax_insurance: 'מסמכי מס וביטוח',
   employment: 'חוזה העסקה או טופס 101',
@@ -12523,6 +12532,274 @@ app.get('/api/employees/:id/payroll-documents/:documentId/download', async (req,
     return res.status(403).json({ error: 'אין הרשאה למסמכי העובד' });
   }
   return downloadPayrollDocument(res, employee, req.params.documentId);
+});
+
+// ─── מעקב תשלומי עובדים ─────────────────────────────────────────────────────
+// שורה לכל עובד לכל חודש: מה הוא עבד, מה שולם, ואילו מסמכים התקבלו. הסיכום
+// מחושב מ-work_assignments כל עוד החודש פתוח, ונצרב על השורה כשסוגרים אותו.
+
+/** קריאת השורות השמורות דרך המטמון, עם נפילה לזיכרון אם הקריאה נכשלה. */
+async function readPayrollPeriods() {
+  try {
+    return await readTable('payroll_periods');
+  } catch (error) {
+    console.error('readTable payroll_periods error:', error.message);
+    return db.get('payroll_periods') || [];
+  }
+}
+
+const findStoredPeriod = (rows, employeeId, period) => (
+  (rows || []).find((row) => row.employee_id === employeeId && row.period === period) || null
+);
+
+/** הרכבת תצוגת חודש אחד מכל המקורות. משמש גם את מסך המעקב וגם את כרטיס העובד. */
+function periodViewFor(employee, period, storedRows) {
+  return buildPeriodView({
+    employee,
+    period,
+    stored: findStoredPeriod(storedRows, employee.id, period),
+    workAssignments: db.get('work_assignments') || [],
+    agreement: (db.get('wage_agreements') || []).find((item) => item.employee_id === employee.id) || null,
+    documents: payrollDocumentsOf(employee).map(publicPayrollDocument),
+  });
+}
+
+app.get('/api/payroll-periods', async (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  }
+  const period = String(req.query.month || '').trim() || israelDateStr().slice(0, 7);
+  if (!isValidPeriod(period)) return res.status(400).json({ error: 'חודש חייב להיות בפורמט YYYY-MM' });
+  const storedRows = await readPayrollPeriods();
+  const employees = (db.get('employees') || []).filter((employee) => employee.is_active !== false);
+  res.json({
+    period,
+    document_types: PAYROLL_DOCUMENT_TYPES,
+    periods: employees
+      .map((employee) => periodViewFor(employee, period, storedRows))
+      .sort((a, b) => (b.summary?.total || 0) - (a.summary?.total || 0)
+        || String(a.employee_name).localeCompare(String(b.employee_name), 'he')),
+  });
+});
+
+app.get('/api/employees/:id/payroll-periods', async (req, res) => {
+  const employee = db.getOne('employees', req.params.id);
+  if (!employee) return res.status(404).json({ error: 'העובד לא נמצא' });
+  if (!hasSensitiveAccess(req.crmUser, 'hr') && !isOwnEmployeeRequest(req, employee.id)) {
+    return res.status(403).json({ error: 'אין הרשאה לתשלומי עובד אחר' });
+  }
+  const storedRows = await readPayrollPeriods();
+  const periods = periodsForEmployee({
+    employeeId: employee.id,
+    workAssignments: db.get('work_assignments') || [],
+    storedRows,
+    documents: payrollDocumentsOf(employee),
+  });
+  res.json({
+    employee_id: employee.id,
+    document_types: PAYROLL_DOCUMENT_TYPES,
+    periods: periods.map((period) => periodViewFor(employee, period, storedRows)),
+  });
+});
+
+/**
+ * שמירת השדות הידניים של חודש. השורה נוצרת בפעם הראשונה שנוגעים בה — אין טעם
+ * להחזיק שורה ריקה לכל עובד בכל חודש שבו לא קרה כלום.
+ */
+app.put('/api/payroll-periods/:employeeId/:period', async (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  }
+  const { employeeId, period } = req.params;
+  const employee = db.getOne('employees', employeeId);
+  if (!employee) return res.status(404).json({ error: 'העובד לא נמצא' });
+  if (!isValidPeriod(period)) return res.status(400).json({ error: 'חודש חייב להיות בפורמט YYYY-MM' });
+  try {
+    const patch = sanitizePeriodPatch(req.body || {});
+    const existing = findStoredPeriod(db.get('payroll_periods') || [], employeeId, period);
+    const saved = existing
+      ? db.update('payroll_periods', existing.id, patch)
+      : db.insert('payroll_periods', { employee_id: employeeId, period, status: 'open', summary: null, ...patch });
+    await persistCore('payroll_periods', saved);
+    res.json(periodViewFor(employee, period, db.get('payroll_periods') || []));
+  } catch (error) {
+    res.status(error.statusCode || 400).json({ error: error.message || 'שמירת החודש נכשלה' });
+  }
+});
+
+/**
+ * סגירת חודש: הסיכום נצרב על השורה ומאותו רגע הוא האמת ההיסטורית שלה.
+ * אותו עיקרון כמו הקפאת השכר על שורת עבודה — משכורת של חודש שעבר לא זזה
+ * כשמעלים תעריף או משנים שם תפקיד היום.
+ */
+app.post('/api/payroll-periods/:employeeId/:period/seal', async (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  }
+  const { employeeId, period } = req.params;
+  const employee = db.getOne('employees', employeeId);
+  if (!employee) return res.status(404).json({ error: 'העובד לא נמצא' });
+  if (!isValidPeriod(period)) return res.status(400).json({ error: 'חודש חייב להיות בפורמט YYYY-MM' });
+
+  const reopen = req.body?.reopen === true;
+  const stored = db.get('payroll_periods') || [];
+  const existing = findStoredPeriod(stored, employeeId, period);
+  // פתיחה מחדש מוחקת את הסיכום הצרוב, אחרת החודש היה ממשיך להציג אותו.
+  const fields = reopen
+    ? { status: 'open', summary: null, sealed_at: null }
+    : {
+      status: 'sealed',
+      // תמיד החישוב החי — גם אם החודש כבר היה סגור, סגירה מחדש צורבת מחדש.
+      summary: periodViewFor(employee, period, stored).live_summary,
+      sealed_at: new Date().toISOString(),
+    };
+  const saved = existing
+    ? db.update('payroll_periods', existing.id, fields)
+    : db.insert('payroll_periods', { employee_id: employeeId, period, ...fields });
+  await persistCore('payroll_periods', saved);
+  res.json(periodViewFor(employee, period, db.get('payroll_periods') || []));
+});
+
+// ─── תשלומי חברה ────────────────────────────────────────────────────────────
+// ביטוח לאומי וכל תשלום שאינו מיוחס לעובד יחיד: סכום לחודש ואישור העברה.
+
+const publicCompanyPayment = (row) => {
+  if (!row) return null;
+  const { document, ...rest } = row;
+  if (!document) return { ...rest, document: null };
+  const { storage_path: _path, ...safeDocument } = document;
+  return { ...rest, document: safeDocument };
+};
+
+app.get('/api/company-payments', async (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  }
+  let rows;
+  try {
+    rows = await readTable('company_payments');
+  } catch (error) {
+    console.error('readTable company_payments error:', error.message);
+    rows = db.get('company_payments') || [];
+  }
+  const period = String(req.query.month || '').trim();
+  const filtered = isValidPeriod(period) ? rows.filter((row) => row.period === period) : rows;
+  res.json({
+    types: COMPANY_PAYMENT_TYPES,
+    payments: [...filtered].sort((a, b) => String(b.period || '').localeCompare(String(a.period || ''))),
+  });
+});
+
+app.put('/api/company-payments/:period/:type', async (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  }
+  const { period, type } = req.params;
+  if (!isValidPeriod(period)) return res.status(400).json({ error: 'חודש חייב להיות בפורמט YYYY-MM' });
+  if (!COMPANY_PAYMENT_TYPES[type]) return res.status(400).json({ error: 'סוג התשלום אינו תקין' });
+  try {
+    const { amount, paid_at: paidAt, notes } = sanitizeCompanyPaymentBody(req.body || {});
+    const existing = (db.get('company_payments') || []).find((row) => row.period === period && row.type === type);
+    const saved = existing
+      ? db.update('company_payments', existing.id, { amount, paid_at: paidAt, notes })
+      : db.insert('company_payments', {
+        period, type, type_label: COMPANY_PAYMENT_TYPES[type], amount, paid_at: paidAt, notes, document: null,
+      });
+    await persistCore('company_payments', saved);
+    res.json(publicCompanyPayment(saved));
+  } catch (error) {
+    res.status(error.statusCode || 400).json({ error: error.message || 'שמירת התשלום נכשלה' });
+  }
+});
+
+function sanitizeCompanyPaymentBody(body) {
+  const amountRaw = body.amount;
+  let amount = null;
+  if (amountRaw !== undefined && amountRaw !== null && amountRaw !== '') {
+    const parsed = Number(amountRaw);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      throw Object.assign(new Error('סכום אינו תקין'), { statusCode: 400 });
+    }
+    amount = Math.round(parsed * 100) / 100;
+  }
+  let paidAt = null;
+  if (body.paid_at) {
+    const date = String(body.paid_at).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw Object.assign(new Error('תאריך אינו תקין'), { statusCode: 400 });
+    }
+    paidAt = date;
+  }
+  return { amount, paid_at: paidAt, notes: String(body.notes || '').slice(0, 2000) };
+}
+
+/**
+ * אישור ההעברה של תשלום חברה. אותו bucket פרטי של מסמכי העובדים, בתיקייה
+ * נפרדת — הקובץ לא שייך לאף עובד, ולכן אין לו מקום בתיק אישי.
+ */
+app.post('/api/company-payments/:id/document', async (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  }
+  const payment = db.getOne('company_payments', req.params.id);
+  if (!payment) return res.status(404).json({ error: 'התשלום לא נמצא' });
+  const { fileBase64, fileName, mimeType } = req.body || {};
+  if (!fileBase64 || typeof fileBase64 !== 'string') return res.status(400).json({ error: 'חסר קובץ' });
+  const raw = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
+  const buffer = Buffer.from(raw, 'base64');
+  if (!buffer.length || buffer.length > 10 * 1024 * 1024) {
+    return res.status(400).json({ error: 'גודל הקובץ אינו תקין' });
+  }
+  const safeMime = String(mimeType || 'application/pdf').slice(0, 120);
+  const safeName = String(fileName || `${payment.type}.${extFromMime(safeMime, fileName)}`)
+    .replace(/[^\w֐-׿.\-]+/g, '_')
+    .slice(0, 120);
+  const storagePath = `company/${payment.type}/${payment.period}/${payment.id}.${extFromMime(safeMime, safeName)}`;
+  try {
+    if (payment.document?.storage_path) await supa.removeEmployeeDocument(payment.document.storage_path);
+    const uploaded = await supa.uploadEmployeeDocument(storagePath, buffer, safeMime);
+    if (!uploaded.ok) throw new Error(uploaded.error || 'שמירת הקובץ נכשלה');
+    const saved = db.update('company_payments', payment.id, {
+      document: {
+        file_name: safeName,
+        storage_path: storagePath,
+        mime_type: safeMime,
+        uploaded_at: new Date().toISOString(),
+      },
+    });
+    await persistCore('company_payments', saved);
+    res.status(201).json(publicCompanyPayment(saved));
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'העלאת המסמך נכשלה' });
+  }
+});
+
+app.get('/api/company-payments/:id/document/download', async (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  }
+  const payment = db.getOne('company_payments', req.params.id);
+  if (!payment?.document?.storage_path) return res.status(404).json({ error: 'המסמך לא נמצא' });
+  const downloaded = await supa.downloadEmployeeDocument(payment.document.storage_path);
+  if (!downloaded.ok || !downloaded.blob) {
+    return res.status(500).json({ error: downloaded.error || 'הורדת המסמך נכשלה' });
+  }
+  const buffer = Buffer.from(await downloaded.blob.arrayBuffer());
+  res.setHeader('Content-Type', payment.document.mime_type || 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(payment.document.file_name || 'document.pdf')}`);
+  return res.send(buffer);
+});
+
+app.delete('/api/company-payments/:id/document', async (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  }
+  const payment = db.getOne('company_payments', req.params.id);
+  if (!payment) return res.status(404).json({ error: 'התשלום לא נמצא' });
+  if (payment.document?.storage_path) await supa.removeEmployeeDocument(payment.document.storage_path);
+  const saved = db.update('company_payments', payment.id, { document: null });
+  await persistCore('company_payments', saved);
+  res.json(publicCompanyPayment(saved));
 });
 
 app.post('/api/work-assignments/approve', (req, res) => {
