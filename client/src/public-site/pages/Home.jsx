@@ -59,8 +59,8 @@ export default function Home() {
           <div className="ks-tiles">
             {[
               { to: '/classes', img: 'gallery-07.jpg', title: 'חוגי טיפוס', body: 'קבוצות שבועיות לפי שכבות גיל, עם מצב מקומות מעודכן.' },
-              { to: '/activities', img: 'cat-rappel.jpg', title: 'טיולי סנפלינג', body: 'גלישה במפלים ובנחלים, בהדרכת מדריכי חבל מוסמכים.' },
-              { to: '/activities', img: 'cat-cave.jpg', title: 'טיולי מערות', body: 'הרפתקה תת־קרקעית בעולם שלא ידעתם שקיים.' },
+              { to: '/activities/rappel', img: 'cat-rappel.jpg', title: 'טיולי סנפלינג', body: 'גלישה במפלים ובנחלים, בהדרכת מדריכי חבל מוסמכים.' },
+              { to: '/activities/cave', img: 'cat-cave.jpg', title: 'טיולי מערות', body: 'הרפתקה תת־קרקעית בעולם שלא ידעתם שקיים.' },
               { to: '/events', img: 'gallery-11.jpg', title: 'ימי הולדת ואירועים', body: 'חגיגות לילדים, בתי ספר וגיבושי חברות.' },
             ].map((tile) => (
               <Link className="ks-tile" to={tile.to} key={tile.title}>

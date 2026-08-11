@@ -1,5 +1,7 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { useActivities, shortDate, ACTIVITY_TYPE_LABELS, WHATSAPP_URL } from '../publicData.js';
+import { TRIP_CATEGORIES } from '../tripCategories.js';
 
 export function ActivityCard({ activity }) {
   const when = activity.end_date && activity.end_date !== activity.date
@@ -67,49 +69,6 @@ export function ActivitiesList({ limit }) {
   );
 }
 
-/* The four trip families the wall runs, carried over from the previous site
-   along with their own photos and wording. */
-const CATEGORIES = [
-  {
-    key: 'cave',
-    title: 'טיולי מערות',
-    accent: 'var(--ks-brown)',
-    body:
-      'לטייל על כוכב אחר! לא הרבה אנשים בוחרים ללכת לחקור מערות בזמנם הפנוי, ' +
-      'אבל זה כי הם לא יודעים מה הם מפסידים. לטייל במערה זו פעילות כה שונה ממה ' +
-      'שכולנו מכירים ועושים בחיי היום יום, וההרפתקאות התת־קרקעיות שיש לנו להציע ' +
-      'יפתיעו אתכם עם עולם שלם שלא רק שלא ידעתם על קיומו — אפילו לא דמיינתם שקיים.',
-  },
-  {
-    key: 'rappel',
-    title: 'טיולי סנפלינג',
-    accent: 'var(--ks-teal)',
-    body:
-      'חבלים הם לא המטרה אלא הכלי! בעזרת חבלים נוכל לא רק להגיע למקומות ייחודיים ' +
-      'שאינם נגישים לכל אחד, אלא גם לקבל הזדמנות לפעילות חברתית או משפחתית מגבשת ' +
-      'ומאתגרת. דמיינו שאתם עומדים בראש מפל גבוה, מחוברים לחבל וצריכים להישען ' +
-      'לאחור — ברגע הזה מתמודדים עם אחד הפחדים הבסיסיים ביותר. כל מדריכי החבל שלנו ' +
-      'מוסמכים, והציוד תקני ובאחזקה גבוהה.',
-  },
-  {
-    key: 'climb',
-    title: 'ימי טיפוס',
-    accent: 'var(--ks-blue)',
-    body:
-      'אמנם היום רובנו מתאמנים בטיפוס בקירות מלאכותיים עם אחיזות מפלסטיק, אבל ' +
-      'טיפוס הוא ספורט שמגיע מהטבע — שם הוא מקבל את צבעו המלא ואת אופיו המיוחד. ' +
-      'אנחנו משתדלים לקחת את המטפסים שלנו אחת לכמה חודשים לטפס בשטח, על מצוקים אמיתיים!',
-  },
-  {
-    key: 'walk',
-    title: 'טיולי הליכה',
-    accent: 'var(--ks-red)',
-    body:
-      'לא כל טיול חייב לכלול חבלים ויכולות טכניות. יש לנו מסלולי הליכה מדהימים ' +
-      'אליהם נוכל לקחת אתכם, וללוות את הנוף בהדרכות מעניינות ובידע שיעשיר לכם את היום.',
-  },
-];
-
 export default function Activities() {
   return (
     <>
@@ -125,27 +84,25 @@ export default function Activities() {
 
       <section className="ks-section ks-section--warm">
         <div className="ks-wrap">
-          <span className="ks-eyebrow">טיולי שטח</span>
-          <h2 className="ks-h2">מה אנחנו עושים</h2>
+          <div className="ks-sectionhead">
+            <h2>טיולי שטח</h2>
+          </div>
           <p className="ks-lede">
             ארבעה סוגי הרפתקאות, כולם בהדרכת מדריכים מוסמכים ובציוד תקני.
+            לחצו על כל אחד כדי לראות את המסלולים.
           </p>
-
-          <div className="ks-cats">
-            {CATEGORIES.map((cat) => (
-              <article className="ks-cat" key={cat.key}>
-                <h3 className="ks-cat-title" style={{ color: cat.accent }}>{cat.title}</h3>
-                <img src={`/gallery/cat-${cat.key}.jpg`} alt={cat.title} loading="lazy" />
-                <p>{cat.body}</p>
-              </article>
+          <div className="ks-tiles">
+            {TRIP_CATEGORIES.map((cat) => (
+              <Link className="ks-tile" to={`/activities/${cat.key}`} key={cat.key}>
+                <img src={`/gallery/cat-${cat.key}.jpg`} alt="" aria-hidden="true" loading="lazy" />
+                <div className="ks-tile-body">
+                  <h3>{cat.title}</h3>
+                  <span className="ks-tile-rule" style={{ background: cat.accent }} />
+                  <p>{cat.tagline}</p>
+                </div>
+              </Link>
             ))}
           </div>
-
-          <p style={{ marginTop: 26 }}>
-            <a className="ks-btn ks-btn--wa" href={WHATSAPP_URL} target="_blank" rel="noreferrer">
-              רוצים לצאת איתנו? כתבו לנו
-            </a>
-          </p>
         </div>
       </section>
     </>

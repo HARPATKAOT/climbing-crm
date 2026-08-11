@@ -11,6 +11,7 @@ const Boaz       = lazy(() => import('./pages/Boaz.jsx'));
 const Gallery    = lazy(() => import('./pages/Gallery.jsx'));
 const Faq        = lazy(() => import('./pages/Faq.jsx'));
 const Community  = lazy(() => import('./pages/Community.jsx'));
+const TripCategory = lazy(() => import('./pages/TripCategory.jsx'));
 const Contact    = lazy(() => import('./pages/Contact.jsx'));
 
 function Loading() {
@@ -29,6 +30,7 @@ export default function PublicSite() {
         <Route element={<PublicLayout />}>
           <Route index element={<Home />} />
           <Route path="activities" element={<Activities />} />
+          <Route path="activities/:key" element={<TripCategory />} />
           <Route path="classes" element={<Classes />} />
           <Route path="events" element={<Events />} />
           <Route path="about" element={<About />} />

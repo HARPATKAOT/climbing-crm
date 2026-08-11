@@ -2,7 +2,10 @@ import React from 'react';
 import { useGroups, weekdayName, WHATSAPP_URL } from '../publicData.js';
 
 /* Mirrors the CRM's weekly board (client/src/components/Schedule.jsx): hours
-   down the side, days across, each class placed by its real start time. */
+   down the side, days across, each class placed by its real start time, and
+   one colour per age band. Everything operational — trainers, assistants and
+   spare places — is deliberately left out; parents get the schedule, the team
+   gets the rest. */
 const START_HOUR = 14;
 const END_HOUR = 22;
 const PX_PER_MIN = 1.4;
@@ -10,22 +13,46 @@ const HOURS = Array.from({ length: END_HOUR - START_HOUR + 1 }, (_, i) => START_
 const GRID_H = (END_HOUR - START_HOUR) * 60 * PX_PER_MIN;
 const DAYS = [0, 1, 2, 3, 4, 5];
 
+/* Same bands and order as the CRM legend. */
+const AGE_BANDS = [
+  { key: "א'-ב'", color: '#8B7BE8' },
+  { key: "ג'-ד'", color: '#2FA37A' },
+  { key: "ה'-ו'", color: '#D9A017' },
+  { key: 'חטיבה', color: '#7C5BD6' },
+  { key: 'תיכון', color: '#D9558E' },
+  { key: 'בוגרים', color: '#2E86C8' },
+];
+
+function ageColor(category) {
+  const raw = String(category || '');
+  const band = AGE_BANDS.find((b) => raw.includes(b.key));
+  return band ? band.color : 'var(--ks-grey)';
+}
+
+/** The stored name repeats the day and time shown by the grid itself. */
+function cleanName(group) {
+  let name = String(group.name || '').trim();
+  name = name.replace(/\s*[—–-]\s*יום\s*[א-ו]['׳]?\s*\d{1,2}:\d{2}.*$/u, '');
+  name = name.replace(/\s+יום\s*[א-ו]['׳]?\s*\d{1,2}:\d{2}.*$/u, '');
+  name = name.replace(/\s+/g, ' ').trim();
+  return name || (group.age_category ? `כיתות ${group.age_category}` : 'חוג טיפוס');
+}
+
 function minutesFromStart(time) {
   const [h, m] = String(time || '').split(':').map(Number);
   if (!Number.isFinite(h)) return null;
   return (h - START_HOUR) * 60 + (Number.isFinite(m) ? m : 0);
 }
 
-function GroupChip({ group, style }) {
+function Legend() {
   return (
-    <div
-      className={`ks-chip${group.has_room ? '' : ' ks-chip--full'}`}
-      style={style}
-      title={`${group.time} · ${group.age_category}`}
-    >
-      <strong>{group.time}</strong>
-      <span>{group.age_category || group.name}</span>
-      {!group.has_room && <em>מלאה</em>}
+    <div className="ks-legend">
+      {AGE_BANDS.map((band) => (
+        <span className="ks-legend-item" key={band.key}>
+          <i style={{ background: band.color }} />
+          {band.key}
+        </span>
+      ))}
     </div>
   );
 }
@@ -35,7 +62,7 @@ function WeekBoard({ groups }) {
     <div className="ks-board-scroll">
       <div className="ks-board">
         <div className="ks-board-head">
-          <div className="ks-board-hourcol" />
+          <div className="ks-board-hourcol">שעה</div>
           {DAYS.map((day) => {
             const count = groups.filter((g) => Number(g.day) === day).length;
             return (
@@ -66,13 +93,21 @@ function WeekBoard({ groups }) {
                 .map((group) => {
                   const top = minutesFromStart(group.time);
                   if (top == null) return null;
-                  const height = Math.max((group.duration || 50) * PX_PER_MIN, 34);
+                  const color = ageColor(group.age_category);
                   return (
-                    <GroupChip
+                    <div
+                      className="ks-chip"
                       key={group.id}
-                      group={group}
-                      style={{ top: top * PX_PER_MIN, height }}
-                    />
+                      style={{
+                        top: top * PX_PER_MIN,
+                        height: Math.max((group.duration || 50) * PX_PER_MIN, 38),
+                        borderInlineStartColor: color,
+                        background: `color-mix(in srgb, ${color} 9%, #fff)`,
+                      }}
+                    >
+                      <strong style={{ color }}>{group.time}</strong>
+                      <span>{cleanName(group)}</span>
+                    </div>
                   );
                 })}
             </div>
@@ -93,13 +128,19 @@ function DayList({ groups }) {
       {Object.keys(byDay).sort((a, b) => a - b).map((day) => (
         <div key={day}>
           <h3 className="ks-daylist-day">יום {weekdayName(day)}</h3>
-          {byDay[day].map((group) => (
-            <div className={`ks-daylist-row${group.has_room ? '' : ' is-full'}`} key={group.id}>
-              <strong>{group.time}</strong>
-              <span>{group.age_category || group.name}</span>
-              <em>{group.has_room ? 'יש מקום' : 'מלאה'}</em>
-            </div>
-          ))}
+          {byDay[day].map((group) => {
+            const color = ageColor(group.age_category);
+            return (
+              <div
+                className="ks-daylist-row"
+                key={group.id}
+                style={{ borderInlineStartColor: color }}
+              >
+                <strong style={{ color }}>{group.time}</strong>
+                <span>{cleanName(group)}</span>
+              </div>
+            );
+          })}
         </div>
       ))}
     </div>
@@ -116,8 +157,7 @@ export default function Classes() {
         <span className="ks-eyebrow">לוח חוגים</span>
         <h1 className="ks-h1">חוגי טיפוס שבועיים</h1>
         <p className="ks-lede">
-          קבוצות קטנות לפי שכבות גיל, עם מדריכים מוסמכים. הלוח מתעדכן מהמערכת —
-          מה שמסומן כפנוי באמת פנוי.
+          קבוצות קטנות לפי שכבות גיל, עם מדריכים מוסמכים. הלוח מתעדכן מהמערכת.
         </p>
 
         {loading && <p className="ks-meta">טוען חוגים…</p>}
@@ -130,7 +170,8 @@ export default function Classes() {
           <>
             <WeekBoard groups={groups} />
             <DayList groups={groups} />
-            <p className="ks-meta" style={{ marginTop: 14 }}>
+            <Legend />
+            <p className="ks-meta" style={{ marginTop: 18 }}>
               המחירים משתנים לפי מספר האימונים בשבוע — נשמח למסור בהודעה.
             </p>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>

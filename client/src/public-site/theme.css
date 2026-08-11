@@ -159,6 +159,16 @@
 .ks-cat img { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; border-radius: 4px; }
 .ks-cat p { margin: 0; font-size: 15.5px; color: var(--ks-ink-2); }
 
+/* Inner-page hero: shorter than the home one, same photo treatment. */
+.ks-pagehero {
+  min-height: 340px; display: flex; align-items: flex-end;
+  background-size: cover; background-position: center;
+  color: #fff; padding: 44px 0 38px;
+}
+.ks-pagehero .ks-h1 { color: #fff; margin-bottom: 8px; }
+.ks-pagehero .ks-lede { color: rgba(255,255,255,.92); margin-bottom: 0; }
+.ks-pagehero .ks-eyebrow { color: var(--ks-amber); }
+
 /* full-width photo strip */
 .ks-strip {
   position: relative; padding: 78px 0; color: #fff; text-align: center;
@@ -257,28 +267,37 @@ a.ks-card:hover { transform: translateY(-3px); box-shadow: var(--ks-shadow-lift)
 
 .ks-chip {
   position: absolute; inset-inline: 5px; overflow: hidden;
-  border-radius: 11px; padding: 6px 9px; font-size: 13px; line-height: 1.3;
-  background: linear-gradient(140deg, #2675B7, #1B5183); color: #fff;
+  border-radius: 6px; padding: 7px 11px; font-size: 13px; line-height: 1.35;
   display: flex; flex-direction: column; gap: 1px;
-  box-shadow: 0 3px 10px rgba(27,81,131,.28);
+  border: 1px solid var(--ks-line);
+  border-inline-start-width: 4px; border-inline-start-style: solid;
+  color: var(--ks-ink);
 }
-.ks-chip strong { font-size: 13.5px; font-weight: 800; }
-.ks-chip span { opacity: .92; font-size: 12.5px; }
-.ks-chip em { font-style: normal; font-size: 11px; opacity: .95; font-weight: 700; }
-.ks-chip--full { background: linear-gradient(140deg, #A1A5A4, #7C807F); box-shadow: none; }
+.ks-chip strong { font-size: 14px; font-weight: 800; letter-spacing: .01em; }
+.ks-chip span { font-size: 12.5px; color: var(--ks-ink-2); }
+
+/* Age legend, mirroring the one under the CRM board. */
+.ks-legend {
+  display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 16px;
+  padding-top: 14px; border-top: 1px solid var(--ks-line);
+}
+.ks-legend-item {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 14px; font-weight: 600; color: var(--ks-ink-2);
+}
+.ks-legend-item i { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
 
 /* Mobile fallback for the board */
 .ks-daylist { display: none; }
 .ks-daylist-day { margin: 22px 0 8px; font-size: 18px; font-weight: 800; }
 .ks-daylist-row {
   display: flex; align-items: center; gap: 12px;
-  padding: 12px 15px; border: 1px solid var(--ks-line); border-radius: 13px;
+  padding: 12px 15px; border: 1px solid var(--ks-line); border-radius: 6px;
+  border-inline-start-width: 4px; border-inline-start-style: solid;
   margin-bottom: 7px; background: #fff;
 }
-.ks-daylist-row strong { font-size: 16px; min-width: 54px; color: var(--ks-blue); }
+.ks-daylist-row strong { font-size: 16px; min-width: 54px; font-weight: 800; }
 .ks-daylist-row span { flex: 1; }
-.ks-daylist-row em { font-style: normal; font-size: 13px; font-weight: 700; color: #0E7C80; }
-.ks-daylist-row.is-full em { color: var(--ks-ink-3); }
 
 /* --- floating WhatsApp --------------------------------------------------- */
 .ks-wa-float {
