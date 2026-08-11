@@ -475,6 +475,8 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
   const botMenuRef = useRef(null);
   const messagesRef = useRef(null);
   const fileRef = useRef(null);
+  const replyInputRef = useRef(null);
+  const wasSendingRef = useRef(false);
   const wasBlockedRef = useRef(false);
   // The nudge out of the template tab belongs to opening a customer. Once staff
   // pick that tab themselves, no background poll may pull them out of it.
@@ -707,6 +709,20 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
     }
     wasBlockedRef.current = !!freeformBlocked;
   }, [freeformBlocked, mode, channel]);
+
+  // The box is disabled while the message is in flight, and a disabled field
+  // loses the caret — so after every send staff had to click back into it
+  // before they could type the next line. Put it back once the send settles,
+  // whether it succeeded or failed: a failure is the case where they most want
+  // to keep typing. Only on that transition, so nothing here ever takes the
+  // caret away from wherever they happen to be working.
+  useEffect(() => {
+    const wasSending = wasSendingRef.current;
+    wasSendingRef.current = sending;
+    if (!wasSending || sending) return;
+    if (freeformBlocked || (mode !== 'text' && mode !== 'image')) return;
+    replyInputRef.current?.focus();
+  }, [sending, freeformBlocked, mode]);
 
   const findInboundBefore = (index) => {
     for (let i = index - 1; i >= 0; i -= 1) {
@@ -1670,6 +1686,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
             {(mode === 'text' || mode === 'image') && (
               <div style={{ display: 'flex', gap: 8 }}>
                 <input
+                  ref={replyInputRef}
                   className="input input-sm"
                   style={{ flex: 1 }}
                   placeholder={mode === 'image' ? 'כיתוב לתמונה (אופציונלי)' : 'כתבו תשובה ללקוח...'}
