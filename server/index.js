@@ -449,6 +449,9 @@ import {
   mergeFieldDefs,
   publicFieldDefs,
   buildEmployeeFromSubmission,
+  EMPLOYEE_ONBOARD_DOC_DEFS,
+  getForm101Url,
+  saveForm101Url,
 } from './employeeOnboardingForm.js';
 import { calculateDashboardStats } from './dashboardStats.js';
 import { applyBusinessBrand, resetPlaygroundConversation } from './whatsappBot.js';
@@ -1309,10 +1312,18 @@ app.post('/api/leads', async (req, res) => {
 app.get('/api/public/employee-onboard-fields', publicFormRateLimit, async (_req, res) => {
   try {
     const config = await getEmployeeOnboardConfig();
-    res.json({ fields: publicFieldDefs(config) });
+    res.json({
+      fields: publicFieldDefs(config),
+      docs: EMPLOYEE_ONBOARD_DOC_DEFS,
+      form101Url: await getForm101Url(),
+    });
   } catch (error) {
     console.error('employee-onboard-fields load error:', error.message);
-    res.json({ fields: publicFieldDefs(await getEmployeeOnboardConfig()) });
+    res.json({
+      fields: publicFieldDefs(await getEmployeeOnboardConfig()),
+      docs: EMPLOYEE_ONBOARD_DOC_DEFS,
+      form101Url: '',
+    });
   }
 });
 
@@ -1321,15 +1332,44 @@ app.post('/api/public/employee-onboard', publicFormRateLimit, async (req, res) =
     const config = await getEmployeeOnboardConfig();
     const { employee, error } = buildEmployeeFromSubmission(req.body?.answers, config);
     if (error) return res.status(400).json({ error });
+    // אסימון העלאה קצר-מועד: הקבצים נשלחים אחד-אחד אחרי שהכרטיס נוצר, כי
+    // תמונות של תעודות מטלפון חורגות בקלות ממגבלת גוף הבקשה אם שולחים הכול יחד.
+    employee.onboard_upload_token = crypto.randomUUID();
+    employee.onboard_upload_expires = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+
     const created = db.insert('employees', employee);
     const durable = await persistCore('employees', created);
     if (!durable.ok) {
       console.error('employee onboarding durable write failed:', durable.error);
     }
-    res.status(201).json({ success: true });
+    res.status(201).json({ success: true, uploadToken: created.onboard_upload_token });
   } catch (error) {
     console.error('employee onboarding submit error:', error.message);
     res.status(500).json({ error: 'שמירת הפרטים נכשלה — נסו שוב' });
+  }
+});
+
+/**
+ * צירוף מסמך אחד על ידי העובד עצמו, מיד אחרי שליחת הטופס. קובץ אחד לבקשה,
+ * ורק בחלון של שעתיים מרגע השליחה — האסימון אינו כניסה למערכת.
+ */
+app.post('/api/public/employee-onboard/documents', publicFormRateLimit, async (req, res) => {
+  try {
+    const { token, docType, fileBase64, fileName, mimeType } = req.body || {};
+    if (!token || typeof token !== 'string') return res.status(400).json({ error: 'חסר אסימון העלאה' });
+
+    const emp = (db.get('employees') || []).find((e) => e.onboard_upload_token === token);
+    const expires = emp?.onboard_upload_expires ? Date.parse(emp.onboard_upload_expires) : 0;
+    if (!emp || !expires || expires < Date.now()) {
+      return res.status(403).json({ error: 'חלון ההעלאה נסגר — פנו לצוות כדי לשלוח את המסמך' });
+    }
+
+    const result = await storeEmployeeDocument(emp.id, { docType, fileBase64, fileName, mimeType });
+    if (result.error) return res.status(result.status || 400).json({ error: result.error });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('employee onboarding document error:', error.message);
+    res.status(500).json({ error: 'שמירת הקובץ נכשלה' });
   }
 });
 
@@ -1348,6 +1388,23 @@ app.put('/api/settings/employee-onboard-fields', requireOwner, async (req, res) 
     res.json(mergeFieldDefs(config));
   } catch (error) {
     res.status(400).json({ error: error.message || 'שמירת הגדרות הטופס נכשלה' });
+  }
+});
+
+// הקישור לאתר החיצוני שבו נחתם טופס 101. ריק = לא מוצג בסיום הטופס.
+app.get('/api/settings/employee-onboard-form101', requireOwner, async (_req, res) => {
+  try {
+    res.json({ url: await getForm101Url() });
+  } catch (error) {
+    res.status(503).json({ error: error.message || 'טעינת הקישור נכשלה' });
+  }
+});
+
+app.put('/api/settings/employee-onboard-form101', requireOwner, async (req, res) => {
+  try {
+    res.json({ url: await saveForm101Url(req.body?.url) });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'שמירת הקישור נכשלה' });
   }
 });
 
@@ -11366,6 +11423,21 @@ const EMPLOYEE_DOC_FLAG = {
   form101: 'hasForm101',
 };
 
+// למדריך יש בדרך כלל יותר מתעודה אחת (סלע, מע"ר, עזרה ראשונה). הראשונה נשמרת
+// במפתח הישן `certificates` כדי שכרטיסים קיימים לא ישתנו, והנוספות במפתחות
+// certificate_2, certificate_3 — כל אחת קובץ אחד.
+const EXTRA_CERT_KEY = /^certificate_(\d+)$/;
+
+function isEmployeeDocType(docType) {
+  return !!EMPLOYEE_DOC_TYPES[docType] || EXTRA_CERT_KEY.test(String(docType || ''));
+}
+
+function employeeDocLabel(docType) {
+  const extra = EXTRA_CERT_KEY.exec(String(docType || ''));
+  if (extra) return `תעודה ${extra[1]}`;
+  return EMPLOYEE_DOC_TYPES[docType] || docType;
+}
+
 function extFromMime(mimeType = '', fileName = '') {
   const fromName = String(fileName).split('.').pop();
   if (fromName && fromName.length <= 5 && fromName !== fileName) return fromName.toLowerCase();
@@ -11379,30 +11451,27 @@ function extFromMime(mimeType = '', fileName = '') {
   return 'bin';
 }
 
-app.post('/api/employees/:id/documents', async (req, res) => {
-  const emp = (db.get('employees') || []).find((e) => e.id === req.params.id);
-  if (!emp) return res.status(404).json({ error: 'העובד לא נמצא' });
-  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
-    return res.status(403).json({ error: 'רק מנהל או בעל הרשאת משאבי אנוש יכול להעלות מסמך רשמי' });
-  }
-
-  const { docType, fileBase64, fileName, mimeType } = req.body || {};
-  if (!EMPLOYEE_DOC_TYPES[docType]) {
-    return res.status(400).json({ error: 'סוג מסמך לא תקין' });
-  }
-  if (!fileBase64 || typeof fileBase64 !== 'string') {
-    return res.status(400).json({ error: 'חסר קובץ' });
-  }
+/**
+ * העלאת מסמך אחד לתיק העובד. משותפת למסך העובדים ולטופס הקליטה הציבורי, כדי
+ * שקובץ שהעובד צירף בעצמו יישמר בדיוק כמו קובץ שהעלה מנהל — אותו נתיב אחסון,
+ * אותה מטא-דאטה ואותו דגל ישן.
+ * מחזירה { error, status } כשהקלט פסול, או { document, employee } בהצלחה.
+ */
+async function storeEmployeeDocument(employeeId, { docType, fileBase64, fileName, mimeType }) {
+  const emp = (db.get('employees') || []).find((e) => e.id === employeeId);
+  if (!emp) return { status: 404, error: 'העובד לא נמצא' };
+  if (!isEmployeeDocType(docType)) return { status: 400, error: 'סוג מסמך לא תקין' };
+  if (!fileBase64 || typeof fileBase64 !== 'string') return { status: 400, error: 'חסר קובץ' };
 
   const raw = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
   let buffer;
   try {
     buffer = Buffer.from(raw, 'base64');
   } catch {
-    return res.status(400).json({ error: 'קובץ לא תקין' });
+    return { status: 400, error: 'קובץ לא תקין' };
   }
   if (!buffer.length || buffer.length > 10 * 1024 * 1024) {
-    return res.status(400).json({ error: 'גודל הקובץ לא תקין' });
+    return { status: 400, error: 'גודל הקובץ לא תקין' };
   }
 
   const safeMime = String(mimeType || 'application/pdf').slice(0, 120);
@@ -11419,7 +11488,7 @@ app.post('/api/employees/:id/documents', async (req, res) => {
 
   const uploaded = await supa.uploadEmployeeDocument(storagePath, buffer, safeMime);
   if (!uploaded.ok) {
-    return res.status(500).json({ error: uploaded.error || 'שמירת הקובץ נכשלה' });
+    return { status: 500, error: uploaded.error || 'שמירת הקובץ נכשלה' };
   }
 
   const docMeta = {
@@ -11428,17 +11497,34 @@ app.post('/api/employees/:id/documents', async (req, res) => {
     mimeType: safeMime,
     uploadedAt: new Date().toISOString(),
   };
-  const documents = { ...(emp.documents || {}), [docType]: docMeta };
+  // נקרא מחדש: כשמעלים כמה קבצים ברצף, `emp` שנתפס למעלה כבר לא מכיל את
+  // הקודמים, והמיזוג היה מוחק אותם.
+  const fresh = (db.get('employees') || []).find((e) => e.id === employeeId) || emp;
+  const documents = { ...(fresh.documents || {}), [docType]: docMeta };
   const flag = EMPLOYEE_DOC_FLAG[docType];
   const updated = db.update('employees', emp.id, {
     documents,
     ...(flag ? { [flag]: true } : {}),
   });
   await persistCore('employees', updated);
+  return { document: docMeta, employee: updated };
+}
+
+app.post('/api/employees/:id/documents', async (req, res) => {
+  const emp = (db.get('employees') || []).find((e) => e.id === req.params.id);
+  if (!emp) return res.status(404).json({ error: 'העובד לא נמצא' });
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'רק מנהל או בעל הרשאת משאבי אנוש יכול להעלות מסמך רשמי' });
+  }
+
+  const { docType, fileBase64, fileName, mimeType } = req.body || {};
+  const result = await storeEmployeeDocument(req.params.id, { docType, fileBase64, fileName, mimeType });
+  if (result.error) return res.status(result.status || 400).json({ error: result.error });
+
   res.json({
     success: true,
-    document: publicLegacyDocuments({ [docType]: docMeta })[docType],
-    employee: employeePrivateView(updated),
+    document: publicLegacyDocuments({ [docType]: result.document })[docType],
+    employee: employeePrivateView(result.employee),
   });
 });
 
@@ -11450,7 +11536,7 @@ app.delete('/api/employees/:id/documents/:docType', async (req, res) => {
   }
 
   const { docType } = req.params;
-  if (!EMPLOYEE_DOC_TYPES[docType]) {
+  if (!isEmployeeDocType(docType)) {
     return res.status(400).json({ error: 'סוג מסמך לא תקין' });
   }
 

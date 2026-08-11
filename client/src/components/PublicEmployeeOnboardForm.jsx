@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle } from 'lucide-react';
+import { CheckCircle, ExternalLink, Paperclip, X } from 'lucide-react';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import { EventStyles } from './publicFormKit.jsx';
 import GenderPicker from './GenderPicker.jsx';
@@ -17,6 +17,15 @@ function ErrorBox({ message }) {
   );
 }
 
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('קריאת הקובץ נכשלה'));
+    reader.readAsDataURL(file);
+  });
+}
+
 /**
  * Which fields appear, and whether each is required, comes from the server —
  * an admin editing the form in the Employees screen must change what a new
@@ -27,11 +36,17 @@ export default function PublicEmployeeOnboardForm() {
   const brandName = profile.display_name || 'הרפתקאות';
   const brandLogo = profile.logo_url || '/logo.png';
   const [fields, setFields] = useState([]);
+  const [docs, setDocs] = useState([]);
+  const [form101Url, setForm101Url] = useState('');
   const [loading, setLoading] = useState(true);
   const [answers, setAnswers] = useState({});
+  // קובץ אחד לכל שדה מסמך, ולתעודות רשימה — למדריך יש בדרך כלל כמה.
+  const [files, setFiles] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
   const [done, setDone] = useState(false);
+  const [docWarning, setDocWarning] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -40,6 +55,8 @@ export default function PublicEmployeeOnboardForm() {
       .then((data) => {
         if (cancelled) return;
         setFields(Array.isArray(data.fields) ? data.fields : []);
+        setDocs(Array.isArray(data.docs) ? data.docs : []);
+        setForm101Url(typeof data.form101Url === 'string' ? data.form101Url : '');
       })
       .catch(() => { if (!cancelled) setFields([]); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -48,6 +65,58 @@ export default function PublicEmployeeOnboardForm() {
 
   const setAnswer = (key, value) => setAnswers((prev) => ({ ...prev, [key]: value }));
 
+  const addFiles = (key, picked, multiple) => {
+    const list = Array.from(picked || []);
+    if (!list.length) return;
+    setFiles((prev) => ({
+      ...prev,
+      [key]: multiple ? [...(prev[key] || []), ...list] : [list[0]],
+    }));
+  };
+
+  const removeFile = (key, index) => {
+    setFiles((prev) => ({ ...prev, [key]: (prev[key] || []).filter((_, i) => i !== index) }));
+  };
+
+  /**
+   * הקבצים נשלחים אחד-אחד אחרי שהכרטיס נוצר: תמונת תעודה מהטלפון גדולה,
+   * ושליחה של הכול בבקשה אחת הייתה נחסמת על גודל.
+   */
+  const uploadFiles = async (token) => {
+    const queue = [];
+    docs.forEach((doc) => {
+      (files[doc.key] || []).forEach((file, index) => {
+        // הראשונה נשמרת במפתח המקורי, הנוספות כ-certificate_2, certificate_3…
+        const docType = index === 0 ? doc.key : `certificate_${index + 1}`;
+        queue.push({ docType, file, label: doc.label });
+      });
+    });
+    const failed = [];
+    for (let i = 0; i < queue.length; i += 1) {
+      const item = queue[i];
+      setProgress(`מעלה קבצים ${i + 1}/${queue.length}...`);
+      try {
+        const fileBase64 = await readFileAsDataUrl(item.file);
+        const res = await fetch('/api/public/employee-onboard/documents', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            token,
+            docType: item.docType,
+            fileBase64,
+            fileName: item.file.name,
+            mimeType: item.file.type || 'application/octet-stream',
+          }),
+        });
+        if (!res.ok) failed.push(item.file.name);
+      } catch {
+        failed.push(item.file.name);
+      }
+    }
+    setProgress('');
+    return failed;
+  };
+
   const submit = async (e) => {
     e.preventDefault();
     if (submitting) return;
@@ -55,6 +124,11 @@ export default function PublicEmployeeOnboardForm() {
     const missing = fields.filter((f) => f.required && !String(answers[f.key] || '').trim());
     if (missing.length) {
       setError(`יש למלא: ${missing.map((f) => f.label).join(', ')}`);
+      return;
+    }
+    const tooBig = docs.flatMap((d) => files[d.key] || []).find((f) => f.size > 10 * 1024 * 1024);
+    if (tooBig) {
+      setError(`הקובץ "${tooBig.name}" גדול מ-10MB — צרפו קובץ קטן יותר`);
       return;
     }
     setSubmitting(true);
@@ -68,6 +142,12 @@ export default function PublicEmployeeOnboardForm() {
       if (!res.ok) {
         setError(data.error || 'שליחת הפרטים נכשלה');
         return;
+      }
+      if (data.uploadToken) {
+        const failed = await uploadFiles(data.uploadToken);
+        if (failed.length) {
+          setDocWarning(`הפרטים נשמרו, אבל הקבצים הבאים לא נקלטו: ${failed.join(', ')}. הצוות יבקש אותם שוב.`);
+        }
       }
       setDone(true);
     } catch {
@@ -94,9 +174,33 @@ export default function PublicEmployeeOnboardForm() {
         <div className="event-card event-centered">
           <CheckCircle size={60} color="#F97316" style={{ margin: '0 auto', marginBottom: 20 }} />
           <h1 style={{ color: '#fff', fontSize: 24, marginBottom: 10 }}>הפרטים התקבלו!</h1>
-          <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16 }}>
-            תודה. הצוות יחזור אליך בהמשך.
-          </p>
+          {docWarning ? (
+            <p style={{ color: '#FCA5A5', fontSize: 14, marginBottom: 12 }}>{docWarning}</p>
+          ) : null}
+          {/* טופס 101 נחתם באתר חיצוני ולא כאן — זה השלב האחרון של הקליטה. */}
+          {form101Url ? (
+            <>
+              <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: 15, marginBottom: 16 }}>
+                נשאר שלב אחד: מילוי וחתימה על טופס 101.
+              </p>
+              <a
+                className="event-primary"
+                href={form101Url}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ display: 'block', textDecoration: 'none', textAlign: 'center' }}
+              >
+                למילוי טופס 101 <ExternalLink size={16} style={{ verticalAlign: 'middle' }} />
+              </a>
+              <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginTop: 14 }}>
+                תודה. הצוות יחזור אליך בהמשך.
+              </p>
+            </>
+          ) : (
+            <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16 }}>
+              תודה. הצוות יחזור אליך בהמשך.
+            </p>
+          )}
         </div>
         <EventStyles />
       </div>
@@ -152,9 +256,41 @@ export default function PublicEmployeeOnboardForm() {
             </div>
           ))}
 
+          {docs.length > 0 && (
+            <div className="onboard-docs">
+              <h3>מסמכים</h3>
+              <p className="onboard-docs-hint">
+                אפשר לצרף עכשיו או לשלוח לצוות בהמשך. תמונה ברורה מהטלפון מספיקה.
+              </p>
+              {docs.map((doc) => (
+                <div className="form-group" key={doc.key}>
+                  <label>{doc.label}{doc.multiple ? ' (אפשר כמה)' : ''}</label>
+                  <label className="onboard-file-btn">
+                    <Paperclip size={15} />
+                    <span>{doc.multiple ? 'הוספת קובץ' : 'בחירת קובץ'}</span>
+                    <input
+                      type="file"
+                      accept="image/*,.pdf,.doc,.docx"
+                      multiple={!!doc.multiple}
+                      onChange={(e) => { addFiles(doc.key, e.target.files, doc.multiple); e.target.value = ''; }}
+                    />
+                  </label>
+                  {(files[doc.key] || []).map((file, index) => (
+                    <div className="onboard-file-row" key={`${file.name}-${index}`}>
+                      <span>{file.name}</span>
+                      <button type="button" onClick={() => removeFile(doc.key, index)} aria-label="הסרה">
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+
           <ErrorBox message={error} />
           <button type="submit" className="event-primary" disabled={submitting}>
-            {submitting ? 'שולח...' : 'שליחת הפרטים'}
+            {submitting ? (progress || 'שולח...') : 'שליחת הפרטים'}
           </button>
         </form>
       </div>
@@ -180,6 +316,26 @@ export default function PublicEmployeeOnboardForm() {
         .employee-form-body input:focus, .employee-form-body select:focus { outline: none; border-color: #f97316; }
         .employee-form-body select option { background: #0b1220; color: #fff; }
         .employee-form-body .event-primary { width: 100%; margin-top: 6px; }
+        .onboard-docs { margin-top: 22px; border-top: 1px solid rgba(255,255,255,.12); padding-top: 16px; }
+        .onboard-docs h3 { margin: 0 0 4px; font-size: 16px; font-weight: 800; color: #fff; }
+        .onboard-docs-hint { margin: 0 0 14px; font-size: 13px; color: #94a3b8; }
+        .onboard-file-btn {
+          display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+          padding: 9px 14px; border-radius: 11px; font-size: 14px; color: #cbd5e1;
+          border: 1px dashed rgba(255,255,255,.25); background: rgba(255,255,255,.04);
+        }
+        .onboard-file-btn:hover { border-color: #f97316; color: #fff; }
+        .onboard-file-btn input { display: none; }
+        .onboard-file-row {
+          display: flex; align-items: center; justify-content: space-between; gap: 8px;
+          margin-top: 8px; padding: 8px 12px; border-radius: 10px;
+          background: rgba(249,115,22,.12); font-size: 13px; color: #fdba74;
+        }
+        .onboard-file-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .onboard-file-row button {
+          background: none; border: none; color: #fdba74; cursor: pointer;
+          display: flex; padding: 2px; flex-shrink: 0;
+        }
       `}</style>
     </div>
   );

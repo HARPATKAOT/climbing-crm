@@ -21,6 +21,37 @@ export const EMPLOYEE_ONBOARD_FIELD_DEFS = [
   { key: 'notes', label: 'הערות נוספות', type: 'textarea' },
 ];
 
+/**
+ * המסמכים שהעובד החדש יכול לצרף בעצמו. `multiple` פותח כמה קבצים לאותו סוג —
+ * למדריך יש בדרך כלל כמה תעודות. טופס 101 לא כאן: הוא נחתם באתר החיצוני
+ * (FORM101_URL_KEY למטה) ולא מועלה כקובץ.
+ */
+export const EMPLOYEE_ONBOARD_DOC_DEFS = [
+  { key: 'idPhoto', label: 'צילום תעודת זהות' },
+  { key: 'police', label: 'אישור משטרה — היעדר עבירות מין' },
+  { key: 'certificates', label: 'תעודות והסמכות', multiple: true },
+  { key: 'contract', label: 'חוזה העסקה חתום' },
+];
+
+const FORM101_URL_KEY = 'employee_onboarding_form101_url';
+const DEFAULT_FORM101_URL = 'https://forms.tofes101.co.il/c/6994466b9e749531fdbe1aa5/run/';
+
+export async function getForm101Url() {
+  const stored = await supa.getAppSetting(FORM101_URL_KEY);
+  if (typeof stored === 'string') return stored.trim();
+  return DEFAULT_FORM101_URL;
+}
+
+export async function saveForm101Url(raw) {
+  const url = String(raw ?? '').trim();
+  if (url && !/^https?:\/\//i.test(url)) {
+    throw new Error('הקישור לטופס 101 חייב להתחיל ב-http או https');
+  }
+  const result = await supa.setAppSetting(FORM101_URL_KEY, url);
+  if (!result?.ok) throw new Error(result?.error || 'שמירת הקישור נכשלה');
+  return url;
+}
+
 const FIELD_DEF_BY_KEY = new Map(EMPLOYEE_ONBOARD_FIELD_DEFS.map((f) => [f.key, f]));
 
 let memoryConfig = null;

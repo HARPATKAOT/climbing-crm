@@ -164,6 +164,25 @@ const EMPLOYEE_DOC_FIELDS = [
   { key: 'form101', label: 'טופס 101 חתום' },
 ];
 
+// למדריך יש בדרך כלל יותר מתעודה אחת. הראשונה יושבת במפתח הישן `certificates`,
+// והנוספות ב-certificate_2, certificate_3… הרשימה כאן היא הקבועים + מה שכבר
+// קיים בפועל + משבצת ריקה אחת, כדי שתמיד אפשר להוסיף עוד תעודה.
+const EXTRA_CERT_KEY = /^certificate_(\d+)$/;
+
+function employeeDocFields(documents = {}, pendingFiles = {}) {
+  const existing = [...new Set([...Object.keys(documents), ...Object.keys(pendingFiles)])]
+    .map((key) => EXTRA_CERT_KEY.exec(key))
+    .filter(Boolean)
+    .map((m) => Number(m[1]))
+    .sort((a, b) => a - b);
+  const nextSlot = (existing[existing.length - 1] || 1) + 1;
+  const extras = [...existing, nextSlot].map((n) => ({
+    key: `certificate_${n}`,
+    label: `תעודה נוספת ${n - 1}`,
+  }));
+  return [...EMPLOYEE_DOC_FIELDS, ...extras];
+}
+
 /**
  * "השמירה נכשלה" בלי סיבה שולח לחיפוש באגים שלא קיימים. השגיאה הנפוצה כאן היא
  * שה-API באמצע אתחול — אז השרת לא מקשיב והפרוקסי מחזיר 502/504, וניסיון נוסף
@@ -743,6 +762,11 @@ function hasEmployeeDoc(emp, key) {
     form101: 'hasForm101',
   };
   return !!(legacy[key] && emp?.[legacy[key]]);
+}
+
+function certificateCount(emp) {
+  const extras = Object.keys(emp?.documents || {}).filter((key) => EXTRA_CERT_KEY.test(key)).length;
+  return (hasEmployeeDoc(emp, 'certificates') ? 1 : 0) + extras;
 }
 
 function readFileAsBase64(file) {
@@ -1495,7 +1519,7 @@ function EmployeeFormModal({
 
             <div className="section-title" style={{ fontSize: 13, borderBottom: '1px solid var(--border)', paddingBottom: 6, marginTop: 8 }}>טפסים ואישורים</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
-              {EMPLOYEE_DOC_FIELDS.map((field) => (
+              {employeeDocFields(documents, pendingFiles).map((field) => (
                 <EmployeeDocField
                   key={field.key}
                   label={field.label}
@@ -2396,7 +2420,39 @@ function EmployeeOnboardingLinkPanel() {
   const [showFieldsModal, setShowFieldsModal] = useState(false);
   const [savingReply, setSavingReply] = useState(false);
   const [replyMsg, setReplyMsg] = useState('');
+  // טופס 101 נחתם באתר חיצוני; הקישור מוצג לעובד במסך הסיום של הטופס.
+  const [form101Url, setForm101Url] = useState('');
+  const [form101Msg, setForm101Msg] = useState('');
+  const [savingForm101, setSavingForm101] = useState(false);
   const link = `${window.location.origin}/staff-onboard`;
+
+  useEffect(() => {
+    fetch('/api/settings/employee-onboard-form101')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => { if (data && typeof data.url === 'string') setForm101Url(data.url); })
+      .catch(() => {});
+  }, []);
+
+  const saveForm101Url = async () => {
+    setSavingForm101(true);
+    setForm101Msg('');
+    try {
+      const res = await fetch('/api/settings/employee-onboard-form101', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: form101Url }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || '');
+      setForm101Url(data.url || '');
+      setForm101Msg('הקישור נשמר');
+    } catch (err) {
+      setForm101Msg(err.message || 'שמירת הקישור נכשלה');
+    } finally {
+      setSavingForm101(false);
+      setTimeout(() => setForm101Msg(''), 5000);
+    }
+  };
 
   const copyLink = async () => {
     try {
@@ -2463,6 +2519,26 @@ function EmployeeOnboardingLinkPanel() {
         </button>
       </div>
       {replyMsg && <div style={{ fontSize: 12, color: 'var(--text-3)' }}>{replyMsg}</div>}
+
+      <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10, marginTop: 2 }}>
+        <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 6 }}>
+          קישור לטופס 101 — מוצג לעובד/ת מיד אחרי שליחת הפרטים. ריק = לא יוצג.
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            className="input input-sm"
+            value={form101Url}
+            onChange={(e) => setForm101Url(e.target.value)}
+            placeholder="https://forms.tofes101.co.il/..."
+            style={{ flex: '1 1 260px', fontFamily: 'monospace' }}
+          />
+          <button type="button" className="btn btn-ghost btn-sm" disabled={savingForm101} onClick={saveForm101Url}>
+            {savingForm101 ? 'שומר...' : 'שמירה'}
+          </button>
+        </div>
+        {form101Msg && <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 6 }}>{form101Msg}</div>}
+      </div>
+
       {showFieldsModal && (
         <EmployeeOnboardFieldsModal onClose={() => setShowFieldsModal(false)} />
       )}
@@ -2991,7 +3067,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
 
     // Remove cleared documents first (while storagePath still exists on the server record)
     if (isEdit && employeeId) {
-      for (const field of EMPLOYEE_DOC_FIELDS) {
+      for (const field of employeeDocFields(previousDocs, _pendingFiles)) {
         const key = field.key;
         const wasPresent = !!previousDocs[key]?.storagePath;
         const stillPresent = !!payload.documents?.[key]?.storagePath;
@@ -4123,8 +4199,12 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
                           {hasEmployeeDoc(emp, 'police') && <span className="badge badge-green">משטרה</span>}
                           {hasEmployeeDoc(emp, 'form101') && <span className="badge badge-green">101</span>}
                           {hasEmployeeDoc(emp, 'idPhoto') && <span className="badge badge-blue">צילום ת.ז</span>}
-                          {hasEmployeeDoc(emp, 'certificates') && <span className="badge badge-blue">תעודות</span>}
-                          {!EMPLOYEE_DOC_FIELDS.some((field) => hasEmployeeDoc(emp, field.key)) && (
+                          {certificateCount(emp) > 0 && (
+                            <span className="badge badge-blue">
+                              תעודות{certificateCount(emp) > 1 ? ` (${certificateCount(emp)})` : ''}
+                            </span>
+                          )}
+                          {!employeeDocFields(emp?.documents).some((field) => hasEmployeeDoc(emp, field.key)) && (
                             <span style={{ color: 'var(--text-3)', fontSize: 11 }}>אין קבצים</span>
                           )}
                         </div>
