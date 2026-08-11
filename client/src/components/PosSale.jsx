@@ -3,7 +3,9 @@ import {
   ShoppingCart, Plus, Minus, Trash2, Search, User,
   Banknote, Link2, FileText, CheckCircle2, X, Percent, Tag,
   Package, ArrowRight, Gift, Send, Settings2, Printer, RotateCcw,
+  AtSign, MessageCircle,
 } from 'lucide-react';
+import QRCode from 'qrcode';
 import {
   PRODUCT_CATEGORIES,
   CATEGORY_COLORS,
@@ -29,6 +31,67 @@ const PAY_METHODS = [
   { id: 'cash', label: 'מזומן', icon: Banknote },
   { id: 'online', label: 'סליקה בקישור', icon: Link2 },
 ];
+
+/**
+ * מתג שליחה בצורת אייקון, ליד כפתור התשלום.
+ *
+ * תיבת סימון עם משפט הסבר לצידה תפסה שורה שלמה ואמרה דבר אחר בכל אמצעי
+ * תשלום. האייקון תופס את מקומו הטבעי — ליד הכפתור שמבצע את השליחה — וההסבר
+ * המלא עולה בריחוף. בלי טלפון או מייל בתיק אין לאן לשלוח, ולכן המתג כבוי.
+ */
+function SendToggle({ on, onToggle, icon: Icon, title, missing, disabled }) {
+  const active = on && !disabled;
+  return (
+    <button
+      type="button"
+      className="btn btn-ghost"
+      onClick={disabled ? undefined : onToggle}
+      aria-pressed={active}
+      title={disabled ? `${title} — ${missing}` : `${title}${on ? '' : ' (כבוי)'}`}
+      style={{
+        paddingInline: 12,
+        opacity: disabled ? 0.4 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        borderColor: active ? 'var(--accent)' : 'var(--border)',
+        color: active ? 'var(--accent)' : 'var(--text-3)',
+        background: active ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : undefined,
+      }}
+    >
+      <Icon size={16} />
+    </button>
+  );
+}
+
+/**
+ * קוד לסריקה של קישור התשלום.
+ *
+ * לא לכל לקוח בדלפק יש וואטסAPP או סבלנות להקליד כתובת. הקוד על המסך הוא
+ * מסלול התשלום השלישי: הלקוח מצלם ומשלם מהטלפון שלו.
+ */
+function PayQr({ url, size = 132 }) {
+  const [src, setSrc] = useState('');
+  useEffect(() => {
+    let alive = true;
+    if (!url) { setSrc(''); return undefined; }
+    QRCode.toDataURL(String(url), { margin: 1, width: size * 2, errorCorrectionLevel: 'M' })
+      .then((data) => { if (alive) setSrc(data); })
+      .catch(() => { if (alive) setSrc(''); });
+    return () => { alive = false; };
+  }, [url, size]);
+  if (!src) return null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+      <img
+        src={src}
+        alt="קוד לסריקה ותשלום"
+        width={size}
+        height={size}
+        style={{ borderRadius: 8, background: '#fff', padding: 6, display: 'block' }}
+      />
+      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>סרקו לתשלום</div>
+    </div>
+  );
+}
 
 /** מספר לוואטסאפ: ספרות בלבד, ו-0 מקומי מוחלף בקידומת ישראל. */
 function waPhone(raw) {
@@ -273,6 +336,34 @@ export default function PosSale({
 
   const effectivePhone = walkInPhone || selectedParent?.phone || '';
   const effectiveEmail = walkInEmail || selectedParent?.email || '';
+
+  // בסליקה בקישור השליחה בוואטסאפ היא עצם הפעולה של הכפתור — אין מה לסמן,
+  // וסימון נפרד רק מזמין דלפקיסט לכבות אותו בטעות. בלי טלפון בתיק אין לאן
+  // לשלוח, ואז נשאר הקוד לסריקה ופתיחת עמוד הסליקה.
+  useEffect(() => {
+    if (paymentMethod !== 'online') return;
+    setSendWhatsapp(Boolean(String(effectivePhone || '').trim()));
+  }, [paymentMethod, effectivePhone]);
+
+  /**
+   * הכניסה הבודדת לקיר — הכפתור המהיר מתחת לשם המתאמן.
+   *
+   * „מקנה טיפוס בקיר” מסומן גם על אימון אישי ועל שיעור זוגי, ולכן שלושתם
+   * הופיעו כאן ודחקו את הפעולה שהדלפק עושה עשרות פעמים ביום. הכניסה הבודדת
+   * מזוהה בכך שהיא עוגן המחיר שכרטיסיות נגזרות ממנו — סימון שכבר קיים
+   * במחירון ואינו דורש תחזוקה נפרדת. כל השאר נמכר מהקטלוג שליד.
+   */
+  const wallEntryProducts = useMemo(() => {
+    const entries = pricelist.filter((item) => (
+      item.grants_wall_climbing === true
+      && (item.product_type || 'product') === 'product'
+    ));
+    const anchorIds = new Set(
+      pricelist.map((item) => item.price_anchor_id).filter(Boolean).map(String)
+    );
+    const anchored = entries.filter((item) => anchorIds.has(String(item.id)));
+    return anchored.length ? anchored : entries;
+  }, [pricelist]);
 
   const filteredProducts = useMemo(() => {
     const q = productFilter.trim().toLowerCase();
@@ -1574,10 +1665,7 @@ ${data.link}`)}`,
             // שקורית לעיתים רחוקות ויש להם קטלוג שלם ליד — רשימה של שלושה-עשר
             // כפתורים מתחת לשם המתאמן מסתירה את הפעולה שבאמת נדרשת.
             addToCart,
-            wallProducts: pricelist.filter((item) => (
-              item.grants_wall_climbing === true
-              && (item.product_type || 'product') === 'product'
-            )),
+            wallProducts: wallEntryProducts,
             cartCount: cart.length,
           })}
 
@@ -2143,20 +2231,6 @@ ${data.link}`)}`,
             </div>
           )}
 
-          {/* אותן שתי תיבות שולחות דברים שונים לפי אופן התשלום: במזומן
-              החשבונית שכבר הופקה, ובסליקה הקישור לתשלום. „שליחה למייל” בלי
-              לומר מה נשלח הוא בדיוק המקום שבו נשלח הדבר הלא נכון. */}
-          <div style={{ display: 'flex', gap: 16, marginTop: 12, fontSize: 13, flexWrap: 'wrap' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-              <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} />
-              {paymentMethod === 'online' ? 'שליחת קישור התשלום למייל' : 'שליחת החשבונית למייל'}
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-              <input type="checkbox" checked={sendWhatsapp} onChange={(e) => setSendWhatsapp(e.target.checked)} />
-              {paymentMethod === 'online' ? 'שליחת קישור התשלום בוואטסאפ' : 'שליחת החשבונית בוואטסאפ'}
-            </label>
-          </div>
-
           {activeCancellationPolicies.length > 0 && (
             <div className="alert alert-warn" style={{ marginTop: 12, display: 'block' }}>
               <div style={{ fontWeight: 800, marginBottom: 8 }}>מדיניות ביטול ותנאים להצגה ללקוח</div>
@@ -2301,18 +2375,23 @@ ${data.link}`)}`,
                   {result.deliveryWarning}
                 </div>
               )}
-              <div
-                style={{
-                  fontSize: 12,
-                  wordBreak: 'break-all',
-                  direction: 'ltr',
-                  textAlign: 'left',
-                  background: 'rgba(0,0,0,0.2)',
-                  padding: '8px 10px',
-                  borderRadius: 8,
-                }}
-              >
-                {lastPayUrl || result.shareUrl || result.payUrl}
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <PayQr url={lastPayUrl || result.shareUrl || result.payUrl} />
+                <div
+                  style={{
+                    flex: 1,
+                    minWidth: 180,
+                    fontSize: 12,
+                    wordBreak: 'break-all',
+                    direction: 'ltr',
+                    textAlign: 'left',
+                    background: 'rgba(0,0,0,0.2)',
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                  }}
+                >
+                  {lastPayUrl || result.shareUrl || result.payUrl}
+                </div>
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <a
@@ -2380,6 +2459,24 @@ ${data.link}`)}`,
                   ? 'בחרו אמצעי תשלום'
                   : paymentMethod === 'online' ? 'שלח קישור לתשלום' : 'גבה והפק חשבונית'}
             </button>
+            {paymentMethod === 'cash' && (
+              <SendToggle
+                on={sendWhatsapp}
+                onToggle={() => setSendWhatsapp((v) => !v)}
+                icon={MessageCircle}
+                disabled={!String(effectivePhone || '').trim()}
+                title="שליחת החשבונית בוואטסאפ"
+                missing="אין טלפון בתיק הלקוח"
+              />
+            )}
+            <SendToggle
+              on={sendEmail}
+              onToggle={() => setSendEmail((v) => !v)}
+              icon={AtSign}
+              disabled={!String(effectiveEmail || '').trim()}
+              title={paymentMethod === 'online' ? 'שליחת קישור התשלום למייל' : 'שליחת החשבונית למייל'}
+              missing="אין כתובת מייל בתיק הלקוח"
+            />
             <button
               type="button"
               className="btn btn-ghost"
@@ -2441,8 +2538,8 @@ ${data.link}`)}`,
           {paymentMethod === 'online' && (
             <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 8 }}>
               {sendWhatsapp
-                ? 'אחרי יצירת הקישור הוא יישלח בוואטסאפ ללקוח (חובה טלפון). אפשר גם להעתיק או לפתוח את עמוד הסליקה.'
-                : 'אחרי יצירת הקישור ייפתח עמוד הסליקה. אפשר גם להעתיק ולשלוח ללקוח.'}
+                ? 'הקישור יישלח בוואטסאפ ללקוח, ויוצג גם כקוד לסריקה למי שמעדיף לשלם מהטלפון.'
+                : 'אין טלפון בתיק — הקישור יוצג כקוד לסריקה, ואפשר גם להעתיק אותו או לפתוח את עמוד הסליקה.'}
             </div>
           )}
         </div>

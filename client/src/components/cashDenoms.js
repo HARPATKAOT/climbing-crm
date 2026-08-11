@@ -6,10 +6,14 @@ import img10c from '../assets/cash-denoms/10c.jpg';
 import img5 from '../assets/cash-denoms/5.jpg';
 import img2 from '../assets/cash-denoms/2.jpg';
 import img1 from '../assets/cash-denoms/1.jpg';
-import img05 from '../assets/cash-denoms/0.5.png';
-import img01 from '../assets/cash-denoms/0.1.jpg';
 
-/** Israeli cash denominations with bundled images (Series C notes + coins). */
+/**
+ * Israeli cash denominations with bundled images (Series C notes + coins).
+ *
+ * Sub-shekel coins are deliberately absent: every price at the counter is a
+ * whole shekel, so they never appear in change and only lengthened the row the
+ * cashier has to scan under a queue.
+ */
 export const CASH_DENOMS = [
   {
     key: '200',
@@ -90,26 +94,6 @@ export const CASH_DENOMS = [
     image: img1,
     accent: '#CBD5E1',
     tint: 'rgba(203, 213, 225, 0.12)',
-  },
-  {
-    key: '0.5',
-    value: 0.5,
-    label: '½',
-    unit: '₪',
-    kind: 'coin',
-    image: img05,
-    accent: '#E8C547',
-    tint: 'rgba(232, 197, 71, 0.14)',
-  },
-  {
-    key: '0.1',
-    value: 0.1,
-    label: '10',
-    unit: 'אג׳',
-    kind: 'coin',
-    image: img01,
-    accent: '#D97706',
-    tint: 'rgba(217, 119, 6, 0.14)',
   },
 ];
 

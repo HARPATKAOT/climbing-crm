@@ -15,6 +15,22 @@ import { normalizeAttStatus } from './attendanceUtils.js';
 /** סטטוסי נוכחות שמשמעם שהמתאמן אכן הגיע. */
 const PRESENT_STATUSES = new Set(['attended', 'makeup', 'saturday_makeup', 'intro_attended']);
 
+/**
+ * מספר הימים שחלפו, בלוח השנה ולא בשעון.
+ *
+ * חישוב לפי הפרש שעות אמר „היה כאן היום” על מי שנכנס אתמול בערב, כי לא עברו
+ * 24 שעות. הדלפקיסט קורא את המשפט הזה כדי להחליט אם צריך ריענון תדריך —
+ * ולכן הגבול הוא חצות, בדיוק כמו שהוא חושב על זה.
+ */
+function calendarDaysBetween(fromMs, toMs) {
+  const midnight = (ms) => {
+    const d = new Date(ms);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  };
+  return Math.max(0, Math.round((midnight(toMs) - midnight(fromMs)) / 86400000));
+}
+
 const toTime = (value) => {
   if (!value) return NaN;
   const raw = String(value);
@@ -63,7 +79,7 @@ export function lastVisit({ checkIns = [], attendance = [], studentId } = {}, no
   return {
     last_at: best.at,
     source: best === wall ? 'wall' : 'class',
-    days_ago: Math.max(0, Math.floor((at.getTime() - best.time) / 86400000)),
+    days_ago: calendarDaysBetween(best.time, at.getTime()),
   };
 }
 
