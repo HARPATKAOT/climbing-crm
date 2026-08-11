@@ -47,3 +47,33 @@ test('a completed silent turn remains claimed and cannot run again', async () =>
   assert.ok(rows[0].completed_at);
   assert.equal(rows[0].sent_at, undefined);
 });
+
+test('a claim abandoned mid-flight stops blocking the next attempt', async () => {
+  const rows = [];
+  const db = {
+    get: () => rows,
+    insert: (_t, record) => { if (rows.some((r) => r.id === record.id)) return null; rows.push({ ...record }); return rows.at(-1); },
+    update: (_t, id, patch) => { const row = rows.find((r) => r.id === id); if (!row) return null; Object.assign(row, patch); return row; },
+    delete: (_t, id) => { const i = rows.findIndex((r) => r.id === id); if (i >= 0) rows.splice(i, 1); return true; },
+  };
+  const key = replyKeyForBurst('0599111000', [{ messageId: 'm-1' }]);
+
+  const first = await claimBotReply(db, key, { phone: '0599111000' });
+  assert.equal(first.claimed, true);
+
+  // The worker died before the send: the row stays "sending" for ever, and
+  // every later attempt at the same message refuses itself. One customer sat
+  // unanswered behind exactly this.
+  const second = await claimBotReply(db, key, { phone: '0599111000' });
+  assert.equal(second.claimed, false);
+  assert.equal(second.reason, 'already_claimed');
+
+  const later = new Date(Date.now() + 6 * 60 * 1000);
+  const retry = await claimBotReply(db, key, { phone: '0599111000', now: later });
+  assert.equal(retry.claimed, true, 'a stale claim may be taken again');
+
+  // A finished claim still blocks — that is what stops a double send.
+  await finishBotReplyClaim(db, null, key, { status: 'sent' });
+  const afterSent = await claimBotReply(db, key, { phone: '0599111000', now: later });
+  assert.equal(afterSent.claimed, false);
+});

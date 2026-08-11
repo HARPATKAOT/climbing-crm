@@ -17,11 +17,34 @@ export function replyKeyForBurst(phone, items = []) {
   return `br-${digest}`;
 }
 
+/**
+ * How long a claim may sit half-finished before it is treated as abandoned.
+ *
+ * A claim is taken before the model runs and closed after the send. If the
+ * worker dies in between — a restart, a crashed turn — the row stays "sending"
+ * for ever and every later attempt at that same message is refused as already
+ * claimed. One customer sat unanswered behind a claim like that: the recovery
+ * sweep picked her up, took the claim, lost the worker, and from then on
+ * refused itself.
+ */
+export const CLAIM_STALE_MS = 5 * 60 * 1000;
+
+export function claimIsStale(row, now = Date.now()) {
+  if (!row || row.status !== 'sending') return false;
+  const at = Date.parse(row.claimed_at || '');
+  return !Number.isFinite(at) || now - at > CLAIM_STALE_MS;
+}
+
 export async function claimBotReply(db, replyKey, { phone = '', now = new Date() } = {}) {
   const id = clean(replyKey);
   if (!id) return { claimed: true, id: '', durable: false };
-  if ((db.get(BOT_REPLY_CLAIMS) || []).some((row) => String(row.id) === id)) {
+  const existing = (db.get(BOT_REPLY_CLAIMS) || []).find((row) => String(row.id) === id);
+  if (existing && !claimIsStale(existing, new Date(now).getTime())) {
     return { claimed: false, id, reason: 'already_claimed' };
+  }
+  if (existing) {
+    // Abandoned mid-flight. Clear it so this attempt can take it properly.
+    await releaseBotReplyClaim(db, id).catch(() => {});
   }
   const record = {
     id,
