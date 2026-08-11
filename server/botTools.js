@@ -349,7 +349,9 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
     description:
       'רושם שההורה מסר שהשלים את ההרשמה של הילד במתנ״ס. אינו משנה סטטוס ואינו '
       + 'מאשר כלום — הוא רק מכניס את השם לרשימת הבדיקה השבועית מול המתנ״ס. '
-      + 'להשתמש כשההורה אומר «נרשמנו», «ההרשמה מעודכנת במתנ״ס» וכדומה.',
+      + 'להשתמש כשההורה אומר «נרשמנו», «ההרשמה מעודכנת במתנ״ס» וכדומה — גם כשהוא '
+      + 'נרשם ישירות במתנ״ס ולא עבר דרכנו. הכלי מחזיר מה עוד חסר כדי לשבץ את הילד '
+      + '(מסמכים וציוד), ויש להמשיך לזה באותה תשובה.',
     parameters: {
       type: 'object',
       properties: {
@@ -1306,8 +1308,31 @@ export function buildCustomerTools({
       // conversation after acknowledging only the registration.
       const equipment = await tools.getEquipmentPaymentLink({ childName: student.name || named });
 
+      // Nor while the papers are missing, and those come first: a parent who
+      // signed up at the centre directly never passed through us at all, so
+      // nobody ever sent them the form. Without it the trainee cannot be put
+      // in a group — the one thing such a parent believes is already settled.
+      await refreshParticipationDocuments();
+      const papers = participationEligibility(db, { studentId: student.id });
+      const healthOnly = !papers.eligible && papers.waiver.state === 'valid';
+      const documents = papers.eligible
+        ? { מצב: 'חתומים ובתוקף' }
+        : {
+          מצב: healthOnly ? 'חסרה הצהרת בריאות' : `חסר ${FORM_SHORT}`,
+          קישור: healthOnly
+            ? healthFormUrl(phone, student.id, 'health-renewal')
+            : healthFormUrl(phone),
+          הסבר: healthOnly
+            ? `אישור ההשתתפות חתום ורק הצהרת הבריאות פגה. בלעדיה אי אפשר לשבץ את ${student.name || 'המתאמן'} לקבוצה.`
+            : `${FORM_FULL}. בלעדיו אי אפשר לשבץ את ${student.name || 'המתאמן'} לקבוצה, גם אחרי הרשמה במתנ״ס. ${FORM_PURPOSE}`,
+          ...(papers.health.state === 'blocked'
+            ? { הערת_בריאות: 'ההשתתפות מוקפאת עד אישור רפואי — יש להעביר לצוות' }
+            : {}),
+        };
+
       return {
         נרשם_לבדיקה: student.name || '',
+        מסמכים: documents,
         ציוד: equipment.קישור
           ? {
             מצב: 'טרם נסגר',
@@ -1317,8 +1342,10 @@ export function buildCustomerTools({
           }
           : { מצב: 'סגור', הערה: equipment.הערה || '' },
         הערה: 'הדיווח נשמר לבדיקה מול המתנ״ס. יש להודות ללקוח ולומר שהדיווח התקבל '
-          + 'ושהצוות יאמת את ההרשמה. אם שדה הציוד מציג «טרם נסגר», חובה להמשיך אליו באותה תשובה '
-          + 'ולשלוח את הקישור; אין לומר שאין צורך בפעולה נוספת. אין לומר שההרשמה אושרה או שהסטטוס כבר הסתנכרן.',
+          + 'ושהצוות יאמת את ההרשמה. אם שדה המסמכים מציג חוסר — זה הדבר הראשון בתשובה: יש לומר '
+          + 'במפורש שאי אפשר לשבץ את המתאמן לקבוצה בלי זה, ולשלוח את הקישור. אם שדה הציוד מציג '
+          + '«טרם נסגר», חובה להמשיך אליו באותה תשובה ולשלוח את הקישור; אין לומר שאין צורך בפעולה '
+          + 'נוספת. אין לומר שההרשמה אושרה או שהסטטוס כבר הסתנכרן.',
       };
     },
 

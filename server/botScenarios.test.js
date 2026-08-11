@@ -760,6 +760,39 @@ test('אישור הרשמה במתנ״ס ממשיך לציוד שעדיין לא
   });
 });
 
+// מי שנרשם ישירות במתנ״ס לא עבר דרכנו מעולם, ולכן איש לא שלח לו את הטופס.
+// דיווח ההרשמה הוא ההזדמנות האחת לומר לו שבלי זה אין שיבוץ.
+test('נרשם ישירות במתנ״ס — הדיווח מחזיר שחסר טופס ההשתתפות ושאי אפשר לשבץ בלעדיו', async () => {
+  await withSeed({
+    parents: [PARENT],
+    students: [childYotam({ status: 'pending_signup', groupId: GROUP_GD.id })],
+    groups: [GROUP_GD],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const result = await tools.reportCentreRegistration({ childName: 'יותם' });
+
+    assert.match(result.מסמכים.מצב, /חסר/);
+    assert.ok(result.מסמכים.קישור);
+    assert.match(result.מסמכים.הסבר, /אי אפשר לשבץ את יותם/);
+    assert.match(result.הערה, /אי אפשר לשבץ/);
+  });
+});
+
+test('הרשמה במתנ״ס כשהמסמכים חתומים — אין מה לבקש', async () => {
+  await withSeed({
+    parents: [PARENT],
+    students: [childYotam({ status: 'pending_signup', groupId: GROUP_GD.id })],
+    groups: [GROUP_GD],
+    ...signedFormFor(['s-yotam']),
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const result = await tools.reportCentreRegistration({ childName: 'יותם' });
+
+    assert.equal(result.מסמכים.מצב, 'חתומים ובתוקף');
+    assert.equal(result.מסמכים.קישור, undefined);
+  });
+});
+
 test('a returning participant is found only by one safe full-name match', async () => {
   const owner = { id: 'p-old', name: 'Dana Rubin', lastName: 'Rubin', phone: '0500000000' };
   const current = { ...PARENT, name: 'Noa Rubin', lastName: 'Rubin' };
