@@ -33,9 +33,6 @@ import {
 } from './equipmentStanding.js';
 import { buildEquipmentRedirectUrl } from './equipmentService.js';
 
-/** Registered at the centre — the thing a pending_signup follow-up asks about. */
-const REGISTERED_STATUSES = new Set(['registered', 'active']);
-
 /**
  * What is still open for this family, read now rather than when the row was
  * written. A follow-up promised yesterday must not ask about an errand that
@@ -45,14 +42,13 @@ function liveFollowUpState(row, parent) {
   const students = (db.get('students') || []).filter(
     (s) => String(s.parentId || s.parent_id || '') === String(parent.id)
   );
-  const subject = row.student_id
-    ? students.find((s) => String(s.id) === String(row.student_id))
-    : null;
-  // No named trainee means the question was about the family; then it is done
-  // only once nobody is still waiting on the centre.
-  const registrationDone = subject
-    ? REGISTERED_STATUSES.has(String(subject.status || ''))
-    : students.every((s) => String(s.status || '') !== 'pending_signup');
+  // The row names the one trainee whose placement created it, but two siblings
+  // registered on the same afternoon are one errand to the parent — asking
+  // about one of them reads as though we lost the other.
+  const awaitingRegistration = students
+    .filter((s) => String(s.status || '') === 'pending_signup')
+    .map((s) => String(s.name || '').trim().split(/\s+/)[0])
+    .filter(Boolean);
 
   const standing = familyEquipmentStanding(db, { students });
   // Reuse a link the family already has rather than minting one from a
@@ -63,7 +59,7 @@ function liveFollowUpState(row, parent) {
       && (!c.expires_at || new Date(c.expires_at).getTime() > now)
   );
   const link = checkout?.id ? buildEquipmentRedirectUrl(checkout.id) : '';
-  return { registrationDone, equipmentLine: equipmentOpenLine(standing, { link }) };
+  return { awaitingRegistration, equipmentLine: equipmentOpenLine(standing, { link }) };
 }
 
 /** A follow-up is answered once — sent, or handed to the team, or dropped. */
@@ -624,8 +620,8 @@ export const automationsService = {
         try {
           // The template carries one subject, so it has to name the errand that
           // is actually still open — not the one the row was created for.
-          const subject = (row.reason === 'pending_signup' && !live.registrationDone)
-            ? `ההרשמה של ${row.subject || 'המתאמן'} במתנ״ס`
+          const subject = (row.reason === 'pending_signup' && live.awaitingRegistration.length)
+            ? `ההרשמה של ${live.awaitingRegistration.join(' ו')} במתנ״ס`
             : (live.equipmentLine ? 'הציוד לאימונים' : (row.note || 'מה שדיברנו עליו'));
           const result = await whatsappService.sendTemplateMessage(
             phone,

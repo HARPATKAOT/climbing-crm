@@ -25,6 +25,7 @@ import {
 import { studentsForParent, updateCustomerFullName } from './whatsappBot.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { participationEligibility } from './participationEligibility.js';
+import { upcomingTrainingBreaks } from './trainingBreaks.js';
 import { healthExpiryDate, declarationSignedAt } from './healthValidity.js';
 import { appPublicBase, buildRedirectUrl } from './publicLinks.js';
 import { persistCore } from './db.js';
@@ -315,6 +316,14 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
   {
     name: 'getOpeningHours',
     description: 'שעות הפתיחה הקרובות של הקיר, לפי היומן, וכתובת המקום.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'getTrainingBreaks',
+    description:
+      'החופשות מהחוגים שעוד לא הסתיימו — שם החג, מתי מתחילה ומתי מסתיימת. '
+      + 'להשתמש בכל שאלה על חופשה, חג או „מתי אין אימונים”. אין לענות על כך '
+      + 'מהזיכרון ואין לגזור תאריכים מלוח השנה — התאריכים נקבעים ביומן שלנו.',
     parameters: { type: 'object', properties: {} },
   },
   {
@@ -1197,6 +1206,28 @@ export function buildCustomerTools({
       };
     },
 
+    getTrainingBreaks: async () => {
+      const breaks = upcomingTrainingBreaks(db).map((row) => ({
+        שם: row.name,
+        מ: spellOutDate(row.from),
+        עד: row.from === row.to ? '' : spellOutDate(row.to),
+        ימים: row.days,
+      }));
+      if (!breaks.length) {
+        return {
+          חופשות: [],
+          הערה: 'לא הוזנו חופשות ביומן — אין לנחש תאריכים, יש להעביר לצוות.',
+        };
+      }
+      return {
+        חופשות: breaks,
+        // אבות שואלים על חופשה כדי לתכנן טיול, ומיד אחר כך שואלים אם הקיר
+        // פתוח. אלה שתי שאלות שונות, והתשובה לשנייה אינה כאן.
+        הערה: 'אלה הימים שבהם אין אימוני חוגים. אין להסיק מכך שהקיר עצמו סגור — '
+          + 'לשעות פתיחה יש getOpeningHours. יש למסור את התאריכים המדויקים כפי שהם.',
+      };
+    },
+
     getEvents: async () => {
       // A formatted paragraph was all the model got, so it could describe a trip
       // but never act on one — there was no handle to pass anywhere. The slug is
@@ -1654,12 +1685,16 @@ export function buildCustomerTools({
         return { קישור: '', הערה: `אין ציוד שטרם שולם עבור ${student.name || ''}` };
       }
 
-      // Reuse a live link rather than minting a token on every question.
+      // Reuse a live link rather than minting a token on every question — and
+      // the family's, not this child's. The page opens on the whole family and
+      // prices two children as one basket with the sibling discount, so a
+      // second link is a second payment that costs the parent more.
       const now = Date.now();
-      const existing = (db.get('equipment_checkouts') || []).find(
-        (c) => String(c.student_id || '') === String(student.id)
-          && (!c.expires_at || new Date(c.expires_at).getTime() > now)
+      const live = (db.get('equipment_checkouts') || []).filter(
+        (c) => !c.expires_at || new Date(c.expires_at).getTime() > now
       );
+      const existing = live.find((c) => String(c.parent_id || '') === String(parent.id))
+        || live.find((c) => String(c.student_id || '') === String(student.id));
       let token = existing?.id || '';
       if (!token) {
         token = newCheckoutToken();
@@ -1699,7 +1734,8 @@ export function buildCustomerTools({
         הערה: 'יש להיכנס לקישור בכל מקרה — גם למי שכבר יש ציוד. בדף מסמנים על '
           + 'כל פריט אם הוא כבר קיים, ורוכשים רק את מה שחסר. בלי הסימון הפריט '
           + 'נשאר חסר במערכת. הסימון ניתן לשינוי. אין לנקוב בסכום ואין לפרט '
-          + 'מחיר לפריט.',
+          + 'מחיר לפריט. הקישור פותח את כל המשפחה: אין לשלוח קישור נפרד לכל '
+          + 'ילד — בוחרים בדף על מי משלמים, ותשלום אחד לשני אחים גם מזכה בהנחה.',
         מה_לומר: 'כבר בהודעה הראשונה שבה נשלח הקישור יש לכתוב את שתי המטרות '
           + 'שלו: להשלים את מה שחסר, וגם לסמן פריט שכבר יש (משנה שעברה או ציוד '
           + 'פרטי). הורה שיש לו ציוד לא ינחש שהוא בכל זאת צריך להיכנס.',
