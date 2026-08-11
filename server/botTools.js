@@ -762,6 +762,39 @@ async function scheduleSignupCheck({ parent, phone, student, settings }) {
 }
 
 /**
+ * The same day-after check, for an equipment link that was just sent.
+ *
+ * It stands down for a placement check that is already open: that one now
+ * carries the equipment line too, and two reminders the next morning read as
+ * two people who did not talk to each other.
+ */
+async function scheduleEquipmentCheck({ parent, phone, student }) {
+  if (!parent?.id) return;
+  if (findOpenFollowUp(db, { parentId: parent.id, reason: 'pending_signup' })) return;
+  if (findOpenFollowUp(db, { parentId: parent.id, reason: 'equipment_unpaid' })) return;
+  const plan = planFollowUp({
+    days: 1,
+    lastInboundAt: parent.last_inbound_whatsapp,
+    settings: db.getSettings ? db.getSettings() : {},
+  });
+  if (!plan) return;
+  const row = db.insert(FOLLOWUP_COLLECTION, {
+    id: newFollowUpId(),
+    parent_id: parent.id,
+    phone: parent.phone || phone || '',
+    reason: 'equipment_unpaid',
+    note: 'הסדרת הציוד',
+    subject: student?.name || '',
+    student_id: student?.id || null,
+    ...plan,
+    status: FOLLOWUP_OPEN,
+    created_by: 'bot',
+    created_at: new Date().toISOString(),
+  });
+  if (row?.id) await persistCore(FOLLOWUP_COLLECTION, row);
+}
+
+/**
  * Roughly who each band is for, in years. Used only to catch a contradiction,
  * never to choose a group — so the edges are deliberately generous.
  */
@@ -1643,6 +1676,11 @@ export function buildCustomerTools({
         if (!created?.id) return { קישור: '', הערה: 'יצירת קישור נכשלה — יש להעביר לצוות' };
         await persistCore('equipment_checkouts', created);
       }
+
+      // A link with nobody behind it is how two open checkouts sat for a month
+      // while the family heard nothing. Same rule as the placement check: set
+      // by the code that sends the link, not by the model remembering to.
+      await scheduleEquipmentCheck({ parent, phone, student });
 
       const itemTypes = unpaid.map((r) => r.item_type || r.itemType).filter(Boolean);
       const shirtSize = unpaid.find((r) => (r.item_type || r.itemType) === 'shirt')?.shirt_size || null;

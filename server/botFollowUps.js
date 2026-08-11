@@ -33,6 +33,7 @@ export const FOLLOWUP_CANCELLED = 'cancelled';
 export const FOLLOWUP_REASONS = new Set([
   'customer_asked',   // "תבדוק איתי מחר"
   'pending_signup',   // נשלח קישור הרשמה — לבדוק אם נרשמו
+  'equipment_unpaid', // נשלח קישור ציוד — לבדוק אם הוסדר
   'general',
 ]);
 
@@ -315,19 +316,38 @@ export async function releaseFollowUpSend(db, claimId) {
  * The message the customer gets. Built from what was promised, so "תבדוק איתי
  * מחר" comes back as that subject and a placement comes back asking about the
  * registration — never as a generic "just checking in".
+ *
+ * `registrationDone` and `equipmentLine` are read from the live record at send
+ * time, a day after the row was written. Asking a parent who registered
+ * yesterday evening whether they registered — or telling one who has just paid
+ * that their equipment is unpaid — is how a follow-up turns into a nuisance,
+ * and both facts are knowable at the moment of writing. An errand that has
+ * closed simply drops out of the message; when all of them have, the caller
+ * gets an empty string and sends nothing at all.
  */
-export function followUpMessage(row, { firstName = '' } = {}) {
+export function followUpMessage(row, {
+  firstName = '',
+  registrationDone = false,
+  equipmentLine = '',
+} = {}) {
   const hello = firstName ? `היי ${firstName},` : 'היי,';
   const note = clean(row?.note);
-  if (String(row?.reason) === 'pending_signup') {
+  const reason = String(row?.reason);
+  const equipment = clean(equipmentLine);
+
+  if (reason === 'pending_signup' || reason === 'equipment_unpaid') {
     const child = clean(row?.subject);
-    return [
-      `${hello} רק בודק מה קורה 🙂`,
-      child
+    const asksRegistration = reason === 'pending_signup' && !registrationDone;
+    if (!asksRegistration && !equipment) return '';
+    const lines = [`${hello} רק בודק מה קורה 🙂`];
+    if (asksRegistration) {
+      lines.push(child
         ? `הספקתם להשלים את ההרשמה של ${child} במתנ״ס?`
-        : 'הספקתם להשלים את ההרשמה במתנ״ס?',
-      'אם נתקלתם במשהו — כתבו לי ואשמח לעזור.',
-    ].join('\n');
+        : 'הספקתם להשלים את ההרשמה במתנ״ס?');
+    }
+    if (equipment) lines.push(equipment);
+    lines.push('אם נתקלתם במשהו — כתבו לי ואשמח לעזור.');
+    return lines.join('\n');
   }
   return [
     `${hello} חוזר אליכם כמו שסיכמנו 🙂`,
