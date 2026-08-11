@@ -3,7 +3,7 @@ import { useLiveMessages } from '../hooks/useLiveMessages.js';
 import {
   Send,
   MessageCircle,
-  Image as ImageIcon,
+  Paperclip,
   FileText,
   Bookmark,
   RefreshCw,
@@ -31,6 +31,7 @@ import {
 } from './conversationTemplatePicker.js';
 import { isAwaitingHandling, threadIsBehindCard } from './communicationQueue.js';
 import AppSelect from './AppSelect.jsx';
+import MessageMedia from './MessageMedia.jsx';
 
 const CHANNEL_LABELS = {
   whatsapp: 'וואטסאפ',
@@ -65,6 +66,42 @@ function LinkifiedMessage({ text }) {
   });
 }
 
+// Mirrors mediaSizeLimit in server/channels/conversations.js. Checked here too
+// so an oversized file is refused before the browser spends a second encoding
+// it into a request that the server would only reject.
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const ATTACHMENT_CAPS = {
+  image: 5 * 1024 * 1024,
+  video: 16 * 1024 * 1024,
+  audio: 16 * 1024 * 1024,
+};
+const ATTACHMENT_NOUNS = { image: 'תמונה', video: 'סרטון', audio: 'הודעה קולית' };
+
+function attachmentFamily(mimeType) {
+  const clean = String(mimeType || '').split('/')[0].toLowerCase();
+  return ATTACHMENT_CAPS[clean] ? clean : 'document';
+}
+
+function attachmentSizeLimit(mimeType) {
+  return Math.min(ATTACHMENT_CAPS[attachmentFamily(mimeType)] ?? MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_BYTES);
+}
+
+function attachmentNoun(mimeType) {
+  return ATTACHMENT_NOUNS[attachmentFamily(mimeType)] || 'קובץ';
+}
+
+function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  const units = ['ב׳', 'ק״ב', 'מ״ב'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
 const BRAND_ORANGE = '#fb923c';
 const DAY_SEPARATOR_LINE = 'rgba(251,146,60,0.35)';
 
@@ -79,6 +116,93 @@ const DELIVERY_MARKS = {
   undelivered: { Icon: AlertCircle, color: '#ef4444', label: 'לא נמסרה' },
   error: { Icon: AlertCircle, color: '#ef4444', label: 'שגיאת שליחה' },
 };
+
+/** The human name of the template a message was sent from, when we still hold it. */
+function templateLabel(message, templates) {
+  const name = message.template_name || message.template_id;
+  if (!name) return '';
+  const template = (templates || []).find(
+    (t) => t.meta_name === name || t.id === name || t.name === name
+  );
+  return template?.name ? `: ${template.name}` : '';
+}
+
+/**
+ * The buttons a template message carried, rebuilt from the template definition.
+ *
+ * sendTemplateMessage logs only the substituted body, so the button the customer
+ * actually saw is missing from the thread — which is why a registration link
+ * sent as a template looked like a message with nothing in it.
+ */
+function TemplateButtons({ message, templates }) {
+  const name = message.template_name || message.template_id;
+  if (!name) return null;
+  const template = (templates || []).find(
+    (t) => t.meta_name === name || t.id === name || t.name === name
+  );
+  const buttons = Array.isArray(template?.buttons) ? template.buttons : [];
+  if (!buttons.length) return null;
+
+  return (
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 4,
+      marginTop: 6,
+      paddingTop: 6,
+      borderTop: '1px solid var(--border)',
+    }}>
+      {buttons.map((button, index) => {
+        const text = button.text || 'כפתור';
+        // A URL button with a placeholder is personalised per customer, and the
+        // resolved link is not stored anywhere — showing a guess would be worse
+        // than showing none.
+        const personalised = button.type === 'URL' && /\{\{\s*\w+\s*\}\}/.test(String(button.url || ''));
+        const href = button.type === 'URL' && !personalised
+          ? button.url
+          : (button.type === 'PHONE_NUMBER' ? `tel:${button.phone_number}` : '');
+
+        if (!href) {
+          return (
+            <span
+              key={`${text}-${index}`}
+              style={{
+                fontSize: 11,
+                color: 'var(--text-3)',
+                textAlign: 'center',
+                padding: '4px 8px',
+              }}
+            >
+              [{text}]{personalised ? ' · קישור אישי' : ''}
+            </span>
+          );
+        }
+        return (
+          <a
+            key={`${text}-${index}`}
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              fontSize: 12,
+              fontWeight: 600,
+              color: '#7dd3fc',
+              textAlign: 'center',
+              padding: '4px 8px',
+              textDecoration: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 5,
+            }}
+          >
+            <ExternalLink size={12} /> {text}
+          </a>
+        );
+      })}
+    </div>
+  );
+}
 
 function DeliveryMark({ status }) {
   const mark = DELIVERY_MARKS[String(status || '').toLowerCase()];
@@ -455,7 +579,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
   const [replyText, setReplyText] = useState('');
   const [channel, setChannel] = useState('whatsapp');
   const [activeThreadId, setActiveThreadId] = useState(selectedThreadId || 'parent');
-  const [mode, setMode] = useState('text'); // text | template | saved | image
+  const [mode, setMode] = useState('text'); // text | template | saved | attachment
   const [templates, setTemplates] = useState(() => approvedTemplatesCache || []);
   const [savedReplies, setSavedReplies] = useState(() => savedRepliesCache || []);
   const [selectedTemplate, setSelectedTemplate] = useState('');
@@ -463,8 +587,9 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
   // The last template fetch failed — different from "Meta approved nothing".
   const [templatesUnavailable, setTemplatesUnavailable] = useState(false);
   const [selectedSaved, setSelectedSaved] = useState('');
-  const [imagePreview, setImagePreview] = useState(null);
-  const [imageBase64, setImageBase64] = useState('');
+  // The file staged for sending: { base64, name, mimeType, size }.
+  const [attachment, setAttachment] = useState(null);
+  const [dragging, setDragging] = useState(false);
   const [botBusy, setBotBusy] = useState(false);
   const [botContinuing, setBotContinuing] = useState(false);
   const [botMenuOpen, setBotMenuOpen] = useState(false);
@@ -613,8 +738,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
     setSelectedTemplate('');
     setTemplateVars([]);
     setReplyText('');
-    setImageBase64('');
-    setImagePreview(null);
+    setAttachment(null);
     setBotMenuOpen(false);
     setBotContinuing(false);
     composingRef.current = false;
@@ -639,8 +763,8 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
   }, [botMenuOpen]);
 
   useEffect(() => {
-    composingRef.current = !!selectedTemplate || !!replyText.trim() || !!imageBase64;
-  }, [selectedTemplate, replyText, imageBase64]);
+    composingRef.current = !!selectedTemplate || !!replyText.trim() || !!attachment;
+  }, [selectedTemplate, replyText, attachment]);
 
   // Live chat: one request waits on the server until a message is actually
   // stored, instead of re-fetching the thread every second and a half.
@@ -696,9 +820,12 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
     ? !!activeThread?.window?.open
     : !!data?.windows?.[channel]?.open;
   const freeformBlocked = !windowOpen;
+  // A drop handler is a stable callback and would otherwise read a stale value.
+  const freeformBlockedRef = useRef(freeformBlocked);
+  freeformBlockedRef.current = freeformBlocked;
 
   useEffect(() => {
-    if (freeformBlocked && channel === 'whatsapp' && (mode === 'text' || mode === 'image' || mode === 'saved')) {
+    if (freeformBlocked && channel === 'whatsapp' && (mode === 'text' || mode === 'attachment' || mode === 'saved')) {
       setMode('template');
     } else if (!freeformBlocked && wasBlockedRef.current && mode === 'template') {
       // Customer just wrote — switch back to free-form text.
@@ -720,7 +847,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
     const wasSending = wasSendingRef.current;
     wasSendingRef.current = sending;
     if (!wasSending || sending) return;
-    if (freeformBlocked || (mode !== 'text' && mode !== 'image')) return;
+    if (freeformBlocked || (mode !== 'text' && mode !== 'attachment')) return;
     replyInputRef.current?.focus();
   }, [sending, freeformBlocked, mode]);
 
@@ -771,18 +898,59 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
     }
   };
 
-  const onPickImage = (e) => {
-    const file = e.target.files?.[0];
+  /**
+   * The one door every attachment comes through — the picker, a drop, a paste.
+   * Validation lives here so it cannot be skipped by one of the three.
+   */
+  const acceptFile = useCallback((file) => {
     if (!file) return;
+    const limit = attachmentSizeLimit(file.type);
+    if (file.size > limit) {
+      setError(
+        `הקובץ גדול מדי (${formatFileSize(file.size)}) — עד ${Math.round(limit / (1024 * 1024))} מ״ב ל${attachmentNoun(file.type)}`
+      );
+      return;
+    }
+    setError('');
     const reader = new FileReader();
+    reader.onerror = () => setError('קריאת הקובץ נכשלה');
     reader.onload = () => {
       const result = String(reader.result || '');
-      setImagePreview(result);
-      setImageBase64(result);
-      setMode('image');
+      setAttachment({
+        base64: result,
+        name: file.name || '',
+        mimeType: file.type || 'application/octet-stream',
+        size: file.size,
+      });
+      setMode('attachment');
     };
     reader.readAsDataURL(file);
+  }, []);
+
+  const onPickFile = (e) => {
+    acceptFile(e.target.files?.[0]);
+    // Clearing lets the same file be picked twice in a row after a failed send.
+    e.target.value = '';
   };
+
+  const onDropFile = useCallback((e) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    setDragging(false);
+    if (freeformBlockedRef.current) {
+      setError('חלון 24 השעות סגור — אפשר לשלוח רק תבנית מאושרת');
+      return;
+    }
+    acceptFile(e.dataTransfer.files?.[0]);
+  }, [acceptFile]);
+
+  const onPasteFile = useCallback((e) => {
+    const file = e.clipboardData?.files?.[0];
+    if (!file) return;
+    // A pasted screenshot is the common case, and it must not also land as text.
+    e.preventDefault();
+    acceptFile(file);
+  }, [acceptFile]);
 
   const handleSend = async (e) => {
     e?.preventDefault?.();
@@ -815,11 +983,13 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
       } else if (mode === 'saved') {
         if (!selectedSaved) throw new Error('בחרו הודעה שמורה');
         body.savedReplyId = selectedSaved;
-      } else if (mode === 'image') {
-        if (!imageBase64) throw new Error('בחרו תמונה');
-        body.imageBase64 = imageBase64;
+      } else if (mode === 'attachment') {
+        if (!attachment) throw new Error('בחרו קובץ');
+        body.type = 'media';
+        body.fileBase64 = attachment.base64;
+        body.mimeType = attachment.mimeType;
+        body.filename = attachment.name;
         body.caption = replyText.trim();
-        body.mimeType = imageBase64.match(/^data:([^;]+);/)?.[1] || 'image/jpeg';
       }
 
       const res = await fetch(`/api/conversations/${parent.id}/reply`, {
@@ -835,8 +1005,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
         throw new Error(json?.error || (json ? 'שליחה נכשלה' : SERVER_DOWN_MESSAGE));
       }
       setReplyText('');
-      setImageBase64('');
-      setImagePreview(null);
+      setAttachment(null);
       setDraftInfo(null);
       await load({ quiet: true });
     } catch (err) {
@@ -1267,7 +1436,48 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
           ))}
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: fillHeight ? 0 : 160, maxHeight: fillHeight ? undefined : 360 }}>
+        <div
+          onDragOver={(e) => {
+            // Only a file drag arms the overlay — dragging selected text past
+            // the panel must not put it into "drop a file here" mode.
+            if (!e.dataTransfer?.types?.includes('Files')) return;
+            e.preventDefault();
+            if (!dragging) setDragging(true);
+          }}
+          onDragLeave={(e) => {
+            if (e.currentTarget.contains(e.relatedTarget)) return;
+            setDragging(false);
+          }}
+          onDrop={onDropFile}
+          style={{
+            position: 'relative',
+            display: 'flex',
+            flexDirection: 'column',
+            flex: 1,
+            minHeight: fillHeight ? 0 : 160,
+            maxHeight: fillHeight ? undefined : 360,
+          }}
+        >
+          {dragging && (
+            <div style={{
+              position: 'absolute',
+              inset: 6,
+              zIndex: 5,
+              borderRadius: 12,
+              border: `2px dashed ${BRAND_ORANGE}`,
+              background: 'rgba(251,146,60,0.10)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+              color: BRAND_ORANGE,
+              fontSize: 13,
+              fontWeight: 700,
+              pointerEvents: 'none',
+            }}>
+              <Paperclip size={16} /> שחררו כדי לצרף את הקובץ
+            </div>
+          )}
           <div
             ref={messagesRef}
             onScroll={(e) => {
@@ -1354,12 +1564,12 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                       <span>
                         {CHANNEL_LABELS[ch] || ch}
                         {childLabel ? ` · מאת ${childLabel}` : ''}
-                        {m.template_id || m.template_name ? ' · תבנית' : ''}
+                        {m.template_id || m.template_name ? ` · תבנית${templateLabel(m, templates)}` : ''}
                         {m.is_ai ? ' · בוט' : ''}
                       </span>
                     </div>
-                    {(m.media_url || m.message_type === 'image') && !m.deleted_at && m.status !== 'deleted' && (
-                      <div style={{ fontSize: 11, color: 'var(--text-2)', marginBottom: 4 }}>📷 תמונה / מדיה</div>
+                    {!m.deleted_at && m.status !== 'deleted' && (
+                      <MessageMedia message={m} parentId={parent.id} />
                     )}
                     {m.deleted_at || m.status === 'deleted' ? (
                       <div style={{ color: 'var(--text-3)', fontStyle: 'italic' }}>
@@ -1369,6 +1579,9 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                       <div style={{ color: 'var(--text-1)', whiteSpace: 'pre-wrap' }}>
                         <LinkifiedMessage text={m.body || m.message || m.text} />
                       </div>
+                    )}
+                    {!m.deleted_at && m.status !== 'deleted' && (
+                      <TemplateButtons message={m} templates={templates} />
                     )}
                     <div style={{
                       fontSize: 12,
@@ -1474,7 +1687,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
               { id: 'text', label: 'טקסט', icon: MessageCircle, disabled: freeformBlocked },
               { id: 'template', label: 'תבנית', icon: FileText, disabled: channel !== 'whatsapp' },
               { id: 'saved', label: 'שמורה', icon: Bookmark, disabled: freeformBlocked },
-              { id: 'image', label: 'תמונה', icon: ImageIcon, disabled: freeformBlocked || channel !== 'whatsapp' },
+              { id: 'attachment', label: 'קובץ', icon: Paperclip, disabled: freeformBlocked || channel !== 'whatsapp' },
             ].map((m) => (
               <button
                 key={m.id}
@@ -1671,26 +1884,82 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
               </AppSelect>
             )}
 
-            {mode === 'image' && (
+            <input ref={fileRef} type="file" hidden onChange={onPickFile} />
+
+            {mode === 'attachment' && (
               <div style={{ marginBottom: 8 }}>
-                <input ref={fileRef} type="file" accept="image/*" hidden onChange={onPickImage} />
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => fileRef.current?.click()}>
-                  בחירת תמונה
-                </button>
-                {imagePreview && (
-                  <img src={imagePreview} alt="תצוגה" style={{ display: 'block', maxHeight: 80, marginTop: 8, borderRadius: 8 }} />
+                {attachment ? (
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    padding: '8px 10px',
+                    borderRadius: 10,
+                    border: '1px solid var(--border)',
+                    background: 'rgba(255,255,255,0.03)',
+                  }}>
+                    {attachment.mimeType.startsWith('image/') ? (
+                      <img
+                        src={attachment.base64}
+                        alt="תצוגה"
+                        style={{ height: 44, width: 44, objectFit: 'cover', borderRadius: 8, flexShrink: 0 }}
+                      />
+                    ) : (
+                      <FileText size={20} style={{ color: '#7dd3fc', flexShrink: 0 }} />
+                    )}
+                    <span style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <span style={{
+                        fontSize: 12,
+                        fontWeight: 600,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {attachment.name || 'קובץ'}
+                      </span>
+                      <span style={{ fontSize: 10, color: 'var(--text-3)' }}>
+                        {formatFileSize(attachment.size)}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => setAttachment(null)}
+                      title="הסרת הקובץ"
+                      style={{ flexShrink: 0 }}
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                ) : (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => fileRef.current?.click()}>
+                    <Paperclip size={13} /> בחירת קובץ
+                  </button>
                 )}
               </div>
             )}
 
-            {(mode === 'text' || mode === 'image') && (
+            {(mode === 'text' || mode === 'attachment') && (
               <div style={{ display: 'flex', gap: 8 }}>
+                {mode === 'text' && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => fileRef.current?.click()}
+                    disabled={sending || freeformBlocked || channel !== 'whatsapp'}
+                    title={channel === 'whatsapp' ? 'צירוף קובץ' : 'צירוף קבצים זמין בוואטסאפ'}
+                    style={{ flexShrink: 0, padding: '0 9px' }}
+                  >
+                    <Paperclip size={15} />
+                  </button>
+                )}
                 <input
                   ref={replyInputRef}
                   className="input input-sm"
                   style={{ flex: 1 }}
-                  placeholder={mode === 'image' ? 'כיתוב לתמונה (אופציונלי)' : 'כתבו תשובה ללקוח...'}
+                  placeholder={mode === 'attachment' ? 'כיתוב לקובץ (אופציונלי)' : 'כתבו תשובה ללקוח...'}
                   value={replyText}
+                  onPaste={onPasteFile}
                   onChange={(e) => {
                     setReplyText(e.target.value);
                     setDraftInfo(null);
@@ -1700,7 +1969,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                     e.preventDefault();
                     if (sending || freeformBlocked) return;
                     if (mode === 'text' && !replyText.trim()) return;
-                    if (mode === 'image' && !imageBase64) return;
+                    if (mode === 'attachment' && !attachment) return;
                     handleSend(e);
                   }}
                   disabled={sending || freeformBlocked}
@@ -1708,7 +1977,7 @@ export default function ConversationPanel({ parent, student, selectedThreadId = 
                 <button
                   type="submit"
                   className="btn btn-primary btn-sm"
-                  disabled={sending || (mode === 'text' && !replyText.trim()) || (mode === 'image' && !imageBase64)}
+                  disabled={sending || (mode === 'text' && !replyText.trim()) || (mode === 'attachment' && !attachment)}
                 >
                   <Send size={13} /> {sending ? 'שולח...' : 'שלח'}
                 </button>

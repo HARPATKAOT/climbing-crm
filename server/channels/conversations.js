@@ -9,7 +9,20 @@ import {
   enrichParentInboundFromSiblings,
   CHANNEL_INBOUND_FIELDS,
 } from './sessionWindow.js';
-import { uploadWhatsAppMedia, getMessengerCredentials, META_GRAPH_VERSION } from './media.js';
+import {
+  uploadWhatsAppMedia,
+  downloadWhatsAppMedia,
+  getMessengerCredentials,
+  META_GRAPH_VERSION,
+} from './media.js';
+import {
+  parseMediaRef,
+  encodeMediaRef,
+  storagePathForMedia,
+  mediaKindOfRow,
+  mediaKindForMime,
+  mediaExtensionForMime,
+} from './mediaRef.js';
 import { whatsappService, instagramService } from '../whatsapp.js';
 import {
   mergeBotSettings,
@@ -25,6 +38,32 @@ import { supa } from '../supa.js';
 import { childrenOfParent } from '../studentGuardians.js';
 import { recordMessage, setMessageStatusByMetaId, toLogRow } from './messageStore.js';
 import { resolveConversationTemplateOptions } from './conversationTemplateOptions.js';
+
+// What the desk may attach.
+//
+// Two ceilings meet here. Meta's own per-type caps are the outer one, but the
+// request body is JSON with the file base64-encoded inside it, and express.json
+// is capped at 15mb — base64 inflates by 4/3, so ~11MB of real bytes is all that
+// can arrive at all. 10MB leaves room for the caption and the rest of the body.
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const META_MEDIA_CAPS = {
+  image: 5 * 1024 * 1024,
+  sticker: 100 * 1024,
+  video: 16 * 1024 * 1024,
+  audio: 16 * 1024 * 1024,
+  document: 100 * 1024 * 1024,
+};
+const MEDIA_KIND_NOUNS = {
+  image: 'תמונה',
+  sticker: 'סטיקר',
+  video: 'סרטון',
+  audio: 'הודעה קולית',
+  document: 'קובץ',
+};
+
+export function mediaSizeLimit(kind) {
+  return Math.min(META_MEDIA_CAPS[kind] ?? MAX_UPLOAD_BYTES, MAX_UPLOAD_BYTES);
+}
 
 function ageFromBirthDate(birthDate) {
   if (!birthDate) return null;
@@ -715,6 +754,104 @@ export async function getConversation(parentId) {
 }
 
 /**
+ * Mirror media we just fetched into our own bucket, so the thread keeps it after
+ * Meta deletes its copy at 30 days. Best effort in every step: this runs on a
+ * read path, and a failed mirror must never turn a working preview into an error.
+ */
+async function mirrorMediaToStorage(row, buffer, mimeType, filename) {
+  try {
+    if (!buffer?.length) return;
+    const storagePath = storagePathForMedia(row.id, mimeType);
+    const uploaded = await supa.uploadClientDocument(storagePath, buffer, mimeType);
+    if (uploaded?.ok === false) return;
+
+    const mediaUrl = encodeMediaRef({ kind: 'storage', id: storagePath, mime: mimeType, filename });
+    // Both collections carry media_url under the same name, and mergeThread reads
+    // whichever it finds — so a half-done rewrite would still be consistent.
+    const updated = db.update('messages', row.id, { media_url: mediaUrl });
+    db.update('whatsapp_logs', row.id, { media_url: mediaUrl });
+    if (updated) await persistCore('messages', updated);
+  } catch (err) {
+    console.warn(`mirroring media for message ${row?.id} failed:`, err.message);
+  }
+}
+
+/**
+ * The bytes behind one message in one conversation.
+ *
+ * Resolution goes through mergeThread rather than a raw message lookup on
+ * purpose: the message must belong to the thread being viewed, so a message id
+ * from another customer cannot be pulled by guessing it.
+ */
+export async function getConversationMedia(parentId, messageId) {
+  const parent = findParentById(parentId);
+  if (!parent) return { success: false, error: 'הלקוח לא נמצא', status: 404 };
+
+  const row = mergeThread(parent).find((m) => String(m.id) === String(messageId));
+  if (!row) return { success: false, error: 'ההודעה לא נמצאה בשיחה הזו', status: 404 };
+
+  const ref = parseMediaRef(row.media_url);
+  if (!ref) {
+    return {
+      success: false,
+      error: 'הקובץ של ההודעה הזו לא נשמר במערכת',
+      status: 404,
+      reason: 'not_stored',
+    };
+  }
+
+  const kind = mediaKindOfRow(row) || 'document';
+
+  if (ref.kind === 'storage') {
+    const stored = await supa.downloadClientDocument(ref.id);
+    if (!stored?.ok || !stored.blob) {
+      return { success: false, error: 'הקובץ לא נמצא באחסון', status: 404, reason: 'gone' };
+    }
+    return {
+      success: true,
+      buffer: Buffer.from(await stored.blob.arrayBuffer()),
+      mimeType: ref.mime || stored.blob.type || 'application/octet-stream',
+      filename: ref.filename,
+      kind,
+    };
+  }
+
+  if (ref.kind === 'link') {
+    try {
+      const res = await fetch(ref.id);
+      if (!res.ok) {
+        return { success: false, error: 'הקובץ לא זמין יותר', status: 404, reason: 'gone' };
+      }
+      return {
+        success: true,
+        buffer: Buffer.from(await res.arrayBuffer()),
+        mimeType: ref.mime || res.headers.get('content-type') || 'application/octet-stream',
+        filename: ref.filename,
+        kind,
+      };
+    } catch (err) {
+      return { success: false, error: 'שליפת הקובץ נכשלה', status: 502, reason: 'fetch_failed' };
+    }
+  }
+
+  // Still only on Meta's servers — fetch it, serve it, and keep a copy.
+  const media = await downloadWhatsAppMedia(ref.id);
+  if (!media?.buffer?.length) {
+    return {
+      success: false,
+      // Meta deletes media 30 days after it was sent. Nothing recovers it.
+      error: 'המדיה כבר לא זמינה — וואטסאפ מוחק קבצים אחרי 30 יום',
+      status: 404,
+      reason: 'expired',
+    };
+  }
+
+  const mimeType = media.mimeType || ref.mime || 'application/octet-stream';
+  await mirrorMediaToStorage(row, media.buffer, mimeType, ref.filename);
+  return { success: true, buffer: media.buffer, mimeType, filename: ref.filename, kind };
+}
+
+/**
  * Manual override of the auto-reply bot for one customer.
  * `mute` is permanent until someone resumes it; `pause` is timed;
  * `resume` clears both the opt-out and any timed pause.
@@ -979,7 +1116,7 @@ export async function replyToParent(parentId, payload = {}) {
   const windowOpen = channel === 'whatsapp'
     ? getPhoneSessionWindow(messages, target.phone).open
     : canSendFreeform(parent, channel);
-  if ((type === 'text' || type === 'image' || type === 'saved_reply') && !windowOpen) {
+  if ((type === 'text' || type === 'image' || type === 'media' || type === 'saved_reply') && !windowOpen) {
     return {
       success: false,
       error: 'חלון התקשורת של 24 שעות סגור. אפשר לשלוח רק תבנית מאושרת (וואטסאפ).',
@@ -1034,27 +1171,69 @@ export async function replyToParent(parentId, payload = {}) {
     return result;
   }
 
-  if (type === 'image') {
+  // 'image' is the name the panel used before any file could be attached.
+  // Kept as an alias so a browser holding the old bundle keeps working while
+  // the new one rolls out.
+  if (type === 'media' || type === 'image') {
     if (channel !== 'whatsapp') {
-      return { success: false, error: 'שליחת תמונה נתמכת כרגע בוואטסאפ', status: 400 };
+      return { success: false, error: 'שליחת קבצים נתמכת כרגע בוואטסאפ', status: 400 };
     }
     if (!target.phone) return { success: false, error: 'אין מספר טלפון לשליחה', status: 400 };
-    if (!payload.imageBase64 && !payload.mediaId) {
-      return { success: false, error: 'חסרה תמונה', status: 400 };
+
+    const base64 = payload.fileBase64 || payload.imageBase64 || '';
+    if (!base64 && !payload.mediaId) {
+      return { success: false, error: 'לא נבחר קובץ', status: 400 };
     }
+
+    // The mime the browser reported is what we trust; the data-URL prefix is the
+    // fallback for a caller that only sent the encoded bytes.
+    const mimeType = payload.mimeType
+      || base64.match(/^data:([^;]+);/)?.[1]
+      || (type === 'image' ? 'image/jpeg' : 'application/octet-stream');
+    const kind = mediaKindForMime(mimeType);
+    const filename = String(payload.filename || '').trim()
+      || `attachment.${mediaExtensionForMime(mimeType)}`;
+
     let mediaId = payload.mediaId;
-    if (!mediaId && payload.imageBase64) {
-      const raw = payload.imageBase64.replace(/^data:[^;]+;base64,/, '');
-      const buffer = Buffer.from(raw, 'base64');
-      const uploaded = await uploadWhatsAppMedia(
-        buffer,
-        payload.mimeType || 'image/jpeg',
-        payload.filename || 'image.jpg'
-      );
+    let mediaRef = null;
+    if (!mediaId) {
+      const buffer = Buffer.from(base64.replace(/^data:[^;]+;base64,/, ''), 'base64');
+      const limit = mediaSizeLimit(kind);
+      if (!buffer.length) return { success: false, error: 'הקובץ ריק', status: 400 };
+      if (buffer.length > limit) {
+        return {
+          success: false,
+          error: `הקובץ גדול מדי — עד ${Math.round(limit / (1024 * 1024))} מ״ב ל${MEDIA_KIND_NOUNS[kind] || 'קובץ'}`,
+          status: 400,
+        };
+      }
+
+      const uploaded = await uploadWhatsAppMedia(buffer, mimeType, filename);
       mediaId = uploaded.id;
+
+      // Mirror while the bytes are still in hand, so an outbound file never
+      // depends on Meta's 30-day retention. A failed mirror must not block the
+      // send — the message still goes out, pointing at Meta's copy.
+      try {
+        const storagePath = storagePathForMedia(`out-${Date.now()}`, mimeType);
+        const stored = await supa.uploadClientDocument(storagePath, buffer, mimeType);
+        if (stored?.ok) {
+          mediaRef = encodeMediaRef({ kind: 'storage', id: storagePath, mime: mimeType, filename });
+        }
+      } catch (err) {
+        console.warn('mirroring outbound media failed:', err.message);
+      }
     }
+    if (!mediaRef) {
+      mediaRef = encodeMediaRef({ kind: 'meta', id: mediaId, mime: mimeType, filename });
+    }
+
     const caption = withStaffMark(text || payload.caption || '');
-    const result = await whatsappService.sendImageMessage(target.phone, mediaId, caption, sendOpts);
+    const result = await whatsappService.sendMediaMessage(
+      target.phone,
+      { kind, mediaId, filename, caption, mediaRef },
+      sendOpts
+    );
     if (result.success) {
       try {
         const settings = mergeBotSettings(db.getSettings());

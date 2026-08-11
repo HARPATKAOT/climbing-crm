@@ -537,6 +537,7 @@ import {
 } from './wallShift.js';
 import {
   getConversation,
+  getConversationMedia,
   listConversations,
   replyToParent,
   updateMessageStatusByMetaId,
@@ -2060,6 +2061,33 @@ app.get('/api/conversations/:parentId', async (req, res) => {
   const result = await getConversation(req.params.parentId);
   if (result.error) return res.status(result.status || 404).json(result);
   res.json(result);
+});
+
+// The file behind one message. The browser cannot put a Bearer token on an
+// <img src>, so the panel fetches this and renders the blob — same as the
+// document download routes.
+app.get('/api/conversations/:parentId/media/:messageId', async (req, res) => {
+  try {
+    const result = await getConversationMedia(req.params.parentId, req.params.messageId);
+    if (!result.success) {
+      return res.status(result.status || 404).json({
+        error: result.error,
+        reason: result.reason || 'not_found',
+      });
+    }
+    const filename = result.filename || `media.${result.mimeType.split('/')[1] || 'bin'}`;
+    res.setHeader('Content-Type', result.mimeType);
+    res.setHeader(
+      'Content-Disposition',
+      // A document is something staff save; everything else is looked at in place.
+      `${result.kind === 'document' ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(filename)}`
+    );
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(result.buffer);
+  } catch (err) {
+    console.error('Error serving conversation media:', err);
+    res.status(500).json({ error: err.message || 'שליפת הקובץ נכשלה' });
+  }
 });
 
 app.post('/api/conversations/:parentId/reply', async (req, res) => {
