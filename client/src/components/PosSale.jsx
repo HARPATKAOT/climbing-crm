@@ -143,6 +143,12 @@ export default function PosSale({
   const [customDraft, setCustomDraft] = useState({ name: '', price: '', quantity: '1' });
   const [cashSessionOpen, setCashSessionOpen] = useState(false);
   const [tenderedAmount, setTenderedAmount] = useState('');
+  // הסכום נגזר מהספירה ולא מחושב בתוך ה-onChange: הספירה מגיעה כפונקציה על
+  // המצב הקודם (אחרת קליקים מהירים נבלעים), ואין בה את התוצאה מראש.
+  useEffect(() => {
+    const sum = sumDenoms(tenderedDenoms);
+    if (sum > 0) setTenderedAmount(String(sum));
+  }, [tenderedDenoms]);
   const [lastChange, setLastChange] = useState(null);
   const [cashClosedHint, setCashClosedHint] = useState(false);
   const [showOpenCash, setShowOpenCash] = useState(false);
@@ -2095,11 +2101,7 @@ ${data.link}`)}`,
                 size="sm"
                 value={tenderedDenoms}
                 showTotal={false}
-                onChange={(next) => {
-                  setTenderedDenoms(next);
-                  const sum = sumDenoms(next);
-                  setTenderedAmount(sum > 0 ? String(sum) : '');
-                }}
+                onChange={setTenderedDenoms}
               />
               <label style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
                 או סכום ישירות

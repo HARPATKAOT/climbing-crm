@@ -46,9 +46,15 @@ export default function CashDenominationPad({
   const catalog = useMemo(() => enrichCatalog(denominations), [denominations]);
   const total = useMemo(() => sumDenoms(value, catalog), [value, catalog]);
 
+  // העדכון נשלח כפונקציה על המצב הקודם ולא כאובייקט מוכן: ספירה היא רצף
+  // קליקים מהירים, וכולם נכנסים לאותה מנת עדכון של React. חישוב מתוך `value`
+  // קורא בכולם את אותו ערך ישן, ורק הקליק האחרון שורד — חמישה שטרות של 200
+  // נספרים כאחד.
   const bump = (key, delta) => {
-    const n = Math.max(0, Math.floor((Number(value[key]) || 0) + delta));
-    onChange?.({ ...value, [key]: n });
+    onChange?.((prev) => ({
+      ...prev,
+      [key]: Math.max(0, Math.floor((Number(prev?.[key]) || 0) + delta)),
+    }));
   };
 
   // הקטלוג כבר מסודר מ-200 ומטה, וב-RTL הראשון הוא הימני — הגדול מימין.
