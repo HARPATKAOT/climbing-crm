@@ -1380,6 +1380,7 @@ export const whatsappService = {
       source: 'customer',
       meta_message_id: metaMessageId,
       message_type: meta.type || 'text',
+      media_url: encodeMediaRef(meta.mediaRef),
       parent_id: parent?.id || null,
       student_id: matchedVia === 'child_phone' ? (student?.id || null) : null,
       created_at: inboundAt,
@@ -1797,7 +1798,7 @@ export const whatsappService = {
   },
 
   // Messages sent from WhatsApp Business app (Coexistence echoes)
-  handlePhoneEcho: async ({ phone, text, messageId, type } = {}) => {
+  handlePhoneEcho: async ({ phone, text, messageId, type, mediaRef = null } = {}) => {
     const normalizedPhone = formatWaPhone(phone) || phone;
     if (!normalizedPhone) return { skipped: true };
 
@@ -1820,6 +1821,7 @@ export const whatsappService = {
       source: 'phone',
       meta_message_id: messageId || null,
       message_type: type || 'text',
+      media_url: encodeMediaRef(mediaRef),
       parent_id: echoParent?.id || null,
     });
 
@@ -1832,7 +1834,7 @@ export const whatsappService = {
   },
 
   // Initial history sync payloads from Coexistence onboarding
-  handleHistoryMessage: async ({ phone, text, direction, messageId, timestamp, type } = {}) => {
+  handleHistoryMessage: async ({ phone, text, direction, messageId, timestamp, type, mediaRef = null } = {}) => {
     const normalizedPhone = formatWaPhone(phone) || phone;
     if (!normalizedPhone || !text) return { skipped: true };
 
@@ -1860,6 +1862,7 @@ export const whatsappService = {
       source: resolvedDirection === 'outbound' ? 'phone' : 'customer',
       meta_message_id: messageId || null,
       message_type: type || 'text',
+      media_url: encodeMediaRef(mediaRef),
       created_at: createdAt,
       parent_id: historyParent?.id || null,
     });

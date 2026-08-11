@@ -2708,6 +2708,7 @@ async function processWhatsAppWebhookChange(change = {}) {
         messageId: message.id,
         type: message.type,
         timestamp: message.timestamp,
+        mediaRef: whatsappConnectService.extractMediaRef(message),
       });
       if (leadResult?.durableError) {
         notPersisted.push({ messageId: message.id, error: leadResult.durableError });
@@ -2732,6 +2733,7 @@ async function processWhatsAppWebhookChange(change = {}) {
         text,
         messageId: echo.id,
         type: echo.type,
+        mediaRef: whatsappConnectService.extractMediaRef(echo),
       });
     }
   }
@@ -2758,6 +2760,7 @@ async function processWhatsAppWebhookChange(change = {}) {
               messageId: message.id,
               timestamp: message.timestamp,
               type: message.type,
+              mediaRef: whatsappConnectService.extractMediaRef(message),
             });
           }
         }
@@ -2773,6 +2776,7 @@ async function processWhatsAppWebhookChange(change = {}) {
             messageId: message.id,
             timestamp: message.timestamp,
             type: message.type,
+            mediaRef: whatsappConnectService.extractMediaRef(message),
           });
         }
       }
