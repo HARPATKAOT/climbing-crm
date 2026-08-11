@@ -42,11 +42,61 @@ async function callJson(url, options) {
   return body;
 }
 
-/** תא אחד בטבלה: יש / חסר / לא נדרש ממנו. */
-function Cell({ state }) {
+/**
+ * תא אחד בטבלה: יש / חסר / לא נדרש ממנו.
+ *
+ * תא חסר הוא כפתור העלאה, ותא מלא הוא כפתור הורדה — כדי שאפשר יהיה לסגור את
+ * החוסר מהטבלה עצמה, בלי לפתוח את כרטיס העובד בשביל כל קובץ.
+ */
+function Cell({ state, label, busy, onPick, onDownload }) {
+  const inputRef = useRef(null);
+  const [dragging, setDragging] = useState(false);
+
   if (state === 'na') return <Minus size={13} style={{ color: 'var(--text-3)', opacity: 0.4 }} />;
-  if (state === 'ok') return <Check size={14} style={{ color: 'var(--green)' }} />;
-  return <AlertTriangle size={13} style={{ color: 'var(--amber, #f59e0b)' }} />;
+
+  const missing = state !== 'ok';
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,application/pdf,image/*"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) onPick(file);
+        }}
+      />
+      <button
+        type="button"
+        disabled={busy}
+        title={missing ? `העלאת ${label}` : `הורדת ${label} · העלאה מחדש בגרירה`}
+        onClick={() => (missing ? inputRef.current?.click() : onDownload())}
+        onDragEnter={(e) => { e.preventDefault(); setDragging(true); }}
+        onDragOver={(e) => e.preventDefault()}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          if (busy) return;
+          const file = e.dataTransfer?.files?.[0];
+          if (file) onPick(file);
+        }}
+        style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 3,
+          width: 34, height: 26, borderRadius: 7, cursor: busy ? 'default' : 'pointer',
+          border: `1px ${dragging ? 'dashed' : 'solid'} ${dragging ? 'var(--blue)' : 'transparent'}`,
+          background: dragging ? 'rgba(56,189,248,0.14)' : 'transparent',
+          color: 'inherit', padding: 0, opacity: busy ? 0.5 : 1,
+        }}
+      >
+        {missing
+          ? <Upload size={13} style={{ color: 'var(--amber, #f59e0b)' }} />
+          : <Check size={14} style={{ color: 'var(--green)' }} />}
+      </button>
+    </>
+  );
 }
 
 /** ביטוח לאומי של החודש — סכום, תאריך העברה ואישור. */
@@ -207,19 +257,64 @@ function NationalInsuranceCard({ month }) {
 export default function PayrollTracking({ month, onOpenEmployee }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [onlyMissing, setOnlyMissing] = useState(true);
+
+  const load = useCallback(async () => {
+    setError('');
+    const body = await callJson(`/api/payroll-periods?month=${encodeURIComponent(month)}`);
+    setData(body);
+  }, [month]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    setError('');
-    callJson(`/api/payroll-periods?month=${encodeURIComponent(month)}`)
-      .then((body) => { if (!cancelled) setData(body); })
+    load()
       .catch((err) => { if (!cancelled) setError(err.message || 'טעינת המעקב נכשלה'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [month]);
+  }, [load]);
+
+  /** העלאת מסמך ישירות מהטבלה, בלי לפתוח את כרטיס העובד. */
+  const uploadCell = async (employeeId, type, file) => {
+    setBusy(true);
+    setError('');
+    try {
+      const fileBase64 = await readFileAsBase64(file);
+      await callJson(`/api/employees/${encodeURIComponent(employeeId)}/payroll-documents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type, period: month, fileBase64, fileName: file.name, mimeType: file.type || 'application/octet-stream',
+        }),
+      });
+      await load();
+    } catch (err) {
+      setError(err.message || 'העלאת המסמך נכשלה');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const downloadCell = async (employeeId, document) => {
+    if (!document) return;
+    setError('');
+    try {
+      const url = `/api/employees/${encodeURIComponent(employeeId)}/payroll-documents/${encodeURIComponent(document.id)}/download`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error('הורדת המסמך נכשלה');
+      const blob = await response.blob();
+      const href = URL.createObjectURL(blob);
+      const anchor = window.document.createElement('a');
+      anchor.href = href;
+      anchor.download = document.file_name || 'מסמך';
+      anchor.click();
+      URL.revokeObjectURL(href);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
 
   const rows = useMemo(() => {
     const all = data?.periods || [];
@@ -253,7 +348,8 @@ export default function PayrollTracking({ month, onOpenEmployee }) {
               )}
             </div>
             <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
-              מי קיבל את התלוש, את ההעברה ואת הפנסיה. לחיצה על שם פותחת את התשלומים של העובד.
+              מי קיבל את התלוש, את ההעברה ואת הפנסיה. לחיצה על ⚠️ מעלה את הקובץ החסר
+              (או גררו אותו לתא), לחיצה על ✓ מורידה אותו. לחיצה על שם פותחת את כרטיס העובד.
             </div>
           </div>
           <div style={{ display: 'flex', gap: 4 }}>
@@ -300,6 +396,7 @@ export default function PayrollTracking({ month, onOpenEmployee }) {
                 {rows.map((view) => {
                   const required = new Set(view.completeness?.required || []);
                   const present = new Set(view.completeness?.present || []);
+                  const docByType = Object.fromEntries((view.documents || []).map((doc) => [doc.type, doc]));
                   return (
                     <tr key={view.employee_id} style={{ borderTop: '1px solid var(--border)' }}>
                       <td style={{ padding: '7px 8px' }}>
@@ -319,7 +416,13 @@ export default function PayrollTracking({ month, onOpenEmployee }) {
                       </td>
                       {TRACKED_TYPES.map((type) => (
                         <td key={type} style={{ padding: '7px 8px', textAlign: 'center' }}>
-                          <Cell state={!required.has(type) ? 'na' : present.has(type) ? 'ok' : 'missing'} />
+                          <Cell
+                            state={!required.has(type) ? 'na' : present.has(type) ? 'ok' : 'missing'}
+                            label={SHORT_LABELS[type]}
+                            busy={busy}
+                            onPick={(file) => uploadCell(view.employee_id, type, file)}
+                            onDownload={() => downloadCell(view.employee_id, docByType[type])}
+                          />
                         </td>
                       ))}
                       <td style={{ padding: '7px 8px', textAlign: 'center', whiteSpace: 'nowrap' }}>
@@ -327,7 +430,20 @@ export default function PayrollTracking({ month, onOpenEmployee }) {
                           ? <Minus size={13} style={{ color: 'var(--text-3)', opacity: 0.4 }} />
                           : view.pension_amount
                             ? <span style={{ color: 'var(--text-2)' }}>{money(view.pension_amount)}</span>
-                            : <AlertTriangle size={13} style={{ color: 'var(--amber, #f59e0b)' }} />}
+                            : (
+                              // הסכום מוקלד בכרטיס העובד, ולכן התג מוביל לשם.
+                              <button
+                                type="button"
+                                title="הזנת סכום ההפקדה בכרטיס העובד"
+                                onClick={() => onOpenEmployee?.(view.employee_id)}
+                                style={{
+                                  background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                                  display: 'inline-flex', alignItems: 'center',
+                                }}
+                              >
+                                <AlertTriangle size={13} style={{ color: 'var(--amber, #f59e0b)' }} />
+                              </button>
+                            )}
                       </td>
                     </tr>
                   );
