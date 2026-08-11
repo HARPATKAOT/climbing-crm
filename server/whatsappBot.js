@@ -905,6 +905,49 @@ export function parseCustomerFullName(input) {
   return { firstName: words[0], lastName: words.slice(1).join(' ') };
 }
 
+/**
+ * A name given inside a sentence, rather than as an answer to the question.
+ *
+ * "היי שמי משה גבאי קבעתי להגיע מחר ב-19" was read as no name at all — the
+ * introduction was only recognised at the very start of the message, and even
+ * then the whole sentence was handed to the name parser, which rightly refuses
+ * anything that long. So the customer was asked their first name, then their
+ * surname, having just given both. Here the phrase is found anywhere, and only
+ * the words right after it are taken — stopping at the first one that is not a
+ * name, which is where the sentence carries on.
+ *
+ * Only the unmistakable phrasings. "אני" opens half the messages we get
+ * ("אני רוצה לרשום את..."), so it counts at the start of a message and nowhere
+ * else — that is the narrow case the old rule already covered.
+ */
+const NAME_PARTICLES = new Set(['בן', 'בת', 'בר', 'אבו', 'דה', 'אל', 'ואן']);
+
+export function introducedName(input) {
+  const text = String(input || '').replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  const anywhere = /(?:קוראים\s+לי|שמי|השם\s+שלי)\s*[:,-]?\s*/u.exec(text);
+  const atStart = /^(?:(?:היי|הי|שלום|בוקר\s+טוב|ערב\s+טוב|אהלן)\s*[,.!]?\s*)?(?:אני|מדבר(?:ת)?|זה)\s*[:,-]?\s*/u.exec(text);
+  const match = anywhere || atStart;
+  if (!match) return null;
+
+  const rest = text.slice(match.index + match[0].length);
+  const words = [];
+  for (const word of rest.split(' ')) {
+    const clean = word.replace(/[^\p{L}\p{M}'׳״-]/gu, '');
+    if (!clean || clean.length < 2) break;
+    if (NON_NAME_WORDS.has(clean.toLowerCase())) break;
+    if (/\p{Script=Hebrew}/u.test(text) && /[A-Za-z]/.test(clean)) break;
+    words.push(clean);
+    // Two words is the name; the third belongs to the sentence — "שמי משה
+    // גבאי קבעתי להגיע" filed a surname of "גבאי קבעתי". The exception is a
+    // surname that genuinely opens with a particle, "רועי בן דוד".
+    if (words.length === 2 && !NAME_PARTICLES.has(words[1])) break;
+    if (words.length === 3) break;
+  }
+  if (words.length < 2) return null;
+  return { firstName: words[0], lastName: words.slice(1).join(' ') };
+}
+
 /** Shared by the deterministic intake and the model tool. No other fields. */
 export async function updateCustomerFullName(parent, { firstName, lastName } = {}) {
   if (!parent?.id) return { error: 'אין כרטיס לקוח לשמור אליו' };
@@ -959,9 +1002,7 @@ export async function advanceCustomerNameCapture(phone, parent, incomingText) {
   const active = /^tools_parent_/.test(String(prior.step || ''));
 
   if (!active) {
-    const explicit = /^(?:קוראים\s+לי|שמי|אני|מדבר(?:ת)?|זה)\s+/u.test(text)
-      ? parseCustomerFullName(text)
-      : null;
+    const explicit = introducedName(text);
     if (explicit) {
       const saved = await updateCustomerFullName(parent, explicit);
       if (saved.error) return { done: false, reply: saved.error };

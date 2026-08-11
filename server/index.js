@@ -10379,6 +10379,11 @@ app.post('/api/icount/webhook', async (req, res) => {
         docnum: docnum || payment.icount_doc_number,
       });
       const clearFields = clearingPatch(clearing) || {};
+      // iCount calls this more than once for the same payment, and every call
+      // used to be treated as the moment it was paid — which is how one family
+      // got the equipment receipt twice inside the same minute. Only the call
+      // that actually moves the payment may announce it.
+      const alreadyPaid = payment.status === 'paid';
 
       const updated = db.update('payments', payment.id, {
         status: 'paid',
@@ -10561,7 +10566,7 @@ app.post('/api/icount/webhook', async (req, res) => {
         });
       }
 
-      if (payment.equipment_payment) await sendEquipmentReceipt(payment);
+      if (payment.equipment_payment && !alreadyPaid) await sendEquipmentReceipt(payment);
 
       return res.json({
         ok: true,
