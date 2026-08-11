@@ -538,6 +538,7 @@ import {
 } from './channels/messageStore.js';
 import { canSendFreeform } from './channels/sessionWindow.js';
 import {
+  POS_INVOICE_TEMPLATE_NAME,
   listLocalTemplates,
   listApprovedTemplates,
   createDraftTemplate,
@@ -722,6 +723,24 @@ function redirectEquipmentCheckout(req, res) {
 }
 app.get('/e/:token', redirectEquipmentCheckout);
 app.get('/api/e/:token', redirectEquipmentCheckout);
+
+/**
+ * הקישור שמאחורי כפתור „צפייה בחשבונית” בתבנית המאושרת.
+ *
+ * המסמך עצמו יושב אצל iCount בכתובת ארוכה שמשתנה מעסקה לעסקה, ומטא מקפיאה
+ * את המארח של כפתור בתבנית. לכן הכפתור מצביע לכאן עם מזהה המכירה, והשרת
+ * שולח משם לכתובת האמיתית.
+ */
+function redirectSaleDocument(req, res) {
+  const saleId = String(req.params.saleId || '').trim();
+  if (!saleId) return res.status(400).send('חסר מזהה מכירה');
+  const sale = db.getOne('pos_sales', saleId);
+  const url = sale?.icount_doc_url;
+  if (!url) return res.status(404).send('לא נמצאה חשבונית למכירה הזאת');
+  return res.redirect(302, url);
+}
+app.get('/d/:saleId', redirectSaleDocument);
+app.get('/api/d/:saleId', redirectSaleDocument);
 
 /**
  * Short link to a group's registration page.
@@ -14359,16 +14378,40 @@ app.post('/api/pos/sale', async (req, res) => {
           doc?.docnum ? `מספר מסמך: ${doc.docnum}` : '',
           doc?.docUrl ? `קישור למסמך: ${doc.docUrl}` : '',
         ].filter(Boolean).join(String.fromCharCode(10));
-        try {
-          const waResult = await whatsappService.sendTextMessage(phone, msg, false, {
-            parentId: syncedParent?.id,
-            fallbackName: syncedParent?.name,
-            source: 'pos_invoice',
-          });
-          invoiceWhatsappSent = !!waResult?.success;
-          if (!invoiceWhatsappSent) invoiceWhatsappError = waResult?.error || 'שליחת החשבונית נכשלה';
-        } catch (waErr) {
-          invoiceWhatsappError = waErr.message || 'שליחת החשבונית נכשלה';
+        // תבנית מאושרת קודם: היא היחידה שמגיעה גם ללקוח שלא כתב לנו קודם,
+        // וזה כמעט כל מי שנכנס לטפס. טקסט חופשי הוא רק גיבוי בתוך 24 השעות.
+        const invoiceTpl = (db.get('message_templates') || []).find(
+          (t) => (t.meta_name || t.name) === POS_INVOICE_TEMPLATE_NAME
+        );
+        const invoiceTplApproved =
+          invoiceTpl && String(invoiceTpl.status).toUpperCase() === 'APPROVED';
+        if (invoiceTplApproved && doc?.docnum) {
+          try {
+            const waResult = await whatsappService.sendTemplateMessage(
+              phone,
+              POS_INVOICE_TEMPLATE_NAME,
+              [syncedParent?.name || 'לקוח', String(total), String(doc.docnum)],
+              { fallbackName: syncedParent?.name, parentId: syncedParent?.id, buttonUrlParam: sale.id }
+            );
+            invoiceWhatsappSent = !!waResult?.success;
+            if (!invoiceWhatsappSent) invoiceWhatsappError = waResult?.error || 'שליחת תבנית החשבונית נכשלה';
+          } catch (waErr) {
+            invoiceWhatsappError = waErr.message || 'שליחת תבנית החשבונית נכשלה';
+          }
+        }
+        if (!invoiceWhatsappSent) {
+          try {
+            const waResult = await whatsappService.sendTextMessage(phone, msg, false, {
+              parentId: syncedParent?.id,
+              fallbackName: syncedParent?.name,
+              source: 'pos_invoice',
+            });
+            invoiceWhatsappSent = !!waResult?.success;
+            if (!invoiceWhatsappSent) invoiceWhatsappError = waResult?.error || 'שליחת החשבונית נכשלה';
+            else invoiceWhatsappError = null;
+          } catch (waErr) {
+            invoiceWhatsappError = waErr.message || invoiceWhatsappError || 'שליחת החשבונית נכשלה';
+          }
         }
         if (!invoiceWhatsappSent) {
           const digits = phone.replace(/^0/, '972');
