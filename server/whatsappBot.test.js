@@ -16,6 +16,7 @@ import {
   isHumanOutboundLog,
   shouldDeferToHumanStaff,
   withBotMark,
+  withStaffMark,
   wantsExplicitHumanStaff,
   normalizeHistoryLimit,
   customerNameParts,
@@ -106,15 +107,23 @@ test('only a listed staff number gets the CRM agent', () => {
 });
 
 test('every bot reply is marked, and the mark never stacks', () => {
-  // The climber is the wall's own mark, and it opens the reply exactly once.
-  assert.equal(withBotMark('היי דלק!'), '🧗 היי דלק!');
-  assert.equal(withBotMark('שעות:\nשני 16:30'), '🧗 שעות:\nשני 16:30');
+  // The robot says what it is; the climber is the wall's own mark.
+  assert.equal(withBotMark('היי דלק!'), '🤖🧗🏾 היי דלק!');
+  assert.equal(withBotMark('שעות:\nשני 16:30'), '🤖🧗🏾 שעות:\nשני 16:30');
   // sendBotReply and the caller can both pass through the same text.
+  assert.equal(withBotMark('🤖🧗🏾 היי דלק!'), '🤖🧗🏾 היי דלק!');
+  // A reply written before the mark grew must not end up wearing both.
   assert.equal(withBotMark('🧗 היי דלק!'), '🧗 היי דלק!');
-  assert.equal(withBotMark('  היי  '), '🧗 היי');
+  assert.equal(withBotMark('  היי  '), '🤖🧗🏾 היי');
   // Nothing to mark stays nothing, so an empty reply is still not sent.
   assert.equal(withBotMark(''), '');
   assert.equal(withBotMark(null), '');
+});
+
+test('a bot reply is never also signed as a person', () => {
+  assert.equal(withStaffMark('🤖🧗🏾 היי דלק!'), '🤖🧗🏾 היי דלק!');
+  assert.equal(withStaffMark('🧗 היי דלק!'), '🧗 היי דלק!');
+  assert.equal(withStaffMark('היי דלק!'), '👤 היי דלק!');
 });
 
 test('a standalone thank-you closes the exchange without another bot turn', () => {
