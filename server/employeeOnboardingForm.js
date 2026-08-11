@@ -28,9 +28,11 @@ export const EMPLOYEE_ONBOARD_FIELD_DEFS = [
  */
 export const EMPLOYEE_ONBOARD_DOC_DEFS = [
   { key: 'idPhoto', label: 'צילום תעודת זהות' },
-  { key: 'police', label: 'אישור משטרה — היעדר עבירות מין' },
+  // מרשם עברייני המין חל על גברים בלבד ומגיל 18, וחוזה העסקה נחתם רק בבגירות.
+  // כל עוד המין או תאריך הלידה לא מולאו, השדה פשוט לא מוצג.
+  { key: 'police', label: 'אישור משטרה — היעדר עבירות מין', when: { gender: 'זכר', minAge: 18 } },
   { key: 'certificates', label: 'תעודות והסמכות', multiple: true },
-  { key: 'contract', label: 'חוזה העסקה חתום' },
+  { key: 'contract', label: 'חוזה העסקה חתום', when: { minAge: 18 } },
 ];
 
 const FORM101_URL_KEY = 'employee_onboarding_form101_url';

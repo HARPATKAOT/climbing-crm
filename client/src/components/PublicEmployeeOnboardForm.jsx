@@ -17,6 +17,32 @@ function ErrorBox({ message }) {
   );
 }
 
+function ageFrom(birthDateStr) {
+  if (!birthDateStr) return null;
+  const birth = new Date(birthDateStr);
+  if (Number.isNaN(birth.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - birth.getFullYear();
+  const m = today.getMonth() - birth.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age -= 1;
+  return age;
+}
+
+/**
+ * תנאי הצגה של מסמך, מתוך התשובות שכבר מולאו. כשהנתון עוד חסר התנאי נכשל —
+ * עדיף לא לבקש אישור משטרה מנערה מאשר לבקש אותו מכולם עד שימלאו מין וגיל.
+ */
+function docVisible(doc, answers) {
+  const when = doc?.when;
+  if (!when) return true;
+  if (when.gender && String(answers?.gender || '') !== when.gender) return false;
+  if (when.minAge != null) {
+    const age = ageFrom(answers?.birthDate);
+    if (age == null || age < when.minAge) return false;
+  }
+  return true;
+}
+
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -82,9 +108,9 @@ export default function PublicEmployeeOnboardForm() {
    * הקבצים נשלחים אחד-אחד אחרי שהכרטיס נוצר: תמונת תעודה מהטלפון גדולה,
    * ושליחה של הכול בבקשה אחת הייתה נחסמת על גודל.
    */
-  const uploadFiles = async (token) => {
+  const uploadFiles = async (token, visible) => {
     const queue = [];
-    docs.forEach((doc) => {
+    visible.forEach((doc) => {
       (files[doc.key] || []).forEach((file, index) => {
         // הראשונה נשמרת במפתח המקורי, הנוספות כ-certificate_2, certificate_3…
         const docType = index === 0 ? doc.key : `certificate_${index + 1}`;
@@ -126,7 +152,10 @@ export default function PublicEmployeeOnboardForm() {
       setError(`יש למלא: ${missing.map((f) => f.label).join(', ')}`);
       return;
     }
-    const tooBig = docs.flatMap((d) => files[d.key] || []).find((f) => f.size > 10 * 1024 * 1024);
+    // רק המסמכים שמוצגים כרגע נשלחים — מי שצירף אישור משטרה ואז שינה את המין
+    // או את תאריך הלידה, הקובץ שלו כבר לא רלוונטי.
+    const visible = docs.filter((doc) => docVisible(doc, answers));
+    const tooBig = visible.flatMap((d) => files[d.key] || []).find((f) => f.size > 10 * 1024 * 1024);
     if (tooBig) {
       setError(`הקובץ "${tooBig.name}" גדול מ-10MB — צרפו קובץ קטן יותר`);
       return;
@@ -144,7 +173,7 @@ export default function PublicEmployeeOnboardForm() {
         return;
       }
       if (data.uploadToken) {
-        const failed = await uploadFiles(data.uploadToken);
+        const failed = await uploadFiles(data.uploadToken, visible);
         if (failed.length) {
           setDocWarning(`הפרטים נשמרו, אבל הקבצים הבאים לא נקלטו: ${failed.join(', ')}. הצוות יבקש אותם שוב.`);
         }
@@ -156,6 +185,8 @@ export default function PublicEmployeeOnboardForm() {
       setSubmitting(false);
     }
   };
+
+  const visibleDocs = docs.filter((doc) => docVisible(doc, answers));
 
   if (loading) {
     return (
@@ -256,13 +287,13 @@ export default function PublicEmployeeOnboardForm() {
             </div>
           ))}
 
-          {docs.length > 0 && (
+          {visibleDocs.length > 0 && (
             <div className="onboard-docs">
               <h3>מסמכים</h3>
               <p className="onboard-docs-hint">
                 אפשר לצרף עכשיו או לשלוח לצוות בהמשך. תמונה ברורה מהטלפון מספיקה.
               </p>
-              {docs.map((doc) => (
+              {visibleDocs.map((doc) => (
                 <div className="form-group" key={doc.key}>
                   <label>{doc.label}{doc.multiple ? ' (אפשר כמה)' : ''}</label>
                   <label className="onboard-file-btn">
