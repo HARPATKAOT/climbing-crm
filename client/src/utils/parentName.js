@@ -30,7 +30,17 @@ export function splitParentName({ name, lastName } = {}) {
   if (storedLast) {
     // Drop the surname from the tail of the full name so re-joining the two
     // fields does not repeat it.
-    if (parts.length > 1 && parts[parts.length - 1] === storedLast) parts.pop();
+    //
+    // Only the last word was compared, so a surname of two words — "שינברג
+    // באדר" — never matched and never came off. The first-name box then held
+    // the whole name, saving appended the surname again, and the card grew a
+    // second copy of it; the edit read as though it had been thrown away.
+    // Stripped repeatedly, so a card that already doubled shows correctly and
+    // heals itself the next time it is saved.
+    const tail = storedLast.split(' ').filter(Boolean);
+    while (parts.length > tail.length && parts.slice(-tail.length).join(' ') === storedLast) {
+      parts.splice(-tail.length);
+    }
     return { first: parts.join(' '), lastName: storedLast };
   }
   if (parts.length > 1) {
