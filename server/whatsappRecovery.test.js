@@ -28,3 +28,17 @@ test('recovery ignores acknowledgements, media, fresh messages and already answe
   ];
   assert.deepEqual(unansweredRecoveryCandidates(rows, { now: NOW }), []);
 });
+
+test('a message swallowed hours ago is still worth answering, up to a day', () => {
+  const hoursAgo = (h) => new Date(NOW - h * 60 * 60 * 1000).toISOString();
+  const rows = [
+    // «אפשר לשבץ?» sat unanswered from the afternoon: the old two-hour window
+    // meant that by the time anyone looked, nobody would ever answer it.
+    { id: 'old', phone: '0503000001', channel: 'whatsapp', direction: 'inbound', message: 'אפשר לשבץ?', created_at: hoursAgo(6) },
+    // Past a day Meta will not carry free text anyway, so there is nothing to send.
+    { id: 'ancient', phone: '0503000002', channel: 'whatsapp', direction: 'inbound', message: 'יש מקום?', created_at: hoursAgo(30) },
+  ];
+  const phones = unansweredRecoveryCandidates(rows, { now: NOW }).map((c) => c.phone);
+  // The phone comes back normalised, the way every other lookup stores it.
+  assert.deepEqual(phones, ['972503000001']);
+});

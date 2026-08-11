@@ -1849,10 +1849,20 @@ export const whatsappService = {
  * (for example, a process restarted after the webhook write). The ordinary
  * gate, 24-hour window, open handoff and durable reply claim still apply.
  */
+/**
+ * How far back a swallowed message is still worth answering.
+ *
+ * Two hours covered a restart, and nothing else: nine customers from one day —
+ * «אפשר לשבץ?», «לא מצליחה לרשום…» — were never answered at all, because by
+ * the time anyone noticed they had aged out of the window. A day is the real
+ * limit, because past it Meta will not carry free text anyway.
+ */
+export const RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 export function unansweredRecoveryCandidates(messages = [], {
   now = Date.now(),
   minAgeMs = 20_000,
-  maxAgeMs = 2 * 60 * 60 * 1000,
+  maxAgeMs = RECOVERY_MAX_AGE_MS,
 } = {}) {
   const byPhone = new Map();
   for (const message of messages) {
@@ -1894,8 +1904,10 @@ export function unansweredRecoveryCandidates(messages = [], {
 export async function recoverUnansweredConversations({
   now = Date.now(),
   minAgeMs = 20_000,
-  maxAgeMs = 2 * 60 * 60 * 1000,
-  limit = 5,
+  maxAgeMs = RECOVERY_MAX_AGE_MS,
+  // Five per sweep was a throttle for a two-hour window. Over a day it becomes
+  // the reason somebody stays unanswered: the queue never drains.
+  limit = 40,
 } = {}) {
   const messages = db.get('messages') || [];
   const candidates = unansweredRecoveryCandidates(messages, { now, minAgeMs, maxAgeMs });

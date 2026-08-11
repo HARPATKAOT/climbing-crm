@@ -117,19 +117,20 @@ export function passPunchBlockReason(
     now: refDate,
   });
 
-  // חסימה רפואית נשארת נפרדת: אותה לא פותרים בחתימה על טופס, ומשפט שאומר
-  // „לחתום” היה שולח את הדלפק לשלוח קישור שלא יסיר את החסימה.
-  if (eligibility.health.state === 'blocked') {
-    return 'קיימת חסימה רפואית — לא ניתן להכניס עד למילוי הצהרה חדשה';
+  const missing = [];
+  if (eligibility.health.state === 'blocked') missing.push('קיימת חסימה רפואית עד למילוי הצהרה חדשה');
+  else if (eligibility.health.state === 'missing') missing.push('לא נחתמה הצהרת בריאות');
+  else if (eligibility.health.state === 'expired') {
+    missing.push(`הצהרת הבריאות פגה (נחתמה ב-${formatDay(eligibility.health.signed_at)})`);
   }
+  if (eligibility.waiver.state === 'missing') missing.push('אין אישור פעילות בקיר');
+  else if (eligibility.waiver.state === 'expired') {
+    missing.push(`אישור הפעילות בקיר פג (נחתם ב-${formatDay(eligibility.waiver.signed_at)})`);
+  }
+  if (missing.length === 0) return null;
 
-  // כל השאר הוא אותו מחסום אחד ואותה פעולה אחת: לחתום. אילו מסמכים חסרים
-  // ומתי פגו אינו משנה למי שעומד בדלפק — הוא רק מאריך משפט שצריך להיקרא
-  // בשנייה, ומופיע ממילא בתווית שליד.
-  if (eligibility.health.state !== 'valid' || eligibility.waiver.state !== 'valid') {
-    return 'לא ניתן להכניס לפני חתימה על אישור השתתפות';
-  }
-  return null;
+  const name = String(student.name || '').trim() || 'המתאמן';
+  return `אי אפשר לנקב ל${name}: ${missing.join(' · ')}. יש להשלים לפני הטיפוס.`;
 }
 
 /**

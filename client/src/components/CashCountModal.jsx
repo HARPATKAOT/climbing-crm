@@ -88,12 +88,14 @@ export default function CashCountModal({
 
   const meta = MODE_META[mode] || MODE_META.open;
   const total = useMemo(() => sumDenoms(denoms, CASH_DENOMS), [denoms]);
-  // כל נגיעה במגירה — פתיחה, סגירה, הפקדה ומשיכה — היא אותה הרשאה בתיק
-  // העובד. עד היום הסינון חל רק על פתיחה וסגירה, ובהפקדה הופיעו כל העובדים.
-  const selectableEmployees = useMemo(
-    () => (employees || []).filter((e) => e.is_active !== false && isWallStaff(e) && e.can_operate_cash === true),
-    [employees]
-  );
+  // פתיחה/סגירה — רק מי שמורשה בתיק. פעולות מנהל נשארות עם כל העובדים הפעילים.
+  const selectableEmployees = useMemo(() => {
+    const active = (employees || []).filter((e) => e.is_active !== false);
+    if (mode === 'open' || mode === 'close') {
+      return active.filter((e) => isWallStaff(e) && e.can_operate_cash === true);
+    }
+    return active;
+  }, [employees, mode]);
 
   const discrepancy =
     revealExpected && meta.showDisc && expectedCash != null
@@ -193,14 +195,10 @@ export default function CashCountModal({
             </button>
           </div>
 
-          <div className="cash-count-hint">
-            קליק על שטר או מטבע מוסיף אחד, קליק ימני מוריד.
-          </div>
-
           <CashDenominationPad
             value={denoms}
             onChange={setDenoms}
-            size="lg"
+            variant="stepper"
             showTotal={false}
           />
 
@@ -247,7 +245,7 @@ export default function CashCountModal({
                   setEmployeeName(emp?.name || '');
                 }}
               />
-              {selectableEmployees.length === 0 && (
+              {(mode === 'open' || mode === 'close') && selectableEmployees.length === 0 && (
                 <div style={{ fontSize: 12, color: 'var(--amber)', marginTop: 6 }}>
                   אין עובד שמורשה לפתוח ולסגור קופה — סמנו בתיק העובד.
                 </div>

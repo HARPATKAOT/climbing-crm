@@ -4,34 +4,6 @@
  */
 
 const STORAGE_KEY = 'kirboaz_thermal_usb';
-const MODE_KEY = 'kirboaz_print_mode';
-
-/**
- * איך המסוף מדפיס במחשב הזה.
- *
- * `usb` — ישירות למדפסת, מדפיס ופותח את המגירה בפקודה אחת. דורש שהמדפסת
- * תהיה שלנו בלבד: דרייבר ווינדוס שמחזיק אותה חוסם את הדפדפן לגמרי.
- * `os`  — דרך מנגנון ההדפסה של ווינדוס, כמו כל תוכנה. המדפסת נשארת משותפת
- * עם תוכנות אחרות; פתיחת המגירה נעשית בהגדרת הדרייבר ולא על ידינו.
- */
-export const PRINT_MODES = Object.freeze({ USB: 'usb', OS: 'os' });
-
-export function printMode() {
-  try {
-    const saved = localStorage.getItem(MODE_KEY);
-    return saved === PRINT_MODES.OS ? PRINT_MODES.OS : PRINT_MODES.USB;
-  } catch {
-    return PRINT_MODES.USB;
-  }
-}
-
-export function setPrintMode(mode) {
-  try {
-    localStorage.setItem(MODE_KEY, mode === PRINT_MODES.OS ? PRINT_MODES.OS : PRINT_MODES.USB);
-  } catch {
-    /* ignore */
-  }
-}
 
 function loadFilter() {
   try {
@@ -72,23 +44,7 @@ async function openDevice() {
   }
   if (!device) throw new Error('לא נבחרה מדפסת');
   saveFilter(device);
-  if (!device.opened) {
-    try {
-      await device.open();
-    } catch (err) {
-      // „Access denied” בווינדוס אינו חוסר הרשאה בדפדפן אלא בעלות: דרייבר
-      // המדפסת של המערכת, או טאב אחר של המסוף, כבר מחזיק את ההתקן. אלה שתי
-      // תקלות שונות לגמרי עם שני פתרונות שונים, והודעת הדפדפן לא מבחינה.
-      if (/access denied|SecurityError|NotAllowedError/i.test(err?.message || err?.name || '')) {
-        throw new Error(
-          'המדפסת תפוסה על ידי תוכנה אחרת. סגרו טאבים אחרים של המסוף באותו מחשב '
-          + 'ונסו שוב; אם זה חוזר, דרייבר המדפסת של ווינדוס מחזיק אותה וצריך '
-          + 'להעביר אותה ל-WinUSB'
-        );
-      }
-      throw err;
-    }
-  }
+  if (!device.opened) await device.open();
   if (device.configuration === null) await device.selectConfiguration(1);
   const iface = device.configuration.interfaces.find((i) =>
     i.alternates.some((a) => a.interfaceClass === 7 || a.endpoints.some((e) => e.direction === 'out'))
@@ -105,26 +61,10 @@ export async function sendEscPosBase64(base64) {
   const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
   const { device, interfaceNumber, endpointNumber } = await openDevice();
   try {
-    // `transferOut` אינו זורק כשהמדפסת מסרבת — הוא מחזיר סטטוס. בלי הבדיקה
-    // הזאת שליחה שנבלעה נראית כמו הצלחה, ואיש לא מבין למה שום דבר לא יצא.
-    const result = await device.transferOut(endpointNumber, bytes);
-    if (result?.status && result.status !== 'ok') {
-      throw new Error(
-        result.status === 'stall'
-          ? 'המדפסת דחתה את השליחה — כבו והדליקו אותה ונסו שוב'
-          : `המדפסת החזירה סטטוס ${result.status}`
-      );
-    }
+    await device.transferOut(endpointNumber, bytes);
   } finally {
-    // שחרור מלא ולא רק של הממשק: טאב שמחזיק את ההתקן פתוח חוסם כל טאב אחר
-    // באותו מחשב, וזו בדיוק „Access denied” שאי אפשר להסביר.
     try {
       await device.releaseInterface(interfaceNumber);
-    } catch {
-      /* ignore */
-    }
-    try {
-      await device.close();
     } catch {
       /* ignore */
     }

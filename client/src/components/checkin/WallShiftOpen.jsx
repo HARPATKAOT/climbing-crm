@@ -35,7 +35,9 @@ export default function WallShiftOpen({ state, employees = [], busy, onOpenShift
   const nameOf = (id) => operators.find((e) => e.id === id)?.name || 'עובד';
 
   const signSafety = async (check) => {
-    const testerId = signerByCheck[check.id] || safetySigners[0]?.id;
+    const isDaily = check.frequency === 'יומי' || Number(check.interval_days) === 1;
+    const pool = isDaily ? safetySigners : employees.filter((e) => e.is_active !== false);
+    const testerId = signerByCheck[check.id] || pool[0]?.id;
     if (!testerId) return;
     setSigningId(check.id);
     try {
@@ -114,8 +116,8 @@ export default function WallShiftOpen({ state, employees = [], busy, onOpenShift
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {dueSafety.map((check) => {
-                // רק מי שהוסמך לחתום על בדיקות בטיחות, בלי קשר לתדירות הבדיקה.
-                const signers = safetySigners;
+                const isDaily = check.frequency === 'יומי' || Number(check.interval_days) === 1;
+                const signers = isDaily ? safetySigners : employees.filter((e) => e.is_active !== false);
                 return (
                   <div
                     key={check.id}

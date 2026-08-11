@@ -1,38 +1,70 @@
 import React, { useMemo } from 'react';
+import { Minus, Plus } from 'lucide-react';
 import { CASH_DENOMS, enrichCatalog, sumDenoms } from './cashDenoms.js';
 
 export { CASH_DENOMS as DEFAULT_DENOMS, sumDenoms };
 
-/**
- * ספירת מזומן: שורה אחת של שטרות ומטבעות, מהגדול (ימין) לקטן (שמאל).
- *
- * הרשת הקודמת — עשר שורות עם שדה מספר וכפתורי חיבור וחיסור — תפסה מסך שלם
- * ובעמודה צרה לא נראתה בכלל. הספירה בפועל היא יד שעוברת על השטרות, ולכן
- * קליק על השטר מוסיף אחד וקליק ימני מוריד; הכמות יושבת על השטר עצמו.
- *
- * שני גדלים: `sm` לדלפק, שבו הספירה היא צד של מכירה, ו-`lg` לפתיחת הקופה
- * ולסגירתה, שבהן הספירה היא כל המשימה וכדאי שהשטרות יהיו גדולים וברורים.
- */
-function DenomChip({ d, qty, onBump }) {
-  const title = `${d.label} ${d.unit}`;
+function Stepper({ title, qty, onBump, onSet }) {
   return (
-    <button
-      type="button"
-      className={`cash-chip cash-chip--${d.kind}${qty > 0 ? ' is-active' : ''}`}
-      style={{ '--accent': d.accent }}
-      title={`${title} — קליק מוסיף, קליק ימני מוריד`}
-      aria-label={`${title}, ${qty}`}
-      onClick={() => onBump(1)}
-      onContextMenu={(e) => { e.preventDefault(); if (qty > 0) onBump(-1); }}
-    >
-      <img
-        src={d.image}
-        alt={title}
-        draggable={false}
-        style={d.objectPosition ? { objectPosition: d.objectPosition } : undefined}
+    <div className="cash-stepper" aria-label={title}>
+      <button
+        type="button"
+        className="cash-step cash-step--plus"
+        onClick={() => onBump(1)}
+        aria-label="הוספה"
+      >
+        <Plus size={16} strokeWidth={2.5} />
+      </button>
+      <input
+        className="cash-qty"
+        type="number"
+        min={0}
+        step={1}
+        inputMode="numeric"
+        value={qty === 0 ? '' : qty}
+        placeholder="0"
+        onChange={(e) => onSet(e.target.value)}
+        aria-label={`כמות ${title}`}
       />
-      {qty > 0 && <span className="cash-chip-qty">{qty}</span>}
-    </button>
+      <button
+        type="button"
+        className="cash-step"
+        onClick={() => onBump(-1)}
+        disabled={qty <= 0}
+        aria-label="הפחתה"
+      >
+        <Minus size={16} strokeWidth={2.5} />
+      </button>
+    </div>
+  );
+}
+
+/** שורה אחת: תמונה · שם · סה״כ שורה · בוחר כמות מימין */
+function DenomLine({ d, qty, onBump, onSet }) {
+  const line = Math.round(qty * d.value * 100) / 100;
+  const active = qty > 0;
+  const title = `${d.label} ${d.unit}`;
+
+  return (
+    <div
+      className={`cash-line cash-line--${d.kind}${active ? ' is-active' : ''}`}
+      style={{ '--accent': d.accent, '--tint': d.tint }}
+      title={title}
+    >
+      {/* RTL: ימין ← תמונה · בוחר כמות · סכום השורה */}
+      <div className={`cash-line-img cash-line-img--${d.kind}`}>
+        <img
+          src={d.image}
+          alt={title}
+          draggable={false}
+          style={d.objectPosition ? { objectPosition: d.objectPosition } : undefined}
+        />
+      </div>
+      <Stepper title={title} qty={qty} onBump={onBump} onSet={onSet} />
+      <div className="cash-line-sum">
+        ₪{line.toLocaleString('he-IL', { minimumFractionDigits: 2 })}
+      </div>
+    </div>
   );
 }
 
@@ -40,38 +72,82 @@ export default function CashDenominationPad({
   denominations = CASH_DENOMS,
   value = {},
   onChange,
-  size = 'sm',
+  variant = 'simple',
   showTotal = true,
 }) {
   const catalog = useMemo(() => enrichCatalog(denominations), [denominations]);
   const total = useMemo(() => sumDenoms(value, catalog), [value, catalog]);
 
-  // העדכון נשלח כפונקציה על המצב הקודם ולא כאובייקט מוכן: ספירה היא רצף
-  // קליקים מהירים, וכולם נכנסים לאותה מנת עדכון של React. חישוב מתוך `value`
-  // קורא בכולם את אותו ערך ישן, ורק הקליק האחרון שורד — חמישה שטרות של 200
-  // נספרים כאחד.
-  const bump = (key, delta) => {
-    onChange?.((prev) => ({
-      ...prev,
-      [key]: Math.max(0, Math.floor((Number(prev?.[key]) || 0) + delta)),
-    }));
+  const setQty = (key, raw) => {
+    const n = Math.max(0, Math.floor(Number(raw) || 0));
+    onChange?.({ ...value, [key]: n });
   };
 
-  // הקטלוג כבר מסודר מ-200 ומטה, וב-RTL הראשון הוא הימני — הגדול מימין.
+  const bump = (key, delta) => {
+    setQty(key, (Number(value[key]) || 0) + delta);
+  };
+
+  if (variant === 'stepper') {
+    const notes = catalog.filter((d) => d.kind === 'note');
+    const coins = catalog.filter((d) => d.kind === 'coin');
+
+    const render = (d) => (
+      <DenomLine
+        key={d.key}
+        d={d}
+        qty={Number(value[d.key]) || 0}
+        onBump={(delta) => bump(d.key, delta)}
+        onSet={(raw) => setQty(d.key, raw)}
+      />
+    );
+
+    return (
+      <div className="cash-pad">
+        <section className="cash-pad-section">
+          <h3 className="cash-pad-heading">שטרות</h3>
+          <div className="cash-line-grid">{notes.map(render)}</div>
+        </section>
+
+        <section className="cash-pad-section">
+          <h3 className="cash-pad-heading">מטבעות</h3>
+          <div className="cash-line-grid">{coins.map(render)}</div>
+        </section>
+
+        {showTotal && (
+          <div className="cash-pad-total">
+            סה״כ בספירה:{' '}
+            <strong>
+              ₪{total.toLocaleString('he-IL', { minimumFractionDigits: 2 })}
+            </strong>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div className={`cash-row cash-row--${size}`}>
+    <div className="cash-pad-simple">
       {catalog.map((d) => (
-        <DenomChip
-          key={d.key}
-          d={d}
-          qty={Number(value[d.key]) || 0}
-          onBump={(delta) => bump(d.key, delta)}
-        />
+        <label key={d.key} className="cash-pad-simple-item">
+          <span>{`${d.label} ${d.unit}`}</span>
+          <input
+            className="input"
+            type="number"
+            min={0}
+            step={1}
+            value={value[d.key] ?? ''}
+            placeholder="0"
+            onChange={(e) => setQty(d.key, e.target.value)}
+          />
+        </label>
       ))}
       {showTotal && (
-        <span className="cash-row-total">
-          סה״כ ₪{total.toLocaleString('he-IL', { minimumFractionDigits: 2 })}
-        </span>
+        <div className="cash-pad-total">
+          סה״כ בספירה:{' '}
+          <strong>
+            ₪{total.toLocaleString('he-IL', { minimumFractionDigits: 2 })}
+          </strong>
+        </div>
       )}
     </div>
   );
