@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ShoppingCart, Plus, Minus, Trash2, Search, User,
   Banknote, Link2, FileText, CheckCircle2, X, Percent, Tag,
-  Package, ArrowRight, Gift, Send, Settings2, Printer, RotateCcw,
+  Package, ArrowRight, Gift, Send, Settings2, Printer, RotateCcw, QrCode, CreditCard,
   AtSign, MessageCircle,
 } from 'lucide-react';
 import QRCode from 'qrcode';
@@ -27,9 +27,10 @@ import {
 } from '../utils/thermalPrinter.js';
 import { buildReceiptHtml, printReceiptViaOs } from '../utils/receiptHtml.js';
 
+// שתי דרכים בלבד, וכל אחת בצבע משלה: בדלפק הבחירה נעשית בהצצה, לא בקריאה.
 const PAY_METHODS = [
-  { id: 'cash', label: 'מזומן', icon: Banknote },
-  { id: 'online', label: 'סליקה בקישור', icon: Link2 },
+  { id: 'cash', label: 'מזומן', hint: 'שטרות ומטבעות', icon: Banknote, color: '#34D399' },
+  { id: 'online', label: 'אשראי בקישור', hint: 'נשלח לטלפון הלקוח', icon: CreditCard, color: '#60A5FA' },
 ];
 
 /**
@@ -68,7 +69,7 @@ function SendToggle({ on, onToggle, icon: Icon, title, missing, disabled }) {
  * לא לכל לקוח בדלפק יש וואטסAPP או סבלנות להקליד כתובת. הקוד על המסך הוא
  * מסלול התשלום השלישי: הלקוח מצלם ומשלם מהטלפון שלו.
  */
-function PayQr({ url, size = 132 }) {
+function PayQr({ url, size = 132, caption = 'סרקו לתשלום' }) {
   const [src, setSrc] = useState('');
   useEffect(() => {
     let alive = true;
@@ -88,7 +89,7 @@ function PayQr({ url, size = 132 }) {
         height={size}
         style={{ borderRadius: 8, background: '#fff', padding: 6, display: 'block' }}
       />
-      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>סרקו לתשלום</div>
+      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{caption}</div>
     </div>
   );
 }
@@ -195,6 +196,9 @@ export default function PosSale({
   // מכירה ללא זיהוי: קרטיב במזומן אינו דורש טלפון, שם, או תיק לקוח. בלי
   // המסלול הזה כל מכירה קטנה גוררת הקלדת פרטים שאיש לא יסתכל בהם שוב.
   const [anonymousSale, setAnonymousSale] = useState(false);
+  // קוד לסריקה של טופס ההרשמה — ללקוח שאין לו וואטסאפ בטלפון שמולנו.
+  const [formQr, setFormQr] = useState('');
+  const [formQrBusy, setFormQrBusy] = useState(false);
   const [tenderedDenoms, setTenderedDenoms] = useState({});
   const [couponError, setCouponError] = useState('');
   const [couponBusy, setCouponBusy] = useState(false);
@@ -522,16 +526,24 @@ export default function PosSale({
     setError('');
   }, [initialStudentId, students, parents]);
 
+  // לקוח שלא נמצא אינו נשמר כליד: הפרטים שלו מגיעים מהטופס שהוא ימלא, ורשומה
+  // חלקית שנוצרת בדלפק רק מייצרת כפילות שמישהו יצטרך למחוק אחר כך.
   const pendingNewLeadName =
     !selectedParent && !selectedStudent ? String(customerQuery || walkInName || '').trim() : '';
   const isPendingNewLead = Boolean(pendingNewLeadName);
-  const showNewLeadBanner =
-    isPendingNewLead && (customerSuggestions.length === 0 || hideSuggestions);
+  // חיפוש שלא מצא — זה הרגע להציע שליחת טופס. אם מה שהוקלד הוא מספר טלפון,
+  // הוא כבר היעד ואין מה להקליד שוב.
+  const searchLooksLikePhone = /^[\d+\-\s()]{9,}$/.test(String(customerQuery || '').trim());
+  const searchPhone = searchLooksLikePhone ? String(customerQuery).replace(/[^\d+]/g, '') : '';
+  const noMatchForSearch =
+    isPendingNewLead && customerSuggestions.length === 0 && Boolean(String(customerQuery || '').trim());
 
   // One search line covers name / phone / email of an existing customer. The
   // contact fields are only for details the sale cannot proceed without: a brand
   // new walk-in, or a selected customer missing the channel we are sending on.
   const hasSelectedCustomer = Boolean(selectedStudent || selectedParent);
+  // כל עוד לא נבחר לקוח ולא נבחרה מכירה ללא זיהוי — הכרטיס מוקף בכתום.
+  const customerUndecided = !hasSelectedCustomer && !anonymousSale;
   const missingSendTarget =
     hasSelectedCustomer &&
     ((sendWhatsapp && !effectivePhone.trim()) || (sendEmail && !effectiveEmail.trim()));
@@ -638,40 +650,62 @@ export default function PosSale({
    * בשמיעה, ואת הפרטים האמיתיים הוא ימסור בעצמו בטופס. לכן כאן נשלח רק
    * הקישור — וואטסאפ נפתח עם ההודעה מוכנה, והדלפקיסט לוחץ שלח.
    */
+  const formTargetPhone = String(searchPhone || walkInPhone || '').trim();
+
+  const requestFormLink = async ({ linkOnly = false } = {}) => {
+    const res = await fetch('/api/checkin/send-form-to-phone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        phone: formTargetPhone,
+        name: searchPhone ? '' : (pendingNewLeadName || walkInName || ''),
+        linkOnly,
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || 'השליחה נכשלה');
+    return body;
+  };
+
+  /**
+   * שליחת טופס ההרשמה בתבנית המאושרת.
+   *
+   * הכפתור שולח — הוא לא פותח חלון וואטסאפ שהדלפקיסט ישלח ממנו ביד. פתיחת
+   * דפדפן באמצע מכירה גוזלת את המסך, ואם איש לא לחץ שם „שלח” הלקוח לא קיבל
+   * כלום ואיש לא ידע.
+   */
   const sendBlankFormLink = async () => {
-    const phone = String(walkInPhone || '').trim();
-    if (!phone) {
+    if (!formTargetPhone) {
       setNewClimberState('חסר טלפון — בלעדיו אין לאן לשלוח');
       return;
     }
     setNewClimberState('sending');
     try {
-      const data = await fetch('/api/checkin/send-form-to-phone', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, name: pendingNewLeadName || walkInName || '' }),
-      }).then(async (r) => {
-        const body = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(body.error || 'השליחה נכשלה');
-        return body;
-      });
-      if (data.sent) {
-        setNewClimberState(`✓ הטופס נשלח ל${phone}`);
-        return;
-      }
-      // התבנית לא זמינה — וואטסאפ אישי עם הקישור, כדי שלא להישאר בלי דרך.
-      setNewClimberState(data.warning || 'לא נשלח אוטומטית — נפתח וואטסאפ לשליחה ידנית');
-      const wa = waPhone(phone);
-      if (data.link && wa) {
-        window.open(
-          `https://wa.me/${wa}?text=${encodeURIComponent(`שלום, כדי להיכנס לקיר צריך למלא טופס השתתפות והצהרת בריאות:
-${data.link}`)}`,
-          '_blank',
-          'noopener'
-        );
-      }
+      const data = await requestFormLink();
+      setNewClimberState(
+        data.sent
+          ? `✓ הטופס נשלח ל${formTargetPhone}`
+          : (data.warning || 'לא נשלח — אפשר להציג קוד לסריקה במקום')
+      );
+      if (!data.sent && data.link) setFormQr(data.link);
     } catch (err) {
       setNewClimberState(err.message);
+    }
+  };
+
+  /** הקוד על המסך — הלקוח מצלם וממלא מהטלפון שלו, בלי שנשלח לו כלום. */
+  const openFormQr = async () => {
+    if (formQr) { setFormQr(''); return; }
+    setFormQrBusy(true);
+    setNewClimberState('');
+    try {
+      const data = await requestFormLink({ linkOnly: true });
+      if (data.link) setFormQr(data.link);
+      else setNewClimberState('לא התקבל קישור לטופס');
+    } catch (err) {
+      setNewClimberState(err.message);
+    } finally {
+      setFormQrBusy(false);
     }
   };
 
@@ -921,9 +955,8 @@ ${data.link}`)}`,
           body.deliveryWarning || 'הקישור נשלח ללקוח בוואטסאפ בתבנית מאושרת'
         );
       } else if (body.whatsappUrl) {
-        window.open(body.whatsappUrl, '_blank', 'noopener,noreferrer');
         setResendOk(false);
-        setResendMsg('השליחה האוטומטית נכשלה — נפתח וואטסאפ לשליחה ידנית');
+        setResendMsg('השליחה נכשלה — אפשר להציג ללקוח קוד לסריקה במקום');
       } else {
         setResendOk(false);
         setResendMsg(body.whatsappError || 'השליחה נכשלה');
@@ -1051,27 +1084,18 @@ ${data.link}`)}`,
       }
       setResult(data);
 
+      // שום חלון לא נפתח. באמצע מכירה, לשונית שנפתחת גוזלת את המסך ומשאירה
+      // את הדלפקיסט לשלוח ביד — ואם הוא שכח, איש לא יודע שההודעה לא יצאה.
+      // המסך אומר אם נשלח, ומציג קוד לסריקה כשלא.
       const payUrl = data.shareUrl || data.payUrl || data.sale?.payment_url || '';
-      if (payUrl) {
-        setLastPayUrl(payUrl);
-        // When WhatsApp send is requested, don't auto-open the payment page —
-        // a second popup is often blocked, and the customer gets the link instead.
-        if (!sendWhatsapp) {
-          window.open(payUrl, '_blank', 'noopener,noreferrer');
-        }
-      }
+      if (payUrl) setLastPayUrl(payUrl);
 
-      if (sendWhatsapp) {
-        if (data.whatsappSent) {
-          // Sent via Meta API — nothing else to open
-        } else if (data.whatsappUrl) {
-          window.open(data.whatsappUrl, '_blank', 'noopener,noreferrer');
-          if (data.whatsappError) {
-            setError('הקישור נוצר. שליחה אוטומטית נכשלה — נפתח וואטסאפ לשליחה ידנית');
-          }
-        } else {
-          setError('הקישור נוצר, אבל לא נשלח בוואטסאפ — בדקו מספר טלפון');
-        }
+      if (sendWhatsapp && !data.whatsappSent) {
+        setError(
+          data.whatsappError
+            ? `הקישור נוצר, אבל לא נשלח: ${data.whatsappError}`
+            : 'הקישור נוצר, אבל לא נשלח בוואטסאפ — בדקו מספר טלפון'
+        );
       }
 
       if (data.changeGiven != null) {
@@ -1435,9 +1459,18 @@ ${data.link}`)}`,
       </div>
 
       <div>
+        {/* כתום = טרם מולא, כמו בכל מקום אחר במערכת. הדלפקיסט צריך לבחור:
+            לקוח מזוהה, או מכירה בלי זיהוי. */}
         <div
           className="card card-p"
-          style={{ marginBottom: 16, overflow: 'visible', position: 'relative', zIndex: 60 }}
+          style={{
+            marginBottom: 28,
+            overflow: 'visible',
+            position: 'relative',
+            zIndex: 60,
+            border: customerUndecided ? '1px solid var(--amber, #F59E0B)' : undefined,
+            boxShadow: customerUndecided ? '0 0 0 1px rgba(245,158,11,0.35)' : undefined,
+          }}
         >
           <div className="section-title" style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
             <User size={16} /> לקוח לחיוב
@@ -1519,13 +1552,14 @@ ${data.link}`)}`,
               היא כיסתה את שדה הטלפון שמתחתיה בדיוק ברגע שצריך למלא אותו. */}
           {!anonymousSale && !(selectedStudent || selectedParent) && (
             <div
-              className="form-group"
               style={{
+                display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap',
                 marginBottom: 10,
                 position: 'relative',
                 zIndex: suggestionsOpen ? 70 : 1,
               }}
             >
+            <div className="form-group" style={{ flex: '1 1 260px', marginBottom: 0 }}>
               <label className="form-label">
                 לקוח — שם, טלפון או מייל {needsCustomer ? '*' : ''}
               </label>
@@ -1544,7 +1578,7 @@ ${data.link}`)}`,
                 <input
                   className="input"
                   style={{ paddingRight: 34 }}
-                  placeholder="שם, טלפון או מייל — או שם של לקוח חדש..."
+                  placeholder="שם, טלפון או מייל..."
                   value={customerQuery}
                   onChange={(e) => {
                     const value = e.target.value;
@@ -1596,36 +1630,36 @@ ${data.link}`)}`,
                       </span>
                     </button>
                   ))}
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    style={{
-                      width: '100%',
-                      justifyContent: 'flex-start',
-                      borderRadius: 0,
-                      gap: 8,
-                      padding: '10px 12px',
-                      textAlign: 'right',
-                      borderTop: customerSuggestions.length ? '1px solid var(--border)' : undefined,
-                      color: 'var(--accent, #F59E0B)',
-                    }}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() =>
-                      selectCustomer({
-                        type: 'new_lead',
-                        name: customerQuery.trim(),
-                      })
-                    }
-                  >
-                    <span style={{ fontWeight: 700 }}>ליד חדש: {customerQuery.trim()}</span>
-                  </button>
+                  {customerSuggestions.length === 0 && (
+                    <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--text-3)' }}>
+                      לא נמצא לקוח בשם או במספר הזה
+                    </div>
+                  )}
                 </div>
               )}
-              {showNewLeadBanner && (
-                <div style={{ fontSize: 12, color: 'var(--accent, #F59E0B)', marginTop: 6, fontWeight: 600 }}>
-                  לא נמצא במערכת · יישמר אוטומטית כליד חדש במכירה
-                </div>
-              )}
+            </div>
+
+            {!needsCustomer && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{
+                  flex: '0 1 200px', flexDirection: 'column', alignItems: 'flex-start',
+                  gap: 2, padding: '9px 12px', textAlign: 'right', height: 'auto',
+                }}
+                onClick={() => {
+                  setAnonymousSale(true);
+                  setSendWhatsapp(false);
+                  setSendEmail(false);
+                  clearCustomer();
+                }}
+              >
+                <span style={{ fontWeight: 700, fontSize: 13 }}>מכירה ללא זיהוי</span>
+                <span style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 400 }}>
+                  קנייה במזומן בלי שם וטלפון
+                </span>
+              </button>
+            )}
             </div>
           )}
 
@@ -1669,26 +1703,17 @@ ${data.link}`)}`,
             cartCount: cart.length,
           })}
 
-          {contactFieldsVisible ? (
-            <div className="form-grid-2" style={{ gap: 8 }}>
-              <div className="form-group">
-                <label className="form-label">טלפון {isPendingNewLead ? '*' : ''}</label>
-                <input
-                  className="input input-sm"
-                  value={walkInPhone}
-                  onChange={(e) => setWalkInPhone(e.target.value)}
-                  placeholder={selectedParent?.phone || '050...'}
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">מייל לשליחת מסמך</label>
-                <input
-                  className="input input-sm"
-                  value={walkInEmail}
-                  onChange={(e) => setWalkInEmail(e.target.value)}
-                  placeholder={selectedParent?.email || 'name@email.com'}
-                />
-              </div>
+          {/* רק טלפון. המייל היה שדה שאיש לא מילא: החשבונית נשלחת בוואטסאפ,
+              ופרטי הלקוח מגיעים מהטופס שהוא ממלא בעצמו. */}
+          {contactFieldsVisible && hasSelectedCustomer ? (
+            <div className="form-group">
+              <label className="form-label">טלפון</label>
+              <input
+                className="input input-sm"
+                value={walkInPhone}
+                onChange={(e) => setWalkInPhone(e.target.value)}
+                placeholder={selectedParent?.phone || '050...'}
+              />
             </div>
           ) : (
             (selectedStudent || selectedParent) && !hideInvoiceContactEditor && (
@@ -1697,29 +1722,15 @@ ${data.link}`)}`,
                 className="btn btn-ghost btn-xs"
                 onClick={() => setShowContactFields(true)}
               >
-                עריכת טלפון / מייל לחשבונית
+                עריכת טלפון לחשבונית
               </button>
             )
           )}
 
-          {!anonymousSale && !needsCustomer && !(selectedStudent || selectedParent) && !isPendingNewLead && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs"
-              style={{ marginBottom: 10 }}
-              onClick={() => {
-                setAnonymousSale(true);
-                setSendWhatsapp(false);
-                setSendEmail(false);
-                clearCustomer();
-              }}
-            >
-              מכירה ללא זיהוי — בלי שם וטלפון
-            </button>
-          )}
-
           {/* לקוח שאינו במערכת: שולחים לו את טופס ההרשמה ולא שומרים כלום. */}
-          {isPendingNewLead && !anonymousSale && !suggestionsOpen && (
+          {/* מופיע כבר תוך כדי ההקלדה כשאין התאמה: להקליד מספר, לראות „לא נמצא”,
+              ואז ללחוץ במקום ריק כדי שהכפתור יתגלה — זה צעד שאיש לא ינחש. */}
+          {noMatchForSearch && !anonymousSale && (
             <div
               className="form-group"
               style={{
@@ -1730,17 +1741,46 @@ ${data.link}`)}`,
             >
               <div style={{ fontSize: 12.5, fontWeight: 700 }}>לקוח שאינו במערכת</div>
               <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-                בלי טופס השתתפות חתום אי אפשר למכור לו כניסה. שלחו לו את הטופס —
-                הפרטים ייכנסו למערכת כשהוא ימלא אותו.
+                בלי טופס השתתפות חתום אי אפשר למכור כניסה. שלחו את הטופס — הפרטים
+                ייכנסו למערכת כשהוא ימלא אותו. שום דבר לא נשמר כאן.
               </div>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={!String(walkInPhone || '').trim()}
-                onClick={sendBlankFormLink}
-              >
-                <Send size={14} /> שליחת טופס הרשמה בוואטסאפ
-              </button>
+              {/* מספר שהוקלד בשורת החיפוש הוא כבר היעד; אין טעם להקליד אותו שוב. */}
+              {!searchPhone && (
+                <input
+                  className="input input-sm"
+                  value={walkInPhone}
+                  onChange={(e) => setWalkInPhone(e.target.value)}
+                  placeholder="טלפון הלקוח — 050..."
+                />
+              )}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  style={{ flex: '1 1 160px' }}
+                  disabled={!formTargetPhone || newClimberState === 'sending'}
+                  onClick={sendBlankFormLink}
+                >
+                  <Send size={14} />
+                  {newClimberState === 'sending'
+                    ? 'שולח...'
+                    : searchPhone ? `שלח טופס הרשמה ל־${searchPhone}` : 'שליחת טופס הרשמה בוואטסאפ'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  style={{ flex: '0 0 auto' }}
+                  disabled={formQrBusy}
+                  onClick={openFormQr}
+                >
+                  <QrCode size={14} /> {formQr ? 'הסתר קוד' : 'קוד לסריקה'}
+                </button>
+              </div>
+              {formQr && (
+                <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 4 }}>
+                  <PayQr url={formQr} size={148} caption="סרקו למילוי הטופס" />
+                </div>
+              )}
               {newClimberState && newClimberState !== 'sending' && (
                 <div style={{ fontSize: 11.5, color: newClimberState.startsWith('✓') ? 'var(--green)' : 'var(--amber)' }}>
                   {newClimberState}
@@ -2100,38 +2140,62 @@ ${data.link}`)}`,
             </div>
           )}
 
-          <div
-            style={{
-              display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap', alignItems: 'center',
-              ...(paymentMethod ? {} : {
-                padding: '10px 12px',
+          {/* הכותרת מעל התיבה, והבחירה בתוכה — כך „איך משלמים?” נקרא כשאלה
+              ולא כאפשרות שלישית שאפשר ללחוץ עליה. */}
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6, color: paymentMethod ? 'var(--text-2)' : '#FBBF24' }}>
+              איך משלמים?
+            </div>
+            <div
+              style={{
+                display: 'flex', gap: 10, flexWrap: 'wrap',
+                padding: 10,
                 borderRadius: 10,
-                border: '1px solid rgba(251, 191, 36, 0.45)',
-                background: 'rgba(251, 191, 36, 0.06)',
-              }),
-            }}
-          >
-            {!paymentMethod && (
-              <span style={{ fontSize: 12.5, fontWeight: 700, color: '#FBBF24' }}>
-                איך משלמים?
-              </span>
-            )}
-            {PAY_METHODS.map((m) => {
-              const Icon = m.icon;
-              const cashBlocked = m.id === 'cash' && !cashSessionOpen;
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  className={`btn btn-sm ${paymentMethod === m.id ? 'btn-primary' : 'btn-ghost'}`}
-                  onClick={() => selectPaymentMethod(m.id)}
-                  title={cashBlocked ? 'יש לפתוח קופה לפני גבייה במזומן' : undefined}
-                  style={cashBlocked ? { opacity: 0.55 } : undefined}
-                >
-                  <Icon size={13} /> {m.label}
-                </button>
-              );
-            })}
+                border: `1px solid ${paymentMethod ? 'var(--border)' : 'rgba(251, 191, 36, 0.55)'}`,
+                background: paymentMethod ? 'transparent' : 'rgba(251, 191, 36, 0.06)',
+              }}
+            >
+              {PAY_METHODS.map((m) => {
+                const Icon = m.icon;
+                const chosen = paymentMethod === m.id;
+                const cashBlocked = m.id === 'cash' && !cashSessionOpen;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => selectPaymentMethod(m.id)}
+                    title={cashBlocked ? 'יש לפתוח קופה לפני גבייה במזומן' : undefined}
+                    style={{
+                      flex: '1 1 150px',
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      padding: '10px 12px',
+                      borderRadius: 10,
+                      cursor: 'pointer',
+                      textAlign: 'right',
+                      opacity: cashBlocked ? 0.55 : 1,
+                      border: `1px solid ${chosen ? m.color : 'var(--border)'}`,
+                      background: chosen ? `${m.color}1f` : 'var(--bg-input)',
+                      boxShadow: chosen ? `0 0 0 1px ${m.color}` : 'none',
+                      color: 'inherit',
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 34, height: 34, borderRadius: 9, flexShrink: 0,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: `${m.color}22`, color: m.color,
+                      }}
+                    >
+                      <Icon size={19} />
+                    </span>
+                    <span style={{ minWidth: 0 }}>
+                      <span style={{ display: 'block', fontWeight: 700, fontSize: 13.5 }}>{m.label}</span>
+                      <span style={{ display: 'block', fontSize: 11, color: 'var(--text-3)' }}>{m.hint}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {requireSeller && !sellerEmployeeId && (
@@ -2440,8 +2504,13 @@ ${data.link}`)}`,
                   ? `מסמך ${result.doc.docnum} הופק`
                   : 'הפעולה הושלמה'}
                 {result.passes?.length ? ` · הופעלו ${result.passes.length} כרטיסים/מנויים` : ''}
-                {result.isNewLead ? ' · נשמר כליד חדש' : ''}
+                {sendWhatsapp ? (result.whatsappSent ? ' · החשבונית נשלחה בוואטסאפ' : ' · החשבונית לא נשלחה') : ''}
               </span>
+              {sendWhatsapp && !result.whatsappSent && result.whatsappError && (
+                <div style={{ fontSize: 11.5, color: 'var(--amber)', marginTop: 4 }}>
+                  {result.whatsappError}
+                </div>
+              )}
             </div>
           )}
 

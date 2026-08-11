@@ -13,21 +13,26 @@ const MODE_KEY = 'kirboaz_print_mode';
  * תהיה שלנו בלבד: דרייבר ווינדוס שמחזיק אותה חוסם את הדפדפן לגמרי.
  * `os`  — דרך מנגנון ההדפסה של ווינדוס, כמו כל תוכנה. המדפסת נשארת משותפת
  * עם תוכנות אחרות; פתיחת המגירה נעשית בהגדרת הדרייבר ולא על ידינו.
+ *
+ * ברירת המחדל היא `os`, כי היא זו שעובדת במחשב הדלפק: המדפסת שם מותקנת
+ * כמדפסת ווינדוס עבור תוכנת הקופה השנייה, והדרייבר הזה חוסם גישה ישירה
+ * מהדפדפן. כדי שההדפסה תצא בלי חלונית אישור צריך שהדפדפן יופעל עם
+ * --kiosk-printing (הקיצור בשולחן העבודה עושה את זה).
  */
 export const PRINT_MODES = Object.freeze({ USB: 'usb', OS: 'os' });
 
 export function printMode() {
   try {
     const saved = localStorage.getItem(MODE_KEY);
-    return saved === PRINT_MODES.OS ? PRINT_MODES.OS : PRINT_MODES.USB;
+    return saved === PRINT_MODES.USB ? PRINT_MODES.USB : PRINT_MODES.OS;
   } catch {
-    return PRINT_MODES.USB;
+    return PRINT_MODES.OS;
   }
 }
 
 export function setPrintMode(mode) {
   try {
-    localStorage.setItem(MODE_KEY, mode === PRINT_MODES.OS ? PRINT_MODES.OS : PRINT_MODES.USB);
+    localStorage.setItem(MODE_KEY, mode === PRINT_MODES.USB ? PRINT_MODES.USB : PRINT_MODES.OS);
   } catch {
     /* ignore */
   }

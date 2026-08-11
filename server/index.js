@@ -14342,19 +14342,38 @@ app.post('/api/pos/sale', async (req, res) => {
       }
     }
 
+    // החשבונית נשלחת מהשרת. עד היום נבנתה כאן רק כתובת wa.me שפתחה דפדפן
+    // בדלפק וחיכתה שמישהו ילחץ „שלח” — מה שקרה לפעמים, ואיש לא ידע מתי לא.
     let whatsappUrl = null;
+    let invoiceWhatsappSent = false;
+    let invoiceWhatsappError = null;
     if (sendWhatsapp) {
       const phone = normalizePhone(syncedParent?.phone || walkInPhone);
-      if (phone) {
-        const digits = phone.replace(/^0/, '972');
-        const text = encodeURIComponent(
-          `שלום${syncedParent?.name ? ` ${syncedParent.name}` : ''},\n` +
-            `תודה על הרכישה ב־${await businessBrand()}.\n` +
-            `סכום: ₪${total}` +
-            (doc?.docnum ? `\nמספר מסמך: ${doc.docnum}` : '') +
-            (doc?.docUrl ? `\nקישור למסמך: ${doc.docUrl}` : '')
-        );
-        whatsappUrl = `https://wa.me/${digits}?text=${text}`;
+      if (!phone) {
+        invoiceWhatsappError = 'אין מספר טלפון לשליחת החשבונית';
+      } else {
+        const msg = [
+          `שלום${syncedParent?.name ? ` ${syncedParent.name}` : ''},`,
+          `תודה על הרכישה ב־${await businessBrand()}.`,
+          `סכום: ₪${total}`,
+          doc?.docnum ? `מספר מסמך: ${doc.docnum}` : '',
+          doc?.docUrl ? `קישור למסמך: ${doc.docUrl}` : '',
+        ].filter(Boolean).join(String.fromCharCode(10));
+        try {
+          const waResult = await whatsappService.sendTextMessage(phone, msg, false, {
+            parentId: syncedParent?.id,
+            fallbackName: syncedParent?.name,
+            source: 'pos_invoice',
+          });
+          invoiceWhatsappSent = !!waResult?.success;
+          if (!invoiceWhatsappSent) invoiceWhatsappError = waResult?.error || 'שליחת החשבונית נכשלה';
+        } catch (waErr) {
+          invoiceWhatsappError = waErr.message || 'שליחת החשבונית נכשלה';
+        }
+        if (!invoiceWhatsappSent) {
+          const digits = phone.replace(/^0/, '972');
+          whatsappUrl = `https://wa.me/${digits}?text=${encodeURIComponent(msg)}`;
+        }
       }
     }
 
@@ -14371,6 +14390,8 @@ app.post('/api/pos/sale', async (req, res) => {
       passes,
       doc,
       whatsappUrl,
+      whatsappSent: invoiceWhatsappSent,
+      whatsappError: invoiceWhatsappSent ? null : invoiceWhatsappError,
       isNewLead: !!isNewLead,
       parent: syncedParent,
       coupon: coupon ? { code: coupon.code, discount: couponDiscount } : null,
@@ -15685,7 +15706,9 @@ app.get('/api/checkin/climber/:id', async (req, res) => {
 app.post('/api/checkin/send-form-to-phone', async (req, res) => {
   const rawPhone = String(req.body?.phone || '').trim();
   const digits = rawPhone.replace(/\D/g, '');
-  if (digits.length < 9) return res.status(400).json({ error: 'מספר טלפון לא תקין' });
+  const linkOnly = req.body?.linkOnly === true;
+  // קוד לסריקה נוצר גם בלי מספר: הלקוח עומד מול הדלפק ומצלם מהמסך.
+  if (!linkOnly && digits.length < 9) return res.status(400).json({ error: 'מספר טלפון לא תקין' });
   const name = String(req.body?.name || '').trim() || 'לקוח';
 
   try {
@@ -15696,8 +15719,13 @@ app.post('/api/checkin/send-form-to-phone', async (req, res) => {
 
   const origin = resolvePublicAppOrigin(req.body?.origin);
   const formTemplate = findDefaultFormTemplate();
-  const link = buildShareableHealthUrl(origin, { phone: digits });
+  const link = digits.length >= 9
+    ? buildShareableHealthUrl(origin, { phone: digits })
+    : buildShareableHealthUrl(origin, {});
   const approved = findApprovedParticipationFormTemplate(db);
+
+  // אין למי לשלוח, ושליחה שקורית בכל זאת מגיעה כהודעה שאיש לא ביקש.
+  if (linkOnly) return res.json({ sent: false, link, linkOnly: true });
 
   if (approved?.meta_name) {
     try {
