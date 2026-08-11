@@ -469,9 +469,21 @@ export function shouldDeferToHumanStaff(phone, { resumedAt = null, withinMinutes
   // message was blocked by the same staff row. Anything before the resume no
   // longer counts.
   const resumedTs = resumedAt ? new Date(resumedAt).getTime() : 0;
-  const logs = (db.get('whatsapp_logs') || [])
+  // `messages` is the source of truth; `whatsapp_logs` is a local mirror of it
+  // and can lag or be rebuilt. Reading the mirror alone is how a staff reply
+  // sent from the CRM at 10:18 went unseen, and the bot answered the customer
+  // at 10:21 — three minutes into a hold that is supposed to last ten.
+  const rows = [...(db.get('messages') || []), ...(db.get('whatsapp_logs') || [])];
+  const seen = new Set();
+  const logs = rows
     .filter((l) => (l.channel || 'whatsapp') === 'whatsapp'
       && phonesMatch(l.phone || l.to || l.from, normalized))
+    .filter((l) => {
+      const key = `${l.id || ''}|${l.created_at || ''}|${l.direction || ''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
     .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
 
   for (const log of logs) {

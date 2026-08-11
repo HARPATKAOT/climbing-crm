@@ -60,3 +60,40 @@ test('a handoff holds the bot for minutes, not for ever', async () => {
   assert.equal(hasOpenBotHandoff(card(60 * 24), '0599111000'), false);
   assert.equal(hasOpenBotHandoff({ phone: '0599111000' }, '0599111000'), false);
 });
+
+test('a staff reply from the CRM holds the bot, even if only `messages` has it', async () => {
+  const { shouldDeferToHumanStaff } = await import('./whatsappBot.js');
+  const { db } = await import('./db.js');
+  const phone = '972546103606';
+  const backup = { messages: db.get('messages') || [], logs: db.get('whatsapp_logs') || [] };
+  try {
+    // Exactly the shape that slipped through: sent from the CRM three minutes
+    // ago, present in `messages`, absent from the local mirror.
+    db.set('messages', [{
+      phone,
+      channel: 'whatsapp',
+      direction: 'outbound',
+      is_ai: false,
+      source: 'crm',
+      message: 'כך שאין מה לחשוש מראשון או רביעי',
+      created_at: new Date(Date.now() - 3 * 60_000).toISOString(),
+    }]);
+    db.set('whatsapp_logs', []);
+    assert.equal(shouldDeferToHumanStaff(phone, { withinMinutes: 10 }), true);
+
+    // And once the hold has passed, the bot speaks again.
+    db.set('messages', [{
+      phone,
+      channel: 'whatsapp',
+      direction: 'outbound',
+      is_ai: false,
+      source: 'crm',
+      message: 'כך שאין מה לחשוש',
+      created_at: new Date(Date.now() - 30 * 60_000).toISOString(),
+    }]);
+    assert.equal(shouldDeferToHumanStaff(phone, { withinMinutes: 10 }), false);
+  } finally {
+    db.set('messages', backup.messages);
+    db.set('whatsapp_logs', backup.logs);
+  }
+});
