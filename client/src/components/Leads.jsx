@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Search, Plus, PlusCircle, Trash2, UserCheck, UserRound, Star, Phone, PhoneOff, AtSign, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, FolderOpen, Download, ReceiptText, History, RotateCw, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert, HeartPulse, Undo2, Loader2, Pencil } from 'lucide-react';
+import { Search, Plus, PlusCircle, Trash2, UserCheck, UserRound, Star, Phone, PhoneOff, AtSign, Eye, X, CreditCard, Award, Send, Clipboard, Edit2, Check, LayoutGrid, List, MessageCircle, MapPin, Tag, Bell, FileCheck2, FolderOpen, Download, ReceiptText, History, RotateCw, ChevronDown, ChevronLeft, Users, Ticket, CalendarDays, Package, Gift, ShoppingBag, Archive, ArchiveRestore, ShieldCheck, ShieldAlert, HeartPulse, Undo2, Loader2, Pencil, SlidersHorizontal } from 'lucide-react';
 import { STATUSES, LEAD_SOURCES, LEAD_SEGMENTS } from '../mockData.js';
 import { useAuth } from './AuthGate.jsx';
 import { StatusBadge, Modal } from './UI.jsx';
@@ -48,6 +48,13 @@ import {
   resolveLeadOpenTarget,
 } from '../utils/leadUtils.js';
 import { buildFamilyMemberTabs, buildFamilyRows, householdStudentsForParent } from '../utils/leadHouseholds.js';
+import {
+  DATE_PRESETS,
+  EMPTY_LEAD_FILTERS,
+  applyLeadFilters,
+  countActiveLeadFilters,
+  matchingPresetKey,
+} from '../utils/leadFilters.js';
 import {
   CATEGORY_COLORS,
   CATEGORY_ICONS,
@@ -7063,6 +7070,9 @@ export default function Leads({
   const [markingAllHandled, setMarkingAllHandled] = useState(false);
   const [handlingError, setHandlingError] = useState('');
   const [communicationSort, setCommunicationSort] = useState('conversation_desc');
+  // Refinements on top of the status tabs — intake date, source, group.
+  const [filters, setFilters] = useState(EMPTY_LEAD_FILTERS);
+  const [showFilters, setShowFilters] = useState(false);
   // The whole declaration feed, so the table can mark each climber without
   // opening their file. One fetch for the list, not one per row.
   const [declarations, setDeclarations] = useState([]);
@@ -7240,13 +7250,23 @@ export default function Leads({
   }, [leadEntries, parents, search, searchActive, showArchived, filterStatus]);
 
   // Table: one row per family. Kanban stays per-student for the funnel.
-  const familyRows = useMemo(() => {
+  const unfilteredFamilyRows = useMemo(() => {
     const rows = buildFamilyRows(filtered, parents, students);
     if (filterStatus === 'communication') {
       return sortCommunicationRows(rows, communicationSort);
     }
     return rows;
   }, [filtered, parents, students, filterStatus, communicationSort]);
+
+  // Applied last, on the finished households: the date and group the filter
+  // answers are the ones printed in the row.
+  const familyRows = useMemo(
+    () => applyLeadFilters(unfilteredFamilyRows, filters),
+    [unfilteredFamilyRows, filters]
+  );
+  const activeFilterCount = countActiveLeadFilters(filters);
+  const activeDatePreset = matchingPresetKey(filters);
+  const patchFilters = (patch) => setFilters((prev) => ({ ...prev, ...patch }));
 
   // Keep modal navigation tied to the complete handling queue, even when the
   // table underneath is filtered or searched. Its order follows the sort the
@@ -7268,7 +7288,7 @@ export default function Leads({
   const ROWS_PER_PAGE = 60;
   const [visibleRowCount, setVisibleRowCount] = useState(ROWS_PER_PAGE);
   const moreRowsRef = useRef(null);
-  useEffect(() => { setVisibleRowCount(ROWS_PER_PAGE); }, [search, filterStatus, communicationSort]);
+  useEffect(() => { setVisibleRowCount(ROWS_PER_PAGE); }, [search, filterStatus, communicationSort, filters]);
   const visibleFamilyRows = useMemo(
     () => familyRows.slice(0, visibleRowCount),
     [familyRows, visibleRowCount]
@@ -7768,21 +7788,141 @@ export default function Leads({
       {/* Table — one row per family */}
       {viewMode === 'table' && (
       <div className="card">
-        <div style={{ display: 'flex', gap: 10, padding: '16px 20px', borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)' }}>
-          <div className="input-icon-wrap" style={{ flex: 1, maxWidth: 300 }}>
-            <Search className="input-icon" size={16} />
-            <input
-              className="input"
-              placeholder="חיפוש לפי שם, הורה, טלפון..."
-              style={{ width: '100%', paddingRight: 36 }}
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)' }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div className="input-icon-wrap" style={{ flex: 1, maxWidth: 300 }}>
+              <Search className="input-icon" size={16} />
+              <input
+                className="input"
+                placeholder="חיפוש לפי שם, הורה, טלפון..."
+                style={{ width: '100%', paddingRight: 36 }}
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+              />
+            </div>
+            <button
+              type="button"
+              className={`btn btn-sm ${activeFilterCount ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => setShowFilters((open) => !open)}
+              aria-expanded={showFilters}
+              title="סינון לפי תאריך קליטה, מקור וקבוצה"
+            >
+              <SlidersHorizontal size={14} /> סינון
+              {activeFilterCount > 0 && (
+                <span
+                  style={{
+                    marginInlineStart: 2, minWidth: 17, padding: '0 5px', borderRadius: 999,
+                    background: 'rgba(0,0,0,0.28)', fontSize: 11, fontWeight: 700,
+                  }}
+                >
+                  {activeFilterCount}
+                </span>
+              )}
+              <ChevronDown
+                size={13}
+                style={{ transform: showFilters ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }}
+              />
+            </button>
+            {activeFilterCount > 0 && (
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setFilters(EMPTY_LEAD_FILTERS)}>
+                <X size={13} /> נקה סינון
+              </button>
+            )}
+            {activeFilterCount > 0 && (
+              <span className="text-muted" style={{ fontSize: 12 }}>
+                {familyRows.length} מתוך {unfilteredFamilyRows.length} משפחות
+              </span>
+            )}
+            {searchActive && (
+              <span className="text-muted" style={{ fontSize: 12 }}>
+                החיפוש כולל גם את הארכיון
+              </span>
+            )}
           </div>
-          {searchActive && (
-            <span className="text-muted" style={{ fontSize: 12 }}>
-              החיפוש כולל גם את הארכיון
-            </span>
+
+          {showFilters && (
+            <div
+              style={{
+                marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)',
+                display: 'flex', flexWrap: 'wrap', gap: 18, alignItems: 'flex-start',
+              }}
+            >
+              <div className="form-group" style={{ margin: 0, minWidth: 300 }}>
+                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <CalendarDays size={14} style={{ color: 'var(--blue)' }} /> תאריך קליטה
+                </label>
+                <div className="choice-row" style={{ marginBottom: 8 }}>
+                  {DATE_PRESETS.map((preset) => {
+                    const active = activeDatePreset === preset.key;
+                    return (
+                      <button
+                        key={preset.key}
+                        type="button"
+                        className={`choice-pill ${active ? 'active' : ''}`}
+                        style={{ '--choice-accent': '#38BDF8' }}
+                        onClick={() => patchFilters(active ? { from: '', to: '' } : preset.range())}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <input
+                    className="input"
+                    type="date"
+                    style={{ flex: 1 }}
+                    value={filters.from}
+                    max={filters.to || undefined}
+                    onChange={(e) => patchFilters({ from: e.target.value })}
+                    aria-label="נקלטו מתאריך"
+                  />
+                  <span className="text-muted" style={{ fontSize: 12 }}>עד</span>
+                  <input
+                    className="input"
+                    type="date"
+                    style={{ flex: 1 }}
+                    value={filters.to}
+                    min={filters.from || undefined}
+                    onChange={(e) => patchFilters({ to: e.target.value })}
+                    aria-label="נקלטו עד תאריך"
+                  />
+                </div>
+              </div>
+
+              <div className="form-group" style={{ margin: 0, minWidth: 190 }}>
+                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Tag size={14} style={{ color: 'var(--purple)' }} /> מקור הליד
+                </label>
+                <AppSelect
+                  className="input"
+                  value={filters.source}
+                  onChange={(e) => patchFilters({ source: e.target.value })}
+                >
+                  <option value="">כל המקורות</option>
+                  {Object.entries(LEAD_SOURCES).map(([k, v]) => (
+                    <option key={k} value={k}>{v.icon} {v.label}</option>
+                  ))}
+                </AppSelect>
+              </div>
+
+              <div className="form-group" style={{ margin: 0, minWidth: 220 }}>
+                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Users size={14} style={{ color: 'var(--green)' }} /> קבוצה
+                </label>
+                <AppSelect
+                  className="input"
+                  value={filters.groupId}
+                  onChange={(e) => patchFilters({ groupId: e.target.value })}
+                >
+                  <option value="">כל הקבוצות</option>
+                  <option value="none">ללא קבוצה</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </AppSelect>
+              </div>
+            </div>
           )}
         </div>
         <div className="table-wrap">
@@ -7800,7 +7940,20 @@ export default function Leads({
             </thead>
             <tbody>
               {familyRows.length === 0 && (
-                <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>אין תוצאות</td></tr>
+                <tr>
+                  <td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-3)' }}>
+                    {activeFilterCount > 0 && unfilteredFamilyRows.length > 0 ? (
+                      <>
+                        אין תוצאות לסינון הזה
+                        <div style={{ marginTop: 10 }}>
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setFilters(EMPTY_LEAD_FILTERS)}>
+                            <X size={13} /> נקה סינון
+                          </button>
+                        </div>
+                      </>
+                    ) : 'אין תוצאות'}
+                  </td>
+                </tr>
               )}
               {visibleFamilyRows.map((family) => {
                 const parent = family.parent;
