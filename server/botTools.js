@@ -25,6 +25,7 @@ import {
 import { studentsForParent, updateCustomerFullName } from './whatsappBot.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { participationEligibility } from './participationEligibility.js';
+import { upcomingTrainingBreaks } from './trainingBreaks.js';
 import { healthExpiryDate, declarationSignedAt } from './healthValidity.js';
 import { appPublicBase, buildRedirectUrl } from './publicLinks.js';
 import { persistCore } from './db.js';
@@ -315,6 +316,14 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
   {
     name: 'getOpeningHours',
     description: 'שעות הפתיחה הקרובות של הקיר, לפי היומן, וכתובת המקום.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'getTrainingBreaks',
+    description:
+      'החופשות מהחוגים שעוד לא הסתיימו — שם החג, מתי מתחילה ומתי מסתיימת. '
+      + 'להשתמש בכל שאלה על חופשה, חג או „מתי אין אימונים”. אין לענות על כך '
+      + 'מהזיכרון ואין לגזור תאריכים מלוח השנה — התאריכים נקבעים ביומן שלנו.',
     parameters: { type: 'object', properties: {} },
   },
   {
@@ -1194,6 +1203,28 @@ export function buildCustomerTools({
         הערה: todayRow?.open
           ? 'היום פתוח — מותר לומר «היום» עם השעות שלמעלה.'
           : 'היום סגור. אין לומר «אפשר להגיע היום» בשום ניסוח — יש לומר מתי הימים הפתוחים הקרובים.',
+      };
+    },
+
+    getTrainingBreaks: async () => {
+      const breaks = upcomingTrainingBreaks(db).map((row) => ({
+        שם: row.name,
+        מ: spellOutDate(row.from),
+        עד: row.from === row.to ? '' : spellOutDate(row.to),
+        ימים: row.days,
+      }));
+      if (!breaks.length) {
+        return {
+          חופשות: [],
+          הערה: 'לא הוזנו חופשות ביומן — אין לנחש תאריכים, יש להעביר לצוות.',
+        };
+      }
+      return {
+        חופשות: breaks,
+        // אבות שואלים על חופשה כדי לתכנן טיול, ומיד אחר כך שואלים אם הקיר
+        // פתוח. אלה שתי שאלות שונות, והתשובה לשנייה אינה כאן.
+        הערה: 'אלה הימים שבהם אין אימוני חוגים. אין להסיק מכך שהקיר עצמו סגור — '
+          + 'לשעות פתיחה יש getOpeningHours. יש למסור את התאריכים המדויקים כפי שהם.',
       };
     },
 
