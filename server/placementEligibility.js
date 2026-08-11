@@ -36,6 +36,17 @@ export function isLevelCandidate(value) {
   return levelRank(value) >= LEVEL_RANK['5A'];
 }
 
+/**
+ * Whether a level was ever written down, at any grade.
+ *
+ * `normalizeLevel` only knows 5A upwards, so a measured 4C and a trainee
+ * nobody has tested both come back empty — and the second was being refused
+ * as though it were the first.
+ */
+export function hasStatedLevel(value) {
+  return /\b[1-9][ABC]\b/i.test(clean(value));
+}
+
 export function isStrongLevelCandidate(value) {
   return levelRank(value) >= LEVEL_RANK['6A'];
 }
@@ -195,6 +206,25 @@ export function evaluateProgramCandidate({ student, group, gradeOrBand = '', lev
   const band = clean(gradeOrBand || group?.ageCategory);
   if (!programMatchesGrade(program, band)) {
     return { restricted: true, allowed: false, candidate: false, program, level: effectiveLevel, reason: 'age_or_grade_mismatch' };
+  }
+  // A level we have never measured is not a level below the bar.
+  //
+  // A family registering for next year has no test on file, so asking to be
+  // considered for a squad came back as "level below 5A" — the request was
+  // refused outright and nothing reached anybody. That is precisely the case
+  // a person has to look at: the answer is unknown, not no. It travels as a
+  // request with the level marked unknown, and the staff decide.
+  if (!effectiveLevel && !hasStatedLevel(level) && !hasStatedLevel(student?.levelGrade)) {
+    return {
+      restricted: true,
+      allowed: false,
+      candidate: true,
+      requiresApproval: true,
+      strength: 'unknown',
+      program,
+      level: '',
+      reason: 'level_unknown_requires_staff_approval',
+    };
   }
   if (!isLevelCandidate(effectiveLevel)) {
     return { restricted: true, allowed: false, candidate: false, program, level: effectiveLevel, reason: 'level_below_5a' };
