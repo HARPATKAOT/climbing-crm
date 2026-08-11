@@ -44,6 +44,8 @@ import {
   AVATAR_ICON_OPTIONS, travelColor,
 } from '../utils/roleIcons.js';
 import AppSelect from './AppSelect.jsx';
+import EmployeePayrollPeriods from './EmployeePayrollPeriods.jsx';
+import PayrollTracking from './PayrollTracking.jsx';
 import { isWallStaff as employeeIsWallStaff } from '../utils/employeeScope.js';
 
 const STATUS_OPTIONS = ['עובד פעיל', 'מנהל', 'עובד זמני', 'מדריך צעיר', 'מועמד', 'ארכיון', 'סנפלינג'];
@@ -3488,6 +3490,7 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
               { key: 'file',   label: 'תיק אישי',       icon: User },
               ...(canViewHr ? [{ key: 'wage', label: 'תפקידים ושכר', icon: Coins }] : []),
               ...(canViewShifts ? [{ key: 'shifts', label: 'משמרות', icon: CalendarRange }] : []),
+              ...(canViewHr ? [{ key: 'payments', label: 'תשלומים', icon: Banknote }] : []),
               ...(canViewHr ? [{ key: 'alerts', label: 'התראות', icon: Bell }] : []),
             ].map(({ key, label, icon: Icon }) => (
               <button
@@ -3538,6 +3541,10 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
               <div style={{ fontSize: 13, color: 'var(--text-3)' }}>
                 שמרו את העובד קודם — ואז יופיעו המשמרות.
               </div>
+            )}
+
+            {drawerTab === 'payments' && (
+              <EmployeePayrollPeriods employee={selectedEmployee} />
             )}
 
             {drawerTab === 'wage' && selectedEmployee.id && (
@@ -4558,6 +4565,14 @@ export default function Employees({ canViewHr = true, canEditEmployees = true, c
               </div>
             )}
           </div>
+
+          <PayrollTracking
+            month={payrollMonth}
+            onOpenEmployee={(id) => {
+              const emp = employees.find((e) => e.id === id);
+              if (emp) openEmployeeDrawer(emp, 'payments');
+            }}
+          />
 
           <div className="card card-p" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ fontSize: 14, fontWeight: 800 }}>הוספת שורה ידנית</div>

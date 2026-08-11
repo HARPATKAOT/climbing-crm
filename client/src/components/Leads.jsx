@@ -66,7 +66,14 @@ import {
   activityDayLabel,
   saveActivityAttendance,
 } from './ActivityAttendance.jsx';
-import { isAwaitingHandling, nextCommunicationRow, sortCommunicationRows, threadIsAwaitingReply } from './communicationQueue.js';
+import {
+  isAwaitingHandling,
+  latestInboundTime,
+  nextCommunicationRow,
+  pickCommunicationTarget,
+  sortCommunicationRows,
+  threadIsAwaitingReply,
+} from './communicationQueue.js';
 import { consecutiveAbsences } from '../scheduleUtils.js';
 import { studentGroupIds } from '../utils/studentGroups.js';
 import { passPurchasedText, passSubtitle } from '../utils/passes.js';
@@ -479,9 +486,29 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const selectedMemberTab = familyMemberTabs.find(
     (tab) => tab.student && String(tab.student.id) === String(student.id)
   ) || null;
-  const initialCommunicationTab = familyMemberTabs.find((tab) => (
-    tab.kind !== 'student' && String(tab.parent?.id) === String(primaryParent?.id)
-  )) || selectedMemberTab || familyMemberTabs[0] || null;
+  /**
+   * The card opens on whoever wrote to us, not on whoever heads the household.
+   *
+   * The waiting-for-handling row carries the primary parent's name, but the
+   * message just as often came from the second parent or from a child on their
+   * own phone. Landing on that person's empty thread reads as „there is no
+   * message here”, and the customer keeps waiting while the agent moves on.
+   *
+   * The parent cards are all we have on the first frame — they say somebody on
+   * this number wrote, not which of them. `pickCommunicationTarget` chooses the
+   * exact thread again below, once the conversations are loaded.
+   */
+  const newestInboundParentTab = familyMemberTabs.reduce((best, tab) => {
+    if (tab.kind === 'student' || !tab.parent?.id) return best;
+    const at = latestInboundTime(tab.parent);
+    if (!at || (best && at <= latestInboundTime(best.parent))) return best;
+    return tab;
+  }, null);
+  const initialCommunicationTab = newestInboundParentTab
+    || familyMemberTabs.find((tab) => (
+      tab.kind !== 'student' && String(tab.parent?.id) === String(primaryParent?.id)
+    ))
+    || selectedMemberTab || familyMemberTabs[0] || null;
   const [activeParentId, setActiveParentId] = useState(primaryParent?.id || null);
   // Communication is a separate axis from the file shown in the details pane.
   // Switching a family tab must never pull the agent out of the conversation
@@ -2915,13 +2942,40 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
     }));
   };
 
+  const communicationPickedByHand = useRef(false);
+  const autoPickedHousehold = useRef(null);
+
   const selectCommunicationMember = (tab) => {
     const target = communicationTargetForTab(tab);
     if (!target) return;
+    communicationPickedByHand.current = true;
     setCommunicationParentId(target.parentId);
     setCommunicationThreadId(target.threadId);
     setCommunicationMemberKey(tab.key);
   };
+
+  useEffect(() => {
+    communicationPickedByHand.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [householdIdentityKey]);
+
+  useEffect(() => {
+    // Once the threads have named the sender the choice is final: a message
+    // arriving mid-read must never drag the agent into somebody else's chat.
+    if (communicationPickedByHand.current) return;
+    if (autoPickedHousehold.current === householdIdentityKey) return;
+    const best = pickCommunicationTarget(familyMemberTabs, {
+      targetForTab: communicationTargetForTab,
+      conversationFor: (parentId) => conversationByParentId[String(parentId)] || null,
+    });
+    if (!best) return;
+    if (best.exact) autoPickedHousehold.current = householdIdentityKey;
+    if (String(best.tab.key) === String(communicationMemberKey)) return;
+    setCommunicationParentId(best.target.parentId);
+    setCommunicationThreadId(best.target.threadId);
+    setCommunicationMemberKey(best.tab.key);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [householdIdentityKey, familyMemberTabs, conversationByParentId, communicationMemberKey]);
 
   const activeFamilyTabKey = profileMode === 'parent'
     ? `parent:${parent?.id || ''}`

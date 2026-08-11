@@ -23,9 +23,9 @@ export const BOT_CAPABILITIES = [
   {
     key: 'classes',
     label: 'מידע על חוגים',
-    hint: 'ימים, שעות, מקומות פנויים ומדריכים',
-    source: 'מסך הקבוצות · ומחיר כניסה בודדת מהמחירון',
-    tools: ['listClasses', 'getPrices'],
+    hint: 'ימים, שעות, מקומות פנויים, מדריכים וחופשות מהאימונים',
+    source: 'מסך הקבוצות · מחיר כניסה בודדת מהמחירון · חופשות מהיומן',
+    tools: ['listClasses', 'getPrices', 'getTrainingBreaks'],
   },
   {
     key: 'hours',

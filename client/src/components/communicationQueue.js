@@ -150,6 +150,62 @@ export function threadIsAwaitingReply(conversation, threadId = 'parent') {
   return latestMessage?.direction === 'inbound';
 }
 
+/**
+ * When this exact person last wrote to us, in epoch ms (0 — never).
+ *
+ * The customer card only knows that *somebody* on this number wrote: a child
+ * writing from their own phone stamps the parent's card too. Which of them it
+ * was is only in the messages, so this is what decides whose thread opens.
+ */
+export function latestInboundInThread(conversation, threadId = 'parent') {
+  const threads = Array.isArray(conversation?.threads) ? conversation.threads : [];
+  const thread = threads.find((item) => item.id === threadId);
+  if (!thread) return 0;
+
+  let latest = 0;
+  for (const message of conversation?.messages || []) {
+    if (message?.direction !== 'inbound') continue;
+    if (!messageBelongsToThread(message, thread, conversation?.parent?.phone)) continue;
+    const time = Date.parse(message?.created_at || '') || 0;
+    if (time > latest) latest = time;
+  }
+  return latest;
+}
+
+/**
+ * Which household member the card should open on: the one who wrote to us last.
+ *
+ * The waiting-for-handling row carries the primary parent's name, but the
+ * message just as often came from the second parent, or from a child on their
+ * own phone. Landing on that person's empty thread reads as „there is no
+ * message here”, and the customer keeps waiting while the agent moves on.
+ *
+ * Until a thread is loaded only the parent card can speak, and it speaks for
+ * everyone who shares its number — so a card-level answer is marked `exact:
+ * false`, and the caller asks again once the conversations arrive.
+ *
+ * @param targetForTab (tab) => { parentId, threadId } | null
+ * @param conversationFor (parentId) => conversation | null
+ */
+export function pickCommunicationTarget(tabs = [], { targetForTab, conversationFor }) {
+  let best = null;
+  for (const tab of tabs) {
+    const target = targetForTab(tab);
+    if (!target) continue;
+    const conversation = conversationFor(target.parentId);
+    const inThread = conversation ? latestInboundInThread(conversation, target.threadId) : 0;
+    const at = inThread
+      || (conversation || target.threadId !== 'parent' ? 0 : latestInboundTime(tab.parent));
+    if (!at) continue;
+    const exact = !!inThread;
+    // A named sender beats the card that only knows the number, at equal time.
+    if (!best || at > best.at || (at === best.at && exact && !best.exact)) {
+      best = { tab, target, at, exact };
+    }
+  }
+  return best;
+}
+
 // Clock skew between the customer card and the message timestamp.
 const INBOUND_MATCH_TOLERANCE_MS = 2000;
 

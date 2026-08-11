@@ -25,6 +25,7 @@ import {
 import { studentsForParent, updateCustomerFullName } from './whatsappBot.js';
 import { findLatestValidDeclaration } from './crmWaiverService.js';
 import { participationEligibility } from './participationEligibility.js';
+import { upcomingTrainingBreaks } from './trainingBreaks.js';
 import { healthExpiryDate, declarationSignedAt } from './healthValidity.js';
 import { appPublicBase, buildRedirectUrl } from './publicLinks.js';
 import { persistCore } from './db.js';
@@ -318,6 +319,14 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
     parameters: { type: 'object', properties: {} },
   },
   {
+    name: 'getTrainingBreaks',
+    description:
+      'החופשות מהחוגים שעוד לא הסתיימו — שם החג, מתי מתחילה ומתי מסתיימת. '
+      + 'להשתמש בכל שאלה על חופשה, חג או „מתי אין אימונים”. אין לענות על כך '
+      + 'מהזיכרון ואין לגזור תאריכים מלוח השנה — התאריכים נקבעים ביומן שלנו.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
     name: 'getEvents',
     description:
       'אירועים וטיולים שסומנו לפרסום: שם, תאריך, מקום, מחיר, מקומות פנויים '
@@ -349,7 +358,9 @@ export const CUSTOMER_TOOL_DECLARATIONS = [
     description:
       'רושם שההורה מסר שהשלים את ההרשמה של הילד במתנ״ס. אינו משנה סטטוס ואינו '
       + 'מאשר כלום — הוא רק מכניס את השם לרשימת הבדיקה השבועית מול המתנ״ס. '
-      + 'להשתמש כשההורה אומר «נרשמנו», «ההרשמה מעודכנת במתנ״ס» וכדומה.',
+      + 'להשתמש כשההורה אומר «נרשמנו», «ההרשמה מעודכנת במתנ״ס» וכדומה — גם כשהוא '
+      + 'נרשם ישירות במתנ״ס ולא עבר דרכנו. הכלי מחזיר מה עוד חסר כדי לשבץ את הילד '
+      + '(מסמכים וציוד), ויש להמשיך לזה באותה תשובה.',
     parameters: {
       type: 'object',
       properties: {
@@ -749,6 +760,39 @@ async function scheduleSignupCheck({ parent, phone, student, settings }) {
     phone: parent.phone || phone || '',
     reason: 'pending_signup',
     note: 'ההרשמה במתנ״ס',
+    subject: student?.name || '',
+    student_id: student?.id || null,
+    ...plan,
+    status: FOLLOWUP_OPEN,
+    created_by: 'bot',
+    created_at: new Date().toISOString(),
+  });
+  if (row?.id) await persistCore(FOLLOWUP_COLLECTION, row);
+}
+
+/**
+ * The same day-after check, for an equipment link that was just sent.
+ *
+ * It stands down for a placement check that is already open: that one now
+ * carries the equipment line too, and two reminders the next morning read as
+ * two people who did not talk to each other.
+ */
+async function scheduleEquipmentCheck({ parent, phone, student }) {
+  if (!parent?.id) return;
+  if (findOpenFollowUp(db, { parentId: parent.id, reason: 'pending_signup' })) return;
+  if (findOpenFollowUp(db, { parentId: parent.id, reason: 'equipment_unpaid' })) return;
+  const plan = planFollowUp({
+    days: 1,
+    lastInboundAt: parent.last_inbound_whatsapp,
+    settings: db.getSettings ? db.getSettings() : {},
+  });
+  if (!plan) return;
+  const row = db.insert(FOLLOWUP_COLLECTION, {
+    id: newFollowUpId(),
+    parent_id: parent.id,
+    phone: parent.phone || phone || '',
+    reason: 'equipment_unpaid',
+    note: 'הסדרת הציוד',
     subject: student?.name || '',
     student_id: student?.id || null,
     ...plan,
@@ -1162,6 +1206,28 @@ export function buildCustomerTools({
       };
     },
 
+    getTrainingBreaks: async () => {
+      const breaks = upcomingTrainingBreaks(db).map((row) => ({
+        שם: row.name,
+        מ: spellOutDate(row.from),
+        עד: row.from === row.to ? '' : spellOutDate(row.to),
+        ימים: row.days,
+      }));
+      if (!breaks.length) {
+        return {
+          חופשות: [],
+          הערה: 'לא הוזנו חופשות ביומן — אין לנחש תאריכים, יש להעביר לצוות.',
+        };
+      }
+      return {
+        חופשות: breaks,
+        // אבות שואלים על חופשה כדי לתכנן טיול, ומיד אחר כך שואלים אם הקיר
+        // פתוח. אלה שתי שאלות שונות, והתשובה לשנייה אינה כאן.
+        הערה: 'אלה הימים שבהם אין אימוני חוגים. אין להסיק מכך שהקיר עצמו סגור — '
+          + 'לשעות פתיחה יש getOpeningHours. יש למסור את התאריכים המדויקים כפי שהם.',
+      };
+    },
+
     getEvents: async () => {
       // A formatted paragraph was all the model got, so it could describe a trip
       // but never act on one — there was no handle to pass anywhere. The slug is
@@ -1306,8 +1372,31 @@ export function buildCustomerTools({
       // conversation after acknowledging only the registration.
       const equipment = await tools.getEquipmentPaymentLink({ childName: student.name || named });
 
+      // Nor while the papers are missing, and those come first: a parent who
+      // signed up at the centre directly never passed through us at all, so
+      // nobody ever sent them the form. Without it the trainee cannot be put
+      // in a group — the one thing such a parent believes is already settled.
+      await refreshParticipationDocuments();
+      const papers = participationEligibility(db, { studentId: student.id });
+      const healthOnly = !papers.eligible && papers.waiver.state === 'valid';
+      const documents = papers.eligible
+        ? { מצב: 'חתומים ובתוקף' }
+        : {
+          מצב: healthOnly ? 'חסרה הצהרת בריאות' : `חסר ${FORM_SHORT}`,
+          קישור: healthOnly
+            ? healthFormUrl(phone, student.id, 'health-renewal')
+            : healthFormUrl(phone),
+          הסבר: healthOnly
+            ? `אישור ההשתתפות חתום ורק הצהרת הבריאות פגה. בלעדיה אי אפשר לשבץ את ${student.name || 'המתאמן'} לקבוצה.`
+            : `${FORM_FULL}. בלעדיו אי אפשר לשבץ את ${student.name || 'המתאמן'} לקבוצה, גם אחרי הרשמה במתנ״ס. ${FORM_PURPOSE}`,
+          ...(papers.health.state === 'blocked'
+            ? { הערת_בריאות: 'ההשתתפות מוקפאת עד אישור רפואי — יש להעביר לצוות' }
+            : {}),
+        };
+
       return {
         נרשם_לבדיקה: student.name || '',
+        מסמכים: documents,
         ציוד: equipment.קישור
           ? {
             מצב: 'טרם נסגר',
@@ -1317,8 +1406,10 @@ export function buildCustomerTools({
           }
           : { מצב: 'סגור', הערה: equipment.הערה || '' },
         הערה: 'הדיווח נשמר לבדיקה מול המתנ״ס. יש להודות ללקוח ולומר שהדיווח התקבל '
-          + 'ושהצוות יאמת את ההרשמה. אם שדה הציוד מציג «טרם נסגר», חובה להמשיך אליו באותה תשובה '
-          + 'ולשלוח את הקישור; אין לומר שאין צורך בפעולה נוספת. אין לומר שההרשמה אושרה או שהסטטוס כבר הסתנכרן.',
+          + 'ושהצוות יאמת את ההרשמה. אם שדה המסמכים מציג חוסר — זה הדבר הראשון בתשובה: יש לומר '
+          + 'במפורש שאי אפשר לשבץ את המתאמן לקבוצה בלי זה, ולשלוח את הקישור. אם שדה הציוד מציג '
+          + '«טרם נסגר», חובה להמשיך אליו באותה תשובה ולשלוח את הקישור; אין לומר שאין צורך בפעולה '
+          + 'נוספת. אין לומר שההרשמה אושרה או שהסטטוס כבר הסתנכרן.',
       };
     },
 
@@ -1594,12 +1685,16 @@ export function buildCustomerTools({
         return { קישור: '', הערה: `אין ציוד שטרם שולם עבור ${student.name || ''}` };
       }
 
-      // Reuse a live link rather than minting a token on every question.
+      // Reuse a live link rather than minting a token on every question — and
+      // the family's, not this child's. The page opens on the whole family and
+      // prices two children as one basket with the sibling discount, so a
+      // second link is a second payment that costs the parent more.
       const now = Date.now();
-      const existing = (db.get('equipment_checkouts') || []).find(
-        (c) => String(c.student_id || '') === String(student.id)
-          && (!c.expires_at || new Date(c.expires_at).getTime() > now)
+      const live = (db.get('equipment_checkouts') || []).filter(
+        (c) => !c.expires_at || new Date(c.expires_at).getTime() > now
       );
+      const existing = live.find((c) => String(c.parent_id || '') === String(parent.id))
+        || live.find((c) => String(c.student_id || '') === String(student.id));
       let token = existing?.id || '';
       if (!token) {
         token = newCheckoutToken();
@@ -1616,6 +1711,11 @@ export function buildCustomerTools({
         if (!created?.id) return { קישור: '', הערה: 'יצירת קישור נכשלה — יש להעביר לצוות' };
         await persistCore('equipment_checkouts', created);
       }
+
+      // A link with nobody behind it is how two open checkouts sat for a month
+      // while the family heard nothing. Same rule as the placement check: set
+      // by the code that sends the link, not by the model remembering to.
+      await scheduleEquipmentCheck({ parent, phone, student });
 
       const itemTypes = unpaid.map((r) => r.item_type || r.itemType).filter(Boolean);
       const shirtSize = unpaid.find((r) => (r.item_type || r.itemType) === 'shirt')?.shirt_size || null;
@@ -1634,7 +1734,8 @@ export function buildCustomerTools({
         הערה: 'יש להיכנס לקישור בכל מקרה — גם למי שכבר יש ציוד. בדף מסמנים על '
           + 'כל פריט אם הוא כבר קיים, ורוכשים רק את מה שחסר. בלי הסימון הפריט '
           + 'נשאר חסר במערכת. הסימון ניתן לשינוי. אין לנקוב בסכום ואין לפרט '
-          + 'מחיר לפריט.',
+          + 'מחיר לפריט. הקישור פותח את כל המשפחה: אין לשלוח קישור נפרד לכל '
+          + 'ילד — בוחרים בדף על מי משלמים, ותשלום אחד לשני אחים גם מזכה בהנחה.',
         מה_לומר: 'כבר בהודעה הראשונה שבה נשלח הקישור יש לכתוב את שתי המטרות '
           + 'שלו: להשלים את מה שחסר, וגם לסמן פריט שכבר יש (משנה שעברה או ציוד '
           + 'פרטי). הורה שיש לו ציוד לא ינחש שהוא בכל זאת צריך להיכנס.',

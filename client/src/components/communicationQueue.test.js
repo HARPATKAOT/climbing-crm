@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {
   awaitingSince,
   isAwaitingHandling,
+  latestInboundInThread,
   nextCommunicationRow,
+  pickCommunicationTarget,
   sortCommunicationRows,
   threadIsAwaitingReply,
 } from './communicationQueue.js';
@@ -137,6 +139,95 @@ test('reply indicator belongs only to the exact family member whose last message
 
   assert.equal(threadIsAwaitingReply(conversation, 'parent'), false);
   assert.equal(threadIsAwaitingReply(conversation, 'student:s1'), true);
+});
+
+test('the card opens on the person who wrote, not on the head of the household', () => {
+  const conversation = {
+    parent: { phone: '0501111111' },
+    threads: [
+      { id: 'parent', role: 'parent', phone: '0501111111' },
+      { id: 'student:s1', role: 'student', studentId: 's1', phone: '0522222222' },
+    ],
+    messages: [
+      { direction: 'inbound', phone: '0501111111', created_at: '2026-08-05T08:00:00.000Z' },
+      { direction: 'inbound', phone: '0522222222', student_id: 's1', created_at: '2026-08-05T09:00:00.000Z' },
+    ],
+  };
+
+  const parentAt = latestInboundInThread(conversation, 'parent');
+  const studentAt = latestInboundInThread(conversation, 'student:s1');
+  assert.equal(parentAt, Date.parse('2026-08-05T08:00:00.000Z'));
+  assert.ok(studentAt > parentAt, 'the child wrote last, so the child thread opens');
+});
+
+test('a household member who never wrote scores nothing', () => {
+  const conversation = {
+    parent: { phone: '0501111111' },
+    threads: [{ id: 'parent', role: 'parent', phone: '0501111111' }],
+    messages: [
+      { direction: 'outbound', phone: '0501111111', created_at: '2026-08-05T08:00:00.000Z' },
+    ],
+  };
+
+  assert.equal(latestInboundInThread(conversation, 'parent'), 0);
+  assert.equal(latestInboundInThread(conversation, 'student:s9'), 0);
+  assert.equal(latestInboundInThread(null, 'parent'), 0);
+});
+
+// A household exactly like the one that started this: the row is filed under
+// the father, the mother is the one who wrote, and the son has his own phone.
+const dad = { id: 'p1', name: 'גלעד', phone: '0501111111' };
+const mum = { id: 'p2', name: 'עדה', phone: '0503333333', last_inbound_whatsapp: '2026-08-11T07:53:00.000Z' };
+const familyTabs = [
+  { key: 'student:s1', kind: 'student', student: { id: 's1', phone: '0522222222' }, parent: dad },
+  { key: 'parent:p1', kind: 'parent', parent: dad },
+  { key: 'parent:p2', kind: 'parent', parent: mum },
+];
+const targetForTab = (tab) => (tab.kind === 'student'
+  ? { parentId: tab.parent.id, threadId: `student:${tab.student.id}` }
+  : { parentId: tab.parent.id, threadId: 'parent' });
+
+test('before the threads load, the parent card that was written to wins', () => {
+  const best = pickCommunicationTarget(familyTabs, {
+    targetForTab,
+    conversationFor: () => null,
+  });
+
+  assert.equal(best.tab.key, 'parent:p2');
+  assert.equal(best.exact, false, 'a card knows the number wrote, not who');
+});
+
+test('nobody wrote — no target, and the card keeps its own default', () => {
+  const quiet = [{ key: 'parent:p1', kind: 'parent', parent: dad }];
+  assert.equal(pickCommunicationTarget(quiet, { targetForTab, conversationFor: () => null }), null);
+});
+
+test('a child writing from their own phone opens the child, not the parent', () => {
+  // Both cards carry the same stamp: an inbound from the child touches the
+  // parent card too. Only the loaded thread says which of them it was.
+  const dadWithChildStamp = { ...dad, last_inbound_whatsapp: '2026-08-11T09:00:00.000Z' };
+  const tabs = familyTabs.map((tab) => (
+    tab.parent?.id === 'p1' ? { ...tab, parent: dadWithChildStamp } : tab
+  ));
+  const conversation = {
+    parent: { phone: '0501111111' },
+    threads: [
+      { id: 'parent', role: 'parent', phone: '0501111111' },
+      { id: 'student:s1', role: 'student', studentId: 's1', phone: '0522222222' },
+    ],
+    messages: [
+      { direction: 'inbound', phone: '0522222222', student_id: 's1', created_at: '2026-08-11T09:00:00.000Z' },
+    ],
+  };
+
+  const best = pickCommunicationTarget(tabs, {
+    targetForTab,
+    conversationFor: (parentId) => (parentId === 'p1' ? conversation : null),
+  });
+
+  assert.equal(best.tab.key, 'student:s1');
+  assert.equal(best.target.threadId, 'student:s1');
+  assert.equal(best.exact, true);
 });
 
 test('an outbound reply clears only its own thread indicator', () => {

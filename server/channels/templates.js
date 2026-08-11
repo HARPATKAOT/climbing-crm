@@ -1,3 +1,6 @@
+/** שם התבנית המאושרת של החשבונית מהדלפק — נקרא גם מהשרת וגם מסקריפט ההגשה. */
+export const POS_INVOICE_TEMPLATE_NAME = 'pos_invoice_v1';
+
 import { db, persistCore } from '../db.js';
 import { getWaCredentials, META_GRAPH_VERSION } from './media.js';
 import {

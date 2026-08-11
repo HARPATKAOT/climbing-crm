@@ -33,6 +33,7 @@ export const FOLLOWUP_CANCELLED = 'cancelled';
 export const FOLLOWUP_REASONS = new Set([
   'customer_asked',   // "תבדוק איתי מחר"
   'pending_signup',   // נשלח קישור הרשמה — לבדוק אם נרשמו
+  'equipment_unpaid', // נשלח קישור ציוד — לבדוק אם הוסדר
   'general',
 ]);
 
@@ -50,6 +51,12 @@ const MONTHS_HE = new Map([
 
 function clean(value) {
   return String(value ?? '').trim();
+}
+
+/** „אלה ואביתר” — the way a parent would say it, not a comma-separated list. */
+function joinNames(names = []) {
+  if (names.length <= 1) return names[0] || '';
+  return `${names.slice(0, -1).join(', ')} ו${names[names.length - 1]}`;
 }
 
 /**
@@ -315,19 +322,43 @@ export async function releaseFollowUpSend(db, claimId) {
  * The message the customer gets. Built from what was promised, so "תבדוק איתי
  * מחר" comes back as that subject and a placement comes back asking about the
  * registration — never as a generic "just checking in".
+ *
+ * `awaitingRegistration` and `equipmentLine` are read from the live record at
+ * send time, a day after the row was written. Asking a parent who registered
+ * yesterday evening whether they registered — or telling one who has just paid
+ * that their equipment is unpaid — is how a follow-up turns into a nuisance,
+ * and both facts are knowable at the moment of writing. An errand that has
+ * closed simply drops out of the message; when all of them have, the caller
+ * gets an empty string and sends nothing at all.
+ *
+ * The row names one trainee because one placement created it, but a parent
+ * registering two children at once is one errand to them. So the question is
+ * asked about everyone still waiting, by first name — a family reading
+ * "ההרשמה של אלה פרי דינרי" is being addressed by a form, not by us.
  */
-export function followUpMessage(row, { firstName = '' } = {}) {
+export function followUpMessage(row, {
+  firstName = '',
+  awaitingRegistration = [],
+  equipmentLine = '',
+} = {}) {
   const hello = firstName ? `היי ${firstName},` : 'היי,';
   const note = clean(row?.note);
-  if (String(row?.reason) === 'pending_signup') {
-    const child = clean(row?.subject);
-    return [
-      `${hello} רק בודק מה קורה 🙂`,
-      child
-        ? `הספקתם להשלים את ההרשמה של ${child} במתנ״ס?`
-        : 'הספקתם להשלים את ההרשמה במתנ״ס?',
-      'אם נתקלתם במשהו — כתבו לי ואשמח לעזור.',
-    ].join('\n');
+  const reason = String(row?.reason);
+  const equipment = clean(equipmentLine);
+
+  if (reason === 'pending_signup' || reason === 'equipment_unpaid') {
+    const waiting = (Array.isArray(awaitingRegistration) ? awaitingRegistration : [])
+      .map(clean)
+      .filter(Boolean);
+    const asksRegistration = reason === 'pending_signup' && waiting.length > 0;
+    if (!asksRegistration && !equipment) return '';
+    const lines = [`${hello} רק בודק מה קורה 🙂`];
+    if (asksRegistration) {
+      lines.push(`הספקתם להשלים את ההרשמה של ${joinNames(waiting)} במתנ״ס?`);
+    }
+    if (equipment) lines.push(equipment);
+    lines.push('אם נתקלתם במשהו — כתבו לי ואשמח לעזור.');
+    return lines.join('\n');
   }
   return [
     `${hello} חוזר אליכם כמו שסיכמנו 🙂`,

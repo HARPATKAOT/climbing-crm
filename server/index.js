@@ -63,6 +63,7 @@ import { notifyGroupMembershipDiff, runIntroHeadsUpIfDue } from './groupAlerts.j
 import { capabilityState, capabilitySettingsPatch } from './botCapabilities.js';
 import { normalizeInboundQuietMs } from './inboundBurst.js';
 import { listBotActions, botActionSummary, BOT_ACTION_TYPES } from './botActivityLog.js';
+import { botOpenItems } from './botOpenItems.js';
 import {
   loadAgendaSettings,
   saveAgendaSettings,
@@ -405,6 +406,10 @@ import {
   equipmentPublicBase,
   shoesSeasonPricing,
 } from './equipmentService.js';
+import {
+  equipmentReceiptMessage,
+  familyEquipmentStanding,
+} from './equipmentStanding.js';
 import { weeklySessionsForStudent } from './studentFrequency.js';
 import { shoesUpgradeQuote, describeShoesUpgrade } from './equipmentUpgrade.js';
 import { safetyTestStatus } from './safetyTestService.js';
@@ -453,7 +458,13 @@ import {
   saveForm101Url,
 } from './employeeOnboardingForm.js';
 import { calculateDashboardStats } from './dashboardStats.js';
-import { applyBusinessBrand, resetPlaygroundConversation } from './whatsappBot.js';
+import {
+  applyBusinessBrand,
+  isOptedOut,
+  parentFirstName,
+  resetPlaygroundConversation,
+  withBotMark,
+} from './whatsappBot.js';
 import { waitForMessages, currentVersion } from './liveUpdates.js';
 import { shouldMarkIntroPaid } from './introStatus.js';
 import { countEnrolled } from './groupCapacity.js';
@@ -487,6 +498,13 @@ import {
   workTypeRole,
   applyRoleLabels,
 } from './wageRates.js';
+import {
+  COMPANY_PAYMENT_TYPES,
+  buildPeriodView,
+  isValidPeriod,
+  periodsForEmployee,
+  sanitizePeriodPatch,
+} from './payrollPeriods.js';
 import {
   readStaffAttendanceSettings,
   writeStaffAttendanceSettings,
@@ -536,6 +554,7 @@ import {
 } from './channels/messageStore.js';
 import { canSendFreeform } from './channels/sessionWindow.js';
 import {
+  POS_INVOICE_TEMPLATE_NAME,
   listLocalTemplates,
   listApprovedTemplates,
   createDraftTemplate,
@@ -720,6 +739,24 @@ function redirectEquipmentCheckout(req, res) {
 }
 app.get('/e/:token', redirectEquipmentCheckout);
 app.get('/api/e/:token', redirectEquipmentCheckout);
+
+/**
+ * הקישור שמאחורי כפתור „צפייה בחשבונית” בתבנית המאושרת.
+ *
+ * המסמך עצמו יושב אצל iCount בכתובת ארוכה שמשתנה מעסקה לעסקה, ומטא מקפיאה
+ * את המארח של כפתור בתבנית. לכן הכפתור מצביע לכאן עם מזהה המכירה, והשרת
+ * שולח משם לכתובת האמיתית.
+ */
+function redirectSaleDocument(req, res) {
+  const saleId = String(req.params.saleId || '').trim();
+  if (!saleId) return res.status(400).send('חסר מזהה מכירה');
+  const sale = db.getOne('pos_sales', saleId);
+  const url = sale?.icount_doc_url;
+  if (!url) return res.status(404).send('לא נמצאה חשבונית למכירה הזאת');
+  return res.redirect(302, url);
+}
+app.get('/d/:saleId', redirectSaleDocument);
+app.get('/api/d/:saleId', redirectSaleDocument);
 
 /**
  * Short link to a group's registration page.
@@ -1704,6 +1741,16 @@ app.get('/api/whatsapp/settings', async (req, res) => {
       process.env.META_WA_ACCESS_TOKEN
     ),
   });
+});
+
+/**
+ * What the bot left open: who is waiting for a person, which reminders are due,
+ * and whose registration the מתנ״ס has not confirmed. Each of those lived in a
+ * different collection and on no screen, so two customers waited a day and
+ * nobody knew. Read-only — closing an item is done where it belongs.
+ */
+app.get('/api/bot/open-items', (req, res) => {
+  res.json(botOpenItems(db));
 });
 
 /**
@@ -10189,6 +10236,40 @@ app.post('/api/payments/:id/refund', async (req, res) => {
   }
 });
 
+/**
+ * The message a family gets once the equipment is settled.
+ *
+ * Until now paying was a page that closed, and marking "we already have shoes"
+ * left no trace the parent could see — so the one who did everything right had
+ * no more confirmation than the one who did nothing. This says what was bought
+ * and for whom, what was recorded as already theirs, and whether anything is
+ * still open, so nobody has to ask.
+ *
+ * Never worth failing a webhook over: the payment is recorded either way.
+ */
+async function sendEquipmentReceipt(payment) {
+  try {
+    const parent = payment.parent_id ? db.getOne('parents', payment.parent_id) : null;
+    if (!parent?.phone) return;
+    if (isOptedOut(parent)) return;
+    const students = (db.get('students') || []).filter(
+      (s) => String(s.parentId || s.parent_id || '') === String(parent.id)
+    );
+    const standing = familyEquipmentStanding(db, { students });
+    const body = equipmentReceiptMessage(standing, { firstName: parentFirstName(parent) });
+    if (!body) return;
+    // A receipt is worth nothing a day late, and a template for it does not
+    // exist; outside the window the page itself already showed the result.
+    if (!canSendFreeform(parent, 'whatsapp')) return;
+    await whatsappService.sendTextMessage(normalizePhone(parent.phone), withBotMark(body), true, {
+      source: 'ai',
+      parentId: parent.id,
+    });
+  } catch (err) {
+    console.error('equipment receipt failed:', err.message);
+  }
+}
+
 app.post('/api/icount/webhook', async (req, res) => {
   try {
     const expectedSecret = (process.env.ICOUNT_WEBHOOK_SECRET || '').trim();
@@ -10427,6 +10508,8 @@ app.post('/api/icount/webhook', async (req, res) => {
           paidAt: updated?.paid_at || new Date().toISOString(),
         });
       }
+
+      if (payment.equipment_payment) await sendEquipmentReceipt(payment);
 
       return res.json({
         ok: true,
@@ -12245,7 +12328,9 @@ app.get('/api/employees/:id/shift-journal', (req, res) => {
 
 const PAYROLL_DOCUMENT_TYPES = Object.freeze({
   payslip: 'תלוש משכורת',
+  invoice: 'חשבונית מהעובד',
   salary_transfer: 'אישור העברת או הפקדת משכורת',
+  pension_split: 'דף פיצול',
   pension_deposit: 'אישור הפקדה לפנסיה',
   tax_insurance: 'מסמכי מס וביטוח',
   employment: 'חוזה העסקה או טופס 101',
@@ -12482,6 +12567,274 @@ app.get('/api/employees/:id/payroll-documents/:documentId/download', async (req,
     return res.status(403).json({ error: 'אין הרשאה למסמכי העובד' });
   }
   return downloadPayrollDocument(res, employee, req.params.documentId);
+});
+
+// ─── מעקב תשלומי עובדים ─────────────────────────────────────────────────────
+// שורה לכל עובד לכל חודש: מה הוא עבד, מה שולם, ואילו מסמכים התקבלו. הסיכום
+// מחושב מ-work_assignments כל עוד החודש פתוח, ונצרב על השורה כשסוגרים אותו.
+
+/** קריאת השורות השמורות דרך המטמון, עם נפילה לזיכרון אם הקריאה נכשלה. */
+async function readPayrollPeriods() {
+  try {
+    return await readTable('payroll_periods');
+  } catch (error) {
+    console.error('readTable payroll_periods error:', error.message);
+    return db.get('payroll_periods') || [];
+  }
+}
+
+const findStoredPeriod = (rows, employeeId, period) => (
+  (rows || []).find((row) => row.employee_id === employeeId && row.period === period) || null
+);
+
+/** הרכבת תצוגת חודש אחד מכל המקורות. משמש גם את מסך המעקב וגם את כרטיס העובד. */
+function periodViewFor(employee, period, storedRows) {
+  return buildPeriodView({
+    employee,
+    period,
+    stored: findStoredPeriod(storedRows, employee.id, period),
+    workAssignments: db.get('work_assignments') || [],
+    agreement: (db.get('wage_agreements') || []).find((item) => item.employee_id === employee.id) || null,
+    documents: payrollDocumentsOf(employee).map(publicPayrollDocument),
+  });
+}
+
+app.get('/api/payroll-periods', async (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  }
+  const period = String(req.query.month || '').trim() || israelDateStr().slice(0, 7);
+  if (!isValidPeriod(period)) return res.status(400).json({ error: 'חודש חייב להיות בפורמט YYYY-MM' });
+  const storedRows = await readPayrollPeriods();
+  const employees = (db.get('employees') || []).filter((employee) => employee.is_active !== false);
+  res.json({
+    period,
+    document_types: PAYROLL_DOCUMENT_TYPES,
+    periods: employees
+      .map((employee) => periodViewFor(employee, period, storedRows))
+      .sort((a, b) => (b.summary?.total || 0) - (a.summary?.total || 0)
+        || String(a.employee_name).localeCompare(String(b.employee_name), 'he')),
+  });
+});
+
+app.get('/api/employees/:id/payroll-periods', async (req, res) => {
+  const employee = db.getOne('employees', req.params.id);
+  if (!employee) return res.status(404).json({ error: 'העובד לא נמצא' });
+  if (!hasSensitiveAccess(req.crmUser, 'hr') && !isOwnEmployeeRequest(req, employee.id)) {
+    return res.status(403).json({ error: 'אין הרשאה לתשלומי עובד אחר' });
+  }
+  const storedRows = await readPayrollPeriods();
+  const periods = periodsForEmployee({
+    employeeId: employee.id,
+    workAssignments: db.get('work_assignments') || [],
+    storedRows,
+    documents: payrollDocumentsOf(employee),
+  });
+  res.json({
+    employee_id: employee.id,
+    document_types: PAYROLL_DOCUMENT_TYPES,
+    periods: periods.map((period) => periodViewFor(employee, period, storedRows)),
+  });
+});
+
+/**
+ * שמירת השדות הידניים של חודש. השורה נוצרת בפעם הראשונה שנוגעים בה — אין טעם
+ * להחזיק שורה ריקה לכל עובד בכל חודש שבו לא קרה כלום.
+ */
+app.put('/api/payroll-periods/:employeeId/:period', async (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  }
+  const { employeeId, period } = req.params;
+  const employee = db.getOne('employees', employeeId);
+  if (!employee) return res.status(404).json({ error: 'העובד לא נמצא' });
+  if (!isValidPeriod(period)) return res.status(400).json({ error: 'חודש חייב להיות בפורמט YYYY-MM' });
+  try {
+    const patch = sanitizePeriodPatch(req.body || {});
+    const existing = findStoredPeriod(db.get('payroll_periods') || [], employeeId, period);
+    const saved = existing
+      ? db.update('payroll_periods', existing.id, patch)
+      : db.insert('payroll_periods', { employee_id: employeeId, period, status: 'open', summary: null, ...patch });
+    await persistCore('payroll_periods', saved);
+    res.json(periodViewFor(employee, period, db.get('payroll_periods') || []));
+  } catch (error) {
+    res.status(error.statusCode || 400).json({ error: error.message || 'שמירת החודש נכשלה' });
+  }
+});
+
+/**
+ * סגירת חודש: הסיכום נצרב על השורה ומאותו רגע הוא האמת ההיסטורית שלה.
+ * אותו עיקרון כמו הקפאת השכר על שורת עבודה — משכורת של חודש שעבר לא זזה
+ * כשמעלים תעריף או משנים שם תפקיד היום.
+ */
+app.post('/api/payroll-periods/:employeeId/:period/seal', async (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  }
+  const { employeeId, period } = req.params;
+  const employee = db.getOne('employees', employeeId);
+  if (!employee) return res.status(404).json({ error: 'העובד לא נמצא' });
+  if (!isValidPeriod(period)) return res.status(400).json({ error: 'חודש חייב להיות בפורמט YYYY-MM' });
+
+  const reopen = req.body?.reopen === true;
+  const stored = db.get('payroll_periods') || [];
+  const existing = findStoredPeriod(stored, employeeId, period);
+  // פתיחה מחדש מוחקת את הסיכום הצרוב, אחרת החודש היה ממשיך להציג אותו.
+  const fields = reopen
+    ? { status: 'open', summary: null, sealed_at: null }
+    : {
+      status: 'sealed',
+      // תמיד החישוב החי — גם אם החודש כבר היה סגור, סגירה מחדש צורבת מחדש.
+      summary: periodViewFor(employee, period, stored).live_summary,
+      sealed_at: new Date().toISOString(),
+    };
+  const saved = existing
+    ? db.update('payroll_periods', existing.id, fields)
+    : db.insert('payroll_periods', { employee_id: employeeId, period, ...fields });
+  await persistCore('payroll_periods', saved);
+  res.json(periodViewFor(employee, period, db.get('payroll_periods') || []));
+});
+
+// ─── תשלומי חברה ────────────────────────────────────────────────────────────
+// ביטוח לאומי וכל תשלום שאינו מיוחס לעובד יחיד: סכום לחודש ואישור העברה.
+
+const publicCompanyPayment = (row) => {
+  if (!row) return null;
+  const { document, ...rest } = row;
+  if (!document) return { ...rest, document: null };
+  const { storage_path: _path, ...safeDocument } = document;
+  return { ...rest, document: safeDocument };
+};
+
+app.get('/api/company-payments', async (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  }
+  let rows;
+  try {
+    rows = await readTable('company_payments');
+  } catch (error) {
+    console.error('readTable company_payments error:', error.message);
+    rows = db.get('company_payments') || [];
+  }
+  const period = String(req.query.month || '').trim();
+  const filtered = isValidPeriod(period) ? rows.filter((row) => row.period === period) : rows;
+  res.json({
+    types: COMPANY_PAYMENT_TYPES,
+    payments: [...filtered].sort((a, b) => String(b.period || '').localeCompare(String(a.period || ''))),
+  });
+});
+
+app.put('/api/company-payments/:period/:type', async (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  }
+  const { period, type } = req.params;
+  if (!isValidPeriod(period)) return res.status(400).json({ error: 'חודש חייב להיות בפורמט YYYY-MM' });
+  if (!COMPANY_PAYMENT_TYPES[type]) return res.status(400).json({ error: 'סוג התשלום אינו תקין' });
+  try {
+    const { amount, paid_at: paidAt, notes } = sanitizeCompanyPaymentBody(req.body || {});
+    const existing = (db.get('company_payments') || []).find((row) => row.period === period && row.type === type);
+    const saved = existing
+      ? db.update('company_payments', existing.id, { amount, paid_at: paidAt, notes })
+      : db.insert('company_payments', {
+        period, type, type_label: COMPANY_PAYMENT_TYPES[type], amount, paid_at: paidAt, notes, document: null,
+      });
+    await persistCore('company_payments', saved);
+    res.json(publicCompanyPayment(saved));
+  } catch (error) {
+    res.status(error.statusCode || 400).json({ error: error.message || 'שמירת התשלום נכשלה' });
+  }
+});
+
+function sanitizeCompanyPaymentBody(body) {
+  const amountRaw = body.amount;
+  let amount = null;
+  if (amountRaw !== undefined && amountRaw !== null && amountRaw !== '') {
+    const parsed = Number(amountRaw);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      throw Object.assign(new Error('סכום אינו תקין'), { statusCode: 400 });
+    }
+    amount = Math.round(parsed * 100) / 100;
+  }
+  let paidAt = null;
+  if (body.paid_at) {
+    const date = String(body.paid_at).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw Object.assign(new Error('תאריך אינו תקין'), { statusCode: 400 });
+    }
+    paidAt = date;
+  }
+  return { amount, paid_at: paidAt, notes: String(body.notes || '').slice(0, 2000) };
+}
+
+/**
+ * אישור ההעברה של תשלום חברה. אותו bucket פרטי של מסמכי העובדים, בתיקייה
+ * נפרדת — הקובץ לא שייך לאף עובד, ולכן אין לו מקום בתיק אישי.
+ */
+app.post('/api/company-payments/:id/document', async (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  }
+  const payment = db.getOne('company_payments', req.params.id);
+  if (!payment) return res.status(404).json({ error: 'התשלום לא נמצא' });
+  const { fileBase64, fileName, mimeType } = req.body || {};
+  if (!fileBase64 || typeof fileBase64 !== 'string') return res.status(400).json({ error: 'חסר קובץ' });
+  const raw = fileBase64.includes(',') ? fileBase64.split(',')[1] : fileBase64;
+  const buffer = Buffer.from(raw, 'base64');
+  if (!buffer.length || buffer.length > 10 * 1024 * 1024) {
+    return res.status(400).json({ error: 'גודל הקובץ אינו תקין' });
+  }
+  const safeMime = String(mimeType || 'application/pdf').slice(0, 120);
+  const safeName = String(fileName || `${payment.type}.${extFromMime(safeMime, fileName)}`)
+    .replace(/[^\w֐-׿.\-]+/g, '_')
+    .slice(0, 120);
+  const storagePath = `company/${payment.type}/${payment.period}/${payment.id}.${extFromMime(safeMime, safeName)}`;
+  try {
+    if (payment.document?.storage_path) await supa.removeEmployeeDocument(payment.document.storage_path);
+    const uploaded = await supa.uploadEmployeeDocument(storagePath, buffer, safeMime);
+    if (!uploaded.ok) throw new Error(uploaded.error || 'שמירת הקובץ נכשלה');
+    const saved = db.update('company_payments', payment.id, {
+      document: {
+        file_name: safeName,
+        storage_path: storagePath,
+        mime_type: safeMime,
+        uploaded_at: new Date().toISOString(),
+      },
+    });
+    await persistCore('company_payments', saved);
+    res.status(201).json(publicCompanyPayment(saved));
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.message || 'העלאת המסמך נכשלה' });
+  }
+});
+
+app.get('/api/company-payments/:id/document/download', async (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  }
+  const payment = db.getOne('company_payments', req.params.id);
+  if (!payment?.document?.storage_path) return res.status(404).json({ error: 'המסמך לא נמצא' });
+  const downloaded = await supa.downloadEmployeeDocument(payment.document.storage_path);
+  if (!downloaded.ok || !downloaded.blob) {
+    return res.status(500).json({ error: downloaded.error || 'הורדת המסמך נכשלה' });
+  }
+  const buffer = Buffer.from(await downloaded.blob.arrayBuffer());
+  res.setHeader('Content-Type', payment.document.mime_type || 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(payment.document.file_name || 'document.pdf')}`);
+  return res.send(buffer);
+});
+
+app.delete('/api/company-payments/:id/document', async (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'hr')) {
+    return res.status(403).json({ error: 'נדרשת הרשאת משאבי אנוש' });
+  }
+  const payment = db.getOne('company_payments', req.params.id);
+  if (!payment) return res.status(404).json({ error: 'התשלום לא נמצא' });
+  if (payment.document?.storage_path) await supa.removeEmployeeDocument(payment.document.storage_path);
+  const saved = db.update('company_payments', payment.id, { document: null });
+  await persistCore('company_payments', saved);
+  res.json(publicCompanyPayment(saved));
 });
 
 app.post('/api/work-assignments/approve', (req, res) => {
@@ -14267,19 +14620,62 @@ app.post('/api/pos/sale', async (req, res) => {
       }
     }
 
+    // החשבונית נשלחת מהשרת. עד היום נבנתה כאן רק כתובת wa.me שפתחה דפדפן
+    // בדלפק וחיכתה שמישהו ילחץ „שלח” — מה שקרה לפעמים, ואיש לא ידע מתי לא.
     let whatsappUrl = null;
+    let invoiceWhatsappSent = false;
+    let invoiceWhatsappError = null;
     if (sendWhatsapp) {
       const phone = normalizePhone(syncedParent?.phone || walkInPhone);
-      if (phone) {
-        const digits = phone.replace(/^0/, '972');
-        const text = encodeURIComponent(
-          `שלום${syncedParent?.name ? ` ${syncedParent.name}` : ''},\n` +
-            `תודה על הרכישה ב־${await businessBrand()}.\n` +
-            `סכום: ₪${total}` +
-            (doc?.docnum ? `\nמספר מסמך: ${doc.docnum}` : '') +
-            (doc?.docUrl ? `\nקישור למסמך: ${doc.docUrl}` : '')
+      if (!phone) {
+        invoiceWhatsappError = 'אין מספר טלפון לשליחת החשבונית';
+      } else {
+        const msg = [
+          `שלום${syncedParent?.name ? ` ${syncedParent.name}` : ''},`,
+          `תודה על הרכישה ב־${await businessBrand()}.`,
+          `סכום: ₪${total}`,
+          doc?.docnum ? `מספר מסמך: ${doc.docnum}` : '',
+          doc?.docUrl ? `קישור למסמך: ${doc.docUrl}` : '',
+        ].filter(Boolean).join(String.fromCharCode(10));
+        // תבנית מאושרת קודם: היא היחידה שמגיעה גם ללקוח שלא כתב לנו קודם,
+        // וזה כמעט כל מי שנכנס לטפס. טקסט חופשי הוא רק גיבוי בתוך 24 השעות.
+        const invoiceTpl = (db.get('message_templates') || []).find(
+          (t) => (t.meta_name || t.name) === POS_INVOICE_TEMPLATE_NAME
         );
-        whatsappUrl = `https://wa.me/${digits}?text=${text}`;
+        const invoiceTplApproved =
+          invoiceTpl && String(invoiceTpl.status).toUpperCase() === 'APPROVED';
+        if (invoiceTplApproved && doc?.docnum) {
+          try {
+            const waResult = await whatsappService.sendTemplateMessage(
+              phone,
+              POS_INVOICE_TEMPLATE_NAME,
+              [syncedParent?.name || 'לקוח', String(total), String(doc.docnum)],
+              { fallbackName: syncedParent?.name, parentId: syncedParent?.id, buttonUrlParam: sale.id }
+            );
+            invoiceWhatsappSent = !!waResult?.success;
+            if (!invoiceWhatsappSent) invoiceWhatsappError = waResult?.error || 'שליחת תבנית החשבונית נכשלה';
+          } catch (waErr) {
+            invoiceWhatsappError = waErr.message || 'שליחת תבנית החשבונית נכשלה';
+          }
+        }
+        if (!invoiceWhatsappSent) {
+          try {
+            const waResult = await whatsappService.sendTextMessage(phone, msg, false, {
+              parentId: syncedParent?.id,
+              fallbackName: syncedParent?.name,
+              source: 'pos_invoice',
+            });
+            invoiceWhatsappSent = !!waResult?.success;
+            if (!invoiceWhatsappSent) invoiceWhatsappError = waResult?.error || 'שליחת החשבונית נכשלה';
+            else invoiceWhatsappError = null;
+          } catch (waErr) {
+            invoiceWhatsappError = waErr.message || invoiceWhatsappError || 'שליחת החשבונית נכשלה';
+          }
+        }
+        if (!invoiceWhatsappSent) {
+          const digits = phone.replace(/^0/, '972');
+          whatsappUrl = `https://wa.me/${digits}?text=${encodeURIComponent(msg)}`;
+        }
       }
     }
 
@@ -14296,6 +14692,8 @@ app.post('/api/pos/sale', async (req, res) => {
       passes,
       doc,
       whatsappUrl,
+      whatsappSent: invoiceWhatsappSent,
+      whatsappError: invoiceWhatsappSent ? null : invoiceWhatsappError,
       isNewLead: !!isNewLead,
       parent: syncedParent,
       coupon: coupon ? { code: coupon.code, discount: couponDiscount } : null,
@@ -15597,6 +15995,62 @@ app.get('/api/checkin/climber/:id', async (req, res) => {
     safety: safetyTestStatus(tests),
     safety_note: passPunchSafetyNote({ student, tests }),
     last_visit: { ...visit, label: lastVisitLabel(visit) },
+  });
+});
+
+/**
+ * שליחת טופס ההרשמה למי שאינו במערכת, בלי לפתוח לו תיק.
+ *
+ * הכפתור בדלפק פתח קודם וואטסאפ עם הקישור מוכן וחיכה שהדלפקיסט ילחץ שלח —
+ * צעד נוסף בדיוק ברגע שבו מישהו עומד וממתין. התבנית המאושרת נשלחת מהשרת
+ * ומגיעה גם מחוץ לחלון 24 השעות, והקישור שבה מוביל לטופס לפי טלפון.
+ */
+app.post('/api/checkin/send-form-to-phone', async (req, res) => {
+  const rawPhone = String(req.body?.phone || '').trim();
+  const digits = rawPhone.replace(/\D/g, '');
+  const linkOnly = req.body?.linkOnly === true;
+  // קוד לסריקה נוצר גם בלי מספר: הלקוח עומד מול הדלפק ומצלם מהמסך.
+  if (!linkOnly && digits.length < 9) return res.status(400).json({ error: 'מספר טלפון לא תקין' });
+  const name = String(req.body?.name || '').trim() || 'לקוח';
+
+  try {
+    ensureParticipationFormWhatsappTemplate({ db, persist: persistCore });
+  } catch (err) {
+    console.warn('participation form template ensure skipped:', err.message);
+  }
+
+  const origin = resolvePublicAppOrigin(req.body?.origin);
+  const formTemplate = findDefaultFormTemplate();
+  const link = digits.length >= 9
+    ? buildShareableHealthUrl(origin, { phone: digits })
+    : buildShareableHealthUrl(origin, {});
+  const approved = findApprovedParticipationFormTemplate(db);
+
+  // אין למי לשלוח, ושליחה שקורית בכל זאת מגיעה כהודעה שאיש לא ביקש.
+  if (linkOnly) return res.json({ sent: false, link, linkOnly: true });
+
+  if (approved?.meta_name) {
+    try {
+      const result = await whatsappService.sendTemplateMessage(
+        digits,
+        approved.meta_name,
+        [name, name],
+        {
+          buttonUrlParam: `p:${digits}`,
+          source: 'participation_form',
+        }
+      );
+      if (result?.success) return res.json({ sent: true, via: 'template', link });
+      return res.json({ sent: false, link, warning: result?.error || 'שליחת התבנית נכשלה' });
+    } catch (err) {
+      return res.json({ sent: false, link, warning: err.message });
+    }
+  }
+  res.json({
+    sent: false,
+    link,
+    templateSlug: formTemplate?.slug || null,
+    warning: `התבנית «${PARTICIPATION_FORM_TEMPLATE}» אינה מאושרת — אי אפשר לשלוח למי שלא כתב לנו קודם`,
   });
 });
 

@@ -738,6 +738,11 @@ test('קישור תשלום ציוד: אילו פריטים חסרים, בלי �
     const second = await tools.getEquipmentPaymentLink({ childName: 'יותם' });
     assert.equal(second.קישור, first.קישור);
     assert.equal((db.get('equipment_checkouts') || []).length, 1);
+
+    // קישור שאיש לא חוזר אליו הוא קישור שפג. תזכורת אחת בלבד, גם על שתי קריאות.
+    const checks = followUps().filter((f) => f.reason === 'equipment_unpaid');
+    assert.equal(checks.length, 1);
+    assert.equal(checks[0].subject, 'יותם כהן');
   });
 });
 
@@ -757,6 +762,39 @@ test('אישור הרשמה במתנ״ס ממשיך לציוד שעדיין לא
     assert.match(result.ציוד.קישור, /\/api\/e\//);
     assert.match(result.ציוד.הסבר, /ציוד מהבית/);
     assert.match(result.הערה, /אין צורך בפעולה נוספת/);
+  });
+});
+
+// מי שנרשם ישירות במתנ״ס לא עבר דרכנו מעולם, ולכן איש לא שלח לו את הטופס.
+// דיווח ההרשמה הוא ההזדמנות האחת לומר לו שבלי זה אין שיבוץ.
+test('נרשם ישירות במתנ״ס — הדיווח מחזיר שחסר טופס ההשתתפות ושאי אפשר לשבץ בלעדיו', async () => {
+  await withSeed({
+    parents: [PARENT],
+    students: [childYotam({ status: 'pending_signup', groupId: GROUP_GD.id })],
+    groups: [GROUP_GD],
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const result = await tools.reportCentreRegistration({ childName: 'יותם' });
+
+    assert.match(result.מסמכים.מצב, /חסר/);
+    assert.ok(result.מסמכים.קישור);
+    assert.match(result.מסמכים.הסבר, /אי אפשר לשבץ את יותם/);
+    assert.match(result.הערה, /אי אפשר לשבץ/);
+  });
+});
+
+test('הרשמה במתנ״ס כשהמסמכים חתומים — אין מה לבקש', async () => {
+  await withSeed({
+    parents: [PARENT],
+    students: [childYotam({ status: 'pending_signup', groupId: GROUP_GD.id })],
+    groups: [GROUP_GD],
+    ...signedFormFor(['s-yotam']),
+  }, async () => {
+    const tools = buildCustomerTools({ parent: PARENT, phone: PARENT.phone });
+    const result = await tools.reportCentreRegistration({ childName: 'יותם' });
+
+    assert.equal(result.מסמכים.מצב, 'חתומים ובתוקף');
+    assert.equal(result.מסמכים.קישור, undefined);
   });
 });
 

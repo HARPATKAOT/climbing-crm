@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
-import { Send, Hash, History, Bot, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2, FileText, Bookmark, RotateCcw, Target, Wrench, MessageSquareText, Clock, Headset, GraduationCap, ClipboardList } from 'lucide-react';
+import { Send, Hash, History, Bot, CheckCircle, RefreshCw, Sparkles, Pencil, Plus, Trash2, FileText, Bookmark, RotateCcw, Target, Wrench, MessageSquareText, Clock, Headset, GraduationCap, ClipboardList, Inbox } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { Modal } from './UI.jsx';
 import SegmentBuilder from './SegmentBuilder.jsx';
@@ -13,6 +13,7 @@ import BotScheduleSettings from './BotScheduleSettings.jsx';
 import BotHandoffSettings from './BotHandoffSettings.jsx';
 import BotLearningPanel from './BotLearningPanel.jsx';
 import BotActivityPanel from './BotActivityPanel.jsx';
+import BotOpenItemsPanel from './BotOpenItemsPanel.jsx';
 import { useBusinessProfile } from '../BusinessProfileContext.jsx';
 import AppSelect from './AppSelect.jsx';
 
@@ -50,6 +51,9 @@ const TABS = [
 
 /** One tab per question the bot screen answers, then its three workbenches. */
 const BOT_TABS = [
+  // First, and the one the screen opens on: everything else here is a setting
+  // that can wait, and this is the only tab where a customer is waiting.
+  { key: 'open',     label: 'מה פתוח',       icon: Inbox },
   { key: 'tools',    label: 'כלים',          icon: Wrench },
   { key: 'tone',     label: 'טון וידע',      icon: MessageSquareText },
   { key: 'schedule', label: 'מתי עונה',      icon: Clock },
@@ -74,7 +78,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
   // squeezed into half a column while the sandbox took the other half. Each is
   // its own job, so each gets its own tab and the full width.
   // tools | tone | schedule | handoff | sandbox | learning | journal
-  const [botTab, setBotTab] = useState(query.get('botTab') || 'tools');
+  const [botTab, setBotTab] = useState(query.get('botTab') || 'open');
   
   // Compose / Send State
   const [lists, setLists] = useState(DEFAULT_LISTS);
@@ -875,7 +879,7 @@ export default function Broadcasts({ parents, students, groups = [] }) {
             fields, which is how a setting that no longer does anything can sit
             there for months without anybody noticing. */}
         {/* Same pill and the same seven-colour accent cycle as the tab bar
-            above — exactly seven tabs, so each one gets its own colour. */}
+            above; the eighth tab starts the cycle again. */}
         <div className="tab-bar tab-bar-inline">
           {BOT_TABS.map(({ key, label, icon: Icon }) => (
             <button
@@ -888,6 +892,17 @@ export default function Broadcasts({ parents, students, groups = [] }) {
             </button>
           ))}
         </div>
+        {botTab === 'open' && (
+          <div className="card card-p">
+            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>מה הבוט השאיר פתוח</div>
+            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 14, lineHeight: 1.6 }}>
+              מי ממתין לצוות, אילו מעקבים עומדים לצאת, ומי ממתין לאישור המתנ״ס.
+              לחיצה על שורה פותחת את כרטיס הלקוח.
+            </div>
+            <BotOpenItemsPanel />
+          </div>
+        )}
+
         {botTab === 'tools' && (
           <div className="card card-p">
             <BotCapabilitiesPanel disabled={!settings.aiResponderEnabled} />
