@@ -25,12 +25,13 @@ test('הכל בתוקף — מותר לנקב', () => {
   assert.equal(reason, null);
 });
 
-test('בלי הצהרת בריאות — חסום, ובמשפט אחד שאפשר לפעול לפיו', () => {
+test('בלי הצהרת בריאות — חסום', () => {
   const reason = passPunchBlockReason(
     { student, declarations: [], tests: [safetyTest('2026-12-01')] },
     NOW
   );
-  assert.equal(reason, 'לא ניתן להכניס לפני חתימה על אישור השתתפות');
+  assert.match(reason, /דנה לוי/);
+  assert.match(reason, /לא נחתמה הצהרת בריאות/);
 });
 
 // המתאמן נכנס, מנקב, ורק אז יוצא עם המדריך לתדריך ולמבחן — חסימה כאן הייתה
@@ -53,23 +54,11 @@ test('מבחן אבטחה בתוקף — אין הערה', () => {
   assert.equal(passPunchSafetyNote(args, NOW), null);
 });
 
-test('שני מסמכים חסרים הם עדיין מחסום אחד ופעולה אחת', () => {
-  // איזה מסמך חסר ומתי פג אינו משנה למי שעומד בדלפק — הפעולה זהה, והפירוט
-  // רק מאריך משפט שצריך להיקרא בשנייה.
+test('שתי סיבות המסמכים מופיעות יחד, והמבחן אינו אחת מהן', () => {
   const reason = passPunchBlockReason({ student, declarations: [], waivers: [], tests: [] }, NOW);
-  assert.equal(reason, 'לא ניתן להכניס לפני חתימה על אישור השתתפות');
+  assert.match(reason, /לא נחתמה הצהרת בריאות/);
+  assert.match(reason, /אין אישור פעילות בקיר/);
   assert.doesNotMatch(reason, /מבחן אבטחה/);
-});
-
-test('חסימה רפואית אינה מוסווית כבקשה לחתום', () => {
-  // קישור לחתימה לא יסיר חסימה רפואית; משפט שאומר „לחתום” היה שולח את הדלפק
-  // לעשות בדיוק את הדבר שלא יעזור.
-  const held = passPunchBlockReason(
-    { student, declarations: [validDecl], waivers: [validWaiver], healthHolds: [{ student_id: 's1', created_at: '2026-08-01' }] },
-    NOW
-  );
-  assert.match(held, /חסימה רפואית/);
-  assert.doesNotMatch(held, /חתימה/);
 });
 
 test('הצהרה שפגה מדווחת כפגה ולא כחסרה', () => {

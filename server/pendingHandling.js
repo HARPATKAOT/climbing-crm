@@ -40,21 +40,20 @@ export function todaysEntrants(checkIns = [], today, dateOf) {
  *
  * @param safetyOf (studentId) => {state, expires_at, test_date}
  */
-export function entryRows({ checkIns = [], today, dateOf, studentOf, safetyOf, includeSettled = false }) {
+export function entryRows({ checkIns = [], today, dateOf, studentOf, safetyOf }) {
   const rows = [];
   for (const [studentId, at] of todaysEntrants(checkIns, today, dateOf)) {
     const student = studentOf(studentId);
     if (!student) continue;
     const safety = safetyOf(studentId) || { state: 'missing' };
-    if (safety.state === 'valid' && !includeSettled) continue;
+    if (safety.state === 'valid') continue;
     rows.push({
       id: `entry:${studentId}`,
       kind: PENDING_KIND.SAFETY,
       student_id: studentId,
       name: student.name,
       at,
-      pending: safety.state !== 'valid',
-      needs_safety: safety.state !== 'valid',
+      pending: true,
       state: safety.state,
       expires_at: safety.expires_at || null,
     });
@@ -68,7 +67,7 @@ export function entryRows({ checkIns = [], today, dateOf, studentOf, safetyOf, i
  * שורה ששולמה ונוקתה כבר אינה כאן; שורה ששולמה ולא נוקתה נשארת דווקא כן —
  * היא ההודעה למדריך שהכסף נכנס.
  */
-export function paymentRows({ sales = [], today, dateOf, studentOf }) {
+export function paymentRows({ sales = [], today, dateOf }) {
   return (Array.isArray(sales) ? sales : [])
     .filter((sale) => {
       if (sale?.payment_method !== 'online') return false;
@@ -77,18 +76,12 @@ export function paymentRows({ sales = [], today, dateOf, studentOf }) {
       const at = sale.created_at || sale.updated_at;
       return !!at && dateOf(at) === today;
     })
-    .map((sale) => {
-      // השם הוא של מי שהכניסה עבורו, לא של מי ששילם. הורה שמשלם על הבן
-      // הופיע ברשימה בשמו שלו, ואחרי התשלום הצטרפה שורה שנייה על שם הבן —
-      // שני אנשים ברשימה על כניסה אחת.
-      const student = sale.student_id && studentOf ? studentOf(sale.student_id) : null;
-      return {
+    .map((sale) => ({
       id: `payment:${sale.id}`,
       kind: PENDING_KIND.PAYMENT,
       sale_id: sale.id,
       student_id: sale.student_id || null,
-      name: student?.name || sale.customer_name || 'לקוח',
-      payer_name: sale.customer_name || '',
+      name: sale.customer_name || 'לקוח',
       at: sale.created_at || sale.updated_at,
       pending: true,
       paid: sale.status === 'paid',
@@ -98,8 +91,7 @@ export function paymentRows({ sales = [], today, dateOf, studentOf }) {
         .map((line) => line?.name)
         .filter(Boolean)
         .join(', '),
-      };
-    });
+    }));
 }
 
 /**
@@ -109,50 +101,12 @@ export function paymentRows({ sales = [], today, dateOf, studentOf }) {
  * הסדר הוא סדר הדחיפות ולא סדר השעה — מי שכבר שילם וממתין רק ללחיצה בראש,
  * ואחריו השאר לפי סדר ההגעה.
  */
-/**
- * שתי הרשימות של הדלפק.
- *
- * `pending` — מי שמשהו אצלו עוד פתוח: תשלום שלא אושר, או תדריך ומבחן.
- * `active`  — מי שנכנס, שילם ועבר את המבחן (או שלא נזקק לו). זו התמונה של
- * מי נמצא עכשיו על הקיר, וזה מידע אחר לגמרי מרשימת המשימות — ולכן שתי
- * לשוניות ולא טבלה אחת עם דגלים.
- */
-export function buildCounterQueues(parts) {
-  const pending = buildPendingQueue(parts);
-  const pendingStudents = new Set(pending.map((row) => row.student_id).filter(Boolean));
-  const dismissed = new Set(parts?.dismissedIds || []);
-  const active = entryRows({ ...parts, includeSettled: true })
-    .filter((row) => !row.needs_safety
-      && !pendingStudents.has(row.student_id)
-      && !dismissed.has(row.id))
-    .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
-  return { pending, active };
-}
-
 export function buildPendingQueue(parts) {
   // הסרה ידנית: לפעמים אדם הלך, ולפעמים הצוות יודע משהו שהמערכת לא. שורה
   // שהוסרה לא חוזרת באותו יום — אחרת ההסרה חסרת ערך והרשימה מפסיקה להיקרא.
   const dismissed = new Set(parts?.dismissedIds || []);
-  const entries = entryRows(parts).filter((row) => !dismissed.has(row.id));
-  const payments = paymentRows(parts).filter((row) => !dismissed.has(row.id));
-
-  // אדם אחד = שורה אחת. תשלום שנפרע יוצר כניסה, והכניסה מוסיפה המתנה למבחן;
-  // בלי האיחוד הזה אותו מתאמן מופיע פעמיים — פעם על הכסף ופעם על התדריך.
-  const byStudent = new Map();
-  const rows = [];
-  for (const payment of payments) {
-    if (!payment.student_id) { rows.push(payment); continue; }
-    byStudent.set(payment.student_id, payment);
-    rows.push(payment);
-  }
-  for (const entry of entries) {
-    const merged = byStudent.get(entry.student_id);
-    if (!merged) { rows.push(entry); continue; }
-    merged.needs_safety = true;
-    merged.state = entry.state;
-    merged.expires_at = entry.expires_at;
-  }
-
+  const rows = [...entryRows(parts), ...paymentRows(parts)]
+    .filter((row) => !dismissed.has(row.id));
   return rows.sort((a, b) => {
     if (!!b.paid !== !!a.paid) return b.paid ? 1 : -1;
     return String(a.at || '').localeCompare(String(b.at || ''));

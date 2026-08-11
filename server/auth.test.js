@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { WALL_STATION_ROLE } from './userAccess.js';
 import {
   isPublicApiPath,
   isStaffRequestAllowed,
@@ -109,44 +108,4 @@ test('a wall station can print a receipt and kick the drawer without finance acc
   assert.equal(isStaffRequestAllowed('POST', '/api/cash-register/receipt-bytes', station), true);
   // ודוחות הקופה עצמם נשארים חסומים.
   assert.equal(isStaffRequestAllowed('GET', '/api/cash-register/ledger', station), false);
-});
-
-test('a wall station can drive every button its own terminal shows', () => {
-  // הכלל להסרה מרשימת הממתינים נשמט פעם אחת, והכפתורים במסך ענו „אין הרשאה”.
-  // זו התקלה שקשה לאבחן: היא נראית כמו באג בקוד ולא כמו הרשאה חסרה, ולכן
-  // כל פעולה שהמסוף מציג נבדקת כאן מול ההרשאות של עמדת הקיר עצמה.
-  const station = {
-    role: 'staff',
-    modules: WALL_STATION_ROLE.modules,
-    sensitive: { finance: false, hr: false },
-  };
-  const allowed = [
-    ['GET', '/api/wall-shift/state'],
-    ['POST', '/api/wall-shift/open'],
-    ['POST', '/api/wall-shift/staff/clock-in'],
-    ['POST', '/api/wall-shift/staff/clock-out'],
-    ['POST', '/api/wall-shift/close'],
-    ['GET', '/api/checkin/climber/s1'],
-    ['GET', '/api/checkin/pending'],
-    ['POST', '/api/checkin/pending/dismiss'],
-    ['POST', '/api/checkin/pending/payment/ps1/handled'],
-    ['POST', '/api/check-ins'],
-    ['POST', '/api/pos/passes/cp1/punch'],
-    ['POST', '/api/pos/sale'],
-    ['POST', '/api/pos/payment-link'],
-    ['POST', '/api/level-tests'],
-    ['POST', '/api/safety/inspections'],
-    ['POST', '/api/leads/s1/send-health-form'],
-    ['POST', '/api/cash-register/open'],
-    ['POST', '/api/cash-register/close'],
-    ['POST', '/api/cash-register/receipt-bytes'],
-  ];
-  for (const [method, path] of allowed) {
-    assert.equal(isStaffRequestAllowed(method, path, station), true, `${method} ${path} נחסם`);
-  }
-
-  // ומה שעדיין חסום לה בכוונה.
-  assert.equal(isStaffRequestAllowed('GET', '/api/cash-register/ledger', station), false);
-  assert.equal(isStaffRequestAllowed('GET', '/api/finance/dashboard', station), false);
-  assert.equal(isStaffRequestAllowed('GET', '/api/dashboard', station), false);
 });

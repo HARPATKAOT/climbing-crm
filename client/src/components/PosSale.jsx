@@ -2,10 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ShoppingCart, Plus, Minus, Trash2, Search, User,
   Banknote, Link2, FileText, CheckCircle2, X, Percent, Tag,
-  Package, ArrowRight, Gift, Send, Settings2, Printer, RotateCcw,
-  AtSign, MessageCircle,
+  Package, ArrowRight, Gift, Send, Settings2,
 } from 'lucide-react';
-import QRCode from 'qrcode';
 import {
   PRODUCT_CATEGORIES,
   CATEGORY_COLORS,
@@ -18,87 +16,14 @@ import {
 } from './productCategories.js';
 import AppSelect from './AppSelect.jsx';
 import CancellationPolicyPreview from './CancellationPolicyPreview.jsx';
-import CashDenominationPad from './CashDenominationPad.jsx';
-import { sumDenoms } from './cashDenoms.js';
 import CashCountModal from './CashCountModal.jsx';
 import EmployeeSelect from './EmployeeSelect.jsx';
-import {
-  printReceiptFromSale, openInvoiceFallback, thermalSupported, printMode, PRINT_MODES,
-} from '../utils/thermalPrinter.js';
-import { buildReceiptHtml, printReceiptViaOs } from '../utils/receiptHtml.js';
+import { printReceiptFromSale, openInvoiceFallback, thermalSupported } from '../utils/thermalPrinter.js';
 
 const PAY_METHODS = [
   { id: 'cash', label: 'מזומן', icon: Banknote },
   { id: 'online', label: 'סליקה בקישור', icon: Link2 },
 ];
-
-/**
- * מתג שליחה בצורת אייקון, ליד כפתור התשלום.
- *
- * תיבת סימון עם משפט הסבר לצידה תפסה שורה שלמה ואמרה דבר אחר בכל אמצעי
- * תשלום. האייקון תופס את מקומו הטבעי — ליד הכפתור שמבצע את השליחה — וההסבר
- * המלא עולה בריחוף. בלי טלפון או מייל בתיק אין לאן לשלוח, ולכן המתג כבוי.
- */
-function SendToggle({ on, onToggle, icon: Icon, title, missing, disabled }) {
-  const active = on && !disabled;
-  return (
-    <button
-      type="button"
-      className="btn btn-ghost"
-      onClick={disabled ? undefined : onToggle}
-      aria-pressed={active}
-      title={disabled ? `${title} — ${missing}` : `${title}${on ? '' : ' (כבוי)'}`}
-      style={{
-        paddingInline: 12,
-        opacity: disabled ? 0.4 : 1,
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        borderColor: active ? 'var(--accent)' : 'var(--border)',
-        color: active ? 'var(--accent)' : 'var(--text-3)',
-        background: active ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : undefined,
-      }}
-    >
-      <Icon size={16} />
-    </button>
-  );
-}
-
-/**
- * קוד לסריקה של קישור התשלום.
- *
- * לא לכל לקוח בדלפק יש וואטסAPP או סבלנות להקליד כתובת. הקוד על המסך הוא
- * מסלול התשלום השלישי: הלקוח מצלם ומשלם מהטלפון שלו.
- */
-function PayQr({ url, size = 132 }) {
-  const [src, setSrc] = useState('');
-  useEffect(() => {
-    let alive = true;
-    if (!url) { setSrc(''); return undefined; }
-    QRCode.toDataURL(String(url), { margin: 1, width: size * 2, errorCorrectionLevel: 'M' })
-      .then((data) => { if (alive) setSrc(data); })
-      .catch(() => { if (alive) setSrc(''); });
-    return () => { alive = false; };
-  }, [url, size]);
-  if (!src) return null;
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-      <img
-        src={src}
-        alt="קוד לסריקה ותשלום"
-        width={size}
-        height={size}
-        style={{ borderRadius: 8, background: '#fff', padding: 6, display: 'block' }}
-      />
-      <div style={{ fontSize: 11, color: 'var(--text-3)' }}>סרקו לתשלום</div>
-    </div>
-  );
-}
-
-/** מספר לוואטסאפ: ספרות בלבד, ו-0 מקומי מוחלף בקידומת ישראל. */
-function waPhone(raw) {
-  let digits = String(raw || '').replace(/\D/g, '');
-  if (digits.startsWith('0')) digits = `972${digits.slice(1)}`;
-  return digits.length >= 11 ? digits : '';
-}
 
 function productTypeLabel(type) {
   if (type === 'punch_card') return 'כרטיסייה';
@@ -109,15 +34,6 @@ function productTypeLabel(type) {
 
 function makeCartLineId() {
   return `cl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-/**
- * כמה אנשים יחידה אחת מכסה — שדה „מספר משתתפים” במחירון.
- * מראה את unitCapacity ב-server/posUtils.js, כמו pickBestPunchCard.
- */
-function unitCapacity(item) {
-  const n = parseInt(String(item?.participants ?? '').trim(), 10);
-  return Number.isFinite(n) && n > 1 ? n : 1;
 }
 
 function roundMoney(n) {
@@ -167,9 +83,7 @@ export default function PosSale({
   const [walkInName, setWalkInName] = useState('');
   const [walkInPhone, setWalkInPhone] = useState('');
   const [walkInEmail, setWalkInEmail] = useState('');
-  // ריק בכוונה: אמצעי התשלום נבחר, לא ננחש. ברירת מחדל „מזומן” גררה מכירות
-  // שנרשמו כמזומן כי איש לא שם לב שהיא כבר מסומנת.
-  const [paymentMethod, setPaymentMethod] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('cash');
   const [sendEmail, setSendEmail] = useState(false);
   const [sendWhatsapp, setSendWhatsapp] = useState(true);
   const [quoteIncludePaymentLink, setQuoteIncludePaymentLink] = useState(true);
@@ -185,17 +99,6 @@ export default function PosSale({
   const [discountDraft, setDiscountDraft] = useState({ type: 'percent', value: '' });
   const [customerCoupons, setCustomerCoupons] = useState([]);
   const [appliedCoupon, setAppliedCoupon] = useState(null);
-  // הטבות שהוסרו ביד. בלי הזיכרון הזה ההחלה האוטומטית מחזירה אותן מיד —
-  // כפתור „הסרה” שלא מסיר כלום הוא גרוע יותר מכפתור שלא קיים.
-  const [dismissedCoupons, setDismissedCoupons] = useState(() => new Set());
-  const [newClimberState, setNewClimberState] = useState(null); // null | 'sending' | string
-  // הקבלה האחרונה נשמרת כדי שאפשר יהיה לנסות להדפיס שוב בלי למכור מחדש.
-  // בלי זה כל בדיקה של המדפסת עולה עסקה, וכל תקלה מסתיימת בחשבונית ידנית.
-  const [lastReceipt, setLastReceipt] = useState(null);
-  // מכירה ללא זיהוי: קרטיב במזומן אינו דורש טלפון, שם, או תיק לקוח. בלי
-  // המסלול הזה כל מכירה קטנה גוררת הקלדת פרטים שאיש לא יסתכל בהם שוב.
-  const [anonymousSale, setAnonymousSale] = useState(false);
-  const [tenderedDenoms, setTenderedDenoms] = useState({});
   const [couponError, setCouponError] = useState('');
   const [couponBusy, setCouponBusy] = useState(false);
   const [resendingLink, setResendingLink] = useState(false);
@@ -206,12 +109,6 @@ export default function PosSale({
   const [customDraft, setCustomDraft] = useState({ name: '', price: '', quantity: '1' });
   const [cashSessionOpen, setCashSessionOpen] = useState(false);
   const [tenderedAmount, setTenderedAmount] = useState('');
-  // הסכום נגזר מהספירה ולא מחושב בתוך ה-onChange: הספירה מגיעה כפונקציה על
-  // המצב הקודם (אחרת קליקים מהירים נבלעים), ואין בה את התוצאה מראש.
-  useEffect(() => {
-    const sum = sumDenoms(tenderedDenoms);
-    if (sum > 0) setTenderedAmount(String(sum));
-  }, [tenderedDenoms]);
   const [lastChange, setLastChange] = useState(null);
   const [cashClosedHint, setCashClosedHint] = useState(false);
   const [showOpenCash, setShowOpenCash] = useState(false);
@@ -337,34 +234,6 @@ export default function PosSale({
   const effectivePhone = walkInPhone || selectedParent?.phone || '';
   const effectiveEmail = walkInEmail || selectedParent?.email || '';
 
-  // בסליקה בקישור השליחה בוואטסאפ היא עצם הפעולה של הכפתור — אין מה לסמן,
-  // וסימון נפרד רק מזמין דלפקיסט לכבות אותו בטעות. בלי טלפון בתיק אין לאן
-  // לשלוח, ואז נשאר הקוד לסריקה ופתיחת עמוד הסליקה.
-  useEffect(() => {
-    if (paymentMethod !== 'online') return;
-    setSendWhatsapp(Boolean(String(effectivePhone || '').trim()));
-  }, [paymentMethod, effectivePhone]);
-
-  /**
-   * הכניסה הבודדת לקיר — הכפתור המהיר מתחת לשם המתאמן.
-   *
-   * „מקנה טיפוס בקיר” מסומן גם על אימון אישי ועל שיעור זוגי, ולכן שלושתם
-   * הופיעו כאן ודחקו את הפעולה שהדלפק עושה עשרות פעמים ביום. הכניסה הבודדת
-   * מזוהה בכך שהיא עוגן המחיר שכרטיסיות נגזרות ממנו — סימון שכבר קיים
-   * במחירון ואינו דורש תחזוקה נפרדת. כל השאר נמכר מהקטלוג שליד.
-   */
-  const wallEntryProducts = useMemo(() => {
-    const entries = pricelist.filter((item) => (
-      item.grants_wall_climbing === true
-      && (item.product_type || 'product') === 'product'
-    ));
-    const anchorIds = new Set(
-      pricelist.map((item) => item.price_anchor_id).filter(Boolean).map(String)
-    );
-    const anchored = entries.filter((item) => anchorIds.has(String(item.id)));
-    return anchored.length ? anchored : entries;
-  }, [pricelist]);
-
   const filteredProducts = useMemo(() => {
     const q = productFilter.trim().toLowerCase();
     return pricelist.filter((item) => {
@@ -477,32 +346,6 @@ export default function PosSale({
     setShowContactFields(false);
   };
 
-  /**
-   * איפוס הקופה — מסך נקי ללקוח הבא.
-   *
-   * הדלפק לא תמיד מסיים במכירה: לקוח מתחרט, נבחר בטעות אדם אחר, או שהעגלה
-   * נבנתה תוך כדי שיחה. בלי כפתור אחד שמנקה הכול צריך למחוק שורה־שורה,
-   * ומה שנשכח מתגלגל אל הלקוח הבא.
-   */
-  const resetRegister = () => {
-    setCart([]);
-    clearCustomer();
-    setAnonymousSale(false);
-    setAppliedCoupon(null);
-    setDismissedCoupons(new Set());
-    setPaymentMethod('');
-    setTenderedAmount('');
-    setTenderedDenoms({});
-    setEditingDiscountId(null);
-    setShowCustomForm(false);
-    setCustomDraft({ name: '', price: '', quantity: '1' });
-    setShowQuoteOptions(false);
-    setDocumentsBlock(null);
-    setDocumentsLink(null);
-    setResult(null);
-    setError('');
-  };
-
   // בחירת הלקוח שהגיע מבחוץ. נעשית פעם אחת לכל מזהה, כדי שניקוי הלקוח בידיים
   // לא יחזיר אותו מיד.
   const appliedInitialRef = useRef('');
@@ -535,14 +378,7 @@ export default function PosSale({
   const missingSendTarget =
     hasSelectedCustomer &&
     ((sendWhatsapp && !effectivePhone.trim()) || (sendEmail && !effectiveEmail.trim()));
-  // רשימת ההצעות היא שכבה צפה מעל מה שמתחתיה. כשהשדות נפתחו כבר בזמן
-  // ההקלדה, הרשימה ישבה עליהם — ולכן הם מחכים שהבחירה תיסגר.
-  const suggestionsOpen = Boolean(customerQuery.trim()) && !hideSuggestions;
-
-  // במכירה ללא זיהוי אין למי לשלוח ואין למי לחייב — השדות רק מפריעים.
-  const contactFieldsVisible = !anonymousSale
-    && !suggestionsOpen
-    && (isPendingNewLead || missingSendTarget || showContactFields);
+  const contactFieldsVisible = isPendingNewLead || missingSendTarget || showContactFields;
 
   const cartTotal = cart.reduce(
     (sum, line) => sum + (Number(line.unitprice) || 0) * (Number(line.quantity) || 1),
@@ -563,15 +399,6 @@ export default function PosSale({
   useEffect(() => {
     setCancellationAccepted(false);
   }, [cart.map((line) => `${line.pricelist_id}:${line.quantity}`).join('|')]);
-
-  useEffect(() => {
-    setDismissedCoupons(new Set());
-  }, [selectedStudentId, selectedParentId]);
-
-  // בחירת לקוח מבטלת מכירה ללא זיהוי — אי אפשר להיות שניהם.
-  useEffect(() => {
-    if (selectedStudentId || selectedParentId) setAnonymousSale(false);
-  }, [selectedStudentId, selectedParentId]);
 
   const needsCustomer = cart.some(
     (line) => line.product_type === 'punch_card' || line.product_type === 'time_membership'
@@ -600,115 +427,9 @@ export default function PosSale({
    * Ask the server what the coupon is worth against this cart. The answer is a
    * preview only — the sale route recomputes it before the discount is given.
    */
-  /**
-   * על אילו פריטים ההטבה חלה.
-   *
-   * הכרטיס אמר רק „הוסיפו פריט לעגלה” בלי לומר איזה, כך שהדרך היחידה לגלות
-   * הייתה לנסות. ההגדרה כבר נמצאת בהטבה עצמה — צריך רק לתרגם מזהי מוצר לשמות.
-   */
-  const couponScopeText = (coupon) => {
-    const parts = coupon?.offer?.parts?.length
-      ? coupon.offer.parts
-      : (coupon?.offer ? [coupon.offer] : []);
-    const names = new Set();
-    let all = false;
-    for (const part of parts) {
-      if (part.appliesTo === 'items') {
-        for (const id of part.pricelistIds || []) {
-          const item = pricelist.find((row) => String(row.id) === String(id));
-          names.add(item?.name || id);
-        }
-      } else if (part.appliesTo === 'categories') {
-        for (const name of part.categoryNames || []) names.add(name);
-      } else if (part.appliesTo === 'product_type') {
-        names.add(productTypeLabel(part.productType));
-      } else {
-        all = true;
-      }
-    }
-    if (all && !names.size) return 'חל על כל העגלה';
-    if (!names.size) return '';
-    return `חל על: ${[...names].join(', ')}`;
-  };
-
-  /**
-   * לקוח שמגיע לראשונה: שולחים לו את טופס ההרשמה, ולא שומרים עליו כלום.
-   *
-   * פתיחת תיק על סמך שם שהוקלד בדלפק מייצרת לקוחות חצי-ריקים ששמם נכתב
-   * בשמיעה, ואת הפרטים האמיתיים הוא ימסור בעצמו בטופס. לכן כאן נשלח רק
-   * הקישור — וואטסאפ נפתח עם ההודעה מוכנה, והדלפקיסט לוחץ שלח.
-   */
-  const sendBlankFormLink = async () => {
-    const phone = String(walkInPhone || '').trim();
-    if (!phone) {
-      setNewClimberState('חסר טלפון — בלעדיו אין לאן לשלוח');
-      return;
-    }
-    setNewClimberState('sending');
-    try {
-      const data = await fetch('/api/checkin/send-form-to-phone', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, name: pendingNewLeadName || walkInName || '' }),
-      }).then(async (r) => {
-        const body = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(body.error || 'השליחה נכשלה');
-        return body;
-      });
-      if (data.sent) {
-        setNewClimberState(`✓ הטופס נשלח ל${phone}`);
-        return;
-      }
-      // התבנית לא זמינה — וואטסאפ אישי עם הקישור, כדי שלא להישאר בלי דרך.
-      setNewClimberState(data.warning || 'לא נשלח אוטומטית — נפתח וואטסאפ לשליחה ידנית');
-      const wa = waPhone(phone);
-      if (data.link && wa) {
-        window.open(
-          `https://wa.me/${wa}?text=${encodeURIComponent(`שלום, כדי להיכנס לקיר צריך למלא טופס השתתפות והצהרת בריאות:
-${data.link}`)}`,
-          '_blank',
-          'noopener'
-        );
-      }
-    } catch (err) {
-      setNewClimberState(err.message);
-    }
-  };
-
-  /**
-   * הדפסת קבלה לפי מצב ההדפסה שנקבע במחשב הזה.
-   *
-   * במצב `os` הקבלה נבנית כ-HTML ועוברת דרך מנגנון ההדפסה של ווינדוס — כך
-   * המדפסת נשארת משותפת עם תוכנת הקופה השנייה. במצב `usb` היא נשלחת ישירות
-   * כ-ESC/POS, ואז גם המגירה נפתחת מאותה פקודה.
-   */
-  const printSaleReceipt = async (data) => {
-    if (printMode() === PRINT_MODES.OS) {
-      const sale = data.sale || {};
-      return printReceiptViaOs(buildReceiptHtml({
-        sale: { ...sale, tendered_amount: sale.tendered_amount ?? (Number(tenderedAmount) || undefined) },
-        changeGiven: data.changeGiven || 0,
-      }));
-    }
-    return printReceiptFromSale(data.receiptBytes);
-  };
-
-  /** ניסיון הדפסה נוסף של הקבלה האחרונה — אחרי שהמדפסת הודלקה או חוברה. */
-  const retryPrint = async () => {
-    if (!lastReceipt) return;
-    setError('');
-    try {
-      await printSaleReceipt(lastReceipt);
-      setLastReceipt(null);
-      setError('');
-    } catch (printErr) {
-      setError(`ההדפסה נכשלה שוב: ${printErr?.message || 'שגיאה לא ידועה'}`);
-    }
-  };
-
-  const applyCoupon = async (coupon, { silent = false } = {}) => {
+  const applyCoupon = async (coupon) => {
     setCouponBusy(true);
-    if (!silent) setCouponError('');
+    setCouponError('');
     try {
       const res = await fetch('/api/pos/coupon-preview', {
         method: 'POST',
@@ -722,11 +443,8 @@ ${data.link}`)}`,
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || 'לא ניתן להשתמש בהטבה');
-      // בהחלה אוטומטית שווה 0 אינו הטבה — עדיף בלי כלום מאשר שורת „הטבה ₪0”.
-      if (silent && !(Number(body.discount) > 0)) return;
       setAppliedCoupon({ id: coupon.id, code: coupon.code, label: coupon.label, discount: body.discount });
     } catch (err) {
-      if (silent) return;
       setAppliedCoupon(null);
       setCouponError(err.message);
     } finally {
@@ -743,8 +461,6 @@ ${data.link}`)}`,
     applyCoupon(coupon);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cart.length, cartTotal]);
-
-
 
   const addToCart = (item) => {
     setResult(null);
@@ -772,11 +488,6 @@ ${data.link}`)}`,
           unitprice: price,
           quantity: 1,
           product_type: item.product_type || 'product',
-          // נשמר על השורה כדי שהעגלה תדע להציע בחירת משתתפים בלי לחפש
-          // את המוצר במחירון בכל ציור.
-          grants_wall_climbing: item.grants_wall_climbing === true,
-          family_shared: item.family_shared === true,
-          participants_per_unit: unitCapacity(item),
           cancellation_policy: item.cancellation_policy || null,
           discountType: null,
           discountValue: 0,
@@ -818,31 +529,6 @@ ${data.link}`)}`,
     ]);
     setCustomDraft({ name: '', price: '', quantity: '1' });
     setShowCustomForm(false);
-  };
-
-  /**
-   * מי המשתתפים בשורה — כשמשלמים על כמה ילדים של אותו הורה יחד.
-   *
-   * השרת כבר יודע לשייך כל יחידה למשתתף (`participant_ids`), אבל בדלפק לא
-   * הייתה דרך לומר לו על מי: כל כניסה נרשמה על המתאמן שנבחר, וגם כשקנו שתיים
-   * שתיהן היו על אותו ילד. הכמות נגזרת מהבחירה ולא להפך.
-   *
-   * יחידה אחת אינה בהכרח אדם אחד: אימון זוגי מכסה שניים, ולכן סימון של הילד
-   * השני ממלא את היחידה במקום להכפיל אותה.
-   */
-  const toggleParticipant = (cartLineId, studentId) => {
-    setCart((prev) => prev.map((l) => {
-      if (l.cartLineId !== cartLineId) return l;
-      const current = Array.isArray(l.participant_ids) && l.participant_ids.length
-        ? l.participant_ids
-        : (selectedStudentId ? [selectedStudentId] : []);
-      const next = current.includes(studentId)
-        ? current.filter((id) => id !== studentId)
-        : [...current, studentId];
-      if (!next.length) return l;
-      const perUnit = Math.max(1, Number(l.participants_per_unit) || 1);
-      return { ...l, participant_ids: next, quantity: Math.ceil(next.length / perUnit) };
-    }));
   };
 
   const setQty = (cartLineId, qty) => {
@@ -979,8 +665,8 @@ ${data.link}`)}`,
       setError('למנוי או כרטיסייה חובה לבחור מתאמן (אפשר לחפש הורה ואז לבחור ילד)');
       return false;
     }
-    if (!anonymousSale && isPendingNewLead && !String(effectivePhone || '').trim()) {
-      setError('לליד חדש חובה למלא טלפון, לבחור לקוח קיים, או לסמן מכירה ללא זיהוי');
+    if (isPendingNewLead && !String(effectivePhone || '').trim()) {
+      setError('לליד חדש חובה למלא טלפון (או לבחור לקוח קיים מהרשימה)');
       return false;
     }
     if (sendWhatsapp && !String(effectivePhone || '').trim()) {
@@ -988,13 +674,7 @@ ${data.link}`)}`,
       return false;
     }
     if (sendEmail && !String(effectiveEmail || '').trim()) {
-      setError(paymentMethod === 'online'
-        ? 'לשליחת קישור התשלום למייל חובה כתובת מייל, או לבטל את הסימון'
-        : 'לשליחת החשבונית למייל חובה כתובת מייל, או לבטל את הסימון');
-      return false;
-    }
-    if (!paymentMethod) {
-      setError('יש לבחור איך התשלום מתקבל — מזומן או סליקה בקישור');
+      setError('לשליחה למייל חובה למלא כתובת מייל, או לבטל את הסימון');
       return false;
     }
     if (paymentMethod === 'online' && !(Number(total) > 0)) {
@@ -1078,19 +758,15 @@ ${data.link}`)}`,
         setLastChange(Number(data.changeGiven));
       }
       if (data.receiptBytes?.base64) {
-        setLastReceipt(data);
         try {
-          await printSaleReceipt(data);
-          setLastReceipt(null);
+          await printReceiptFromSale(data.receiptBytes);
         } catch (printErr) {
           console.warn('thermal print failed', printErr);
           const docUrl = data.doc?.docUrl || data.sale?.icount_doc_url;
           if (docUrl) openInvoiceFallback(docUrl);
-          // ההודעה הכללית לא אמרה למה נכשל, ולכן לא היה מה לעשות איתה.
-          // הסיבה שהדפדפן החזיר היא ההבדל בין „המדפסת כבויה” לבין „לא חוברה”.
           setError(
             thermalSupported()
-              ? `המכירה נקלטה, אבל ההדפסה נכשלה: ${printErr?.message || 'שגיאה לא ידועה'}`
+              ? 'המכירה נקלטה, אבל ההדפסה נכשלה — בדקו את חיבור המדפסת או פתחו את החשבונית מהקישור'
               : 'המכירה נקלטה. הדפסה ישירה לא זמינה בדפדפן הזה — נפתחה החשבונית להדפסה רגילה'
           );
         }
@@ -1099,16 +775,6 @@ ${data.link}`)}`,
       // Clear cart after any successful checkout action
       setCart([]);
       setTenderedAmount('');
-      setTenderedDenoms({});
-      // קישור תשלום סוגר את הטיפול בלקוח הזה: הוא עבר לרשימת הממתינים, והדלפק
-      // פנוי לבא בתור. השארת הלקוח על המסך גרמה למכירה הבאה להיתלות עליו.
-      setPaymentMethod('');
-      if (endpoint === '/api/pos/payment-link') {
-        clearCustomer();
-        setAnonymousSale(false);
-        setAppliedCoupon(null);
-        setDismissedCoupons(new Set());
-      }
       setShowQuoteOptions(false);
       if (data.isNewLead || (!selectedParentId && !selectedStudentId && pendingNewLeadName)) {
         clearCustomer();
@@ -1441,15 +1107,6 @@ ${data.link}`)}`,
         >
           <div className="section-title" style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
             <User size={16} /> לקוח לחיוב
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              style={{ marginInlineStart: 'auto' }}
-              onClick={resetRegister}
-              title="ניקוי הלקוח, העגלה ואמצעי התשלום"
-            >
-              <RotateCcw size={14} /> איפוס קופה
-            </button>
           </div>
           {loadError && (
             <div
@@ -1504,28 +1161,8 @@ ${data.link}`)}`,
             </div>
           )}
 
-          {/* מכירה ללא זיהוי: קרטיב במזומן אינו דורש שם או טלפון, וכפייה
-              להקליד אותם מייצרת רשומות שאיש לא יסתכל בהן שוב. */}
-          {anonymousSale && !(selectedStudent || selectedParent) && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-              <span className="badge badge-gray">לקוח לא מזוהה</span>
-              <button type="button" className="btn btn-ghost btn-xs" onClick={() => setAnonymousSale(false)}>
-                בחירת לקוח
-              </button>
-            </div>
-          )}
-
-          {/* שכבת החיפוש מתרוממת רק כשהרשימה פתוחה. כשהיא נשארה גבוהה תמיד
-              היא כיסתה את שדה הטלפון שמתחתיה בדיוק ברגע שצריך למלא אותו. */}
-          {!anonymousSale && !(selectedStudent || selectedParent) && (
-            <div
-              className="form-group"
-              style={{
-                marginBottom: 10,
-                position: 'relative',
-                zIndex: suggestionsOpen ? 70 : 1,
-              }}
-            >
+          {!(selectedStudent || selectedParent) && (
+            <div className="form-group" style={{ marginBottom: 10, position: 'relative', zIndex: 70 }}>
               <label className="form-label">
                 לקוח — שם, טלפון או מייל {needsCustomer ? '*' : ''}
               </label>
@@ -1665,7 +1302,10 @@ ${data.link}`)}`,
             // שקורית לעיתים רחוקות ויש להם קטלוג שלם ליד — רשימה של שלושה-עשר
             // כפתורים מתחת לשם המתאמן מסתירה את הפעולה שבאמת נדרשת.
             addToCart,
-            wallProducts: wallEntryProducts,
+            wallProducts: pricelist.filter((item) => (
+              item.grants_wall_climbing === true
+              && (item.product_type || 'product') === 'product'
+            )),
             cartCount: cart.length,
           })}
 
@@ -1700,53 +1340,6 @@ ${data.link}`)}`,
                 עריכת טלפון / מייל לחשבונית
               </button>
             )
-          )}
-
-          {!anonymousSale && !needsCustomer && !(selectedStudent || selectedParent) && !isPendingNewLead && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs"
-              style={{ marginBottom: 10 }}
-              onClick={() => {
-                setAnonymousSale(true);
-                setSendWhatsapp(false);
-                setSendEmail(false);
-                clearCustomer();
-              }}
-            >
-              מכירה ללא זיהוי — בלי שם וטלפון
-            </button>
-          )}
-
-          {/* לקוח שאינו במערכת: שולחים לו את טופס ההרשמה ולא שומרים כלום. */}
-          {isPendingNewLead && !anonymousSale && !suggestionsOpen && (
-            <div
-              className="form-group"
-              style={{
-                marginBottom: 12, padding: 10, borderRadius: 10,
-                background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.35)',
-                display: 'flex', flexDirection: 'column', gap: 6,
-              }}
-            >
-              <div style={{ fontSize: 12.5, fontWeight: 700 }}>לקוח שאינו במערכת</div>
-              <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-                בלי טופס השתתפות חתום אי אפשר למכור לו כניסה. שלחו לו את הטופס —
-                הפרטים ייכנסו למערכת כשהוא ימלא אותו.
-              </div>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={!String(walkInPhone || '').trim()}
-                onClick={sendBlankFormLink}
-              >
-                <Send size={14} /> שליחת טופס הרשמה בוואטסאפ
-              </button>
-              {newClimberState && newClimberState !== 'sending' && (
-                <div style={{ fontSize: 11.5, color: newClimberState.startsWith('✓') ? 'var(--green)' : 'var(--amber)' }}>
-                  {newClimberState}
-                </div>
-              )}
-            </div>
           )}
         </div>
 
@@ -1847,38 +1440,6 @@ ${data.link}`)}`,
                             </span>
                           )}
                         </div>
-
-                        {/* תשלום על כמה ילדים של אותו הורה בבת אחת: כל מי
-                            שמסומן מקבל יחידה משלו, והכמות נגזרת מהסימון. */}
-                        {line.grants_wall_climbing && !line.family_shared
-                          && childrenOfSelectedParent.length > 1 && (
-                          <div style={{ marginTop: 8 }}>
-                            <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 4 }}>
-                              עבור מי:
-                              {(Number(line.participants_per_unit) || 1) > 1 && (
-                                <> {line.name} מכסה {line.participants_per_unit} משתתפים ליחידה</>
-                              )}
-                            </div>
-                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                              {childrenOfSelectedParent.map((child) => {
-                                const chosen = (line.participant_ids?.length
-                                  ? line.participant_ids
-                                  : [selectedStudentId]).includes(child.id);
-                                return (
-                                  <button
-                                    key={child.id}
-                                    type="button"
-                                    className={`btn btn-sm ${chosen ? 'btn-primary' : 'btn-ghost'}`}
-                                    style={{ padding: '3px 9px', fontSize: 11 }}
-                                    onClick={() => toggleParticipant(line.cartLineId, child.id)}
-                                  >
-                                    {child.name}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
                       </div>
                       <div
                         style={{
@@ -2045,21 +1606,12 @@ ${data.link}`)}`,
                             : `קוד ${coupon.code} · ללא תוקף`}
                         {!coupon.recurring && coupon.days_left != null ? ` · עוד ${coupon.days_left} ימים` : ''}
                       </div>
-                      {couponScopeText(coupon) && (
-                        <div style={{ fontSize: 11.5, color: 'var(--green)', marginTop: 2 }}>
-                          {couponScopeText(coupon)}
-                        </div>
-                      )}
                     </div>
                     {isApplied ? (
                       <button
                         type="button"
                         className="btn btn-ghost btn-xs"
-                        onClick={() => {
-                          setAppliedCoupon(null);
-                          setCouponError('');
-                          setDismissedCoupons((prev) => new Set(prev).add(coupon.id));
-                        }}
+                        onClick={() => { setAppliedCoupon(null); setCouponError(''); }}
                       >
                         הסרה
                       </button>
@@ -2068,14 +1620,7 @@ ${data.link}`)}`,
                         type="button"
                         className="btn btn-success btn-xs"
                         disabled={couponBusy || !cart.length}
-                        onClick={() => {
-                          setDismissedCoupons((prev) => {
-                            const next = new Set(prev);
-                            next.delete(coupon.id);
-                            return next;
-                          });
-                          applyCoupon(coupon);
-                        }}
+                        onClick={() => applyCoupon(coupon)}
                       >
                         {couponBusy ? 'בודק...' : 'החלה'}
                       </button>
@@ -2088,7 +1633,7 @@ ${data.link}`)}`,
               )}
               {!cart.length && (
                 <div style={{ fontSize: 11, color: 'var(--text-3)', marginTop: 6 }}>
-                  הוסיפו פריט לעגלה ואז לחצו „החלה”
+                  הוסיפו פריט לעגלה כדי להחיל את ההטבה
                 </div>
               )}
               {paymentMethod === 'online' && appliedCoupon && !customerCoupons.find((c) => c.id === appliedCoupon.id)?.recurring && (
@@ -2100,22 +1645,7 @@ ${data.link}`)}`,
             </div>
           )}
 
-          <div
-            style={{
-              display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap', alignItems: 'center',
-              ...(paymentMethod ? {} : {
-                padding: '10px 12px',
-                borderRadius: 10,
-                border: '1px solid rgba(251, 191, 36, 0.45)',
-                background: 'rgba(251, 191, 36, 0.06)',
-              }),
-            }}
-          >
-            {!paymentMethod && (
-              <span style={{ fontSize: 12.5, fontWeight: 700, color: '#FBBF24' }}>
-                איך משלמים?
-              </span>
-            )}
+          <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
             {PAY_METHODS.map((m) => {
               const Icon = m.icon;
               const cashBlocked = m.id === 'cash' && !cashSessionOpen;
@@ -2178,49 +1708,25 @@ ${data.link}`)}`,
                 gap: 8,
               }}
             >
-              {/* מה שהלקוח נתן, בשטרות ומטבעות ולא כמספר. הקלדת סכום דורשת
-                  לחשב אותו בראש בזמן שמישהו עומד ומחכה, וטעות שם היא עודף
-                  שגוי; ספירת השטרות היא בדיוק מה שהיד עושה ממילא. */}
-              <div style={{ fontSize: 13, fontWeight: 600 }}>התקבל מהלקוח</div>
-              <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-                קליק על שטר או מטבע מוסיף אחד, קליק ימני מוריד.
-              </div>
-              <CashDenominationPad
-                size="sm"
-                value={tenderedDenoms}
-                showTotal={false}
-                onChange={setTenderedDenoms}
-              />
-              <label style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
-                או סכום ישירות
+              <label style={{ fontSize: 13, fontWeight: 600 }}>
+                התקבל מהלקוח (ש״ח)
                 <input
-                  className="input input-sm"
+                  className="input"
                   type="number"
                   min={0}
                   step="0.01"
                   inputMode="decimal"
                   value={tenderedAmount}
-                  onChange={(e) => {
-                    setTenderedAmount(e.target.value);
-                    setTenderedDenoms({});
-                  }}
+                  onChange={(e) => setTenderedAmount(e.target.value)}
                   style={{ marginTop: 6 }}
                 />
               </label>
-              <div style={{ fontSize: 13 }}>
-                התקבל: <strong>₪{(Number(tenderedAmount) || 0).toFixed(2)}</strong>
-              </div>
               <div style={{ fontSize: 14, fontWeight: 700 }}>
                 {changePreview == null
                   ? 'הזינו כמה התקבל מהלקוח'
                   : changePreview < 0
                     ? `חסרים ₪${Math.abs(changePreview).toFixed(2)}`
                     : `עודף להחזר: ₪${changePreview.toFixed(2)}`}
-              </div>
-              {/* מה שנשאר במגירה הוא סכום המכירה, לא מה שהלקוח הושיט: העודף
-                  יוצא חזרה. זה מה שספירת הסגירה תיבדק מולו. */}
-              <div style={{ fontSize: 11.5, color: 'var(--text-3)' }}>
-                יתווסף למגירה: ₪{roundMoney(total).toFixed(2)}
               </div>
             </div>
           )}
@@ -2230,6 +1736,17 @@ ${data.link}`)}`,
               עודף להחזר ללקוח: ₪{Number(lastChange).toFixed(2)}
             </div>
           )}
+
+          <div style={{ display: 'flex', gap: 16, marginTop: 12, fontSize: 13, flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} />
+              שליחה למייל
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input type="checkbox" checked={sendWhatsapp} onChange={(e) => setSendWhatsapp(e.target.checked)} />
+              שליחה לוואטסאפ
+            </label>
+          </div>
 
           {activeCancellationPolicies.length > 0 && (
             <div className="alert alert-warn" style={{ marginTop: 12, display: 'block' }}>
@@ -2253,14 +1770,7 @@ ${data.link}`)}`,
           )}
 
           {error && (
-            <div className="alert alert-error" style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <span style={{ flex: 1, minWidth: 200 }}>{error}</span>
-              {lastReceipt && (
-                <button type="button" className="btn btn-secondary btn-sm" onClick={retryPrint}>
-                  <Printer size={14} /> הדפסה חוזרת
-                </button>
-              )}
-            </div>
+            <div className="alert alert-error" style={{ marginTop: 12 }}>{error}</div>
           )}
           {documentsBlock && (
             <div
@@ -2375,23 +1885,18 @@ ${data.link}`)}`,
                   {result.deliveryWarning}
                 </div>
               )}
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-                <PayQr url={lastPayUrl || result.shareUrl || result.payUrl} />
-                <div
-                  style={{
-                    flex: 1,
-                    minWidth: 180,
-                    fontSize: 12,
-                    wordBreak: 'break-all',
-                    direction: 'ltr',
-                    textAlign: 'left',
-                    background: 'rgba(0,0,0,0.2)',
-                    padding: '8px 10px',
-                    borderRadius: 8,
-                  }}
-                >
-                  {lastPayUrl || result.shareUrl || result.payUrl}
-                </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  wordBreak: 'break-all',
+                  direction: 'ltr',
+                  textAlign: 'left',
+                  background: 'rgba(0,0,0,0.2)',
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                }}
+              >
+                {lastPayUrl || result.shareUrl || result.payUrl}
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <a
@@ -2453,30 +1958,8 @@ ${data.link}`)}`,
               disabled={busy}
               onClick={handleCheckout}
             >
-              {busy
-                ? 'מעבד...'
-                : !paymentMethod
-                  ? 'בחרו אמצעי תשלום'
-                  : paymentMethod === 'online' ? 'שלח קישור לתשלום' : 'גבה והפק חשבונית'}
+              {busy ? 'מעבד...' : paymentMethod === 'online' ? 'צור קישור תשלום' : 'גבה והפק חשבונית'}
             </button>
-            {paymentMethod === 'cash' && (
-              <SendToggle
-                on={sendWhatsapp}
-                onToggle={() => setSendWhatsapp((v) => !v)}
-                icon={MessageCircle}
-                disabled={!String(effectivePhone || '').trim()}
-                title="שליחת החשבונית בוואטסאפ"
-                missing="אין טלפון בתיק הלקוח"
-              />
-            )}
-            <SendToggle
-              on={sendEmail}
-              onToggle={() => setSendEmail((v) => !v)}
-              icon={AtSign}
-              disabled={!String(effectiveEmail || '').trim()}
-              title={paymentMethod === 'online' ? 'שליחת קישור התשלום למייל' : 'שליחת החשבונית למייל'}
-              missing="אין כתובת מייל בתיק הלקוח"
-            />
             <button
               type="button"
               className="btn btn-ghost"
@@ -2538,8 +2021,8 @@ ${data.link}`)}`,
           {paymentMethod === 'online' && (
             <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 8 }}>
               {sendWhatsapp
-                ? 'הקישור יישלח בוואטסאפ ללקוח, ויוצג גם כקוד לסריקה למי שמעדיף לשלם מהטלפון.'
-                : 'אין טלפון בתיק — הקישור יוצג כקוד לסריקה, ואפשר גם להעתיק אותו או לפתוח את עמוד הסליקה.'}
+                ? 'אחרי יצירת הקישור הוא יישלח בוואטסאפ ללקוח (חובה טלפון). אפשר גם להעתיק או לפתוח את עמוד הסליקה.'
+                : 'אחרי יצירת הקישור ייפתח עמוד הסליקה. אפשר גם להעתיק ולשלוח ללקוח.'}
             </div>
           )}
         </div>

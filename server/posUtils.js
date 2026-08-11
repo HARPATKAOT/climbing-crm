@@ -258,16 +258,3 @@ export function enrichPricelistItem(item) {
     stock_qty: item.stock_qty != null ? Number(item.stock_qty) : null,
   };
 }
-
-/**
- * כמה אנשים יחידה אחת של המוצר מכסה.
- *
- * שדה „מספר משתתפים” במחירון קיים מזמן ושימש עד היום לתצוגה בלבד. הוא בדיוק
- * המידע החסר: אימון זוגי הוא יחידה אחת לשני אנשים, ולכן סימון של ילד שני
- * בדלפק צריך למלא את היחידה — לא לקנות עוד אחת. ריק, „1” או טקסט חופשי
- * נקראים כיחידה לאדם אחד, כי זה המצב של כמעט כל המוצרים.
- */
-export function unitCapacity(item) {
-  const n = parseInt(String(item?.participants ?? '').trim(), 10);
-  return Number.isFinite(n) && n > 1 ? n : 1;
-}

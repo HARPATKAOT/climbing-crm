@@ -5,7 +5,6 @@ import {
 import EntityLink from '../utils/entityLinks.jsx';
 import { CheckIcon } from './safetyCheckIcons.jsx';
 import AppSelect from './AppSelect.jsx';
-import EmployeeSelect from './EmployeeSelect.jsx';
 
 const HEB_DAYS = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 const FREQUENCIES = ['יומי', 'שבועי', 'דו שבועי', 'חודשי', 'דו חודשי', 'חצי שנתי', 'שנתי'];
@@ -75,9 +74,10 @@ function addDays(dateStr, days) {
 
 // ─── Modal: Sign check ───────────────────────────────────────────────────
 function SignCheckModal({ check, employees, initialLog = null, onSave, onClose }) {
-  // בדיקת בטיחות היא בדיקת בטיחות — מי שלא הוסמך לחתום עליה לא חותם גם על
-  // בדיקה חודשית. עד היום הסינון חל רק על היומיות, ובשאר הופיעו כל העובדים.
-  const eligible = employees.filter((e) => e.is_active !== false && e.can_sign_daily_safety === true);
+  const isDaily = check?.frequency === 'יומי' || Number(check?.interval_days) === 1;
+  const eligible = isDaily
+    ? employees.filter((e) => e.is_active !== false && e.can_sign_daily_safety === true)
+    : employees.filter((e) => e.is_active !== false);
   const [testerId, setTesterId] = useState(initialLog?.completed_by_employee_id || eligible[0]?.id || '');
   const [status, setStatus] = useState(initialLog?.status || 'תקין');
   const [notes, setNotes] = useState(initialLog?.description || '');
@@ -123,16 +123,15 @@ function SignCheckModal({ check, employees, initialLog = null, onSave, onClose }
           <form id="sign-check-form" onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div className="form-group">
               <label className="form-label">שם הבודק *</label>
-              <EmployeeSelect
-                employees={eligible}
-                value={testerId}
-                placeholder="בחר עובד..."
-                aria-label="שם הבודק"
-                onChange={(emp) => setTesterId(emp?.id || '')}
-              />
-              {eligible.length === 0 && (
+              <AppSelect className="input select" value={testerId} onChange={(e) => setTesterId(e.target.value)} required>
+                <option value="">בחר עובד...</option>
+                {eligible.map((emp) => (
+                  <option key={emp.id} value={emp.id}>{emp.name}</option>
+                ))}
+              </AppSelect>
+              {isDaily && eligible.length === 0 && (
                 <div style={{ fontSize: 12, color: 'var(--amber)', marginTop: 6 }}>
-                  אין עובד שמורשה לחתום על בדיקות בטיחות — סמנו בתיק העובד.
+                  אין עובד שמורשה לחתום על בדיקות יומיות — סמנו בתיק העובד.
                 </div>
               )}
             </div>
@@ -330,13 +329,9 @@ function AddIncidentModal({ employees, onSave, onClose }) {
               </div>
               <div className="form-group">
                 <label className="form-label">מדריך מדווח *</label>
-                <EmployeeSelect
-                  employees={employees}
-                  value={employeeId}
-                  placeholder="בחר עובד..."
-                  aria-label="מדריך מדווח"
-                  onChange={(emp) => setEmployeeId(emp?.id || '')}
-                />
+                <AppSelect className="input select" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}>
+                  {employees.map((emp) => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
+                </AppSelect>
               </div>
             </div>
           </form>

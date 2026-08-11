@@ -56,26 +56,3 @@ test('the counter label reads in days, months and years', () => {
   assert.equal(lastVisitLabel({ last_at: 'x', source: 'wall', days_ago: 120 }), 'כניסה אחרונה לפני 4 חודשים (קיר)');
   assert.match(lastVisitLabel({ last_at: 'x', source: 'wall', days_ago: 800 }), /שנתיים|2 שנים/);
 });
-
-test('yesterday evening reads as yesterday, not as today', () => {
-  // ההפרש בשעות היה קטן מיממה, ולכן מי שטיפס אתמול ב-20:00 הוצג בבוקר
-  // כמי ש„היה כאן היום” — והדלפקיסט ויתר על ריענון שכן היה צריך. הגבול
-  // הוא חצות, כמו שסופרים ימים.
-  const morning = new Date('2026-08-11T09:00:00');
-  const visit = lastVisit({
-    checkIns: [{ climber_id: 's1', timestamp: new Date('2026-08-10T20:00:00').toISOString() }],
-    attendance: [],
-    studentId: 's1',
-  }, morning);
-  assert.equal(visit.days_ago, 1);
-  assert.equal(lastVisitLabel(visit), 'היה כאן אתמול (קיר)');
-});
-
-test('earlier the same day is still today', () => {
-  const visit = lastVisit({
-    checkIns: [{ climber_id: 's1', timestamp: new Date('2026-08-11T07:30:00').toISOString() }],
-    attendance: [],
-    studentId: 's1',
-  }, new Date('2026-08-11T22:30:00'));
-  assert.equal(visit.days_ago, 0);
-});

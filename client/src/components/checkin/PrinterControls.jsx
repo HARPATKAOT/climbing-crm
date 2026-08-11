@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
-import { Inbox, Printer, Usb } from 'lucide-react';
-import {
-  pairThermalPrinter, sendEscPosBase64, thermalSupported, printMode, setPrintMode, PRINT_MODES,
-} from '../../utils/thermalPrinter.js';
+import { Inbox, Printer } from 'lucide-react';
+import { pairThermalPrinter, sendEscPosBase64, thermalSupported } from '../../utils/thermalPrinter.js';
 
 /**
  * חיבור המדפסת התרמית ופתיחת המגירה — מהמסוף.
@@ -17,24 +15,7 @@ import {
  */
 export default function PrinterControls({ onMessage }) {
   const [busy, setBusy] = useState(false);
-  const [mode, setMode] = useState(printMode);
-  const osMode = mode === PRINT_MODES.OS;
-
-  const switchMode = () => {
-    const next = osMode ? PRINT_MODES.USB : PRINT_MODES.OS;
-    setPrintMode(next);
-    setMode(next);
-    onMessage?.(next === PRINT_MODES.OS
-      ? 'הדפסה דרך ווינדוס — המדפסת נשארת משותפת עם תוכנות אחרות'
-      : 'הדפסה ישירה למדפסת — דורשת שהמדפסת תהיה של המסוף בלבד');
-  };
-
-  // גם בלי WebUSB אפשר להדפיס דרך ווינדוס, ולכן הכפתורים לא נעלמים.
-  if (!thermalSupported()) {
-    return (
-      <span style={{ fontSize: 12, color: 'var(--text-3)' }}>הדפסה דרך ווינדוס</span>
-    );
-  }
+  if (!thermalSupported()) return null;
 
   const pair = async () => {
     setBusy(true);
@@ -79,35 +60,21 @@ export default function PrinterControls({ onMessage }) {
       <button
         type="button"
         className="btn btn-ghost btn-sm"
-        onClick={switchMode}
-        title={osMode
-          ? 'כרגע מדפיסים דרך ווינדוס. לחיצה עוברת להדפסה ישירה (מהירה יותר, אבל תופסת את המדפסת)'
-          : 'כרגע מדפיסים ישירות למדפסת. לחיצה עוברת להדפסה דרך ווינדוס, שמשאירה אותה משותפת'}
+        disabled={busy}
+        onClick={pair}
+        title="חיבור חד-פעמי של המדפסת התרמית למחשב הזה"
       >
-        <Usb size={14} /> {osMode ? 'הדפסה: ווינדוס' : 'הדפסה: ישירה'}
+        <Printer size={14} /> חיבור מדפסת
       </button>
-      {!osMode && (
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          disabled={busy}
-          onClick={pair}
-          title="חיבור חד-פעמי של המדפסת התרמית למחשב הזה"
-        >
-          <Printer size={14} /> חיבור מדפסת
-        </button>
-      )}
-      {!osMode && (
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          disabled={busy}
-          onClick={openDrawer}
-          title="פתיחת מגירת הקופה"
-        >
-          <Inbox size={14} /> פתיחת מגירה
-        </button>
-      )}
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm"
+        disabled={busy}
+        onClick={openDrawer}
+        title="פתיחת מגירת הקופה"
+      >
+        <Inbox size={14} /> פתיחת מגירה
+      </button>
     </>
   );
 }
