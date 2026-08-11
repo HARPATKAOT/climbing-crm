@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X, Printer, ShoppingCart, Package, Calculator, History, BarChart3, Wallet, Link2, BadgePercent } from 'lucide-react';
+import { ReceiptText, RefreshCw, RotateCcw, Download, Loader2, Copy, ExternalLink, Search, X, Printer, ShoppingCart, Package, Calculator, History, BarChart3, Wallet, Link2, BadgePercent, Ban } from 'lucide-react';
 import EntityLink from '../utils/entityLinks.jsx';
 import PosSale from './PosSale.jsx';
 import Pricelist from './Pricelist.jsx';
@@ -102,6 +102,7 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
   const [posSales, setPosSales] = useState([]);
   const [salesLoading, setSalesLoading] = useState(false);
   const [refundBusyId, setRefundBusyId] = useState('');
+  const [cancelBusyId, setCancelBusyId] = useState('');
   const [invoiceBusyKey, setInvoiceBusyKey] = useState('');
   const [historyError, setHistoryError] = useState('');
   const [historyOk, setHistoryOk] = useState('');
@@ -283,6 +284,42 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
       setHistoryError(err.message || 'הזיכוי נכשל');
     } finally {
       setRefundBusyId('');
+    }
+  };
+
+  /**
+   * ביטול עסקה שלא שולמה. אין כאן זיכוי כי אין מה להחזיר: לא עבר כסף ולא יצא
+   * מסמך. מה שנסגר זה קישור התשלום שעדיין אפשר לשלם, וההטבה שהוחזקה בשבילו.
+   */
+  const cancelSale = async (sale) => {
+    if (!sale?.id) return;
+    const ok = window.confirm(
+      `לבטל את העסקה של ${sale.customer_name || 'לקוח'} בסך ₪${Number(sale.total || 0).toLocaleString()}?\n`
+      + 'לא שולם ולא יצאה חשבונית, ולכן אין זיכוי ואין מסמך ביטול.\n'
+      + 'קישור התשלום יפסיק לעבוד, והעסקה תישאר בהיסטוריה כמבוטלת.'
+      + (sale.coupon_code
+        ? `\nההטבה ${sale.coupon_code} תחזור ללקוח.`
+        : '')
+    );
+    if (!ok) return;
+
+    setCancelBusyId(sale.id);
+    setHistoryError('');
+    setHistoryOk('');
+    try {
+      const res = await fetch(`/api/pos/sales/${sale.id}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: `ביטול מקופה · ${sale.id}` }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'הביטול נכשל');
+      setHistoryOk('העסקה בוטלה');
+      await refreshSales();
+    } catch (err) {
+      setHistoryError(err.message || 'הביטול נכשל');
+    } finally {
+      setCancelBusyId('');
     }
   };
 
@@ -739,6 +776,13 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
                       sale.status === 'paid' &&
                       !!sale.icount_doc_number &&
                       sale.payment_method !== 'quote';
+                    // לא שולם ולא יצאה חשבונית — אין מה לזכות, רק לסגור.
+                    const canCancel =
+                      !canRefund &&
+                      sale.status !== 'paid' &&
+                      sale.status !== 'refunded' &&
+                      sale.status !== 'cancelled' &&
+                      !sale.icount_doc_number;
                     const canDownloadCharge = !!(
                       sale.icount_doc_url ||
                       sale.icount_doc_number ||
@@ -967,6 +1011,23 @@ export default function CashRegister({ isOwner = true, canResetCash = isOwner, s
                                       >
                                         <RotateCcw size={13} />
                                         {refundBusyId === sale.id ? 'מזכה...' : 'זיכוי עסקה'}
+                                      </button>
+                                    </>
+                                  )}
+                                  {canCancel && (
+                                    <>
+                                      <span className="pos-sale-detail-actions-spacer" />
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-sm"
+                                        disabled={cancelBusyId === sale.id}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          cancelSale(sale);
+                                        }}
+                                      >
+                                        <Ban size={13} />
+                                        {cancelBusyId === sale.id ? 'מבטל...' : 'ביטול עסקה'}
                                       </button>
                                     </>
                                   )}

@@ -14043,6 +14043,111 @@ app.post('/api/pos/sales/:id/refund', async (req, res) => {
   }
 });
 
+/**
+ * ביטול רכישה שלא שולמה — לא זיכוי.
+ *
+ * כשלא יצאה חשבונית אין מה לזכות: לא עבר כסף ואין מסמך לבטל במערכת החיוב.
+ * מה שכן נשאר זו שורה שנראית כמו חוב פתוח, קישור תשלום שאפשר לשלם גם בעוד
+ * חודש, וקופון שמוחזק בצד בשביל רכישה שלא תקרה. הביטול סוגר את שלושתם.
+ *
+ * השורה נשארת בהיסטוריה כ"בוטל" ולא נמחקת: מי ביטל ומתי זה בדיוק מה שירצו
+ * לדעת כשהלקוח ישאל למה הקישור שקיבל כבר לא עובד.
+ */
+app.post('/api/pos/sales/:id/cancel', async (req, res) => {
+  try {
+    const sale = db.getOne('pos_sales', req.params.id);
+    if (!sale) return res.status(404).json({ error: 'עסקה לא נמצאה' });
+
+    if (req.crmUser?.role === 'staff') {
+      const today = new Date().toISOString().slice(0, 10);
+      const allowed =
+        String(sale.sold_by || '') === String(req.crmUser.email || '') ||
+        String(sale.created_at || '').slice(0, 10) === today;
+      if (!allowed) {
+        return res.status(403).json({ error: 'אין הרשאה לבטל עסקה זו' });
+      }
+    }
+
+    if (sale.status === 'cancelled') {
+      return res.status(400).json({ error: 'העסקה כבר בוטלה' });
+    }
+    if (sale.status === 'refunded') {
+      return res.status(400).json({ error: 'העסקה זוכתה — אין מה לבטל' });
+    }
+    if (sale.status === 'paid' || sale.icount_doc_number) {
+      return res.status(400).json({
+        error: 'העסקה שולמה או שיצאה עליה חשבונית — צריך לזכות אותה, לא לבטל',
+      });
+    }
+
+    const now = new Date().toISOString();
+    const reason = String(req.body?.reason || '').trim();
+
+    const updatedSale = db.update('pos_sales', sale.id, {
+      status: 'cancelled',
+      cancelled_at: now,
+      cancelled_by: req.crmUser?.email || req.crmUser?.name || null,
+      cancel_reason: reason || null,
+      updated_at: now,
+    }) || sale;
+    await persistCore('pos_sales', updatedSale);
+
+    // בקשת התשלום עצמה נסגרת גם היא, אחרת הרכישה בוטלה אבל החוב עדיין מוצג
+    // בתיק הלקוח ובדוחות.
+    const cancelledPayments = [];
+    for (const payment of db.get('payments') || []) {
+      const linked =
+        String(payment.pos_sale_id || '') === String(sale.id) ||
+        (sale.payment_id && String(payment.id) === String(sale.payment_id));
+      if (!linked) continue;
+      if (payment.status === 'paid' || payment.status === 'refunded') continue;
+      const patched = db.update('payments', payment.id, { status: 'cancelled', updated_at: now });
+      if (patched) {
+        cancelledPayments.push(patched);
+        await persistCore('payments', patched);
+      }
+    }
+
+    // ההטבה הוחזקה בשביל התשלום הזה. אין תשלום — היא חוזרת ללקוח.
+    const restoredCoupons = releaseCouponsForSale(db, sale.id);
+    for (const restored of restoredCoupons) {
+      await persistCore('customer_coupons', restored);
+    }
+
+    // קישור הטפסים שהוליד את הרכישה נסגר איתה, אחרת אפשר להשלים אותו ולייצר
+    // רכישה חדשה בדיוק על מה שביטלנו.
+    let cancelledLink = null;
+    if (sale.checkout_link_id) {
+      const link = db.getOne(POS_CHECKOUT_TABLE, sale.checkout_link_id);
+      const open =
+        link &&
+        link.status !== POS_CHECKOUT_STATUS.PAID &&
+        link.status !== POS_CHECKOUT_STATUS.CANCELLED;
+      if (open) {
+        cancelledLink = db.update(POS_CHECKOUT_TABLE, link.id, {
+          status: POS_CHECKOUT_STATUS.CANCELLED,
+          updated_at: now,
+        });
+        if (cancelledLink) await persistCore(POS_CHECKOUT_TABLE, cancelledLink);
+      }
+    }
+
+    console.log(
+      `🚫 [POS] cancelled unpaid sale=${sale.id} total=${sale.total} by=${req.crmUser?.email || 'system'}`
+    );
+
+    res.json({
+      sale: updatedSale,
+      cancelledPayments,
+      restoredCoupons,
+      checkoutLink: cancelledLink,
+    });
+  } catch (err) {
+    console.error('POS cancel error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Coupons ────────────────────────────────────────────────────────────────
 // A coupon is the benefit a campaign (or a member of staff) handed to one
 // customer. Staff may read and issue them; only the owner deletes campaigns.

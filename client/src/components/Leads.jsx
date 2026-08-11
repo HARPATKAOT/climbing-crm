@@ -1085,6 +1085,8 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
   const [couponError, setCouponError] = useState('');
   const [sales, setSales] = useState([]);
   const [salesLoading, setSalesLoading] = useState(false);
+  const [saleCancelBusyId, setSaleCancelBusyId] = useState('');
+  const [saleCancelError, setSaleCancelError] = useState('');
   const billableStudents = (siblings || []).filter((member) => !isParentOnlyLead(member));
   const billingStudent = billableStudents.find(
     (member) => String(member.id) === String(billingStudentId)
@@ -1115,6 +1117,40 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       setSales([]);
     } finally {
       setSalesLoading(false);
+    }
+  };
+
+  /**
+   * ביטול רכישה שלא שולמה. אין כאן זיכוי — לא עבר כסף ולא יצאה חשבונית,
+   * ולכן אין מה להחזיר ואין מסמך לבטל. מה שנסגר זה הקישור שעדיין אפשר לשלם
+   * וההטבה שהוחזקה בשבילו.
+   */
+  const cancelSale = async (sale) => {
+    const label = (sale.items || [])
+      .map((i) => i.description || i.name || 'פריט')
+      .join(' · ') || 'הרכישה';
+    const ok = window.confirm(
+      `לבטל את "${label}" (₪${Number(sale.total || 0).toLocaleString()})?\n\n`
+      + 'לא שולם ולא יצאה חשבונית, ולכן אין זיכוי. קישור התשלום יפסיק לעבוד '
+      + 'והרכישה תישאר בהיסטוריה כמבוטלת.'
+    );
+    if (!ok) return;
+    setSaleCancelBusyId(sale.id);
+    setSaleCancelError('');
+    try {
+      const res = await fetch(`/api/pos/sales/${encodeURIComponent(sale.id)}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'הביטול נכשל');
+      await refreshSales();
+      refreshData?.();
+    } catch (err) {
+      setSaleCancelError(err.message || 'הביטול נכשל');
+    } finally {
+      setSaleCancelBusyId('');
     }
   };
 
@@ -2781,7 +2817,10 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
       : coupons.length === 0
         ? 'אין הטבות'
         : 'אין בתוקף';
-  const salesPending = sales.filter((s) => s.status !== 'paid' && s.status !== 'refunded').length;
+  // רכישה מבוטלת אינה ממתינה לכלום — היא נשארת בהיסטוריה, לא בספירת החוב.
+  const salesPending = sales.filter(
+    (s) => s.status !== 'paid' && s.status !== 'refunded' && s.status !== 'cancelled'
+  ).length;
   const salesCountLabel = sales.length === 1 ? 'רכישה אחת' : `${sales.length} רכישות`;
   const salesSummary = salesLoading
     ? 'טוען...'
@@ -5396,8 +5435,23 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                         return Number(i.quantity) > 1 ? `${label} ×${i.quantity}` : label;
                       })
                       .join(' · ');
+                    // אין חשבונית ואין תשלום — אין מה לזכות, רק לבטל.
+                    const cancellable =
+                      canManageBilling &&
+                      sale.status !== 'paid' &&
+                      sale.status !== 'refunded' &&
+                      sale.status !== 'cancelled' &&
+                      !sale.icount_doc_number;
+                    const isCancelled = sale.status === 'cancelled';
                     return (
-                      <div key={sale.id} style={{ borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
+                      <div
+                        key={sale.id}
+                        style={{
+                          borderBottom: '1px solid var(--border)',
+                          paddingBottom: 8,
+                          opacity: isCancelled ? 0.55 : 1,
+                        }}
+                      >
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontWeight: 700, fontSize: 13 }}>{names || 'רכישה'}</div>
@@ -5420,15 +5474,32 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                               <ReceiptText size={12} /> חשבונית
                             </a>
                           )}
-                          {sale.status !== 'paid' && sale.payment_url && (
+                          {sale.status !== 'paid' && !isCancelled && sale.payment_url && (
                             <a className="btn btn-ghost btn-xs" href={sale.payment_url} target="_blank" rel="noreferrer">
                               <CreditCard size={12} /> קישור לתשלום
                             </a>
+                          )}
+                          {cancellable && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs"
+                              style={{ color: '#fb7185' }}
+                              disabled={saleCancelBusyId === sale.id}
+                              onClick={() => cancelSale(sale)}
+                            >
+                              <X size={12} />
+                              {saleCancelBusyId === sale.id ? 'מבטל...' : 'בטל רכישה'}
+                            </button>
                           )}
                         </div>
                       </div>
                     );
                   })}
+                </div>
+              )}
+              {saleCancelError && (
+                <div className="alert alert-error" style={{ marginTop: 8, fontSize: 12 }}>
+                  {saleCancelError}
                 </div>
               )}
                 </>
