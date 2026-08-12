@@ -1,20 +1,19 @@
-// One string format for everything a message knows beyond its own text: where
-// its bytes live, and which other bubble it points at.
+// One string format for where a message's bytes live.
 //
-// The `messages` table cannot grow columns from here — running the DDL against
-// production is blocked — and `media_url` was already carrying three different
-// things: a bare Meta media id from sendImageMessage, a public https link from
-// sendDocumentMessage, and null. Rather than add a fourth unwritten convention,
-// everything is encoded here:
+// `media_url` was already carrying three different things: a bare Meta media id
+// from sendImageMessage, a public https link from sendDocumentMessage, and null.
+// Rather than add a fourth unwritten convention, the file pointer is encoded
+// here, and nothing else:
 //
 //   wa-media:<metaMediaId>?mime=image%2Fjpeg&name=IMG_1234.jpg
 //   storage:wa-media/2026/08/wh123.pdf?mime=application%2Fpdf&name=חשבונית.pdf
-//   ctx:?reply_to=wamid.xxx         quotes another bubble, carries no file
-//   ctx:?reaction_to=wamid.xxx      a reaction; the emoji is the message text
 //   https://…                       public link — left exactly as it was
 //   1234567890                      legacy bare Meta id, read as wa-media:
 //
-// reply_to rides alongside a file too, so a quoted photo carries both.
+// What a message *points at* — the bubble it quotes, or the one it reacts to —
+// lives in the `meta` jsonb column instead. For a few hours before that column
+// existed it rode here too, under a `ctx:` scheme and as extra query keys; those
+// rows are still read (see messageContext), and no new ones are written.
 //
 // `media_type` keeps holding the WhatsApp type word ('image' / 'document' / …)
 // and is never overloaded with a mime type.
@@ -84,14 +83,9 @@ export function mediaKindForMime(mimeType) {
  * the `ctx:` scheme when there is not (a reaction, or a quoted text reply).
  */
 export function encodeMediaRef(ref) {
-  const { kind, id, mime, filename, replyTo, reactionTo } = ref || {};
+  const { kind, id, mime, filename } = ref || {};
   const target = String(id || '').trim();
-
-  const context = [];
-  if (replyTo) context.push(`reply_to=${encodeURIComponent(replyTo)}`);
-  if (reactionTo) context.push(`reaction_to=${encodeURIComponent(reactionTo)}`);
-
-  if (!target) return context.length ? `${CONTEXT_SCHEME}?${context.join('&')}` : null;
+  if (!target) return null;
 
   // A public link is stored verbatim — appending our own params would corrupt
   // a URL that already has a query, and parseMediaRef reads none off a link.
@@ -101,8 +95,30 @@ export function encodeMediaRef(ref) {
   const params = [];
   if (mime) params.push(`mime=${encodeURIComponent(String(mime).split(';')[0].trim())}`);
   if (filename) params.push(`name=${encodeURIComponent(filename)}`);
-  params.push(...context);
   return params.length ? `${base}?${params.join('&')}` : base;
+}
+
+/** The `meta` column value for a webhook reference, or null when it points nowhere. */
+export function metaFromMediaRef(ref) {
+  const meta = {};
+  if (ref?.replyTo) meta.reply_to = String(ref.replyTo);
+  if (ref?.reactionTo) meta.reaction_to = String(ref.reactionTo);
+  return Object.keys(meta).length ? meta : null;
+}
+
+/**
+ * What a message points at, from wherever it was stored.
+ *
+ * The `meta` column is the home for this now. Rows written in the hours before
+ * it existed carry the same two values as query keys on media_url, so both are
+ * read and the column wins.
+ */
+export function messageContext(row = {}) {
+  const legacy = parseMediaRef(row.media_url) || {};
+  return {
+    replyTo: row.meta?.reply_to || legacy.replyTo || '',
+    reactionTo: row.meta?.reaction_to || legacy.reactionTo || '',
+  };
 }
 
 /** Everything a stored reference can say, with nothing missing. */

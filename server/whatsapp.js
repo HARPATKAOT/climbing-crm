@@ -1,7 +1,7 @@
 import { db, persistCore, syncBotFlagFromRemote } from './db.js';
 import { normalizeWaPhone, phonesMatch } from './whatsappConnect.js';
 import { buildTemplateParameters } from './channels/templates.js';
-import { encodeMediaRef } from './channels/mediaRef.js';
+import { encodeMediaRef, metaFromMediaRef } from './channels/mediaRef.js';
 import {
   recordMessage,
   recordMessageDurable,
@@ -651,7 +651,7 @@ export const whatsappService = {
         is_ai: isAi,
         source: options.source || (isAi ? 'ai' : 'crm'),
         meta_message_id: result.messageId || null,
-        media_url: encodeMediaRef({ replyTo: options.replyTo }),
+        meta: { reply_to: options.replyTo },
         parent_id: options.parentId || null,
         student_id: options.studentId || null,
       });
@@ -916,7 +916,8 @@ export const whatsappService = {
         source: options.source || 'crm',
         meta_message_id: result.messageId || null,
         message_type: type,
-        media_url: mediaRef || encodeMediaRef({ kind: 'meta', id: mediaId, filename, replyTo: options.replyTo }),
+        media_url: mediaRef || encodeMediaRef({ kind: 'meta', id: mediaId, filename }),
+        meta: { reply_to: options.replyTo },
         parent_id: options.parentId || null,
         student_id: options.studentId || null,
       });
@@ -959,7 +960,7 @@ export const whatsappService = {
         source: options.source || 'crm',
         meta_message_id: result.messageId || null,
         message_type: 'reaction',
-        media_url: encodeMediaRef({ reactionTo: messageId }),
+        meta: { reaction_to: messageId },
         parent_id: options.parentId || null,
         student_id: options.studentId || null,
       });
@@ -1443,6 +1444,7 @@ export const whatsappService = {
       meta_message_id: metaMessageId,
       message_type: meta.type || 'text',
       media_url: encodeMediaRef(meta.mediaRef),
+      meta: metaFromMediaRef(meta.mediaRef),
       parent_id: parent?.id || null,
       student_id: matchedVia === 'child_phone' ? (student?.id || null) : null,
       created_at: inboundAt,
@@ -1884,6 +1886,7 @@ export const whatsappService = {
       meta_message_id: messageId || null,
       message_type: type || 'text',
       media_url: encodeMediaRef(mediaRef),
+      meta: metaFromMediaRef(mediaRef),
       parent_id: echoParent?.id || null,
     });
 
@@ -1925,6 +1928,7 @@ export const whatsappService = {
       meta_message_id: messageId || null,
       message_type: type || 'text',
       media_url: encodeMediaRef(mediaRef),
+      meta: metaFromMediaRef(mediaRef),
       created_at: createdAt,
       parent_id: historyParent?.id || null,
     });

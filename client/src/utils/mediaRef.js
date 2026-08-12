@@ -53,14 +53,20 @@ export function mediaFilenameOf(message = {}) {
   return refParam(message, 'name');
 }
 
-/** The Meta id of the bubble this message quotes, or '' when it quotes nothing. */
+/**
+ * The Meta id of the bubble this message quotes, or '' when it quotes nothing.
+ *
+ * The `meta` column is where this lives. Rows written in the few hours before
+ * that column existed carry it as a query key on media_url instead, so both are
+ * read and the column wins.
+ */
 export function replyTargetOf(message = {}) {
-  return refParam(message, 'reply_to');
+  return message.meta?.reply_to || refParam(message, 'reply_to');
 }
 
 /** The Meta id of the bubble this reaction belongs to. */
 export function reactionTargetOf(message = {}) {
-  return refParam(message, 'reaction_to');
+  return message.meta?.reaction_to || refParam(message, 'reaction_to');
 }
 
 /** True when the row is a reaction — it belongs on another bubble, not on its own. */

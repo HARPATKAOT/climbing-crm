@@ -689,6 +689,9 @@ mappers.messages = columnMapper([
   'id', 'parent_id', 'student_id', 'channel', 'direction', 'message', 'media_url', 'media_type',
   'template_name', 'status', 'source', 'is_ai', 'meta_message_id', 'phone', 'recipient_id',
   'edited_at', 'deleted_at',
+  // מה שההודעה מצביעה עליו — ציטוט וריאקציה. jsonb, כדי שהשדה הבא לא ידרוש
+  // מיגרציה נוספת. אל תבלבל עם meta_message_id, שהוא המזהה של ההודעה ב-Meta.
+  'meta',
   'created_at', 'updated_at',
 ]);
 mappers.message_templates = columnMapper([

@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import {
   encodeMediaRef,
   parseMediaRef,
+  messageContext,
+  metaFromMediaRef,
   mediaExtensionForMime,
   mediaKindForMime,
   mediaKindOfRow,
@@ -85,35 +87,44 @@ test('a reference with no metadata still parses', () => {
   });
 });
 
-test('a message that only points at another bubble needs no file', () => {
-  const reaction = encodeMediaRef({ reactionTo: 'wamid.TARGET1' });
-  assert.equal(reaction, 'ctx:?reaction_to=wamid.TARGET1');
-  assert.equal(parseMediaRef(reaction).kind, 'context');
-  assert.equal(parseMediaRef(reaction).reactionTo, 'wamid.TARGET1');
-  assert.equal(parseMediaRef(reaction).id, '');
-
-  const quote = encodeMediaRef({ replyTo: 'wamid.TARGET2' });
-  assert.equal(parseMediaRef(quote).replyTo, 'wamid.TARGET2');
+test('media_url holds the file and nothing else', () => {
+  // What a message points at goes to the meta column now; encoding must not
+  // sneak it back into the string that means "where the bytes are".
+  assert.equal(encodeMediaRef({ replyTo: 'wamid.X', reactionTo: 'wamid.Y' }), null);
+  assert.equal(
+    encodeMediaRef({ kind: 'storage', id: 'a/b.jpg', mime: 'image/jpeg', replyTo: 'wamid.X' }),
+    'storage:a/b.jpg?mime=image%2Fjpeg'
+  );
 });
 
-test('a quoted photo carries both its file and what it answers', () => {
-  const encoded = encodeMediaRef({
-    kind: 'storage',
-    id: 'wa-media/2026/08/x.jpg',
-    mime: 'image/jpeg',
-    replyTo: 'wamid.QUOTED',
-  });
-  const parsed = parseMediaRef(encoded);
-  assert.equal(parsed.kind, 'storage');
-  assert.equal(parsed.id, 'wa-media/2026/08/x.jpg');
-  assert.equal(parsed.mime, 'image/jpeg');
-  assert.equal(parsed.replyTo, 'wamid.QUOTED');
+test('a webhook reference becomes the meta column value', () => {
+  assert.deepEqual(metaFromMediaRef({ replyTo: 'wamid.Q' }), { reply_to: 'wamid.Q' });
+  assert.deepEqual(metaFromMediaRef({ reactionTo: 'wamid.R' }), { reaction_to: 'wamid.R' });
+  assert.deepEqual(
+    metaFromMediaRef({ kind: 'image', id: '9', replyTo: 'wamid.Q' }),
+    { reply_to: 'wamid.Q' }
+  );
+  for (const input of [null, undefined, {}, { replyTo: '', reactionTo: '' }]) {
+    assert.equal(metaFromMediaRef(input), null);
+  }
 });
 
-test('a context reference that points nowhere is nothing', () => {
-  assert.equal(encodeMediaRef({ replyTo: '', reactionTo: '' }), null);
-  assert.equal(parseMediaRef('ctx:'), null);
-  assert.equal(parseMediaRef('ctx:?mime=image%2Fjpeg'), null);
+test('rows written before the meta column are still read', () => {
+  // A few hours of production rows carry these as query keys instead.
+  assert.deepEqual(
+    messageContext({ media_url: 'ctx:?reaction_to=wamid.OLD' }),
+    { replyTo: '', reactionTo: 'wamid.OLD' }
+  );
+  assert.deepEqual(
+    messageContext({ media_url: 'wa-media:9?mime=image%2Fjpeg&reply_to=wamid.OLD' }),
+    { replyTo: 'wamid.OLD', reactionTo: '' }
+  );
+  // The column wins wherever both exist.
+  assert.equal(
+    messageContext({ meta: { reply_to: 'wamid.NEW' }, media_url: 'ctx:?reply_to=wamid.OLD' }).replyTo,
+    'wamid.NEW'
+  );
+  assert.deepEqual(messageContext({}), { replyTo: '', reactionTo: '' });
 });
 
 test('mime maps to the WhatsApp type word', () => {

@@ -55,6 +55,16 @@ test('the filename is read off the reference, including Hebrew', () => {
   assert.equal(mediaFilenameOf({}), '');
 });
 
+test('a bubble reads its quote from the meta column', () => {
+  assert.equal(replyTargetOf({ meta: { reply_to: 'wamid.NEW' } }), 'wamid.NEW');
+  assert.equal(reactionTargetOf({ meta: { reaction_to: 'wamid.NEW' } }), 'wamid.NEW');
+  // The column wins over a row that also carries the older encoding.
+  assert.equal(
+    replyTargetOf({ meta: { reply_to: 'wamid.NEW' }, media_url: 'ctx:?reply_to=wamid.OLD' }),
+    'wamid.NEW'
+  );
+});
+
 test('a bubble knows which message it quotes', () => {
   assert.equal(replyTargetOf({ media_url: 'ctx:?reply_to=wamid.ABC' }), 'wamid.ABC');
   // A quoted photo carries both, and neither reading disturbs the other.
