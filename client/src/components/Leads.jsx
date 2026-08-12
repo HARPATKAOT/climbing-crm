@@ -5512,8 +5512,11 @@ export function CustomerCard({ student, parent: primaryParent, parents: allParen
                       })
                       .join(' · ');
                     // אין חשבונית ואין תשלום — אין מה לזכות, רק לבטל.
+                    // רכישת ציוד אינה מכירה בקופה: הביטול שלה הוא בתיק הציוד,
+                    // ולכן אין כאן כפתור שינסה לבטל שורה שלא קיימת.
                     const cancellable =
                       canManageBilling &&
+                      sale.source !== 'equipment_payment' &&
                       sale.status !== 'paid' &&
                       sale.status !== 'refunded' &&
                       sale.status !== 'cancelled' &&

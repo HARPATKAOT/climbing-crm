@@ -228,6 +228,7 @@ import {
 } from './activityCopyDraft.js';
 import { executePartialRefund } from './partialRefund.js';
 import { equipmentRefundRecommendation, isEquipmentPayment } from './equipmentRefund.js';
+import { equipmentPurchaseRows } from './equipmentPurchases.js';
 import { passesOfSale, saleRefundPlan } from './passRefund.js';
 import { validateManualRefund, manualRefundMarks } from './manualRefund.js';
 import {
@@ -13825,6 +13826,16 @@ app.get('/api/pos/sales', async (req, res) => {
         console.warn('⚠️ [POS sales] clearing backfill failed:', err.message);
       }
     }
+  }
+
+  // כרטיס לקוח בלבד: תשלום ציוד הוא רכישה, גם בלי שורה ב-pos_sales. מסך
+  // הקופה נשאר קופה — הוא מבקש את הרשימה בלי סינון, ולכן לא מקבל אותם.
+  // סינון המדריך שלמעלה לא חל כאן בכוונה: לתשלום ציוד אין מוכר ואין משמרת,
+  // והמדריך ממילא רואה בתיק הציוד אם שולם — רק לא את הסכום ואת החשבונית.
+  if (askStudent || askParent) {
+    sales = sales.concat(
+      equipmentPurchaseRows({ payments, studentId: askStudent, parentId: askParent })
+    );
   }
 
   sales = [...sales]
