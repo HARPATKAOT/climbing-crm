@@ -19,6 +19,8 @@ import {
   normalizeChargeBasis,
   normalizeCount,
   normalizeMoney,
+  ruleChargeBreakdown,
+  ruleNumbers,
 } from '../utils/activityPricing.js';
 import {
   staffForRole, noStaffForRoleMessage, fetchRoleCatalog, activityRoleLabels, payableRolesOf,
@@ -447,6 +449,9 @@ function emptyForm(dateStr = '', opts = {}) {
     extra_participant_price: '',
     max_charge: '',
     price_template_id: null,
+    // שורת המחירון שהאירוע מתומחר לפיה, והגרסה שנקבעה כשנבחרה.
+    price_rule_id: null,
+    price_rule_version: null,
     host_charge_participants: '',
     description: '',
     notes: '',
@@ -1490,9 +1495,25 @@ function RegularActivityModal({
     return () => document.removeEventListener('mousedown', close);
   }, [templateMenuOpen]);
 
-  // המחירון נטען גם בלי לפתוח את תפריט „שמירה כתבנית”: כרטיס המחיר מציג בורר
-  // מחירון, ובלי הרשימה אי אפשר לדעת לאיזו שורה האירוע מחובר.
-  const needTemplates = templateMenuOpen || (canViewFinance && !isOps && !isTemplateEdit);
+  const [priceRules, setPriceRules] = useState([]);
+
+  // המחירון נטען כשכרטיס המחיר מוצג — גם בעריכת תבנית, כי תבנית יכולה להישמר
+  // עם שורת מחירון בדיוק כמו אירוע.
+  useEffect(() => {
+    if (!canViewFinance || isOps) return undefined;
+    let active = true;
+    fetch('/api/activity-price-rules')
+      .then(async (response) => {
+        const body = await response.json().catch(() => []);
+        if (!response.ok) throw new Error('טעינת המחירון נכשלה');
+        if (active) setPriceRules(Array.isArray(body) ? body : []);
+      })
+      .catch(() => { if (active) setPriceRules([]); })
+      .finally(() => {});
+    return () => { active = false; };
+  }, [canViewFinance, isOps]);
+
+  const needTemplates = templateMenuOpen;
 
   useEffect(() => {
     if (!needTemplates || templateOptions.length) return undefined;
@@ -1514,50 +1535,80 @@ function RegularActivityModal({
     submit(event, { closeAfter: false, saveAsTemplate: action });
   };
 
-  const priceRule = templateOptions.find(
-    (item) => String(item.id) === String(form.price_template_id || '')
+  const priceRule = priceRules.find(
+    (item) => String(item.id) === String(form.price_rule_id || '')
   ) || null;
 
   /**
-   * העתקת כלל תמחור מהמחירון אל האירוע.
+   * שיוך שורת מחירון לאירוע.
    *
-   * הערכים מועתקים ולא נקראים חיים: שינוי מחיר במחירון לא אמור לתמחר מחדש יום
-   * הולדת שכבר הוצע ללקוח. הקישור נשמר רק כדי להראות מאיפה המחיר הגיע, ולאפשר
-   * לרענן אותו ביודעין.
+   * נשמרים המזהה והגרסה — ולא המספרים — כדי שסתירה בין האירוע למחירון תהיה
+   * בלתי אפשרית: בכרטיס הזה אין שדה מספר לעריכה. `price` ו-`price_includes_vat`
+   * כן נכתבים, כי מסלול ההרשמה הפתוחה קורא אותם ישירות (נרשם בודד משלם את מחיר
+   * המשתתף היחיד), ומהם נגזר גם „האם גובים כסף” בכלל.
    */
-  const applyPriceRule = (rule) => {
+  const pickPriceRule = (rule) => {
     if (readOnly) return;
     if (!rule) {
-      setForm((prev) => ({ ...prev, price_template_id: null }));
+      setForm((prev) => ({ ...prev, price_rule_id: null, price_rule_version: null }));
       return;
     }
+    const seat = rule.method === 'flat' ? rule.event_price : rule.participant_price;
     setForm((prev) => ({
       ...prev,
-      price_template_id: rule.id,
-      price: rule.price ?? '',
+      price_rule_id: rule.id,
+      price_rule_version: rule.version || 1,
+      price: seat ?? '',
       price_includes_vat: normalizePriceIncludesVat(rule.price_includes_vat),
-      charge_basis: normalizeChargeBasis(rule.charge_basis),
-      min_participants: rule.min_participants ?? '',
-      extra_participant_price: rule.extra_participant_price ?? '',
-      max_charge: rule.max_charge ?? '',
-      max_participants: prev.max_participants || (rule.max_participants ?? ''),
+      charge_basis: rule.method === 'flat' ? 'flat' : 'per_participant',
+      // המספרים המקומיים מתנקים: הכלל הוא המקור, ושארית של מינימום ישן הייתה
+      // ממשיכה להשפיע במסלולים שקוראים את שדות האירוע.
+      min_participants: '',
+      extra_participant_price: '',
+      max_charge: '',
     }));
   };
 
-  // האם שורת המחירון המחוברת כבר לא תואמת את מה שכתוב באירוע. זה לא בהכרח
-  // באג — אפשר לתת הנחה לאירוע בודד — ולכן זו הצעה ולא תיקון אוטומטי.
-  const priceRuleDrifted = !!priceRule && [
-    ['price', (v) => Number(v) || 0],
-    ['charge_basis', normalizeChargeBasis],
-    ['min_participants', (v) => normalizeCount(v)],
-    ['extra_participant_price', (v) => normalizeMoney(v)],
-    ['max_charge', (v) => normalizeMoney(v)],
-    ['price_includes_vat', (v) => normalizePriceIncludesVat(v)],
-  ].some(([key, normalize]) => normalize(priceRule[key]) !== normalize(form[key]));
+  /** ניתוק מהמחירון: המספרים של הכלל נכתבים לאירוע והקישור יורד. */
+  const detachPriceRule = () => {
+    if (readOnly || !priceRule) return;
+    setForm((prev) => ({
+      ...prev,
+      price_rule_id: null,
+      price_rule_version: null,
+      charge_basis: priceRule.method === 'flat' ? 'flat' : 'per_participant',
+      price: (priceRule.method === 'flat'
+        ? priceRule.event_price
+        : priceRule.participant_price) ?? '',
+      min_participants: priceRule.min_participants ?? '',
+      extra_participant_price: priceRule.extra_participant_price ?? '',
+      max_charge: priceRule.max_charge ?? '',
+    }));
+  };
 
-  const chargePreview = eventChargeBreakdown(form, {
-    participants: normalizeCount(form.min_participants) || 0,
-  });
+  // האם המחירון התעדכן מאז שהאירוע תומחר. אירוע לא זז מעצמו — מוצג כפתור,
+  // וההחלטה היא של מי שעורך.
+  const priceRuleStale = !!priceRule
+    && normalizeCount(form.price_rule_version) != null
+    && Number(form.price_rule_version) < (Number(priceRule.version) || 1);
+
+  const linkedToBook = !!form.price_rule_id;
+  const priceMode = linkedToBook
+    ? 'book'
+    : (normalizeCount(form.min_participants)
+      || normalizeMoney(form.extra_participant_price)
+      || normalizeMoney(form.max_charge))
+      ? 'advanced'
+      : 'simple';
+
+  // תצוגה מקדימה: במחירון לפי הכלל, ואחרת לפי המספרים שעל האירוע. מספר
+  // המשתתפים לדוגמה הוא המינימום כשיש, ואחרת המדרגה הראשונה.
+  const previewCount = normalizeCount(form.min_participants)
+    || (priceRule?.brackets?.[0]?.up_to)
+    || 0;
+  const chargePreview = priceRule
+    ? ruleChargeBreakdown(ruleNumbers(priceRule), { participants: previewCount })
+    : eventChargeBreakdown(form, { participants: previewCount });
 
   return (
     <div className="activity-modal-backdrop" onClick={onClose}>
@@ -1877,49 +1928,108 @@ function RegularActivityModal({
 
               {!isOps && canViewFinance && (
                 <>
-                  {!isTemplateEdit && (
+                  {/* שלוש דרכים לתמחר, ובכל רגע נתון פעילה אחת. הבחירה נגזרת
+                      ממה שכבר יש על האירוע ולא נשמרת כשדה: מצב שנשמר בנפרד
+                      מהמספרים יכול לסתור אותם. */}
+                  <div className="activity-price-modes">
+                    {[
+                      { id: 'simple', label: 'מחיר פשוט', hint: 'מספר אחד', Icon: CreditCard, color: 'var(--amber)' },
+                      { id: 'advanced', label: 'חישוב מיוחד לאירוע', hint: 'מינימום, תוספת ותקרה', Icon: Users, color: 'var(--green)' },
+                      { id: 'book', label: 'מהמחירון', hint: 'שורה שמורה', Icon: Layers, color: 'var(--purple)' },
+                    ].map(({ id, label, hint, Icon, color }) => (
+                      <button
+                        key={id}
+                        type="button"
+                        className={`activity-price-mode${priceMode === id ? ' is-on' : ''}`}
+                        style={{ '--method-color': color }}
+                        disabled={readOnly}
+                        onClick={() => {
+                          if (id === 'book') return;
+                          if (linkedToBook) detachPriceRule();
+                          if (id === 'simple') {
+                            setForm((prev) => ({
+                              ...prev,
+                              price_rule_id: null,
+                              price_rule_version: null,
+                              min_participants: '',
+                              extra_participant_price: '',
+                              max_charge: '',
+                            }));
+                          } else {
+                            setForm((prev) => ({
+                              ...prev,
+                              price_rule_id: null,
+                              price_rule_version: null,
+                              charge_basis: 'per_participant',
+                              min_participants: prev.min_participants || 1,
+                            }));
+                          }
+                        }}
+                      >
+                        <Icon size={15} />
+                        <strong>{label}</strong>
+                        <small>{hint}</small>
+                      </button>
+                    ))}
+                  </div>
+
+                  {priceMode === 'book' ? (
                     <label>
-                      <span className="activity-settings-label">מחירון</span>
+                      <span className="activity-settings-label">שורת מחירון</span>
                       <AppSelect
                         className="input"
-                        value={form.price_template_id || ''}
-                        onChange={(event) => applyPriceRule(
-                          templateOptions.find((item) => String(item.id) === event.target.value)
+                        value={form.price_rule_id || ''}
+                        onChange={(event) => pickPriceRule(
+                          priceRules.find((item) => String(item.id) === event.target.value)
                         )}
-                        disabled={readOnly || templateLoading}
+                        disabled={readOnly}
                       >
-                        <option value="">בלי מחירון — מחיר ידני</option>
-                        {templateOptions.map((item) => (
+                        <option value="">בחרו שורה</option>
+                        {priceRules.map((item) => (
                           <option key={item.id} value={item.id}>
                             {item.name}
-                            {describePriceRule(item) ? ` · ${describePriceRule(item)}` : ''}
+                            {item.summary ? ` · ${item.summary}` : ''}
                           </option>
                         ))}
                       </AppSelect>
-                      {priceRuleDrifted && (
+                      {priceRule && (
                         <span className="activity-settings-hint">
-                          המחיר כאן שונה ממה שרשום במחירון.
+                          {describePriceRule(priceRule)}
+                          {' · '}
+                          <button
+                            type="button"
+                            className="linklike"
+                            onClick={detachPriceRule}
+                            disabled={readOnly}
+                          >
+                            לנתק מהמחירון ולערוך כאן
+                          </button>
+                        </span>
+                      )}
+                      {priceRuleStale && (
+                        <span className="activity-settings-hint" style={{ color: 'var(--amber)' }}>
+                          המחירון עודכן מאז (גרסה {priceRule.version} מול {form.price_rule_version}).
                           {' '}
                           <button
                             type="button"
                             className="linklike"
-                            onClick={() => applyPriceRule(priceRule)}
+                            onClick={() => pickPriceRule(priceRule)}
                             disabled={readOnly}
                           >
-                            לעדכן לפי המחירון
+                            לעדכן לפי המחיר החדש
                           </button>
                         </span>
                       )}
                     </label>
-                  )}
-
+                  ) : (
+                  <>
                   <label>
                     <span className="activity-settings-label">בסיס חיוב</span>
                     <AppSelect
                       className="input"
                       value={normalizeChargeBasis(form.charge_basis)}
                       onChange={(event) => set('charge_basis', event.target.value)}
-                      disabled={readOnly}
+                      disabled={readOnly || priceMode === 'advanced'}
                       optionIcon={(value) => (value === 'per_participant'
                         ? { Icon: Users, color: 'var(--green)' }
                         : { Icon: CreditCard, color: 'var(--amber)' })}
@@ -1974,7 +2084,7 @@ function RegularActivityModal({
                   {/* מינימום משתתפים הוא רצפת חיוב בלבד: 12 נרשמים במינימום 15
                       מחויבים כ-15, אבל ההרשמה נשארת פתוחה והאירוע מתקיים.
                       התוספת היא המחיר מעבר לרצפה, והתקרה עוצרת את הסכום הכולל. */}
-                  {perParticipantCharge && (
+                  {perParticipantCharge && priceMode === 'advanced' && (
                     <div className="activity-settings-grid activity-settings-grid--price-vat">
                       <label>
                         <span className="activity-settings-label">מינימום משתתפים</span>
@@ -2033,6 +2143,16 @@ function RegularActivityModal({
                           : `כולל מע״מ: ${formatIls(priceVat.gross)} · לתשלום: ${formatIls(priceVat.gross)}`}
                       </div>
                     )
+                  )}
+                  </>
+                  )}
+
+                  {/* במצב מחירון אין שדות מספר לעריכה — זה מה שהופך סתירה בין
+                      האירוע למחירון לבלתי אפשרית. במקומם, מה שיחויב בפועל. */}
+                  {priceMode === 'book' && priceRule && (
+                    <div className="activity-settings-hint">
+                      {describeEventCharge(chargePreview) || 'בחרו שורת מחירון'}
+                    </div>
                   )}
 
                   {/* קייטנה נמשכת כמה ימים ולא כל הורה רוצה את כולם.
@@ -2096,6 +2216,7 @@ function RegularActivityModal({
                 canViewFinance={canViewFinance}
                 hideRegistrationToggle
                 templateMode={isTemplateEdit}
+                priceRuleNumbers={priceRule ? ruleNumbers(priceRule) : null}
               />
             )}
 
@@ -2340,6 +2461,8 @@ function ActivityFormModal({
     extra_participant_price: initial?.extra_participant_price ?? '',
     max_charge: initial?.max_charge ?? '',
     price_template_id: initial?.price_template_id || null,
+    price_rule_id: initial?.price_rule_id || null,
+    price_rule_version: initial?.price_rule_version ?? null,
     host_charge_participants: initial?.host_charge_participants ?? '',
     host_name: initial?.host_name || initial?.contact_name || '',
     host_phone: initial?.host_phone || initial?.contact_phone || '',
@@ -2393,6 +2516,10 @@ function ActivityFormModal({
         'allow_single_day', 'single_day_price',
         'charge_basis', 'min_participants', 'extra_participant_price', 'max_charge',
         'host_charge_participants', 'host_charge_amount',
+        // ⚠️ חייב להישאר זהה ל-ACTIVITY_FINANCE_FIELDS בשרת. שדה שהשרת חוסם
+        // ומכאן נשלח בכל זאת (כ-null, כי הטופס תמיד מכיל את המפתח) מקבל 403
+        // על כל שמירה — גם כשעובד בלי הרשאת כספים שינה רק את המיקום.
+        'price_rule_id', 'price_rule_version',
         'payment_link', 'payment_url', 'host_payment_id', 'host_payment_token',
       ]) delete next[key];
     }
@@ -2456,6 +2583,7 @@ function ActivityFormModal({
         ? 0
         : Number(form.single_day_price),
         max_participants: form.max_participants === '' ? null : Number(form.max_participants),
+        price_rule_id: form.price_rule_id || null,
         charge_basis: normalizeChargeBasis(form.charge_basis),
         min_participants: normalizeCount(form.min_participants),
         extra_participant_price: normalizeMoney(form.extra_participant_price),
@@ -4563,6 +4691,10 @@ export default function ActivitiesCalendar({
       extra_participant_price: tpl.extra_participant_price ?? '',
       max_charge: tpl.max_charge ?? '',
       price_template_id: tpl.id || null,
+      // תבנית ששמורה עם שורת מחירון מעבירה אותה לאירוע. הגרסה נשארת ריקה כאן
+      // ונקבעת כשבוחרים את השורה, כדי שהאירוע יתומחר לפי מה שכתוב במחירון עכשיו.
+      price_rule_id: tpl.price_rule_id || null,
+      price_rule_version: null,
       description: tpl.description || '',
       notes: tpl.notes || '',
       registration_enabled: !!tpl.registration_enabled,
@@ -4604,6 +4736,7 @@ export default function ActivitiesCalendar({
       min_participants: tpl.min_participants ?? '',
       extra_participant_price: tpl.extra_participant_price ?? '',
       max_charge: tpl.max_charge ?? '',
+      price_rule_id: tpl.price_rule_id || null,
       description: tpl.description || '',
       notes: tpl.notes || '',
       registration_enabled: !!tpl.registration_enabled,

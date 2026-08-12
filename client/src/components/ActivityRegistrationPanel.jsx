@@ -141,6 +141,9 @@ export default function ActivityRegistrationPanel({
   canViewFinance = true,
   hideRegistrationToggle = false,
   templateMode = false,
+  // שורת המחירון שהאירוע מתומחר לפיה, כפי שנטענה בטופס האירוע. null = האירוע
+  // נושא מספרים משלו.
+  priceRuleNumbers = null,
 }) {
   const navigate = useNavigate();
   const [regs, setRegs] = useState([]);
@@ -856,20 +859,27 @@ export default function ActivityRegistrationPanel({
   // המשתתפים לחיוב, אחרי רצפת המינימום ולפני התקרה.
   const perParticipantCharge = normalizeChargeBasis(form.charge_basis) === 'per_participant';
   const registeredCount = regs.length;
-  const chargeBreakdown = hostChargeBreakdown(form, { registeredCount });
+  // אירוע שמקושר למחירון מחושב לפי הכלל ולא לפי המספרים שעליו. הכלל נטען בטופס
+  // האירוע ומועבר לכאן; בלעדיו — חישוב מהמספרים המקומיים, כמו קודם.
+  const chargeBreakdown = hostChargeBreakdown(form, {
+    registeredCount,
+    numbers: priceRuleNumbers,
+  });
   // שתי סיבות שונות לכך שהחיוב אינו לפי מספר הנרשמים, ואסור לבלבל ביניהן:
   // או שהצוות תיקן ידנית את המספר, או שהמינימום הרים אותו. תיקון ידני ל-26
   // כשנרשמו 12 אינו „חיוב לפי המינימום”, ואמירה כזאת שולחת לחפש באג שאין.
   const overrideCount = normalizeCount(form.host_charge_participants);
   const flooredByMinimum = perParticipantCharge
     && chargeBreakdown.registeredCount < (chargeBreakdown.billableCount || 0);
-  const chargeNote = !perParticipantCharge
-    ? ''
-    : overrideCount != null && overrideCount !== registeredCount
-      ? `נרשמו ${registeredCount} — החיוב הוא על ${chargeBreakdown.billableCount}.`
-      : flooredByMinimum
-        ? `נרשמו ${registeredCount} מתוך מינימום ${chargeBreakdown.minParticipants} — החיוב הוא לפי המינימום.`
-        : '';
+  const chargeNote = chargeBreakdown.unpriced
+    ? describeEventCharge(chargeBreakdown)
+    : !perParticipantCharge
+      ? ''
+      : overrideCount != null && overrideCount !== registeredCount
+        ? `נרשמו ${registeredCount} — החיוב הוא על ${chargeBreakdown.billableCount}.`
+        : flooredByMinimum
+          ? `נרשמו ${registeredCount} מתוך מינימום ${chargeBreakdown.minParticipants} — החיוב הוא לפי המינימום.`
+          : '';
   const hostEnteredAmountLabel = formatIls(
     hostPayment?.entered_amount ?? chargeBreakdown.entered ?? hostPayment?.amount ?? 0
   );

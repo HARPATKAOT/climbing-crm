@@ -168,6 +168,17 @@ import {
   hostChargeBreakdown,
 } from './activityPricing.js';
 import {
+  describeRule,
+  ensureSeedPriceRules,
+  listPriceRules,
+  normalizePriceRule,
+  priceRuleUsage,
+  resolveActivityRule,
+  ruleNumbers,
+  ruleNumbersChanged,
+  MAX_RULE_HISTORY,
+} from './activityPriceBook.js';
+import {
   activityPublicSlug,
   upcomingPublicActivities,
   upcomingOpeningHours,
@@ -5182,6 +5193,7 @@ function normalizeActivityPayload(body = {}) {
     : 'paid_per_participant';
   const category = normalizeTemplateCategory(body.category);
   const isOps = category === 'ops';
+  const perEventPrice = normalizeChargeBasis(body.charge_basis) !== 'per_participant';
   return {
     name: String(body.name || '').trim(),
     type,
@@ -5209,11 +5221,20 @@ function normalizeActivityPayload(body = {}) {
     // תמחור לפי ראש: המינימום הוא רצפת חיוב (12 נרשמים במינימום 15 מחויבים
     // כ-15), התוספת היא המחיר מעבר לרצפה, והתקרה חוסמת את הסכום הכולל.
     // `max_charge` הוא תקרת סכום, בשונה מ-`max_participants` שהוא מכסת נרשמים.
+    //
+    // במחיר קבוע לאירוע שלושתם נמחקים ולא רק מוסתרים: אירוע שהיה „לפי ראש” עם
+    // תקרה של 2,500 ועבר למחיר קבוע של 3,000 היה נשאר עם תקרה שהמסך כבר לא
+    // מציג, וממשיכה לחתוך בשקט.
     charge_basis: isOps ? 'flat' : normalizeChargeBasis(body.charge_basis),
-    min_participants: isOps ? null : normalizeCount(body.min_participants),
-    extra_participant_price: isOps ? null : normalizeMoney(body.extra_participant_price),
-    max_charge: isOps ? null : normalizeMoney(body.max_charge),
+    min_participants: isOps || perEventPrice ? null : normalizeCount(body.min_participants),
+    extra_participant_price:
+      isOps || perEventPrice ? null : normalizeMoney(body.extra_participant_price),
+    max_charge: isOps || perEventPrice ? null : normalizeMoney(body.max_charge),
     price_template_id: isOps ? null : (body.price_template_id || null),
+    // שורת המחירון שהאירוע מתומחר לפיה, והגרסה שנקבעה כשנבחרה. הגרסה היא מה
+    // שמונע מאירוע שכבר תומחר לזוז כשמעדכנים מחיר במחירון.
+    price_rule_id: isOps ? null : (body.price_rule_id || null),
+    price_rule_version: isOps ? null : normalizeCount(body.price_rule_version),
     // מה שהוקפא ברגע יצירת קישור התשלום למזמין. נשמר על האירוע כדי שהרשמה
     // מאוחרת לא תשנה את הסכום שכבר נשלח לו.
     host_charge_participants: isOps ? null : normalizeCount(body.host_charge_participants),
@@ -5304,20 +5325,59 @@ function buildHostPaymentUrl(req, token) {
  */
 function freezeHostCharge(activity) {
   if (!activity || activity.registration_mode !== 'host_pays') return activity;
-  const registeredCount = activeRegistrations(db, activity.id).length;
-  const breakdown = hostChargeBreakdown(activity, { registeredCount });
+  const breakdown = activityChargeBreakdown(activity);
+  // סכום שלא ניתן לחשב לא מוקפא. אירוע מדרגות בלי נרשמים, או קבוצה מעל המדרגה
+  // האחרונה, מחזירים סירוב — ועדיף שדף המזמין יגיד „המחיר טרם נקבע” מאשר
+  // שייסגר על מספר שאיש לא קבע.
+  if (breakdown.unpriced || !(breakdown.gross > 0)) return activity;
   return db.update('activities', activity.id, {
-    host_charge_participants: breakdown.billableCount ?? null,
+    // נשמר מספר הנרשמים בפועל ולא המספר המחויב. השדה הזה נקרא במסך האירוע
+    // כתיקון ידני של הצוות, ולכן 12 נרשמים במינימום 15 שנשמרים כ-15 מייצרים
+    // שם את ההודעה „נרשמו 12 — החיוב על 15”, בנוסח של תיקון שאיש לא עשה.
+    // הרצפה נכנסת שוב בזמן החישוב, ולכן הסכום זהה.
+    host_charge_participants: breakdown.registeredCount || null,
     host_charge_amount: breakdown.gross,
   }) || activity;
+}
+
+/**
+ * פירוט החיוב של אירוע — דרך המחירון כשהוא מקושר, ואחרת מהמספרים שעליו.
+ *
+ * זה המקום היחיד שמחשב כסף של אירוע, כדי שדף המזמין, מסך האירוע וסיכום התשלום
+ * לא יוכלו להראות שלושה מספרים שונים.
+ */
+function activityChargeBreakdown(activity, { participants } = {}) {
+  const registeredCount = participants != null
+    ? participants
+    : activeRegistrations(db, activity.id).length;
+  const resolved = resolveActivityRule(db, activity);
+  if (resolved && !resolved.numbers) {
+    // הכלל נמחק מהמסד, או שהגרסה שהאירוע נקבע לפיה כבר לא קיימת. אסור ליפול
+    // חזרה לחישוב לפי ראש — 350×12 = 4,200₪ במקום 5,700₪ נראה סביר לגמרי,
+    // ולכן אף אחד לא היה תופס את זה.
+    return {
+      basis: 'missing_rule',
+      unpriced: true,
+      unpricedReason: 'missing_rule',
+      registeredCount,
+      billableCount: null,
+      entered: 0,
+      net: 0,
+      gross: 0,
+      vat: 0,
+    };
+  }
+  return hostChargeBreakdown(activity, {
+    registeredCount,
+    numbers: resolved?.numbers || null,
+  });
 }
 
 /** הסכום שהמזמין משלם: מה שהוקפא, ואם אין — חישוב חי, כמו לפני ההקפאה. */
 function hostChargeFor(activity) {
   const frozen = normalizeMoney(activity.host_charge_amount);
   if (frozen != null) return frozen;
-  const registeredCount = activeRegistrations(db, activity.id).length;
-  return hostChargeBreakdown(activity, { registeredCount }).gross;
+  return activityChargeBreakdown(activity).gross;
 }
 
 function matchHostPaymentActivity(rows, token) {
@@ -5433,6 +5493,11 @@ const ACTIVITY_FINANCE_FIELDS = new Set([
   // לגזור אותו מהמינימום והתקרה.
   'charge_basis', 'min_participants', 'extra_participant_price', 'max_charge',
   'host_charge_participants', 'host_charge_amount',
+  // הקישור למחירון קובע כסף — בשונה מ-`price_template_id` שהיה דקורטיבי.
+  // ⚠️ כל שדה שנוסף כאן חייב להתווסף באותו קומיט גם ל-`permittedPayload`
+  // ב-ActivitiesCalendar.jsx, אחרת עובד בלי הרשאת כספים שולח null ומקבל 403
+  // על כל שמירה — גם כשהוא שינה רק את המיקום.
+  'price_rule_id', 'price_rule_version',
 ]);
 const ACTIVITY_HR_FIELDS = new Set(['staff_pay_mode', 'staff_flat_amount', 'staff_cost', 'staff_rate']);
 
@@ -7396,6 +7461,7 @@ app.get('/api/public/host-payments/:token', publicFormRateLimit, async (req, res
       charge_amount: hostChargeFor(activity),
       charge_basis: normalizeChargeBasis(activity.charge_basis),
       charge_participants: normalizeCount(activity.host_charge_participants),
+      charge_ready: hostChargeFor(activity) > 0,
       payment_status: activity.payment_status || 'unpaid',
       cover_image: theme.cover_image || '',
       cover_position: theme.cover_position || '50% 50%',
@@ -7449,6 +7515,14 @@ app.post('/api/public/host-payments/:token/pay', publicFormRateLimit, async (req
     // הסכום שהוקפא כשהקישור נוצר. אירוע ותיק שאין לו סכום שמור נופל לחישוב חי,
     // כך שכל קישור שכבר בידי מזמין ממשיך לעבוד בדיוק כמו קודם.
     const amount = hostChargeFor(activity);
+    if (!(amount > 0)) {
+      // מדרגה שלא נמצאה, כלל שנמחק, או אירוע בלי מחיר. עדיף שהמזמין יראה שהמחיר
+      // טרם נקבע מאשר שיישלח לסליקה על סכום שאיש לא קבע.
+      return res.status(409).json({
+        error: 'המחיר לאירוע טרם נקבע. נציג יחזור אליכם עם הסכום המדויק.',
+        code: 'activity_price_undetermined',
+      });
+    }
     const description = `תשלום אירוע: ${activity.name}`;
     if (
       !payment ||
@@ -14378,6 +14452,93 @@ app.post('/api/pos/sales/:id/cancel', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ─── מחירון פעילויות ─────────────────────────────────────────────────────────
+// כללי תמחור שאפשר לשייך לתבניות ולאירועים. קריאה פתוחה למי שרואה כספים — גם
+// בורר המחירון בטופס האירוע וגם תקציר התבנית צריכים אותה — וכתיבה לבעלים בלבד.
+// אין מחיקה: כלל שנמחק היה מותיר אירועים שאין להם דרך לחשב את עצמם.
+
+app.get('/api/activity-price-rules', (req, res) => {
+  if (!hasSensitiveAccess(req.crmUser, 'finance')) {
+    return res.status(403).json({ error: 'אין הרשאה לצפות במחירון' });
+  }
+  const includeInactive = req.query.all === '1';
+  const rules = listPriceRules(db, { includeInactive });
+  res.json(rules.map((rule) => ({
+    ...rule,
+    summary: describeRule(rule),
+    usage: priceRuleUsage(db, rule.id),
+  })));
+});
+
+app.post('/api/activity-price-rules', requireOwner, async (req, res) => {
+  const normalized = normalizePriceRule(req.body || {});
+  const invalid = priceRuleProblem(normalized);
+  if (invalid) return res.status(400).json({ error: invalid });
+  ensureSeedPriceRules(db);
+  const created = db.insert('activity_price_rules', {
+    // מזהה מפורש: db.insert היה טובע `ac…` משתי האותיות הראשונות של שם הטבלה,
+    // ומתנגש חזותית עם מזהי אירועים בכל לוג ובכל בדיקה.
+    id: `pr_${Date.now()}`,
+    ...normalized,
+    version: 1,
+    versions: [],
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+  const durable = await persistCore('activity_price_rules', created);
+  if (durable?.ok === false) {
+    return res.status(503).json({ error: durable.error || 'שמירת שורת המחירון נכשלה' });
+  }
+  res.status(201).json({ ...created, summary: describeRule(created) });
+});
+
+app.put('/api/activity-price-rules/:id', requireOwner, async (req, res) => {
+  const current = db.getOne('activity_price_rules', req.params.id);
+  if (!current) return res.status(404).json({ error: 'שורת המחירון לא נמצאה' });
+  const normalized = normalizePriceRule({ ...current, ...(req.body || {}) });
+  const invalid = priceRuleProblem(normalized);
+  if (invalid) return res.status(400).json({ error: invalid });
+
+  // גרסה עולה רק כשהמספרים זזו. תיקון ניסוח בשם או בהערה שהיה מעלה גרסה היה
+  // מדליק „המחירון עודכן” על כל אירוע קיים, ומרוקן את ההתראה ממשמעות.
+  const moved = ruleNumbersChanged(current, normalized);
+  const version = moved ? (Number(current.version) || 1) + 1 : (Number(current.version) || 1);
+  const versions = moved
+    ? [
+      ...(current.versions || []),
+      { version: Number(current.version) || 1, saved_at: current.updated_at || null, ...ruleNumbers(current) },
+    ].slice(-MAX_RULE_HISTORY)
+    : (current.versions || []);
+
+  const updated = db.update('activity_price_rules', current.id, {
+    ...normalized,
+    version,
+    versions,
+    updated_at: new Date().toISOString(),
+  });
+  const durable = await persistCore('activity_price_rules', updated);
+  if (durable?.ok === false) {
+    return res.status(503).json({ error: durable.error || 'שמירת שורת המחירון נכשלה' });
+  }
+  res.json({
+    ...updated,
+    summary: describeRule(updated),
+    usage: priceRuleUsage(db, updated.id),
+  });
+});
+
+/** מה שמונע שורת מחירון שאי אפשר לחשב לפיה מחיר. */
+function priceRuleProblem(rule) {
+  if (!rule.name) return 'יש לתת שם לשורת המחירון';
+  if (rule.method === 'flat' && !rule.event_price) return 'יש להזין מחיר לאירוע';
+  if (rule.method === 'per_head' && !rule.participant_price) return 'יש להזין מחיר למשתתף';
+  if (rule.method === 'brackets') {
+    if (!rule.brackets.length) return 'יש להזין לפחות מדרגה אחת';
+    if (!rule.participant_price) return 'יש להזין מחיר למשתתף יחיד בהרשמה פתוחה';
+  }
+  return '';
+}
 
 // ─── Coupons ────────────────────────────────────────────────────────────────
 // A coupon is the benefit a campaign (or a member of staff) handed to one

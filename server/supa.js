@@ -189,6 +189,9 @@ export const OPERATIONAL_TABLES = [
   'campaign_runs',
   'customer_coupons',
   'discount_rules',
+  // מחירון הפעילויות. מסמך לכל כלל, כי מדרגות הן רשימה באורך משתנה —
+  // בטבלה רגילה זו טבלה שנייה ומיגרציה שנייה.
+  'activity_price_rules',
   // Reminders the bot sets for itself — same kv pattern, no migration.
   'bot_followups',
   // Everything the bot did, in one journal.
@@ -487,6 +490,9 @@ mappers.activities = columnMapper([
   // ומה הוקפא ברגע ששלחנו לו את הקישור.
   'charge_basis', 'min_participants', 'extra_participant_price', 'max_charge',
   'price_template_id', 'host_charge_participants', 'host_charge_amount',
+  // שורת המחירון שהאירוע מתומחר לפיה, והגרסה שלה. הגרסה היא מה שמונע מאירוע
+  // שכבר תומחר לזוז כשמעדכנים מחיר במחירון.
+  'price_rule_id', 'price_rule_version',
   'created_at', 'updated_at',
 ], { keepEmpty: ['audience', 'included', 'what_to_bring', 'important_info'] });
 mappers.attendance = columnMapper([
@@ -556,7 +562,8 @@ mappers.activity_templates = columnMapper([
   'cancellation_policy_id', 'cancellation_policy_disabled',
   'theme', 'sort_order', 'is_active',
   'staff_role', 'staff_pay_mode', 'staff_flat_amount',
-  // התבנית היא המחירון, ולכן היא נושאת את אותם שדות תמחור כמו האירוע.
+  // תבנית יכולה להצביע על שורת מחירון, או לשאת מספרים משלה — בדיוק כמו אירוע.
+  'price_rule_id',
   'charge_basis', 'min_participants', 'extra_participant_price', 'max_charge',
   'created_at', 'updated_at',
 ], { keepEmpty: ['audience', 'included', 'what_to_bring', 'important_info'] });
